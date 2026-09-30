@@ -100,6 +100,19 @@ describe("author modal history ownership", () => {
     expect(underlying).not.toHaveBeenCalled();
     window.removeEventListener("popstate", underlying);
   });
+  it("releases history ownership during a delayed exit animation", async () => {
+    const close = vi.fn(),
+      underlying = vi.fn();
+    await render(close);
+    window.addEventListener("popstate", underlying);
+    await popDialog({ screen: "detail" });
+    expect(close).toHaveBeenCalledOnce();
+    expect(underlying).not.toHaveBeenCalled();
+    await popDialog({ screen: "home" });
+    expect(close).toHaveBeenCalledOnce();
+    expect(underlying).toHaveBeenCalledOnce();
+    window.removeEventListener("popstate", underlying);
+  });
   it("guards repeated close clicks while Back is pending", async () => {
     const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
     const node = await render(vi.fn());
@@ -152,10 +165,12 @@ const ModalChildren = ({
   onClose,
   dirty = false,
   dismissible = true,
+  guardChildBack = true,
 }: {
   onClose: () => void;
   dirty?: boolean;
   dismissible?: boolean;
+  guardChildBack?: boolean;
 }) => {
   const [depth, setDepth] = useState(0);
   const navigation = useRef<AuthorDialogNavigationHandle>(null);
@@ -170,6 +185,7 @@ const ModalChildren = ({
         setDepth(target);
       }}
       dirty={dirty}
+      guardChildBack={guardChildBack}
       dismissible={dismissible}
       onClose={onClose}
     >
@@ -187,6 +203,7 @@ const renderChildren = async (
   onClose = vi.fn(),
   dirty = false,
   dismissible = true,
+  guardChildBack = true,
 ) => {
   childBack.mockClear();
   const node = document.createElement("div");
@@ -199,6 +216,7 @@ const renderChildren = async (
           onClose={onClose}
           dirty={dirty}
           dismissible={dismissible}
+          guardChildBack={guardChildBack}
         />
       </StrictMode>,
     ),
@@ -304,5 +322,34 @@ describe("author modal child navigation", () => {
     root = null;
     expect(go).toHaveBeenCalledWith(-3);
     await popDialog({ screen: "detail" });
+  });
+});
+
+describe("settings opt-in draft preservation", () => {
+  it("skips only child dirty confirmation and still guards root exit", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const close = vi.fn();
+    const node = await renderChildren(close, true, true, false);
+    const modalRoot = window.history.state;
+    await act(async () =>
+      node.querySelector<HTMLButtonElement>("[data-open-child]")!.click(),
+    );
+    await popDialog(modalRoot);
+    expect(childBack).toHaveBeenCalledWith(0);
+    expect(confirm).not.toHaveBeenCalled();
+    await popDialog({ screen: "detail" });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+  });
+  it("keeps non-dismissible and repeat-Back protection despite opting in", async () => {
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const node = await renderChildren(vi.fn(), true, false, false);
+    await act(async () =>
+      node.querySelector<HTMLButtonElement>("[data-open-child]")!.click(),
+    );
+    await act(async () =>
+      node.querySelector<HTMLButtonElement>("[data-profile-back]")!.click(),
+    );
+    expect(back).not.toHaveBeenCalled();
   });
 });
