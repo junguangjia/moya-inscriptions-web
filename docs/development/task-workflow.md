@@ -315,6 +315,89 @@ and [Claude Code memory/imports](https://code.claude.com/docs/en/memory).
 Installed versions and session behavior must be checked rather than inferred
 from file names alone.
 
+## Task resources, preparation and reusable context
+
+Prepare a task-owned disposable target once from its assigned worktree:
+
+```sh
+/opt/homebrew/bin/mise exec -- pnpm dev:task:prepare --task <task-id> --manifest <absolute-private-manifest>
+/opt/homebrew/bin/mise exec -- pnpm dev:task:inspect --task <task-id> --manifest <absolute-private-manifest>
+```
+
+The manifest binds the actual worktree, task, Compose project, labeled
+container, loopback database/Web/API ports, private configuration hash and
+output root. Preparation reuses only that ownership record. The test Compose
+file requires `MOYA_TEST_DB_PASSWORD` from that private task configuration; it
+has no default password. The private mode-0600 environment file contains
+disposable generated authentication material; do not print, copy into tracked
+files or publish it. These operations never use retained Development
+configuration or data. A missing/mismatched ownership label, configuration or
+resource record fails; it is not permission to adopt an existing service. Pass
+`--resources <absolute-private-manifest>` to `verify-task.mjs` to inspect and
+load this target before validation. Each verification still creates a fresh
+private `--output` directory. Preparation does not cache database, migration,
+browser or device acceptance.
+
+After reading applicable authority and recording the writer checkpoint, create
+an advisory context snapshot:
+
+```sh
+/opt/homebrew/bin/mise exec -- pnpm task:snapshot --task <task-id> --checkpoint <absolute-private-json> --handoff <private-handoff> --resources <private-manifest> --scope scripts --scope docs/development
+/opt/homebrew/bin/mise exec -- pnpm task:verify-context --task <task-id> --checkpoint <absolute-private-json>
+```
+
+Verification is read-only and compares HEAD, staged/unstaged/untracked content,
+scoped authority, writer record and resource identity. Add every allowed path's
+scope when taking the snapshot; newly applicable instruction files invalidate
+it. An unchanged snapshot reduces rediscovery within the same already-read
+context. It does not acquire a writer role, load authority into a new session,
+prove process inactivity or replace the human handoff rules below. A true new
+session still reads applicable authority once.
+
+## Throughput and individual check evidence
+
+Complete validation selects the known affected workspace/consumer closure and
+preserves the cumulative CI gate. Missing graph information, unknown paths,
+authentication/session/security changes, migrations, database configuration and
+shared toolchain configuration widen coverage. The monolithic shared unit suite
+runs whole when selected. When complete Web validation already selects both that
+suite and the Web client suite, redundant focused contract commands are omitted;
+shared-contract-only work retains its focused checks. Feedback has finite
+existing Backend-memory, Admin-component and shared-function mappings. Missing
+mappings or test files are reported as unchecked and cannot become a PASS.
+
+CMS preparation uses the existing filtered Turbo dependency graph. Library-only
+builds use `.turbo/library-cache`; CI restores that content-hashed cache for the
+existing contract, PostgreSQL and CMS jobs. It stores library dist and compiler
+status/logs, excludes application builds and runtime results, and invalidates on
+relevant source/configuration/dependency and actual Node toolchain identity.
+Existing pnpm store caching remains separate. No database, migration, browser or
+device result is accepted from a cache. Local lightweight static checks may pair
+at a maximum concurrency of two. Build-dependent tests, shared dist/incremental
+compiler outputs and database consumers keep necessary ordering; all commands
+retain one deadline and its cleanup reserve.
+
+An optional `--reuse-summary <absolute-private-summary>` reuses only successful,
+individually executed, explicit file-scoped Prettier check or ESLint commands.
+The summary records tested base, actual tools, command, input identities,
+source-summary hash/head/check and each invalidation reason. Config modules can
+import repository sources, so this first version conservatively fingerprints the
+whole tracked/untracked source inventory and actual installed static-tool
+dependency bytes, including the Node and pnpm implementations. The current
+reviewed static configuration is supported; unknown/nested configs, plugins or
+imports decline reuse. These inputs are rechecked after validation to detect
+changes during a check. Any source, command, toolchain or relevant configuration
+difference invalidates reuse. Failed, missing, incomplete and previously
+reused-only records do not satisfy it. Other selected checks execute normally.
+Evidence preparation consumes the original validation ceiling; reuse never
+grants more time.
+
+A source feedback summary remains `FEEDBACK ONLY — NOT FULL ACCEPTANCE`. Reusing
+one static result does not accept its whole plan or relabel previous-head CI.
+Push one fixed candidate, then start independent review alongside its CI. Final
+acceptance waits for both applicable results, with existing Owner and Draft
+stops.
+
 ## Transfer the writer role
 
 Stop the current writer and source-changing commands, then write a short

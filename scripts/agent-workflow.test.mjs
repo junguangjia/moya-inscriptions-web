@@ -174,7 +174,7 @@ describe("project-scoped Claude permissions: positive allowlist first, fail clos
     for (const rule of allow) {
       assert.match(
         rule,
-        /^Bash\((?:git (?:status|diff|log|show|rev-parse|branch|worktree (?:list|add)|fetch origin|ls-remote|merge-base|cherry|merge (?:--no-edit )?origin\/main\)|stash (?:list|show)|add)|gh (?:pr (?:view|list|diff|checks|create --draft|comment)|issue (?:view|list|create)|run (?:view|list))|node (?:scripts\/verify(?:-task|-apple)?\.mjs|scripts\/test-target\.mjs check|scripts\/task-git\.mjs (?:commit --message|push\))|--test scripts\/)|pnpm (?:verify|test:e2e:smoke|format:check|lint|typecheck|install --frozen-lockfile|--filter \* exec vitest run))/u,
+        /^Bash\((?:git (?:status|diff|log|show|rev-parse|branch|worktree (?:list|add)|fetch origin|ls-remote|merge-base|cherry|merge (?:--no-edit )?origin\/main\)|stash (?:list|show)|add)|gh (?:pr (?:view|list|diff|checks|create --draft|comment)|issue (?:view|list|create)|run (?:view|list))|(?:\/opt\/homebrew\/bin\/mise exec -- )?node (?:scripts\/verify(?:-task|-apple)?\.mjs|scripts\/test-target\.mjs check|scripts\/task-git\.mjs (?:commit --message|push\))|scripts\/task-context\.mjs (?:snapshot|verify) --task|scripts\/task-resources\.mjs (?:prepare|inspect) --task|--test scripts\/)|(?:\/opt\/homebrew\/bin\/mise exec -- )?pnpm (?:(?:dev:task:(?:prepare|inspect)|task:(?:snapshot|verify-context)) --task|verify|test:e2e:smoke|format:check|lint|typecheck|install --frozen-lockfile|--filter \* exec vitest run))/u,
         rule,
       );
       assert.doesNotMatch(
@@ -377,6 +377,55 @@ describe("project-scoped Claude permissions: positive allowlist first, fail clos
       "git -c core.hooksPath=/dev/null commit -m x",
     ])
       assert.notEqual(nativeDecision(command), "allow", command);
+  });
+});
+
+describe("precise mise and task helper permissions", () => {
+  it("allows only named existing entries and fixed task helper operations", () => {
+    const allow = JSON.parse(read(".claude/settings.json")).permissions.allow;
+    for (const rule of allow.filter((r) => r.includes("mise exec"))) {
+      assert.match(
+        rule,
+        /^Bash\(\/opt\/homebrew\/bin\/mise exec -- (?:node (?:scripts\/(?:verify(?:-task|-apple)?|test-target|task-git|task-context|task-resources)\.mjs|--test scripts\/)|pnpm (?:(?:dev:task:(?:prepare|inspect)|task:(?:snapshot|verify-context)) --task|verify|test:e2e:smoke|format:check|lint|typecheck|install --frozen-lockfile|--filter))/u,
+      );
+    }
+    assert.ok(!allow.includes("Bash(/opt/homebrew/bin/mise exec -- *)"));
+    for (const op of ["snapshot", "verify"])
+      assert.ok(
+        allow.includes(
+          `Bash(/opt/homebrew/bin/mise exec -- node scripts/task-context.mjs ${op} --task *)`,
+        ),
+      );
+    for (const op of ["prepare", "inspect"])
+      assert.ok(
+        allow.includes(
+          `Bash(/opt/homebrew/bin/mise exec -- node scripts/task-resources.mjs ${op} --task *)`,
+        ),
+      );
+  });
+  it("retains narrow guard denials through the canonical runtime wrapper", () => {
+    assert.ok(
+      guardDecision(
+        '/opt/homebrew/bin/mise exec -- psql yoyi_dev -c "TRUNCATE things"',
+      ),
+    );
+    assert.ok(
+      guardDecision(
+        "/opt/homebrew/bin/mise exec -- git -C /tmp/task push origin main",
+      ),
+    );
+    assert.equal(
+      guardDecision(
+        "echo /opt/homebrew/bin/mise exec -- psql yoyi_dev TRUNCATE",
+      ),
+      null,
+    );
+    assert.equal(
+      guardDecision(
+        "/opt/homebrew/bin/mise exec -- node scripts/task-git.mjs push",
+      ),
+      null,
+    );
   });
 });
 

@@ -22,6 +22,7 @@ import {
   assertPath,
   changedPaths,
   classifyTask,
+  affectedWebWorkspaces,
   localPaths,
   nulPaths,
 } from "./ci-task-scope.mjs";
@@ -52,6 +53,7 @@ import {
   STARTUP_MARGIN_MS,
   WEB_VERIFICATION_PROFILES,
   verificationBudgetMs,
+  verificationCommands,
   verificationPlan,
   viableCeiling,
 } from "./verify.mjs";
@@ -954,10 +956,13 @@ describe("the real CI wiring preserves required-check closure", () => {
     const { jobs } = workflowJobs();
     const entry = "scripts/editorial/verify-cms.mjs";
     const source = read(entry);
-    // The tsc -p projects it builds and the build output it imports itself.
-    const built = [
-      ...source.matchAll(/"((?:packages|services)\/[\w-]+)\/tsconfig\.json"/gu),
-    ].map((match) => match[1]);
+    // The finite Turbo selectors and the build output it imports itself.
+    const buildBlock =
+      /CMS_LIBRARY_WORKSPACES = Object\.freeze\(\[([\s\S]*?)\]\)/u.exec(source);
+    assert.ok(buildBlock, "CMS names its finite library preparation");
+    const builtNames = [...buildBlock[1].matchAll(/"(@moya\/[^"]+)"/gu)].map(
+      (match) => match[1],
+    );
     const probed = [
       ...source.matchAll(/\bimport\("(\.\.\/[^"]+?)\/dist\/[^"]+"\)/gu),
     ].map((match) => relative(root, resolve(root, dirname(entry), match[1])));
@@ -972,6 +977,11 @@ describe("the real CI wiring preserves required-check closure", () => {
             `${parent}/${name}`,
           ]),
       ),
+    );
+    const built = builtNames.map((name) => workspaces.get(name));
+    assert.ok(
+      !built.includes(undefined),
+      "every library filter names a known workspace",
     );
     // The job migrates and builds Admin and runs Vitest over tests/cms; the
     // workspaces they import load their workspace runtime dependencies.
@@ -1038,9 +1048,10 @@ describe("the real CI wiring preserves required-check closure", () => {
     );
     const verify = read("scripts/verify.mjs");
     assert.match(verify, /\be2e: \[bounded\(smoke\)\]/);
-    const smoke = verify.match(
-      /const smoke = \[process\.execPath, "([^"]+)"\]/u,
-    )?.[1];
+    const smoke = verificationCommands({
+      mode: "e2e",
+      selection: "complete",
+    })[0][1];
     assert.equal(smoke, "scripts/ci-e2e-smoke.mjs");
     // The Web test job's @moya/tests Vitest run keeps the unit architecture
     // tests; the policy test there loads the E2E scope module.
@@ -2738,6 +2749,8 @@ describe("explicit validation profiles and nested deadlines", () => {
         "all",
         "--profile",
         "complete",
+        "--workspaces",
+        "@moya/tests,web",
         "--remaining-ms",
         REMAINING_MS_TOKEN,
       ],
@@ -3055,5 +3068,82 @@ describe("explicit validation profiles and nested deadlines", () => {
         "INVALID_PROFILE",
       );
     }
+  });
+});
+
+describe("semantic workspace selection and cumulative coverage", () => {
+  it("retains the monolithic tests while selecting real dependent consumers", () => {
+    assert.deepEqual(
+      classifyTask(["apps/web/features/home/home-screen.tsx"]).webWorkspaces,
+      ["@moya/tests", "web"],
+    );
+    const image = classifyTask(["packages/image/src/index.ts"]);
+    for (const name of [
+      "@moya/image",
+      "@moya/tests",
+      "@moya/backend-production",
+      "web",
+    ])
+      assert.ok(image.webWorkspaces.includes(name), name);
+    const admin = classifyTask(["apps/admin/src/community/endpoints.ts"]);
+    assert.ok(admin.webWorkspaces.includes("admin"));
+    assert.ok(admin.webWorkspaces.includes("@moya/tests"));
+  });
+  it("uses the broad plan for security, migrations, global configuration and unresolved dependencies", () => {
+    for (const file of [
+      "services/backend-runtime/src/community/auth-handler.ts",
+      "database/schema.sql",
+      "turbo.json",
+      "tests/unit/backend/catalog-http.test.ts",
+      "apps/admin/payload.config.ts",
+    ])
+      assert.deepEqual(classifyTask([file]).webWorkspaces ?? [], [], file);
+    assert.deepEqual(
+      affectedWebWorkspaces(
+        ["apps/web/app/page.tsx"],
+        "/missing/synthetic-repository",
+      ),
+      [],
+    );
+    assert.throws(
+      () => classifyTask(["services/new-runtime/src/index.ts"]),
+      /Unmapped/u,
+    );
+    for (const file of [
+      "scripts/task-context.mjs",
+      "scripts/task-resources.mjs",
+    ])
+      assert.deepEqual(flags(classifyTask([file])), expectedFlags({}), file);
+  });
+  it("runs focused contract suites once when the full Web invocation already includes them", () => {
+    const plan = classifyTask([
+      "packages/contracts/src/catalog.ts",
+      "apps/web/app/page.tsx",
+    ]);
+    assert.equal(plan.contracts, true);
+    const commands = taskCommands(plan, "/private/synthetic-output");
+    assert.ok(
+      commands.some((command) => command.includes("scripts/verify.mjs")),
+    );
+    assert.ok(!commands.some((command) => command.includes("unit/contracts")));
+    assert.ok(plan.webWorkspaces.includes("@moya/tests"));
+    assert.ok(plan.webWorkspaces.includes("web"));
+    assert.ok(
+      taskCommands({ contracts: true }, "/private/synthetic-output").some(
+        (command) => command.includes("unit/contracts"),
+      ),
+    );
+  });
+  it("keeps cache paths restricted to library preparation and adds root/toolchain invalidation", () => {
+    const workflow = read(".github/workflows/ci.yml");
+    assert.equal(
+      (workflow.match(/path: \.turbo\/library-cache/gu) ?? []).length,
+      3,
+    );
+    assert.doesNotMatch(workflow, /path: \.turbo\/cache/u);
+    const config = JSON.parse(read("turbo.json"));
+    assert.ok(config.globalDependencies.includes(".nvmrc"));
+    assert.ok(config.globalDependencies.includes("tsconfig.base.json"));
+    assert.ok(config.globalEnv.includes("MOYA_VERIFICATION_TOOLCHAIN"));
   });
 });

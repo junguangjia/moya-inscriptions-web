@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 
 // Email-auth acceptance templates. Exact files only: other HTML or text under
@@ -28,6 +30,10 @@ const tooling = new Set([
   "scripts/verify-task.mjs",
   "scripts/verify-apple.mjs",
   "scripts/task-git.mjs",
+  "scripts/task-context.mjs",
+  "scripts/task-resources.mjs",
+  "scripts/verification-evidence.mjs",
+  "scripts/verification-tool-inputs.mjs",
   "scripts/task-validation.test.mjs",
 ]);
 const webRoots = [
@@ -112,6 +118,108 @@ export function assertPath(file) {
     file.split("/").some((part) => ["", ".", ".."].includes(part))
   )
     throw new Error(`Invalid changed path: ${JSON.stringify(file)}`);
+}
+
+/** A missing/ambiguous dependency graph selects the existing broad plan. */
+export function affectedWebWorkspaces(
+  paths,
+  root = fileURLToPath(new URL("../", import.meta.url)),
+) {
+  const manifests = [];
+  try {
+    for (const parent of ["apps", "packages", "services"])
+      for (const name of readdirSync(join(root, parent))) {
+        const directory = `${parent}/${name}`;
+        if (existsSync(join(root, directory, "package.json")))
+          manifests.push([
+            directory,
+            JSON.parse(
+              readFileSync(join(root, directory, "package.json"), "utf8"),
+            ),
+          ]);
+      }
+    manifests.push([
+      "tests",
+      JSON.parse(readFileSync(join(root, "tests/package.json"), "utf8")),
+    ]);
+  } catch {
+    return [];
+  }
+  const graph = new Map();
+  for (const [directory, manifest] of manifests) {
+    if (
+      typeof manifest.name !== "string" ||
+      !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(
+        manifest.name,
+      ) ||
+      graph.has(manifest.name)
+    )
+      return [];
+    const dependencies = Object.entries({
+      ...manifest.dependencies,
+      ...manifest.devDependencies,
+      ...manifest.peerDependencies,
+    })
+      .filter(
+        ([, value]) =>
+          typeof value === "string" && value.startsWith("workspace:"),
+      )
+      .map(([name]) => name);
+    graph.set(manifest.name, { directory, dependencies });
+  }
+  if (!graph.has("web") || !graph.has("@moya/tests")) return [];
+  for (const { dependencies } of graph.values())
+    if (dependencies.some((name) => !graph.has(name))) return [];
+  const selected = new Set(["@moya/tests"]);
+  for (const file of paths) {
+    // Global configuration, security/authentication and persisted state retain
+    // the broad path. This optimization cannot waive their semantic consumers.
+    if (
+      webConfig.has(file) ||
+      webLintConfig.has(file) ||
+      /(?:^|\/)(?:package\.json|tsconfig[^/]*\.json|[^/]*(?:auth|session|credential|security|permission|grant|migration|config)[^/]*)$/iu.test(
+        file,
+      ) ||
+      /^(?:database|infra|tests|experiments|docs\/prototypes|docs\/design-system)\//u.test(
+        file,
+      )
+    )
+      return [];
+    const entry = [...graph.entries()].find(([, item]) =>
+      file.startsWith(`${item.directory}/`),
+    );
+    if (entry) {
+      selected.add(entry[0]);
+      // HTTP is a semantic dependency outside package.json: backend and shared
+      // public shapes keep the Web consumer even without a direct import.
+      if (
+        file.startsWith("services/") ||
+        /^packages\/(?:contracts|image|search)\//u.test(file)
+      )
+        selected.add("web");
+    } else if (
+      !docs.has(file) &&
+      !tooling.has(file) &&
+      !emailAuthTemplates.has(file) &&
+      !file.endsWith(".md") &&
+      !/^\.(?:agents|claude|github|githooks)\//u.test(file) &&
+      !/^scripts\/[a-z-]+\.test\.mjs$/u.test(file)
+    )
+      return [];
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, { dependencies }] of graph)
+      if (
+        !selected.has(name) &&
+        dependencies.some((dependency) => selected.has(dependency))
+      ) {
+        selected.add(name);
+        changed = true;
+      }
+  }
+  return [...selected].sort();
 }
 
 // Metadata (author, model, labels, branch prefix) is deliberately not an input.
@@ -222,6 +330,9 @@ export function classifyTask(paths, event = "pull_request") {
     plan.contracts = true;
     plan.scope = "full";
   } else if (plan.web) plan.scope = "smoke";
+  if (plan.web)
+    plan.webWorkspaces =
+      event === "workflow_dispatch" ? [] : affectedWebWorkspaces(plan.paths);
   return plan;
 }
 
@@ -312,7 +423,9 @@ if (
         process.env.GITHUB_OUTPUT,
         ["scope", "web", "cms", "contracts", "apple", "harmony", "lightweight"]
           .map((key) => `${key}=${plan[key]}\n`)
-          .join("") + `plan=${JSON.stringify(plan)}\n`,
+          .join("") +
+          `web_workspaces=${(plan.webWorkspaces ?? []).join(",")}\n` +
+          `plan=${JSON.stringify(plan)}\n`,
       );
     }
     console.log(JSON.stringify(plan));

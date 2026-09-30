@@ -41,7 +41,11 @@
     "dev:db:down": "docker compose -f compose.dev.yml down",
     "dev:migrate": "turbo run build --filter=admin^... --filter=@moya/community-postgres && node --env-file=.env.local scripts/migrate.mjs --development && docker compose -f compose.dev.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U yoyi_dev_owner -d yoyi_dev -f /opt/yoyi/grant-public-read.sql && node --env-file=.env.local scripts/migrate-community.mjs --development && docker compose -f compose.dev.yml exec -T postgres psql -v ON_ERROR_STOP=1 --single-transaction -U yoyi_dev_owner -d yoyi_dev -v app_role=yoyi_dev_app -f /opt/yoyi/grant-community-app.sql -f /opt/yoyi/grant-runtime.sql -f /opt/yoyi/community-development-accounts.sql",
     "dev:backend": "node --env-file=.env.local node_modules/turbo/bin/turbo watch dev --filter=@moya/backend-production",
-    "test:cms:agent-connections": "node scripts/editorial/verify-agent-connections.mjs"
+    "test:cms:agent-connections": "node scripts/editorial/verify-agent-connections.mjs",
+    "dev:task:prepare": "node scripts/task-resources.mjs prepare",
+    "dev:task:inspect": "node scripts/task-resources.mjs inspect",
+    "task:snapshot": "node scripts/task-context.mjs snapshot",
+    "task:verify-context": "node scripts/task-context.mjs verify"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
