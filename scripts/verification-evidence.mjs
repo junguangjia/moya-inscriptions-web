@@ -17,10 +17,12 @@ import { performance } from "node:perf_hooks";
 import process from "node:process";
 import { runGit, nulPaths } from "./ci-task-scope.mjs";
 import {
-  installedStaticToolInputs,
+  reviewedStaticToolInputs,
   nodeExecutableInputs,
   pnpmExecutableInputs,
   staticConfigurationEligibility,
+  staticToolDispatchInputs,
+  staticToolRuntimeEligibility,
 } from "./verification-tool-inputs.mjs";
 
 export const EVIDENCE_VERSION = 1;
@@ -87,15 +89,17 @@ export function staticCheckFiles(command) {
 
 export function evidenceToolchain(root, timeoutMs = 5000) {
   const deadline = performance.now() + timeoutMs;
-  const staticTools = installedStaticToolInputs(root, { deadline });
-  delete staticTools.durationMs;
-  const pnpmExecutable = pnpmExecutableInputs(root, { deadline });
+  const environment = staticToolRuntimeEligibility();
+  const pnpmExecutable = environment.eligible
+    ? pnpmExecutableInputs(root, { deadline })
+    : environment;
+  let childPath = null;
   let childNode = { eligible: false, reason: "unbound-pnpm-executable" };
   if (pnpmExecutable.eligible) {
     try {
       // Query the actual pnpm child PATH with this known parent executable.
       // Do not execute a potentially replaced PATH/node during preparation.
-      const childPath = execFileSync(
+      childPath = execFileSync(
         "pnpm",
         [
           "exec",
@@ -123,6 +127,9 @@ export function evidenceToolchain(root, timeoutMs = 5000) {
       childNode = { eligible: false, reason: "unbound-child-node-dispatch" };
     }
   }
+  const staticTools = environment.eligible
+    ? reviewedStaticToolInputs(root, { deadline, searchPath: childPath })
+    : environment;
   const version = (...args) =>
     execFileSync("pnpm", args, {
       cwd: root,
@@ -137,13 +144,18 @@ export function evidenceToolchain(root, timeoutMs = 5000) {
     staticTools,
     pnpmExecutable,
     childNode,
-    pnpm: version("--version"),
-    eslint: JSON.parse(
-      readFileSync(resolve(root, "node_modules/eslint/package.json")),
-    ).version,
-    prettier: JSON.parse(
-      readFileSync(resolve(root, "node_modules/prettier/package.json")),
-    ).version,
+    childPath,
+    pnpm: pnpmExecutable.eligible ? version("--version") : "unbound",
+    eslint: staticTools.eligible
+      ? JSON.parse(
+          readFileSync(resolve(root, "node_modules/eslint/package.json")),
+        ).version
+      : "unbound",
+    prettier: staticTools.eligible
+      ? JSON.parse(
+          readFileSync(resolve(root, "node_modules/prettier/package.json")),
+        ).version
+      : "unbound",
     optionsSha256: hash(
       JSON.stringify([
         process.env.NODE_OPTIONS ?? "",
@@ -177,6 +189,15 @@ export function checkInputIdentity(
       eligible: false,
       reason: toolchain.childNode?.reason ?? "unbound-child-node-dispatch",
     };
+  // Do not trust a prepared (or synthetic) toolchain to authorize an unknown
+  // live launcher. Bind the selected dispatch again before considering reuse.
+  const dispatch = staticToolDispatchInputs(root, command[2], { deadline });
+  if (!dispatch.eligible) return dispatch;
+  const reviewed = reviewedStaticToolInputs(root, {
+    deadline,
+    searchPath: toolchain.childPath,
+  });
+  if (!reviewed.eligible) return reviewed;
   const configuration = staticConfigurationEligibility(
     root,
     command[2],
@@ -185,15 +206,9 @@ export function checkInputIdentity(
   );
   if (!configuration.eligible) return configuration;
   const paths = [
-    ...new Set([
-      ...files,
-      ...selected,
-      "node_modules/.pnpm/lock.yaml",
-      "node_modules/.bin/eslint",
-      "node_modules/.bin/prettier",
-    ]),
+    ...new Set([...files, ...selected, "node_modules/.pnpm/lock.yaml"]),
   ].sort();
-  const inputs = [];
+  const inputs = [...reviewed.inputs];
   for (const file of paths) {
     if (performance.now() >= deadline)
       throw new Error(
