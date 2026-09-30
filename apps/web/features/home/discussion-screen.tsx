@@ -21,7 +21,7 @@ import {
   isArticleId,
   isCollectionId,
 } from "../editorial-content/use-editorial-content";
-import { ThreadsFeed } from "../threads/threads-feed";
+import { ThreadsFeed, ThreadsUnavailable } from "../threads/threads-feed";
 import { isThreadId } from "../threads/use-threads";
 import { TopicCard } from "../topics/topic-card";
 import styles from "./home-screen.module.css";
@@ -55,11 +55,14 @@ export function DiscussionScreen({
   headerStart,
   headerEnd,
   initialTopicId = null,
+  liveThreads = false,
 }: {
   readonly data: HomeSurfaceData["topics"];
   readonly headerStart?: ReactNode;
   readonly headerEnd?: ReactNode;
   readonly initialTopicId?: string | null;
+  /** The live 话题 feed needs the author and publishing providers. */
+  readonly liveThreads?: boolean;
 }) {
   const shell = useProductShell();
   const preview = useDiscussionPreview();
@@ -213,7 +216,7 @@ export function DiscussionScreen({
             : {
                 // Real published editorial reads (content-community-completion-v1).
                 news: <EditorialNewsFeed />,
-                threads: (
+                threads: liveThreads ? (
                   <ThreadsFeed
                     localRead={localRead}
                     onOpen={(id, opener) => {
@@ -221,6 +224,8 @@ export function DiscussionScreen({
                       shell.openTopic(id, opener, shell.readActiveScrollTop());
                     }}
                   />
+                ) : (
+                  <ThreadsUnavailable />
                 ),
                 topics: (
                   <>

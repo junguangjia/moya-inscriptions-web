@@ -61,6 +61,14 @@ export interface T02pProductPreviewProps {
   readonly developmentDiscussion?: boolean;
   readonly headerStart?: ReactNode;
   readonly headerEnd?: ReactNode;
+  /**
+   * Composes the live 话题 feed and Thread pages. They read the author,
+   * publishing and publishing-entry providers, so only a composition that
+   * mounts them sets it. Without it 话题 shows its unavailable state and a
+   * Thread id opens no Thread page: Community V1 enables nothing in
+   * Production (amendment 2026-09-11, section 7).
+   */
+  readonly liveThreads?: boolean;
   readonly renderProfileOverlay?: (
     properties: ProductShellProfileOverlayRenderProps,
   ) => ReactNode;
@@ -97,6 +105,7 @@ export const T02pProductPreview = ({
   developmentDiscussion = false,
   headerStart,
   headerEnd,
+  liveThreads = false,
   renderProfileOverlay,
   renderEditorOverlay,
   workDetailLoader,
@@ -128,6 +137,7 @@ export const T02pProductPreview = ({
                 headerStart={headerStart}
                 headerEnd={headerEnd}
                 initialTopicId={initialTopicId}
+                liveThreads={liveThreads}
               />
             </ContentQuickActionsProvider>
           </div>
@@ -202,6 +212,7 @@ export const T02pProductPreview = ({
         renderTopicOverlay={({ backButtonRef, onClose, topicId }) => (
           <PreviewTopicOverlay
             backButtonRef={backButtonRef}
+            liveThreads={liveThreads}
             onClose={onClose}
             topicId={topicId}
             topicsState={states.home.topics}
@@ -215,12 +226,14 @@ export const T02pProductPreview = ({
 
 const PreviewTopicOverlay = ({
   backButtonRef,
+  liveThreads,
   onClose,
   topicId,
   topicsState,
   renderDiscussion,
 }: {
   readonly backButtonRef: RefObject<HTMLButtonElement | null>;
+  readonly liveThreads: boolean;
   readonly onClose: () => void;
   readonly topicId: string;
   readonly topicsState: HomeSurfaceData["topics"];
@@ -237,7 +250,7 @@ const PreviewTopicOverlay = ({
         onClose={onClose}
       />
     );
-  if (isThreadId(topicId))
+  if (liveThreads && isThreadId(topicId))
     return (
       <ThreadDetail
         key={topicId}
