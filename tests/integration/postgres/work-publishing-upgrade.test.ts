@@ -841,6 +841,7 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         users: before.users!.map((user) => ({
           ...user,
           background_media_id: null,
+          studio_name: "",
         })),
       });
       expect(
