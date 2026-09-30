@@ -1,66 +1,105 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, createRef } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import type { AuthorProfile } from "@moya/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-const { upload, background, accountEpoch, readImage, author } = vi.hoisted(
-  () => ({
-    upload: vi.fn(),
-    background: vi.fn(),
-    accountEpoch: vi.fn(() => 0),
-    readImage: vi.fn(),
-    author: {
-      viewer: { id: "author" } as { id: string } | null,
-      checking: false,
-      sessionError: false,
-      mutate: vi.fn(),
-      notify: vi.fn(),
-    },
-  }),
-);
+const {
+  upload,
+  background,
+  accountEpoch,
+  account,
+  readImage,
+  exportCover,
+  author,
+  RequestError,
+} = vi.hoisted(() => ({
+  upload: vi.fn(),
+  background: vi.fn(),
+  accountEpoch: vi.fn(() => 0),
+  account: vi.fn((): string | null => "author"),
+  readImage: vi.fn(),
+  exportCover: vi.fn(),
+  author: {
+    viewer: { id: "author" } as { id: string } | null,
+    checking: false,
+    sessionError: false,
+    mutate: vi.fn(),
+    notify: vi.fn(),
+    refresh: vi.fn(),
+  },
+  RequestError: class extends Error {
+    constructor(
+      readonly status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
+}));
 vi.mock("./author-context", () => ({ useAuthors: () => author }));
 vi.mock("./author-data", () => ({
-  authorClient: { upload, background, accountEpoch },
+  authorClient: { upload, background, accountEpoch, account },
+  AuthorRequestError: RequestError,
 }));
-vi.mock("./avatar-image", () => ({
-  readAvatarImage: readImage,
-  normalizeAvatarPng: (bytes: Uint8Array) => bytes,
+vi.mock("./profile-cover", async (original) => ({
+  ...(await original<typeof import("./profile-cover")>()),
+  readProfileCoverImage: readImage,
+  exportProfileCover: exportCover,
 }));
 vi.mock("react-easy-crop", () => ({
   default: ({
     onCropAreaChange,
   }: {
     onCropAreaChange: (
-      a: unknown,
-      b: { x: number; y: number; width: number; height: number },
+      a: { x: number; y: number; width: number; height: number },
+      b: unknown,
     ) => void;
   }) => (
-    <button
-      type="button"
-      onClick={() =>
-        onCropAreaChange(null, { x: 0, y: 0, width: 160, height: 90 })
-      }
-    >
-      完成裁剪
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() =>
+          onCropAreaChange({ x: 0, y: 0, width: 100, height: 100 }, null)
+        }
+      >
+        完成裁剪
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onCropAreaChange({ x: 0.001, y: 0, width: 99.999, height: 100 }, null)
+        }
+      >
+        重新布局
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onCropAreaChange({ x: 10, y: 5, width: 50, height: 50 }, null)
+        }
+      >
+        改变裁剪
+      </button>
+    </>
   ),
 }));
 import { ProfileBackgroundEditor } from "./profile-background-editor";
+import presentation from "../user/user-presentation.module.css";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
-const profile: AuthorProfile = {
+const base: AuthorProfile = {
   id: "author",
   handle: "owner",
   displayName: "作者",
   bio: "",
   avatar: null,
   background: {
-    id: "background-old",
+    id: "user-media-old",
     src: "/old.png",
-    width: 160,
-    height: 90,
+    width: 1280,
+    height: 720,
   },
   isOwner: true,
   following: false,
@@ -74,35 +113,88 @@ const profile: AuthorProfile = {
   nextAvatarChangeAt: null,
 };
 let root: Root | null = null;
+let profile = base;
+const header = createRef<HTMLElement>();
 const onSaved = vi.fn(),
   onClose = vi.fn();
+const source = () => ({
+  display: { url: "blob:display", width: 2048, height: 1536 },
+  width: 4032,
+  height: 3024,
+  pixels: { width: 4032, height: 3024 },
+  opaque: true,
+  release: vi.fn(),
+});
+const exported = { blob: new Blob(["png"]), width: 1600, height: 1200 };
 const view = () => (
-  <ProfileBackgroundEditor
-    profile={profile}
-    onSaved={onSaved}
-    onClose={onClose}
-  />
+  <>
+    <section ref={header}>
+      <div className={presentation.profileCover}>
+        {profile.background && <img src={profile.background.src} alt="" />}
+      </div>
+    </section>
+    <ProfileBackgroundEditor
+      profile={profile}
+      header={header}
+      onSaved={onSaved}
+      onClose={onClose}
+    />
+  </>
 );
 const render = async () => {
-  const node = document.createElement("div");
-  document.body.append(node);
-  root = createRoot(node);
+  if (!root) {
+    const node = document.createElement("div");
+    document.body.append(node);
+    root = createRoot(node);
+  }
   await act(async () => root!.render(view()));
 };
-const click = async (text: string) => {
-  const control = Array.from(document.querySelectorAll("button")).find(
+const find = (text: string) =>
+  Array.from(document.querySelectorAll("button")).find(
     (item) => item.textContent === text,
-  )!;
+  );
+const click = async (text: string) => {
+  const control = find(text);
+  if (!control) throw Error(`no button ${text}`);
   await act(async () => control.click());
 };
+const choose = async (name = "cover.jpg") => {
+  const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(input, "files", {
+    configurable: true,
+    value: [new File(["image"], name, { type: "image/jpeg" })],
+  });
+  await act(async () =>
+    input.dispatchEvent(new Event("change", { bubbles: true })),
+  );
+};
+const selectImage = async () => {
+  await choose();
+  await click("完成裁剪");
+};
+/** The profile read-back after a save, and the header image finishing. */
+const readBack = async (next: AuthorProfile["background"]) => {
+  profile = { ...profile, background: next };
+  await render();
+  const image = header.current!.querySelector("img");
+  if (image) await act(async () => image.dispatchEvent(new Event("load")));
+};
+const alert = () => document.querySelector('[role="alert"]')?.textContent ?? "";
+let go: ReturnType<typeof vi.spyOn>;
+let confirm: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  profile = base;
   author.viewer = { id: "author" };
   author.checking = false;
   author.sessionError = false;
   accountEpoch.mockReturnValue(0);
-  upload.mockResolvedValue({ id: "background-new" });
-  background.mockResolvedValue({});
+  account.mockReturnValue("author");
+  upload.mockResolvedValue({ id: "user-media-new" });
+  background.mockResolvedValue(undefined);
+  readImage.mockImplementation(async () => source());
+  exportCover.mockImplementation(async () => ({ ...exported }));
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true,
     value() {
@@ -115,65 +207,149 @@ beforeEach(() => {
       this.open = false;
     },
   });
-  Object.defineProperty(URL, "revokeObjectURL", {
-    configurable: true,
-    value: vi.fn(),
-  });
   vi.spyOn(window.history, "back").mockImplementation(() => {});
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-    drawImage: vi.fn(),
-  } as never);
-  vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
-    "data:image/png;base64,AQID",
-  );
-  readImage.mockResolvedValue({
-    image: { naturalWidth: 160, naturalHeight: 90 },
-    url: "blob:background-preview",
-  });
+  go = vi.spyOn(window.history, "go").mockImplementation(() => {});
+  confirm = vi.spyOn(window, "confirm");
   window.history.replaceState({ source: "profile" }, "", "/#profile");
 });
 afterEach(async () => {
+  vi.useRealTimers();
   window.history.replaceState({ source: "profile" }, "", "/#profile");
   await act(async () => root?.unmount());
   root = null;
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
-const selectImage = async () => {
-  const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
-  Object.defineProperty(input, "files", {
-    configurable: true,
-    value: [new File(["image"], "cover.png", { type: "image/png" })],
-  });
-  await act(async () =>
-    input.dispatchEvent(new Event("change", { bubbles: true })),
-  );
-  await click("完成裁剪");
-};
-it("does not save a removal until explicitly requested", async () => {
+
+it("opens on the current background with explicit change and remove actions", async () => {
   await render();
-  await click("恢复空白背景");
-  expect(background).not.toHaveBeenCalled();
-  expect(upload).not.toHaveBeenCalled();
-  await click("保存背景");
-  expect(background).toHaveBeenCalledWith({
-    requestId: expect.any(String),
-    mediaId: null,
-  });
-  expect(onSaved).toHaveBeenCalledOnce();
+  expect(document.querySelector('[aria-label="主页背景"]')).not.toBeNull();
+  const preview = document.querySelector("[data-cover-preview]")!;
+  expect(
+    preview
+      .querySelector(`.${presentation.profileCover} img`)!
+      .getAttribute("src"),
+  ).toBe("/old.png");
+  expect(find("更换照片")).toBeDefined();
+  expect(find("移除背景")).toBeDefined();
 });
-it("uploads the cropped PNG and saves its returned owned media id", async () => {
+
+it("enters the crop state right after a photo is chosen, without any request", async () => {
+  await render();
+  await choose();
+  expect(document.querySelector('[data-cover-editor="crop"]')).not.toBeNull();
+  expect(document.querySelector('[aria-label="调整背景"]')).not.toBeNull();
+  expect(find("保存")!.disabled).toBe(true);
+  await click("完成裁剪");
+  expect(find("保存")!.disabled).toBe(false);
+  expect(upload).not.toHaveBeenCalled();
+  expect(background).not.toHaveBeenCalled();
+});
+
+it("uploads the exported PNG, saves its media id and closes only after the header shows it", async () => {
   await render();
   await selectImage();
-  expect(upload).not.toHaveBeenCalled();
-  await click("保存背景");
-  expect(upload).toHaveBeenCalledWith(expect.any(Blob), expect.any(String));
+  await click("保存");
+  expect(exportCover).toHaveBeenCalledWith(expect.anything(), {
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100,
+  });
+  expect(upload).toHaveBeenCalledWith(exported.blob, expect.any(String));
   expect(background).toHaveBeenCalledWith({
     requestId: expect.any(String),
-    mediaId: "background-new",
+    mediaId: "user-media-new",
   });
-  expect(author.notify).toHaveBeenCalledWith("主页背景已保存");
+  expect(onSaved).toHaveBeenCalledOnce();
+  expect(author.mutate).toHaveBeenCalledOnce();
+  // Still refreshing: no success claim over the previous background.
+  expect(document.body.textContent).toContain("正在更新主页");
+  expect(author.notify).not.toHaveBeenCalled();
+  expect(go).not.toHaveBeenCalled();
+  await readBack({
+    id: "user-media-new",
+    src: "/api/community/media/user-media-new",
+    width: 1600,
+    height: 1200,
+  });
+  expect(author.notify).toHaveBeenCalledWith("主页背景已更新");
+  expect(go).toHaveBeenCalledWith(-2);
+  expect(confirm).not.toHaveBeenCalled();
 });
+
+it("uploads once for a double tap", async () => {
+  let resolve!: (value: { id: string }) => void;
+  upload.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  await render();
+  await selectImage();
+  const save = find("保存")!;
+  await act(async () => {
+    save.click();
+    save.click();
+  });
+  await act(async () => resolve({ id: "user-media-new" }));
+  expect(exportCover).toHaveBeenCalledOnce();
+  expect(upload).toHaveBeenCalledOnce();
+  expect(background).toHaveBeenCalledOnce();
+});
+
+it("retries a failed save with the same ids and bytes, without exporting again", async () => {
+  background.mockRejectedValueOnce(new TypeError("Load failed"));
+  await render();
+  await selectImage();
+  await click("保存");
+  expect(alert()).toContain("无法确认是否已保存");
+  expect(alert()).toContain("照片和裁剪已保留");
+  expect(alert()).not.toContain("Load failed");
+  // A layout re-report within a source pixel is not a new crop.
+  await click("重新布局");
+  const first = background.mock.calls[0];
+  await click("重试保存");
+  expect(exportCover).toHaveBeenCalledOnce();
+  expect(upload).toHaveBeenCalledOnce();
+  expect(background.mock.calls[1]).toEqual(first);
+});
+
+it("uploads again only when the crop itself changed after a failure", async () => {
+  background.mockRejectedValueOnce(new RequestError(503, "x"));
+  await render();
+  await selectImage();
+  await click("保存");
+  await click("改变裁剪");
+  await click("重试保存");
+  expect(exportCover).toHaveBeenCalledTimes(2);
+  expect(upload).toHaveBeenCalledTimes(2);
+  expect(upload.mock.calls[0]![1]).not.toBe(upload.mock.calls[1]![1]);
+});
+
+it("starts fresh ids when the server refuses the save identity", async () => {
+  background.mockRejectedValueOnce(
+    new RequestError(409, "Request identity reused"),
+  );
+  await render();
+  await selectImage();
+  await click("保存");
+  expect(alert()).not.toContain("Request identity");
+  const first = background.mock.calls[0]![0].requestId;
+  await click("重试保存");
+  expect(upload).toHaveBeenCalledTimes(2);
+  expect(background.mock.calls[1]![0].requestId).not.toBe(first);
+});
+
+it("maps an upload failure to copy that says nothing changed", async () => {
+  upload.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  await render();
+  await selectImage();
+  await click("保存");
+  expect(alert()).toContain("网络连接失败，背景尚未更改");
+  expect(background).not.toHaveBeenCalled();
+});
+
 it("does not attach an upload after the account changes", async () => {
   let resolve!: (value: { id: string }) => void;
   upload.mockReturnValueOnce(
@@ -183,28 +359,33 @@ it("does not attach an upload after the account changes", async () => {
   );
   await render();
   await selectImage();
-  await click("保存背景");
+  await click("保存");
   accountEpoch.mockReturnValue(1);
   author.viewer = { id: "different" };
-  await act(async () => root!.render(view()));
+  await render();
   await act(async () => resolve({ id: "late-media" }));
   expect(background).not.toHaveBeenCalled();
   expect(onSaved).not.toHaveBeenCalled();
+  expect(alert()).toContain("账户已切换，背景尚未更改");
 });
-it("reuses the uploaded media and exact save request after a failed response", async () => {
-  background.mockRejectedValueOnce(Error("连接中断"));
+
+it("keeps saving through a session revalidation of the same account", async () => {
+  let resolve!: (value: { id: string }) => void;
+  upload.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
   await render();
   await selectImage();
-  await click("保存背景");
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-    "连接中断",
-  );
-  const first = background.mock.calls[0];
-  await click("保存背景");
-  expect(upload).toHaveBeenCalledOnce();
-  expect(background.mock.calls[1]).toEqual(first);
+  await click("保存");
+  author.checking = true;
+  await render();
+  await act(async () => resolve({ id: "user-media-new" }));
+  expect(background).toHaveBeenCalledOnce();
   expect(onSaved).toHaveBeenCalledOnce();
 });
+
 it("ignores an upload that finishes after the editor unmounts", async () => {
   let resolve!: (value: { id: string }) => void;
   upload.mockReturnValueOnce(
@@ -214,10 +395,89 @@ it("ignores an upload that finishes after the editor unmounts", async () => {
   );
   await render();
   await selectImage();
-  await click("保存背景");
+  await click("保存");
   await act(async () => root!.unmount());
   root = null;
   await act(async () => resolve({ id: "late-media" }));
   expect(background).not.toHaveBeenCalled();
   expect(onSaved).not.toHaveBeenCalled();
+});
+
+it("cancels back to the overview without sending or prompting", async () => {
+  await render();
+  await selectImage();
+  const chosen = readImage.mock.results[0]!.value as Promise<{
+    release: ReturnType<typeof vi.fn>;
+  }>;
+  await click("取消");
+  expect(
+    document.querySelector('[data-cover-editor="overview"]'),
+  ).not.toBeNull();
+  expect((await chosen).release).toHaveBeenCalled();
+  expect(upload).not.toHaveBeenCalled();
+  expect(background).not.toHaveBeenCalled();
+  expect(confirm).not.toHaveBeenCalled();
+});
+
+it("keeps the current photo and crop when a reselected photo cannot be used", async () => {
+  await render();
+  await selectImage();
+  const { CoverError } = await import("./profile-cover");
+  readImage.mockRejectedValueOnce(new CoverError("heic"));
+  await choose("IMG_1.HEIC");
+  expect(alert()).toContain("暂不支持 HEIC");
+  expect(document.querySelector("[data-cover-stage]")).not.toBeNull();
+  expect(find("保存")!.disabled).toBe(false);
+});
+
+it("ignores a slower earlier decode after a newer choice", async () => {
+  let first!: (value: ReturnType<typeof source>) => void;
+  const stale = source();
+  readImage.mockReturnValueOnce(
+    new Promise((done) => {
+      first = done;
+    }),
+  );
+  await render();
+  await choose("a.jpg");
+  await choose("b.jpg");
+  await act(async () => first(stale));
+  expect(stale.release).toHaveBeenCalled();
+  expect(document.querySelector("[data-cover-stage]")).not.toBeNull();
+});
+
+it("removes the background only after an explicit confirmation", async () => {
+  await render();
+  await click("移除背景");
+  expect(document.querySelector('[data-cover-editor="remove"]')).not.toBeNull();
+  expect(background).not.toHaveBeenCalled();
+  await click("确认移除");
+  expect(background).toHaveBeenCalledWith({
+    requestId: expect.any(String),
+    mediaId: null,
+  });
+  expect(upload).not.toHaveBeenCalled();
+  expect(author.notify).not.toHaveBeenCalled();
+  await readBack(null);
+  expect(author.notify).toHaveBeenCalledWith("主页背景已移除");
+});
+
+it("closes with an honest notice when the header does not catch up", async () => {
+  vi.useFakeTimers();
+  await render();
+  await selectImage();
+  await click("保存");
+  expect(author.notify).not.toHaveBeenCalled();
+  await act(async () => vi.advanceTimersByTime(15_000));
+  expect(author.notify).toHaveBeenCalledWith("主页背景已保存，刷新后显示");
+  expect(go).toHaveBeenCalled();
+});
+
+it("still reports a confirmed save when the editor closes before the read-back", async () => {
+  await render();
+  await selectImage();
+  await click("保存");
+  await act(async () => root!.unmount());
+  root = null;
+  expect(author.notify).toHaveBeenCalledWith("主页背景已保存");
 });

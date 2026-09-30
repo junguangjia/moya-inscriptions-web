@@ -131,7 +131,8 @@
   overflow: hidden;
   background: var(--yoyi-color-background-page);
 }
-.profileCover:has(img)::after {
+.profileCover:has(img)::after,
+.coverFade::after {
   position: absolute;
   inset: 0;
   content: "";
@@ -146,6 +147,8 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* One 4:3 master; every header shows a window starting at its top edge. */
+  object-position: 50% 0;
 }
 .backgroundEdit {
   position: absolute;
@@ -158,7 +161,11 @@
   padding: var(--yoyi-space-3);
   place-items: center;
   color: var(--yoyi-color-text-primary);
-  background: transparent;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-background-page) 72%,
+    transparent
+  );
   border: 0;
   border-radius: var(--yoyi-radius-full);
   cursor: pointer;
