@@ -8,6 +8,7 @@ import { authRequest } from "./auth-api";
 import type { AuthAccountView } from "./auth-api";
 
 import styles from "./account-security.module.css";
+import { SettingsIcon } from "../settings/settings-icons";
 
 type Channel = "email" | "phone";
 type Action = "link" | "replace" | "unlink";
@@ -414,16 +415,21 @@ export const AccountSecurity = ({
                   available = availableAccount.capabilities[channel].available;
                 return (
                   <div className={styles.row} key={channel}>
-                    <div className={styles.detail}>
-                      <strong>{labels[channel]}</strong>
-                      <span>{factor.masked || states[factor.state]}</span>
-                      <small>
-                        {factor.masked
-                          ? states[factor.state]
-                          : available
-                            ? "可用于登录当前账户"
-                            : "此方式当前不可用"}
-                      </small>
+                    <div className={styles.identity}>
+                      <SettingsIcon
+                        name={channel === "email" ? "mail" : "smartphone"}
+                      />
+                      <div className={styles.detail}>
+                        <strong>{labels[channel]}</strong>
+                        <span>{factor.masked || states[factor.state]}</span>
+                        <small>
+                          {factor.masked
+                            ? states[factor.state]
+                            : available
+                              ? "可用于登录当前账户"
+                              : "此方式当前不可用"}
+                        </small>
+                      </div>
                     </div>
                     <div className={styles.actions}>
                       {available && factor.state === "unbound" && (
@@ -464,9 +470,7 @@ export const AccountSecurity = ({
               })}
             </div>
           )}
-          <p className={styles.muted}>
-            邮箱和手机号属于同一个账户。更换或解除前，需要验证当前可用的登录方式。
-          </p>
+          <p className={styles.muted}>更换或解除前，需验证当前登录方式。</p>
           {error && (
             <p className={styles.error} role="alert">
               {error}
@@ -495,6 +499,7 @@ export const AccountSecurity = ({
               });
             }}
           >
+            <SettingsIcon name="log-out" />
             {busy ? "处理中" : "退出登录"}
           </button>
         </>

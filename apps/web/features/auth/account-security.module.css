@@ -9,6 +9,7 @@
 }
 .row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--yoyi-space-4);
@@ -16,6 +17,17 @@
 }
 .row + .row {
   border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+.identity {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  flex: 1;
+  min-width: min(150px, 100%);
+}
+.identity > svg {
+  flex: none;
+  color: var(--yoyi-color-text-secondary);
 }
 .detail {
   display: grid;
@@ -82,6 +94,10 @@
   border-color: transparent;
 }
 .panel .signOut {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-3);
   width: 100%;
   margin-top: var(--yoyi-space-7);
   color: var(--yoyi-color-seal-red);
@@ -95,5 +111,8 @@
   .row {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .row > .actions {
+    align-self: flex-end;
   }
 }

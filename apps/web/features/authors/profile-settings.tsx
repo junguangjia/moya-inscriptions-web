@@ -17,6 +17,8 @@ import { AccountSecurity } from "../auth/account-security";
 import type { AccountSecurityHandle } from "../auth/account-security";
 import { useSettingsSwipe } from "../settings/use-settings-swipe";
 import styles from "../settings/settings-view.module.css";
+import { SettingsIcon } from "../settings/settings-icons";
+import type { SettingsIconName } from "../settings/settings-icons";
 
 type Page = "root" | "display" | "privacy" | "blocks" | "security" | "factor";
 const titles: Record<Page, string> = {
@@ -38,6 +40,18 @@ const privacyLabels = {
   favorites: "收藏列表",
   likes: "喜欢列表",
 } as const;
+const pageIcons = {
+  display: "palette",
+  privacy: "lock-keyhole",
+  blocks: "ban",
+  security: "shield-check",
+} as const;
+const privacyIcons = {
+  following: "user-round-plus",
+  followers: "users-round",
+  favorites: "bookmark",
+  likes: "heart",
+} as const;
 const defaults: AuthorProfile["privacy"] = {
   following: "private",
   followers: "private",
@@ -46,18 +60,25 @@ const defaults: AuthorProfile["privacy"] = {
 };
 const ChoiceGroup = <Value extends string>({
   label,
+  kind,
   options,
   value,
   onChange,
 }: {
   label: string;
-  options: readonly { value: Value; label: string }[];
+  kind: "theme" | "layout";
+  options: readonly { value: Value; label: string; icon?: SettingsIconName }[];
   value: Value;
   onChange: (value: Value) => void;
 }) => (
   <fieldset className={styles.group}>
     <legend>{label}</legend>
-    <div className={styles.choices} role="radiogroup" aria-label={label}>
+    <div
+      className={styles.choices}
+      data-choice-kind={kind}
+      role="radiogroup"
+      aria-label={label}
+    >
       {options.map((option, index) => (
         <button
           key={option.value}
@@ -97,8 +118,37 @@ const ChoiceGroup = <Value extends string>({
             buttons?.[next]?.focus();
           }}
         >
+          <span
+            className={styles.preview}
+            data-theme-preview={kind === "theme" ? option.value : undefined}
+            data-layout-preview={kind === "layout" ? option.value : undefined}
+            aria-hidden="true"
+          >
+            {kind === "theme" ? (
+              <>
+                <span className={styles.previewWindow}>
+                  <span className={styles.previewBar} />
+                  <span className={styles.previewTiles}>
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </span>
+                {option.icon && <SettingsIcon name={option.icon} />}
+              </>
+            ) : (
+              <span className={styles.previewFeed}>
+                <i />
+                <i />
+                <i />
+                <i />
+              </span>
+            )}
+          </span>
           <span>{option.label}</span>
-          <span aria-hidden="true">{value === option.value ? "✓" : ""}</span>
+          <span className={styles.checkmark} aria-hidden="true">
+            {value === option.value && <SettingsIcon name="check" />}
+          </span>
         </button>
       ))}
     </div>
@@ -435,7 +485,11 @@ export const ProfileSettings = ({
       if (valid()) setMutationBusy(false);
     }
   };
-  const row = (label: string, destination: Page, summary?: string) => (
+  const row = (
+    label: string,
+    destination: keyof typeof pageIcons,
+    summary?: string,
+  ) => (
     <button
       type="button"
       data-settings-focus-key={destination}
@@ -443,29 +497,30 @@ export const ProfileSettings = ({
       disabled={blocked}
       onClick={() => show(destination)}
     >
+      <span className={styles.rowIcon}>
+        <SettingsIcon name={pageIcons[destination]} />
+      </span>
       <span className={styles.rowText}>
         <span>{label}</span>
         {summary && <small>{summary}</small>}
       </span>
-      <span className={styles.chevron} aria-hidden="true">
-        ›
-      </span>
+      <SettingsIcon className={styles.chevron} name="chevron-right" />
     </button>
   );
   const guest = (
     <div className={styles.rows}>
       <a className={styles.row} href={author.signInHref}>
-        <span className={styles.rowText}>
-          登录后管理账户设置<small>隐私、屏蔽账户与登录方式</small>
+        <span className={styles.rowIcon}>
+          <SettingsIcon name="shield-check" />
         </span>
-        <span className={styles.chevron} aria-hidden="true">
-          ›
-        </span>
+        <span className={styles.rowText}>登录后管理账户设置</span>
+        <SettingsIcon className={styles.chevron} name="chevron-right" />
       </a>
     </div>
   );
   return (
     <AuthorDialog
+      backIcon={<SettingsIcon name="arrow-left" />}
       title={page === "factor" ? factorTitle : titles[page]}
       titleContent={
         <span ref={title} className={styles.title} tabIndex={-1}>
@@ -499,7 +554,7 @@ export const ProfileSettings = ({
             {page === "root" && (
               <>
                 <section className={styles.group}>
-                  <h3>外观</h3>
+                  <h3>偏好</h3>
                   <div className={styles.rows}>
                     {row(
                       "外观",
@@ -516,15 +571,15 @@ export const ProfileSettings = ({
                         {row(
                           "列表隐私",
                           "privacy",
-                          dirty ? "有未保存的更改" : "关注、粉丝、收藏与喜欢",
+                          dirty ? "有未保存的更改" : undefined,
                         )}
-                        {row("已屏蔽账户", "blocks", "查看和解除屏蔽")}
+                        {row("已屏蔽账户", "blocks")}
                       </div>
                     </section>
                     <section className={styles.group}>
                       <h3>账户</h3>
                       <div className={styles.rows}>
-                        {row("账号与安全", "security", "邮箱、手机号与登录")}
+                        {row("账号与安全", "security")}
                         {onEdit && (
                           <button
                             type="button"
@@ -539,10 +594,14 @@ export const ProfileSettings = ({
                               setEditRequested(true);
                             }}
                           >
-                            <span>编辑信息</span>
-                            <span className={styles.chevron} aria-hidden="true">
-                              ›
+                            <span className={styles.rowIcon}>
+                              <SettingsIcon name="user-round-pen" />
                             </span>
+                            <span className={styles.rowText}>编辑信息</span>
+                            <SettingsIcon
+                              className={styles.chevron}
+                              name="chevron-right"
+                            />
                           </button>
                         )}
                       </div>
@@ -560,15 +619,27 @@ export const ProfileSettings = ({
               <>
                 <ChoiceGroup
                   label="主题"
+                  kind="theme"
                   value={shell.theme}
                   onChange={shell.setThemePreference}
                   options={(["system", "light", "dark"] as const).map(
-                    (value) => ({ value, label: themeLabels[value] }),
+                    (value) => ({
+                      value,
+                      label: themeLabels[value],
+                      icon: (
+                        {
+                          system: "monitor",
+                          light: "sun",
+                          dark: "moon",
+                        } as const
+                      )[value],
+                    }),
                   )}
                 />
                 {shell.platform !== "pc" && (
                   <ChoiceGroup
                     label="首页布局"
+                    kind="layout"
                     value={shell.feedLayout}
                     onChange={shell.setFeedLayoutPreference}
                     options={(["single", "double"] as const).map((value) => ({
@@ -577,9 +648,7 @@ export const ProfileSettings = ({
                     }))}
                   />
                 )}
-                <p className={styles.help}>
-                  外观更改立即生效，并保存在当前浏览器。
-                </p>
+                <p className={styles.help}>立即生效，保存在当前浏览器。</p>
               </>
             )}
             {page === "privacy" &&
@@ -592,7 +661,10 @@ export const ProfileSettings = ({
                       ) as (keyof typeof privacyLabels)[]
                     ).map((key) => (
                       <label className={styles.row} key={key}>
-                        <span>{privacyLabels[key]}</span>
+                        <span className={styles.rowLabel}>
+                          <SettingsIcon name={privacyIcons[key]} />
+                          <span>{privacyLabels[key]}</span>
+                        </span>
                         <select
                           value={privacy[key]}
                           disabled={busy}
@@ -611,7 +683,7 @@ export const ProfileSettings = ({
                     ))}
                   </div>
                   <p className={styles.help}>
-                    每项设置仅隐藏自己的列表；另一人的公开列表仍可能显示同一关系。浏览历史、我的评论和编辑草稿始终私密。
+                    只隐藏自己的列表，另一方的公开列表仍可能显示关系。浏览历史、我的评论与草稿始终私密。
                   </p>
                   {error && (
                     <p className={styles.error} role="alert">
@@ -637,7 +709,7 @@ export const ProfileSettings = ({
               (ownProfile ? (
                 <>
                   <p className={styles.help}>
-                    解除屏蔽不会恢复以前的关注。屏蔽不会阻止匿名访问公开内容。
+                    解除后不恢复关注；屏蔽不限制匿名访问公开内容。
                   </p>
                   {blocks && (
                     <div className={styles.rows}>

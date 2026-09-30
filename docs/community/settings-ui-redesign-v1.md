@@ -74,3 +74,20 @@ for the reviewed candidate.
 The cumulative verify-task entry, exact-head CI and independent review are
 required for the Draft handoff. No animation performance improvement is claimed
 without measured evidence.
+
+## Owner visual refinement r2
+
+The Owner requested graphical, concise settings with uniform mature-library
+icons, while preserving older icons on every other interface and matching the
+current ArtVenn UI. Only settings imports the locally vendored Lucide subset
+with fixed upstream provenance and full license. No dependency or global icon
+asset changes are introduced. AuthorDialog accepts an optional presentation-only
+back icon; its default remains unchanged.
+
+The root keeps short labels and meaningful current/draft status. Appearance uses
+three theme preview cards and two layout diagrams with the existing radio
+semantics, visible labels, keyboard selection and persistence. Privacy and
+account rows use the same decorative SVG vocabulary; explanatory text retains
+privacy, relationship and verification limits. Existing tokens determine colors,
+spacing, type and rounding. All r1 state/protocol/motion and Draft gates remain
+applicable.
