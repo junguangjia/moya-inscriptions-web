@@ -321,8 +321,11 @@ export const ProfileSettings = ({
     closingRef.current = true;
     setClosing(true);
     const finish = () => {
-      if (latest.current.signedOut) window.location.assign("/");
-      else if (
+      if (latest.current.signedOut) {
+        viewport.current?.closest<HTMLDialogElement>("dialog")?.close();
+        latest.current.onClose();
+        window.location.assign("/");
+      } else if (
         latest.current.editRequested &&
         ownerRef.current &&
         latest.current.onEdit
