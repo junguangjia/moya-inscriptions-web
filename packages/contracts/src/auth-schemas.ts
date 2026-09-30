@@ -47,13 +47,49 @@ export const authAccountSecuritySchema = z.strictObject({
   capabilities: authCapabilitiesSchema,
 });
 
+export const authPasswordSchema = z
+  .string()
+  .refine((value) => {
+    const length = [...value].length;
+    return (
+      length >= 6 &&
+      length <= 20 &&
+      /[A-Z]/u.test(value) &&
+      /[0-9]/u.test(value) &&
+      !value.includes("\u0000") &&
+      !/[\uD800-\uDFFF]/u.test(value)
+    );
+  }, "Password must contain 6–20 Unicode code points, an ASCII uppercase letter and a digit")
+  .meta({
+    description:
+      "6–20 Unicode code points, including an ASCII uppercase letter and digit; do not trim or normalize; no NUL or lone surrogate. Never stored as plaintext.",
+    writeOnly: true,
+  });
+export const studioNameSchema = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      [...value].length <= 6 &&
+      !value.includes("\u0000") &&
+      !/[\uD800-\uDFFF]/u.test(value),
+    "Invalid studio name",
+  );
+
 const idempotencyKeySchema = z.string().uuid();
 const continuationTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
 const otpSchema = z.string().regex(/^\d{6}$/u);
 
 export const authChallengeRequestSchema = z.strictObject({
   channel: authChannelSchema,
-  purpose: z.enum(["sign_in", "register", "link", "replace", "reauthenticate"]),
+  purpose: z.enum([
+    "sign_in",
+    "register",
+    "link",
+    "replace",
+    "reauthenticate",
+    "password_reset",
+  ]),
   identifier: z.string().min(1).max(254).optional(),
   idempotencyKey: idempotencyKeySchema,
   reauthToken: continuationTokenSchema.optional(),
@@ -77,9 +113,40 @@ export const authVerifyRequestSchema = z.strictObject({
 export const authRegistrationRequestSchema = z.strictObject({
   handoffToken: continuationTokenSchema,
   displayName: z.string().min(1).max(40),
+  password: authPasswordSchema.optional(),
+  studioName: studioNameSchema.optional(),
   agreement: z.literal(true),
   idempotencyKey: idempotencyKeySchema,
 });
+
+export const authPasswordLoginRequestSchema = z.strictObject({
+  channel: authChannelSchema,
+  identifier: z.string().min(1).max(254),
+  // Do not expose composition differences on sign-in; the service verifies generically.
+  password: z.string().max(80).meta({
+    writeOnly: true,
+    description:
+      "Password input; missing, unset and invalid credentials have the same sign-in result.",
+  }),
+  idempotencyKey: idempotencyKeySchema,
+});
+export const authPasswordResetRequestSchema = z.strictObject({
+  handoffToken: continuationTokenSchema,
+  password: authPasswordSchema,
+  idempotencyKey: idempotencyKeySchema,
+});
+export const authPasswordResetResultSchema = z.strictObject({
+  reset: z.literal(true),
+});
+export type AuthPasswordLoginRequest = z.infer<
+  typeof authPasswordLoginRequestSchema
+>;
+export type AuthPasswordResetRequest = z.infer<
+  typeof authPasswordResetRequestSchema
+>;
+export type AuthPasswordResetResult = z.infer<
+  typeof authPasswordResetResultSchema
+>;
 
 export const authFactorCompleteRequestSchema = z.strictObject({
   challengeId: z.string().regex(/^challenge-[0-9a-f]{32}$/u),

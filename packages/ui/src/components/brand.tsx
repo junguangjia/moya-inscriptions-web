@@ -1,4 +1,25 @@
 import type { HTMLAttributes } from "react";
+import { darkTheme, lightTheme } from "@moya/design-tokens";
+
+/** Product control accent retained for existing consumers. */
+export const brandAccentColors = {
+  light: lightTheme["system-orange"],
+  dark: darkTheme["system-orange"],
+} as const;
+
+/** Neutral material parameters shared with the independently themed Admin. */
+export const brandDebossColors = {
+  light: {
+    floor: lightTheme["brand-recess-floor"],
+    shadow: lightTheme["brand-recess-shadow"],
+    highlight: lightTheme["brand-recess-highlight"],
+  },
+  dark: {
+    floor: darkTheme["brand-recess-floor"],
+    shadow: darkTheme["brand-recess-shadow"],
+    highlight: darkTheme["brand-recess-highlight"],
+  },
+} as const;
 
 import type { FixedLabelName, IconName } from "../assets.js";
 import { cx } from "../utils.js";
@@ -94,7 +115,7 @@ export type YoyiLogoProps = Omit<
 };
 
 export function YoyiLogo({
-  label = "由艺",
+  label = "由于艺",
   className,
   ...props
 }: YoyiLogoProps) {

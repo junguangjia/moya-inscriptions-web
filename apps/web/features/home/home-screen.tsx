@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuthReturnView } from "../auth/auth-return";
+
 import {
   forwardRef,
   useCallback,
@@ -178,9 +180,24 @@ export const HomeScreen = ({
     registerActiveHomeScrollElement,
     restoreActiveScrollTop,
   } = useProductShell();
-  const [activeFeed, setActiveFeed] = useState<HomeFeed>(() =>
-    parseHomeFeed(initialFeed),
+  const authReturnView = useAuthReturnView("home", () => ({
+    feed: activeFeedRef.current,
+    positions: {
+      ...scrollPositionsRef.current,
+      [activeFeedRef.current]: readActiveScrollTop(),
+    },
+  }));
+  const [activeFeed, setActiveFeed] = useState<HomeFeed>(
+    () => authReturnView?.feed ?? parseHomeFeed(initialFeed),
   );
+  const restoredHome = useRef(false);
+  useEffect(() => {
+    if (!authReturnView || restoredHome.current) return;
+    restoredHome.current = true;
+    scrollPositionsRef.current = authReturnView.positions;
+    pagerRef.current?.scrollToFeed(authReturnView.feed);
+    restoreActiveScrollTop(authReturnView.positions[authReturnView.feed]);
+  }, [authReturnView, restoreActiveScrollTop]);
   activeFeedRef.current = activeFeed;
   useEffect(() => onFeedChange?.(activeFeed), [activeFeed, onFeedChange]);
 

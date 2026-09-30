@@ -7,6 +7,7 @@ import {
   readT02Document,
   sanitizeProductionT02Document,
   serveT02File,
+  methodNotAllowed,
 } from "./t02-static-files";
 
 import type { BrowseItem } from "./t02-static-files";
@@ -38,6 +39,28 @@ afterEach(() => {
 });
 
 describe("formal T02 file serving", () => {
+  it("serves the imported brand stylesheet through the contained readonly boundary", async () => {
+    const get = await serveT02File(
+      { kind: "ui-styles", segments: ["brand.css"] },
+      "GET",
+    );
+    expect(get.status).toBe(200);
+    expect(get.headers.get("Content-Type")).toBe("text/css; charset=utf-8");
+    expect(await get.text()).toContain(".yoyi-logo::before");
+    const head = await serveT02File(
+      { kind: "ui-styles", segments: ["brand.css"] },
+      "HEAD",
+    );
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(methodNotAllowed().status).toBe(405);
+    const traversal = await serveT02File(
+      { kind: "prototype", segments: ["..", "brand.css"] },
+      "GET",
+    );
+    expect(traversal.status).toBe(404);
+  });
+
   it("appends real Discover cards without replacing canonical QA cards", async () => {
     const source = await (
       await serveT02File({ kind: "prototype", segments: ["index.html"] }, "GET")

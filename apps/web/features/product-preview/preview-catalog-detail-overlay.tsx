@@ -4,8 +4,11 @@ import { useEffect, useRef, useState } from "react";
 
 import { CatalogDetailExperience } from "../detail/catalog-detail-experience";
 import { useProductShell } from "../product-shell/product-shell";
+import { useOptionalAuthors } from "../authors/author-context";
+import { useAuthReturn } from "../auth/auth-return";
 
 import type { ReactNode, RefObject } from "react";
+import type { ContentIdentity } from "@moya/contracts";
 import type { CatalogDetailPresentationLoader } from "../detail/load-catalog-detail";
 import type {
   CatalogDetailPresentation,
@@ -15,6 +18,7 @@ import type {
 export interface PreviewCatalogDetailOverlayProps {
   readonly backButtonRef: RefObject<HTMLButtonElement | null>;
   readonly catalogId: string;
+  readonly target?: ContentIdentity;
   readonly commentSection?: ReactNode;
   readonly renderActions?: (
     detail: CatalogDetailPresentation,
@@ -29,6 +33,7 @@ export interface PreviewCatalogDetailOverlayProps {
 export const PreviewCatalogDetailOverlay = ({
   backButtonRef,
   catalogId,
+  target,
   commentSection,
   renderActions,
   initialScrollTop,
@@ -36,6 +41,12 @@ export const PreviewCatalogDetailOverlay = ({
   onClose,
   onScrollTopChange,
 }: PreviewCatalogDetailOverlayProps) => {
+  const author = useOptionalAuthors();
+  const authReturn = useAuthReturn();
+  const identityReady =
+    author === null || (!author.checking && !author.sessionError);
+  const targetType = target?.type ?? "catalog";
+  const targetId = target?.id ?? catalogId;
   const {
     activeViewerMediaId,
     changeViewerMedia,
@@ -43,8 +54,10 @@ export const PreviewCatalogDetailOverlay = ({
     openViewer,
     orientation,
     platform,
+    recoverUnavailableAuthContent,
   } = useProductShell();
   const generationRef = useRef(0);
+  const missingTargetRef = useRef<ContentIdentity | null>(null);
   const [revision, setRevision] = useState(0);
   const [state, setState] = useState<CatalogDetailPresentationState>({
     state: "loading",
@@ -53,6 +66,7 @@ export const PreviewCatalogDetailOverlay = ({
   useEffect(() => {
     const controller = new AbortController();
     const generation = ++generationRef.current;
+    missingTargetRef.current = null;
     setState({ state: "loading" });
     void loader(catalogId, controller.signal)
       .then((nextState) => {
@@ -60,6 +74,10 @@ export const PreviewCatalogDetailOverlay = ({
           !controller.signal.aborted &&
           generationRef.current === generation
         ) {
+          missingTargetRef.current =
+            nextState.state === "not-found"
+              ? { type: targetType, id: targetId }
+              : null;
           setState(nextState);
         }
       })
@@ -72,7 +90,29 @@ export const PreviewCatalogDetailOverlay = ({
         }
       });
     return () => controller.abort();
-  }, [catalogId, loader, revision]);
+  }, [catalogId, loader, revision, targetType, targetId]);
+
+  useEffect(() => {
+    // A confirmed /me can re-key source feeds and this Detail. Let that commit
+    // read its public snapshot before retiring the journey for a missing item.
+    if (!identityReady || state.state !== "not-found") return;
+    const missing = missingTargetRef.current;
+    if (missing !== null) recoverUnavailableAuthContent(missing);
+  }, [
+    identityReady,
+    state.state,
+    recoverUnavailableAuthContent,
+    targetType,
+    targetId,
+  ]);
+
+  // A missing Viewer normally closes itself with Back. During this source
+  // recovery the shell replaces both Viewer and Detail together, after /me;
+  // keep the child in its loading view until that recovery can commit.
+  const presentedState: CatalogDetailPresentationState =
+    state.state === "not-found" && authReturn?.isRestoring()
+      ? { state: "loading" }
+      : state;
 
   return (
     <CatalogDetailExperience
@@ -93,7 +133,7 @@ export const PreviewCatalogDetailOverlay = ({
       onViewerMediaChange={changeViewerMedia}
       orientation={orientation}
       platform={platform}
-      state={state}
+      state={presentedState}
     />
   );
 };

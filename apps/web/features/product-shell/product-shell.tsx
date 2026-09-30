@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
+
 import {
   Fragment,
   createContext,
@@ -12,7 +14,7 @@ import {
   useState,
 } from "react";
 
-import { LoadingScreen } from "@moya/ui";
+import { Button, LoadingScreen } from "@moya/ui";
 
 import styles from "./product-shell.module.css";
 import { requestIdentity } from "../shell/request-identity";
@@ -177,6 +179,8 @@ export interface ProductShellContextValue {
   readonly activeViewerMediaId: string | null;
   readonly closeTopic: () => void;
   readonly closeViewer: () => void;
+  /** Recover only unavailable content from the current authentication return. */
+  readonly recoverUnavailableAuthContent: (target?: ContentIdentity) => boolean;
   readonly changeViewerMedia: (mediaId: string) => void;
   readonly feedLayout: FeedLayoutPreference;
   readonly setThemePreference: (value: ThemePreference) => void;
@@ -332,6 +336,8 @@ export const ProductShell = ({
   renderTopicOverlay,
   showDevelopmentPagerControls = false,
 }: ProductShellProps) => {
+  const authReturn = useAuthReturn();
+  const [authReturnNotice, setAuthReturnNotice] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const settingsBackRef = useRef<HTMLButtonElement>(null);
   const detailBackRef = useRef<HTMLButtonElement>(null);
@@ -1043,6 +1049,18 @@ export const ProductShell = ({
       );
     }
   }, [readActiveScrollTop, saveScroll]);
+  const authReturnView = useAuthReturnView("shell", () => {
+    const stored = parseProductHistoryState(window.history.state);
+    const history =
+      stored?.kind === "detail" || stored?.kind === "viewer"
+        ? { ...stored, detailScrollTop: detailScrollTopRef.current }
+        : stored?.kind === "profile" && profileRef.current
+          ? profileRef.current
+          : stored?.kind === "primary"
+            ? { ...stored, scrollTop: readActiveScrollTop() }
+            : stored;
+    return { history, positions: { ...scrollPositionsRef.current } };
+  });
   const openContent = useCallback(
     (target: ContentIdentity, opener: HTMLElement) => {
       if (
@@ -1586,6 +1604,58 @@ export const ProductShell = ({
     setViewerVisibility,
   ]);
 
+  const recoverUnavailableAuthContent = useCallback(
+    (target?: ContentIdentity) => {
+      if (!authReturn?.isRestoring()) return false;
+      const state = parseProductHistoryState(window.history.state);
+      if (
+        state === null ||
+        (state.kind !== "detail" &&
+          state.kind !== "viewer" &&
+          state.kind !== "topic") ||
+        (target !== undefined &&
+          (state.kind === "topic" ||
+            state.target.type !== target.type ||
+            state.target.id !== target.id))
+      )
+        return false;
+      if (detailHistoryTimerRef.current !== null) {
+        window.clearTimeout(detailHistoryTimerRef.current);
+        detailHistoryTimerRef.current = null;
+      }
+      const { sourceDestination, sourceScrollTop } = state;
+      // This replaces the unavailable source entry itself. Closing a viewer
+      // with Back would leave an equally unavailable Detail beneath it.
+      authReturn.retire();
+      setViewerVisibility(null);
+      setDetailVisibility(null);
+      setTopicVisibility(null);
+      detailScrollTopRef.current = 0;
+      activeDestinationRef.current = sourceDestination;
+      setActiveDestination(sourceDestination);
+      scrollPositionsRef.current[sourceDestination] = sourceScrollTop;
+      window.history.replaceState(
+        currentProductHistoryState(
+          primaryHistoryState(sourceDestination, sourceScrollTop),
+        ),
+        "",
+        primaryLocation(window.location),
+      );
+      expandNavigation();
+      restoreScroll(sourceDestination, platformRef.current);
+      setAuthReturnNotice("原内容已删除或暂时无法访问，已返回原列表。");
+      return true;
+    },
+    [
+      authReturn,
+      expandNavigation,
+      restoreScroll,
+      setDetailVisibility,
+      setTopicVisibility,
+      setViewerVisibility,
+    ],
+  );
+
   useEffect(() => {
     const root = document.documentElement;
     const storedTheme = readStoredThemePreference(window.localStorage);
@@ -1767,9 +1837,16 @@ export const ProductShell = ({
   ]);
 
   useEffect(() => {
-    const storedState = parseProductHistoryState(window.history.state);
+    const storedState =
+      authReturnView?.history ?? parseProductHistoryState(window.history.state);
     const initialState =
-      storedState === null ? null : resetHistoryScroll(storedState);
+      storedState === null
+        ? null
+        : authReturnView
+          ? storedState
+          : resetHistoryScroll(storedState);
+    if (authReturnView)
+      scrollPositionsRef.current = { ...authReturnView.positions };
     if (initialState)
       window.history.replaceState(currentProductHistoryState(initialState), "");
     const candidateTarget = directContentFromLocation(window.location);
@@ -2326,6 +2403,7 @@ export const ProductShell = ({
     activeViewerMediaId,
     changeViewerMedia,
     closeViewer,
+    recoverUnavailableAuthContent,
     closeTopic,
     feedLayout,
     cycleTheme,
@@ -2395,6 +2473,33 @@ export const ProductShell = ({
           />
           {primaryUtility}
         </div>
+
+        {authReturnNotice !== null ? (
+          <div
+            aria-live="polite"
+            data-auth-content-recovery=""
+            role="status"
+            style={{
+              position: "fixed",
+              insetInline: "var(--yoyi-space-5)",
+              top: "calc(env(safe-area-inset-top, 0px) + var(--yoyi-space-5))",
+              zIndex: "var(--yoyi-z-index-overlay)",
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--yoyi-space-3)",
+              padding: "var(--yoyi-space-4)",
+              border: "1px solid var(--yoyi-color-border-default)",
+              borderRadius: "var(--yoyi-radius-md)",
+              background: "var(--yoyi-color-background-elevated)",
+              color: "var(--yoyi-color-text-primary)",
+            }}
+          >
+            <span style={{ flex: 1 }}>{authReturnNotice}</span>
+            <Button onClick={() => setAuthReturnNotice(null)} variant="quiet">
+              关闭提示
+            </Button>
+          </div>
+        ) : null}
 
         {settingsOpen ? (
           <SettingsOverlay

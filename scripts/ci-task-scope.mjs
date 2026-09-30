@@ -98,9 +98,11 @@ const cmsTestTarget = new Set([
 // Admin's agent-connection control plane and resource boundary import it, so
 // the cms job now builds and runs it through `pnpm --filter admin build`. The
 // script test derives this closure from the job itself rather than from this
-// comment, which is what caught the omission.
+// comment, which is what caught the omission. Admin branding now consumes the
+// existing UI asset export, so UI and its design-token dependency join that
+// closure and must retain CMS coverage when their shared resources change.
 const cmsBuiltPackage =
-  /^(?:packages\/(?:contracts|image|search)|services\/(?:api|catalog-postgres|community-postgres))\/(?:src\/|(?:package|tsconfig)\.json$)/u;
+  /^(?:packages\/(?:contracts|design-tokens|image|search|ui)|services\/(?:api|catalog-postgres|community-postgres))\/(?:src\/|(?:package|tsconfig)\.json$)/u;
 const publicBoundary = (file) =>
   (file.startsWith("packages/contracts/") &&
     !file.startsWith("packages/contracts/src/internal/")) ||
