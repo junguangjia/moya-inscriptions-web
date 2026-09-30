@@ -166,6 +166,16 @@ const click = async (text: string) => {
   if (!control) throw Error(`no button ${text}`);
   await act(async () => control.click());
 };
+/** Header Back or a swipe: the browser pops the crop step's history entry. */
+const back = async () => {
+  await act(async () =>
+    window.dispatchEvent(
+      new PopStateEvent("popstate", {
+        state: { ...window.history.state, phase4DialogDepth: 0 },
+      }),
+    ),
+  );
+};
 const choose = async (name = "cover.jpg") => {
   const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
   Object.defineProperty(input, "files", {
@@ -225,6 +235,11 @@ afterEach(async () => {
   window.history.replaceState({ source: "profile" }, "", "/#profile");
   await act(async () => root?.unmount());
   root = null;
+  // A dialog unmounted mid-test leaves AuthorDialog's one-shot listener for
+  // the browser's Back (history.back is mocked here): consume it now, while
+  // nothing is mounted, so it cannot swallow the next test's Back.
+  await Promise.resolve();
+  window.dispatchEvent(new PopStateEvent("popstate", { state: null }));
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
@@ -431,7 +446,9 @@ it("cancels back to the overview without sending or prompting", async () => {
   const chosen = readImage.mock.results[0]!.value as Promise<{
     release: ReturnType<typeof vi.fn>;
   }>;
-  await click("取消");
+  // Crop has no 取消: Back returns to the overview (as in the publishing crop).
+  expect(find("取消")).toBeUndefined();
+  await back();
   expect(
     document.querySelector('[data-cover-editor="overview"]'),
   ).not.toBeNull();
@@ -526,7 +543,7 @@ it("checks an uncertain save when leaving the crop, quietly if still offline", a
   await render();
   await selectImage();
   await click("保存");
-  await click("取消");
+  await back();
   expect(profileRead).toHaveBeenCalledWith("author");
   expect(onSaved).not.toHaveBeenCalled();
   expect(
@@ -545,8 +562,9 @@ it("checks an uncertain save when leaving the crop, quietly if still offline", a
   });
   await selectImage();
   await click("保存");
-  await click("取消");
+  await back();
   expect(onSaved).toHaveBeenCalledOnce();
+  expect(author.notify).toHaveBeenCalledWith("主页背景已保存");
 });
 
 it("stops guarding page unload once the server has confirmed the save", async () => {
@@ -585,6 +603,6 @@ it("moves focus with each step", async () => {
   await click("取消");
   expect(document.activeElement?.textContent).toBe("更换照片");
   await selectImage();
-  await click("取消");
+  await back();
   expect(document.activeElement?.textContent).toBe("更换照片");
 });

@@ -303,9 +303,13 @@ const decodeBounded = async (
           : { ...oriented, resizeWidth: width, resizeQuality: "high" },
       );
     } catch (error) {
-      // Engines that refuse the options decode once at full size.
+      // Engines that refuse the options: keep the size bound (a rotated
+      // photo then fails the shape check with a clear message).
       if (!(error instanceof TypeError)) throw error;
-      return environment.decode(file, {});
+      return environment.decode(
+        file,
+        width === null ? {} : { resizeWidth: width, resizeQuality: "high" },
+      );
     }
     const pixels = bitmap.width * bitmap.height;
     // An engine that applies resizeWidth before EXIF rotation returns too

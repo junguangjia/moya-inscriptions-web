@@ -1,6 +1,6 @@
 # Profile cover upload redesign V1
 
-Status: implementation candidate for Issue #171 r2. Delivery stops at an
+Status: implementation candidate for Issue #171 r4. Delivery stops at an
 independently reviewed Draft PR with a Development preview. Owner visual and
 physical-device acceptance, Ready, merge and Issue closure are separate.
 
@@ -98,14 +98,14 @@ The editor stays inside the existing `AuthorDialog`, with no new shell or
 motion. Back never shows a discard prompt, and it is blocked only while a save
 is in progress.
 
-| Step (dialog depth)     | Behaviour                                                                                                                                                                                                                                                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Overview (0)            | The current background in a header replica built from the live cover classes, with a 手机/电脑 toggle. Buttons: 更换照片 / 选择照片, and 移除背景.                                                                                                                                                                           |
-| Choose                  | Opens the system picker from the click. An unusable file gets specific copy. A failed reselect keeps the current photo and crop.                                                                                                                                                                                             |
-| Crop (1)                | Drag to reposition; zoom with two fingers (touch pinch or trackpad pinch). There is no zoom bar (Owner decision, 2026-09-30). Keyboard and mouse fallbacks: arrow keys (8 px), `+ − 0`, Ctrl + wheel. 重置 sits in the toolbar. The zoom range is 1–3, and the image always covers the frame. Buttons: 重新选择, 取消, 保存. |
-| Saving                  | 处理图片 · 上传 · 保存 · 更新主页. Input is locked. The dialog closes, and the notice appears, only after the owner's header shows the confirmed image, or after 15 s with 「刷新后显示」.                                                                                                                                   |
-| Failure                 | Mapped copy that says whether the background changed. 重试保存 reuses the exported bytes and both request ids. A changed crop starts a new export.                                                                                                                                                                           |
-| Remove confirmation (1) | A blank replica. 确认移除 saves `mediaId: null`.                                                                                                                                                                                                                                                                             |
+| Step (dialog depth)     | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Overview (0)            | 手机/电脑 as the 设置 underline tabs, then the current background in a header replica built from the live cover classes. Buttons: 移除背景 (secondary) and 更换照片 / 选择照片 (primary).                                                                                                                                                                                                                                         |
+| Choose                  | Opens the system picker from the click. An unusable file gets specific copy. A failed reselect keeps the current photo and crop.                                                                                                                                                                                                                                                                                                  |
+| Crop (1)                | 手机/电脑 tabs above the 4:3 frame. Drag to reposition; zoom with two fingers (touch pinch or trackpad pinch); there is no zoom bar (r3). Fallbacks: arrow keys (8 px), `+ − 0`, Ctrl + wheel. Under the frame: 还原 and the gesture hint, then the 参考线 switch, then 重新选择 / 保存. Back (header or swipe) returns to the overview; there is no separate 取消. The zoom range is 1–3, and the image always covers the frame. |
+| Saving                  | 处理图片 · 上传 · 保存 · 更新主页. Input is locked. The dialog closes, and the notice appears, only after the owner's header shows the confirmed image, or after 15 s with 「刷新后显示」.                                                                                                                                                                                                                                        |
+| Failure                 | Mapped copy that says whether the background changed. 重试保存 reuses the exported bytes and both request ids. A changed crop starts a new export.                                                                                                                                                                                                                                                                                |
+| Remove confirmation (1) | A blank replica. Buttons: 取消 (secondary) and 确认移除 (primary), which saves `mediaId: null`.                                                                                                                                                                                                                                                                                                                                   |
 
 ## Behavior Matrix
 
@@ -145,6 +145,27 @@ means choosing the photo again.
 Replaced or abandoned uploads remain owner-only `user_media` rows, as before.
 Collecting them is Backend scope.
 
+## Visual language (r4)
+
+The editors use ArtVenn's established controls; nothing new is invented:
+
+- **Actions:** the publishing crop dialog's buttons and layout
+  (`publishing/ui/media/media.module.css`): the primary action is a seal-red
+  pill (`--yoyi-color-seal-red`, `text-inverse`, 15 px / 650), secondary actions
+  are outlined pills, and every step ends in a two-button row.
+- **Device choice:** the 设置 underline tabs (`.phase4-settings-tabs`), selected
+  with the seal-red underline.
+- **参考线:** the composer's switch (`EditorSwitch`), whose description replaces
+  a legend.
+- **Notes, errors and progress:** `dialogNote`, `notice` / `errorText` and the
+  composer's step bars.
+- **Guides over the photo:** palette tokens only, the same in both themes: an
+  ink-black 55 % dim outside the device window, a paper-light 1 px edge, a
+  dashed edge for the other device and a solid one for the safe area.
+- **Avatar editor (r4):** the same two-finger zoom (shared `crop-gestures.ts`),
+  the same 还原 and hint row (`crop-tools.tsx`), and the
+  seal-red 保存头像 primary. Its behaviour is otherwise unchanged.
+
 ## Reused mature components
 
 - **react-easy-crop 6.2.3**, the existing dependency. Mastodon's 2026 profile
@@ -155,7 +176,7 @@ Collecting them is Backend scope.
 - **Keyboard alternatives** to drag and pinch (arrow keys, `+ − 0`, announced
   through the crop area's label). By Owner decision (r3) there is no on-screen
   zoom bar: touch users zoom with two fingers, and a touch screen-reader or
-  single-pointer user cannot zoom (they keep drag and 重置). The Owner accepted
+  single-pointer user cannot zoom (they keep drag and 还原). The Owner accepted
   this trade-off.
 - **GitHub `image-crop-element`:** key map.
 - **Repository code reused:**

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { Area } from "react-easy-crop";
 import type { AuthorProfile } from "@moya/contracts";
@@ -23,9 +23,15 @@ import type {
   CoverSource,
   HeaderBox,
 } from "./profile-cover";
-import { DEVICE_LABELS, ProfileCoverStage } from "./profile-cover-stage";
+import {
+  DEVICE_LABELS,
+  DeviceTabs,
+  ProfileCoverStage,
+} from "./profile-cover-stage";
 import { ProfileCoverPreview } from "./profile-cover-preview";
 import { requestIdentity } from "../shell/request-identity";
+import editor from "../publishing/ui/editor/editor.module.css";
+import media from "../publishing/ui/media/media.module.css";
 import presentation from "../user/user-presentation.module.css";
 import styles from "./profile-background-editor.module.css";
 
@@ -109,6 +115,7 @@ export const ProfileBackgroundEditor = ({
   const headers = measured
     ? { ...REFERENCE_HEADERS, [thisDevice]: measured }
     : REFERENCE_HEADERS;
+  const tabsId = useId();
   const [step, setStep] = useState<Step>("overview"),
     [device, setDevice] = useState<CoverDevice>(thisDevice),
     [chosen, setChosen] = useState<Chosen | null>(null),
@@ -142,8 +149,36 @@ export const ProfileBackgroundEditor = ({
     author.viewer?.id === profile.id &&
     !author.checking &&
     !author.sessionError;
-  const latest = useRef({ author, account: author.viewer?.id });
-  latest.current = { author, account: author.viewer?.id };
+  const latest = useRef({
+    author,
+    account: author.viewer?.id,
+    profile,
+    onSaved,
+  });
+  latest.current = { author, account: author.viewer?.id, profile, onSaved };
+  /**
+   * After a bind that got no definite answer: an editor-scoped read (never a
+   * page reload, which offline would close the editor). A failed read keeps
+   * the question open for the next exit; a confirmed save refreshes the
+   * owning profile and says so.
+   */
+  const checkUncertain = () => {
+    if (!uncertain.current || phaseRef.current !== "idle") return;
+    const { profile: current } = latest.current;
+    const shown = current.background?.id ?? null;
+    void authorClient
+      .profile(current.id)
+      .then((fresh) => {
+        if (!uncertain.current) return;
+        uncertain.current = false;
+        if ((fresh.background?.id ?? null) === shown) return;
+        latest.current.onSaved();
+        latest.current.author.notify(
+          fresh.background ? "主页背景已保存" : "主页背景已移除",
+        );
+      })
+      .catch(() => {});
+  };
   const identity = {
     name: profile.displayName,
     avatarSrc: profile.avatar?.src ?? null,
@@ -168,6 +203,8 @@ export const ProfileBackgroundEditor = ({
       mounted.current = false;
       generation.current++;
       owned.current?.release();
+      // Leaving after an unconfirmed save still checks it (refs only).
+      checkUncertain();
       // The save was confirmed but the editor left before the header caught up.
       if (phaseRef.current === "refresh")
         latest.current.author.notify(
@@ -187,19 +224,7 @@ export const ProfileBackgroundEditor = ({
 
   const toOverview = () => {
     generation.current++;
-    if (uncertain.current) {
-      uncertain.current = false;
-      // Editor-scoped read: a failure (still offline) changes nothing; only a
-      // background that really changed refreshes the owning profile.
-      const shown = profile.background?.id ?? null;
-      void authorClient
-        .profile(profile.id)
-        .then((fresh) => {
-          if (mounted.current && (fresh.background?.id ?? null) !== shown)
-            onSaved();
-        })
-        .catch(() => {});
-    }
+    checkUncertain();
     release();
     setDecoding(false);
     setFailed(false);
@@ -423,25 +448,18 @@ export const ProfileBackgroundEditor = ({
       ? SAVE_STEPS.filter(([key]) => key !== "upload" && key !== "export")
       : SAVE_STEPS;
   const activeIndex = saveSteps.findIndex(([key]) => key === phase);
+  // The composer's step bars; the status line names the phase.
   const progress = busy && (
     <>
-      <ol className={styles.steps} aria-label="保存进度">
-        {saveSteps.map(([key, label], index) => (
+      <ol className={editor.stepProgress} aria-hidden="true">
+        {saveSteps.map(([key], index) => (
           <li
             key={key}
-            data-state={
-              index < activeIndex
-                ? "done"
-                : index === activeIndex
-                  ? "active"
-                  : "pending"
-            }
-          >
-            {index < activeIndex ? `✓ ${label}` : label}
-          </li>
+            data-reached={index <= activeIndex ? "true" : undefined}
+          />
         ))}
       </ol>
-      <p role="status" className={styles.hint}>
+      <p role="status" className={media.dialogNote}>
         {PHASE_STATUS[phase]}
       </p>
     </>
@@ -449,16 +467,18 @@ export const ProfileBackgroundEditor = ({
   const problems = (
     <>
       {!allowed && !author.sessionError && (
-        <p role="status" className={styles.hint}>
+        <p role="status" className={media.dialogNote}>
           正在确认账户，确认后可保存背景。
         </p>
       )}
       {author.sessionError && (
-        <div className={styles.error} role="alert">
-          <p>暂时无法确认账户，照片和裁剪已保留。请检查网络后重试。</p>
+        <div className={media.notice} role="alert">
+          <p className={media.errorText}>
+            暂时无法确认账户，照片和裁剪已保留。请检查网络后重试。
+          </p>
           <button
             type="button"
-            className="phase4-button"
+            className={media.secondaryButton}
             disabled={author.checking || busy}
             onClick={() => void author.refresh()}
           >
@@ -467,12 +487,19 @@ export const ProfileBackgroundEditor = ({
         </div>
       )}
       {error && (
-        <div className={styles.error} role="alert">
-          <p>{error}</p>
-          {failed && step === "crop" && <p>照片和裁剪已保留。</p>}
+        <div className={styles.problem} role="alert">
+          <p className={media.errorText}>{error}</p>
+          {failed && step === "crop" && (
+            <p className={media.dialogNote}>照片和裁剪已保留。</p>
+          )}
         </div>
       )}
     </>
+  );
+  const opening = decoding && (
+    <p role="status" className={media.dialogNote}>
+      正在打开照片…
+    </p>
   );
 
   return (
@@ -492,7 +519,7 @@ export const ProfileBackgroundEditor = ({
       onClose={onClose}
     >
       <div
-        className={styles.editor}
+        className={`${media.dialogBody} ${styles.editor}`}
         aria-busy={busy || decoding}
         data-cover-editor={step}
       >
@@ -512,10 +539,11 @@ export const ProfileBackgroundEditor = ({
                 setAreaReady(true);
               }}
             >
-              <div className={styles.actions}>
+              {/* Back (header) returns to the overview, as in the publishing crop. */}
+              <div className={media.dialogActions}>
                 <button
                   type="button"
-                  className="phase4-button"
+                  className={media.secondaryButton}
                   disabled={busy || decoding}
                   onClick={pick}
                 >
@@ -523,15 +551,7 @@ export const ProfileBackgroundEditor = ({
                 </button>
                 <button
                   type="button"
-                  className="phase4-button"
-                  disabled={busy}
-                  onClick={toOverview}
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  className={`phase4-button ${styles.primary}`}
+                  className={media.primaryButton}
                   disabled={!allowed || busy || decoding || !areaReady}
                   onClick={() => void save()}
                 >
@@ -540,68 +560,50 @@ export const ProfileBackgroundEditor = ({
               </div>
             </ProfileCoverStage>
             {/* Below the buttons: a status never pushes 保存 off a short screen. */}
-            {decoding && (
-              <p role="status" className={styles.hint}>
-                正在打开照片…
-              </p>
-            )}
+            {opening}
             {progress}
             {problems}
           </>
         ) : (
           <>
-            <div className={styles.toolbar}>
-              <div
-                className={styles.segmented}
-                role="group"
-                aria-label="预览设备"
-              >
-                {(["phone", "desktop"] as const).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={device === value}
-                    onClick={() => setDevice(value)}
-                  >
-                    {DEVICE_LABELS[value]}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <ProfileCoverPreview
-              src={step === "remove" ? null : (profile.background?.src ?? null)}
-              header={headers[device]}
-              device={device}
-              identity={identity}
-            />
-            {step === "remove" ? (
-              <p className={styles.previewTitle}>移除后主页将显示空白背景</p>
-            ) : (
-              <>
-                <p className={styles.previewTitle}>
-                  {profile.background
+            <DeviceTabs idBase={tabsId} value={device} onChange={setDevice} />
+            <div
+              className={styles.previewPanel}
+              role="tabpanel"
+              id={`${tabsId}-panel`}
+              aria-labelledby={`${tabsId}-${device}`}
+            >
+              <ProfileCoverPreview
+                src={
+                  step === "remove" ? null : (profile.background?.src ?? null)
+                }
+                header={headers[device]}
+                device={device}
+                identity={identity}
+              />
+              <p className={styles.previewTitle}>
+                {step === "remove"
+                  ? "移除后主页将显示空白背景"
+                  : profile.background
                     ? `当前背景在${DEVICE_LABELS[device]}上的效果`
                     : "尚未设置主页背景"}
-                </p>
-                <p className={styles.hint}>
-                  建议选择横向照片，重要内容放在画面中上部；不同机型显示范围略有差异。
-                </p>
-              </>
-            )}
-            {decoding && (
-              <p role="status" className={styles.hint}>
-                正在打开照片…
+              </p>
+            </div>
+            {step === "overview" && (
+              <p className={media.dialogNote}>
+                建议选择横向照片，重要内容放在画面中上部；不同机型显示范围略有差异。
               </p>
             )}
+            {opening}
             {progress}
             {problems}
-            <div className={styles.actions}>
+            <div className={media.dialogActions}>
               {step === "remove" ? (
                 <>
                   <button
                     ref={keepRemove}
                     type="button"
-                    className="phase4-button"
+                    className={media.secondaryButton}
                     disabled={busy}
                     onClick={toOverview}
                   >
@@ -609,7 +611,7 @@ export const ProfileBackgroundEditor = ({
                   </button>
                   <button
                     type="button"
-                    className={`phase4-button ${styles.primary}`}
+                    className={media.primaryButton}
                     disabled={!allowed || busy}
                     onClick={() => void remove()}
                   >
@@ -621,7 +623,7 @@ export const ProfileBackgroundEditor = ({
                   {profile.background && (
                     <button
                       type="button"
-                      className="phase4-button"
+                      className={media.secondaryButton}
                       disabled={busy || decoding}
                       onClick={() => {
                         setError("");
@@ -635,7 +637,7 @@ export const ProfileBackgroundEditor = ({
                   <button
                     ref={primary}
                     type="button"
-                    className={`phase4-button ${styles.primary}`}
+                    className={media.primaryButton}
                     disabled={busy || decoding}
                     onClick={pick}
                   >

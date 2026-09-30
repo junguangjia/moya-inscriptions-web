@@ -1,11 +1,28 @@
+/*
+ * Profile cover editor. Layout, buttons and notes come from the publishing
+ * crop dialog (media.module.css), device choice from the 设置 tabs and the
+ * 参考线 switch from the composer (editor.module.css); this module only adds
+ * what is specific to the cover: header replicas, the 4:3 frame and its
+ * guides. Colours are design tokens only.
+ */
+
 .editor {
-  display: grid;
-  gap: var(--yoyi-space-4);
-  max-width: 640px;
-  margin: var(--yoyi-space-4) auto 0;
+  text-align: start;
 }
 .editor p {
   margin: 0;
+}
+
+.editor .deviceTabs {
+  margin-bottom: 0;
+}
+.editor .deviceTabs button {
+  min-width: 56px;
+}
+
+.previewPanel {
+  display: grid;
+  gap: var(--yoyi-space-3);
 }
 
 /* Header replicas and the crop frame share the live cover classes. */
@@ -36,53 +53,14 @@
 .stageView,
 .stageControls {
   display: grid;
-  gap: var(--yoyi-space-3);
+  gap: var(--yoyi-space-4);
   min-width: 0;
-}
-
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--yoyi-space-2);
-}
-.segmented {
-  display: inline-flex;
-  padding: 2px;
-  border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-full);
-  background: var(--yoyi-color-background-surface);
-}
-.segmented button,
-.toggle {
-  min-width: 64px;
-  min-height: 44px;
-  padding: 0 var(--yoyi-space-4);
-  border: 0;
-  border-radius: var(--yoyi-radius-full);
-  background: transparent;
-  color: var(--yoyi-color-text-secondary);
-  font: inherit;
-  font-size: var(--yoyi-type-body-small-size);
-  cursor: pointer;
-}
-.segmented button[aria-pressed="true"] {
-  background: var(--yoyi-color-text-primary);
-  color: var(--yoyi-color-background-page);
-}
-.toggle {
-  border: 1px solid var(--yoyi-color-border-subtle);
-}
-.toggle[aria-pressed="true"] {
-  color: var(--yoyi-color-text-primary);
-  border-color: currentColor;
 }
 
 /* The 4:3 master, inset from the screen edges (iOS edge swipe) and height-capped. */
 .frame {
   position: relative;
-  width: min(100%, calc((100svh - 350px) * 4 / 3));
+  width: min(100%, calc((100svh - 400px) * 4 / 3));
   min-width: min(100%, 280px);
   aspect-ratio: 4 / 3;
   margin-inline: auto;
@@ -110,6 +88,7 @@
   -webkit-user-drag: none;
 }
 
+/* Guides: the publishing crop's ink dim and paper edge, the same in both themes. */
 .overlay {
   position: absolute;
   inset: 0;
@@ -118,7 +97,11 @@
 }
 .window {
   position: absolute;
-  box-shadow: 0 0 0 100vmax var(--yoyi-color-overlay);
+  box-shadow: 0 0 0 100vmax
+    color-mix(in srgb, var(--yoyi-color-ink-black) 55%, transparent);
+  outline: 1px solid
+    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
+  outline-offset: -1px;
   container-type: size;
 }
 .fade {
@@ -166,120 +149,25 @@
     transparent
   );
 }
-.reference {
-  position: absolute;
-  outline: 1.5px dashed rgb(255 255 255 / 85%);
-  outline-offset: -1px;
-}
+.reference,
 .safe {
   position: absolute;
-  outline: 1.5px dotted rgb(255 255 255 / 95%);
+  outline: 1px dashed
+    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
   outline-offset: -1px;
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 30%);
+  box-shadow: inset 0 0 0 2px
+    color-mix(in srgb, var(--yoyi-color-ink-black) 30%, transparent);
+}
+.safe {
+  outline-style: solid;
 }
 
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--yoyi-space-2) var(--yoyi-space-4);
-  color: var(--yoyi-color-text-secondary);
-  font-size: var(--yoyi-type-caption-size);
-}
-.legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.legend i {
-  display: inline-block;
-  width: 14px;
-  height: 10px;
-  border-radius: 2px;
-}
-.legendDim {
-  background: var(--yoyi-color-overlay);
-}
-.legendReference {
-  outline: 1.5px dashed var(--yoyi-color-text-secondary);
-}
-.legendSafe {
-  outline: 1.5px dotted var(--yoyi-color-text-secondary);
-}
-
-.toolbarEnd {
-  display: flex;
-  gap: var(--yoyi-space-2);
-}
-.segmented button:disabled,
-.toggle:disabled,
-.toggle[aria-disabled="true"] {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.hint,
-.notice {
-  color: var(--yoyi-color-text-secondary);
-  font-size: var(--yoyi-type-body-small-size);
-  line-height: 1.5;
-}
-.notice {
-  color: var(--yoyi-color-text-primary);
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--yoyi-space-3);
-  padding-block: var(--yoyi-space-2)
-    calc(var(--yoyi-space-2) + env(safe-area-inset-bottom));
-}
-.actions button {
-  flex: 1 1 0;
-  min-width: 96px;
-  min-height: 48px;
-}
-.actions .primary {
-  background: var(--yoyi-color-text-primary);
-  color: var(--yoyi-color-background-page);
-  border-color: transparent;
-}
-.actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.steps {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--yoyi-space-2) var(--yoyi-space-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--yoyi-type-body-small-size);
-  color: var(--yoyi-color-text-tertiary);
-}
-.steps li[data-state="done"] {
-  color: var(--yoyi-color-text-secondary);
-}
-.steps li[data-state="active"] {
-  color: var(--yoyi-color-text-primary);
-  font-weight: 650;
-}
-
-.error {
+.problem {
   display: grid;
   gap: var(--yoyi-space-2);
-  padding: var(--yoyi-space-3);
-  border-radius: var(--yoyi-radius-lg);
-  background: var(--yoyi-color-seal-red-muted);
-  color: var(--yoyi-color-text-primary);
-  font-size: var(--yoyi-type-body-small-size);
-  line-height: 1.5;
 }
 
+/* A phone on its side: the frame on the left, controls on the right. */
 @media (orientation: landscape) and (max-height: 560px) {
   .editor[data-cover-editor="crop"] {
     max-width: 960px;

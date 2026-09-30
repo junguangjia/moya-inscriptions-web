@@ -10,7 +10,7 @@ interface CropperProps {
   crop: { x: number; y: number };
   keyboardStep: number;
   aspect: number;
-  cropperProps: { tabIndex: number; "aria-keyshortcuts"?: string };
+  cropperProps: { tabIndex: number; "aria-label"?: string };
   onCropAreaChange: (area: Area, pixels: Area) => void;
   onZoomChange: (zoom: number) => void;
   onCropChange: (crop: { x: number; y: number }) => void;
@@ -87,6 +87,8 @@ const button = (name: string) =>
     (item) =>
       item.textContent === name || item.getAttribute("aria-label") === name,
   )!;
+const guidesSwitch = () =>
+  document.querySelector<HTMLButtonElement>('[role="switch"]')!;
 const percent = (value: number) => `${value * 100}%`;
 const key = async (value: string, init: KeyboardEventInit = {}) => {
   const event = new KeyboardEvent("keydown", {
@@ -143,10 +145,11 @@ it("switches the previewed device and can hide the guides", async () => {
   expect(
     document.querySelector('[data-cover-reference="phone"]'),
   ).not.toBeNull();
-  expect(document.body.textContent).toContain("电脑上看不到");
-  await act(async () => button("参考线").click());
+  // The 参考线 switch describes the guides (no legend).
+  expect(document.body.textContent).toContain("亮处为电脑显示范围");
+  await act(async () => guidesSwitch().click());
   expect(document.querySelector("[data-cover-window]")).toBeNull();
-  expect(button("参考线").getAttribute("aria-pressed")).toBe("false");
+  expect(guidesSwitch().getAttribute("aria-checked")).toBe("false");
 });
 
 it("zooms only with a pinch or Ctrl wheel so ordinary scrolling keeps scrolling", async () => {
@@ -161,11 +164,11 @@ it("zooms by pinch or keys without a zoom bar, clamped to 1–3, with a reset", 
   // Owner decision: no zoom slider or −/+ bar; two-finger gestures zoom.
   expect(document.querySelector('input[type="range"]')).toBeNull();
   expect(button("放大")).toBeUndefined();
-  expect(button("重置").getAttribute("aria-disabled")).toBe("true");
+  expect(button("还原").getAttribute("aria-disabled")).toBe("true");
   // A pinch arrives from react-easy-crop as a zoom change.
   await act(async () => cropper.props!.onZoomChange(1.5));
   expect(cropper.props!.zoom).toBe(1.5);
-  expect(button("重置").getAttribute("aria-disabled")).toBe("false");
+  expect(button("还原").getAttribute("aria-disabled")).toBe("false");
   // Keyboard fallback for pointer-only desktops.
   await key("+");
   await key("=");
@@ -176,7 +179,7 @@ it("zooms by pinch or keys without a zoom bar, clamped to 1–3, with a reset", 
   expect(cropper.props!.zoom).toBe(3);
   expect(document.body.textContent).toContain("已放大到最大");
   await act(async () => cropper.props!.onCropChange({ x: 12, y: -4 }));
-  await act(async () => button("重置").click());
+  await act(async () => button("还原").click());
   expect(cropper.props!.zoom).toBe(1);
   expect(cropper.props!.crop).toEqual({ x: 0, y: 0 });
   await act(async () => cropper.props!.onZoomChange(2));
@@ -199,7 +202,8 @@ it("leaves browser shortcuts with modifiers to the browser", async () => {
 
 it("leaves ⌘/Alt/Ctrl + arrows to the browser and keeps shortcuts on the photo", async () => {
   await render();
-  expect(cropper.props!.cropperProps["aria-keyshortcuts"]).toBe("+ - 0");
+  // The keys are announced in the crop area's label.
+  expect(cropper.props!.cropperProps["aria-label"]).toContain("+ − 键缩放");
   const back = await key("ArrowLeft", { altKey: true });
   expect(back.defaultPrevented).toBe(false);
   await key("ArrowLeft", { metaKey: true });
@@ -209,7 +213,7 @@ it("leaves ⌘/Alt/Ctrl + arrows to the browser and keeps shortcuts on the photo
   // "0" on a toolbar button is not a reset.
   await act(async () => cropper.props!.onZoomChange(2));
   await act(async () =>
-    button("参考线").dispatchEvent(
+    guidesSwitch().dispatchEvent(
       new KeyboardEvent("keydown", { key: "0", bubbles: true }),
     ),
   );
@@ -267,7 +271,7 @@ it("locks every user input while saving but keeps layout re-reports", async () =
   expect(cropper.props!.onTouchRequest()).toBe(false);
   expect(cropper.props!.onWheelRequest({ ctrlKey: true })).toBe(false);
   expect(cropper.props!.cropperProps.tabIndex).toBe(-1);
-  expect(button("重置").disabled).toBe(true);
+  expect(button("还原").disabled).toBe(true);
   // A focused crop area's arrow keys are swallowed while saving.
   expect((await key("ArrowLeft")).defaultPrevented).toBe(true);
   expect((await key("+")).defaultPrevented).toBe(false);

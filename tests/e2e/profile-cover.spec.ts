@@ -320,9 +320,9 @@ test("Crop frame, saved bytes and the reloaded header show the same framing", as
   const expected = HEADER_POINTS.map(
     ([fx, fy]) => [window.x + fx * window.w, window.y + fy * window.h] as const,
   );
-  await page.getByRole("button", { name: "参考线" }).click();
+  await page.getByRole("switch", { name: "参考线" }).click();
   const inEditor = await decode(page, "[data-cover-stage]", expected);
-  await page.getByRole("button", { name: "参考线" }).click();
+  await page.getByRole("switch", { name: "参考线" }).click();
   for (const [index, [x, y]] of inEditor.entries()) {
     expect(Math.abs(x - expected[index]![0])).toBeLessThan(0.02);
     expect(Math.abs(y - expected[index]![1])).toBeLessThan(0.02);
@@ -507,7 +507,8 @@ test("Cancel, Back and repeated reselection never write and always settle", asyn
     await expect(page.locator("[data-cover-stage]")).toBeVisible();
     await choose(page, photo);
     await expect(page.locator("[data-cover-stage]")).toBeVisible();
-    if (round % 2) await page.getByRole("button", { name: "取消" }).click();
+    // The crop step has no 取消: the header's 返回 or the browser Back.
+    if (round % 2) await page.getByRole("button", { name: "返回" }).click();
     else await page.goBack();
     await expect(page.locator('[data-cover-editor="overview"]')).toBeVisible();
     await page.goBack();
@@ -580,8 +581,8 @@ test("Narrow phones reach every crop control without scrolling", async ({
     for (const control of [
       page.getByRole("button", { name: "保存", exact: true }),
       page.getByRole("button", { name: "重新选择" }),
-      page.getByRole("button", { name: "重置" }),
-      page.getByRole("button", { name: "参考线" }),
+      page.getByRole("button", { name: "还原" }),
+      page.getByRole("switch", { name: "参考线" }),
     ]) {
       const box = (await control.boundingBox())!;
       expect(box.y).toBeGreaterThanOrEqual(0);
@@ -640,6 +641,15 @@ test("Ordinary wheel scrolling does not zoom; Ctrl wheel (trackpad pinch) does",
   await page.mouse.wheel(0, -200);
   await page.keyboard.up("Control");
   await expect.poll(zoom).toBeGreaterThan(1);
+  // A mouse user keeps the + key after using another control: pressing on
+  // the photo gives it focus again.
+  const before = await zoom();
+  await page.getByRole("switch", { name: "参考线" }).click();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.keyboard.press("+");
+  await expect.poll(zoom).toBeGreaterThan(before);
 });
 
 test("A two-finger pinch zooms the photo", async ({ page, browserName }) => {
@@ -679,6 +689,66 @@ test("A two-finger pinch zooms the photo", async ({ page, browserName }) => {
     touchPoints: [],
   });
   await expect.poll(() => mediaScale(page)).toBeGreaterThan(1.2);
+});
+
+test("A pinch whose fingers land one after the other still zooms, but not from outside", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "multi-touch injection needs CDP");
+  await fixture(page);
+  await openProfile(page);
+  await openEditor(page);
+  await choose(page, await jpeg(await calibration(1600, 1200)));
+  const stage = page.locator("[data-cover-stage]");
+  await expect(stage).toBeVisible();
+  const box = (await stage.boundingBox())!;
+  const cx = box.x + box.width / 2,
+    cy = box.y + box.height / 2;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setTouchEmulationEnabled", {
+    enabled: true,
+    maxTouchPoints: 5,
+  });
+  const send = (
+    type: "touchStart" | "touchMove" | "touchEnd",
+    touchPoints: { x: number; y: number; id: number }[],
+  ) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints });
+  // (a) First finger, then the second, both on the photo.
+  await send("touchStart", [{ x: cx - 30, y: cy, id: 1 }]);
+  await send("touchStart", [
+    { x: cx - 30, y: cy, id: 1 },
+    { x: cx + 30, y: cy, id: 2 },
+  ]);
+  for (let step = 1; step <= 10; step += 1)
+    await send("touchMove", [
+      { x: cx - 30 - step * 6, y: cy, id: 1 },
+      { x: cx + 30 + step * 6, y: cy, id: 2 },
+    ]);
+  await send("touchEnd", []);
+  await expect.poll(() => mediaScale(page)).toBeGreaterThan(1.2);
+  // (b) The second finger lands outside the photo: no jump to the maximum.
+  await page.getByRole("button", { name: "还原" }).click();
+  await expect.poll(() => mediaScale(page)).toBeCloseTo(1, 3);
+  const outside = (await page
+    .getByRole("button", { name: "重新选择" })
+    .boundingBox())!;
+  const ox = outside.x + outside.width / 2,
+    oy = outside.y + outside.height / 2;
+  await send("touchStart", [{ x: cx, y: cy, id: 1 }]);
+  await send("touchStart", [
+    { x: cx, y: cy, id: 1 },
+    { x: ox, y: oy, id: 2 },
+  ]);
+  for (let step = 1; step <= 5; step += 1)
+    await send("touchMove", [
+      { x: cx, y: cy, id: 1 },
+      { x: ox, y: oy + step * 4, id: 2 },
+    ]);
+  await send("touchEnd", []);
+  await page.waitForTimeout(150);
+  expect(await mediaScale(page)).toBeLessThan(1.5);
+  await expect(page.getByText("已放大到最大")).toHaveCount(0);
 });
 
 test("A cancelled touch does not leave the photo following later touches", async ({
@@ -725,7 +795,7 @@ test("A cancelled touch does not leave the photo following later touches", async
   const settled = await transform();
   // A later touch outside the frame must not drag the photo.
   const outside = (await page
-    .getByRole("button", { name: "取消" })
+    .getByRole("button", { name: "重新选择" })
     .boundingBox())!;
   await touch("touchStart", outside.x + 5, outside.y + 5);
   await touch("touchMove", outside.x + 60, outside.y + 5);
