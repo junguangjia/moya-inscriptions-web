@@ -173,11 +173,13 @@ export const ProfileSettings = ({
   onClose,
   onSaved,
   onEdit,
+  onDeparture,
 }: {
   profile: AuthorProfile | null;
   onClose: () => void;
   onSaved: () => void;
   onEdit?: (() => void) | undefined;
+  onDeparture?: (() => void) | undefined;
 }) => {
   const author = useAuthors(),
     shell = useProductShell();
@@ -501,6 +503,10 @@ export const ProfileSettings = ({
   const finishClose = () => {
     if (closingRef.current) return;
     closingRef.current = true;
+    // Explicit close/edit ends this settings restoration. Effect cleanup may
+    // be checking/rekey or StrictMode and must keep late restoration available.
+    authReturn?.consumeView("profile-settings-page", authReturnView);
+    onDeparture?.();
     setClosing(true);
     const finish = () => {
       if (latest.current.signedOut) {

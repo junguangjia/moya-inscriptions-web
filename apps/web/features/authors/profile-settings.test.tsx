@@ -487,7 +487,9 @@ describe("settings authentication return", () => {
     document.body.append(node);
     root = createRoot(node);
     const onClose = vi.fn(),
-      onSaved = vi.fn();
+      onSaved = vi.fn(),
+      onEdit = vi.fn(),
+      onDeparture = vi.fn();
     let state: ReturnType<typeof useAuthReturn>;
     const Probe = () => {
       state = useAuthReturn();
@@ -510,6 +512,8 @@ describe("settings authentication return", () => {
                   profile={owner}
                   onClose={onClose}
                   onSaved={onSaved}
+                  onEdit={onEdit}
+                  onDeparture={onDeparture}
                 />
               )}
             </AuthReturnProvider>
@@ -551,6 +555,8 @@ describe("settings authentication return", () => {
       node,
       onClose,
       onSaved,
+      onEdit,
+      onDeparture,
       context,
       mount,
       leave,
@@ -626,6 +632,125 @@ describe("settings authentication return", () => {
       true,
     );
   };
+
+  it("signals settings departure synchronously before the closing animation finishes", async () => {
+    vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const view = await journey();
+    await click(view.node, "外观");
+    view.scroll().scrollTop = 318;
+    const entry = await view.leave();
+    await view.returnChecking(entry);
+    await view.confirm();
+    expect(view.page()).toBe("display");
+    expect(view.scroll().scrollTop).toBe(318);
+    expect(view.onDeparture).not.toHaveBeenCalled();
+    const restoredRoot = { ...window.history.state, phase4DialogDepth: 0 };
+    await click(view.node, "返回");
+    await pop(restoredRoot);
+    const sourceEntry: Record<string, unknown> = { ...restoredRoot };
+    delete sourceEntry.phase4Dialog;
+    delete sourceEntry.phase4DialogDepth;
+    const frame = view.node.querySelector<HTMLElement>("[data-settings-page]")!;
+    frame.style.setProperty("--yoyi-duration-normal", "200ms");
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false })),
+    );
+    vi.useFakeTimers();
+    try {
+      view.onDeparture.mockImplementation(() => {
+        expect(view.context().read("profile-settings-page")).toBeUndefined();
+        expect(view.onClose).not.toHaveBeenCalled();
+      });
+      await click(view.node, "返回");
+      await pop(sourceEntry);
+      expect(view.context().isRestoring()).toBe(true);
+      expect(view.onDeparture).toHaveBeenCalledOnce();
+      expect(view.onClose).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTime(199));
+      expect(view.onClose).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(view.onClose).toHaveBeenCalledOnce();
+      expect(view.onDeparture).toHaveBeenCalledOnce();
+      expectReadOnlyReturn();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])(
+    "retires the settings snapshot on actual close before ordinary reopen (StrictMode=%s)",
+    async (strict) => {
+      vi.spyOn(window.history, "back").mockImplementation(() => {});
+      const view = await journey({ strict });
+      view.scroll().scrollTop = 94;
+      await click(view.node, "外观");
+      view.scroll().scrollTop = 318;
+      const entry = await view.leave();
+      await view.returnChecking(entry);
+      expect(view.page()).toBe("display");
+      expect(view.scroll().scrollTop).toBe(318);
+      await view.confirm();
+      expect(view.page()).toBe("display");
+      expect(view.scroll().scrollTop).toBe(318);
+      const restoredRoot = {
+        ...window.history.state,
+        phase4DialogDepth: 0,
+      };
+      await click(view.node, "返回");
+      await pop(restoredRoot);
+      expect(view.page()).toBe("root");
+      expect(view.scroll().scrollTop).toBe(94);
+      // Child Back is not a close: late account rekeys must still have a view.
+      expect(view.context().read("profile-settings-page")).toMatchObject({
+        page: "display",
+        positions: { display: 318 },
+      });
+      const sourceEntry: Record<string, unknown> = { ...restoredRoot };
+      delete sourceEntry.phase4Dialog;
+      delete sourceEntry.phase4DialogDepth;
+      await click(view.node, "返回");
+      await pop(sourceEntry);
+      expect(view.onClose).toHaveBeenCalledOnce();
+      expect(view.onEdit).not.toHaveBeenCalled();
+      // Keep the same ticket so whole-journey retirement cannot hide the bug.
+      expect(view.context().isRestoring()).toBe(true);
+      expect(view.context().read("profile-settings-page")).toBeUndefined();
+      await view.mount(profile, false);
+      await view.mount(profile);
+      expect(view.context().isRestoring()).toBe(true);
+      expect(view.page()).toBe("root");
+      expect(view.scroll().scrollTop).toBe(0);
+      expectReadOnlyReturn();
+    },
+  );
+
+  it("retires the settings snapshot when an explicit edit exits the restored modal", async () => {
+    vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const view = await journey();
+    await click(view.node, "外观");
+    view.scroll().scrollTop = 318;
+    const entry = await view.leave();
+    await view.returnChecking(entry);
+    await view.confirm();
+    const restoredRoot = { ...window.history.state, phase4DialogDepth: 0 };
+    await click(view.node, "返回");
+    await pop(restoredRoot);
+    const sourceEntry: Record<string, unknown> = { ...restoredRoot };
+    delete sourceEntry.phase4Dialog;
+    delete sourceEntry.phase4DialogDepth;
+    await click(view.node, "编辑信息");
+    await pop(sourceEntry);
+    expect(view.onEdit).toHaveBeenCalledOnce();
+    expect(view.onClose).not.toHaveBeenCalled();
+    expect(view.context().isRestoring()).toBe(true);
+    expect(view.context().read("profile-settings-page")).toBeUndefined();
+    await view.mount(profile, false);
+    await view.mount(profile);
+    expect(view.page()).toBe("root");
+    expect(view.scroll().scrollTop).toBe(0);
+    expectReadOnlyReturn();
+  });
 
   it("keeps the restored child page and scroll through checking guest and confirmed-owner rekeys", async () => {
     const view = await journey();

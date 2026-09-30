@@ -23,6 +23,7 @@ import {
   passwordAuthCases,
   registerPasswordCase,
   preparePasswordResetCase,
+  sendAnonymousSignInCase,
 } from "../../unit/backend/password-auth-cases";
 
 import {
@@ -1294,6 +1295,218 @@ describe("email-auth PostgreSQL", () => {
       };
     };
     passwordAuthCases(makePasswordHarness);
+    it("rejects an anonymous sign-in when a factor transfers before the first known User lock", async () => {
+      const h = makePasswordHarness(),
+        email = `${key()}@example.invalid`,
+        source = "synthetic-factor-transfer";
+      const anonymous = await sendAnonymousSignInCase(h, email);
+      const original = await registerPasswordCase(h, email, false);
+      const linkProof = await reauthenticate(
+        h.service,
+        original.session.token,
+        "email",
+        source,
+      );
+      const phone = await h.service.sendChallenge({
+        channel: "phone",
+        purpose: "link",
+        identifier: "13800138971",
+        idempotencyKey: key(),
+        source,
+        sessionToken: original.session.token,
+        reauthToken: linkProof,
+      });
+      if (!phone.ok || !phone.value.continuationToken)
+        throw Error("Synthetic alternate factor rejected");
+      const linked = await h.service.completeFactor({
+        challengeId: phone.value.challengeId,
+        continuationToken: phone.value.continuationToken,
+        code: latest(),
+        reauthToken: linkProof,
+        expectedVersion: 0,
+        idempotencyKey: key(),
+        sessionToken: original.session.token,
+      });
+      if (!linked.ok) throw Error("Synthetic alternate factor rejected");
+      const recipient = await register(
+        h.service,
+        "phone",
+        "13800138972",
+        "Synthetic recipient",
+        source,
+      );
+      const before = await h.port.transaction((tx) =>
+        tx.findChallenge(anonymous.challengeId),
+      );
+      if (before === null) throw Error("Synthetic anonymous challenge missing");
+      expect({
+        userId: before.userId,
+        invalidatedAt: before.invalidatedAt,
+        completedAt: before.completedAt,
+      }).toEqual({ userId: null, invalidatedAt: null, completedAt: null });
+
+      let release!: () => void,
+        reached!: () => void,
+        gated = false,
+        identityReads = 0,
+        challengeWrites = 0,
+        sessionWrites = 0,
+        receiptWrites = 0;
+      const paused = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const ready = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const lockedUsers: string[] = [];
+      const observedOwners: (string | null)[] = [];
+      const reader: import("@moya/api").CommunityAuthPort = {
+        transaction: (work) =>
+          h.port.transaction((tx) =>
+            work({
+              ...tx,
+              findIdentity: async (kind, digest) => {
+                const identity = await tx.findIdentity(kind, digest);
+                if (kind === "email" && digest === before.targetDigest) {
+                  identityReads++;
+                  observedOwners.push(identity?.userId ?? null);
+                }
+                return identity;
+              },
+              lockUser: async (id) => {
+                lockedUsers.push(id);
+                // No lock has been acquired yet: A can unlink while this
+                // request still holds only its earlier read of the owner.
+                if (!gated && id === original.session.profile.id) {
+                  gated = true;
+                  reached();
+                  await paused;
+                }
+                return tx.lockUser(id);
+              },
+              saveChallenge: async (row) => {
+                challengeWrites++;
+                await tx.saveChallenge(row);
+              },
+              insertSession: async (row) => {
+                sessionWrites++;
+                await tx.insertSession(row);
+              },
+              insertReceipt: async (row) => {
+                receiptWrites++;
+                return tx.insertReceipt(row);
+              },
+            }),
+          ),
+      };
+      const verifying = h
+        .serviceForPort(reader)
+        .verifyChallenge(anonymous.command);
+      let verified: Awaited<typeof verifying> | undefined;
+      try {
+        await Promise.race([
+          ready,
+          verifying.then(() => {
+            throw Error("Synthetic verification did not reach User gate");
+          }),
+        ]);
+        expect(observedOwners).toEqual([original.session.profile.id]);
+        expect(challengeWrites).toBe(0);
+
+        const unlinkProof = await reauthenticate(
+          h.service,
+          linked.value.session.token,
+          "phone",
+          source,
+        );
+        const unlinked = await h.service.unlinkFactor({
+          channel: "email",
+          reauthToken: unlinkProof,
+          expectedVersion: linked.value.account.email.version,
+          idempotencyKey: key(),
+          sessionToken: linked.value.session.token,
+        });
+        if (!unlinked.ok) throw Error("Synthetic factor unlink rejected");
+        const recipientProof = await reauthenticate(
+          h.service,
+          recipient.token,
+          "phone",
+          source,
+        );
+        const emailLink = await h.service.sendChallenge({
+          channel: "email",
+          purpose: "link",
+          identifier: email,
+          idempotencyKey: key(),
+          source,
+          sessionToken: recipient.token,
+          reauthToken: recipientProof,
+        });
+        if (!emailLink.ok || !emailLink.value.continuationToken)
+          throw Error("Synthetic recipient factor rejected");
+        const transferred = await h.service.completeFactor({
+          challengeId: emailLink.value.challengeId,
+          continuationToken: emailLink.value.continuationToken,
+          code: latest(),
+          reauthToken: recipientProof,
+          expectedVersion: 0,
+          idempotencyKey: key(),
+          sessionToken: recipient.token,
+        });
+        if (!transferred.ok) throw Error("Synthetic factor transfer rejected");
+        const freshOwner = await h.port.transaction((tx) =>
+          tx.findIdentity("email", before.targetDigest),
+        );
+        expect(freshOwner?.userId).toBe(recipient.profile.id);
+        const sessionsBefore = await counted(
+          owner,
+          "SELECT count(*)::text AS count FROM community.sessions",
+          [],
+        );
+        release();
+        verified = await verifying;
+        // The assertion deliberately excludes code, continuation and Session.
+        expect(
+          verified.ok
+            ? { ok: true, outcome: verified.value.outcome }
+            : { ok: false, reason: verified.reason },
+        ).toEqual({ ok: false, reason: "AUTH_PROOF_REJECTED" });
+        expect(identityReads).toBe(2);
+        expect(observedOwners).toEqual([
+          original.session.profile.id,
+          recipient.profile.id,
+        ]);
+        expect(lockedUsers).toEqual([original.session.profile.id]);
+        expect({ challengeWrites, sessionWrites, receiptWrites }).toEqual({
+          challengeWrites: 0,
+          sessionWrites: 0,
+          receiptWrites: 0,
+        });
+        expect(
+          await counted(
+            owner,
+            "SELECT count(*)::text AS count FROM community.sessions",
+            [],
+          ),
+        ).toBe(sessionsBefore);
+        const after = await h.port.transaction((tx) =>
+          tx.findChallenge(anonymous.challengeId),
+        );
+        expect({
+          attempts: after?.attempts,
+          completedAt: after?.completedAt,
+          invalidatedAt: after?.invalidatedAt,
+        }).toEqual({ attempts: 0, completedAt: null, invalidatedAt: null });
+      } finally {
+        release();
+        if (verified === undefined)
+          await verifying.then(
+            () => undefined,
+            () => undefined,
+          );
+      }
+    });
+
     it("locks the user before the challenge and re-reads invalidation when reset interleaves", async () => {
       const h = makePasswordHarness(),
         email = `${key()}@example.invalid`;

@@ -203,6 +203,84 @@ it("ignores a late original-owner profile after the confirmed session switches a
   expect(node.querySelector("input[type='file']")).toBeNull();
   expect(writes()).toHaveLength(0);
 });
+const selectPhoto = async () => {
+  const picker = node.querySelector<HTMLInputElement>("input[type='file']")!;
+  expect(picker).not.toBeNull();
+  Object.defineProperty(picker, "files", {
+    configurable: true,
+    value: [
+      new File(["synthetic jpg"], "synthetic-avatar.jpg", {
+        type: "image/jpeg",
+      }),
+    ],
+  });
+  await act(async () =>
+    picker.dispatchEvent(new Event("change", { bubbles: true })),
+  );
+  const crop = node.querySelector("[data-existing-avatar-crop]");
+  expect(crop).not.toBeNull();
+  return { picker, crop };
+};
+const saveButton = () =>
+  [...node.querySelectorAll<HTMLButtonElement>("button")].find(
+    (candidate) => candidate.textContent?.trim() === "保存头像",
+  )!;
+it("keeps the native picker and crop through same-account focus and profile revalidation without writes", async () => {
+  await render();
+  const { picker, crop } = await selectPhoto();
+  const identity = deferred(),
+    background = deferred();
+  me = () => identity.promise;
+  readProfile = () => background.promise;
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(node.querySelector("input[type='file']")).toBe(picker);
+  expect(node.querySelector("[data-existing-avatar-crop]")).toBe(crop);
+  expect(saveButton().disabled).toBe(true);
+  await act(async () => identity.resolve(reply(owner)));
+  expect(node.querySelector("[data-existing-avatar-crop]")).toBe(crop);
+  await act(async () => background.resolve(reply(profile)));
+  expect(node.querySelector("[data-existing-avatar-crop]")).toBe(crop);
+  expect(saveButton().disabled).toBe(false);
+  expect(writes()).toHaveLength(0);
+});
+it("keeps the crop through a temporary identity failure but blocks saving until the same owner is confirmed", async () => {
+  await render();
+  const { crop } = await selectPhoto();
+  me = async () => reply(null, 503);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(node.querySelector("[data-existing-avatar-crop]")).toBe(crop);
+  expect(saveButton().disabled).toBe(true);
+  await click("保存头像");
+  expect(writes()).toHaveLength(0);
+  me = async () => reply(owner);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(node.querySelector("[data-existing-avatar-crop]")).toBe(crop);
+  expect(saveButton().disabled).toBe(false);
+  expect(writes()).toHaveLength(0);
+});
+for (const [name, response] of [
+  ["another confirmed account", () => reply(other)],
+  ["a refused identity", () => reply(null, 401)],
+] as const) {
+  it(`clears the selected crop on ${name} without uploading`, async () => {
+    await render();
+    await selectPhoto();
+    me = async () => response();
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(node.querySelector("[data-existing-avatar-crop]")).toBeNull();
+    expect(node.querySelector("input[type='file']")).toBeNull();
+    expect(writes()).toHaveLength(0);
+  });
+}
+it("clears the crop when a refreshed profile refuses ownership", async () => {
+  await render();
+  await selectPhoto();
+  readProfile = async () => reply({ ...profile, isOwner: false });
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(node.querySelector("[data-existing-avatar-crop]")).toBeNull();
+  expect(node.querySelector("input[type='file']")).toBeNull();
+  expect(writes()).toHaveLength(0);
+});
 it("delegates explicit crop saving to the existing account-isolated avatar endpoints", async () => {
   await render();
   const picker = node.querySelector<HTMLInputElement>("input[type='file']")!;

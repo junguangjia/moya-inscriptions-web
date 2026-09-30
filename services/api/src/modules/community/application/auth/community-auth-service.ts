@@ -1255,16 +1255,22 @@ export class CommunityAuthService {
       .filter((id): id is string => id !== null)
       .sort())
       await tx.lockUser(id);
-    if (targetIdentity === null) {
-      await tx.lockDigest(challenge.targetDigest);
-      // A concurrent registration may have appeared before this advisory lock.
-      // Reject that old anonymous proof without taking another user lock in reverse order.
-      if (
-        (await tx.findIdentity(challenge.channel, challenge.targetDigest)) !==
-        null
-      )
-        return fail("AUTH_PROOF_REJECTED");
-    }
+    if (targetIdentity === null) await tx.lockDigest(challenge.targetDigest);
+    const identity = await tx.findIdentity(
+      challenge.channel,
+      challenge.targetDigest,
+    );
+    // Ownership may change before the first User lock. Reject that stale read
+    // before touching Challenge; discovering and locking a new owner afterward
+    // would reverse the reset User -> Challenge order.
+    if (
+      identity?.id !== targetIdentity?.id ||
+      identity?.userId !== targetIdentity?.userId ||
+      identity?.version !== targetIdentity?.version ||
+      identity?.environment !== targetIdentity?.environment ||
+      identity?.verificationMode !== targetIdentity?.verificationMode
+    )
+      return fail("AUTH_PROOF_REJECTED");
     challenge = await tx.findChallenge(input.challengeId);
     if (challenge === null || challenge.continuationHash !== continuationHash)
       return fail("AUTH_PROOF_REJECTED");
@@ -1337,10 +1343,6 @@ export class CommunityAuthService {
         value: { outcome: "reauthenticated", reauthToken: token },
       };
     }
-    const identity = await tx.findIdentity(
-      challenge.channel,
-      challenge.targetDigest,
-    );
     if (challenge.purpose === "password_reset") {
       const user =
         challenge.userId === null ? null : await tx.lockUser(challenge.userId);

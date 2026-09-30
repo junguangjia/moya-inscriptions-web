@@ -4,6 +4,7 @@ import type {
   CommunityAuthPort,
   CommunityAuthService,
   AuthDeliveryPorts,
+  StoredIdentity,
 } from "@moya/api";
 
 export interface PasswordHarness {
@@ -21,6 +22,31 @@ const requestKey = () => randomUUID();
 const password = "SYNTHETIC_A1";
 const replacement = "SyntheticB2雪";
 const source = "synthetic-password-case";
+/** Synthetic OTP and continuation remain in test memory, never assertion output. */
+const sendAnonymousSignInCase = async (
+  h: PasswordHarness,
+  identifier: string,
+) => {
+  const sent = await h.service.sendChallenge({
+    channel: "email",
+    purpose: "sign_in",
+    identifier,
+    idempotencyKey: requestKey(),
+    source,
+  });
+  if (!sent.ok || !sent.value.continuationToken)
+    throw Error("Synthetic anonymous challenge rejected");
+  return {
+    challengeId: sent.value.challengeId,
+    command: {
+      challengeId: sent.value.challengeId,
+      continuationToken: sent.value.continuationToken,
+      code: h.latestCode(),
+      idempotencyKey: requestKey(),
+    },
+  };
+};
+
 const safe = (result: { ok: boolean; reason?: string; value?: unknown }) => {
   if (!result.ok) return { ok: false, reason: result.reason };
   const value = result.value as
@@ -178,6 +204,132 @@ const passwordAttemptGate = (
 
 /** Same business behavior is installed for memory and PostgreSQL App-role ports. */
 export const passwordAuthCases = (make: () => PasswordHarness) => {
+  it.each([
+    "id",
+    "userId",
+    "version",
+    "environment",
+    "verificationMode",
+  ] as const)(
+    "rejects identity %s drift before touching an older anonymous sign-in challenge",
+    async (field) => {
+      const h = make(),
+        email = `${requestKey()}@example.invalid`;
+      // This proof has no User association, so factor-change invalidation on A
+      // cannot make the race pass incidentally by invalidating the challenge.
+      const anonymous = await sendAnonymousSignInCase(h, email);
+      const first = await registration(h, email, false);
+      const other = await registration(
+        h,
+        `${requestKey()}@example.invalid`,
+        false,
+      );
+      const stored = await h.port.transaction(async (tx) =>
+        (await tx.listIdentities(first.session.profile.id)).find(
+          (identity) => identity.kind === "email",
+        ),
+      );
+      if (stored === undefined) throw Error("Synthetic identity missing");
+      const changed: StoredIdentity = {
+        ...stored,
+        ...(field === "id"
+          ? { id: `${stored.id}_changed` }
+          : field === "userId"
+            ? { userId: other.session.profile.id }
+            : field === "version"
+              ? { version: stored.version + 1 }
+              : field === "environment"
+                ? { environment: "production" as const }
+                : { verificationMode: "provider" as const }),
+      };
+      let reads = 0;
+      const lockedUsers: string[] = [];
+      const writes = { challenges: 0, sessions: 0, handoffs: 0, receipts: 0 };
+      // Memory transactions serialize. This read seam reproduces the two
+      // observations around lockUser without pretending to run concurrent
+      // memory transactions; the actual transfer runs in the PG test below.
+      const reader: CommunityAuthPort = {
+        transaction: (work) =>
+          h.port.transaction((tx) =>
+            work({
+              ...tx,
+              findIdentity: async (kind, digest) => {
+                const identity = await tx.findIdentity(kind, digest);
+                if (kind !== stored.kind || digest !== stored.lookupDigest)
+                  return identity;
+                return reads++ === 0 ? identity : changed;
+              },
+              lockUser: async (id) => {
+                lockedUsers.push(id);
+                return tx.lockUser(id);
+              },
+              saveChallenge: async (row) => {
+                writes.challenges++;
+                await tx.saveChallenge(row);
+              },
+              insertSession: async (row) => {
+                writes.sessions++;
+                await tx.insertSession(row);
+              },
+              insertHandoff: async (row) => {
+                writes.handoffs++;
+                await tx.insertHandoff(row);
+              },
+              insertReceipt: async (row) => {
+                writes.receipts++;
+                return tx.insertReceipt(row);
+              },
+            }),
+          ),
+      };
+      const result = await h
+        .serviceForPort(reader)
+        .verifyChallenge(anonymous.command);
+      expect(safe(result)).toEqual({
+        ok: false,
+        reason: "AUTH_PROOF_REJECTED",
+      });
+      expect(reads).toBe(2);
+      expect(lockedUsers).toEqual([first.session.profile.id]);
+      expect(writes).toEqual({
+        challenges: 0,
+        sessions: 0,
+        handoffs: 0,
+        receipts: 0,
+      });
+      const after = await h.port.transaction((tx) =>
+        tx.findChallenge(anonymous.challengeId),
+      );
+      expect({
+        userId: after?.userId,
+        attempts: after?.attempts,
+        completedAt: after?.completedAt,
+        invalidatedAt: after?.invalidatedAt,
+      }).toEqual({
+        userId: null,
+        attempts: 0,
+        completedAt: null,
+        invalidatedAt: null,
+      });
+      expect((await h.service.readAccount(first.session.token)).ok).toBe(true);
+      expect((await h.service.readAccount(other.session.token)).ok).toBe(true);
+    },
+  );
+
+  it("accepts an older anonymous sign-in proof when the identity remains unchanged", async () => {
+    const h = make(),
+      email = `${requestKey()}@example.invalid`;
+    const anonymous = await sendAnonymousSignInCase(h, email);
+    const original = await registration(h, email, false);
+    const result = await h.service.verifyChallenge(anonymous.command);
+    expect(result.ok && result.value.outcome).toBe("signed_in");
+    expect(
+      result.ok && result.value.outcome === "signed_in"
+        ? result.value.session.profile.id
+        : null,
+    ).toBe(original.session.profile.id);
+  });
+
   it("rejects password login at the source limit before credential work or Session writes", async () => {
     const h = make(),
       email = `${requestKey()}@example.invalid`;
@@ -654,4 +806,5 @@ export const passwordAuthCases = (make: () => PasswordHarness) => {
 export {
   registration as registerPasswordCase,
   reset as preparePasswordResetCase,
+  sendAnonymousSignInCase,
 };

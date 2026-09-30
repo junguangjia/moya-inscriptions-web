@@ -1,5 +1,5 @@
 "use client";
-import { useAuthReturnView } from "../auth/auth-return";
+import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 import { Icon } from "@moya/ui";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -66,6 +66,7 @@ const ScopedAuthorProfile = ({
     id = preview?.profile.id ?? state.authorId ?? viewerId ?? null,
     owner = !isPreview && (id === viewerId || id === null),
     cacheKey = `profile:${id}`;
+  const authReturn = useAuthReturn();
   const profileCapture = useRef({
     open: false,
     positions: {} as Record<string, number>,
@@ -558,6 +559,7 @@ const ScopedAuthorProfile = ({
       {ownProfile && profile && modal === "background" && (
         <ProfileBackgroundEditor
           profile={profile}
+          header={profileHeader}
           onClose={() => setModal(null)}
           onSaved={save}
         />
@@ -579,9 +581,31 @@ const ScopedAuthorProfile = ({
         <ProfileSettings
           key={profile?.id ?? "guest"}
           profile={profile}
-          onClose={() => setModal(null)}
+          onDeparture={() =>
+            authReturn?.consumeView(
+              `profile-settings:${state.entryId}`,
+              authReturnView,
+            )
+          }
+          onClose={() => {
+            authReturn?.consumeView(
+              `profile-settings:${state.entryId}`,
+              authReturnView,
+            );
+            setModal(null);
+          }}
           onSaved={save}
-          onEdit={ownProfile ? () => setModal("edit") : undefined}
+          onEdit={
+            ownProfile
+              ? () => {
+                  authReturn?.consumeView(
+                    `profile-settings:${state.entryId}`,
+                    authReturnView,
+                  );
+                  setModal("edit");
+                }
+              : undefined
+          }
         />
       )}
     </section>

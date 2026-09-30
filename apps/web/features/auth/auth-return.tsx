@@ -52,6 +52,16 @@ const entryOf = (value: unknown) => {
   const entry = objectOf(value)?.__artvennEntry;
   return typeof entry === "string" ? entry : null;
 };
+const isDialogEntry = (value: unknown) => {
+  const data = objectOf(value);
+  return (
+    typeof data?.phase4Dialog === "string" &&
+    data.phase4Dialog.length > 0 &&
+    typeof data.phase4DialogDepth === "number" &&
+    Number.isSafeInteger(data.phase4DialogDepth) &&
+    data.phase4DialogDepth >= 0
+  );
+};
 const withoutTicket = (value: unknown): unknown => {
   const data = objectOf(value);
   if (data === null || !(historyKey in data)) return value;
@@ -198,6 +208,20 @@ export const createAuthReturnState = () => {
         return withTicket(data, { id: source.id, role: "auth" });
       }
       if (source.phase === "auth" && kind === "replace" && authMatches(path))
+        return withTicket(data, { id: source.id, role: "auth" });
+      // The existing avatar modal owns a local history entry on this exact
+      // auth page. Its inherited journey and shell entry cannot admit a fresh visit.
+      if (
+        source.phase === "auth" &&
+        kind === "push" &&
+        typeof window !== "undefined" &&
+        path === browserPath() &&
+        authMatches(path) &&
+        matches(ticketOf(window.history.state), "auth") &&
+        matches(incoming, "auth") &&
+        entryOf(data) === entryOf(window.history.state) &&
+        isDialogEntry(data)
+      )
         return withTicket(data, { id: source.id, role: "auth" });
       if (
         source.phase !== "auth" &&

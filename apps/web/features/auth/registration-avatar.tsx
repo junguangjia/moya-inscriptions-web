@@ -21,16 +21,18 @@ const AvatarStep = ({
   const [revision, setRevision] = useState(0);
   const run = useRef(0);
   const account =
-    !author.checking &&
-    !author.sessionError &&
-    author.viewer?.id === expectedAccountId
-      ? author.viewer.id
-      : undefined;
+    author.viewer?.id === expectedAccountId ? author.viewer.id : undefined;
   useEffect(() => {
     const current = ++run.current;
-    setProfile(null);
+    if (!account) {
+      setProfile(null);
+      setFailed(false);
+      return;
+    }
+    // A focus check is not an account change. Keep the confirmed owner's
+    // picker/crop mounted while /me and the background profile read settle.
+    if (author.checking || author.sessionError) return;
     setFailed(false);
-    if (!account) return;
     void authorClient
       .profile(account)
       .then((value) => {
@@ -41,7 +43,10 @@ const AvatarStep = ({
           authorClient.account() === account
         )
           setProfile(value);
-        else if (current === run.current) setFailed(true);
+        else if (current === run.current) {
+          setProfile(null);
+          setFailed(true);
+        }
       })
       .catch(() => {
         if (current === run.current) setFailed(true);
@@ -49,9 +54,18 @@ const AvatarStep = ({
     return () => {
       run.current += 1;
     };
-  }, [account, author.revision, revision]);
+  }, [
+    account,
+    author.checking,
+    author.sessionError,
+    author.revision,
+    revision,
+  ]);
   const currentProfile =
-    profile?.id === account && authorClient.account() === account
+    profile?.id === account &&
+    (author.checking ||
+      author.sessionError ||
+      authorClient.account() === account)
       ? profile
       : null;
   const saving =

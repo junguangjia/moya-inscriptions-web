@@ -254,3 +254,17 @@ merge that pinned SHA and verify the merged main tree/CI before administrative
 closure. No Production change is authorized. Owner acceptance is an
 Owner-reported judgment; browser screenshots are not labelled as separately
 observed physical-device evidence.
+
+Final independent review also required correctness repairs: re-read the
+challenge target identity after known User locks and reject ownership/provenance
+drift before any Challenge write; retain an already-confirmed owner's selected
+avatar/crop during focus revalidation, with saves blocked until identity is
+confirmed again and selection cleared on account switch, refusal or profile
+ownership failure. These repairs do not change the accepted visual direction.
+
+Preserve controlled authentication-return tickets for the existing same-URL
+local avatar dialog, requiring matching journey tickets and history-entry
+identity; unrelated pushes still retire the journey. Explicit settings close or
+edit departure consumes only its child/parent restoration snapshots so an
+ordinary reopen starts at the root. Checking/account rekeys and StrictMode
+cleanup retain pending restoration; unrelated source views and drafts survive.

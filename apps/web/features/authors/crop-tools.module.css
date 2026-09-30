@@ -1,0 +1,10 @@
+/* Nothing to restore: dimmed, but kept focusable (not `disabled`). */
+.reset[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.hint {
+  min-width: 0;
+  flex: 1 1 12em;
+}

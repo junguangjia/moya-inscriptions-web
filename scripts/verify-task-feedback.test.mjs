@@ -9,6 +9,7 @@ import { classifyTask } from "./ci-task-scope.mjs";
 import { assertTaskGate } from "./ci-task-gate.mjs";
 import {
   FEEDBACK_LABEL,
+  FOCUSED_FEEDBACK,
   VERIFY_TASK_USAGE,
   classifyFeedbackPath,
   contractCommands,
@@ -23,6 +24,7 @@ import {
   scriptTests,
   selectTaskValidationCommands,
   taskCommands,
+  taskChecks,
 } from "./verify-task.mjs";
 import { REMAINING_MS_TOKEN } from "./validation-profiles.mjs";
 
@@ -324,8 +326,13 @@ const joined = (commands) =>
 const isBareVerify = (command) =>
   command[0] === process.execPath &&
   command[1] === "scripts/verify.mjs" &&
-  command.slice(2).join(" ") ===
-    `all --profile complete --remaining-ms ${REMAINING_MS_TOKEN}`;
+  command[2] === "all" &&
+  command[3] === "--profile" &&
+  command[4] === "complete" &&
+  command.at(-2) === "--remaining-ms" &&
+  command.at(-1) === REMAINING_MS_TOKEN &&
+  (command.length === 7 ||
+    (command.length === 9 && command[5] === "--workspaces"));
 const feedbackOptions = { root };
 
 describe("feedback command selection", () => {
@@ -337,7 +344,7 @@ describe("feedback command selection", () => {
     const general = taskCommands(plan, "/private/synthetic-output");
     assert.ok(
       general.some(isBareVerify),
-      "general taskCommands still selects bare scripts/verify.mjs for Web",
+      "general taskCommands still selects complete scripts/verify.mjs for Web",
     );
     assert.match(joined(general), /--test /);
     assert.doesNotMatch(
@@ -511,4 +518,113 @@ describe("feedback command selection", () => {
       }),
     );
   });
+});
+
+describe("finite Backend, Admin and shared feedback mappings", () => {
+  it("selects existing focused tests and library preparation without runtime suites", () => {
+    for (const [file, mapped] of Object.entries(FOCUSED_FEEDBACK)) {
+      const selection = planFeedbackCommands(
+        { feedbackPaths: [file] },
+        "/private/synthetic-output",
+        { root },
+      );
+      assert.equal(selection.unresolved, null, file);
+      assert.equal(classifyFeedbackPath(file), "focused", file);
+      const text = joined(selection.commands);
+      assert.match(text, /turbo run build/u, file);
+      assert.match(text, /turbo run typecheck/u, file);
+      for (const test of mapped.tests)
+        assert.ok(text.includes(test), `${file}: ${test}`);
+      assert.doesNotMatch(
+        text,
+        /test:cms|test:postgres|ci-e2e-smoke|verify-apple|db:migrate/u,
+        file,
+      );
+      assert.ok(
+        selection.uncheckedCoverage.includes(
+          "full acceptance / merge permission",
+        ),
+      );
+    }
+  });
+  it("refuses missing mappings or missing mapped tests and preserves mixed unsupported coverage", () => {
+    const known = "packages/image/src/index.ts";
+    const missing = planFeedbackCommands({ feedbackPaths: [known] }, "", {
+      root,
+      exists: () => false,
+    });
+    assert.match(missing.unresolved, /Mapped feedback tests are missing/u);
+    assert.deepEqual(missing.commands, []);
+    for (const paths of [
+      [
+        "services/api/src/modules/catalog/application/services/future-service.ts",
+      ],
+      [known, "apps/admin/src/migrations/future.ts"],
+      [known, "database/community/future.sql"],
+    ]) {
+      const selected = planFeedbackCommands({ feedbackPaths: paths }, "", {
+        root,
+      });
+      assert.match(selected.unresolved, /unsupported/u);
+      assert.deepEqual(selected.commands, []);
+    }
+  });
+});
+
+it("deduplicates focused contracts only when both complete consumers are selected", () => {
+  const subset = taskChecks(
+    { web: true, contracts: true, webWorkspaces: ["@moya/api"] },
+    "/private/run",
+  );
+  assert.ok(subset.some((check) => check.name === "contracts"));
+  const complete = taskChecks(
+    { web: true, contracts: true, webWorkspaces: ["@moya/tests", "web"] },
+    "/private/run",
+  );
+  assert.ok(!complete.some((check) => check.name === "contracts"));
+});
+
+it("widens auth and public shared configuration before selecting cumulative commands", () => {
+  for (const file of [
+    "services/backend-runtime/src/community/session.ts",
+    "services/backend-runtime/src/community/auth.ts",
+    "packages/contracts/package.json",
+    "packages/contracts/tsconfig.json",
+  ]) {
+    const plan = classifyTask([file], "local");
+    assert.equal(plan.web, true, file);
+    assert.equal(plan.contracts, true, file);
+    assert.deepEqual(
+      plan.webWorkspaces,
+      [],
+      "sensitive paths use the broad stage",
+    );
+    const commands = taskCommands(plan, "/private/run");
+    assert.ok(
+      commands.some(
+        (command) =>
+          command.includes("scripts/verify.mjs") && command.includes("all"),
+      ),
+    );
+  }
+});
+
+it("refuses sensitive auth feedback and retains ordinary author presentation feedback", () => {
+  for (const file of [
+    "services/backend-runtime/src/community/auth-handler.ts",
+    "services/api/src/auth/delivery.ts",
+    "apps/web/features/auth/email-session.ts",
+  ]) {
+    const selection = planFeedbackCommands(
+      { feedbackPaths: [file] },
+      "/private/run",
+      { root },
+    );
+    assert.ok(selection.unresolved, file);
+    assert.deepEqual(selection.commands, []);
+  }
+  assert.equal(
+    classifyFeedbackPath("apps/web/features/authors/author-profile.tsx"),
+    "behavior",
+  );
 });

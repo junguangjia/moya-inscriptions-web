@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, StrictMode } from "react";
+import { act, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +10,8 @@ vi.mock("next/navigation", () => ({
   useRouter: () => router,
   usePathname: () => window.location.pathname,
 }));
+
+import { AuthorDialog } from "../authors/author-dialog";
 
 import {
   AuthReturnProvider,
@@ -269,6 +271,18 @@ describe("authentication entry and provider integration", () => {
   const nativeReplace = window.history.replaceState;
 
   beforeEach(() => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLDialogElement) {
+        this.open = true;
+      }),
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLDialogElement) {
+        this.open = false;
+      }),
+    });
     router.push.mockReset();
     router.replace.mockReset();
     router.back.mockReset();
@@ -332,7 +346,18 @@ describe("authentication entry and provider integration", () => {
   const Auth = () => {
     context = useAuthReturn();
     const enter = useAuthEntry();
-    return <button onClick={() => enter("/register")}>切换注册</button>;
+    const [avatarOpen, setAvatarOpen] = useState(false);
+    return (
+      <>
+        <button onClick={() => enter("/register")}>切换注册</button>
+        <button onClick={() => setAvatarOpen(true)}>设置头像</button>
+        {avatarOpen && (
+          <AuthorDialog title="头像" onClose={() => setAvatarOpen(false)}>
+            <p>现有头像设置</p>
+          </AuthorDialog>
+        )}
+      </>
+    );
   };
   const render = async (
     page: "source" | "auth",
@@ -405,6 +430,147 @@ describe("authentication entry and provider integration", () => {
       expect(context?.hasSource()).toBe(false);
     },
   );
+
+  it.each(["shell entry", "no shell entry"])(
+    "retains source snapshots and owner drafts through the registration avatar modal's push and Back with %s",
+    async (entryKind) => {
+      await render("source");
+      context?.remember("synthetic-owner", "synthetic-comment", {
+        text: "unsent comment",
+      });
+      await click("按钮登录");
+      const sourceEntry = pushedSource;
+      await render("auth");
+      await click("切换注册");
+      if (entryKind === "shell entry")
+        window.history.replaceState(
+          { ...window.history.state, __artvennEntry: "synthetic-auth-entry" },
+          "",
+          registerPath,
+        );
+      const authEntry = window.history.state;
+      const back = vi
+        .spyOn(window.history, "back")
+        .mockImplementation(() => {});
+      await click("设置头像");
+      expect(container.querySelector("dialog")?.open).toBe(true);
+      expect(window.location.pathname).toBe("/register");
+      expect(window.history.state).toEqual(
+        expect.objectContaining({
+          [historyKey]: authEntry[historyKey],
+          phase4Dialog: expect.any(String),
+          phase4DialogDepth: 0,
+        }),
+      );
+      expect(window.history.state.__artvennEntry).toBe(
+        authEntry.__artvennEntry,
+      );
+      expect(context?.hasSource()).toBe(true);
+      expect(context?.returnPath("/fallback")).toBe(sourcePath);
+      expect(context?.read("shell")).toBeUndefined();
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>("dialog button[aria-label='返回']")
+          ?.click(),
+      );
+      expect(back).toHaveBeenCalledOnce();
+      await popTo(authEntry, registerPath);
+      expect(container.querySelector("dialog")).toBeNull();
+      expect(context?.hasSource()).toBe(true);
+      await popTo(sourceEntry);
+      await render("source");
+      expect(sourceRendered).toEqual({ feed: "favorites", top: 123 });
+      expect(lateRendered).toEqual({ page: "comments", top: 333 });
+      expect(context?.take("synthetic-owner", "synthetic-comment")).toEqual({
+        text: "unsent comment",
+      });
+      expect(
+        context?.take("synthetic-owner", "synthetic-comment"),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([
+    "missing ticket",
+    "different current ticket",
+    "different ticket",
+    "source ticket",
+    "different shell entry",
+    "missing shell entry",
+    "different route",
+    "different query",
+    "different hash",
+    "missing marker",
+    "empty marker",
+    "non-string marker",
+    "missing depth",
+    "negative depth",
+    "fractional depth",
+    "string depth",
+    "unsafe depth",
+  ])("retires an auth modal-shaped push with %s", async (change) => {
+    await render("source");
+    context?.remember("synthetic-owner", "synthetic-comment", {
+      text: "unsent comment",
+    });
+    await click("按钮登录");
+    const sourceEntry = pushedSource;
+    await render("auth");
+    window.history.replaceState(
+      { ...window.history.state, __artvennEntry: "synthetic-auth-entry" },
+      "",
+      authPath,
+    );
+    const incoming: Record<string, unknown> = {
+      ...window.history.state,
+      phase4Dialog: "synthetic-avatar-modal",
+      phase4DialogDepth: 0,
+    };
+    let path = authPath;
+    if (change === "different current ticket")
+      nativeReplace.call(
+        window.history,
+        {
+          ...window.history.state,
+          [historyKey]: { id: "synthetic-other-journey", role: "auth" },
+        },
+        "",
+        authPath,
+      );
+    if (change === "missing ticket") delete incoming[historyKey];
+    if (change === "different ticket")
+      incoming[historyKey] = { id: "synthetic-other-journey", role: "auth" };
+    if (change === "source ticket")
+      incoming[historyKey] = {
+        ...window.history.state[historyKey],
+        role: "source",
+      };
+    if (change === "different shell entry")
+      incoming.__artvennEntry = "synthetic-other-entry";
+    if (change === "missing shell entry") delete incoming.__artvennEntry;
+    if (change === "different route") path = registerPath;
+    if (change === "different query") path += "&method=password";
+    if (change === "different hash") path += "#avatar";
+    if (change === "missing marker") delete incoming.phase4Dialog;
+    if (change === "empty marker") incoming.phase4Dialog = "";
+    if (change === "non-string marker") incoming.phase4Dialog = 1;
+    if (change === "missing depth") delete incoming.phase4DialogDepth;
+    if (change === "negative depth") incoming.phase4DialogDepth = -1;
+    if (change === "fractional depth") incoming.phase4DialogDepth = 0.5;
+    if (change === "string depth") incoming.phase4DialogDepth = "0";
+    if (change === "unsafe depth")
+      incoming.phase4DialogDepth = Number.MAX_SAFE_INTEGER + 1;
+    window.history.pushState(incoming, "", path);
+    expect(context?.hasSource()).toBe(false);
+    expect(window.history.state[historyKey]).toBeUndefined();
+    await popTo(sourceEntry);
+    await render("source");
+    expect(sourceRendered).toBeUndefined();
+    expect(lateRendered).toBeUndefined();
+    expect(
+      context?.take("synthetic-owner", "synthetic-comment"),
+    ).toBeUndefined();
+  });
 
   it("leaves checkpoint rejection on the source and suppresses duplicate pending navigation", async () => {
     const pending = deferredGuard();

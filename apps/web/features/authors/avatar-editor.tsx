@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { AuthorProfile } from "@moya/contracts";
 import Cropper from "react-easy-crop";
@@ -8,6 +8,9 @@ import "react-easy-crop/react-easy-crop.css";
 import { AuthorDialog } from "./author-dialog";
 import { useAuthors } from "./author-context";
 import { readAvatarImage, exportAvatarSnapshot } from "./avatar-image";
+import { useCropGestures } from "./crop-gestures";
+import { CropTools } from "./crop-tools";
+import media from "../publishing/ui/media/media.module.css";
 import type { AvatarImage } from "./avatar-image";
 import styles from "./avatar-editor.module.css";
 const availableAt = (next: string | null) =>
@@ -95,8 +98,6 @@ export const AvatarEditor = ({
 }) => {
   const [file, setFile] = useState(initialFile);
   const [source, setSource] = useState<AvatarImage | null>(null);
-  const [crop, setCrop] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
@@ -116,6 +117,10 @@ export const AvatarEditor = ({
     };
   }, []);
   const author = useAuthors();
+  // Owner decision (#171 r4): the same two-finger zoom as the cover editor,
+  // with no zoom slider.
+  const gestures = useCropGestures({ locked: busy });
+  const hintId = useId();
   const limited = availableAt(next) > now;
   useEffect(() => {
     if (!limited) return;
@@ -140,8 +145,7 @@ export const AvatarEditor = ({
         ownedSource.current = value;
         cropArea.current = null;
         setReady(false);
-        setCrop({ x: 0, y: 0 });
-        setZoom(1);
+        gestures.reset();
         setSource(value);
       })
       .catch((e) => {
@@ -185,40 +189,37 @@ export const AvatarEditor = ({
   // Back (header or swipe), with no discard prompt; a crop is quick to redo.
   return (
     <AuthorDialog title="更换头像" onClose={onClose}>
-      <div className={styles.editor} aria-busy={busy}>
+      <div
+        className={`${media.dialogBody} ${styles.editor}`}
+        aria-busy={busy}
+        {...gestures.wrapperProps}
+      >
         {source && (
           <div
             className={styles.viewport}
             data-avatar-crop=""
             data-saving={busy}
+            {...gestures.frameProps}
           >
             <Cropper
-              key={source.url}
+              key={`${source.url}:${gestures.surface}`}
               image={source.url}
-              crop={crop}
-              zoom={zoom}
+              {...gestures.cropperProps}
               aspect={1}
               cropShape="round"
               showGrid={false}
               objectFit="cover"
-              minZoom={1}
-              maxZoom={3}
               disableAutomaticStylesInjection
               classes={{ cropAreaClassName: styles.mask ?? "" }}
               cropperProps={{
                 tabIndex: busy ? -1 : 0,
-                "aria-label": "拖动照片调整头像，可用方向键移动",
+                "aria-label":
+                  "拖动照片调整头像，方向键移动，+ − 键缩放，0 键还原",
+                "aria-describedby": hintId,
               }}
-              mediaProps={{ alt: "待裁剪的头像照片" }}
-              onCropChange={(value) => {
-                if (!saving.current) setCrop(value);
-              }}
-              onZoomChange={(value) => {
-                if (!saving.current) setZoom(value);
-              }}
-              onTouchRequest={() => !saving.current}
-              onWheelRequest={() => !saving.current}
-              onCropAreaChange={(_, area) => {
+              mediaProps={{ alt: "待裁剪的头像照片", draggable: false }}
+              onCropAreaChange={(percent, area) => {
+                gestures.reportArea(percent);
                 if (saving.current) return;
                 cropArea.current = area;
                 setReady(true);
@@ -226,31 +227,20 @@ export const AvatarEditor = ({
             />
           </div>
         )}
-        <p className="phase4-muted">
-          {source
-            ? "拖动照片调整位置，双指或滚轮缩放。"
-            : file && !error
-              ? "正在打开照片…"
-              : "选择照片，调整你的头像。"}
-        </p>
-        {source && (
-          <label className={styles.zoom}>
-            缩放
-            <input
-              aria-label="缩放"
-              type="range"
-              min="1"
-              max="3"
-              step="0.01"
-              value={zoom}
-              disabled={busy}
-              onChange={(event) => {
-                if (!saving.current) setZoom(Number(event.target.value));
-              }}
-            />
-          </label>
+        {source ? (
+          <CropTools
+            hintId={hintId}
+            coarse={gestures.coarse}
+            pristine={gestures.pristine}
+            locked={busy}
+            onReset={gestures.reset}
+          />
+        ) : (
+          <p className={media.dialogNote}>
+            {file && !error ? "正在打开照片…" : "选择照片，调整你的头像。"}
+          </p>
         )}
-        <p className="phase4-muted">
+        <p className={media.dialogNote}>
           {limited && next
             ? `今天已更换过头像。下次可更换：${newYorkTime(next)}（美国纽约时间）。`
             : "每天可更换一次头像，以美国纽约日期为准。"}
@@ -269,16 +259,18 @@ export const AvatarEditor = ({
           }}
         />
         {author.checking && !busy && (
-          <p role="status" className="phase4-muted">
+          <p role="status" className={media.dialogNote}>
             正在确认账户…
           </p>
         )}
         {author.sessionError && (
-          <div className={styles.error} role="alert">
-            <p>暂时无法确认账户，裁剪已保留。请检查网络后重试。</p>
+          <div className={media.notice} role="alert">
+            <p className={media.errorText}>
+              暂时无法确认账户，裁剪已保留。请检查网络后重试。
+            </p>
             <button
               type="button"
-              className="phase4-button"
+              className={media.secondaryButton}
               disabled={author.checking || busy}
               onClick={() => void author.refresh()}
             >
@@ -287,14 +279,14 @@ export const AvatarEditor = ({
           </div>
         )}
         {error && !author.sessionError && (
-          <p role="alert" className={styles.error}>
+          <p role="alert" className={media.errorText}>
             {error}
           </p>
         )}
-        <div className={styles.actions}>
+        <div className={media.dialogActions}>
           <button
             type="button"
-            className="phase4-button"
+            className={media.secondaryButton}
             disabled={busy || limited}
             onClick={() => input.current?.click()}
           >
@@ -302,7 +294,7 @@ export const AvatarEditor = ({
           </button>
           <button
             type="button"
-            className={`phase4-button ${styles.save}`}
+            className={media.primaryButton}
             disabled={
               !ready ||
               decoding ||
