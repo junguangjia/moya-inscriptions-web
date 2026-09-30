@@ -136,6 +136,13 @@ export const useSettingsSwipe = ({
       if (commit) latest.current.onBack();
     },
     onPointerCancel: reset,
-    onLostPointerCapture: reset,
+    onLostPointerCapture: (event: PointerEvent<HTMLDivElement>) => {
+      // Moving implicit capture from a child bubbles its loss through the frame.
+      if (
+        event.target === frame.current &&
+        event.pointerId === session.current?.id
+      )
+        reset();
+    },
   };
 };

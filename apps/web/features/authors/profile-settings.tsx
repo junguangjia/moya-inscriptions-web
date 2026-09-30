@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { motion } from "@moya/design-tokens";
 import type { AuthorProfile } from "@moya/contracts";
 import { AuthorDialog } from "./author-dialog";
 import type { AuthorDialogNavigationHandle } from "./author-dialog";
@@ -106,6 +105,15 @@ const ChoiceGroup = <Value extends string>({
   </fieldset>
 );
 
+const motionTiming = (element: HTMLElement | null) => {
+  const tokens = element ? window.getComputedStyle(element) : null;
+  const value = tokens?.getPropertyValue("--yoyi-duration-normal").trim() ?? "";
+  const duration = Number.parseFloat(value) * (value.endsWith("ms") ? 1 : 1000);
+  return {
+    duration: Number.isFinite(duration) ? Math.max(0, duration) : 0,
+    easing: tokens?.getPropertyValue("--yoyi-easing-standard").trim() ?? "",
+  };
+};
 const reducedMotion = () =>
   window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
@@ -290,7 +298,13 @@ export const ProfileSettings = ({
       restored.focus({ preventScroll: true });
     else if (page !== "root") title.current?.focus({ preventScroll: true });
     pageAnimation.current?.cancel();
-    if (direction !== "none" && !reducedMotion())
+    const timing = motionTiming(content.current);
+    if (
+      direction !== "none" &&
+      !reducedMotion() &&
+      timing.duration > 0 &&
+      timing.easing
+    )
       pageAnimation.current =
         content.current?.animate?.(
           [
@@ -300,10 +314,7 @@ export const ProfileSettings = ({
             },
             { opacity: 1, transform: "translateX(0)" },
           ],
-          {
-            duration: Number.parseInt(motion.duration.normal),
-            easing: motion.easing.standard,
-          },
+          timing,
         ) ?? null;
   }, [page]);
   useEffect(() => {
@@ -334,7 +345,11 @@ export const ProfileSettings = ({
       else latest.current.onClose();
     };
     if (reducedMotion()) finish();
-    else closeTimer.current = window.setTimeout(finish, 200);
+    else
+      closeTimer.current = window.setTimeout(
+        finish,
+        motionTiming(viewport.current).duration,
+      );
   };
   const canBack = () =>
     !busyRef.current && !securityBusyRef.current && !closingRef.current;

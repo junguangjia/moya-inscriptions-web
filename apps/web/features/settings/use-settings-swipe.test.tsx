@@ -93,6 +93,19 @@ describe("settings-local touch Back", () => {
     await finish();
     expect(back).not.toHaveBeenCalled();
   });
+  it("preserves capture transferred from a child and cancels actual frame capture loss", async () => {
+    await mount();
+    await start(frame.querySelector("p")!);
+    await pointer("pointermove", 80, 102);
+    await pointer("lostpointercapture", 80, 102, frame.querySelector("p")!);
+    await finish();
+    expect(back).toHaveBeenCalledOnce();
+    await start();
+    await pointer("pointermove", 80, 102);
+    await pointer("lostpointercapture", 80, 102);
+    await finish();
+    expect(back).toHaveBeenCalledOnce();
+  });
   it("cancels an established swipe when a second finger touches elsewhere", async () => {
     await mount();
     await start();
