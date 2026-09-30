@@ -47,6 +47,10 @@ handoffs and evidence under
 subdirectory for each validation or reviewer run. Do not write evidence into Git
 or another task's outputs.
 
+New tasks start from freshly fetched `origin/main`, as required by the
+single-main amendment. An active task keeps its established implementation
+baseline under the boundaries below.
+
 Start either tool with its working directory set to that worktree. The terminal
 entry is `codex` or `claude` when installed on PATH; desktop users open that
 same existing folder. For a handoff, do not request a new managed worktree or
@@ -67,11 +71,50 @@ worktree when source writes cannot be avoided. Return the writer role to the
 implementer before fixes. Either tool, including a new session of the same tool,
 may implement, test, review or take over the task.
 
+An unrelated active task or open PR is not a project-wide lock. Coordinate only
+actual competing writers, scope dependencies or incompatible shared-resource
+use; pause the affected work, not independent tasks.
+
 Do not interrupt unrelated sessions, services, containers or databases. Use
 task-specific ports and writable test databases where isolation is needed. Apple
 integration must name an API version, service endpoint/port and data agreement;
 it cannot rely on another task's backend remaining available or unchanged.
 Provisioning a new shared service requires its own authority.
+
+## Implementation and final integration boundaries
+
+During implementation, an unrelated `main` update or a GitHub merge-conflict
+indicator alone does not require stopping work or immediately merging/rebasing
+`main`. Continue on the established baseline with applicable local feedback
+checks. Do not poll unrelated PRs or require all agents to synchronize after
+another task merges.
+
+Assess upstream dependency impact semantically, not merely by overlapping
+filenames. Changed contracts, authentication/security behavior, migrations,
+shared configuration or another dependency the task actually consumes can
+require earlier coordination or synchronization. Pause only the affected work.
+Reading updated governing instructions is separate from merging `main`: a stable
+coding baseline never permits ignoring new Owner authority.
+
+GitHub does not run `pull_request` workflows for merge-conflicted PRs
+([GitHub workflow troubleshooting](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows)).
+Unavailable PR CI does not prevent applicable local feedback through the
+existing entry below; feedback does not replace required CI or final acceptance.
+
+At the final integration/delivery boundary, refresh relevant upstream state,
+integrate and resolve conflicts when needed for the actual candidate, then run
+the existing applicable cumulative validation and required CI. Bind validation
+and independent review to that candidate and its tested base; preserve strict
+up-to-date protection and every task-specific acceptance requirement. An earlier
+HEAD's green CI is not evidence that a changed candidate passed.
+
+Reuse unchanged applicable evidence under the existing rules below. Relevant
+upstream changes can invalidate integration evidence and require further
+conflict resolution or validation; conflicts are not promised to resolve only
+once. Use the existing finite repair limits in the validation-profiles
+amendment, without an unbounded chase-main/retest loop. Report any remaining
+integration blocker, missing or blocked CI, and a Draft pending integration as
+pending, not merge-ready.
 
 ## Use the applicable local entry
 
