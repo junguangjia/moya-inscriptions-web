@@ -530,7 +530,28 @@ export function boundedChildLimit(limitMs, remainingMs, marginMs = 8_000) {
   return Math.max(1, Math.min(limitMs, remainingMs - marginMs));
 }
 
+// Original library build tasks and their declared dependency closure only.
+export const CMS_LIBRARY_WORKSPACES = Object.freeze([
+  "@moya/contracts",
+  "@moya/search",
+  "@moya/api",
+  "@moya/catalog-postgres",
+  "@moya/image",
+  "@moya/community-postgres",
+]);
+export function cmsLibraryBuildArgs() {
+  return [
+    "node_modules/turbo/bin/turbo",
+    "run",
+    "build",
+    ...CMS_LIBRARY_WORKSPACES.map((name) => `--filter=${name}...`),
+    "--cache-dir=.turbo/library-cache",
+    "--no-daemon",
+  ];
+}
+
 async function main() {
+  process.env.MOYA_VERIFICATION_TOOLCHAIN = `${process.version}/${process.platform}/${process.arch}`;
   const budget = resolveCmsBudget(process.argv.slice(2));
   const database = syntheticDatabase(process.env.CMS_TEST_DATABASE_URL);
   const session = await createVerificationSession(
@@ -544,61 +565,7 @@ async function main() {
   let operationError;
   try {
     for (const [name, cwd, args] of [
-      [
-        "contracts-build",
-        ".",
-        [
-          "node_modules/typescript/bin/tsc",
-          "-p",
-          "packages/contracts/tsconfig.json",
-        ],
-      ],
-      [
-        "search-build",
-        ".",
-        [
-          "node_modules/typescript/bin/tsc",
-          "-p",
-          "packages/search/tsconfig.json",
-        ],
-      ],
-      [
-        "api-build",
-        ".",
-        ["node_modules/typescript/bin/tsc", "-p", "services/api/tsconfig.json"],
-      ],
-      [
-        "public-read-build",
-        ".",
-        [
-          "node_modules/typescript/bin/tsc",
-          "-p",
-          "services/catalog-postgres/tsconfig.json",
-        ],
-      ],
-      [
-        "image-build",
-        ".",
-        [
-          "node_modules/typescript/bin/tsc",
-          "-p",
-          "packages/image/tsconfig.json",
-        ],
-      ],
-      // r15: `payload.config.ts` reaches @moya/community-postgres through the
-      // agent-connection endpoints, and that package resolves to its BUILD
-      // output. Without this stage the very next step -- loading the config to
-      // migrate -- fails on a missing dist, which is exactly how CI failed at
-      // 27f1893 while every local run passed on an already-built tree.
-      [
-        "community-postgres-build",
-        ".",
-        [
-          "node_modules/typescript/bin/tsc",
-          "-p",
-          "services/community-postgres/tsconfig.json",
-        ],
-      ],
+      ["library-build", ".", cmsLibraryBuildArgs()],
       ["migrations", "apps/admin", ["node_modules/payload/bin.js", "migrate"]],
       [
         "integration",
