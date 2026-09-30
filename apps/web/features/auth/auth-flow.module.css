@@ -25,6 +25,7 @@
   padding-inline: var(--yoyi-space-3);
   margin-inline-start: calc(-1 * var(--yoyi-space-3));
   font-weight: 400;
+  border-radius: var(--yoyi-radius-full);
   white-space: nowrap;
 }
 
@@ -61,13 +62,11 @@
 }
 
 .logo {
-  width: 4.8rem;
-  height: 2.4rem;
+  width: 3.5rem;
+  height: auto;
 }
 
 .brandName {
-  padding-left: var(--yoyi-space-4);
-  border-left: 1px solid var(--yoyi-color-border-default);
   color: var(--yoyi-color-text-secondary);
   font-family: var(--yoyi-font-editorial);
   font-size: 1rem;
@@ -99,17 +98,15 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--yoyi-space-2);
-  padding: var(--yoyi-space-2);
-  border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-md);
-  background: var(--yoyi-color-background-muted);
+  padding: 0;
+  border: 0;
 }
 
 .channels button {
   min-height: 44px;
   padding: var(--yoyi-space-3) var(--yoyi-space-4);
-  border: 1px solid transparent;
-  border-radius: var(--yoyi-radius-sm);
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
   color: var(--yoyi-color-text-secondary);
   background: transparent;
   font: inherit;
@@ -117,10 +114,8 @@
 }
 
 .channels button[aria-pressed="true"] {
-  border-color: var(--yoyi-color-border-subtle);
-  color: var(--yoyi-color-text-primary);
-  background: var(--yoyi-color-background-elevated);
-  box-shadow: var(--yoyi-shadow-subtle);
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-seal-red-muted);
 }
 
 .channels button:disabled {
@@ -132,6 +127,13 @@
 .footer a:focus-visible,
 .agreementChoice input:focus-visible {
   outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 3px;
+}
+
+/* Preserve keyboard focus in this flow when the mobile shell suppresses
+   ordinary tap outlines. The existing root rule also uses !important. */
+.page :focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring) !important;
   outline-offset: 3px;
 }
 
@@ -149,11 +151,16 @@
   min-width: 0;
   min-height: 52px;
   padding: var(--yoyi-space-4) var(--yoyi-space-5);
-  border-radius: var(--yoyi-radius-md);
-  background: var(--yoyi-color-background-elevated);
+  border-color: transparent;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-muted);
   font-size: 1rem;
   line-height: 1.5;
   scroll-margin-block: var(--yoyi-space-8);
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--yoyi-color-error);
 }
 
 .phoneField {
@@ -204,9 +211,7 @@
   flex-wrap: wrap;
   gap: var(--yoyi-space-3);
   margin: 0;
-  padding: var(--yoyi-space-4);
-  border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-md);
+  padding-block: var(--yoyi-space-4);
   color: var(--yoyi-color-text-secondary);
   font-size: 0.875rem;
   line-height: 1.65;
@@ -244,6 +249,7 @@
   padding-inline: var(--yoyi-space-3);
   margin-left: auto;
   color: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
   font-weight: 400;
 }
 
@@ -262,6 +268,7 @@
   min-height: 44px;
   padding-inline: var(--yoyi-space-3);
   color: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
   font-size: inherit;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
@@ -270,7 +277,9 @@
 .primary {
   width: 100%;
   min-height: 52px;
-  border-radius: var(--yoyi-radius-md);
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font-size: 1rem;
 }
 
 .error {
@@ -279,8 +288,8 @@
   gap: var(--yoyi-space-3);
   margin: 0;
   padding: var(--yoyi-space-4);
-  border: 1px solid color-mix(in srgb, var(--yoyi-color-error) 28%, transparent);
-  border-radius: var(--yoyi-radius-md);
+  border: 0;
+  border-radius: var(--yoyi-radius-lg);
   background: color-mix(
     in srgb,
     var(--yoyi-color-error) 7%,
@@ -334,6 +343,7 @@
   min-height: 44px;
   padding-inline: var(--yoyi-space-3);
   color: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
   font-size: 0.8125rem;
   font-weight: 400;
 }

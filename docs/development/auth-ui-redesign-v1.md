@@ -11,9 +11,25 @@ requires explicit submission. Reuse the existing semantic tokens and controls.
 Allowed changes are auth presentation/hosts/client, root transient auth return
 context, narrow source navigation/composer/checkpoint adapters, directly
 affected tests and this specification. No backend, database, public protocol,
-binding UI, dependencies, providers or Production exposure changes. Stop at a
-reviewed Draft candidate and an API-connected preview, pending recorded
-visual/device acceptance.
+binding UI, providers or Production exposure changes. No dependency version
+upgrades. Stop at a reviewed Draft candidate and an API-connected preview,
+pending recorded visual/device acceptance.
+
+## Owner visual revision
+
+The Owner rejected the first candidate's squared control outlines and supplied
+an updated ArtVenn mark. Authentication now uses the current product's capsule
+primary controls and selected category-pill treatment: no outer channel frame,
+no ordinary hard input outline, preserved focus/error affordances, and a rounded
+primary action. Existing auth/API/return behavior is unchanged.
+
+The explicit replacement request extends this task to the canonical shared brand
+asset, its aspect ratio, browser icon metadata, Admin graphics and directly
+related provenance/asset checks. Admin adds the existing `@moya/ui` workspace
+dependency to consume its exported asset; no external package version changes.
+CI routing includes UI and its design-token dependency in Admin coverage. All
+current consumers use the new transparent mark. Historical screenshots/records
+remain evidence of their original candidate.
 
 ## Action mapping
 

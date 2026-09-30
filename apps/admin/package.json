@@ -19,6 +19,7 @@
     "@moya/catalog-postgres": "workspace:*",
     "@moya/community-postgres": "workspace:*",
     "@moya/contracts": "workspace:*",
+    "@moya/ui": "workspace:*",
     "@payloadcms/db-postgres": "3.88.0",
     "@payloadcms/next": "3.88.0",
     "@payloadcms/plugin-cloud-storage": "3.88.0",

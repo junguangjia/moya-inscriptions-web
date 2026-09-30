@@ -1,0 +1,22 @@
+.mark {
+  display: inline-block;
+  flex: 0 0 auto;
+  aspect-ratio: 658 / 426;
+  color: var(--theme-elevation-1000);
+  background-color: currentColor;
+  -webkit-mask-image: url("@moya/ui/assets/brand/yoyi-logo.svg");
+  mask-image: url("@moya/ui/assets/brand/yoyi-logo.svg");
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.logo {
+  width: 132px;
+}
+.icon {
+  width: 32px;
+}

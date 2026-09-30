@@ -12,6 +12,12 @@ import { PRODUCT_BOOT_SCRIPT } from "../features/product-shell/product-boot";
 
 export const metadata: Metadata = {
   title: "由艺（Yoyi）",
+  icons: {
+    icon: {
+      url: "/packages/ui/src/assets/brand/yoyi-logo.svg",
+      type: "image/svg+xml",
+    },
+  },
   description:
     "来源无关的中国文化艺术 Catalog，当前公开范围为碑刻（inscription）与书帖（calligraphy）。",
 };

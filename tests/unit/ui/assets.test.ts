@@ -284,13 +284,13 @@ describe("SVG assets", () => {
     }
   });
 
-  it("preserves the official logo byte-for-byte", async () => {
+  it("preserves the current Owner-approved ArtVenn mark", async () => {
     const logo = await readFile(new URL("brand/yoyi-logo.svg", assetsRoot));
     const hash = createHash("sha256").update(logo).digest("hex");
     expect(hash).toBe(
-      "3cef0221e44de2587ee153276417e38f702249c36bdf57d0db539236fd45bac3",
+      "a611503f5256a806cf11d66efcc0b34817b7bb5017a9743152337cadac0bb5d4",
     );
-    expect(logo.toString("utf8").match(/<path\b/g)).toHaveLength(3);
+    expect(logo.toString("utf8").match(/<path\b/g)).toHaveLength(2);
   });
 
   it("keeps paper texture opacity below the readability ceiling", async () => {
