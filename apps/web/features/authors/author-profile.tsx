@@ -541,6 +541,7 @@ const ScopedAuthorProfile = ({
       {ownProfile && profile && modal === "background" && (
         <ProfileBackgroundEditor
           profile={profile}
+          header={profileHeader}
           onClose={() => setModal(null)}
           onSaved={save}
         />
