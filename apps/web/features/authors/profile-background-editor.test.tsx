@@ -11,6 +11,7 @@ const {
   account,
   readImage,
   exportCover,
+  profileRead,
   author,
   RequestError,
 } = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const {
   account: vi.fn((): string | null => "author"),
   readImage: vi.fn(),
   exportCover: vi.fn(),
+  profileRead: vi.fn(),
   author: {
     viewer: { id: "author" } as { id: string } | null,
     checking: false,
@@ -39,7 +41,13 @@ const {
 }));
 vi.mock("./author-context", () => ({ useAuthors: () => author }));
 vi.mock("./author-data", () => ({
-  authorClient: { upload, background, accountEpoch, account },
+  authorClient: {
+    upload,
+    background,
+    accountEpoch,
+    account,
+    profile: profileRead,
+  },
   AuthorRequestError: RequestError,
 }));
 vi.mock("./profile-cover", async (original) => ({
@@ -373,10 +381,10 @@ it("keeps the save identity when the account changes during the bind", async () 
   await render();
   await selectImage();
   await click("保存");
-  // The server may have committed: say so, re-read the profile, and retry
-  // with the same ids (a committed save is replayed, never repeated).
+  // The server may have committed: say so and retry with the same ids (a
+  // committed save is replayed, never repeated). No page reload from here.
   expect(alert()).toContain("无法确认是否已保存");
-  expect(onSaved).toHaveBeenCalledOnce();
+  expect(onSaved).not.toHaveBeenCalled();
   const first = background.mock.calls[0];
   await click("重试保存");
   expect(upload).toHaveBeenCalledOnce();
@@ -496,16 +504,49 @@ it("still reports a confirmed save when the editor closes before the read-back",
   expect(author.notify).toHaveBeenCalledWith("主页背景已保存");
 });
 
-it("re-reads the profile after an ambiguous bind failure", async () => {
+it("keeps photo, crop and ids through an offline bind failure", async () => {
   background.mockRejectedValueOnce(new TypeError("Load failed"));
   await render();
   await selectImage();
   await click("保存");
-  expect(onSaved).toHaveBeenCalledOnce();
+  // The page is not reloaded (offline, that read would fail and close the
+  // editor): the editor, the crop and the retry identity stay.
+  expect(onSaved).not.toHaveBeenCalled();
+  expect(profileRead).not.toHaveBeenCalled();
+  expect(document.querySelector("[data-cover-stage]")).not.toBeNull();
+  const first = background.mock.calls[0];
+  await click("重试保存");
+  expect(background.mock.calls[1]).toEqual(first);
+  expect(upload).toHaveBeenCalledOnce();
+});
+
+it("checks an uncertain save when leaving the crop, quietly if still offline", async () => {
+  background.mockRejectedValueOnce(new TypeError("Load failed"));
+  profileRead.mockRejectedValueOnce(new TypeError("Load failed"));
+  await render();
+  await selectImage();
+  await click("保存");
   await click("取消");
+  expect(profileRead).toHaveBeenCalledWith("author");
+  expect(onSaved).not.toHaveBeenCalled();
   expect(
     document.querySelector('[data-cover-editor="overview"]'),
   ).not.toBeNull();
+  // Later: the save had committed; leaving again refreshes the profile.
+  background.mockRejectedValueOnce(new TypeError("Load failed"));
+  profileRead.mockResolvedValueOnce({
+    ...profile,
+    background: {
+      id: "user-media-new",
+      src: "/new.png",
+      width: 1600,
+      height: 1200,
+    },
+  });
+  await selectImage();
+  await click("保存");
+  await click("取消");
+  expect(onSaved).toHaveBeenCalledOnce();
 });
 
 it("stops guarding page unload once the server has confirmed the save", async () => {

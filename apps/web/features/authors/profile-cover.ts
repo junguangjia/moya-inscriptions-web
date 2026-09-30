@@ -259,6 +259,8 @@ export const browserCoverEnvironment = (): CoverReadEnvironment => ({
       if (!context) throw new CoverError("decode");
       canvas.width = size.width;
       canvas.height = size.height;
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
       context.drawImage(pixels, 0, 0, size.width, size.height);
       const blob = await new Promise<Blob | null>((resolve) =>
         canvas.toBlob(

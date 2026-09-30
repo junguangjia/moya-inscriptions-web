@@ -109,20 +109,20 @@ is in progress.
 
 ## Behavior Matrix
 
-| Scenario                      | Development                                                                                                                                | Production                       | Must preserve                                                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------- |
-| Owner opens the editor        | Overview with a header replica and a device toggle                                                                                         | Unchanged: no Community exposure | Owner-only entry, dialog history ownership                                                    |
-| Choose a photo                | The crop state appears immediately; zero requests                                                                                          | Unchanged                        | Backend PNG validation; avatar limits (background source: JPEG/PNG/WebP ≤ 25 MiB, ≤ 50 Mi px) |
-| Crop, reposition and zoom     | 4:3 frame with device window, fade, identity and safe area; the gesture stays inside the frame; bounded zoom, no blank areas               | Unchanged                        | Native scrolling outside the gesture                                                          |
-| Cancelled gesture or blur     | The gesture ends and the position is kept                                                                                                  | Unchanged                        | —                                                                                             |
-| Save                          | One export, one upload, one bind; visible phases; closes after read-back                                                                   | Unchanged                        | Ownership, media authorization, idempotent request ids                                        |
-| Failure                       | Truthful mapped copy; photo, crop and ids kept                                                                                             | Unchanged                        | Persisted background untouched until the bind succeeds                                        |
-| Back, cancel, reselect        | Steps back without a prompt; never writes; repeated loops settle                                                                           | Unchanged                        | Profile navigation and URL                                                                    |
-| Remove                        | Explicit confirmation step, then `mediaId: null`                                                                                           | Unchanged                        | —                                                                                             |
-| Existing backgrounds          | Top-anchored; the pencil has a translucent backing                                                                                         | Unchanged                        | Accepted profile layout                                                                       |
-| Reload                        | The server bytes render through the same CSS the editor previews                                                                           | Unchanged                        | Existing profile data                                                                         |
-| Narrow phone / short viewport | The height-capped 4:3 frame, zoom controls and actions fit one screen from 360×640; landscape phones use two columns; controls are ≥ 44 px | Unchanged                        | Native scrolling outside the crop gesture; safe-area insets                                   |
-| Reduced motion or keyboard    | No animation dependency; keyboard crop and zoom (browser Ctrl/⌘ shortcuts untouched); focus follows each step                              | Unchanged                        | Focus and accessibility behaviour                                                             |
+| Scenario                      | Development                                                                                                                          | Production                       | Must preserve                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------- |
+| Owner opens the editor        | Overview with a header replica and a device toggle                                                                                   | Unchanged: no Community exposure | Owner-only entry, dialog history ownership                                                    |
+| Choose a photo                | The crop state appears immediately; zero requests                                                                                    | Unchanged                        | Backend PNG validation; avatar limits (background source: JPEG/PNG/WebP ≤ 25 MiB, ≤ 50 Mi px) |
+| Crop, reposition and zoom     | 4:3 frame with device window, fade, identity and safe area; the gesture stays inside the frame; bounded zoom, no blank areas         | Unchanged                        | Native scrolling outside the gesture                                                          |
+| Cancelled gesture or blur     | The gesture ends and the position is kept                                                                                            | Unchanged                        | —                                                                                             |
+| Save                          | One export, one upload, one bind; visible phases; closes after read-back                                                             | Unchanged                        | Ownership, media authorization, idempotent request ids                                        |
+| Failure                       | Truthful mapped copy; photo, crop and ids kept                                                                                       | Unchanged                        | Persisted background untouched until the bind succeeds                                        |
+| Back, cancel, reselect        | Steps back without a prompt; never writes; repeated loops settle                                                                     | Unchanged                        | Previous persisted background remains intact; profile navigation and URL                      |
+| Remove                        | Explicit confirmation step, then `mediaId: null`                                                                                     | Unchanged                        | —                                                                                             |
+| Existing backgrounds          | Top-anchored; the pencil has a translucent backing                                                                                   | Unchanged                        | Accepted profile layout                                                                       |
+| Reload                        | The server bytes render through the same CSS the editor previews                                                                     | Unchanged                        | Existing profile data                                                                         |
+| Narrow phone / short viewport | The height-capped 4:3 frame, toolbar and actions fit one screen from 360×640; landscape phones use two columns; controls are ≥ 44 px | Unchanged                        | Native scrolling outside the crop gesture; safe-area insets                                   |
+| Reduced motion or keyboard    | No animation dependency; keyboard crop and zoom (browser Ctrl/⌘ shortcuts untouched); focus follows each step                        | Unchanged                        | Focus and accessibility behaviour                                                             |
 
 ## Image architecture (AC9)
 
@@ -152,8 +152,11 @@ Collecting them is Backend scope.
 - **Mastodon's lessons:**
   - #39957 / #39958: cap the export size;
   - #38433 / #38446: use the same anchor in the editor and on the page.
-- **Keyboard alternatives** to drag and pinch (arrow keys, `+ − 0`). By Owner
-  decision there is no on-screen zoom bar; touch users zoom with two fingers.
+- **Keyboard alternatives** to drag and pinch (arrow keys, `+ − 0`, announced
+  through the crop area's label). By Owner decision (r3) there is no on-screen
+  zoom bar: touch users zoom with two fingers, and a touch screen-reader or
+  single-pointer user cannot zoom (they keep drag and 重置). The Owner accepted
+  this trade-off.
 - **GitHub `image-crop-element`:** key map.
 - **Repository code reused:**
   - `AuthorDialog` navigation depth;

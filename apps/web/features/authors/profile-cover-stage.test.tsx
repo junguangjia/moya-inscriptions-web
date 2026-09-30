@@ -10,7 +10,7 @@ interface CropperProps {
   crop: { x: number; y: number };
   keyboardStep: number;
   aspect: number;
-  cropperProps: { tabIndex: number };
+  cropperProps: { tabIndex: number; "aria-keyshortcuts"?: string };
   onCropAreaChange: (area: Area, pixels: Area) => void;
   onZoomChange: (zoom: number) => void;
   onCropChange: (crop: { x: number; y: number }) => void;
@@ -22,6 +22,7 @@ interface CropperProps {
 const cropper = vi.hoisted(() => ({
   props: null as CropperProps | null,
   mounts: 0,
+  keys: 0,
 }));
 vi.mock("react-easy-crop", async () => {
   const { useEffect } = await import("react");
@@ -31,7 +32,16 @@ vi.mock("react-easy-crop", async () => {
       useEffect(() => {
         cropper.mounts += 1;
       }, []);
-      return <div data-mock-cropper="" />;
+      // Stands in for the library's crop area and its arrow-key handler.
+      return (
+        <div
+          data-mock-cropper=""
+          tabIndex={props.cropperProps.tabIndex}
+          onKeyDown={() => {
+            cropper.keys += 1;
+          }}
+        />
+      );
     },
   };
 });
@@ -48,7 +58,7 @@ const headers: Record<"phone" | "desktop", HeaderBox> = {
 };
 let root: Root | null = null;
 const onAreaChange = vi.fn();
-const view = (locked = false, sourceWidth = 4032) => (
+const view = (locked = false, sourceWidth = 4032, autoFocus = false) => (
   <ProfileCoverStage
     image={{ url: "blob:display" }}
     sourceWidth={sourceWidth}
@@ -56,16 +66,21 @@ const view = (locked = false, sourceWidth = 4032) => (
     thisDevice="phone"
     identity={{ name: "作者", avatarSrc: null }}
     locked={locked}
+    autoFocus={autoFocus}
     onAreaChange={onAreaChange}
   />
 );
-const render = async (locked = false, sourceWidth?: number) => {
+const render = async (
+  locked = false,
+  sourceWidth?: number,
+  autoFocus = false,
+) => {
   if (!root) {
     const node = document.createElement("div");
     document.body.append(node);
     root = createRoot(node);
   }
-  await act(async () => root!.render(view(locked, sourceWidth)));
+  await act(async () => root!.render(view(locked, sourceWidth, autoFocus)));
 };
 const button = (name: string) =>
   Array.from(document.querySelectorAll("button")).find(
@@ -89,6 +104,7 @@ const key = async (value: string, init: KeyboardEventInit = {}) => {
 beforeEach(() => {
   cropper.props = null;
   cropper.mounts = 0;
+  cropper.keys = 0;
   onAreaChange.mockClear();
 });
 afterEach(async () => {
@@ -181,6 +197,42 @@ it("leaves browser shortcuts with modifiers to the browser", async () => {
   expect(cropper.props!.crop).toEqual({ x: 12, y: -4 });
 });
 
+it("leaves ⌘/Alt/Ctrl + arrows to the browser and keeps shortcuts on the photo", async () => {
+  await render();
+  expect(cropper.props!.cropperProps["aria-keyshortcuts"]).toBe("+ - 0");
+  const back = await key("ArrowLeft", { altKey: true });
+  expect(back.defaultPrevented).toBe(false);
+  await key("ArrowLeft", { metaKey: true });
+  expect(cropper.keys).toBe(0);
+  await key("ArrowLeft");
+  expect(cropper.keys).toBe(1);
+  // "0" on a toolbar button is not a reset.
+  await act(async () => cropper.props!.onZoomChange(2));
+  await act(async () =>
+    button("参考线").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "0", bubbles: true }),
+    ),
+  );
+  expect(cropper.props!.zoom).toBe(2);
+});
+
+it("ends a pinch whose second finger lands outside the frame", async () => {
+  await render();
+  await act(async () => cropper.props!.onInteractionStart());
+  await act(async () =>
+    document.body.dispatchEvent(new Event("touchstart", { bubbles: true })),
+  );
+  expect(cropper.mounts).toBe(2);
+  // Touches inside the frame are the gesture itself.
+  await act(async () => cropper.props!.onInteractionStart());
+  await act(async () =>
+    document
+      .querySelector("[data-mock-cropper]")!
+      .dispatchEvent(new Event("touchstart", { bubbles: true })),
+  );
+  expect(cropper.mounts).toBe(2);
+});
+
 it("ends an interrupted gesture by remounting the cropper, keeping crop and zoom", async () => {
   await render();
   await act(async () => cropper.props!.onZoomChange(2));
@@ -247,4 +299,17 @@ it("reports the chosen area and warns when it has too few source pixels", async 
     height: 50,
   });
   expect(document.body.textContent).toContain("照片分辨率较低");
+});
+
+it("focuses the crop area once the photo is laid out", async () => {
+  await render(false, 4032, true);
+  const area = document.querySelector("[data-mock-cropper]");
+  expect(document.activeElement).not.toBe(area);
+  await act(async () =>
+    cropper.props!.onCropAreaChange(
+      { x: 0, y: 0, width: 100, height: 100 },
+      { x: 0, y: 0, width: 1, height: 1 },
+    ),
+  );
+  expect(document.activeElement).toBe(area);
 });

@@ -99,7 +99,7 @@ export const ProfileCoverStage = ({
 }: {
   /** Bounded display copy of the chosen photo. */
   image: { readonly url: string };
-  /** Oriented width of the chosen photo, for the resolution notice. */
+  /** Width of the decoded (bounded) photo the export draws from, for the resolution notice. */
   sourceWidth: number;
   headers: Readonly<Record<CoverDevice, HeaderBox>>;
   thisDevice: CoverDevice;
@@ -108,7 +108,7 @@ export const ProfileCoverStage = ({
   /** Focus the crop area once the photo is laid out. */
   autoFocus?: boolean;
   onAreaChange: (area: Area) => void;
-  /** The editor's actions, placed right under the zoom row. */
+  /** The editor's actions, placed right under the frame and legend. */
   children?: ReactNode;
 }) => {
   const [crop, setCrop] = useState({ x: 0, y: 0 }),
@@ -140,13 +140,37 @@ export const ProfileCoverStage = ({
     const hidden = () => {
       if (document.visibilityState === "hidden") endInterrupted();
     };
+    // A second finger landing outside the frame starts no pinch in the
+    // library (its distance stays 0, so zoom would jump): end the gesture.
+    const outside = (event: TouchEvent) => {
+      if (
+        frame.current &&
+        event.target instanceof Node &&
+        !frame.current.contains(event.target)
+      )
+        endInterrupted();
+    };
     window.addEventListener("blur", endInterrupted);
     document.addEventListener("visibilitychange", hidden);
+    document.addEventListener("touchstart", outside, {
+      capture: true,
+      passive: true,
+    });
     return () => {
       window.removeEventListener("blur", endInterrupted);
       document.removeEventListener("visibilitychange", hidden);
+      document.removeEventListener("touchstart", outside, { capture: true });
     };
   }, []);
+  // The crop area exists once the library has measured and reported an
+  // area: focus it then, once per stage (keyboard and screen readers).
+  useEffect(() => {
+    if (!autoFocus || focused.current || !area) return;
+    const target = frame.current?.querySelector<HTMLElement>('[tabindex="0"]');
+    if (!target) return;
+    focused.current = true;
+    target.focus({ preventScroll: true });
+  }, [area, autoFocus]);
   const changeZoom = (value: number) => {
     if (latestLocked.current) return;
     setZoom(Math.min(COVER_MAX_ZOOM, Math.max(1, value)));
@@ -157,10 +181,13 @@ export const ProfileCoverStage = ({
     setZoom(1);
   };
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
-    // Browser shortcuts (page zoom Ctrl/⌘ + = − 0) stay the browser's.
+    // Only the photo takes + − 0 (not the toolbar or the action buttons);
+    // browser shortcuts (page zoom Ctrl/⌘ + = − 0) stay the browser's.
     if (
       latestLocked.current ||
-      event.target instanceof HTMLInputElement ||
+      !(
+        event.target instanceof Node && frame.current?.contains(event.target)
+      ) ||
       event.ctrlKey ||
       event.metaKey ||
       event.altKey
@@ -179,7 +206,14 @@ export const ProfileCoverStage = ({
   // While saving, the arrow keys of an already focused crop area must not
   // move the photo; layout re-reports (rotation, resize) still apply.
   const lockKeys = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (latestLocked.current && event.key.startsWith("Arrow")) {
+    if (!event.key.startsWith("Arrow")) return;
+    // ⌘/Alt/Ctrl + arrows are the browser's (Back, page scroll): the
+    // library would otherwise take them as an 8 px nudge.
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      event.stopPropagation();
+      return;
+    }
+    if (latestLocked.current) {
       event.preventDefault();
       event.stopPropagation();
     }
@@ -243,7 +277,9 @@ export const ProfileCoverStage = ({
             classes={{ cropAreaClassName: styles.cropArea ?? "" }}
             cropperProps={{
               tabIndex: locked ? -1 : 0,
-              "aria-label": "拖动照片调整主页背景，可用方向键移动",
+              "aria-label":
+                "拖动照片调整主页背景，方向键移动，+ − 键缩放，0 键重置",
+              "aria-keyshortcuts": "+ - 0",
               "aria-describedby": hintId,
             }}
             mediaProps={{ alt: "待裁剪的主页背景", draggable: false }}
@@ -255,15 +291,6 @@ export const ProfileCoverStage = ({
             // Plain wheel and two-finger scroll keep scrolling the dialog;
             // trackpad pinch arrives with ctrlKey (Safari uses gesture events).
             onWheelRequest={(event) => !latestLocked.current && event.ctrlKey}
-            onMediaLoaded={() => {
-              if (!autoFocus || focused.current) return;
-              focused.current = true;
-              requestAnimationFrame(() =>
-                frame.current
-                  ?.querySelector<HTMLElement>('[tabindex="0"]')
-                  ?.focus({ preventScroll: true }),
-              );
-            }}
             onInteractionStart={() => {
               interacting.current = true;
             }}

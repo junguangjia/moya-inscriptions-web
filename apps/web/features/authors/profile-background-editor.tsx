@@ -131,7 +131,9 @@ export const ProfileBackgroundEditor = ({
     generation = useRef(0),
     saving = useRef(false),
     target = useRef<string | null>(null),
-    phaseRef = useRef<Phase>("idle");
+    phaseRef = useRef<Phase>("idle"),
+    /** A bind failed without a definite answer from the server. */
+    uncertain = useRef(false);
   const busy = BUSY.includes(phase);
   /** A write is in flight: leaving the page could lose it. */
   const writing = phase === "export" || phase === "upload" || phase === "bind";
@@ -185,6 +187,19 @@ export const ProfileBackgroundEditor = ({
 
   const toOverview = () => {
     generation.current++;
+    if (uncertain.current) {
+      uncertain.current = false;
+      // Editor-scoped read: a failure (still offline) changes nothing; only a
+      // background that really changed refreshes the owning profile.
+      const shown = profile.background?.id ?? null;
+      void authorClient
+        .profile(profile.id)
+        .then((fresh) => {
+          if (mounted.current && (fresh.background?.id ?? null) !== shown)
+            onSaved();
+        })
+        .catch(() => {});
+    }
     release();
     setDecoding(false);
     setFailed(false);
@@ -221,6 +236,7 @@ export const ProfileBackgroundEditor = ({
     setError(message);
   };
   const confirm = (media: string | null) => {
+    uncertain.current = false;
     target.current = media;
     go("refresh");
     onSaved();
@@ -248,8 +264,9 @@ export const ProfileBackgroundEditor = ({
     epoch: number,
   ) => {
     if (!mounted.current) return;
-    // A lost bind response may hide a committed save: re-read the profile.
-    if (stage === "bind") onSaved();
+    // A lost bind response may hide a committed save; the overview checks
+    // it when the owner leaves this step (never a page reload from here).
+    if (stage === "bind") uncertain.current = true;
     if (authorClient.accountEpoch() !== epoch) {
       if (stage !== "bind") return interrupted();
       // Same ids are safe to retry: the server replays a committed save.

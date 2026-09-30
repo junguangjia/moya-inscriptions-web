@@ -566,6 +566,17 @@ test("Narrow phones reach every crop control without scrolling", async ({
     await openEditor(page);
     await choose(page, photo);
     await expect(page.locator("[data-cover-stage]")).toBeVisible();
+    // The crop area takes focus once the photo is laid out.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.activeElement?.closest("[data-cover-stage]") !== null,
+        ),
+      )
+      .toBe(true);
+    expect(
+      await page.locator("dialog[open]").evaluate((node) => node.scrollTop),
+    ).toBe(0);
     for (const control of [
       page.getByRole("button", { name: "保存", exact: true }),
       page.getByRole("button", { name: "重新选择" }),
@@ -573,8 +584,9 @@ test("Narrow phones reach every crop control without scrolling", async ({
       page.getByRole("button", { name: "参考线" }),
     ]) {
       const box = (await control.boundingBox())!;
+      expect(box.y).toBeGreaterThanOrEqual(0);
       expect(box.y + box.height).toBeLessThanOrEqual(size.height);
-      expect(box.height).toBeGreaterThanOrEqual(40);
+      expect(box.height).toBeGreaterThanOrEqual(44);
     }
     await page.goBack();
     await page.goBack();
@@ -628,6 +640,45 @@ test("Ordinary wheel scrolling does not zoom; Ctrl wheel (trackpad pinch) does",
   await page.mouse.wheel(0, -200);
   await page.keyboard.up("Control");
   await expect.poll(zoom).toBeGreaterThan(1);
+});
+
+test("A two-finger pinch zooms the photo", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "multi-touch injection needs CDP");
+  await fixture(page);
+  await openProfile(page);
+  await openEditor(page);
+  await choose(page, await jpeg(await calibration(1600, 1200)));
+  const stage = page.locator("[data-cover-stage]");
+  await expect(stage).toBeVisible();
+  expect(await mediaScale(page)).toBeCloseTo(1, 3);
+  const box = (await stage.boundingBox())!;
+  const cx = box.x + box.width / 2,
+    cy = box.y + box.height / 2;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setTouchEmulationEnabled", {
+    enabled: true,
+    maxTouchPoints: 5,
+  });
+  const points = (spread: number) => [
+    { x: cx - spread, y: cy, id: 1 },
+    { x: cx + spread, y: cy, id: 2 },
+  ];
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: points(30),
+  });
+  for (let step = 1; step <= 10; step += 1) {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: points(30 + step * 6),
+    });
+    await page.waitForTimeout(20);
+  }
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
+  await expect.poll(() => mediaScale(page)).toBeGreaterThan(1.2);
 });
 
 test("A cancelled touch does not leave the photo following later touches", async ({
