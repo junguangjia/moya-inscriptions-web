@@ -6,6 +6,8 @@ import "@moya/ui/styles.css";
 
 import "./globals.css";
 
+import { AuthReturnProvider } from "../features/auth/auth-return";
+
 import { PRODUCT_BOOT_SCRIPT } from "../features/product-shell/product-boot";
 
 export const metadata: Metadata = {
@@ -34,7 +36,9 @@ export default function RootLayout({
           id="yoyi-product-boot"
         />
       </head>
-      <body className="yoyi-paper yoyi-paper--visible">{children}</body>
+      <body className="yoyi-paper yoyi-paper--visible">
+        <AuthReturnProvider>{children}</AuthReturnProvider>
+      </body>
     </html>
   );
 }

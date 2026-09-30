@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 
-import { AuthFlow } from "../../features/auth/auth-flow";
+import { AuthPage } from "../../features/auth/auth-page";
 import { safeReturnPath } from "../../features/auth/auth-api";
 
 export default async function LoginPage({
@@ -15,5 +15,5 @@ export default async function LoginPage({
   const returnTo = safeReturnPath(
     typeof query.return === "string" ? query.return : "/",
   );
-  return <AuthFlow mode="sign-in" returnTo={returnTo} />;
+  return <AuthPage mode="sign-in" returnTo={returnTo} />;
 }

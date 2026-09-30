@@ -1,4 +1,5 @@
 "use client";
+import { useAuthReturn } from "../auth/auth-return";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@moya/ui";
 import type { DiscussionTarget } from "@moya/contracts";
@@ -116,8 +117,38 @@ function ScopedMessageTrigger({
   const shell = useProductShell();
   const discussionPreview = useDiscussionPreview();
   const opener = useRef<HTMLButtonElement>(null);
+  const authReturn = useAuthReturn();
+  const restoredAuthView = useRef(false);
+  const authSnapshot = useRef({
+    owner: author.viewer?.id ?? null,
+    open: false,
+    active: "direct" as Section,
+  });
+  useEffect(() => {
+    const destination =
+      opener.current?.closest<HTMLElement>("[data-primary-destination]")
+        ?.dataset.primaryDestination ?? "home";
+    return authReturn?.register(
+      `messages:${destination}`,
+      () => authSnapshot.current,
+    );
+  }, [authReturn]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState<Section>("direct");
+  authSnapshot.current = { owner: author.viewer?.id ?? null, open, active };
+  useEffect(() => {
+    if (restoredAuthView.current || author.checking || author.sessionError)
+      return;
+    const destination =
+      opener.current?.closest<HTMLElement>("[data-primary-destination]")
+        ?.dataset.primaryDestination ?? "home";
+    const saved = authReturn?.read(`messages:${destination}`) as
+      typeof authSnapshot.current | undefined;
+    restoredAuthView.current = true;
+    if (!saved || saved.owner !== (author.viewer?.id ?? null)) return;
+    setOpen(saved.open);
+    setActive(saved.active);
+  }, [authReturn, author.checking, author.sessionError, author.viewer?.id]);
   // content-community-completion-v1: real direct messages in the 私信 tab. The
   // DM unread unit (unread conversations) joins the supplied activity count
   // exactly once; a profile's 私信 action opens this center on that pair.

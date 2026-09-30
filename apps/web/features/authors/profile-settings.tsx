@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { useAuthReturnView } from "../auth/auth-return";
 import type { AuthorProfile } from "@moya/contracts";
 import { AuthorDialog } from "./author-dialog";
 import { authorClient } from "./author-data";
@@ -19,6 +20,10 @@ export const ProfileSettings = ({
   onSaved: () => void;
   onEdit?: (() => void) | undefined;
 }) => {
+  const tabRef = useRef<"display" | "account">("display");
+  const authReturnView = useAuthReturnView("profile-settings-tab", () => ({
+    tab: tabRef.current,
+  }));
   const initialPrivacy: AuthorProfile["privacy"] = profile?.privacy ?? {
     following: "private",
     followers: "private",
@@ -27,13 +32,16 @@ export const ProfileSettings = ({
   };
   const [privacy, setPrivacy] = useState(initialPrivacy),
     [saved, setSaved] = useState(initialPrivacy),
-    [tab, setTab] = useState<"display" | "account">("display"),
+    [tab, setTab] = useState<"display" | "account">(
+      authReturnView?.tab ?? "display",
+    ),
     [blocks, setBlocks] = useState<Awaited<
       ReturnType<typeof authorClient.people>
     > | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [editRequested, setEditRequested] = useState(false);
+  tabRef.current = tab;
   const author = useAuthors();
   const shell = useProductShell();
   const tabId = useId();

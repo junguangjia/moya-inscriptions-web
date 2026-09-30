@@ -1,3 +1,6 @@
+export type { AuthChallengeAccepted as AuthChallengeView } from "@moya/contracts";
+import { publicUserProfileSchema } from "@moya/contracts/schemas";
+
 export interface AuthCapabilitiesView {
   readonly profile: "full-local" | "email-first" | "disabled";
   readonly email: {
@@ -71,4 +74,19 @@ export const safeReturnPath = (value: string | null | undefined): string => {
   } catch {
     return "/";
   }
+};
+
+/** A completed auth result must contain the existing public identity metadata. */
+export const hasCompletedAuthSession = (body: unknown): boolean => {
+  if (typeof body !== "object" || body === null || Array.isArray(body))
+    return false;
+  const session = (body as Record<string, unknown>).session;
+  if (typeof session !== "object" || session === null || Array.isArray(session))
+    return false;
+  const value = session as Record<string, unknown>;
+  return (
+    typeof value.expiresAt === "string" &&
+    Number.isFinite(Date.parse(value.expiresAt)) &&
+    publicUserProfileSchema.safeParse(value.profile).success
+  );
 };

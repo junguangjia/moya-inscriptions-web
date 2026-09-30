@@ -1,4 +1,5 @@
 "use client";
+import { useAuthReturnView } from "../auth/auth-return";
 import { Icon } from "@moya/ui";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -65,6 +66,14 @@ const ScopedAuthorProfile = ({
     id = preview?.profile.id ?? state.authorId ?? viewerId ?? null,
     owner = !isPreview && (id === viewerId || id === null),
     cacheKey = `profile:${id}`;
+  const profileCapture = useRef({
+    open: false,
+    positions: {} as Record<string, number>,
+  });
+  const authReturnView = useAuthReturnView<{
+    open: boolean;
+    positions: Record<string, number>;
+  }>(`profile-settings:${state.entryId}`, () => profileCapture.current);
   const [loadedProfile, setProfile] = useState<AuthorProfile | null>(() =>
       isPreview
         ? null
@@ -72,13 +81,14 @@ const ScopedAuthorProfile = ({
     ),
     [error, setError] = useState(""),
     [modal, setModal] = useState<"edit" | "settings" | "background" | null>(
-      null,
+      authReturnView?.open ? "settings" : null,
     ),
     [people, setPeople] = useState<"following" | "followers" | null>(null),
     [revision, setRevision] = useState(0),
     [progress, setProgress] = useState(
       Math.max(0, tabs.indexOf(state.tab as (typeof tabs)[number])),
     );
+
   const profile = preview?.profile ?? loadedProfile;
   const root = useRef<HTMLElement>(null),
     profileHeader = useRef<HTMLElement>(null),
@@ -138,9 +148,15 @@ const ScopedAuthorProfile = ({
   const positions = useRef<Record<string, number>>(
     isPreview
       ? {}
-      : ((author.cache.get(`profile-scroll:${state.entryId}`) as
-          Record<string, number> | undefined) ?? {}),
+      : (authReturnView?.positions ??
+          (author.cache.get(`profile-scroll:${state.entryId}`) as
+            Record<string, number> | undefined) ??
+          {}),
   );
+  profileCapture.current = {
+    open: modal === "settings",
+    positions: { ...positions.current },
+  };
   const scrollTab = viewTab;
   const scrollElement = () =>
     embedded
@@ -809,12 +825,18 @@ const ScopedAuthorProfilePage = ({
 }) => {
   const author = useAuthors();
   const cacheKey = `primary-profile-tab:${author.viewer?.id ?? "guest"}:${entryId}`;
+  const selectedTab = useRef<(typeof tabs)[number]>("works");
+  const authReturnView = useAuthReturnView(
+    `primary-profile:${entryId}`,
+    () => ({ tab: selectedTab.current }),
+  );
   const [tab, setTab] = useState<(typeof tabs)[number]>(() => {
-    const saved = author.cache.get(cacheKey);
+    const saved = authReturnView?.tab ?? author.cache.get(cacheKey);
     return tabs.includes(saved as (typeof tabs)[number])
       ? (saved as (typeof tabs)[number])
       : "works";
   });
+  selectedTab.current = tab;
   const backButtonRef = useRef<HTMLButtonElement>(null);
   return (
     <ScopedAuthorProfile
