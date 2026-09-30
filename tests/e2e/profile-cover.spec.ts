@@ -552,7 +552,7 @@ test("Removing the background needs an explicit confirmation", async ({
   ).toHaveCount(0);
 });
 
-test("Narrow phones reach every crop control without scrolling", async ({
+test("Narrow phone viewports reach every crop control without scrolling", async ({
   page,
 }) => {
   await fixture(page);
