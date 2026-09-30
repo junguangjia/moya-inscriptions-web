@@ -179,6 +179,8 @@ export interface ProductShellContextValue {
   readonly closeViewer: () => void;
   readonly changeViewerMedia: (mediaId: string) => void;
   readonly feedLayout: FeedLayoutPreference;
+  readonly setThemePreference: (value: ThemePreference) => void;
+  readonly setFeedLayoutPreference: (value: FeedLayoutPreference) => void;
   readonly cycleTheme: () => void;
   readonly cycleFeedLayout: () => void;
   readonly openCatalog: (catalogId: string, opener: HTMLElement) => void;
@@ -2290,15 +2292,13 @@ export const ProductShell = ({
     [cancelScrollRestore, cancelSettingsFocus],
   );
 
-  const cycleTheme = () => {
-    const next = nextThemePreference(theme);
+  const setThemePreference = (next: ThemePreference) => {
     setTheme(next);
     applyThemePreferenceToRoot(document.documentElement, next);
     persistPreference(window.localStorage, THEME_PREFERENCE_STORAGE_KEY, next);
   };
 
-  const cycleFeedLayout = () => {
-    const next = nextFeedLayoutPreference(feedLayout);
+  const setFeedLayoutPreference = (next: FeedLayoutPreference) => {
     setFeedLayout(next);
     applyFeedLayoutPreferenceToRoot(document.documentElement, next);
     persistPreference(
@@ -2307,6 +2307,10 @@ export const ProductShell = ({
       next,
     );
   };
+
+  const cycleTheme = () => setThemePreference(nextThemePreference(theme));
+  const cycleFeedLayout = () =>
+    setFeedLayoutPreference(nextFeedLayoutPreference(feedLayout));
 
   const contextValue: ProductShellContextValue = {
     activeCatalogId:
@@ -2326,6 +2330,8 @@ export const ProductShell = ({
     feedLayout,
     cycleTheme,
     cycleFeedLayout,
+    setThemePreference,
+    setFeedLayoutPreference,
     openCatalog,
     openViewer,
     openTopic,
