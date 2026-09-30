@@ -17,6 +17,7 @@ import { URL } from "node:url";
 import process from "node:process";
 import {
   installedStaticToolInputs,
+  nodeExecutableInputs,
   pnpmExecutableInputs,
   staticConfigurationEligibility,
 } from "./verification-tool-inputs.mjs";
@@ -278,4 +279,28 @@ test("pnpm PATH resolution binds executable bytes and declines unknown dispatche
       }),
     /deadline/u,
   );
+});
+
+test("static child Node dispatch declines a preceding PATH wrapper without invoking it", (t) => {
+  const root = fixture(t),
+    known = join(root, "known/node"),
+    override = join(root, "override/node"),
+    marker = join(root, "invoked");
+  mkdirSync(dirname(known), { recursive: true });
+  symlinkSync(process.execPath, known);
+  const searchPath = `${dirname(override)}:${dirname(known)}`;
+  const before = nodeExecutableInputs(root, { searchPath });
+  assert.equal(before.eligible, true);
+  write(override, `#!/bin/sh\ntouch '${marker}'\nexit 17\n`);
+  chmodSync(override, 0o700);
+  assert.deepEqual(nodeExecutableInputs(root, { searchPath }), {
+    eligible: false,
+    reason: "unreviewed-child-node-dispatch",
+  });
+  assert.throws(() => readFileSync(marker), { code: "ENOENT" });
+  assert.equal(
+    nodeExecutableInputs(root, { searchPath: join(root, "missing") }).eligible,
+    false,
+  );
+  assert.throws(() => nodeExecutableInputs(root, { deadline: 0 }), /deadline/u);
 });

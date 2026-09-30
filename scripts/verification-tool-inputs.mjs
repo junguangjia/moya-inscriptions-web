@@ -318,6 +318,44 @@ export function installedStaticToolInputs(root, { deadline = Infinity } = {}) {
   }
 }
 
+/** Static shims use child PATH, which may differ from this parent Node. */
+export function nodeExecutableInputs(
+  root,
+  {
+    deadline = Infinity,
+    searchPath = process.env.PATH ?? "",
+    parentExecutable = process.execPath,
+  } = {},
+) {
+  try {
+    deadlineCheck(deadline);
+    if (!["darwin", "linux"].includes(process.platform))
+      return { eligible: false, reason: "unsupported-static-node-platform" };
+    const parent = realpathSync(parentExecutable);
+    for (const directory of searchPath.split(":")) {
+      const candidate = resolve(root, directory, "node"),
+        info = statOrMissing(candidate);
+      if (!info) continue;
+      const resolved = realpathSync(candidate),
+        target = statOrMissing(resolved);
+      if (!target?.isFile() || !(target.mode & 0o111)) continue;
+      if (resolved !== parent)
+        return { eligible: false, reason: "unreviewed-child-node-dispatch" };
+      const { value, mode } = bytes(resolved, deadline, 256 * 1024 * 1024);
+      return {
+        eligible: true,
+        path: resolved,
+        mode,
+        sha256: hash(value),
+      };
+    }
+    return { eligible: false, reason: "missing-child-node-executable" };
+  } catch (error) {
+    if (error.message.includes("original validation deadline")) throw error;
+    return { eligible: false, reason: "unsupported-child-node-executable" };
+  }
+}
+
 /** Bind PATH dispatch and native standalone pnpm bytes, never execute a shell. */
 export function pnpmExecutableInputs(
   root,

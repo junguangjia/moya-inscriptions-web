@@ -55,11 +55,25 @@ test("input identities invalidate on source inventory, config, command and toolc
       node: "synthetic-v1",
       staticTools: { eligible: true, sha256: "synthetic-installed-closure" },
       pnpmExecutable: { eligible: true, sha256: "synthetic-pnpm-executable" },
+      childNode: { eligible: true, sha256: "synthetic-child-node" },
     },
   };
   const identity = checkInputIdentity(command, options);
   assert.equal(identity.eligible, true);
   assert.deepEqual(checkInputIdentity(command, options), identity);
+  assert.equal(
+    checkInputIdentity(command, {
+      ...options,
+      toolchain: {
+        ...options.toolchain,
+        childNode: {
+          eligible: false,
+          reason: "unreviewed-child-node-dispatch",
+        },
+      },
+    }).eligible,
+    false,
+  );
   assert.notEqual(
     checkInputIdentity(command, {
       ...options,

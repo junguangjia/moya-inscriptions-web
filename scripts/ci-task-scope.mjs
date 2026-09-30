@@ -121,6 +121,26 @@ export function assertPath(file) {
 }
 
 /** A missing/ambiguous dependency graph selects the existing broad plan. */
+export function isSecurityPath(file) {
+  return /(?:^|[\/.-])(?:auth(?:entication|orization)?|sessions?|credentials?|security|permissions?|grants?|passwords?|tokens?|csrf|oauth|jwt|scram|acl)(?:[\/.-]|$)/iu.test(
+    file.replace(/^packages\/design-tokens\//u, "packages/design-system/"),
+  );
+}
+
+function broadWebImpact(file) {
+  return (
+    isSecurityPath(file) ||
+    webConfig.has(file) ||
+    webLintConfig.has(file) ||
+    /(?:^|\/)(?:package\.json|tsconfig[^/]*\.json|[^/]*(?:migration|config)[^/]*)$/iu.test(
+      file,
+    ) ||
+    /^(?:database|infra|tests|experiments|docs\/prototypes|docs\/design-system)\//u.test(
+      file,
+    )
+  );
+}
+
 export function affectedWebWorkspaces(
   paths,
   root = fileURLToPath(new URL("../", import.meta.url)),
@@ -174,17 +194,7 @@ export function affectedWebWorkspaces(
   for (const file of paths) {
     // Global configuration, security/authentication and persisted state retain
     // the broad path. This optimization cannot waive their semantic consumers.
-    if (
-      webConfig.has(file) ||
-      webLintConfig.has(file) ||
-      /(?:^|\/)(?:package\.json|tsconfig[^/]*\.json|[^/]*(?:auth|session|credential|security|permission|grant|migration|config)[^/]*)$/iu.test(
-        file,
-      ) ||
-      /^(?:database|infra|tests|experiments|docs\/prototypes|docs\/design-system)\//u.test(
-        file,
-      )
-    )
-      return [];
+    if (broadWebImpact(file)) return [];
     const entry = [...graph.entries()].find(([, item]) =>
       file.startsWith(`${item.directory}/`),
     );
@@ -285,6 +295,9 @@ export function classifyTask(paths, event = "pull_request") {
         "HARMONY_NATIVE_VALIDATION_NOT_YET_CONFIGURED";
     } else if (publicBoundary(file)) {
       plan.contracts = true;
+      // Sensitive public-boundary paths must reach broad Web validation too;
+      // the focused contract path cannot cover all auth or shared config checks.
+      if (broadWebImpact(file)) plan.web = true;
       if (cmsBuiltPackage.test(file)) plan.cms = true;
     } else if (
       webConfig.has(file) ||

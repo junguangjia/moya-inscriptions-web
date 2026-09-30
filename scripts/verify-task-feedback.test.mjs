@@ -583,3 +583,48 @@ it("deduplicates focused contracts only when both complete consumers are selecte
   );
   assert.ok(!complete.some((check) => check.name === "contracts"));
 });
+
+it("widens auth and public shared configuration before selecting cumulative commands", () => {
+  for (const file of [
+    "services/backend-runtime/src/community/session.ts",
+    "services/backend-runtime/src/community/auth.ts",
+    "packages/contracts/package.json",
+    "packages/contracts/tsconfig.json",
+  ]) {
+    const plan = classifyTask([file], "local");
+    assert.equal(plan.web, true, file);
+    assert.equal(plan.contracts, true, file);
+    assert.deepEqual(
+      plan.webWorkspaces,
+      [],
+      "sensitive paths use the broad stage",
+    );
+    const commands = taskCommands(plan, "/private/run");
+    assert.ok(
+      commands.some(
+        (command) =>
+          command.includes("scripts/verify.mjs") && command.includes("all"),
+      ),
+    );
+  }
+});
+
+it("refuses sensitive auth feedback and retains ordinary author presentation feedback", () => {
+  for (const file of [
+    "services/backend-runtime/src/community/auth-handler.ts",
+    "services/api/src/auth/delivery.ts",
+    "apps/web/features/auth/email-session.ts",
+  ]) {
+    const selection = planFeedbackCommands(
+      { feedbackPaths: [file] },
+      "/private/run",
+      { root },
+    );
+    assert.ok(selection.unresolved, file);
+    assert.deepEqual(selection.commands, []);
+  }
+  assert.equal(
+    classifyFeedbackPath("apps/web/features/authors/author-profile.tsx"),
+    "behavior",
+  );
+});

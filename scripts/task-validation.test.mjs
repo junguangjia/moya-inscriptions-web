@@ -280,7 +280,10 @@ describe("task routing follows the complete changed-path set", () => {
     ],
     [["tests/cms/workflow.test.ts"], { web: true, cms: true, scope: "smoke" }],
     [["packages/contracts/src/catalog.ts"], { contracts: true, cms: true }],
-    [["packages/contracts/package.json"], { contracts: true, cms: true }],
+    [
+      ["packages/contracts/package.json"],
+      { web: true, contracts: true, cms: true, scope: "smoke" },
+    ],
     [
       ["packages/contracts/src/internal/catalog-import/index.ts"],
       { web: true, cms: true, scope: "smoke" },
@@ -333,9 +336,12 @@ describe("task routing follows the complete changed-path set", () => {
     [["services/public-api/src/openapi.ts"], { contracts: true }],
     [
       ["services/backend-runtime/src/community/session.ts"],
-      { contracts: true },
+      { web: true, contracts: true, scope: "smoke" },
     ],
-    [["services/backend-runtime/src/community/auth.ts"], { contracts: true }],
+    [
+      ["services/backend-runtime/src/community/auth.ts"],
+      { web: true, contracts: true, scope: "smoke" },
+    ],
     [
       ["packages/contracts/src/internal/editorial.ts"],
       { web: true, cms: true, scope: "smoke" },

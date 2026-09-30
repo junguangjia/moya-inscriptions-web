@@ -16,6 +16,7 @@ import { performance } from "node:perf_hooks";
 import process from "node:process";
 import {
   installedStaticToolInputs,
+  nodeExecutableInputs,
   pnpmExecutableInputs,
   staticConfigurationEligibility,
 } from "./verification-tool-inputs.mjs";
@@ -54,6 +55,40 @@ export function evidenceToolchain(root, timeoutMs = 5000) {
   const deadline = performance.now() + timeoutMs;
   const staticTools = installedStaticToolInputs(root, { deadline });
   delete staticTools.durationMs;
+  const pnpmExecutable = pnpmExecutableInputs(root, { deadline });
+  let childNode = { eligible: false, reason: "unbound-pnpm-executable" };
+  if (pnpmExecutable.eligible) {
+    try {
+      // Query the actual pnpm child PATH with this known parent executable.
+      // Do not execute a potentially replaced PATH/node during preparation.
+      const childPath = execFileSync(
+        "pnpm",
+        [
+          "exec",
+          process.execPath,
+          "-e",
+          "process.stdout.write(process.env.PATH ?? '')",
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: Math.max(1, Math.floor(deadline - performance.now())),
+          maxBuffer: 128 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      childNode = nodeExecutableInputs(root, {
+        deadline,
+        searchPath: childPath,
+      });
+    } catch {
+      if (performance.now() >= deadline)
+        throw new Error(
+          "Evidence preparation reached the original validation deadline",
+        );
+      childNode = { eligible: false, reason: "unbound-child-node-dispatch" };
+    }
+  }
   const version = (...args) =>
     execFileSync("pnpm", args, {
       cwd: root,
@@ -66,8 +101,8 @@ export function evidenceToolchain(root, timeoutMs = 5000) {
     platform: process.platform,
     arch: process.arch,
     staticTools,
-    pnpmExecutable: pnpmExecutableInputs(root, { deadline }),
-    nodeExecutableSha256: hash(readFileSync(process.execPath)),
+    pnpmExecutable,
+    childNode,
     pnpm: version("--version"),
     eslint: JSON.parse(
       readFileSync(resolve(root, "node_modules/eslint/package.json")),
@@ -103,10 +138,10 @@ export function checkInputIdentity(
       eligible: false,
       reason: toolchain.pnpmExecutable?.reason ?? "unbound-pnpm-executable",
     };
-  if (toolchain.pnpmExecutable?.eligible !== true)
+  if (toolchain.childNode?.eligible !== true)
     return {
       eligible: false,
-      reason: toolchain.pnpmExecutable?.reason ?? "unbound-pnpm-implementation",
+      reason: toolchain.childNode?.reason ?? "unbound-child-node-dispatch",
     };
   const configuration = staticConfigurationEligibility(
     root,

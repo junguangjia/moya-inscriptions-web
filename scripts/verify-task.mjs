@@ -37,6 +37,7 @@ import {
 } from "./validation-profiles.mjs";
 import {
   classifyTask,
+  isSecurityPath,
   localPaths,
   runGit,
   nulPaths,
@@ -468,6 +469,12 @@ export const FOCUSED_FEEDBACK = Object.freeze({
 });
 
 export function classifyFeedbackPath(file) {
+  if (
+    isSecurityPath(file) &&
+    !file.startsWith("docs/") &&
+    !file.endsWith(".md")
+  )
+    return "security";
   if (Object.hasOwn(FOCUSED_FEEDBACK, file)) return "focused";
   if (
     file.startsWith("apps/admin/") ||
