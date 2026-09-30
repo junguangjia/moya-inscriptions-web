@@ -271,6 +271,13 @@ async function decode(
   });
 }
 
+/** The crop photo's zoom, read from its CSS transform. */
+async function mediaScale(page: Page) {
+  return page
+    .locator("[data-cover-stage] img")
+    .evaluate((node) => new DOMMatrix(getComputedStyle(node).transform).a);
+}
+
 /** Header fractions inside the clear top band, away from the pencil. */
 const HEADER_POINTS = [
   [0.3, 0.08],
@@ -544,6 +551,37 @@ test("Removing the background needs an explicit confirmation", async ({
   ).toHaveCount(0);
 });
 
+test("Narrow phones reach every crop control without scrolling", async ({
+  page,
+}) => {
+  await fixture(page);
+  const photo = await jpeg(await calibration(800, 600));
+  for (const size of [
+    { width: 360, height: 640 },
+    { width: 375, height: 667 },
+    { width: 393, height: 659 },
+  ]) {
+    await page.setViewportSize(size);
+    await openProfile(page);
+    await openEditor(page);
+    await choose(page, photo);
+    await expect(page.locator("[data-cover-stage]")).toBeVisible();
+    for (const control of [
+      page.getByRole("button", { name: "保存", exact: true }),
+      page.getByRole("button", { name: "重新选择" }),
+      page.getByRole("button", { name: "重置" }),
+      page.getByRole("button", { name: "参考线" }),
+    ]) {
+      const box = (await control.boundingBox())!;
+      expect(box.y + box.height).toBeLessThanOrEqual(size.height);
+      expect(box.height).toBeGreaterThanOrEqual(40);
+    }
+    await page.goBack();
+    await page.goBack();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+  }
+});
+
 test("An upload keeps going when the window regains focus mid-save", async ({
   page,
 }) => {
@@ -579,17 +617,17 @@ test("Ordinary wheel scrolling does not zoom; Ctrl wheel (trackpad pinch) does",
   const stage = page.locator("[data-cover-stage]");
   await expect(stage).toBeVisible();
   const box = (await stage.boundingBox())!;
-  const zoom = page.getByRole("slider", { name: "缩放" });
+  // There is no zoom bar; the photo's own transform carries the zoom.
+  await expect(page.getByRole("slider")).toHaveCount(0);
+  const zoom = () => mediaScale(page);
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, -200);
   await page.waitForTimeout(300);
-  expect(Number(await zoom.inputValue())).toBe(1);
+  expect(await zoom()).toBeCloseTo(1, 3);
   await page.keyboard.down("Control");
   await page.mouse.wheel(0, -200);
   await page.keyboard.up("Control");
-  await expect
-    .poll(async () => Number(await zoom.inputValue()))
-    .toBeGreaterThan(1);
+  await expect.poll(zoom).toBeGreaterThan(1);
 });
 
 test("A cancelled touch does not leave the photo following later touches", async ({
@@ -603,9 +641,11 @@ test("A cancelled touch does not leave the photo following later touches", async
   await choose(page, await jpeg(await calibration(1600, 1200)));
   const stage = page.locator("[data-cover-stage]");
   await expect(stage).toBeVisible();
-  // Zoom so the photo can move.
-  await page.getByRole("button", { name: "放大" }).click();
-  await page.getByRole("button", { name: "放大" }).click();
+  // Zoom (keyboard fallback) so the photo can move.
+  await stage.locator('[tabindex="0"]').focus();
+  await page.keyboard.press("+");
+  await page.keyboard.press("+");
+  await expect.poll(() => mediaScale(page)).toBeGreaterThan(1.1);
   const image = stage.locator("img");
   const transform = () =>
     image.evaluate((node) => getComputedStyle(node).transform);

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent } from "react";
+import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import Cropper from "react-easy-crop";
 import type { Area } from "react-easy-crop";
 import "react-easy-crop/react-easy-crop.css";
@@ -93,7 +93,9 @@ export const ProfileCoverStage = ({
   thisDevice,
   identity,
   locked,
+  autoFocus = false,
   onAreaChange,
+  children,
 }: {
   /** Bounded display copy of the chosen photo. */
   image: { readonly url: string };
@@ -103,7 +105,11 @@ export const ProfileCoverStage = ({
   thisDevice: CoverDevice;
   identity: CoverIdentity;
   locked: boolean;
+  /** Focus the crop area once the photo is laid out. */
+  autoFocus?: boolean;
   onAreaChange: (area: Area) => void;
+  /** The editor's actions, placed right under the zoom row. */
+  children?: ReactNode;
 }) => {
   const [crop, setCrop] = useState({ x: 0, y: 0 }),
     [zoom, setZoom] = useState(1),
@@ -112,7 +118,9 @@ export const ProfileCoverStage = ({
     [surface, setSurface] = useState(0),
     [area, setArea] = useState<Area | null>(null),
     [coarse, setCoarse] = useState(false);
-  const interacting = useRef(false),
+  const frame = useRef<HTMLDivElement>(null),
+    focused = useRef(false),
+    interacting = useRef(false),
     latestLocked = useRef(locked);
   latestLocked.current = locked;
   const hintId = useId();
@@ -149,7 +157,15 @@ export const ProfileCoverStage = ({
     setZoom(1);
   };
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.target instanceof HTMLInputElement) return;
+    // Browser shortcuts (page zoom Ctrl/⌘ + = − 0) stay the browser's.
+    if (
+      latestLocked.current ||
+      event.target instanceof HTMLInputElement ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey
+    )
+      return;
     if (event.key === "+" || event.key === "=") changeZoom(zoom + ZOOM_STEP);
     else if (event.key === "-" || event.key === "_")
       changeZoom(zoom - ZOOM_STEP);
@@ -160,8 +176,16 @@ export const ProfileCoverStage = ({
   const selected = headers[device],
     shown = coverWindow(selected.width / selected.height),
     reference = coverWindow(headers[other].width / headers[other].height);
+  // While saving, the arrow keys of an already focused crop area must not
+  // move the photo; layout re-reports (rotation, resize) still apply.
+  const lockKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (latestLocked.current && event.key.startsWith("Arrow")) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
   return (
-    <div className={styles.stage} onKeyDown={keys}>
+    <div className={styles.stage} onKeyDown={keys} onKeyDownCapture={lockKeys}>
       <div className={styles.stageView}>
         <div className={styles.toolbar}>
           <div className={styles.segmented} role="group" aria-label="预览设备">
@@ -176,16 +200,28 @@ export const ProfileCoverStage = ({
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            className={styles.toggle}
-            aria-pressed={guides}
-            onClick={() => setGuides((value) => !value)}
-          >
-            参考线
-          </button>
+          <div className={styles.toolbarEnd}>
+            <button
+              type="button"
+              className={styles.toggle}
+              disabled={locked}
+              aria-disabled={zoom === 1 && crop.x === 0 && crop.y === 0}
+              onClick={reset}
+            >
+              重置
+            </button>
+            <button
+              type="button"
+              className={styles.toggle}
+              aria-pressed={guides}
+              onClick={() => setGuides((value) => !value)}
+            >
+              参考线
+            </button>
+          </div>
         </div>
         <div
+          ref={frame}
           className={styles.frame}
           data-cover-stage=""
           data-locked={locked}
@@ -211,16 +247,23 @@ export const ProfileCoverStage = ({
               "aria-describedby": hintId,
             }}
             mediaProps={{ alt: "待裁剪的主页背景", draggable: false }}
-            onCropChange={(value) => {
-              if (!latestLocked.current) setCrop(value);
-            }}
-            onZoomChange={(value) => {
-              if (!latestLocked.current) setZoom(value);
-            }}
+            // User input is blocked while saving (touch, wheel, keys and
+            // pointer-events); what still arrives is layout re-reporting.
+            onCropChange={setCrop}
+            onZoomChange={setZoom}
             onTouchRequest={() => !latestLocked.current}
             // Plain wheel and two-finger scroll keep scrolling the dialog;
             // trackpad pinch arrives with ctrlKey (Safari uses gesture events).
             onWheelRequest={(event) => !latestLocked.current && event.ctrlKey}
+            onMediaLoaded={() => {
+              if (!autoFocus || focused.current) return;
+              focused.current = true;
+              requestAnimationFrame(() =>
+                frame.current
+                  ?.querySelector<HTMLElement>('[tabindex="0"]')
+                  ?.focus({ preventScroll: true }),
+              );
+            }}
             onInteractionStart={() => {
               interacting.current = true;
             }}
@@ -228,7 +271,6 @@ export const ProfileCoverStage = ({
               interacting.current = false;
             }}
             onCropAreaChange={(value) => {
-              if (latestLocked.current) return;
               setArea(value);
               onAreaChange(value);
             }}
@@ -273,47 +315,11 @@ export const ProfileCoverStage = ({
         )}
       </div>
       <div className={styles.stageControls}>
-        <div className={styles.zoom}>
-          <button
-            type="button"
-            aria-label="缩小"
-            disabled={locked || zoom <= 1}
-            onClick={() => changeZoom(zoom - ZOOM_STEP)}
-          >
-            −
-          </button>
-          <input
-            aria-label="缩放"
-            aria-valuetext={`${Math.round(zoom * 100)}%`}
-            type="range"
-            min="1"
-            max={COVER_MAX_ZOOM}
-            step="0.01"
-            value={zoom}
-            disabled={locked}
-            onChange={(event) => changeZoom(Number(event.target.value))}
-          />
-          <button
-            type="button"
-            aria-label="放大"
-            disabled={locked || zoom >= COVER_MAX_ZOOM}
-            onClick={() => changeZoom(zoom + ZOOM_STEP)}
-          >
-            +
-          </button>
-          <button
-            type="button"
-            className={styles.reset}
-            disabled={locked || (zoom === 1 && crop.x === 0 && crop.y === 0)}
-            onClick={reset}
-          >
-            重置
-          </button>
-        </div>
+        {children}
         <p id={hintId} className={styles.hint}>
           {coarse
             ? "拖动照片调整位置，双指缩放。"
-            : "拖动照片调整位置，触控板双指捏合或按住 Ctrl 滚动缩放，也可使用 + − 键。"}
+            : "拖动照片调整位置，触控板双指缩放（也可按住 Ctrl 滚动）。"}
         </p>
         {zoom >= COVER_MAX_ZOOM && (
           <p className={styles.notice}>已放大到最大</p>

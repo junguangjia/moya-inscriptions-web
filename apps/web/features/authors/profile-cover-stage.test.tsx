@@ -72,17 +72,19 @@ const button = (name: string) =>
     (item) =>
       item.textContent === name || item.getAttribute("aria-label") === name,
   )!;
-const slider = () =>
-  document.querySelector<HTMLInputElement>('input[type="range"]')!;
 const percent = (value: number) => `${value * 100}%`;
-const key = async (value: string) =>
-  act(async () =>
-    document
-      .querySelector("[data-cover-stage]")!
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { key: value, bubbles: true }),
-      ),
+const key = async (value: string, init: KeyboardEventInit = {}) => {
+  const event = new KeyboardEvent("keydown", {
+    key: value,
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  await act(async () =>
+    document.querySelector("[data-mock-cropper]")!.dispatchEvent(event),
   );
+  return event;
+};
 
 beforeEach(() => {
   cropper.props = null;
@@ -138,25 +140,45 @@ it("zooms only with a pinch or Ctrl wheel so ordinary scrolling keeps scrolling"
   expect(cropper.props!.onTouchRequest()).toBe(true);
 });
 
-it("offers buttons and keys for zoom, clamped to 1–3, and a reset", async () => {
+it("zooms by pinch or keys without a zoom bar, clamped to 1–3, with a reset", async () => {
   await render();
-  expect(button("缩小").disabled).toBe(true);
-  await act(async () => button("放大").click());
-  expect(Number(slider().value)).toBeCloseTo(1.1);
-  expect(slider().getAttribute("aria-valuetext")).toBe("110%");
+  // Owner decision: no zoom slider or −/+ bar; two-finger gestures zoom.
+  expect(document.querySelector('input[type="range"]')).toBeNull();
+  expect(button("放大")).toBeUndefined();
+  expect(button("重置").getAttribute("aria-disabled")).toBe("true");
+  // A pinch arrives from react-easy-crop as a zoom change.
+  await act(async () => cropper.props!.onZoomChange(1.5));
+  expect(cropper.props!.zoom).toBe(1.5);
+  expect(button("重置").getAttribute("aria-disabled")).toBe("false");
+  // Keyboard fallback for pointer-only desktops.
   await key("+");
   await key("=");
-  expect(Number(slider().value)).toBeCloseTo(1.3);
+  expect(cropper.props!.zoom).toBeCloseTo(1.7);
   await key("-");
-  expect(Number(slider().value)).toBeCloseTo(1.2);
+  expect(cropper.props!.zoom).toBeCloseTo(1.6);
   for (let i = 0; i < 30; i++) await key("+");
-  expect(Number(slider().value)).toBe(3);
-  expect(button("放大").disabled).toBe(true);
+  expect(cropper.props!.zoom).toBe(3);
   expect(document.body.textContent).toContain("已放大到最大");
   await act(async () => cropper.props!.onCropChange({ x: 12, y: -4 }));
-  await key("0");
-  expect(Number(slider().value)).toBe(1);
+  await act(async () => button("重置").click());
+  expect(cropper.props!.zoom).toBe(1);
   expect(cropper.props!.crop).toEqual({ x: 0, y: 0 });
+  await act(async () => cropper.props!.onZoomChange(2));
+  await key("0");
+  expect(cropper.props!.zoom).toBe(1);
+});
+
+it("leaves browser shortcuts with modifiers to the browser", async () => {
+  await render();
+  await act(async () => cropper.props!.onZoomChange(2));
+  await act(async () => cropper.props!.onCropChange({ x: 12, y: -4 }));
+  for (const init of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }])
+    for (const value of ["=", "+", "-", "0"]) {
+      const event = await key(value, init);
+      expect(event.defaultPrevented).toBe(false);
+    }
+  expect(cropper.props!.zoom).toBe(2);
+  expect(cropper.props!.crop).toEqual({ x: 12, y: -4 });
 });
 
 it("ends an interrupted gesture by remounting the cropper, keeping crop and zoom", async () => {
@@ -188,20 +210,26 @@ it("ends an interrupted gesture by remounting the cropper, keeping crop and zoom
   expect(cropper.mounts).toBe(3);
 });
 
-it("locks every input while saving", async () => {
+it("locks every user input while saving but keeps layout re-reports", async () => {
   await render(true);
   expect(cropper.props!.onTouchRequest()).toBe(false);
   expect(cropper.props!.onWheelRequest({ ctrlKey: true })).toBe(false);
   expect(cropper.props!.cropperProps.tabIndex).toBe(-1);
-  expect(button("放大").disabled).toBe(true);
-  expect(slider().disabled).toBe(true);
+  expect(button("重置").disabled).toBe(true);
+  // A focused crop area's arrow keys are swallowed while saving.
+  expect((await key("ArrowLeft")).defaultPrevented).toBe(true);
+  expect((await key("+")).defaultPrevented).toBe(false);
+  expect(cropper.props!.zoom).toBe(1);
+  // Rotation or resize re-layout still reaches the stage and the editor.
+  await act(async () => cropper.props!.onCropChange({ x: 3, y: 1 }));
+  expect(cropper.props!.crop).toEqual({ x: 3, y: 1 });
   await act(async () =>
     cropper.props!.onCropAreaChange(
       { x: 0, y: 0, width: 50, height: 50 },
       { x: 0, y: 0, width: 1, height: 1 },
     ),
   );
-  expect(onAreaChange).not.toHaveBeenCalled();
+  expect(onAreaChange).toHaveBeenCalledOnce();
 });
 
 it("reports the chosen area and warns when it has too few source pixels", async () => {

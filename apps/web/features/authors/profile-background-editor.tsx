@@ -124,12 +124,17 @@ export const ProfileBackgroundEditor = ({
     intent = useRef<Intent | null>(null),
     owned = useRef<CoverSource | null>(null),
     input = useRef<HTMLInputElement>(null),
+    primary = useRef<HTMLButtonElement>(null),
+    keepRemove = useRef<HTMLButtonElement>(null),
+    shownStep = useRef<Step>("overview"),
     mounted = useRef(false),
     generation = useRef(0),
     saving = useRef(false),
     target = useRef<string | null>(null),
     phaseRef = useRef<Phase>("idle");
   const busy = BUSY.includes(phase);
+  /** A write is in flight: leaving the page could lose it. */
+  const writing = phase === "export" || phase === "upload" || phase === "bind";
   const allowed =
     profile.isOwner &&
     author.viewer?.id === profile.id &&
@@ -163,9 +168,20 @@ export const ProfileBackgroundEditor = ({
       owned.current?.release();
       // The save was confirmed but the editor left before the header caught up.
       if (phaseRef.current === "refresh")
-        latest.current.author.notify("主页背景已保存");
+        latest.current.author.notify(
+          target.current === null ? "主页背景已移除" : "主页背景已保存",
+        );
     };
   }, []);
+
+  // Keyboard and screen-reader users follow the step: the crop area focuses
+  // itself once laid out; the overview and removal focus their safe action.
+  useEffect(() => {
+    if (shownStep.current === step) return;
+    shownStep.current = step;
+    if (step === "overview") primary.current?.focus({ preventScroll: true });
+    if (step === "remove") keepRemove.current?.focus({ preventScroll: true });
+  }, [step]);
 
   const toOverview = () => {
     generation.current++;
@@ -225,6 +241,33 @@ export const ProfileBackgroundEditor = ({
     );
   };
 
+  /** Truthful copy after a failed request, and the right identity for a retry. */
+  const onFailure = (
+    e: unknown,
+    stage: "export" | CoverSavePhase,
+    epoch: number,
+  ) => {
+    if (!mounted.current) return;
+    // A lost bind response may hide a committed save: re-read the profile.
+    if (stage === "bind") onSaved();
+    if (authorClient.accountEpoch() !== epoch) {
+      if (stage !== "bind") return interrupted();
+      // Same ids are safe to retry: the server replays a committed save.
+      return fail(
+        "账户状态已变化，无法确认是否已保存，请确认账户后重试（不会重复保存）",
+      );
+    }
+    if (needsFreshIntent(e)) intent.current = null;
+    fail(
+      coverErrorMessage(
+        stage === "export" && !(e instanceof CoverError)
+          ? new CoverError("export")
+          : e,
+        stage === "export" ? undefined : stage,
+      ),
+    );
+  };
+
   const save = async () => {
     const current = chosen,
       chosenArea = area.current;
@@ -273,16 +316,7 @@ export const ProfileBackgroundEditor = ({
       });
       if (mounted.current) confirm(pending.mediaId);
     } catch (e) {
-      if (!mounted.current) return;
-      if (needsFreshIntent(e)) intent.current = null;
-      fail(
-        coverErrorMessage(
-          stage === "export" && !(e instanceof CoverError)
-            ? new CoverError("export")
-            : e,
-          stage === "export" ? undefined : stage,
-        ),
-      );
+      onFailure(e, stage, epoch);
     } finally {
       saving.current = false;
     }
@@ -311,9 +345,7 @@ export const ProfileBackgroundEditor = ({
       });
       if (mounted.current) confirm(null);
     } catch (e) {
-      if (!mounted.current) return;
-      if (needsFreshIntent(e)) intent.current = null;
-      fail(coverErrorMessage(e, "bind"));
+      onFailure(e, "bind", epoch);
     } finally {
       saving.current = false;
     }
@@ -325,7 +357,11 @@ export const ProfileBackgroundEditor = ({
     if (phase !== "refresh") return;
     const timer = window.setTimeout(() => {
       go("done");
-      author.notify("主页背景已保存，刷新后显示");
+      author.notify(
+        target.current === null
+          ? "主页背景已移除"
+          : "主页背景已保存，刷新后显示",
+      );
     }, REFRESH_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [phase]);
@@ -433,7 +469,7 @@ export const ProfileBackgroundEditor = ({
       }
       navigationDepth={step === "overview" ? 0 : 1}
       onBack={onBack}
-      dirty={busy}
+      dirty={writing}
       dismissible={!busy}
       closeRequested={phase === "done"}
       onClose={onClose}
@@ -448,42 +484,44 @@ export const ProfileBackgroundEditor = ({
             <ProfileCoverStage
               key={chosen.key}
               image={chosen.source.display}
-              sourceWidth={chosen.source.width}
+              sourceWidth={chosen.source.pixels.width}
               headers={headers}
               thisDevice={thisDevice}
               identity={identity}
               locked={busy}
+              autoFocus
               onAreaChange={(value) => {
                 area.current = value;
                 setAreaReady(true);
               }}
-            />
-            <div className={styles.actions}>
-              <button
-                type="button"
-                className="phase4-button"
-                disabled={busy || decoding}
-                onClick={pick}
-              >
-                重新选择
-              </button>
-              <button
-                type="button"
-                className="phase4-button"
-                disabled={busy}
-                onClick={toOverview}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className={`phase4-button ${styles.primary}`}
-                disabled={!allowed || busy || decoding || !areaReady}
-                onClick={() => void save()}
-              >
-                {busy ? "保存中…" : failed ? "重试保存" : "保存"}
-              </button>
-            </div>
+            >
+              <div className={styles.actions}>
+                <button
+                  type="button"
+                  className="phase4-button"
+                  disabled={busy || decoding}
+                  onClick={pick}
+                >
+                  重新选择
+                </button>
+                <button
+                  type="button"
+                  className="phase4-button"
+                  disabled={busy}
+                  onClick={toOverview}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className={`phase4-button ${styles.primary}`}
+                  disabled={!allowed || busy || decoding || !areaReady}
+                  onClick={() => void save()}
+                >
+                  {busy ? "保存中…" : failed ? "重试保存" : "保存"}
+                </button>
+              </div>
+            </ProfileCoverStage>
             {/* Below the buttons: a status never pushes 保存 off a short screen. */}
             {decoding && (
               <p role="status" className={styles.hint}>
@@ -544,6 +582,7 @@ export const ProfileBackgroundEditor = ({
               {step === "remove" ? (
                 <>
                   <button
+                    ref={keepRemove}
                     type="button"
                     className="phase4-button"
                     disabled={busy}
@@ -577,6 +616,7 @@ export const ProfileBackgroundEditor = ({
                     </button>
                   )}
                   <button
+                    ref={primary}
                     type="button"
                     className={`phase4-button ${styles.primary}`}
                     disabled={busy || decoding}

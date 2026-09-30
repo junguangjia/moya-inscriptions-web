@@ -146,12 +146,21 @@ describe("readProfileCoverImage", () => {
     expect(env.measure).not.toHaveBeenCalled();
   });
 
-  it("refuses more than 50 megapixels and undecodable files", async () => {
+  it("admits 50 MP camera modes, refuses larger and undecodable files", async () => {
+    // 8192×6144 = 50,331,648 px: a common "5000 万像素" phone mode.
     expect(
       await codeOf(
         readProfileCoverImage(
           file("a.jpg", "image/jpeg"),
-          environment({ width: 10000, height: 5001 }),
+          environment({ width: 8192, height: 6144 }),
+        ),
+      ),
+    ).toBe("resolved");
+    expect(
+      await codeOf(
+        readProfileCoverImage(
+          file("a.jpg", "image/jpeg"),
+          environment({ width: 10000, height: 5300 }),
         ),
       ),
     ).toBe("pixels");
@@ -203,31 +212,55 @@ describe("readProfileCoverImage", () => {
     expect(source.opaque).toBe(false);
   });
 
-  it("re-decodes smaller when an engine resizes the pre-rotation width", async () => {
-    const size = { width: 4284, height: 5712 };
-    let calls = 0;
-    const env = environment(size, {
-      decode: vi.fn(async (_: Blob, options: ImageBitmapOptions) => {
-        calls += 1;
-        // First answer: the resize was applied to the other side.
-        const w =
-          calls === 1
-            ? Math.round(((options.resizeWidth ?? 0) * 5712) / 4284)
-            : (options.resizeWidth ?? 0);
-        return bitmap(
-          w,
-          Math.round((w * 5712) / 4284),
-        ) as unknown as ImageBitmap;
-      }),
+  /**
+   * An engine that applies resizeWidth to the stored (pre-rotation) width:
+   * a rotated photo decodes too small (portrait stored landscape) or too
+   * large (landscape stored portrait) on the first attempt.
+   */
+  const preRotationEngine = (stored: { width: number; height: number }) => {
+    const calls: number[] = [];
+    const decode = vi.fn(async (_: Blob, options: ImageBitmapOptions) => {
+      const width = options.resizeWidth ?? stored.width;
+      calls.push(width);
+      const height = Math.round((width * stored.height) / stored.width);
+      // Returned in display orientation (rotated a quarter turn).
+      return bitmap(height, width) as unknown as ImageBitmap;
     });
+    return { decode, calls };
+  };
+
+  it("corrects a pre-rotation resize that returns too few pixels", async () => {
+    const engine = preRotationEngine({ width: 5712, height: 4284 });
+    const source = await readProfileCoverImage(
+      file("a.jpg", "image/jpeg"),
+      environment({ width: 4284, height: 5712 }, { decode: engine.decode }),
+    );
+    expect(engine.calls).toHaveLength(2);
+    const pixels = source.pixels.width * source.pixels.height;
+    expect(pixels).toBeGreaterThanOrEqual(16 * 1024 * 1024 * 0.8);
+    expect(pixels).toBeLessThanOrEqual(16 * 1024 * 1024 * 1.05);
+  });
+
+  it("corrects a pre-rotation resize that returns too many pixels", async () => {
+    const engine = preRotationEngine({ width: 4284, height: 5712 });
+    const source = await readProfileCoverImage(
+      file("a.jpg", "image/jpeg"),
+      environment({ width: 5712, height: 4284 }, { decode: engine.decode }),
+    );
+    expect(engine.calls).toHaveLength(2);
+    expect(source.pixels.width * source.pixels.height).toBeLessThanOrEqual(
+      16 * 1024 * 1024 * 1.05,
+    );
+  });
+
+  it("decodes the photo once and draws the display copy from those pixels", async () => {
+    const env = environment({ width: 4000, height: 3000 });
     const source = await readProfileCoverImage(
       file("a.jpg", "image/jpeg"),
       env,
     );
-    expect(calls).toBe(2);
-    expect(source.pixels.width * source.pixels.height).toBeLessThanOrEqual(
-      16 * 1024 * 1024 * 1.05,
-    );
+    expect(env.decode).toHaveBeenCalledOnce();
+    expect(env.display).toHaveBeenCalledWith(source.pixels, true);
   });
 
   it("closes the decoded source when the display copy fails or the shape is wrong", async () => {
@@ -301,11 +334,11 @@ interface FakeContext {
 
 const exportDeps = ({
   sizeFor = () => 1000,
-  alpha = 255,
+  alpha = () => 255,
   type = "image/png",
 }: {
   sizeFor?: (width: number) => number;
-  alpha?: number;
+  alpha?: (index: number) => number;
   type?: string;
 } = {}) => {
   const canvases: {
@@ -328,7 +361,7 @@ const exportDeps = ({
             drawImage: vi.fn(),
             getImageData: (_x, _y, w, h) => {
               const data = new Uint8ClampedArray(w * h * 4);
-              for (let i = 3; i < data.length; i += 4) data[i] = alpha;
+              for (let i = 3; i < data.length; i += 4) data[i] = alpha(i);
               return { data };
             },
             options,
@@ -437,14 +470,26 @@ describe("exportProfileCover", () => {
     ).toBe("too-large");
   });
 
-  it("detects a silently blank canvas for opaque sources only", async () => {
+  it("refuses a silently blank canvas, but keeps a transparent PNG's alpha", async () => {
+    // Opaque source: sampled rows with alpha 0 mean nothing was drawn.
     expect(
       await codeOf(
-        exportProfileCover(source(), full, exportDeps({ alpha: 0 }).deps),
+        exportProfileCover(source(), full, exportDeps({ alpha: () => 0 }).deps),
       ),
     ).toBe("blank");
-    // A transparent PNG keeps its alpha canvas.
-    const { deps, canvases } = exportDeps({ alpha: 0 });
+    // Transparent source: refused only when every pixel is empty.
+    expect(
+      await codeOf(
+        exportProfileCover(
+          source(4000, 3000, false),
+          full,
+          exportDeps({ alpha: () => 0 }).deps,
+        ),
+      ),
+    ).toBe("blank");
+    const { deps, canvases } = exportDeps({
+      alpha: (index) => (index % 8 === 3 ? 0 : 255),
+    });
     await exportProfileCover(source(4000, 3000, false), full, deps);
     expect(canvases).toHaveLength(1);
     expect(canvases[0]!.encoded).toBe(true);

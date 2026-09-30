@@ -1,9 +1,5 @@
 import type { Area } from "react-easy-crop";
-import {
-  browserPreviewEnvironment,
-  CROP_IMAGE_EDGE,
-  renderBounded,
-} from "../publishing/ui/media/bounded-preview";
+import { CROP_IMAGE_EDGE } from "../publishing/ui/media/bounded-preview";
 import {
   canvasHasTransparency,
   canvasLooksBlank,
@@ -32,7 +28,8 @@ export const COVER_HARD_BYTES = 4 * 1024 * 1024;
 export const COVER_LOW_RESOLUTION_WIDTH = 1024;
 /** Background-only source limits (Owner decision, #171 r2). */
 export const COVER_SOURCE_BYTES = 25 * 1024 * 1024;
-export const COVER_SOURCE_PIXELS = 50_000_000;
+/** 50 Mi px: admits 50 MP camera modes (8192×6144, 8160×6144). */
+export const COVER_SOURCE_PIXELS = 50 * 1024 * 1024;
 /** Decoded export source bound (the previous source limit). */
 const EXPORT_SOURCE_PIXELS = 16 * 1024 * 1024;
 
@@ -153,7 +150,7 @@ const SOURCE_MESSAGES: Record<CoverErrorCode, string> = {
   type: "仅支持 JPG、PNG 或 WebP 照片",
   heic: "暂不支持 HEIC 照片，请在相册中导出为 JPG 后再选择",
   bytes: "照片超过 25 MiB，请选择较小的照片",
-  pixels: "照片像素过高（超过 5000 万），请选择较小的照片",
+  pixels: "照片像素过高，请选择较小的照片",
   decode: "这张照片无法打开，请换一张",
   blank: "当前设备无法处理这张照片，请换一张较小的照片",
   "too-large": "照片细节过多，无法压缩到 4 MiB 以内，请换一张",
@@ -215,7 +212,11 @@ export interface CoverReadEnvironment {
   /** Oriented natural size, without decoding the whole picture. */
   measure(file: Blob): Promise<{ width: number; height: number }>;
   decode(file: Blob, options: ImageBitmapOptions): Promise<ImageBitmap>;
-  display(file: Blob): Promise<{
+  /** A small display copy drawn from the already bounded pixels. */
+  display(
+    pixels: ImageBitmap,
+    opaque: boolean,
+  ): Promise<{
     blob: Blob;
     size: { width: number; height: number };
   }>;
@@ -243,8 +244,36 @@ export const browserCoverEnvironment = (): CoverReadEnvironment => ({
       return Promise.reject(new CoverError("decode"));
     return createImageBitmap(file, options);
   },
-  display: (file) =>
-    renderBounded(browserPreviewEnvironment(), file, CROP_IMAGE_EDGE),
+  display: async (pixels, opaque) => {
+    const scale = Math.min(
+      1,
+      CROP_IMAGE_EDGE / Math.max(pixels.width, pixels.height),
+    );
+    const size = {
+      width: Math.max(1, Math.round(pixels.width * scale)),
+      height: Math.max(1, Math.round(pixels.height * scale)),
+    };
+    const canvas = document.createElement("canvas");
+    try {
+      const context = canvas.getContext("2d");
+      if (!context) throw new CoverError("decode");
+      canvas.width = size.width;
+      canvas.height = size.height;
+      context.drawImage(pixels, 0, 0, size.width, size.height);
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(
+          resolve,
+          opaque ? "image/jpeg" : "image/png",
+          opaque ? 0.85 : undefined,
+        ),
+      );
+      if (!blob) throw new CoverError("decode");
+      return { blob, size };
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  },
   createObjectURL: (blob) => URL.createObjectURL(blob),
   revokeObjectURL: (url) => URL.revokeObjectURL(url),
 });
@@ -258,22 +287,18 @@ const decodeBounded = async (
   size: { width: number; height: number },
 ): Promise<ImageBitmap> => {
   const oriented = { imageOrientation: "from-image" } as const;
-  let scale = Math.min(
-    1,
-    Math.sqrt(EXPORT_SOURCE_PIXELS / (size.width * size.height)),
-  );
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const scale = Math.sqrt(EXPORT_SOURCE_PIXELS / (size.width * size.height));
+  // Requested decode width; null decodes at full size.
+  let width: number | null =
+    scale < 1 ? Math.max(1, Math.floor(size.width * scale)) : null;
+  for (let attempt = 0; ; attempt += 1) {
     let bitmap: ImageBitmap;
     try {
       bitmap = await environment.decode(
         file,
-        scale < 1
-          ? {
-              ...oriented,
-              resizeWidth: Math.max(1, Math.floor(size.width * scale)),
-              resizeQuality: "high",
-            }
-          : oriented,
+        width === null
+          ? oriented
+          : { ...oriented, resizeWidth: width, resizeQuality: "high" },
       );
     } catch (error) {
       // Engines that refuse the options decode once at full size.
@@ -281,12 +306,21 @@ const decodeBounded = async (
       return environment.decode(file, {});
     }
     const pixels = bitmap.width * bitmap.height;
-    // An engine that sized the pre-rotation width returns more pixels.
-    if (pixels <= EXPORT_SOURCE_PIXELS * 1.05 || attempt === 1) return bitmap;
+    // An engine that applies resizeWidth before EXIF rotation returns too
+    // many or too few pixels for a rotated photo: correct the request once.
+    if (
+      width === null ||
+      attempt === 1 ||
+      (pixels <= EXPORT_SOURCE_PIXELS * 1.05 &&
+        pixels >= EXPORT_SOURCE_PIXELS * 0.8)
+    )
+      return bitmap;
     bitmap.close();
-    scale *= Math.sqrt(EXPORT_SOURCE_PIXELS / pixels);
+    width = Math.min(
+      Math.max(size.width, size.height),
+      Math.max(1, Math.floor(width * Math.sqrt(EXPORT_SOURCE_PIXELS / pixels))),
+    );
   }
-  throw new CoverError("decode");
 };
 
 /** Background-only source policy; the avatar and the Backend keep their own limits. */
@@ -312,29 +346,33 @@ export const readProfileCoverImage = async (
   if (!(size.width > 0 && size.height > 0)) throw new CoverError("decode");
   if (size.width * size.height > COVER_SOURCE_PIXELS)
     throw new CoverError("pixels");
-  const [pixels, display] = await Promise.allSettled([
-    decodeBounded(environment, file, size),
-    environment.display(file),
-  ]);
-  if (pixels.status === "rejected" || display.status === "rejected") {
-    if (pixels.status === "fulfilled") pixels.value.close();
+  const opaque = file.type === "image/jpeg";
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await decodeBounded(environment, file, size);
+  } catch {
     throw new CoverError("decode");
   }
-  const bitmap = pixels.value;
-  if (
-    Math.abs(bitmap.width / bitmap.height - size.width / size.height) > 0.02
-  ) {
+  // One decode of the photo: the display copy is drawn from the bounded pixels.
+  let display: Awaited<ReturnType<CoverReadEnvironment["display"]>>;
+  try {
+    if (
+      Math.abs(bitmap.width / bitmap.height - size.width / size.height) > 0.02
+    )
+      throw new CoverError("decode");
+    display = await environment.display(bitmap, opaque);
+  } catch {
     bitmap.close();
     throw new CoverError("decode");
   }
-  const url = environment.createObjectURL(display.value.blob);
+  const url = environment.createObjectURL(display.blob);
   let released = false;
   return {
-    display: { url, ...display.value.size },
+    display: { url, ...display.size },
     width: size.width,
     height: size.height,
     pixels: bitmap,
-    opaque: file.type === "image/jpeg",
+    opaque,
     release: () => {
       if (released) return;
       released = true;
@@ -375,6 +413,20 @@ const release = (canvas: ExportCanvas | null) => {
   canvas.height = 0;
 };
 
+/** Whether no pixel was drawn at all (every alpha is 0), in bounded strips. */
+const canvasIsEmpty = (
+  context: Drawable2dContext,
+  size: { width: number; height: number },
+) => {
+  for (let y = 0; y < size.height; y += 256) {
+    const rows = Math.min(256, size.height - y);
+    const { data } = context.getImageData(0, y, size.width, rows);
+    for (let index = 3; index < data.length; index += 4)
+      if (data[index] !== 0) return false;
+  }
+  return true;
+};
+
 const encodePng = (canvas: ExportCanvas) =>
   new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
 
@@ -413,8 +465,13 @@ export const exportProfileCover = async (
       context.imageSmoothingQuality = "high";
       context.drawImage(pixels, sx, sy, sw, sh, 0, 0, width, height);
       const probe = context as unknown as Drawable2dContext;
-      // WebKit may silently draw nothing into a canvas over its memory ceiling.
-      if (source.opaque && canvasLooksBlank(probe, { width, height }))
+      // WebKit may silently draw nothing into a canvas over its memory
+      // ceiling; a transparent PNG is only refused when nothing at all shows.
+      if (
+        source.opaque
+          ? canvasLooksBlank(probe, { width, height })
+          : canvasIsEmpty(probe, { width, height })
+      )
         throw new CoverError("blank");
       let target = canvas;
       if (source.opaque || !canvasHasTransparency(probe, { width, height })) {

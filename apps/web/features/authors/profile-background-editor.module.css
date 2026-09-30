@@ -57,7 +57,7 @@
 .segmented button,
 .toggle {
   min-width: 64px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 var(--yoyi-space-4);
   border: 0;
   border-radius: var(--yoyi-radius-full);
@@ -82,7 +82,7 @@
 /* The 4:3 master, inset from the screen edges (iOS edge swipe) and height-capped. */
 .frame {
   position: relative;
-  width: min(100%, calc((100svh - 400px) * 4 / 3));
+  width: min(100%, calc((100svh - 350px) * 4 / 3));
   min-width: min(100%, 280px);
   aspect-ratio: 4 / 3;
   margin-inline: auto;
@@ -207,36 +207,13 @@
   outline: 1.5px dotted var(--yoyi-color-text-secondary);
 }
 
-.zoom {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 44px auto;
-  align-items: center;
+.toolbarEnd {
+  display: flex;
   gap: var(--yoyi-space-2);
 }
-.zoom input {
-  width: 100%;
-  min-height: 44px;
-  accent-color: var(--yoyi-color-text-primary);
-}
-.zoom button {
-  min-width: 44px;
-  min-height: 44px;
-  border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-full);
-  background: var(--yoyi-color-background-surface);
-  color: var(--yoyi-color-text-primary);
-  font: inherit;
-  font-size: 1.25rem;
-  line-height: 1;
-  cursor: pointer;
-}
-.zoom button.reset {
-  padding: 0 var(--yoyi-space-4);
-  font-size: var(--yoyi-type-body-small-size);
-}
-.zoom button:disabled,
 .segmented button:disabled,
-.toggle:disabled {
+.toggle:disabled,
+.toggle[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }
@@ -304,7 +281,7 @@
 }
 
 @media (orientation: landscape) and (max-height: 560px) {
-  .editor {
+  .editor[data-cover-editor="crop"] {
     max-width: 960px;
     grid-template-columns: minmax(0, 58fr) minmax(0, 42fr);
     align-items: start;

@@ -350,23 +350,37 @@ it("maps an upload failure to copy that says nothing changed", async () => {
   expect(background).not.toHaveBeenCalled();
 });
 
-it("does not attach an upload after the account changes", async () => {
-  let resolve!: (value: { id: string }) => void;
-  upload.mockReturnValueOnce(
-    new Promise((done) => {
-      resolve = done;
-    }),
-  );
+it("does not attach an upload after the account switches", async () => {
+  // The real client refuses a response that arrives after an account change.
+  upload.mockImplementationOnce(async () => {
+    accountEpoch.mockReturnValue(1);
+    account.mockReturnValue("different");
+    throw new RequestError(401, "账户状态已变化，请重试读取");
+  });
   await render();
   await selectImage();
   await click("保存");
-  accountEpoch.mockReturnValue(1);
-  author.viewer = { id: "different" };
-  await render();
-  await act(async () => resolve({ id: "late-media" }));
   expect(background).not.toHaveBeenCalled();
   expect(onSaved).not.toHaveBeenCalled();
   expect(alert()).toContain("账户已切换，背景尚未更改");
+});
+
+it("keeps the save identity when the account changes during the bind", async () => {
+  background.mockImplementationOnce(async () => {
+    accountEpoch.mockReturnValue(1);
+    throw new RequestError(401, "账户状态已变化，请重试读取");
+  });
+  await render();
+  await selectImage();
+  await click("保存");
+  // The server may have committed: say so, re-read the profile, and retry
+  // with the same ids (a committed save is replayed, never repeated).
+  expect(alert()).toContain("无法确认是否已保存");
+  expect(onSaved).toHaveBeenCalledOnce();
+  const first = background.mock.calls[0];
+  await click("重试保存");
+  expect(upload).toHaveBeenCalledOnce();
+  expect(background.mock.calls[1]).toEqual(first);
 });
 
 it("keeps saving through a session revalidation of the same account", async () => {
@@ -480,4 +494,56 @@ it("still reports a confirmed save when the editor closes before the read-back",
   await act(async () => root!.unmount());
   root = null;
   expect(author.notify).toHaveBeenCalledWith("主页背景已保存");
+});
+
+it("re-reads the profile after an ambiguous bind failure", async () => {
+  background.mockRejectedValueOnce(new TypeError("Load failed"));
+  await render();
+  await selectImage();
+  await click("保存");
+  expect(onSaved).toHaveBeenCalledOnce();
+  await click("取消");
+  expect(
+    document.querySelector('[data-cover-editor="overview"]'),
+  ).not.toBeNull();
+});
+
+it("stops guarding page unload once the server has confirmed the save", async () => {
+  let resolve!: () => void;
+  background.mockReturnValueOnce(
+    new Promise<void>((done) => {
+      resolve = done;
+    }),
+  );
+  await render();
+  await selectImage();
+  await click("保存");
+  const during = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(during);
+  expect(during.defaultPrevented).toBe(true);
+  await act(async () => resolve());
+  expect(document.body.textContent).toContain("正在更新主页");
+  const after = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(after);
+  expect(after.defaultPrevented).toBe(false);
+});
+
+it("reports a removal as removed when the header does not catch up", async () => {
+  vi.useFakeTimers();
+  await render();
+  await click("移除背景");
+  await click("确认移除");
+  await act(async () => vi.advanceTimersByTime(15_000));
+  expect(author.notify).toHaveBeenCalledWith("主页背景已移除");
+});
+
+it("moves focus with each step", async () => {
+  await render();
+  await click("移除背景");
+  expect(document.activeElement?.textContent).toBe("取消");
+  await click("取消");
+  expect(document.activeElement?.textContent).toBe("更换照片");
+  await selectImage();
+  await click("取消");
+  expect(document.activeElement?.textContent).toBe("更换照片");
 });
