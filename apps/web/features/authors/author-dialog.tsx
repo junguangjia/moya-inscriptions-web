@@ -18,6 +18,7 @@ export const AuthorDialog = ({
   headerHidden = false,
   className,
   dirty = false,
+  guardChildBack = true,
   dismissible = true,
   closeRequested = false,
   onClose,
@@ -33,6 +34,8 @@ export const AuthorDialog = ({
   className?: string | undefined;
   headerHidden?: boolean;
   dirty?: boolean;
+  /** Keep drafts within a settings tree; root exit is always guarded. */
+  guardChildBack?: boolean;
   dismissible?: boolean;
   /** Finish this modal's Back transition before a caller changes the parent view. */
   closeRequested?: boolean;
@@ -40,19 +43,42 @@ export const AuthorDialog = ({
   children: ReactNode;
 }) => {
   const ref = useRef<HTMLDialogElement>(null),
-    latest = useRef({ dirty, dismissible, onClose, onBack, navigationDepth }),
+    latest = useRef({
+      dirty,
+      guardChildBack,
+      dismissible,
+      onClose,
+      onBack,
+      navigationDepth,
+    }),
     closeApproved = useRef(false),
     stepApproved = useRef(false),
     pending = useRef(false),
+    consumed = useRef(false),
     historyDepth = useRef(0),
     generation = useRef(0),
     id = useRef(requestIdentity());
-  latest.current = { dirty, dismissible, onClose, onBack, navigationDepth };
-  const allowed = () =>
+  latest.current = {
+    dirty,
+    guardChildBack,
+    dismissible,
+    onClose,
+    onBack,
+    navigationDepth,
+  };
+  const allowed = (child = false) =>
     latest.current.dismissible &&
-    (!latest.current.dirty || window.confirm("更改尚未保存，放弃这些更改？"));
+    (!latest.current.dirty ||
+      (child && !latest.current.guardChildBack) ||
+      window.confirm("更改尚未保存，放弃这些更改？"));
   const close = () => {
-    if (pending.current || closeApproved.current || !allowed()) return;
+    if (
+      consumed.current ||
+      pending.current ||
+      closeApproved.current ||
+      !allowed()
+    )
+      return;
     closeApproved.current = true;
     if (window.history.state?.phase4Dialog === id.current) {
       pending.current = true;
@@ -62,6 +88,7 @@ export const AuthorDialog = ({
     } else latest.current.onClose();
   };
   const back = () => {
+    if (consumed.current) return;
     // Preserve older callers whose local Back is deliberately not a child page.
     if (latest.current.navigationDepth === undefined && latest.current.onBack) {
       if (latest.current.dismissible) latest.current.onBack(0);
@@ -71,7 +98,7 @@ export const AuthorDialog = ({
       close();
       return;
     }
-    if (pending.current || !allowed()) return;
+    if (pending.current || !allowed(true)) return;
     pending.current = true;
     stepApproved.current = true;
     window.history.back();
@@ -82,6 +109,7 @@ export const AuthorDialog = ({
     dialog?.showModal();
     const marker = id.current;
     const run = ++generation.current;
+    consumed.current = false;
     if (window.history.state?.phase4Dialog !== marker)
       window.history[
         window.history.state?.phase4Dialog ? "replaceState" : "pushState"
@@ -109,7 +137,9 @@ export const AuthorDialog = ({
       const distance = historyDepth.current - targetDepth;
       if (
         !latest.current.dismissible ||
-        (!closeApproved.current && !stepApproved.current && !allowed())
+        (!closeApproved.current &&
+          !stepApproved.current &&
+          !allowed(sameDialog))
       ) {
         if (distance === 1) window.history.forward();
         else window.history.go(distance);
@@ -122,7 +152,14 @@ export const AuthorDialog = ({
         // A successful submit may have already returned the controlled view.
         if (latest.current.navigationDepth !== targetDepth)
           latest.current.onBack?.(targetDepth);
-      } else latest.current.onClose();
+      } else {
+        // Exit animation may retain the modal briefly after its entry is gone.
+        // The next browser Back belongs to the underlying page.
+        consumed.current = true;
+        window.removeEventListener("popstate", pop, true);
+        window.removeEventListener("beforeunload", unload);
+        latest.current.onClose();
+      }
     };
     const unload = (event: BeforeUnloadEvent) => {
       if (latest.current.dirty) {
@@ -156,7 +193,7 @@ export const AuthorDialog = ({
     };
   }, []);
   useEffect(() => {
-    if (navigationDepth === undefined) return;
+    if (navigationDepth === undefined || consumed.current) return;
     const depth = Math.max(0, navigationDepth);
     if (depth > historyDepth.current) {
       for (let next = historyDepth.current + 1; next <= depth; next++) {
