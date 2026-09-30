@@ -387,6 +387,7 @@ describe("AccountSecurity request and host boundaries", () => {
       request.mock.calls.filter(([path]) => path === "challenges"),
     ).toHaveLength(1);
     expect(flow).toHaveBeenCalledWith("绑定手机号");
+    expect(node.textContent).not.toContain("验证码已发往");
     await act(async () => pending.resolve({ status: 200, body: challenge }));
     expect(busy).toHaveBeenLastCalledWith(false);
   });
@@ -440,6 +441,7 @@ describe("AccountSecurity request and host boundaries", () => {
       "网络暂时不可用",
     );
     expect(busy).toHaveBeenLastCalledWith(false);
+    expect(node.textContent).not.toContain("验证码已发往");
     await click("取消");
     expect(flow).toHaveBeenLastCalledWith(null);
     expect(node.querySelector("input")).toBeNull();
@@ -462,8 +464,10 @@ describe("AccountSecurity request and host boundaries", () => {
     expect(node.querySelector("[role=alert]")?.textContent).toContain(
       "这个登录方式当前不可用",
     );
+    expect(node.textContent).not.toContain("验证码已发往");
     await click("重新获取验证码");
     expect(node.querySelector("[role=alert]")).toBeNull();
+    expect(node.textContent).toContain("验证码已发往");
     expect(attempts).toBe(2);
   });
   it("never reports successful sign-out after a failed or duplicate request", async () => {

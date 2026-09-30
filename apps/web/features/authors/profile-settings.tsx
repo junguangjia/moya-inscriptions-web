@@ -667,18 +667,20 @@ export const ProfileSettings = ({
                       </button>
                     </div>
                   )}
-                  {blocks && blocks.items.length < blocks.total && (
-                    <div className={styles.footer}>
-                      <button
-                        type="button"
-                        className={styles.action}
-                        disabled={busy || blocksLoading}
-                        onClick={() => void loadBlocks(blocks.page + 1)}
-                      >
-                        加载更多
-                      </button>
-                    </div>
-                  )}
+                  {blocks &&
+                    !blocksError &&
+                    blocks.items.length < blocks.total && (
+                      <div className={styles.footer}>
+                        <button
+                          type="button"
+                          className={styles.action}
+                          disabled={busy || blocksLoading}
+                          onClick={() => void loadBlocks(blocks.page + 1)}
+                        >
+                          加载更多
+                        </button>
+                      </div>
+                    )}
                 </>
               ) : (
                 guest

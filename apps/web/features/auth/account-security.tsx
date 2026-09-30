@@ -509,11 +509,13 @@ export const AccountSecurity = ({
           <p className={styles.muted}>
             {flow.step === "identifier"
               ? `输入要${flow.action === "replace" ? "更换" : "绑定"}的${labels[flow.target]}。这会留在当前账户。`
-              : flow.step === "factor"
-                ? `验证码已发往 ${flow.masked}。`
-                : flow.action === "unlink"
-                  ? `解除${labels[flow.target]}前，先验证当前的${labels[flow.proof]}${flow.masked ? ` ${flow.masked}` : ""}。`
-                  : `验证码已发往当前的${labels[flow.proof]}${flow.masked ? ` ${flow.masked}` : ""}。`}
+              : !flow.challengeId
+                ? `验证当前的${labels[flow.proof]}；获取验证码后继续。`
+                : flow.step === "factor"
+                  ? `验证码已发往 ${flow.masked}。`
+                  : flow.action === "unlink"
+                    ? `解除${labels[flow.target]}前，先验证当前的${labels[flow.proof]}${flow.masked ? ` ${flow.masked}` : ""}。`
+                    : `验证码已发往当前的${labels[flow.proof]}${flow.masked ? ` ${flow.masked}` : ""}。`}
           </p>
           <label className={styles.field}>
             {flow.step === "identifier" ? labels[flow.target] : "验证码"}

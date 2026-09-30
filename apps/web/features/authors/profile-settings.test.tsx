@@ -402,6 +402,28 @@ describe("grouped My settings", () => {
     expect(people).toHaveBeenCalledTimes(2);
     expect(node.textContent).toContain("暂无已屏蔽账户");
   });
+  it("requires a failed post-unblock refresh to recover before paging again", async () => {
+    people
+      .mockResolvedValueOnce({
+        items: [person],
+        page: 1,
+        pageSize: 1,
+        total: 2,
+      })
+      .mockRejectedValueOnce(new Error("刷新失败"));
+    const { node } = await render();
+    await click(node, "已屏蔽账户");
+    await click(node, "解除屏蔽");
+    expect(node.querySelector("[role=alert]")?.textContent).toBe("刷新失败");
+    expect(
+      Array.from(node.querySelectorAll("button")).some((item) =>
+        item.textContent?.includes("加载更多"),
+      ),
+    ).toBe(false);
+    await click(node, "重试");
+    expect(people).toHaveBeenLastCalledWith(profile.id, "blocks", 1);
+    expect(node.textContent).toContain("暂无已屏蔽账户");
+  });
   it("consumes settings history before opening Edit Info", async () => {
     const { node, onEdit, onClose } = await render();
     const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
