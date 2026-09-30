@@ -60,6 +60,8 @@ import {
 import { SMOKE_PROFILES, smokeBudget, smokeOptions } from "./ci-e2e-smoke.mjs";
 import {
   CMS_FINALIZATION_MS,
+  CMS_LIBRARY_WORKSPACES,
+  cmsLibraryBuildArgs,
   CMS_PROFILES,
   boundedChildLimit,
   cmsBudget,
@@ -956,6 +958,82 @@ describe("the real CI wiring preserves required-check closure", () => {
       flags(classifyTask(["scripts/verify.mjs"])),
       expectedFlags({ web: true, scope: "smoke" }),
     );
+  });
+
+  it("prepares every internal Admin runtime dependency before the native CMS build", () => {
+    const manifests = new Map(
+      ["apps", "packages", "services"].flatMap((parent) =>
+        readdirSync(join(root, parent))
+          .filter((name) =>
+            existsSync(join(root, parent, name, "package.json")),
+          )
+          .map((name) => {
+            const manifest = JSON.parse(read(`${parent}/${name}/package.json`));
+            return [manifest.name, manifest];
+          }),
+      ),
+    );
+    const closure = (roots) => {
+      const pending = [...roots],
+        visited = new Set();
+      while (pending.length) {
+        const name = pending.pop();
+        if (visited.has(name)) continue;
+        const manifest = manifests.get(name);
+        assert.ok(manifest, `Unknown CMS prerequisite workspace: ${name}`);
+        visited.add(name);
+        pending.push(
+          ...Object.entries(manifest.dependencies ?? {})
+            .filter(([, version]) => version.startsWith("workspace:"))
+            .map(([name]) => name),
+        );
+      }
+      return visited;
+    };
+    const required = closure(["admin"]);
+    required.delete("admin");
+    const prepared = closure(CMS_LIBRARY_WORKSPACES);
+    for (const name of required)
+      assert.ok(prepared.has(name), `Cold CMS preparation omits ${name}`);
+    assert.equal(prepared.has("admin"), false);
+    assert.equal(prepared.has("web"), false);
+    assert.ok(prepared.has("@moya/ui"));
+    assert.ok(prepared.has("@moya/design-tokens"));
+    assert.deepEqual(
+      cmsLibraryBuildArgs().filter((argument) =>
+        argument.startsWith("--filter="),
+      ),
+      CMS_LIBRARY_WORKSPACES.map((name) => `--filter=${name}...`),
+    );
+  });
+
+  it("prepares Formal Web UI runtime dependencies before each dependent compiler", () => {
+    const source = read("tests/e2e/support/start-formal-web.ts");
+    const block =
+      /for \(const \[name, configuration\] of \[([\s\S]*?)\] as const\) \{/u.exec(
+        source,
+      );
+    assert.ok(block, "Formal Web declares its ordered library preparation");
+    const projects = [
+      ...block[1].matchAll(
+        /\["([^"]+)", "(packages\/[^"]+)\/tsconfig\.json"\]/gu,
+      ),
+    ].map((match) => ({ name: match[1], project: match[2] }));
+    const completed = new Set();
+    for (const { name, project } of projects) {
+      const manifest = JSON.parse(read(`${project}/package.json`));
+      assert.equal(manifest.name, name);
+      for (const [name, version] of Object.entries(manifest.dependencies ?? {}))
+        if (version.startsWith("workspace:"))
+          assert.ok(
+            completed.has(name),
+            `Formal Web compiles ${manifest.name} before runtime prerequisite ${name}`,
+          );
+      completed.add(manifest.name);
+    }
+    assert.ok(completed.has("@moya/ui"));
+    assert.ok(completed.has("@moya/design-tokens"));
+    assert.ok(projects.every(({ project }) => project.startsWith("packages/")));
   });
 
   it("routes the packages the cms job builds and imports to the cms job", () => {

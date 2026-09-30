@@ -532,6 +532,7 @@ export function boundedChildLimit(limitMs, remainingMs, marginMs = 8_000) {
 
 // Original library build tasks and their declared dependency closure only.
 export const CMS_LIBRARY_WORKSPACES = Object.freeze([
+  "@moya/ui",
   "@moya/contracts",
   "@moya/search",
   "@moya/api",
