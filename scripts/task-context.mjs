@@ -16,7 +16,10 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sourceFingerprint, workspaceFingerprint } from "./verify-task.mjs";
+import {
+  sourceFingerprint,
+  workspaceFingerprint,
+} from "./verification-evidence.mjs";
 import { inspectResources } from "./task-resources.mjs";
 
 export const SCRIPT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   lstatSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   openSync,
   fstatSync,
@@ -11,9 +12,10 @@ import {
   readSync,
   constants,
 } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import process from "node:process";
+import { runGit, nulPaths } from "./ci-task-scope.mjs";
 import {
   installedStaticToolInputs,
   nodeExecutableInputs,
@@ -23,6 +25,38 @@ import {
 
 export const EVIDENCE_VERSION = 1;
 const hash = (value) => createHash("sha256").update(value).digest("hex");
+
+// Shared by verification and context helpers without importing a CLI entry.
+export function workspaceFingerprint(git = runGit) {
+  const root = git("rev-parse", "--show-toplevel").trim();
+  const untracked = nulPaths(
+    git("ls-files", "--others", "--exclude-standard", "-z"),
+    true,
+  )
+    .sort()
+    .map((file) => {
+      const path = join(root, file),
+        info = lstatSync(path);
+      return {
+        file,
+        mode: info.mode,
+        sha256: hash(
+          info.isSymbolicLink() ? readlinkSync(path) : readFileSync(path),
+        ),
+      };
+    });
+  return {
+    head: git("rev-parse", "HEAD").trim(),
+    stagedDiffSha256: hash(git("diff", "--cached", "--binary", "HEAD", "--")),
+    workingDiffSha256: hash(git("diff", "--binary", "--")),
+    untracked,
+  };
+}
+
+/** One identity for HEAD plus all dirty bytes, retained across repeated checks. */
+export function sourceFingerprint(fingerprint) {
+  return hash(JSON.stringify(fingerprint));
+}
 
 // Only explicit, read-only, file-scoped static checks are reusable. Database,
 // browser, build, typecheck and unit-test evidence still executes normally.

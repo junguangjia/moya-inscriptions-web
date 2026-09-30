@@ -5,10 +5,8 @@ import {
   openSync,
   writeFileSync,
   realpathSync,
-  lstatSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
 } from "node:fs";
 import {
   resolve,
@@ -19,7 +17,6 @@ import {
   basename,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createHash } from "node:crypto";
 import { runWithinBudget, STARTUP_MARGIN_MS, GRACE_MS } from "./verify.mjs";
 import { performance } from "node:perf_hooks";
 import {
@@ -30,6 +27,8 @@ import {
   reuseDecision,
   readReuseSummary,
   sourceInventory,
+  workspaceFingerprint,
+  sourceFingerprint,
 } from "./verification-evidence.mjs";
 import {
   VALIDATION_PROFILES,
@@ -40,8 +39,11 @@ import {
   isSecurityPath,
   localPaths,
   runGit,
-  nulPaths,
 } from "./ci-task-scope.mjs";
+export {
+  workspaceFingerprint,
+  sourceFingerprint,
+} from "./verification-evidence.mjs";
 
 /** Validate and resolve a private output path without creating it. */
 export function resolveFreshOutput(value, root = process.cwd()) {
@@ -781,43 +783,6 @@ export function validationEnvironment(output, head, env = process.env) {
           GITHUB_RUN_ATTEMPT: "1",
         }),
   };
-}
-
-export function workspaceFingerprint(git = runGit) {
-  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
-  const root = git("rev-parse", "--show-toplevel").trim();
-  const untracked = nulPaths(
-    git("ls-files", "--others", "--exclude-standard", "-z"),
-    true,
-  )
-    .sort()
-    .map((file) => {
-      const path = join(root, file),
-        info = lstatSync(path);
-      return {
-        file,
-        mode: info.mode,
-        sha256: hash(
-          info.isSymbolicLink() ? readlinkSync(path) : readFileSync(path),
-        ),
-      };
-    });
-  return {
-    head: git("rev-parse", "HEAD").trim(),
-    stagedDiffSha256: hash(git("diff", "--cached", "--binary", "HEAD", "--")),
-    workingDiffSha256: hash(git("diff", "--binary", "--")),
-    untracked,
-  };
-}
-
-/**
- * One value for the exact validated content (HEAD plus every dirty byte). A
- * rerun on identical content repeats this value, so it is recognizable as an
- * unchanged retry of the earlier result rather than new evidence; the earlier
- * output directory is never overwritten (see freshOutput).
- */
-export function sourceFingerprint(fingerprint) {
-  return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
 }
 
 export const FEEDBACK_LABEL = "FEEDBACK ONLY — NOT FULL ACCEPTANCE";

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import process from "node:process";
 import {
   chmodSync,
   mkdirSync,
@@ -13,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   assertTaskId,
   authorityFingerprint,
@@ -30,6 +33,36 @@ import {
   prepareResources,
 } from "./task-resources.mjs";
 import { DISPOSABLE_TEST_TARGET_MARKER } from "./disposable-test-target.mjs";
+
+test("verify-task CLI can load resource helpers and report invalid manifests without a module cycle", (t) => {
+  const privateRoot = realpathSync(
+    mkdtempSync(join(tmpdir(), "task-resource-cli-")),
+  );
+  t.after(() => rmSync(privateRoot, { recursive: true, force: true }));
+  const result = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./verify-task.mjs", import.meta.url)),
+      "--mode",
+      "lightweight",
+      "--resources",
+      join(privateRoot, "missing.json"),
+      "--output",
+      join(privateRoot, "validation"),
+    ],
+    {
+      cwd: fileURLToPath(new URL("../", import.meta.url)),
+      encoding: "utf8",
+      timeout: 10000,
+    },
+  );
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /Task validation unavailable: PRIVATE_JSON_INVALID/u,
+  );
+  assert.doesNotMatch(result.stderr, /unsettled top-level await/u);
+});
 
 function fixture(t, task = "parallel-a") {
   const base = realpathSync(
