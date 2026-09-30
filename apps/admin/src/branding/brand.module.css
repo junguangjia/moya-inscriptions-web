@@ -1,17 +1,8 @@
+/* Payload owns its page theme; only these logo variables are adapted. */
 .mark {
-  display: inline-block;
-  flex: 0 0 auto;
-  aspect-ratio: 658 / 426;
-  color: var(--theme-elevation-1000);
-  background-color: currentColor;
-  -webkit-mask-image: url("@moya/ui/assets/brand/yoyi-logo.svg");
-  mask-image: url("@moya/ui/assets/brand/yoyi-logo.svg");
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  mask-size: contain;
+  --yoyi-color-brand-recess-floor: var(--admin-brand-light-floor);
+  --yoyi-color-brand-recess-shadow: var(--admin-brand-light-shadow);
+  --yoyi-color-brand-recess-highlight: var(--admin-brand-light-highlight);
 }
 
 .logo {
@@ -19,4 +10,19 @@
 }
 .icon {
   width: 32px;
+  --yoyi-brand-depth: 0.5px;
+}
+
+[data-theme="dark"] .mark {
+  --yoyi-color-brand-recess-floor: var(--admin-brand-dark-floor);
+  --yoyi-color-brand-recess-shadow: var(--admin-brand-dark-shadow);
+  --yoyi-color-brand-recess-highlight: var(--admin-brand-dark-highlight);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .mark {
+    --yoyi-color-brand-recess-floor: var(--admin-brand-dark-floor);
+    --yoyi-color-brand-recess-shadow: var(--admin-brand-dark-shadow);
+    --yoyi-color-brand-recess-highlight: var(--admin-brand-dark-highlight);
+  }
 }

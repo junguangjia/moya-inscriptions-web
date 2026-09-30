@@ -1,5 +1,16 @@
+export type {
+  AuthPasswordLoginRequest,
+  AuthPasswordResetRequest,
+  AuthPasswordResetResult,
+  AuthRegistrationRequest,
+  AuthChallengeRequest,
+} from "@moya/contracts";
 export type { AuthChallengeAccepted as AuthChallengeView } from "@moya/contracts";
-import { publicUserProfileSchema } from "@moya/contracts/schemas";
+import {
+  authPasswordSchema,
+  publicUserProfileSchema,
+  studioNameSchema,
+} from "@moya/contracts/schemas";
 
 export interface AuthCapabilitiesView {
   readonly profile: "full-local" | "email-first" | "disabled";
@@ -89,4 +100,13 @@ export const hasCompletedAuthSession = (body: unknown): boolean => {
     Number.isFinite(Date.parse(value.expiresAt)) &&
     publicUserProfileSchema.safeParse(value.profile).success
   );
+};
+
+/** Client-safe validation delegates to the shared public contracts boundary. */
+export const validAuthPassword = (value: string): boolean =>
+  authPasswordSchema.safeParse(value).success;
+
+export const normalizedStudioName = (value: string): string | null => {
+  const parsed = studioNameSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 };

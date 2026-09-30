@@ -18,7 +18,12 @@ import {
   runCommunityMigrations,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  passwordAuthCases,
+  registerPasswordCase,
+  preparePasswordResetCase,
+} from "../../unit/backend/password-auth-cases";
 
 import {
   assertSyntheticTestDatabaseUrl,
@@ -1229,5 +1234,138 @@ describe("email-auth PostgreSQL", () => {
     expect((await service.readAccount(opened.value.session.token)).ok).toBe(
       false,
     );
+  });
+
+  describe("password auth PostgreSQL App-role parity", () => {
+    beforeAll(async () => {
+      // The focused suite also works when prior OTP cases are filtered out.
+      await runCommunityMigrations(owner, migrationsDirectory);
+      await owner.query(catalogStubs);
+      const existing = await owner.query(
+        "SELECT 1 FROM pg_roles WHERE rolname=$1",
+        [appRole],
+      );
+      if (existing.rowCount === 0)
+        await owner.query(
+          `CREATE ROLE ${appRole} LOGIN PASSWORD 'synthetic-test-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`,
+        );
+      await owner.query(
+        `GRANT CONNECT ON DATABASE ${new URL(ownerUrl).pathname.slice(1)} TO ${appRole}`,
+      );
+      await applyGrants(owner, appRole);
+    });
+    beforeEach(async () => {
+      await owner.query("TRUNCATE TABLE community.public_users CASCADE");
+      await owner.query(
+        "TRUNCATE TABLE community.auth_send_counters,community.auth_target_failures",
+      );
+      codes.length = 0;
+    });
+    const makePasswordHarness = () => {
+      let now = new Date("2026-09-30T12:00:00Z");
+      const pool = appPool();
+      const serviceForPort = (
+        port: import("@moya/api").CommunityAuthPort,
+        deliveryOverride?: AuthDeliveryPorts,
+      ) =>
+        new CommunityAuthService(port, {
+          environment: "development",
+          profile: "full-local",
+          keys,
+          emailMode: "local_capture",
+          phoneMode: "simulated",
+          delivery: deliveryOverride ?? delivery(),
+          clock: () => now,
+        });
+      return {
+        service: serviceAt(pool, () => now),
+        port: new PostgresCommunityAuthAdapter(pool),
+        latestCode: latest,
+        serviceForPort,
+        suspend: async (id: string) => {
+          await owner.query(
+            "UPDATE community.public_users SET status='suspended' WHERE id=$1",
+            [id],
+          );
+        },
+        advance: (ms: number) => {
+          now = new Date(now.getTime() + ms);
+        },
+      };
+    };
+    passwordAuthCases(makePasswordHarness);
+    it("locks the user before the challenge and re-reads invalidation when reset interleaves", async () => {
+      const h = makePasswordHarness(),
+        email = `${key()}@example.invalid`;
+      const original = await registerPasswordCase(h, email),
+        command = await preparePasswordResetCase(h, email);
+      const sent = await h.service.sendChallenge({
+        channel: "email",
+        purpose: "sign_in",
+        identifier: email,
+        idempotencyKey: key(),
+        source: "gated-pg",
+      });
+      if (!sent.ok || !sent.value.continuationToken)
+        throw Error("Synthetic OTP rejected");
+      const code = latest();
+      let release!: () => void,
+        readReached!: () => void,
+        resetReached!: () => void,
+        gated = false;
+      const paused = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const ready = new Promise<void>((resolve) => {
+        readReached = resolve;
+      });
+      const resetWriting = new Promise<void>((resolve) => {
+        resetReached = resolve;
+      });
+      const reader: import("@moya/api").CommunityAuthPort = {
+        transaction: (work) =>
+          h.port.transaction((tx) =>
+            work({
+              ...tx,
+              lockUser: async (id) => {
+                if (!gated && id === original.session.profile.id) {
+                  gated = true;
+                  readReached();
+                  await paused;
+                }
+                return tx.lockUser(id);
+              },
+            }),
+          ),
+      };
+      const writer: import("@moya/api").CommunityAuthPort = {
+        transaction: (work) =>
+          h.port.transaction((tx) =>
+            work({
+              ...tx,
+              invalidatePasswordResetProofs: async (id, at) => {
+                resetReached();
+                await tx.invalidatePasswordResetProofs(id, at);
+              },
+            }),
+          ),
+      };
+      const verifying = h.serviceForPort(reader).verifyChallenge({
+        challengeId: sent.value.challengeId,
+        continuationToken: sent.value.continuationToken,
+        code,
+        idempotencyKey: key(),
+      });
+      await ready;
+      const resetting = h.serviceForPort(writer).resetPassword(command);
+      await resetWriting;
+      release();
+      const [verified, reset] = await Promise.all([verifying, resetting]);
+      expect(reset.ok).toBe(true);
+      expect(verified.ok).toBe(false);
+      expect((await h.service.readAccount(original.session.token)).ok).toBe(
+        false,
+      );
+    });
   });
 });

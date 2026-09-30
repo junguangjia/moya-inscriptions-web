@@ -1,3 +1,4 @@
+import type { APIRequestContext, APIResponse } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import {
   expect,
@@ -78,9 +79,13 @@ async function latestCapture(
     .poll(
       async () => {
         try {
-          const response = await fetch(
-            new URL("/api/v1/messages?limit=100", captureOrigin),
+          const inboxUrl = new URL("/api/v1/search", captureOrigin);
+          inboxUrl.searchParams.set(
+            "query",
+            phone ? `"${target}"` : `to:"${target}"`,
           );
+          inboxUrl.searchParams.set("limit", "100");
+          const response = await fetch(inboxUrl);
           if (!response.ok) return false;
           const inbox = record(await response.json());
           const messages = Array.isArray(inbox.messages) ? inbox.messages : [];
@@ -134,6 +139,12 @@ async function emptyCodeScreenshot(
   const input = codeField(page);
   const safe = (await input.count()) === 0 || (await input.inputValue()) === "";
   expect(safe, "Screenshots require an empty verification input").toBe(true);
+  const passwords = await page
+    .locator('input[type="password"]')
+    .evaluateAll((inputs) =>
+      inputs.every((input) => (input as HTMLInputElement).value === ""),
+    );
+  expect(passwords, "Screenshots require empty password inputs").toBe(true);
   await page.screenshot({
     path: testInfo.outputPath(name),
     fullPage: true,
@@ -153,9 +164,11 @@ async function goAuth(
 ) {
   await page.goto(`/${mode}?return=${encodeURIComponent(returnTo)}`);
   await expect(emailField(page)).toBeVisible();
+  if (mode === "login")
+    await page.getByRole("button", { name: "验证码登录", exact: true }).click();
   await expect(
     page.getByRole("button", { name: /^发送验证码$/ }),
-  ).toBeEnabled();
+  ).toBeVisible();
 }
 
 async function send(
@@ -163,6 +176,11 @@ async function send(
   identifier: string,
   channel: "email" | "phone" = "email",
 ) {
+  const codeLogin = page.getByRole("button", {
+    name: "验证码登录",
+    exact: true,
+  });
+  if (await codeLogin.count()) await codeLogin.click();
   await (channel === "email" ? emailField(page) : phoneField(page)).fill(
     identifier,
   );
@@ -201,13 +219,34 @@ async function verify(page: Page, code: string, expectedOutcome?: string) {
     expect(response.status()).toBe(200);
     expect(body.outcome).toBe(expectedOutcome);
   }
+  if (expectedOutcome === "registration_required") {
+    const password = `A${randomBytes(6).toString("hex")}9`;
+    try {
+      await page.getByLabel("密码", { exact: true }).fill(password);
+      await page.getByLabel("确认密码", { exact: true }).fill(password);
+    } catch {
+      throw new Error("Registration password could not be filled");
+    }
+    await page.getByRole("button", { name: "下一步", exact: true }).click();
+  }
   return body;
 }
 
+async function skipAvatar(page: Page) {
+  await expect(
+    page.getByRole("heading", { name: "设置头像", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "跳过", exact: true }).click();
+}
+
 async function signOut(page: Page) {
-  const response = await page.request.post("/api/community/auth/sign-out");
+  const response = await privateRequest(page.request).post(
+    "/api/community/auth/sign-out",
+  );
   expect([200, 204].includes(response.status())).toBe(true);
-  expect((await page.request.get("/api/community/me")).status()).toBe(401);
+  expect(
+    (await privateRequest(page.request).get("/api/community/me")).status(),
+  ).toBe(401);
 }
 
 async function openSyntheticComments(page: Page) {
@@ -244,7 +283,9 @@ async function assertReturnedComments(page: Page, source: string) {
 }
 
 test.beforeEach(async ({ page }) => {
-  const response = await page.request.get("/api/community/auth/capabilities");
+  const response = await privateRequest(page.request).get(
+    "/api/community/auth/capabilities",
+  );
   expect(response.status(), "A real Development auth server is required").toBe(
     200,
   );
@@ -301,7 +342,9 @@ test("explicit registration, existing login, and existing-account register hando
   expect(registrations, "Verification alone does not create an account").toBe(
     0,
   );
-  expect((await page.request.get("/api/community/me")).status()).toBe(401);
+  expect(
+    (await privateRequest(page.request).get("/api/community/me")).status(),
+  ).toBe(401);
   await nicknameField(page).fill("认证预览访客");
   await expect(submit(page)).toBeDisabled();
   const agreement = page
@@ -319,6 +362,7 @@ test("explicit registration, existing login, and existing-account register hando
   const creation = authResponse(page, "registrations");
   await page.getByRole("button", { name: /^创建账户$/ }).click();
   expect((await creation).status()).toBe(201);
+  await skipAvatar(page);
   await expect(page).toHaveURL(new URL(destination, page.url()).href);
   expect(registrations).toBe(1);
   expect(challenges, "Explicit creation uses one requested challenge").toBe(1);
@@ -327,7 +371,9 @@ test("explicit registration, existing login, and existing-account register hando
       (cookie) => cookie.name === "yoyi-session" && cookie.httpOnly,
     ),
   ).toBe(true);
-  expect((await page.request.get("/api/community/me")).status()).toBe(200);
+  expect(
+    (await privateRequest(page.request).get("/api/community/me")).status(),
+  ).toBe(200);
   const commentReturn = Boolean(
     acceptanceCatalogId && testInfo.project.name === "desktop-chromium",
   );
@@ -443,7 +489,9 @@ test("unknown login requires explicit creation, mode/channel reset, cancel and b
   );
   await expect(nicknameField(page)).toBeVisible();
   expect(registrations).toBe(0);
-  expect((await page.request.get("/api/community/me")).status()).toBe(401);
+  expect(
+    (await privateRequest(page.request).get("/api/community/me")).status(),
+  ).toBe(401);
   const proof = typeof body.handoffToken === "string" ? body.handoffToken : "";
   expect(proof.length > 0).toBe(true);
   expect(
@@ -469,14 +517,15 @@ test("unknown login requires explicit creation, mode/channel reset, cancel and b
   }
   await emptyCodeScreenshot(page, testInfo, "restart-account.png");
   await page
-    .getByRole("button", { name: /^(?:取消|返回原页面)$/ })
-    .or(page.getByRole("link", { name: /^(?:取消|返回原页面)$/ }))
+    .getByRole("button", { name: /^(?:取消|返回|返回原页面)$/ })
+    .or(page.getByRole("link", { name: /^(?:取消|返回|返回原页面)$/ }))
     .first()
     .click();
   await expect(page).toHaveURL(new URL(source, page.url()).href);
   expect(registrations).toBe(0);
   await goAuth(page, "login", source);
   await modeLink(page, "register").click();
+  await expect(page).toHaveURL(/\/register\?/);
   await page.goBack();
   await expect(page).toHaveURL(new URL(source, page.url()).href);
 });
@@ -512,7 +561,9 @@ test("wrong code stays recoverable and resend replaces the real challenge", asyn
   expect(second.id !== first.id).toBe(true);
   await verify(page, second.code, "registration_required");
   await expect(nicknameField(page)).toBeVisible();
-  expect((await page.request.get("/api/community/me")).status()).toBe(401);
+  expect(
+    (await privateRequest(page.request).get("/api/community/me")).status(),
+  ).toBe(401);
 });
 
 test("full-local phone uses captured simulated SMS and explicit confirmation", async ({
@@ -536,8 +587,11 @@ test("full-local phone uses captured simulated SMS and explicit confirmation", a
   const waiting = authResponse(page, "registrations");
   await page.getByRole("button", { name: /^创建账户$/ }).click();
   expect((await waiting).status()).toBe(201);
+  await skipAvatar(page);
   await expect(page).toHaveURL(/\/dev\/community$/);
-  expect((await page.request.get("/api/community/me")).status()).toBe(200);
+  expect(
+    (await privateRequest(page.request).get("/api/community/me")).status(),
+  ).toBe(200);
 });
 
 test("application login entry restores the visitor profile tab without a reload", async ({
@@ -566,7 +620,7 @@ test("application login entry restores the visitor profile tab without a reload"
   await profileSurface.getByRole("link", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/login\?/);
   await expect(emailField(page)).toBeVisible();
-  await page.getByRole("button", { name: /^返回原页面$/ }).click();
+  await page.getByRole("button", { name: /^(?:返回|返回原页面)$/ }).click();
   await expect(page).toHaveURL(source);
   expect(
     await page.evaluate(
@@ -600,11 +654,35 @@ test("synthetic detail comments tab survives cancel and browser back", async ({
   const signedOut = page.locator("[data-comment-signed-out]");
   await signedOut.getByRole("link", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/login\?/);
-  await page.getByRole("button", { name: /^返回原页面$/ }).click();
+  await page.getByRole("button", { name: /^(?:返回|返回原页面)$/ }).click();
   await assertReturnedComments(page, source);
   await signedOut.getByRole("link", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/login\?/);
   await page.goBack();
   await assertReturnedComments(page, source);
-  expect((await page.request.get("/api/community/me")).status()).toBe(401);
+  expect(
+    (await privateRequest(page.request).get("/api/community/me")).status(),
+  ).toBe(401);
+});
+
+// Never forward Playwright API call logs containing private Cookie/body data.
+const privateRequest = (api: APIRequestContext) => ({
+  get: async (
+    ...args: Parameters<APIRequestContext["get"]>
+  ): Promise<APIResponse> => {
+    try {
+      return await api.get(...args);
+    } catch {
+      throw new Error("Development API read unavailable");
+    }
+  },
+  post: async (
+    ...args: Parameters<APIRequestContext["post"]>
+  ): Promise<APIResponse> => {
+    try {
+      return await api.post(...args);
+    } catch {
+      throw new Error("Development API write result unavailable");
+    }
+  },
 });

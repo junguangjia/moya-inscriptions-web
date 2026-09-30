@@ -22,7 +22,10 @@ const loopbackOrigin = (value: string): string => {
 
 export default defineConfig({
   testDir: ".",
-  testMatch: "auth-ui.development.ts",
+  testMatch:
+    process.env.AUTH_UI_JOURNEY === "password"
+      ? "auth-password.development.ts"
+      : "auth-ui.development.ts",
   outputDir: resolve(
     process.env.AUTH_UI_ARTIFACT_DIR ?? `.local/auth-ui-e2e/${profile}`,
   ),
@@ -35,7 +38,11 @@ export default defineConfig({
   expect: { timeout: 12_000 },
   reporter: "list",
   metadata: {
-    authDevelopment: { profile, sourceHead: process.env.AUTH_UI_SOURCE_HEAD },
+    authDevelopment: {
+      profile,
+      sourceHead: process.env.AUTH_UI_SOURCE_HEAD,
+      sourceFingerprint: process.env.AUTH_UI_SOURCE_FINGERPRINT,
+    },
   },
   use: {
     baseURL: loopbackOrigin(

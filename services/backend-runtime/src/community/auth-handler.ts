@@ -6,6 +6,9 @@ import {
   authChallengeRequestSchema,
   authFactorCompleteRequestSchema,
   authRegistrationRequestSchema,
+  authPasswordLoginRequestSchema,
+  authPasswordResetRequestSchema,
+  authPasswordResetResultSchema,
   authUnlinkRequestSchema,
   authVerifyRequestSchema,
   publicUserDisplayNameSchema,
@@ -29,6 +32,7 @@ export const trustedRequestSource = (request: IncomingMessage): string =>
 
 const codeFor = (reason: AuthReason): { readonly code: ApiErrorCode } => {
   switch (reason) {
+    case "AUTH_INVALID_CREDENTIALS":
     case "AUTH_UNAUTHENTICATED":
     case "AUTH_ACCOUNT_SUSPENDED":
       return { code: "UNAUTHENTICATED" };
@@ -188,10 +192,62 @@ export const handleCommunityAuth = async (
       sendJson(response, 200, value, noStore);
       return;
     }
+    if (path === "passwords/login") {
+      const parsed = authPasswordLoginRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        sendFailure(response, "AUTH_INVALID_CREDENTIALS");
+        return;
+      }
+      const result = await service.passwordLogin({ ...parsed.data, source });
+      if (!result.ok) {
+        sendFailure(response, result.reason);
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        { outcome: "signed_in", session: sessionBody(result.value) },
+        noStore,
+      );
+      return;
+    }
+    if (path === "passwords/reset") {
+      const parsed = authPasswordResetRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        sendFailure(
+          response,
+          parsed.error.issues.some((issue) => issue.path[0] === "password")
+            ? "AUTH_INVALID_PASSWORD"
+            : "AUTH_PROOF_REJECTED",
+        );
+        return;
+      }
+      const result = await service.resetPassword({ ...parsed.data, source });
+      if (!result.ok) {
+        sendFailure(response, result.reason);
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        authPasswordResetResultSchema.parse(result.value),
+        noStore,
+      );
+      return;
+    }
     if (path === "registrations") {
       const parsed = authRegistrationRequestSchema.safeParse(body);
       if (!parsed.success) {
-        sendApiError(response, "INVALID_INPUT", "AUTH_AGREEMENT_REQUIRED");
+        sendFailure(
+          response,
+          parsed.error.issues.some((issue) => issue.path[0] === "password")
+            ? "AUTH_INVALID_PASSWORD"
+            : parsed.error.issues.some(
+                  (issue) => issue.path[0] === "studioName",
+                )
+              ? "AUTH_INVALID_STUDIO_NAME"
+              : "AUTH_AGREEMENT_REQUIRED",
+        );
         return;
       }
       if (
@@ -200,7 +256,10 @@ export const handleCommunityAuth = async (
         sendApiError(response, "INVALID_INPUT", "AUTH_INVALID_DISPLAY_NAME");
         return;
       }
-      const result = await service.confirmRegistration(parsed.data);
+      const result = await service.confirmRegistration({
+        ...parsed.data,
+        source,
+      });
       if (!result.ok) {
         sendFailure(response, result.reason);
         return;

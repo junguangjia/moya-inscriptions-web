@@ -1,6 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="297 411 658 426" style="color-scheme: light dark; color: CanvasText;" role="img" aria-labelledby="artvenn-logo-title artvenn-logo-description">
-  <title id="artvenn-logo-title">ArtVenn</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="297 411 658 426" style="color-scheme: light dark;" role="img" aria-labelledby="artvenn-logo-title artvenn-logo-description">
+  <style>
+    :root { color: #e3e3e3; --brand-shadow: rgba(0, 0, 0, 0.32); --brand-highlight: rgba(255, 255, 255, 0.88); }
+    @media (prefers-color-scheme: dark) { :root { color: #303030; --brand-shadow: rgba(0, 0, 0, 0.80); --brand-highlight: rgba(255, 255, 255, 0.22); } }
+    @media (forced-colors: active) { :root { color: CanvasText; } .brand-shape { filter: none; } }
+  </style>
+  <title id="artvenn-logo-title">由于艺</title>
   <desc id="artvenn-logo-description">An open circular arc beside a solid circular form with a transparent lens-shaped opening.</desc>
+  <defs>
+    <filter id="brand-recess" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+      <feOffset in="SourceAlpha" dx="8" dy="8" result="shadow-offset" />
+      <feComposite in="SourceAlpha" in2="shadow-offset" operator="out" result="shadow-edge" />
+      <feFlood flood-color="var(--brand-shadow)" result="shadow-paint" />
+      <feComposite in="shadow-paint" in2="shadow-edge" operator="in" result="inner-shadow" />
+      <feOffset in="SourceAlpha" dx="-8" dy="-8" result="highlight-offset" />
+      <feComposite in="SourceAlpha" in2="highlight-offset" operator="out" result="highlight-edge" />
+      <feFlood flood-color="var(--brand-highlight)" result="highlight-paint" />
+      <feComposite in="highlight-paint" in2="highlight-edge" operator="in" result="inner-highlight" />
+      <feMerge>
+        <feMergeNode in="SourceGraphic" />
+        <feMergeNode in="inner-shadow" />
+        <feMergeNode in="inner-highlight" />
+      </feMerge>
+    </filter>
+  </defs>
+  <g class="brand-shape" filter="url(#brand-recess)">
   <path
     d="M584.8 443.3C562.3 431.1 536.1 424.4 506.7 424.4C398.3 424.4 310.5 513.6 310.5 623.5C310.5 733.3 397.4 821.9 505.2 821.9C534.4 821.9 560.9 815.6 584.1 803.1"
     fill="none"
@@ -13,4 +36,5 @@
     fill="currentColor"
     fill-rule="evenodd"
   />
+  </g>
 </svg>

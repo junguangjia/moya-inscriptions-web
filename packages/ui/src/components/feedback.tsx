@@ -98,7 +98,7 @@ export type LoadingScreenProps = HTMLAttributes<HTMLDivElement> & {
 export function LoadingScreen({
   active = true,
   delay = 160,
-  label = "由艺正在加载",
+  label = "由于艺正在加载",
   className,
   ...props
 }: LoadingScreenProps) {

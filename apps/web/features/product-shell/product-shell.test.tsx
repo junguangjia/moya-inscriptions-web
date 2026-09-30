@@ -2778,4 +2778,21 @@ describe("ProductShell", () => {
       );
     }
   });
+  it("persists explicit choices through the same root and preserves cycle APIs", async () => {
+    renderProductShell(<ProductShellObserver />);
+    await act(async () => {
+      observedProductShell!.setThemePreference("dark");
+      observedProductShell!.setFeedLayoutPreference("single");
+    });
+    expect(window.localStorage.getItem("yoyi.theme-preference")).toBe("dark");
+    expect(window.localStorage.getItem("yoyi.home-feed-layout")).toBe("single");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
+    await act(async () => {
+      observedProductShell!.cycleTheme();
+      observedProductShell!.cycleFeedLayout();
+    });
+    expect(window.localStorage.getItem("yoyi.theme-preference")).toBe("system");
+    expect(window.localStorage.getItem("yoyi.home-feed-layout")).toBe("double");
+  });
 });

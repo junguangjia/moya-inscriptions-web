@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState } from "react";
+import type { RefObject } from "react";
 
 import { requestIdentity } from "../shell/request-identity";
 import { authRequest } from "./auth-api";
 import type { AuthAccountView } from "./auth-api";
 
-import styles from "./auth-flow.module.css";
+import styles from "./account-security.module.css";
+import { SettingsIcon } from "../settings/settings-icons";
 
 type Channel = "email" | "phone";
 type Action = "link" | "replace" | "unlink";
@@ -86,307 +88,457 @@ const emptyFlow = (
   masked: "",
 });
 
-export const AccountSecurity = () => {
-  const generation = useRef(0);
+export interface AccountSecurityHandle {
+  cancelFlow: () => boolean;
+}
+
+export const AccountSecurity = ({
+  expectedViewerId,
+  onBusyChange,
+  onFlowChange,
+  navigationRef,
+  guardSignOut,
+  onSignedOut,
+}: {
+  expectedViewerId?: string;
+  onBusyChange?: (busy: boolean) => void;
+  guardSignOut?: () => boolean;
+  onSignedOut?: () => void;
+  onFlowChange?: (title: string | null) => void;
+  navigationRef?: RefObject<AccountSecurityHandle | null>;
+} = {}) => {
+  const generation = useRef(0),
+    mounted = useRef(false),
+    busyRef = useRef(false);
+  const expected = useRef(expectedViewerId);
+  expected.current = expectedViewerId;
+  const callbacks = useRef({ onBusyChange, onFlowChange });
+  callbacks.current = { onBusyChange, onFlowChange };
+  const flowRef = useRef<FactorFlow | null>(null);
   const [account, setAccount] = useState<AuthAccountView | null>(null);
-  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(true),
+    [note, setNote] = useState("");
   const [flow, setFlow] = useState<FactorFlow | null>(null);
-  const [identifier, setIdentifier] = useState("");
-  const [code, setCode] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const load = () => {
-    const current = ++generation.current;
-    void authRequest("account")
-      .then((result) => {
-        if (current !== generation.current) return;
-        if (
-          result.status === 200 &&
-          typeof result.body === "object" &&
-          result.body !== null &&
-          "userId" in result.body
-        )
-          setAccount(result.body as AuthAccountView);
-        else setNote("登录方式暂未开放，或当前没有可用会话。");
-      })
-      .catch(() => {
-        if (current === generation.current)
-          setNote("登录方式暂未开放，或当前没有可用会话。");
-      });
+  const [identifier, setIdentifier] = useState(""),
+    [code, setCode] = useState("");
+  const [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const flowTitle = (value: FactorFlow) =>
+    `${value.action === "link" ? "绑定" : value.action === "replace" ? "更换" : "解除"}${labels[value.target]}`;
+  const updateFlow = (value: FactorFlow | null) => {
+    const previous = flowRef.current;
+    flowRef.current = value;
+    setFlow(value);
+    if (
+      (previous === null) !== (value === null) ||
+      (previous && value && flowTitle(previous) !== flowTitle(value))
+    )
+      callbacks.current.onFlowChange?.(value ? flowTitle(value) : null);
   };
-
+  const updateBusy = (value: boolean) => {
+    busyRef.current = value;
+    callbacks.current.onBusyChange?.(value);
+    setBusy(value);
+  };
+  const matches = (value: AuthAccountView) =>
+    expected.current === undefined || value.userId === expected.current;
+  const load = async () => {
+    if (busyRef.current) return;
+    const current = ++generation.current,
+      owner = expected.current;
+    setLoading(true);
+    setNote("");
+    setError("");
+    try {
+      const result = await authRequest("account");
+      if (
+        !mounted.current ||
+        current !== generation.current ||
+        expected.current !== owner
+      )
+        return;
+      if (
+        result.status === 200 &&
+        typeof result.body === "object" &&
+        result.body !== null &&
+        "userId" in result.body &&
+        matches(result.body as AuthAccountView)
+      )
+        setAccount(result.body as AuthAccountView);
+      else {
+        setAccount(null);
+        setNote("登录方式暂未开放，或当前没有可用会话。");
+      }
+    } catch {
+      if (mounted.current && current === generation.current) {
+        setAccount(null);
+        setNote("登录方式暂时无法读取，请重试。");
+      }
+    } finally {
+      if (mounted.current && current === generation.current) setLoading(false);
+    }
+  };
+  const cancelFlow = () => {
+    if (busyRef.current) return false;
+    generation.current++;
+    updateFlow(null);
+    setCode("");
+    setIdentifier("");
+    setError("");
+    return true;
+  };
+  useImperativeHandle(navigationRef, () => ({ cancelFlow }));
   useEffect(() => {
-    const current = ++generation.current;
-    void authRequest("account")
-      .then((result) => {
-        if (current !== generation.current) return;
-        if (
-          result.status === 200 &&
-          typeof result.body === "object" &&
-          result.body !== null &&
-          "userId" in result.body
-        )
-          setAccount(result.body as AuthAccountView);
-        else setNote("登录方式暂未开放，或当前没有可用会话。");
-      })
-      .catch(() => {
-        if (current === generation.current)
-          setNote("登录方式暂未开放，或当前没有可用会话。");
-      });
-  }, []);
+    mounted.current = true;
+    flowRef.current = null;
+    setFlow(null);
+    setCode("");
+    setIdentifier("");
+    setAccount(null);
+    updateBusy(false);
+    void load();
+    return () => {
+      mounted.current = false;
+      generation.current++;
+      flowRef.current = null;
+      busyRef.current = false;
+      onBusyChange?.(false);
+    };
+  }, [expectedViewerId]);
 
+  // One synchronous gate and generation cover the entire operation, including proof -> unlink.
+  const run = async (operation: (valid: () => boolean) => Promise<void>) => {
+    if (
+      busyRef.current ||
+      !mounted.current ||
+      (expected.current !== undefined && (!account || !matches(account)))
+    )
+      return;
+    const current = ++generation.current,
+      owner = expected.current;
+    const valid = () =>
+      mounted.current &&
+      generation.current === current &&
+      expected.current === owner;
+    updateBusy(true);
+    setError("");
+    try {
+      await operation(valid);
+    } catch {
+      if (valid()) setError("网络暂时不可用，请稍后重试。");
+    } finally {
+      if (valid()) updateBusy(false);
+    }
+  };
+  const readChallenge = (
+    result: Awaited<ReturnType<typeof authRequest>>,
+    currentFlow: FactorFlow,
+    step: Step,
+  ) => {
+    if (result.status !== 200) {
+      setError(messageOf(result.body));
+      return;
+    }
+    const body = result.body as {
+      challengeId?: string;
+      continuationToken?: string;
+      maskedTarget?: string;
+    } | null;
+    if (!body?.challengeId || !body.continuationToken) {
+      setError("这次验证无法继续，请重新获取验证码。");
+      return;
+    }
+    updateFlow({
+      ...currentFlow,
+      step,
+      challengeId: body.challengeId,
+      continuation: body.continuationToken,
+      masked: body.maskedTarget ?? "",
+    });
+    setCode("");
+  };
+  const sendProof = (currentFlow: FactorFlow) =>
+    run(async (valid) => {
+      const result = await authRequest("challenges", {
+        body: {
+          channel: currentFlow.proof,
+          purpose: "reauthenticate",
+          idempotencyKey: requestIdentity(),
+        },
+      });
+      if (valid()) readChallenge(result, currentFlow, "proof");
+    });
   const begin = (action: Action, target: Channel) => {
-    if (account === null) return;
+    if (busyRef.current || account === null || !matches(account)) return;
     const proof = proofFor(account, target);
     if (proof === null) {
       setError("请先保留一种可用的登录方式。");
       return;
     }
-    setError("");
+    const next = emptyFlow(action, target, proof, account[target].version);
     setCode("");
     setIdentifier("");
-    setFlow(null);
-    void sendProof(emptyFlow(action, target, proof, account[target].version));
+    updateFlow(next);
+    void sendProof(next);
   };
-
-  const sendProof = async (currentFlow: FactorFlow) => {
-    const current = ++generation.current;
-    setBusy(true);
-    setError("");
-    const result = await authRequest("challenges", {
-      body: {
-        channel: currentFlow.proof,
-        purpose: "reauthenticate",
-        idempotencyKey: requestIdentity(),
-      },
-    });
-    if (current !== generation.current) return;
-    setBusy(false);
-    if (result.status !== 200) {
-      setError(messageOf(result.body));
-      return;
-    }
-    const body = result.body as {
-      challengeId?: string;
-      continuationToken?: string;
-      maskedTarget?: string;
-    };
-    const continuation = body.continuationToken ?? currentFlow.continuation;
-    if (!continuation) {
-      setError("请稍后再获取验证码。");
-      return;
-    }
-    setFlow({
-      ...currentFlow,
-      step: "proof",
-      challengeId: body.challengeId ?? "",
-      continuation,
-      masked: body.maskedTarget ?? "",
-    });
-    setCode("");
-  };
-
-  const sendFactor = async (currentFlow: FactorFlow, value: string) => {
-    const current = ++generation.current;
-    setBusy(true);
-    setError("");
-    const result = await authRequest("challenges", {
-      body: {
-        channel: currentFlow.target,
-        purpose: currentFlow.action === "replace" ? "replace" : "link",
-        identifier: value,
-        reauthToken: currentFlow.reauthToken,
-        idempotencyKey: requestIdentity(),
-      },
-    });
-    if (current !== generation.current) return;
-    setBusy(false);
-    if (result.status !== 200) {
-      setError(messageOf(result.body));
-      return;
-    }
-    const body = result.body as {
-      challengeId?: string;
-      continuationToken?: string;
-      maskedTarget?: string;
-    };
-    setFlow({
-      ...currentFlow,
-      step: "factor",
-      challengeId: body.challengeId ?? "",
-      continuation: body.continuationToken ?? "",
-      masked: body.maskedTarget ?? "",
-    });
-    setCode("");
-  };
-
-  const applyAccount = (body: unknown) => {
-    if (
-      typeof body === "object" &&
-      body !== null &&
-      "account" in body &&
-      typeof body.account === "object" &&
-      body.account !== null
-    ) {
-      setAccount(body.account as AuthAccountView);
-      return;
-    }
-    load();
-  };
-
-  const submit = async () => {
-    if (flow === null) return;
-    if (flow.step === "identifier") {
-      await sendFactor(flow, identifier);
-      return;
-    }
-    const current = ++generation.current;
-    setBusy(true);
-    setError("");
-    if (flow.step === "proof") {
-      const result = await authRequest("challenges/verify", {
+  const sendFactor = (currentFlow: FactorFlow, value: string) =>
+    run(async (valid) => {
+      const result = await authRequest("challenges", {
         body: {
-          challengeId: flow.challengeId,
-          code,
-          continuationToken: flow.continuation,
+          channel: currentFlow.target,
+          purpose: currentFlow.action === "replace" ? "replace" : "link",
+          identifier: value,
+          reauthToken: currentFlow.reauthToken,
           idempotencyKey: requestIdentity(),
         },
       });
-      if (current !== generation.current) return;
-      setBusy(false);
-      if (result.status !== 200) {
-        setError(messageOf(result.body));
-        return;
+      if (valid()) readChallenge(result, currentFlow, "factor");
+    });
+  const applyAccount = async (body: unknown, valid: () => boolean) => {
+    const payload = body as { account?: AuthAccountView } | null;
+    if (payload?.account && matches(payload.account))
+      setAccount(payload.account);
+    else {
+      const result = await authRequest("account");
+      if (!valid()) return;
+      if (
+        result.status === 200 &&
+        typeof result.body === "object" &&
+        result.body !== null &&
+        "userId" in result.body &&
+        matches(result.body as AuthAccountView)
+      )
+        setAccount(result.body as AuthAccountView);
+      else {
+        setAccount(null);
+        setNote("变更已确认，请重新读取账户信息。");
       }
-      const body = result.body as { outcome?: string; reauthToken?: string };
-      if (body.outcome !== "reauthenticated" || !body.reauthToken) {
-        setError("这次验证不能继续，请重新开始。");
-        return;
-      }
-      const proved = { ...flow, reauthToken: body.reauthToken };
+    }
+    if (valid()) {
+      updateFlow(null);
       setCode("");
-      if (flow.action === "unlink") {
-        const unlinked = await authRequest("factors/unlink", {
+      setIdentifier("");
+    }
+  };
+  const submit = () => {
+    const currentFlow = flowRef.current;
+    if (currentFlow === null || busyRef.current) return;
+    if (currentFlow.step === "identifier") {
+      void sendFactor(currentFlow, identifier);
+      return;
+    }
+    void run(async (valid) => {
+      if (currentFlow.step === "proof") {
+        const result = await authRequest("challenges/verify", {
           body: {
-            channel: flow.target,
-            reauthToken: body.reauthToken,
-            expectedVersion: flow.expectedVersion,
+            challengeId: currentFlow.challengeId,
+            code,
+            continuationToken: currentFlow.continuation,
             idempotencyKey: requestIdentity(),
           },
         });
-        if (current !== generation.current) return;
-        if (unlinked.status !== 200) {
-          setError(messageOf(unlinked.body));
+        if (!valid()) return;
+        if (result.status !== 200) {
+          setError(messageOf(result.body));
           return;
         }
-        applyAccount(unlinked.body);
-        setFlow(null);
-        return;
+        const body = result.body as {
+          outcome?: string;
+          reauthToken?: string;
+        } | null;
+        if (body?.outcome !== "reauthenticated" || !body.reauthToken) {
+          setError("这次验证不能继续，请重新开始。");
+          return;
+        }
+        if (currentFlow.action === "unlink") {
+          const unlinked = await authRequest("factors/unlink", {
+            body: {
+              channel: currentFlow.target,
+              reauthToken: body.reauthToken,
+              expectedVersion: currentFlow.expectedVersion,
+              idempotencyKey: requestIdentity(),
+            },
+          });
+          if (!valid()) return;
+          if (unlinked.status !== 200) {
+            setError(messageOf(unlinked.body));
+            return;
+          }
+          await applyAccount(unlinked.body, valid);
+        } else {
+          updateFlow({
+            ...currentFlow,
+            reauthToken: body.reauthToken,
+            step: "identifier",
+          });
+          setCode("");
+        }
+      } else {
+        const result = await authRequest("factors/complete", {
+          body: {
+            challengeId: currentFlow.challengeId,
+            code,
+            continuationToken: currentFlow.continuation,
+            reauthToken: currentFlow.reauthToken,
+            expectedVersion: currentFlow.expectedVersion,
+            idempotencyKey: requestIdentity(),
+          },
+        });
+        if (!valid()) return;
+        if (result.status !== 200) {
+          setError(messageOf(result.body));
+          return;
+        }
+        await applyAccount(result.body, valid);
       }
-      setFlow({ ...proved, step: "identifier" });
-      return;
-    }
-    const result = await authRequest("factors/complete", {
-      body: {
-        challengeId: flow.challengeId,
-        code,
-        continuationToken: flow.continuation,
-        reauthToken: flow.reauthToken,
-        expectedVersion: flow.expectedVersion,
-        idempotencyKey: requestIdentity(),
-      },
     });
-    if (current !== generation.current) return;
-    setBusy(false);
-    if (result.status !== 200) {
-      setError(messageOf(result.body));
-      return;
-    }
-    applyAccount(result.body);
-    setFlow(null);
-    setCode("");
-    setIdentifier("");
   };
-
+  const availableAccount = account && matches(account) ? account : null;
   return (
-    <section aria-label="登录与安全">
-      <h3>登录与安全</h3>
-      {account === null ? (
-        <p className="phase4-muted">{note || "正在读取登录方式。"}</p>
-      ) : (
-        (["email", "phone"] as const).map((channel) => {
-          const factor = account[channel];
-          const available = account.capabilities[channel].available;
-          return (
-            <p key={channel}>
-              {labels[channel]}：{states[factor.state]}
-              {factor.masked ? ` ${factor.masked}` : ""}
-              {available && factor.state === "unbound" ? (
-                <>
-                  {" "}
-                  <button type="button" onClick={() => begin("link", channel)}>
-                    绑定
-                  </button>
-                </>
-              ) : null}
-              {available &&
-              (factor.state === "verified" || factor.state === "pending") ? (
-                <>
-                  {" "}
-                  <button
-                    type="button"
-                    onClick={() => begin("replace", channel)}
-                  >
-                    更换
-                  </button>{" "}
-                  <button
-                    type="button"
-                    onClick={() => begin("unlink", channel)}
-                  >
-                    解除
-                  </button>
-                </>
-              ) : null}
+    <section aria-label="登录与安全" className={styles.panel} aria-busy={busy}>
+      {!onFlowChange && <h3>登录与安全</h3>}
+      {!flow ? (
+        <>
+          {availableAccount === null ? (
+            <div className={styles.notice}>
+              <p role="status">{loading ? "正在读取登录方式。" : note}</p>
+              {!loading && (
+                <button type="button" onClick={() => void load()}>
+                  重试
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className={styles.rows}>
+              {(["email", "phone"] as const).map((channel) => {
+                const factor = availableAccount[channel],
+                  available = availableAccount.capabilities[channel].available;
+                return (
+                  <div className={styles.row} key={channel}>
+                    <div className={styles.identity}>
+                      <SettingsIcon
+                        name={channel === "email" ? "mail" : "smartphone"}
+                      />
+                      <div className={styles.detail}>
+                        <strong>{labels[channel]}</strong>
+                        <span>{factor.masked || states[factor.state]}</span>
+                        <small>
+                          {factor.masked
+                            ? states[factor.state]
+                            : available
+                              ? "可用于登录当前账户"
+                              : "此方式当前不可用"}
+                        </small>
+                      </div>
+                    </div>
+                    <div className={styles.actions}>
+                      {available && factor.state === "unbound" && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          data-settings-focus-key={`auth-link-${channel}`}
+                          onClick={() => begin("link", channel)}
+                        >
+                          绑定
+                        </button>
+                      )}
+                      {available &&
+                        (factor.state === "verified" ||
+                          factor.state === "pending") && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              data-settings-focus-key={`auth-replace-${channel}`}
+                              onClick={() => begin("replace", channel)}
+                            >
+                              更换
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              data-settings-focus-key={`auth-unlink-${channel}`}
+                              onClick={() => begin("unlink", channel)}
+                            >
+                              解除
+                            </button>
+                          </>
+                        )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <p className={styles.muted}>更换或解除前，需验证当前登录方式。</p>
+          {error && (
+            <p className={styles.error} role="alert">
+              {error}
             </p>
-          );
-        })
-      )}
-      {flow ? (
+          )}
+          <button
+            className={styles.signOut}
+            type="button"
+            disabled={
+              busy ||
+              loading ||
+              (expectedViewerId !== undefined && availableAccount === null)
+            }
+            onClick={() => {
+              if (busyRef.current || guardSignOut?.() === false) return;
+              void run(async (valid) => {
+                const result = await authRequest("sign-out", {
+                  method: "POST",
+                  body: {},
+                });
+                if (!valid()) return;
+                if (result.status >= 200 && result.status < 300) {
+                  if (onSignedOut) onSignedOut();
+                  else window.location.assign("/");
+                } else setError("退出未能确认，请重试。");
+              });
+            }}
+          >
+            <SettingsIcon name="log-out" />
+            {busy ? "处理中" : "退出登录"}
+          </button>
+        </>
+      ) : (
         <form
           className={styles.form}
           onSubmit={(event) => {
             event.preventDefault();
-            void submit();
+            submit();
           }}
         >
           <p className={styles.muted}>
-            {flow.action === "unlink"
-              ? `解除${labels[flow.target]}前，先验证当前的${labels[flow.proof]}。`
-              : flow.step === "identifier"
-                ? `输入要${flow.action === "replace" ? "更换" : "绑定"}的${labels[flow.target]}。这会留在当前账户。`
+            {flow.step === "identifier"
+              ? `输入要${flow.action === "replace" ? "更换" : "绑定"}的${labels[flow.target]}。这会留在当前账户。`
+              : !flow.challengeId
+                ? `验证当前的${labels[flow.proof]}；获取验证码后继续。`
                 : flow.step === "factor"
                   ? `验证码已发往 ${flow.masked}。`
-                  : `验证码已发往当前的${labels[flow.proof]}${flow.masked ? ` ${flow.masked}` : ""}。`}
+                  : flow.action === "unlink"
+                    ? `解除${labels[flow.target]}前，先验证当前的${labels[flow.proof]}${flow.masked ? ` ${flow.masked}` : ""}。`
+                    : `验证码已发往当前的${labels[flow.proof]}${flow.masked ? ` ${flow.masked}` : ""}。`}
           </p>
-          {flow.step === "identifier" ? (
-            <label className={styles.field}>
-              {labels[flow.target]}
+          <label className={styles.field}>
+            {flow.step === "identifier" ? labels[flow.target] : "验证码"}
+            {flow.step === "identifier" ? (
               <input
                 autoComplete={flow.target === "email" ? "email" : "tel"}
                 inputMode={flow.target === "email" ? "email" : "tel"}
                 value={identifier}
+                disabled={busy}
                 onChange={(event) => setIdentifier(event.target.value)}
                 required
               />
-            </label>
-          ) : (
-            <label className={styles.field}>
-              验证码
+            ) : (
               <input
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 value={code}
+                disabled={busy}
                 onPaste={(event) => {
                   const next = digits(event.clipboardData.getData("text"));
                   if (next.length === 0) return;
@@ -396,47 +548,49 @@ export const AccountSecurity = () => {
                 onChange={(event) => setCode(digits(event.target.value))}
                 required
               />
-            </label>
-          )}
-          {error ? (
+            )}
+          </label>
+          {error && (
             <p className={styles.error} role="alert">
               {error}
             </p>
-          ) : null}
+          )}
+          <button
+            className={styles.primary}
+            type="submit"
+            disabled={
+              busy ||
+              (flow.step === "identifier"
+                ? !identifier.trim()
+                : !flow.challengeId || code.length !== 6)
+            }
+          >
+            {busy
+              ? "处理中"
+              : flow.step === "identifier"
+                ? "发送验证码"
+                : "继续"}
+          </button>
           <div className={styles.actions}>
-            <button className="yoyi-button" type="submit" disabled={busy}>
-              {busy
-                ? "处理中"
-                : flow.step === "identifier"
-                  ? "发送验证码"
-                  : "继续"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                generation.current += 1;
-                setFlow(null);
-                setError("");
-                setBusy(false);
-              }}
-            >
+            {flow.step !== "identifier" && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void (flow.step === "proof"
+                    ? sendProof(flow)
+                    : sendFactor(flow, identifier))
+                }
+              >
+                重新获取验证码
+              </button>
+            )}
+            <button type="button" disabled={busy} onClick={cancelFlow}>
               取消
             </button>
           </div>
         </form>
-      ) : null}
-      <button
-        type="button"
-        onClick={() => {
-          void authRequest("sign-out", { method: "POST", body: {} }).then(
-            () => {
-              window.location.assign("/");
-            },
-          );
-        }}
-      >
-        退出登录
-      </button>
+      )}
     </section>
   );
 };

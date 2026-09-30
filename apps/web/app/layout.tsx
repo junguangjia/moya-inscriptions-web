@@ -11,7 +11,7 @@ import { AuthReturnProvider } from "../features/auth/auth-return";
 import { PRODUCT_BOOT_SCRIPT } from "../features/product-shell/product-boot";
 
 export const metadata: Metadata = {
-  title: "由艺（Yoyi）",
+  title: "由于艺",
   icons: {
     icon: {
       url: "/packages/ui/src/assets/brand/yoyi-logo.svg",

@@ -708,11 +708,14 @@ export const authorMediaSchema = z.strictObject({
   width: z.number().int().positive().max(8192),
   height: z.number().int().positive().max(8192),
 });
+import { studioNameSchema } from "./auth-schemas.ts";
+
 export const authorProfileSchema = z.strictObject({
   id: userId,
   handle: z.string(),
   displayName: authorText(40),
   bio: authorText(500),
+  studioName: studioNameSchema.optional(),
   avatar: authorMediaSchema.nullable(),
   background: authorMediaSchema.nullable().optional(),
   isOwner: z.boolean(),
@@ -805,6 +808,7 @@ export const profileUpdateSchema = z.strictObject({
   requestId,
   displayName: authorText(40).refine((s) => s.length > 0),
   bio: authorText(500),
+  studioName: studioNameSchema.optional(),
 });
 export const privacyUpdateSchema = z.strictObject({
   requestId,
@@ -1062,6 +1066,11 @@ export {
   authFactorCompleteRequestSchema,
   authFactorSchema,
   authRegistrationRequestSchema,
+  authPasswordSchema,
+  authPasswordLoginRequestSchema,
+  authPasswordResetRequestSchema,
+  authPasswordResetResultSchema,
+  studioNameSchema,
   authUnlinkRequestSchema,
   authVerifyRequestSchema,
 } from "./auth-schemas.ts";
@@ -1075,6 +1084,9 @@ export type {
   AuthFactor,
   AuthFactorCompleteRequest,
   AuthRegistrationRequest,
+  AuthPasswordLoginRequest,
+  AuthPasswordResetRequest,
+  AuthPasswordResetResult,
   AuthUnlinkRequest,
   AuthVerifyRequest,
 } from "./auth-schemas.ts";

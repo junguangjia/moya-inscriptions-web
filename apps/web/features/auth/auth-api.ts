@@ -2,6 +2,8 @@ export {
   authRequest,
   hasCompletedAuthSession,
   safeReturnPath,
+  validAuthPassword,
+  normalizedStudioName,
 } from "../../lib/public-api/auth-client";
 export type {
   AuthAccountView,

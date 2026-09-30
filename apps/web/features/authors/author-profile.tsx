@@ -360,6 +360,7 @@ const ScopedAuthorProfile = ({
             {profile ? (
               <>
                 <p>@{profile.handle}</p>
+                {profile.studioName && <p>{profile.studioName}</p>}
                 <p>{profile.bio}</p>
                 <div className="phase4-actions">
                   {!isPreview && profile.totals.following !== null && (

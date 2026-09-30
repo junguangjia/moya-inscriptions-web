@@ -1,0 +1,81 @@
+/* Canonical silhouette and neutral inner edges; shared by Web and Admin. */
+.yoyi-logo {
+  --yoyi-brand-mask: url("./assets/brand/yoyi-logo.svg");
+  --yoyi-brand-depth: 0.7px;
+  display: inline-block;
+  position: relative;
+  flex: 0 0 auto;
+  width: 76px;
+  aspect-ratio: 658 / 426;
+  background-color: var(--yoyi-color-brand-recess-floor);
+  -webkit-mask-image: var(--yoyi-brand-mask);
+  mask-image: var(--yoyi-brand-mask);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.yoyi-logo::before,
+.yoyi-logo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  -webkit-mask-image: var(--yoyi-brand-mask), var(--yoyi-brand-mask);
+  mask-image: var(--yoyi-brand-mask), var(--yoyi-brand-mask);
+  -webkit-mask-size: contain, contain;
+  mask-size: contain, contain;
+  -webkit-mask-repeat: no-repeat, no-repeat;
+  mask-repeat: no-repeat, no-repeat;
+  -webkit-mask-composite: source-out;
+  mask-composite: subtract;
+}
+
+.yoyi-logo::before {
+  background-color: var(--yoyi-color-brand-recess-shadow);
+  -webkit-mask-position:
+    center,
+    calc(50% + var(--yoyi-brand-depth)) calc(50% + var(--yoyi-brand-depth));
+  mask-position:
+    center,
+    calc(50% + var(--yoyi-brand-depth)) calc(50% + var(--yoyi-brand-depth));
+}
+
+.yoyi-logo::after {
+  background-color: var(--yoyi-color-brand-recess-highlight);
+  -webkit-mask-position:
+    center,
+    calc(50% - var(--yoyi-brand-depth)) calc(50% - var(--yoyi-brand-depth));
+  mask-position:
+    center,
+    calc(50% - var(--yoyi-brand-depth)) calc(50% - var(--yoyi-brand-depth));
+}
+
+.yoyi-wordmark {
+  color: var(--yoyi-color-brand-wordmark-ink);
+  background-color: var(--yoyi-color-brand-wordmark-surface);
+  border-radius: 0.2em;
+  padding: 0.05em 0.15em;
+  text-shadow:
+    -0.5px -0.5px 0 var(--yoyi-color-brand-recess-shadow),
+    0.7px 0.7px 0 var(--yoyi-color-brand-recess-highlight);
+}
+
+@media (forced-colors: active) {
+  .yoyi-logo {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+  }
+  .yoyi-logo::before,
+  .yoyi-logo::after {
+    content: none;
+  }
+  .yoyi-wordmark {
+    color: CanvasText;
+    background-color: Canvas;
+    text-shadow: none;
+  }
+}

@@ -47,18 +47,18 @@
 .panel {
   width: 100%;
   max-width: 24rem;
-  margin: var(--yoyi-space-10) auto 0;
+  margin: var(--yoyi-space-7) auto 0;
 }
 
 .intro {
-  margin-bottom: var(--yoyi-space-8);
+  margin-bottom: var(--yoyi-space-7);
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: var(--yoyi-space-4);
-  margin-bottom: var(--yoyi-space-8);
+  margin-bottom: var(--yoyi-space-6);
 }
 
 .logo {
@@ -67,7 +67,6 @@
 }
 
 .brandName {
-  color: var(--yoyi-color-text-secondary);
   font-family: var(--yoyi-font-editorial);
   font-size: 1rem;
   letter-spacing: 0.025em;
@@ -77,7 +76,7 @@
 .agreement h1 {
   margin: 0 0 var(--yoyi-space-4);
   font-family: var(--yoyi-font-editorial);
-  font-size: 1.875rem;
+  font-size: 1.75rem;
   font-weight: 500;
   line-height: 1.35;
 }
@@ -91,7 +90,7 @@
 
 .form {
   display: grid;
-  gap: var(--yoyi-space-6);
+  gap: var(--yoyi-space-5);
 }
 
 .channels {
@@ -321,7 +320,7 @@
   display: flex;
   min-height: 44px;
   align-items: center;
-  gap: var(--yoyi-space-4);
+  gap: var(--yoyi-space-3);
   color: var(--yoyi-color-text-secondary);
   font-size: 0.875rem;
   line-height: 1.65;
@@ -341,10 +340,10 @@
   width: fit-content;
   max-width: 100%;
   min-height: 44px;
-  padding-inline: var(--yoyi-space-3);
+  padding-inline: 0;
   color: var(--yoyi-color-seal-red);
   border-radius: var(--yoyi-radius-full);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 400;
 }
 
@@ -402,11 +401,11 @@
   }
 
   .panel {
-    margin-top: clamp(var(--yoyi-space-10), 9vh, var(--yoyi-space-12));
+    margin-top: var(--yoyi-space-9);
   }
 
   .intro h1 {
-    font-size: 2rem;
+    font-size: 1.75rem;
   }
 }
 
@@ -426,4 +425,86 @@
     animation: none;
     transition: none;
   }
+}
+
+.optional {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+.agreementRow,
+.secondaryActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--yoyi-space-2);
+}
+
+.secondaryActions {
+  justify-content: space-between;
+}
+
+.secondaryActions button,
+.skip,
+.avatarChange {
+  min-height: 44px;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+}
+
+.avatarStep {
+  display: grid;
+  gap: var(--yoyi-space-5);
+  text-align: center;
+}
+
+.avatarPreview {
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto var(--yoyi-space-3);
+  overflow: hidden;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-muted);
+  font-size: 2rem;
+}
+
+.avatarPreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatarChoose,
+.avatarChange {
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+}
+
+.avatarChoose {
+  min-height: 52px;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-seal-red);
+  color: var(--yoyi-color-text-inverse);
+  font: inherit;
+}
+
+.avatarChoose:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.avatarChange {
+  background: transparent;
+  color: var(--yoyi-color-text-secondary);
+}
+
+/* AvatarEntry also serves image overlays elsewhere; this standalone chooser
+   uses its native picker and editor without the image-overlay caption. */
+.avatarChoose > span:last-child,
+.avatarChange > span:last-child {
+  display: none;
 }

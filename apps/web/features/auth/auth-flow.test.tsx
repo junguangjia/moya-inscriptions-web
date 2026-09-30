@@ -9,6 +9,14 @@ vi.mock("./auth-api", async (importOriginal) => {
   return { ...original, authRequest: request };
 });
 
+vi.mock("./registration-avatar", () => ({
+  RegistrationAvatar: ({ onComplete }: { onComplete: () => void }) => (
+    <button data-registration-avatar="" onClick={onComplete}>
+      跳过
+    </button>
+  ),
+}));
+
 import { AuthFlow } from "./auth-flow";
 
 (
@@ -20,6 +28,7 @@ type Response = { status: number; body: unknown };
 
 // All addresses, codes and proof strings below are synthetic mock fixtures.
 // No delivery provider, Session cookie or real credential is used by this suite.
+const syntheticPassword = "A1合成测试密码";
 const syntheticCode = "123456";
 const syntheticProof = "s".repeat(43);
 const syntheticHandoff = "h".repeat(43);
@@ -113,9 +122,16 @@ describe("AuthFlow", () => {
     vi.restoreAllMocks();
   });
 
-  const render = async (changes: Partial<Props> = {}) => {
+  const render = async (changes: Partial<Props> = {}, selectCode = true) => {
     props = { ...props, ...changes };
     await act(async () => root.render(<AuthFlow {...props} />));
+    if (
+      selectCode &&
+      props.mode === "sign-in" &&
+      container.querySelector("main")?.getAttribute("data-auth-method") ===
+        "password"
+    )
+      await click("验证码登录");
   };
   const input = (selector: string): HTMLInputElement => {
     const element = container.querySelector<HTMLInputElement>(selector);
@@ -164,6 +180,18 @@ describe("AuthFlow", () => {
   const enterCode = async () => {
     await setInput(input("input[autocomplete='one-time-code']"), syntheticCode);
   };
+  const passwordFields = () => [
+    ...container.querySelectorAll<HTMLInputElement>(
+      "input[autocomplete='new-password']",
+    ),
+  ];
+  const setNewPassword = async (
+    value = syntheticPassword,
+    confirmation = value,
+  ) => {
+    await setInput(passwordFields()[0]!, value);
+    await setInput(passwordFields()[1]!, confirmation);
+  };
   const startProfile = async () => {
     request.mockImplementation(async (path: string) => {
       if (path === "capabilities") return capabilities();
@@ -180,6 +208,8 @@ describe("AuthFlow", () => {
     await startCode();
     await enterCode();
     await submit();
+    await setNewPassword();
+    await click("下一步");
   };
 
   it("starts on email and presents unavailable phone without engineering instructions", async () => {
@@ -221,7 +251,7 @@ describe("AuthFlow", () => {
     expect(container.querySelector("[role='alert']")?.textContent).toContain(
       "暂时无法获取登录方式",
     );
-    await click("重新获取登录方式");
+    await click("重试");
     expect(button("发送验证码").disabled).toBe(false);
     expect(calls("capabilities")).toHaveLength(2);
   });
@@ -231,7 +261,7 @@ describe("AuthFlow", () => {
     await render();
     expect(container.textContent).toContain("暂时无法获取登录方式");
     request.mockResolvedValueOnce(capabilities(true, false));
-    await click("重新获取登录方式");
+    await click("重试");
     expect(button("邮箱").getAttribute("aria-pressed")).toBe("true");
     expect(button("发送验证码").disabled).toBe(true);
     expect(container.textContent).toContain("邮箱登录当前不可用");
@@ -239,7 +269,7 @@ describe("AuthFlow", () => {
     expect(input("input[type='tel']").getAttribute("autocomplete")).toBe(
       "tel-national",
     );
-    expect(container.textContent).toContain("目前仅支持中国大陆手机号");
+    expect(container.textContent).toContain("仅支持中国大陆手机号");
   });
 
   it("places account-format errors beside the associated input before requesting a code", async () => {
@@ -250,7 +280,7 @@ describe("AuthFlow", () => {
     expect(email.getAttribute("aria-invalid")).toBe("true");
     expect(
       document.getElementById(
-        email.getAttribute("aria-describedby")!.split(" ")[1]!,
+        email.getAttribute("aria-describedby")!.split(" ").at(-1)!,
       )?.textContent,
     ).toContain("有效的邮箱");
     expect(calls("challenges")).toHaveLength(0);
@@ -458,7 +488,7 @@ describe("AuthFlow", () => {
     });
     expect(calls("challenges/verify")).toHaveLength(1);
     expect(button("修改账号").disabled).toBe(true);
-    expect(button("返回原页面").disabled).toBe(true);
+    expect(button("返回").disabled).toBe(true);
     expect(
       container.querySelector("footer a")?.getAttribute("aria-disabled"),
     ).toBe("true");
@@ -553,12 +583,12 @@ describe("AuthFlow", () => {
       expect(
         container.querySelector("main")?.getAttribute("data-auth-step"),
       ).toBe("profile");
-      expect(container.textContent).toContain("账户尚未创建");
+      expect(container.textContent).not.toContain("验证已完成");
       expect(calls("registrations")).toHaveLength(0);
       await setInput(input("input[autocomplete='nickname']"), "  访碑者  ");
       expect(button("创建账户").disabled).toBe(true);
       await act(async () => input("input[type='checkbox']").click());
-      await click("阅读开发环境注册说明");
+      await click("注册说明");
       expect(
         container.querySelector("main")?.getAttribute("data-auth-step"),
       ).toBe("agreements");
@@ -567,10 +597,15 @@ describe("AuthFlow", () => {
       await click("返回填写");
       expect(input("input[autocomplete='nickname']").value).toBe("  访碑者  ");
       expect(input("input[type='checkbox']").checked).toBe(true);
-      expect(document.activeElement).toBe(button("阅读开发环境注册说明"));
+      expect(document.activeElement).toBe(button("注册说明"));
       await click("创建账户");
       expect(bodies("registrations")[0]!.displayName).toBe("访碑者");
       expect(bodies("registrations")[0]!.agreement).toBe(true);
+      expect(onReturn).not.toHaveBeenCalled();
+      expect(
+        container.querySelector("main")?.getAttribute("data-auth-step"),
+      ).toBe("avatar");
+      await click("跳过");
       expect(onReturn).toHaveBeenCalledTimes(1);
       expect(localStorage.length).toBe(0);
     },
@@ -588,7 +623,15 @@ describe("AuthFlow", () => {
     expect(container.textContent).toContain("这个账号已经注册");
     expect(onModeChange).not.toHaveBeenCalled();
     expect(onReturn).not.toHaveBeenCalled();
-    await click("去登录");
+    const recovery = button("去登录");
+    expect(recovery.type).toBe("button");
+    const activation = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => recovery.dispatchEvent(activation));
+    expect(activation.defaultPrevented).toBe(true);
+    expect(recovery.isConnected).toBe(false);
     expect(onModeChange).toHaveBeenCalledWith("sign-in");
     expect(
       container.querySelector("input[autocomplete='one-time-code']"),
@@ -605,6 +648,8 @@ describe("AuthFlow", () => {
     await submit();
     await enterCode();
     await submit();
+    await setNewPassword();
+    await click("下一步");
     expect(input("input[type='checkbox']").checked).toBe(false);
     expect(button("创建账户").disabled).toBe(true);
     expect(calls("registrations")).toHaveLength(0);
@@ -635,6 +680,8 @@ describe("AuthFlow", () => {
     await click("发送验证码");
     await enterCode();
     await submit();
+    await setNewPassword();
+    await click("下一步");
     await setInput(input("input[autocomplete='nickname']"), "访碑者");
     await act(async () => input("input[type='checkbox']").click());
     await click("创建账户");
@@ -665,7 +712,330 @@ describe("AuthFlow", () => {
 
   it("uses the existing safe return path before its return callback", async () => {
     await render({ returnTo: "//outside.invalid/path" });
-    await click("返回原页面");
+    await click("返回");
     expect(onReturn).toHaveBeenCalledWith("/");
+  });
+  it("defaults to password login and sends existing passwords without imposing the creation policy", async () => {
+    await render({}, false);
+    expect(input("input[autocomplete='current-password']").value).toBe("");
+    expect(container.textContent).not.toContain("账号·验证·完成");
+    expect(container.textContent).not.toContain("开发预览");
+    expect(
+      container
+        .querySelector("[data-yoyi-ui='logo']")
+        ?.getAttribute("aria-label"),
+    ).toBe("由于艺");
+    await setInput(input("input[type='email']"), "tester@example.com");
+    await setInput(
+      input("input[autocomplete='current-password']"),
+      "legacy password",
+    );
+    request.mockResolvedValueOnce({
+      status: 200,
+      body: { outcome: "signed_in", session: syntheticSession },
+    });
+    await click("登录");
+    expect(bodies("passwords/login")[0]!.password).toBe("legacy password");
+    expect(calls("challenges")).toHaveLength(0);
+    expect(onReturn).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a password login identity only for an explicit unchanged network retry", async () => {
+    await render({}, false);
+    await setInput(input("input[type='email']"), "tester@example.com");
+    await setInput(
+      input("input[autocomplete='current-password']"),
+      syntheticPassword,
+    );
+    request.mockRejectedValueOnce(new Error("synthetic transport failure"));
+    await click("登录");
+    expect(calls("passwords/login")).toHaveLength(1);
+    request.mockRejectedValueOnce(new Error("synthetic transport failure"));
+    await click("登录");
+    expect(bodies("passwords/login")[1]!.idempotencyKey).toBe(
+      bodies("passwords/login")[0]!.idempotencyKey,
+    );
+    await setInput(
+      input("input[autocomplete='current-password']"),
+      syntheticPassword + "2",
+    );
+    await click("登录");
+    expect(bodies("passwords/login")[2]!.idempotencyKey).not.toBe(
+      bodies("passwords/login")[0]!.idempotencyKey,
+    );
+  });
+
+  it("clears password and verification material when changing method while keeping the ordinary account", async () => {
+    await render({}, false);
+    await setInput(input("input[type='email']"), "tester@example.com");
+    await setInput(
+      input("input[autocomplete='current-password']"),
+      syntheticPassword,
+    );
+    await click("验证码登录");
+    expect(input("input[type='email']").value).toBe("tester@example.com");
+    expect(container.querySelector("input[type='password']")).toBeNull();
+    await click("密码登录");
+    expect(input("input[autocomplete='current-password']").value).toBe("");
+    await click("忘记密码");
+    expect(container.querySelector("h1")?.textContent).toBe("找回密码");
+    await click("发送验证码");
+    expect(bodies("challenges")[0]!.purpose).toBe("password_reset");
+  });
+
+  it("validates confirmation and exact Unicode creation policy before advancing or creating", async () => {
+    request.mockImplementation(async (path: string) =>
+      path === "capabilities"
+        ? capabilities()
+        : path === "challenges"
+          ? accepted()
+          : handoff(),
+    );
+    await render({ mode: "register" });
+    await startCode();
+    await enterCode();
+    await submit();
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("password");
+    await setNewPassword("abcdef1");
+    await click("下一步");
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "大写字母",
+    );
+    await setNewPassword("A1😀😀😀😀", "A1😀😀😀😁");
+    await click("下一步");
+    expect(passwordFields()[1]!.getAttribute("aria-invalid")).toBe("true");
+    expect(container.querySelector("[role='alert']")?.textContent).toContain(
+      "不一致",
+    );
+    await setNewPassword("A1😀😀😀😀");
+    await click("下一步");
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("profile");
+    expect(calls("registrations")).toHaveLength(0);
+  });
+
+  it("keeps the optional six-codepoint studio name separate from the mandatory nickname", async () => {
+    await startProfile();
+    await setInput(input("input[autocomplete='nickname']"), "访碑者");
+    const studio = [
+      ...container.querySelectorAll<HTMLInputElement>("input"),
+    ].find((element) => element.placeholder === "斋号")!;
+    await setInput(studio, "😀😀😀甲乙丙丁");
+    await act(async () => input("input[type='checkbox']").click());
+    await click("创建账户");
+    expect(calls("registrations")).toHaveLength(0);
+    expect(studio.getAttribute("aria-invalid")).toBe("true");
+    await setInput(studio, "  😀😀😀甲乙丙  ");
+    await click("创建账户");
+    expect(bodies("registrations")[0]!.studioName).toBe("😀😀😀甲乙丙");
+    expect(bodies("registrations")[0]!.displayName).toBe("访碑者");
+    expect(bodies("registrations")[0]!.password).toBe(syntheticPassword);
+    expect(bodies("registrations")[0]).not.toHaveProperty("passwordConfirm");
+    expect(onReturn).not.toHaveBeenCalled();
+    await click("跳过");
+    expect(onReturn).toHaveBeenCalledTimes(1);
+  });
+
+  const startResetPassword = async () => {
+    request.mockImplementation(async (path: string) =>
+      path === "capabilities"
+        ? capabilities()
+        : path === "challenges"
+          ? accepted()
+          : path === "challenges/verify"
+            ? {
+                status: 200,
+                body: {
+                  ...(handoff().body as object),
+                  outcome: "password_reset_required",
+                },
+              }
+            : { status: 200, body: { reset: true } },
+    );
+    await render({}, false);
+    await click("忘记密码");
+    await startCode();
+    await enterCode();
+    await submit();
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("password");
+    expect(container.querySelector("label[for]")?.textContent).toBe("新密码");
+  };
+
+  it("resets only after explicit matching-password submission and returns to fresh login without a session", async () => {
+    await startResetPassword();
+    await setNewPassword();
+    expect(calls("passwords/reset")).toHaveLength(0);
+    await click("重置密码");
+    expect(bodies("passwords/reset")[0]!.handoffToken).toBe(syntheticHandoff);
+    expect(bodies("passwords/reset")[0]).not.toHaveProperty("passwordConfirm");
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("reset-complete");
+    expect(calls("passwords/login")).toHaveLength(0);
+    expect(onReturn).not.toHaveBeenCalled();
+    await click("返回登录");
+    expect(input("input[autocomplete='current-password']").value).toBe("");
+    expect(input("input[type='email']").value).toBe("tester@example.com");
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("keeps reset transport retries manual and stops using a rejected reset proof", async () => {
+    await startResetPassword();
+    await setNewPassword();
+    request.mockRejectedValueOnce(new Error("synthetic transport failure"));
+    await click("重置密码");
+    expect(calls("passwords/reset")).toHaveLength(1);
+    request.mockResolvedValueOnce(failure("AUTH_PROOF_REJECTED"));
+    await click("重置密码");
+    expect(bodies("passwords/reset")[1]!.idempotencyKey).toBe(
+      bodies("passwords/reset")[0]!.idempotencyKey,
+    );
+    expect(passwordFields()[0]!.disabled).toBe(true);
+    await click("重新验证");
+    expect(container.querySelector("input[type='password']")).toBeNull();
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("identifier");
+    expect(onReturn).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a signed-in response for the password-reset purpose", async () => {
+    await render({}, false);
+    await click("忘记密码");
+    await startCode();
+    await enterCode();
+    await submit();
+    expect(onReturn).not.toHaveBeenCalled();
+    expect(button("重新验证")).toBeDefined();
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("code");
+  });
+  it("keeps registration identity across an uncertain relay 503 and accepts the committed replay", async () => {
+    await startProfile();
+    await setInput(input("input[autocomplete='nickname']"), "访碑者");
+    await act(async () => input("input[type='checkbox']").click());
+    request.mockResolvedValueOnce({ status: 503, body: null });
+    await click("创建账户");
+    expect(calls("registrations")).toHaveLength(1);
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("profile");
+    await click("创建账户");
+    expect(bodies("registrations")[1]!.idempotencyKey).toBe(
+      bodies("registrations")[0]!.idempotencyKey,
+    );
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("avatar");
+    expect(onReturn).not.toHaveBeenCalled();
+  });
+
+  it("keeps reset identity across an uncertain relay 503 and accepts the consumed-proof replay", async () => {
+    await startResetPassword();
+    await setNewPassword();
+    request.mockResolvedValueOnce({ status: 503, body: null });
+    await click("重置密码");
+    expect(calls("passwords/reset")).toHaveLength(1);
+    await click("重置密码");
+    expect(bodies("passwords/reset")[1]!.idempotencyKey).toBe(
+      bodies("passwords/reset")[0]!.idempotencyKey,
+    );
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("reset-complete");
+    expect(onReturn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a login identity across a relay 504 but still requires a manual retry", async () => {
+    await render({}, false);
+    await setInput(input("input[type='email']"), "tester@example.com");
+    await setInput(
+      input("input[autocomplete='current-password']"),
+      syntheticPassword,
+    );
+    request.mockResolvedValueOnce({ status: 504, body: null });
+    await click("登录");
+    expect(calls("passwords/login")).toHaveLength(1);
+    request.mockResolvedValueOnce({
+      status: 200,
+      body: { outcome: "signed_in", session: syntheticSession },
+    });
+    await click("登录");
+    expect(bodies("passwords/login")[1]!.idempotencyKey).toBe(
+      bodies("passwords/login")[0]!.idempotencyKey,
+    );
+    expect(onReturn).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an uncertain send with its identity but never verifies a replay without a continuation", async () => {
+    await render();
+    await setInput(input("input[type='email']"), "tester@example.com");
+    request.mockResolvedValueOnce({ status: 503, body: null });
+    await click("发送验证码");
+    expect(calls("challenges")).toHaveLength(1);
+    request.mockResolvedValueOnce(accepted({ continuationToken: undefined }));
+    await click("发送验证码");
+    expect(bodies("challenges")[1]!.idempotencyKey).toBe(
+      bodies("challenges")[0]!.idempotencyKey,
+    );
+    expect(
+      container.querySelector("input[autocomplete='one-time-code']"),
+    ).toBeNull();
+    expect(container.textContent).toContain("这次发送无法继续验证");
+    await click("发送验证码");
+    expect(bodies("challenges")[2]!.idempotencyKey).not.toBe(
+      bodies("challenges")[0]!.idempotencyKey,
+    );
+  });
+  it("ignores a late reset success and finally after a new registration send begins", async () => {
+    await startResetPassword();
+    await setNewPassword();
+    const oldReset = deferred();
+    request.mockImplementationOnce(() => oldReset.promise);
+    await click("重置密码");
+    expect(button("返回").disabled).toBe(true);
+    await render({ mode: "register" });
+    expect(container.querySelector("input[type='password']")).toBeNull();
+    const nextSend = deferred();
+    request.mockImplementationOnce(() => nextSend.promise);
+    await click("发送验证码");
+    await act(async () =>
+      oldReset.resolve({ status: 200, body: { reset: true } }),
+    );
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("identifier");
+    expect(button("正在发送…").disabled).toBe(true);
+    expect(onReturn).not.toHaveBeenCalled();
+    await act(async () => nextSend.resolve(accepted()));
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("code");
+    expect(bodies("challenges").at(-1)!.purpose).toBe("register");
+  });
+  it("returns from forgot-password identifier to password login rather than OTP", async () => {
+    await render({}, false);
+    await setInput(input("input[type='email']"), "tester@example.com");
+    await click("忘记密码");
+    expect(document.activeElement).toBe(input("input[type='email']"));
+    await click("密码登录");
+    expect(document.activeElement).toBe(input("input[type='email']"));
+    expect(container.querySelector("h1")?.textContent).toBe("登录");
+    expect(input("input[autocomplete='current-password']").value).toBe("");
+    expect(input("input[type='email']").value).toBe("tester@example.com");
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-method"),
+    ).toBe("password");
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-purpose"),
+    ).toBe("sign-in");
+    expect(calls("challenges")).toHaveLength(0);
+    expect(calls("passwords/reset")).toHaveLength(0);
   });
 });

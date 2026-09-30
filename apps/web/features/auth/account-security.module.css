@@ -1,0 +1,118 @@
+.panel {
+  min-width: 0;
+  color: var(--yoyi-color-text-primary);
+}
+.rows {
+  overflow: hidden;
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-4);
+  padding: var(--yoyi-space-5);
+}
+.row + .row {
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+.identity {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  flex: 1;
+  min-width: min(150px, 100%);
+}
+.identity > svg {
+  flex: none;
+  color: var(--yoyi-color-text-secondary);
+}
+.detail {
+  display: grid;
+  gap: var(--yoyi-space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.detail strong {
+  font-weight: 600;
+}
+.detail small,
+.muted,
+.notice {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+}
+.muted {
+  margin: var(--yoyi-space-5) 0;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yoyi-space-3);
+}
+.panel button {
+  min-height: 44px;
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.panel button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.form {
+  display: grid;
+  gap: var(--yoyi-space-5);
+}
+.field {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+.field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 52px;
+  padding: var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-surface);
+  font: inherit;
+  font-size: max(16px, 1em);
+}
+.panel .primary {
+  width: 100%;
+  color: var(--yoyi-color-background-surface);
+  background: var(--yoyi-color-seal-red);
+  border-color: transparent;
+}
+.panel .signOut {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-3);
+  width: 100%;
+  margin-top: var(--yoyi-space-7);
+  color: var(--yoyi-color-seal-red);
+}
+.error {
+  color: var(--yoyi-color-seal-red);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 359px) {
+  .row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .row > .actions {
+    align-self: flex-end;
+  }
+}

@@ -7,6 +7,14 @@ import type {
   PublicUserProfile,
 } from "@moya/contracts";
 
+import { normalizeStudioName } from "../../domain/auth-profile-policy.js";
+import {
+  hashPassword,
+  verifyPassword,
+  validPassword,
+  PasswordHashBusyError,
+} from "./password-crypto.js";
+
 import { mapPublicUserProfile } from "../mappers/community-public-contract-mapper.js";
 import {
   defaultRandomBytes,
@@ -25,6 +33,8 @@ import type {
   StoredIdentity,
   StoredReceipt,
   StoredUser,
+  StoredPasswordCredential,
+  StoredPasswordResetReceipt,
   VerificationMode,
 } from "./auth-port.js";
 import {
@@ -60,6 +70,9 @@ export const authReasons = [
   "AUTH_CHANNEL_UNAVAILABLE",
   "AUTH_INVALID_IDENTIFIER",
   "AUTH_INVALID_DISPLAY_NAME",
+  "AUTH_INVALID_STUDIO_NAME",
+  "AUTH_INVALID_PASSWORD",
+  "AUTH_INVALID_CREDENTIALS",
   "AUTH_AGREEMENT_REQUIRED",
   "AUTH_RATE_LIMITED",
   "AUTH_CODE_EXHAUSTED",
@@ -92,7 +105,7 @@ export interface AuthSessionGrant {
 export type AuthVerifyValue =
   | { readonly outcome: "signed_in"; readonly session: AuthSessionGrant }
   | {
-      readonly outcome: "registration_required";
+      readonly outcome: "registration_required" | "password_reset_required";
       readonly handoffToken: string;
       readonly maskedTarget: string;
       readonly channel: AuthChannelName;
@@ -143,6 +156,8 @@ interface Target {
   readonly sessionHash: string | null;
   readonly expectedVersion: number | null;
   readonly reauthHash: string | null;
+  readonly identityId?: string | null;
+  readonly credentialVersion?: number | null;
 }
 
 interface Minted extends AuthSessionGrant {
@@ -159,6 +174,8 @@ type Reservation =
       readonly destination: string;
       readonly code: string | null;
     };
+
+class PasswordReceiptRace extends Error {}
 
 class AuthRollback extends Error {
   constructor(readonly result: AuthResult<unknown>) {
@@ -250,6 +267,12 @@ export class CommunityAuthService {
         );
         if (current === null || reserved.value.kind !== "send")
           return fail("AUTH_PROOF_REJECTED");
+        if (
+          current.invalidatedAt !== null ||
+          current.supersededAt !== null ||
+          current.completedAt !== null
+        )
+          return fail("AUTH_PROOF_REJECTED");
         await tx.saveChallenge({
           ...current,
           deliveryState:
@@ -328,6 +351,9 @@ export class CommunityAuthService {
     readonly displayName: string;
     readonly agreement: boolean;
     readonly idempotencyKey: string;
+    readonly password?: string | undefined;
+    readonly studioName?: string | undefined;
+    readonly source?: string;
   }): Promise<AuthResult<AuthSessionGrant>> {
     if (input.agreement !== true) return fail("AUTH_AGREEMENT_REQUIRED");
     const displayName = input.displayName.trim();
@@ -335,12 +361,22 @@ export class CommunityAuthService {
       displayName !== input.displayName ||
       displayName.length < 1 ||
       displayName.length > 40 ||
-      displayName.includes("\u0000")
+      displayName.includes("\u0000") ||
+      /[\uD800-\uDFFF]/u.test(displayName)
     )
       return fail("AUTH_INVALID_DISPLAY_NAME");
-    const at = this.clock();
-    const tokenHash = await hashSessionToken(input.handoffToken);
-    return this.transactional<AuthSessionGrant>(async (tx) => {
+    const studio = normalizeStudioName(input.studioName ?? "");
+    if (studio === null) return fail("AUTH_INVALID_STUDIO_NAME");
+    if (input.password !== undefined && !validPassword(input.password))
+      return fail("AUTH_INVALID_PASSWORD");
+    const at = this.clock(),
+      tokenHash = await hashSessionToken(input.handoffToken);
+    const preflight = await this.transactional<{
+      handoff: StoredHandoff;
+      receiptKey: string;
+      receipt: StoredReceipt | null;
+      credential: StoredPasswordCredential | null;
+    }>(async (tx) => {
       const handoff = await tx.findHandoff(tokenHash);
       if (
         handoff === null ||
@@ -348,59 +384,488 @@ export class CommunityAuthService {
         !this.handoffModeOk(handoff)
       )
         return fail("AUTH_PROOF_REJECTED");
-      if (new Date(handoff.expiresAt).getTime() <= at.getTime())
-        return fail("AUTH_CODE_EXPIRED");
-      await tx.lockDigest(handoff.targetDigest);
       const receiptKey = await this.receiptKey(
         input.idempotencyKey,
         handoff.targetDigest,
         "register",
       );
       const receipt = await tx.findReceipt(receiptKey);
+      if (
+        receipt?.closedAt != null ||
+        (receipt === null &&
+          (handoff.consumedAt !== null ||
+            new Date(handoff.expiresAt).getTime() <= at.getTime()))
+      )
+        return fail("AUTH_PROOF_REJECTED");
+      const credential =
+        receipt === null
+          ? null
+          : await tx.findPasswordCredential(receipt.userId);
+      return {
+        ok: true as const,
+        value: { handoff, receiptKey, receipt, credential },
+      };
+    });
+    if (!preflight.ok) return preflight;
+    const prepared = preflight.value;
+    if (input.password !== undefined) {
+      const budget = await this.transactional((tx) =>
+        this.reservePasswordAttempt(
+          tx,
+          prepared.handoff.targetDigest,
+          input.source ?? "unknown",
+          at,
+        ),
+      );
+      if (!budget.ok) return budget;
+    }
+    let verifier: string | null = null;
+    try {
+      if (prepared.receipt !== null) {
+        if (
+          input.password === undefined
+            ? prepared.credential !== null
+            : prepared.credential === null ||
+              !(await verifyPassword(
+                input.password,
+                prepared.credential.verifier,
+              ))
+        )
+          return fail("AUTH_PROOF_REJECTED");
+        verifier = prepared.credential?.verifier ?? null;
+      } else if (input.password !== undefined)
+        verifier = await hashPassword(input.password);
+    } catch (error) {
+      if (error instanceof PasswordHashBusyError)
+        return fail("AUTH_RATE_LIMITED");
+      throw error;
+    }
+    const payloadHash = await this.registrationPayload(
+      displayName,
+      studio,
+      verifier,
+    );
+    return this.convergeReceiptRace(
+      () => this.confirmRegistration(input),
+      () =>
+        this.transactional<AuthSessionGrant>(async (tx) => {
+          const handoff = await tx.findHandoff(tokenHash);
+          if (
+            handoff === null ||
+            handoff.purpose !== "register_confirm" ||
+            !this.handoffModeOk(handoff)
+          )
+            return fail("AUTH_PROOF_REJECTED");
+          if (new Date(handoff.expiresAt).getTime() <= at.getTime())
+            return fail("AUTH_CODE_EXPIRED");
+          await tx.lockDigest(handoff.targetDigest);
+          const receipt = await tx.findReceipt(prepared.receiptKey);
+          if (receipt !== null) {
+            const user = await tx.lockUser(receipt.userId);
+            if (user === null || user.status !== "active")
+              return fail("AUTH_ACCOUNT_SUSPENDED");
+            const credential = await tx.findPasswordCredential(user.id);
+            if (prepared.receipt === null) throw new PasswordReceiptRace();
+            if (
+              (credential?.version ?? null) !==
+              (prepared.credential?.version ?? null)
+            )
+              return fail("AUTH_PROOF_REJECTED");
+            if (receipt.payloadHash == null) {
+              // Legacy receipts may replay only their original OTP-only public fields.
+              if (
+                input.password !== undefined ||
+                studio !== (user.studioName ?? "") ||
+                displayName !== user.displayName
+              )
+                return fail("AUTH_PROOF_REJECTED");
+            } else if (
+              receipt.payloadHash !== payloadHash ||
+              (receipt.credentialVersion ?? null) !==
+                (credential?.version ?? null)
+            )
+              return fail("AUTH_PROOF_REJECTED");
+            return {
+              ok: true,
+              value: await this.reissue(tx, receipt, user, handoff.channel, at),
+            };
+          }
+          if (handoff.consumedAt !== null) return fail("AUTH_PROOF_REJECTED");
+          if (
+            (await tx.findIdentity(handoff.channel, handoff.targetDigest)) !==
+            null
+          )
+            throw new AuthRollback(fail("AUTH_IDENTIFIER_CONFLICT"));
+          if ((await tx.consumeHandoff(handoff.id, at.toISOString())) !== "ok")
+            return fail("AUTH_PROOF_REJECTED");
+          const user = await this.insertNewUser(tx, displayName, studio);
+          if (
+            (await tx.insertIdentity({
+              id: generateOpaqueId("login", this.randomBytes),
+              userId: user.id,
+              kind: handoff.channel,
+              lookupDigest: handoff.targetDigest,
+              ciphertext: handoff.ciphertext,
+              lookupKeyVersion: this.options.keys.version,
+              verificationMode: handoff.providerMode,
+              environment: handoff.environment,
+              version: 1,
+              verifiedAt: at.toISOString(),
+            })) === "conflict"
+          )
+            throw new AuthRollback(fail("AUTH_IDENTIFIER_CONFLICT"));
+          if (
+            verifier !== null &&
+            (await tx.savePasswordCredential(
+              {
+                userId: user.id,
+                verifier,
+                version: 1,
+                updatedAt: at.toISOString(),
+              },
+              null,
+            )) !== "ok"
+          )
+            throw new AuthRollback(fail("AUTH_PROOF_REJECTED"));
+          const session = await this.mint(tx, user, handoff.channel, at);
+          await tx.insertReceipt({
+            keyHash: prepared.receiptKey,
+            userId: user.id,
+            sessionId: session.sessionId,
+            sessionTokenHash: session.tokenHash,
+            purpose: "register",
+            originSessionId: session.sessionId,
+            closedAt: null,
+            payloadHash,
+            credentialVersion: verifier === null ? null : 1,
+          });
+          await this.audit(tx, user.id, "register", at);
+          return { ok: true, value: session };
+        }),
+    );
+  }
+
+  async passwordLogin(input: {
+    readonly channel: AuthChannelName;
+    readonly identifier: string;
+    readonly password: string;
+    readonly idempotencyKey: string;
+    readonly source: string;
+  }): Promise<AuthResult<AuthSessionGrant>> {
+    if (!this.channelAvailable(input.channel))
+      return fail("AUTH_CHANNEL_UNAVAILABLE");
+    const normalized = this.normalize(input.channel, input.identifier);
+    if (normalized === null) return fail("AUTH_INVALID_IDENTIFIER");
+    const digest = await lookupDigest(
+      input.channel,
+      normalized.lookup,
+      this.options.keys,
+    );
+    const at = this.clock();
+    // Every attempt reserves all three scopes atomically before expensive work.
+    const reserved = await this.transactional(async (tx) => {
+      const budget = await this.reservePasswordAttempt(
+        tx,
+        digest,
+        input.source,
+        at,
+      );
+      if (!budget.ok) return budget;
+      const identity = await tx.findIdentity(input.channel, digest);
+      const user =
+        identity === null ? null : await tx.findUser(identity.userId);
+      const credential =
+        user === null ? null : await tx.findPasswordCredential(user.id);
+      return { ok: true as const, value: { identity, user, credential } };
+    });
+    if (!reserved.ok) return reserved;
+    const { identity, user, credential } = reserved.value;
+    let matched: boolean;
+    try {
+      matched = await verifyPassword(
+        input.password,
+        user?.status === "active" &&
+          identity !== null &&
+          this.provenanceOk(identity)
+          ? (credential?.verifier ?? null)
+          : null,
+      );
+    } catch (error) {
+      if (error instanceof PasswordHashBusyError)
+        return fail("AUTH_RATE_LIMITED");
+      throw error;
+    }
+    if (
+      !matched ||
+      identity === null ||
+      user === null ||
+      credential === null ||
+      user.status !== "active" ||
+      !this.provenanceOk(identity)
+    )
+      return fail("AUTH_INVALID_CREDENTIALS");
+    return this.transactional<AuthSessionGrant>(async (tx) => {
+      const currentUser = await tx.lockUser(user.id);
+      const currentIdentity = await tx.findIdentity(input.channel, digest);
+      const currentCredential = await tx.findPasswordCredential(user.id);
+      if (
+        currentUser?.status !== "active" ||
+        currentIdentity?.id !== identity.id ||
+        currentIdentity.version !== identity.version ||
+        currentIdentity.userId !== user.id ||
+        !this.provenanceOk(currentIdentity) ||
+        currentCredential?.version !== credential.version ||
+        currentCredential.verifier !== credential.verifier
+      )
+        return fail("AUTH_INVALID_CREDENTIALS");
+      const receiptKey = await this.receiptKey(
+        input.idempotencyKey,
+        digest,
+        "password_login",
+      );
+      // Bind the salted slow verifier, never a fast fingerprint of the password.
+      const payloadHash = await keyedHash(
+        this.options.keys.lookupKey,
+        JSON.stringify([
+          input.channel,
+          digest,
+          credential.verifier,
+          credential.version,
+        ]),
+      );
+      const receipt = await tx.findReceipt(receiptKey);
       if (receipt !== null) {
-        const user = await tx.lockUser(receipt.userId);
-        if (user === null || user.status !== "active")
-          return fail("AUTH_ACCOUNT_SUSPENDED");
+        if (
+          receipt.userId !== user.id ||
+          receipt.payloadHash !== payloadHash ||
+          receipt.credentialVersion !== credential.version
+        )
+          return fail("AUTH_PROOF_REJECTED");
         return {
           ok: true,
-          value: await this.reissue(tx, receipt, user, handoff.channel, at),
+          value: await this.reissue(
+            tx,
+            receipt,
+            currentUser,
+            input.channel,
+            at,
+          ),
         };
       }
-      if (handoff.consumedAt !== null) return fail("AUTH_PROOF_REJECTED");
-      if (
-        (await tx.findIdentity(handoff.channel, handoff.targetDigest)) !== null
-      )
-        throw new AuthRollback(fail("AUTH_IDENTIFIER_CONFLICT"));
-      if ((await tx.consumeHandoff(handoff.id, at.toISOString())) !== "ok")
-        return fail("AUTH_PROOF_REJECTED");
-      const user = await this.insertNewUser(tx, displayName);
-      const inserted = await tx.insertIdentity({
-        id: generateOpaqueId("login", this.randomBytes),
-        userId: user.id,
-        kind: handoff.channel,
-        lookupDigest: handoff.targetDigest,
-        ciphertext: handoff.ciphertext,
-        lookupKeyVersion: this.options.keys.version,
-        verificationMode: handoff.providerMode,
-        environment: handoff.environment,
-        version: 1,
-        verifiedAt: at.toISOString(),
-      });
-      if (inserted === "conflict")
-        throw new AuthRollback(fail("AUTH_IDENTIFIER_CONFLICT"));
-      const session = await this.mint(tx, user, handoff.channel, at);
+      const session = await this.mint(tx, currentUser, input.channel, at);
       await tx.insertReceipt({
         keyHash: receiptKey,
         userId: user.id,
         sessionId: session.sessionId,
         sessionTokenHash: session.tokenHash,
-        purpose: "register",
+        purpose: "password_login",
         originSessionId: session.sessionId,
         closedAt: null,
+        payloadHash,
+        credentialVersion: credential.version,
       });
-      await this.audit(tx, user.id, "register", at);
+      await this.audit(tx, user.id, "password_login", at);
       return { ok: true, value: session };
     });
+  }
+
+  async resetPassword(input: {
+    readonly handoffToken: string;
+    readonly password: string;
+    readonly idempotencyKey: string;
+    readonly source?: string;
+  }): Promise<AuthResult<{ readonly reset: true }>> {
+    if (!validPassword(input.password)) return fail("AUTH_INVALID_PASSWORD");
+    const tokenHash = await hashSessionToken(input.handoffToken),
+      at = this.clock();
+    const prepared = await this.transactional<{
+      handoff: StoredHandoff;
+      keyHash: string;
+      receipt: StoredPasswordResetReceipt | null;
+      credential: StoredPasswordCredential | null;
+    }>(async (tx) => {
+      const handoff = await tx.findHandoff(tokenHash);
+      if (
+        handoff === null ||
+        handoff.purpose !== "password_reset" ||
+        handoff.userId === null ||
+        !this.handoffModeOk(handoff)
+      )
+        return fail("AUTH_PROOF_REJECTED");
+      const keyHash = await this.receiptKey(
+        input.idempotencyKey,
+        tokenHash,
+        "password_reset",
+      );
+      const receipt = await tx.findPasswordResetReceipt(keyHash);
+      if (
+        receipt?.closedAt != null ||
+        (receipt === null &&
+          (handoff.consumedAt !== null ||
+            new Date(handoff.expiresAt).getTime() <= at.getTime()))
+      )
+        return fail("AUTH_PROOF_REJECTED");
+      const credential = await tx.findPasswordCredential(handoff.userId);
+      return {
+        ok: true as const,
+        value: { handoff, keyHash, receipt, credential },
+      };
+    });
+    if (!prepared.ok) return prepared;
+    const prior = prepared.value;
+    const budget = await this.transactional((tx) =>
+      this.reservePasswordAttempt(
+        tx,
+        prior.handoff.targetDigest,
+        input.source ?? "unknown",
+        at,
+      ),
+    );
+    if (!budget.ok) return budget;
+    let verifier: string;
+    try {
+      if (prior.receipt !== null) {
+        if (
+          prior.receipt.closedAt !== null ||
+          prior.credential === null ||
+          prior.receipt.credentialVersion !== prior.credential.version ||
+          !(await verifyPassword(input.password, prior.credential.verifier))
+        )
+          return fail("AUTH_PROOF_REJECTED");
+        verifier = prior.credential.verifier;
+      } else verifier = await hashPassword(input.password);
+    } catch (error) {
+      if (error instanceof PasswordHashBusyError)
+        return fail("AUTH_RATE_LIMITED");
+      throw error;
+    }
+    const payloadHash = await keyedHash(
+      this.options.keys.lookupKey,
+      JSON.stringify([tokenHash, verifier]),
+    );
+    return this.convergeReceiptRace(
+      () => this.resetPassword(input),
+      () =>
+        this.transactional(async (tx) => {
+          const user = await tx.lockUser(prior.handoff.userId!);
+          const handoff = await tx.findHandoff(tokenHash);
+          if (
+            user?.status !== "active" ||
+            handoff === null ||
+            handoff.purpose !== "password_reset" ||
+            handoff.userId !== user.id ||
+            !this.handoffModeOk(handoff)
+          )
+            return fail("AUTH_PROOF_REJECTED");
+          const credential = await tx.findPasswordCredential(user.id);
+          const receipt = await tx.findPasswordResetReceipt(prior.keyHash);
+          if (receipt !== null) {
+            if (prior.receipt === null) throw new PasswordReceiptRace();
+            if (
+              receipt.closedAt !== null ||
+              receipt.payloadHash !== payloadHash ||
+              receipt.credentialVersion !== credential?.version
+            )
+              return fail("AUTH_PROOF_REJECTED");
+            return { ok: true, value: { reset: true as const } };
+          }
+          if (new Date(handoff.expiresAt).getTime() <= at.getTime())
+            return fail("AUTH_CODE_EXPIRED");
+          const identity = await tx.findIdentity(
+            handoff.channel,
+            handoff.targetDigest,
+          );
+          if (
+            handoff.consumedAt !== null ||
+            identity?.userId !== user.id ||
+            identity.id !== handoff.identityId ||
+            identity.version !== handoff.expectedVersion ||
+            !this.provenanceOk(identity) ||
+            (credential?.version ?? 0) !== handoff.credentialVersion
+          )
+            return fail("AUTH_PROOF_REJECTED");
+          if ((await tx.consumeHandoff(handoff.id, at.toISOString())) !== "ok")
+            return fail("AUTH_PROOF_REJECTED");
+          const version = (credential?.version ?? 0) + 1;
+          if (
+            (await tx.savePasswordCredential(
+              {
+                userId: user.id,
+                verifier,
+                version,
+                updatedAt: at.toISOString(),
+              },
+              credential?.version ?? null,
+            )) !== "ok"
+          )
+            throw new AuthRollback(fail("AUTH_PROOF_REJECTED"));
+          await tx.revokeAllSessions(user.id, at.toISOString());
+          await tx.closeUserReceipts(user.id, at.toISOString());
+          await tx.invalidatePasswordResetProofs(user.id, at.toISOString());
+          if (
+            (await tx.insertPasswordResetReceipt({
+              keyHash: prior.keyHash,
+              userId: user.id,
+              payloadHash,
+              credentialVersion: version,
+              closedAt: null,
+            })) !== "ok"
+          )
+            throw new AuthRollback(fail("AUTH_PROOF_REJECTED"));
+          await this.audit(tx, user.id, "password_reset", at);
+          return { ok: true, value: { reset: true as const } };
+        }),
+    );
+  }
+
+  private async convergeReceiptRace<T>(
+    repeat: () => Promise<AuthResult<T>>,
+    work: () => Promise<AuthResult<T>>,
+  ): Promise<AuthResult<T>> {
+    try {
+      return await work();
+    } catch (error) {
+      // The transaction rolled back. Re-read and slow-verify the winner outside
+      // DB locks; shared attempt reservations bound even concurrent retries.
+      if (error instanceof PasswordReceiptRace) return repeat();
+      throw error;
+    }
+  }
+
+  private async reservePasswordAttempt(
+    tx: AuthUnitOfWork,
+    digest: string,
+    requestSource: string,
+    at: Date,
+  ): Promise<AuthResult<true>> {
+    await tx.lockDigest("password-login-attempts");
+    const since = new Date(at.getTime() - WINDOW_MS).toISOString();
+    const target = `password:${digest}`,
+      source = await keyedHash(
+        this.options.keys.lookupKey,
+        `password-source\0${requestSource}`,
+      );
+    if (
+      (await tx.sendCount("target", target, since)) >= TARGET_SENDS ||
+      (await tx.sendCount("source", source, since)) >= SOURCE_SENDS ||
+      (await tx.sendCount("global", "password-global", since)) >= GLOBAL_SENDS
+    )
+      return fail("AUTH_RATE_LIMITED");
+    await tx.addSend("target", target, at.toISOString());
+    await tx.addSend("source", source, at.toISOString());
+    await tx.addSend("global", "password-global", at.toISOString());
+    return { ok: true, value: true };
+  }
+
+  private registrationPayload(
+    displayName: string,
+    studioName: string,
+    verifier: string | null,
+  ): Promise<string> {
+    return keyedHash(
+      this.options.keys.lookupKey,
+      JSON.stringify(["register", displayName, studioName, verifier]),
+    );
   }
 
   async readAccount(
@@ -762,7 +1227,7 @@ export class CommunityAuthService {
     providerPassed: boolean,
     at: Date,
   ): Promise<AuthResult<AuthVerifyValue>> {
-    const challenge = await tx.findChallenge(input.challengeId);
+    let challenge = await tx.findChallenge(input.challengeId);
     if (challenge === null || challenge.continuationHash !== continuationHash)
       return fail("AUTH_PROOF_REJECTED");
     if (!this.challengeModeOk(challenge))
@@ -773,6 +1238,40 @@ export class CommunityAuthService {
       challenge.purpose,
     );
     const receipt = await tx.findReceipt(receiptKey);
+    const targetIdentity = await tx.findIdentity(
+      challenge.channel,
+      challenge.targetDigest,
+    );
+    // Reset owns User -> Challenge -> Session/receipt order. Acquire all known
+    // users deterministically before touching a challenge; never trust the first read.
+    const userIds = new Set([
+      challenge.userId,
+      targetIdentity?.userId ?? null,
+      receipt !== null && challenge.purpose === "sign_in"
+        ? receipt.userId
+        : null,
+    ]);
+    for (const id of [...userIds]
+      .filter((id): id is string => id !== null)
+      .sort())
+      await tx.lockUser(id);
+    if (targetIdentity === null) {
+      await tx.lockDigest(challenge.targetDigest);
+      // A concurrent registration may have appeared before this advisory lock.
+      // Reject that old anonymous proof without taking another user lock in reverse order.
+      if (
+        (await tx.findIdentity(challenge.channel, challenge.targetDigest)) !==
+        null
+      )
+        return fail("AUTH_PROOF_REJECTED");
+    }
+    challenge = await tx.findChallenge(input.challengeId);
+    if (challenge === null || challenge.continuationHash !== continuationHash)
+      return fail("AUTH_PROOF_REJECTED");
+    if (!this.challengeModeOk(challenge))
+      return fail("AUTH_PROVENANCE_REJECTED");
+    if (challenge.invalidatedAt !== null || challenge.supersededAt !== null)
+      return this.staleChallenge(challenge, at);
     if (receipt !== null && challenge.purpose === "sign_in") {
       const user = await tx.lockUser(receipt.userId);
       if (user === null || user.status !== "active")
@@ -842,6 +1341,55 @@ export class CommunityAuthService {
       challenge.channel,
       challenge.targetDigest,
     );
+    if (challenge.purpose === "password_reset") {
+      const user =
+        challenge.userId === null ? null : await tx.lockUser(challenge.userId);
+      const credential =
+        user === null ? null : await tx.findPasswordCredential(user.id);
+      if (
+        user?.status !== "active" ||
+        identity?.userId !== user.id ||
+        identity.id !== challenge.identityId ||
+        identity.version !== challenge.expectedVersion ||
+        !this.provenanceOk(identity) ||
+        (credential?.version ?? 0) !== challenge.credentialVersion
+      )
+        return fail("AUTH_PROOF_REJECTED");
+      const token = generateSessionToken(this.randomBytes);
+      await tx.insertHandoff({
+        id: generateOpaqueId("handoff", this.randomBytes),
+        tokenHash: await hashSessionToken(token),
+        purpose: "password_reset",
+        channel: challenge.channel,
+        targetDigest: challenge.targetDigest,
+        ciphertext: challenge.ciphertext,
+        providerMode: challenge.providerMode,
+        environment: challenge.environment,
+        userId: user.id,
+        sessionHash: null,
+        expectedVersion: identity.version,
+        identityId: identity.id,
+        credentialVersion: credential?.version ?? 0,
+        expiresAt: new Date(at.getTime() + HANDOFF_TTL_MS).toISOString(),
+        consumedAt: null,
+      });
+      const plain = await decryptContact(
+        this.options.keys,
+        challenge.channel,
+        challenge.ciphertext,
+      );
+      if (plain === null) return fail("AUTH_PROOF_REJECTED");
+      return {
+        ok: true,
+        value: {
+          outcome: "password_reset_required",
+          handoffToken: token,
+          channel: challenge.channel,
+          maskedTarget:
+            challenge.channel === "email" ? maskEmail(plain) : maskPhone(plain),
+        },
+      };
+    }
     if (challenge.purpose === "register") {
       if (identity !== null)
         return {
@@ -975,6 +1523,8 @@ export class CommunityAuthService {
       sessionHash: target.sessionHash,
       continuationHash: await hashSessionToken(continuationToken),
       expectedVersion: target.expectedVersion,
+      identityId: target.identityId ?? null,
+      credentialVersion: target.credentialVersion ?? null,
       reauthHash: target.reauthHash,
       providerCorrelation: null,
       expiresAt: new Date(at.getTime() + OTP_TTL_MS).toISOString(),
@@ -1071,6 +1621,39 @@ export class CommunityAuthService {
     }
     const normalized = this.normalize(input.channel, input.identifier ?? "");
     if (normalized === null) return fail("AUTH_INVALID_IDENTIFIER");
+    if (input.purpose === "password_reset") {
+      const digest = await lookupDigest(
+        input.channel,
+        normalized.lookup,
+        this.options.keys,
+      );
+      return this.transactional(async (tx) => {
+        const identity = await tx.findIdentity(input.channel, digest);
+        const credential =
+          identity === null
+            ? null
+            : await tx.findPasswordCredential(identity.userId);
+        return {
+          ok: true,
+          value: {
+            digest,
+            destination: normalized.delivery,
+            masked: normalized.masked,
+            ciphertext: await encryptContact(
+              this.options.keys,
+              input.channel,
+              normalized.delivery,
+            ),
+            userId: identity?.userId ?? null,
+            sessionHash: null,
+            reauthHash: null,
+            identityId: identity?.id ?? null,
+            expectedVersion: identity?.version ?? null,
+            credentialVersion: credential?.version ?? 0,
+          },
+        };
+      });
+    }
     let reauthHash: string | null = null;
     if (input.purpose === "link" || input.purpose === "replace") {
       if (session === null || input.reauthToken === undefined)
@@ -1294,12 +1877,14 @@ export class CommunityAuthService {
   private async insertNewUser(
     tx: AuthUnitOfWork,
     displayName: string,
+    studioName = "",
   ): Promise<StoredUser> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const user: StoredUser = {
         id: generateOpaqueId("user", this.randomBytes),
         handle: this.generateHandle(),
         displayName,
+        studioName,
         status: "active",
       };
       if ((await tx.insertUser(user)) === "ok") return user;
