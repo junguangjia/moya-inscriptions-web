@@ -1,4 +1,5 @@
 "use client";
+import { useAuthReturnView } from "../auth/auth-return";
 import { useEffect, useRef, useState } from "react";
 import type {
   ContentCard as Card,
@@ -40,13 +41,26 @@ const ScopedDiscoveryFeed = ({
   const author = useAuthors(),
     shell = useProductShell(),
     key = `discovery:${author.viewer?.id ?? "guest"}:${kind}`;
+  const returnCapture = useRef({
+    filters: emptyFilters,
+    search: "",
+    count: 0,
+    top: 0,
+    anchor: null as string | null,
+  });
+  const authReturnView = useAuthReturnView(`discovery:${kind}`, () => ({
+    ...returnCapture.current,
+    top: shell.readActiveScrollTop(),
+    anchor: shell.activeContent?.id ?? returnCapture.current.anchor,
+  }));
+  const restoreDone = useRef(false);
   const [snapshot, setSnapshot] = useState<Snapshot>(
       () =>
         (author.cache.get(key) as Snapshot | undefined) ?? {
           items: [],
           cursor: null,
-          filters: emptyFilters,
-          search: "",
+          filters: authReturnView?.filters ?? emptyFilters,
+          search: authReturnView?.search ?? "",
         },
     ),
     [draftFilters, setDraftFilters] = useState(snapshot.filters),
@@ -62,6 +76,13 @@ const ScopedDiscoveryFeed = ({
     sentinel = useRef<HTMLDivElement>(null),
     failed = useRef<{ reset: boolean } | null>(null);
   state.current = snapshot;
+  returnCapture.current = {
+    filters: snapshot.filters,
+    search: snapshot.search,
+    count: snapshot.items.length,
+    top: returnCapture.current.top,
+    anchor: shell.activeContent?.id ?? null,
+  };
   useEffect(() => {
     author.cache.set(key, snapshot);
   }, [key, snapshot, author.cache]);
@@ -109,8 +130,8 @@ const ScopedDiscoveryFeed = ({
       (author.cache.get(key) as Snapshot | undefined) ?? {
         items: [],
         cursor: null,
-        filters: emptyFilters,
-        search: "",
+        filters: authReturnView?.filters ?? emptyFilters,
+        search: authReturnView?.search ?? "",
       },
     );
     return () => {
@@ -128,6 +149,34 @@ const ScopedDiscoveryFeed = ({
     )
       void load();
   }, [active, author.checking, key, error]);
+  useEffect(() => {
+    if (
+      !authReturnView ||
+      restoreDone.current ||
+      author.checking ||
+      loading.current ||
+      busy ||
+      error ||
+      !snapshot.cursor
+    )
+      return;
+    if (
+      snapshot.items.length < authReturnView.count &&
+      snapshot.cursor.hasMore
+    ) {
+      void load();
+      return;
+    }
+    if (!active) return;
+    restoreDone.current = true;
+    shell.restoreActiveScrollTop(authReturnView.top);
+    if (authReturnView.anchor && !shell.activeContent) {
+      const card = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-content-id]"),
+      ).find((node) => node.dataset.contentId === authReturnView.anchor);
+      card?.scrollIntoView?.({ block: "nearest" });
+    }
+  }, [active, authReturnView, author.checking, busy, error, snapshot]);
   const readFilters = () =>
     authorClient
       .filters()

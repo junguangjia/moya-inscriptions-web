@@ -32,6 +32,11 @@ import {
   catalogSearchPageSchema,
   authAccountSecuritySchema,
   authCapabilitiesSchema,
+  authChallengeRequestSchema,
+  authRegistrationRequestSchema,
+  authPasswordLoginRequestSchema,
+  authPasswordResetRequestSchema,
+  authPasswordResetResultSchema,
   healthResponseSchema,
   mediaIdSchema,
   noQueryTransportSchema,
@@ -388,6 +393,11 @@ import {
 /** Work publishing public DTOs, for the Development-only OpenAPI components. */
 export const authJsonSchemas = {
   AuthCapabilities: toJsonSchema(authCapabilitiesSchema),
+  AuthChallengeRequest: toJsonSchema(authChallengeRequestSchema),
+  AuthRegistrationRequest: toJsonSchema(authRegistrationRequestSchema),
+  AuthPasswordLoginRequest: toJsonSchema(authPasswordLoginRequestSchema),
+  AuthPasswordResetRequest: toJsonSchema(authPasswordResetRequestSchema),
+  AuthPasswordResetResult: toJsonSchema(authPasswordResetResultSchema),
   AuthAccountSecurity: toJsonSchema(authAccountSecuritySchema),
 };
 

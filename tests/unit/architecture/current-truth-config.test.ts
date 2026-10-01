@@ -321,8 +321,8 @@ describe("current repository truth and local configuration", () => {
       readJson(path.join(repositoryRoot, "apps/admin/tsconfig.json")),
     ]);
 
-    expect(webLayout).toContain('title: "由艺（Yoyi）"');
-    expect(adminConfig).toContain('titleSuffix: "— 由艺（Yoyi）管理端"');
+    expect(webLayout).toContain('title: "由于艺"');
+    expect(adminConfig).toContain('titleSuffix: "— 由于艺管理端"');
     expect(adminTsconfig.compilerOptions).toMatchObject({
       paths: { "@payload-config": ["./payload.config.ts"] },
     });

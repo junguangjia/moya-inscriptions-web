@@ -5,6 +5,7 @@ import {
   fetchServerCatalogPage,
   parsePublicApiBaseUrl,
   relayServerAuthorCommunity,
+  relayServerCommunityAuth,
   relayServerLocalEditorialMedia,
 } from "./server.js";
 
@@ -560,5 +561,79 @@ describe("Article authoring relay preserves existing Work boundaries", () => {
       ).status,
     ).toBe(413);
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe("Password reset and stale authentication cookie recovery", () => {
+  // Reviewed synthetic fixtures only; no real Session or password is used.
+  const request = (suffix: string) =>
+    new Request(`http://127.0.0.1:3410/api/community/auth/${suffix}`, {
+      method: "POST",
+      headers: {
+        host: "127.0.0.1:3410",
+        origin: "http://127.0.0.1:3410",
+        cookie: `yoyi-session=${"S".repeat(43)}`,
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+  it("clears the signed browser cookie after successful reset without creating a Session", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ reset: true }));
+    vi.stubGlobal("fetch", fetcher);
+    const result = await relayServerCommunityAuth(request("passwords/reset"));
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ reset: true });
+    expect(result.headers.get("set-cookie")).toMatch(
+      /^yoyi-session=; .*Max-Age=0/u,
+    );
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+  it("clears a refused stale cookie once without replaying the challenge POST", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: { code: "SESSION_INVALID", message: "AUTH_UNAUTHENTICATED" },
+          },
+          { status: 401 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", fetcher);
+    const result = await relayServerCommunityAuth(request("challenges"));
+    expect(result.status).toBe(401);
+    expect(result.headers.get("set-cookie")).toMatch(
+      /^yoyi-session=; .*Max-Age=0/u,
+    );
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(
+      fetcher.mock.calls.filter((call) => call[1]?.method === "POST"),
+    ).toHaveLength(1);
+    expect(new URL(String(fetcher.mock.calls[1]?.[0])).pathname).toBe("/v1/me");
+  });
+  it("keeps the cookie when the identity check is unavailable", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: { code: "SESSION_INVALID", message: "AUTH_UNAUTHENTICATED" },
+          },
+          { status: 401 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetcher);
+    const result = await relayServerCommunityAuth(request("challenges"));
+    expect(result.headers.get("set-cookie")).toBeNull();
+    expect(
+      fetcher.mock.calls.filter((call) => call[1]?.method === "POST"),
+    ).toHaveLength(1);
   });
 });

@@ -100,7 +100,9 @@ export const ArticleAuthoringWorkspace = (
     uploadResource?.sessionKey === props.sessionKey
       ? uploadResource.session
       : null;
-  const epoch = authorClient.accountEpoch();
+  // Freeze the loaded editor session. Account-fenced ports invalidate writes
+  // without replacing local input after a transient identity-check failure.
+  const [epoch] = useState(() => authorClient.accountEpoch());
   const [resolverResource, setResolverResource] = useState<{
     readonly sessionKey: string;
     readonly epoch: number;

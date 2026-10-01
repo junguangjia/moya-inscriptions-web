@@ -1,5 +1,9 @@
 "use client";
 
+import { useCallback, useRef } from "react";
+import { useOptionalAuthors } from "../authors/author-context";
+import { useAuthReturn } from "../auth/auth-return";
+
 import { CatalogBrowseScreen } from "../home/catalog-screen";
 import { AllCalligraphyFeed } from "../calligraphy/calligraphy-category-screen";
 import { HomeScreen } from "../home/home-screen";
@@ -183,6 +187,7 @@ export const T02pProductPreview = ({
             backButtonRef={backButtonRef}
             key={`${detailScopeKey}:${target.type}:${target.id}:${navigationRevision}`}
             catalogId={target.id}
+            target={target}
             commentSection={
               renderDiscussion?.(target) ??
               (target.type === "catalog"
@@ -229,7 +234,29 @@ const PreviewTopicOverlay = ({
   readonly topicsState: HomeSurfaceData["topics"];
   readonly renderDiscussion?: (target: DiscussionTarget) => ReactNode;
 }) => {
-  const { feedLayout, platform } = useProductShell();
+  const { feedLayout, platform, recoverUnavailableAuthContent } =
+    useProductShell();
+  const author = useOptionalAuthors();
+  const authReturn = useAuthReturn();
+  const identityReady =
+    author === null || (!author.checking && !author.sessionError);
+  // A 404 read before identity confirmation is not reused by the confirmed
+  // source. Re-key that reader once on confirmation, preserving public
+  // snapshots until it has mounted. Ordinary/focus checks keep the reader.
+  const wasAuthSource = useRef(authReturn?.isRestoring() ?? false);
+  const confirmedReader = useRef<string | null>(null);
+  if (
+    wasAuthSource.current &&
+    confirmedReader.current === null &&
+    identityReady
+  )
+    confirmedReader.current = author?.viewer?.id ?? "guest";
+  const readerKey = wasAuthSource.current
+    ? `${topicId}:auth:${confirmedReader.current ?? "checking"}`
+    : topicId;
+  const recover = useCallback(() => {
+    recoverUnavailableAuthContent();
+  }, [recoverUnavailableAuthContent]);
   const preview = useDiscussionPreview();
   if (preview && previewFeed(topicId))
     return (
@@ -243,10 +270,11 @@ const PreviewTopicOverlay = ({
   if (isThreadId(topicId))
     return (
       <ThreadDetail
-        key={topicId}
+        key={readerKey}
         id={topicId}
         backButtonRef={backButtonRef}
         onClose={onClose}
+        {...(identityReady ? { onUnavailable: recover } : {})}
         {...(renderDiscussion
           ? {
               renderComments: (workId: string) =>
@@ -258,10 +286,11 @@ const PreviewTopicOverlay = ({
   if (isArticleId(topicId) || isCollectionId(topicId))
     return (
       <EditorialDetail
-        key={topicId}
+        key={readerKey}
         id={topicId}
         backButtonRef={backButtonRef}
         onClose={onClose}
+        {...(identityReady ? { onUnavailable: recover } : {})}
         {...(renderDiscussion
           ? {
               renderComments: (articleId: string) =>
@@ -281,6 +310,10 @@ const PreviewTopicOverlay = ({
       onClose={onClose}
       platform={platform}
       topic={findTopic(topics, topicId)}
+      {...(identityReady &&
+      (topicsState.state === "populated" || topicsState.state === "empty")
+        ? { onUnavailable: recover }
+        : {})}
     />
   );
 };

@@ -1,5 +1,8 @@
 import "server-only";
-import { ARTICLE_DOCUMENT_LIMITS } from "@moya/contracts/schemas";
+import {
+  ARTICLE_DOCUMENT_LIMITS,
+  authPasswordResetResultSchema,
+} from "@moya/contracts/schemas";
 import { localCatalogFileUrl } from "../../features/detail/local-catalog-media";
 import {
   isSecureRequest,
@@ -1067,6 +1070,15 @@ export const relayServerCommunityAuth = async (
     const payload: unknown = await upstream.json();
     const secure = isSecureRequest(request);
     let setCookie: string | undefined;
+    if (
+      (suffix === "passwords/reset" &&
+        upstream.status === 200 &&
+        authPasswordResetResultSchema.safeParse(payload).success) ||
+      (upstream.status === 401 &&
+        token !== undefined &&
+        (await communitySessionRefused(base, token)))
+    )
+      setCookie = serializeClearedCommunitySessionCookie(secure);
     if (
       typeof payload === "object" &&
       payload !== null &&

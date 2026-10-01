@@ -10847,6 +10847,43 @@
         "required": ["profile", "email", "phone", "developmentOnly"],
         "type": "object"
       },
+      "AuthChallengeRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "enum": ["email", "phone"],
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "identifier": {
+            "maxLength": 254,
+            "minLength": 1,
+            "type": "string"
+          },
+          "purpose": {
+            "enum": [
+              "sign_in",
+              "register",
+              "link",
+              "replace",
+              "reauthenticate",
+              "password_reset"
+            ],
+            "type": "string"
+          },
+          "reauthToken": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          }
+        },
+        "required": ["channel", "purpose", "idempotencyKey"],
+        "type": "object"
+      },
       "AuthorMedia": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -11073,6 +11110,9 @@
             "required": ["following", "followers", "favorites", "likes"],
             "type": "object"
           },
+          "studioName": {
+            "type": "string"
+          },
           "totals": {
             "additionalProperties": false,
             "properties": {
@@ -11151,6 +11191,107 @@
           "privacy",
           "totals",
           "nextAvatarChangeAt"
+        ],
+        "type": "object"
+      },
+      "AuthPasswordLoginRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "enum": ["email", "phone"],
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "identifier": {
+            "maxLength": 254,
+            "minLength": 1,
+            "type": "string"
+          },
+          "password": {
+            "description": "Password input; missing, unset and invalid credentials have the same sign-in result.",
+            "maxLength": 80,
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": ["channel", "identifier", "password", "idempotencyKey"],
+        "type": "object"
+      },
+      "AuthPasswordResetRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "handoffToken": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "password": {
+            "description": "6–20 Unicode code points, including an ASCII uppercase letter and digit; do not trim or normalize; no NUL or lone surrogate. Never stored as plaintext.",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": ["handoffToken", "password", "idempotencyKey"],
+        "type": "object"
+      },
+      "AuthPasswordResetResult": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "reset": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["reset"],
+        "type": "object"
+      },
+      "AuthRegistrationRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "agreement": {
+            "const": true,
+            "type": "boolean"
+          },
+          "displayName": {
+            "maxLength": 40,
+            "minLength": 1,
+            "type": "string"
+          },
+          "handoffToken": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "password": {
+            "description": "6–20 Unicode code points, including an ASCII uppercase letter and digit; do not trim or normalize; no NUL or lone surrogate. Never stored as plaintext.",
+            "type": "string",
+            "writeOnly": true
+          },
+          "studioName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handoffToken",
+          "displayName",
+          "agreement",
+          "idempotencyKey"
         ],
         "type": "object"
       },
@@ -17799,6 +17940,9 @@
           "requestId": {
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "studioName": {
             "type": "string"
           }
         },
@@ -30219,6 +30363,157 @@
           }
         },
         "summary": "Authentication channel capabilities"
+      }
+    },
+    "/v1/community/auth/passwords/login": {
+      "post": {
+        "description": "Existing same-origin relay receives a server-only Session grant and sets HttpOnly Cookie. Production mounting is unchanged. Missing credentials and wrong passwords have the same response.",
+        "operationId": "passwordSignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthPasswordLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing server-only Session grant; never expose its raw token to browser JavaScript."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Generic invalid credentials. ApiErrorCode UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Attempt limit or state conflict. ApiErrorCode CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input or purpose-bound proof. ApiErrorCode INVALID_INPUT."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error. ApiErrorCode INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+          }
+        },
+        "summary": "Development password sign-in for an existing public account"
+      }
+    },
+    "/v1/community/auth/passwords/reset": {
+      "post": {
+        "description": "Revoke all Sessions, close prior auth receipts and invalidate proofs atomically. No Session is created. Exact manual retries return the prior result.",
+        "operationId": "resetPublicAccountPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthPasswordResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthPasswordResetResult"
+                }
+              }
+            },
+            "description": "Password reset. Continue with explicit sign-in."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Generic invalid credentials. ApiErrorCode UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Attempt limit or state conflict. ApiErrorCode CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input or purpose-bound proof. ApiErrorCode INVALID_INPUT."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error. ApiErrorCode INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+          }
+        },
+        "summary": "Consume a password_reset proof and replace an existing account's password"
       }
     },
     "/v1/community/authors/{authorId}": {

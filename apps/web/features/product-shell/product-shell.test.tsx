@@ -4,7 +4,13 @@ import { act, useEffect, useLayoutEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => window.location.pathname,
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }),
+}));
+
 import { ProductShell, useProductShell } from "./product-shell";
+import { AuthReturnProvider, useAuthReturn } from "../auth/auth-return";
 import {
   editorHistoryState,
   profileHistoryState,
@@ -39,6 +45,17 @@ const createMediaQueryList = (matches = false): MediaQueryList =>
 
 const mountedRoots: ReturnType<typeof createRoot>[] = [];
 let observedProductShell: ProductShellContextValue | null = null;
+let observedAuthReturn: ReturnType<typeof useAuthReturn> = null;
+const nativeReplace = window.history.replaceState;
+const AuthReturnObserver = () => {
+  observedAuthReturn = useAuthReturn();
+  return null;
+};
+const authReturn = () => {
+  if (observedAuthReturn === null)
+    throw new Error("Missing authentication return context");
+  return observedAuthReturn;
+};
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -517,6 +534,7 @@ const withHistoryMarkers = (state: unknown) => ({
 
 describe("ProductShell", () => {
   beforeEach(() => {
+    observedAuthReturn = null;
     vi.useFakeTimers();
     window.localStorage.clear();
     window.history.replaceState(null, "", "/dev/t02p");
@@ -565,6 +583,181 @@ describe("ProductShell", () => {
     document.body.style.overflow = "";
     document.documentElement.removeAttribute("data-effective-theme");
     observedProductShell = null;
+  });
+
+  const renderAuthRecovery = async (kind: "detail" | "viewer" | "topic") => {
+    const destination: "discussion" | "user" | "home" =
+      kind === "topic" ? "discussion" : kind === "detail" ? "user" : "home";
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    mountedRoots.push(root);
+    window.history.replaceState(
+      primaryHistoryState(destination),
+      "",
+      "/dev/t02p?feed=favorites",
+    );
+    const render = async (auth: boolean) =>
+      act(async () =>
+        root.render(
+          <AuthReturnProvider>
+            <AuthReturnObserver />
+            {auth ? (
+              <p>Authentication route</p>
+            ) : (
+              <ProductShell
+                user={<p>user source</p>}
+                home={<p>home source</p>}
+                discussion={<p>discussion source</p>}
+                initialPlatform="phone"
+                primaryUtility={
+                  <>
+                    <ProductShellObserver />
+                    <button data-recovery-opener="" type="button">
+                      Source opener
+                    </button>
+                  </>
+                }
+                renderDetailOverlay={({ target }) => (
+                  <section data-recovery-detail="">{target.id}</section>
+                )}
+                renderTopicOverlay={({ topicId }) => (
+                  <section data-recovery-topic="">{topicId}</section>
+                )}
+              />
+            )}
+          </AuthReturnProvider>,
+        ),
+      );
+    await render(false);
+    const opener = container.querySelector<HTMLButtonElement>(
+      "[data-recovery-opener]",
+    )!;
+    act(() => {
+      if (kind === "topic")
+        observedProductShell?.openTopic("synthetic-topic", opener, 173);
+      else observedProductShell?.openCatalog("synthetic-unavailable", opener);
+    });
+    if (kind === "viewer")
+      act(() => observedProductShell?.openViewer("synthetic-media"));
+    window.history.replaceState(
+      { ...window.history.state, sourceScrollTop: 173 },
+      "",
+    );
+    const sourcePath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    authReturn().capture(sourcePath, null);
+    const sourceEntry = window.history.state;
+    window.history.pushState(
+      { __NA: true },
+      "",
+      `/login?return=${encodeURIComponent(sourcePath)}`,
+    );
+    expect(authReturn().hasSource()).toBe(true);
+    await render(true);
+    nativeReplace.call(window.history, sourceEntry, "", sourcePath);
+    await act(async () =>
+      window.dispatchEvent(
+        new PopStateEvent("popstate", { state: sourceEntry }),
+      ),
+    );
+    await render(false);
+    expect(authReturn().isRestoring()).toBe(true);
+    const sourcePanel = scrollable(
+      container.querySelector<HTMLElement>(
+        `[data-primary-destination="${destination}"]`,
+      )!,
+    );
+    return { container, destination, sourcePanel };
+  };
+
+  it.each(["detail", "viewer", "topic"] as const)(
+    "recovers only the unavailable %s authentication source with the original list scroll",
+    async (kind) => {
+      const { container, destination, sourcePanel } =
+        await renderAuthRecovery(kind);
+      const back = vi.spyOn(window.history, "back");
+      const push = vi.spyOn(window.history, "pushState");
+      let recovered: boolean | undefined;
+      act(() => {
+        recovered = observedProductShell?.recoverUnavailableAuthContent();
+      });
+      await act(async () => vi.runAllTimers());
+      expect(recovered).toBe(true);
+      expect(observedProductShell?.activeContent).toBeNull();
+      expect(observedProductShell?.activeViewerMediaId).toBeNull();
+      expect(observedProductShell?.activeTopicId).toBeNull();
+      expect(observedProductShell?.activeDestination).toBe(destination);
+      expect(parseProductHistoryState(window.history.state)).toEqual(
+        primaryHistoryState(destination, 173),
+      );
+      expect(sourcePanel.scrollTop).toBe(173);
+      expect(
+        `${window.location.pathname}${window.location.search}${window.location.hash}`,
+      ).toBe("/dev/t02p?feed=favorites");
+      expect(
+        container.querySelector('[data-auth-content-recovery][role="status"]')
+          ?.textContent,
+      ).toContain("已返回原列表");
+      expect(authReturn().isRestoring()).toBe(false);
+      expect(back).not.toHaveBeenCalled();
+      expect(push).not.toHaveBeenCalled();
+      back.mockRestore();
+      push.mockRestore();
+    },
+  );
+
+  it("ignores an unavailable result for a different content identity during restoration", async () => {
+    const { container } = await renderAuthRecovery("detail");
+    const replace = vi.spyOn(window.history, "replaceState");
+    let recovered: boolean | undefined;
+    act(() => {
+      recovered = observedProductShell?.recoverUnavailableAuthContent({
+        type: "catalog",
+        id: "synthetic-other",
+      });
+    });
+    expect(recovered).toBe(false);
+    expect(observedProductShell?.activeCatalogId).toBe("synthetic-unavailable");
+    expect(parseProductHistoryState(window.history.state)?.kind).toBe("detail");
+    expect(container.querySelector("[data-auth-content-recovery]")).toBeNull();
+    expect(authReturn().isRestoring()).toBe(true);
+    expect(replace).not.toHaveBeenCalled();
+    replace.mockRestore();
+  });
+
+  it("keeps an ordinary content entry unchanged without an authentication journey", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    mountedRoots.push(root);
+    act(() =>
+      root.render(
+        <ProductShell
+          user={<p>user</p>}
+          home={<CatalogOpener />}
+          discussion={<p>discussion</p>}
+          initialPlatform="phone"
+          primaryUtility={<ProductShellObserver />}
+          renderDetailOverlay={() => <p>Ordinary missing content</p>}
+        />,
+      ),
+    );
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>("[data-open-catalog]")
+        ?.click(),
+    );
+    const entry = window.history.state;
+    const path = window.location.href;
+    let recovered: boolean | undefined;
+    act(() => {
+      recovered = observedProductShell?.recoverUnavailableAuthContent();
+    });
+    expect(recovered).toBe(false);
+    expect(window.history.state).toEqual(entry);
+    expect(window.location.href).toBe(path);
+    expect(observedProductShell?.activeCatalogId).toBe("catalog-one");
+    expect(container.querySelector("[data-auth-content-recovery]")).toBeNull();
   });
 
   it("keeps all destinations mounted and commits a tap through one history replacement", async () => {
@@ -1965,6 +2158,62 @@ describe("ProductShell", () => {
       else expect(editorDialog(app.container)).toBeNull();
     },
   );
+  it("synchronizes Article URLs through the Next-style native history wrapper while retaining router state", async () => {
+    const nativePush = History.prototype.pushState.bind(window.history);
+    const nativeReplace = History.prototype.replaceState.bind(window.history);
+    const routerState = {
+      __NA: true,
+      __PRIVATE_NEXTJS_INTERNALS_TREE: ["synthetic-router"],
+    };
+    nativeReplace({ ...window.history.state, ...routerState }, "");
+    let canonical = `${window.location.pathname}${window.location.hash}`;
+    const wrap =
+      (native: typeof window.history.pushState) =>
+      (
+        data: Record<string, unknown>,
+        title: string,
+        url?: string | URL | null,
+      ) => {
+        if (!data?.__NA && !data?._N) {
+          if (url) canonical = String(url);
+          data = {
+            ...data,
+            __NA: window.history.state?.__NA,
+            __PRIVATE_NEXTJS_INTERNALS_TREE:
+              window.history.state?.__PRIVATE_NEXTJS_INTERNALS_TREE,
+          };
+        }
+        native(data, title, url);
+      };
+    const pushMock = vi
+      .spyOn(window.history, "pushState")
+      .mockImplementation(wrap(nativePush));
+    const replaceMock = vi
+      .spyOn(window.history, "replaceState")
+      .mockImplementation(wrap(nativeReplace));
+    const app = renderEditorShell(true, false, true);
+    await act(async () => vi.runAllTimers());
+    act(() =>
+      observedProductShell!.openEditor(
+        { type: "article-list" },
+        buttonByLabel(app.container, "发布作品"),
+      ),
+    );
+    expect(canonical).toContain("#article-editor");
+    expect(window.history.state.__PRIVATE_NEXTJS_INTERNALS_TREE).toEqual(
+      routerState.__PRIVATE_NEXTJS_INTERNALS_TREE,
+    );
+    const target = {
+      type: "article-draft",
+      id: "article-" + "d".repeat(32),
+    } as const;
+    act(() => app.editor().controls.replaceTarget(target));
+    expect(app.editor().target).toEqual(target);
+    nativeReplace(window.history.state, "", canonical);
+    expect(window.location.hash).toBe("#article-editor");
+    pushMock.mockRestore();
+    replaceMock.mockRestore();
+  });
   it("keeps a private Article draft mounted when its registered guard rejects history Back", async () => {
     const app = renderEditorShell(true, false, true);
     await act(async () => vi.runAllTimers());

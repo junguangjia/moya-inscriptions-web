@@ -15,6 +15,9 @@ import {
 const state = vi.hoisted(() => ({
   account: `user-${"1".repeat(32)}`,
   epoch: 1,
+  clientAccount: null as string | null | undefined,
+  checking: false,
+  refresh: vi.fn(async () => undefined),
   workspaceTitle: "",
 }));
 vi.mock("next/dynamic", () => ({
@@ -26,7 +29,8 @@ vi.mock("next/dynamic", () => ({
 vi.mock("../../authors/author-context", () => ({
   useAuthors: () => ({
     viewer: { id: state.account },
-    checking: false,
+    checking: state.checking,
+    refresh: state.refresh,
     signInHref: "/synthetic-sign-in",
   }),
 }));
@@ -36,7 +40,8 @@ vi.mock("../../product-shell/product-shell", () => ({
 vi.mock("../../../lib/public-api/author-community-client", () => ({
   AuthorRequestError: class extends Error {},
   authorClient: {
-    account: () => state.account,
+    account: () =>
+      state.clientAccount === undefined ? state.account : state.clientAccount,
     accountEpoch: () => state.epoch,
   },
 }));
@@ -119,6 +124,8 @@ beforeEach(() => {
   ).IS_REACT_ACT_ENVIRONMENT = true;
   state.account = `user-${"1".repeat(32)}`;
   state.epoch = 1;
+  state.clientAccount = undefined;
+  state.checking = false;
   state.workspaceTitle = "";
   vi.clearAllMocks();
   client.list.mockReset();
@@ -184,5 +191,39 @@ describe("Owned Article host transport lifecycle", () => {
     await render({ type: "article-draft", id: draft().id });
     expect(node.querySelector("[data-workspace]")).toBeNull();
     expect(node.textContent).toContain("不属于当前账号");
+  });
+  it("settles an unconfirmed retained-viewer read and retries after same-owner confirmation", async () => {
+    state.clientAccount = null;
+    await render({ type: "article-draft", id: draft().id });
+    expect(client.read).not.toHaveBeenCalled();
+    expect(node.textContent).not.toContain("正在读取专题草稿");
+    expect(node.textContent).toContain("重新确认账号");
+    client.read.mockResolvedValueOnce(draft());
+    state.clientAccount = state.account;
+    state.epoch++;
+    await render({ type: "article-draft", id: draft().id });
+    expect(node.querySelector("[data-workspace]")).not.toBeNull();
+  });
+  it("preserves the mounted draft through same-owner verification failure without rereading or rebinding its epoch", async () => {
+    client.read.mockResolvedValueOnce(draft());
+    await render({ type: "article-draft", id: draft().id });
+    const loaded = node.querySelector("[data-workspace]");
+    state.clientAccount = null;
+    state.epoch++;
+    await render({ type: "article-draft", id: draft().id });
+    expect(node.querySelector("[data-workspace]")).toBe(loaded);
+    expect(client.read).toHaveBeenCalledOnce();
+    expect(node.textContent).toContain("当前输入仍保留");
+    state.clientAccount = state.account;
+    state.epoch++;
+    await render({ type: "article-draft", id: draft().id });
+    expect(node.querySelector("[data-workspace]")).toBe(loaded);
+    expect(client.read).toHaveBeenCalledOnce();
+    state.account = `user-${"3".repeat(32)}`;
+    state.clientAccount = state.account;
+    state.epoch++;
+    client.read.mockRejectedValueOnce(new Error("not owned"));
+    await render({ type: "article-draft", id: draft().id });
+    expect(node.querySelector("[data-workspace]")).toBeNull();
   });
 });

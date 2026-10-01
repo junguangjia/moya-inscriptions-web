@@ -76,7 +76,7 @@ export const ArticleAuthoringHost = ({
         </>
       ) : (
         <OwnedArticles
-          key={`${author.viewer.id}:${authorClient.accountEpoch()}`}
+          key={author.viewer.id}
           ownerId={author.viewer.id}
           target={target}
           controls={controls}
@@ -95,6 +95,9 @@ const OwnedArticles = ({
   readonly controls: ProductShellEditorOverlayControls;
 }) => {
   const shell = useProductShell();
+  const author = useAuthors();
+  const accountEpoch = authorClient.accountEpoch();
+  const accountReady = authorClient.account() === ownerId;
   const [draft, setDraft] = useState<ArticleDraft | null>(null);
   const [items, setItems] = useState<readonly ArticleDraftSummary[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -113,9 +116,10 @@ const OwnedArticles = ({
     mediaRead = useRef(0);
   const creation = useRef<CreateArticleDraftCommand | null>(null);
   const writeBusy = useRef(false);
+  const liveRead = (abort: AbortController) =>
+    !abort.signal.aborted && lifetime.current === abort;
   const current = (abort: AbortController) =>
-    !abort.signal.aborted &&
-    lifetime.current === abort &&
+    liveRead(abort) &&
     authorClient.account() === ownerId &&
     authorClient.accountEpoch() === epoch.current;
   const list = useCallback(
@@ -143,21 +147,30 @@ const OwnedArticles = ({
         );
         setCursor(result.nextCursor);
       } catch {
-        if (current(abort) && read === listRead.current)
+        if (liveRead(abort) && read === listRead.current)
           setNotice("暂时无法读取专题草稿，请重试。");
       } finally {
-        if (current(abort) && read === listRead.current) setBusy(false);
+        if (liveRead(abort) && read === listRead.current) setBusy(false);
       }
     },
     [ownerId],
   );
+  // Loaded editor input survives same-owner identity failures. Its original
+  // epoch remains fenced; only unopened reads restart after confirmation.
+  const readEpoch = draft === null ? accountEpoch : epoch.current;
   useEffect(() => {
     const abort = new AbortController();
     lifetime.current = abort;
+    epoch.current = readEpoch;
     setDraft(null);
     setItems([]);
     setCursor(null);
     setNotice(null);
+    if (!accountReady) {
+      setBusy(false);
+      setNotice("账号暂时无法确认，请重新确认后读取专题草稿。");
+      return () => abort.abort();
+    }
     if (target.type === "article-list") void list();
     else {
       setBusy(true);
@@ -170,10 +183,11 @@ const OwnedArticles = ({
           setDraft(value);
         })
         .catch(() => {
-          if (current(abort)) setNotice("这份专题草稿不可用或不属于当前账号。");
+          if (liveRead(abort))
+            setNotice("这份专题草稿不可用或不属于当前账号。");
         })
         .finally(() => {
-          if (current(abort)) setBusy(false);
+          if (liveRead(abort)) setBusy(false);
         });
     }
     return () => {
@@ -183,6 +197,7 @@ const OwnedArticles = ({
     };
   }, [
     ownerId,
+    readEpoch,
     target.type,
     target.type === "article-draft" ? target.id : "",
     list,
@@ -221,7 +236,7 @@ const OwnedArticles = ({
       );
     } finally {
       writeBusy.current = false;
-      if (current(abort)) setBusy(false);
+      if (liveRead(abort)) setBusy(false);
     }
   };
   const readMedia = useCallback(
@@ -256,41 +271,57 @@ const OwnedArticles = ({
     },
     [ownerId],
   );
+  const identityNotice =
+    !accountReady || accountEpoch !== epoch.current ? (
+      <p role="alert">
+        账号验证发生变化，当前输入仍保留。请重新确认账号；已打开的编辑器需要在原账号中重新打开。
+        <button
+          type="button"
+          disabled={author.checking}
+          onClick={() => void author.refresh()}
+        >
+          重新确认账号
+        </button>
+      </p>
+    ) : null;
   if (draft !== null)
     return (
-      <Workspace
-        initial={draft}
-        sessionKey={`${ownerId}:${epoch.current}:${draft.id}:${reload}`}
-        layout={shell.platform === "phone" ? "phone" : "desktop"}
-        mediaItems={mediaItems}
-        mediaLoading={mediaBusy}
-        mediaHasMore={mediaCursor !== null}
-        reloadMedia={() => readMedia()}
-        loadMoreMedia={() =>
-          mediaCursor === null ? Promise.resolve() : readMedia(mediaCursor)
-        }
-        covered={false}
-        backButtonRef={controls.backButtonRef}
-        registerLeaveGuard={controls.registerLeaveGuard}
-        onBack={controls.close}
-        onPublished={(id) => {
-          setPublished(id);
-          controls.replaceTarget({ type: "article-list" });
-        }}
-        onReloadDraft={(remote) => {
-          if (remote.ownerId === ownerId) {
-            setDraft(remote);
-            setReload((value) => value + 1);
+      <>
+        {identityNotice}
+        <Workspace
+          initial={draft}
+          sessionKey={`${ownerId}:${epoch.current}:${draft.id}:${reload}`}
+          layout={shell.platform === "phone" ? "phone" : "desktop"}
+          mediaItems={mediaItems}
+          mediaLoading={mediaBusy}
+          mediaHasMore={mediaCursor !== null}
+          reloadMedia={() => readMedia()}
+          loadMoreMedia={() =>
+            mediaCursor === null ? Promise.resolve() : readMedia(mediaCursor)
           }
-        }}
-        onOpenCatalog={(id) =>
-          window.open(
-            `/?catalogId=${encodeURIComponent(id)}#detail`,
-            "_blank",
-            "noopener,noreferrer",
-          )
-        }
-      />
+          covered={false}
+          backButtonRef={controls.backButtonRef}
+          registerLeaveGuard={controls.registerLeaveGuard}
+          onBack={controls.close}
+          onPublished={(id) => {
+            setPublished(id);
+            controls.replaceTarget({ type: "article-list" });
+          }}
+          onReloadDraft={(remote) => {
+            if (remote.ownerId === ownerId) {
+              setDraft(remote);
+              setReload((value) => value + 1);
+            }
+          }}
+          onOpenCatalog={(id) =>
+            window.open(
+              `/?catalogId=${encodeURIComponent(id)}#detail`,
+              "_blank",
+              "noopener,noreferrer",
+            )
+          }
+        />
+      </>
     );
   return (
     <>
@@ -306,6 +337,7 @@ const OwnedArticles = ({
         <strong>专题文章与草稿</strong>
       </header>
       <div className={styles.list} aria-busy={busy}>
+        {identityNotice}
         {notice === null ? null : <p role="status">{notice}</p>}
         {published === null ? null : (
           <p role="status">

@@ -235,6 +235,16 @@ export const createArticleAutosave = (options: {
   };
   return {
     store,
+    checkIdentity: () => {
+      if (sameAccount() || closed) return;
+      cancelTimer();
+      abort.abort();
+      store.update((state) => ({
+        ...state,
+        status: "permission_lost",
+        message: "账号验证发生变化。输入仍保留，请在原账户中重新打开专题。",
+      }));
+    },
     changed: () => {
       requireAccount();
       if (firstDirtyAt === null) firstDirtyAt = now();

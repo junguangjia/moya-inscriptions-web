@@ -122,12 +122,15 @@ export function ThreadDetail({
   backButtonRef,
   onClose,
   onOpened,
+  onUnavailable,
   renderComments,
 }: {
   id: string;
   backButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   onOpened?: (id: string) => void;
+  /** Reports a canonical missing source; the composing shell owns recovery. */
+  onUnavailable?: () => void;
   /** The live discussion of a post's Work. */
   renderComments?: (workId: string) => ReactNode;
 }) {
@@ -154,6 +157,9 @@ export function ThreadDetail({
   const [revision, setRevision] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const thread = useThread(id);
+  useEffect(() => {
+    if (thread.state.state === "missing") onUnavailable?.();
+  }, [thread.state.state, onUnavailable]);
   const posts = useThreadPosts(id, revision);
   const marked = useRef<string | null>(null);
   useEffect(() => {

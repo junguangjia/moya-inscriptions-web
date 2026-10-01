@@ -251,6 +251,10 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       setBusy(null);
     }
   };
+  const identityEpoch = authorClient.accountEpoch();
+  useEffect(() => {
+    auto?.checkIdentity();
+  }, [auto, identityEpoch]);
   const openPreview = () =>
     void act("preview", async () => {
       const committed = await activeSave().flush();

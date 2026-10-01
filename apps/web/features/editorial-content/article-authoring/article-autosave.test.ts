@@ -302,4 +302,23 @@ describe("Article autosave serialized committed revisions", () => {
     expect(state.auto.store.get().status).toBe("failed");
     state.auto.dispose();
   });
+  it("cancels a dirty timer on identity failure and never silently rebinds after same-owner recovery", async () => {
+    vi.useFakeTimers();
+    const state = setup();
+    state.edit("保留未保存输入");
+    state.auto.checkIdentity();
+    expect(state.auto.store.get().status).toBe("pending");
+    state.account(null);
+    state.auto.checkIdentity();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(state.save).not.toHaveBeenCalled();
+    expect(state.auto.store.get().status).toBe("permission_lost");
+    expect(state.auto.isDirty()).toBe(true);
+    expect(state.capture().title).toBe("保留未保存输入");
+    state.account(initial.ownerId);
+    state.auto.checkIdentity();
+    expect(() => state.auto.flush()).toThrow("article_account_changed");
+    expect(state.save).not.toHaveBeenCalled();
+    state.auto.dispose();
+  });
 });

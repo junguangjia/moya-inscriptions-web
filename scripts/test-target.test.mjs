@@ -540,6 +540,6 @@ describe("preparation entry points require the marked target", () => {
         "./infra/test/disposable-test-target.sql:/docker-entrypoint-initdb.d/90-disposable-test-target.sql:ro",
       ),
     );
-    assert.ok(compose.includes("POSTGRES_DB: moya_test"));
+    assert.ok(compose.includes("POSTGRES_DB: ${MOYA_TEST_DB_NAME:-moya_test}"));
   });
 });

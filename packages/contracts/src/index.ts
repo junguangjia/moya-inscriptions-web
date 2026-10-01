@@ -136,6 +136,8 @@ export type {
   AuthAccountSecurity,
   AuthCapabilities,
   AuthChallengeAccepted,
+  AuthChallengeRequest,
+  AuthRegistrationRequest,
   AuthFactor,
 } from "./auth-schemas.ts";
 export type { MentionReference } from "./mention-references.js";
@@ -234,3 +236,8 @@ export type {
   ArticleApprovalReview,
   ArticleConsentReview,
 } from "./article-delegation.ts";
+export type {
+  AuthPasswordLoginRequest,
+  AuthPasswordResetRequest,
+  AuthPasswordResetResult,
+} from "./auth-schemas.js";

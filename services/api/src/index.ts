@@ -79,6 +79,8 @@ export type {
   StoredReceipt,
   StoredSession,
   StoredUser,
+  StoredPasswordCredential,
+  StoredPasswordResetReceipt,
   VerificationMode,
 } from "./modules/community/application/auth/auth-port.js";
 export type {
@@ -386,3 +388,14 @@ export {
   hashSessionToken,
   generateOpaqueId,
 } from "./modules/community/application/session-token.js";
+export {
+  hashPassword,
+  verifyPassword,
+  validPassword,
+  PasswordHashBusyError,
+} from "./modules/community/application/auth/password-crypto.js";
+
+export {
+  isValidAuthPassword,
+  normalizeStudioName,
+} from "./modules/community/domain/auth-profile-policy.js";

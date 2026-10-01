@@ -152,3 +152,13 @@ word selects the mode; an unknown or missing mode is a usage error, not a guess.
   PRs and tracked files.
 - Speak to the Owner in Chinese; write instructions, code and configuration in
   English.
+
+## Task preparation and context shortcuts
+
+Use the task-resource prepare/inspect and snapshot/verify commands documented in
+`docs/development/task-workflow.md`. Pass the inspected private resource
+manifest to `verify-task.mjs --resources`; use `--reuse-summary` only for its
+individually validated deterministic checks. An unchanged context snapshot is
+advisory within an already-read session. New sessions still read applicable
+authority, verify the writer checkpoint and keep the established worktree and
+Draft/Owner boundaries.

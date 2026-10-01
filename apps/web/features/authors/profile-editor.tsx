@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import type { AuthorProfile } from "@moya/contracts";
+import { normalizedStudioName } from "../auth/auth-api";
 import { AuthorDialog } from "./author-dialog";
 import { authorClient } from "./author-data";
 import { useAuthors } from "./author-context";
@@ -16,15 +17,18 @@ export const ProfileEditor = ({
 }) => {
   const [name, setName] = useState(profile.displayName),
     [bio, setBio] = useState(profile.bio),
+    [studioName, setStudioName] = useState(profile.studioName ?? ""),
     [saved, setSaved] = useState({
       name: profile.displayName,
       bio: profile.bio,
+      studioName: profile.studioName ?? "",
     }),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const author = useAuthors();
   const revision = useRef(0);
-  const dirty = name !== saved.name || bio !== saved.bio;
+  const dirty =
+    name !== saved.name || bio !== saved.bio || studioName !== saved.studioName;
   return (
     <AuthorDialog title="编辑资料" dirty={dirty} onClose={onClose}>
       <form
@@ -32,6 +36,10 @@ export const ProfileEditor = ({
         onSubmit={async (event) => {
           event.preventDefault();
           if (busy) return;
+          if (normalizedStudioName(studioName) === null) {
+            setError("斋号最多 6 个字。");
+            return;
+          }
           setBusy(true);
           setError("");
           const submitted = revision.current;
@@ -40,12 +48,18 @@ export const ProfileEditor = ({
               requestId: requestIdentity(),
               displayName: name.trim(),
               bio: bio.trim(),
+              studioName: studioName.trim(),
             });
             if (submitted === revision.current) {
               setName(name.trim());
               setBio(bio.trim());
+              setStudioName(studioName.trim());
             }
-            setSaved({ name: name.trim(), bio: bio.trim() });
+            setSaved({
+              name: name.trim(),
+              bio: bio.trim(),
+              studioName: studioName.trim(),
+            });
             await author.refresh();
             onSaved();
             author.notify("资料已保存");
@@ -65,6 +79,17 @@ export const ProfileEditor = ({
             onChange={(e) => {
               revision.current++;
               setName(e.target.value);
+            }}
+          />
+        </label>
+        <label>
+          斋号（选填，最多 6 字）
+          <input
+            value={studioName}
+            maxLength={12}
+            onChange={(event) => {
+              revision.current++;
+              setStudioName(event.target.value);
             }}
           />
         </label>

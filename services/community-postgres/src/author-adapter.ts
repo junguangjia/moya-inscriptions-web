@@ -34,6 +34,7 @@ interface UserRow extends QueryResultRow {
   id: string;
   handle: string;
   display_name: string;
+  studio_name: string;
   bio: string;
   following_privacy: "public" | "private";
   followers_privacy: "public" | "private";
@@ -271,6 +272,7 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
         id,
         handle: u.handle,
         displayName: u.display_name,
+        studioName: u.studio_name,
         bio: u.bio,
         avatar: u.avatar_media_id
           ? ((await this.media(db, [u.avatar_media_id]))[0] ?? null)
@@ -324,8 +326,8 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
       input,
       async (db) => {
         await db.query(
-          "UPDATE community.public_users SET display_name=$2,bio=$3,updated_at=CURRENT_TIMESTAMP WHERE id=$1",
-          [actor, input.displayName, input.bio],
+          "UPDATE community.public_users SET display_name=$2,bio=$3,studio_name=CASE WHEN $4::text IS NULL THEN studio_name ELSE $4 END,updated_at=CURRENT_TIMESTAMP WHERE id=$1",
+          [actor, input.displayName, input.bio, input.studioName ?? null],
         );
       },
     );

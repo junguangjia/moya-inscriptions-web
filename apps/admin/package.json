@@ -19,6 +19,7 @@
     "@moya/catalog-postgres": "workspace:*",
     "@moya/community-postgres": "workspace:*",
     "@moya/contracts": "workspace:*",
+    "@moya/ui": "workspace:*",
     "@payloadcms/db-postgres": "3.88.0",
     "@payloadcms/next": "3.88.0",
     "@payloadcms/plugin-cloud-storage": "3.88.0",
@@ -68,6 +69,7 @@
     "./agent-connections-consent": "./src/agent-connections/consent.ts",
     "./agent-connections-decide": "./src/agent-connections/decide.ts",
     "./agent-connections-resource": "./src/agent-connections/resource.ts",
-    "./editorial-content": "./src/editorial-content/index.ts"
+    "./editorial-content": "./src/editorial-content/index.ts",
+    "./branding": "./src/branding/Brand.tsx"
   }
 }

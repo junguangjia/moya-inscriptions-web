@@ -1,4 +1,6 @@
 "use client";
+
+import { useAuthReturnView } from "../auth/auth-return";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DiscussionIcon } from "../discussion-preview/discussion-icons";
 import { AnimatedTopTabs } from "../shell/animated-top-tabs";
@@ -69,8 +71,23 @@ export function DiscussionScreen({
     (initialTopicId ? "topics" : "news");
   const root = useRef<HTMLDivElement>(null);
   const pager = useRef<HorizontalPagerHandle<DiscussionFeed>>(null);
-  const [active, setActive] = useState<DiscussionFeed>(initialFeed);
-  const [progress, setProgress] = useState(feeds.indexOf(initialFeed));
+  const activeRef = useRef<DiscussionFeed>(initialFeed);
+  const authReturnView = useAuthReturnView("discussion", () => ({
+    feed: activeRef.current,
+    top: shell.readActiveScrollTop(),
+  }));
+  const [active, setActive] = useState<DiscussionFeed>(
+    authReturnView?.feed ?? initialFeed,
+  );
+  activeRef.current = active;
+  useEffect(() => {
+    if (!authReturnView) return;
+    pager.current?.scrollToKey(authReturnView.feed);
+    shell.restoreActiveScrollTop(authReturnView.top);
+  }, [authReturnView, shell.restoreActiveScrollTop]);
+  const [progress, setProgress] = useState(
+    feeds.indexOf(authReturnView?.feed ?? initialFeed),
+  );
   const openedInitial = useRef(false);
   // Guest read memory for Threads (session-local; not synchronized account data).
   const [localRead, setLocalRead] = useState<ReadonlySet<string>>(

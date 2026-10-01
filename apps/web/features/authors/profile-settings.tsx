@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import type { AuthorProfile } from "@moya/contracts";
+import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 import { AuthorDialog } from "./author-dialog";
 import type { AuthorDialogNavigationHandle } from "./author-dialog";
 import { authorClient } from "./author-data";
@@ -174,11 +175,13 @@ export const ProfileSettings = ({
   onClose,
   onSaved,
   onEdit,
+  onDeparture,
 }: {
   profile: AuthorProfile | null;
   onClose: () => void;
   onSaved: () => void;
   onEdit?: (() => void) | undefined;
+  onDeparture?: (() => void) | undefined;
 }) => {
   const articleAuthoring = useArticleAvailability();
   const author = useAuthors(),
@@ -189,9 +192,39 @@ export const ProfileSettings = ({
   const mutationRun = useRef(0);
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
-  const [page, setPage] = useState<Page>("root"),
-    [direction, setDirection] = useState<"forward" | "back" | "none">("none");
   const pageRef = useRef<Page>("root");
+  const authReturn = useAuthReturn();
+  const authReturnView = useAuthReturnView<{
+    page: Page;
+    positions: Partial<Record<Page, number>>;
+  }>(
+    "profile-settings-page",
+    (): {
+      page: Page;
+      positions: Partial<Record<Page, number>>;
+    } => {
+      // Navigation is public presentation state. Account data and factor proofs
+      // stay in their existing account-scoped components and are reloaded.
+      const current =
+        pageRef.current === "factor" ? "security" : pageRef.current;
+      return {
+        page: current,
+        positions: {
+          ...scrollPositions.current,
+          [current]: scroller.current?.scrollTop ?? 0,
+        },
+      };
+    },
+  );
+  const restoredPage: Page =
+    authReturnView && Object.hasOwn(titles, authReturnView.page)
+      ? authReturnView.page === "factor"
+        ? "security"
+        : authReturnView.page
+      : "root";
+  const [page, setPage] = useState<Page>(restoredPage),
+    [direction, setDirection] = useState<"forward" | "back" | "none">("none");
+  pageRef.current = page;
   const [privacy, setPrivacy] = useState(profile?.privacy ?? defaults),
     [saved, setSaved] = useState(profile?.privacy ?? defaults);
   const [blocks, setBlocks] = useState<Awaited<
@@ -218,7 +251,18 @@ export const ProfileSettings = ({
   const viewport = useRef<HTMLDivElement>(null),
     scroller = useRef<HTMLDivElement>(null),
     title = useRef<HTMLSpanElement>(null);
-  const scrollPositions = useRef<Partial<Record<Page, number>>>({});
+  const scrollPositions = useRef<Partial<Record<Page, number>>>(
+    Object.fromEntries(
+      Object.entries(authReturnView?.positions ?? {}).filter(
+        ([key, value]) =>
+          Object.hasOwn(titles, key) &&
+          typeof value === "number" &&
+          Number.isFinite(value) &&
+          value >= 0,
+      ),
+    ),
+  );
+  const endedScrollRestores = useRef(new Set<Page>());
   const openers = useRef<Partial<Record<Page, HTMLElement>>>({});
   const pendingFocus = useRef<HTMLElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -303,10 +347,6 @@ export const ProfileSettings = ({
     }
   };
   useEffect(() => {
-    if (page === "blocks" && owner && blocks === null && !blocksError)
-      void loadBlocks();
-  }, [page, owner]);
-  useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
@@ -328,8 +368,19 @@ export const ProfileSettings = ({
     setBusy(false);
     securityBusyRef.current = false;
     setSecurityBusy(false);
-    show("root", true);
+    // /me may re-key this component after the checking/guest first mount.
+    // Preserve the controlled source's public page; private state above resets.
+    if (!authReturn?.isRestoring()) show("root", true);
   }, [owner]);
+  useEffect(() => {
+    if (
+      pageRef.current === "blocks" &&
+      owner &&
+      blocks === null &&
+      !blocksError
+    )
+      void loadBlocks();
+  }, [page, owner]);
   useLayoutEffect(() => {
     const dialog = viewport.current?.closest("dialog");
     dialog?.setAttribute("data-settings-platform", shell.platform);
@@ -370,6 +421,78 @@ export const ProfileSettings = ({
           timing,
         ) ?? null;
   }, [page]);
+  useLayoutEffect(() => {
+    const target = authReturnView?.positions?.[page];
+    const element = scroller.current;
+    const body = content.current;
+    if (
+      !authReturn?.isRestoring() ||
+      !element ||
+      !body ||
+      typeof target !== "number" ||
+      !Number.isFinite(target) ||
+      target <= 0 ||
+      endedScrollRestores.current.has(page)
+    )
+      return;
+    // A checking/guest or loading page may initially clamp the saved position.
+    // Retry as this returned view grows; yield immediately to user interaction.
+    let stopped = false;
+    let resize: ResizeObserver | undefined;
+    const mutation = new MutationObserver(() => restore());
+    const stop = () => {
+      stopped = true;
+      resize?.disconnect();
+      mutation.disconnect();
+    };
+    const end = () => {
+      endedScrollRestores.current.add(page);
+      stop();
+    };
+    const restore = () => {
+      if (stopped) return;
+      if (pageRef.current !== page || !authReturn.isRestoring()) {
+        end();
+        return;
+      }
+      element.scrollTop = target;
+      if (Math.abs(element.scrollTop - target) < 1) end();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (
+        [
+          "ArrowUp",
+          "ArrowDown",
+          "PageUp",
+          "PageDown",
+          "Home",
+          "End",
+          " ",
+        ].includes(event.key)
+      )
+        end();
+    };
+    element.addEventListener("wheel", end, { passive: true });
+    element.addEventListener("touchstart", end, { passive: true });
+    element.addEventListener("pointerdown", end, { passive: true });
+    element.addEventListener("keydown", key);
+    mutation.observe(body, { childList: true, subtree: true });
+    if (typeof ResizeObserver !== "undefined") {
+      resize = new ResizeObserver(restore);
+      resize.observe(body);
+    }
+    restore();
+    return () => {
+      // Same-page cleanup may be StrictMode replay of an unfinished attempt.
+      // Only a real page departure ends it; a later mount owns its own Set.
+      if (pageRef.current !== page) endedScrollRestores.current.add(page);
+      stop();
+      element.removeEventListener("wheel", end);
+      element.removeEventListener("touchstart", end);
+      element.removeEventListener("pointerdown", end);
+      element.removeEventListener("keydown", key);
+    };
+  }, [page, authReturn, authReturnView]);
   useEffect(() => {
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -383,6 +506,10 @@ export const ProfileSettings = ({
   const finishClose = () => {
     if (closingRef.current) return;
     closingRef.current = true;
+    // Explicit close/edit ends this settings restoration. Effect cleanup may
+    // be checking/rekey or StrictMode and must keep late restoration available.
+    authReturn?.consumeView("profile-settings-page", authReturnView);
+    onDeparture?.();
     setClosing(true);
     const finish = () => {
       if (latest.current.signedOut) {

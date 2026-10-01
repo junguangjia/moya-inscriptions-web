@@ -5,6 +5,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
+const verificationModule = (await import(
+  pathToFileURL(root + "scripts/verify.mjs").href
+)) as {
+  verificationCommands: (
+    plan: { mode: string; selection: string },
+    env?: Record<string, string>,
+  ) => string[][];
+};
+
 const scopeModule = (await import(
   pathToFileURL(root + "scripts/ci-e2e-scope.mjs").href
 )) as {
@@ -124,9 +133,21 @@ describe("PostgreSQL preparation shares ordinary test build hashes", () => {
     expect(postgresPlan).toMatch(
       /pnpm\("db:migrate"\),\s*pnpm\("test:postgres"\)/,
     );
-    expect(verify).toContain(
-      'test: [...(process.env.TEST_DATABASE_URL ? postgres : []), pnpm("test")]',
+    const commands = verificationModule.verificationCommands(
+      { mode: "test", selection: "complete" },
+      { TEST_DATABASE_URL: "synthetic-selected" },
     );
+    expect(commands.slice(-2)).toEqual([
+      ["pnpm", "test:postgres"],
+      ["pnpm", "test"],
+    ]);
+    expect(commands[0]).toContain(".turbo/library-cache");
+    expect(
+      verificationModule.verificationCommands({
+        mode: "test",
+        selection: "complete",
+      }),
+    ).toEqual([["pnpm", "test"]]);
     expect(verify).toContain("runWithinBudget(plans[mode])");
   });
 });
@@ -184,9 +205,21 @@ describe("ordinary tests and production task boundaries", () => {
     );
     for (const filter of filters)
       expect(postgresPlan).toContain(JSON.stringify("--filter=" + filter));
-    expect(verify).toContain(
-      'test: [...(process.env.TEST_DATABASE_URL ? postgres : []), pnpm("test")]',
+    const commands = verificationModule.verificationCommands(
+      { mode: "test", selection: "complete" },
+      { TEST_DATABASE_URL: "synthetic-selected" },
     );
+    expect(commands.slice(-2)).toEqual([
+      ["pnpm", "test:postgres"],
+      ["pnpm", "test"],
+    ]);
+    expect(commands[0]).toContain(".turbo/library-cache");
+    expect(
+      verificationModule.verificationCommands({
+        mode: "test",
+        selection: "complete",
+      }),
+    ).toEqual([["pnpm", "test"]]);
     expect(verify).toContain("runWithinBudget(plans[mode])");
   });
 

@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit --project e2e/tsconfig.json",
     "test": "vitest run --exclude 'integration/postgres/**' --exclude 'e2e/**' --exclude 'cms/**'",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
-    "test:postgres": "pnpm -w exec turbo run build --filter=@moya/tests^... && vitest run integration/postgres",
+    "test:postgres": "pnpm -w exec turbo run build --filter=@moya/tests^... --filter=!admin --cache-dir=.turbo/library-cache --no-daemon && vitest run integration/postgres",
     "test:cms": "vitest run cms --no-file-parallelism --testTimeout=30000 --hookTimeout=60000"
   },
   "devDependencies": {
