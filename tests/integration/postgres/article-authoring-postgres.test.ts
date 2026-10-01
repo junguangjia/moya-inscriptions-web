@@ -1740,16 +1740,27 @@ describe("authored Article public-media and existing community targets", () => {
 
 describe("native Article canonical media paging and public resolution", () => {
   it("pages own readable assets without losing SQL microsecond seek precision", async () => {
-    const first = await seedMedia(user),
-      second = await seedMedia(user);
+    // The file has many retained assets for its general owner. Use a separate
+    // owner so wall-clock created_at values cannot outrank this precise pair.
+    const pagingOwner = opaque("user") as PublicUserId;
+    await setup!.query(
+      "INSERT INTO community.public_users(id,handle,display_name) VALUES($1,$2,'合成分页作者')",
+      [pagingOwner, `article-paging-${pagingOwner.slice(-16)}`],
+    );
+    const pagingActor: ArticleAuthoringActor = {
+      source: "human",
+      userId: pagingOwner,
+    };
+    const first = await seedMedia(pagingOwner),
+      second = await seedMedia(pagingOwner);
     await setup!.query(
       "UPDATE community.media_items SET created_at=CASE id WHEN $1 THEN '2026-09-30T23:59:59.123456Z'::timestamptz ELSE '2026-09-30T23:59:59.123455Z'::timestamptz END WHERE id=ANY($2::text[])",
       [first, [first, second]],
     );
-    const a = await adapter.listOwnMedia(actor, { pageSize: 1 }, now);
+    const a = await adapter.listOwnMedia(pagingActor, { pageSize: 1 }, now);
     expect(a.items.map((item) => item.id)).toEqual([first]);
     const b = await adapter.listOwnMedia(
-      actor,
+      pagingActor,
       { pageSize: 1, cursor: a.nextCursor! },
       now,
     );
@@ -1764,9 +1775,9 @@ describe("native Article canonical media paging and public resolution", () => {
       [first],
     );
     expect(
-      (await adapter.listOwnMedia(actor, { pageSize: 50 }, now)).items.some(
-        (item) => item.id === first,
-      ),
+      (
+        await adapter.listOwnMedia(pagingActor, { pageSize: 50 }, now)
+      ).items.some((item) => item.id === first),
     ).toBe(false);
   });
   it("resolves only current published own references through the actual limited App role", async () => {

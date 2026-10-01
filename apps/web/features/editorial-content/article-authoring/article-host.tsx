@@ -344,7 +344,7 @@ const OwnedArticles = ({
           <p role="status">
             专题已公开。
             <a
-              href={`/#topic-${encodeURIComponent(published)}`}
+              href={`/?topic=${encodeURIComponent(published)}`}
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -383,7 +383,7 @@ const OwnedArticles = ({
                     <a
                       target="_blank"
                       rel="noopener noreferrer"
-                      href={`/#topic-${encodeURIComponent(item.id)}`}
+                      href={`/?topic=${encodeURIComponent(item.id)}`}
                     >
                       公开版本
                     </a>
