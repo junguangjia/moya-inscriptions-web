@@ -99,6 +99,30 @@ export const registerDirectMessageTests = (
       );
     });
 
+    it("shows a participant's current studio without changing the conversation identity", async () => {
+      const a = await user("同名作者"),
+        b = await user("同名作者");
+      await pool.query(
+        "UPDATE community.public_users SET studio_name='听雨阁',studio_name_suffix='阁' WHERE id=$1",
+        [b],
+      );
+      await send(a, b, "Studio introduction");
+      const first = await dm.findConversationWith(a, b);
+      expect(first?.participant).toMatchObject({
+        id: b,
+        displayName: "同名作者",
+        studioName: "听雨阁",
+      });
+      await pool.query(
+        "UPDATE community.public_users SET studio_name='问石斋',studio_name_suffix='斋' WHERE id=$1",
+        [b],
+      );
+      const reloaded = await new PostgresDirectMessageAdapter(
+        pool,
+      ).findConversationWith(a, b);
+      expect(reloaded?.id).toBe(first?.id);
+      expect(reloaded?.participant.studioName).toBe("问石斋");
+    });
     it("enforces the one-first-message request gate until the recipient's committed reply", async () => {
       const a = await user("甲");
       const b = await user("乙");

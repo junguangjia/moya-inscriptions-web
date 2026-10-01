@@ -817,20 +817,33 @@ describe("AuthFlow", () => {
     expect(calls("registrations")).toHaveLength(0);
   });
 
-  it("keeps the optional six-codepoint studio name separate from the mandatory nickname", async () => {
+  it("registers the optional five-codepoint name with an independently selected suffix", async () => {
     await startProfile();
     await setInput(input("input[autocomplete='nickname']"), "访碑者");
-    const studio = [
-      ...container.querySelectorAll<HTMLInputElement>("input"),
-    ].find((element) => element.placeholder === "斋号")!;
+    const studio = input("input[placeholder='如：听雨']");
     await setInput(studio, "😀😀😀甲乙丙丁");
+    expect(studio.value).toBe("😀😀😀甲乙");
+    const suffix = container.querySelector("select")!;
+    expect(suffix.value).toBe("斋");
+    expect([...suffix.options].map((option) => option.text)).toEqual([
+      "斋",
+      "堂",
+      "室",
+      "房",
+      "庐",
+      "其他",
+    ]);
+    await act(async () => {
+      suffix.value = "other";
+      suffix.dispatchEvent(new Event("change", { bubbles: true }));
+    });
     await act(async () => input("input[type='checkbox']").click());
     await click("创建账户");
     expect(calls("registrations")).toHaveLength(0);
-    expect(studio.getAttribute("aria-invalid")).toBe("true");
-    await setInput(studio, "  😀😀😀甲乙丙  ");
+    await setInput(input("input[placeholder='最多 2 字，如：书屋']"), "书屋堂");
     await click("创建账户");
-    expect(bodies("registrations")[0]!.studioName).toBe("😀😀😀甲乙丙");
+    expect(bodies("registrations")[0]!.studioName).toBe("😀😀😀甲乙书屋");
+    expect(bodies("registrations")[0]!.studioNameSuffix).toBe("书屋");
     expect(bodies("registrations")[0]!.displayName).toBe("访碑者");
     expect(bodies("registrations")[0]!.password).toBe(syntheticPassword);
     expect(bodies("registrations")[0]).not.toHaveProperty("passwordConfirm");

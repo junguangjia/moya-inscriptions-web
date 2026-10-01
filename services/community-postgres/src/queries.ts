@@ -1,5 +1,5 @@
 export const findDevelopmentAccountByHandleSql = `
-  SELECT u.id, u.handle, u.display_name, u.status
+  SELECT u.id, u.handle, u.display_name, u.studio_name, u.status
   FROM community.public_users u
   JOIN community.development_accounts d ON d.user_id = u.id
   WHERE u.handle = $1::text
@@ -11,7 +11,7 @@ export const insertSessionSql = `
 `;
 
 export const findSessionUserSql = `
-  SELECT u.id, u.handle, u.display_name, u.status
+  SELECT u.id, u.handle, u.display_name, u.studio_name, u.status
   FROM community.sessions s
   JOIN community.public_users u ON u.id = s.user_id
   WHERE s.token_hash = $1::text

@@ -18,13 +18,23 @@ import { requestIdentity } from "../shell/request-identity";
 const row = (r: DiscussionReply): CommentReply => ({
   id: r.id,
   text: r.text,
-  user: { id: r.author.id, name: r.author.displayName },
+  user: {
+    id: r.author.id,
+    name: r.author.displayName,
+    studioName: r.author.studioName,
+  },
   createdAtLabel: new Date(r.createdAt).toLocaleString(),
   likeCount: r.likeCount,
   liked: r.liked,
   deleted: r.deleted,
   ...(r.replyTo
-    ? { replyToUser: { id: r.replyTo.id, name: r.replyTo.displayName } }
+    ? {
+        replyToUser: {
+          id: r.replyTo.id,
+          name: r.replyTo.displayName,
+          studioName: r.replyTo.studioName,
+        },
+      }
     : {}),
 });
 const rootRow = (r: DiscussionComment): CommentItem => ({
@@ -336,6 +346,7 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
             ? withAvatar({
                 id: author.viewer.id,
                 name: author.viewer.displayName,
+                studioName: author.viewer.studioName,
               })
             : { id: "guest", name: "访客" }
         }

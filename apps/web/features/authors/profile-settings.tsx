@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "./user-identity";
 import {
   useCallback,
   useEffect,
@@ -843,7 +844,10 @@ export const ProfileSettings = ({
                       {blocks.items.map((person) => (
                         <div className={styles.row} key={person.id}>
                           <span className={styles.rowText}>
-                            <span>{person.displayName}</span>
+                            <UserIdentity
+                              name={person.displayName}
+                              studioName={person.studioName}
+                            />
                             <small>@{person.handle}</small>
                           </span>
                           <button

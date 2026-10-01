@@ -62,6 +62,7 @@ export const toCommentUserPresentation = (
   avatarSrc: null,
   id: author.id,
   name: author.displayName,
+  studioName: author.studioName,
 });
 
 export const toCommentReplyPresentation = (

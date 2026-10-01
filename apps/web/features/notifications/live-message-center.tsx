@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "../authors/user-identity";
 import { useAuthReturn } from "../auth/auth-return";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -614,11 +615,19 @@ function AccountMessages({
                                         <span className={local.itemHeading}>
                                           <span className={local.identity}>
                                             <strong>
-                                              {item.actors
-                                                .map(
-                                                  (actor) => actor.displayName,
-                                                )
-                                                .join("、")}
+                                              {item.actors.map(
+                                                (actor, index) => (
+                                                  <span key={actor.id}>
+                                                    {index > 0 && "、"}
+                                                    <UserIdentity
+                                                      name={actor.displayName}
+                                                      studioName={
+                                                        actor.studioName
+                                                      }
+                                                    />
+                                                  </span>
+                                                ),
+                                              )}
                                               {item.actorCount >
                                               item.actors.length
                                                 ? ` 等 ${item.actorCount} 人`
@@ -769,7 +778,12 @@ function Followers({
                 {person.displayName.slice(0, 1)}
               </span>
               <span>
-                <strong>{person.displayName}</strong>
+                <strong>
+                  <UserIdentity
+                    name={person.displayName}
+                    studioName={person.studioName}
+                  />
+                </strong>
                 <span className={styles.secondary}>@{person.handle}</span>
               </span>
             </button>

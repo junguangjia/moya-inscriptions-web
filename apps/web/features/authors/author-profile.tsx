@@ -1,4 +1,5 @@
 "use client";
+import { StudioName } from "./user-identity";
 import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 import { Icon } from "@moya/ui";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
@@ -360,8 +361,12 @@ const ScopedAuthorProfile = ({
             <h1>{name}</h1>
             {profile ? (
               <>
+                {profile.studioName && (
+                  <p>
+                    <StudioName value={profile.studioName} prominent />
+                  </p>
+                )}
                 <p>@{profile.handle}</p>
-                {profile.studioName && <p>{profile.studioName}</p>}
                 <p>{profile.bio}</p>
                 <div className="phase4-actions">
                   {!isPreview && profile.totals.following !== null && (
@@ -462,6 +467,7 @@ const ScopedAuthorProfile = ({
                             directEntry.openWith(
                               profile.id,
                               profile.displayName,
+                              profile.studioName,
                             );
                             onClose();
                           }}

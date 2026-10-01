@@ -17,8 +17,10 @@ export interface CommentRow extends QueryResultRow {
   readonly moderation: unknown;
   readonly author_id: unknown;
   readonly author_display_name: unknown;
+  readonly author_studio_name?: unknown;
   readonly reply_to_author_id?: unknown;
   readonly reply_to_display_name?: unknown;
+  readonly reply_to_studio_name?: unknown;
 }
 
 export interface OperatorCommentRow extends CommentRow {
@@ -89,11 +91,25 @@ const asHandle = (value: unknown): string =>
 const asUserStatus = (value: unknown): "active" | "suspended" =>
   value === "active" || value === "suspended" ? value : invalid();
 
-const asAuthor = (id: unknown, displayName: unknown): CommentAuthorRecord => {
+const asAuthor = (
+  id: unknown,
+  displayName: unknown,
+  studioName?: unknown,
+): CommentAuthorRecord => {
+  if (
+    studioName !== undefined &&
+    (typeof studioName !== "string" ||
+      studioName.trim() !== studioName ||
+      [...studioName].length > 7 ||
+      studioName.includes("\u0000") ||
+      /[\uD800-\uDFFF]/u.test(studioName))
+  )
+    invalid();
   if (typeof id !== "string" || !publicUserIdPattern.test(id)) invalid();
   return {
     id: id as CommentAuthorRecord["id"],
     displayName: asDisplayName(displayName),
+    ...(typeof studioName === "string" ? { studioName } : {}),
   };
 };
 
@@ -102,7 +118,11 @@ export const mapCommentRow = (row: CommentRow): CatalogCommentRecord => {
   return {
     id: asCommentId(row.id) as CatalogCommentRecord["id"],
     catalogId: asCatalogId(row.catalog_id) as CatalogCommentRecord["catalogId"],
-    author: asAuthor(row.author_id, row.author_display_name),
+    author: asAuthor(
+      row.author_id,
+      row.author_display_name,
+      row.author_studio_name,
+    ),
     text: asText(row.text),
     createdAt: asDate(row.created_at),
     moderation: asModeration(row.moderation),
@@ -113,13 +133,21 @@ export const mapReplyRow = (row: CommentRow): CatalogCommentReplyRecord => {
   const replyTo =
     row.reply_to_author_id === null || row.reply_to_author_id === undefined
       ? undefined
-      : asAuthor(row.reply_to_author_id, row.reply_to_display_name);
+      : asAuthor(
+          row.reply_to_author_id,
+          row.reply_to_display_name,
+          row.reply_to_studio_name,
+        );
   return {
     id: asCommentId(row.id) as CatalogCommentReplyRecord["id"],
     rootCommentId: asCommentId(
       row.root_comment_id,
     ) as CatalogCommentReplyRecord["rootCommentId"],
-    author: asAuthor(row.author_id, row.author_display_name),
+    author: asAuthor(
+      row.author_id,
+      row.author_display_name,
+      row.author_studio_name,
+    ),
     text: asText(row.text),
     createdAt: asDate(row.created_at),
     moderation: asModeration(row.moderation),

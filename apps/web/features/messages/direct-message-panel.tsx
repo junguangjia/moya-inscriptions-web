@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "../authors/user-identity";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Icon } from "@moya/ui";
@@ -53,9 +54,11 @@ export interface DirectMessageTitle {
 
 const HeaderTitle = ({
   name,
+  studioName,
   onOpen,
 }: {
   name: string;
+  studioName?: string | undefined;
   onOpen: (opener: HTMLElement) => void;
 }) => (
   <button
@@ -73,7 +76,7 @@ const HeaderTitle = ({
     >
       {initial(name)}
     </span>
-    <span>{name}</span>
+    <UserIdentity name={name} studioName={studioName} />
   </button>
 );
 
@@ -84,7 +87,11 @@ const HeaderTitle = ({
  */
 const useHostTitle = (
   onTitleChange: ((title: DirectMessageTitle | null) => void) | undefined,
-  participant: { id: string; displayName: string } | null,
+  participant: {
+    id: string;
+    displayName: string;
+    studioName?: string | undefined;
+  } | null,
   onOpenProfile: (userId: string, opener: HTMLElement) => void,
 ): boolean => {
   const open = useRef(onOpenProfile);
@@ -96,6 +103,7 @@ const useHostTitle = (
   const seam = onTitleChange !== undefined;
   const id = participant?.id ?? null;
   const name = participant?.displayName ?? null;
+  const studioName = participant?.studioName;
   useEffect(() => {
     if (!seam || id === null || name === null) return;
     change.current?.({
@@ -103,12 +111,13 @@ const useHostTitle = (
       content: (
         <HeaderTitle
           name={name}
+          studioName={studioName}
           onOpen={(opener) => open.current(id, opener)}
         />
       ),
     });
     return () => change.current?.(null);
-  }, [seam, id, name]);
+  }, [seam, id, name, studioName]);
   return seam;
 };
 
@@ -293,7 +302,12 @@ const ConversationView = ({
               onOpenProfile(state.conversation.participant.id, opener);
             }}
           />
-          <strong>{state.conversation.participant.displayName}</strong>
+          <strong>
+            <UserIdentity
+              name={state.conversation.participant.displayName}
+              studioName={state.conversation.participant.studioName}
+            />
+          </strong>
           {state.conversation.muted && <MutedMark />}
         </div>
       )}
@@ -356,19 +370,21 @@ const ConversationView = ({
 const StartConversation = ({
   userId,
   displayName,
+  studioName,
   onStarted,
   onOpenProfile,
   onTitleChange,
 }: {
   userId: string;
   displayName: string;
+  studioName?: string | undefined;
   onStarted: (conversationId: string) => void;
   onOpenProfile: (userId: string, opener: HTMLElement) => void;
   onTitleChange?: (title: DirectMessageTitle | null) => void;
 }) => {
   const titleInHost = useHostTitle(
     onTitleChange,
-    { id: userId, displayName },
+    { id: userId, displayName, studioName },
     onOpenProfile,
   );
   return (
@@ -381,7 +397,9 @@ const StartConversation = ({
       {!titleInHost && (
         <div className={panelStyles.title}>
           <Avatar name={displayName} />
-          <strong>{displayName}</strong>
+          <strong>
+            <UserIdentity name={displayName} studioName={studioName} />
+          </strong>
         </div>
       )}
       <div className={`${styles.chatStream} ${panelStyles.stream}`}>
@@ -407,6 +425,7 @@ export interface DirectMessagePanelProps {
   readonly openWith?: {
     readonly userId: string;
     readonly displayName: string;
+    readonly studioName?: string | undefined;
   } | null;
   readonly onOpenProfile: (userId: string, opener: HTMLElement) => void;
   /** Reports whether a child conversation is open so the host's Back returns one level. */
@@ -437,6 +456,7 @@ export const DirectMessagePanel = ({
   const [starting, setStarting] = useState<{
     userId: string;
     displayName: string;
+    studioName?: string | undefined;
   } | null>(null);
   const [undo, setUndo] = useState<{
     conversation: DirectConversation;
@@ -510,6 +530,7 @@ export const DirectMessagePanel = ({
       <StartConversation
         userId={starting.userId}
         displayName={starting.displayName}
+        studioName={starting.studioName}
         onStarted={(conversationId) => {
           setStarting(null);
           setOpen(conversationId);
@@ -636,7 +657,12 @@ export const DirectMessagePanel = ({
                 onHide={() => void hide(conversation)}
               >
                 <span className={styles.rowHeading}>
-                  <strong>{name}</strong>
+                  <strong>
+                    <UserIdentity
+                      name={name}
+                      studioName={conversation.participant.studioName}
+                    />
+                  </strong>
                   {conversation.lastMessage && (
                     <time dateTime={conversation.lastMessage.createdAt}>
                       {formatEditorialTime(conversation.lastMessage.createdAt)}

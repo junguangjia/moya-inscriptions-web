@@ -14,6 +14,7 @@ export interface StoredUser {
   readonly handle: string;
   readonly displayName: string;
   readonly studioName?: string;
+  readonly studioNameSuffix?: string;
   readonly status: "active" | "suspended";
 }
 

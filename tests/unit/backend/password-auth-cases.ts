@@ -661,10 +661,77 @@ export const passwordAuthCases = (make: () => PasswordHarness) => {
       displayName: "Synthetic owner",
       studioName: "山🌿斋",
     });
+    expect(registered.session.profile.studioName).toBe("山🌿斋");
     const signed = await login(h, email);
+    expect(signed.ok && signed.value.profile.studioName).toBe("山🌿斋");
     expect(signed.ok && signed.value.profile.id).toBe(
       registered.session.profile.id,
     );
+  });
+  it("round-trips paired studio names and binds registration replay to the chosen suffix", async () => {
+    const h = make();
+    const proof = await begin(h, `${requestKey()}@example.invalid`, "register");
+    if (!proof.ok || proof.value.outcome !== "registration_required")
+      throw Error("Synthetic registration proof rejected");
+    const command = {
+      handoffToken: proof.value.handoffToken,
+      displayName: "Studio owner",
+      agreement: true,
+      studioName: "山水书斋",
+      studioNameSuffix: "书斋",
+      idempotencyKey: requestKey(),
+      source,
+    };
+    const registered = await h.service.confirmRegistration(command);
+    expect(registered.ok).toBe(true);
+    if (!registered.ok) throw Error("Synthetic registration rejected");
+    expect(registered.value.profile.studioName).toBe("山水书斋");
+    expect(
+      await h.port.transaction((tx) =>
+        tx.findUser(registered.value.profile.id),
+      ),
+    ).toMatchObject({ studioName: "山水书斋", studioNameSuffix: "书斋" });
+    expect(
+      safe(
+        await h.service.confirmRegistration({
+          ...command,
+          studioNameSuffix: "斋",
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "AUTH_PROOF_REJECTED" });
+    expect(safe(await h.service.confirmRegistration(command))).toMatchObject({
+      ok: true,
+    });
+  });
+  it("rejects invalid paired studio names before consuming registration proof", async () => {
+    const h = make();
+    const proof = await begin(h, `${requestKey()}@example.invalid`, "register");
+    if (!proof.ok || proof.value.outcome !== "registration_required")
+      throw Error("Synthetic registration proof rejected");
+    const command = {
+      handoffToken: proof.value.handoffToken,
+      displayName: "Studio owner",
+      agreement: true,
+      idempotencyKey: requestKey(),
+      source,
+    };
+    for (const input of [
+      { studioName: "🌿".repeat(6) + "斋", studioNameSuffix: "斋" },
+      { studioName: "斋", studioNameSuffix: "斋" },
+      { studioName: "山斋", studioNameSuffix: "堂" },
+      { studioNameSuffix: "斋" },
+    ])
+      expect(
+        safe(await h.service.confirmRegistration({ ...command, ...input })),
+      ).toEqual({ ok: false, reason: "AUTH_INVALID_STUDIO_NAME" });
+    const registered = await h.service.confirmRegistration({
+      ...command,
+      studioName: "🌿".repeat(5) + "书斋",
+      studioNameSuffix: "书斋",
+    });
+    expect(registered.ok).toBe(true);
+    if (!registered.ok) throw Error("Synthetic registration rejected");
+    expect(registered.value.profile.studioName).toBe("🌿".repeat(5) + "书斋");
   });
   it("keeps missing accounts, OTP-only accounts and wrong passwords indistinguishable", async () => {
     const h = make(),

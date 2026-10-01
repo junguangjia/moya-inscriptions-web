@@ -5,6 +5,7 @@ export interface PublicUserRow extends QueryResultRow {
   readonly id: unknown;
   readonly handle: unknown;
   readonly display_name: unknown;
+  readonly studio_name?: unknown;
   readonly status: unknown;
 }
 
@@ -27,6 +28,12 @@ export const mapPublicUserRow = (row: PublicUserRow): PublicUserRecord => {
     row.display_name.trim() !== row.display_name ||
     row.display_name.length === 0 ||
     row.display_name.length > 40 ||
+    (row.studio_name !== undefined &&
+      (typeof row.studio_name !== "string" ||
+        row.studio_name.trim() !== row.studio_name ||
+        [...row.studio_name].length > 7 ||
+        row.studio_name.includes("\u0000") ||
+        /[\uD800-\uDFFF]/u.test(row.studio_name))) ||
     !isStatus(row.status)
   ) {
     throw new Error("Invalid PostgreSQL public user row");
@@ -35,6 +42,9 @@ export const mapPublicUserRow = (row: PublicUserRow): PublicUserRecord => {
     id: row.id as PublicUserRecord["id"],
     handle: row.handle,
     displayName: row.display_name,
+    ...(typeof row.studio_name === "string"
+      ? { studioName: row.studio_name }
+      : {}),
     status: row.status,
   };
 };

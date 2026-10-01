@@ -106,6 +106,7 @@ describe("@moya/api server-only surface", () => {
       "mapPublicUserProfile",
       "mapTencentSendEmail",
       "normalizeStudioName",
+      "normalizeStudioNameInput",
       "parseCatalogListQuery",
       "parseCatalogSearchQuery",
       "parseCommentListingQuery",
