@@ -15,6 +15,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { Script } from "node:vm";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   categories,
@@ -346,6 +347,337 @@ test("typeof primitive comparisons pass without hiding literal credential compar
     ).includes("AUTHORIZING_URL"),
   );
 });
+// Reviewed synthetic adversarial material; assembled rather than copied from
+// any configuration. Assertions expose only categories and source line numbers.
+const opaqueLiteral = ["opaque", "Credential123456789"].join("");
+const assignmentText = (name, operator, value) =>
+  [name, operator, value].join(" ");
+function assertNearbyDetectors(safe, filename) {
+  const literal = assignmentText("apiKey", "=", JSON.stringify(opaqueLiteral));
+  for (const separator of ["; ", "\n"])
+    for (const content of [
+      safe + separator + literal,
+      literal + separator + safe,
+    ])
+      assert.ok(categories(content, filename).includes("CREDENTIAL_LITERAL"));
+  assert.ok(categories(safe + "\n" + token, filename).includes("API_TOKEN"));
+  assert.ok(
+    categories(safe + "\n" + signedUrl, filename).includes("AUTHORIZING_URL"),
+  );
+}
+
+test("explicit synthetic placeholder markers pass only as complete marker values", () => {
+  const marker = ["EXPLICIT", "SYNTHETIC", "PLACEHOLDER"].join("_");
+  for (const filename of ["fixture.mjs", "fixture.env", "notes.md"])
+    for (const value of [marker, marker.toLowerCase()]) {
+      const safe = assignmentText("token", "=", JSON.stringify(value));
+      assert.deepEqual(categories(safe, filename), []);
+      assertNearbyDetectors(safe, filename);
+    }
+  for (const value of [
+    "UNREVIEWED_" + marker,
+    marker + "_" + opaqueLiteral,
+    "EXPLICIT_" + opaqueLiteral,
+    marker.replace("SYNTHETIC", "LIVE"),
+    marker.replace("PLACEHOLDER", "VALUE"),
+  ])
+    assert.ok(
+      categories(
+        assignmentText("token", "=", JSON.stringify(value)),
+        "fixture.ts",
+      ).includes("CREDENTIAL_LITERAL"),
+    );
+  assert.ok(
+    categories(
+      "// Explicit synthetic fixture\n" +
+        assignmentText("token", "=", JSON.stringify(opaqueLiteral)),
+      "fixture.test.ts",
+    ).includes("CREDENTIAL_LITERAL"),
+  );
+});
+
+test("the implicit-authentication disabling switch accepts only its boolean sentinel", () => {
+  const name = "HF_HUB_DISABLE_IMPLICIT_TOKEN";
+  for (const [filename, operator] of [
+    ["fixture.py", ":"],
+    ["fixture.env", "="],
+    ["fixture.json", ":"],
+  ])
+    for (const value of ["1", JSON.stringify("1")]) {
+      const safe = assignmentText(name, operator, value);
+      assert.deepEqual(categories(safe, filename), []);
+      assertNearbyDetectors(safe, filename);
+      assert.deepEqual(categories(safe + " # disabled", filename), []);
+    }
+  for (const otherName of [
+    "API_TOKEN",
+    "DISABLE_ACCESS_TOKEN",
+    name + "_TOKEN",
+  ])
+    assert.ok(
+      categories(
+        assignmentText(otherName, "=", JSON.stringify("1")),
+        "fixture.env",
+      ).includes("CREDENTIAL_LITERAL"),
+    );
+  for (const value of ["0", "10", opaqueLiteral, token, signedUrl])
+    assert.ok(
+      categories(
+        assignmentText(name, "=", JSON.stringify(value)),
+        "fixture.env",
+      ).includes("CREDENTIAL_LITERAL"),
+    );
+  for (const suffix of [
+    " + " + JSON.stringify(opaqueLiteral),
+    " && " + JSON.stringify(opaqueLiteral),
+    ".suffix",
+    "extra",
+  ])
+    assert.ok(
+      categories(
+        assignmentText(name, "=", JSON.stringify("1")) + suffix,
+        "fixture.py",
+      ).includes("CREDENTIAL_LITERAL"),
+    );
+  assert.ok(
+    categories(assignmentText(name, "=", "1"), "notes.md").includes(
+      "CREDENTIAL_LITERAL",
+    ),
+  );
+});
+
+test("Swift nil predicates pass without accepting nil strings or dropping nearby literals", () => {
+  for (const operator of ["==", "!="])
+    for (const member of ["parts.password", "parts?.password"])
+      for (const suffix of ["", ",", " && parts.host != nil", " // optional"]) {
+        const safe = assignmentText(member, operator, "nil") + suffix;
+        assert.deepEqual(categories(safe, "fixture.swift"), []);
+        assertNearbyDetectors(safe, "fixture.swift");
+      }
+  for (const [operator, value] of [
+    ["=", "nil"],
+    ["==", JSON.stringify("nil")],
+    ["!=", JSON.stringify(opaqueLiteral)],
+    ["==", "nilSuffix"],
+    ["==", "nil + " + JSON.stringify(opaqueLiteral)],
+  ])
+    assert.ok(
+      categories(
+        assignmentText("parts.password", operator, value),
+        "fixture.swift",
+      ).includes("CREDENTIAL_LITERAL"),
+    );
+  const content = Buffer.from(assignmentText("parts.password", "==", "nil"));
+  assert.deepEqual(inspect(content, "fixture.swift"), []);
+  assert.ok(
+    inspect(content, "notes.md").some(
+      (f) => f.category === "CREDENTIAL_LITERAL",
+    ),
+  );
+});
+
+test("JavaScript prefix counters are expressions with a complete source boundary", () => {
+  for (const filename of ["fixture.js", "fixture.mjs", "fixture.ts"])
+    for (const reference of [
+      "generation",
+      "state.generation",
+      "$state.generation",
+    ])
+      for (const declaration of ["const", "let", "var"]) {
+        const safe =
+          declaration +
+          " " +
+          assignmentText("token", "=", "++" + reference) +
+          ";";
+        assert.deepEqual(categories(safe, filename), []);
+        assertNearbyDetectors(safe, filename);
+      }
+  for (const value of [
+    JSON.stringify("++state.generation"),
+    "123456789",
+    "++state.generation + " + JSON.stringify(opaqueLiteral),
+    "++state.generation && " + JSON.stringify(opaqueLiteral),
+    "++state.generation[" + JSON.stringify(opaqueLiteral) + "]",
+    "++state.generation/" + opaqueLiteral,
+    JSON.stringify(opaqueLiteral),
+  ])
+    assert.ok(
+      categories(
+        "const " + assignmentText("token", "=", value) + ";",
+        "fixture.js",
+      ).includes("CREDENTIAL_LITERAL"),
+    );
+  const content = Buffer.from(
+    "const " + assignmentText("token", "=", "++state.generation") + ";",
+  );
+  assert.deepEqual(inspect(content, "fixture.js"), []);
+  for (const filename of [
+    "fixture.py",
+    "fixture.jsx",
+    "fixture.tsx",
+    "fixture.env",
+    "notes.md",
+    "source.patch",
+  ])
+    assert.ok(
+      inspect(content, filename).some(
+        (f) => f.category === "CREDENTIAL_LITERAL",
+      ),
+    );
+});
+
+test("counter exemptions require executable declarations, not strings, comments or continuations", () => {
+  const counter = "const " + assignmentText("token", "=", "++" + opaqueLiteral);
+  const complete = counter + ";";
+  const literal = JSON.stringify(opaqueLiteral);
+  for (const source of [
+    counter,
+    counter + "\n? " + literal + " : null;",
+    counter + " // continued\n+ " + literal + ";",
+    counter + "\n+ " + literal + ";",
+    assignmentText("token", "=", "++" + opaqueLiteral) + ";",
+    ...["'", '"', "`"].map(
+      (quote) => "const text = " + quote + complete + quote + ";",
+    ),
+    "const text = `\n" + complete + "\n`;",
+    "/*\n" + complete + "\n*/",
+    "// " + complete,
+    "value.match(/" + complete + "/);",
+    "const pattern = /ambiguous/;\n" + complete,
+    "const text = `opaque ${value}`;\n" + complete,
+    "const element = <div>\n" + complete + "\n</div>;",
+  ])
+    assert.ok(categories(source, "fixture.js").includes("CREDENTIAL_LITERAL"));
+  for (const prefix of [
+    "// comment\n",
+    "/* closed comment */\n",
+    "const text = 'quoted prefix';\n",
+    'const text = "escaped \\" prefix";\n',
+    "const text = `plain opaque text`;\n",
+    "if (active < 1 || disabled) return;\n",
+    "value.match(/[/\"'\\\\]/g);\n",
+    "value.match(/escaped\\/slash/);\n",
+  ]) {
+    assert.deepEqual(categories(prefix + complete, "fixture.js"), []);
+    assertNearbyDetectors(prefix + complete, "fixture.js");
+  }
+});
+
+test("valid JavaScript comment and interpolation decoys retain literal detection", () => {
+  const counter =
+    "const " + assignmentText("token", "=", "++" + opaqueLiteral) + ";";
+  const fixtures = [
+    "/* /* */\nconst text = `*/\n" + counter + "\n`;",
+    "const text = `" + '${"`"}' + '"\n' + counter + "\n`;",
+  ];
+  for (const source of fixtures) {
+    let parses = false;
+    try {
+      new Script(source);
+      parses = true;
+    } catch {
+      // Never render fixture source through an exception diagnostic.
+    }
+    assert.ok(parses, "reviewed synthetic source must parse without execution");
+    assert.ok(categories(source, "fixture.js").includes("CREDENTIAL_LITERAL"));
+  }
+});
+
+test("Swift nil exemptions stay outside quoted, raw and multiline string contents", () => {
+  const predicate = assignmentText("parts.password", "==", "nil");
+  for (const source of [
+    'let text = "' + predicate + ', continued"',
+    'let text = """\n' + predicate + '\n"""',
+    'let text = #"' + predicate + '"#',
+    'let text = "\\(value)"\n' + predicate,
+    "/* " + predicate + " */",
+    "// " + predicate,
+  ])
+    assert.ok(
+      categories(source, "fixture.swift").includes("CREDENTIAL_LITERAL"),
+    );
+  for (const prefix of [
+    '// quoted " comment\n',
+    '/* outer /* nested " */ comment */\n',
+    'let text = "closed"\n',
+    'let text = """\nmultiline " content\n"""\n',
+  ]) {
+    assert.deepEqual(categories(prefix + predicate, "fixture.swift"), []);
+    assertNearbyDetectors(prefix + predicate, "fixture.swift");
+  }
+});
+
+test("unmodeled JavaScript comment boundaries conservatively retain literal detection", () => {
+  const counter =
+    "const " + assignmentText("token", "=", "++" + opaqueLiteral) + ";";
+  const fixtures = [
+    ...["\u2028", "\u2029"].map(
+      (separator) =>
+        "// comment" + separator + "const text = `\n" + counter + "\n`;",
+    ),
+    "--> `\nconst text = `\n" + counter + "\n`;",
+    "#!node `\nconst text = `\n" + counter + "\n`;",
+  ];
+  for (const source of fixtures) {
+    let parses = false;
+    try {
+      new Script(source);
+      parses = true;
+    } catch {
+      // Keep source values out of assertion output.
+    }
+    assert.ok(parses, "reviewed synthetic boundary fixture must parse");
+    assert.ok(categories(source, "fixture.js").includes("CREDENTIAL_LITERAL"));
+  }
+  // A harmless prefix containing the unmodeled syntax also declines: this
+  // deliberately conservative fallback is not a claim to parse all JS syntax.
+  for (const marker of ["\u2028", "\u2029", "-->", "#!"])
+    assert.ok(
+      categories(
+        "const text = " + JSON.stringify(marker) + ";\n" + counter,
+        "fixture.js",
+      ).includes("CREDENTIAL_LITERAL"),
+    );
+  for (const newline of ["\n", "\r\n"])
+    assert.deepEqual(
+      categories("// comment" + newline + counter, "fixture.js"),
+      [],
+    );
+  const hashbang = "#!node\n";
+  const credential = assignmentText(
+    "apiKey",
+    "=",
+    JSON.stringify(opaqueLiteral),
+  );
+  const findings = inspect(Buffer.from(hashbang + credential), "fixture.js");
+  assert.ok(
+    findings.some(
+      (f) =>
+        f.line === 2 &&
+        f.category === "CREDENTIAL_LITERAL" &&
+        f.severity === "BLOCK",
+    ),
+  );
+  assert.ok(categories(hashbang + token, "fixture.js").includes("API_TOKEN"));
+  assert.ok(
+    categories(hashbang + signedUrl, "fixture.js").includes("AUTHORIZING_URL"),
+  );
+});
+
+test("source context for existing typeof, references and Python false is not inferred from patches", () => {
+  for (const [source, filename] of [
+    ["typeof token === 'object'", "fixture.js"],
+    [assignmentText("token", "=", "state.runtimeGeneration"), "fixture.js"],
+    [assignmentText("token", "=", "False"), "fixture.py"],
+  ]) {
+    assert.deepEqual(categories(source, filename), []);
+    assertNearbyDetectors(source, filename);
+    assert.ok(
+      categories(source, "source.patch").includes("CREDENTIAL_LITERAL"),
+    );
+  }
+});
+
 test("only exact pnpm snapshot dependency versions pass and cache remains context-bound", () => {
   const lock = [
     "lockfileVersion: '9.0'",
