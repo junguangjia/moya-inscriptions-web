@@ -14,6 +14,7 @@
     "dev:admin": "pnpm --filter admin dev",
     "dev:all": "node --env-file=.env.local node_modules/turbo/bin/turbo watch dev --filter=web --filter=admin --filter=@moya/backend-production",
     "build": "turbo run build",
+    "cache:prune": "node scripts/turbo-cache-prune.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "db:migrate:community": "node scripts/migrate-community.mjs",
     "lint": "turbo run lint",

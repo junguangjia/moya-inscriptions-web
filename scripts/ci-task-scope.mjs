@@ -35,6 +35,9 @@ const tooling = new Set([
   "scripts/verification-evidence.mjs",
   "scripts/verification-tool-inputs.mjs",
   "scripts/task-validation.test.mjs",
+  // Dependency-free maintenance for the shared local Turbo cache; its own
+  // script test runs in the lightweight job.
+  "scripts/turbo-cache-prune.mjs",
 ]);
 const webRoots = [
   "apps/web/",
