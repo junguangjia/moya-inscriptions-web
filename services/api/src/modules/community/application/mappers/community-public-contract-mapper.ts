@@ -33,6 +33,7 @@ export const mapPublicUserProfile = (
     id: user.id,
     handle: user.handle,
     displayName: user.displayName,
+    ...(user.studioName === undefined ? {} : { studioName: user.studioName }),
   });
 
 const isoUtc = (value: Date): string =>
@@ -43,7 +44,13 @@ export const mapCatalogCommentReply = (
 ): CatalogCommentReply =>
   catalogCommentReplySchema.parse({
     id: reply.id,
-    author: { id: reply.author.id, displayName: reply.author.displayName },
+    author: {
+      id: reply.author.id,
+      displayName: reply.author.displayName,
+      ...(reply.author.studioName === undefined
+        ? {}
+        : { studioName: reply.author.studioName }),
+    },
     text: reply.text,
     createdAt: isoUtc(reply.createdAt),
     ...(reply.replyTo === undefined
@@ -52,6 +59,9 @@ export const mapCatalogCommentReply = (
           replyTo: {
             id: reply.replyTo.id,
             displayName: reply.replyTo.displayName,
+            ...(reply.replyTo.studioName === undefined
+              ? {}
+              : { studioName: reply.replyTo.studioName }),
           },
         }),
   });
@@ -65,7 +75,13 @@ export const mapCatalogComment = (
   catalogCommentSchema.parse({
     id: comment.id,
     catalogId: comment.catalogId,
-    author: { id: comment.author.id, displayName: comment.author.displayName },
+    author: {
+      id: comment.author.id,
+      displayName: comment.author.displayName,
+      ...(comment.author.studioName === undefined
+        ? {}
+        : { studioName: comment.author.studioName }),
+    },
     text: comment.text,
     createdAt: isoUtc(comment.createdAt),
     replies: replies.map(mapCatalogCommentReply),

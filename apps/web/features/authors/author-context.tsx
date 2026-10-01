@@ -104,6 +104,7 @@ export const AuthorProvider = ({
       setViewer((old) =>
         old?.id === next.id &&
         old.displayName === next.displayName &&
+        old.studioName === next.studioName &&
         old.handle === next.handle
           ? old
           : next,

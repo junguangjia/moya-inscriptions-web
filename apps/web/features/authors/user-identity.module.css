@@ -1,0 +1,37 @@
+.identity {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-1) var(--yoyi-space-2);
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: baseline;
+  text-align: start;
+}
+
+.name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.studio {
+  display: inline-block;
+  flex: 0 0 auto;
+  max-width: 100%;
+  font-size: calc(var(--yoyi-type-caption-size) * 0.8);
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.studio svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  forced-color-adjust: none;
+}
+
+.prominent {
+  font-size: calc(var(--yoyi-type-caption-size) * 0.9);
+}

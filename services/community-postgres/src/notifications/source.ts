@@ -46,7 +46,7 @@ export async function validateMentionUsers(
 
 /** Current source facts only; never a persisted excerpt or actor snapshot. */
 export const sourceFactsSql = `SELECT s.action_key,s.kind,s.actor_id,s.created_at,
-  a.handle,a.display_name,t.target_type,t.target_id,
+  a.handle,a.display_name,a.studio_name,t.target_type,t.target_id,
   CASE WHEN s.kind IN ('comment','comment_like') THEN s.subject_id END AS comment_id,
   c.id AS root_id,c.author_id AS root_author,
   CASE WHEN r.id IS NOT NULL THEN COALESCE(rr.author_id,c.author_id) END AS reply_recipient,

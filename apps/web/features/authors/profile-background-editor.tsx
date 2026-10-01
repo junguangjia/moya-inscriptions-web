@@ -181,6 +181,7 @@ export const ProfileBackgroundEditor = ({
   };
   const identity = {
     name: profile.displayName,
+    studioName: profile.studioName,
     avatarSrc: profile.avatar?.src ?? null,
   };
 

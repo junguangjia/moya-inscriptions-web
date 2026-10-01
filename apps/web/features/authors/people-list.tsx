@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "./user-identity";
 import { useEffect, useRef, useState } from "react";
 import { authorClient, AuthorRequestError } from "./author-data";
 import { useAuthors } from "./author-context";
@@ -323,7 +324,12 @@ export const PeopleList = ({
                   )}
                 </span>
                 <span>
-                  <strong>{person.displayName}</strong>
+                  <strong>
+                    <UserIdentity
+                      name={person.displayName}
+                      studioName={person.studioName}
+                    />
+                  </strong>
                   <small>@{person.handle}</small>
                 </span>
               </button>

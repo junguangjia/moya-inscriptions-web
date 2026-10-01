@@ -53,7 +53,7 @@ const readSql = `WITH source AS (${sourceFactsSql}
     COALESCE(bool_or(f.allowed),false) AS available,
     COALESCE(bool_or(f.allowed AND f.revision>g.read_through),false) AS unread,
     count(DISTINCT f.actor_id) FILTER (WHERE f.allowed)::integer AS actor_count,
-    (array_agg(jsonb_build_object('id',f.actor_id,'handle',f.handle,'displayName',f.display_name) ORDER BY f.revision DESC) FILTER(WHERE f.allowed))[1:3] AS actors,
+    (array_agg(jsonb_build_object('id',f.actor_id,'handle',f.handle,'displayName',f.display_name,'studioName',f.studio_name) ORDER BY f.revision DESC) FILTER(WHERE f.allowed))[1:3] AS actors,
     (array_agg(jsonb_build_object('type',f.target_type,'id',f.target_id) ORDER BY f.revision DESC) FILTER(WHERE f.allowed))[1] AS target,
     (array_agg(f.comment_id ORDER BY f.revision DESC) FILTER(WHERE f.allowed))[1] AS comment_id,
     (array_agg(f.text ORDER BY f.revision DESC) FILTER(WHERE f.allowed))[1] AS text,
@@ -178,8 +178,13 @@ export class PostgresNotificationAdapter
   async lookup(actor: string, query: string) {
     return this.transaction(false, async (db) => {
       const rows = (
-        await db.query<{ id: string; handle: string; displayName: string }>(
-          `SELECT id,handle,display_name AS "displayName" FROM community.public_users
+        await db.query<{
+          id: string;
+          handle: string;
+          displayName: string;
+          studioName: string;
+        }>(
+          `SELECT id,handle,display_name AS "displayName",studio_name AS "studioName" FROM community.public_users
         WHERE status='active' AND community.accounts_can_interact($1,id)
         AND (position(lower($2) in lower(handle))>0 OR position(lower($2) in lower(display_name))>0)
         ORDER BY (handle=lower($2)) DESC,handle,id LIMIT 10`,

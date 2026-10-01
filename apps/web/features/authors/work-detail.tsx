@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "./user-identity";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { WorkVisibility } from "@moya/contracts";
 import {
@@ -48,6 +49,7 @@ export const loadWorkDetail: CatalogDetailPresentationLoader = async (
         id: work.id,
         authorId: work.authorId,
         authorName: work.authorName,
+        authorStudioName: work.authorStudioName,
         canEdit: work.canEdit,
         available: work.available,
         firstPublishedAt: work.firstPublishedAt,
@@ -436,7 +438,10 @@ const WorkAuthor = ({ detail }: { detail: WorkDetail }) => {
           [...detail.authorName][0]
         )}
       </span>
-      <span>{detail.authorName}</span>
+      <UserIdentity
+        name={detail.authorName}
+        studioName={detail.authorStudioName}
+      />
     </button>
   );
 };
