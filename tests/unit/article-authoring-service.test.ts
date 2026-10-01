@@ -65,6 +65,11 @@ const fixture = () => {
       },
     }),
     withdraw: async () => draft(),
+    deleteDraft: async () => ({
+      id: articleId,
+      deleted: true,
+      publicVersion: null,
+    }),
     readPublished: async () => null,
     listPublished: async () => ({ items: [], total: 0 }),
   };

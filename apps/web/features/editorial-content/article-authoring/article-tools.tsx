@@ -247,10 +247,37 @@ export const ArticleTools = ({
         role="toolbar"
         aria-label="专题格式工具栏"
       >
+        <div
+          className={`${styles.desktopTools} ${styles.blockStyles}`}
+          role="group"
+          aria-label="段落样式"
+        >
+          {blockChoices.map((choice) => (
+            <button
+              key={choice.label}
+              type="button"
+              className={styles.toolButton}
+              aria-label={choice.label}
+              title={choice.label}
+              aria-pressed={state.label === choice.label}
+              disabled={
+                disabled ||
+                !bodyActive ||
+                !canFormatArticleBlocks(editor, choice)
+              }
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                if (allowed()) formatArticleBlocks(editor, choice);
+              }}
+            >
+              {choice.type === "heading" ? `H${choice.level}` : choice.label}
+            </button>
+          ))}
+        </div>
         <div className={styles.formattingRow}>
           <button
             type="button"
-            className={styles.formatButton}
+            className={`${styles.formatButton} ${styles.mobileTools}`}
             disabled={disabled || !bodyActive}
             aria-label={`段落样式：${state.label}`}
             aria-haspopup="dialog"
@@ -287,12 +314,53 @@ export const ArticleTools = ({
             },
             state.underline,
           )}
-          {action(
-            "color",
-            "文字颜色",
-            () => openMenu("color"),
-            state.color !== "default",
-          )}
+          <span className={styles.mobileTools}>
+            {action(
+              "color",
+              "文字颜色",
+              () => openMenu("color"),
+              state.color !== "default",
+            )}
+          </span>
+          <div
+            className={`${styles.desktopTools} ${styles.colors}`}
+            role="group"
+            aria-label="文字颜色"
+          >
+            {(
+              [
+                { value: "default", label: "默认墨色" },
+                { value: "gray", label: "灰色" },
+                { value: "red", label: "朱红" },
+                { value: "brown", label: "褐色" },
+              ] as const
+            ).map((color) => (
+              <button
+                key={color.value}
+                type="button"
+                className={styles.toolButton}
+                aria-label={`文字颜色：${color.label}`}
+                title={color.label}
+                aria-pressed={state.color === color.value}
+                disabled={disabled || !bodyActive}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  if (!allowed()) return;
+                  if (color.value === "default")
+                    editor.removeStyles({ textColor: "default" });
+                  else editor.addStyles({ textColor: color.value });
+                  editor.focus();
+                }}
+              >
+                <span
+                  className={styles.colorSwatch}
+                  data-article-text-color={color.value}
+                >
+                  A
+                </span>
+              </button>
+            ))}
+          </div>
           {action("link", "编辑链接", onLink, state.linked)}
         </div>
         <div className={styles.utilityRow}>
@@ -300,7 +368,7 @@ export const ArticleTools = ({
           {action("redo", "重做", () => editor.redo(), undefined, !state.redo)}
           <button
             type="button"
-            className={styles.insertButton}
+            className={`${styles.insertButton} ${styles.mobileTools}`}
             disabled={disabled || !bodyActive}
             aria-haspopup="dialog"
             onMouseDown={(event) => event.preventDefault()}
@@ -309,7 +377,35 @@ export const ArticleTools = ({
             <ArticleToolIcon name="insert" />
             插入
           </button>
-          {action("more", "更多块操作", () => openMenu("more"))}
+          <span className={styles.mobileTools}>
+            {action("more", "更多块操作", () => openMenu("more"))}
+          </span>
+          <div
+            className={styles.desktopTools}
+            role="group"
+            aria-label="插入内容"
+          >
+            {action("image", "插入图片", onImage)}
+            {action("gallery", "插入图片组", onGallery)}
+            {action("catalog", "插入藏品引用", onCatalog)}
+            {action("divider", "插入分隔线", onDivider)}
+          </div>
+          <div className={styles.desktopTools} role="group" aria-label="块操作">
+            {action("up", "当前块上移", () =>
+              stepArticleBlock(
+                editor,
+                editor.getTextCursorPosition().block.id,
+                -1,
+              ),
+            )}
+            {action("down", "当前块下移", () =>
+              stepArticleBlock(
+                editor,
+                editor.getTextCursorPosition().block.id,
+                1,
+              ),
+            )}
+          </div>
           {action("settings", "文章设置", onSettings)}
         </div>
       </div>

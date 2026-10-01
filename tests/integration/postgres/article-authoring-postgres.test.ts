@@ -261,6 +261,238 @@ it("consent UID SQL accepts the complete 256-character ASCII contract and reject
 });
 
 describe("Article persistence through the limited runtime role", () => {
+  it("deletes a human-owned exact private lifetime once and refuses stale receipt resurrection", async () => {
+    const create = {
+      ...commandId(),
+      title: "合成删除验收",
+      coverRefId: null,
+      document: emptyArticleDocument(),
+    };
+    const draft = await adapter.create(actor, create, at(5000));
+    const save = {
+      ...commandId(),
+      expectedVersion: draft.version,
+      title: "合成删除新版",
+      coverRefId: null,
+      document: draft.document,
+    };
+    const changed = await adapter.save(actor, draft.id, save, at(5001));
+    await expect(
+      adapter.deleteDraft(
+        actor,
+        draft.id,
+        { ...commandId(), expectedVersion: draft.version },
+        at(5002),
+      ),
+    ).rejects.toBeInstanceOf(CommunityConflictError);
+    await expect(
+      adapter.deleteDraft(
+        stranger,
+        draft.id,
+        { ...commandId(), expectedVersion: changed.version },
+        at(5002),
+      ),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    const delegated: ArticleAuthoringActor = {
+      source: "delegated",
+      userId: user,
+      connectionId: "synthetic",
+      generation: 1,
+      grantId: "synthetic",
+      expiresAt: at(6000).toISOString(),
+      scopes: ["artvenn:article:draft"],
+    };
+    await expect(
+      adapter.deleteDraft(
+        delegated,
+        draft.id,
+        { ...commandId(), expectedVersion: changed.version },
+        at(5002),
+      ),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    const command = { ...commandId(), expectedVersion: changed.version };
+    const result = await adapter.deleteDraft(
+      actor,
+      draft.id,
+      command,
+      at(5003),
+    );
+    expect(result).toEqual({
+      id: draft.id,
+      deleted: true,
+      publicVersion: null,
+    });
+    expect(
+      await adapter.deleteDraft(actor, draft.id, command, at(5004)),
+    ).toEqual(result);
+    expect(
+      (await adapter.list(actor, { pageSize: 50 }, at(5004))).items.some(
+        (item) => item.id === draft.id,
+      ),
+    ).toBe(false);
+    await expect(
+      adapter.read(actor, draft.id, at(5004)),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    await expect(
+      adapter.save(actor, draft.id, save, at(5004)),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    await expect(
+      adapter.create(actor, create, at(5004)),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    const stored = (
+      await setup!.query<{ version: number; deleted_at: Date }>(
+        "SELECT version,deleted_at FROM community.article_documents WHERE id=$1",
+        [draft.id],
+      )
+    ).rows[0]!;
+    expect(stored.version).toBe(changed.version + 1);
+    expect(stored.deleted_at).not.toBeNull();
+    expect(
+      Number(
+        (
+          await setup!.query<{ count: string }>(
+            "SELECT count(*)::text AS count FROM community.author_events WHERE subject_id=$1 AND action='article.draft.delete'",
+            [draft.id],
+          )
+        ).rows[0]!.count,
+      ),
+    ).toBe(1);
+    await expect(
+      app!.query(
+        "UPDATE community.article_documents SET deleted_at=NULL,version=version+1 WHERE id=$1",
+        [draft.id],
+      ),
+    ).rejects.toMatchObject({ code: "23000" });
+  });
+
+  it("removes draft media refs while preserving the same published snapshot and its media", async () => {
+    const document: ArticleAuthoringDocument = {
+      ...emptyArticleDocument(),
+      blocks: [
+        {
+          id: "delete-media",
+          type: "managedImage",
+          props: {
+            refId: "delete-image",
+            caption: "合成图片",
+            alt: "合成图片",
+          },
+          children: [],
+        },
+      ],
+      references: { "delete-image": { type: "managed", itemId: ownMedia } },
+    };
+    const draft = await adapter.create(
+      actor,
+      {
+        ...commandId(),
+        title: "合成公开保留验收",
+        coverRefId: "delete-image",
+        document,
+      },
+      at(5010),
+    );
+    const published = await adapter.publish(
+      actor,
+      draft.id,
+      candidate(draft),
+      at(5011),
+    );
+    const before = await adapter.readPublished(draft.id);
+    expect(before).not.toBeNull();
+    expect(
+      await adapter.deleteDraft(
+        actor,
+        draft.id,
+        { ...commandId(), expectedVersion: published.version },
+        at(5012),
+      ),
+    ).toEqual({
+      id: draft.id,
+      deleted: true,
+      publicVersion: published.publicVersion,
+    });
+    expect(await adapter.readPublished(draft.id)).toEqual(before);
+    expect(
+      (await adapter.listPublished({ page: 1, pageSize: 100 })).items.some(
+        (item) => item.id === draft.id,
+      ),
+    ).toBe(true);
+    expect(
+      (
+        await setup!.query(
+          "SELECT 1 FROM community.media_item_refs WHERE holder_kind='article_draft' AND holder_id=$1",
+          [draft.id],
+        )
+      ).rowCount,
+    ).toBe(0);
+    expect(
+      (
+        await setup!.query(
+          "SELECT 1 FROM community.media_item_refs WHERE holder_kind='article_revision' AND holder_id='article-revision-'||substr(encode(sha256(convert_to($1||':'||$2::text,'UTF8')),'hex'),1,32) AND item_id=$3",
+          [draft.id, published.publicVersion, ownMedia],
+        )
+      ).rowCount,
+    ).toBe(1);
+  });
+
+  it("removes a deleted pending draft from staff review without changing existing public visibility", async () => {
+    await setup!.query(
+      "UPDATE community.work_publishing_settings SET publication_policy='PRE_MODERATION' WHERE id='settings'",
+    );
+    try {
+      const draft = await adapter.create(
+        actor,
+        {
+          ...commandId(),
+          title: "合成待审删除验收",
+          coverRefId: null,
+          document: emptyArticleDocument(),
+        },
+        at(5020),
+      );
+      const pending = await adapter.publish(
+        actor,
+        draft.id,
+        candidate(draft),
+        at(5021),
+      );
+      const review = await adapter.readPending(draft.id);
+      await adapter.deleteDraft(
+        actor,
+        draft.id,
+        { ...commandId(), expectedVersion: pending.version },
+        at(5022),
+      );
+      expect(
+        (await adapter.listPending({ pageSize: 50 })).items.some(
+          (item) => item.articleId === draft.id,
+        ),
+      ).toBe(false);
+      await expect(adapter.readPending(draft.id)).rejects.toBeInstanceOf(
+        CommunityNotFoundError,
+      );
+      await expect(
+        adapter.moderatePending(
+          "owner",
+          draft.id,
+          {
+            ...commandId(),
+            action: "approve",
+            expectedVersion: review.expectedVersion,
+            candidateVersion: review.candidateVersion,
+            fingerprint: review.fingerprint,
+          },
+          at(5023),
+        ),
+      ).rejects.toBeInstanceOf(CommunityConflictError);
+      expect(await adapter.readPublished(draft.id)).toBeNull();
+    } finally {
+      await setup!.query(
+        "UPDATE community.work_publishing_settings SET publication_policy='DIRECT_PUBLICATION' WHERE id='settings'",
+      );
+    }
+  });
   it("validates distinct Catalog-media tuples even when delimiter-based keys collide", async () => {
     const first = "article-qa",
       second = "article-qa:pair";

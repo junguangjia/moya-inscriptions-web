@@ -90,6 +90,12 @@ export const articleAuthoringPaths: Record<string, unknown> = {
     ),
   },
   [article]: {
+    delete: operation(
+      "deleteOwnedArticleDraft",
+      "ArticleDraftDeletionResult",
+      "DeleteArticleDraftCommand",
+      [path("articleId")],
+    ),
     get: operation("readOwnedArticleDraft", "ArticleDraft", undefined, [
       path("articleId"),
     ]),

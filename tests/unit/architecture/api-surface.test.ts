@@ -114,6 +114,7 @@ describe("@moya/api server-only surface", () => {
       "parseArticleBlockEditsCommand",
       "parseArticleCandidateCommand",
       "parseArticleDraftCreateCommand",
+      "parseArticleDraftDeletionCommand",
       "parseArticleDraftListQuery",
       "parseArticleDraftUpdateCommand",
       "parseArticleId",

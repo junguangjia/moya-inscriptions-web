@@ -538,6 +538,22 @@ export const updateArticleDraftCommandSchema = withCoverCheck(
 export type UpdateArticleDraftCommand = z.infer<
   typeof updateArticleDraftCommandSchema
 >;
+export const deleteArticleDraftCommandSchema = z.strictObject({
+  requestId: requestIdSchema,
+  expectedVersion: versionSchema,
+});
+export type DeleteArticleDraftCommand = z.infer<
+  typeof deleteArticleDraftCommandSchema
+>;
+export const articleDraftDeletionResultSchema = z.strictObject({
+  id: articleAuthoringArticleIdSchema,
+  deleted: z.literal(true),
+  publicVersion: versionSchema.nullable(),
+});
+export type ArticleDraftDeletionResult = z.infer<
+  typeof articleDraftDeletionResultSchema
+>;
+
 export const articleCandidateCommandSchema = z.strictObject({
   requestId: requestIdSchema,
   expectedVersion: versionSchema,

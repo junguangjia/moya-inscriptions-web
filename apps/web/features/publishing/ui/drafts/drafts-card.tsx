@@ -78,7 +78,6 @@ export const DraftsCard = ({
       },
   );
   const [picker, setPicker] = useState(false);
-  const [pickerType, setPickerType] = useState<"work" | "article">("work");
   const openerRef = useRef<HTMLButtonElement>(null);
   const pendingTarget = useRef<ProductEditorTarget | null>(null);
   const pendingArticleEpoch = useRef<number | null>(null);
@@ -163,7 +162,6 @@ export const DraftsCard = ({
     )
       return;
     author.cache.delete(returnKey);
-    setPickerType("article");
     setPicker(true);
   }, [
     accountId,
@@ -236,11 +234,7 @@ export const DraftsCard = ({
   const newest = state.status === "ready" ? state.newest : null;
   const text = countText(state);
   const label = articleEnabled ? "草稿箱" : "草稿";
-  const detail = articleEnabled
-    ? state.status === "ready"
-      ? `${state.total === 0 ? "暂无作品草稿" : `${state.total} 份作品草稿`} + 专题草稿`
-      : `${text} + 专题草稿`
-    : text;
+  const detail = articleEnabled ? "作品与专题草稿，长按卡片可多选管理" : text;
 
   return (
     <div className={styles.stack} data-drafts-card-stack="">
@@ -284,7 +278,6 @@ export const DraftsCard = ({
           aria-label={`${label}，${detail}`}
           className={homeStyles.cardAction}
           onClick={() => {
-            setPickerType("work");
             setPicker(true);
           }}
           type="button"
@@ -298,7 +291,6 @@ export const DraftsCard = ({
               <DraftsPicker
                 accountId={accountId}
                 articleEnabled={articleEnabled}
-                initialType={pickerType}
                 onOpenArticle={(id) => {
                   pendingTarget.current = { type: "article-draft", id };
                   pendingArticleEpoch.current = authorClient.accountEpoch();

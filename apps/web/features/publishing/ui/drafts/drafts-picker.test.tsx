@@ -20,6 +20,32 @@ vi.mock("../../publishing-provider", async () => {
   };
 });
 
+vi.mock("../../../authors/author-context", () => ({
+  useAuthors: () => ({
+    viewer: { id: `user-${"a".repeat(32)}` },
+    checking: false,
+    sessionError: false,
+    refresh: vi.fn(),
+  }),
+}));
+vi.mock(
+  "../../../../lib/public-api/author-community-client",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("../../../../lib/public-api/author-community-client")
+      >();
+    return {
+      ...original,
+      authorClient: {
+        ...original.authorClient,
+        account: () => `user-${"a".repeat(32)}`,
+        accountEpoch: () => 1,
+      },
+    };
+  },
+);
+
 import { act } from "react";
 
 import { PublishingRequestError } from "../../publishing-data";

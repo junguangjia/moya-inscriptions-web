@@ -90,7 +90,7 @@ const publishingMethods: Record<string, string[]> = {
 const articleAuthoringMethods: Record<string, string[]> = {
   "/v1/community/article-authoring": ["get", "post"],
   "/v1/community/article-authoring/media": ["get"],
-  "/v1/community/article-authoring/{articleId}": ["get", "put"],
+  "/v1/community/article-authoring/{articleId}": ["delete", "get", "put"],
   ...Object.fromEntries(
     ["blocks", "validate", "preview", "publish", "withdraw"].map((action) => [
       `/v1/community/article-authoring/{articleId}/${action}`,

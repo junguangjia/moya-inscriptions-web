@@ -68,6 +68,7 @@
 }
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: var(--yoyi-space-4);
@@ -75,7 +76,7 @@
   max-width: calc(100% - 24px);
   padding: var(--yoyi-space-2) var(--yoyi-space-3);
   position: relative;
-  border-radius: var(--yoyi-radius-full);
+  border-radius: var(--yoyi-radius-xl);
 }
 .formattingRow,
 .utilityRow {
@@ -84,7 +85,24 @@
   justify-content: center;
   gap: var(--yoyi-space-1);
 }
+.desktopTools {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-1);
+}
+.toolbar .mobileTools {
+  display: none;
+}
+.blockStyles {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.blockStyles button {
+  padding-inline: var(--yoyi-space-3);
+  font-size: var(--yoyi-type-body-small-size);
+}
 .utilityRow {
+  flex-wrap: wrap;
   padding-left: var(--yoyi-space-3);
   border-left: 1px solid var(--yoyi-color-border-subtle);
 }
@@ -334,6 +352,12 @@
   cursor: pointer;
 }
 @media (max-width: 760px) {
+  .desktopTools {
+    display: none;
+  }
+  .toolbar .mobileTools {
+    display: inline-flex;
+  }
   .toolbar {
     flex-direction: column;
     gap: 0;

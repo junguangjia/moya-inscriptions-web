@@ -16,6 +16,8 @@ import {
   articleValidationResultSchema,
   createArticleDraftCommandSchema,
   updateArticleDraftCommandSchema,
+  deleteArticleDraftCommandSchema,
+  articleDraftDeletionResultSchema,
   catalogIdSchema,
   emptyArticleDocument,
 } from "@moya/contracts/schemas";
@@ -27,6 +29,7 @@ import type {
   ArticleDocument,
   CreateArticleDraftCommand,
   UpdateArticleDraftCommand,
+  DeleteArticleDraftCommand,
 } from "@moya/contracts";
 import { authorClient } from "./author-community-client";
 
@@ -46,7 +49,7 @@ const request = async <Value>(
   path: string,
   parser: Parser<Value>,
   options: {
-    readonly method?: "GET" | "POST" | "PUT";
+    readonly method?: "GET" | "POST" | "PUT" | "DELETE";
     readonly body?: unknown;
     readonly signal?: AbortSignal | undefined;
   } = {},
@@ -160,6 +163,16 @@ export const articleAuthoringClient = {
     request(`/${segment(id)}`, articleDraftSchema, {
       method: "PUT",
       body: updateArticleDraftCommandSchema.parse(command),
+      signal,
+    }),
+  deleteDraft: (
+    id: ArticleDraft["id"],
+    command: DeleteArticleDraftCommand,
+    signal?: AbortSignal,
+  ) =>
+    request(`/${segment(id)}`, articleDraftDeletionResultSchema, {
+      method: "DELETE",
+      body: deleteArticleDraftCommandSchema.parse(command),
       signal,
     }),
   validate: (

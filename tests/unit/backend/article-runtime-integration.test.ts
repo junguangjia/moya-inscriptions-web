@@ -45,6 +45,11 @@ const makePort = () =>
     editBlocks: vi.fn(async () => draft),
     publish: vi.fn(async () => draft),
     withdraw: vi.fn(async () => draft),
+    deleteDraft: vi.fn(async () => ({
+      id: draft.id,
+      deleted: true as const,
+      publicVersion: null,
+    })),
     validate: async () => ({
       id: draft.id,
       version: 1,

@@ -131,6 +131,7 @@ const AuthorProduct = ({
               <T02pProductPreview
                 {...preview}
                 detailScopeKey={author.viewer?.id ?? "guest"}
+                liveThreads
                 // Publishing takes the one dock action; Search moves to the headers.
                 navigationAction={
                   articleAuthoring ? (

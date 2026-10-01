@@ -102,3 +102,20 @@ export function ThreadsFeed({
     </div>
   );
 }
+
+/**
+ * 话题 where the live Threads are not composed (Production, and any
+ * composition without the author and publishing providers): Community V1
+ * enables nothing in Production, so nothing is read and there is no retry.
+ */
+export function ThreadsUnavailable() {
+  return (
+    <section
+      className={homeStyles.stateMessage}
+      role="status"
+      data-threads-state="unavailable"
+    >
+      <h2>话题暂时不可用</h2>
+    </section>
+  );
+}

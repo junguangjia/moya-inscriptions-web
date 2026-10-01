@@ -76,6 +76,8 @@ import {
   articleAuthoringListQuerySchema,
   articleAuthoringCreateSchema,
   articleAuthoringUpdateSchema,
+  deleteArticleDraftCommandSchema,
+  articleDraftDeletionResultSchema,
   articleBlockEditsCommandSchema,
   articleAuthoringCandidateSchema,
   articleValidationResultSchema,
@@ -115,6 +117,12 @@ export const articleAuthoringJsonSchemas = {
   ),
   UpdateArticleDraftCommand: articleAuthoringJsonSchema(
     articleAuthoringUpdateSchema,
+  ),
+  DeleteArticleDraftCommand: articleAuthoringJsonSchema(
+    deleteArticleDraftCommandSchema,
+  ),
+  ArticleDraftDeletionResult: articleAuthoringJsonSchema(
+    articleDraftDeletionResultSchema,
   ),
   ArticleBlockEditsCommand: articleAuthoringJsonSchema(
     articleBlockEditsCommandSchema,

@@ -201,6 +201,8 @@ export type {
   ArticleDraft,
   CreateArticleDraftCommand,
   UpdateArticleDraftCommand,
+  DeleteArticleDraftCommand,
+  ArticleDraftDeletionResult,
   PublishArticleCommand,
   ArticleCandidateCommand,
   ArticleOwnMediaListQuery,

@@ -10,6 +10,8 @@ import type {
   ArticleBlockEditsCommand,
   CreateArticleDraftCommand,
   UpdateArticleDraftCommand,
+  DeleteArticleDraftCommand,
+  ArticleDraftDeletionResult,
   ArticleCandidateCommand,
 } from "@moya/contracts";
 import type {
@@ -61,6 +63,13 @@ export class ArticleAuthoringService {
     command: UpdateArticleDraftCommand,
   ): Promise<ArticleDraft> {
     return this.port.save(actor, id, command, this.now());
+  }
+  deleteDraft(
+    actor: ArticleAuthoringActor,
+    id: ArticleId,
+    command: DeleteArticleDraftCommand,
+  ): Promise<ArticleDraftDeletionResult> {
+    return this.port.deleteDraft(actor, id, command, this.now());
   }
   validate(
     actor: ArticleAuthoringActor,

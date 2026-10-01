@@ -333,7 +333,7 @@ GRANT SELECT, INSERT ON TABLE community.article_documents,
 -- Article projection; this adds no Payload CRUD or owner reassignment.
 GRANT SELECT ON TABLE community.published_authored_articles TO :"app_role";
 GRANT UPDATE (version, title, cover_ref_id, document, fingerprint, status,
-  published_version, pending_version, first_published_at, published_at, updated_at)
+  published_version, pending_version, first_published_at, published_at, updated_at, deleted_at)
 ON TABLE community.article_documents TO :"app_role";
 GRANT EXECUTE ON FUNCTION
   community.article_catalog_references_published(TEXT[], TEXT[], TEXT[])

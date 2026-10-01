@@ -230,7 +230,7 @@ export const createArticleDelegationStore = (
   ): Promise<void> => {
     const candidate = await db.query(
       `SELECT id FROM community.article_documents
-      WHERE id=$1 AND owner_id=$2 AND version=$3 AND fingerprint=$4 FOR SHARE`,
+      WHERE id=$1 AND owner_id=$2 AND version=$3 AND fingerprint=$4 AND deleted_at IS NULL FOR SHARE`,
       [input.articleId, ownerId, input.expectedVersion, input.fingerprint],
     );
     if (candidate.rowCount !== 1)

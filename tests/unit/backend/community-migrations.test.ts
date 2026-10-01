@@ -80,6 +80,7 @@ describe("community migration family", () => {
         "20260930020000_article_authoring.sql",
         "20260930030000_article_authoring_delegation.sql",
         "20260930040000_article_consent_uid_check.sql",
+        "20261001010000_article_draft_deletion.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);

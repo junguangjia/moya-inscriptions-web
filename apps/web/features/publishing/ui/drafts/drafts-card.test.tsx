@@ -2,7 +2,7 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { client, author, entry, shell, articlePanel } = vi.hoisted(() => ({
+const { client, author, entry, shell, articleClient } = vi.hoisted(() => ({
   client: { listDrafts: vi.fn(), deleteDraft: vi.fn() },
   author: {
     cache: new Map<string, unknown>(),
@@ -14,7 +14,7 @@ const { client, author, entry, shell, articlePanel } = vi.hoisted(() => ({
   },
   entry: { checking: false, openEditor: vi.fn() },
   shell: { activeEditor: null, activeProfile: null, openEditor: vi.fn() },
-  articlePanel: vi.fn(),
+  articleClient: { list: vi.fn(), deleteDraft: vi.fn() },
 }));
 vi.mock(
   "../../../../lib/public-api/author-community-client",
@@ -37,19 +37,12 @@ vi.mock("../../../product-shell/product-shell", () => ({
   useProductShell: () => shell,
 }));
 vi.mock(
-  "../../../editorial-content/article-authoring/article-drafts-panel",
-  () => ({
-    ArticleDraftsPanel: (props: { onOpen: (id: string) => void }) => {
-      articlePanel();
-      return (
-        <button
-          type="button"
-          onClick={() => props.onOpen(`article-${"b".repeat(32)}`)}
-        >
-          打开专题测试草稿
-        </button>
-      );
-    },
+  "../../../../lib/public-api/article-authoring-client",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../../lib/public-api/article-authoring-client")
+    >()),
+    articleAuthoringClient: articleClient,
   }),
 );
 vi.mock("../../publishing-data", async (importOriginal) => ({
@@ -97,7 +90,25 @@ beforeEach(() => {
   shell.openEditor.mockReturnValue(true);
   shell.activeEditor = null;
   shell.activeProfile = null;
-  articlePanel.mockClear();
+  author.checking = false;
+  author.sessionError = false;
+  author.viewer = { id: ACCOUNT };
+  articleClient.list.mockResolvedValue({
+    items: [
+      {
+        id: `article-${"b".repeat(32)}`,
+        ownerId: ACCOUNT,
+        version: 5,
+        title: "专题测试草稿",
+        coverRefId: null,
+        status: "draft",
+        publicVersion: null,
+        updatedAt: "2026-09-13T12:00:00.000Z",
+        fingerprint: "a".repeat(64),
+      },
+    ],
+    nextCursor: null,
+  });
   window.history.replaceState({ kind: "profile" }, "", "/#profile");
 });
 afterEach(async () => {
@@ -251,7 +262,7 @@ describe("Unified owner draft box", () => {
     await flush();
     expect(document.querySelector('[role="tablist"]')).toBeNull();
     expect(document.querySelector("[data-article-drafts-panel]")).toBeNull();
-    expect(articlePanel).not.toHaveBeenCalled();
+    expect(articleClient.list).not.toHaveBeenCalled();
     expect(card().querySelector("h3")?.textContent).toBe("草稿");
   });
 
@@ -274,17 +285,22 @@ describe("Unified owner draft box", () => {
       </ArticleAvailability>,
     );
     await flush();
-    expect(card().textContent).toContain("暂无作品草稿 + 专题草稿");
+    expect(card().textContent).toContain("作品与专题草稿");
     expect(card().textContent).not.toContain("0 份专题");
     await act(async () => openButton().click());
     await flush();
-    const tab = document.querySelector<HTMLButtonElement>(
-      '[role="tab"][data-value="article"]',
-    )!;
-    await act(async () => tab.click());
-    await flush();
-    await vi.waitFor(() => expect(articlePanel).toHaveBeenCalled());
-    await act(async () => buttonByText(document, "打开专题测试草稿").click());
+    expect(document.querySelector('[role="tablist"]')).toBeNull();
+    expect(document.querySelector('[role="tab"]')).toBeNull();
+    const articleRow = document.querySelector<HTMLElement>(
+      `li[data-article-draft-id="article-${"b".repeat(32)}"]`,
+    );
+    expect(articleRow).not.toBeNull();
+    expect(articleRow?.textContent).toContain("专题测试草稿");
+    expect(articleClient.list).toHaveBeenCalledWith(
+      { pageSize: 20 },
+      expect.any(AbortSignal),
+    );
+    await act(async () => buttonByText(articleRow!, "继续编辑").click());
     await flush();
     await vi.waitFor(() => expect(shell.openEditor).toHaveBeenCalled());
     expect(shell.openEditor).toHaveBeenCalledExactlyOnceWith(

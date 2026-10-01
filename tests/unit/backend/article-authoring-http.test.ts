@@ -96,6 +96,11 @@ const start = async (nodeEnv?: "development" | "test" | "production") => {
     })),
     publish: vi.fn(async () => ({ ...draft, status: "pending" as const })),
     withdraw: vi.fn(async () => ({ ...draft, status: "withdrawn" as const })),
+    deleteDraft: vi.fn(async () => ({
+      id: draft.id,
+      deleted: true as const,
+      publicVersion: null,
+    })),
     readPublished: vi.fn(async () => null),
     listPublished: vi.fn(async () => ({ items: [], total: 0 })),
   } satisfies ArticleAuthoringPort;
@@ -153,6 +158,49 @@ const start = async (nodeEnv?: "development" | "test" | "production") => {
 };
 
 describe("private human Article HTTP boundary", () => {
+  it("deletes only the current authenticated account's exact draft version", async () => {
+    const { port, send, headers } = await start();
+    const command = { requestId, expectedVersion: 1 };
+    expect((await send(`/${id}`, "DELETE", command, {} as never)).status).toBe(
+      401,
+    );
+    expect(
+      (
+        await send(`/${id}`, "DELETE", command, {
+          ...headers,
+          "x-author-account": fixtureUsers.second.id,
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await send(`/${id}`, "DELETE", {
+          ...command,
+          ownerId: fixtureUsers.second.id,
+        })
+      ).status,
+    ).toBe(422);
+    expect((await send(`/${id}`, "DELETE", { requestId })).status).toBe(422);
+    expect(port.deleteDraft).not.toHaveBeenCalled();
+    const response = await send(`/${id}`, "DELETE", command);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      id,
+      deleted: true,
+      publicVersion: null,
+    });
+    expect(port.deleteDraft.mock.calls[0]?.slice(0, 3)).toEqual([
+      { source: "human", userId: fixtureUsers.active.id },
+      id,
+      command,
+    ]);
+    port.deleteDraft.mockRejectedValueOnce(
+      new CommunityConflictError("article_revision_conflict"),
+    );
+    expect((await send(`/${id}`, "DELETE", command)).status).toBe(409);
+    port.deleteDraft.mockRejectedValueOnce(new CommunityNotFoundError());
+    expect((await send(`/${id}`, "DELETE", command)).status).toBe(404);
+  });
   it("mounts the authenticated route in Development and excludes it elsewhere", async () => {
     const development = await start("development");
     expect((await development.send("", "POST", createCommand)).status).toBe(

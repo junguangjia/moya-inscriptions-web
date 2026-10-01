@@ -1584,6 +1584,8 @@ export {
   articleDraftSchema,
   createArticleDraftCommandSchema,
   updateArticleDraftCommandSchema,
+  deleteArticleDraftCommandSchema,
+  articleDraftDeletionResultSchema,
   articleCandidateCommandSchema,
   publishArticleCommandSchema,
   articleAuthoringCreateSchema,

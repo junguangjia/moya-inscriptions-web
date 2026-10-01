@@ -1,6 +1,5 @@
 "use client";
 
-import { useOptionalAuthors } from "../authors/author-context";
 import { useAuthReturnView } from "../auth/auth-return";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DiscussionIcon } from "../discussion-preview/discussion-icons";
@@ -24,7 +23,7 @@ import {
   isArticleId,
   isCollectionId,
 } from "../editorial-content/use-editorial-content";
-import { ThreadsFeed } from "../threads/threads-feed";
+import { ThreadsFeed, ThreadsUnavailable } from "../threads/threads-feed";
 import { isThreadId } from "../threads/use-threads";
 import { TopicCard } from "../topics/topic-card";
 import styles from "./home-screen.module.css";
@@ -58,13 +57,15 @@ export function DiscussionScreen({
   headerStart,
   headerEnd,
   initialTopicId = null,
+  liveThreads = false,
 }: {
   readonly data: HomeSurfaceData["topics"];
   readonly headerStart?: ReactNode;
   readonly headerEnd?: ReactNode;
   readonly initialTopicId?: string | null;
+  /** The live 话题 feed needs the author and publishing providers. */
+  readonly liveThreads?: boolean;
 }) {
-  const author = useOptionalAuthors();
   const shell = useProductShell();
   const preview = useDiscussionPreview();
   const initialFeed =
@@ -232,22 +233,17 @@ export function DiscussionScreen({
             : {
                 // Real published editorial reads (content-community-completion-v1).
                 news: <EditorialNewsFeed />,
-                threads:
-                  author === null ? (
-                    <p role="status">话题暂不可用。</p>
-                  ) : (
-                    <ThreadsFeed
-                      localRead={localRead}
-                      onOpen={(id, opener) => {
-                        setLocalRead((old) => new Set(old).add(id));
-                        shell.openTopic(
-                          id,
-                          opener,
-                          shell.readActiveScrollTop(),
-                        );
-                      }}
-                    />
-                  ),
+                threads: liveThreads ? (
+                  <ThreadsFeed
+                    localRead={localRead}
+                    onOpen={(id, opener) => {
+                      setLocalRead((old) => new Set(old).add(id));
+                      shell.openTopic(id, opener, shell.readActiveScrollTop());
+                    }}
+                  />
+                ) : (
+                  <ThreadsUnavailable />
+                ),
                 topics: (
                   <>
                     <EditorialTopicsFeed />

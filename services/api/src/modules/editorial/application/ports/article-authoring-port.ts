@@ -14,6 +14,8 @@ import type {
   PublicUserId,
   CreateArticleDraftCommand,
   UpdateArticleDraftCommand,
+  DeleteArticleDraftCommand,
+  ArticleDraftDeletionResult,
   PublishArticleCommand,
 } from "@moya/contracts";
 
@@ -94,6 +96,13 @@ export interface ArticleAuthoringPort {
     command: ArticleSaveCommand,
     now: Date,
   ): Promise<ArticleDraft>;
+  /** Human-only private-draft deletion; immutable publication remains visible. */
+  deleteDraft(
+    actor: ArticleAuthoringActor,
+    id: ArticleId,
+    command: DeleteArticleDraftCommand,
+    now: Date,
+  ): Promise<ArticleDraftDeletionResult>;
   editBlocks(
     actor: ArticleAuthoringActor,
     id: ArticleId,

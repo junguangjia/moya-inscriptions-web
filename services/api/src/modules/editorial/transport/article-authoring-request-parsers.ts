@@ -3,6 +3,7 @@ import {
   articleAuthoringArticleIdSchema,
   articleAuthoringCreateSchema,
   articleAuthoringUpdateSchema,
+  deleteArticleDraftCommandSchema,
   articleAuthoringCandidateSchema,
   articleAuthoringListQuerySchema,
   articleBlockEditsCommandSchema,
@@ -37,6 +38,12 @@ export const parseArticleDraftCreateCommand = (input: unknown) =>
   parse(articleAuthoringCreateSchema, input, "article_invalid_command");
 export const parseArticleDraftUpdateCommand = (input: unknown) =>
   parse(articleAuthoringUpdateSchema, input, "article_invalid_command");
+export const parseArticleDraftDeletionCommand = (input: unknown) =>
+  parse(
+    deleteArticleDraftCommandSchema,
+    input,
+    "article_invalid_delete_command",
+  );
 export const parseArticleCandidateCommand = (input: unknown) =>
   parse(articleAuthoringCandidateSchema, input, "article_invalid_candidate");
 export const parseArticleDraftListQuery = (input: unknown) =>

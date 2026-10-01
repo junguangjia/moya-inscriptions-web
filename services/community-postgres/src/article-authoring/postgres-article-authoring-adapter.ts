@@ -32,6 +32,8 @@ import type {
   ArticleOwnMediaPage,
   ArticleDraft,
   ArticleDraftSummary,
+  DeleteArticleDraftCommand,
+  ArticleDraftDeletionResult,
   ArticleBlockEditsCommand,
   ArticlePreview,
   ArticleMediaReference,
@@ -313,7 +315,7 @@ const pendingColumns =
 const pendingFrom = `FROM community.article_documents a
   JOIN community.article_revisions r ON r.article_id=a.id AND r.version=a.pending_version
   JOIN community.public_users u ON u.id=a.owner_id AND u.status='active'
-  WHERE a.status='pending' AND a.pending_version IS NOT NULL AND r.submitted_policy='PRE_MODERATION'`;
+  WHERE a.status='pending' AND a.pending_version IS NOT NULL AND a.deleted_at IS NULL AND r.submitted_policy='PRE_MODERATION'`;
 const pendingSummaryOf = (row: PendingSummaryRow): ArticlePendingSummary => ({
   articleId: row.id as ArticleId,
   ownerId: row.owner_id as PublicUserId,
@@ -376,7 +378,7 @@ export class PostgresArticleAuthoringAdapter
   ): Promise<ArticleDraft> {
     const row = (
       await db.query<DraftRow>(
-        `SELECT ${columns} FROM community.article_documents WHERE id=$1 AND owner_id=$2 FOR ${lock.toUpperCase()}`,
+        `SELECT ${columns} FROM community.article_documents WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR ${lock.toUpperCase()}`,
         [id, actor.userId],
       )
     ).rows[0];
@@ -405,8 +407,13 @@ export class PostgresArticleAuthoringAdapter
       },
       run,
       {
-        beforeReceipt: (db: PoolClient) =>
-          this.admit(db, actor, operation, id, now),
+        beforeReceipt: async (db: PoolClient) => {
+          await this.admit(db, actor, operation, id, now);
+          // A retained receipt cannot resurrect a deleted editor lifetime.
+          // Deletion itself remains replayable under its original request id.
+          if (id !== null && action !== "article.draft.delete")
+            await this.owned(db, actor, id as ArticleId);
+        },
         ...(created ? { auditSubject: created } : {}),
       },
     );
@@ -554,7 +561,7 @@ export class PostgresArticleAuthoringAdapter
         const count = Number(
           (
             await db.query<{ count: string }>(
-              "SELECT count(*)::text AS count FROM community.article_documents WHERE owner_id=$1 AND status IN ('draft','pending')",
+              "SELECT count(*)::text AS count FROM community.article_documents WHERE owner_id=$1 AND deleted_at IS NULL AND status IN ('draft','pending')",
               [actor.userId],
             )
           ).rows[0]?.count ?? 0,
@@ -614,7 +621,7 @@ export class PostgresArticleAuthoringAdapter
       const rows = (
         await db.query<DraftSummaryRow>(
           `SELECT ${summaryColumns} FROM community.article_documents
-        WHERE owner_id=$1 AND ($2::timestamptz IS NULL OR (updated_at,id)<($2::timestamptz,$3::text))
+        WHERE owner_id=$1 AND deleted_at IS NULL AND ($2::timestamptz IS NULL OR (updated_at,id)<($2::timestamptz,$3::text))
         ORDER BY updated_at DESC,id DESC LIMIT $4`,
           [
             actor.userId,
@@ -651,6 +658,53 @@ export class PostgresArticleAuthoringAdapter
         const prior = await this.owned(db, actor, id, "update");
         assertVersion(prior, command.expectedVersion);
         return this.saveContent(db, actor, id, content, fingerprint, now);
+      },
+    );
+  }
+  async deleteDraft(
+    actor: ArticleAuthoringActor,
+    id: ArticleId,
+    command: DeleteArticleDraftCommand,
+    now: Date,
+  ): Promise<ArticleDraftDeletionResult> {
+    // Existing delegated draft/publish grants do not include private deletion.
+    if (actor.source !== "human") throw new CommunityNotFoundError();
+    return this.mutate(
+      actor,
+      id,
+      command,
+      "draft-write",
+      "article.draft.delete",
+      now,
+      async (db) => {
+        const draft = await this.owned(db, actor, id, "update");
+        assertVersion(draft, command.expectedVersion);
+        await db.query(
+          `UPDATE community.article_documents
+           SET deleted_at=$3::timestamptz,version=version+1,updated_at=$3::timestamptz
+           WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL`,
+          [id, actor.userId, now.toISOString()],
+        );
+        // Only the private draft holder is released. Publication snapshots,
+        // their media retention refs and public pointers remain authoritative.
+        await releaseHolderRefs(
+          db,
+          [{ holderKind: "article_draft", holderIds: [id] }],
+          now,
+        );
+        // Creation/save receipts carried draft content. Reuse the established
+        // content-free tombstone so a replay cannot return the removed draft.
+        await db.query(
+          `UPDATE community.author_command_receipts
+           SET result='{"permanentlyDeleted":true}'::jsonb
+           WHERE actor_id=$1 AND result->>'id'=$2`,
+          [actor.userId, id],
+        );
+        return {
+          id,
+          deleted: true as const,
+          publicVersion: draft.publicVersion,
+        };
       },
     );
   }

@@ -7418,6 +7418,34 @@
         ],
         "type": "object"
       },
+      "ArticleDraftDeletionResult": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "const": true,
+            "type": "boolean"
+          },
+          "id": {
+            "pattern": "^article-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "publicVersion": {
+            "anyOf": [
+              {
+                "maximum": 2147483647,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["id", "deleted", "publicVersion"],
+        "type": "object"
+      },
       "ArticleDraftListQuery": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -14588,6 +14616,24 @@
           }
         },
         "required": ["requestId", "workId"],
+        "type": "object"
+      },
+      "DeleteArticleDraftCommand": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expectedVersion": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          }
+        },
+        "required": ["requestId", "expectedVersion"],
         "type": "object"
       },
       "DeletedResult": {
@@ -28827,6 +28873,108 @@
       }
     },
     "/v1/community/article-authoring/{articleId}": {
+      "delete": {
+        "description": "Development only. Current human session and x-author-account are required on reads and writes. Owner identity is server bound. Expected version and fingerprint fences are checked before mutation. Agents use the separate delegated MCP resource; this session route grants no staff or Admin authority.",
+        "operationId": "deleteOwnedArticleDraft",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-author-account",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PublicUserId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "articleId",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteArticleDraftCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArticleDraftDeletionResult"
+                }
+              }
+            },
+            "description": "Exact committed result; private, no-store."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing session or stale account."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign owned identity."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Stale candidate, changed grant, receipt or reference conflict."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded document, command or query."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Required infrastructure unavailable."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["ArticleAuthoring"]
+      },
       "get": {
         "description": "Development only. Current human session and x-author-account are required on reads and writes. Owner identity is server bound. Expected version and fingerprint fences are checked before mutation. Agents use the separate delegated MCP resource; this session route grants no staff or Admin authority.",
         "operationId": "readOwnedArticleDraft",

@@ -1,10 +1,66 @@
 # Special / Article Editor V1
 
-Task: `special-article-editor-v1`, r4. Owner assignment: 2026-09-30. Baseline:
+Task: `special-article-editor-v1`, r5. Owner assignment: 2026-09-30. Baseline:
 `288d4d27e72339402b648f4458ef1aacadcfc681`. Delivery: independently reviewed
 Draft, isolated Development acceptance, private handoff. No Ready, merge, Issue
 closure, release, cloud operation or Production activation. Physical-device and
 visual judgment remain the Owner's.
+
+## r5 — Owner desktop tools and unified draft-card acceptance delta
+
+Explicit Owner feedback of 2026-10-01 authorizes direct desktop tools, one mixed
+Work/Article draft-card grid, long-press multi-selection and deletion, and reuse
+of one local acceptance entry. This extends r4 only as follows. Root remains the
+sole writer in the same worktree, branch and Draft PR. Earlier failed validation
+and Owner rejection evidence stays unchanged.
+
+Desktop displays all supported paragraph/list/quote choices, inline styles,
+finite colors, link, history, image/gallery/Catalog/divider insertion, movement
+and settings directly. Dialogs collect actual link/media/settings input. Mobile
+retains the compact floating toolbar and focused launchers.
+
+The existing draft box merges independently loaded Work and Article summaries
+into one recently-edited card grid without type tabs. Type labels preserve
+canonical distinctions. Long press selects; subsequent taps toggle selection; a
+visible selection control supplies keyboard/desktop access. Scrolling, pointer
+cancellation, a second pointer and leaving the box cancel a pending hold. Bulk
+deletion names only the fixed selected loaded cards, confirms its scope, reports
+per-item failures, keeps failed selections for retry and stops if account
+confirmation changes. Active Work editor drafts remain protected. Existing Work
+receipt replay, local-copy cleanup, media lifetime and history remain intact.
+
+Article deletion is a human-session-only removal of the private editable copy,
+version fenced and receipted in the existing Backend transaction. An internal
+nullable deletion timestamp hides it from private reads/listing, quota counts,
+pending review and delegated exact-candidate approval. Public immutable versions
+and their media remain readable. Existing audit/history persists. Deleted draft
+media pins are released; referenced public media is retained. No MCP deletion
+tool or Agent/Admin scope is added. A forward migration adds only that internal
+timestamp; executed migration bytes stay unchanged.
+
+Allowed r5 paths: existing Article tools/styles/tests and draft data hook;
+`apps/web/features/publishing/ui/drafts/` and directly affected history/card
+tests; `packages/contracts/src/article-authoring.ts` with existing
+exports/schema/JSON schema; existing Article authoring application
+ports/services/parsers, HTTP handler and PostgreSQL adapter; existing Article
+delegation exact-candidate query; one forward
+`20261001010000_article_draft_deletion.sql` plus community manifest and existing
+runtime grants; existing Article public-API client, OpenAPI source/generated
+output and architecture allowlists; directly affected contract, HTTP and
+isolated PostgreSQL tests; the existing Development sign-in page acceptance
+link; and this specification. No dependency, governance, production/auth
+provider, CMS ownership or other domain change.
+
+| Scenario         | Development                                                                  | Production                | Must Preserve                                                    |
+| ---------------- | ---------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------- |
+| Desktop toolbar  | All supported tools visible directly in wrapping floating groups             | No new Article capability | Selection, undo, restricted formats                              |
+| Phone toolbar    | Existing compact inset rounded tools                                         | Unchanged                 | No overflow; 44px controls                                       |
+| Draft box        | Work/Article cards mixed by latest edit; one entry                           | Existing Work box         | Separate storage and type semantics                              |
+| Selection        | 400ms hold; scroll cancellation; keyboard/desktop selection                  | Existing Work behavior    | Normal tap opens; release after hold does not open               |
+| Bulk delete      | Confirm fixed selected cards; partial results and retry                      | No new Article route      | Active Work draft; current account; local copies                 |
+| Article deletion | CAS plus receipt/audit; archived private copy and draft pins                 | Unavailable               | Published pointer/history/public media remain; stale writes fail |
+| Acceptance entry | Reuse owned port and one local hostname entry/tab                            | No deployment             | Task-owned services/data only; physical-phone DNS pending        |
+| Validation       | New substantive local combined plan <=900s; max two cause-backed corrections | No activation             | Full cumulative checks/review; prior failures; Draft stop        |
 
 ## r4 — Owner physical-phone acceptance correction
 

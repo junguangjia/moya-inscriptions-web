@@ -41,7 +41,8 @@ describe("ProductApplication public server rendering", () => {
       );
       expect(markup).toContain('data-product-shell=""');
       expect(markup).toContain('data-discussion-surface=""');
-      expect(markup).toContain("话题暂不可用。");
+      expect(markup).toContain('data-threads-state="unavailable"');
+      expect(markup).toContain("话题暂时不可用");
       expect(markup).not.toContain('data-threads-feed=""');
       expect(markup).not.toContain('data-article-authoring-host=""');
       expect(markup).not.toContain('data-create-work-action=""');

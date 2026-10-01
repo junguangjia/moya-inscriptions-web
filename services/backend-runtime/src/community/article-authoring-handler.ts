@@ -9,6 +9,7 @@ import {
   parseArticleOwnMediaListQuery,
   parseArticleDraftListQuery,
   parseArticleDraftUpdateCommand,
+  parseArticleDraftDeletionCommand,
   parseArticleId,
 } from "@moya/api";
 import type {
@@ -103,6 +104,11 @@ export async function handleArticleAuthoringRequest(
       const id = parseArticleId(segment);
       if (path.length === 1 && method === "GET") {
         sendJson(response, 200, await service.read(actor, id));
+        return;
+      }
+      if (path.length === 1 && method === "DELETE") {
+        const command = parseArticleDraftDeletionCommand(await body(4096));
+        sendJson(response, 200, await service.deleteDraft(actor, id, command));
         return;
       }
       if (path.length === 1 && method === "PUT") {

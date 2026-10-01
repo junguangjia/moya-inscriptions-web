@@ -363,6 +363,7 @@ export {
   parseArticleId,
   parseArticleDraftCreateCommand,
   parseArticleDraftUpdateCommand,
+  parseArticleDraftDeletionCommand,
   parseArticleCandidateCommand,
   parseArticleOwnMediaListQuery,
   parseArticleDraftListQuery,

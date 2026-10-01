@@ -639,6 +639,10 @@ const articleClientImports: ReadonlyMap<
           "articleTextLength",
         ],
       },
+      "features/publishing/ui/drafts/drafts-picker.tsx": {
+        "author-community-client": ["authorClient"],
+        "article-authoring-client": ["articleAuthoringClient"],
+      },
       "features/publishing/ui/drafts/drafts-card.tsx": {
         "author-community-client": ["authorClient"],
       },
@@ -938,6 +942,8 @@ const allowedClientContractTypes = new Set([
   "ArticleDocument",
   "ArticleDraft",
   "ArticleDraftSummary",
+  "DeleteArticleDraftCommand",
+  "ArticleDraftDeletionResult",
   "ArticleMediaReference",
   "ArticlePreview",
   "ArticleResolvedReference",
