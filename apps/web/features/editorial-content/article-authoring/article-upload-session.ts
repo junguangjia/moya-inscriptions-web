@@ -1,4 +1,5 @@
 import { authorClient } from "../../../lib/public-api/author-community-client";
+import { requestIdentity } from "../../shell/request-identity";
 import { publishingClient } from "../../../lib/public-api/work-publishing-client";
 import { createBlobHasher } from "../../publishing/hashing";
 import { createWorkerPreprocess } from "../../publishing/preprocess/worker-client";
@@ -32,7 +33,7 @@ export const createArticleUploadSession = (accountId: string) => {
     client: publishingClient,
     signal: abort.signal,
     requireAccount,
-    requestId: () => crypto.randomUUID(),
+    requestId: () => requestIdentity(),
     onSession: (session) => {
       if (heartbeat !== null) clearInterval(heartbeat);
       heartbeat =
@@ -56,8 +57,8 @@ export const createArticleUploadSession = (accountId: string) => {
     transfer: createUppyTransfer(TRANSFER_CONCURRENCY),
     preprocess: createWorkerPreprocess(),
     currentAccount: () => (sameAccount() ? accountId : null),
-    requestId: () => crypto.randomUUID(),
-    attemptId: () => crypto.randomUUID(),
+    requestId: () => requestIdentity(),
+    attemptId: () => requestIdentity(),
     preprocessConcurrency: preprocessConcurrency(
       resolveRuntimePresentationPlatform(navigator, window.innerWidth),
     ),

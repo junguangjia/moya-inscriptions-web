@@ -76,6 +76,10 @@ const click = async (text: string) => {
   await act(async () => button!.click());
 };
 beforeEach(() => {
+  // Exercise actual consent receipts on the Owner's LAN HTTP origin.
+  vi.stubGlobal("crypto", {
+    getRandomValues: crypto.getRandomValues.bind(crypto),
+  });
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -91,6 +95,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   node.remove();
+  vi.unstubAllGlobals();
 });
 describe("human consent retry UI", () => {
   it("preserves the exact unknown command through account revalidation and offers only the previous decision", async () => {

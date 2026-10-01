@@ -16,6 +16,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ArticlePreview } from "@moya/contracts";
 import type { KeyboardEvent } from "react";
 import { authorClient } from "../../../lib/public-api/author-community-client";
+import { requestIdentity } from "../../shell/request-identity";
 import {
   ArticleRequestError,
   articleAuthoringLimits,
@@ -45,7 +46,7 @@ import type { ArticleEditorProps } from "./article-editor-props";
 import { ArticleRichBody } from "./article-rich-body";
 import styles from "./article-authoring.module.css";
 
-const nextStableId = () => crypto.randomUUID().replaceAll("-", "");
+const nextStableId = () => requestIdentity().replaceAll("-", "");
 const SelectionTools = () => (
   <FormattingToolbar>
     <BasicTextStyleButton basicTextStyle="bold" />
@@ -143,7 +144,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       client: opening.client,
       currentAccount: authorClient.account,
       accountEpoch: authorClient.accountEpoch,
-      requestId: () => crypto.randomUUID(),
+      requestId: () => requestIdentity(),
       capture: () => {
         const value = latest.current;
         return {
@@ -173,7 +174,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       currentAccount: authorClient.account,
       accountEpoch: authorClient.accountEpoch,
       publish: opening.client.publish,
-      requestId: () => crypto.randomUUID(),
+      requestId: () => requestIdentity(),
     });
     publicationRef.current = publication;
     editorRef.current = instance;
@@ -264,7 +265,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     void act("preview", async () => {
       const committed = await activeSave().flush();
       const exact = {
-        requestId: crypto.randomUUID(),
+        requestId: requestIdentity(),
         expectedVersion: committed.version,
         fingerprint: committed.fingerprint,
       };

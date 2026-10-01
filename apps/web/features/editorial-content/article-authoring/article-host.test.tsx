@@ -121,6 +121,10 @@ const render = async (
   );
 };
 beforeEach(() => {
+  // Private-LAN HTTP exposes getRandomValues, but not randomUUID.
+  vi.stubGlobal("crypto", {
+    getRandomValues: crypto.getRandomValues.bind(crypto),
+  });
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -142,6 +146,7 @@ afterEach(async () => {
   await act(async () => root?.unmount());
   root = null;
   document.body.replaceChildren();
+  vi.unstubAllGlobals();
 });
 describe("Owned Article host transport lifecycle", () => {
   it("retries an unknown draft creation with the same exact identity before entering its owned editor", async () => {

@@ -10,6 +10,7 @@ import type {
 import { articleDelegationClient } from "../../../lib/public-api/article-delegation-client";
 import { useAuthors } from "../../authors/author-context";
 import { authorClient } from "../../../lib/public-api/author-community-client";
+import { requestIdentity } from "../../shell/request-identity";
 import { createArticleConsentAttempt } from "./article-consent-attempt";
 import styles from "../../auth/account-security.module.css";
 
@@ -58,7 +59,7 @@ const ArticleAccountConsent = ({
       interactionUid,
       currentAccount: authorClient.account,
       accountEpoch: authorClient.accountEpoch,
-      requestId: () => crypto.randomUUID(),
+      requestId: () => requestIdentity(),
       decide: articleDelegationClient.decide,
     });
     setAttempt(next);
@@ -223,7 +224,7 @@ export const ArticleAgentApproval = ({
     try {
       await articleDelegationClient.approve({
         ...candidate,
-        requestId: crypto.randomUUID(),
+        requestId: requestIdentity(),
         reviewTicket: review.reviewTicket,
       });
       setApproved(true);
@@ -304,7 +305,7 @@ export const ArticleAgentConnections = () => {
     setNote("");
     try {
       await articleDelegationClient.revoke(item.id, {
-        requestId: crypto.randomUUID(),
+        requestId: requestIdentity(),
         expectedGeneration: item.generation,
       });
       await load();

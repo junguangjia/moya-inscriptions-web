@@ -10,6 +10,7 @@ import type {
 import { useVisualViewportFrame } from "../../publishing/ui/editor/editor-overlay";
 import { Icon } from "@moya/ui";
 import { authorClient } from "../../../lib/public-api/author-community-client";
+import { requestIdentity } from "../../shell/request-identity";
 import {
   articleAuthoringClient,
   ArticleRequestError,
@@ -209,7 +210,7 @@ const OwnedArticles = ({
     setBusy(true);
     setNotice(null);
     creation.current ??= {
-      requestId: crypto.randomUUID(),
+      requestId: requestIdentity(),
       title: "",
       coverRefId: null,
       document: createEmptyArticleDocument(),
