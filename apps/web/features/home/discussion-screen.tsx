@@ -1,5 +1,6 @@
 "use client";
 
+import { useOptionalAuthors } from "../authors/author-context";
 import { useAuthReturnView } from "../auth/auth-return";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DiscussionIcon } from "../discussion-preview/discussion-icons";
@@ -63,6 +64,7 @@ export function DiscussionScreen({
   readonly headerEnd?: ReactNode;
   readonly initialTopicId?: string | null;
 }) {
+  const author = useOptionalAuthors();
   const shell = useProductShell();
   const preview = useDiscussionPreview();
   const initialFeed =
@@ -230,7 +232,9 @@ export function DiscussionScreen({
             : {
                 // Real published editorial reads (content-community-completion-v1).
                 news: <EditorialNewsFeed />,
-                threads: (
+                threads: author === null ? (
+                  <p role="status">话题暂不可用。</p>
+                ) : (
                   <ThreadsFeed
                     localRead={localRead}
                     onOpen={(id, opener) => {

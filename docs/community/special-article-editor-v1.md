@@ -85,6 +85,11 @@ are changed only at the seams listed here.
   `features/editorial-content/editorial-feed.tsx`, `editorial-detail.tsx`,
   `editorial-media.ts`; `features/discussion-preview/article-reader.tsx`,
   `academic-reader.tsx` only for semantic document rendering.
+- `apps/web/features/home/discussion-screen.tsx` and its focused SSR test only
+  to keep the existing provider-free production preview from invoking strict
+  Development Thread hooks while validating normal production-build navigation.
+  No Thread or authorization capability is enabled outside the existing author
+  composition; its unavailable detail uses the existing fallback.
 - `apps/web/features/product-shell/product-history.ts`, `product-shell.tsx`,
   `features/product-application/product-application.tsx` only for the existing
   conditional editor host, completion into the existing Article reader and

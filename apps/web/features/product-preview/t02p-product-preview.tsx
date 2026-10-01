@@ -267,7 +267,7 @@ const PreviewTopicOverlay = ({
         onClose={onClose}
       />
     );
-  if (isThreadId(topicId))
+  if (isThreadId(topicId) && author !== null)
     return (
       <ThreadDetail
         key={readerKey}
