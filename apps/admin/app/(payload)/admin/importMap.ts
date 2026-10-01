@@ -8,19 +8,24 @@ import { CommunityDashboardCard as CommunityDashboardCard_04d062f16b5363b8f08083
 import { S3ClientUploadHandler as S3ClientUploadHandler_f97aa6c64367fa259c5bc0567239ef24 } from "@payloadcms/storage-s3/client";
 import { OwnerWorkflowView as OwnerWorkflowView_6be79d619593d3e50db1d13a833f41ac } from "../../../src/owner-workflow/View";
 import { CommunityModerationView as CommunityModerationView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
+import { ThreadsView as ThreadsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
+import { DmModerationView as DmModerationView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CommunitySettingsView as CommunitySettingsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CommunityContentView as CommunityContentView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CommunityHistoryView as CommunityHistoryView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { WorkSubmissionsView as WorkSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
+import { AgentConnectionsView as AgentConnectionsView_3d1d3bf96b1194d419c311865cb1d9cc } from "../../../src/agent-connections/View";
+import { AgentConsentView as AgentConsentView_3d1d3bf96b1194d419c311865cb1d9cc } from "../../../src/agent-connections/View";
 import { AccountCapacityView as AccountCapacityView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { PublishingJobsView as PublishingJobsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { AgentOperationsView as AgentOperationsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
-import { AgentConnectionsView as AgentConnectionsView_7b3c0dcb1d5f4a2e9c6a8f1042d3be55 } from "../../../src/agent-connections/View";
-import { AgentConsentView as AgentConsentView_7b3c0dcb1d5f4a2e9c6a8f1042d3be55 } from "../../../src/agent-connections/View";
 import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } from "@payloadcms/next/rsc";
+import { AdminLogo, AdminIcon } from "../../../src/branding/Brand";
 
 /** @type import('payload').ImportMap */
 export const importMap = {
+  "/src/branding/Brand#AdminLogo": AdminLogo,
+  "/src/branding/Brand#AdminIcon": AdminIcon,
   "./src/media/MediaSnapshotPicker#MediaSnapshotPicker":
     MediaSnapshotPicker_a43c203023e3389c5dc6b4863a273b24,
   "/src/owner-workflow/OwnerWithdrawButton#OwnerWithdrawButton":
@@ -41,6 +46,10 @@ export const importMap = {
     OwnerWorkflowView_6be79d619593d3e50db1d13a833f41ac,
   "/src/community/View#CommunityModerationView":
     CommunityModerationView_86a1b3c9ec56e37b61bf12e13c3d66d2,
+  "/src/community/View#ThreadsView":
+    ThreadsView_86a1b3c9ec56e37b61bf12e13c3d66d2,
+  "/src/community/View#DmModerationView":
+    DmModerationView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#CommunitySettingsView":
     CommunitySettingsView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#CommunityContentView":
@@ -49,16 +58,16 @@ export const importMap = {
     CommunityHistoryView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#WorkSubmissionsView":
     WorkSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2,
+  "/src/agent-connections/View#AgentConnectionsView":
+    AgentConnectionsView_3d1d3bf96b1194d419c311865cb1d9cc,
+  "/src/agent-connections/View#AgentConsentView":
+    AgentConsentView_3d1d3bf96b1194d419c311865cb1d9cc,
   "/src/community/View#AccountCapacityView":
     AccountCapacityView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#PublishingJobsView":
     PublishingJobsView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#AgentOperationsView":
     AgentOperationsView_86a1b3c9ec56e37b61bf12e13c3d66d2,
-  "/src/agent-connections/View#AgentConnectionsView":
-    AgentConnectionsView_7b3c0dcb1d5f4a2e9c6a8f1042d3be55,
-  "/src/agent-connections/View#AgentConsentView":
-    AgentConsentView_7b3c0dcb1d5f4a2e9c6a8f1042d3be55,
   "@payloadcms/next/rsc#CollectionCards":
     CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1,
 };

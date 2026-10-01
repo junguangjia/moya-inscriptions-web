@@ -1,3 +1,4 @@
+import type { MentionReference } from "@moya/contracts";
 import {
   CommunityConflictError,
   CommunityInputError,
@@ -92,6 +93,7 @@ interface RevisionRow extends QueryResultRow, RevisionAuthorshipColumns {
   id: string;
   title: string;
   body: string;
+  mentions: MentionReference[];
   cover_item_id: string | null;
   cover_crop: MediaCrop | null;
 }
@@ -122,7 +124,7 @@ export const readEditableWork = async (
       throw new CommunityNotFoundError();
     const revision = (
       await db.query<RevisionRow>(
-        "SELECT id,title,body,authorship_kind,reference_title,original_author,source_note,cover_item_id,cover_crop FROM community.work_revisions WHERE id=$1",
+        "SELECT id,title,body,mentions,authorship_kind,reference_title,original_author,source_note,cover_item_id,cover_crop FROM community.work_revisions WHERE id=$1",
         [work.author_revision_id],
       )
     ).rows[0];
@@ -145,6 +147,7 @@ export const readEditableWork = async (
       content: {
         title: revision.title,
         body: revision.body,
+        ...(revision.mentions.length ? { mentions: revision.mentions } : {}),
         authorship: revisionAuthorship(revision),
         visibility: work.visibility,
         items: items.map((item) => ({

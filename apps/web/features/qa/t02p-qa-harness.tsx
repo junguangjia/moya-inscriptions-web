@@ -3,6 +3,9 @@
 import { useCallback, useState } from "react";
 
 import { T02pProductPreview } from "../product-preview/t02p-product-preview";
+import { AuthorProvider } from "../authors/author-context";
+import { PublishingEntryProvider } from "../publishing/publishing-entry";
+import { PublishingProvider } from "../publishing/publishing-provider";
 import { CommentSection } from "../comments/comment-section";
 import {
   qaCommentScenarioLabels,
@@ -171,181 +174,204 @@ export const T02pQaHarness = ({
   );
 
   return (
-    <main
-      data-catalog-scenario={catalogScenario}
-      data-comment-scenario={commentScenario}
-      data-home-scenario={homeScenario}
-      data-qa-chrome={qaChrome}
-      data-search-scenario={searchScenario}
-      data-t02p-qa-harness=""
-    >
-      {qaChrome === "visible" ? (
-        <aside aria-label="T02P QA controls" data-qa-controls="">
-          <h1>T02P QA Harness</h1>
-          <label htmlFor="t02p-qa-platform">QA presentation platform</label>
-          <select
-            id="t02p-qa-platform"
-            data-qa-platform-selector=""
-            value={platformMode}
-            onChange={(event) => {
-              const next = platformOptions.find(
-                ([candidate]) => candidate === event.currentTarget.value,
-              )?.[0];
-              if (next !== undefined) setPlatformMode(next);
-            }}
+    // The real Discussion panels read community data through the author seam
+    // and observe publishing; the seam renders its own feedback region, so it
+    // wraps the harness root rather than sitting inside it.
+    <AuthorProvider signInHref="/dev/community">
+      <PublishingProvider>
+        <PublishingEntryProvider>
+          <main
+            data-catalog-scenario={catalogScenario}
+            data-comment-scenario={commentScenario}
+            data-home-scenario={homeScenario}
+            data-qa-chrome={qaChrome}
+            data-search-scenario={searchScenario}
+            data-t02p-qa-harness=""
           >
-            {platformOptions.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+            {qaChrome === "visible" ? (
+              <aside aria-label="T02P QA controls" data-qa-controls="">
+                <h1>T02P QA Harness</h1>
+                <label htmlFor="t02p-qa-platform">
+                  QA presentation platform
+                </label>
+                <select
+                  id="t02p-qa-platform"
+                  data-qa-platform-selector=""
+                  value={platformMode}
+                  onChange={(event) => {
+                    const next = platformOptions.find(
+                      ([candidate]) => candidate === event.currentTarget.value,
+                    )?.[0];
+                    if (next !== undefined) setPlatformMode(next);
+                  }}
+                >
+                  {platformOptions.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
 
-          <label htmlFor="t02p-qa-search-scenario">QA Search scenario</label>
-          <select
-            id="t02p-qa-search-scenario"
-            data-qa-search-scenario-selector=""
-            value={searchScenario}
-            onChange={(event) => {
-              const next = qaSearchScenarioNames.find(
-                (candidate) => candidate === event.currentTarget.value,
-              );
-              if (next !== undefined) setSearchScenario(next);
-            }}
-          >
-            {qaSearchScenarioNames.map((value) => (
-              <option key={value} value={value}>
-                {searchScenarioLabels[value]}
-              </option>
-            ))}
-          </select>
+                <label htmlFor="t02p-qa-search-scenario">
+                  QA Search scenario
+                </label>
+                <select
+                  id="t02p-qa-search-scenario"
+                  data-qa-search-scenario-selector=""
+                  value={searchScenario}
+                  onChange={(event) => {
+                    const next = qaSearchScenarioNames.find(
+                      (candidate) => candidate === event.currentTarget.value,
+                    );
+                    if (next !== undefined) setSearchScenario(next);
+                  }}
+                >
+                  {qaSearchScenarioNames.map((value) => (
+                    <option key={value} value={value}>
+                      {searchScenarioLabels[value]}
+                    </option>
+                  ))}
+                </select>
 
-          <label htmlFor="t02p-qa-home-scenario">QA Home scenario</label>
-          <select
-            id="t02p-qa-home-scenario"
-            data-qa-home-scenario-selector=""
-            value={homeScenario}
-            onChange={(event) => {
-              const next = homeScenarioNames.find(
-                (candidate) => candidate === event.currentTarget.value,
-              );
-              if (next !== undefined) setHomeScenario(next);
-            }}
-          >
-            {homeScenarioNames.map((value) => (
-              <option key={value} value={value}>
-                {homeScenarioLabels[value]}
-              </option>
-            ))}
-          </select>
+                <label htmlFor="t02p-qa-home-scenario">QA Home scenario</label>
+                <select
+                  id="t02p-qa-home-scenario"
+                  data-qa-home-scenario-selector=""
+                  value={homeScenario}
+                  onChange={(event) => {
+                    const next = homeScenarioNames.find(
+                      (candidate) => candidate === event.currentTarget.value,
+                    );
+                    if (next !== undefined) setHomeScenario(next);
+                  }}
+                >
+                  {homeScenarioNames.map((value) => (
+                    <option key={value} value={value}>
+                      {homeScenarioLabels[value]}
+                    </option>
+                  ))}
+                </select>
 
-          <label htmlFor="t02p-qa-user-scenario">QA User scenario</label>
-          <select
-            id="t02p-qa-user-scenario"
-            data-qa-user-scenario-selector=""
-            value={userScenario}
-            onChange={(event) => {
-              const next = qaUserScenarioNames.find(
-                (candidate) => candidate === event.currentTarget.value,
-              );
-              if (next !== undefined) setUserScenario(next);
-            }}
-          >
-            {qaUserScenarioNames.map((value) => (
-              <option key={value} value={value}>
-                {qaUserScenarioLabels[value]}
-              </option>
-            ))}
-          </select>
+                <label htmlFor="t02p-qa-user-scenario">QA User scenario</label>
+                <select
+                  id="t02p-qa-user-scenario"
+                  data-qa-user-scenario-selector=""
+                  value={userScenario}
+                  onChange={(event) => {
+                    const next = qaUserScenarioNames.find(
+                      (candidate) => candidate === event.currentTarget.value,
+                    );
+                    if (next !== undefined) setUserScenario(next);
+                  }}
+                >
+                  {qaUserScenarioNames.map((value) => (
+                    <option key={value} value={value}>
+                      {qaUserScenarioLabels[value]}
+                    </option>
+                  ))}
+                </select>
 
-          <label htmlFor="t02p-qa-catalog-scenario">QA Catalog scenario</label>
-          <select
-            id="t02p-qa-catalog-scenario"
-            data-qa-catalog-scenario-selector=""
-            value={catalogScenario}
-            onChange={(event) => {
-              const next = catalogScenarioOptions.find(
-                ([candidate]) => candidate === event.currentTarget.value,
-              )?.[0];
-              if (next !== undefined) setCatalogScenario(next);
-            }}
-          >
-            {catalogScenarioOptions.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <label htmlFor="t02p-qa-comment-scenario">QA Comment scenario</label>
-          <select
-            id="t02p-qa-comment-scenario"
-            data-qa-comment-scenario-selector=""
-            value={commentScenario}
-            onChange={(event) => {
-              const next = qaCommentScenarioNames.find(
-                (candidate) => candidate === event.currentTarget.value,
-              );
-              if (next !== undefined) setCommentScenario(next);
-            }}
-          >
-            {qaCommentScenarioNames.map((value) => (
-              <option key={value} value={value}>
-                {qaCommentScenarioLabels[value]}
-              </option>
-            ))}
-          </select>
-        </aside>
-      ) : null}
+                <label htmlFor="t02p-qa-catalog-scenario">
+                  QA Catalog scenario
+                </label>
+                <select
+                  id="t02p-qa-catalog-scenario"
+                  data-qa-catalog-scenario-selector=""
+                  value={catalogScenario}
+                  onChange={(event) => {
+                    const next = catalogScenarioOptions.find(
+                      ([candidate]) => candidate === event.currentTarget.value,
+                    )?.[0];
+                    if (next !== undefined) setCatalogScenario(next);
+                  }}
+                >
+                  {catalogScenarioOptions.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <label htmlFor="t02p-qa-comment-scenario">
+                  QA Comment scenario
+                </label>
+                <select
+                  id="t02p-qa-comment-scenario"
+                  data-qa-comment-scenario-selector=""
+                  value={commentScenario}
+                  onChange={(event) => {
+                    const next = qaCommentScenarioNames.find(
+                      (candidate) => candidate === event.currentTarget.value,
+                    );
+                    if (next !== undefined) setCommentScenario(next);
+                  }}
+                >
+                  {qaCommentScenarioNames.map((value) => (
+                    <option key={value} value={value}>
+                      {qaCommentScenarioLabels[value]}
+                    </option>
+                  ))}
+                </select>
+              </aside>
+            ) : null}
 
-      <QaUtilitiesProvider
-        initialSearchOpen={search.initialOpen}
-        resetKey={`${searchScenario}:${userScenario}`}
-      >
-        <T02pProductPreview
-          quickActions={quickActions}
-          catalogDetailLoader={loadQaDetail}
-          key={homeScenario}
-          developmentPlatformOverride={
-            platformMode === "auto" ? null : platformMode
-          }
-          initialHomeFeed={initialHomeFeed ?? home.initialFeed}
-          onHomeFeedChange={setActiveHomeFeed}
-          initialPlatform={initialPlatform}
-          initialTopicId={initialTopicId ?? home.initialTopicId ?? null}
-          navigationAction={<QaNavigationSearchAction />}
-          productUtility={
-            <QaProductUtilities
-              activeHomeFeed={activeHomeFeed}
-              catalogItems={visualCatalogItems}
-              initialKeyword={search.initialKeyword}
-              key={`${searchScenario}:${userScenario}`}
-              showEmptyState={search.showEmptyState}
-              showRecentSearches={search.showRecentSearches}
-              userScenarioName={userScenario}
-            />
-          }
-          renderCommentSection={(catalogId) => (
-            <CommentSection
-              catalogId={catalogId}
-              currentUser={qaCurrentUser}
-              items={commentStore.getItems(catalogId)}
-              key={`${commentScenario}:${catalogId}`}
-              onSendComment={(text) =>
-                commentStore.sendComment(catalogId, text, qaCurrentUser)
-              }
-              onSendReply={(target, text) =>
-                commentStore.sendReply(catalogId, target, text, qaCurrentUser)
-              }
-              onToggleLike={(commentId, replyId) =>
-                commentStore.toggleLike(catalogId, commentId, replyId)
-              }
-              scenario={commentScenario}
-            />
-          )}
-          showDevelopmentPagerControls={qaChrome !== "hidden"}
-          states={states}
-        />
-      </QaUtilitiesProvider>
-    </main>
+            <QaUtilitiesProvider
+              initialSearchOpen={search.initialOpen}
+              resetKey={`${searchScenario}:${userScenario}`}
+            >
+              <T02pProductPreview
+                quickActions={quickActions}
+                catalogDetailLoader={loadQaDetail}
+                key={homeScenario}
+                developmentPlatformOverride={
+                  platformMode === "auto" ? null : platformMode
+                }
+                initialHomeFeed={initialHomeFeed ?? home.initialFeed}
+                onHomeFeedChange={setActiveHomeFeed}
+                initialPlatform={initialPlatform}
+                initialTopicId={initialTopicId ?? home.initialTopicId ?? null}
+                liveThreads
+                navigationAction={<QaNavigationSearchAction />}
+                productUtility={
+                  <QaProductUtilities
+                    activeHomeFeed={activeHomeFeed}
+                    catalogItems={visualCatalogItems}
+                    initialKeyword={search.initialKeyword}
+                    key={`${searchScenario}:${userScenario}`}
+                    showEmptyState={search.showEmptyState}
+                    showRecentSearches={search.showRecentSearches}
+                    userScenarioName={userScenario}
+                  />
+                }
+                renderCommentSection={(catalogId) => (
+                  <CommentSection
+                    catalogId={catalogId}
+                    currentUser={qaCurrentUser}
+                    items={commentStore.getItems(catalogId)}
+                    key={`${commentScenario}:${catalogId}`}
+                    onSendComment={(text) =>
+                      commentStore.sendComment(catalogId, text, qaCurrentUser)
+                    }
+                    onSendReply={(target, text) =>
+                      commentStore.sendReply(
+                        catalogId,
+                        target,
+                        text,
+                        qaCurrentUser,
+                      )
+                    }
+                    onToggleLike={(commentId, replyId) =>
+                      commentStore.toggleLike(catalogId, commentId, replyId)
+                    }
+                    scenario={commentScenario}
+                  />
+                )}
+                showDevelopmentPagerControls={qaChrome !== "hidden"}
+                states={states}
+              />
+            </QaUtilitiesProvider>
+          </main>
+        </PublishingEntryProvider>
+      </PublishingProvider>
+    </AuthorProvider>
   );
 };

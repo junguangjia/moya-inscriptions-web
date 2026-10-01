@@ -383,12 +383,15 @@ Active development tracks (independent of the parked cloud track):
    discussions and Admin existing-work management. Accepted presentation
    includes shared author bars, inscription rows, long-press actions, My
    display/account settings, icon-only Detail actions, direct avatar cropping
-   and Save recovery after Back or refresh. Comment, reply and composer avatars
-   follow the saved profile. Work creation/editing/deletion entrances remain
-   frozen; favorites/likes list filters remain hidden. Backend authorization,
-   media ownership and the America/New_York avatar-change rule remain in force.
-   The [Behavior Matrix](community/phase4-author-community-v1.md) preserves
-   scope and acceptance history;
+   and Save recovery after Back or refresh. Comment and reply avatars follow the
+   saved profile; since the Owner's 2026-09-25 phone acceptance the composer has
+   no avatar
+   ([decision](community/content-community-completion-v1.md#11-owner-phone-acceptance-decisions-2026-09-25)).
+   Work creation/editing/deletion entrances remain frozen; favorites/likes list
+   filters remain hidden. Backend authorization, media ownership and the
+   America/New_York avatar-change rule remain in force. The
+   [Behavior Matrix](community/phase4-author-community-v1.md) preserves scope
+   and acceptance history;
    [PR #126](https://github.com/nontwo/moya-inscriptions-web/pull/126) records
    the exact delivery head, independent reviews, CI outcomes and merge
    verification. Owner acceptance does not waive failed checks. This is a
@@ -454,6 +457,29 @@ Active development tracks (independent of the parked cloud track):
      prepared durable operations, ten `artvenn_*` MCP tools, an Owner-only
      operations view and the `artvenn-admin` skill; record in
      [agent-admin-v1](community/agent-admin-v1.md).
+   - **Content, Threads and Direct Messages
+     (`content-community-completion-v1`)** — Draft PR #163, Issue #160 (r1),
+     from `0a55227`; track C of the three-track parallel plan (A
+     `email-auth-v1`, N `messaging-notification-foundation-v1`). Development
+     software, not an audit: Payload `articles` / `article-collections` with the
+     existing exact-revision approval, published-only SQL views read by the
+     Backend (`/v1/community/editorial/**`) and the Web 近闻 / 专题 tabs and
+     readers; operator-created Threads as an association over existing Works
+     (quick composer text + ≤3 static images through the accepted editor,
+     deterministic heat `Σ weight·2^(-age_days/7)`, per-user read state);
+     Article discussion through the existing root/reply tables (`target_type`
+     gains `article`, no renames); real 1:1 plain-text direct messages
+     (canonical pair, immutable per-conversation sequence, one-first-message
+     request gate, per-participant hide/mute/read, 2,000 code points, 20 new
+     pairs per UTC day, 20 messages per minute, 10 s foreground polling) in the
+     message center's 私信 tab with the profile's 私信 action; Owner-only Thread
+     and DM moderation views over the Backend operator boundary with
+     content-free audit. Frozen decisions, Behavior Matrix, path inventory, the
+     A/N interface checkpoint and the retained-environment plan are in
+     [content-community-completion-v1](community/content-community-completion-v1.md).
+     Everything is composed under `NODE_ENV=development` only; no retained
+     database was inspected or modified; Owner visual and device acceptance, the
+     independent review and the joint A/N/C QA assembly are pending.
 4. **Home Discover progressive loading** — NOT STARTED. Small product task using
    the established explicit “继续加载” pattern; not mixed into Community work
    and not begun by the Community V1 closure.

@@ -1,7 +1,9 @@
 import type { ContentIdentity } from "@moya/contracts";
 import { requestIdentity } from "../shell/request-identity";
-export const contentKey = (target: ContentIdentity) =>
-  `${target.type}:${target.id}`;
+export const contentKey = (target: {
+  readonly type: string;
+  readonly id: string;
+}) => `${target.type}:${target.id}`;
 const validTarget = (value: unknown): value is ContentIdentity => {
   const t = value as ContentIdentity;
   return (

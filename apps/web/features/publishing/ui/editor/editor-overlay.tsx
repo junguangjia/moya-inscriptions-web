@@ -100,7 +100,9 @@ export const DESKTOP_MINIMUM_WIDTH = 896;
 const editorTitle = (target: EditorTarget, state: EditorSessionState | null) =>
   (state?.kind ?? (target.type === "work" ? "edit" : "new")) === "edit"
     ? "编辑作品"
-    : "发布作品";
+    : target.type === "new" && target.threadId
+      ? "参与话题"
+      : "发布作品";
 
 type UploadSessionApi = ReturnType<typeof useUploadSession>;
 
@@ -275,7 +277,7 @@ export const EditorOverlay = ({
               <div className={styles.message}>
                 <p>登录后可发布与编辑作品。</p>
                 <div className="phase4-actions">
-                  <a href={author.signInHref}>使用开发测试账户登录</a>
+                  <a href={author.signInHref}>登录</a>
                 </div>
               </div>
             )}

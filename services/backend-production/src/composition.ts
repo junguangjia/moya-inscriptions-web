@@ -1,5 +1,10 @@
+import { PostgresNotificationAdapter } from "@moya/community-postgres";
+import { NotificationSignals } from "@moya/backend-runtime";
+import { NotificationWorker } from "./notifications/worker.js";
 import {
+  assertProductionAuthConfiguration,
   createBackendApplication,
+  createDevelopmentAuthService,
   createPublishingTransferRegistry,
   parseRuntimeConfig,
   startBackendProcess,
@@ -12,6 +17,7 @@ import {
   createPostgresPool,
   parsePostgresConfig,
   PostgresCatalogQueryAdapter,
+  PostgresEditorialContentAdapter,
 } from "@moya/catalog-postgres";
 import {
   PostgresAgentAdministrationAdapter,
@@ -19,7 +25,10 @@ import {
   PostgresAuthorCommunityAdapter,
   PostgresCommunityDiscoveryAdapter,
   PostgresCommunityCommentAdapter,
+  PostgresCommunityAuthAdapter,
   PostgresCommunityIdentityAdapter,
+  PostgresThreadAdapter,
+  PostgresDirectMessageAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
   verifyCommunityMigrationLedger,
@@ -147,6 +156,7 @@ export const prepareProductionBackend = async (
   environment: RuntimeEnvironment,
 ): Promise<PreparedProductionBackend> => {
   const runtimeConfig = parseRuntimeConfig(environment);
+  assertProductionAuthConfiguration(environment);
   if (
     runtimeConfig.nodeEnv !== "production" &&
     runtimeConfig.nodeEnv !== "development"
@@ -242,8 +252,19 @@ export const prepareProductionBackend = async (
           }),
         })
       : undefined;
+  const notificationSignals = new NotificationSignals();
+  const notificationPort =
+    runtimeConfig.nodeEnv === "development"
+      ? new PostgresNotificationAdapter(communityPool)
+      : undefined;
+  const notificationWorker = notificationPort
+    ? new NotificationWorker(notificationPort, (ids) =>
+        notificationSignals.publish(ids),
+      )
+    : undefined;
   const closeResources = async (): Promise<void> => {
     // Running jobs finish or give their leases back before the pools close.
+    await notificationWorker?.stop();
     await publishingWorker?.stop();
     await Promise.all([
       closePostgresPool(pool),
@@ -278,7 +299,16 @@ export const prepareProductionBackend = async (
       storageUrlResolver,
       healthReadinessCheck: readinessCheck,
       communityIdentityPort,
+      ...(() => {
+        if (runtimeConfig.nodeEnv !== "development") return {};
+        const authService = createDevelopmentAuthService(
+          new PostgresCommunityAuthAdapter(communityPool),
+          environment,
+        );
+        return authService === null ? {} : { authService };
+      })(),
       communityCommentPort,
+      ...(notificationPort ? { notificationPort, notificationSignals } : {}),
       ...(runtimeConfig.nodeEnv === "development"
         ? {
             discussionPort: communityCommentPort,
@@ -286,6 +316,10 @@ export const prepareProductionBackend = async (
               communityPool,
             ),
             discoveryPort: new PostgresCommunityDiscoveryAdapter(communityPool),
+            // Published editorial views through the public read role.
+            editorialContentPort: new PostgresEditorialContentAdapter(pool),
+            threadPort: new PostgresThreadAdapter(communityPool),
+            directMessagePort: new PostgresDirectMessageAdapter(communityPool),
             authorCommunityPort: new PostgresAuthorCommunityAdapter(
               communityPool,
             ),
@@ -333,6 +367,7 @@ export const prepareProductionBackend = async (
     closeResources,
     startBackgroundWork: () => {
       publishingWorker?.start();
+      notificationWorker?.start();
     },
   };
 };

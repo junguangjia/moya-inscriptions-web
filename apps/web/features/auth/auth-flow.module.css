@@ -1,0 +1,510 @@
+.page {
+  min-height: 100dvh;
+  padding: calc(env(safe-area-inset-top, 0px) + var(--yoyi-space-5))
+    var(--yoyi-space-5)
+    calc(env(safe-area-inset-bottom, 0px) + var(--yoyi-space-9));
+  background: var(--yoyi-color-background-page);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+}
+
+.navigation {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 64rem;
+  min-height: 44px;
+  margin-inline: auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-3);
+}
+
+.back {
+  min-height: 44px;
+  padding-inline: var(--yoyi-space-3);
+  margin-inline-start: calc(-1 * var(--yoyi-space-3));
+  font-weight: 400;
+  border-radius: var(--yoyi-radius-full);
+  white-space: nowrap;
+}
+
+.progress {
+  display: flex;
+  margin-inline-start: auto;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  color: var(--yoyi-color-text-tertiary);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.progress [data-current="true"] {
+  color: var(--yoyi-color-text-primary);
+  font-weight: 600;
+}
+
+.panel {
+  width: 100%;
+  max-width: 24rem;
+  margin: var(--yoyi-space-7) auto 0;
+}
+
+.intro {
+  margin-bottom: var(--yoyi-space-7);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+  margin-bottom: var(--yoyi-space-6);
+}
+
+.logo {
+  width: 3.5rem;
+  height: auto;
+}
+
+.brandName {
+  font-family: var(--yoyi-font-editorial);
+  font-size: 1rem;
+  letter-spacing: 0.025em;
+}
+
+.intro h1,
+.agreement h1 {
+  margin: 0 0 var(--yoyi-space-4);
+  font-family: var(--yoyi-font-editorial);
+  font-size: 1.75rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+
+.form {
+  display: grid;
+  gap: var(--yoyi-space-5);
+}
+
+.channels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--yoyi-space-2);
+  padding: 0;
+  border: 0;
+}
+
+.channels button {
+  min-height: 44px;
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.channels button[aria-pressed="true"] {
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-seal-red-muted);
+}
+
+.channels button:disabled {
+  color: var(--yoyi-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.channels button:focus-visible,
+.footer a:focus-visible,
+.agreementChoice input:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 3px;
+}
+
+/* Preserve keyboard focus in this flow when the mobile shell suppresses
+   ordinary tap outlines. The existing root rule also uses !important. */
+.page :focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring) !important;
+  outline-offset: 3px;
+}
+
+.field {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+
+.field label {
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.input {
+  min-width: 0;
+  min-height: 52px;
+  padding: var(--yoyi-space-4) var(--yoyi-space-5);
+  border-color: transparent;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-muted);
+  font-size: 1rem;
+  line-height: 1.5;
+  scroll-margin-block: var(--yoyi-space-8);
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--yoyi-color-error);
+}
+
+.phoneField {
+  position: relative;
+}
+
+.phoneField .input {
+  padding-left: 4.5rem;
+}
+
+.dialCode {
+  position: absolute;
+  inset: 0 auto 0 var(--yoyi-space-5);
+  display: flex;
+  align-items: center;
+  color: var(--yoyi-color-text-secondary);
+  font-size: 1rem;
+  pointer-events: none;
+}
+
+.codeInput {
+  min-height: 60px;
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.18em;
+}
+
+.codeInput::placeholder {
+  font-size: 1rem;
+  letter-spacing: normal;
+}
+
+.hint,
+.channelHint {
+  margin: 0;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+}
+
+.channelHint {
+  margin-top: calc(-1 * var(--yoyi-space-4));
+}
+
+.capabilityNotice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--yoyi-space-3);
+  margin: 0;
+  padding-block: var(--yoyi-space-4);
+  color: var(--yoyi-color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+
+.capabilityNotice p {
+  margin: 0;
+}
+
+.target {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--yoyi-space-2) var(--yoyi-space-3);
+  padding-bottom: var(--yoyi-space-3);
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+}
+
+.target p,
+.verified {
+  min-width: 0;
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.target strong {
+  color: var(--yoyi-color-text-primary);
+  font-weight: 500;
+}
+
+.target button {
+  padding-inline: var(--yoyi-space-3);
+  margin-left: auto;
+  color: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
+  font-weight: 400;
+}
+
+.resend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--yoyi-space-2);
+  margin-top: calc(-1 * var(--yoyi-space-3));
+  color: var(--yoyi-color-text-tertiary);
+  font-size: 0.8125rem;
+}
+
+.resend button {
+  min-height: 44px;
+  padding-inline: var(--yoyi-space-3);
+  color: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
+  font-size: inherit;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.primary {
+  width: 100%;
+  min-height: 52px;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font-size: 1rem;
+}
+
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--yoyi-space-3);
+  margin: 0;
+  padding: var(--yoyi-space-4);
+  border: 0;
+  border-radius: var(--yoyi-radius-lg);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-error) 7%,
+    var(--yoyi-color-background-page)
+  );
+  color: var(--yoyi-color-error);
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+
+.error > span {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.fieldError {
+  margin: 0;
+  color: var(--yoyi-color-error);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+}
+
+.agreementField {
+  display: grid;
+  gap: var(--yoyi-space-2);
+}
+
+.agreementChoice {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.65;
+  cursor: pointer;
+}
+
+.agreementChoice input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--yoyi-color-seal-red);
+}
+
+.agreementLink {
+  justify-content: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  padding-inline: 0;
+  color: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.footer {
+  margin-top: var(--yoyi-space-8);
+  text-align: center;
+}
+
+.footer p {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+
+.footer a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding-inline: var(--yoyi-space-3);
+  color: var(--yoyi-color-seal-red);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.footer a[aria-disabled="true"] {
+  color: var(--yoyi-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.footer .development {
+  margin-top: var(--yoyi-space-4);
+  color: var(--yoyi-color-text-tertiary);
+  font-size: 0.75rem;
+}
+
+.agreement {
+  max-width: 32rem;
+}
+
+.agreement h1:focus {
+  outline: none;
+}
+
+.agreement p {
+  margin: 0 0 var(--yoyi-space-6);
+  color: var(--yoyi-color-text-secondary);
+  font-size: 0.9375rem;
+  line-height: 1.85;
+}
+
+@media (min-width: 768px) {
+  .page {
+    padding-inline: var(--yoyi-space-8);
+  }
+
+  .panel {
+    margin-top: var(--yoyi-space-9);
+  }
+
+  .intro h1 {
+    font-size: 1.75rem;
+  }
+}
+
+@media (max-width: 359px) {
+  .progress {
+    gap: var(--yoyi-space-2);
+  }
+
+  .back {
+    font-size: 0.875rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page button,
+  .page input {
+    animation: none;
+    transition: none;
+  }
+}
+
+.optional {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+.agreementRow,
+.secondaryActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--yoyi-space-2);
+}
+
+.secondaryActions {
+  justify-content: space-between;
+}
+
+.secondaryActions button,
+.skip,
+.avatarChange {
+  min-height: 44px;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+}
+
+.avatarStep {
+  display: grid;
+  gap: var(--yoyi-space-5);
+  text-align: center;
+}
+
+.avatarPreview {
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto var(--yoyi-space-3);
+  overflow: hidden;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-muted);
+  font-size: 2rem;
+}
+
+.avatarPreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatarChoose,
+.avatarChange {
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+}
+
+.avatarChoose {
+  min-height: 52px;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-seal-red);
+  color: var(--yoyi-color-text-inverse);
+  font: inherit;
+}
+
+.avatarChoose:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.avatarChange {
+  background: transparent;
+  color: var(--yoyi-color-text-secondary);
+}
+
+/* AvatarEntry also serves image overlays elsewhere; this standalone chooser
+   uses its native picker and editor without the image-overlay caption. */
+.avatarChoose > span:last-child,
+.avatarChange > span:last-child {
+  display: none;
+}

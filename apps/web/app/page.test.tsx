@@ -78,9 +78,10 @@ describe("FormalPage", () => {
     vi.stubEnv("NEXT_PUBLIC_MOYA_DISCUSSION_PREVIEW", "true");
     renderToStaticMarkup(await FormalPage({}));
     expect(productApplicationMock.mock.calls[0]?.[0]).toMatchObject({
-      comments: { signInHref: "/dev/community" },
+      comments: { signInHref: "/login" },
       authorCommunity: true,
       developmentDiscussion: true,
+      liveNotifications: true,
     });
 
     productApplicationMock.mockReset();
@@ -92,6 +93,9 @@ describe("FormalPage", () => {
     });
     expect(productApplicationMock.mock.calls[0]?.[0]).not.toHaveProperty(
       "developmentDiscussion",
+    );
+    expect(productApplicationMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "liveNotifications",
     );
   });
 

@@ -5,7 +5,7 @@ import { Icon } from "@moya/ui";
 import { useProductShell } from "../product-shell/product-shell";
 import { usePreviewNavigationHistory } from "../shell/use-preview-navigation-history";
 import { ArticleReader, PostReader } from "./article-reader";
-import { AcademicReader } from "./academic-reader";
+import { AcademicReader, academicViewFromSpecial } from "./academic-reader";
 import { DiscussionCount, Heat } from "./discussion-icons";
 import { PreviewAuthorProfile } from "../authors/preview-author-profile";
 import {
@@ -434,7 +434,7 @@ export function DiscussionPreviewDetail({
             onOpenProfile={openProfile}
             renderContent={({ scrollElement, active, overlayTarget }) => (
               <AcademicReader
-                special={special}
+                article={academicViewFromSpecial(special)}
                 scrollElement={scrollElement}
                 active={active}
                 railPortalTarget={overlayTarget}

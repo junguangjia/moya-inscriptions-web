@@ -1,3 +1,5 @@
+import { remapMentions } from "../../../notifications/mention-edits";
+import type { MentionReference } from "@moya/contracts";
 import { itemDerivation } from "../../edit-readiness";
 import { createExternalStore } from "../../upload-manager-store";
 import {
@@ -81,6 +83,7 @@ export interface EditorSessionState {
   readonly workId: string | null;
   readonly title: string;
   readonly body: string;
+  readonly mentions: readonly MentionReference[];
   /** `null` = 未设置: nothing is preselected and a choice can be cleared (C05). */
   readonly authorshipKind: WorkAuthorshipKind | null;
   /** Kept while switching kinds, so 原创 → 临摹 → back restores what was typed. */
@@ -135,6 +138,7 @@ export const createEditorState = (
   workId: target.type === "work" ? target.id : null,
   title: "",
   body: "",
+  mentions: [],
   // Nothing is claimed on the author's behalf: 未设置 until they choose (C05).
   authorshipKind: null,
   reference: emptyReference,
@@ -180,6 +184,7 @@ export const authorshipOf = (
 export const contentOf = (state: EditorSessionState): WorkDraftContent => ({
   title: state.title,
   body: state.body,
+  ...(state.mentions.length ? { mentions: [...state.mentions] } : {}),
   authorship: authorshipOf(state),
   visibility: state.visibility,
   items: [...state.items],
@@ -256,6 +261,7 @@ export const sameAuthorContent = (
     JSON.stringify([
       content.title,
       content.body,
+      content.mentions ?? [],
       content.authorship === null
         ? null
         : [
@@ -298,7 +304,9 @@ export const preserveLaterConflictEdits = (
   return {
     ...selected,
     ...(changed({ title: screen.title }) ? { title: screen.title } : {}),
-    ...(changed({ body: screen.body }) ? { body: screen.body } : {}),
+    ...(changed({ body: screen.body, mentions: screen.mentions ?? [] })
+      ? { body: screen.body, mentions: screen.mentions ?? [] }
+      : {}),
     ...(changed({ authorship: screen.authorship })
       ? { authorship: screen.authorship }
       : {}),
@@ -543,7 +551,7 @@ export interface EditorSessionStore {
 
   // Author changes (each is an edit).
   setTitle(value: string): void;
-  setBody(value: string): void;
+  setBody(value: string, mentions?: readonly MentionReference[]): void;
   /** `null` clears the choice back to 未设置. */
   setAuthorshipKind(kind: WorkAuthorshipKind | null): void;
   setReference(field: ReferenceField, value: string): void;
@@ -664,7 +672,11 @@ export const createEditorSessionStore = (
     content: () => contentOf(store.get()),
 
     setTitle: (value) => edit("title", () => ({ title: value })),
-    setBody: (value) => edit("body", () => ({ body: value })),
+    setBody: (value, mentions) =>
+      edit("body", (state) => ({
+        body: value,
+        mentions: mentions ?? remapMentions(state.body, value, state.mentions),
+      })),
     setAuthorshipKind: (kind) =>
       edit(null, (state) => ({
         authorshipKind: kind,
@@ -762,6 +774,7 @@ export const createEditorSessionStore = (
         ...state,
         title: content.title,
         body: content.body,
+        mentions: content.mentions ?? [],
         authorshipKind: content.authorship?.kind ?? null,
         reference:
           content.authorship === null || content.authorship.kind === "original"

@@ -50,6 +50,7 @@ const sessionView = (
   overrides: Partial<EditorSessionView> = {},
 ): EditorSessionView => ({
   target,
+  threadId: null,
   saveMode: "saved",
   draftId: null,
   sessionId: null,

@@ -19,5 +19,8 @@
   },
   "dependencies": {
     "@moya/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3"
   }
 }

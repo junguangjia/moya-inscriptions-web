@@ -5,10 +5,8 @@ import {
   openSync,
   writeFileSync,
   realpathSync,
-  lstatSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
 } from "node:fs";
 import {
   resolve,
@@ -19,18 +17,33 @@ import {
   basename,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createHash } from "node:crypto";
-import { runWithinBudget, STARTUP_MARGIN_MS } from "./verify.mjs";
+import { runWithinBudget, STARTUP_MARGIN_MS, GRACE_MS } from "./verify.mjs";
+import { performance } from "node:perf_hooks";
+import {
+  EVIDENCE_VERSION,
+  staticCheckFiles,
+  evidenceToolchain,
+  checkInputIdentity,
+  reuseDecision,
+  readReuseSummary,
+  sourceInventory,
+  workspaceFingerprint,
+  sourceFingerprint,
+} from "./verification-evidence.mjs";
 import {
   VALIDATION_PROFILES,
   REMAINING_MS_TOKEN,
 } from "./validation-profiles.mjs";
 import {
   classifyTask,
+  isSecurityPath,
   localPaths,
   runGit,
-  nulPaths,
 } from "./ci-task-scope.mjs";
+export {
+  workspaceFingerprint,
+  sourceFingerprint,
+} from "./verification-evidence.mjs";
 
 /** Validate and resolve a private output path without creating it. */
 export function resolveFreshOutput(value, root = process.cwd()) {
@@ -63,6 +76,7 @@ export const contractCommands = () => [
     "--filter=@moya/backend-production...",
     "--filter=@moya/catalog-importer...",
     "--no-daemon",
+    "--cache-dir=.turbo/library-cache",
   ],
   [
     "pnpm",
@@ -116,7 +130,15 @@ export function taskChecks(plan, output) {
       commands: [[process.execPath, "--test", ...scriptTests()]],
     },
   ];
-  if (plan.contracts)
+  // The full Web test invocation already covers the focused contract and HTTP
+  // suites; do not run the same tests twice within one candidate plan.
+  const completeContractConsumers =
+    plan.web &&
+    (!plan.webWorkspaces?.length ||
+      ["@moya/tests", "web"].every((name) =>
+        plan.webWorkspaces.includes(name),
+      ));
+  if (plan.contracts && !completeContractConsumers)
     checks.push({
       name: "contracts",
       ...declared(VALIDATION_PROFILES.webComplete),
@@ -136,6 +158,9 @@ export function taskChecks(plan, output) {
           "all",
           "--profile",
           "complete",
+          ...(plan.webWorkspaces?.length
+            ? ["--workspaces", plan.webWorkspaces.join(",")]
+            : []),
           ...remainingArgs,
         ],
       ],
@@ -278,7 +303,181 @@ function isPublicContractPath(file) {
   );
 }
 
+// Deliberately finite: new files never acquire focused coverage by a wildcard.
+export const FOCUSED_FEEDBACK = Object.freeze({
+  "services/api/src/modules/catalog/application/services/catalog-read-service.ts":
+    {
+      kind: "backend",
+      workspace: "@moya/api",
+      tests: [
+        "unit/backend/catalog-read-service.test.ts",
+        "unit/backend/catalog-http.test.ts",
+      ],
+    },
+  "services/api/src/modules/catalog/application/mappers/catalog-public-contract-mapper.ts":
+    {
+      kind: "backend",
+      workspace: "@moya/api",
+      tests: [
+        "unit/backend/catalog-public-mapper.test.ts",
+        "unit/backend/catalog-http.test.ts",
+      ],
+    },
+  "services/api/src/modules/catalog/application/queries/catalog-list-query.ts":
+    {
+      kind: "backend",
+      workspace: "@moya/api",
+      tests: [
+        "unit/backend/catalog-list-query.test.ts",
+        "unit/backend/catalog-http.test.ts",
+      ],
+    },
+  "services/api/src/modules/catalog/application/catalog-read-projections.ts": {
+    kind: "backend",
+    workspace: "@moya/api",
+    tests: [
+      "unit/backend/catalog-read-projections.test.ts",
+      "unit/backend/catalog-http.test.ts",
+    ],
+  },
+  "services/api/src/modules/community/application/services/catalog-comment-service.ts":
+    {
+      kind: "backend",
+      workspace: "@moya/api",
+      tests: [
+        "unit/backend/catalog-comment-service.test.ts",
+        "unit/backend/community-comment-http.test.ts",
+      ],
+    },
+  "services/api/src/modules/community/application/services/community-moderation-service.ts":
+    {
+      kind: "backend",
+      workspace: "@moya/api",
+      tests: [
+        "unit/backend/community-moderation-service.test.ts",
+        "unit/backend/community-http.test.ts",
+      ],
+    },
+  "services/api/src/modules/community/application/services/author-community-service.ts":
+    {
+      kind: "backend",
+      workspace: "@moya/api",
+      tests: [
+        "unit/backend/author-community-service.test.ts",
+        "unit/backend/community-http.test.ts",
+      ],
+    },
+  "services/api/src/modules/community/application/services/agent-administration-service.ts":
+    {
+      kind: "backend",
+      workspace: "@moya/api",
+      tests: [
+        "unit/backend/agent-administration-service.test.ts",
+        "unit/backend/agent-boundary-http.test.ts",
+      ],
+    },
+  "apps/admin/src/community/endpoints.ts": {
+    kind: "admin",
+    workspace: "admin",
+    tests: ["unit/backend/community-admin-endpoints.test.ts"],
+  },
+  "apps/admin/src/community/bulk-actions.tsx": {
+    kind: "admin",
+    workspace: "admin",
+    tests: ["unit/backend/community-bulk-actions.test.ts"],
+  },
+  "apps/admin/src/agent-connections/connections-client.tsx": {
+    kind: "admin",
+    workspace: "admin",
+    tests: ["unit/admin/agent-connections-page.test.tsx"],
+  },
+  "packages/image/src/index.ts": {
+    kind: "shared",
+    workspace: "@moya/image",
+    tests: [
+      "unit/backend/image-resolver.test.ts",
+      "unit/architecture/image-surface.test.ts",
+    ],
+  },
+  "packages/search/src/index.ts": {
+    kind: "shared",
+    workspace: "@moya/search",
+    tests: [
+      "unit/backend/search-normalization.test.ts",
+      "unit/backend/search-golden.test.ts",
+    ],
+  },
+  "packages/design-tokens/src/index.ts": {
+    kind: "shared",
+    workspace: "@moya/design-tokens",
+    tests: ["unit/ui/tokens.test.ts"],
+  },
+  "packages/ui/src/components/navigation.tsx": {
+    kind: "shared",
+    workspace: "@moya/ui",
+    tests: [
+      "unit/ui/components.test.ts",
+      "unit/ui/styles-and-architecture.test.ts",
+    ],
+  },
+  "packages/ui/src/components/feedback.tsx": {
+    kind: "shared",
+    workspace: "@moya/ui",
+    tests: [
+      "unit/ui/components.test.ts",
+      "unit/ui/styles-and-architecture.test.ts",
+    ],
+  },
+  "packages/ui/src/components/layout.tsx": {
+    kind: "shared",
+    workspace: "@moya/ui",
+    tests: [
+      "unit/ui/components.test.ts",
+      "unit/ui/styles-and-architecture.test.ts",
+    ],
+  },
+  "packages/ui/src/components/primitives.tsx": {
+    kind: "shared",
+    workspace: "@moya/ui",
+    tests: [
+      "unit/ui/components.test.ts",
+      "unit/ui/styles-and-architecture.test.ts",
+    ],
+  },
+  "packages/ui/src/components/content.tsx": {
+    kind: "shared",
+    workspace: "@moya/ui",
+    tests: [
+      "unit/ui/components.test.ts",
+      "unit/ui/styles-and-architecture.test.ts",
+    ],
+  },
+  "packages/ui/src/components/tabs.tsx": {
+    kind: "shared",
+    workspace: "@moya/ui",
+    tests: [
+      "unit/ui/components.test.ts",
+      "unit/ui/styles-and-architecture.test.ts",
+    ],
+  },
+  "packages/ui/src/components/overlays.tsx": {
+    kind: "shared",
+    workspace: "@moya/ui",
+    tests: [
+      "unit/ui/components.test.ts",
+      "unit/ui/styles-and-architecture.test.ts",
+    ],
+  },
+});
+
 export function classifyFeedbackPath(file) {
+  if (
+    isSecurityPath(file) &&
+    !file.startsWith("docs/") &&
+    !file.endsWith(".md")
+  )
+    return "security";
+  if (Object.hasOwn(FOCUSED_FEEDBACK, file)) return "focused";
   if (
     file.startsWith("apps/admin/") ||
     file.startsWith("tests/cms/") ||
@@ -393,6 +592,7 @@ export function planFeedbackCommands(
     contracts: [],
     tooling: [],
     docs: [],
+    focused: [],
     apple: [],
     unsupported: [],
   };
@@ -412,10 +612,13 @@ export function planFeedbackCommands(
     ...groups.presentation,
     ...groups.behavior,
     ...groups.docs,
+    ...groups.focused,
   ];
-  const eslintFiles = [...groups.behavior, ...groups.docs].filter((file) =>
-    FEEDBACK_LINTABLE.test(file),
-  );
+  const eslintFiles = [
+    ...groups.behavior,
+    ...groups.docs,
+    ...groups.focused,
+  ].filter((file) => FEEDBACK_LINTABLE.test(file));
   if (prettierFiles.length)
     commands.push(["pnpm", "exec", "prettier", "--check", ...prettierFiles]);
   if (eslintFiles.length)
@@ -448,6 +651,45 @@ export function planFeedbackCommands(
   ].sort();
   if (scriptFiles.length)
     commands.push([process.execPath, "--test", ...scriptFiles]);
+  const focused = groups.focused.map((file) => FOCUSED_FEEDBACK[file]);
+  const missingFocusedTests = [
+    ...new Set(focused.flatMap(({ tests }) => tests)),
+  ].filter((test) => !exists(join(root, "tests", test)));
+  if (focused.length) {
+    const workspaces = [
+      ...new Set(focused.map(({ workspace }) => workspace)),
+    ].sort();
+    const buildFilters = workspaces.map(
+      (workspace) =>
+        `--filter=${workspace}${workspace === "admin" ? "^..." : "..."}`,
+    );
+    commands.push([
+      "pnpm",
+      "exec",
+      "turbo",
+      "run",
+      "build",
+      ...buildFilters,
+      "--cache-dir=.turbo/library-cache",
+    ]);
+    commands.push([
+      "pnpm",
+      "exec",
+      "turbo",
+      "run",
+      "typecheck",
+      ...workspaces.map((workspace) => `--filter=${workspace}...`),
+    ]);
+    commands.push([
+      "pnpm",
+      "--filter",
+      "@moya/tests",
+      "exec",
+      "vitest",
+      "run",
+      ...[...new Set(focused.flatMap(({ tests }) => tests))].sort(),
+    ]);
+  }
   if (groups.contracts.length) commands.push(...contractCommands());
   // An Apple delta gets the build-only Apple feedback profile under this
   // plan's remaining time. Native tests stay unchecked and are listed as such.
@@ -466,6 +708,8 @@ export function planFeedbackCommands(
   if (paths.length === 0) {
     unresolved =
       "No committed, staged, unstaged or untracked paths since the feedback checkpoint; no product delta was treated as checked";
+  } else if (missingFocusedTests.length) {
+    unresolved = `Mapped feedback tests are missing: ${missingFocusedTests.join(", ")}; scope is not treated as checked`;
   } else if (unsupportedCoverage.length) {
     unresolved = `Feedback coverage is unsupported for ${unsupportedCoverage.join(", ")}; not treated as checked. ${FEEDBACK_UNSUPPORTED_DEFAULT}`;
   } else if (commands.length === 0) {
@@ -541,46 +785,9 @@ export function validationEnvironment(output, head, env = process.env) {
   };
 }
 
-export function workspaceFingerprint(git = runGit) {
-  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
-  const root = git("rev-parse", "--show-toplevel").trim();
-  const untracked = nulPaths(
-    git("ls-files", "--others", "--exclude-standard", "-z"),
-    true,
-  )
-    .sort()
-    .map((file) => {
-      const path = join(root, file),
-        info = lstatSync(path);
-      return {
-        file,
-        mode: info.mode,
-        sha256: hash(
-          info.isSymbolicLink() ? readlinkSync(path) : readFileSync(path),
-        ),
-      };
-    });
-  return {
-    head: git("rev-parse", "HEAD").trim(),
-    stagedDiffSha256: hash(git("diff", "--cached", "--binary", "HEAD", "--")),
-    workingDiffSha256: hash(git("diff", "--binary", "--")),
-    untracked,
-  };
-}
-
-/**
- * One value for the exact validated content (HEAD plus every dirty byte). A
- * rerun on identical content repeats this value, so it is recognizable as an
- * unchanged retry of the earlier result rather than new evidence; the earlier
- * output directory is never overwritten (see freshOutput).
- */
-export function sourceFingerprint(fingerprint) {
-  return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
-}
-
 export const FEEDBACK_LABEL = "FEEDBACK ONLY — NOT FULL ACCEPTANCE";
 export const VERIFY_TASK_USAGE =
-  "Usage: verify-task.mjs [--base origin/main] [--mode lightweight|contracts|feedback] [--since <ref>] --output /private/unique-run";
+  "Usage: verify-task.mjs [--base origin/main] [--mode lightweight|contracts|feedback] [--since <ref>] [--reuse-summary <private-summary>] [--resources <private-manifest>] --output /private/unique-run";
 
 function tryGit(git, ...args) {
   try {
@@ -594,7 +801,14 @@ export function parseVerifyTaskArgs(argv) {
   const options = {};
   for (let i = 0; i < argv.length; i += 2) {
     if (
-      !["--base", "--mode", "--output", "--since"].includes(argv[i]) ||
+      ![
+        "--base",
+        "--mode",
+        "--output",
+        "--since",
+        "--reuse-summary",
+        "--resources",
+      ].includes(argv[i]) ||
       !argv[i + 1] ||
       options[argv[i]]
     )
@@ -785,42 +999,125 @@ export async function validate(
   detail = {},
   budget = feedbackValidationBudget(commands),
 ) {
+  const started = detail.validationStartedMs ?? performance.now();
+  const originalBudgetMs = budget.totalMs - STARTUP_MARGIN_MS;
+  const deadline = started + originalBudgetMs - GRACE_MS;
+  process.env.MOYA_VERIFICATION_TOOLCHAIN = `${process.version}/${process.platform}/${process.arch}`;
   const before = workspaceFingerprint();
+  const hasStatic = commands.some((command) => staticCheckFiles(command));
+  const toolchain = hasStatic
+    ? evidenceToolchain(
+        process.cwd(),
+        Math.max(1, Math.floor(deadline - performance.now())),
+      )
+    : { node: process.version, platform: process.platform, arch: process.arch };
+  const inventory = hasStatic ? sourceInventory(runGit) : [];
+  const source = detail.reuseSummary
+    ? readReuseSummary(detail.reuseSummary, { root: process.cwd(), deadline })
+    : null;
+  const checkEvidence = commands.map((command, index) => {
+    const identity = checkInputIdentity(command, {
+      root: process.cwd(),
+      files: inventory,
+      toolchain,
+      deadline,
+    });
+    return {
+      index,
+      ...identity,
+      reuse: reuseDecision(
+        identity,
+        command,
+        source?.summary,
+        source?.identity,
+      ),
+    };
+  });
+  const selectedIndices = checkEvidence
+    .filter((entry) => !entry.reuse.reused)
+    .map((entry) => entry.index);
+  const selected = selectedIndices.map((index) => commands[index]);
+  const parallelIndices = selectedIndices.flatMap((originalIndex, index) =>
+    checkEvidence[originalIndex].eligible ? [index] : [],
+  );
+  const preparationMs = Math.round(performance.now() - started);
+  const budgetMs = Math.max(0, originalBudgetMs - preparationMs);
   const fd = openSync(join(output, "validation.private.log"), "wx", 0o600);
-  const budgetMs = budget.totalMs - STARTUP_MARGIN_MS;
   let result;
   try {
-    result = await runWithinBudget(commands, {
+    result = await runWithinBudget(selected, {
       budgetMs,
+      parallelIndices,
       stdio: ["ignore", fd, fd],
     });
   } finally {
     closeSync(fd);
   }
   const after = workspaceFingerprint();
-  const contentUnchanged = JSON.stringify(before) === JSON.stringify(after);
-  if (!contentUnchanged) result.code = 1;
+  let staticInputsUnchanged = !hasStatic || result.code === 0;
+  const evidenceRecheckStarted = performance.now();
+  if (hasStatic && result.code === 0) {
+    const afterToolchain = evidenceToolchain(
+      process.cwd(),
+      Math.max(1, Math.floor(deadline - performance.now())),
+    );
+    const afterInventory = sourceInventory(runGit);
+    staticInputsUnchanged = checkEvidence.every((entry, index) => {
+      if (!entry.eligible) return true;
+      const afterIdentity = checkInputIdentity(commands[index], {
+        root: process.cwd(),
+        files: afterInventory,
+        toolchain: afterToolchain,
+        deadline,
+      });
+      return (
+        afterIdentity.eligible &&
+        afterIdentity.inputSha256 === entry.inputSha256
+      );
+    });
+  }
+  const evidenceRecheckMs = Math.round(
+    performance.now() - evidenceRecheckStarted,
+  );
+  const contentUnchanged =
+    JSON.stringify(before) === JSON.stringify(after) && staticInputsUnchanged;
+  if (!contentUnchanged && result.code === 0) result.code = 1;
   const checkNames = budget.checks.flatMap((check) =>
     Array.from({ length: check.commands }, () => check.name),
   );
-  const executed = result.executed.map((record, index) => ({
-    check: checkNames[index] ?? null,
-    ...record,
-  }));
+  const executed = result.executed.map((record, position) => {
+    const index = selectedIndices[record.index ?? position];
+    return { ...record, index, check: checkNames[index] ?? null };
+  });
+  const elapsedMs = Math.round(performance.now() - started);
+  const testedBase =
+    detail.checkpoint?.sha ??
+    tryGit(runGit, "merge-base", detail.baseRef ?? "origin/main", before.head);
   const summary = {
     ...detail,
+    evidenceVersion: EVIDENCE_VERSION,
+    testedBase,
+    toolchain,
+    checkEvidence,
+    reusedChecks: checkEvidence
+      .filter((entry) => entry.reuse.reused)
+      .map(({ index, reuse }) => ({ index, ...reuse })),
+    preparationMs,
+    evidenceRecheckMs,
+    concurrencyLimit: 2,
     code: result.code,
-    durationMs: result.durationMs,
+    durationMs: elapsedMs,
     profile: budget.profile,
     totalMs: budget.totalMs,
-    ceilingMs: budgetMs,
+    ceilingMs: originalBudgetMs,
+    executionCeilingMs: budgetMs,
     combinedCeilingMs: budget.combinedCeilingMs,
     serialCombination: budget.serialCombination,
     checks: budget.checks,
     ...(budget.note ? { planNote: budget.note } : {}),
     executed,
     accounting: {
-      elapsedMs: result.durationMs,
+      elapsedMs,
       note: "Recorded for reporting only; a new substantive validation plan gets its declared profile, never an Issue-lifetime balance.",
     },
     result:
@@ -836,6 +1133,7 @@ export async function validate(
     contentBefore: before,
     contentAfter: after,
     contentUnchanged,
+    staticInputsUnchanged,
     note: "Evidence belongs to the recorded HEAD and dirty-content fingerprints. Source drift fails acceptance. Raw logs are private, not publication attachments.",
   };
   writeFileSync(
@@ -845,10 +1143,12 @@ export async function validate(
   );
   const printed = {
     result: summary.result,
-    durationMs: result.durationMs,
+    durationMs: elapsedMs,
+    preparationMs,
+    reusedChecks: summary.reusedChecks,
     profile: budget.profile,
     totalMs: budget.totalMs,
-    ceilingMs: budgetMs,
+    ceilingMs: originalBudgetMs,
     sourceFingerprint: summary.sourceFingerprint,
     checks: executed.map(
       ({ check, command, durationMs, remainingMs, code }) => ({
@@ -923,6 +1223,13 @@ if (
         scopeNote: "Committed, staged, unstaged and untracked union",
       };
     }
+    detail = {
+      ...detail,
+      baseRef: options["--base"] ?? "origin/main",
+      ...(options["--reuse-summary"]
+        ? { reuseSummary: options["--reuse-summary"] }
+        : {}),
+    };
     const output = freshOutput(outputPath, root);
     // A resumed task must not reuse another session's smoke paths or identity.
     Object.assign(
@@ -938,6 +1245,25 @@ if (
       const checks = taskChecks(plan, output);
       commands = checks.flatMap((check) => check.commands);
       budget = taskValidationBudget(checks);
+    }
+    if (options["--resources"]) {
+      const started = performance.now();
+      const { loadResourceEnvironment, boundedDockerRunner } =
+        await import("./task-resources.mjs");
+      Object.assign(
+        process.env,
+        loadResourceEnvironment(options["--resources"], {
+          root,
+          run: boundedDockerRunner(
+            budget.totalMs -
+              STARTUP_MARGIN_MS -
+              GRACE_MS -
+              (performance.now() - started),
+          ),
+        }),
+      );
+      detail.resourceManifest = options["--resources"];
+      detail.validationStartedMs = started;
     }
     console.log(
       JSON.stringify({

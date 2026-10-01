@@ -9,7 +9,6 @@
 
 .header,
 .metaRow,
-.composerFooter,
 .replyMode {
   display: flex;
   align-items: center;
@@ -34,7 +33,6 @@
   cursor: pointer;
 }
 
-.composer,
 .comment,
 .reply {
   display: grid;
@@ -43,19 +41,29 @@
   gap: var(--yoyi-space-4);
 }
 
-.composerBody,
 .commentBody {
   min-width: 0;
 }
 
-.composerBody {
+/* Owner acceptance (2026-09-25): every text composer (comments, replies and
+   direct messages) is one box with the send button on its right. */
+.composer {
   display: grid;
-  gap: var(--yoyi-space-3);
+  gap: var(--yoyi-space-2);
+  min-width: 0;
 }
 
 .composerInputRow {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
   gap: var(--yoyi-space-3);
+}
+
+.composerField {
+  position: relative;
+  display: grid;
+  min-width: 0;
 }
 
 .avatar {
@@ -93,29 +101,34 @@
 }
 
 .composer textarea {
+  box-sizing: border-box;
   width: 100%;
-  min-height: 96px;
-  resize: vertical;
-  padding: var(--yoyi-space-4);
+  height: 44px;
+  min-height: 44px;
+  resize: none;
+  padding: 10px var(--yoyi-space-4);
   color: var(--yoyi-color-text-primary);
   background: var(--yoyi-color-background-page);
   border: 1px solid var(--yoyi-color-border-default);
   border-radius: var(--yoyi-radius-md);
   font: inherit;
-  line-height: 1.65;
+  font-size: var(--yoyi-type-input-size);
+  line-height: 1.45;
+}
+
+/* Room for the "@" mention trigger, only when the box shows one. */
+.composerField:has(button) textarea {
+  padding-right: 44px;
 }
 
 .composer textarea::placeholder {
   color: var(--yoyi-color-text-tertiary);
 }
 
-.composerFooter {
-  color: var(--yoyi-color-text-tertiary);
-  font-size: var(--yoyi-type-caption-size);
-}
-
-.composerFooter button {
-  min-width: 72px;
+/* Qualified by .composer so the Article, message and chat hosts' generic
+   `button { font: inherit }` resets cannot restyle it. */
+.composer .composerSend {
+  min-width: 64px;
   min-height: 44px;
   padding: 0 var(--yoyi-space-5);
   color: var(--yoyi-color-text-inverse);
@@ -124,14 +137,15 @@
   border-radius: var(--yoyi-radius-full);
   font: inherit;
   font-weight: 650;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.composerFooter button:hover:not(:disabled) {
+.composer .composerSend:hover:not(:disabled) {
   background: var(--yoyi-color-seal-red-hover);
 }
 
-.composerFooter button:disabled {
+.composer .composerSend:disabled {
   color: var(--yoyi-color-text-disabled);
   background: var(--yoyi-color-background-muted);
   cursor: not-allowed;
@@ -463,9 +477,6 @@
   right: var(--detail-comment-composer-right);
   bottom: 0;
   left: var(--detail-comment-composer-left);
-  grid-template-columns: 36px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--yoyi-space-3);
   padding: var(--yoyi-space-3) var(--yoyi-space-4)
     calc(var(--yoyi-space-3) + env(safe-area-inset-bottom));
   background: var(--yoyi-color-background-surface);
@@ -486,87 +497,6 @@
   display: none;
 }
 
-:is(
-    [data-detail-content-pager],
-    [data-detail-landscape-comments],
-    [data-discussion-comments-host]
-  )
-  .composer
-  > .avatar {
-  width: 36px;
-  height: 36px;
-}
-
-:is(
-    [data-detail-content-pager],
-    [data-detail-landscape-comments],
-    [data-discussion-comments-host]
-  )
-  .composerBody {
-  gap: var(--yoyi-space-2);
-}
-
-:is(
-    [data-detail-content-pager],
-    [data-detail-landscape-comments],
-    [data-discussion-comments-host]
-  )
-  .composerInputRow {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--yoyi-space-3);
-}
-
-:is(
-    [data-detail-content-pager],
-    [data-detail-landscape-comments],
-    [data-discussion-comments-host]
-  )
-  .composer
-  textarea {
-  height: 44px;
-  min-height: 44px;
-  padding: 10px var(--yoyi-space-4);
-  resize: none;
-  line-height: 1.45;
-}
-
-:is(
-    [data-detail-content-pager],
-    [data-detail-landscape-comments],
-    [data-discussion-comments-host]
-  )
-  .composerFooter {
-  display: contents;
-}
-
-:is(
-    [data-detail-content-pager],
-    [data-detail-landscape-comments],
-    [data-discussion-comments-host]
-  )
-  .composerFooter
-  > span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-:is(
-    [data-detail-content-pager],
-    [data-detail-landscape-comments],
-    [data-discussion-comments-host]
-  )
-  .composerFooter
-  button {
-  min-width: 64px;
-  min-height: 44px;
-}
-
 @keyframes comment-pulse {
   from {
     opacity: 0.55;
@@ -583,20 +513,14 @@
     padding: var(--yoyi-space-5);
   }
 
-  .composer,
   .comment {
     grid-template-columns: 36px minmax(0, 1fr);
     gap: var(--yoyi-space-3);
   }
 
-  .composer > .avatar,
   .comment > .avatar {
     width: 36px;
     height: 36px;
-  }
-
-  .composerFooter > span {
-    max-width: 58%;
   }
 }
 

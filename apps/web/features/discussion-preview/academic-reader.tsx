@@ -11,6 +11,32 @@ type Chapter = {
   readonly title: string;
   readonly paragraphs: readonly string[];
 };
+/** One figure placed after a paragraph of a chapter. */
+export interface AcademicFigure {
+  readonly afterParagraph: number;
+  readonly src: string;
+  readonly alt: string;
+  readonly caption: string;
+}
+export interface AcademicChapterView extends Chapter {
+  readonly figures?: readonly AcademicFigure[];
+}
+/**
+ * Presentation input of the academic reader. Real Articles map to it from the
+ * editorial API; the local preview maps its fixtures to the same shape.
+ */
+export interface AcademicArticleView {
+  readonly id: string;
+  readonly category: string | null;
+  readonly title: string;
+  readonly subtitle: string | null;
+  readonly byline: string;
+  readonly meta: string;
+  readonly intro: string | null;
+  readonly chapters: readonly AcademicChapterView[];
+  /** Citation lines shown in the footer; the second element is a source note. */
+  readonly citation: readonly [string, string | null];
+}
 
 // Presentation copy for the local preview; no publication or backend identity.
 const chaptersBySpecial: Record<AcademicSpecial["id"], readonly Chapter[]> = {
@@ -294,21 +320,66 @@ type Scrub = {
   cancelled: boolean;
 };
 
+/** Preview fixtures rendered through the same reader as real Articles. */
+export const academicViewFromSpecial = (
+  special: AcademicSpecial,
+): AcademicArticleView => {
+  const chapters =
+    chaptersBySpecial[special.id] ?? chaptersBySpecial["special-stone"]!;
+  const illustration =
+    illustrations[special.id] ?? illustrations["special-stone"]!;
+  return {
+    id: special.id,
+    category: special.category,
+    title: special.title,
+    subtitle: special.subtitle,
+    byline: "由艺编辑室",
+    meta: `${special.issue} · 研究札记 · 约 8 分钟`,
+    intro: special.intro,
+    chapters: chapters.map((chapter, index) => ({
+      ...chapter,
+      figures:
+        index === 1
+          ? [
+              {
+                afterParagraph: 0,
+                src: special.image,
+                alt: `${special.title}的材料关系示意图`,
+                caption: `图 1 · ${special.subtitle}（示意）`,
+              },
+            ]
+          : index === 3
+            ? [
+                {
+                  afterParagraph: 0,
+                  src: `/docs/design-system/assets/demo/${illustration[0]}`,
+                  alt: illustration[1],
+                  caption: `图 2 · ${illustration[1]}（示意）`,
+                },
+              ]
+            : [],
+    })),
+    citation: [
+      `由艺编辑室：《${special.title}——${special.subtitle}》，由艺学术专题，${special.issue}，前端示例版。`,
+      "本文为阅读体验示例，未作为正式学术文献发表。引用具体论述时，请核对原始材料与正式出版来源。",
+    ],
+  };
+};
+
 export function AcademicReader({
-  special,
+  article: special,
   scrollElement,
   active = true,
   railPortalTarget,
 }: {
-  readonly special: AcademicSpecial;
+  readonly article: AcademicArticleView;
   /** Omit for a standalone reader; null waits for the parent reading panel. */
   readonly scrollElement?: HTMLElement | null;
   readonly active?: boolean;
   /** Embedded navigation belongs outside the transformed horizontal track. */
   readonly railPortalTarget?: HTMLElement | null;
 }) {
-  const chapters =
-    chaptersBySpecial[special.id] ?? chaptersBySpecial["special-stone"]!;
+  const chapters = special.chapters;
   const embedded = scrollElement !== undefined;
   const scroller = useRef<HTMLDivElement>(null);
   const article = useRef<HTMLElement>(null);
@@ -321,8 +392,6 @@ export function AcademicReader({
   const [previewPosition, setPreviewPosition] = useState<number | null>(null);
   const previewChapter =
     previewPosition === null ? null : Math.round(previewPosition);
-  const illustration =
-    illustrations[special.id] ?? illustrations["special-stone"]!;
   const chapterId = (index: number) => `${special.id}-chapter-${index + 1}`;
   const scrollOwner = () => (embedded ? scrollElement : scroller.current);
   const scrollPadding = () => {
@@ -613,18 +682,22 @@ export function AcademicReader({
         aria-labelledby={`${special.id}-reader-heading`}
       >
         <header className={styles.header}>
-          <p className={styles.category}>{special.category}</p>
+          {special.category && (
+            <p className={styles.category}>{special.category}</p>
+          )}
           <h2 id={`${special.id}-reader-heading`}>
             {special.title}
-            <span>{special.subtitle}</span>
+            {special.subtitle && <span>{special.subtitle}</span>}
           </h2>
-          <p className={styles.author}>由艺编辑室</p>
-          <p className={styles.meta}>{special.issue} · 研究札记 · 约 8 分钟</p>
+          <p className={styles.author}>{special.byline}</p>
+          <p className={styles.meta}>{special.meta}</p>
         </header>
-        <section className={styles.abstract} aria-label="摘要">
-          <h3>摘要</h3>
-          <p>{special.intro}</p>
-        </section>
+        {special.intro && (
+          <section className={styles.abstract} aria-label="摘要">
+            <h3>摘要</h3>
+            <p>{special.intro}</p>
+          </section>
+        )}
         <nav
           className={styles.toc}
           aria-label="文章目录"
@@ -674,35 +747,30 @@ export function AcademicReader({
                 {chapter.title}
               </h3>
               {chapter.paragraphs.map((paragraph, paragraphIndex) => (
-                <div key={paragraph} className={styles.paragraphGroup}>
+                <div
+                  key={`${paragraphIndex}-${paragraph.slice(0, 24)}`}
+                  className={styles.paragraphGroup}
+                >
                   <p>{paragraph}</p>
-                  {(index === 1 || index === 3) && paragraphIndex === 0 && (
-                    <figure
-                      className={styles.figure}
-                      data-academic-figure={index === 1 ? "1" : "2"}
-                    >
-                      <img
-                        src={
-                          index === 1
-                            ? special.image
-                            : `/docs/design-system/assets/demo/${illustration[0]}`
-                        }
-                        alt={
-                          index === 1
-                            ? `${special.title}的材料关系示意图`
-                            : illustration[1]
-                        }
-                        loading="lazy"
-                        decoding="async"
-                      />
-                      <figcaption>
-                        {index === 1
-                          ? `图 1 · ${special.subtitle}`
-                          : `图 2 · ${illustration[1]}`}
-                        （示意）
-                      </figcaption>
-                    </figure>
-                  )}
+                  {(chapter.figures ?? [])
+                    .filter(
+                      (figure) => figure.afterParagraph === paragraphIndex,
+                    )
+                    .map((figure, figureIndex) => (
+                      <figure
+                        key={figure.src}
+                        className={styles.figure}
+                        data-academic-figure={`${index}-${figureIndex}`}
+                      >
+                        <img
+                          src={figure.src}
+                          alt={figure.alt}
+                          loading="lazy"
+                          decoding="async"
+                        />
+                        <figcaption>{figure.caption}</figcaption>
+                      </figure>
+                    ))}
                 </div>
               ))}
             </section>
@@ -710,13 +778,10 @@ export function AcademicReader({
         </div>
         <footer className={styles.citation} data-academic-citation="">
           <h3>引用信息</h3>
-          <p>
-            由艺编辑室：《{special.title}——{special.subtitle}》，由艺学术专题，
-            {special.issue}，前端示例版。
-          </p>
-          <p className={styles.sourceNote}>
-            本文为阅读体验示例，未作为正式学术文献发表。引用具体论述时，请核对原始材料与正式出版来源。
-          </p>
+          <p>{special.citation[0]}</p>
+          {special.citation[1] && (
+            <p className={styles.sourceNote}>{special.citation[1]}</p>
+          )}
         </footer>
       </article>
       {railPortalTarget

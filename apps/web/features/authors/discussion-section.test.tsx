@@ -133,11 +133,13 @@ afterEach(async () => {
 });
 
 describe("Phase 4 comment avatar synchronization", () => {
-  it("updates own roots, replies and composer immediately without losing an unsent draft or reloading comments", async () => {
+  it("updates own roots and replies immediately without losing an unsent draft or reloading comments", async () => {
     await render();
     expect(src('[data-comment-id="hot"]')).toBe(context.avatarSrc);
     expect(src('[data-comment-reply="self-reply"]')).toBe(context.avatarSrc);
-    expect(src("[data-comment-composer]")).toBe(context.avatarSrc);
+    // Owner acceptance (2026-09-25): the composer is a box and a send button,
+    // with no avatar of its own.
+    expect(node.querySelector("[data-comment-composer] img")).toBeNull();
     const textarea = node.querySelector("textarea")!;
     act(() => {
       Object.getOwnPropertyDescriptor(
@@ -152,7 +154,6 @@ describe("Phase 4 comment avatar synchronization", () => {
     for (const selector of [
       '[data-comment-id="hot"]',
       '[data-comment-reply="self-reply"]',
-      "[data-comment-composer]",
     ])
       expect(src(selector)).toBe(context.avatarSrc);
     expect(node.querySelector("textarea")?.value).toBe("尚未发送");

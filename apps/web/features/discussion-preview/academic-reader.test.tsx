@@ -3,7 +3,7 @@ import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AcademicReader } from "./academic-reader";
+import { AcademicReader, academicViewFromSpecial } from "./academic-reader";
 import { previewSpecials } from "./preview-data";
 
 (
@@ -70,7 +70,7 @@ function EmbeddedReader({ active = true }: { active?: boolean }) {
     <>
       <div ref={setOwner} data-test-reading-panel="">
         <AcademicReader
-          special={previewSpecials[0]!}
+          article={academicViewFromSpecial(previewSpecials[0]!)}
           scrollElement={owner}
           active={active}
           railPortalTarget={outlet}
@@ -127,7 +127,9 @@ beforeEach(async () => {
   document.body.append(node);
   root = createRoot(node);
   await act(async () =>
-    root.render(<AcademicReader special={previewSpecials[0]!} />),
+    root.render(
+      <AcademicReader article={academicViewFromSpecial(previewSpecials[0]!)} />,
+    ),
   );
   reader().scrollTo = scrollTo;
 });
@@ -146,7 +148,11 @@ describe("AcademicReader", () => {
     ["special-landscape", "文字如何进入山水空间"],
   ])("renders distinct full article copy for %s", async (id, firstHeading) => {
     const special = previewSpecials.find((entry) => entry.id === id)!;
-    await act(async () => root.render(<AcademicReader special={special} />));
+    await act(async () =>
+      root.render(
+        <AcademicReader article={academicViewFromSpecial(special)} />,
+      ),
+    );
     expect(node.querySelectorAll("[data-academic-chapter]")).toHaveLength(6);
     expect(node.querySelector("[data-academic-chapter] h3")?.textContent).toBe(
       firstHeading,

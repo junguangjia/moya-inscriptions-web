@@ -11,10 +11,16 @@
       "import": "./dist/index.js"
     },
     "./styles.css": "./src/styles.css",
-    "./assets/*": "./src/assets/*"
+    "./assets/*": "./src/assets/*",
+    "./brand.css": "./src/brand.css",
+    "./brand": {
+      "types": "./src/components/brand.tsx",
+      "import": "./dist/components/brand.js"
+    }
   },
   "sideEffects": [
-    "./src/styles.css"
+    "./src/styles.css",
+    "./src/brand.css"
   ],
   "dependencies": {
     "@moya/design-tokens": "workspace:*"

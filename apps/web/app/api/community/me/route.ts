@@ -1,4 +1,8 @@
-import { readCommunitySessionToken } from "../../../../lib/public-api/community-session-cookie";
+import {
+  isSecureRequest,
+  readCommunitySessionToken,
+  serializeClearedCommunitySessionCookie,
+} from "../../../../lib/public-api/community-session-cookie";
 import { fetchServerCurrentUser } from "../../../../lib/public-api/server";
 
 export const runtime = "nodejs";
@@ -18,7 +22,18 @@ export const GET = async (request: Request): Promise<Response> => {
           headers: { "Cache-Control": "no-store" },
         });
       case "unauthenticated":
-        return emptyResponse(401);
+        // email-auth-v1: the Backend refuses the presented Session (logged out
+        // or factor-replaced on another device, expired, unknown), so this
+        // browser is signed out and the stale cookie goes.
+        return new Response(null, {
+          status: 401,
+          headers: {
+            "Cache-Control": "no-store",
+            "set-cookie": serializeClearedCommunitySessionCookie(
+              isSecureRequest(request),
+            ),
+          },
+        });
       case "unavailable":
         return emptyResponse(503);
       case "unexpected-error":

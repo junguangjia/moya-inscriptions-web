@@ -34,6 +34,16 @@ import {
   setWorkPublishingSettingsCommandSchema,
   workPublishingSettingsSchema,
   workSubmissionModerationResultSchema,
+  adminUpdateThreadRequestSchema,
+  createThreadCommandSchema,
+  operatorThreadPageSchema,
+  operatorThreadSchema,
+  operatorThreadsQuerySchema,
+  adminRemoveDmMessageRequestSchema,
+  operatorDmConversationSchema,
+  operatorDmLookupRequestSchema,
+  operatorDmMessageSchema,
+  operatorDmReadRequestSchema,
 } from "@moya/contracts/internal/community-operator";
 import { z } from "zod";
 
@@ -229,6 +239,60 @@ export const communityOperations = (
   "remove-thread": async (_req, input) => {
     const { id, ...command } = parse(adminRemoveThreadSchema, input);
     return call("POST", `comments/${segment(id)}/remove-thread`, command);
+  },
+  // content-community-completion-v1: narrow Owner-only DM moderation. One
+  // explicitly selected conversation with a stated purpose; every access is
+  // audited content-free on the Backend. No listing or search of messages.
+  "read-dm-conversation": async (_req, input) =>
+    checked(
+      operatorDmConversationSchema,
+      await call(
+        "POST",
+        "messages/conversation",
+        parse(operatorDmReadRequestSchema, input),
+      ),
+    ),
+  "lookup-dm-conversation": async (_req, input) =>
+    checked(
+      operatorDmConversationSchema,
+      await call(
+        "POST",
+        "messages/lookup",
+        parse(operatorDmLookupRequestSchema, input),
+      ),
+    ),
+  "remove-dm-message": async (_req, input) => {
+    const { id, ...command } = parse(adminRemoveDmMessageRequestSchema, input);
+    return checked(
+      operatorDmMessageSchema,
+      await call("POST", `messages/${segment(id)}/remove`, command),
+    );
+  },
+  // content-community-completion-v1: operator-managed Threads (Development).
+  "read-threads": async (_req, input) =>
+    checked(
+      operatorThreadPageSchema,
+      await call(
+        "GET",
+        `threads${toQuery({
+          ...parse(operatorThreadsQuerySchema, input),
+          includeHidden: parse(operatorThreadsQuerySchema, input).includeHidden
+            ? "true"
+            : "false",
+        })}`,
+      ),
+    ),
+  "create-thread": async (_req, input) =>
+    checked(
+      operatorThreadSchema,
+      await call("POST", "threads", parse(createThreadCommandSchema, input)),
+    ),
+  "update-thread": async (_req, input) => {
+    const { id, ...command } = parse(adminUpdateThreadRequestSchema, input);
+    return checked(
+      operatorThreadSchema,
+      await call("POST", `threads/${segment(id)}`, command),
+    );
   },
   "read-feature-catalogs": async (req, input) => {
     const query = parse(operatorContentQuerySchema, input);
@@ -459,6 +523,12 @@ export const communityOperations = (
 });
 
 const phase4Operations = new Set([
+  "read-dm-conversation",
+  "lookup-dm-conversation",
+  "remove-dm-message",
+  "read-threads",
+  "create-thread",
+  "update-thread",
   "read-users",
   "recommend-user",
   "read-works",

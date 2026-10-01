@@ -1,4 +1,15 @@
 import { z } from "zod";
+import {
+  mentionReferencesSchema,
+  validMentionReferences,
+} from "./mention-references.ts";
+export {
+  mentionReferenceSchema,
+  mentionReferencesSchema,
+  validMentionReferences,
+  normalizeMentionText,
+  MENTION_LIMIT,
+} from "./mention-references.ts";
 
 import {
   workAuthorshipSchema,
@@ -494,7 +505,7 @@ export const commentAuthorSchema = z.strictObject({
 });
 
 /**
- * Comment text is plain: no rich text, mentions, links, media or attachments.
+ * Comment text is plain. Resolved mention references are separate from text; no rich text, links, media or attachments.
  * The bound is fixed by the Mission 2B Contract review and enforced by the
  * Backend; Web never relaxes it.
  */
@@ -606,15 +617,25 @@ export const catalogCommentListingTransportQuerySchema =
     pinned: pinnedCommentIdsStringSchema.optional(),
   });
 
-export const createCatalogCommentRequestSchema = z.strictObject({
-  text: commentTextSchema,
-});
+export const createCatalogCommentRequestSchema = z
+  .strictObject({
+    text: commentTextSchema,
+    mentions: mentionReferencesSchema.optional(),
+  })
+  .refine((value) => validMentionReferences(value.text, value.mentions ?? []), {
+    message: "Invalid mention references",
+  });
 
-export const createCatalogCommentReplyRequestSchema = z.strictObject({
-  text: commentTextSchema,
-  /** Answers a sibling reply; the new reply stays a sibling under the same root. */
-  replyTo: catalogCommentIdSchema.optional(),
-});
+export const createCatalogCommentReplyRequestSchema = z
+  .strictObject({
+    text: commentTextSchema,
+    /** Answers a sibling reply; the new reply stays a sibling under the same root. */
+    replyTo: catalogCommentIdSchema.optional(),
+    mentions: mentionReferencesSchema.optional(),
+  })
+  .refine((value) => validMentionReferences(value.text, value.mentions ?? []), {
+    message: "Invalid mention references",
+  });
 
 export const healthResponseSchema = z.strictObject({
   status: z.literal("ok"),
@@ -658,6 +679,23 @@ export const contentIdentitySchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("catalog"), id }),
   z.strictObject({ type: z.literal("work"), id: workId }),
 ]);
+// content-community-completion-v1: the public Article identity and the
+// discussion target that adds it to the two content identities.
+export const articleIdSchema = z
+  .string()
+  .regex(/^article-[0-9a-f]{32}$/u)
+  .brand<"ArticleId">();
+export type ArticleId = z.infer<typeof articleIdSchema>;
+/**
+ * What a discussion may attach to: the existing Catalog and Work identities
+ * plus a published editorial Article. Content relations (favorite / like) keep
+ * `contentIdentitySchema`; an Article has no likes or favorites.
+ */
+export const discussionTargetSchema = z.discriminatedUnion("type", [
+  ...contentIdentitySchema.options,
+  z.strictObject({ type: z.literal("article"), id: articleIdSchema }),
+]);
+export type DiscussionTarget = z.infer<typeof discussionTargetSchema>;
 export const authorPrivacySchema = z.strictObject({
   following: visibility,
   followers: visibility,
@@ -670,11 +708,14 @@ export const authorMediaSchema = z.strictObject({
   width: z.number().int().positive().max(8192),
   height: z.number().int().positive().max(8192),
 });
+import { studioNameSchema } from "./auth-schemas.ts";
+
 export const authorProfileSchema = z.strictObject({
   id: userId,
   handle: z.string(),
   displayName: authorText(40),
   bio: authorText(500),
+  studioName: studioNameSchema.optional(),
   avatar: authorMediaSchema.nullable(),
   background: authorMediaSchema.nullable().optional(),
   isOwner: z.boolean(),
@@ -767,6 +808,7 @@ export const profileUpdateSchema = z.strictObject({
   requestId,
   displayName: authorText(40).refine((s) => s.length > 0),
   bio: authorText(500),
+  studioName: studioNameSchema.optional(),
 });
 export const privacyUpdateSchema = z.strictObject({
   requestId,
@@ -852,7 +894,7 @@ export const discussionReplySchema = z.strictObject({
   deleted: z.boolean(),
 });
 export const discussionCommentSchema = discussionReplySchema.extend({
-  target: contentIdentitySchema,
+  target: discussionTargetSchema,
   replies: z.array(discussionReplySchema).max(3),
   replyTotal: z.number().int().nonnegative(),
   replyPageTotal: z.number().int().nonnegative(),
@@ -881,7 +923,7 @@ export const ownCommentSchema = z.strictObject({
   text: z.string(),
   createdAt: z.iso.datetime(),
   deleted: z.boolean(),
-  target: contentIdentitySchema.nullable(),
+  target: discussionTargetSchema.nullable(),
 });
 export const commentLikeUpdateSchema = z.strictObject({
   requestId,
@@ -1013,3 +1055,419 @@ export const deletedResultSchema = z.strictObject({ deleted: z.literal(true) });
 export const discardedResultSchema = z.strictObject({
   discarded: z.literal(true),
 });
+
+export {
+  authAccountSecuritySchema,
+  authCapabilitiesSchema,
+  authChallengeAcceptedSchema,
+  authChallengeRequestSchema,
+  authChannelSchema,
+  authChannelStateSchema,
+  authFactorCompleteRequestSchema,
+  authFactorSchema,
+  authRegistrationRequestSchema,
+  authPasswordSchema,
+  authPasswordLoginRequestSchema,
+  authPasswordResetRequestSchema,
+  authPasswordResetResultSchema,
+  studioNameSchema,
+  authUnlinkRequestSchema,
+  authVerifyRequestSchema,
+} from "./auth-schemas.ts";
+export type {
+  AuthAccountSecurity,
+  AuthCapabilities,
+  AuthChallengeAccepted,
+  AuthChallengeRequest,
+  AuthChannel,
+  AuthChannelState,
+  AuthFactor,
+  AuthFactorCompleteRequest,
+  AuthRegistrationRequest,
+  AuthPasswordLoginRequest,
+  AuthPasswordResetRequest,
+  AuthPasswordResetResult,
+  AuthUnlinkRequest,
+  AuthVerifyRequest,
+} from "./auth-schemas.ts";
+// messaging-notification-foundation-v1: private activity DTOs; no Session or media keys.
+export const notificationReasonSchema = z.enum([
+  "like",
+  "comment",
+  "reply",
+  "mention",
+]);
+export const notificationObservationSchema = z.string().min(1).max(4096);
+export const notificationItemSchema = z.strictObject({
+  id: z.string().regex(/^notification-[0-9a-f]{32}$/u),
+  reason: notificationReasonSchema,
+  available: z.boolean(),
+  // parallel-community-integration-qa: a notification target is a discussion
+  // target, so it spans Catalog, Work and published Article. This is the
+  // discussion union, NOT `contentIdentitySchema`: content relations
+  // (favorite / like) stay Catalog/Work only, so an Article gains no likes or
+  // favorites from being notifiable.
+  target: discussionTargetSchema.nullable(),
+  commentId: catalogCommentIdSchema.nullable(),
+  actors: z.array(publicUserProfileSchema).max(3),
+  actorCount: z.number().int().nonnegative(),
+  text: z.string().max(240),
+  createdAt: z.iso.datetime(),
+  unread: z.boolean(),
+  observation: notificationObservationSchema,
+});
+export const notificationUnreadSchema = z.strictObject({
+  total: z.number().int().nonnegative(),
+  likes: z.number().int().nonnegative(),
+  comments: z.number().int().nonnegative(),
+  mentions: z.number().int().nonnegative(),
+});
+export const notificationPageSchema = z.strictObject({
+  items: z.array(notificationItemSchema).max(50),
+  nextCursor: notificationObservationSchema.nullable(),
+  observation: notificationObservationSchema,
+  unread: notificationUnreadSchema,
+});
+export const notificationReadSchema = z.strictObject({
+  observation: notificationObservationSchema,
+});
+export const mentionLookupPageSchema = z.strictObject({
+  items: z.array(publicUserProfileSchema).max(10),
+});
+// ---------------------------------------------------------------------------
+// content-community-completion-v1: editorial Articles and Article Collections.
+// Public read DTOs over the Payload published-only views. Ids are the
+// server-generated stable identities, never Payload row ids; timestamps are
+// canonical ISO 8601 instants formatted by Web.
+// ---------------------------------------------------------------------------
+export const articleCollectionIdSchema = z
+  .string()
+  .regex(/^collection-[0-9a-f]{32}$/u)
+  .brand<"ArticleCollectionId">();
+export type ArticleCollectionId = z.infer<typeof articleCollectionIdSchema>;
+export const articlePresentationSchema = z.enum(["news", "academic"]);
+export type ArticlePresentation = z.infer<typeof articlePresentationSchema>;
+const editorialInstant = z.iso.datetime({ offset: true });
+const optionalEditorialText = (max: number) =>
+  z.string().min(1).max(max).nullable();
+export const articleSummarySchema = z.strictObject({
+  id: articleIdSchema,
+  presentation: articlePresentationSchema,
+  title: z.string().min(1).max(120),
+  subtitle: optionalEditorialText(120),
+  summary: optionalEditorialText(400),
+  section: optionalEditorialText(40),
+  issue: optionalEditorialText(40),
+  /** Editorial display attribution; not a public user and never an account. */
+  byline: z.string().min(1).max(60),
+  cover: publicMediaSchema.nullable(),
+  firstPublishedAt: editorialInstant,
+  publishedAt: editorialInstant,
+  updatedAt: editorialInstant,
+});
+export type ArticleSummary = z.infer<typeof articleSummarySchema>;
+export const articleSectionSchema = z.strictObject({
+  heading: optionalEditorialText(80),
+  paragraphs: z.array(z.string().min(1).max(20000)).min(1).max(400),
+  image: publicMediaSchema.nullable(),
+  imageCaption: optionalEditorialText(200),
+});
+export type ArticleSection = z.infer<typeof articleSectionSchema>;
+export const articleCitationSchema = z.strictObject({
+  text: z.string().min(1).max(500),
+  url: z.string().url().max(500).nullable(),
+});
+export type ArticleCitation = z.infer<typeof articleCitationSchema>;
+export const articleDetailSchema = articleSummarySchema.extend({
+  intro: optionalEditorialText(2000),
+  sections: z.array(articleSectionSchema).min(1).max(40),
+  citations: z.array(articleCitationSchema).max(50),
+});
+export type ArticleDetail = z.infer<typeof articleDetailSchema>;
+export const ARTICLE_PAGE_SIZE_MAXIMUM = 50;
+export const articleListQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(ARTICLE_PAGE_SIZE_MAXIMUM)
+    .default(12),
+  presentation: articlePresentationSchema.optional(),
+});
+export type ArticleListQuery = z.infer<typeof articleListQuerySchema>;
+const editorialPageOf = <T extends z.ZodType>(item: T) =>
+  z.strictObject({
+    items: z.array(item).max(ARTICLE_PAGE_SIZE_MAXIMUM),
+    total: z.number().int().min(0),
+    page: z.number().int().min(1),
+    pageSize: z.number().int().min(1).max(ARTICLE_PAGE_SIZE_MAXIMUM),
+    totalPages: z.number().int().min(0),
+  });
+export const articlePageSchema = editorialPageOf(articleSummarySchema);
+export type ArticlePage = z.infer<typeof articlePageSchema>;
+export const articleCollectionSummarySchema = z.strictObject({
+  id: articleCollectionIdSchema,
+  title: z.string().min(1).max(120),
+  subtitle: optionalEditorialText(120),
+  summary: optionalEditorialText(1000),
+  category: optionalEditorialText(60),
+  issue: optionalEditorialText(40),
+  cover: publicMediaSchema.nullable(),
+  /** Currently eligible members only; withdrawn members never count. */
+  memberTotal: z.number().int().min(0),
+  firstPublishedAt: editorialInstant,
+  publishedAt: editorialInstant,
+  updatedAt: editorialInstant,
+});
+export type ArticleCollectionSummary = z.infer<
+  typeof articleCollectionSummarySchema
+>;
+export const articleCollectionMemberSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("article"),
+    position: z.number().int().min(0),
+    article: articleSummarySchema,
+  }),
+  z.strictObject({
+    kind: z.literal("catalog"),
+    position: z.number().int().min(0),
+    record: catalogSummarySchema,
+  }),
+]);
+export type ArticleCollectionMember = z.infer<
+  typeof articleCollectionMemberSchema
+>;
+export const articleCollectionDetailSchema =
+  articleCollectionSummarySchema.extend({
+    members: z.array(articleCollectionMemberSchema).max(200),
+  });
+export type ArticleCollectionDetail = z.infer<
+  typeof articleCollectionDetailSchema
+>;
+export const articleCollectionListQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(ARTICLE_PAGE_SIZE_MAXIMUM)
+    .default(12),
+});
+export type ArticleCollectionListQuery = z.infer<
+  typeof articleCollectionListQuerySchema
+>;
+export const articleCollectionPageSchema = editorialPageOf(
+  articleCollectionSummarySchema,
+);
+export type ArticleCollectionPage = z.infer<typeof articleCollectionPageSchema>;
+
+// ---------------------------------------------------------------------------
+// content-community-completion-v1: Threads over Works and the Article
+// discussion target.
+// ---------------------------------------------------------------------------
+export const threadIdSchema = z
+  .string()
+  .regex(/^thread-[0-9a-f]{32}$/u)
+  .brand<"ThreadId">();
+export type ThreadId = z.infer<typeof threadIdSchema>;
+export const threadStatusSchema = z.enum(["open", "closed"]);
+export type ThreadStatus = z.infer<typeof threadStatusSchema>;
+export const threadSummarySchema = z.strictObject({
+  id: threadIdSchema,
+  title: z.string().min(1).max(120),
+  description: z.string().max(2000),
+  tags: z.array(z.string().min(1).max(24)).max(6),
+  status: threadStatusSchema,
+  /** Deterministic V1 heat at the page anchor; a transparent heuristic, not a recommendation. */
+  heat: z.number().min(0),
+  /** Currently eligible (publicly visible) posts. */
+  postCount: z.number().int().min(0),
+  /** Latest eligible activity instant, or null for a Thread without any yet. */
+  latestActivityAt: z.iso.datetime({ offset: true }).nullable(),
+  createdAt: z.iso.datetime({ offset: true }),
+  /**
+   * Whether the signed-in viewer has unseen eligible activity; null for an
+   * anonymous viewer (whose read state, if any, stays local).
+   */
+  unread: z.boolean().nullable(),
+});
+export type ThreadSummary = z.infer<typeof threadSummarySchema>;
+export const THREAD_PAGE_SIZE_MAXIMUM = 50;
+export const threadListQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(THREAD_PAGE_SIZE_MAXIMUM)
+    .default(22),
+  /** Ranking snapshot; the first page omits it and receives one for later pages. */
+  anchor: z.iso.datetime({ offset: true }).optional(),
+});
+export type ThreadListQuery = z.infer<typeof threadListQuerySchema>;
+export const threadPageSchema = z.strictObject({
+  items: z.array(threadSummarySchema).max(THREAD_PAGE_SIZE_MAXIMUM),
+  total: z.number().int().min(0),
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1).max(THREAD_PAGE_SIZE_MAXIMUM),
+  totalPages: z.number().int().min(0),
+  /** Server snapshot instant every page of this browsing sequence is ranked at. */
+  anchor: z.iso.datetime({ offset: true }),
+});
+export type ThreadPage = z.infer<typeof threadPageSchema>;
+export const threadReadResultSchema = z.strictObject({
+  /** The server-observed activity instant now recorded as seen, or null. */
+  observedActivityAt: z.iso.datetime({ offset: true }).nullable(),
+});
+export type ThreadReadResult = z.infer<typeof threadReadResultSchema>;
+
+// ---------------------------------------------------------------------------
+// content-community-completion-v1: one-to-one plain-text direct messages.
+// Sender identity always comes from the Session; DTOs never carry credentials,
+// contact details or read receipts of the other participant.
+// ---------------------------------------------------------------------------
+export const DIRECT_MESSAGE_TEXT_MAXIMUM = 2000;
+export const dmConversationIdSchema = z
+  .string()
+  .regex(/^dm-[0-9a-f]{32}$/u)
+  .brand<"DmConversationId">();
+export type DmConversationId = z.infer<typeof dmConversationIdSchema>;
+export const dmMessageIdSchema = z
+  .string()
+  .regex(/^dmsg-[0-9a-f]{32}$/u)
+  .brand<"DmMessageId">();
+export type DmMessageId = z.infer<typeof dmMessageIdSchema>;
+export const dmParticipantSchema = z.strictObject({
+  id: userId,
+  displayName: z.string(),
+  /** Whether the other account can currently be messaged (active, not blocked either way). */
+  available: z.boolean(),
+});
+export type DmParticipant = z.infer<typeof dmParticipantSchema>;
+export const directMessageSchema = z.strictObject({
+  id: dmMessageIdSchema,
+  conversationId: dmConversationIdSchema,
+  sequence: z.number().int().min(1),
+  senderId: userId,
+  /** Null once removed by the authorized moderation path. */
+  text: z.string().max(DIRECT_MESSAGE_TEXT_MAXIMUM).nullable(),
+  removed: z.boolean(),
+  createdAt: z.iso.datetime({ offset: true }),
+});
+export type DirectMessage = z.infer<typeof directMessageSchema>;
+export const dmSendRefusalSchema = z.enum([
+  "request_pending",
+  "blocked",
+  "unavailable",
+]);
+export type DmSendRefusal = z.infer<typeof dmSendRefusalSchema>;
+export const directConversationSchema = z.strictObject({
+  id: dmConversationIdSchema,
+  participant: dmParticipantSchema,
+  /** `requested` until the recipient's committed reply activates it. */
+  state: z.enum(["requested", "active"]),
+  /** Whether the viewer may commit a message now; `sendRefusal` names why not. */
+  canSend: z.boolean(),
+  sendRefusal: dmSendRefusalSchema.nullable(),
+  lastMessage: z
+    .strictObject({
+      sequence: z.number().int().min(1),
+      senderId: userId,
+      text: z.string().max(DIRECT_MESSAGE_TEXT_MAXIMUM).nullable(),
+      removed: z.boolean(),
+      createdAt: z.iso.datetime({ offset: true }),
+    })
+    .nullable(),
+  /** Unread incoming, non-removed messages for the viewer. */
+  unreadCount: z.number().int().min(0),
+  muted: z.boolean(),
+  hidden: z.boolean(),
+  /** The viewer's monotonic observed sequence (never the other participant's). */
+  readSequence: z.number().int().min(0),
+  createdAt: z.iso.datetime({ offset: true }),
+});
+export type DirectConversation = z.infer<typeof directConversationSchema>;
+/** The canonical pair with another account, if it exists; never creates one. */
+export const directConversationLookupSchema = z.strictObject({
+  conversation: directConversationSchema.nullable(),
+});
+export type DirectConversationLookup = z.infer<
+  typeof directConversationLookupSchema
+>;
+export const directConversationPageSchema = z.strictObject({
+  items: z.array(directConversationSchema).max(50),
+  /** Opaque cursor for older conversations, or null at the end. */
+  nextCursor: z.string().max(200).nullable(),
+});
+export type DirectConversationPage = z.infer<
+  typeof directConversationPageSchema
+>;
+export const directMessagePageSchema = z.strictObject({
+  conversation: directConversationSchema,
+  /** Newest first; `nextBefore` continues to older messages. */
+  items: z.array(directMessageSchema).max(50),
+  nextBefore: z.number().int().min(1).nullable(),
+});
+export type DirectMessagePage = z.infer<typeof directMessagePageSchema>;
+export const directConversationListQuerySchema = z.strictObject({
+  cursor: z.string().max(200).optional(),
+  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+});
+export const directMessageHistoryQuerySchema = z.strictObject({
+  before: z.coerce.number().int().min(1).optional(),
+  /** Messages newer than this sequence only (polling). */
+  after: z.coerce.number().int().min(0).optional(),
+  pageSize: z.coerce.number().int().min(1).max(50).default(30),
+});
+export const sendDirectMessageCommandSchema = z
+  .strictObject({
+    requestId: requestIdentitySchema.shape.requestId,
+    recipientId: userId.optional(),
+    conversationId: dmConversationIdSchema.optional(),
+    /** Trimmed by the Backend; 1–2,000 Unicode code points after trimming. */
+    text: z
+      .string()
+      .max(DIRECT_MESSAGE_TEXT_MAXIMUM * 4)
+      .refine(
+        (value) =>
+          value.trim().length > 0 &&
+          codePointLength(value.trim()) <= DIRECT_MESSAGE_TEXT_MAXIMUM,
+        `1–${DIRECT_MESSAGE_TEXT_MAXIMUM} code points`,
+      ),
+  })
+  .refine(
+    (value) =>
+      (value.recipientId === undefined) !==
+      (value.conversationId === undefined),
+    "Exactly one of recipientId or conversationId",
+  );
+export type SendDirectMessageCommand = z.infer<
+  typeof sendDirectMessageCommandSchema
+>;
+export const directMessageReadCommandSchema = z.strictObject({
+  requestId: requestIdentitySchema.shape.requestId,
+  /** Observed sequence; clamped to the latest existing message, never beyond. */
+  sequence: z.number().int().min(0),
+});
+export type DirectMessageReadCommand = z.infer<
+  typeof directMessageReadCommandSchema
+>;
+export const directMessageUnreadSchema = z.strictObject({
+  /** Visible (unhidden) conversations with unread incoming messages: the DM badge unit. */
+  unreadConversations: z.number().int().min(0),
+});
+export type DirectMessageUnread = z.infer<typeof directMessageUnreadSchema>;
+/** Refusal codes carried in INVALID_INPUT messages. */
+export const directMessageFailureCodeSchema = z.enum([
+  "dm_self",
+  "dm_recipient_unavailable",
+  "dm_blocked",
+  "dm_request_pending",
+  "dm_daily_limit",
+  "dm_rate_limited",
+  "dm_text_invalid",
+]);
+export type DirectMessageFailureCode = z.infer<
+  typeof directMessageFailureCodeSchema
+>;

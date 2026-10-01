@@ -1,7 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 
+// Email-auth acceptance templates. Exact files only: other HTML or text under
+// docs/ stays unmapped. They are documentation of the message, not runtime.
+const emailAuthTemplates = new Set([
+  "docs/development/email-auth/verification.html",
+  "docs/development/email-auth/verification.txt",
+]);
 const docs = new Set([
   "AGENTS.md",
   "CLAUDE.md",
@@ -22,6 +30,10 @@ const tooling = new Set([
   "scripts/verify-task.mjs",
   "scripts/verify-apple.mjs",
   "scripts/task-git.mjs",
+  "scripts/task-context.mjs",
+  "scripts/task-resources.mjs",
+  "scripts/verification-evidence.mjs",
+  "scripts/verification-tool-inputs.mjs",
   "scripts/task-validation.test.mjs",
   // Dependency-free maintenance for the shared local Turbo cache; its own
   // script test runs in the lightweight job.
@@ -89,9 +101,11 @@ const cmsTestTarget = new Set([
 // Admin's agent-connection control plane and resource boundary import it, so
 // the cms job now builds and runs it through `pnpm --filter admin build`. The
 // script test derives this closure from the job itself rather than from this
-// comment, which is what caught the omission.
+// comment, which is what caught the omission. Admin branding now consumes the
+// existing UI asset export, so UI and its design-token dependency join that
+// closure and must retain CMS coverage when their shared resources change.
 const cmsBuiltPackage =
-  /^(?:packages\/(?:contracts|image|search)|services\/(?:api|catalog-postgres|community-postgres))\/(?:src\/|(?:package|tsconfig)\.json$)/u;
+  /^(?:packages\/(?:contracts|design-tokens|image|search|ui)|services\/(?:api|catalog-postgres|community-postgres))\/(?:src\/|(?:package|tsconfig)\.json$)/u;
 const publicBoundary = (file) =>
   (file.startsWith("packages/contracts/") &&
     !file.startsWith("packages/contracts/src/internal/")) ||
@@ -109,6 +123,118 @@ export function assertPath(file) {
     file.split("/").some((part) => ["", ".", ".."].includes(part))
   )
     throw new Error(`Invalid changed path: ${JSON.stringify(file)}`);
+}
+
+/** A missing/ambiguous dependency graph selects the existing broad plan. */
+export function isSecurityPath(file) {
+  return /(?:^|[\/.-])(?:auth(?:entication|orization)?|sessions?|credentials?|security|permissions?|grants?|passwords?|tokens?|csrf|oauth|jwt|scram|acl)(?:[\/.-]|$)/iu.test(
+    file.replace(/^packages\/design-tokens\//u, "packages/design-system/"),
+  );
+}
+
+function broadWebImpact(file) {
+  return (
+    isSecurityPath(file) ||
+    webConfig.has(file) ||
+    webLintConfig.has(file) ||
+    /(?:^|\/)(?:package\.json|tsconfig[^/]*\.json|[^/]*(?:migration|config)[^/]*)$/iu.test(
+      file,
+    ) ||
+    /^(?:database|infra|tests|experiments|docs\/prototypes|docs\/design-system)\//u.test(
+      file,
+    )
+  );
+}
+
+export function affectedWebWorkspaces(
+  paths,
+  root = fileURLToPath(new URL("../", import.meta.url)),
+) {
+  const manifests = [];
+  try {
+    for (const parent of ["apps", "packages", "services"])
+      for (const name of readdirSync(join(root, parent))) {
+        const directory = `${parent}/${name}`;
+        if (existsSync(join(root, directory, "package.json")))
+          manifests.push([
+            directory,
+            JSON.parse(
+              readFileSync(join(root, directory, "package.json"), "utf8"),
+            ),
+          ]);
+      }
+    manifests.push([
+      "tests",
+      JSON.parse(readFileSync(join(root, "tests/package.json"), "utf8")),
+    ]);
+  } catch {
+    return [];
+  }
+  const graph = new Map();
+  for (const [directory, manifest] of manifests) {
+    if (
+      typeof manifest.name !== "string" ||
+      !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(
+        manifest.name,
+      ) ||
+      graph.has(manifest.name)
+    )
+      return [];
+    const dependencies = Object.entries({
+      ...manifest.dependencies,
+      ...manifest.devDependencies,
+      ...manifest.peerDependencies,
+    })
+      .filter(
+        ([, value]) =>
+          typeof value === "string" && value.startsWith("workspace:"),
+      )
+      .map(([name]) => name);
+    graph.set(manifest.name, { directory, dependencies });
+  }
+  if (!graph.has("web") || !graph.has("@moya/tests")) return [];
+  for (const { dependencies } of graph.values())
+    if (dependencies.some((name) => !graph.has(name))) return [];
+  const selected = new Set(["@moya/tests"]);
+  for (const file of paths) {
+    // Global configuration, security/authentication and persisted state retain
+    // the broad path. This optimization cannot waive their semantic consumers.
+    if (broadWebImpact(file)) return [];
+    const entry = [...graph.entries()].find(([, item]) =>
+      file.startsWith(`${item.directory}/`),
+    );
+    if (entry) {
+      selected.add(entry[0]);
+      // HTTP is a semantic dependency outside package.json: backend and shared
+      // public shapes keep the Web consumer even without a direct import.
+      if (
+        file.startsWith("services/") ||
+        /^packages\/(?:contracts|image|search)\//u.test(file)
+      )
+        selected.add("web");
+    } else if (
+      !docs.has(file) &&
+      !tooling.has(file) &&
+      !emailAuthTemplates.has(file) &&
+      !file.endsWith(".md") &&
+      !/^\.(?:agents|claude|github|githooks)\//u.test(file) &&
+      !/^scripts\/[a-z-]+\.test\.mjs$/u.test(file)
+    )
+      return [];
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, { dependencies }] of graph)
+      if (
+        !selected.has(name) &&
+        dependencies.some((dependency) => selected.has(dependency))
+      ) {
+        selected.add(name);
+        changed = true;
+      }
+  }
+  return [...selected].sort();
 }
 
 // Metadata (author, model, labels, branch prefix) is deliberately not an input.
@@ -144,6 +270,7 @@ export function classifyTask(paths, event = "pull_request") {
       plan.web = true;
     } else if (
       docs.has(file) ||
+      emailAuthTemplates.has(file) ||
       tooling.has(file) ||
       // A workflow path cannot name the job an edit affects; script tests
       // assert the test and cms jobs' disposable-target marker steps.
@@ -173,6 +300,9 @@ export function classifyTask(paths, event = "pull_request") {
         "HARMONY_NATIVE_VALIDATION_NOT_YET_CONFIGURED";
     } else if (publicBoundary(file)) {
       plan.contracts = true;
+      // Sensitive public-boundary paths must reach broad Web validation too;
+      // the focused contract path cannot cover all auth or shared config checks.
+      if (broadWebImpact(file)) plan.web = true;
       if (cmsBuiltPackage.test(file)) plan.cms = true;
     } else if (
       webConfig.has(file) ||
@@ -185,7 +315,7 @@ export function classifyTask(paths, event = "pull_request") {
       // stage spawns ci-e2e-smoke.mjs; only the test job's Vitest policy test
       // loads ci-e2e-scope.mjs. validation-profiles.mjs supplies the stage and
       // smoke ceilings those commands import.
-      /^scripts\/(?:migrate(?:-community)?|generate-catalog-import-template|confidentiality-scan|install-confidentiality-hooks|disposable-test-target|test-target|verify|validation-profiles|ci-e2e-(?:scope|smoke)|materialize-phase4-fixtures|seed-phase4-acceptance|seed-phase4-support)\.mjs$/u.test(
+      /^scripts\/(?:migrate(?:-community)?|generate-catalog-import-template|confidentiality-scan|install-confidentiality-hooks|disposable-test-target|test-target|verify|validation-profiles|ci-e2e-(?:scope|smoke)|materialize-phase4-fixtures|seed-phase4-acceptance|seed-phase4-support|email-auth-acceptance)\.mjs$/u.test(
         file,
       )
     ) {
@@ -218,6 +348,9 @@ export function classifyTask(paths, event = "pull_request") {
     plan.contracts = true;
     plan.scope = "full";
   } else if (plan.web) plan.scope = "smoke";
+  if (plan.web)
+    plan.webWorkspaces =
+      event === "workflow_dispatch" ? [] : affectedWebWorkspaces(plan.paths);
   return plan;
 }
 
@@ -308,7 +441,9 @@ if (
         process.env.GITHUB_OUTPUT,
         ["scope", "web", "cms", "contracts", "apple", "harmony", "lightweight"]
           .map((key) => `${key}=${plan[key]}\n`)
-          .join("") + `plan=${JSON.stringify(plan)}\n`,
+          .join("") +
+          `web_workspaces=${(plan.webWorkspaces ?? []).join(",")}\n` +
+          `plan=${JSON.stringify(plan)}\n`,
       );
     }
     console.log(JSON.stringify(plan));

@@ -10,7 +10,7 @@ describe("resolveCommunityCommentSurface", () => {
     expect(resolveCommunityCommentSurface("development")).toEqual({
       signInHref: developmentSignInPath,
     });
-    expect(developmentSignInPath).toBe("/dev/community");
+    expect(developmentSignInPath).toBe("/login");
   });
 
   it.each(["production", "test", undefined])(

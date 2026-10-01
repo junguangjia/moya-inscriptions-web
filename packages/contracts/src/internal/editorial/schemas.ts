@@ -388,3 +388,44 @@ export const editorialContentFromDocument = (
   }
   return content;
 };
+
+// ---------------------------------------------------------------------------
+// content-community-completion-v1: bounded extension of the editorial batch
+// mechanism to the `articles` collection. Same preparation → exact-revision
+// Owner approval → scoped publication shape; no new machine power.
+// ---------------------------------------------------------------------------
+const articleRowId = z.union([
+  z.number().int().positive(),
+  z.string().regex(/^[1-9]\d*$/u),
+]);
+const articleIdempotencyKey = z.string().min(1).max(128);
+export const editorialArticleSaveDraftSchema = z.strictObject({
+  id: articleRowId.optional(),
+  expectedRevision: z.number().int().min(0).optional(),
+  idempotencyKey: articleIdempotencyKey,
+  content: z.record(z.string(), z.unknown()),
+});
+export type EditorialArticleSaveDraft = z.infer<
+  typeof editorialArticleSaveDraftSchema
+>;
+export const editorialArticleApproveBatchSchema = z.strictObject({
+  label: z.string().min(1).max(200).optional(),
+  automationUserId: articleRowId,
+  items: z
+    .array(
+      z.strictObject({ id: articleRowId, revision: z.number().int().min(1) }),
+    )
+    .min(1)
+    .max(100),
+});
+export type EditorialArticleApproveBatch = z.infer<
+  typeof editorialArticleApproveBatchSchema
+>;
+export const editorialArticlePublishApprovedSchema = z.strictObject({
+  approvalId: articleRowId,
+  id: articleRowId,
+  idempotencyKey: articleIdempotencyKey,
+});
+export type EditorialArticlePublishApproved = z.infer<
+  typeof editorialArticlePublishApprovedSchema
+>;

@@ -695,9 +695,7 @@
 .chat .chatComposer {
   position: relative;
   box-sizing: border-box;
-  grid-template-columns: 36px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--yoyi-space-3);
+  gap: var(--yoyi-space-2);
   min-width: 0;
   padding: var(--yoyi-space-3) var(--yoyi-space-4);
   border-top: 1px solid var(--yoyi-color-border-subtle);

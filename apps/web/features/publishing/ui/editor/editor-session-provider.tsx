@@ -1,5 +1,7 @@
 "use client";
 
+import { useBeforeAuth } from "../../../auth/auth-return";
+
 import {
   createContext,
   useContext,
@@ -203,6 +205,27 @@ export const EditorSessionProvider = ({
       document.removeEventListener("visibilitychange", background);
     };
   }, [registry, current, upload]);
+
+  useBeforeAuth(async () => {
+    const store = registry.current(accountId);
+    if (!store || registry.leavingReason(store)) return true;
+    const state = store.get();
+    const checkpoint = uploadRef.current.checkpoint?.();
+    if (state.phase !== "ready" || !checkpoint) return true;
+    const saved = await registry.recovery?.save(state, {
+      ...checkpoint,
+      content: contentOf(state),
+    });
+    if (
+      !saved &&
+      (uploadRef.current.hasUnsavedChanges() ||
+        checkpoint.pendingFiles.length > 0)
+    ) {
+      store.setNotice("本机恢复未能保存，请先保存草稿再离开，避免内容丢失");
+      return false;
+    }
+    return true;
+  });
 
   // A session that ended while no editor showed it (e.g. its last upload was
   // discarded elsewhere) leaves nothing to return to. A store whose runtime

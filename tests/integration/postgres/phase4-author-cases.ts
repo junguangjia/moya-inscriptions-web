@@ -35,6 +35,7 @@ import type {
 } from "@moya/contracts";
 import type { BackendProcessHandle } from "@moya/backend-runtime";
 
+import { cleanupNotificationData } from "./notification-fixture-cleanup.js";
 import { cleanupPublishingData } from "./work-publishing-content-cases.js";
 
 const id = (prefix: string) => `${prefix}-${randomUUID().replaceAll("-", "")}`;
@@ -1368,6 +1369,7 @@ export const registerPhase4AuthorTests = (
       );
     };
     const removeUsers = async (users: readonly string[]) => {
+      await cleanupNotificationData(pool, users);
       await pool.query(
         "DELETE FROM community.comment_likes WHERE user_id=ANY($1)",
         [users],

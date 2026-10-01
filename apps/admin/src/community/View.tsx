@@ -8,6 +8,8 @@ import { CommunityContentClient } from "./content-client";
 import { CommunityHistoryClient } from "./history-client";
 import { PublishingJobsClient } from "./publishing-jobs-client";
 import { CommunityQueueClient } from "./queue-client";
+import { ThreadsClient } from "./threads-client";
+import { DmModerationClient } from "./dm-moderation-client";
 import { CommunitySettingsClient } from "./settings-client";
 import { WorkSubmissionsQueueClient } from "./work-submissions-client";
 
@@ -104,5 +106,23 @@ export const AgentOperationsView = (props: AdminViewServerProps) => (
     ) : (
       <p role="alert">代理操作仅在开发环境可用。</p>
     )}
+  </OwnerOnly>
+);
+
+// content-community-completion-v1: operator-managed Threads (Development only).
+export const ThreadsView = (props: AdminViewServerProps) => (
+  <OwnerOnly props={props}>
+    <DevelopmentOnly>
+      <ThreadsClient />
+    </DevelopmentOnly>
+  </OwnerOnly>
+);
+
+// content-community-completion-v1: narrow Owner-only DM moderation (Development only).
+export const DmModerationView = (props: AdminViewServerProps) => (
+  <OwnerOnly props={props}>
+    <DevelopmentOnly>
+      <DmModerationClient />
+    </DevelopmentOnly>
   </OwnerOnly>
 );

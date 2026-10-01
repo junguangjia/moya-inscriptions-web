@@ -10,6 +10,7 @@ import commentStyles from "../comments/comment-section.module.css";
 import type { PreviewCommentLocation } from "../discussion-preview/preview-context";
 import { PreviewAuthorProfile } from "./preview-author-profile";
 import styles from "./message-preview.module.css";
+import { CategoryIcon } from "./message-category-icon";
 
 // Presentation fixtures only. These names are never public-user identities.
 const people = [
@@ -213,32 +214,6 @@ function Avatar({
     >
       {actor.glyph}
     </span>
-  );
-}
-
-function CategoryIcon({
-  kind,
-}: {
-  kind: "followers" | "reactions" | "comments";
-}) {
-  return kind === "reactions" ? (
-    <QuickActionIcon action="like" />
-  ) : kind === "comments" ? (
-    <Icon name="message" aria-hidden="true" />
-  ) : (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      aria-hidden="true"
-    >
-      <circle cx="9" cy="8" r="3" />
-      <path
-        d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }
 
@@ -1125,24 +1100,8 @@ export function MessagePreview({
                 setDraft("");
               }}
             >
-              <button
-                type="button"
-                className={commentStyles.avatar}
-                aria-label="查看我的主页"
-                onClick={(event) => {
-                  event.currentTarget.focus({ preventScroll: true });
-                  openPerson("self");
-                }}
-              >
-                <span
-                  className={commentStyles.avatarContent}
-                  aria-hidden="true"
-                >
-                  我
-                </span>
-              </button>
-              <div className={commentStyles.composerBody}>
-                <div className={commentStyles.composerInputRow}>
+              <div className={commentStyles.composerInputRow}>
+                <div className={commentStyles.composerField}>
                   <textarea
                     id="message-preview-draft"
                     aria-label="输入消息"
@@ -1153,12 +1112,14 @@ export function MessagePreview({
                     maxLength={500}
                     onChange={(event) => setDraft(event.currentTarget.value)}
                   />
-                  <div className={commentStyles.composerFooter}>
-                    <button type="submit" disabled={!draft.trim()}>
-                      发送
-                    </button>
-                  </div>
                 </div>
+                <button
+                  type="submit"
+                  className={commentStyles.composerSend}
+                  disabled={!draft.trim()}
+                >
+                  发送
+                </button>
               </div>
             </form>
           </div>

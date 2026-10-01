@@ -1,5 +1,6 @@
+import type { MentionReference } from "@moya/contracts";
 import type {
-  ContentIdentity,
+  DiscussionTarget,
   DiscussionPage,
   DiscussionReply,
   DiscussionReplyPage,
@@ -12,24 +13,25 @@ export interface DiscussionQuery {
   readonly pinned?: readonly string[];
 }
 export interface DiscussionPort {
-  discussionTarget(id: string): Promise<ContentIdentity>;
+  discussionTarget(id: string): Promise<DiscussionTarget>;
   readDiscussion(
-    target: ContentIdentity,
+    target: DiscussionTarget,
     viewer: string | null,
     query: DiscussionQuery,
   ): Promise<DiscussionPage>;
   readDiscussionReplies(
-    target: ContentIdentity,
+    target: DiscussionTarget,
     rootId: string,
     viewer: string | null,
     query: DiscussionQuery,
   ): Promise<DiscussionReplyPage>;
   submitDiscussion(
-    target: ContentIdentity,
+    target: DiscussionTarget,
     actor: string,
     text: string,
     rootId?: string,
     replyTo?: string,
+    mentions?: readonly MentionReference[],
   ): Promise<{
     id: string;
     rootId: string;
@@ -63,7 +65,7 @@ export interface DiscussionPort {
     query: DiscussionQuery,
   ): Promise<AuthorPage<OwnComment>>;
   locateDiscussion(
-    target: ContentIdentity,
+    target: DiscussionTarget,
     id: string,
     viewer: string,
     query: DiscussionQuery,

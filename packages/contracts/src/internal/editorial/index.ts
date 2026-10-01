@@ -7,12 +7,18 @@ export {
   editorialDraftSchema,
   editorialMediaSchema,
   editorialPublishSchema,
+  editorialArticleApproveBatchSchema,
+  editorialArticlePublishApprovedSchema,
+  editorialArticleSaveDraftSchema,
 } from "./schemas.js";
 export type {
   EditorialDraft,
   EditorialMedia,
   EditorialPublished,
   EditorialStatefulField,
+  EditorialArticleApproveBatch,
+  EditorialArticlePublishApproved,
+  EditorialArticleSaveDraft,
 } from "./schemas.js";
 export {
   editorialApproveBatchSchema,

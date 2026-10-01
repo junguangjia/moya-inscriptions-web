@@ -1,6 +1,12 @@
 import "server-only";
+import { authPasswordResetResultSchema } from "@moya/contracts/schemas";
 import { localCatalogFileUrl } from "../../features/detail/local-catalog-media";
-import { readCommunitySessionToken } from "./community-session-cookie";
+import {
+  isSecureRequest,
+  readCommunitySessionToken,
+  serializeClearedCommunitySessionCookie,
+  serializeCommunitySessionCookie,
+} from "./community-session-cookie";
 
 import { fetchCatalogSearchPage } from "./catalog-search";
 import type { CatalogSearchTransportResult } from "./catalog-search";
@@ -234,11 +240,31 @@ export const signOutServerDevelopmentSession = async (
   }
 };
 
+/** True when the Backend refuses the presented Session itself: `me` answers 401. */
+const communitySessionRefused = async (
+  base: URL,
+  token: string,
+): Promise<boolean> => {
+  try {
+    const answer = await fetch(new URL("v1/me", base), {
+      method: "GET",
+      headers: { accept: "application/json", Authorization: `Bearer ${token}` },
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(15000),
+    });
+    await answer.body?.cancel().catch(() => undefined);
+    return answer.status === 401;
+  } catch {
+    return false;
+  }
+};
+
 /** Fixed Development namespace relay. Credentials stay on the server and every read is private. */
 export const relayServerAuthorCommunity = async (
   request: Request,
 ): Promise<Response> => {
-  const headers = {
+  const headers: Record<string, string> = {
     "cache-control": "private, no-store",
     vary: "Cookie",
     "x-content-type-options": "nosniff",
@@ -293,6 +319,14 @@ export const relayServerAuthorCommunity = async (
       accept: "application/json, image/png",
     };
     if (token !== undefined) outgoing.Authorization = `Bearer ${token}`;
+    // Bind private inbox reads to the UI's confirmed account when another tab changed the cookie.
+    if (request.method === "GET" && suffix === "notifications") {
+      const expected = request.headers.get("x-author-account");
+      if (expected) {
+        if (!/^user-[0-9a-f]{32}$/u.test(expected)) return fail(422);
+        outgoing["x-author-account"] = expected;
+      }
+    }
     let bytes: Uint8Array | undefined;
     if (request.method !== "GET") {
       const type = request.headers.get("content-type");
@@ -322,14 +356,37 @@ export const relayServerAuthorCommunity = async (
       }
       bytes = new Uint8Array(Buffer.concat(chunks));
     }
-    const upstream = await fetch(target, {
-      method: request.method,
-      headers: outgoing,
-      cache: "no-store",
-      redirect: "error",
-      signal: AbortSignal.timeout(15000),
-      ...(bytes === undefined ? {} : { body: bytes as BodyInit }),
-    });
+    const send = (credentials: Record<string, string>) =>
+      fetch(target, {
+        method: request.method,
+        headers: credentials,
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(15000),
+        ...(bytes === undefined ? {} : { body: bytes as BodyInit }),
+      });
+    let upstream = await send(outgoing);
+    // email-auth-v1: a Session the Backend no longer accepts (logged out or
+    // factor-replaced on another device, expired, unknown) must not keep this
+    // browser from public reads. Once the Backend refuses the Session itself
+    // (not an account header that no longer matches it), the cookie is cleared
+    // and a read is answered as for a signed-out browser; a write is not
+    // repeated.
+    if (
+      upstream.status === 401 &&
+      token !== undefined &&
+      (await communitySessionRefused(base, token))
+    ) {
+      headers["set-cookie"] = serializeClearedCommunitySessionCookie(
+        isSecureRequest(request),
+      );
+      if (request.method === "GET") {
+        await upstream.body?.cancel().catch(() => undefined);
+        const signedOut = { ...outgoing };
+        delete signedOut.Authorization;
+        upstream = await send(signedOut);
+      }
+    }
     const type = upstream.headers.get("content-type")?.split(";")[0];
     if (type !== "application/json" && type !== "image/png")
       return fail(upstream.ok ? 502 : upstream.status);
@@ -350,6 +407,110 @@ export const relayServerAuthorCommunity = async (
     return new Response(new Uint8Array(Buffer.concat(chunks)), {
       status: upstream.status,
       headers: { ...headers, "content-type": type },
+    });
+  } catch {
+    return fail(503);
+  }
+};
+
+const editorialOwnerPattern = /^(article|collection)-[0-9a-f]{32}$/u;
+const editorialLocalFile = /^[a-f0-9]{64}-[a-f0-9]{64}\.(png|jpg|webp)$/u;
+const editorialMediaTypes: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  webp: "image/webp",
+};
+
+/** Every image source a published editorial detail carries. */
+const editorialImageSources = (
+  value: unknown,
+  found: string[] = [],
+): string[] => {
+  if (Array.isArray(value))
+    for (const item of value) editorialImageSources(item, found);
+  else if (value !== null && typeof value === "object")
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "src" && typeof item === "string") found.push(item);
+      else editorialImageSources(item, found);
+    }
+  return found;
+};
+
+/**
+ * Development-only caller, as for Catalog media: an editorial image is served
+ * through the Web origin only when the published Article or Collection named
+ * by `owner` shows it. Its loopback file URL comes from that published detail,
+ * never from the request, and both reads are anonymous.
+ */
+export const relayServerLocalEditorialMedia = async (
+  owner: string,
+  file: string,
+): Promise<Response> => {
+  const headers = {
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+  };
+  const fail = (status: number) => new Response(null, { status, headers });
+  const kind = editorialOwnerPattern.exec(owner)?.[1];
+  const match = editorialLocalFile.exec(file);
+  if (!kind || !match) return fail(404);
+  const expected = editorialMediaTypes[match[1]!]!;
+  try {
+    const detail = await fetch(
+      new URL(
+        `v1/community/editorial/${kind}s/${owner}`,
+        parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL),
+      ),
+      {
+        method: "GET",
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+    if (!detail.ok) {
+      await detail.body?.cancel().catch(() => undefined);
+      return fail(detail.status === 404 ? 404 : 503);
+    }
+    const url = editorialImageSources(await detail.json())
+      .map((src) => localCatalogFileUrl(src))
+      .find((candidate) => candidate?.pathname === `/api/media/file/${file}`);
+    if (!url) return fail(404);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { accept: expected },
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return fail(
+        response.status === 404 || response.status === 403 ? 404 : 503,
+      );
+    }
+    if (response.headers.get("content-type")?.split(";")[0] !== expected) {
+      await response.body?.cancel().catch(() => undefined);
+      return fail(502);
+    }
+    const reader = response.body?.getReader();
+    if (!reader) return fail(502);
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > 12 * 1024 * 1024) {
+        await reader.cancel();
+        return fail(502);
+      }
+      chunks.push(next.value);
+    }
+    return new Response(new Uint8Array(Buffer.concat(chunks)), {
+      status: 200,
+      headers: { ...headers, "content-type": expected },
     });
   } catch {
     return fail(503);
@@ -816,4 +977,118 @@ export const relayServerPublishingMedia = async (
     return new Response(null, { status: upstream.status, headers });
   }
   return new Response(upstream.body, { status: upstream.status, headers });
+};
+
+/**
+ * Same-origin authentication relay. A session token returned by the Backend is
+ * stored in the HttpOnly cookie and removed before the body reaches the browser.
+ */
+export const relayServerCommunityAuth = async (
+  request: Request,
+): Promise<Response> => {
+  const headers = {
+    "cache-control": "private, no-store",
+    vary: "Cookie",
+    "x-content-type-options": "nosniff",
+  };
+  const fail = (status: number) => new Response(null, { status, headers });
+  if (!["GET", "POST"].includes(request.method)) return fail(405);
+  const incoming = new URL(request.url);
+  const origin = request.headers.get("origin");
+  const authority = request.headers.get("host") ?? incoming.host;
+  let sameOrigin = origin === null;
+  if (origin !== null) {
+    try {
+      const source = new URL(origin);
+      sameOrigin =
+        source.host === authority && source.protocol === incoming.protocol;
+    } catch {
+      sameOrigin = false;
+    }
+  }
+  if (
+    request.method !== "GET" &&
+    (!sameOrigin || request.headers.get("sec-fetch-site") === "cross-site")
+  )
+    return fail(403);
+  const prefix = "/api/community/auth/";
+  if (!incoming.pathname.startsWith(prefix)) return fail(404);
+  const suffix = incoming.pathname.slice(prefix.length);
+  try {
+    const base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
+    const target = new URL(`v1/community/auth/${suffix}`, base);
+    const token = readCommunitySessionToken(request.headers.get("cookie"));
+    const outgoing: Record<string, string> = { accept: "application/json" };
+    if (token !== undefined) outgoing.authorization = `Bearer ${token}`;
+    let body: string | undefined;
+    if (request.method === "POST") {
+      outgoing["content-type"] = "application/json";
+      body = await request.text();
+      if (body.length > 16_384) return fail(413);
+    }
+    const upstream = await fetch(target, {
+      method: request.method,
+      headers: outgoing,
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+      ...(body === undefined ? {} : { body }),
+    });
+    if (suffix === "sign-out") {
+      const secure = isSecureRequest(request);
+      return new Response(null, {
+        status: upstream.status,
+        headers: {
+          ...headers,
+          "set-cookie": serializeClearedCommunitySessionCookie(secure),
+        },
+      });
+    }
+    const type = upstream.headers.get("content-type") ?? "";
+    if (!type.includes("application/json"))
+      return fail(upstream.ok ? 502 : upstream.status);
+    const payload: unknown = await upstream.json();
+    const secure = isSecureRequest(request);
+    let setCookie: string | undefined;
+    if (
+      (suffix === "passwords/reset" &&
+        upstream.status === 200 &&
+        authPasswordResetResultSchema.safeParse(payload).success) ||
+      (upstream.status === 401 &&
+        token !== undefined &&
+        (await communitySessionRefused(base, token)))
+    )
+      setCookie = serializeClearedCommunitySessionCookie(secure);
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "session" in payload
+    ) {
+      const session = payload.session;
+      if (
+        typeof session === "object" &&
+        session !== null &&
+        "token" in session &&
+        "expiresAt" in session &&
+        typeof session.token === "string" &&
+        typeof session.expiresAt === "string"
+      ) {
+        setCookie = serializeCommunitySessionCookie(
+          session.token,
+          new Date(session.expiresAt),
+          secure,
+        );
+        delete session.token;
+      }
+    }
+    return Response.json(payload, {
+      status: upstream.status,
+      headers: {
+        ...headers,
+        ...(setCookie === undefined ? {} : { "set-cookie": setCookie }),
+      },
+    });
+  } catch {
+    return fail(503);
+  }
 };

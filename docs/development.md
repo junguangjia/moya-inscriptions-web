@@ -221,6 +221,51 @@ They carry that prefix deliberately: Payload mounts every endpoint under `/api`,
 so a `/community/...` endpoint would land on the public Community read surface
 that Web and the Backend already own.
 
+## Content, Threads and Direct Messages (content-community-completion-v1)
+
+Development-only composition (`NODE_ENV=development`), recorded in
+[docs/community/content-community-completion-v1.md](community/content-community-completion-v1.md).
+
+- **Editorial content.** Payload Admin gains `articles` (news or academic
+  presentation, sections, citations, an optional Catalog cover) and
+  `article-collections` (ordered Article/Catalog members). They follow the
+  existing editorial rules: automation saves drafts only, publication needs an
+  exact-revision approval (`editorial-article-approvals`) unless the Owner
+  publishes, withdrawal is Owner-only, hard delete is disabled. The Backend
+  reads only the published SQL views (`article_entries`, `article_sections`,
+  `article_citations`, `article_collection_entries`,
+  `article_collection_members`) through the public read role; `dev:migrate`
+  applies the Payload migrations and `grant-public-read.sql`. Web reads
+  `GET /api/community/editorial/{articles,collections}[/{id}]` (the existing
+  same-origin relay to `/v1/community/editorial/**`) for the 近闻 and 专题 tabs
+  and their readers; a withdrawn Article answers 404 and leaves lists and
+  Collections.
+- **Threads.** The Owner creates and edits Threads in Admin (话题管理) over
+  `/internal/community/threads`. A signed-in account posts to a Thread with the
+  accepted editor in Thread mode (text plus at most three static images); the
+  Work is one identity on the Thread, the author's Works and discovery.
+  `GET /api/community/threads` ranks by `Σ weight·2^(-age_days/7)` (Work 1,
+  comment or reply 2, like 1) at one server anchor per browsing sequence;
+  `POST …/threads/{id}/read` stores the per-user read marker. Article discussion
+  uses the existing discussion routes with the target kind `article`.
+- **Direct messages.** `GET/POST /api/community/messages` and the
+  per-conversation routes (`/with/{userId}`, `/{id}`,
+  `/{id}/{hide|unhide| mute|unmute|read}`, `/unread`) relay to
+  `/v1/community/messages/**`. The first message to a new pair is allowed;
+  further messages wait for a committed reply (`dm_request_pending`); limits are
+  2,000 code points, 20 new pairs per UTC day and 20 messages per minute. The
+  open conversation polls every 10 s in the foreground (paused while hidden).
+  Sign in as two Development accounts at `/dev/community` to exercise the gate.
+  Owner moderation (私信处理) reads one named conversation or looks a pair up
+  with a stated purpose and removes single messages; every access is audited
+  content-free in `community.dm_moderation_events`, and ordinary logs never
+  carry bodies.
+- **Migrations and grants.** Community migrations `20260922030000_threads`,
+  `20260922031000_article_discussion_target` and
+  `20260922032000_direct_messages` are append-only; `grant-runtime.sql` carries
+  one named `content-community-completion-v1` block. The PostgreSQL suite covers
+  Threads and DMs on `TEST_DATABASE_URL` only.
+
 ## Optional local read-only browser role
 
 After `dev:migrate`, an operator can explicitly create a local inspection role:

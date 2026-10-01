@@ -119,6 +119,8 @@ export type SaveMode = "saved" | "unsaved";
 
 export interface EditorSessionView {
   readonly target: EditorTarget;
+  /** The Thread a new work publishes into (quick composer), else null. */
+  readonly threadId: string | null;
   readonly saveMode: SaveMode;
   readonly draftId: string | null;
   readonly sessionId: string | null;
@@ -314,6 +316,14 @@ const NOTHING_APPENDABLE: ReadonlySet<string> = new Set();
  * or left out by the editor). Manager items outside both are never re-added:
  * a restored or chosen version decides the album.
  */
+/** Quick-composer bound for a Thread post (content-community-completion-v1). */
+export const THREAD_QUICK_COMPOSER_ITEMS = 3;
+const sessionMaxItems = (
+  session: { readonly view: { readonly threadId: string | null } } | null,
+  limit: number,
+): number =>
+  session?.view.threadId ? Math.min(limit, THREAD_QUICK_COMPOSER_ITEMS) : limit;
+
 const withManagedItems = <
   C extends { readonly items: readonly WorkDraftItem[] },
 >(
@@ -557,6 +567,10 @@ export class PublishingRuntime {
     const saveMode = draft ? "saved" : options.saveMode;
     const view: EditorSessionView = {
       target: options.target,
+      threadId:
+        options.target.type === "new"
+          ? (options.target.threadId ?? null)
+          : null,
       saveMode,
       draftId: draft?.id ?? null,
       sessionId: null,
@@ -1192,7 +1206,7 @@ export class PublishingRuntime {
     const result = confirmStaging(
       account.staging,
       existing,
-      account.limits?.maxItems ?? DEFAULT_MAX_ITEMS,
+      sessionMaxItems(session, account.limits?.maxItems ?? DEFAULT_MAX_ITEMS),
     );
     if (!result.ok) return result;
     account.staging = result.remaining;
@@ -1262,6 +1276,9 @@ export class PublishingRuntime {
       holder,
       content: current,
       baseRevisionId: session.view.baseRevisionId,
+      ...(session.view.threadId === null
+        ? {}
+        : { threadId: session.view.threadId }),
     });
     session.submitting = false;
     // Refused as not ready: those items show as processing and the account
@@ -1589,7 +1606,10 @@ export class PublishingRuntime {
               count: countStaging(
                 staging,
                 existing,
-                account.limits?.maxItems ?? DEFAULT_MAX_ITEMS,
+                sessionMaxItems(
+                  account.session,
+                  account.limits?.maxItems ?? DEFAULT_MAX_ITEMS,
+                ),
               ),
               identifying: account.identifying,
             }
@@ -1599,7 +1619,10 @@ export class PublishingRuntime {
                 count: countStaging(
                   { origin: "picker", original: false, entries: [] },
                   existing,
-                  account.limits?.maxItems ?? DEFAULT_MAX_ITEMS,
+                  sessionMaxItems(
+                    account.session,
+                    account.limits?.maxItems ?? DEFAULT_MAX_ITEMS,
+                  ),
                 ),
                 identifying: account.identifying,
               }

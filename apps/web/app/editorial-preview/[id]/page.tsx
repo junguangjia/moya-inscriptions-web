@@ -6,7 +6,7 @@ import { EditorialPreviewExperience } from "./preview-experience";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const metadata: Metadata = {
-  title: "内容预览 · 由艺",
+  title: "内容预览 · 由于艺",
   robots: { index: false, follow: false },
 };
 

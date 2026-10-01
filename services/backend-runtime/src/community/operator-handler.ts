@@ -15,16 +15,21 @@ import {
 
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
+import { failureLabel } from "../http/request-boundary.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { handleAgentRequest } from "./agent-handler.js";
 import { handlePublishingOperatorRequest } from "./work-publishing-handler.js";
+import { handleThreadOperatorRequest } from "./thread-handler.js";
+import { handleDirectMessageOperatorRequest } from "./direct-message-handler.js";
 
 import type {
   AgentAdministrationService,
   CommunityContentOperatorPort,
   DiscussionPort,
   CommunityModerationService,
+  DirectMessageService,
   PublishingOperatorService,
+  ThreadService,
 } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
@@ -36,6 +41,10 @@ export interface OperatorRouteDependencies {
   readonly publishingOperatorService?: PublishingOperatorService | undefined;
   /** Agent administration (Development only); absent leaves agent/* unrouted. */
   readonly agentAdministrationService?: AgentAdministrationService | undefined;
+  /** Threads (content-community-completion-v1, Development only); absent leaves threads/* unrouted. */
+  readonly threadService?: ThreadService | undefined;
+  /** DM moderation (content-community-completion-v1, Development only). */
+  readonly directMessageService?: DirectMessageService | undefined;
   /** Shared credential the Owner's Payload Admin holds server-side. */
   readonly operatorCredential: string;
 }
@@ -64,6 +73,16 @@ export const isAuthorizedOperator = (
 };
 
 const sendFailure = (response: ServerResponse, error: unknown): void => {
+  // A handler that failed after it answered has nothing left to fail; one
+  // that failed while answering cannot be answered twice. Both still leave a
+  // diagnosable trace without private data.
+  if (response.headersSent) {
+    console.error(
+      `[backend-runtime] operator request failed after answering (${failureLabel(error)})`,
+    );
+    if (!response.writableEnded) response.destroy();
+    return;
+  }
   if (isCommunityNotFoundError(error)) {
     sendOperatorError(response, 404, "NOT_FOUND");
     return;
@@ -81,6 +100,10 @@ const sendFailure = (response: ServerResponse, error: unknown): void => {
     sendOperatorError(response, 503, "STORE_UNAVAILABLE");
     return;
   }
+  // Unmapped: leave a diagnosable trace without private data.
+  console.error(
+    `[backend-runtime] operator request failed (${failureLabel(error)})`,
+  );
   sendOperatorError(response, 500, "INTERNAL_ERROR");
 };
 
@@ -151,36 +174,63 @@ export const handleOperatorRequest = async (
     discussionPort,
     publishingOperatorService,
     agentAdministrationService,
+    threadService,
+    directMessageService,
   }: OperatorRouteDependencies,
 ): Promise<void> => {
   if (!isAuthorizedOperator(request, operatorCredential)) {
     sendOperatorError(response, 401, "OPERATOR_UNAUTHORIZED");
     return;
   }
-  if (
-    agentAdministrationService !== undefined &&
-    (await handleAgentRequest(
-      request,
-      response,
-      pathname,
-      agentAdministrationService,
-    ))
-  )
-    return;
-  if (
-    publishingOperatorService !== undefined &&
-    (await handlePublishingOperatorRequest(
-      request,
-      response,
-      pathname,
-      publishingOperatorService,
-    ))
-  )
-    return;
   const method = request.method ?? "GET";
   const methodNotAllowed = () =>
     sendOperatorError(response, 405, "METHOD_NOT_ALLOWED");
   try {
+    // Every operator route family, including the Agent, publishing, direct-
+    // message and Thread handlers, runs inside this boundary: an error they do
+    // not map themselves becomes a bounded operator failure for this request.
+    if (
+      agentAdministrationService !== undefined &&
+      (await handleAgentRequest(
+        request,
+        response,
+        pathname,
+        agentAdministrationService,
+      ))
+    )
+      return;
+    if (
+      publishingOperatorService !== undefined &&
+      (await handlePublishingOperatorRequest(
+        request,
+        response,
+        pathname,
+        publishingOperatorService,
+      ))
+    )
+      return;
+    if (
+      directMessageService !== undefined &&
+      (await handleDirectMessageOperatorRequest(
+        request,
+        response,
+        pathname,
+        directMessageService,
+        "owner",
+      ))
+    )
+      return;
+    if (
+      threadService !== undefined &&
+      (await handleThreadOperatorRequest(
+        request,
+        response,
+        pathname,
+        threadService,
+        "owner",
+      ))
+    )
+      return;
     const operatorService = new CommunityContentOperatorService(
       contentOperatorPort,
       discussionPort,
@@ -465,7 +515,7 @@ export const handleOperatorRequest = async (
 
     sendOperatorError(response, 404, "NOT_FOUND");
   } catch (error) {
-    if (error instanceof JsonBodyError) {
+    if (error instanceof JsonBodyError && !response.headersSent) {
       sendOperatorError(response, 400, "INVALID_COMMAND");
       return;
     }

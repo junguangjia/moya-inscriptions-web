@@ -1,10 +1,11 @@
 "use client";
+import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 import { Icon } from "@moya/ui";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   AuthorProfile,
-  ContentIdentity,
+  DiscussionTarget,
   OwnComment,
 } from "@moya/contracts";
 import type { ProductShellProfileOverlayRenderProps } from "../product-shell/product-shell";
@@ -13,6 +14,7 @@ import { HorizontalPager } from "../shell/horizontal-pager";
 import type { HorizontalPagerHandle } from "../shell/horizontal-pager";
 import { authorClient } from "./author-data";
 import { useAuthors } from "./author-context";
+import { useDirectMessageEntry } from "../messages/direct-message-entry";
 import { AvatarEntry } from "./avatar-editor";
 import { ProfileEditor } from "./profile-editor";
 import { ProfileSettings } from "./profile-settings";
@@ -53,6 +55,7 @@ const ScopedAuthorProfile = ({
   headerStart,
 }: ProductShellProfileOverlayRenderProps &
   AuthorProfilePresentationProps & { embedded?: boolean }) => {
+  const directEntry = useDirectMessageEntry();
   const author = useAuthors(),
     shell = useProductShell(),
     isPreview = preview !== undefined,
@@ -63,6 +66,15 @@ const ScopedAuthorProfile = ({
     id = preview?.profile.id ?? state.authorId ?? viewerId ?? null,
     owner = !isPreview && (id === viewerId || id === null),
     cacheKey = `profile:${id}`;
+  const authReturn = useAuthReturn();
+  const profileCapture = useRef({
+    open: false,
+    positions: {} as Record<string, number>,
+  });
+  const authReturnView = useAuthReturnView<{
+    open: boolean;
+    positions: Record<string, number>;
+  }>(`profile-settings:${state.entryId}`, () => profileCapture.current);
   const [loadedProfile, setProfile] = useState<AuthorProfile | null>(() =>
       isPreview
         ? null
@@ -70,13 +82,14 @@ const ScopedAuthorProfile = ({
     ),
     [error, setError] = useState(""),
     [modal, setModal] = useState<"edit" | "settings" | "background" | null>(
-      null,
+      authReturnView?.open ? "settings" : null,
     ),
     [people, setPeople] = useState<"following" | "followers" | null>(null),
     [revision, setRevision] = useState(0),
     [progress, setProgress] = useState(
       Math.max(0, tabs.indexOf(state.tab as (typeof tabs)[number])),
     );
+
   const profile = preview?.profile ?? loadedProfile;
   const root = useRef<HTMLElement>(null),
     profileHeader = useRef<HTMLElement>(null),
@@ -136,9 +149,15 @@ const ScopedAuthorProfile = ({
   const positions = useRef<Record<string, number>>(
     isPreview
       ? {}
-      : ((author.cache.get(`profile-scroll:${state.entryId}`) as
-          Record<string, number> | undefined) ?? {}),
+      : (authReturnView?.positions ??
+          (author.cache.get(`profile-scroll:${state.entryId}`) as
+            Record<string, number> | undefined) ??
+          {}),
   );
+  profileCapture.current = {
+    open: modal === "settings",
+    positions: { ...positions.current },
+  };
   const scrollTab = viewTab;
   const scrollElement = () =>
     embedded
@@ -342,6 +361,7 @@ const ScopedAuthorProfile = ({
             {profile ? (
               <>
                 <p>@{profile.handle}</p>
+                {profile.studioName && <p>{profile.studioName}</p>}
                 <p>{profile.bio}</p>
                 <div className="phase4-actions">
                   {!isPreview && profile.totals.following !== null && (
@@ -431,6 +451,24 @@ const ScopedAuthorProfile = ({
                       >
                         屏蔽
                       </button>
+                      {directEntry && (
+                        <button
+                          type="button"
+                          data-profile-direct-message=""
+                          aria-label={`给 ${profile.displayName} 发私信`}
+                          onClick={() => {
+                            // Opening never sends: the first submit in the
+                            // message center creates the canonical pair.
+                            directEntry.openWith(
+                              profile.id,
+                              profile.displayName,
+                            );
+                            onClose();
+                          }}
+                        >
+                          私信
+                        </button>
+                      )}
                     </>
                   ) : !profile.isOwner ? (
                     <a href={author.signInHref}>登录后关注</a>
@@ -441,7 +479,7 @@ const ScopedAuthorProfile = ({
               <>
                 <p>无需登录即可浏览与搜索。登录后可跨设备收藏、喜欢、关注。</p>
                 <div className="phase4-actions">
-                  <a href={author.signInHref}>使用开发测试账户登录</a>
+                  <a href={author.signInHref}>登录</a>
                 </div>
               </>
             ) : null}
@@ -521,6 +559,7 @@ const ScopedAuthorProfile = ({
       {ownProfile && profile && modal === "background" && (
         <ProfileBackgroundEditor
           profile={profile}
+          header={profileHeader}
           onClose={() => setModal(null)}
           onSaved={save}
         />
@@ -542,9 +581,31 @@ const ScopedAuthorProfile = ({
         <ProfileSettings
           key={profile?.id ?? "guest"}
           profile={profile}
-          onClose={() => setModal(null)}
+          onDeparture={() =>
+            authReturn?.consumeView(
+              `profile-settings:${state.entryId}`,
+              authReturnView,
+            )
+          }
+          onClose={() => {
+            authReturn?.consumeView(
+              `profile-settings:${state.entryId}`,
+              authReturnView,
+            );
+            setModal(null);
+          }}
           onSaved={save}
-          onEdit={ownProfile ? () => setModal("edit") : undefined}
+          onEdit={
+            ownProfile
+              ? () => {
+                  authReturn?.consumeView(
+                    `profile-settings:${state.entryId}`,
+                    authReturnView,
+                  );
+                  setModal("edit");
+                }
+              : undefined
+          }
         />
       )}
     </section>
@@ -555,8 +616,12 @@ export const MyComments = ({
   onOpenContent,
 }: {
   entryId: string;
+  /**
+   * A host that owns a modal (the message center) opens the target after it
+   * has finished closing. Every target, Articles included, goes through it.
+   */
   onOpenContent?:
-    ((target: ContentIdentity, opener: HTMLElement) => void) | undefined;
+    ((target: DiscussionTarget, opener: HTMLElement) => void) | undefined;
 }) => {
   const author = useAuthors(),
     shell = useProductShell();
@@ -647,9 +712,19 @@ export const MyComments = ({
                       target: item.target,
                       id: item.id,
                     });
-                    if (onOpenContent)
-                      onOpenContent(item.target!, event.currentTarget);
-                    else shell.openContent(item.target!, event.currentTarget);
+                    const target = item.target!;
+                    const opener = event.currentTarget;
+                    if (onOpenContent) onOpenContent(target, opener);
+                    else if (target.type === "article") {
+                      // content-community-completion-v1: an Article discussion
+                      // opens through the editorial reader, a topic overlay of
+                      // the discussion destination (openTopic refuses from
+                      // any other destination).
+                      shell.navigatePrimary("discussion");
+                      requestAnimationFrame(() =>
+                        shell.openTopic(target.id, opener, 0),
+                      );
+                    } else shell.openContent(target, opener);
                   }}
                 >
                   前往评论位置
@@ -775,12 +850,18 @@ const ScopedAuthorProfilePage = ({
 }) => {
   const author = useAuthors();
   const cacheKey = `primary-profile-tab:${author.viewer?.id ?? "guest"}:${entryId}`;
+  const selectedTab = useRef<(typeof tabs)[number]>("works");
+  const authReturnView = useAuthReturnView(
+    `primary-profile:${entryId}`,
+    () => ({ tab: selectedTab.current }),
+  );
   const [tab, setTab] = useState<(typeof tabs)[number]>(() => {
-    const saved = author.cache.get(cacheKey);
+    const saved = authReturnView?.tab ?? author.cache.get(cacheKey);
     return tabs.includes(saved as (typeof tabs)[number])
       ? (saved as (typeof tabs)[number])
       : "works";
   });
+  selectedTab.current = tab;
   const backButtonRef = useRef<HTMLButtonElement>(null);
   return (
     <ScopedAuthorProfile

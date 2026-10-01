@@ -1,3 +1,9 @@
+import {
+  enqueueNotification,
+  validateMentionUsers,
+} from "./notifications/source.js";
+import { normalizeMentionText } from "@moya/contracts/schemas";
+import type { MentionReference } from "@moya/contracts";
 import { asCommunityOperationError } from "./availability.js";
 import { createHash, randomUUID } from "node:crypto";
 import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
@@ -8,7 +14,7 @@ import {
 } from "@moya/contracts/schemas";
 import type { DiscussionPort, DiscussionQuery } from "@moya/api";
 import type {
-  ContentIdentity,
+  DiscussionTarget as ContentIdentity,
   DiscussionComment,
   DiscussionReply,
 } from "@moya/contracts";
@@ -422,8 +428,11 @@ export class PostgresDiscussionStore implements DiscussionPort {
     text: string,
     rootId?: string,
     replyTo?: string,
+    mentions: readonly MentionReference[] = [],
   ) {
+    text = normalizeMentionText(text);
     return this.run(true, async (db) => {
+      await validateMentionUsers(db, actor, text, mentions);
       await this.active(db, actor);
       await this.interactionLocks(db, target, actor, rootId, replyTo);
       await this.workAllowed(db, target, actor, true);
@@ -473,7 +482,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
         id = opaque("comment");
       if (rootId)
         await db.query(
-          "INSERT INTO community.catalog_comment_replies(id,root_comment_id,author_id,text,moderation,reply_to_reply_id,was_public) VALUES($1,$2,$3,$4,$5,$6,$7)",
+          "INSERT INTO community.catalog_comment_replies(id,root_comment_id,author_id,text,moderation,reply_to_reply_id,was_public,mentions) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
           [
             id,
             rootId,
@@ -482,11 +491,12 @@ export class PostgresDiscussionStore implements DiscussionPort {
             moderation,
             replyTo ?? null,
             moderation === "visible",
+            JSON.stringify(mentions),
           ],
         );
       else
         await db.query(
-          "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation,was_public) VALUES($1,$2,$3,$4,$5,$6,$7)",
+          "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation,was_public,mentions) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
           [
             id,
             target.id,
@@ -495,8 +505,10 @@ export class PostgresDiscussionStore implements DiscussionPort {
             text,
             moderation,
             moderation === "visible",
+            JSON.stringify(mentions),
           ],
         );
+      await enqueueNotification(db, "comment", id, actor);
       await this.authorAudit(db, actor, "comment_sent", id);
       const author = (
         await db.query(
@@ -543,7 +555,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
         id: string;
         root_id: string;
         author_id: string;
-        target_type: "catalog" | "work";
+        target_type: "catalog" | "work" | "article";
         catalog_id: string;
         thread_removed_at: Date | null;
       }>(
@@ -572,7 +584,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
   async discussionTarget(id: string): Promise<ContentIdentity> {
     return this.run(false, async (db) => {
       const s = await this.subject(db, id, false);
-      return { type: s.target_type, id: s.catalog_id };
+      return { type: s.target_type, id: s.catalog_id } as ContentIdentity;
     });
   }
   async setDiscussionLike(
@@ -590,7 +602,10 @@ export class PostgresDiscussionStore implements DiscussionPort {
         ["like", id, enabled],
         async () => {
           const s = await this.subject(db, id, false),
-            target: ContentIdentity = { type: s.target_type, id: s.catalog_id };
+            target = {
+              type: s.target_type,
+              id: s.catalog_id,
+            } as ContentIdentity;
           await this.interactionLocks(
             db,
             target,
@@ -614,16 +629,17 @@ export class PostgresDiscussionStore implements DiscussionPort {
                   [target.type, target.id, actor, s.root_id, id],
                 );
           if (eligible.rowCount !== 1) throw new CommunityNotFoundError();
-          if (enabled)
-            await db.query(
-              "INSERT INTO community.comment_likes(comment_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
-              [id, actor],
-            );
-          else
-            await db.query(
-              "DELETE FROM community.comment_likes WHERE comment_id=$1 AND user_id=$2",
-              [id, actor],
-            );
+          const changed = enabled
+            ? await db.query(
+                "INSERT INTO community.comment_likes(comment_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
+                [id, actor],
+              )
+            : await db.query(
+                "DELETE FROM community.comment_likes WHERE comment_id=$1 AND user_id=$2",
+                [id, actor],
+              );
+          if (changed.rowCount)
+            await enqueueNotification(db, "comment_like", id, actor);
           await this.authorAudit(
             db,
             actor,

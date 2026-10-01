@@ -956,7 +956,9 @@ describe("Frontend message preview", () => {
     await click("打开消息");
     expect(node.textContent).not.toContain("示例消息");
     expect(node.textContent).not.toContain("秋山");
-    expect(node.textContent).toContain("暂无私信");
+    // content-community-completion-v1: the 私信 tab is the real direct-message
+    // panel; a guest sees the truthful sign-in state and no request is made.
+    expect(node.textContent).toContain("登录后查看私信");
     expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -87,3 +87,28 @@
 .page section[role="tabpanel"] {
   padding: var(--yoyi-space-4);
 }
+
+/* content-community-completion-v1: the 私信 list and chat run edge to edge, as
+ * in the accepted message center. */
+.page section[data-message-section="direct"] {
+  padding: 0;
+}
+
+/*
+ * While a direct-message conversation or start view is open it replaces the
+ * tab content, as in the accepted chat. The dialog body becomes the header plus
+ * one filling region, so the panel's message stream scrolls inside it and its
+ * composer stays at the bottom.
+ */
+.tabs[hidden] {
+  display: none;
+}
+.page.directOpen > div {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+}
+.page.directOpen section[role="tabpanel"] {
+  display: flex;
+  min-height: 0;
+}

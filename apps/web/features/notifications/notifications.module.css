@@ -1,0 +1,242 @@
+.mention {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+.mention button,
+.tools button {
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--yoyi-color-seal-red);
+  padding: var(--yoyi-space-3);
+}
+.mention input {
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-height: 44px;
+  font-size: var(--yoyi-type-input-size);
+}
+.mention ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.mention button:disabled {
+  color: var(--yoyi-color-text-tertiary);
+}
+/* Inline in a comment box (Owner acceptance 2026-09-25): the root takes no
+   space, the "@" trigger sits at the box's right edge and the picker opens
+   above the box. Both are placed against the composer field. */
+.mentionInline {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+/* Qualified by .mentionInline so hosts' generic `button { font: inherit }`
+   resets cannot restyle the trigger or the picker's buttons. */
+.mentionInline .mentionTrigger {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  width: 40px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--yoyi-color-text-secondary);
+  font: inherit;
+  font-size: var(--yoyi-type-body-size);
+  font-weight: 650;
+  cursor: pointer;
+}
+.mentionInline .mentionTrigger[aria-expanded="true"] {
+  color: var(--yoyi-color-seal-red);
+}
+.mentionInline .mentionTrigger:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--yoyi-radius-sm);
+}
+.mentionPanel {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: calc(100% + var(--yoyi-space-2));
+  left: 0;
+  display: grid;
+  gap: var(--yoyi-space-3);
+  box-sizing: border-box;
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+  padding: var(--yoyi-space-4);
+  background: var(--yoyi-color-background-surface);
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-md);
+  box-shadow: var(--yoyi-shadow-dialog);
+}
+.mentionPanel label {
+  display: grid;
+  gap: var(--yoyi-space-2);
+}
+.mentionPanel input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-page);
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-md);
+  font: inherit;
+  font-size: var(--yoyi-type-input-size);
+}
+.mentionPanel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mentionInline .mentionPanel button {
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-3);
+  border: 0;
+  background: transparent;
+  color: var(--yoyi-color-seal-red);
+  font: inherit;
+  cursor: pointer;
+}
+.mentionInline .mentionPanel li button {
+  width: 100%;
+  color: var(--yoyi-color-text-primary);
+  text-align: left;
+}
+.mentionPanel li button span {
+  color: var(--yoyi-color-text-tertiary);
+}
+.mentionInline .mentionPanel button:disabled {
+  color: var(--yoyi-color-text-tertiary);
+  cursor: not-allowed;
+}
+.mentionPanel p {
+  margin: 0;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+}
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  padding-inline: var(--yoyi-space-5);
+}
+.status {
+  padding: var(--yoyi-space-5);
+  color: var(--yoyi-color-text-secondary);
+}
+.itemHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--yoyi-space-3);
+}
+.identity {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.timestamp {
+  display: grid;
+  flex-shrink: 0;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.5;
+  text-align: right;
+}
+.itemPreview {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+}
+.itemPreview > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.unreadDot {
+  flex: 0 0 var(--yoyi-space-3);
+  width: var(--yoyi-space-3);
+  height: var(--yoyi-space-3);
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-seal-red);
+}
+.pullScroll {
+  overscroll-behavior-y: none;
+}
+.pullIndicator {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  color: var(--yoyi-color-text-tertiary);
+  transition: height var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+.pullIndicator[data-notification-refresh="pulling"],
+.pullIndicator[data-notification-refresh="ready"] {
+  transition: none;
+}
+.pullIndicator[data-notification-refresh="ready"] {
+  color: var(--yoyi-color-seal-red);
+}
+.pullProgress {
+  display: flex;
+}
+.pullProgress :global(.yoyi-icon) {
+  width: var(--yoyi-space-5);
+  height: var(--yoyi-space-5);
+}
+.accessibleRefresh:not(:focus-visible),
+.refreshAnnouncement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.accessibleRefresh:focus-visible {
+  display: block;
+  min-height: 44px;
+  margin: var(--yoyi-space-3) auto;
+  padding: var(--yoyi-space-3) var(--yoyi-space-5);
+  border: 0;
+  background: var(--yoyi-color-background-muted);
+  color: var(--yoyi-color-seal-red);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pullIndicator {
+    transition: none;
+  }
+  .pullProgress {
+    transform: none !important;
+  }
+  .pullIndicator :global(.yoyi-spinner .yoyi-icon) {
+    animation: none;
+  }
+}
+/*
+ * parallel-community-integration-qa: while a direct-message conversation or
+ * start view is open, the host body is one filling region, as the accepted
+ * chat's conversation content, not a scrolling list. The attribute qualifier
+ * outranks the shared .content rule regardless of stylesheet order.
+ */
+.directOpen[data-message-live] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.directOpen > .directRegion {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+}

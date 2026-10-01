@@ -20,6 +20,7 @@ const state = {
 const checkpoint: PublishingCheckpoint = {
   view: {
     target: { type: "new" },
+    threadId: null,
     saveMode: "saved",
     draftId: null,
     sessionId: null,

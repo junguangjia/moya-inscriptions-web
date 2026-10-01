@@ -97,5 +97,7 @@
         "WORK_MEDIA_WORKER_CONCURRENCY"
       ]
     }
-  }
+  },
+  "globalDependencies": [".nvmrc", "tsconfig.base.json"],
+  "globalEnv": ["MOYA_VERIFICATION_TOOLCHAIN"]
 }

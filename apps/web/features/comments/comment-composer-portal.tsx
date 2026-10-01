@@ -20,3 +20,11 @@ export const CommentComposerPortalProvider = ({
 
 export const useCommentComposerPortalTarget = () =>
   useContext(CommentComposerPortalContext);
+
+/** Lets an exact-comment target reveal its containing detail page before scrolling. */
+export const CommentLocationRevealContext = createContext<{
+  active: boolean;
+  reveal: () => void;
+} | null>(null);
+export const useCommentLocationReveal = () =>
+  useContext(CommentLocationRevealContext);

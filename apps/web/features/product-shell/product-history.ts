@@ -70,7 +70,11 @@ export interface ProfileProductHistoryState {
 
 /** A new work, an existing private draft, or an existing own work to edit. */
 export type EditorTarget =
-  | { readonly type: "new" }
+  | {
+      readonly type: "new";
+      /** content-community-completion-v1: publish the new work into this Thread. */
+      readonly threadId?: string;
+    }
   | { readonly type: "draft"; readonly id: string }
   | { readonly type: "work"; readonly id: string };
 export interface EditorProductHistoryState {
@@ -437,11 +441,16 @@ export const profileLocation = (
   return `${url.pathname}${url.search}#profile`;
 };
 const draftIdPattern = /^work-draft-[0-9a-f]{32}$/u;
+const threadIdPattern = /^thread-[0-9a-f]{32}$/u;
 const workIdPattern = /^work-[0-9a-f]{32}$/u;
 export const parseEditorTarget = (value: unknown): EditorTarget | null => {
   if (!value || typeof value !== "object") return null;
   const r = value as Record<string, unknown>;
-  if (r.type === "new") return { type: "new" };
+  if (r.type === "new")
+    // content-community-completion-v1: a new work may target a Thread.
+    return typeof r.threadId === "string" && threadIdPattern.test(r.threadId)
+      ? { type: "new", threadId: r.threadId }
+      : { type: "new" };
   if (typeof r.id !== "string") return null;
   return r.type === "draft" && draftIdPattern.test(r.id)
     ? { type: "draft", id: r.id }

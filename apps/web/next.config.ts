@@ -24,6 +24,7 @@ const nextConfig: NextConfig = {
       "../../docs/design-system/assets/**/*",
       "../../packages/design-tokens/src/theme.css",
       "../../packages/ui/src/styles.css",
+      "../../packages/ui/src/brand.css",
       "../../packages/ui/src/assets/**/*",
     ],
     "/docs/prototypes/mobile-preview/*": [
@@ -34,6 +35,7 @@ const nextConfig: NextConfig = {
       "../../packages/design-tokens/src/theme.css",
     ],
     "/packages/ui/src/styles.css": ["../../packages/ui/src/styles.css"],
+    "/packages/ui/src/brand.css": ["../../packages/ui/src/brand.css"],
     "/packages/ui/src/assets/**": ["../../packages/ui/src/assets/**/*"],
   },
 };

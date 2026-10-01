@@ -128,6 +128,8 @@ describe("ProductApplication", () => {
       }>;
     expect(element(props.navigationAction).type).toBe(CreateWorkAction);
     expect(props.renderEditorOverlay).toBe(renderEditorOverlay);
+    // Live Threads read the providers this composition mounts.
+    expect(props.liveThreads).toBe(true);
     // Uploads and editor sessions live above the shell, not inside the overlay.
     expect(providersMock).toHaveBeenLastCalledWith(true);
     expect(element(props.headerStart).type).toBe(CatalogSearchHeaderAction);
@@ -165,6 +167,7 @@ describe("ProductApplication", () => {
     expect(lastPreviewProps().navigationAction).toBe(navigationAction);
     expect(lastPreviewProps()).not.toHaveProperty("renderEditorOverlay");
     expect(lastPreviewProps()).not.toHaveProperty("headerStart");
+    expect(lastPreviewProps()).not.toHaveProperty("liveThreads");
     expect(providersMock).toHaveBeenLastCalledWith(false);
   });
 });

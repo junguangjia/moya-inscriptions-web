@@ -66,6 +66,15 @@ const workPublishingMigrations = [
   "20260920070000",
   "20260920080000",
   "20260921010000",
+  "20260922010000",
+  "20260922011000",
+  "20260922020000",
+  // content-community-completion-v1 forward files (Threads, the Article
+  // discussion target, direct messages).
+  "20260922030000",
+  "20260922031000",
+  "20260922032000",
+  "20260930010000",
 ];
 const backfillMigration = "20260914092000";
 const bridgeMigration = "20260914093000";
@@ -824,9 +833,15 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
     it("leaves the deleted work, relations, comments, drafts and user media untouched", async () => {
       expect(await snapshotPhase4Rows()).toEqual({
         ...before,
+        comments: before.comments!.map((comment) => ({
+          ...comment,
+          mentions: [],
+        })),
+        replies: before.replies!.map((reply) => ({ ...reply, mentions: [] })),
         users: before.users!.map((user) => ({
           ...user,
           background_media_id: null,
+          studio_name: "",
         })),
       });
       expect(
@@ -1447,46 +1462,66 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         "INSERT INTO community.works(id, author_id, title, text, media_ids, first_published_at, updated_at, synthetic_provenance) VALUES($1, $2, '另一旧作', '', $3, '2026-03-03T08:00:00Z', '2026-03-03T08:00:00Z', 'work-publishing-authorship-test')",
         [editedWork, author, [mediaId]],
       );
-      const seededAt = new Date("2026-09-14T01:00:00.000Z");
-      const openSeeded = async (workId: string) => {
-        const opened = await publishing.openEditDraft(
-          author,
-          workId,
-          { requestId: randomUUID(), deviceClass: "phone" },
-          seededAt,
+      // Freeze pre-20260914094000 rows instead of calling a current adapter
+      // against a historical schema. Real adapter coverage resumes after upgrade.
+      const seedLegacyEditDraft = async (
+        workId: string,
+        changedTitle?: string,
+      ) => {
+        const id = opaque("work-draft");
+        const [base] = await rows<{ content: Record<string, unknown> }>(
+          pool,
+          `SELECT jsonb_build_object(
+             'title', r.title, 'body', r.body, 'authorship', jsonb_build_object('kind', r.authorship_kind),
+             'visibility', 'public', 'items', COALESCE((
+               SELECT jsonb_agg(jsonb_build_object('key', i.item_id, 'itemId', i.item_id,
+                 'kind', m.kind, 'qualityMode', m.quality_mode, 'edit', i.edit) ORDER BY i.position)
+               FROM community.work_revision_items i JOIN community.media_items m ON m.id=i.item_id
+               WHERE i.revision_id=r.id), '[]'::jsonb),
+             'coverKey', r.cover_item_id, 'coverCrop', r.cover_crop) AS content
+           FROM community.work_revisions r WHERE r.id=$1`,
+          [legacyRevision(workId)],
         );
-        expect(opened).toMatchObject({
-          created: true,
-          draft: { revision: 1, content: { authorship: { kind: "original" } } },
-        });
-        expect(
-          await publishing.snapshotDraft(
+        const original = base!.content;
+        const current = changedTitle
+          ? { ...original, title: changedTitle }
+          : original;
+        const revision = changedTitle ? 2 : 1;
+        await pool.query(
+          `INSERT INTO community.work_drafts(id,owner_id,work_id,base_revision_id,revision,content,content_sha256,device_class,created_at,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6::jsonb,encode(sha256(convert_to(($6::jsonb)::text,'UTF8')),'hex'),'phone',
+             '2026-09-14T01:00:00Z',$7::timestamptz)`,
+          [
+            id,
             author,
-            opened.draft.id,
-            {
-              baseRevision: 1,
-              content: opened.draft.content,
-              deviceClass: "phone",
-            },
-            new Date("2026-09-14T01:01:00.000Z"),
-          ),
-        ).toMatchObject({ status: "saved", draft: { revision: 1 } });
-        return opened.draft;
+            workId,
+            legacyRevision(workId),
+            revision,
+            JSON.stringify(current),
+            changedTitle ? "2026-09-14T01:02:00Z" : "2026-09-14T01:00:00Z",
+          ],
+        );
+        for (const [index, saved] of (changedTitle
+          ? [original, current]
+          : [original]
+        ).entries())
+          await pool.query(
+            `INSERT INTO community.work_draft_snapshots(id,owner_id,draft_id,work_id,kind,content,source_revision,created_at)
+             VALUES($1,$2,$3,$4,'saved',$5::jsonb,$6,$7::timestamptz)`,
+            [
+              opaque("work-snapshot"),
+              author,
+              id,
+              workId,
+              JSON.stringify(saved),
+              index + 1,
+              index === 0 ? "2026-09-14T01:01:00Z" : "2026-09-14T01:02:00Z",
+            ],
+          );
+        return { id };
       };
-      const untouched = await openSeeded(legacyWork);
-      const changed = await openSeeded(editedWork);
-      expect(
-        await publishing.snapshotDraft(
-          author,
-          changed.id,
-          {
-            baseRevision: 1,
-            content: { ...changed.content, title: "另一旧作（改）" },
-            deviceClass: "phone",
-          },
-          new Date("2026-09-14T01:02:00.000Z"),
-        ),
-      ).toMatchObject({ status: "saved", draft: { revision: 2 } });
+      const untouched = await seedLegacyEditDraft(legacyWork);
+      const changed = await seedLegacyEditDraft(editedWork, "另一旧作（改）");
       const draftTimes = await rows<{ id: string; updated_at: Date }>(
         pool,
         "SELECT id, updated_at FROM community.work_drafts WHERE id = ANY($1::text[]) ORDER BY id",
@@ -1512,6 +1547,13 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         "20260920070000",
         "20260920080000",
         "20260921010000",
+        "20260922010000",
+        "20260922011000",
+        "20260922020000",
+        "20260922030000",
+        "20260922031000",
+        "20260922032000",
+        "20260930010000",
       ]);
 
       // Declared submissions: stored hashes unchanged and still exactly what

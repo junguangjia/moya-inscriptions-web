@@ -1,7 +1,9 @@
 "use client";
+import { useAuthEntry, useAuthReturnView } from "../auth/auth-return";
+import type { MentionReference } from "@moya/contracts";
 import { useEffect, useRef, useState } from "react";
 import type {
-  ContentIdentity,
+  DiscussionTarget as ContentIdentity,
   DiscussionComment,
   DiscussionReply,
 } from "@moya/contracts";
@@ -33,6 +35,7 @@ const rootRow = (r: DiscussionComment): CommentItem => ({
   replyPageTotal: r.replyPageTotal,
 });
 const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
+  const enterAuth = useAuthEntry();
   const author = useAuthors(),
     shell = useProductShell(),
     [hot, setHot] = useState<CommentItem[]>([]),
@@ -47,6 +50,12 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
     [notice, setNotice] = useState(""),
     [highlight, setHighlight] = useState<string>(),
     [locatedPage, setLocatedPage] = useState<number | null>(null);
+  const sourcePage = useRef(0);
+  sourcePage.current = page;
+  const authReturnView = useAuthReturnView(
+    `comments-window:${contentKey(target)}`,
+    () => ({ pages: sourcePage.current }),
+  );
   const mutationLocks = useRef(new Set<string>()),
     sendLock = useRef(false),
     failed = useRef<{ next: number; reset: boolean } | null>(null),
@@ -133,6 +142,17 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
     if (!author.checking && page === 0 && !loading.current && !error)
       void load(1, true);
   }, [author.checking, page, error]);
+  useEffect(() => {
+    if (
+      authReturnView &&
+      !author.checking &&
+      page > 0 &&
+      page < Math.min(authReturnView.pages, totalPages) &&
+      !loading.current &&
+      !error
+    )
+      void load(page + 1);
+  }, [authReturnView, author.checking, page, totalPages, busy, error]);
   useEffect(
     () => () => {
       epoch.current++;
@@ -217,14 +237,21 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
     };
     void locate();
   }, [page, author.checking]);
-  const send = async (text: string, root?: string, reply?: string) => {
+  const send = async (
+    text: string,
+    root?: string,
+    reply?: string,
+    mentions: readonly MentionReference[] = [],
+  ) => {
     if (sendLock.current || !author.viewer || author.checking || composerClosed)
       return false;
     sendLock.current = true;
     const run = epoch.current;
     setSubmitting(true);
     try {
-      await authorClient.send(target, text, root, reply);
+      if (mentions.length)
+        await authorClient.send(target, text, root, reply, mentions);
+      else await authorClient.send(target, text, root, reply);
       if (run === epoch.current) {
         setNotice("已发送");
         await load(1, true);
@@ -314,13 +341,13 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
         }
         items={items.map(present)}
         hotItems={hot.map(present)}
-        onSendComment={(text) => send(text)}
-        onSendReply={(reply, text) =>
-          send(text, reply.rootCommentId, reply.replyId)
+        onSendComment={(text, refs) => send(text, undefined, undefined, refs)}
+        onSendReply={(reply, text, refs) =>
+          send(text, reply.rootCommentId, reply.replyId, refs)
         }
         onToggleLike={(root, reply) => {
           if (!author.viewer) {
-            window.location.assign(author.signInHref);
+            enterAuth(author.signInHref);
             return;
           }
           const id = reply ?? root,
@@ -354,7 +381,7 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
                 ? { state: "signed-in" }
                 : { state: "signed-out", signInHref: author.signInHref }
         }
-        loading={busy && page === 0}
+        loading={page === 0 && !error && !unavailable}
         status={unavailable ? "not-found" : null}
         notice={
           error

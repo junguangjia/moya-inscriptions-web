@@ -1,5 +1,6 @@
 "use client";
 
+import { MentionControl } from "../../../notifications/mention-control";
 import { AuthorshipFields } from "./authorship-fields";
 import { bodyRule, checkEditorText, titleRule } from "./editor-text";
 import { TextField } from "./text-field";
@@ -55,18 +56,25 @@ export const BodyField = ({
   readonly state: EditorSessionState;
   readonly store: EditorSessionStore;
 }) => (
-  <TextField
-    error={state.fieldErrors.body ?? null}
-    field="body"
-    hint="保留换行；首尾的空白不计入字数"
-    label="正文"
-    multiline
-    onChange={store.setBody}
-    optional
-    placeholder="写下作品的说明、释文或心得"
-    rule={bodyRule}
-    value={state.body}
-  />
+  <>
+    <TextField
+      error={state.fieldErrors.body ?? null}
+      field="body"
+      hint="保留换行；首尾的空白不计入字数"
+      label="正文"
+      multiline
+      onChange={store.setBody}
+      optional
+      placeholder="写下作品的说明、释文或心得"
+      rule={bodyRule}
+      value={state.body}
+    />
+    <MentionControl
+      text={state.body}
+      mentions={state.mentions}
+      onChange={store.setBody}
+    />
+  </>
 );
 
 /**

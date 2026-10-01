@@ -250,74 +250,74 @@ export class PostgresCommunityCommentAdapter
       kind: unknown;
     } & QueryResultRow;
     type Receipt = { fingerprint: unknown; result: unknown } & QueryResultRow;
-    const rows =
-      audit === undefined && receipt === undefined
-        ? await this.query<Changed>(applyCommentModerationSql, values)
-        : await this.transaction(async (run) => {
-            // The receipt is read, the transition applied, the audit row and
-            // the receipt written, all on this one connection inside this one
-            // transaction: a committed moderation always carries the receipt
-            // that proves which command committed it.
-            const stored = async (): Promise<Changed[] | null> => {
-              if (receipt === undefined) return null;
-              const prior = await run<Receipt>(findCommandReceiptSql, [
-                operatorLabel,
-                receipt.requestId,
-              ]);
-              const row = prior[0];
-              if (row === undefined) return null;
-              if (row.fingerprint !== receipt.fingerprint)
-                throw new CommunityConflictError(
-                  "Reused command identity with other content",
-                );
-              return [row.result as Changed];
-            };
-            // The replay comes first: returning a receipt creates no effect, so
-            // an executor that lost its lease must still be able to read back
-            // what it already committed rather than have it reported as a
-            // conflict.
-            const replay = await stored();
-            if (replay !== null) return replay;
-            // Only a NEW transition needs the right to execute, and it is
-            // checked inside this transaction, which holds the operation row
-            // until it ends. An executor that lost its lease while stalled
-            // cannot commit behind a cancellation's back, and a cancellation
-            // arriving mid-flight waits for this transaction rather than
-            // racing it.
-            if (receipt?.fence !== undefined)
-              await assertExecutionFence(run, receipt.fence);
-            const changed = await run<Changed>(
-              applyCommentModerationSql,
-              values,
-            );
-            const subject = changed[0];
-            // The audit row exists exactly when the transition happened.
-            if (subject !== undefined) {
-              if (audit !== undefined)
-                await run(insertModerationEventSql, [
-                  audit.id,
-                  audit.occurredAt,
-                  audit.operatorLabel,
-                  audit.action,
-                  subject.kind,
-                  subject.id,
-                  audit.detail ?? null,
-                ]);
-              if (receipt !== undefined)
-                await run(insertCommandReceiptSql, [
-                  operatorLabel,
-                  receipt.requestId,
-                  receipt.fingerprint,
-                  JSON.stringify(subject),
-                  at,
-                ]);
-              return changed;
-            }
-            // Nothing changed. Either the subject really moved on, or a
-            // concurrent holder of this exact identity committed it while this
-            // transaction was starting: the receipt decides, not a guess.
-            return (await stored()) ?? changed;
-          });
+    const rows = await this.transaction(async (run) => {
+      // The receipt is read, the transition applied, the audit row and
+      // the receipt written, all on this one connection inside this one
+      // transaction: a committed moderation always carries the receipt
+      // that proves which command committed it.
+      const stored = async (): Promise<Changed[] | null> => {
+        if (receipt === undefined) return null;
+        const prior = await run<Receipt>(findCommandReceiptSql, [
+          operatorLabel,
+          receipt.requestId,
+        ]);
+        const row = prior[0];
+        if (row === undefined) return null;
+        if (row.fingerprint !== receipt.fingerprint)
+          throw new CommunityConflictError(
+            "Reused command identity with other content",
+          );
+        return [row.result as Changed];
+      };
+      // The replay comes first: returning a receipt creates no effect, so
+      // an executor that lost its lease must still be able to read back
+      // what it already committed rather than have it reported as a
+      // conflict.
+      const replay = await stored();
+      if (replay !== null) return replay;
+      // Only a NEW transition needs the right to execute, and it is
+      // checked inside this transaction, which holds the operation row
+      // until it ends. An executor that lost its lease while stalled
+      // cannot commit behind a cancellation's back, and a cancellation
+      // arriving mid-flight waits for this transaction rather than
+      // racing it.
+      if (receipt?.fence !== undefined)
+        await assertExecutionFence(run, receipt.fence);
+      const changed = await run<Changed>(applyCommentModerationSql, values);
+      const subject = changed[0];
+      // The audit row exists exactly when the transition happened.
+      if (subject !== undefined) {
+        await run(
+          `UPDATE community.notification_sources SET generation=generation+1,attempts=0,
+                run_after=CURRENT_TIMESTAMP,error_code=NULL WHERE subject_id=$1 OR subject_id IN
+                (SELECT id FROM community.catalog_comment_replies WHERE root_comment_id=$1)`,
+          [id],
+        );
+        if (audit !== undefined)
+          await run(insertModerationEventSql, [
+            audit.id,
+            audit.occurredAt,
+            audit.operatorLabel,
+            audit.action,
+            subject.kind,
+            subject.id,
+            audit.detail ?? null,
+          ]);
+        if (receipt !== undefined)
+          await run(insertCommandReceiptSql, [
+            operatorLabel,
+            receipt.requestId,
+            receipt.fingerprint,
+            JSON.stringify(subject),
+            at,
+          ]);
+        return changed;
+      }
+      // Nothing changed. Either the subject really moved on, or a
+      // concurrent holder of this exact identity committed it while this
+      // transaction was starting: the receipt decides, not a guess.
+      return (await stored()) ?? changed;
+    });
     const row = rows[0];
     if (row === undefined) return null;
     if (

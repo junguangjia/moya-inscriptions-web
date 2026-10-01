@@ -83,3 +83,21 @@ export type CreateCatalogCommentReplyRequest = z.infer<
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
+
+export type { MentionReference } from "./mention-references.js";
+
+export type NotificationItem = z.infer<
+  typeof import("./schemas.js").notificationItemSchema
+>;
+export type NotificationPage = z.infer<
+  typeof import("./schemas.js").notificationPageSchema
+>;
+export type NotificationUnread = z.infer<
+  typeof import("./schemas.js").notificationUnreadSchema
+>;
+export type NotificationReason = z.infer<
+  typeof import("./schemas.js").notificationReasonSchema
+>;
+export type MentionLookupPage = z.infer<
+  typeof import("./schemas.js").mentionLookupPageSchema
+>;

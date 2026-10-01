@@ -47,7 +47,7 @@ type FileAccess =
   | { kind: "prototype"; segments: readonly string[] }
   | { kind: "demo-assets"; segments: readonly string[] }
   | { kind: "design-tokens"; segments: readonly ["theme.css"] }
-  | { kind: "ui-styles"; segments: readonly ["styles.css"] }
+  | { kind: "ui-styles"; segments: readonly ["styles.css" | "brand.css"] }
   | { kind: "ui-assets"; segments: readonly string[] };
 
 const rootFor = (access: FileAccess): string => {

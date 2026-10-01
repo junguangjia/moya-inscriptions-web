@@ -444,6 +444,7 @@ describe("editor session store", () => {
     const store = createEditorSessionStore(ACCOUNT, { type: "new" });
     const view = {
       target: { type: "new" } as const,
+      threadId: null,
       saveMode: "saved" as const,
       draftId: `work-draft-${"d".repeat(32)}`,
       sessionId: null,

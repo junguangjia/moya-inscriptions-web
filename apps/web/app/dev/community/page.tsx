@@ -135,7 +135,10 @@ export default async function CommunityDevelopmentPage({
         )}
       </section>
       <p>
-        <a href="/">返回浏览，打开右上角个人主页</a>
+        <a href="/?notifications=comments">打开评论与提到我测试</a>
+      </p>
+      <p>
+        <a href="/?notifications=likes">打开赞通知测试</a>
       </p>
       <p className={styles.footnote}>
         同源接口：<code>GET /api/community/me</code>{" "}

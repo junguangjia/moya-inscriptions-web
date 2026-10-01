@@ -1,8 +1,13 @@
 "use client";
 
+import { useAuthReturnView } from "../auth/auth-return";
+
 import { useContext, useId, useLayoutEffect, useRef, useState } from "react";
 
-import { CommentComposerPortalProvider } from "../comments/comment-composer-portal";
+import {
+  CommentComposerPortalProvider,
+  CommentLocationRevealContext,
+} from "../comments/comment-composer-portal";
 import {
   CommentCountLabel,
   CommentCountProvider,
@@ -29,18 +34,35 @@ const ScopedCatalogDetailContentPager = ({
   information,
   platform,
 }: CatalogDetailContentPagerProps) => {
-  const [activePage, setActivePage] =
-    useState<DetailContentPage>("information");
+  const currentPage = useRef<DetailContentPage>("information");
+  const capturedScroll = useContext(CatalogDetailScrollContext);
+  const scrollRef = useRef(capturedScroll);
+  scrollRef.current = capturedScroll;
+  const authReturnView = useAuthReturnView("detail-pager", () => ({
+    page: currentPage.current,
+    top: scrollRef.current?.read() ?? 0,
+  }));
+  const [activePage, setActivePage] = useState<DetailContentPage>(
+    authReturnView?.page ?? "information",
+  );
+  currentPage.current = activePage;
   const [composerPortalTarget, setComposerPortalTarget] =
     useState<HTMLDivElement | null>(null);
   const pagerRef = useRef<HorizontalPagerHandle<DetailContentPage>>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const scroll = useContext(CatalogDetailScrollContext);
   const positions = useRef<Partial<Record<DetailContentPage, number>>>({});
-  const committedPage = useRef<DetailContentPage>("information");
+  const committedPage = useRef<DetailContentPage>(
+    authReturnView?.page ?? "information",
+  );
   const pendingTop = useRef<number | null>(null);
   const previousCollapse = useRef<number | null>(null);
   const id = useId();
+  useLayoutEffect(() => {
+    if (!authReturnView) return;
+    pagerRef.current?.scrollToKey(authReturnView.page);
+    scroll?.restore(authReturnView.top);
+  }, [authReturnView, scroll]);
   const selectPage = (page: DetailContentPage) => {
     pagerRef.current?.scrollToKey(page);
   };
@@ -154,9 +176,16 @@ const ScopedCatalogDetailContentPager = ({
         panelLabelledBy={(page) => `${id}-${page}-tab`}
         panels={{
           comments: (
-            <CommentComposerPortalProvider target={composerPortalTarget}>
-              {comments}
-            </CommentComposerPortalProvider>
+            <CommentLocationRevealContext.Provider
+              value={{
+                active: activePage === "comments",
+                reveal: () => selectPage("comments"),
+              }}
+            >
+              <CommentComposerPortalProvider target={composerPortalTarget}>
+                {comments}
+              </CommentComposerPortalProvider>
+            </CommentLocationRevealContext.Provider>
           ),
           information,
         }}

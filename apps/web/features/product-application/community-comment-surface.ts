@@ -14,7 +14,7 @@
  * `next start`) bakes in "production", `next dev` "development" — the same
  * gate the `/dev/*` routes rely on.
  */
-export const developmentSignInPath = "/dev/community";
+export const developmentSignInPath = "/login";
 
 export interface CommunityCommentSurface {
   /** Where a signed-out reader goes to sign in. */

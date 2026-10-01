@@ -5,7 +5,14 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContentIdentity } from "@moya/contracts";
 
-const { author, openContent } = vi.hoisted(() => ({
+const { author, openContent, shellCalls, commentTarget } = vi.hoisted(() => ({
+  shellCalls: [] as string[],
+  commentTarget: {
+    value: { type: "work", id: `work-${"3".repeat(32)}` } as {
+      type: string;
+      id: string;
+    },
+  },
   author: {
     viewer: { id: `user-${"1".repeat(32)}` } as { id: string } | null,
     checking: false,
@@ -16,7 +23,12 @@ const { author, openContent } = vi.hoisted(() => ({
 }));
 vi.mock("./author-context", () => ({ useAuthors: () => author }));
 vi.mock("../product-shell/product-shell", () => ({
-  useProductShell: () => ({ openContent }),
+  useProductShell: () => ({
+    openContent,
+    navigatePrimary: (destination: string) =>
+      shellCalls.push(`navigatePrimary:${destination}`),
+    openTopic: (id: string) => shellCalls.push(`openTopic:${id}`),
+  }),
 }));
 vi.mock("./author-profile", () => ({
   MyComments: ({
@@ -30,7 +42,7 @@ vi.mock("./author-profile", () => ({
       data-comments-entry={entryId}
       onClick={(event) =>
         onOpenContent(
-          { type: "work", id: `work-${"3".repeat(32)}` },
+          commentTarget.value as ContentIdentity,
           event.currentTarget,
         )
       }
@@ -51,6 +63,8 @@ let frames: FrameRequestCallback[];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  shellCalls.length = 0;
+  commentTarget.value = { type: "work", id: `work-${"3".repeat(32)}` };
   author.viewer = { id: `user-${"1".repeat(32)}` };
   author.checking = false;
   author.sessionError = false;
@@ -171,6 +185,26 @@ describe("Message center navigation and account boundaries", () => {
       { type: "work", id: `work-${"3".repeat(32)}` },
       trigger,
     );
+  });
+
+  it("opens an Article comment on the discussion destination after closing", async () => {
+    const articleId = `article-${"5".repeat(32)}`;
+    commentTarget.value = { type: "article", id: articleId };
+    await render();
+    await click("打开消息");
+    await click("我的评论");
+    await click("前往评论位置");
+    expect(shellCalls).toEqual([]);
+    await finishBack();
+    expect(node.querySelector("dialog")).toBeNull();
+    await flushFrames();
+    expect(shellCalls).toEqual(["navigatePrimary:discussion"]);
+    await flushFrames();
+    expect(shellCalls).toEqual([
+      "navigatePrimary:discussion",
+      `openTopic:${articleId}`,
+    ]);
+    expect(openContent).not.toHaveBeenCalled();
   });
 
   it.each(["guest", "checking", "failed-session"] as const)(

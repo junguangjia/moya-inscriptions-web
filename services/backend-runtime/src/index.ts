@@ -1,4 +1,8 @@
 export {
+  assertProductionAuthConfiguration,
+  createDevelopmentAuthService,
+} from "@moya/api";
+export {
   createBackendApplication,
   createPublishingTransferRegistry,
 } from "./application.js";
@@ -9,6 +13,7 @@ export {
   startBackendProcess,
 } from "./process-lifecycle.js";
 export { createBackendServer, startServer, stopServer } from "./server.js";
+export { trustedRequestSource } from "./community/auth-handler.js";
 
 export type {
   ConfiguredPort,
@@ -24,3 +29,5 @@ export type {
   ProcessShutdownLogger,
 } from "./process-lifecycle.js";
 export type { InternalListenOptions, ShutdownOptions } from "./server.js";
+
+export { NotificationSignals } from "./community/notification-stream.js";

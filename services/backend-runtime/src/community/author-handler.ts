@@ -12,6 +12,7 @@ import {
   authorListQuerySchema,
   discoveryQuerySchema,
   contentIdentitySchema,
+  discussionTargetSchema,
   commentLikeUpdateSchema,
   createCatalogCommentReplyRequestSchema,
   catalogCommentIdSchema,
@@ -32,6 +33,9 @@ import { collectTransportQuery } from "../http/transport-query.js";
 import { refuseTransfer } from "./publishing-upload.js";
 import { readBearerToken } from "./session-credential.js";
 import { handleWorkPublishingRequest } from "./work-publishing-handler.js";
+import { handleEditorialRequest } from "./editorial-handler.js";
+import { handleThreadRequest } from "./thread-handler.js";
+import { handleDirectMessageRequest } from "./direct-message-handler.js";
 import type {
   AuthorCommunityService,
   CommunitySessionService,
@@ -93,6 +97,22 @@ export const handleAuthorRequest = async (
       );
       return;
     }
+    // content-community-completion-v1: anonymous published editorial reads.
+    if (path[0] === "editorial") {
+      if (service.editorial === undefined) {
+        sendJson(response, 404, {
+          error: { status: 404, message: "Not Found" },
+        });
+        return;
+      }
+      await handleEditorialRequest(
+        request,
+        response,
+        path.slice(1),
+        service.editorial,
+      );
+      return;
+    }
     const requireActor = () => {
       if (viewer === null) throw new Unauthorized();
       const expected = request.headers["x-author-account"];
@@ -104,6 +124,41 @@ export const handleAuthorRequest = async (
         throw new Unauthorized();
       return viewer;
     };
+    // content-community-completion-v1: direct messages (session required).
+    if (path[0] === "messages") {
+      if (service.messages === undefined) {
+        sendJson(response, 404, {
+          error: { status: 404, message: "Not Found" },
+        });
+        return;
+      }
+      await handleDirectMessageRequest(
+        request,
+        response,
+        path.slice(1),
+        service.messages,
+        requireActor,
+      );
+      return;
+    }
+    // content-community-completion-v1: Threads over Works.
+    if (path[0] === "threads") {
+      if (service.threads === undefined) {
+        sendJson(response, 404, {
+          error: { status: 404, message: "Not Found" },
+        });
+        return;
+      }
+      await handleThreadRequest(
+        request,
+        response,
+        path.slice(1),
+        service.threads,
+        viewer,
+        requireActor,
+      );
+      return;
+    }
     const method = request.method;
     const reply = (value: unknown, status = 200) =>
       sendJson(response, status, value, noStore);
@@ -246,14 +301,21 @@ export const handleAuthorRequest = async (
           return;
         }
       }
-      if ((path[1] === "catalog" || path[1] === "work") && path[2]) {
+      // content-community-completion-v1: a published Article is the third
+      // discussion target kind; content relations keep the two identities.
+      if (
+        (path[1] === "catalog" ||
+          path[1] === "work" ||
+          path[1] === "article") &&
+        path[2]
+      ) {
         let decoded: string;
         try {
           decoded = decodeURIComponent(path[2]);
         } catch {
           throw new InvalidInput();
         }
-        const target = parsed(contentIdentitySchema, {
+        const target = parsed(discussionTargetSchema, {
           type: path[1],
           id: decoded,
         });
@@ -307,6 +369,7 @@ export const handleAuthorRequest = async (
               input.text,
               root,
               input.replyTo,
+              input.mentions,
             ),
             201,
           );

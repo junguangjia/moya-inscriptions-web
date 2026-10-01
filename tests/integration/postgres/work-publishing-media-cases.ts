@@ -6,6 +6,7 @@ import {
 } from "@moya/community-postgres";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { cleanupNotificationData } from "./notification-fixture-cleanup.js";
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 
 import type {
@@ -237,6 +238,7 @@ export const registerWorkPublishingMediaTests = (
     afterEach(async () => {
       const owners = users.splice(0);
       const subjects = jobSubjects.splice(0);
+      await cleanupNotificationData(pool, owners);
       await pool.query(
         `DELETE FROM community.publishing_jobs WHERE subject_id=ANY($2::text[]) OR subject_id IN (
            SELECT id FROM community.media_items WHERE owner_id=ANY($1::text[])

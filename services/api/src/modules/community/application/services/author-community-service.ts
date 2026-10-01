@@ -10,6 +10,9 @@ import type {
   DiscoveryCardRecord,
 } from "../ports/community-discovery-port.js";
 import type { StorageUrlResolver } from "../../../catalog/application/ports/storage-url-resolver.js";
+import type { EditorialContentReadService } from "../../../editorial/application/services/editorial-content-read-service.js";
+import type { ThreadService } from "./thread-service.js";
+import type { DirectMessageService } from "./direct-message-service.js";
 import type {
   AuthorListQuery,
   ContentCard,
@@ -17,6 +20,7 @@ import type {
   CatalogId,
   ContentIdentity,
   ContentRelationUpdate,
+  DiscussionTarget,
 } from "@moya/contracts";
 
 /** Public application boundary; the adapter enforces transactional ownership. */
@@ -27,6 +31,12 @@ export class AuthorCommunityService {
     readonly discussion?: DiscussionPort,
     readonly discovery?: CommunityDiscoveryPort,
     private readonly mediaResolver?: StorageUrlResolver,
+    /** content-community-completion-v1: published editorial reads, Development only. */
+    readonly editorial?: EditorialContentReadService,
+    /** content-community-completion-v1: Threads over Works, Development only. */
+    readonly threads?: ThreadService,
+    /** content-community-completion-v1: direct messages, Development only. */
+    readonly messages?: DirectMessageService,
   ) {}
   private async cards(
     items: readonly DiscoveryCardRecord[],
@@ -78,11 +88,19 @@ export class AuthorCommunityService {
     return this.port.readProfile(id, viewer);
   }
   async assertTarget(
-    target: ContentIdentity,
+    target: DiscussionTarget,
     viewer: string | null,
   ): Promise<void> {
     if (target.type === "catalog") {
       if (!(await this.catalog.isPublished(target.id as CatalogId)))
+        throw new CommunityNotFoundError();
+    } else if (target.type === "article") {
+      // content-community-completion-v1: only the exact published revision is
+      // discussable; a pending replacement or a withdrawal reads as absent.
+      if (
+        this.editorial === undefined ||
+        !(await this.editorial.isArticlePublished(target.id))
+      )
         throw new CommunityNotFoundError();
     } else {
       const work = await this.port.readWork(target.id, viewer);
@@ -111,9 +129,26 @@ export class AuthorCommunityService {
         ),
       ),
     ]);
+    const articleIds = [
+      ...new Set(
+        page.items.flatMap((item) =>
+          item.target?.type === "article" ? [item.target.id] : [],
+        ),
+      ),
+    ];
+    const publishedArticles = new Set<string>();
+    if (this.editorial !== undefined)
+      await Promise.all(
+        articleIds.map(async (id) => {
+          if (await this.editorial!.isArticlePublished(id))
+            publishedArticles.add(id);
+        }),
+      );
     const items = page.items.map((item) =>
-      item.target?.type === "catalog" &&
-      !published.has(item.target.id as CatalogId)
+      (item.target?.type === "catalog" &&
+        !published.has(item.target.id as CatalogId)) ||
+      (item.target?.type === "article" &&
+        !publishedArticles.has(item.target.id))
         ? { ...item, target: null }
         : item,
     );

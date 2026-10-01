@@ -1,4 +1,6 @@
 export { parseCatalogCount, PostgresCatalogQueryAdapter } from "./adapter.js";
+// content-community-completion-v1: published editorial content reads.
+export { PostgresEditorialContentAdapter } from "./editorial-content-adapter.js";
 export {
   catalogSearchSourceSelectSql,
   projectCatalogSearchSourceRow,

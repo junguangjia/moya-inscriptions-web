@@ -1,5 +1,7 @@
+import { authPaths } from "./auth-openapi.js";
 import { authorCommunityPaths } from "./author-community-openapi.js";
 import {
+  authJsonSchemas,
   authorCommunityJsonSchemas,
   workPublishingJsonSchemas,
 } from "@moya/contracts/json-schema";
@@ -173,6 +175,7 @@ export const openApiDocument: JsonObject = {
   },
   paths: {
     ...authorCommunityPaths,
+    ...authPaths,
     "/health": {
       get: {
         operationId: "getHealth",
@@ -365,6 +368,7 @@ export const openApiDocument: JsonObject = {
     },
     schemas: {
       ...authorCommunityJsonSchemas,
+      ...authJsonSchemas,
       ...workPublishingJsonSchemas,
       CatalogId: catalogIdJsonSchema,
       CatalogKind: catalogKindJsonSchema,

@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  mentionReferencesSchema,
+  validMentionReferences,
+} from "./mention-references.ts";
 
 import {
   AUTHORSHIP_ORIGINAL_AUTHOR_MAXIMUM,
@@ -77,6 +81,10 @@ export const workPublishingFailureCodeSchema = z.enum([
   "unsupported_type",
   "pairing_mismatch",
   "work_unavailable",
+  // content-community-completion-v1: Thread association refusals.
+  "thread_unavailable",
+  "thread_conflict",
+  "thread_items_limit",
 ]);
 
 export const mediaItemKindSchema = z.enum(["static", "live"]);
@@ -370,6 +378,7 @@ export const workDraftItemSchema = z
   });
 
 const workContentShape = (stage: PublishingTextStage) => ({
+  mentions: mentionReferencesSchema.optional(),
   title: publishingTextSchema(
     publishingTitleRule,
     { tooLong: "title_too_long", lineBreak: "title_line_break" },
@@ -468,6 +477,11 @@ export const workSubmissionContentSchema = z
   .strictObject(workContentShape("submission"))
   .superRefine(checkContentReferences)
   .superRefine((content, context) => {
+    if (!validMentionReferences(content.body, content.mentions ?? []))
+      context.addIssue({
+        code: "custom",
+        message: "Invalid mention references",
+      });
     if (isEmptyWorkContent(content))
       context.addIssue({ code: "custom", message: "empty_work" });
   });
@@ -1223,6 +1237,15 @@ export const workSubmissionCommandSchema = z.strictObject({
   holder: publishingHolderSchema,
   content: workSubmissionContentSchema,
   baseRevisionId: workRevisionIdSchema.nullable(),
+  /**
+   * content-community-completion-v1: publish this new Work into a Thread. The
+   * association commits in the same transaction as the submission; at most
+   * three static items; never reassigns an existing Work.
+   */
+  threadId: z
+    .string()
+    .regex(/^thread-[0-9a-f]{32}$/u)
+    .optional(),
 });
 
 /** Author-neutral confirmation; the same receipt answers a lost-response query. */

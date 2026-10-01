@@ -206,6 +206,9 @@ const failureMessages: Readonly<Record<PublishingRequestErrorCode, string>> = {
   unsupported_type: "格式不支持",
   pairing_mismatch: "实况照片的图片与视频不匹配",
   work_unavailable: "作品不可用",
+  thread_unavailable: "该话题已关闭或不可用，作品未发布",
+  thread_conflict: "该作品已属于其他话题",
+  thread_items_limit: "参与话题最多附 3 张静态图片",
   [PUBLISHING_DRAFT_CHANGED]: "草稿已在别处更改，未删除",
 };
 

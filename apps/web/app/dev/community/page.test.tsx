@@ -114,6 +114,13 @@ describe("CommunityDevelopmentPage", () => {
     }
   });
 
+  it("links directly to live notification categories instead of the empty Catalog preview", async () => {
+    const markup = renderToStaticMarkup(await CommunityDevelopmentPage({}));
+    expect(markup).toContain('href="/?notifications=comments"');
+    expect(markup).toContain('href="/?notifications=likes"');
+    expect(markup).not.toContain('href="/dev/t02p"');
+    expect(markup).not.toContain("不使用真实数据");
+  });
   it("declares a handle pattern browsers accept under the v flag", async () => {
     const markup = renderToStaticMarkup(await CommunityDevelopmentPage({}));
     const pattern = /pattern="([^"]+)"/u.exec(markup)?.[1];

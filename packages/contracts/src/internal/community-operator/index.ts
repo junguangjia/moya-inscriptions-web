@@ -276,3 +276,32 @@ export type {
   AgentScope,
   AgentTargetOutcome,
 } from "./agent-schemas.js";
+// content-community-completion-v1: operator-managed Threads.
+export {
+  adminUpdateThreadRequestSchema,
+  createThreadCommandSchema,
+  operatorThreadPageSchema,
+  operatorThreadSchema,
+  operatorThreadsQuerySchema,
+  updateThreadCommandSchema,
+} from "./content-schemas.js";
+export type {
+  CreateThreadCommand,
+  OperatorThread,
+  OperatorThreadPage,
+  UpdateThreadCommand,
+} from "./content-schemas.js";
+// content-community-completion-v1: narrow DM moderation shapes.
+export {
+  adminRemoveDmMessageRequestSchema,
+  operatorDmConversationSchema,
+  operatorDmLookupRequestSchema,
+  operatorDmMessageSchema,
+  operatorDmPurposeSchema,
+  operatorDmReadRequestSchema,
+  operatorRemoveDmMessageCommandSchema,
+} from "./content-schemas.js";
+export type {
+  OperatorDmConversation,
+  OperatorDmMessage,
+} from "./content-schemas.js";

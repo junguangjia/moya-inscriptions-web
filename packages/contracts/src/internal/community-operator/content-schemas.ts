@@ -213,3 +213,118 @@ export type FeaturedSettingsMutation = z.infer<
   typeof featuredSettingsMutationSchema
 >;
 export type FeaturedPage = z.infer<typeof featuredPageSchema>;
+
+// ---------------------------------------------------------------------------
+// content-community-completion-v1: operator-managed Threads.
+// ---------------------------------------------------------------------------
+const threadId = z.string().regex(/^thread-[0-9a-f]{32}$/u);
+const threadTitle = z.string().trim().min(1).max(120);
+const threadDescription = z.string().max(2000);
+const threadTags = z.array(z.string().trim().min(1).max(24)).max(6);
+export const operatorThreadSchema = z.strictObject({
+  id: threadId,
+  title: threadTitle,
+  description: threadDescription,
+  tags: threadTags,
+  status: z.enum(["open", "closed"]),
+  hidden: z.boolean(),
+  position: z.number().int(),
+  version,
+  postCount: z.number().int().nonnegative(),
+  createdBy: z.string(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export const operatorThreadPageSchema = z.strictObject({
+  items: z.array(operatorThreadSchema).max(50),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+});
+export const operatorThreadsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  includeHidden: z.coerce.boolean().default(true),
+});
+export const createThreadCommandSchema = z.strictObject({
+  requestId: z.uuid(),
+  title: threadTitle,
+  description: threadDescription.default(""),
+  tags: threadTags.default([]),
+  position: z.number().int().default(0),
+});
+export const updateThreadCommandSchema = z.strictObject({
+  requestId: z.uuid(),
+  expectedVersion: version,
+  title: threadTitle.optional(),
+  description: threadDescription.optional(),
+  tags: threadTags.optional(),
+  status: z.enum(["open", "closed"]).optional(),
+  hidden: z.boolean().optional(),
+  position: z.number().int().optional(),
+});
+/** Admin envelope: the id travels in the route on the Backend side. */
+export const adminUpdateThreadRequestSchema = updateThreadCommandSchema.extend({
+  id: threadId,
+});
+export type OperatorThread = z.infer<typeof operatorThreadSchema>;
+export type OperatorThreadPage = z.infer<typeof operatorThreadPageSchema>;
+export type CreateThreadCommand = z.infer<typeof createThreadCommandSchema>;
+export type UpdateThreadCommand = z.infer<typeof updateThreadCommandSchema>;
+
+// ---------------------------------------------------------------------------
+// content-community-completion-v1: narrow Owner-only DM moderation shapes.
+// Access is always to one explicitly selected conversation with a stated
+// purpose; no search across private messages exists.
+// ---------------------------------------------------------------------------
+const dmConversationId = z.string().regex(/^dm-[0-9a-f]{32}$/u);
+const dmMessageId = z.string().regex(/^dmsg-[0-9a-f]{32}$/u);
+export const operatorDmPurposeSchema = z.string().trim().min(1).max(500);
+export const operatorDmMessageSchema = z.strictObject({
+  id: dmMessageId,
+  sequence: z.number().int().positive(),
+  senderId: userId,
+  senderName: z.string(),
+  text: z.string().nullable(),
+  removed: z.boolean(),
+  removedBy: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export const operatorDmConversationSchema = z.strictObject({
+  id: dmConversationId,
+  participants: z
+    .array(
+      z.strictObject({
+        id: userId,
+        displayName: z.string(),
+        status: z.enum(["active", "suspended"]),
+      }),
+    )
+    .length(2),
+  initiatorId: userId,
+  state: z.enum(["requested", "active"]),
+  messageCount: z.number().int().nonnegative(),
+  createdAt: z.iso.datetime(),
+  messages: z.array(operatorDmMessageSchema).max(200),
+});
+export const operatorDmReadRequestSchema = z.strictObject({
+  id: dmConversationId,
+  purpose: operatorDmPurposeSchema,
+});
+export const operatorDmLookupRequestSchema = z.strictObject({
+  /** Both participant ids: the only way to find a conversation without an id. */
+  userIds: z.array(userId).length(2),
+  purpose: operatorDmPurposeSchema,
+});
+export const operatorRemoveDmMessageCommandSchema = z.strictObject({
+  requestId: z.uuid(),
+  purpose: operatorDmPurposeSchema,
+});
+export const adminRemoveDmMessageRequestSchema =
+  operatorRemoveDmMessageCommandSchema.extend({
+    id: dmMessageId,
+  });
+export type OperatorDmConversation = z.infer<
+  typeof operatorDmConversationSchema
+>;
+export type OperatorDmMessage = z.infer<typeof operatorDmMessageSchema>;

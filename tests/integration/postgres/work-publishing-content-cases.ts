@@ -45,6 +45,8 @@ import type {
 
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 
+import { cleanupNotificationData } from "./notification-fixture-cleanup.js";
+
 type Pool = ReturnType<typeof createPostgresPool>;
 type ErrorClass = abstract new (...args: never[]) => Error;
 
@@ -63,6 +65,7 @@ export const cleanupPublishingData = async (
   pool: Pool,
   users: readonly string[],
 ): Promise<void> => {
+  await cleanupNotificationData(pool, users);
   const ids = [...users];
   const run = (sql: string) => pool.query(sql, [ids]);
   await run(

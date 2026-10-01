@@ -9,6 +9,8 @@ type CropProps = {
   crop: { x: number; y: number };
   zoom: number;
   showGrid: boolean;
+  maxZoom: number;
+  onWheelRequest?: (event: WheelEvent) => boolean;
   cropperProps: { tabIndex: number };
   onTouchRequest: () => boolean;
   onCropChange: (value: { x: number; y: number }) => void;
@@ -185,9 +187,10 @@ it("opens the device picker before the editor and keeps other authors read-only"
   );
   expect(node.querySelector("button")).toBeNull();
 });
-it("shows a round mask, direct positioning and only one zoom slider", async () => {
+it("shows a round mask, direct positioning and two-finger zoom without a slider", async () => {
   await render();
-  expect(node.querySelectorAll('input[type="range"]')).toHaveLength(1);
+  // Owner decision (#171 r4): no zoom slider; pinch zooms the photo.
+  expect(node.querySelectorAll('input[type="range"]')).toHaveLength(0);
   expect(node.querySelector('[data-crop-shape="round"]')).not.toBeNull();
   await act(async () => {
     state.crop!.onCropChange({ x: 20, y: -30 });
@@ -196,12 +199,26 @@ it("shows a round mask, direct positioning and only one zoom slider", async () =
   expect(state.crop!.crop).toEqual({ x: 20, y: -30 });
   expect(state.crop!.zoom).toBe(2);
   expect(state.crop!.showGrid).toBe(false);
+  expect(state.crop!.maxZoom).toBe(3);
+  // Ordinary wheel scrolling is not taken as zoom; Ctrl + wheel is.
+  expect(state.crop!.onWheelRequest!({ ctrlKey: false } as WheelEvent)).toBe(
+    false,
+  );
+  expect(state.crop!.onWheelRequest!({ ctrlKey: true } as WheelEvent)).toBe(
+    true,
+  );
 });
 it("cancel before saving never uploads or binds", async () => {
   await render();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
+  // Owner acceptance (2026-09-26): Back with a chosen photo just closes, with
+  // no discard prompt and no leave-page warning.
+  const confirm = vi.spyOn(window, "confirm");
+  const unload = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(unload);
+  expect(unload.defaultPrevented).toBe(false);
   window.history.replaceState({}, "", "/#profile");
   await click("返回");
+  expect(confirm).not.toHaveBeenCalled();
   expect(close).toHaveBeenCalledOnce();
   expect(state.upload).not.toHaveBeenCalled();
   expect(state.avatar).not.toHaveBeenCalled();

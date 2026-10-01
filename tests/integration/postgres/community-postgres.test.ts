@@ -2,6 +2,8 @@ import { registerPhase4DiscoveryTests } from "./phase4-discovery-cases.js";
 import { registerPhase4AuthorTests } from "./phase4-author-cases.js";
 import { registerProfileBackgroundTests } from "./profile-background-cases.js";
 import { registerWorkPublishingContentTests } from "./work-publishing-content-cases.js";
+import { registerThreadTests } from "./thread-cases.js";
+import { registerDirectMessageTests } from "./direct-message-cases.js";
 import { registerWorkPublishingMediaTests } from "./work-publishing-media-cases.js";
 import { registerAgentAdministrationTests } from "./agent-administration-cases.js";
 import { registerAgentAuthorizationFlowTests } from "./agent-authorization-flow-cases.js";
@@ -110,10 +112,18 @@ beforeAll(async () => {
   // Other suites in this synthetic database only verify the community ledger,
   // so the family is applied idempotently here (never dropped) and the rows
   // are reset before the Development accounts are seeded.
+  // `vitest run integration/postgres` runs FILES in parallel, and the
+  // publishing worker and app-role files own accounts (with receipts) in this
+  // same database while this hook runs. The reset therefore touches only what
+  // this file seeds: the Development accounts and the comment/session rows
+  // its cases leave behind. Every case here cleans up the accounts it creates.
   await runCommunityMigrations(pool, migrationsDirectory);
   expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([]);
   await pool.query(
-    "DELETE FROM community.catalog_comment_replies; DELETE FROM community.catalog_comments; DELETE FROM community.sessions; DELETE FROM community.development_accounts; DELETE FROM community.public_users",
+    "DELETE FROM community.catalog_comment_replies; DELETE FROM community.catalog_comments; DELETE FROM community.sessions; DELETE FROM community.development_accounts",
+  );
+  await pool.query(
+    "DELETE FROM community.public_users WHERE handle LIKE 'dev-user-%'",
   );
   await pool.query(await readFile(seedFile, "utf8"));
   // The Catalog discovery projection, created once for the whole file.
@@ -177,12 +187,13 @@ describe("community PostgreSQL identity and sessions", () => {
       { handle: "dev-user-02", display_name: "书法学徒", status: "active" },
       { handle: "dev-user-03", display_name: "石刻研究者", status: "active" },
     ]);
-    // Re-seeding is idempotent.
+    // Re-seeding is idempotent. Counted by the seeded handles: other files in
+    // this parallel run own accounts of their own in the same database.
     await pool.query(await readFile(seedFile, "utf8"));
     expect(
       (
         await pool.query(
-          "SELECT COUNT(*)::int AS n FROM community.public_users",
+          "SELECT COUNT(*)::int AS n FROM community.public_users WHERE handle LIKE 'dev-user-%'",
         )
       ).rows[0],
     ).toEqual({ n: 3 });
@@ -1134,3 +1145,5 @@ registerAgentConnectionConsentTests(pool);
 registerAgentAuthorizationFlowTests(pool);
 
 registerWorkPublishingContentTests(pool);
+registerThreadTests(pool);
+registerDirectMessageTests(pool);

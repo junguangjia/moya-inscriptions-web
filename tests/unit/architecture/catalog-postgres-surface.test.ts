@@ -29,6 +29,7 @@ describe("@moya/catalog-postgres package boundary", () => {
       "DatabaseSchemaNotReadyError",
       "MigrationStateError",
       "PostgresCatalogQueryAdapter",
+      "PostgresEditorialContentAdapter",
       "PostgresStartupError",
       "asPostgresOperationError",
       "assertMigrationTarget",

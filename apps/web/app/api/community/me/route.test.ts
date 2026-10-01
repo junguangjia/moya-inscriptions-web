@@ -57,4 +57,25 @@ describe("same-origin current-user bridge", () => {
     expect(response.status).toBe(status);
     expect(await response.text()).toBe("");
   });
+
+  // email-auth-v1: a Session the Backend refuses (logged out or
+  // factor-replaced on another device, expired, unknown) leaves this browser
+  // signed out, so its cookie is cleared; a failed check never signs out.
+  it("clears the cookie of a Session the Backend refuses", async () => {
+    fetchServerCurrentUserMock.mockResolvedValue({ state: "unauthenticated" });
+    const response = await GET(request(`yoyi-session=${opaqueSession}`));
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toMatch(
+      /^yoyi-session=; .*Max-Age=0; Path=\/; HttpOnly; SameSite=Lax/u,
+    );
+  });
+
+  it.each(["unavailable", "unexpected-error"] as const)(
+    "keeps the cookie when the check is %s",
+    async (state) => {
+      fetchServerCurrentUserMock.mockResolvedValue({ state });
+      const response = await GET(request(`yoyi-session=${opaqueSession}`));
+      expect(response.headers.get("set-cookie")).toBeNull();
+    },
+  );
 });

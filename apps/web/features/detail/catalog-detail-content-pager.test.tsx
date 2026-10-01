@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CatalogDetailContentPager } from "./catalog-detail-content-pager";
 import { CatalogDetailScrollContext } from "./catalog-detail-scroll";
+import { useCommentLocationReveal } from "../comments/comment-composer-portal";
 import { usePublishCommentCount } from "../comments/comment-count";
 import type { Root } from "react-dom/client";
 import type { ReactNode } from "react";
@@ -44,6 +45,39 @@ const Count = ({ value }: { value: number }) => {
 };
 
 describe("Detail content pages", () => {
+  it("reveals the comments page for an exact locator before scrolling", () => {
+    const Target = () => {
+      const location = useCommentLocationReveal();
+      return (
+        <button onClick={() => location?.reveal()}>
+          {location?.active ? "located" : "locate"}
+        </button>
+      );
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <CatalogDetailContentPager
+          information={<p>资料</p>}
+          comments={<Target />}
+          platform="phone"
+        />,
+      ),
+    );
+    act(() =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "locate")!
+        .click(),
+    );
+    expect(
+      container.querySelector('[role="tab"][aria-selected="true"]')
+        ?.textContent,
+    ).toBe("评论");
+    expect(container.textContent).toContain("located");
+  });
+
   it("restores independent information and comment positions through tab commits", () => {
     const container = document.createElement("div");
     document.body.append(container);

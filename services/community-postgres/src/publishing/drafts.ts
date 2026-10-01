@@ -1,3 +1,4 @@
+import type { MentionReference } from "@moya/contracts";
 import {
   CommunityConflictError,
   CommunityInputError,
@@ -1193,6 +1194,7 @@ export const resolveConflict = async (
 interface EditableRevisionRow {
   title: string;
   body: string;
+  mentions: MentionReference[];
   authorship_kind: "original" | "copy_practice" | "material_sharing" | null;
   reference_title: string | null;
   original_author: string | null;
@@ -1267,7 +1269,7 @@ export const openEditDraft = async (
       const revision = firstRow(
         (
           await db.query<EditableRevisionRow>(
-            "SELECT title,body,authorship_kind,reference_title,original_author,source_note,cover_item_id,cover_crop FROM community.work_revisions WHERE id=$1",
+            "SELECT title,body,mentions,authorship_kind,reference_title,original_author,source_note,cover_item_id,cover_crop FROM community.work_revisions WHERE id=$1",
             [work.author_revision_id],
           )
         ).rows,
@@ -1295,6 +1297,7 @@ export const openEditDraft = async (
       const content = workDraftContentSchema.parse({
         title: revision.title,
         body: revision.body,
+        ...(revision.mentions.length ? { mentions: revision.mentions } : {}),
         // A revision without a declaration (a legacy baseline) opens as not set.
         authorship: revisionAuthorship(revision),
         visibility: work.visibility,

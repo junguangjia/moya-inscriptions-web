@@ -29,7 +29,6 @@ The active amendments are:
   explicitly revised by the Owner to incremental core-credential checks with a
   shared 120-second security-work allowance. Ordinary identifiers and Git
   configuration forms are not credential findings or approval gates.
-
 - [`2026-09-07 P2-04 Payload editorial automation`](docs/governance/amendments/2026-09-07-p2-04-payload-editorial.md),
   which authorizes the bounded CMS server integration and controlled content
   automation while preserving public contracts and separate cutover authority.
@@ -46,6 +45,7 @@ The active amendments are:
   full 600 s; Web/CMS complete 300 s; local combined ≤ 900 s), keeps the
   credential check at 120 s per genuine publication cycle, and records finite
   repair authority. Historical failures remain unchanged.
+- [`2026-09-22 content, Threads and direct messages (three-track Community scope)`](docs/governance/amendments/2026-09-22-content-community-completion-scope.md)
 
 No lower-level prompt, Plan, implementation decision, PR description, inferred
 best practice, or code comment may relax or override a higher authority.

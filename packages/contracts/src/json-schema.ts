@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import {
+  notificationPageSchema,
+  notificationReadSchema,
+  mentionReferenceSchema,
+  mentionLookupPageSchema,
   apiErrorCodeSchema,
   apiErrorSchema,
   catalogCitationScopeSchema,
@@ -26,6 +30,13 @@ import {
   catalogSearchTransportQuerySchema,
   catalogSearchItemSchema,
   catalogSearchPageSchema,
+  authAccountSecuritySchema,
+  authCapabilitiesSchema,
+  authChallengeRequestSchema,
+  authRegistrationRequestSchema,
+  authPasswordLoginRequestSchema,
+  authPasswordResetRequestSchema,
+  authPasswordResetResultSchema,
   healthResponseSchema,
   mediaIdSchema,
   noQueryTransportSchema,
@@ -121,6 +132,26 @@ import {
   guestFavoriteMergeSchema,
   guestFavoriteMergeResultSchema,
   requestIdentitySchema,
+  articleSummarySchema,
+  articleSectionSchema,
+  articleCitationSchema,
+  articleDetailSchema,
+  articlePageSchema,
+  articleCollectionSummarySchema,
+  articleCollectionMemberSchema,
+  articleCollectionDetailSchema,
+  articleCollectionPageSchema,
+  discussionTargetSchema,
+  threadSummarySchema,
+  threadPageSchema,
+  threadReadResultSchema,
+  directConversationSchema,
+  directConversationPageSchema,
+  directMessageSchema,
+  directMessagePageSchema,
+  directMessageUnreadSchema,
+  sendDirectMessageCommandSchema,
+  directMessageReadCommandSchema,
 } from "./schemas.js";
 
 import {
@@ -147,6 +178,10 @@ import {
 } from "./schemas.js";
 
 export const authorCommunityJsonSchemas = {
+  NotificationPage: toJsonSchema(notificationPageSchema),
+  NotificationRead: toJsonSchema(notificationReadSchema),
+  MentionReference: toJsonSchema(mentionReferenceSchema),
+  MentionLookupPage: toJsonSchema(mentionLookupPageSchema),
   ContentIdentity: toJsonSchema(contentIdentitySchema),
   DiscussionReply: toJsonSchema(discussionReplySchema),
   DiscussionComment: toJsonSchema(discussionCommentSchema),
@@ -183,6 +218,30 @@ export const authorCommunityJsonSchemas = {
   GuestFavoriteMerge: toJsonSchema(guestFavoriteMergeSchema),
   GuestFavoriteMergeResult: toJsonSchema(guestFavoriteMergeResultSchema),
   RequestIdentity: toJsonSchema(requestIdentitySchema),
+
+  // content-community-completion-v1: editorial content read DTOs.
+  ArticleSummary: toJsonSchema(articleSummarySchema),
+  ArticleSection: toJsonSchema(articleSectionSchema),
+  ArticleCitation: toJsonSchema(articleCitationSchema),
+  ArticleDetail: toJsonSchema(articleDetailSchema),
+  ArticlePage: toJsonSchema(articlePageSchema),
+  ArticleCollectionSummary: toJsonSchema(articleCollectionSummarySchema),
+  ArticleCollectionMember: toJsonSchema(articleCollectionMemberSchema),
+  ArticleCollectionDetail: toJsonSchema(articleCollectionDetailSchema),
+  ArticleCollectionPage: toJsonSchema(articleCollectionPageSchema),
+  // content-community-completion-v1: Threads over Works.
+  DiscussionTarget: toJsonSchema(discussionTargetSchema),
+  ThreadSummary: toJsonSchema(threadSummarySchema),
+  ThreadPage: toJsonSchema(threadPageSchema),
+  ThreadReadResult: toJsonSchema(threadReadResultSchema),
+  // content-community-completion-v1: direct messages.
+  DirectConversation: toJsonSchema(directConversationSchema),
+  DirectConversationPage: toJsonSchema(directConversationPageSchema),
+  DirectMessage: toJsonSchema(directMessageSchema),
+  DirectMessagePage: toJsonSchema(directMessagePageSchema),
+  DirectMessageUnread: toJsonSchema(directMessageUnreadSchema),
+  SendDirectMessageCommand: toJsonSchema(sendDirectMessageCommandSchema),
+  DirectMessageReadCommand: toJsonSchema(directMessageReadCommandSchema),
 };
 
 import {
@@ -219,6 +278,16 @@ import {
 } from "./schemas.js";
 
 /** Work publishing public DTOs, for the Development-only OpenAPI components. */
+export const authJsonSchemas = {
+  AuthCapabilities: toJsonSchema(authCapabilitiesSchema),
+  AuthChallengeRequest: toJsonSchema(authChallengeRequestSchema),
+  AuthRegistrationRequest: toJsonSchema(authRegistrationRequestSchema),
+  AuthPasswordLoginRequest: toJsonSchema(authPasswordLoginRequestSchema),
+  AuthPasswordResetRequest: toJsonSchema(authPasswordResetRequestSchema),
+  AuthPasswordResetResult: toJsonSchema(authPasswordResetResultSchema),
+  AuthAccountSecurity: toJsonSchema(authAccountSecuritySchema),
+};
+
 export const workPublishingJsonSchemas = {
   MediaEdit: toJsonSchema(mediaEditSchema),
   WorkAuthorship: toJsonSchema(workAuthorshipSchema),

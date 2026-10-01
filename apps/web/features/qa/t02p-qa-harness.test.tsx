@@ -58,6 +58,13 @@ describe("T02pQaHarness QA chrome", () => {
     }
   });
 
+  it("keeps the live 话题 feed over its author and publishing providers", () => {
+    const threads = renderHarness().querySelector("#discussion-panel-threads");
+    expect(
+      threads?.querySelector('[data-threads-state="loading"]'),
+    ).not.toBeNull();
+  });
+
   it("keeps all scenario and platform controls visible by default", () => {
     const container = renderHarness();
     const harness = container.querySelector("[data-t02p-qa-harness]");

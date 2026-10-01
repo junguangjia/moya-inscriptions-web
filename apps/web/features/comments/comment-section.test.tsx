@@ -149,6 +149,20 @@ describe("CommentSection", () => {
     ).toContain("访碑者");
   });
 
+  it("is one box with the send button on its right and no avatar", () => {
+    // Owner acceptance (2026-09-25): every text composer shares this shape.
+    const { container } = render();
+    const composer = container.querySelector("[data-comment-composer]")!;
+    const textarea = composer.querySelector("textarea")!;
+    const send = composer.querySelector('button[type="submit"]')!;
+    const row = send.parentElement!;
+    expect(row.contains(textarea)).toBe(true);
+    expect([...row.children].at(-1)).toBe(send);
+    expect(composer.querySelector("img")).toBeNull();
+    expect(composer.firstElementChild).toBe(row);
+    expect(textarea.rows).toBe(1);
+  });
+
   it("replies at depth two and toggles likes without reordering", () => {
     const { container } = render();
     const firstComment = container.querySelector("[data-comment-id]");

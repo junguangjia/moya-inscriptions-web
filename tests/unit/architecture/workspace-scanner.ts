@@ -259,9 +259,35 @@ const webCommunityServerImports: ReadonlyMap<string, string> = new Map([
     ),
     "{relayServerLocalCatalogMedia}",
   ],
+  // content-community-completion-v1: Development-only editorial images for a
+  // phone on the LAN acceptance origin, looked up in the published item.
+  [
+    path.join(
+      webRoot,
+      "app",
+      "api",
+      "editorial-media",
+      "[owner]",
+      "[file]",
+      "route.ts",
+    ),
+    "{relayServerLocalEditorialMedia}",
+  ],
   [
     path.join(webRoot, "app", "api", "community", "[...path]", "route.ts"),
     "{relayServerAuthorCommunity}",
+  ],
+  [
+    path.join(
+      webRoot,
+      "app",
+      "api",
+      "community",
+      "auth",
+      "[...path]",
+      "route.ts",
+    ),
+    "{relayServerCommunityAuth}",
   ],
   [
     path.join(webRoot, "app", "api", "community", "me", "route.ts"),
@@ -501,6 +527,18 @@ const isApprovedCatalogSearchApiReference = (
   );
 };
 
+const isApprovedNotificationStreamReference = (
+  filePath: string,
+  source: string,
+  reference: ModuleReference,
+): boolean =>
+  path.resolve(filePath) ===
+    path.join(webRoot, "app/api/community/notifications/stream/route.ts") &&
+  !hasUseClientDirective(source) &&
+  reference.kind === "static-import" &&
+  reference.specifier === "../../../../../lib/public-api/notification-stream" &&
+  /import\s*\{\s*relayNotificationStream\s*\}\s*from/u.test(source);
+
 const isApprovedCommunityServerReference = (
   filePath: string,
   source: string,
@@ -733,6 +771,12 @@ const isForbiddenServerReference = (specifier: string): boolean => {
 };
 
 const allowedClientContractTypes = new Set([
+  "MentionReference",
+  "NotificationPage",
+  "NotificationItem",
+  "NotificationUnread",
+  "NotificationReason",
+  "PublicUserProfile",
   "ContentIdentity",
   "ContentCard",
   "AuthorProfile",
@@ -748,6 +792,41 @@ const allowedClientContractTypes = new Set([
   "DiscoveryQuery",
   "InscriptionFilters",
   "InscriptionFilterOptions",
+
+  // content-community-completion-v1 editorial content read DTOs.
+  "ArticleCitation",
+  "ArticleCollectionDetail",
+  "ArticleCollectionId",
+  "ArticleCollectionMember",
+  "ArticleCollectionPage",
+  "ArticleCollectionSummary",
+  "ArticleDetail",
+  "ArticleId",
+  "ArticleListQuery",
+  "ArticlePage",
+  "ArticlePresentation",
+  "ArticleSection",
+  "ArticleSummary",
+  "DiscussionTarget",
+  "ThreadId",
+  "ThreadListQuery",
+  "ThreadPage",
+  "ThreadReadResult",
+  "ThreadStatus",
+  "ThreadSummary",
+  "DirectConversation",
+  "DirectConversationLookup",
+  "DirectConversationPage",
+  "DirectMessage",
+  "DirectMessageFailureCode",
+  "DirectMessagePage",
+  "DirectMessageReadCommand",
+  "DirectMessageUnread",
+  "DmConversationId",
+  "DmMessageId",
+  "DmParticipant",
+  "DmSendRefusal",
+  "SendDirectMessageCommand",
 
   "CatalogDetail",
   "CatalogId",
@@ -904,7 +983,9 @@ export const isAuthorizedCmsServerFile = (
     // the row the provider wrote. The browser halves are separate files with
     // their own "use client" directive and no server import.
     relative === "src/agent-connections/View.tsx" ||
-    /^src\/(?:editorial|media|fields|published|migration|migrations|preview)\/[^.].*\.tsx?$/.test(
+    // content-community-completion-v1: Articles/Collections editorial modules
+    // are Payload server modules like `src/editorial`.
+    /^src\/(?:editorial|editorial-content|media|fields|published|migration|migrations|preview)\/[^.].*\.tsx?$/.test(
       relative,
     ) ||
     /^src\/(?:users|runtime-settings|mcp|payload-types)\.ts$/.test(relative) ||
@@ -935,6 +1016,9 @@ const isOwnerWorkflowTypes = (
         "src/community/settings-client.tsx",
         "src/community/history-client.tsx",
         "src/community/agent-operations-client.tsx",
+        // content-community-completion-v1: Threads and DM moderation views.
+        "src/community/threads-client.tsx",
+        "src/community/dm-moderation-client.tsx",
       ].includes(relative) &&
         reference.specifier ===
           "@moya/contracts/internal/community-operator") ||
@@ -1115,7 +1199,18 @@ export const frontendBoundaryViolations = (
       !approvedCatalogDetailApiImport &&
       !approvedCatalogListApiImport &&
       !approvedCatalogSearchApiImport &&
-      !approvedCommunityServerImport
+      !approvedCommunityServerImport &&
+      !isApprovedNotificationStreamReference(filePath, source, reference) &&
+      !(
+        isAuthorizedPublicApi &&
+        path.resolve(filePath) ===
+          path.join(webPublicApiRoot, "notification-stream.ts") &&
+        reference.kind === "static-import" &&
+        reference.specifier === "./server" &&
+        /import\s*\{\s*parsePublicApiBaseUrl\s*\}\s*from\s*["']\.\/server["']/u.test(
+          source,
+        )
+      )
     ) {
       violations.push(`${reference.specifier} crosses the frontend boundary`);
     }

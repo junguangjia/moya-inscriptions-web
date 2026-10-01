@@ -1,0 +1,150 @@
+/*
+ * content-community-completion-v1: the direct-message panel reuses the accepted
+ * message-center styles (authors/message-preview.module.css). Those rules
+ * assume the accepted page around them; these keep the panel correct in any
+ * host.
+ */
+
+/* Controls inherit the product type and focus ring, as in the accepted content. */
+.panel button {
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.panel button:focus-visible,
+.panel textarea:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 3px;
+}
+
+/*
+ * The conversation and start views follow the accepted chat (.chat,
+ * .chatStream, .chatComposer): a scrolling message stream above a bottom
+ * composer, filling the region the host gives them. Without a header seam the
+ * participant takes a first row. The [data-dm-view] qualifier outranks .chat
+ * without editing the accepted stylesheet.
+ */
+.conversation[data-dm-view] {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+.conversation[data-dm-view][data-dm-title="view"] {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--yoyi-space-2) var(--yoyi-space-5);
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+}
+
+.title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The participant in the host's dialog header (accepted .chatTitle). The
+ * doubled class outranks the shared dialog header's button style.
+ */
+.headerTitle.headerTitle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-3);
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.headerTitle > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.headerAvatar {
+  width: 32px;
+  height: 32px;
+  font-size: var(--yoyi-type-body-small-size);
+}
+.headerTitle.headerTitle:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 3px;
+}
+
+.conversation .stream {
+  padding-top: var(--yoyi-space-5);
+}
+
+/* One message: the bubble and its time, on the sender's side of the stream. */
+.message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+}
+
+.message[data-dm-sent="true"] {
+  align-items: flex-end;
+}
+
+.message > p {
+  margin-bottom: var(--yoyi-space-1);
+}
+
+.time {
+  margin: 0 0 var(--yoyi-space-4);
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+/*
+ * Status text inside the page. The accepted .notice is the floating toast for
+ * delete, restore and mute; it stays for those only.
+ */
+.inlineNotice {
+  align-self: stretch;
+  margin: var(--yoyi-space-4) 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* A refusal or error takes the composer's full width. */
+.composerNotice {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.viewStatus {
+  margin: 0;
+  padding: var(--yoyi-space-6) var(--yoyi-space-5);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+
+.olderButton,
+.textButton {
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-4);
+  border: 0;
+  color: var(--yoyi-color-seal-red);
+  background: transparent;
+}
+.olderButton {
+  align-self: center;
+  display: block;
+  margin: var(--yoyi-space-3) auto;
+}

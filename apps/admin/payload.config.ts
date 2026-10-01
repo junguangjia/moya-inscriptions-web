@@ -5,6 +5,9 @@ import { postgresAdapter } from "@payloadcms/db-postgres";
 import { guardCmsMigrationAdapter } from "./src/migration/guard";
 import { zh } from "@payloadcms/translations/languages/zh";
 import { Users } from "./src/users";
+import { Articles } from "./src/editorial-content/articles";
+import { ArticleCollections } from "./src/editorial-content/article-collections";
+import { EditorialArticleApprovals } from "./src/editorial-content/approvals";
 import { editorialFields } from "./src/fields/editorial-fields";
 import {
   catalogAccess,
@@ -43,8 +46,19 @@ export default buildConfig({
       baseDir: dirname,
       importMapFile: path.resolve(dirname, "app/(payload)/admin/importMap.ts"),
     },
-    meta: { titleSuffix: "— 由艺（Yoyi）管理端" },
+    meta: {
+      titleSuffix: "— 由于艺管理端",
+      icons: {
+        icon: [
+          { url: "/admin/brand.svg", type: "image/svg+xml", sizes: "any" },
+        ],
+      },
+    },
     components: {
+      graphics: {
+        Logo: "/src/branding/Brand#AdminLogo",
+        Icon: "/src/branding/Brand#AdminIcon",
+      },
       views: {
         editorialWorkflow: {
           Component: "/src/owner-workflow/View#OwnerWorkflowView",
@@ -56,6 +70,17 @@ export default buildConfig({
         communityModeration: {
           Component: "/src/community/View#CommunityModerationView",
           path: "/community-moderation",
+          exact: true,
+        },
+        // content-community-completion-v1: Threads over Works (Development).
+        communityThreads: {
+          Component: "/src/community/View#ThreadsView",
+          path: "/community-moderation/threads",
+          exact: true,
+        },
+        communityDirectMessages: {
+          Component: "/src/community/View#DmModerationView",
+          path: "/community-moderation/direct-messages",
           exact: true,
         },
         communitySettings: {
@@ -195,6 +220,10 @@ export default buildConfig({
     EditorialIdentities,
     EditorialApprovals,
     EditorialReceipts,
+    // content-community-completion-v1: editorial content collections.
+    Articles,
+    ArticleCollections,
+    EditorialArticleApprovals,
   ],
   endpoints: [
     ...editorialEndpoints,

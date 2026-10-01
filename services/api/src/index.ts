@@ -44,6 +44,45 @@ export { mapPublicUserProfile } from "./modules/community/application/mappers/co
 export { CatalogCommentService } from "./modules/community/application/services/catalog-comment-service.js";
 export { CommunityModerationService } from "./modules/community/application/services/community-moderation-service.js";
 export { CommunitySessionService } from "./modules/community/application/services/community-session-service.js";
+export { CommunityAuthService } from "./modules/community/application/auth/community-auth-service.js";
+export { createMemoryCommunityAuthPort } from "./modules/community/application/auth/memory-auth-port.js";
+export {
+  assertProductionAuthConfiguration,
+  createDevelopmentAuthService,
+} from "./modules/community/application/auth/auth-configuration.js";
+export {
+  assertLoopbackCaptureUrl,
+  interpretAliyunCheck,
+  interpretAliyunSend,
+  interpretTencentSendEmail,
+  mapAliyunCheckSmsVerifyCode,
+  mapAliyunSendSmsVerifyCode,
+  mapTencentSendEmail,
+} from "./modules/community/application/auth/delivery.js";
+export type {
+  AuthDeliveryPorts,
+  AuthReason,
+  AuthResult,
+  AuthSessionGrant,
+  AuthVerifyValue,
+  CommunityAuthServiceOptions,
+} from "./modules/community/application/auth/community-auth-service.js";
+export type {
+  AuthChannelName,
+  AuthEnvironmentName,
+  AuthPurposeName,
+  AuthUnitOfWork,
+  CommunityAuthPort,
+  StoredChallenge,
+  StoredHandoff,
+  StoredIdentity,
+  StoredReceipt,
+  StoredSession,
+  StoredUser,
+  StoredPasswordCredential,
+  StoredPasswordResetReceipt,
+  VerificationMode,
+} from "./modules/community/application/auth/auth-port.js";
 export type {
   CatalogCommentServiceOptions,
   CommentListingInput,
@@ -261,3 +300,54 @@ export type {
   AgentManifestSelection,
   AgentOperationDraft,
 } from "./modules/community/application/ports/agent-administration-port.js";
+
+// messaging-notification-foundation-v1
+export type {
+  NotificationPort,
+  NotificationQuery,
+  NotificationFilter,
+  NotificationReadResult,
+  NotificationStoredItem,
+  NotificationJobClaim,
+  NotificationWorkerPort,
+} from "./modules/community/application/ports/notification-port.js";
+
+export { NotificationService } from "./modules/community/application/services/notification-service.js";
+// content-community-completion-v1: editorial content reads.
+export {
+  EditorialContentReadService,
+  splitParagraphs,
+} from "./modules/editorial/application/services/editorial-content-read-service.js";
+export type {
+  ArticleCitationRecord,
+  ArticleCollectionDetailRecord,
+  ArticleCollectionMemberRecord,
+  ArticleCollectionSummaryRecord,
+  ArticleDetailRecord,
+  ArticleSectionRecord,
+  ArticleSummaryRecord,
+  EditorialContentReadPort,
+  EditorialMediaRecord,
+  EditorialPageRecord,
+} from "./modules/editorial/application/ports/editorial-content-read-port.js";
+// content-community-completion-v1: Threads over Works.
+export { ThreadService } from "./modules/community/application/services/thread-service.js";
+export type { ThreadPort } from "./modules/community/application/ports/thread-port.js";
+// content-community-completion-v1: direct messages.
+export { DirectMessageService } from "./modules/community/application/services/direct-message-service.js";
+export type {
+  DirectMessagePort,
+  DirectMessageSendInput,
+} from "./modules/community/application/ports/direct-message-port.js";
+
+export {
+  hashPassword,
+  verifyPassword,
+  validPassword,
+  PasswordHashBusyError,
+} from "./modules/community/application/auth/password-crypto.js";
+
+export {
+  isValidAuthPassword,
+  normalizeStudioName,
+} from "./modules/community/domain/auth-profile-policy.js";

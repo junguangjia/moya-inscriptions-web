@@ -1,4 +1,5 @@
 export { PostgresCommunityIdentityAdapter } from "./adapter.js";
+export { PostgresCommunityAuthAdapter } from "./auth-adapter.js";
 export { asCommunityOperationError } from "./availability.js";
 export { PostgresCommunityCommentAdapter } from "./comment-adapter.js";
 export {
@@ -110,3 +111,10 @@ export type {
   ProviderAdapterOptions,
   ProviderModel,
 } from "./agent-connection-provider-adapter.js";
+
+// messaging-notification-foundation-v1
+export { PostgresNotificationAdapter } from "./notifications/adapter.js";
+// content-community-completion-v1: Threads over Works.
+export { PostgresThreadAdapter } from "./thread-adapter.js";
+// content-community-completion-v1: direct messages.
+export { PostgresDirectMessageAdapter } from "./direct-message-adapter.js";

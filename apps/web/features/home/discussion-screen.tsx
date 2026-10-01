@@ -1,4 +1,6 @@
 "use client";
+
+import { useAuthReturnView } from "../auth/auth-return";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DiscussionIcon } from "../discussion-preview/discussion-icons";
 import { AnimatedTopTabs } from "../shell/animated-top-tabs";
@@ -13,11 +15,38 @@ import {
   previewFeed,
 } from "../discussion-preview/discussion-preview";
 import { CatalogMasonry } from "./catalog-masonry";
+import {
+  EditorialNewsFeed,
+  EditorialTopicsFeed,
+} from "../editorial-content/editorial-feed";
+import {
+  isArticleId,
+  isCollectionId,
+} from "../editorial-content/use-editorial-content";
+import { ThreadsFeed, ThreadsUnavailable } from "../threads/threads-feed";
+import { isThreadId } from "../threads/use-threads";
 import { TopicCard } from "../topics/topic-card";
 import styles from "./home-screen.module.css";
 const feeds = ["news", "threads", "topics"] as const;
 type DiscussionFeed = (typeof feeds)[number];
 const labels = { news: "近闻", threads: "话题", topics: "专题" };
+// Real editorial ids map to their feed; preview fixtures keep their own map.
+const editorialFeed = (id: string | null): DiscussionFeed | null =>
+  isArticleId(id)
+    ? "news"
+    : isCollectionId(id)
+      ? "topics"
+      : isThreadId(id)
+        ? "threads"
+        : null;
+/** The Discussion feed whose panel holds an opened card, if any. */
+export const openerFeed = (
+  opener: HTMLElement | undefined,
+): DiscussionFeed | null => {
+  const panel = opener?.closest<HTMLElement>('[id^="discussion-panel-"]');
+  const feed = panel?.id.slice("discussion-panel-".length);
+  return feeds.find((key) => key === feed) ?? null;
+};
 const icons = {
   news: "news",
   threads: "discussion",
@@ -28,22 +57,45 @@ export function DiscussionScreen({
   headerStart,
   headerEnd,
   initialTopicId = null,
+  liveThreads = false,
 }: {
   readonly data: HomeSurfaceData["topics"];
   readonly headerStart?: ReactNode;
   readonly headerEnd?: ReactNode;
   readonly initialTopicId?: string | null;
+  /** The live 话题 feed needs the author and publishing providers. */
+  readonly liveThreads?: boolean;
 }) {
   const shell = useProductShell();
   const preview = useDiscussionPreview();
   const initialFeed =
     (preview && previewFeed(initialTopicId)) ||
+    editorialFeed(initialTopicId) ||
     (initialTopicId ? "topics" : "news");
   const root = useRef<HTMLDivElement>(null);
   const pager = useRef<HorizontalPagerHandle<DiscussionFeed>>(null);
-  const [active, setActive] = useState<DiscussionFeed>(initialFeed);
-  const [progress, setProgress] = useState(feeds.indexOf(initialFeed));
+  const activeRef = useRef<DiscussionFeed>(initialFeed);
+  const authReturnView = useAuthReturnView("discussion", () => ({
+    feed: activeRef.current,
+    top: shell.readActiveScrollTop(),
+  }));
+  const [active, setActive] = useState<DiscussionFeed>(
+    authReturnView?.feed ?? initialFeed,
+  );
+  activeRef.current = active;
+  useEffect(() => {
+    if (!authReturnView) return;
+    pager.current?.scrollToKey(authReturnView.feed);
+    shell.restoreActiveScrollTop(authReturnView.top);
+  }, [authReturnView, shell.restoreActiveScrollTop]);
+  const [progress, setProgress] = useState(
+    feeds.indexOf(authReturnView?.feed ?? initialFeed),
+  );
   const openedInitial = useRef(false);
+  // Guest read memory for Threads (session-local; not synchronized account data).
+  const [localRead, setLocalRead] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const positions = useRef<Record<DiscussionFeed, number>>({
     news: 0,
     threads: 0,
@@ -60,16 +112,21 @@ export function DiscussionScreen({
     [active, shell],
   );
   useEffect(() => {
-    const targetFeed =
-      (preview && previewFeed(shell.activeTopicId)) || "topics";
-    const frame =
-      shell.activeTopicId !== null && active !== targetFeed
-        ? requestAnimationFrame(() => pager.current?.scrollToKey(targetFeed))
-        : null;
     const opener = Array.from(
       root.current?.querySelectorAll<HTMLButtonElement>("[data-topic-id]") ??
         [],
     ).find((button) => button.dataset.topicId === shell.activeTopicId);
+    // An Article id alone does not say 近闻 or 专题: the feed that holds the
+    // opened card wins, and the id prefix only decides for a deep link.
+    const targetFeed =
+      (preview && previewFeed(shell.activeTopicId)) ||
+      openerFeed(opener) ||
+      editorialFeed(shell.activeTopicId) ||
+      "topics";
+    const frame =
+      shell.activeTopicId !== null && active !== targetFeed
+        ? requestAnimationFrame(() => pager.current?.scrollToKey(targetFeed))
+        : null;
     if (opener && shell.activeTopicId)
       shell.registerTopicOpener(shell.activeTopicId, opener);
     return () => {
@@ -173,7 +230,27 @@ export function DiscussionScreen({
                 threads: <DiscussionPreviewFeed feed="threads" />,
                 topics: <DiscussionPreviewFeed feed="topics" />,
               }
-            : { news: null, threads: null, topics }
+            : {
+                // Real published editorial reads (content-community-completion-v1).
+                news: <EditorialNewsFeed />,
+                threads: liveThreads ? (
+                  <ThreadsFeed
+                    localRead={localRead}
+                    onOpen={(id, opener) => {
+                      setLocalRead((old) => new Set(old).add(id));
+                      shell.openTopic(id, opener, shell.readActiveScrollTop());
+                    }}
+                  />
+                ) : (
+                  <ThreadsUnavailable />
+                ),
+                topics: (
+                  <>
+                    <EditorialTopicsFeed />
+                    {data.state === "populated" ? topics : null}
+                  </>
+                ),
+              }
         }
         platform={shell.platform}
         visible={shell.activeDestination === "discussion"}

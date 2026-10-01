@@ -171,6 +171,9 @@ export class CatalogCommentService {
         { type: "catalog", id: catalogId },
         authorId,
         request.text,
+        undefined,
+        undefined,
+        request.mentions,
       );
       return {
         item: {
@@ -179,7 +182,7 @@ export class CatalogCommentService {
           replies: [],
           replyTotal: 0,
         },
-        awaitingApproval: false,
+        awaitingApproval: sent.awaitingApproval,
       };
     }
     const moderation = await this.entryModerationState();
@@ -211,8 +214,12 @@ export class CatalogCommentService {
         request.text,
         rootCommentId,
         request.replyTo,
+        request.mentions,
       );
-      return { item: legacyReply(sent.item), awaitingApproval: false };
+      return {
+        item: legacyReply(sent.item),
+        awaitingApproval: sent.awaitingApproval,
+      };
     }
     await this.assertVisibleRoot(catalogId, rootCommentId);
     if (request.replyTo !== undefined) {

@@ -11,6 +11,11 @@ import {
   restoreDraft,
   saveDraft,
 } from "./operations";
+import {
+  approveArticleBatch,
+  publishApprovedArticle,
+  saveArticleDraft,
+} from "../editorial-content/operations";
 
 const endpoint = (
   name: string,
@@ -49,4 +54,8 @@ export const editorialEndpoints: Endpoint[] = [
   endpoint("approve-batch", approveBatch),
   endpoint("publish-approved", publishApproved),
   endpoint("restore-draft", restoreDraft),
+  // content-community-completion-v1: the same mechanism for Articles.
+  endpoint("save-article-draft", saveArticleDraft),
+  endpoint("approve-article-batch", approveArticleBatch),
+  endpoint("publish-approved-article", publishApprovedArticle),
 ];

@@ -89,6 +89,9 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
       "/v1/me",
       "/v1/development/sign-in",
       "/v1/development/sign-out",
+      // Owner r2 notification scope; composition remains Development-only.
+      "/v1/community/mentions",
+      "/v1/community/notifications",
     ]);
     // One Catalog detail route plus the two comment routes of Mission 2B.
     expect(router.match(/\.exec\(pathname\)/gu)).toHaveLength(3);
@@ -105,9 +108,12 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
   });
 
   it("4. keeps the application modules at catalog and community (2A)", async () => {
+    // content-community-completion-v1 (2026-09-22 amendment) adds the
+    // published editorial content read module.
     expect(await visibleEntries("services/api/src/modules")).toEqual([
       "catalog",
       "community",
+      "editorial",
     ]);
   });
 

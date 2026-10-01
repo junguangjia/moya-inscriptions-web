@@ -1,17 +1,27 @@
 "use client";
 
+import { useAuthReturn } from "../auth/auth-return";
+
 import {
   createContext,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { MentionControl } from "../notifications/mention-control";
+import { remapMentions } from "../notifications/mention-edits";
+import { normalizeMentionText } from "../notifications/mention-data";
+import type { MentionReference } from "@moya/contracts";
 import { createPortal } from "react-dom";
 
-import { useCommentComposerPortalTarget } from "./comment-composer-portal";
+import {
+  useCommentComposerPortalTarget,
+  useCommentLocationReveal,
+} from "./comment-composer-portal";
 import { formatCommentCount, usePublishCommentCount } from "./comment-count";
 import styles from "./comment-section.module.css";
 
@@ -61,10 +71,14 @@ export interface CommentSectionProps {
   readonly highlightCommentId?: string;
   readonly currentUser: CommentUserPresentation;
   readonly items: readonly CommentItem[];
-  readonly onSendComment: (text: string) => CommentSendResult;
+  readonly onSendComment: (
+    text: string,
+    mentions?: readonly MentionReference[],
+  ) => CommentSendResult;
   readonly onSendReply: (
     target: CommentReplyTarget,
     text: string,
+    mentions?: readonly MentionReference[],
   ) => CommentSendResult;
   /** The live Phase 4 composition supplies authorized like commands. */
   readonly onToggleLike?: (commentId: string, replyId?: string) => void;
@@ -448,11 +462,14 @@ export const CommentSection = ({
   totalCount,
   viewer,
 }: CommentSectionProps) => {
+  const authReturn = useAuthReturn();
   const catalogId = contentKey ?? legacyCatalogId ?? "discussion";
   const sectionRef = useRef<HTMLElement>(null),
     highlighted = useRef<string | null>(null),
     highlightTimer = useRef<number | null>(null);
+  const locationReveal = useCommentLocationReveal();
   const [draft, setDraft] = useState("");
+  const [mentions, setMentions] = useState<readonly MentionReference[]>([]);
   const [expandedCommentIds, setExpandedCommentIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -466,6 +483,16 @@ export const CommentSection = ({
         c.replies.some((r) => r.id === highlightCommentId),
     );
     if (!root) return;
+    if (locationReveal && !locationReveal.active) {
+      // The pager flushes its imperative transition; call it outside React's layout phase.
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) locationReveal.reveal();
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     if (!expandedCommentIds.has(root.id)) {
       setExpandedCommentIds((old) => new Set([...old, root.id]));
       return;
@@ -492,7 +519,7 @@ export const CommentSection = ({
         highlightTimer.current = null;
       }, 1800);
     }
-  }, [highlightCommentId, hotItems, items, expandedCommentIds]);
+  }, [highlightCommentId, hotItems, items, expandedCommentIds, locationReveal]);
   useEffect(
     () => () => {
       if (highlightTimer.current !== null)
@@ -503,6 +530,7 @@ export const CommentSection = ({
   const [replyTarget, setReplyTarget] = useState<CommentReplyTarget | null>(
     null,
   );
+  const recoveredComposer = useRef(false);
   const editorRevision = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorMounted = useRef(true);
@@ -511,6 +539,7 @@ export const CommentSection = ({
     actor: currentUser.id,
   });
   const viewerState = viewer?.state;
+  const loading = loadingOverride ?? scenario === "comment-loading";
   useLayoutEffect(() => {
     editorMounted.current = true;
     return () => {
@@ -527,14 +556,49 @@ export const CommentSection = ({
           : currentUser.id;
     if (
       editorScope.current.catalogId !== catalogId ||
-      editorScope.current.actor !== confirmedActor
+      editorScope.current.actor !== confirmedActor ||
+      (!recoveredComposer.current &&
+        confirmedActor !== null &&
+        viewerState === "signed-in")
     ) {
       editorRevision.current += 1;
-      setDraft("");
-      setReplyTarget(null);
+      if (confirmedActor !== null) recoveredComposer.current = true;
+      const saved =
+        confirmedActor === null
+          ? undefined
+          : (authReturn?.take(confirmedActor, catalogId) as
+              | {
+                  draft: string;
+                  mentions: readonly MentionReference[];
+                  replyTarget: CommentReplyTarget | null;
+                }
+              | undefined);
+      setDraft(saved?.draft ?? "");
+      setMentions(saved?.mentions ?? []);
+      // Page one cannot prove that a target from a later page disappeared.
+      // An explicit reply still goes through the existing server validation.
+      setReplyTarget(saved?.replyTarget ?? null);
     }
     editorScope.current = { catalogId, actor: confirmedActor };
-  }, [catalogId, currentUser.id, viewerState]);
+  }, [catalogId, currentUser.id, viewerState, authReturn]);
+  useEffect(() => {
+    // Hidden during a refused session; restored only after /me confirms this owner.
+    const owner = editorScope.current.actor;
+    if (
+      presentation === "live" &&
+      owner !== null &&
+      viewerState === "signed-in"
+    )
+      authReturn?.remember(owner, catalogId, { draft, mentions, replyTarget });
+  }, [
+    authReturn,
+    catalogId,
+    draft,
+    mentions,
+    presentation,
+    replyTarget,
+    viewerState,
+  ]);
   const changeReplyTarget = (target: CommentReplyTarget | null) => {
     if (target !== null && textareaRef.current === null) return;
     const identity = (value: CommentReplyTarget | null) =>
@@ -552,8 +616,9 @@ export const CommentSection = ({
   };
   const [sort, setSort] = useState<CommentSort>("hot");
   const composerPortalTarget = useCommentComposerPortalTarget();
+  const postingAsId = useId();
   const live = presentation === "live";
-  const loading = loadingOverride ?? scenario === "comment-loading";
+
   const hot = hotItems ?? [];
   const count =
     totalCount ??
@@ -582,12 +647,14 @@ export const CommentSection = ({
     setExpandedCommentIds((current) => new Set(current).add(commentId));
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const text = draft.trim();
+    const text = normalizeMentionText(draft);
     if (text.length === 0 || submitting) return;
     const submittedRevision = editorRevision.current;
     const target = replyTarget;
     const outcome =
-      target === null ? onSendComment(text) : onSendReply(target, text);
+      target === null
+        ? onSendComment(text, mentions)
+        : onSendReply(target, text, mentions);
     const accepted = () => {
       if (
         !editorMounted.current ||
@@ -597,6 +664,7 @@ export const CommentSection = ({
       editorRevision.current += 1;
       if (target !== null) expandThread(target.rootCommentId);
       setDraft("");
+      setMentions([]);
       setReplyTarget(null);
     };
     // A failed live submission keeps the text; nothing is shown as sent.
@@ -609,25 +677,27 @@ export const CommentSection = ({
       );
     } else accepted();
   };
+  // Owner acceptance (2026-09-25): every text composer is one box with the
+  // send button on its right; the mention trigger sits inside the box.
   const composer = (
     <form
       className={styles.composer}
       data-comment-composer=""
       onSubmit={submit}
     >
-      <Avatar user={currentUser} />
-      <div className={styles.composerBody}>
-        {replyTarget === null ? null : (
-          <div className={styles.replyMode} data-comment-reply-mode="">
-            <span>回复 {replyTarget.user.name}</span>
-            <button onClick={() => changeReplyTarget(null)} type="button">
-              取消
-            </button>
-          </div>
-        )}
-        <div className={styles.composerInputRow}>
+      {replyTarget === null ? null : (
+        <div className={styles.replyMode} data-comment-reply-mode="">
+          <span>回复 {replyTarget.user.name}</span>
+          <button onClick={() => changeReplyTarget(null)} type="button">
+            取消
+          </button>
+        </div>
+      )}
+      <div className={styles.composerInputRow}>
+        <div className={styles.composerField}>
           <textarea
             ref={textareaRef}
+            aria-describedby={postingAsId}
             aria-label={
               replyTarget === null
                 ? "写下你的评论"
@@ -635,23 +705,40 @@ export const CommentSection = ({
             }
             onChange={(event) => {
               editorRevision.current += 1;
-              setDraft(event.currentTarget.value);
+              const next = event.currentTarget.value;
+              setMentions(remapMentions(draft, next, mentions));
+              setDraft(next);
             }}
             placeholder="写下你的评论…"
-            rows={3}
+            rows={1}
             value={draft}
           />
-          <div className={styles.composerFooter}>
-            <span>以“{currentUser.name}”发布</span>
-            <button
-              disabled={draft.trim().length === 0 || submitting}
-              type="submit"
-            >
-              {submitting ? "发送中…" : "发送"}
-            </button>
-          </div>
+          {live && (
+            <MentionControl
+              inline
+              text={draft}
+              mentions={mentions}
+              maxLength={1000}
+              onChange={(text, refs) => {
+                editorRevision.current++;
+                setDraft(text);
+                setMentions(refs);
+                textareaRef.current?.focus();
+              }}
+            />
+          )}
         </div>
+        <button
+          className={styles.composerSend}
+          disabled={draft.trim().length === 0 || submitting}
+          type="submit"
+        >
+          {submitting ? "发送中…" : "发送"}
+        </button>
       </div>
+      <span id={postingAsId} className={styles.visuallyHidden}>
+        以“{currentUser.name}”发布
+      </span>
     </form>
   );
   // Signed out, the composer's place carries the truthful state instead.

@@ -1,5 +1,6 @@
 "use client";
 
+import { THREAD_QUICK_COMPOSER_ITEMS } from "../../publishing-runtime";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { itemDerivation, itemEditKey, withEditKey } from "../../edit-readiness";
@@ -130,7 +131,11 @@ const MediaSectionBody = ({
     useMediaUiState(ui);
   const uploads = session.uploads;
   const staging = staged.staging;
-  const maxItems = session.limits?.maxItems ?? 50;
+  // A Thread quick composer (content-community-completion-v1) carries at most
+  // three static items; the general editor keeps the server limit.
+  const maxItems = session.session?.threadId
+    ? Math.min(session.limits?.maxItems ?? 50, THREAD_QUICK_COMPOSER_ITEMS)
+    : (session.limits?.maxItems ?? 50);
   const value = useMemo<MediaValue>(
     () => ({
       items: state.items,

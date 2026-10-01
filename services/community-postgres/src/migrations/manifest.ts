@@ -187,4 +187,46 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "87cb58fb59ed83544fe41379939cca832e50d89a49e80d43f39cfedcd89ec9bd",
     }),
+    Object.freeze({
+      migrationId: "20260922010000",
+      filename: "20260922010000_email_phone_login_identities.sql",
+      checksum:
+        "6441c9d4d6cf9e3b10274fe0c47b8328f9e5e8a2da7a967c0b54c8c6f83330ea",
+    }),
+    Object.freeze({
+      migrationId: "20260922011000",
+      filename: "20260922011000_auth_failure_rows_and_receipt_seal.sql",
+      checksum:
+        "cef51df23c932f2efe7b0259e120a726172af78cccef5759f848c640f14ccbf0",
+    }),
+    Object.freeze({
+      migrationId: "20260922020000",
+      filename: "20260922020000_notification_foundation.sql",
+      checksum:
+        "fe4f4ce057e3b3d0fc3092ae85b1358ab5a4492be0288cff318135d1caa51656",
+    }),
+    Object.freeze({
+      migrationId: "20260922030000",
+      filename: "20260922030000_threads.sql",
+      checksum:
+        "7f55816b0de03f4a13fdc79c8db4d661590646ed1b03c09e19067dbd8b2d9d59",
+    }),
+    Object.freeze({
+      migrationId: "20260922031000",
+      filename: "20260922031000_article_discussion_target.sql",
+      checksum:
+        "b378c94945016f84ef2df82a39159a17bf1db387861d99ff1afdc9577cb1638e",
+    }),
+    Object.freeze({
+      migrationId: "20260922032000",
+      filename: "20260922032000_direct_messages.sql",
+      checksum:
+        "a97b63b085612a883f95bcb14a56d629ac5ff3c75892aed4ab462e9940dd444d",
+    }),
+    Object.freeze({
+      migrationId: "20260930010000",
+      filename: "20260930010000_password_credentials_and_studio.sql",
+      checksum:
+        "4774f8a17ee2fb249f00bf58bf05ca9489a7fb5e0fb415e64c74842904de2b74",
+    }),
   ]);

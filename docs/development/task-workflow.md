@@ -47,6 +47,10 @@ handoffs and evidence under
 subdirectory for each validation or reviewer run. Do not write evidence into Git
 or another task's outputs.
 
+New tasks start from freshly fetched `origin/main`, as required by the
+single-main amendment. An active task keeps its established implementation
+baseline under the boundaries below.
+
 Start either tool with its working directory set to that worktree. The terminal
 entry is `codex` or `claude` when installed on PATH; desktop users open that
 same existing folder. For a handoff, do not request a new managed worktree or
@@ -67,11 +71,50 @@ worktree when source writes cannot be avoided. Return the writer role to the
 implementer before fixes. Either tool, including a new session of the same tool,
 may implement, test, review or take over the task.
 
+An unrelated active task or open PR is not a project-wide lock. Coordinate only
+actual competing writers, scope dependencies or incompatible shared-resource
+use; pause the affected work, not independent tasks.
+
 Do not interrupt unrelated sessions, services, containers or databases. Use
 task-specific ports and writable test databases where isolation is needed. Apple
 integration must name an API version, service endpoint/port and data agreement;
 it cannot rely on another task's backend remaining available or unchanged.
 Provisioning a new shared service requires its own authority.
+
+## Implementation and final integration boundaries
+
+During implementation, an unrelated `main` update or a GitHub merge-conflict
+indicator alone does not require stopping work or immediately merging/rebasing
+`main`. Continue on the established baseline with applicable local feedback
+checks. Do not poll unrelated PRs or require all agents to synchronize after
+another task merges.
+
+Assess upstream dependency impact semantically, not merely by overlapping
+filenames. Changed contracts, authentication/security behavior, migrations,
+shared configuration or another dependency the task actually consumes can
+require earlier coordination or synchronization. Pause only the affected work.
+Reading updated governing instructions is separate from merging `main`: a stable
+coding baseline never permits ignoring new Owner authority.
+
+GitHub does not run `pull_request` workflows for merge-conflicted PRs
+([GitHub workflow troubleshooting](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows)).
+Unavailable PR CI does not prevent applicable local feedback through the
+existing entry below; feedback does not replace required CI or final acceptance.
+
+At the final integration/delivery boundary, refresh relevant upstream state,
+integrate and resolve conflicts when needed for the actual candidate, then run
+the existing applicable cumulative validation and required CI. Bind validation
+and independent review to that candidate and its tested base; preserve strict
+up-to-date protection and every task-specific acceptance requirement. An earlier
+HEAD's green CI is not evidence that a changed candidate passed.
+
+Reuse unchanged applicable evidence under the existing rules below. Relevant
+upstream changes can invalidate integration evidence and require further
+conflict resolution or validation; conflicts are not promised to resolve only
+once. Use the existing finite repair limits in the validation-profiles
+amendment, without an unbounded chase-main/retest loop. Report any remaining
+integration blocker, missing or blocked CI, and a Draft pending integration as
+pending, not merge-ready.
 
 ## Use the applicable local entry
 
@@ -271,6 +314,89 @@ See
 and [Claude Code memory/imports](https://code.claude.com/docs/en/memory).
 Installed versions and session behavior must be checked rather than inferred
 from file names alone.
+
+## Task resources, preparation and reusable context
+
+Prepare a task-owned disposable target once from its assigned worktree:
+
+```sh
+/opt/homebrew/bin/mise exec -- pnpm dev:task:prepare --task <task-id> --manifest <absolute-private-manifest>
+/opt/homebrew/bin/mise exec -- pnpm dev:task:inspect --task <task-id> --manifest <absolute-private-manifest>
+```
+
+The manifest binds the actual worktree, task, Compose project, labeled
+container, loopback database/Web/API ports, private configuration hash and
+output root. Preparation reuses only that ownership record. The test Compose
+file requires `MOYA_TEST_DB_PASSWORD` from that private task configuration; it
+has no default password. The private mode-0600 environment file contains
+disposable generated authentication material; do not print, copy into tracked
+files or publish it. These operations never use retained Development
+configuration or data. A missing/mismatched ownership label, configuration or
+resource record fails; it is not permission to adopt an existing service. Pass
+`--resources <absolute-private-manifest>` to `verify-task.mjs` to inspect and
+load this target before validation. Each verification still creates a fresh
+private `--output` directory. Preparation does not cache database, migration,
+browser or device acceptance.
+
+After reading applicable authority and recording the writer checkpoint, create
+an advisory context snapshot:
+
+```sh
+/opt/homebrew/bin/mise exec -- pnpm task:snapshot --task <task-id> --checkpoint <absolute-private-json> --handoff <private-handoff> --resources <private-manifest> --scope scripts --scope docs/development
+/opt/homebrew/bin/mise exec -- pnpm task:verify-context --task <task-id> --checkpoint <absolute-private-json>
+```
+
+Verification is read-only and compares HEAD, staged/unstaged/untracked content,
+scoped authority, writer record and resource identity. Add every allowed path's
+scope when taking the snapshot; newly applicable instruction files invalidate
+it. An unchanged snapshot reduces rediscovery within the same already-read
+context. It does not acquire a writer role, load authority into a new session,
+prove process inactivity or replace the human handoff rules below. A true new
+session still reads applicable authority once.
+
+## Throughput and individual check evidence
+
+Complete validation selects the known affected workspace/consumer closure and
+preserves the cumulative CI gate. Missing graph information, unknown paths,
+authentication/session/security changes, migrations, database configuration and
+shared toolchain configuration widen coverage. The monolithic shared unit suite
+runs whole when selected. When complete Web validation already selects both that
+suite and the Web client suite, redundant focused contract commands are omitted;
+shared-contract-only work retains its focused checks. Feedback has finite
+existing Backend-memory, Admin-component and shared-function mappings. Missing
+mappings or test files are reported as unchecked and cannot become a PASS.
+
+CMS preparation uses the existing filtered Turbo dependency graph. Library-only
+builds use `.turbo/library-cache`; CI restores that content-hashed cache for the
+existing contract, PostgreSQL and CMS jobs. It stores library dist and compiler
+status/logs, excludes application builds and runtime results, and invalidates on
+relevant source/configuration/dependency and actual Node toolchain identity.
+Existing pnpm store caching remains separate. No database, migration, browser or
+device result is accepted from a cache. Local lightweight static checks may pair
+at a maximum concurrency of two. Build-dependent tests, shared dist/incremental
+compiler outputs and database consumers keep necessary ordering; all commands
+retain one deadline and its cleanup reserve.
+
+An optional `--reuse-summary <absolute-private-summary>` reuses only successful,
+individually executed, explicit file-scoped Prettier check or ESLint commands.
+The summary records tested base, actual tools, command, input identities,
+source-summary hash/head/check and each invalidation reason. Config modules can
+import repository sources, so this first version conservatively fingerprints the
+whole tracked/untracked source inventory and actual installed static-tool
+dependency bytes, including the Node and pnpm implementations. The current
+reviewed static configuration is supported; unknown/nested configs, plugins or
+imports decline reuse. These inputs are rechecked after validation to detect
+changes during a check. Any source, command, toolchain or relevant configuration
+difference invalidates reuse. Failed, missing, incomplete and previously
+reused-only records do not satisfy it. Other selected checks execute normally.
+Evidence preparation consumes the original validation ceiling; reuse never
+grants more time.
+
+A source feedback summary remains `FEEDBACK ONLY — NOT FULL ACCEPTANCE`. Reusing
+one static result does not accept its whole plan or relabel previous-head CI.
+Push one fixed candidate, then start independent review alongside its CI. Final
+acceptance waits for both applicable results, with existing Owner and Draft
+stops.
 
 ## Transfer the writer role
 
