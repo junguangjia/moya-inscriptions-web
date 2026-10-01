@@ -19,10 +19,12 @@ const state = vi.hoisted(() => ({
   checking: false,
   refresh: vi.fn(async () => undefined),
   workspaceTitle: "",
+  workspaceEpoch: 0,
 }));
 vi.mock("next/dynamic", () => ({
-  default: () => (props: { initial: ArticleDraft }) => {
+  default: () => (props: { initial: ArticleDraft; accountEpoch: number }) => {
     state.workspaceTitle = props.initial.title;
+    state.workspaceEpoch = props.accountEpoch;
     return <p data-workspace="">{props.initial.title}</p>;
   },
 }));
@@ -208,16 +210,19 @@ describe("Owned Article host transport lifecycle", () => {
     client.read.mockResolvedValueOnce(draft());
     await render({ type: "article-draft", id: draft().id });
     const loaded = node.querySelector("[data-workspace]");
+    expect(state.workspaceEpoch).toBe(1);
     state.clientAccount = null;
     state.epoch++;
     await render({ type: "article-draft", id: draft().id });
     expect(node.querySelector("[data-workspace]")).toBe(loaded);
+    expect(state.workspaceEpoch).toBe(1);
     expect(client.read).toHaveBeenCalledOnce();
     expect(node.textContent).toContain("当前输入仍保留");
     state.clientAccount = state.account;
     state.epoch++;
     await render({ type: "article-draft", id: draft().id });
     expect(node.querySelector("[data-workspace]")).toBe(loaded);
+    expect(state.workspaceEpoch).toBe(1);
     expect(client.read).toHaveBeenCalledOnce();
     state.account = `user-${"3".repeat(32)}`;
     state.clientAccount = state.account;

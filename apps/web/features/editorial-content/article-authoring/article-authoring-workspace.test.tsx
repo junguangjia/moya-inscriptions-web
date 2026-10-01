@@ -207,6 +207,7 @@ const render = async (
   const workspace = (
     <ArticleAuthoringWorkspace
       sessionKey={sessionKey}
+      accountEpoch={1}
       covered={covered}
       initial={initial}
       layout="phone"
@@ -276,6 +277,20 @@ afterEach(async () => {
 });
 
 describe("Article authoring media workspace", () => {
+  it("refuses a late workspace mount after same-owner identity recovery and permits a clean local exit", async () => {
+    state.epoch = 3;
+    await mount();
+    expect(state.editor).toBeNull();
+    expect(session.limits).not.toHaveBeenCalled();
+    expect(node.textContent).toContain("账号状态已变化");
+    await click(
+      [...node.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "返回",
+      )!,
+    );
+    expect(session.discard).not.toHaveBeenCalled();
+    expect(onBack).toHaveBeenCalledOnce();
+  });
   it("keeps the loaded epoch across identity recovery and releases a clean readonly exit without stale lease writes", async () => {
     await mount();
     expect(state.editor!.accountEpoch).toBe(1);

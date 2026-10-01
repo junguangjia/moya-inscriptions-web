@@ -63,6 +63,7 @@ import styles from "./article-media.module.css";
 export interface ArticleAuthoringWorkspaceProps extends Pick<
   ArticleEditorProps,
   | "sessionKey"
+  | "accountEpoch"
   | "initial"
   | "onBack"
   | "onPublished"
@@ -102,7 +103,7 @@ export const ArticleAuthoringWorkspace = (
       : null;
   // Freeze the loaded editor session. Account-fenced ports invalidate writes
   // without replacing local input after a transient identity-check failure.
-  const [epoch] = useState(() => authorClient.accountEpoch());
+  const [epoch] = useState(props.accountEpoch);
   const [resolverResource, setResolverResource] = useState<{
     readonly sessionKey: string;
     readonly epoch: number;
@@ -514,7 +515,16 @@ export const ArticleAuthoringWorkspace = (
         )}
       </div>
       {uploads === null || resolver === null ? (
-        <p role="status">正在准备专题素材…</p>
+        <>
+          <button type="button" ref={props.backButtonRef} onClick={close}>
+            返回
+          </button>
+          <p role="status">
+            {sameAccount()
+              ? "正在准备专题素材…"
+              : "账号状态已变化，请返回后重新打开专题。"}
+          </p>
+        </>
       ) : (
         <ArticleAuthoringBoundary
           active

@@ -291,6 +291,7 @@ const OwnedArticles = ({
         <Workspace
           initial={draft}
           sessionKey={`${ownerId}:${epoch.current}:${draft.id}:${reload}`}
+          accountEpoch={epoch.current}
           layout={shell.platform === "phone" ? "phone" : "desktop"}
           mediaItems={mediaItems}
           mediaLoading={mediaBusy}
