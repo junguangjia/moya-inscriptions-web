@@ -9,6 +9,7 @@ vi.mock("./auth-api", () => ({
 
 import { authRequest } from "./auth-api";
 import { AccountSecurity } from "./account-security";
+import type { AuthAccountView } from "./auth-api";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -44,6 +45,17 @@ const challenge = {
   challengeId: "challenge-0123456789abcdef0123456789abcdef",
   continuationToken: "a".repeat(43),
   maskedTarget: "a***@example.com",
+};
+
+const linkedAccount: AuthAccountView = {
+  ...account,
+  phone: {
+    channel: "phone",
+    state: "verified",
+    masked: "138****8000",
+    version: 4,
+    usable: true,
+  },
 };
 
 const setValue = (element: HTMLInputElement, value: string): void => {
@@ -332,6 +344,306 @@ const authButton = (node: HTMLElement, label: string) => {
   if (!button) throw Error(`Missing ${label}`);
   return button;
 };
+
+describe("phone and email rebinding", () => {
+  let node: HTMLDivElement, root: ReturnType<typeof createRoot> | null;
+  let current: AuthAccountView;
+  let failure: string | null;
+  const mount = async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
+    current = structuredClone(linkedAccount);
+    failure = null;
+    request.mockImplementation(async (path, init) => {
+      const body = init?.body as Record<string, unknown> | undefined;
+      if (path === "account") return { status: 200, body: current };
+      if (path === "challenges")
+        return {
+          status: 200,
+          body: {
+            ...challenge,
+            maskedTarget:
+              body?.purpose === "replace"
+                ? "new***@example.com"
+                : current[body?.channel as "email" | "phone"].masked,
+            resendAvailableAt: new Date(Date.now() + 7000).toISOString(),
+          },
+        };
+      if (path === "challenges/verify")
+        return {
+          status: 200,
+          body: { outcome: "reauthenticated", reauthToken: "b".repeat(43) },
+        };
+      if (path === "factors/complete" && failure)
+        return { status: 409, body: { error: { message: failure } } };
+      return { status: 503, body: null };
+    });
+    node = document.createElement("div");
+    document.body.append(node);
+    root = createRoot(node);
+    await act(async () =>
+      root!.render(<AccountSecurity expectedViewerId={account.userId} />),
+    );
+  };
+  const click = async (label: string) =>
+    act(async () => authButton(node, label).click());
+  const begin = async (channel: "email" | "phone") =>
+    act(async () => {
+      node
+        .querySelector<HTMLButtonElement>(
+          `[data-settings-focus-key="auth-replace-${channel}"]`,
+        )!
+        .click();
+    });
+  const fill = async (value: string) =>
+    act(async () => setValue(node.querySelector("input")!, value));
+  const throughNewContact = async (channel: "email" | "phone" = "email") => {
+    await begin(channel);
+    await fill("123456");
+    await click("验证并继续");
+    await fill(channel === "email" ? "new@example.com" : "13900139000");
+    await click("发送验证码");
+    await fill("654321");
+  };
+  afterEach(async () => {
+    await act(async () => root?.unmount());
+    root = null;
+    node?.remove();
+    request.mockReset();
+    vi.useRealTimers();
+  });
+
+  it.each(["email", "phone"] as const)(
+    "verifies the old %s before the new contact and confirms only after the server",
+    async (channel) => {
+      await mount();
+      const pending = deferredResult<{ status: number; body: unknown }>();
+      const original = request.getMockImplementation()!;
+      request.mockImplementation((path, init) =>
+        path === "factors/complete" ? pending.promise : original(path, init),
+      );
+      await throughNewContact(channel);
+      const commands = request.mock.calls.filter(
+        ([path]) => path === "challenges",
+      );
+      expect(
+        commands.map(
+          ([, init]) => init?.body as { channel: string; purpose: string },
+        ),
+      ).toEqual([
+        expect.objectContaining({ channel, purpose: "reauthenticate" }),
+        expect.objectContaining({ channel, purpose: "replace" }),
+      ]);
+      expect(
+        node.querySelector('[aria-current="step"]')?.textContent,
+      ).toContain("确认绑定");
+      expect(
+        request.mock.calls.some(([path]) => path === "factors/complete"),
+      ).toBe(false);
+      const confirm = authButton(node, "确认换绑");
+      await act(async () => {
+        confirm.click();
+        confirm.click();
+      });
+      expect(
+        request.mock.calls.filter(([path]) => path === "factors/complete"),
+      ).toHaveLength(1);
+      expect(request).toHaveBeenLastCalledWith(
+        "factors/complete",
+        expect.objectContaining({
+          body: expect.objectContaining({
+            expectedVersion: linkedAccount[channel].version,
+          }),
+        }),
+      );
+      expect(node.textContent).not.toContain("换绑成功");
+      expect(authButton(node, "取消").disabled).toBe(true);
+      const masked = channel === "email" ? "new***@example.com" : "139****9000";
+      await act(async () =>
+        pending.resolve({
+          status: 200,
+          body: {
+            account: {
+              ...linkedAccount,
+              [channel]: {
+                ...linkedAccount[channel],
+                masked,
+                version: linkedAccount[channel].version + 1,
+              },
+            },
+          },
+        }),
+      );
+      expect(node.querySelector('[role="status"]')?.textContent).toContain(
+        "换绑成功",
+      );
+      expect(node.textContent).toContain(masked);
+      expect(node.querySelector("input")).toBeNull();
+      expect(
+        request.mock.calls.some(([path]) =>
+          ["registrations", "sign-in", "sign-out"].includes(path),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("uses the server resend deadline and preserves it across cancel and reopen", async () => {
+    await mount();
+    await begin("email");
+    expect(authButton(node, "7 秒后重新获取").disabled).toBe(true);
+    await click("7 秒后重新获取");
+    await click("取消");
+    await begin("email");
+    expect(node.textContent).not.toContain("验证码已发往");
+    expect(
+      request.mock.calls.filter(([path]) => path === "challenges"),
+    ).toHaveLength(1);
+    await act(async () => vi.advanceTimersByTime(7000));
+    await click("重新获取验证码");
+    expect(
+      request.mock.calls.filter(([path]) => path === "challenges"),
+    ).toHaveLength(2);
+    expect(authButton(node, "7 秒后重新获取").disabled).toBe(true);
+  });
+
+  it.each(["AUTH_PROOF_REJECTED", "AUTH_STALE_VERSION"])(
+    "offers a fresh account read after %s without claiming success",
+    async (reason) => {
+      await mount();
+      await throughNewContact();
+      failure = reason;
+      await click("确认换绑");
+      expect(node.querySelector('[role="alert"]')).not.toBeNull();
+      expect(node.textContent).not.toContain("换绑成功");
+      expect(authButton(node, "确认换绑").disabled).toBe(true);
+      await click("返回并重新验证");
+      expect(
+        request.mock.calls.filter(([path]) => path === "account"),
+      ).toHaveLength(2);
+      expect(node.textContent).toContain(linkedAccount.email.masked!);
+      expect(node.querySelector("input")).toBeNull();
+    },
+  );
+
+  it("keeps the original binding on conflict and permits editing the new contact", async () => {
+    await mount();
+    await throughNewContact();
+    failure = "AUTH_IDENTIFIER_CONFLICT";
+    await click("确认换绑");
+    expect(node.textContent).toContain("这个联系方式无法绑定");
+    await click("修改邮箱");
+    expect(node.querySelector<HTMLInputElement>("input")?.value).toBe(
+      "new@example.com",
+    );
+    await fill("corrected@example.com");
+    expect(authButton(node, "7 秒后可发送").disabled).toBe(true);
+    await act(async () => vi.advanceTimersByTime(7000));
+    await click("发送验证码");
+    expect(request).toHaveBeenLastCalledWith(
+      "challenges",
+      expect.objectContaining({
+        body: expect.objectContaining({
+          purpose: "replace",
+          identifier: "corrected@example.com",
+        }),
+      }),
+    );
+    expect(
+      request.mock.calls.filter(([path]) => path === "challenges/verify"),
+    ).toHaveLength(1);
+    expect(node.querySelector<HTMLInputElement>("input")?.value).toBe("");
+    await click("取消");
+    expect(node.textContent).toContain(linkedAccount.email.masked!);
+    expect(node.textContent).not.toContain("换绑成功");
+  });
+
+  it("blocks another replacement until a stale account refresh finishes", async () => {
+    await mount();
+    await throughNewContact();
+    failure = "AUTH_STALE_VERSION";
+    await click("确认换绑");
+    const refreshed = deferredResult<{ status: number; body: unknown }>();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((path, init) =>
+      path === "account" ? refreshed.promise : original(path, init),
+    );
+    await click("返回并重新验证");
+    expect(
+      node.querySelector('[data-settings-focus-key="auth-replace-email"]'),
+    ).toBeNull();
+    expect(node.textContent).toContain("正在读取登录方式");
+    await act(async () =>
+      refreshed.resolve({
+        status: 200,
+        body: { ...current, email: { ...current.email, version: 9 } },
+      }),
+    );
+    await act(async () => vi.advanceTimersByTime(7000));
+    await throughNewContact();
+    await click("确认换绑");
+    expect(request).toHaveBeenLastCalledWith(
+      "factors/complete",
+      expect.objectContaining({
+        body: expect.objectContaining({ expectedVersion: 9 }),
+      }),
+    );
+  });
+
+  it("ignores late successful completion after the viewer changes", async () => {
+    await mount();
+    await throughNewContact();
+    const pending = deferredResult<{ status: number; body: unknown }>();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((path, init) =>
+      path === "factors/complete" ? pending.promise : original(path, init),
+    );
+    await click("确认换绑");
+    current = {
+      ...current,
+      userId: "user-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      email: { ...current.email, masked: "other***@example.com" },
+    };
+    await act(async () =>
+      root!.render(<AccountSecurity expectedViewerId={current.userId} />),
+    );
+    await act(async () =>
+      pending.resolve({ status: 200, body: { account: linkedAccount } }),
+    );
+    expect(node.textContent).toContain("other***@example.com");
+    expect(node.textContent).not.toContain("换绑成功");
+    expect(node.textContent).not.toContain(linkedAccount.email.masked!);
+    expect(node.querySelector("input")).toBeNull();
+  });
+
+  it("does not substitute the other factor when the old target cannot be verified", async () => {
+    await mount();
+    current = { ...current, email: { ...current.email, usable: false } };
+    await act(async () => root!.unmount());
+    root = createRoot(node);
+    await act(async () =>
+      root!.render(<AccountSecurity expectedViewerId={account.userId} />),
+    );
+    await begin("email");
+    expect(node.textContent).toContain("原邮箱当前无法验证");
+    expect(request.mock.calls.some(([path]) => path === "challenges")).toBe(
+      false,
+    );
+  });
+
+  it("reports rate limits without pretending a code was sent", async () => {
+    await mount();
+    request.mockResolvedValue({
+      status: 429,
+      body: { error: { message: "AUTH_RATE_LIMITED" } },
+    });
+    await begin("phone");
+    expect(node.querySelector('[role="alert"]')?.textContent).toContain(
+      "操作过于频繁",
+    );
+    expect(node.textContent).not.toContain("验证码已发往");
+    expect(authButton(node, "验证并继续").disabled).toBe(true);
+  });
+});
 
 describe("AccountSecurity request and host boundaries", () => {
   let node: HTMLDivElement, root: ReturnType<typeof createRoot> | null;
