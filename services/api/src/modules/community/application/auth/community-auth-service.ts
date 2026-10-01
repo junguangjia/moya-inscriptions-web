@@ -7,7 +7,7 @@ import type {
   PublicUserProfile,
 } from "@moya/contracts";
 
-import { normalizeStudioName } from "../../domain/auth-profile-policy.js";
+import { normalizeStudioNameInput } from "../../domain/auth-profile-policy.js";
 import {
   hashPassword,
   verifyPassword,
@@ -353,6 +353,7 @@ export class CommunityAuthService {
     readonly idempotencyKey: string;
     readonly password?: string | undefined;
     readonly studioName?: string | undefined;
+    readonly studioNameSuffix?: string | undefined;
     readonly source?: string;
   }): Promise<AuthResult<AuthSessionGrant>> {
     if (input.agreement !== true) return fail("AUTH_AGREEMENT_REQUIRED");
@@ -365,7 +366,10 @@ export class CommunityAuthService {
       /[\uD800-\uDFFF]/u.test(displayName)
     )
       return fail("AUTH_INVALID_DISPLAY_NAME");
-    const studio = normalizeStudioName(input.studioName ?? "");
+    const studio = normalizeStudioNameInput(
+      input.studioName,
+      input.studioNameSuffix,
+    );
     if (studio === null) return fail("AUTH_INVALID_STUDIO_NAME");
     if (input.password !== undefined && !validPassword(input.password))
       return fail("AUTH_INVALID_PASSWORD");
@@ -442,7 +446,8 @@ export class CommunityAuthService {
     }
     const payloadHash = await this.registrationPayload(
       displayName,
-      studio,
+      studio.studioName,
+      studio.studioNameSuffix,
       verifier,
     );
     return this.convergeReceiptRace(
@@ -475,7 +480,8 @@ export class CommunityAuthService {
               // Legacy receipts may replay only their original OTP-only public fields.
               if (
                 input.password !== undefined ||
-                studio !== (user.studioName ?? "") ||
+                studio.studioName !== (user.studioName ?? "") ||
+                studio.studioNameSuffix !== (user.studioNameSuffix ?? "") ||
                 displayName !== user.displayName
               )
                 return fail("AUTH_PROOF_REJECTED");
@@ -498,7 +504,12 @@ export class CommunityAuthService {
             throw new AuthRollback(fail("AUTH_IDENTIFIER_CONFLICT"));
           if ((await tx.consumeHandoff(handoff.id, at.toISOString())) !== "ok")
             return fail("AUTH_PROOF_REJECTED");
-          const user = await this.insertNewUser(tx, displayName, studio);
+          const user = await this.insertNewUser(
+            tx,
+            displayName,
+            studio.studioName,
+            studio.studioNameSuffix,
+          );
           if (
             (await tx.insertIdentity({
               id: generateOpaqueId("login", this.randomBytes),
@@ -860,11 +871,17 @@ export class CommunityAuthService {
   private registrationPayload(
     displayName: string,
     studioName: string,
+    studioNameSuffix: string,
     verifier: string | null,
   ): Promise<string> {
+    // Preserve exact replay of pre-suffix receipts; paired writes bind the suffix too.
     return keyedHash(
       this.options.keys.lookupKey,
-      JSON.stringify(["register", displayName, studioName, verifier]),
+      JSON.stringify(
+        studioNameSuffix === ""
+          ? ["register", displayName, studioName, verifier]
+          : ["register", displayName, studioName, verifier, studioNameSuffix],
+      ),
     );
   }
 
@@ -1831,6 +1848,9 @@ export class CommunityAuthService {
         id: user.id as PublicUserId,
         handle: user.handle,
         displayName: user.displayName,
+        ...(user.studioName === undefined
+          ? {}
+          : { studioName: user.studioName }),
         status: user.status,
       }),
       sessionId,
@@ -1880,6 +1900,7 @@ export class CommunityAuthService {
     tx: AuthUnitOfWork,
     displayName: string,
     studioName = "",
+    studioNameSuffix = "",
   ): Promise<StoredUser> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const user: StoredUser = {
@@ -1887,6 +1908,7 @@ export class CommunityAuthService {
         handle: this.generateHandle(),
         displayName,
         studioName,
+        studioNameSuffix,
         status: "active",
       };
       if ((await tx.insertUser(user)) === "ok") return user;

@@ -23,6 +23,7 @@ export interface WorkRow extends QueryResultRow {
   id: string;
   author_id: string;
   display_name: string;
+  studio_name: string;
   title: string;
   text: string;
   first_published_at: Date | null;
@@ -52,7 +53,7 @@ export const workVisibleTo = (viewer: string) =>
   `u.status='active' AND community.accounts_can_interact(${viewer},w.author_id)
   AND (community.work_is_public(w) OR (w.author_id=${viewer} AND w.deleted_at IS NULL AND w.trashed_at IS NULL))`;
 export const workColumns =
-  "w.id,w.author_id,w.title,w.text,w.first_published_at,w.edited_at,w.version,w.visibility,w.trashed_at,w.public_revision_id,w.author_revision_id,w.operator_state,community.work_is_public(w) AS is_public,u.display_name";
+  "w.id,w.author_id,w.title,w.text,w.first_published_at,w.edited_at,w.version,w.visibility,w.trashed_at,w.public_revision_id,w.author_revision_id,w.operator_state,community.work_is_public(w) AS is_public,u.display_name,u.studio_name";
 
 export const workDtos = async (
   db: PoolClient,
@@ -100,6 +101,7 @@ const workDtoFrom = (
     id: row.id,
     authorId: row.author_id,
     authorName: row.display_name,
+    authorStudioName: row.studio_name,
     title: revision?.title ?? row.title,
     text: revision?.body ?? row.text,
     media,

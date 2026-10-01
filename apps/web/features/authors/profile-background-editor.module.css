@@ -181,3 +181,10 @@
     width: min(100%, calc((100svh - 185px) * 4 / 3));
   }
 }
+
+.ghostStudio {
+  display: block;
+}
+.ghostStudio > span {
+  font-size: inherit;
+}

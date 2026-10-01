@@ -399,7 +399,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     );
     expect(
       Object.keys(asObject(asObject(schemas.CommentAuthor).properties)),
-    ).toEqual(["id", "displayName"]);
+    ).toEqual(["id", "displayName", "studioName"]);
     expect(asObject(schemas.CatalogComment).additionalProperties).toBe(false);
     expect(
       asObject(
@@ -499,7 +499,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     });
     expect(
       Object.keys(asObject(asObject(schemas.PublicUserProfile).properties)),
-    ).toEqual(["id", "handle", "displayName"]);
+    ).toEqual(["id", "handle", "displayName", "studioName"]);
     expect(JSON.stringify(schemas.PublicUserProfile).toLowerCase()).not.toMatch(
       /status|token|credential|email|phone|avatar/u,
     );

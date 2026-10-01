@@ -272,6 +272,232 @@ export const registerPhase4AuthorTests = (
       expect(response.status).toBe(201);
       return response.json() as Promise<AuthorMedia>;
     };
+    it("persists and clears studio composition while omitted updates preserve it across every author read", async () => {
+      const studioName = "🌿".repeat(5) + "书斋";
+      const command = {
+        requestId: randomUUID(),
+        displayName: "同名作者",
+        bio: "",
+        studioName,
+        studioNameSuffix: "书斋",
+      };
+      await adapter.updateProfile(a, command);
+      await adapter.updateProfile(a, command);
+      const reloaded = new PostgresAuthorCommunityAdapter(pool);
+      expect(await reloaded.readProfile(a, b)).toMatchObject({
+        id: a,
+        displayName: "同名作者",
+        studioName,
+        studioNameSuffix: "书斋",
+      });
+      await adapter.updateProfile(a, {
+        requestId: randomUUID(),
+        displayName: "同名作者",
+        bio: "仅更新简介",
+      });
+      expect(await reloaded.readProfile(a, a)).toMatchObject({
+        studioName,
+        studioNameSuffix: "书斋",
+        bio: "仅更新简介",
+      });
+      const base = await server();
+      const token = await signIn(base, a);
+      const me = await fetch(`${base}/v1/me`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(me.status).toBe(200);
+      expect(await me.json()).toMatchObject({
+        id: a,
+        displayName: "同名作者",
+        studioName,
+      });
+      await adapter.follow(b, {
+        requestId: randomUUID(),
+        targetId: a,
+        enabled: true,
+      });
+      expect(
+        (await adapter.listPeople(b, b, "following", query)).items,
+      ).toContainEqual(expect.objectContaining({ id: a, studioName }));
+      expect(await reloaded.readWork(work, b)).toMatchObject({
+        authorId: a,
+        authorName: "同名作者",
+        authorStudioName: studioName,
+      });
+      const paired = {
+        requestId: randomUUID(),
+        displayName: "同名作者",
+        bio: "",
+        studioName: "山水书斋",
+        studioNameSuffix: "书斋",
+      };
+      await adapter.updateProfile(a, paired);
+      await expect(
+        adapter.updateProfile(a, { ...paired, studioNameSuffix: "斋" }),
+      ).rejects.toBeInstanceOf(CommunityConflictError);
+      await adapter.updateProfile(a, {
+        requestId: randomUUID(),
+        displayName: "同名作者",
+        bio: "",
+        studioName: "旧六字无后缀",
+      });
+      expect(await reloaded.readProfile(a, a)).toMatchObject({
+        studioName: "旧六字无后缀",
+        studioNameSuffix: "",
+      });
+      await adapter.updateProfile(a, {
+        requestId: randomUUID(),
+        displayName: "同名作者",
+        bio: "",
+        studioName: "",
+        studioNameSuffix: "",
+      });
+      expect(await reloaded.readProfile(a, a)).toMatchObject({
+        studioName: "",
+        studioNameSuffix: "",
+      });
+      expect(await reloaded.readWork(work, b)).toMatchObject({
+        authorStudioName: "",
+      });
+    });
+    it("reads current studios in discussion submissions, roots, replies and reply-to identities", async () => {
+      await pool.query(
+        "UPDATE community.publication_setting SET policy='DIRECT_PUBLICATION' WHERE id='publication'",
+      );
+      for (const [actor, studioName] of [
+        [a, "问石斋"],
+        [b, "听雨阁"],
+      ])
+        await adapter.updateProfile(actor!, {
+          requestId: randomUUID(),
+          displayName: "同名作者",
+          bio: "",
+          studioName: studioName!,
+          studioNameSuffix: [...studioName!].at(-1)!,
+        });
+      const target = { type: "work" as const, id: work };
+      const root = await discussion.submitDiscussion(target, a, "Studio root");
+      const first = await discussion.submitDiscussion(
+        target,
+        b,
+        "Studio reply",
+        root.id,
+      );
+      const reply = await discussion.submitDiscussion(
+        target,
+        a,
+        "Studio reply to reply",
+        root.id,
+        first.id,
+      );
+      expect(root.item.author.studioName).toBe("问石斋");
+      expect(first.item.author.studioName).toBe("听雨阁");
+      expect(reply.item.replyTo?.studioName).toBe("听雨阁");
+      const page = await discussion.readDiscussion(target, b, query);
+      expect(
+        [...page.hot, ...page.items].find((item) => item.id === root.id)?.author
+          .studioName,
+      ).toBe("问石斋");
+      expect(
+        (
+          await discussion.readDiscussionReplies(target, root.id, b, query)
+        ).items.find((item) => item.id === reply.id)?.replyTo?.studioName,
+      ).toBe("听雨阁");
+      await adapter.updateProfile(b, {
+        requestId: randomUUID(),
+        displayName: "同名作者",
+        bio: "",
+        studioName: "新雨堂",
+        studioNameSuffix: "堂",
+      });
+      expect(
+        (
+          await discussion.readDiscussionReplies(target, root.id, a, query)
+        ).items.find((item) => item.id === reply.id)?.replyTo?.studioName,
+      ).toBe("新雨堂");
+    });
+    it("preserves studio names in the legacy catalog root, hot, embedded-reply and reply-page queries", async () => {
+      await adapter.updateProfile(a, {
+        requestId: randomUUID(),
+        displayName: "同名作者",
+        bio: "",
+        studioName: "问石斋",
+        studioNameSuffix: "斋",
+      });
+      await adapter.updateProfile(b, {
+        requestId: randomUUID(),
+        displayName: "同名作者",
+        bio: "",
+        studioName: "听雨阁",
+        studioNameSuffix: "阁",
+      });
+      const catalogId =
+        "synthetic-studio-catalog" as import("@moya/contracts").CatalogId;
+      const root = await discussion.insertComment({
+        id: id("comment") as CatalogCommentId,
+        catalogId,
+        authorId: a as PublicUserId,
+        text: "Studio catalog",
+        moderation: "visible",
+        createdAt: new Date(),
+      });
+      const first = await discussion.insertReply({
+        id: id("comment") as CatalogCommentId,
+        rootCommentId: root.id,
+        authorId: b as PublicUserId,
+        text: "Studio reply",
+        moderation: "visible",
+        createdAt: new Date(),
+      });
+      const reply = await discussion.insertReply({
+        id: id("comment") as CatalogCommentId,
+        rootCommentId: root.id,
+        authorId: a as PublicUserId,
+        text: "Studio reply to reply",
+        moderation: "visible",
+        createdAt: new Date(),
+        replyToReplyId: first.id,
+      });
+      expect(root.author.studioName).toBe("问石斋");
+      expect(reply.replyTo?.studioName).toBe("听雨阁");
+      expect((await discussion.findComment(root.id))?.author.studioName).toBe(
+        "问石斋",
+      );
+      expect((await discussion.findReply(reply.id))?.replyTo?.studioName).toBe(
+        "听雨阁",
+      );
+      const page = await discussion.readVisibleComments({
+        catalogId,
+        page: 1,
+        pageSize: 20,
+        embeddedReplyLimit: 10,
+        hotLimit: 3,
+        pinned: [],
+      });
+      expect(page.hot[0]?.author.studioName).toBe("问石斋");
+      expect(
+        page.hot[0]?.replies.find((item) => item.id === reply.id)?.replyTo
+          ?.studioName,
+      ).toBe("听雨阁");
+      const latest = await discussion.readVisibleComments({
+        catalogId,
+        page: 1,
+        pageSize: 20,
+        embeddedReplyLimit: 10,
+        hotLimit: 0,
+        pinned: [],
+      });
+      expect(latest.items[0]?.author.studioName).toBe("问石斋");
+      expect(
+        (
+          await discussion.readVisibleReplies({
+            rootCommentId: root.id,
+            page: 1,
+            pageSize: 20,
+          })
+        ).items.find((item) => item.id === reply.id)?.author.studioName,
+      ).toBe("问石斋");
+    });
     it("counts visible roots and all replies independently of pagination without private or deleted bodies", async () => {
       await pool.query(
         "UPDATE community.publication_setting SET policy='DIRECT_PUBLICATION' WHERE id='publication'",

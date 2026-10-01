@@ -16,7 +16,7 @@ const commentAuthorJoin = `
  */
 export const selectHotCommentsSql = `
   SELECT c.id, c.catalog_id, c.text, c.created_at, c.moderation,
-         u.id AS author_id, u.display_name AS author_display_name
+         u.id AS author_id, u.display_name AS author_display_name, u.studio_name AS author_studio_name
   FROM community.catalog_comments c
   ${commentAuthorJoin}
   JOIN community.catalog_comment_replies r
@@ -38,7 +38,7 @@ export const countVisibleCommentsSql = `
 
 export const listVisibleCommentsSql = `
   SELECT c.id, c.catalog_id, c.text, c.created_at, c.moderation,
-         u.id AS author_id, u.display_name AS author_display_name
+         u.id AS author_id, u.display_name AS author_display_name, u.studio_name AS author_studio_name
   FROM community.catalog_comments c
   ${commentAuthorJoin}
   WHERE c.catalog_id = $1::text AND c.moderation = 'visible'
@@ -58,13 +58,13 @@ export const countVisibleRepliesByRootSql = `
 /** The bounded first page of visible replies for each root on the page. */
 export const listEmbeddedRepliesSql = `
   SELECT id, root_comment_id, text, created_at, moderation,
-         author_id, author_display_name,
-         reply_to_author_id, reply_to_display_name
+         author_id, author_display_name, author_studio_name,
+         reply_to_author_id, reply_to_display_name, reply_to_studio_name
   FROM (
     SELECT r.id, r.root_comment_id, r.text, r.created_at, r.moderation,
-           u.id AS author_id, u.display_name AS author_display_name,
+           u.id AS author_id, u.display_name AS author_display_name, u.studio_name AS author_studio_name,
            ru.id AS reply_to_author_id,
-           ru.display_name AS reply_to_display_name,
+           ru.display_name AS reply_to_display_name, ru.studio_name AS reply_to_studio_name,
            ROW_NUMBER() OVER (
              PARTITION BY r.root_comment_id
              ORDER BY r.created_at ASC, r.id ASC
@@ -88,8 +88,8 @@ export const countVisibleRepliesSql = `
 
 export const listVisibleRepliesSql = `
   SELECT r.id, r.root_comment_id, r.text, r.created_at, r.moderation,
-         u.id AS author_id, u.display_name AS author_display_name,
-         ru.id AS reply_to_author_id, ru.display_name AS reply_to_display_name
+         u.id AS author_id, u.display_name AS author_display_name, u.studio_name AS author_studio_name,
+         ru.id AS reply_to_author_id, ru.display_name AS reply_to_display_name, ru.studio_name AS reply_to_studio_name
   FROM community.catalog_comment_replies r
   JOIN community.public_users u ON u.id = r.author_id
   LEFT JOIN community.catalog_comment_replies t
@@ -102,7 +102,7 @@ export const listVisibleRepliesSql = `
 
 export const findCommentSql = `
   SELECT c.id, c.catalog_id, c.text, c.created_at, c.moderation,
-         u.id AS author_id, u.display_name AS author_display_name
+         u.id AS author_id, u.display_name AS author_display_name, u.studio_name AS author_studio_name
   FROM community.catalog_comments c
   ${commentAuthorJoin}
   WHERE c.id = $1::text
@@ -110,8 +110,8 @@ export const findCommentSql = `
 
 export const findReplySql = `
   SELECT r.id, r.root_comment_id, r.text, r.created_at, r.moderation,
-         u.id AS author_id, u.display_name AS author_display_name,
-         ru.id AS reply_to_author_id, ru.display_name AS reply_to_display_name
+         u.id AS author_id, u.display_name AS author_display_name, u.studio_name AS author_studio_name,
+         ru.id AS reply_to_author_id, ru.display_name AS reply_to_display_name, ru.studio_name AS reply_to_studio_name
   FROM community.catalog_comment_replies r
   JOIN community.public_users u ON u.id = r.author_id
   LEFT JOIN community.catalog_comment_replies t ON t.id = r.reply_to_reply_id
@@ -127,7 +127,7 @@ export const insertCommentSql = `
     RETURNING id, catalog_id, author_id, text, moderation, created_at
   )
   SELECT c.id, c.catalog_id, c.text, c.created_at, c.moderation,
-         u.id AS author_id, u.display_name AS author_display_name
+         u.id AS author_id, u.display_name AS author_display_name, u.studio_name AS author_studio_name
   FROM inserted c
   ${commentAuthorJoin}
 `;
@@ -143,8 +143,8 @@ export const insertReplySql = `
               reply_to_reply_id
   )
   SELECT r.id, r.root_comment_id, r.text, r.created_at, r.moderation,
-         u.id AS author_id, u.display_name AS author_display_name,
-         ru.id AS reply_to_author_id, ru.display_name AS reply_to_display_name
+         u.id AS author_id, u.display_name AS author_display_name, u.studio_name AS author_studio_name,
+         ru.id AS reply_to_author_id, ru.display_name AS reply_to_display_name, ru.studio_name AS reply_to_studio_name
   FROM inserted r
   JOIN community.public_users u ON u.id = r.author_id
   LEFT JOIN community.catalog_comment_replies t ON t.id = r.reply_to_reply_id

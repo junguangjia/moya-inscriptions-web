@@ -102,7 +102,10 @@ const Harness = () => {
   const [open, setOpen] = useState(true);
   return (
     <>
-      <output data-shared-avatar={author.avatarSrc ?? ""} />
+      <output
+        data-shared-avatar={author.avatarSrc ?? ""}
+        data-viewer-studio={author.viewer?.studioName ?? ""}
+      />
       {author.viewer?.id === owner.id && open && (
         <AvatarEditor
           profile={profile}
@@ -486,4 +489,16 @@ it("retries a definitive upload rejection with the retained crop and request IDs
   await click("重试保存");
   expect(posts("/media")[1]!.init.headers).toEqual(first);
   expect(node.textContent).toContain("头像已更换");
+});
+
+it("refreshes viewer identity when only the studio name changes", async () => {
+  me = async () => reply({ ...owner, studioName: "听雨斋" });
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  expect(
+    node
+      .querySelector("[data-viewer-studio]")
+      ?.getAttribute("data-viewer-studio"),
+  ).toBe("听雨斋");
 });

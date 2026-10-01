@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "../authors/user-identity";
 
 import { useAuthReturn } from "../auth/auth-return";
 
@@ -116,10 +117,12 @@ const AuthorName = ({ user }: { user: CommentUserPresentation }) => {
       type="button"
       onClick={(e) => actions.open?.(user.id, e.currentTarget)}
     >
-      {user.name}
+      <UserIdentity name={user.name} studioName={user.studioName} />
     </button>
   ) : (
-    <p className={styles.userName}>{user.name}</p>
+    <p className={styles.userName}>
+      <UserIdentity name={user.name} studioName={user.studioName} />
+    </p>
   );
 };
 const BodyDelete = ({
@@ -213,7 +216,13 @@ const CommentContent = ({
   >
     <p className={styles.commentText}>
       {replyToUser === undefined ? null : (
-        <span className={styles.replyTo}>回复 {replyToUser.name}：</span>
+        <span className={styles.replyTo}>
+          回复{" "}
+          <UserIdentity
+            name={replyToUser.name}
+            studioName={replyToUser.studioName}
+          />
+        </span>
       )}
       {text}
     </p>
@@ -687,7 +696,13 @@ export const CommentSection = ({
     >
       {replyTarget === null ? null : (
         <div className={styles.replyMode} data-comment-reply-mode="">
-          <span>回复 {replyTarget.user.name}</span>
+          <span>
+            回复{" "}
+            <UserIdentity
+              name={replyTarget.user.name}
+              studioName={replyTarget.user.studioName}
+            />
+          </span>
           <button onClick={() => changeReplyTarget(null)} type="button">
             取消
           </button>

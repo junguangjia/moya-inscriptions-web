@@ -256,10 +256,11 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           StoredUser & {
             display_name: string;
             studio_name: string;
+            studio_name_suffix: string;
             status: StoredUser["status"];
           }
         >(
-          "SELECT id, handle, display_name, studio_name, status FROM community.public_users WHERE id=$1",
+          "SELECT id, handle, display_name, studio_name, studio_name_suffix, status FROM community.public_users WHERE id=$1",
           [id],
         );
         const row = rows[0];
@@ -270,6 +271,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               handle: row.handle,
               displayName: row.display_name,
               studioName: row.studio_name,
+              studioNameSuffix: row.studio_name_suffix,
               status: row.status,
             };
       },
@@ -291,8 +293,14 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
       insertUser: async (user) => {
         const outcome = await catchKind(async () => {
           await query(
-            "INSERT INTO community.public_users(id, handle, display_name, studio_name) VALUES($1,$2,$3,$4)",
-            [user.id, user.handle, user.displayName, user.studioName ?? ""],
+            "INSERT INTO community.public_users(id, handle, display_name, studio_name, studio_name_suffix) VALUES($1,$2,$3,$4,$5)",
+            [
+              user.id,
+              user.handle,
+              user.displayName,
+              user.studioName ?? "",
+              user.studioNameSuffix ?? "",
+            ],
           );
           return "ok" as const;
         });
@@ -370,9 +378,10 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           handle: string;
           display_name: string;
           studio_name: string;
+          studio_name_suffix: string;
           status: StoredUser["status"];
         }>(
-          "SELECT id, handle, display_name, studio_name, status FROM community.public_users WHERE id=$1 FOR UPDATE",
+          "SELECT id, handle, display_name, studio_name, studio_name_suffix, status FROM community.public_users WHERE id=$1 FOR UPDATE",
           [userId],
         );
         const row = rows[0];
@@ -383,6 +392,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               handle: row.handle,
               displayName: row.display_name,
               studioName: row.studio_name,
+              studioNameSuffix: row.studio_name_suffix,
               status: row.status,
             };
       },
@@ -716,9 +726,10 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           handle: string;
           display_name: string;
           studio_name: string;
+          studio_name_suffix: string;
           status: StoredUser["status"];
         }>(
-          `SELECT u.id, u.handle, u.display_name, u.studio_name, u.status
+          `SELECT u.id, u.handle, u.display_name, u.studio_name, u.studio_name_suffix, u.status
            FROM community.sessions s
            JOIN community.public_users u ON u.id = s.user_id
            WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > $2`,
@@ -732,6 +743,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               handle: row.handle,
               displayName: row.display_name,
               studioName: row.studio_name,
+              studioNameSuffix: row.studio_name_suffix,
               status: row.status,
             };
       },

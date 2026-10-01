@@ -208,6 +208,16 @@
   line-height: 1.5;
 }
 
+button.userName {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
 .commentText {
   margin-top: var(--yoyi-space-2);
   overflow-wrap: anywhere;
@@ -326,6 +336,8 @@
 }
 
 .replyTo {
+  display: block;
+  margin-bottom: var(--yoyi-space-1);
   color: var(--yoyi-color-text-secondary);
 }
 
@@ -435,6 +447,7 @@
 }
 
 .sortControl select:focus-visible,
+button.userName:focus-visible,
 .composer textarea:focus-visible,
 .composer button:focus-visible,
 .textAction:focus-visible,
@@ -528,12 +541,4 @@
   .skeleton span {
     animation: none;
   }
-}
-
-[data-discussion-comments-host] button.userName {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
 }

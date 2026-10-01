@@ -75,6 +75,7 @@ interface ConversationRow extends QueryResultRow {
   // other participant
   other_id: string;
   other_name: string;
+  other_studio_name: string;
   other_status: "active" | "suspended";
   can_interact: boolean;
   unread_count: string | number;
@@ -101,7 +102,7 @@ interface MessageRow extends QueryResultRow {
 const conversationSelect = (viewerParam: string) => `
   SELECT c.id, c.user_low, c.user_high, c.initiator_id, c.state, c.next_sequence, c.last_message_at, c.created_at,
     p.hidden_at, p.hidden_before_sequence, p.muted, p.read_sequence,
-    o.id AS other_id, o.display_name AS other_name, o.status AS other_status,
+    o.id AS other_id, o.display_name AS other_name, o.studio_name AS other_studio_name, o.status AS other_status,
     community.accounts_can_interact(${viewerParam}, o.id) AS can_interact,
     (SELECT count(*) FROM community.dm_messages m
       WHERE m.conversation_id = c.id AND m.sender_id <> ${viewerParam}
@@ -213,6 +214,7 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
       participant: {
         id: row.other_id,
         displayName: row.other_name,
+        studioName: row.other_studio_name,
         available: otherAvailable,
       },
       state: row.state,

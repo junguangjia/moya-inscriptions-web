@@ -1,3 +1,8 @@
+import {
+  studioNameDisplaySchema,
+  studioNameSuffixSchema,
+  refineStudioNameWrite,
+} from "./auth-schemas.ts";
 import { z } from "zod";
 import {
   mentionReferencesSchema,
@@ -473,6 +478,7 @@ export const publicUserProfileSchema = z.strictObject({
   id: publicUserIdSchema,
   handle: publicUserHandleSchema,
   displayName: publicUserDisplayNameSchema,
+  studioName: studioNameDisplaySchema.optional(),
 });
 
 /**
@@ -502,6 +508,7 @@ export const catalogCommentIdSchema =
 export const commentAuthorSchema = z.strictObject({
   id: publicUserIdSchema,
   displayName: publicUserDisplayNameSchema,
+  studioName: studioNameDisplaySchema.optional(),
 });
 
 /**
@@ -708,14 +715,14 @@ export const authorMediaSchema = z.strictObject({
   width: z.number().int().positive().max(8192),
   height: z.number().int().positive().max(8192),
 });
-import { studioNameSchema } from "./auth-schemas.ts";
 
 export const authorProfileSchema = z.strictObject({
   id: userId,
   handle: z.string(),
   displayName: authorText(40),
   bio: authorText(500),
-  studioName: studioNameSchema.optional(),
+  studioName: studioNameDisplaySchema.optional(),
+  studioNameSuffix: studioNameSuffixSchema.optional(),
   avatar: authorMediaSchema.nullable(),
   background: authorMediaSchema.nullable().optional(),
   isOwner: z.boolean(),
@@ -735,6 +742,7 @@ export const workSchema = z
     id: workId,
     authorId: userId,
     authorName: z.string(),
+    authorStudioName: studioNameDisplaySchema.optional(),
     /** May be empty: an untitled work keeps an empty title in storage. */
     title: z.string(),
     text: z.string(),
@@ -804,12 +812,15 @@ export const workSchema = z
         message: "the cover names one of the work's media",
       });
   });
-export const profileUpdateSchema = z.strictObject({
-  requestId,
-  displayName: authorText(40).refine((s) => s.length > 0),
-  bio: authorText(500),
-  studioName: studioNameSchema.optional(),
-});
+export const profileUpdateSchema = z
+  .strictObject({
+    requestId,
+    displayName: authorText(40).refine((s) => s.length > 0),
+    bio: authorText(500),
+    studioName: studioNameDisplaySchema.optional(),
+    studioNameSuffix: studioNameSuffixSchema.optional(),
+  })
+  .superRefine(refineStudioNameWrite);
 export const privacyUpdateSchema = z.strictObject({
   requestId,
   privacy: authorPrivacySchema,
@@ -872,6 +883,7 @@ export const authorPersonSchema = z.strictObject({
   id: userId,
   handle: z.string(),
   displayName: z.string(),
+  studioName: studioNameDisplaySchema.optional(),
   avatar: authorMediaSchema.nullable(),
 });
 export const authorPeoplePageSchema = pageOf(authorPersonSchema);
@@ -1071,6 +1083,9 @@ export {
   authPasswordResetRequestSchema,
   authPasswordResetResultSchema,
   studioNameSchema,
+  studioNameDisplaySchema,
+  studioNameSuffixSchema,
+  studioNameInputSchema,
   authUnlinkRequestSchema,
   authVerifyRequestSchema,
 } from "./auth-schemas.ts";
@@ -1341,6 +1356,7 @@ export type DmMessageId = z.infer<typeof dmMessageIdSchema>;
 export const dmParticipantSchema = z.strictObject({
   id: userId,
   displayName: z.string(),
+  studioName: studioNameDisplaySchema.optional(),
   /** Whether the other account can currently be messaged (active, not blocked either way). */
   available: z.boolean(),
 });

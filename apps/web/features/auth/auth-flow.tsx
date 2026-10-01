@@ -9,9 +9,9 @@ import {
   hasCompletedAuthSession,
   safeReturnPath,
   validAuthPassword,
-  normalizedStudioName,
 } from "./auth-api";
 import type { AuthCapabilitiesView, AuthChallengeView } from "./auth-api";
+import { StudioNameField, studioNameInput } from "../authors/studio-name-field";
 import { RegistrationAvatar } from "./registration-avatar";
 
 import styles from "./auth-flow.module.css";
@@ -42,7 +42,7 @@ const reasons: Record<string, string> = {
   AUTH_INVALID_IDENTIFIER: "请检查邮箱或手机号格式。",
   AUTH_INVALID_DISPLAY_NAME: "昵称需要 1 到 40 个字符。",
   AUTH_INVALID_PASSWORD: passwordRuleHint,
-  AUTH_INVALID_STUDIO_NAME: "斋号最多 6 个字。",
+  AUTH_INVALID_STUDIO_NAME: "斋号名称最多 5 字，称谓需要 1 到 2 字。",
   AUTH_INVALID_CREDENTIALS: "账号或密码不正确，请重试或找回密码。",
   AUTH_AGREEMENT_REQUIRED: "请先阅读并勾选注册说明。",
   AUTH_RATE_LIMITED: "操作过于频繁，请稍后重试。",
@@ -193,6 +193,7 @@ export const AuthFlow = ({
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [studioName, setStudioName] = useState("");
+  const [studioSuffix, setStudioSuffix] = useState("斋");
   const [createdAccountId, setCreatedAccountId] = useState("");
   const [agreed, setAgreed] = useState(false);
   const [agreementOpen, setAgreementOpen] = useState(false);
@@ -697,8 +698,8 @@ export const AuthFlow = ({
       });
       return;
     }
-    const studio = normalizedStudioName(studioName);
-    if (studio === null) {
+    const studio = studioNameInput(studioName, studioSuffix);
+    if (!studio.success) {
       setFeedback({
         field: "studioName",
         message: reasons.AUTH_INVALID_STUDIO_NAME!,
@@ -717,7 +718,7 @@ export const AuthFlow = ({
         handoffToken: handoff,
         displayName: nickname,
         password,
-        ...(studio ? { studioName: studio } : {}),
+        ...(studio.data.studioName ? studio.data : {}),
         agreement: true,
       },
       (result) => {
@@ -1166,20 +1167,17 @@ export const AuthFlow = ({
                   {fieldFeedback("displayName")}
                 </div>
                 <div className={styles.field}>
-                  <label htmlFor={studioId}>
-                    斋号 <span className={styles.optional}>选填，最多6字</span>
-                  </label>
-                  <Input
-                    id={studioId}
-                    ref={studioRef}
-                    value={studioName}
+                  <StudioNameField
+                    inputId={studioId}
+                    inputRef={studioRef}
+                    name={studioName}
+                    suffix={studioSuffix}
                     disabled={pending !== null || !handoff}
-                    placeholder="斋号"
                     invalid={feedbackFor("studioName") !== null}
-                    aria-describedby={descriptionFor("studioName")}
-                    className={styles.input}
-                    onChange={(event) => {
-                      setStudioName(event.target.value);
+                    describedBy={descriptionFor("studioName")}
+                    onChange={(name, suffix) => {
+                      setStudioName(name);
+                      setStudioSuffix(suffix);
                       if (feedbackFor("studioName")) setFeedback(null);
                     }}
                   />
