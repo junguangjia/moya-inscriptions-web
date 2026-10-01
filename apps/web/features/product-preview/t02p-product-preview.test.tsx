@@ -144,8 +144,10 @@ let container: HTMLDivElement;
 const render = async (topics = states.home.topics) =>
   act(async () =>
     root.render(
+      // The author composition, which mounts what live Threads read.
       <T02pProductPreview
         initialPlatform="phone"
+        liveThreads
         states={{ ...states, home: { ...states.home, topics } }}
       />,
     ),
