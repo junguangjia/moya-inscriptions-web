@@ -1,6 +1,11 @@
 export type AuthChannelName = "email" | "phone";
 export type AuthPurposeName =
-  "sign_in" | "register" | "link" | "replace" | "reauthenticate";
+  | "sign_in"
+  | "register"
+  | "link"
+  | "replace"
+  | "reauthenticate"
+  | "password_reset";
 export type VerificationMode = "local_capture" | "simulated" | "provider";
 export type AuthEnvironmentName = "development" | "production";
 
@@ -8,6 +13,7 @@ export interface StoredUser {
   readonly id: string;
   readonly handle: string;
   readonly displayName: string;
+  readonly studioName?: string;
   readonly status: "active" | "suspended";
 }
 
@@ -38,6 +44,8 @@ export interface StoredChallenge {
   readonly sessionHash: string | null;
   readonly continuationHash: string;
   readonly expectedVersion: number | null;
+  readonly identityId?: string | null;
+  readonly credentialVersion?: number | null;
   readonly reauthHash: string | null;
   readonly providerCorrelation: string | null;
   readonly expiresAt: string;
@@ -54,7 +62,7 @@ export interface StoredChallenge {
 export interface StoredHandoff {
   readonly id: string;
   readonly tokenHash: string;
-  readonly purpose: "register_confirm" | "reauth";
+  readonly purpose: "register_confirm" | "reauth" | "password_reset";
   readonly channel: AuthChannelName;
   readonly targetDigest: string;
   readonly ciphertext: string;
@@ -63,6 +71,8 @@ export interface StoredHandoff {
   readonly userId: string | null;
   readonly sessionHash: string | null;
   readonly expectedVersion: number | null;
+  readonly identityId?: string | null;
+  readonly credentialVersion?: number | null;
   readonly expiresAt: string;
   readonly consumedAt: string | null;
 }
@@ -76,6 +86,22 @@ export interface StoredReceipt {
   /** First session in this receipt lineage. Lost-response reissue does not change it. */
   readonly originSessionId: string;
   /** Set by explicit logout. A closed receipt must not mint another session. */
+  readonly closedAt: string | null;
+  readonly payloadHash?: string | null;
+  readonly credentialVersion?: number | null;
+}
+
+export interface StoredPasswordCredential {
+  readonly userId: string;
+  readonly verifier: string;
+  readonly version: number;
+  readonly updatedAt: string;
+}
+export interface StoredPasswordResetReceipt {
+  readonly keyHash: string;
+  readonly userId: string;
+  readonly payloadHash: string;
+  readonly credentialVersion: number;
   readonly closedAt: string | null;
 }
 
@@ -161,6 +187,7 @@ export interface AuthUnitOfWork {
     atIso: string,
   ): Promise<void>;
   invalidateUserProofs(userId: string, atIso: string): Promise<void>;
+  invalidatePasswordResetProofs(userId: string, atIso: string): Promise<void>;
   insertAudit(row: {
     readonly id: string;
     readonly userId: string | null;
@@ -173,6 +200,21 @@ export interface AuthUnitOfWork {
     channel: AuthChannelName,
   ): Promise<boolean>;
   countUsers(): Promise<number>;
+  findPasswordCredential(
+    userId: string,
+  ): Promise<StoredPasswordCredential | null>;
+  savePasswordCredential(
+    row: StoredPasswordCredential,
+    expectedVersion: number | null,
+  ): Promise<"ok" | "stale">;
+  findPasswordResetReceipt(
+    keyHash: string,
+  ): Promise<StoredPasswordResetReceipt | null>;
+  insertPasswordResetReceipt(
+    row: StoredPasswordResetReceipt,
+  ): Promise<"ok" | "conflict">;
+  revokeAllSessions(userId: string, atIso: string): Promise<void>;
+  closeUserReceipts(userId: string, atIso: string): Promise<void>;
 }
 
 export interface CommunityAuthPort {

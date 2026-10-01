@@ -1,0 +1,28 @@
+/* Payload owns its page theme; only these logo variables are adapted. */
+.mark {
+  --yoyi-color-brand-recess-floor: var(--admin-brand-light-floor);
+  --yoyi-color-brand-recess-shadow: var(--admin-brand-light-shadow);
+  --yoyi-color-brand-recess-highlight: var(--admin-brand-light-highlight);
+}
+
+.logo {
+  width: 132px;
+}
+.icon {
+  width: 32px;
+  --yoyi-brand-depth: 0.5px;
+}
+
+[data-theme="dark"] .mark {
+  --yoyi-color-brand-recess-floor: var(--admin-brand-dark-floor);
+  --yoyi-color-brand-recess-shadow: var(--admin-brand-dark-shadow);
+  --yoyi-color-brand-recess-highlight: var(--admin-brand-dark-highlight);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .mark {
+    --yoyi-color-brand-recess-floor: var(--admin-brand-dark-floor);
+    --yoyi-color-brand-recess-shadow: var(--admin-brand-dark-shadow);
+    --yoyi-color-brand-recess-highlight: var(--admin-brand-dark-highlight);
+  }
+}

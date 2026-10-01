@@ -1,4 +1,5 @@
 "use client";
+import { useAuthReturn } from "../auth/auth-return";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "@moya/ui";
@@ -97,6 +98,61 @@ function AccountMessages({
       source?: PrimaryDestination;
     } | null>(null),
     frame = useRef<number | null>(null);
+  const authReturn = useAuthReturn();
+  const restoredAuthView = useRef(false);
+  const authSnapshot = useRef({
+    owner: author.viewer?.id ?? null,
+    open,
+    view,
+    commentTab,
+    positions: new Map<string, number>(),
+  });
+  authSnapshot.current = {
+    owner: author.viewer?.id ?? null,
+    open,
+    view,
+    commentTab,
+    positions: new Map(scroll.current),
+  };
+  useEffect(() => {
+    const destination =
+      opener.current?.closest<HTMLElement>("[data-primary-destination]")
+        ?.dataset.primaryDestination ?? "home";
+    return authReturn?.register(
+      `messages-live:${destination}`,
+      () => authSnapshot.current,
+    );
+  }, [authReturn]);
+  useEffect(() => {
+    if (restoredAuthView.current || author.checking || author.sessionError)
+      return;
+    const destination =
+      opener.current?.closest<HTMLElement>("[data-primary-destination]")
+        ?.dataset.primaryDestination ?? "home";
+    const saved = authReturn?.read(`messages-live:${destination}`) as
+      typeof authSnapshot.current | undefined;
+    restoredAuthView.current = true;
+    if (!saved || saved.owner !== (author.viewer?.id ?? null)) return;
+    scroll.current = new Map(saved.positions);
+    setView(saved.view);
+    setCommentTab(saved.commentTab);
+    setOpen(saved.open);
+    inbox.setFilter(
+      saved.view === "reactions"
+        ? "likes"
+        : saved.view === "comments"
+          ? saved.commentTab === "mentions"
+            ? "mentions"
+            : "comments"
+          : "all",
+    );
+  }, [
+    authReturn,
+    author.checking,
+    author.sessionError,
+    author.viewer?.id,
+    inbox.setFilter,
+  ]);
   const confirmed = !author.checking && !author.sessionError && !!author.viewer;
   const incoming =
     view === "reactions" || (view === "comments" && commentTab !== "sent");

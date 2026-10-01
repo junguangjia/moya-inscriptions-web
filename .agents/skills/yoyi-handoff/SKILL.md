@@ -89,3 +89,13 @@ Restrictions, approvals and delivery stop: ...
   must not assume its startup prompt refreshed edited instructions.
 - The checkpoint carries local facts only. Task-level decisions belong in the
   Issue; verification evidence in the PR and the private output directory.
+
+## Task preparation and context shortcuts
+
+Use the task-resource prepare/inspect and snapshot/verify commands documented in
+`docs/development/task-workflow.md`. Pass the inspected private resource
+manifest to `verify-task.mjs --resources`; use `--reuse-summary` only for its
+individually validated deterministic checks. An unchanged context snapshot is
+advisory within an already-read session. New sessions still read applicable
+authority, verify the writer checkpoint and keep the established worktree and
+Draft/Owner boundaries.

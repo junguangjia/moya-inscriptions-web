@@ -1,3 +1,17 @@
+export type {
+  AuthPasswordLoginRequest,
+  AuthPasswordResetRequest,
+  AuthPasswordResetResult,
+  AuthRegistrationRequest,
+  AuthChallengeRequest,
+} from "@moya/contracts";
+export type { AuthChallengeAccepted as AuthChallengeView } from "@moya/contracts";
+import {
+  authPasswordSchema,
+  publicUserProfileSchema,
+  studioNameSchema,
+} from "@moya/contracts/schemas";
+
 export interface AuthCapabilitiesView {
   readonly profile: "full-local" | "email-first" | "disabled";
   readonly email: {
@@ -71,4 +85,28 @@ export const safeReturnPath = (value: string | null | undefined): string => {
   } catch {
     return "/";
   }
+};
+
+/** A completed auth result must contain the existing public identity metadata. */
+export const hasCompletedAuthSession = (body: unknown): boolean => {
+  if (typeof body !== "object" || body === null || Array.isArray(body))
+    return false;
+  const session = (body as Record<string, unknown>).session;
+  if (typeof session !== "object" || session === null || Array.isArray(session))
+    return false;
+  const value = session as Record<string, unknown>;
+  return (
+    typeof value.expiresAt === "string" &&
+    Number.isFinite(Date.parse(value.expiresAt)) &&
+    publicUserProfileSchema.safeParse(value.profile).success
+  );
+};
+
+/** Client-safe validation delegates to the shared public contracts boundary. */
+export const validAuthPassword = (value: string): boolean =>
+  authPasswordSchema.safeParse(value).success;
+
+export const normalizedStudioName = (value: string): string | null => {
+  const parsed = studioNameSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 };

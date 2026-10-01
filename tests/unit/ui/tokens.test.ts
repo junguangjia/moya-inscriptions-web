@@ -101,6 +101,29 @@ describe("design tokens", () => {
     }
   });
 
+  it("keeps control accents separate from achromatic branding", async () => {
+    for (const theme of [lightTheme, darkTheme]) {
+      expect(theme["brand-wordmark-ink"]).toBe("#000000");
+      expect(theme["brand-recess-floor"]).toMatch(/^rgba\(0, 0, 0,/);
+      expect(theme["brand-recess-highlight"]).toMatch(/^rgba\(255, 255, 255,/);
+    }
+    expect(
+      contrast(
+        darkTheme["brand-wordmark-ink"],
+        darkTheme["brand-wordmark-surface"],
+      ),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(lightTheme["system-orange"]).toBe(lightTheme["seal-red"]);
+    expect(darkTheme["system-orange"]).toBe(darkTheme["seal-red"]);
+    const css = await readFile(
+      new URL("../../../packages/design-tokens/src/theme.css", import.meta.url),
+      "utf8",
+    );
+    expect(css).toContain(
+      "--yoyi-color-system-orange: var(--yoyi-color-seal-red)",
+    );
+  });
+
   it("contains explicit and system theme selectors", async () => {
     const css = await readFile(
       new URL("../../../packages/design-tokens/src/theme.css", import.meta.url),
