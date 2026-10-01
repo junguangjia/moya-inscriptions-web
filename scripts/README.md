@@ -36,10 +36,12 @@ runtime依赖。
 
 `turbo-cache-prune.mjs` is a dependency-free, dry-run-by-default maintenance
 command for the shared local Turborepo cache (`<main checkout>/.turbo/cache`,
-used by every linked worktree). `plan` (default, `pnpm cache:prune`) writes a
-reviewable JSON plan that keeps every archive an existing worktree currently
-hits, every worktree HEAD's archives and recent history inside a size budget;
-`apply --from-plan` deletes exactly that plan after re-checking file identity
-and is idempotent. Path guards limit it to a real `.turbo/cache` directory and
-the three recognized files per hash. Policy and limits:
-`docs/development/turbo-cache-retention.md`. It never runs automatically.
+used by every linked worktree). `plan` (default, `pnpm cache:prune`) prints
+totals; with `--plan-file` it writes a reviewable JSON plan that keeps every
+archive an existing worktree currently hits (ordinary and verification runs),
+every worktree HEAD's archives and recent history inside a size budget.
+`apply --from-plan` deletes exactly that plan after re-checking file identity,
+refuses incomplete or stale plans without an explicit flag, and is idempotent.
+Path guards limit it to a real `.turbo/cache` directory and the three recognized
+files per hash. Policy and limits: `docs/development/turbo-cache-retention.md`.
+It never runs automatically.

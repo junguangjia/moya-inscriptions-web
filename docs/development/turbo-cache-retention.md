@@ -40,15 +40,33 @@ pnpm cache:prune -- apply --from-plan /path/private/plan.json [--max-gib 15]
 ```
 
 `plan` keeps an archive group (`<hash>.tar.zst`, `-manifest.json`, `-meta.json`)
-when any existing registered worktree currently produces that task hash (a
-read-only `turbo run build lint typecheck test --dry-run=json` in each worktree
-that has `node_modules`), when its meta records a worktree's current HEAD, or
-when it is newer than `--keep-days` (default 3). The newest remaining history is
-then retained until `--budget-gib` (default 10) is full; legacy archives that
-still contain compiler or development cache paths are dropped first. `apply`
-deletes exactly the reviewed plan, re-checking each file's inode, device, size
-and mtime, skipping anything changed, and is idempotent; `--max-gib` limits one
-batch. The plan and result files hold local paths and belong in the task's
+when any existing registered worktree that has `node_modules` currently produces
+that task hash, when its meta records a worktree's current HEAD, or when it is
+newer than `--keep-days` (default 3). Current task hashes come from two
+read-only `turbo run build lint typecheck test --dry-run=json` runs per
+worktree: one plain, and one with `MOYA_VERIFICATION_TOOLCHAIN` set as
+`scripts/verify.mjs` sets it, because that variable is a Turbo `globalEnv` and
+changes every hash. The value uses the Node that runs the command, so run it
+with the same Node as verification (`mise exec -- pnpm cache:prune`).
+
+Remaining groups are then kept newest first while they fit `--budget-gib`
+(default 10), non-legacy before legacy, where legacy means the archive still
+holds compiler or development cache paths. A group that does not fit is skipped,
+so a smaller, older group can still fill the remainder. Metadata left without
+its archive is deleted once it is older than the retention window.
+
+The plan file records which worktrees were covered, which had no Turbo, and
+which dry runs failed. A failed dry run, or `--skip-dry-run`, marks the plan
+incomplete. Without `--plan-file`, `plan` only prints totals.
+
+`apply` deletes exactly the reviewed plan. It refuses an incomplete plan without
+`--allow-incomplete` and a plan older than 24 hours without `--allow-stale`. It
+validates every planned name before deleting anything, skips a group whose
+commit has become a worktree HEAD since planning, re-checks each file's inode,
+device, size and mtime, skips anything changed, records unlink failures and
+continues, and is idempotent. `--max-gib` stops after the group that crosses the
+limit, so one batch can exceed it by one group. It exits non-zero if any file
+failed. The plan and result files hold local paths and belong in the task's
 private artifacts directory, not in Git.
 
 The default budget is an engineering choice for this machine. If the kept set is
