@@ -13,6 +13,8 @@ import { authorClient } from "./author-data";
 import { useAuthors } from "./author-context";
 import { requestIdentity } from "../shell/request-identity";
 import { useProductShell } from "../product-shell/product-shell";
+import { ArticleAgentConnections } from "../editorial-content/article-authoring/article-delegation";
+import { useArticleAvailability } from "../editorial-content/article-authoring/article-availability";
 import { AccountSecurity } from "../auth/account-security";
 import type { AccountSecurityHandle } from "../auth/account-security";
 import { useSettingsSwipe } from "../settings/use-settings-swipe";
@@ -178,6 +180,7 @@ export const ProfileSettings = ({
   onSaved: () => void;
   onEdit?: (() => void) | undefined;
 }) => {
+  const articleAuthoring = useArticleAvailability();
   const author = useAuthors(),
     shell = useProductShell();
   const ownProfile = !!profile?.isOwner && profile.id === author.viewer?.id;
@@ -774,17 +777,22 @@ export const ProfileSettings = ({
               ))}
             {(page === "security" || page === "factor") &&
               (ownProfile ? (
-                <AccountSecurity
-                  expectedViewerId={owner!}
-                  guardSignOut={() =>
-                    !dirty ||
-                    window.confirm("更改尚未保存，放弃这些更改并退出登录？")
-                  }
-                  onSignedOut={() => setSignedOut(true)}
-                  onBusyChange={handleSecurityBusy}
-                  onFlowChange={handleFlow}
-                  navigationRef={security}
-                />
+                <>
+                  <AccountSecurity
+                    expectedViewerId={owner!}
+                    guardSignOut={() =>
+                      !dirty ||
+                      window.confirm("更改尚未保存，放弃这些更改并退出登录？")
+                    }
+                    onSignedOut={() => setSignedOut(true)}
+                    onBusyChange={handleSecurityBusy}
+                    onFlowChange={handleFlow}
+                    navigationRef={security}
+                  />
+                  {articleAuthoring && page === "security" ? (
+                    <ArticleAgentConnections />
+                  ) : null}
+                </>
               ) : (
                 guest
               ))}

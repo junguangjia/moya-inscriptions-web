@@ -30,12 +30,14 @@ import type {
  */
 
 export interface WrapDiagnostics {
+  /** Optional public-user policy; default preserves existing Admin wrapping. */
+  readonly assertGrantCurrent?: (grantId: string) => Promise<void>;
   /** Bare codes only. Never a token, never a jti, never a grant id. */
   readonly recordFailure?: (code: string) => void;
 }
 
 export const installAccessTokenWrapper = (
-  bundle: ProviderBundle,
+  bundle: Pick<ProviderBundle, "provider" | "wrappers">,
   diagnostics: WrapDiagnostics = {},
 ): void => {
   const { provider, wrappers } = bundle;
@@ -72,6 +74,7 @@ export const installAccessTokenWrapper = (
     if (grantId === undefined) return refuse("WRAP_NO_PROVIDER_GRANT");
 
     try {
+      await diagnostics.assertGrantCurrent?.(grantId);
       const minted = await wrappers.mint({
         grantId,
         jti: issued,

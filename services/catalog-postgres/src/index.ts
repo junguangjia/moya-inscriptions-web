@@ -49,3 +49,16 @@ export {
   assertMigrationTarget,
   migrationTargetProbeSql,
 } from "./migrations/target.js";
+
+export { PostgresCompositeEditorialAdapter } from "./postgres-composite-editorial-adapter.js";
+export type { AuthoredArticleReadProjector } from "./postgres-composite-editorial-adapter.js";
+export {
+  CanonicalAuthoredArticleProjector,
+  articleCatalogMediaKey,
+} from "./authored-article-read-projector.js";
+export type { AuthoredArticleMediaResolver } from "./authored-article-read-projector.js";
+
+export {
+  PostgresAuthoredArticleCatalogMediaResolver,
+  authoredArticleCatalogPairKey,
+} from "./authored-article-media-resolver.js";

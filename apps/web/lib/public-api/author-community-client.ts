@@ -129,11 +129,15 @@ const request = async <T>(
     }
     throw new AuthorRequestError(response.status, message, reason);
   }
-  const result = schema.parse(await response.json());
+  const result = schema.parse(
+    response.status === 204 ? null : await response.json(),
+  );
   if (epoch !== accountEpoch)
     throw new AuthorRequestError(401, "账户状态已变化，请重试读取");
   return result;
 };
+/** Existing session relay and account fence, reused by Article delegation. */
+export { request as authorRequest };
 const targetPath = (t: DiscussionTarget) =>
   `${t.type}/${encodeURIComponent(t.id)}`;
 const query = (q: Record<string, string | number | undefined>) =>

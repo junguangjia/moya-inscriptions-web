@@ -337,3 +337,52 @@ export type {
   DirectMessagePort,
   DirectMessageSendInput,
 } from "./modules/community/application/ports/direct-message-port.js";
+
+// special-article-editor-v1: Development authoring application boundary.
+export { ArticleAuthoringService } from "./modules/editorial/application/services/article-authoring-service.js";
+export type { ArticleAuthoringServiceOptions } from "./modules/editorial/application/services/article-authoring-service.js";
+export type {
+  ArticleAuthoringActor,
+  ArticleAuthoringPort,
+  ArticleAuthoringPage,
+  ArticleCandidateIdentity,
+  ArticleCandidateValidation,
+  ArticleCreateCommand,
+  ArticleDraftListQuery,
+  ArticlePublishCommand,
+  ArticleReferenceIssue,
+  ArticleSaveCommand,
+  ArticleWithdrawCommand,
+  PublishedAuthoredArticle,
+  PublishedAuthoredArticleSummary,
+} from "./modules/editorial/application/ports/article-authoring-port.js";
+
+export {
+  parseArticleId,
+  parseArticleDraftCreateCommand,
+  parseArticleDraftUpdateCommand,
+  parseArticleCandidateCommand,
+  parseArticleOwnMediaListQuery,
+  parseArticleDraftListQuery,
+  parseArticleBlockEditsCommand,
+} from "./modules/editorial/transport/article-authoring-request-parsers.js";
+
+export type { ArticlePublicationOperatorPort } from "./modules/editorial/application/ports/article-publication-operator-port.js";
+export { ArticlePublicationOperatorService } from "./modules/editorial/application/services/article-publication-operator-service.js";
+export {
+  parseArticlePendingId,
+  parseArticlePendingListQuery,
+  parseArticlePendingModerationCommand,
+} from "./modules/editorial/transport/article-publication-operator-parsers.js";
+
+export type {
+  ArticleDelegationActor,
+  ArticleConsentInteraction,
+  ArticleConsentPort,
+  ArticleDelegationPort,
+} from "./modules/editorial/application/ports/article-delegation-port.js";
+export {
+  generateSessionToken,
+  hashSessionToken,
+  generateOpaqueId,
+} from "./modules/community/application/session-token.js";

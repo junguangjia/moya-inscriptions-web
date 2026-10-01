@@ -3,7 +3,7 @@ import {
   validateMentionUsers,
 } from "./notifications/source.js";
 import { normalizeMentionText } from "@moya/contracts/schemas";
-import type { MentionReference } from "@moya/contracts";
+import type { ArticleId, MentionReference } from "@moya/contracts";
 import { asCommunityOperationError } from "./availability.js";
 import { createHash, randomUUID } from "node:crypto";
 import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
@@ -124,12 +124,67 @@ export class PostgresDiscussionStore implements DiscussionPort {
     viewer: string | null,
     lock = false,
   ): Promise<void> {
+    if (target.type === "article")
+      return this.articleAllowed(db, target.id, viewer, lock);
     if (target.type !== "work") return;
     const r = await db.query(
       `SELECT w.id FROM community.works w JOIN community.public_users u ON u.id=w.author_id WHERE w.id=$1 AND ${workVisible(lock)}${lock ? " FOR SHARE OF w" : ""}`,
       [target.id, viewer],
     );
     if (r.rowCount !== 1) throw new CommunityNotFoundError();
+  }
+  /**
+   * Current authored publication and owner eligibility are checked inside the
+   * discussion transaction. Writes share-lock the mutable document row, so
+   * withdrawal/republication cannot pass admission and commit ahead of them.
+   * Existing staff Articles remain admitted only when no authored id exists.
+   */
+  private async articleAllowed(
+    db: PoolClient,
+    id: string,
+    viewer: string | null,
+    lock: boolean,
+  ): Promise<void> {
+    const authored = await db.query<{ allowed: boolean }>(
+      `SELECT (r.article_id IS NOT NULL AND a.status<>'withdrawn'
+        AND u.status='active' AND community.accounts_can_interact($2,a.owner_id)) AS allowed
+      FROM community.article_documents a
+      LEFT JOIN community.article_revisions r ON r.article_id=a.id
+        AND r.version=a.published_version AND r.owner_id=a.owner_id
+      LEFT JOIN community.public_users u ON u.id=a.owner_id
+      WHERE a.id=$1${lock ? " FOR SHARE OF a" : ""}`,
+      [id, viewer],
+    );
+    if (authored.rowCount) {
+      if (!authored.rows[0]?.allowed) throw new CommunityNotFoundError();
+      return;
+    }
+    if (
+      (
+        await db.query(
+          "SELECT article_id FROM public.article_entries WHERE article_id=$1",
+          [id],
+        )
+      ).rowCount !== 1
+    )
+      throw new CommunityNotFoundError();
+  }
+  /** Retained own records hide unavailable Article targets in one page query. */
+  private async allowedArticles(
+    db: PoolClient,
+    ids: readonly string[],
+    viewer: string | null,
+  ): Promise<Set<string>> {
+    if (!ids.length) return new Set();
+    const rows = await db.query<{ id: string }>(
+      `SELECT a.article_id AS id FROM community.published_authored_articles a
+      WHERE a.article_id=ANY($1::text[]) AND community.accounts_can_interact($2,a.owner_id)
+      UNION SELECT s.article_id FROM public.article_entries s
+      WHERE s.article_id=ANY($1::text[]) AND NOT EXISTS (
+        SELECT 1 FROM community.article_documents a WHERE a.id=s.article_id)`,
+      [[...new Set(ids)], viewer],
+    );
+    return new Set(rows.rows.map((row) => row.id));
   }
   /** The read-side `workAllowed` answer for every distinct work id in one statement. */
   private async allowedWorks(
@@ -206,6 +261,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
     const people = (
       await db.query<{ id: string }>(
         `SELECT author_id AS id FROM community.works WHERE $1='work' AND id=$2
+   UNION SELECT owner_id FROM community.article_documents WHERE $1='article' AND id=$2
    UNION SELECT author_id FROM community.catalog_comments WHERE id=$3
    UNION SELECT author_id FROM community.catalog_comment_replies WHERE id=$4`,
         [target.type, target.id, root ?? null, reply ?? null],
@@ -595,6 +651,34 @@ export class PostgresDiscussionStore implements DiscussionPort {
   ) {
     await this.run(true, async (db) => {
       await this.active(db, actor);
+      // Article availability is current admission, including a receipt replay.
+      // This identity lookup leaves existing Work/Catalog replay semantics intact.
+      const articleSubject = (
+        await db.query<{
+          target_type: ContentIdentity["type"];
+          catalog_id: string;
+          root_id: string;
+        }>(
+          `SELECT target_type,catalog_id,id AS root_id FROM community.catalog_comments WHERE id=$1
+          UNION ALL SELECT c.target_type,c.catalog_id,c.id FROM community.catalog_comment_replies r
+          JOIN community.catalog_comments c ON c.id=r.root_comment_id WHERE r.id=$1`,
+          [id],
+        )
+      ).rows[0];
+      if (articleSubject?.target_type === "article") {
+        const target: ContentIdentity = {
+          type: "article",
+          id: articleSubject.catalog_id as ArticleId,
+        };
+        await this.interactionLocks(
+          db,
+          target,
+          actor,
+          articleSubject.root_id,
+          id === articleSubject.root_id ? undefined : id,
+        );
+        await this.articleAllowed(db, target.id, actor, true);
+      }
       return this.receipt(
         db,
         actor,
@@ -772,10 +856,20 @@ export class PostgresDiscussionStore implements DiscussionPort {
         ),
         actor,
       );
+      const allowedArticles = await this.allowedArticles(
+        db,
+        rows.flatMap((r) =>
+          r.context_available && r.target_type === "article"
+            ? [r.catalog_id]
+            : [],
+        ),
+        actor,
+      );
       const items = rows.map((r) => {
         const target: ContentIdentity | null =
           r.context_available &&
-          (r.target_type !== "work" || allowedWorks.has(r.catalog_id))
+          (r.target_type !== "work" || allowedWorks.has(r.catalog_id)) &&
+          (r.target_type !== "article" || allowedArticles.has(r.catalog_id))
             ? { type: r.target_type, id: r.catalog_id }
             : null;
         return ownCommentSchema.parse({

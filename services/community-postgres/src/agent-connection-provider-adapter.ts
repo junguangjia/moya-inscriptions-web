@@ -233,6 +233,8 @@ const unseal = (
 const TABLE = "community.agent_connection_provider_artifacts";
 
 export interface ProviderAdapterOptions {
+  /** Separate public-authoring protocol store; never inferred from a token. */
+  readonly namespace?: "admin" | "article-authoring";
   readonly pool: Pick<Pool, "query">;
   readonly keys: ProviderAdapterKeys;
   readonly now?: () => Date;
@@ -253,6 +255,10 @@ export interface ProviderAdapterOptions {
  */
 export const createProviderAdapter = (options: ProviderAdapterOptions) => {
   const { pool, keys } = options;
+  const table =
+    options.namespace === "article-authoring"
+      ? "community.article_authoring_provider_artifacts"
+      : TABLE;
   const now = options.now ?? (() => new Date());
 
   return class ProviderArtifactAdapter {
@@ -293,7 +299,7 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
       const expiresAt = new Date(now().getTime() + expiresIn * 1000);
       const uid = typeof payload.uid === "string" ? payload.uid : undefined;
       await pool.query(
-        `INSERT INTO ${TABLE}
+        `INSERT INTO ${table}
            (lookup_digest, model, sealed_payload, format_version, grant_id,
             uid_digest, expires_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -331,7 +337,7 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
       if (this.unstored) return undefined;
       const digest = digestOf(keys, this.model, id);
       const { rows } = await pool.query(
-        `SELECT sealed_payload, consumed_at, grant_id FROM ${TABLE}
+        `SELECT sealed_payload, consumed_at, grant_id FROM ${table}
           WHERE lookup_digest=$1 AND model=$2`,
         [digest, this.model],
       );
@@ -361,7 +367,7 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
       if (this.unstored) return undefined;
       const { rows } = await pool.query(
         `SELECT lookup_digest, sealed_payload, consumed_at, grant_id
-           FROM ${TABLE} WHERE uid_digest=$1 AND model='Session'`,
+           FROM ${table} WHERE uid_digest=$1 AND model='Session'`,
         [digestOf(keys, "Session:uid", uid)],
       );
       const row = rows[0] as
@@ -388,7 +394,7 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
     async consume(id: string): Promise<void> {
       if (this.unstored) return;
       await pool.query(
-        `UPDATE ${TABLE} SET consumed_at=$3
+        `UPDATE ${table} SET consumed_at=$3
           WHERE lookup_digest=$1 AND model=$2 AND consumed_at IS NULL`,
         [digestOf(keys, this.model, id), this.model, now()],
       );
@@ -398,7 +404,7 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
     async destroy(id: string): Promise<void> {
       if (this.unstored) return;
       await pool.query(
-        `DELETE FROM ${TABLE} WHERE lookup_digest=$1 AND model=$2`,
+        `DELETE FROM ${table} WHERE lookup_digest=$1 AND model=$2`,
         [digestOf(keys, this.model, id), this.model],
       );
     }
@@ -409,7 +415,7 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
      */
     async revokeByGrantId(grantId: string): Promise<void> {
       if (this.unstored) return;
-      await pool.query(`DELETE FROM ${TABLE} WHERE grant_id=$1 AND model=$2`, [
+      await pool.query(`DELETE FROM ${table} WHERE grant_id=$1 AND model=$2`, [
         grantId,
         this.model,
       ]);
@@ -427,8 +433,8 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
      */
     async deleteExpired(limit = 1000): Promise<number> {
       const { rowCount } = await pool.query(
-        `DELETE FROM ${TABLE} WHERE lookup_digest IN (
-           SELECT lookup_digest FROM ${TABLE}
+        `DELETE FROM ${table} WHERE lookup_digest IN (
+           SELECT lookup_digest FROM ${table}
             WHERE model=$1 AND expires_at <= $2 LIMIT $3)`,
         [this.model, now(), limit],
       );

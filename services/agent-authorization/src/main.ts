@@ -1,50 +1,75 @@
 import pg from "pg";
-
 import {
   AUTHORIZATION_ENABLED_SETTING,
   authorizationConfigFrom,
   authorizationEnabled,
 } from "./config.js";
 import { startAuthorizationServer } from "./server.js";
+import { articleAuthorizationConfigFrom } from "./article-provider.js";
+import { startArticleAuthorizationServer } from "./article-server.js";
 
-/**
- * Agent Connections V1 (Issue #141 r15 §5) — the entry point.
- *
- * It refuses to run outside Development-plus-opt-in, refuses to start on
- * malformed configuration, and shuts the listener down before the pool so an
- * in-flight request cannot outlive the connection it is using.
- */
+/** Existing Admin config, pools and endpoints remain separately composed. */
 const main = async (): Promise<void> => {
-  if (!authorizationEnabled()) {
+  const articleConfig = articleAuthorizationConfigFrom(process.env);
+  const adminEnabled = authorizationEnabled();
+  if (!adminEnabled && articleConfig === null) {
     process.stderr.write(
-      `agent authorization is composed only in development with ${AUTHORIZATION_ENABLED_SETTING}=true\n`,
+      `agent authorization is composed only in development with ${AUTHORIZATION_ENABLED_SETTING}=true or ARTICLE_AUTHORING_ENABLED=true\n`,
     );
     process.exitCode = 78;
     return;
   }
-
-  const config = authorizationConfigFrom(process.env);
-  const pool = new pg.Pool({ connectionString: config.databaseUrl });
-
-  const server = await startAuthorizationServer({
-    config,
-    pool,
-    environment: process.env,
-    buildId: process.env.AGENT_AUTHORIZATION_BUILD_ID ?? "unknown",
-    recordFailure: (code) => process.stderr.write(`wrap-failure ${code}\n`),
-  });
-
-  process.stdout.write(`agent authorization listening on ${server.origin}\n`);
-
+  const pools: pg.Pool[] = [];
+  const listeners: { close: () => Promise<void> }[] = [];
+  const close = async () => {
+    await Promise.allSettled(listeners.map((server) => server.close()));
+    await Promise.allSettled(pools.map((pool) => pool.end()));
+  };
+  const recordFailure = (code: string) =>
+    process.stderr.write(`authorization-failure ${code}\n`);
+  try {
+    if (adminEnabled) {
+      const config = authorizationConfigFrom(process.env);
+      const pool = new pg.Pool({ connectionString: config.databaseUrl });
+      pools.push(pool);
+      listeners.push(
+        await startAuthorizationServer({
+          config,
+          pool,
+          environment: process.env,
+          buildId: process.env.AGENT_AUTHORIZATION_BUILD_ID ?? "unknown",
+          recordFailure,
+        }),
+      );
+    }
+    if (articleConfig !== null) {
+      const pool = new pg.Pool({ connectionString: articleConfig.databaseUrl });
+      pools.push(pool);
+      listeners.push(
+        await startArticleAuthorizationServer({
+          config: articleConfig,
+          pool,
+          environment: process.env,
+          buildId: process.env.ARTICLE_AUTHORIZATION_BUILD_ID ?? "unknown",
+          recordFailure,
+        }),
+      );
+    }
+  } catch {
+    await close();
+    throw new Error("AUTHORIZATION_STARTUP_REFUSED");
+  }
+  process.stdout.write("agent authorization listeners ready\n");
+  let closing = false;
   const shutdown = () => {
-    void (async () => {
-      await server.close();
-      await pool.end();
-      process.exit(0);
-    })();
+    if (closing) return;
+    closing = true;
+    void close().then(() => process.exit(0));
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 };
-
-void main();
+void main().catch(() => {
+  process.stderr.write("agent authorization startup refused\n");
+  process.exitCode = 78;
+});

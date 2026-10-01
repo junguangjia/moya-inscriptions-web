@@ -1,4 +1,7 @@
 import { handleNotificationRequest } from "../community/notification-handler.js";
+import { handleArticleAuthoringRequest } from "../community/article-authoring-handler.js";
+import { handleArticleDelegationHttpRequest } from "../community/article-delegation-handler.js";
+import type { BackendApplicationOptions } from "../application.js";
 import type { NotificationStreams } from "../community/notification-stream.js";
 import type { NotificationService } from "@moya/api";
 import type { RequestListener, ServerResponse } from "node:http";
@@ -34,6 +37,7 @@ const operatorFailure = (response: ServerResponse): void =>
   sendJson(response, 500, { error: { status: 500, code: "INTERNAL_ERROR" } });
 
 import type {
+  ArticleAuthoringService,
   CommunityContentOperatorPort,
   DiscussionPort,
   AuthorCommunityService,
@@ -41,6 +45,7 @@ import type {
   CatalogReadService,
   CommunityModerationService,
   CommunityAuthService,
+  ArticlePublicationOperatorService,
   CommunitySessionService,
   AgentAdministrationService,
   DirectMessageService,
@@ -67,6 +72,10 @@ const sendRouteError = (
 };
 
 export interface CommunityRouterDependencies {
+  /** Separate user-owned Article operations; Development only. */
+  readonly articleAuthoringService?: ArticleAuthoringService;
+  readonly articleDelegation?: BackendApplicationOptions["articleDelegation"];
+  readonly articlePublicationOperatorService?: ArticlePublicationOperatorService;
   readonly notificationService?: NotificationService;
   readonly notificationStreams?: NotificationStreams;
   readonly sessionService: CommunitySessionService;
@@ -233,6 +242,61 @@ export const createRouter =
       return;
     }
 
+    const articlePrefix = "/v1/community/article-authoring";
+    if (
+      community?.developmentEntry === true &&
+      community.articleDelegation !== undefined
+    ) {
+      const delegated = community.articleDelegation;
+      const resource = new URL(delegated.resource);
+      if (
+        pathname === resource.pathname ||
+        pathname === `/.well-known/oauth-protected-resource${resource.pathname}`
+      ) {
+        containRequest(response, delegated.mcp(request, response), apiFailure);
+        return;
+      }
+      if (pathname.startsWith(`${articlePrefix}/`)) {
+        const segments = pathname.slice(articlePrefix.length + 1).split("/");
+        if (
+          ["connections", "consents", "approvals"].includes(segments[0] ?? "")
+        ) {
+          containRequest(
+            response,
+            handleArticleDelegationHttpRequest(
+              request,
+              response,
+              segments,
+              community.sessionService,
+              delegated.human,
+            ),
+            apiFailure,
+          );
+          return;
+        }
+      }
+    }
+    if (
+      community?.developmentEntry === true &&
+      community.articleAuthoringService !== undefined &&
+      (pathname === articlePrefix || pathname.startsWith(`${articlePrefix}/`))
+    ) {
+      containRequest(
+        response,
+        handleArticleAuthoringRequest(
+          request,
+          response,
+          pathname === articlePrefix
+            ? []
+            : pathname.slice(articlePrefix.length + 1).split("/"),
+          community.articleAuthoringService,
+          community.sessionService,
+        ),
+        apiFailure,
+      );
+      return;
+    }
+
     if (
       community?.developmentEntry === true &&
       community.authorService !== undefined &&
@@ -330,6 +394,8 @@ export const createRouter =
         response,
         handleOperatorRequest(request, response, pathname, {
           moderationService,
+          articlePublicationOperatorService:
+            community?.articlePublicationOperatorService,
           contentOperatorPort: community?.contentOperatorPort,
           discussionPort: community?.discussionPort,
           publishingOperatorService: community?.publishingOperatorService,

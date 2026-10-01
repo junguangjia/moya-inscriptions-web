@@ -223,4 +223,22 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "a97b63b085612a883f95bcb14a56d629ac5ff3c75892aed4ab462e9940dd444d",
     }),
+    Object.freeze({
+      migrationId: "20260930020000",
+      filename: "20260930020000_article_authoring.sql",
+      checksum:
+        "b402302332fbcb593376fb429ab8cceb72ea8c43eb154b2b126f08797c37d27e",
+    }),
+    Object.freeze({
+      migrationId: "20260930030000",
+      filename: "20260930030000_article_authoring_delegation.sql",
+      checksum:
+        "7220564f1578105597902b151dc1ee5d1e902c3eaf2d0a0aec7c46aa2cab445c",
+    }),
+    Object.freeze({
+      migrationId: "20260930040000",
+      filename: "20260930040000_article_consent_uid_check.sql",
+      checksum:
+        "7eada86a6707ff2aae73055f31629af3de810dc4fecadef4edcd46df09f05b05",
+    }),
   ]);

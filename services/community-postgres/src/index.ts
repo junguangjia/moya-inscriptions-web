@@ -1,4 +1,6 @@
 export { PostgresCommunityIdentityAdapter } from "./adapter.js";
+export { PostgresArticleAuthoringAdapter } from "./article-authoring/postgres-article-authoring-adapter.js";
+export type { PostgresArticleAuthoringOptions } from "./article-authoring/postgres-article-authoring-adapter.js";
 export { PostgresCommunityAuthAdapter } from "./auth-adapter.js";
 export { asCommunityOperationError } from "./availability.js";
 export { PostgresCommunityCommentAdapter } from "./comment-adapter.js";
@@ -118,3 +120,19 @@ export { PostgresNotificationAdapter } from "./notifications/adapter.js";
 export { PostgresThreadAdapter } from "./thread-adapter.js";
 // content-community-completion-v1: direct messages.
 export { PostgresDirectMessageAdapter } from "./direct-message-adapter.js";
+
+export { createArticleConsentStore } from "./article-delegation-consent.js";
+export {
+  createArticleDelegationGuards,
+  createArticleDelegationStore,
+  admitArticleOAuthGrant,
+  assertArticleScopes,
+} from "./article-delegation.js";
+export type {
+  ArticleDelegationAuthority,
+  ArticleDelegationActor,
+} from "./article-delegation.js";
+
+export { resolvePublishedArticleManagedMedia } from "./article-authoring/media-read.js";
+
+export { selectOwnArticleThumbnail } from "./article-authoring/thumbnail-read.js";

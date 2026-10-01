@@ -35,7 +35,7 @@ import type {
   ProductShellEditorOverlayControls,
   ProductShellProfileOverlayRenderProps,
 } from "../product-shell/product-shell";
-import type { EditorTarget } from "../product-shell/product-history";
+import type { ProductEditorTarget } from "../product-shell/product-history";
 import type { CatalogDetailPresentation } from "../detail/catalog-detail-presentation";
 import type { ReactNode, RefObject } from "react";
 import type { HomeCatalogState } from "../home/catalog-state";
@@ -64,8 +64,9 @@ export interface T02pProductPreviewProps {
   readonly renderProfileOverlay?: (
     properties: ProductShellProfileOverlayRenderProps,
   ) => ReactNode;
+  readonly articleEditorEnabled?: boolean;
   readonly renderEditorOverlay?: (
-    target: EditorTarget,
+    target: ProductEditorTarget,
     controls: ProductShellEditorOverlayControls,
   ) => ReactNode;
   readonly workDetailLoader?: CatalogDetailPresentationLoader;
@@ -99,6 +100,7 @@ export const T02pProductPreview = ({
   headerEnd,
   renderProfileOverlay,
   renderEditorOverlay,
+  articleEditorEnabled = false,
   workDetailLoader,
   renderDiscussion,
   renderDetailActions,
@@ -166,6 +168,7 @@ export const T02pProductPreview = ({
         primaryUtility={productUtility}
         navigationAction={navigationAction}
         {...(renderProfileOverlay ? { renderProfileOverlay } : {})}
+        articleEditorEnabled={articleEditorEnabled}
         {...(renderEditorOverlay ? { renderEditorOverlay } : {})}
         showDevelopmentPagerControls={showDevelopmentPagerControls}
         renderDetailOverlay={({

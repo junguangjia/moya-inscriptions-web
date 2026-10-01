@@ -188,3 +188,49 @@ export type {
   DmSendRefusal,
   SendDirectMessageCommand,
 } from "./schemas.js";
+
+// special-article-editor-v1: additive authoring contracts.
+export type {
+  ArticleInlineContent,
+  ArticleBlock,
+  ArticleMediaReference,
+  ArticleDocument,
+  ArticleAuthoringDocument,
+  ArticleDraft,
+  CreateArticleDraftCommand,
+  UpdateArticleDraftCommand,
+  PublishArticleCommand,
+  ArticleCandidateCommand,
+  ArticleOwnMediaListQuery,
+  ArticleOwnMediaPage,
+  ArticleDraftListQuery,
+  ArticleDraftSummary,
+  ArticleDraftPage,
+  ArticlePublishResult,
+  ArticleValidationIssue,
+  ArticleValidationResult,
+  ArticleCandidateValidation,
+  ArticlePreview,
+  ArticleAuthoringScope,
+  ArticleAuthoringGrant,
+  CreateArticleAuthoringGrantCommand,
+  ArticleCandidateApprovalCommand,
+  RevokeArticleAuthoringGrantCommand,
+  ArticleBlockEdit,
+  ArticleBlockEditsCommand,
+  LegacyArticleImage,
+  LegacyArticleInput,
+} from "./article-authoring.ts";
+
+export type {
+  ArticleResolvedReference,
+  ArticleResolvedReferences,
+} from "./schemas.ts";
+
+export type {
+  ArticleApprovalCandidate,
+  ArticleApprovalResult,
+  ArticleCandidateApprovalSubmission,
+  ArticleApprovalReview,
+  ArticleConsentReview,
+} from "./article-delegation.ts";

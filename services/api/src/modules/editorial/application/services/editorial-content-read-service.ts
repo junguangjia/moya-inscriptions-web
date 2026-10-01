@@ -114,7 +114,13 @@ export class EditorialContentReadService {
       section: record.section,
       issue: record.issue,
       byline: record.byline,
-      cover: this.media(record.cover, resolved),
+      cover:
+        record.resolvedCover !== undefined
+          ? record.resolvedCover
+          : this.media(record.cover, resolved),
+      ...(record.managedCover !== undefined
+        ? { managedCover: record.managedCover }
+        : {}),
       firstPublishedAt: record.firstPublishedAt,
       publishedAt: record.publishedAt,
       updatedAt: record.updatedAt,
@@ -170,6 +176,10 @@ export class EditorialContentReadService {
     return parseArticleDetail({
       ...this.summary(record, resolved),
       intro: record.intro,
+      ...(record.document !== undefined ? { document: record.document } : {}),
+      ...(record.resolvedReferences !== undefined
+        ? { resolvedReferences: record.resolvedReferences }
+        : {}),
       sections: record.sections.map((section) => ({
         heading: section.heading,
         paragraphs: splitParagraphs(section.body),

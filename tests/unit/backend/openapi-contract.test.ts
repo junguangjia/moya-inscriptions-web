@@ -4,6 +4,7 @@ import {
   authJsonSchemas,
   authorCommunityJsonSchemas,
   workPublishingJsonSchemas,
+  articleAuthoringJsonSchemas,
   apiErrorJsonSchema,
   catalogCitationScopeJsonSchema,
   catalogCommentIdJsonSchema,
@@ -86,6 +87,25 @@ const publishingMethods: Record<string, string[]> = {
   "/v1/community/publishing/submissions/{requestId}": ["get"],
 };
 
+const articleAuthoringMethods: Record<string, string[]> = {
+  "/v1/community/article-authoring": ["get", "post"],
+  "/v1/community/article-authoring/media": ["get"],
+  "/v1/community/article-authoring/{articleId}": ["get", "put"],
+  ...Object.fromEntries(
+    ["blocks", "validate", "preview", "publish", "withdraw"].map((action) => [
+      `/v1/community/article-authoring/{articleId}/${action}`,
+      ["post"],
+    ]),
+  ),
+  "/v1/community/article-authoring/connections": ["get"],
+  "/v1/community/article-authoring/connections/{connectionId}/revoke": ["post"],
+  "/v1/community/article-authoring/consents/{uid}": ["get"],
+  "/v1/community/article-authoring/consents/{uid}/approve": ["post"],
+  "/v1/community/article-authoring/consents/{uid}/deny": ["post"],
+  "/v1/community/article-authoring/approvals/review": ["post"],
+  "/v1/community/article-authoring/approvals": ["post"],
+};
+
 describe("inscription-first OpenAPI 3.1.1 contract", () => {
   it("contains exactly the approved Catalog, Community V1, Phase 4 and work publishing routes", () => {
     expect(openApiDocument.openapi).toBe("3.1.1");
@@ -155,6 +175,19 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/community/messages/{conversationId}/unmute",
         "/v1/community/messages/{conversationId}/read",
         ...Object.keys(publishingMethods),
+        "/v1/community/article-authoring",
+        "/v1/community/article-authoring/media",
+        "/v1/community/article-authoring/{articleId}",
+        ...["blocks", "validate", "preview", "publish", "withdraw"].map(
+          (action) => `/v1/community/article-authoring/{articleId}/${action}`,
+        ),
+        "/v1/community/article-authoring/connections",
+        "/v1/community/article-authoring/connections/{connectionId}/revoke",
+        "/v1/community/article-authoring/consents/{uid}",
+        "/v1/community/article-authoring/consents/{uid}/approve",
+        "/v1/community/article-authoring/consents/{uid}/deny",
+        "/v1/community/article-authoring/approvals/review",
+        "/v1/community/article-authoring/approvals",
       ].sort(),
     );
     // The Development session lifecycle is not a Public API operation, and the
@@ -237,6 +270,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "/v1/community/messages/{conversationId}/unmute": ["post"],
       "/v1/community/messages/{conversationId}/read": ["post"],
       ...publishingMethods,
+      ...articleAuthoringMethods,
     };
     for (const [name, pathItem] of Object.entries(paths)) {
       expect(Object.keys(asObject(pathItem))).toEqual(
@@ -456,10 +490,22 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
   });
 
   it("uses only contract-derived public components", () => {
-    expect(schemas).toEqual({
+    // Embedding changes only each component's local definition location.
+    const standalone = JSON.parse(
+      JSON.stringify(schemas, (key, value: unknown) =>
+        key === "$ref" && typeof value === "string"
+          ? value.replace(
+              /^#\/components\/schemas\/[^/]+\/(\$defs\/.*)$/u,
+              "#/$1",
+            )
+          : value,
+      ),
+    ) as unknown;
+    expect(standalone).toEqual({
       ...authorCommunityJsonSchemas,
       ...authJsonSchemas,
       ...workPublishingJsonSchemas,
+      ...articleAuthoringJsonSchemas,
       CatalogId: catalogIdJsonSchema,
       CatalogKind: catalogKindJsonSchema,
       CatalogContributorRole: catalogContributorRoleJsonSchema,
@@ -542,7 +588,27 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       },
     });
 
-    const serialized = JSON.stringify({ paths, schemas }).toLowerCase();
+    // Catalog's public boundary remains unchanged. Author-owned document,
+    // preview and human consent contracts intentionally use candidate/review
+    // vocabulary; they do not expose staff Catalog curation fields.
+    const authorSchemaNames = new Set([
+      ...Object.keys(authorCommunityJsonSchemas),
+      ...Object.keys(authJsonSchemas),
+      ...Object.keys(workPublishingJsonSchemas),
+      ...Object.keys(articleAuthoringJsonSchemas),
+    ]);
+    const serialized = JSON.stringify({
+      paths: Object.fromEntries(
+        Object.entries(paths).filter(
+          ([name]) => !name.startsWith("/v1/community/"),
+        ),
+      ),
+      schemas: Object.fromEntries(
+        Object.entries(schemas).filter(
+          ([name]) => !authorSchemaNames.has(name),
+        ),
+      ),
+    }).toLowerCase();
     for (const term of [
       "rawsource",
       "candidate",
@@ -977,5 +1043,65 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     expect(JSON.parse(regenerated)).toEqual(JSON.parse(committedArtifact));
     expect(formatted).toBe(committedArtifact);
     expect(serializeOpenApiDocument()).toBe(regenerated);
+  });
+});
+
+describe("embedded Article OpenAPI document integrity", () => {
+  it("resolves every local JSON pointer against the complete OpenAPI document", () => {
+    let refs = 0;
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      if (value === null || typeof value !== "object") return;
+      for (const [key, item] of Object.entries(value)) {
+        if (
+          key === "$ref" &&
+          typeof item === "string" &&
+          item.startsWith("#/")
+        ) {
+          refs++;
+          let target: unknown = openApiDocument;
+          for (const segment of item.slice(2).split("/")) {
+            expect(target, `unresolved ${item}`).not.toBeNull();
+            expect(typeof target, `unresolved ${item}`).toBe("object");
+            target =
+              asObject(target)[
+                segment.replaceAll("~1", "/").replaceAll("~0", "~")
+              ];
+          }
+          expect(target, `unresolved ${item}`).toBeDefined();
+        } else visit(item);
+      }
+    };
+    visit(openApiDocument);
+    expect(refs).toBeGreaterThan(500);
+  });
+  it("requires the defined session scheme and account fence for every human Article operation", () => {
+    const security = asObject(
+      asObject(openApiDocument.components).securitySchemes,
+    );
+    for (const [name, item] of Object.entries(paths)) {
+      if (!name.startsWith("/v1/community/article-authoring")) continue;
+      for (const operation of Object.values(asObject(item))) {
+        expect(asObject(operation).security).toEqual([{ session: [] }]);
+        expect(security.session).toMatchObject({
+          type: "http",
+          scheme: "bearer",
+        });
+        expect(asObject(operation).parameters).toContainEqual({
+          name: "x-author-account",
+          in: "header",
+          required: true,
+          schema: { $ref: "#/components/schemas/PublicUserId" },
+        });
+      }
+    }
+    expect(
+      asObject(
+        asObject(paths["/v1/community/article-authoring/{articleId}"]).put,
+      ).operationId,
+    ).toBe("saveOwnedArticleDraft");
   });
 });

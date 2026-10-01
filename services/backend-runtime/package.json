@@ -18,11 +18,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@moya/api": "workspace:*",
     "@moya/contracts": "workspace:*",
     "@moya/image": "workspace:*",
     "@moya/public-api": "workspace:*",
-    "@moya/search": "workspace:*"
+    "@moya/search": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.13.3"

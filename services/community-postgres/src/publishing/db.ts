@@ -222,6 +222,8 @@ export interface AuthorCommandSpec {
 }
 
 export interface AuthorCommandOptions<T> {
+  /** Recheck a current delegated capability before replaying a command receipt. */
+  readonly beforeReceipt?: (db: PublishingDb) => Promise<void>;
   /**
    * Return false to roll the whole transaction back and return the result
    * without receipt or audit (for example a `not_ready` submission).
@@ -253,6 +255,7 @@ export const authorCommand = async <T>(
   try {
     await db.query("BEGIN");
     await lockActor(db, spec.actorId);
+    await options.beforeReceipt?.(db);
     const receipt = (
       await db.query<{ fingerprint: string; result: T }>(
         "SELECT fingerprint,result FROM community.author_command_receipts WHERE actor_id=$1 AND request_id=$2",

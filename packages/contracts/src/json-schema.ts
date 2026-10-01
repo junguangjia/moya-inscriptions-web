@@ -44,6 +44,119 @@ import {
 const toJsonSchema = (schema: z.ZodType) =>
   z.toJSONSchema(schema, { target: "draft-2020-12" });
 
+/** Article tools keep reused definitions small and expose an object root. */
+export const articleAuthoringJsonSchema = (schema: z.ZodType) => {
+  const result = z.toJSONSchema(schema, {
+    target: "draft-2020-12",
+    reused: "ref",
+  });
+  if (result.$ref?.startsWith("#/$defs/")) {
+    const definition = result.$defs?.[result.$ref.slice("#/$defs/".length)];
+    if (definition !== undefined) {
+      const root = { ...result, ...definition };
+      delete root.$ref;
+      return root;
+    }
+  }
+  return result;
+};
+
+import {
+  articleAuthoringDocumentSchema,
+  articleDraftSchema,
+  articleDraftSummarySchema,
+  articleDraftPageSchema,
+  articleOwnMediaListQuerySchema,
+  articleOwnMediaPageSchema,
+  articleAuthoringListQuerySchema,
+  articleAuthoringCreateSchema,
+  articleAuthoringUpdateSchema,
+  articleBlockEditsCommandSchema,
+  articleAuthoringCandidateSchema,
+  articleValidationResultSchema,
+  articlePreviewSchema,
+  articleAuthoringGrantSchema,
+  createArticleAuthoringGrantCommandSchema,
+  articleCandidateApprovalCommandSchema,
+  revokeArticleAuthoringGrantCommandSchema,
+  articlePublicationResultSchema,
+} from "./article-authoring.ts";
+import {
+  articleApprovalCandidateSchema,
+  articleApprovalResultSchema,
+  articleCandidateApprovalSubmissionSchema,
+  articleApprovalReviewSchema,
+  articleConsentReviewSchema,
+  articleAuthoringConnectionsSchema,
+  articleConsentDecisionSchema,
+} from "./article-delegation.js";
+
+export const articleAuthoringJsonSchemas = {
+  ArticleOwnMediaListQuery: articleAuthoringJsonSchema(
+    articleOwnMediaListQuerySchema,
+  ),
+  ArticleOwnMediaPage: articleAuthoringJsonSchema(articleOwnMediaPageSchema),
+  ArticleAuthoringDocument: articleAuthoringJsonSchema(
+    articleAuthoringDocumentSchema,
+  ),
+  ArticleDraft: articleAuthoringJsonSchema(articleDraftSchema),
+  ArticleDraftSummary: articleAuthoringJsonSchema(articleDraftSummarySchema),
+  ArticleDraftPage: articleAuthoringJsonSchema(articleDraftPageSchema),
+  ArticleDraftListQuery: articleAuthoringJsonSchema(
+    articleAuthoringListQuerySchema,
+  ),
+  CreateArticleDraftCommand: articleAuthoringJsonSchema(
+    articleAuthoringCreateSchema,
+  ),
+  UpdateArticleDraftCommand: articleAuthoringJsonSchema(
+    articleAuthoringUpdateSchema,
+  ),
+  ArticleBlockEditsCommand: articleAuthoringJsonSchema(
+    articleBlockEditsCommandSchema,
+  ),
+  ArticleCandidateCommand: articleAuthoringJsonSchema(
+    articleAuthoringCandidateSchema,
+  ),
+  ArticleValidationResult: articleAuthoringJsonSchema(
+    articleValidationResultSchema,
+  ),
+  ArticlePreview: articleAuthoringJsonSchema(articlePreviewSchema),
+  ArticleAuthoringGrant: articleAuthoringJsonSchema(
+    articleAuthoringGrantSchema,
+  ),
+  CreateArticleAuthoringGrantCommand: articleAuthoringJsonSchema(
+    createArticleAuthoringGrantCommandSchema,
+  ),
+  ArticleCandidateApprovalCommand: articleAuthoringJsonSchema(
+    articleCandidateApprovalCommandSchema,
+  ),
+  RevokeArticleAuthoringGrantCommand: articleAuthoringJsonSchema(
+    revokeArticleAuthoringGrantCommandSchema,
+  ),
+  ArticlePublicationResult: articleAuthoringJsonSchema(
+    articlePublicationResultSchema,
+  ),
+  ArticleApprovalCandidate: articleAuthoringJsonSchema(
+    articleApprovalCandidateSchema,
+  ),
+  ArticleApprovalResult: articleAuthoringJsonSchema(
+    articleApprovalResultSchema,
+  ),
+  ArticleCandidateApprovalSubmission: articleAuthoringJsonSchema(
+    articleCandidateApprovalSubmissionSchema,
+  ),
+  ArticleApprovalReview: articleAuthoringJsonSchema(
+    articleApprovalReviewSchema,
+  ),
+  ArticleConsentReview: articleAuthoringJsonSchema(articleConsentReviewSchema),
+  ArticleAuthoringConnections: articleAuthoringJsonSchema(
+    articleAuthoringConnectionsSchema,
+  ),
+  ArticleConsentDecision: articleAuthoringJsonSchema(
+    articleConsentDecisionSchema,
+  ),
+};
+
 export const catalogIdJsonSchema = toJsonSchema(catalogIdSchema);
 export const catalogKindJsonSchema = toJsonSchema(catalogKindSchema);
 export const catalogContributorRoleJsonSchema = toJsonSchema(
@@ -218,7 +331,7 @@ export const authorCommunityJsonSchemas = {
   ArticleSummary: toJsonSchema(articleSummarySchema),
   ArticleSection: toJsonSchema(articleSectionSchema),
   ArticleCitation: toJsonSchema(articleCitationSchema),
-  ArticleDetail: toJsonSchema(articleDetailSchema),
+  ArticleDetail: articleAuthoringJsonSchema(articleDetailSchema),
   ArticlePage: toJsonSchema(articlePageSchema),
   ArticleCollectionSummary: toJsonSchema(articleCollectionSummarySchema),
   ArticleCollectionMember: toJsonSchema(articleCollectionMemberSchema),

@@ -214,7 +214,12 @@ export function ArticleReader({
                   {renderContent ? (
                     renderContent({
                       scrollElement: readingElement,
-                      active: active === "reading" && !inline,
+                      active:
+                        active === "reading" &&
+                        !inline &&
+                        shell.activeEditor === null &&
+                        shell.activeProfile === null &&
+                        !shell.settingsOpen,
                       overlayTarget,
                     })
                   ) : (

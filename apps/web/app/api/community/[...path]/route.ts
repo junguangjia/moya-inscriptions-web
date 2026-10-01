@@ -11,4 +11,5 @@ const relay = (request: Request): Promise<Response> =>
       );
 export const GET = relay;
 export const POST = relay;
+export const PUT = relay;
 export const DELETE = relay;

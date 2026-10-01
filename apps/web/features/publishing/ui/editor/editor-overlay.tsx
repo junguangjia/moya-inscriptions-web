@@ -140,7 +140,9 @@ const useViewportWidth = () =>
   );
 
 /** Keeps the editor inside the visual viewport (keyboard, safe areas), like Search. */
-const useVisualViewportFrame = (hostRef: RefObject<HTMLElement | null>) => {
+export const useVisualViewportFrame = (
+  hostRef: RefObject<HTMLElement | null>,
+) => {
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (host === null) return undefined;
