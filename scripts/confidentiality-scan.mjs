@@ -146,11 +146,90 @@ function syntax(filename) {
       : "text";
 }
 function placeholder(value) {
-  return !value || value === "..." || PLACEHOLDER.test(value);
+  return (
+    !value ||
+    value === "..." ||
+    PLACEHOLDER.test(value) ||
+    /^EXPLICIT_SYNTHETIC_PLACEHOLDER$/i.test(value)
+  );
 }
 const pnpmLock = (filename) => path.basename(filename) === "pnpm-lock.yaml";
 const syntaxContext = (filename) =>
-  syntax(filename) + (pnpmLock(filename) ? ":pnpm-lock" : "");
+  syntax(filename) +
+  (pnpmLock(filename) ? ":pnpm-lock" : "") +
+  (/\.swift$/i.test(filename) ? ":swift" : "") +
+  (/\.(?:[cm]?js|ts)$/i.test(filename) ? ":javascript" : "");
+// Conservative lexical proof for the two source-only exemptions below. Plain
+// templates and Swift multiline strings stay opaque; interpolation declines.
+// Only a JS regex immediately after an opening parenthesis is unambiguous here.
+// Other slash syntax and Swift raw strings decline the exemption; this is not a
+// general-purpose language parser.
+function sourcePosition(text, at, swift = false) {
+  // Unmodeled line separators, legacy HTML-close and hashbang comments can
+  // change where a quoted region starts. Decline the exemption instead of
+  // guessing, even when they occur in an otherwise harmless string.
+  if (/[\u2028\u2029]|-->|#!/.test(text.slice(0, at))) return false;
+  let quote = null,
+    comment = 0;
+  for (let i = 0; i < at; i++) {
+    if (comment === -1) {
+      if (text[i] === "\n" || text[i] === "\r") comment = 0;
+    } else if (comment > 0) {
+      if (swift && text.startsWith("/*", i)) {
+        comment++;
+        i++;
+      } else if (text.startsWith("*/", i)) {
+        comment--;
+        i++;
+      }
+    } else if (quote) {
+      if (
+        (quote === "`" && text.startsWith("${", i)) ||
+        (swift && text.startsWith("\\(", i))
+      )
+        return false;
+      if (text[i] === "\\") i++;
+      else if (text.startsWith(quote, i)) {
+        i += quote.length - 1;
+        quote = null;
+      }
+    } else if (text.startsWith("//", i)) {
+      comment = -1;
+      i++;
+    } else if (text.startsWith("/*", i)) {
+      comment = 1;
+      i++;
+    } else if (text[i] === "/") {
+      if (swift || !text.slice(0, i).trimEnd().endsWith("(")) return false;
+      let inClass = false,
+        closed = false;
+      for (i++; i < at; i++) {
+        if (text[i] === "\n" || text[i] === "\r") return false;
+        if (text[i] === "\\") i++;
+        else if (text[i] === "[") inClass = true;
+        else if (text[i] === "]") inClass = false;
+        else if (text[i] === "/" && !inClass) {
+          closed = true;
+          break;
+        }
+      }
+      if (!closed) return false;
+    } else if (swift && text[i] === "#") return false;
+    // JS-in-.js can contain JSX. Only the unambiguous numeric comparison
+    // prefix needed here is accepted; possible tags and type syntax decline.
+    else if (
+      !swift &&
+      text[i] === "<" &&
+      !/^[ \t]*\d+(?:\.\d+)?\b/.test(text.slice(i + 1))
+    )
+      return false;
+    else if (swift && text.startsWith('"""', i)) {
+      quote = '"""';
+      i += 2;
+    } else if (/['"`]/.test(text[i])) quote = text[i];
+  }
+  return quote === null && comment === 0;
+}
 function packageVersionContext(text, at, name, value, filename, operator) {
   if (
     !pnpmLock(filename) ||
@@ -255,6 +334,44 @@ function literalFindings(text, filename) {
     )
       continue;
     if (packageVersionContext(text, m.index, name, value, filename, operator))
+      continue;
+    const afterValue = text.slice(m.index + m[0].length);
+    const expressionEnd = /^[ \t]*(?:$|[,;)}\]\r\n]|\/\/)/;
+    // This documented environment switch disables implicit authentication.
+    // Its name alone, other values and other token fields receive no exemption.
+    if (
+      name === "HF_HUB_DISABLE_IMPLICIT_TOKEN" &&
+      /^(?:=|:)$/.test(operator) &&
+      value === "1" &&
+      /^(?:code|config)$/.test(syntax(filename)) &&
+      (expressionEnd.test(afterValue) || /^[ \t]*#/.test(afterValue))
+    )
+      continue;
+    // Swift optional absence predicates contain no password value. Keep Swift
+    // distinct in the cache without treating arbitrary Swift text as JS code.
+    if (
+      /\.swift$/i.test(filename) &&
+      !quoted &&
+      /^(?:==|!=)$/.test(operator) &&
+      value === "nil" &&
+      (expressionEnd.test(afterValue) ||
+        /^[ \t]*(?:&&|\|\|)/.test(afterValue)) &&
+      sourcePosition(text, m.index, true)
+    )
+      continue;
+    // A semicolon-terminated JS declaration with a prefix increment is numeric.
+    // A newline is not a terminator: it can continue into a string expression.
+    if (
+      /\.(?:[cm]?js|ts)$/i.test(filename) &&
+      !quoted &&
+      operator === "=" &&
+      /^\+\+[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(value) &&
+      /^[ \t]*;/.test(afterValue) &&
+      /^[ \t]*(?:const|let|var)[ \t]+$/.test(
+        text.slice(text.lastIndexOf("\n", m.index - 1) + 1, m.index),
+      ) &&
+      sourcePosition(text, m.index)
+    )
       continue;
     // A closing source string followed by concatenation is not a literal value.
     if (syntax(filename) === "code" && /^\s*\+\s*$/.test(value)) continue;
