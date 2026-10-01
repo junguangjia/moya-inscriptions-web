@@ -162,6 +162,9 @@ export function classifyTask(paths, event = "pull_request") {
       file === ".mcp.json" ||
       file.startsWith(".github/ISSUE_TEMPLATE/") ||
       file === "scripts/README.md" ||
+      // Local curation owns separate pinned native runtimes and Draft-only
+      // acceptance; it does not change CMS/public runtime implementation.
+      file.startsWith("scripts/curation/") ||
       /^scripts\/[a-z-]+\.test\.mjs$/u.test(file) ||
       (/\.md$/u.test(file) &&
         /^(?:docs|apps\/apple|apps\/harmony|apps\/web|apps\/admin|packages|services)\//u.test(
