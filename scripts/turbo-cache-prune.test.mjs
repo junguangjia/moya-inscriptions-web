@@ -14,9 +14,11 @@ import {
   applyPlan,
   currentTaskHashes,
   parseArgs,
+  planIncompleteReason,
   planPrune,
   resolveCacheDir,
   scanCache,
+  turboDryRun,
   verificationToolchain,
 } from "./turbo-cache-prune.mjs";
 
@@ -396,6 +398,54 @@ test("currentTaskHashes unions plain and verification dry runs and reports skipp
   assert.deepEqual(r.covered, [dirs[0]]);
   assert.deepEqual(r.skipped, [{ dir: dirs[2], reason: "no-turbo-binary" }]);
   assert.deepEqual(r.failed, [{ dir: dirs[1], error: "turbo exploded" }]);
+});
+
+test("a failed or skipped dry run makes the plan incomplete", () => {
+  const ok = { covered: ["a"], skipped: [{ dir: "b" }], failed: [] };
+  assert.equal(
+    planIncompleteReason(ok, false),
+    null,
+    "a worktree without Turbo does not make it incomplete",
+  );
+  assert.equal(
+    planIncompleteReason({ ...ok, failed: [{ dir: "c", error: "x" }] }, false),
+    "1 worktree dry run(s) failed",
+  );
+  assert.equal(planIncompleteReason(ok, true), "dry runs skipped");
+});
+
+test("turboDryRun clears an inherited toolchain variable for the plain run, sets it for the verification run, and rejects an empty result", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "turbo-cache-prune-bin-"));
+  const bin = path.join(dir, "turbo");
+  fs.writeFileSync(
+    bin,
+    [
+      "#!/bin/sh",
+      'if [ -n "$EMPTY" ]; then echo \'{"tasks":[]}\'; exit 0; fi',
+      'if [ -n "$MOYA_VERIFICATION_TOOLCHAIN" ]; then h=1111111111111111; else h=0000000000000000; fi',
+      'echo "• turbo noise"; echo "{\\"tasks\\":[{\\"hash\\":\\"$h\\"},{\\"hash\\":\\"not-a-hash\\"}]}"',
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const saved = process.env[VERIFICATION_TOOLCHAIN_ENV];
+  process.env[VERIFICATION_TOOLCHAIN_ENV] = "inherited-from-shell";
+  try {
+    assert.deepEqual(turboDryRun(bin, dir, ["build"], null), [
+      "0000000000000000",
+    ]);
+    assert.deepEqual(turboDryRun(bin, dir, ["build"], "v0/test/arch"), [
+      "1111111111111111",
+    ]);
+    process.env.EMPTY = "1";
+    assert.throws(
+      () => turboDryRun(bin, dir, ["build"], null),
+      /no task hashes/u,
+    );
+  } finally {
+    delete process.env.EMPTY;
+    if (saved === undefined) delete process.env[VERIFICATION_TOOLCHAIN_ENV];
+    else process.env[VERIFICATION_TOOLCHAIN_ENV] = saved;
+  }
 });
 
 test("the verification toolchain value matches what the verification entries set", () => {

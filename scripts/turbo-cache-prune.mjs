@@ -189,7 +189,16 @@ export function currentTaskHashes(
       for (const hash of found) hashes.add(hash);
       covered.push(dir);
     } catch (error) {
-      failed.push({ dir, error: String(error.message).split("\n")[0] });
+      const detail = String(error.stderr ?? "")
+        .trim()
+        .split("\n")
+        .at(-1);
+      failed.push({
+        dir,
+        error: [String(error.message).split("\n")[0], detail]
+          .filter(Boolean)
+          .join(" — "),
+      });
     }
   }
   return { hashes, covered, skipped, failed };
@@ -245,6 +254,7 @@ export function scanCache(cacheDir) {
       skipped.push({ name: hash, reason: "not-a-regular-file" });
       continue;
     }
+    if (!files.length) continue; // removed between readdir and lstat
     const archive = files.find((f) => f.name.endsWith(".tar.zst"));
     const meta = readJson(path.join(cacheDir, `${hash}-meta.json`));
     const manifest = archive
@@ -484,6 +494,14 @@ export function applyPlan(
   return { deletedBytes, deletedLogicalBytes, results };
 }
 
+/** Why a plan cannot protect every current task hash, or null when it can. */
+export function planIncompleteReason(coverage, skipDryRun) {
+  if (skipDryRun) return "dry runs skipped";
+  if (coverage.failed.length)
+    return `${coverage.failed.length} worktree dry run(s) failed`;
+  return null;
+}
+
 export function parseArgs(argv) {
   const opts = {
     mode: "plan",
@@ -549,11 +567,7 @@ export function main(argv) {
       for (const h of r.hashes) keepHashes.add(h);
       coverage = r;
     }
-    const incompleteReason = opts.skipDryRun
-      ? "dry runs skipped"
-      : coverage.failed.length
-        ? `${coverage.failed.length} worktree dry run(s) failed`
-        : null;
+    const incompleteReason = planIncompleteReason(coverage, opts.skipDryRun);
     const { groups, skipped } = scanCache(cacheDir);
     const plan = {
       generatedAt: new Date().toISOString(),
