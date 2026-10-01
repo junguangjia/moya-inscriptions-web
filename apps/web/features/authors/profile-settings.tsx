@@ -706,7 +706,7 @@ export const ProfileSettings = ({
                     <section className={styles.group}>
                       <h3>账户</h3>
                       <div className={styles.rows}>
-                        {row("账号与安全", "security")}
+                        {row("账号与安全", "security", "手机号、邮箱换绑")}
                         {onEdit && (
                           <button
                             type="button"
