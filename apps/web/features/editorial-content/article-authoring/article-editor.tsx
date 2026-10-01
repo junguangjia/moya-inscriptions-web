@@ -85,7 +85,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
   busyRef.current = busy !== null && busy !== "close";
   const [insertMenu, setInsertMenu] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const frozen = useRef({ initial, client });
+  const frozen = useRef({ initial, client, accountEpoch: props.accountEpoch });
   const latest = useRef({ title, attachments, coverRefId, media });
   latest.current = { title, attachments, coverRefId, media };
   const [loadingStore] = useState(() =>
@@ -105,6 +105,8 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     saveStore.get,
     saveStore.get,
   );
+  const canChange = () => auto?.canMutate() === true;
+  const mutationAllowed = canChange();
   const activeSave = () => {
     if (auto === null) throw new Error("article_editor_unavailable");
     return auto;
@@ -112,7 +114,10 @@ export default function ArticleEditor(props: ArticleEditorProps) {
 
   useEffect(() => {
     const opening = frozen.current;
-    if (authorClient.account() !== opening.initial.ownerId) {
+    if (
+      authorClient.account() !== opening.initial.ownerId ||
+      authorClient.accountEpoch() !== opening.accountEpoch
+    ) {
       setNotice("账户状态已变化，请重新打开专题。");
       return;
     }
@@ -268,6 +273,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       );
     });
   const publish = () => {
+    if (!canChange()) return;
     const publication = publicationRef.current;
     if (preview === null || !preview.validation.valid || publication === null)
       return;
@@ -304,7 +310,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     });
   };
   const insertMedia = async (multiple: boolean) => {
-    if (editor === null || busy !== null) return;
+    if (editor === null || busy !== null || !canChange()) return;
     const anchor = editor.getTextCursorPosition().block.id;
     setBusy("media");
     setInsertMenu(false);
@@ -313,7 +319,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
         multiple,
         signal: abortRef.current!.signal,
       });
-      if (selected.length === 0) return;
+      if (!canChange() || selected.length === 0) return;
       const bounded = multiple ? articleAuthoringLimits.galleryImages : 1;
       if (selected.length > bounded) throw new Error("article_gallery_limit");
       const attached = attachArticleReferences(
@@ -369,7 +375,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     }
   };
   const insertCatalog = async () => {
-    if (editor === null || busy !== null) return;
+    if (editor === null || busy !== null || !canChange()) return;
     const anchor = editor.getTextCursorPosition().block.id;
     setInsertMenu(false);
     setBusy("media");
@@ -377,7 +383,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       const catalogId = await latest.current.media.chooseCatalog(
         abortRef.current!.signal,
       );
-      if (catalogId !== null)
+      if (canChange() && catalogId !== null)
         editor.insertBlocks(
           [
             {
@@ -406,7 +412,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       | "divider",
     level: 2 | 3 = 2,
   ) => {
-    if (editor === null) return;
+    if (editor === null || !canChange()) return;
     const anchor = editor.getTextCursorPosition().block.id;
     if (type === "heading")
       editor.insertBlocks(
@@ -420,6 +426,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
   };
   const protectListNesting = (event: KeyboardEvent<HTMLDivElement>) => {
     if (
+      !canChange() ||
       event.key !== "Tab" ||
       editor === null ||
       event.target instanceof HTMLInputElement ||
@@ -490,6 +497,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     index: number,
     offset: -1 | 1,
   ) => {
+    if (!canChange()) return;
     const current = latest.current.attachments;
     const group = Object.hasOwn(current.galleries, groupId)
       ? current.galleries[groupId]
@@ -540,7 +548,8 @@ export default function ArticleEditor(props: ArticleEditorProps) {
           disabled={busy !== null}
           onClick={() =>
             void act("close", async () => {
-              await activeSave().flush();
+              if (auto?.isDirty() || publicationRef.current?.pending() != null)
+                await activeSave().flush();
               props.onBack();
             })
           }
@@ -619,6 +628,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
             }
             maxLength={articleAuthoringLimits.titleCodePoints * 2}
             onChange={(event) => {
+              if (!canChange()) return;
               const value = event.currentTarget.value;
               latest.current = { ...latest.current, title: value };
               setTitle(value);
@@ -633,45 +643,53 @@ export default function ArticleEditor(props: ArticleEditorProps) {
           <button
             type="button"
             aria-expanded={insertMenu}
-            disabled={editor === null || busy !== null}
+            disabled={editor === null || busy !== null || !mutationAllowed}
             onClick={() => setInsertMenu((open) => !open)}
           >
             插入
           </button>
           <button
             type="button"
-            disabled={editor === null || busy !== null}
+            disabled={editor === null || busy !== null || !mutationAllowed}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => editor?.moveBlocksUp()}
+            onClick={() => {
+              if (canChange()) editor?.moveBlocksUp();
+            }}
           >
             上移
           </button>
           <button
             type="button"
-            disabled={editor === null || busy !== null}
+            disabled={editor === null || busy !== null || !mutationAllowed}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => editor?.moveBlocksDown()}
+            onClick={() => {
+              if (canChange()) editor?.moveBlocksDown();
+            }}
           >
             下移
           </button>
           <button
             type="button"
-            disabled={editor === null || busy !== null}
+            disabled={editor === null || busy !== null || !mutationAllowed}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => editor?.undo()}
+            onClick={() => {
+              if (canChange()) editor?.undo();
+            }}
           >
             撤销
           </button>
           <button
             type="button"
-            disabled={editor === null || busy !== null}
+            disabled={editor === null || busy !== null || !mutationAllowed}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => editor?.redo()}
+            onClick={() => {
+              if (canChange()) editor?.redo();
+            }}
           >
             重做
           </button>
         </div>
-        {insertMenu ? (
+        {insertMenu && mutationAllowed ? (
           <div className={styles.insertMenu} aria-label="插入内容">
             <button type="button" onClick={() => insertText("paragraph")}>
               段落
@@ -717,6 +735,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                 attachments,
                 media,
                 disabled:
+                  !mutationAllowed ||
                   busy !== null ||
                   preview !== null ||
                   saved.status === "permission_lost" ||
@@ -727,6 +746,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
               <BlockNoteView
                 editor={editor}
                 editable={
+                  mutationAllowed &&
                   busy === null &&
                   preview === null &&
                   saved.status !== "permission_lost"
@@ -745,7 +765,8 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                 onChange={(_editor, context) => {
                   // Editable/focus updates may emit an empty transaction.
                   // Only document changes advance the persisted edit generation.
-                  if (context.getChanges().length !== 0) auto?.changed();
+                  if (canChange() && context.getChanges().length !== 0)
+                    auto?.changed();
                 }}
               >
                 <FormattingToolbarController
@@ -774,8 +795,9 @@ export default function ArticleEditor(props: ArticleEditorProps) {
           <select
             aria-label="专题封面"
             value={coverRefId ?? ""}
-            disabled={busy !== null}
+            disabled={busy !== null || !mutationAllowed}
             onChange={(event) => {
+              if (!canChange()) return;
               const id = event.currentTarget.value || null;
               latest.current = { ...latest.current, coverRefId: id };
               setCoverRefId(id);
@@ -836,6 +858,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
               type="button"
               className={styles.primary}
               disabled={
+                !mutationAllowed ||
                 !preview.validation.valid ||
                 busy !== null ||
                 (activeSave().isDirty() &&
@@ -878,16 +901,20 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                 </button>
                 <button
                   type="button"
+                  disabled={!mutationAllowed}
                   onClick={() => {
+                    if (!canChange()) return;
                     setCompare(false);
-                    props.onReloadDraft(saved.remote!);
+                    if (canChange()) props.onReloadDraft(saved.remote!);
                   }}
                 >
                   使用服务器版本
                 </button>
                 <button
                   type="button"
+                  disabled={!mutationAllowed}
                   onClick={() => {
+                    if (!canChange()) return;
                     setCompare(false);
                     void activeSave().keepLocalAfterComparison().catch(failed);
                   }}

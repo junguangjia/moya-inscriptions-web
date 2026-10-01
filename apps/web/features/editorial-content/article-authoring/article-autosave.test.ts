@@ -307,8 +307,10 @@ describe("Article autosave serialized committed revisions", () => {
     const state = setup();
     state.edit("保留未保存输入");
     state.auto.checkIdentity();
+    expect(state.auto.canMutate()).toBe(true);
     expect(state.auto.store.get().status).toBe("pending");
     state.account(null);
+    expect(state.auto.canMutate()).toBe(false);
     state.auto.checkIdentity();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(state.save).not.toHaveBeenCalled();
@@ -316,6 +318,7 @@ describe("Article autosave serialized committed revisions", () => {
     expect(state.auto.isDirty()).toBe(true);
     expect(state.capture().title).toBe("保留未保存输入");
     state.account(initial.ownerId);
+    expect(state.auto.canMutate()).toBe(false);
     state.auto.checkIdentity();
     expect(() => state.auto.flush()).toThrow("article_account_changed");
     expect(state.save).not.toHaveBeenCalled();

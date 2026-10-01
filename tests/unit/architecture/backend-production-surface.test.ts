@@ -32,6 +32,7 @@ describe("@moya/backend-production composition boundary", () => {
       await readFile(path.join(productionRoot, "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
     expect(manifest.dependencies).toEqual({
+      "@moya/agent-authorization": "workspace:*",
       "@moya/catalog-importer": "workspace:*",
       "@moya/backend-runtime": "workspace:*",
       "@moya/catalog-postgres": "workspace:*",
@@ -44,6 +45,7 @@ describe("@moya/backend-production composition boundary", () => {
 
   it("imports approved backend roots and confines the COS SDK to storage", async () => {
     const approved = new Set([
+      "@moya/agent-authorization",
       "@moya/catalog-importer",
       "@moya/backend-runtime",
       "@moya/catalog-postgres",

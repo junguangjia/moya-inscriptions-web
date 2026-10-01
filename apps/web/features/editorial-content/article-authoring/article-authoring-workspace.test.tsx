@@ -198,6 +198,7 @@ const motion = (): IdentifiedMotion => ({
 let root: Root | null = null;
 let node: HTMLDivElement;
 const reloadMedia = vi.fn(async () => undefined);
+const onBack = vi.fn();
 const render = async (
   sessionKey = "account:article:1",
   covered = false,
@@ -214,7 +215,7 @@ const render = async (
       mediaHasMore={false}
       reloadMedia={reloadMedia}
       loadMoreMedia={async () => undefined}
-      onBack={() => undefined}
+      onBack={onBack}
       onPublished={() => undefined}
       onReloadDraft={() => undefined}
       onOpenCatalog={() => undefined}
@@ -275,6 +276,18 @@ afterEach(async () => {
 });
 
 describe("Article authoring media workspace", () => {
+  it("keeps the loaded epoch across identity recovery and releases a clean readonly exit without stale lease writes", async () => {
+    await mount();
+    expect(state.editor!.accountEpoch).toBe(1);
+    state.epoch += 2;
+    await render();
+    expect(state.editor!.accountEpoch).toBe(1);
+    await act(async () => state.editor!.onBack());
+    expect(session.discard).not.toHaveBeenCalled();
+    expect(session.manager.release).toHaveBeenCalled();
+    expect(session.dispose).toHaveBeenCalled();
+    expect(onBack).toHaveBeenCalledOnce();
+  });
   it("ignores the disposed StrictMode limits request while reporting a current session failure", async () => {
     let reject!: (error: Error) => void;
     session.limits.mockImplementationOnce(

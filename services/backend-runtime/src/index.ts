@@ -46,3 +46,5 @@ export {
   readBoundedArticleThumbnail,
   ARTICLE_THUMBNAIL_MAX_BYTES,
 } from "./community/article-runtime-read.js";
+
+export { handleArticleAuthoringRequest } from "./community/article-authoring-handler.js";

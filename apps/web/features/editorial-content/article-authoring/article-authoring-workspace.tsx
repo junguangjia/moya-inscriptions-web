@@ -127,7 +127,7 @@ export const ArticleAuthoringWorkspace = (
   const [catalogLoading, setCatalogLoading] = useState(false);
   const choiceRef = useRef<ImageChoice | null>(null);
   const catalogChoiceRef = useRef<CatalogChoice | null>(null);
-  const epochRef = useRef(authorClient.accountEpoch());
+  const epochRef = useRef(epoch);
   const batchRef = useRef<StagingBatch | null>(null);
   const sessionGeneration = useRef(0);
   const batchRevision = useRef(0);
@@ -191,9 +191,7 @@ export const ArticleAuthoringWorkspace = (
     identificationOperation.current++;
     setIdentifying(0);
     lifetime.current = abort;
-    epochRef.current = authorClient.accountEpoch();
-    if (authorClient.account() !== props.initial.ownerId)
-      return () => abort.abort();
+    if (!sameAccount()) return () => abort.abort();
     const session = createArticleUploadSession(props.initial.ownerId);
     const mediaResolver = createArticleMediaResolver({
       ownerId: props.initial.ownerId,
@@ -246,6 +244,12 @@ export const ArticleAuthoringWorkspace = (
       catalogChoiceRef.current = null;
     };
   }, [props.initial.ownerId, props.sessionKey, epoch]);
+  const currentEpoch = authorClient.accountEpoch();
+  useEffect(() => {
+    if (sameAccount()) return;
+    finishImages([]);
+    finishCatalog(null);
+  }, [currentEpoch]);
   const loadCatalog = async (page: number) => {
     catalogRead.current?.abort();
     const abort = new AbortController();
@@ -485,7 +489,9 @@ export const ArticleAuthoringWorkspace = (
     finishImages(references);
   };
   const close = () => {
-    if (uploads === null) {
+    if (uploads === null || !sameAccount()) {
+      uploads?.manager.release();
+      uploads?.dispose();
       resolver?.dispose();
       props.onBack();
       return;
@@ -514,6 +520,7 @@ export const ArticleAuthoringWorkspace = (
           active
           initial={props.initial}
           sessionKey={props.sessionKey}
+          accountEpoch={epoch}
           client={client}
           {...(props.backButtonRef === undefined
             ? {}

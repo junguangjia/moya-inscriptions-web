@@ -30,6 +30,8 @@ export interface ArticleEditorClient extends ArticleAutosavePort {
 export interface ArticleEditorProps {
   /** Stable for ordinary saves; changed only for an explicit account/draft/reload transition. */
   readonly sessionKey: string;
+  /** Original loaded-session epoch, including the lazy editor mount interval. */
+  readonly accountEpoch: number;
   readonly backButtonRef?: RefObject<HTMLButtonElement | null>;
   readonly registerLeaveGuard?: ProductShellEditorOverlayControls["registerLeaveGuard"];
   readonly initial: ArticleDraft;

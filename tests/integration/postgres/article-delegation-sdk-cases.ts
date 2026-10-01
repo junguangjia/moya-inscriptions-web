@@ -16,13 +16,13 @@ import {
   wrapperKeysFrom,
   parseRegisteredClients,
 } from "@moya/community-postgres";
-import { articleAuthorizationConfigFrom } from "../../../services/agent-authorization/src/article-provider.js";
-import { startArticleAuthorizationServer } from "../../../services/agent-authorization/src/article-server.js";
+import { articleAuthorizationConfigFrom } from "@moya/agent-authorization";
+import { startArticleAuthorizationServer } from "@moya/agent-authorization";
 import {
   createArticleDelegationPersistence,
   createArticleDelegationRuntime,
-} from "../../../services/backend-production/src/article-authoring/delegation-composition.js";
-import { handleArticleDelegationRequest } from "../../../services/backend-runtime/src/community/article-delegation-handler.js";
+} from "@moya/backend-production";
+import { handleArticleDelegationRequest } from "@moya/backend-runtime";
 import {
   articleDraftSchema,
   articlePreviewSchema,

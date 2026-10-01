@@ -33,25 +33,35 @@ describe("@moya/backend-runtime package boundary", () => {
     ) as { dependencies?: Record<string, string> };
 
     expect(manifest.dependencies).toEqual({
+      "@modelcontextprotocol/sdk": "1.30.0",
       "@moya/api": "workspace:*",
       "@moya/contracts": "workspace:*",
       "@moya/image": "workspace:*",
       "@moya/public-api": "workspace:*",
       "@moya/search": "workspace:*",
+      zod: "4.4.3",
     });
   });
 
   it("exposes only runtime composition and lifecycle values", async () => {
     expect(Object.keys(await import("@moya/backend-runtime")).sort()).toEqual([
+      "ARTICLE_THUMBNAIL_MAX_BYTES",
       "NotificationSignals",
       "assertProductionAuthConfiguration",
+      "createArticleAuthoringService",
+      "createArticleCatalogReadCallbacks",
+      "createArticleMcpHandler",
       "createBackendApplication",
       "createBackendServer",
       "createDevelopmentAuthService",
       "createDevelopmentCatalogFixtureQueryPort",
       "createPublishingTransferRegistry",
+      "handleArticleAuthoringRequest",
+      "handleArticleDelegationHttpRequest",
+      "handleArticleDelegationRequest",
       "installProcessShutdownHandlers",
       "parseRuntimeConfig",
+      "readBoundedArticleThumbnail",
       "startBackendProcess",
       "startServer",
       "stopServer",

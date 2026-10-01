@@ -235,6 +235,7 @@ export const createArticleAutosave = (options: {
   };
   return {
     store,
+    canMutate: () => sameAccount() && store.get().status !== "permission_lost",
     checkIdentity: () => {
       if (sameAccount() || closed) return;
       cancelTimer();

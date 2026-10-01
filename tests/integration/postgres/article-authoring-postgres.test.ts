@@ -28,7 +28,7 @@ import type {
   WorkDraftContent,
 } from "@moya/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { sourceFactsSql } from "../../../services/community-postgres/src/notifications/source.js";
+import { sourceFactsSql } from "@moya/community-postgres";
 import {
   assertSyntheticTestDatabaseUrl,
   requireSyntheticTestDatabaseUrl,

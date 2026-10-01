@@ -16,11 +16,11 @@ import {
   encodeArticleOwnMediaCursor,
   listArticleOwnMedia,
   resolvePublishedArticleManagedMedia,
-} from "../../services/community-postgres/src/article-authoring/media-read.js";
+} from "@moya/community-postgres";
 import {
   PostgresAuthoredArticleCatalogMediaResolver,
   authoredArticleCatalogPairKey,
-} from "../../services/catalog-postgres/src/authored-article-media-resolver.js";
+} from "@moya/catalog-postgres";
 const owner = `user-${"1".repeat(32)}` as PublicUserId;
 const id = (digit: string) => `media-item-${digit.repeat(32)}`;
 const legacy = `user-media-${"9".repeat(32)}`;

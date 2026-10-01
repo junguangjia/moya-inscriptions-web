@@ -6,13 +6,13 @@ import {
   articleDraftSchema,
   emptyArticleDocument,
 } from "@moya/contracts/schemas";
-import { createBackendApplication } from "../../../services/backend-runtime/src/application.js";
-import type { ArticleDelegationRuntime } from "../../../services/backend-runtime/src/community/article-delegation-handler.js";
+import { createBackendApplication } from "@moya/backend-runtime";
+import type { ArticleDelegationRuntime } from "@moya/backend-runtime";
 import {
   readBoundedArticleThumbnail,
   ARTICLE_THUMBNAIL_MAX_BYTES,
-} from "../../../services/backend-runtime/src/community/article-runtime-read.js";
-import { articleBackendConfigurationFrom } from "../../../services/backend-production/src/article-authoring/runtime-config.js";
+} from "@moya/backend-runtime";
+import { articleBackendConfigurationFrom } from "@moya/backend-production";
 import {
   parseRuntimeConfig,
   createDevelopmentCatalogFixtureQueryPort,

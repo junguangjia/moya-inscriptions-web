@@ -139,6 +139,7 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
       if ((await read(file)).includes("APP_DATABASE_URL")) offenders.push(file);
     }
     expect(offenders).toEqual([
+      "services/backend-production/src/article-authoring/runtime-config.ts",
       "services/backend-production/src/composition.ts",
     ]);
   });

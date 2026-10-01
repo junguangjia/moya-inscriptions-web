@@ -16,7 +16,7 @@ import {
   createDevelopmentCatalogFixtureQueryPort,
 } from "@moya/backend-runtime";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
-import { handleArticleAuthoringRequest } from "../../../services/backend-runtime/src/community/article-authoring-handler.ts";
+import { handleArticleAuthoringRequest } from "@moya/backend-runtime";
 import {
   fixtureUsers,
   InMemoryCommunityIdentityPort,

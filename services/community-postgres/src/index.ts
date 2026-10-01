@@ -136,3 +136,10 @@ export type {
 export { resolvePublishedArticleManagedMedia } from "./article-authoring/media-read.js";
 
 export { selectOwnArticleThumbnail } from "./article-authoring/thumbnail-read.js";
+
+export { sourceFactsSql } from "./notifications/source.js";
+export {
+  decodeArticleOwnMediaCursor,
+  encodeArticleOwnMediaCursor,
+  listArticleOwnMedia,
+} from "./article-authoring/media-read.js";

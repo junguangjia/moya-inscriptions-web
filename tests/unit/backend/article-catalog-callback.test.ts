@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CatalogQueryPort, CatalogSearchQueryPort } from "@moya/api";
 import { CommunityInputError } from "@moya/api";
-import { createArticleCatalogReadCallbacks } from "../../../services/backend-runtime/src/community/article-runtime-read.js";
+import { createArticleCatalogReadCallbacks } from "@moya/backend-runtime";
 
 const fixture = () => {
   const search = vi.fn<CatalogSearchQueryPort["search"]>(async (query) => ({
