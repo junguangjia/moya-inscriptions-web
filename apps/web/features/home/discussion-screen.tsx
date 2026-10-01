@@ -232,17 +232,22 @@ export function DiscussionScreen({
             : {
                 // Real published editorial reads (content-community-completion-v1).
                 news: <EditorialNewsFeed />,
-                threads: author === null ? (
-                  <p role="status">话题暂不可用。</p>
-                ) : (
-                  <ThreadsFeed
-                    localRead={localRead}
-                    onOpen={(id, opener) => {
-                      setLocalRead((old) => new Set(old).add(id));
-                      shell.openTopic(id, opener, shell.readActiveScrollTop());
-                    }}
-                  />
-                ),
+                threads:
+                  author === null ? (
+                    <p role="status">话题暂不可用。</p>
+                  ) : (
+                    <ThreadsFeed
+                      localRead={localRead}
+                      onOpen={(id, opener) => {
+                        setLocalRead((old) => new Set(old).add(id));
+                        shell.openTopic(
+                          id,
+                          opener,
+                          shell.readActiveScrollTop(),
+                        );
+                      }}
+                    />
+                  ),
                 topics: (
                   <>
                     <EditorialTopicsFeed />

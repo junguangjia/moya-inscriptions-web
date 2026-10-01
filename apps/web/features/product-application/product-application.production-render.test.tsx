@@ -31,12 +31,12 @@ describe("ProductApplication public server rendering", () => {
     (initialPlatform) => {
       const markup = renderToStaticMarkup(
         <CatalogSearchProvider>
-        <ProductApplication
-          comments={null}
-          authorCommunity={false}
-          initialPlatform={initialPlatform}
-          states={states}
-        />
+          <ProductApplication
+            comments={null}
+            authorCommunity={false}
+            initialPlatform={initialPlatform}
+            states={states}
+          />
         </CatalogSearchProvider>,
       );
       expect(markup).toContain('data-product-shell=""');
