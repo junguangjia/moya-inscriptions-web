@@ -88,7 +88,7 @@ export const HeaderGhost = ({
             className={styles.ghostStudio}
             style={
               {
-                fontSize: `${(Number.parseFloat(typography.body.mobileSize) / header.width) * 100}cqw`,
+                fontSize: `${((Number.parseFloat(typography.caption.mobileSize) * 0.9) / header.width) * 100}cqw`,
                 marginTop: `${(Number.parseFloat(spacing[2]) / header.width) * 100}cqw`,
               } as CSSProperties
             }
