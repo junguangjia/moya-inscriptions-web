@@ -1,7 +1,7 @@
 .identity {
   display: inline-flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: var(--yoyi-space-1) var(--yoyi-space-3);
   max-width: 100%;
   min-width: 0;
@@ -17,20 +17,26 @@
 
 .studio {
   display: inline-block;
+  flex: 0 0 auto;
   max-width: 100%;
-  padding-inline-start: var(--yoyi-space-3);
-  border-inline-start: 1px solid var(--yoyi-color-border-subtle);
-  color: var(--yoyi-color-text-secondary);
-  font-family: var(--yoyi-font-editorial);
-  font-size: var(--yoyi-type-caption-size);
-  font-weight: 400;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  font-size: var(--yoyi-type-label-size);
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.studio svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  forced-color-adjust: none;
 }
 
 .prominent {
-  padding-inline-start: var(--yoyi-space-3);
-  color: var(--yoyi-color-text-primary);
   font-size: var(--yoyi-type-body-size);
+}
+
+/* Color emoji must also become opaque black in the luminance mask. */
+.cutoutText {
+  filter: brightness(0);
 }

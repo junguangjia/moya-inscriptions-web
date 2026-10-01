@@ -90,7 +90,6 @@ export const HeaderGhost = ({
               {
                 fontSize: `${(Number.parseFloat(typography.body.mobileSize) / header.width) * 100}cqw`,
                 marginTop: `${(Number.parseFloat(spacing[2]) / header.width) * 100}cqw`,
-                "--studio-inset": `${(Number.parseFloat(spacing[3]) / header.width) * 100}cqw`,
               } as CSSProperties
             }
           >

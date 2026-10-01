@@ -187,5 +187,4 @@
 }
 .ghostStudio > span {
   font-size: inherit;
-  padding-inline-start: var(--studio-inset);
 }
