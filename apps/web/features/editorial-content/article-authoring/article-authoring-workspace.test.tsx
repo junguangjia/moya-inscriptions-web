@@ -199,6 +199,7 @@ let root: Root | null = null;
 let node: HTMLDivElement;
 const reloadMedia = vi.fn(async () => undefined);
 const onBack = vi.fn();
+const onPublished = vi.fn();
 const render = async (
   sessionKey = "account:article:1",
   covered = false,
@@ -217,7 +218,7 @@ const render = async (
       reloadMedia={reloadMedia}
       loadMoreMedia={async () => undefined}
       onBack={onBack}
-      onPublished={() => undefined}
+      onPublished={onPublished}
       onReloadDraft={() => undefined}
       onOpenCatalog={() => undefined}
     />
@@ -259,6 +260,7 @@ beforeEach(() => {
   state.frameActive = true;
   vi.clearAllMocks();
   session.limits.mockReset().mockResolvedValue({ maxItems: 20 });
+  session.discard.mockReset().mockResolvedValue(undefined);
   identify.files.mockReset();
   identify.file.mockReset();
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
@@ -277,6 +279,43 @@ afterEach(async () => {
 });
 
 describe("Article authoring media workspace", () => {
+  it("does not notify publication after its deferred upload cleanup outlives the workspace", async () => {
+    await mount();
+    const cleanup = deferred<void>();
+    session.discard.mockReturnValueOnce(cleanup.promise);
+    await act(async () => state.editor!.onPublished(initial.id));
+    expect(session.discard).toHaveBeenCalledOnce();
+    expect(onPublished).not.toHaveBeenCalled();
+    await act(async () => root!.unmount());
+    root = null;
+    await act(async () => cleanup.resolve(undefined));
+    expect(onPublished).not.toHaveBeenCalled();
+  });
+  it("does not notify publication after the same owner's epoch changes during deferred cleanup", async () => {
+    await mount();
+    const cleanup = deferred<void>();
+    session.discard.mockReturnValueOnce(cleanup.promise);
+    await act(async () => state.editor!.onPublished(initial.id));
+    expect(session.discard).toHaveBeenCalledOnce();
+    expect(onPublished).not.toHaveBeenCalled();
+    state.epoch++;
+    await render();
+    expect(state.account).toBe(initial.ownerId);
+    expect(state.editor!.accountEpoch).toBe(1);
+    await act(async () => cleanup.resolve(undefined));
+    expect(onPublished).not.toHaveBeenCalled();
+  });
+  it("notifies the parent exactly once when publication cleanup completes in its live owned epoch", async () => {
+    await mount();
+    const cleanup = deferred<void>();
+    session.discard.mockReturnValueOnce(cleanup.promise);
+    await act(async () => state.editor!.onPublished(initial.id));
+    expect(session.discard).toHaveBeenCalledOnce();
+    expect(onPublished).not.toHaveBeenCalled();
+    await act(async () => cleanup.resolve(undefined));
+    expect(onPublished).toHaveBeenCalledExactlyOnceWith(initial.id);
+  });
+
   it("refuses a late workspace mount after same-owner identity recovery and permits a clean local exit", async () => {
     state.epoch = 3;
     await mount();

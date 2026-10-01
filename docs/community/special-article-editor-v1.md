@@ -1,10 +1,49 @@
 # Special / Article Editor V1
 
-Task: `special-article-editor-v1`, r2. Owner assignment: 2026-09-30. Baseline:
+Task: `special-article-editor-v1`, r3. Owner assignment: 2026-09-30. Baseline:
 `288d4d27e72339402b648f4458ef1aacadcfc681`. Delivery: independently reviewed
 Draft, isolated Development acceptance, private handoff. No Ready, merge, Issue
 closure, release, cloud operation or Production activation. Physical-device and
 visual judgment remain the Owner's.
+
+## r3 — Owner rejected editor UI and requested redesign
+
+Owner instruction 2026-10-01 replaces the initial Article editor presentation
+and separate draft-list workflow. The reference rich-text screenshot specifies
+the quality and interaction direction, not a dependency/engine migration. The
+Owner explicitly confirmed that Work and Article drafts must share the existing
+draft-box entry; Article edits continue autosaving to the signed-in account.
+
+Allowed r3 delta: `apps/web/features/editorial-content/article-authoring/`,
+existing `features/publishing/ui/drafts/` card/picker/style seams,
+`features/publishing/create-action.tsx`, the existing typed ProductShell
+history/ composition seams and directly affected feature tests, plus this
+specification. One writer applies the change in the existing
+worktree/branch/Draft PR.
+
+Provide an always-visible compact rich-text toolbar, real current-block/
+selection formatting, contextual tools, safe-link dialog, clean media blocks
+with image details and gallery-order dialogs, coherent title/body typography,
+cover settings, and a single saved-draft destination. All visible commands act
+on the existing persisted supported schema (paragraph, H2/H3, lists, quote,
+divider, bold/italic/safe links, managed image/gallery/Catalog). No inert
+toolbar buttons or unsupported-format claims. Do not add formats, dependencies,
+contracts, migrations, storage masters, public authorization, collaboration or
+AI features under this presentation redesign.
+
+| Scenario                 | Development                                                                                                                    | Production                    | Must Preserve                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- | ----------------------------------------------------------------------------------- |
+| Draft destination        | Existing account draft box contains Work and Article tabs; each opens its canonical editor                                     | No Article tab/API capability | Work counts/deletion/recovery/history and immutable Article ownership               |
+| New Article              | Create directly from existing publish choice; empty writing canvas without a separate draft management screen                  | Unavailable                   | Idempotent creation and preserved failure input                                     |
+| Formatting               | Fixed compact toolbar plus contextual selection tools; transform current text block, preserve text/caret, actual active states | No editor activation          | Restricted persisted schema, native undo/redo, safe link validation                 |
+| Media                    | Image/gallery/Catalog use current pickers; caption/alt/order editing in scoped dialogs                                         | Unavailable                   | Media identity, upload lifecycle, Live behavior, undo and quotas                    |
+| Save/leave               | Quiet truthful committed-save status; ordinary back flushes then returns to original destination                               | Existing behavior             | Composition deferral, receipt retry, no data loss, account epoch, conflict handling |
+| Preview/publication      | Designed preview/footer and real validation outcome                                                                            | Unavailable                   | Exact candidate/revision, old public version, human approval and Backend policy     |
+| Responsive/accessibility | Desktop grouping and mobile horizontal tools; keyboard labels, selection retention, native modal focus/cancel                  | Existing runtime              | Existing tokens, dark/reduced motion, shell history/focus/viewport                  |
+
+This replaces only the initial editor presentation and separate Article list
+entry. All r1/r2 domain, persistence, identity, publication, MCP, data-isolation
+and Draft/Owner acceptance boundaries below remain binding.
 
 ## Scope and ownership freeze
 

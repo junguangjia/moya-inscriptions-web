@@ -104,7 +104,6 @@ const OwnedArticles = ({
   const [cursor, setCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [published, setPublished] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [mediaItems, setMediaItems] = useState<readonly PublishingMediaItem[]>(
     [],
@@ -116,6 +115,16 @@ const OwnedArticles = ({
   const listRead = useRef(0),
     mediaRead = useRef(0);
   const creation = useRef<CreateArticleDraftCommand | null>(null);
+  useEffect(() => {
+    if (
+      target.type === "article-list" &&
+      accountReady &&
+      controls.openDraftBox !== undefined
+    ) {
+      author.cache.set(`drafts-box-return:${ownerId}`, "article");
+      controls.openDraftBox();
+    }
+  }, [target.type, accountReady, ownerId, author.cache, controls.openDraftBox]);
   const writeBusy = useRef(false);
   const liveRead = (abort: AbortController) =>
     !abort.signal.aborted && lifetime.current === abort;
@@ -172,6 +181,8 @@ const OwnedArticles = ({
       setNotice("账号暂时无法确认，请重新确认后读取专题草稿。");
       return () => abort.abort();
     }
+    if (target.type === "article-list" && controls.openDraftBox !== undefined)
+      return () => abort.abort();
     if (target.type === "article-list") void list();
     else {
       setBusy(true);
@@ -202,6 +213,7 @@ const OwnedArticles = ({
     target.type,
     target.type === "article-draft" ? target.id : "",
     list,
+    controls.openDraftBox,
   ]);
   const create = async () => {
     const abort = lifetime.current;
@@ -305,9 +317,9 @@ const OwnedArticles = ({
           backButtonRef={controls.backButtonRef}
           registerLeaveGuard={controls.registerLeaveGuard}
           onBack={controls.close}
-          onPublished={(id) => {
-            setPublished(id);
-            controls.replaceTarget({ type: "article-list" });
+          onPublished={() => {
+            author.cache.set(`drafts-box-return:${ownerId}`, "article");
+            controls.close();
           }}
           onReloadDraft={(remote) => {
             if (remote.ownerId === ownerId) {
@@ -341,18 +353,6 @@ const OwnedArticles = ({
       <div className={styles.list} aria-busy={busy}>
         {identityNotice}
         {notice === null ? null : <p role="status">{notice}</p>}
-        {published === null ? null : (
-          <p role="status">
-            专题已公开。
-            <a
-              href={`/?topic=${encodeURIComponent(published)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              查看公开文章
-            </a>
-          </p>
-        )}
         {target.type === "article-list" ? (
           <>
             <button type="button" disabled={busy} onClick={() => void create()}>

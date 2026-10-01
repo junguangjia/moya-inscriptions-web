@@ -32,6 +32,9 @@ export interface ArticleAttachmentContextValue {
   readonly attachments: Pick<ArticleDocument, "references" | "galleries">;
   readonly media: ArticleMediaBridge;
   readonly disabled: boolean;
+  readonly editImage: (blockId: string) => void;
+  readonly editGallery: (blockId: string) => void;
+  readonly editLink: () => void;
   readonly moveGalleryImage: (
     blockId: string,
     groupId: string,

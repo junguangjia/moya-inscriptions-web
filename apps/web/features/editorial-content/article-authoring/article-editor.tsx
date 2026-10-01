@@ -6,11 +6,12 @@ import { zh } from "@blocknote/core/locales";
 import { BlockNoteView } from "@blocknote/ariakit";
 import {
   BasicTextStyleButton,
-  CreateLinkButton,
   FormattingToolbar,
   FormattingToolbarController,
   SuggestionMenuController,
   getDefaultReactSlashMenuItems,
+  useBlockNoteEditor,
+  useEditorState,
 } from "@blocknote/react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ArticlePreview } from "@moya/contracts";
@@ -39,24 +40,53 @@ import {
   ArticleAttachmentContext,
   articleSessionAttachments,
   attachArticleReferences,
+  useArticleAttachments,
+  galleryEntry,
+  referenceEntry,
 } from "./article-attachments";
 import { articleBlockNoteSchema } from "./article-blocknote-schema";
 import type { ArticleBlockNoteEditor } from "./article-blocknote-schema";
 import type { ArticleEditorProps } from "./article-editor-props";
 import { ArticleRichBody } from "./article-rich-body";
+import { ArticleTools, ArticleToolIcon } from "./article-tools";
+import { ArticleLinkDialog } from "./article-link-dialog";
+import { ArticleImageDialog } from "./article-image-dialog";
+import {
+  captureArticleSelection,
+  restoreArticleSelection,
+} from "./article-selection";
+import type { ArticleSelection } from "./article-selection";
 import styles from "./article-authoring.module.css";
 
 const nextStableId = () => requestIdentity().replaceAll("-", "");
-const SelectionTools = () => (
-  <FormattingToolbar>
-    <BasicTextStyleButton basicTextStyle="bold" />
-    <BasicTextStyleButton basicTextStyle="italic" />
-    <CreateLinkButton />
-  </FormattingToolbar>
-);
+const SelectionTools = () => {
+  const { disabled, editLink } = useArticleAttachments();
+  const editor = useBlockNoteEditor();
+  const selectedText = useEditorState({
+    editor,
+    selector: ({ editor: current }) => current.getSelectedText(),
+  });
+  if (selectedText.length === 0) return null;
+  return (
+    <FormattingToolbar>
+      <BasicTextStyleButton basicTextStyle="bold" />
+      <BasicTextStyleButton basicTextStyle="italic" />
+      <button
+        type="button"
+        className={styles.toolButton}
+        aria-label="编辑链接"
+        disabled={disabled}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={editLink}
+      >
+        <ArticleToolIcon name="link" />
+      </button>
+    </FormattingToolbar>
+  );
+};
 const statusText = {
-  saved: "已保存到账号",
-  pending: "有未保存的更改",
+  saved: "已保存",
+  pending: "等待保存",
   saving: "保存中…",
   failed: "保存失败",
   conflict: "存在版本冲突",
@@ -84,7 +114,22 @@ export default function ArticleEditor(props: ArticleEditorProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [compare, setCompare] = useState(false);
   busyRef.current = busy !== null && busy !== "close";
-  const [insertMenu, setInsertMenu] = useState(false);
+  const [linkSelection, setLinkSelection] = useState<ArticleSelection | null>(
+    null,
+  );
+  const [imageDetails, setImageDetails] = useState<string | null>(null);
+  const [galleryDetails, setGalleryDetails] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [bodyActive, setBodyActive] = useState(true);
+  const [publishedCompletion, setPublishedCompletion] = useState<
+    ArticlePreview["draft"]["id"] | null
+  >(null);
+  const completionStarted = useRef(false);
+  const pendingLink = useRef<{
+    selection: ArticleSelection;
+    url: string | null;
+    label: string;
+  } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const frozen = useRef({ initial, client, accountEpoch: props.accountEpoch });
   const latest = useRef({ title, attachments, coverRefId, media });
@@ -106,12 +151,69 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     saveStore.get,
     saveStore.get,
   );
-  const canChange = () => auto?.canMutate() === true;
+  const canChange = () =>
+    auto?.canMutate() === true && publishedCompletion === null;
   const mutationAllowed = canChange();
+  const dialogOpen =
+    preview !== null ||
+    compare ||
+    linkSelection !== null ||
+    imageDetails !== null ||
+    galleryDetails !== null ||
+    settingsOpen;
   const activeSave = () => {
     if (auto === null) throw new Error("article_editor_unavailable");
     return auto;
   };
+  // Finish only after React has committed the end of publication activity.
+  // Keep the acknowledged editor frozen while upload leases are released.
+  useEffect(() => {
+    if (
+      publishedCompletion === null ||
+      busy !== null ||
+      auto === null ||
+      completionStarted.current ||
+      auto.isDirty() ||
+      publicationRef.current?.pending() != null ||
+      !auto.canMutate()
+    )
+      return;
+    completionStarted.current = true;
+    props.onPublished(publishedCompletion);
+  }, [publishedCompletion, busy, auto, props.onPublished]);
+  const openLink = () => {
+    if (editor === null || !canChange() || busy !== null || dialogOpen) return;
+    setLinkSelection(captureArticleSelection(editor));
+  };
+  useEffect(() => {
+    if (
+      linkSelection !== null ||
+      editor === null ||
+      pendingLink.current === null
+    )
+      return;
+    const pending = pendingLink.current;
+    pendingLink.current = null;
+    const frame = requestAnimationFrame(() => {
+      if (
+        editorRef.current !== editor ||
+        !auto?.canMutate() ||
+        !restoreArticleSelection(editor, pending.selection)
+      ) {
+        setNotice("选中的内容已变化，请重新选择后编辑链接。");
+        return;
+      }
+      const existing = pending.selection.link;
+      if (pending.url === null) {
+        if (existing !== undefined) editor.deleteLink(existing.from);
+      } else if (!pending.selection.empty) editor.createLink(pending.url);
+      else if (existing !== undefined)
+        editor.editLink(pending.url, existing.text, existing.from);
+      else editor.createLink(pending.url, pending.label);
+      editor.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [linkSelection, editor, auto]);
 
   useEffect(() => {
     const opening = frozen.current;
@@ -299,7 +401,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       const result = verified.result;
       activeSave().adoptPublicationResult(result.draft, verified.checkpoint);
       if (result.status === "published" && !activeSave().isDirty())
-        props.onPublished(result.draft.id);
+        setPublishedCompletion(result.draft.id);
       else {
         setPreview(null);
         setNotice(
@@ -314,7 +416,6 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     if (editor === null || busy !== null || !canChange()) return;
     const anchor = editor.getTextCursorPosition().block.id;
     setBusy("media");
-    setInsertMenu(false);
     try {
       const selected = await latest.current.media.choose({
         multiple,
@@ -378,7 +479,6 @@ export default function ArticleEditor(props: ArticleEditorProps) {
   const insertCatalog = async () => {
     if (editor === null || busy !== null || !canChange()) return;
     const anchor = editor.getTextCursorPosition().block.id;
-    setInsertMenu(false);
     setBusy("media");
     try {
       const catalogId = await latest.current.media.chooseCatalog(
@@ -422,10 +522,18 @@ export default function ArticleEditor(props: ArticleEditorProps) {
         "after",
       );
     else editor.insertBlocks([{ id: nextStableId(), type }], anchor, "after");
-    setInsertMenu(false);
     editor.focus();
   };
   const protectListNesting = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      event.key.toLowerCase() === "k" &&
+      !(event.target instanceof HTMLInputElement)
+    ) {
+      event.preventDefault();
+      openLink();
+      return;
+    }
     if (
       !canChange() ||
       event.key !== "Tab" ||
@@ -546,6 +654,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
         <button
           type="button"
           ref={props.backButtonRef}
+          aria-label="返回草稿箱"
           disabled={busy !== null}
           onClick={() =>
             void act("close", async () => {
@@ -555,10 +664,11 @@ export default function ArticleEditor(props: ArticleEditorProps) {
             })
           }
         >
-          返回
+          <ArticleToolIcon name="back" />
+          <span>返回</span>
         </button>
         <div className={styles.status}>
-          <strong>专题</strong>
+          <strong>写专题</strong>
           <span
             aria-live={
               saved.status === "failed" ||
@@ -568,6 +678,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                 : "off"
             }
           >
+            {saved.status === "saved" ? <ArticleToolIcon name="check" /> : null}
             {statusText[saved.status]}
           </span>
         </div>
@@ -584,6 +695,24 @@ export default function ArticleEditor(props: ArticleEditorProps) {
           {busy === "preview" ? "准备预览…" : "预览"}
         </button>
       </header>
+      {editor === null ? (
+        <div className={styles.toolbar} aria-busy="true">
+          <span>正在准备编辑工具…</span>
+        </div>
+      ) : (
+        <ArticleTools
+          editor={editor}
+          disabled={!mutationAllowed || busy !== null || dialogOpen}
+          bodyActive={bodyActive}
+          canMutate={canChange}
+          onLink={openLink}
+          onImage={() => void insertMedia(false)}
+          onGallery={() => void insertMedia(true)}
+          onCatalog={() => void insertCatalog()}
+          onDivider={() => insertText("divider")}
+          onSettings={() => setSettingsOpen(true)}
+        />
+      )}
       <div className={styles.messages}>
         {saved.message !== null ? (
           <div className={styles.notice} role="alert">
@@ -622,9 +751,11 @@ export default function ArticleEditor(props: ArticleEditorProps) {
             aria-label="专题标题"
             placeholder="写下专题标题"
             value={title}
+            onFocus={() => setBodyActive(false)}
             disabled={
               auto === null ||
               busy !== null ||
+              publishedCompletion !== null ||
               saved.status === "permission_lost"
             }
             maxLength={articleAuthoringLimits.titleCodePoints * 2}
@@ -640,94 +771,11 @@ export default function ArticleEditor(props: ArticleEditorProps) {
         {articleTextLength(title) > articleAuthoringLimits.titleCodePoints ? (
           <p role="alert">标题最多 120 字，请调整后保存。</p>
         ) : null}
-        <div className={styles.touchTools} aria-label="编辑工具">
-          <button
-            type="button"
-            aria-expanded={insertMenu}
-            disabled={editor === null || busy !== null || !mutationAllowed}
-            onClick={() => setInsertMenu((open) => !open)}
-          >
-            插入
-          </button>
-          <button
-            type="button"
-            disabled={editor === null || busy !== null || !mutationAllowed}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              if (canChange()) editor?.moveBlocksUp();
-            }}
-          >
-            上移
-          </button>
-          <button
-            type="button"
-            disabled={editor === null || busy !== null || !mutationAllowed}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              if (canChange()) editor?.moveBlocksDown();
-            }}
-          >
-            下移
-          </button>
-          <button
-            type="button"
-            disabled={editor === null || busy !== null || !mutationAllowed}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              if (canChange()) editor?.undo();
-            }}
-          >
-            撤销
-          </button>
-          <button
-            type="button"
-            disabled={editor === null || busy !== null || !mutationAllowed}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              if (canChange()) editor?.redo();
-            }}
-          >
-            重做
-          </button>
-        </div>
-        {insertMenu && mutationAllowed ? (
-          <div className={styles.insertMenu} aria-label="插入内容">
-            <button type="button" onClick={() => insertText("paragraph")}>
-              段落
-            </button>
-            <button type="button" onClick={() => insertText("heading", 2)}>
-              章节标题
-            </button>
-            <button type="button" onClick={() => insertText("heading", 3)}>
-              小节标题
-            </button>
-            <button type="button" onClick={() => insertText("bulletListItem")}>
-              无序列表
-            </button>
-            <button
-              type="button"
-              onClick={() => insertText("numberedListItem")}
-            >
-              有序列表
-            </button>
-            <button type="button" onClick={() => insertText("quote")}>
-              引用
-            </button>
-            <button type="button" onClick={() => insertText("divider")}>
-              分隔线
-            </button>
-            <button type="button" onClick={() => void insertMedia(false)}>
-              图片
-            </button>
-            <button type="button" onClick={() => void insertMedia(true)}>
-              图片组
-            </button>
-            <button type="button" onClick={() => void insertCatalog()}>
-              藏品引用
-            </button>
-          </div>
-        ) : null}
-        <div className={styles.document} onKeyDownCapture={protectListNesting}>
+        <div
+          className={styles.document}
+          onFocusCapture={() => setBodyActive(true)}
+          onKeyDownCapture={protectListNesting}
+        >
           {editor === null ? (
             <p role="status">正在加载编辑器…</p>
           ) : (
@@ -740,8 +788,17 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                   busy !== null ||
                   preview !== null ||
                   saved.status === "permission_lost" ||
-                  compare,
+                  dialogOpen,
                 moveGalleryImage,
+                editImage: (id) => {
+                  if (canChange() && busy === null && !dialogOpen)
+                    setImageDetails(id);
+                },
+                editGallery: (id) => {
+                  if (canChange() && busy === null && !dialogOpen)
+                    setGalleryDetails(id);
+                },
+                editLink: openLink,
               }}
             >
               <BlockNoteView
@@ -749,7 +806,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                 editable={
                   mutationAllowed &&
                   busy === null &&
-                  preview === null &&
+                  !dialogOpen &&
                   saved.status !== "permission_lost"
                 }
                 className={styles.blocknote}
@@ -791,34 +848,171 @@ export default function ArticleEditor(props: ArticleEditorProps) {
             </ArticleAttachmentContext.Provider>
           )}
         </div>
-        <label className={styles.cover}>
-          <span>封面</span>
-          <select
-            aria-label="专题封面"
-            value={coverRefId ?? ""}
-            disabled={busy !== null || !mutationAllowed}
-            onChange={(event) => {
-              if (!canChange()) return;
-              const id = event.currentTarget.value || null;
-              latest.current = { ...latest.current, coverRefId: id };
-              setCoverRefId(id);
-              auto?.changed();
-            }}
-          >
-            <option value="">不设封面</option>
-            {Object.keys(attachments.references).map((id, index) => (
-              <option key={id} value={id}>
-                已选图片 {index + 1}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
       <div
         ref={setPortal}
         className={styles.portal}
         data-article-editor-portals=""
       />
+      {linkSelection === null ? null : (
+        <ArticleLinkDialog
+          selection={linkSelection}
+          disabled={!mutationAllowed}
+          onCancel={() => setLinkSelection(null)}
+          onSubmit={(url, label) => {
+            if (!canChange()) return;
+            pendingLink.current = { selection: linkSelection, url, label };
+            setLinkSelection(null);
+          }}
+        />
+      )}
+      {imageDetails === null || editor === null
+        ? null
+        : (() => {
+            const image = editor.getBlock(imageDetails);
+            if (image?.type !== "managedImage") return null;
+            return (
+              <ArticleImageDialog
+                caption={image.props.caption}
+                alt={image.props.alt}
+                disabled={!mutationAllowed}
+                onCancel={() => setImageDetails(null)}
+                onSubmit={(caption, alt) => {
+                  if (
+                    !canChange() ||
+                    editorRef.current !== editor ||
+                    editor.getBlock(imageDetails)?.type !== "managedImage"
+                  )
+                    return;
+                  editor.updateBlock(imageDetails, { props: { caption, alt } });
+                  setImageDetails(null);
+                }}
+              />
+            );
+          })()}
+      {galleryDetails === null || editor === null
+        ? null
+        : (() => {
+            const block = editor.getBlock(galleryDetails);
+            if (block?.type !== "imageGallery") return null;
+            const group = galleryEntry(attachments, block.props.groupId);
+            return (
+              <EditorDialog
+                title="调整图片组"
+                size="wide"
+                dataName="article-gallery-details"
+                onCancel={() => setGalleryDetails(null)}
+              >
+                <p className={styles.dialogHint}>
+                  调整图片顺序，修改会自动保存。关闭后仍可撤销。
+                </p>
+                <div className={styles.galleryChoices}>
+                  {group?.referenceIds.map((id, index) => {
+                    const reference = referenceEntry(attachments, id);
+                    return (
+                      <div key={id} className={styles.galleryChoice}>
+                        {reference === undefined ? (
+                          <span>图片不可用</span>
+                        ) : (
+                          media.render(reference, {
+                            alt: `第 ${index + 1} 张`,
+                            active: false,
+                          })
+                        )}
+                        <div>
+                          <span>图片 {index + 1}</span>
+                          <button
+                            type="button"
+                            aria-label={`第 ${index + 1} 张图片上移`}
+                            disabled={!mutationAllowed || index === 0}
+                            onClick={() =>
+                              moveGalleryImage(
+                                block.id,
+                                block.props.groupId,
+                                index,
+                                -1,
+                              )
+                            }
+                          >
+                            <ArticleToolIcon name="up" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`第 ${index + 1} 张图片下移`}
+                            disabled={
+                              !mutationAllowed ||
+                              index === group.referenceIds.length - 1
+                            }
+                            onClick={() =>
+                              moveGalleryImage(
+                                block.id,
+                                block.props.groupId,
+                                index,
+                                1,
+                              )
+                            }
+                          >
+                            <ArticleToolIcon name="down" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className={styles.actions}>
+                  <button
+                    type="button"
+                    className={styles.primary}
+                    onClick={() => setGalleryDetails(null)}
+                  >
+                    完成
+                  </button>
+                </div>
+              </EditorDialog>
+            );
+          })()}
+      {settingsOpen ? (
+        <EditorDialog
+          title="文章设置"
+          dataName="article-settings"
+          onCancel={() => setSettingsOpen(false)}
+        >
+          <label className={styles.cover}>
+            <span>封面</span>
+            <select
+              aria-label="专题封面"
+              value={coverRefId ?? ""}
+              disabled={busy !== null || !mutationAllowed}
+              onChange={(event) => {
+                if (!canChange()) return;
+                const id = event.currentTarget.value || null;
+                latest.current = { ...latest.current, coverRefId: id };
+                setCoverRefId(id);
+                auto?.changed();
+              }}
+            >
+              <option value="">不设封面</option>
+              {Object.keys(attachments.references).map((id, index) => (
+                <option key={id} value={id}>
+                  已选图片 {index + 1}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className={styles.dialogHint}>
+            正文修改会自动保存到草稿箱。预览确认后再发布。
+          </p>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.primary}
+              onClick={() => setSettingsOpen(false)}
+            >
+              完成
+            </button>
+          </div>
+        </EditorDialog>
+      ) : null}
       {preview !== null ? (
         <EditorDialog
           title="专题预览"

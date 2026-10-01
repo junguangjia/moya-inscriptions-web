@@ -311,6 +311,8 @@ export interface ProductShellEditorOverlayControls {
   ) => () => void;
   /** Replaces the current editor entry, e.g. once a new work gains a draft. */
   readonly replaceTarget: (target: ProductEditorTarget) => void;
+  /** Retires only the legacy Article list alias into the existing own profile. */
+  readonly openDraftBox?: () => void;
 }
 
 export interface ProductShellTopicOverlayRenderProps {
@@ -1468,6 +1470,38 @@ export const ProductShell = ({
     },
     [setEditorVisibility, allowedEditorTarget],
   );
+  const openEditorDraftBox = useCallback(() => {
+    const current = editorRef.current;
+    if (
+      !articleEditorEnabled ||
+      !profileEnabled ||
+      current?.editorTarget.type !== "article-list"
+    )
+      return;
+    const profile = profileHistoryState(
+      null,
+      requestIdentity(),
+      "works",
+      0,
+      current.sourceDestination,
+      current.sourceScrollTop,
+    );
+    window.history.replaceState(
+      currentProductHistoryState(profile),
+      "",
+      profileLocation(window.location, null),
+    );
+    disposeEditorLeaveGuard();
+    editorBelowRef.current = null;
+    setEditorVisibility(null);
+    setProfileVisibility(profile);
+  }, [
+    articleEditorEnabled,
+    profileEnabled,
+    disposeEditorLeaveGuard,
+    setEditorVisibility,
+    setProfileVisibility,
+  ]);
   const editorControls = useMemo<ProductShellEditorOverlayControls>(
     () => ({
       backButtonRef: editorBackRef,
@@ -1475,12 +1509,14 @@ export const ProductShell = ({
       completeWith: completeEditor,
       registerLeaveGuard: registerEditorLeaveGuard,
       replaceTarget: replaceEditorTarget,
+      openDraftBox: openEditorDraftBox,
     }),
     [
       closeEditor,
       completeEditor,
       registerEditorLeaveGuard,
       replaceEditorTarget,
+      openEditorDraftBox,
     ],
   );
 

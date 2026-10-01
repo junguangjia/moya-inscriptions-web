@@ -618,6 +618,30 @@ const articleClientImports: ReadonlyMap<
 > = new Map(
   (
     Object.entries({
+      "features/editorial-content/article-authoring/article-create-entry.tsx": {
+        "author-community-client": ["authorClient"],
+        "article-authoring-client": [
+          "articleAuthoringClient",
+          "ArticleRequestError",
+          "createEmptyArticleDocument",
+        ],
+      },
+      "features/editorial-content/article-authoring/article-drafts-panel.tsx": {
+        "author-community-client": ["authorClient"],
+        "article-authoring-client": ["articleAuthoringClient"],
+      },
+      "features/editorial-content/article-authoring/article-link-dialog.tsx": {
+        "article-authoring-client": ["isArticleSafeLink"],
+      },
+      "features/editorial-content/article-authoring/article-image-dialog.tsx": {
+        "article-authoring-client": [
+          "articleAuthoringLimits",
+          "articleTextLength",
+        ],
+      },
+      "features/publishing/ui/drafts/drafts-card.tsx": {
+        "author-community-client": ["authorClient"],
+      },
       "features/editorial-content/article-authoring/article-agent-page.tsx": {
         "author-community-client": ["authorClient"],
         "work-publishing-client": ["publishingClient"],

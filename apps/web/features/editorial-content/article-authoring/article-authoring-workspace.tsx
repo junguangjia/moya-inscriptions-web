@@ -542,6 +542,15 @@ export const ArticleAuthoringWorkspace = (
           onBack={close}
           onReloadDraft={props.onReloadDraft}
           onPublished={(id) => {
+            const abort = lifetime.current;
+            const generation = sessionGeneration.current;
+            const current = () =>
+              abort !== null &&
+              !abort.signal.aborted &&
+              lifetime.current === abort &&
+              generation === sessionGeneration.current &&
+              sameAccount();
+            if (!current()) return;
             if (uploads === null) props.onPublished(id);
             else
               void uploads
@@ -549,7 +558,7 @@ export const ArticleAuthoringWorkspace = (
                 .catch(() => undefined)
                 .finally(() => {
                   resolver.dispose();
-                  props.onPublished(id);
+                  if (current()) props.onPublished(id);
                 });
           }}
         />

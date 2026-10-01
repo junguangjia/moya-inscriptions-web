@@ -18,6 +18,7 @@ import {
   useArticleAttachments,
 } from "./article-attachments";
 import styles from "./article-authoring.module.css";
+import { ArticleToolIcon } from "./article-tools";
 
 const fixedColors = {
   backgroundColor: { default: "default", values: ["default"] },
@@ -71,8 +72,9 @@ const managedImage = createReactBlockSpec(
     content: "none",
   },
   {
-    render: ({ block, editor }) => {
-      const { attachments, media, disabled } = useArticleAttachments();
+    render: ({ block }) => {
+      const { attachments, media, disabled, editImage } =
+        useArticleAttachments();
       const reference = referenceEntry(attachments, block.props.refId);
       return (
         <figure className={styles.imageBlock} contentEditable={false}>
@@ -81,38 +83,27 @@ const managedImage = createReactBlockSpec(
           ) : (
             media.render(reference, { alt: block.props.alt, active: !disabled })
           )}
-          <label>
-            <span>图片说明</span>
-            <input
+          <div className={styles.imageDetails}>
+            {block.props.caption === "" ? null : (
+              <figcaption>{block.props.caption}</figcaption>
+            )}
+            <button
+              type="button"
+              className={styles.blockAction}
+              aria-label="编辑图片说明"
               disabled={disabled}
-              aria-label="图片说明"
-              maxLength={articleAuthoringLimits.captionCodePoints * 2}
-              value={block.props.caption}
-              onChange={(event) =>
-                editor.updateBlock(block, {
-                  props: { caption: event.currentTarget.value },
-                })
-              }
-            />
-          </label>
+              onClick={() => editImage(block.id)}
+            >
+              <ArticleToolIcon name="settings" />
+              <span>
+                {block.props.caption === "" ? "添加说明" : "编辑说明"}
+              </span>
+            </button>
+          </div>
           {articleTextLength(block.props.caption) >
           articleAuthoringLimits.captionCodePoints ? (
             <p role="alert">图片说明最多 200 字。</p>
           ) : null}
-          <label>
-            <span>图片替代文字</span>
-            <input
-              disabled={disabled}
-              aria-label="图片替代文字"
-              maxLength={articleAuthoringLimits.captionCodePoints * 2}
-              value={block.props.alt}
-              onChange={(event) =>
-                editor.updateBlock(block, {
-                  props: { alt: event.currentTarget.value },
-                })
-              }
-            />
-          </label>
         </figure>
       );
     },
@@ -133,54 +124,44 @@ const imageGallery = createReactBlockSpec(
   },
   {
     render: ({ block }) => {
-      const { attachments, media, disabled, moveGalleryImage } =
+      const { attachments, media, disabled, editGallery } =
         useArticleAttachments();
       const gallery = galleryEntry(attachments, block.props.groupId);
       return gallery === undefined ? (
         <p role="alert">图组引用不可用，请重新选择。</p>
       ) : (
-        <div
-          className={styles.gallery}
+        <figure
+          className={styles.galleryBlock}
           contentEditable={false}
           aria-label="图片组"
         >
-          {gallery.referenceIds.map((id, index) => {
-            const reference = referenceEntry(attachments, id);
-            return (
-              <figure key={id}>
-                {reference === undefined ? (
-                  <p>图片不可用</p>
-                ) : (
-                  media.render(reference, { alt: "", active: !disabled })
-                )}
-                <div>
-                  <button
-                    type="button"
-                    aria-label={`第 ${index + 1} 张图片上移`}
-                    disabled={disabled || index === 0}
-                    onClick={() =>
-                      moveGalleryImage(block.id, block.props.groupId, index, -1)
-                    }
-                  >
-                    上移
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`第 ${index + 1} 张图片下移`}
-                    disabled={
-                      disabled || index === gallery.referenceIds.length - 1
-                    }
-                    onClick={() =>
-                      moveGalleryImage(block.id, block.props.groupId, index, 1)
-                    }
-                  >
-                    下移
-                  </button>
-                </div>
-              </figure>
-            );
-          })}
-        </div>
+          <div className={styles.gallery}>
+            {gallery.referenceIds.map((id) => {
+              const reference = referenceEntry(attachments, id);
+              return (
+                <figure key={id}>
+                  {reference === undefined ? (
+                    <p>图片不可用</p>
+                  ) : (
+                    media.render(reference, { alt: "", active: !disabled })
+                  )}
+                </figure>
+              );
+            })}
+          </div>
+          <figcaption className={styles.imageDetails}>
+            <span>{gallery.referenceIds.length} 张图片</span>
+            <button
+              type="button"
+              className={styles.blockAction}
+              disabled={disabled}
+              onClick={() => editGallery(block.id)}
+            >
+              <ArticleToolIcon name="gallery" />
+              调整图组
+            </button>
+          </figcaption>
+        </figure>
       );
     },
     toExternalHTML: () => <p>图片组</p>,

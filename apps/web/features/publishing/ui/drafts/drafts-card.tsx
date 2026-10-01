@@ -10,6 +10,10 @@ import {
 import { createPortal } from "react-dom";
 
 import { useAuthors } from "../../../authors/author-context";
+import { authorClient } from "../../../../lib/public-api/author-community-client";
+import { useProductShell } from "../../../product-shell/product-shell";
+import type { ProductEditorTarget } from "../../../product-shell/product-history";
+import { useArticleAvailability } from "../../../editorial-content/article-authoring/article-availability";
 import homeStyles from "../../../home/home-screen.module.css";
 import { usePublishingEntry } from "../../publishing-entry";
 import { publishingClient } from "../../publishing-data";
@@ -63,6 +67,9 @@ export const DraftsCard = ({
 }) => {
   const author = useAuthors();
   const entry = usePublishingEntry();
+  const shell = useProductShell();
+  const articleEnabled = useArticleAvailability();
+  const returnKey = `drafts-box-return:${accountId}`;
   const cacheKey = `drafts-card:${accountId}`;
   const [state, setState] = useState<CardState>(
     () =>
@@ -71,16 +78,29 @@ export const DraftsCard = ({
       },
   );
   const [picker, setPicker] = useState(false);
+  const [pickerType, setPickerType] = useState<"work" | "article">("work");
   const openerRef = useRef<HTMLButtonElement>(null);
-  const pendingDraft = useRef<string | null>(null);
+  const pendingTarget = useRef<ProductEditorTarget | null>(null);
+  const pendingArticleEpoch = useRef<number | null>(null);
   const controller = useRef<AbortController | null>(null);
   const settled = useRef(onSettled);
   settled.current = onSettled;
   const latest = useRef({
     openEditor: entry.openEditor,
+    openArticle: shell.openEditor,
+    articleEnabled,
+    ownerId: author.viewer?.id ?? null,
+    checking: author.checking,
     notify: author.notify,
   });
-  latest.current = { openEditor: entry.openEditor, notify: author.notify };
+  latest.current = {
+    openEditor: entry.openEditor,
+    openArticle: shell.openEditor,
+    articleEnabled,
+    ownerId: author.viewer?.id ?? null,
+    checking: author.checking,
+    notify: author.notify,
+  };
 
   const show = useCallback(
     (next: CardState) => {
@@ -123,12 +143,47 @@ export const DraftsCard = ({
     settled.current?.();
   }, [state]);
 
+  // The existing owner profile returns from an Article to this same box.
+  // Only the visible card consumes the transient, account-keyed request.
+  useEffect(() => {
+    if (
+      !articleEnabled ||
+      !active ||
+      shell.activeEditor !== null ||
+      author.checking ||
+      author.sessionError ||
+      author.viewer?.id !== accountId ||
+      author.cache.get(returnKey) !== "article"
+    )
+      return;
+    const opener = openerRef.current;
+    if (
+      opener === null ||
+      opener.closest('[inert], [hidden], [aria-hidden="true"]') !== null
+    )
+      return;
+    author.cache.delete(returnKey);
+    setPickerType("article");
+    setPicker(true);
+  }, [
+    accountId,
+    active,
+    articleEnabled,
+    author.cache,
+    author.checking,
+    author.sessionError,
+    author.viewer?.id,
+    returnKey,
+    shell.activeEditor,
+    shell.activeProfile,
+  ]);
+
   // The picker's AuthorDialog owns a temporary history entry. The editor
   // opens only after that entry is gone, so it never inherits (and later
   // loses) the dialog's history marker.
   useEffect(() => {
-    if (picker || pendingDraft.current === null) return undefined;
-    const draftId = pendingDraft.current;
+    if (picker || pendingTarget.current === null) return undefined;
+    const target = pendingTarget.current;
     const started = Date.now();
     let timer = 0;
     const attempt = () => {
@@ -142,24 +197,50 @@ export const DraftsCard = ({
           timer = window.setTimeout(attempt, HISTORY_SETTLE_STEP_MS);
           return;
         }
-        pendingDraft.current = null;
+        pendingTarget.current = null;
         latest.current.notify("暂时无法打开草稿，请重试");
         return;
       }
-      pendingDraft.current = null;
+      pendingTarget.current = null;
       const opener = openerRef.current;
+      if (opener === null) {
+        latest.current.notify("暂时无法打开草稿，请重试");
+        return;
+      }
+      if (target.type === "article-draft") {
+        if (
+          !latest.current.articleEnabled ||
+          latest.current.checking ||
+          latest.current.ownerId !== accountId ||
+          authorClient.account() !== accountId ||
+          authorClient.accountEpoch() !== pendingArticleEpoch.current
+        ) {
+          latest.current.notify("请先确认当前账号后打开专题草稿");
+          return;
+        }
+        author.cache.set(returnKey, "article");
+        if (!latest.current.openArticle(target, opener))
+          latest.current.notify("暂时无法打开专题草稿，请重试");
+        return;
+      }
       if (
-        opener === null ||
-        !latest.current.openEditor({ type: "draft", id: draftId }, opener)
+        target.type !== "article-list" &&
+        !latest.current.openEditor(target, opener)
       )
         latest.current.notify("暂时无法打开草稿，请重试");
     };
     timer = window.setTimeout(attempt, 0);
     return () => window.clearTimeout(timer);
-  }, [picker]);
+  }, [accountId, author.cache, picker, returnKey]);
 
   const newest = state.status === "ready" ? state.newest : null;
   const text = countText(state);
+  const label = articleEnabled ? "草稿箱" : "草稿";
+  const detail = articleEnabled
+    ? state.status === "ready"
+      ? `${state.total === 0 ? "暂无作品草稿" : `${state.total} 份作品草稿`} + 专题草稿`
+      : `${text} + 专题草稿`
+    : text;
 
   return (
     <div className={styles.stack} data-drafts-card-stack="">
@@ -192,17 +273,20 @@ export const DraftsCard = ({
           />
         )}
         <div className={homeStyles.cardBody}>
-          <h3 className={homeStyles.cardTitle}>草稿</h3>
+          <h3 className={homeStyles.cardTitle}>{label}</h3>
           <p className={`${homeStyles.cardMetadata} ${styles.cardMeta}`}>
-            {text}
+            {detail}
           </p>
         </div>
         <button
           ref={openerRef}
           aria-haspopup="dialog"
-          aria-label={`草稿，${text}`}
+          aria-label={`${label}，${detail}`}
           className={homeStyles.cardAction}
-          onClick={() => setPicker(true)}
+          onClick={() => {
+            setPickerType("work");
+            setPicker(true);
+          }}
           type="button"
         />
       </article>
@@ -213,12 +297,19 @@ export const DraftsCard = ({
             <div onWheel={(event) => event.stopPropagation()}>
               <DraftsPicker
                 accountId={accountId}
+                articleEnabled={articleEnabled}
+                initialType={pickerType}
+                onOpenArticle={(id) => {
+                  pendingTarget.current = { type: "article-draft", id };
+                  pendingArticleEpoch.current = authorClient.accountEpoch();
+                  setPicker(false);
+                }}
                 onChanged={(total, first) =>
                   show({ status: "ready", total, newest: first })
                 }
                 onClose={() => setPicker(false)}
                 onOpenDraft={(draftId) => {
-                  pendingDraft.current = draftId;
+                  pendingTarget.current = { type: "draft", id: draftId };
                   setPicker(false);
                 }}
               />
