@@ -28,16 +28,19 @@ Codex: `$yoyi-review ...`. Claude Code: `/yoyi-review ...`.
    specification it links.
 2. The exact head: `gh pr view <n> --json headRefOid,baseRefName,isDraft` and
    `git diff <base>...<head> --stat`; state the SHA you reviewed. A later commit
-   invalidates the review.
-3. The actual diff, file by file, against the approved scope: paths outside the
-   scope, deletions, both sides of renames, lockfile, migrations, Contracts, CI
-   and instruction files.
+   requires reviewing its delta and integration impact and binding the final
+   decision to the new HEAD; retain the review of unchanged parts.
+3. The actual task diff, or the new delta after an earlier review, file by file
+   against the approved scope: paths outside the scope, deletions, both sides of
+   renames, lockfile, migrations, Contracts, CI and instruction files.
 4. Applicable evidence: CI check runs for that head, the task's private
    validation `summary.json` when the writer shared its path, and whether the
-   evidence matches the reviewed head (previous-head evidence never counts).
-   Feedback-mode evidence labeled `FEEDBACK ONLY — NOT FULL ACCEPTANCE` is an
-   intermediate preview only; it does not satisfy complete task validation or
-   permission to merge.
+   evidence applies to the reviewed candidate. Required CI must match that
+   candidate; reuse prior review and acceptance only under the final integration
+   rules in `docs/development/task-workflow.md`. Do not relabel an earlier run
+   as a new execution. Feedback-mode evidence labeled
+   `FEEDBACK ONLY — NOT FULL ACCEPTANCE` is an intermediate preview only; it
+   does not satisfy complete task validation or permission to merge.
 5. Review threads and the PR template sections; Owner gates that apply (visual
    or real-device acceptance, directional decisions, Production authority).
 

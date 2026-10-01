@@ -80,8 +80,9 @@ Restrictions, approvals and delivery stop: ...
    worktree, branch and PR. Never create another branch or worktree for a
    handoff.
 5. Reuse valid evidence. Unchanged content keeps its results; a changed tool
-   alone does not require a rerun. Previous-head CI or device acceptance is not
-   current-head evidence.
+   alone does not require a rerun. Required CI must match the final candidate;
+   carry forward review and Owner acceptance only under the shared workflow's
+   final integration rules, without relabeling earlier runs.
 
 ## Boundaries
 
