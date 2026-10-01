@@ -281,7 +281,7 @@ afterEach(async () => {
 describe("Article authoring media workspace", () => {
   it("does not notify publication after its deferred upload cleanup outlives the workspace", async () => {
     await mount();
-    const cleanup = deferred<void>();
+    const cleanup = deferred<undefined>();
     session.discard.mockReturnValueOnce(cleanup.promise);
     await act(async () => state.editor!.onPublished(initial.id));
     expect(session.discard).toHaveBeenCalledOnce();
@@ -293,7 +293,7 @@ describe("Article authoring media workspace", () => {
   });
   it("does not notify publication after the same owner's epoch changes during deferred cleanup", async () => {
     await mount();
-    const cleanup = deferred<void>();
+    const cleanup = deferred<undefined>();
     session.discard.mockReturnValueOnce(cleanup.promise);
     await act(async () => state.editor!.onPublished(initial.id));
     expect(session.discard).toHaveBeenCalledOnce();
@@ -307,7 +307,7 @@ describe("Article authoring media workspace", () => {
   });
   it("notifies the parent exactly once when publication cleanup completes in its live owned epoch", async () => {
     await mount();
-    const cleanup = deferred<void>();
+    const cleanup = deferred<undefined>();
     session.discard.mockReturnValueOnce(cleanup.promise);
     await act(async () => state.editor!.onPublished(initial.id));
     expect(session.discard).toHaveBeenCalledOnce();

@@ -466,25 +466,50 @@ describe("Article exact inline selection and safe link commands", () => {
     );
   });
 
-  it("refuses a different editor lifetime with the same authored blocks", () => {
+  it("refuses a different editor lifetime with the complete equivalent native document", () => {
     const initial = inlineFixture();
     const first = makeEditor(initial);
     selectInline(first, "mixed", 4, 1);
     const captured = captureArticleSelection(first);
-    const next = makeEditor(initial);
+    // Capture every actual first.document block and ID through the real adapter.
+    // The adapter removes only undefined content:none fields; it does not drop
+    // blocks. Do not slice the authored content or replace the live PM state.
+    const copied = canonical(first, initial);
+    const next = makeEditor(copied);
     selectInline(next, "mixed", 0);
-    // Each native lifetime owns a newly generated trailing block. Compare the
-    // authored blocks rather than assuming native UI nodes share those IDs.
-    expect(canonical(next, initial).blocks.slice(0, 2)).toEqual(
-      canonical(first, initial).blocks.slice(0, 2),
+    expect(next.getBlock("mixed")?.id).toBe("mixed");
+    expect(next.document.map(({ id }) => id)).toEqual(
+      first.document.map(({ id }) => id),
     );
-    const current = canonical(next, initial);
+    expect(canonical(next, copied)).toEqual(copied);
+    expect(next.prosemirrorState.doc.toJSON()).toEqual(
+      captured.document.toJSON(),
+    );
+
+    // Each real Tiptap editor has its own Schema/NodeType objects. Native eq()
+    // requires NodeType identity, so compare the COMPLETE captured document
+    // inside the receiving schema without modifying its state or ID caches.
+    const comparable = {
+      ...captured,
+      document: next.pmSchema.nodeFromJSON(captured.document.toJSON()),
+    };
+    expect(next.prosemirrorState.doc.eq(comparable.document)).toBe(true);
+    expect(comparable.editor).toBe(first);
+    expect(comparable.editor).not.toBe(next);
+    const current = canonical(next, copied);
     const currentSelection = next.prosemirrorState.selection.toJSON();
 
     expect(restoreArticleSelection(next, captured)).toBe(false);
+    // This independently exercises the editor-lifetime guard: if that guard
+    // were removed, the already-equal native document would permit restore.
+    expect(restoreArticleSelection(next, comparable)).toBe(false);
 
-    expect(canonical(next, initial)).toEqual(current);
+    expect(canonical(next, copied)).toEqual(current);
     expect(next.prosemirrorState.selection.toJSON()).toEqual(currentSelection);
+    // The original captured range remains valid in its original lifetime.
+    first.setTextCursorPosition("other", "end");
+    expect(restoreArticleSelection(first, captured)).toBe(true);
+    expect(first.getSelectedText()).toBe("bcd");
   });
 });
 
