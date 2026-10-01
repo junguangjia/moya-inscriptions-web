@@ -93,6 +93,8 @@ export const articleStyledTextSchema = z.strictObject({
   styles: z.strictObject({
     bold: z.boolean().optional(),
     italic: z.boolean().optional(),
+    underline: z.boolean().optional(),
+    textColor: z.enum(["default", "gray", "red", "brown"]).optional(),
   }),
 });
 export const articleInlineContentSchema = z.discriminatedUnion("type", [

@@ -217,6 +217,13 @@
                   },
                   "italic": {
                     "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
+                    "type": "boolean"
                   }
                 },
                 "type": "object"
@@ -1793,6 +1800,13 @@
                   },
                   "italic": {
                     "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
+                    "type": "boolean"
                   }
                 },
                 "type": "object"
@@ -2710,6 +2724,13 @@
                     "type": "boolean"
                   },
                   "italic": {
+                    "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
                     "type": "boolean"
                   }
                 },
@@ -5545,6 +5566,13 @@
                   },
                   "italic": {
                     "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
+                    "type": "boolean"
                   }
                 },
                 "type": "object"
@@ -6430,6 +6458,13 @@
                     "type": "boolean"
                   },
                   "italic": {
+                    "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
                     "type": "boolean"
                   }
                 },
@@ -8195,6 +8230,13 @@
                   },
                   "italic": {
                     "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
+                    "type": "boolean"
                   }
                 },
                 "type": "object"
@@ -9304,6 +9346,13 @@
                     "type": "boolean"
                   },
                   "italic": {
+                    "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
                     "type": "boolean"
                   }
                 },
@@ -13229,6 +13278,13 @@
                     "type": "boolean"
                   },
                   "italic": {
+                    "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
                     "type": "boolean"
                   }
                 },
@@ -25633,6 +25689,13 @@
                     "type": "boolean"
                   },
                   "italic": {
+                    "type": "boolean"
+                  },
+                  "textColor": {
+                    "enum": ["default", "gray", "red", "brown"],
+                    "type": "string"
+                  },
+                  "underline": {
                     "type": "boolean"
                   }
                 },

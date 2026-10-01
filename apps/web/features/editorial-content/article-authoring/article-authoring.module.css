@@ -24,7 +24,7 @@
   border: 0;
   min-height: 44px;
   padding: var(--yoyi-space-2) var(--yoyi-space-3);
-  border-radius: var(--yoyi-radius-md);
+  border-radius: var(--yoyi-radius-full);
   background: transparent;
   color: var(--yoyi-color-text-primary);
   font: inherit;
@@ -70,25 +70,39 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  gap: var(--yoyi-space-2);
-  padding: var(--yoyi-space-2) var(--yoyi-space-4);
-  border-bottom: 1px solid var(--yoyi-color-border-subtle);
-  background: var(--yoyi-color-background-elevated);
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
+  gap: var(--yoyi-space-4);
+  margin: var(--yoyi-space-3) auto;
+  max-width: calc(100% - 24px);
+  padding: var(--yoyi-space-2) var(--yoyi-space-3);
+  position: relative;
+  border-radius: var(--yoyi-radius-full);
 }
-.toolGroup {
+.formattingRow,
+.utilityRow {
   display: flex;
   align-items: center;
-  flex-shrink: 0;
-  padding-right: var(--yoyi-space-2);
-  border-right: 1px solid var(--yoyi-color-border-subtle);
+  justify-content: center;
+  gap: var(--yoyi-space-1);
 }
-.toolGroup:last-child {
+.utilityRow {
+  padding-left: var(--yoyi-space-3);
+  border-left: 1px solid var(--yoyi-color-border-subtle);
+}
+.mobileFormat {
+  display: none;
+}
+.insertButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  min-height: 44px;
+  padding: var(--yoyi-space-2) var(--yoyi-space-3);
   border: 0;
-  padding-right: 0;
+  border-radius: var(--yoyi-radius-full);
+  background: transparent;
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  cursor: pointer;
 }
 .toolButton,
 .formatButton {
@@ -101,7 +115,7 @@
   padding: var(--yoyi-space-2);
   color: var(--yoyi-color-text-primary);
   border: 0;
-  border-radius: var(--yoyi-radius-sm);
+  border-radius: var(--yoyi-radius-full);
   background: transparent;
   font: inherit;
   cursor: pointer;
@@ -210,7 +224,7 @@
   min-height: 44px;
   padding: var(--yoyi-space-3) var(--yoyi-space-5);
   border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-md);
+  border-radius: var(--yoyi-radius-full);
   color: var(--yoyi-color-text-primary);
   background: var(--yoyi-color-background-surface);
   font: inherit;
@@ -321,8 +335,37 @@
 }
 @media (max-width: 760px) {
   .toolbar {
-    justify-content: flex-start;
+    flex-direction: column;
+    gap: 0;
+    padding: var(--yoyi-space-2) var(--yoyi-space-3);
+    border-radius: var(--yoyi-radius-lg);
+    width: max-content;
+    box-sizing: border-box;
   }
+  .utilityRow {
+    border-left: 0;
+    border-top: 1px solid var(--yoyi-color-border-subtle);
+    padding-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+  .formatButton {
+    width: 48px;
+    min-width: 48px;
+    padding: var(--yoyi-space-2);
+    justify-content: center;
+  }
+  .desktopFormat {
+    display: none;
+  }
+  .mobileFormat {
+    display: inline;
+  }
+  .blocknote :global(.bn-side-menu),
+  .portal :global(.bn-side-menu) {
+    display: none;
+  }
+
   .status {
     gap: var(--yoyi-space-2);
     flex-wrap: wrap;
@@ -513,4 +556,68 @@
 }
 .blocknote :global(.bn-editor:focus-visible) {
   outline: none;
+}
+
+.colorSwatch {
+  font-size: var(--yoyi-type-section-title-size) !important;
+  border-bottom: 3px solid currentColor;
+}
+.editor [data-article-text-color="default"],
+.portal [data-article-text-color="default"],
+.editor [data-article-text-color="gray"],
+.portal [data-article-text-color="gray"],
+.editor [data-article-text-color="red"],
+.portal [data-article-text-color="red"],
+.editor [data-article-text-color="brown"],
+.portal [data-article-text-color="brown"] {
+  color: var(--yoyi-color-text-primary) !important;
+}
+.editor [data-article-text-color="gray"],
+.portal [data-article-text-color="gray"],
+.blocknote :global([data-article-text-color="gray"]) {
+  color: var(--yoyi-color-text-secondary) !important;
+}
+.editor [data-article-text-color="red"],
+.portal [data-article-text-color="red"],
+.blocknote :global([data-article-text-color="red"]) {
+  color: var(--yoyi-color-seal-red) !important;
+}
+.editor [data-article-text-color="brown"],
+.portal [data-article-text-color="brown"],
+.blocknote :global([data-article-text-color="brown"]) {
+  color: var(--yoyi-color-ink-gray) !important;
+}
+.blockControls {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.blockControls button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  background: transparent;
+  color: var(--yoyi-color-text-secondary);
+  cursor: pointer;
+}
+.blockControls button:hover,
+.blockControls button[data-dragging="true"] {
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-seal-red-muted);
+}
+.dragHandle {
+  touch-action: none;
+  cursor: grab !important;
+}
+.blocknote :global([data-article-drop="before"]) {
+  box-shadow: 0 -2px var(--yoyi-color-seal-red);
+}
+.blocknote :global([data-article-drop="after"]) {
+  box-shadow: 0 2px var(--yoyi-color-seal-red);
+}
+.imageDetails {
+  flex-wrap: wrap;
 }

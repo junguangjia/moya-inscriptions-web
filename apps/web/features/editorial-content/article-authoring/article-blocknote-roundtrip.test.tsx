@@ -33,7 +33,7 @@ const content: ArticleDocument = {
         {
           type: "text",
           text: "空格  与换行\n异体𠮷字",
-          styles: { italic: true },
+          styles: { italic: true, underline: true, textColor: "red" },
         },
         {
           type: "link",
@@ -110,7 +110,31 @@ describe("restricted BlockNote canonical roundtrip", () => {
     expect(Object.keys(editor.schema.styleSchema).sort()).toEqual([
       "bold",
       "italic",
+      "textColor",
+      "underline",
     ]);
+    editor.unmount();
+  });
+  it("filters arbitrary clipboard colors and preserves supported internal color/underline", async () => {
+    const editor = BlockNoteEditor.create({ schema: articleBlockNoteSchema });
+    const blocks = await editor.tryParseHTMLToBlocks(
+      '<p><span data-style-type="textColor" data-value="rgb(1,2,3)">a</span><span data-style-type="textColor" data-value="brown"><u>𠮷</u></span><span style="color:rgb(1,2,3)">b</span></p>',
+    );
+    const parsed = parseArticleEditorDocument(blocks, {
+      references: {},
+      galleries: {},
+    });
+    expect(parsed.blocks[0]).toMatchObject({
+      content: [
+        { type: "text", text: "a", styles: {} },
+        {
+          type: "text",
+          text: "𠮷",
+          styles: { textColor: "brown", underline: true },
+        },
+        { type: "text", text: "b", styles: {} },
+      ],
+    });
     editor.unmount();
   });
   it("starts a new session with reachable maps while keeping cover references", () => {

@@ -35,6 +35,7 @@ export interface ArticleAttachmentContextValue {
   readonly editImage: (blockId: string) => void;
   readonly editGallery: (blockId: string) => void;
   readonly editLink: () => void;
+  readonly blockControls?: (blockId: string) => ReactNode;
   readonly moveGalleryImage: (
     blockId: string,
     groupId: string,

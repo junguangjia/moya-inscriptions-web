@@ -1,11 +1,16 @@
 "use client";
 
-import { BlockNoteEditor } from "@blocknote/core";
+import { BlockNoteEditor, nodeToBlock } from "@blocknote/core";
 import { filterSuggestionItems } from "@blocknote/core/extensions";
 import { zh } from "@blocknote/core/locales";
 import { BlockNoteView } from "@blocknote/ariakit";
 import {
   BasicTextStyleButton,
+  SideMenuController,
+  SideMenu,
+  DragHandleButton,
+  DragHandleMenu,
+  RemoveBlockItem,
   FormattingToolbar,
   FormattingToolbarController,
   SuggestionMenuController,
@@ -48,6 +53,7 @@ import { articleBlockNoteSchema } from "./article-blocknote-schema";
 import type { ArticleBlockNoteEditor } from "./article-blocknote-schema";
 import type { ArticleEditorProps } from "./article-editor-props";
 import { ArticleRichBody } from "./article-rich-body";
+import { ArticleBlockControls } from "./article-block-controls";
 import { ArticleTools, ArticleToolIcon } from "./article-tools";
 import { ArticleLinkDialog } from "./article-link-dialog";
 import { ArticleImageDialog } from "./article-image-dialog";
@@ -71,6 +77,7 @@ const SelectionTools = () => {
     <FormattingToolbar>
       <BasicTextStyleButton basicTextStyle="bold" />
       <BasicTextStyleButton basicTextStyle="italic" />
+      <BasicTextStyleButton basicTextStyle="underline" />
       <button
         type="button"
         className={styles.toolButton}
@@ -82,6 +89,22 @@ const SelectionTools = () => {
         <ArticleToolIcon name="link" />
       </button>
     </FormattingToolbar>
+  );
+};
+const ArticleDragMenu = () => {
+  const { disabled } = useArticleAttachments();
+  return disabled ? null : (
+    <DragHandleMenu>
+      <RemoveBlockItem>移除内容块</RemoveBlockItem>
+    </DragHandleMenu>
+  );
+};
+const ArticleSideMenu = () => {
+  const { disabled } = useArticleAttachments();
+  return disabled ? null : (
+    <SideMenu>
+      <DragHandleButton dragHandleMenu={ArticleDragMenu} />
+    </SideMenu>
   );
 };
 const statusText = {
@@ -279,12 +302,28 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       requestId: () => requestIdentity(),
     });
     publicationRef.current = publication;
+    const stopDropGuard = instance.onBeforeChange(({ tr }) => {
+      if (tr.getMeta("uiEvent") !== "drop") return;
+      if (!autosave.canMutate() || !instance.isEditable) return false;
+      try {
+        const blocks: unknown[] = [];
+        tr.doc.firstChild?.forEach((node) =>
+          blocks.push(nodeToBlock(node, tr.doc)),
+        );
+        parseArticleEditorDocument(blocks, latest.current.attachments);
+      } catch {
+        setNotice("这个位置不能放置该内容。请使用拖动手柄或上移、下移。");
+        return false;
+      }
+      return true;
+    });
     editorRef.current = instance;
     setEditor(instance);
     setAuto(autosave);
     return () => {
       publication.dispose();
       if (publicationRef.current === publication) publicationRef.current = null;
+      stopDropGuard();
       autosave.dispose();
       abort.abort();
       instance.unmount();
@@ -744,7 +783,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
           </p>
         ) : null}
       </div>
-      <div className={styles.scroller}>
+      <div className={styles.scroller} data-article-scroller="">
         <label className={styles.title}>
           <span className={styles.srOnly}>专题标题</span>
           <input
@@ -799,6 +838,19 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                     setGalleryDetails(id);
                 },
                 editLink: openLink,
+                blockControls: (id) => (
+                  <ArticleBlockControls
+                    editor={editor}
+                    blockId={id}
+                    disabled={
+                      !mutationAllowed ||
+                      busy !== null ||
+                      dialogOpen ||
+                      saved.status === "permission_lost"
+                    }
+                    canMutate={canChange}
+                  />
+                ),
               }}
             >
               <BlockNoteView
@@ -827,6 +879,10 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                     auto?.changed();
                 }}
               >
+                <SideMenuController
+                  sideMenu={ArticleSideMenu}
+                  {...(portal === null ? {} : { portalElement: portal })}
+                />
                 <FormattingToolbarController
                   formattingToolbar={SelectionTools}
                   {...(portal === null ? {} : { portalElement: portal })}

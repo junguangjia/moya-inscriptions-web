@@ -18,6 +18,7 @@ import {
   captureArticleSelection,
   restoreArticleSelection,
 } from "./article-selection";
+import { moveArticleBlock, stepArticleBlock } from "./article-block-move";
 import { formatArticleBlocks } from "./article-tools";
 
 const mixed = (): ArticleInlineContent[] => [
@@ -582,4 +583,83 @@ describe("actual Article link dialog validation", () => {
       expect(dialog.cancel).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("r4 native styles and media reorder", () => {
+  it("applies underline and color to the captured mixed selection only, with real undo", () => {
+    const initial = inlineFixture();
+    const editor = makeEditor(initial);
+    selectInline(editor, "mixed", 1, 4);
+    const before = canonical(editor, initial);
+    const captured = captureArticleSelection(editor);
+    editor.setTextCursorPosition("other", "start");
+    expect(restoreArticleSelection(editor, captured)).toBe(true);
+    editor.transact(() => {
+      editor.toggleStyles({ underline: true });
+      editor.addStyles({ textColor: "red" });
+    });
+    expect(canonical(editor, initial).blocks[0]).toMatchObject({
+      content: [
+        { text: "a", styles: { bold: true } },
+        {
+          text: "b",
+          styles: { bold: true, underline: true, textColor: "red" },
+        },
+        {
+          text: "cd",
+          styles: { italic: true, underline: true, textColor: "red" },
+        },
+        { text: "ef", styles: {} },
+      ],
+    });
+    expect(canonical(editor, initial).blocks[1]).toEqual(before.blocks[1]);
+    editor.undo();
+    expect(canonical(editor, initial).blocks[0]).toMatchObject({
+      content: [
+        { text: "a", styles: { bold: true } },
+        { text: "b", styles: { bold: true, underline: true } },
+        { text: "cd", styles: { italic: true, underline: true } },
+        { text: "ef", styles: {} },
+      ],
+    });
+    editor.undo();
+    expect(canonical(editor, initial).blocks[0]).toEqual(
+      canonical(makeEditor(initial), initial).blocks[0],
+    );
+  });
+  it("moves media around a nested list without nesting, changing IDs or dropping references; one undo", () => {
+    const initial: ArticleDocument = {
+      ...nestedFixture(),
+      references: {
+        asset: { type: "managed", itemId: `media-item-${"1".repeat(32)}` },
+      },
+    };
+    initial.blocks.splice(1, 0, {
+      id: "photo",
+      type: "managedImage",
+      props: { refId: "asset", caption: "𠮷", alt: "碑" },
+      children: [],
+    });
+    const editor = makeEditor(initial);
+    const before = canonical(editor, initial);
+    expect(stepArticleBlock(editor, "photo", 1)).toBe(true);
+    const after = canonical(editor, initial);
+    expect(after.blocks.map((block) => block.id)).toEqual([
+      "outside",
+      "parent",
+      "photo",
+      "tail",
+    ]);
+    expect(after.blocks.find((block) => block.id === "photo")).toEqual(
+      before.blocks.find((block) => block.id === "photo"),
+    );
+    expect(after.references).toEqual(before.references);
+    expect(after.blocks.find((block) => block.id === "parent")).toEqual(
+      before.blocks.find((block) => block.id === "parent"),
+    );
+    editor.undo();
+    expect(canonical(editor, initial)).toEqual(before);
+    expect(moveArticleBlock(editor, "photo", "leaf", "before")).toBe(false);
+    expect(stepArticleBlock(editor, "outside", -1)).toBe(false);
+  });
 });

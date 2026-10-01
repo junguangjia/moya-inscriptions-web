@@ -211,9 +211,7 @@ describe("restricted Article document", () => {
         blocks: [
           {
             ...paragraph("bad"),
-            content: [
-              { type: "text", text: "字", styles: { underline: true } },
-            ],
+            content: [{ type: "text", text: "字", styles: { strike: true } }],
           },
         ],
       }).success,
@@ -231,6 +229,56 @@ describe("restricted Article document", () => {
         arbitraryMetadata: "hidden",
       }).success,
     ).toBe(false);
+  });
+  it("persists underline and only the finite inline text palette, including links", () => {
+    for (const textColor of ["default", "gray", "red", "brown"]) {
+      const input = {
+        ...fixture(),
+        blocks: [
+          {
+            ...paragraph("styled"),
+            content: [
+              {
+                type: "link",
+                href: "https://example.invalid",
+                content: [
+                  {
+                    type: "text",
+                    text: "繁體𠮷",
+                    styles: {
+                      bold: true,
+                      italic: true,
+                      underline: true,
+                      textColor,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      expect(articleDocumentSchema.parse(input)).toEqual(input);
+    }
+    for (const textColor of [
+      "#123456",
+      "rgb(1, 2, 3)",
+      "blue",
+      "var(--unreviewed)",
+      "RED",
+    ]) {
+      expect(
+        articleDocumentSchema.safeParse({
+          ...fixture(),
+          blocks: [
+            {
+              ...paragraph("bad"),
+              content: [{ type: "text", text: "碑", styles: { textColor } }],
+            },
+          ],
+        }).success,
+      ).toBe(false);
+    }
   });
   it.each([
     "javascript:alert(1)",

@@ -2,6 +2,7 @@
 
 import {
   BlockNoteSchema,
+  createStyleSpec,
   defaultBlockSpecs,
   defaultInlineContentSpecs,
   defaultStyleSpecs,
@@ -19,6 +20,44 @@ import {
 } from "./article-attachments";
 import styles from "./article-authoring.module.css";
 import { ArticleToolIcon } from "./article-tools";
+
+/** Keep native marks, with a bounded parser for clipboard/internal HTML. */
+const textColorBase = createStyleSpec(
+  { type: "textColor", propSchema: "string" },
+  {
+    render: (value) => {
+      const dom = document.createElement("span");
+      dom.dataset.articleTextColor = value;
+      return { dom, contentDOM: dom };
+    },
+  },
+);
+const allowedTextColor = (value: string | null) =>
+  value !== null && ["default", "gray", "red", "brown"].includes(value);
+const textColor = {
+  ...textColorBase,
+  implementation: {
+    ...textColorBase.implementation,
+    mark: textColorBase.implementation.mark.extend({
+      parseHTML: () => [
+        {
+          tag: '[data-style-type="textColor"]',
+          getAttrs: (element) => {
+            const value = element.getAttribute("data-value");
+            return allowedTextColor(value) ? { stringValue: value } : false;
+          },
+        },
+        {
+          style: "color",
+          getAttrs: (value) =>
+            typeof value === "string" && allowedTextColor(value)
+              ? { stringValue: value }
+              : false,
+        },
+      ],
+    }),
+  },
+};
 
 const fixedColors = {
   backgroundColor: { default: "default", values: ["default"] },
@@ -73,7 +112,7 @@ const managedImage = createReactBlockSpec(
   },
   {
     render: ({ block }) => {
-      const { attachments, media, disabled, editImage } =
+      const { attachments, media, disabled, editImage, blockControls } =
         useArticleAttachments();
       const reference = referenceEntry(attachments, block.props.refId);
       return (
@@ -84,6 +123,7 @@ const managedImage = createReactBlockSpec(
             media.render(reference, { alt: block.props.alt, active: !disabled })
           )}
           <div className={styles.imageDetails}>
+            {blockControls?.(block.id)}
             {block.props.caption === "" ? null : (
               <figcaption>{block.props.caption}</figcaption>
             )}
@@ -124,7 +164,7 @@ const imageGallery = createReactBlockSpec(
   },
   {
     render: ({ block }) => {
-      const { attachments, media, disabled, editGallery } =
+      const { attachments, media, disabled, editGallery, blockControls } =
         useArticleAttachments();
       const gallery = galleryEntry(attachments, block.props.groupId);
       return gallery === undefined ? (
@@ -150,6 +190,7 @@ const imageGallery = createReactBlockSpec(
             })}
           </div>
           <figcaption className={styles.imageDetails}>
+            {blockControls?.(block.id)}
             <span>{gallery.referenceIds.length} 张图片</span>
             <button
               type="button"
@@ -222,6 +263,8 @@ export const articleBlockNoteSchema = BlockNoteSchema.create({
   styleSpecs: {
     bold: defaultStyleSpecs.bold,
     italic: defaultStyleSpecs.italic,
+    underline: defaultStyleSpecs.underline,
+    textColor,
   },
 });
 

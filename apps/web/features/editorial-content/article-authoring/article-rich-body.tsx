@@ -44,6 +44,11 @@ const styledText = (
   let value: ReactNode = part.text;
   if (part.styles.italic) value = <em>{value}</em>;
   if (part.styles.bold) value = <strong>{value}</strong>;
+  if (part.styles.underline) value = <u>{value}</u>;
+  if (part.styles.textColor)
+    value = (
+      <span data-article-text-color={part.styles.textColor}>{value}</span>
+    );
   return value;
 };
 const inline = (content: readonly ArticleInlineContent[]) =>

@@ -60,3 +60,19 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.body [data-article-text-color="default"] {
+  color: var(--yoyi-color-text-primary);
+}
+.body [data-article-text-color="gray"] {
+  color: var(--yoyi-color-text-secondary);
+}
+.body [data-article-text-color="red"] {
+  color: var(--yoyi-color-seal-red);
+}
+.body [data-article-text-color="brown"] {
+  color: var(--yoyi-color-ink-gray);
+}
+.body u {
+  text-underline-offset: 3px;
+}

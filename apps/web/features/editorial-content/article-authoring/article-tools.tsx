@@ -10,6 +10,7 @@ import {
   restoreArticleSelection,
 } from "./article-selection";
 import type { ArticleSelection } from "./article-selection";
+import { stepArticleBlock } from "./article-block-move";
 import styles from "./article-authoring.module.css";
 
 export type ArticleToolName =
@@ -18,6 +19,10 @@ export type ArticleToolName =
   | "redo"
   | "bold"
   | "italic"
+  | "underline"
+  | "color"
+  | "insert"
+  | "drag"
   | "link"
   | "image"
   | "gallery"
@@ -36,6 +41,10 @@ const paths: Record<ArticleToolName, string> = {
   redo: "m16 4 5 5-5 5m5-5H10a7 7 0 0 0 0 14",
   bold: "M7 4h6a4 4 0 0 1 0 8H7V4Zm0 8h7a4 4 0 0 1 0 8H7v-8Z",
   italic: "M10 4h9M5 20h9M15 4 9 20",
+  underline: "M6 4v7a6 6 0 0 0 12 0V4M4 21h16",
+  color: "m7 16 5-12 5 12M9 12h6M4 21h16",
+  insert: "M12 4v16M4 12h16",
+  drag: "M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01",
   link: "m10 13 4-4M9 15l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m0 3 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0",
   image: "M4 4h16v16H4V4Zm0 12 5-5 7 9m-3-5 3-3 4 4M8 8h.01",
   gallery: "M7 3h14v14H7V3ZM3 7v14h14M7 13l4-4 6 8m-3-5 3-3 4 4",
@@ -146,7 +155,9 @@ export const ArticleTools = ({
   readonly onDivider: () => void;
   readonly onSettings: () => void;
 }) => {
-  const [menu, setMenu] = useState<"format" | "more" | null>(null);
+  const [menu, setMenu] = useState<
+    "format" | "more" | "color" | "insert" | null
+  >(null);
   const current = useRef({ disabled, bodyActive, canMutate });
   current.current = { disabled, bodyActive, canMutate };
   const allowed = (body = true) =>
@@ -155,7 +166,7 @@ export const ArticleTools = ({
     current.current.canMutate();
   const selection = useRef<ArticleSelection | null>(null);
   const pending = useRef<(() => void) | null>(null);
-  const openMenu = (value: "format" | "more") => {
+  const openMenu = (value: "format" | "more" | "color" | "insert") => {
     if (!allowed()) return;
     selection.current = captureArticleSelection(editor);
     setMenu(value);
@@ -199,6 +210,8 @@ export const ArticleTools = ({
           )?.label ?? "内容块",
         bold: current.getActiveStyles().bold === true,
         italic: current.getActiveStyles().italic === true,
+        underline: current.getActiveStyles().underline === true,
+        color: current.getActiveStyles().textColor ?? "default",
         linked: current.getSelectedLinkUrl() !== undefined,
         undo: history !== undefined && current.canExec(history.undoCommand),
         redo: history !== undefined && current.canExec(history.redoCommand),
@@ -230,28 +243,23 @@ export const ArticleTools = ({
   return (
     <>
       <div
-        className={styles.toolbar}
+        className={`${styles.toolbar} yoyi-functional-glass`}
         role="toolbar"
         aria-label="专题格式工具栏"
       >
-        <div className={styles.toolGroup}>
-          {action("undo", "撤销", () => editor.undo(), undefined, !state.undo)}
-          {action("redo", "重做", () => editor.redo(), undefined, !state.redo)}
-        </div>
-        <div className={styles.toolGroup}>
+        <div className={styles.formattingRow}>
           <button
             type="button"
             className={styles.formatButton}
             disabled={disabled || !bodyActive}
+            aria-label={`段落样式：${state.label}`}
             aria-haspopup="dialog"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => openMenu("format")}
           >
-            {state.label}
-            <span aria-hidden="true">⌄</span>
+            <span className={styles.desktopFormat}>{state.label}</span>
+            <span className={styles.mobileFormat}>T⌄</span>
           </button>
-        </div>
-        <div className={styles.toolGroup}>
           {action(
             "bold",
             "粗体（⌘/Ctrl+B）",
@@ -270,22 +278,52 @@ export const ArticleTools = ({
             },
             state.italic,
           )}
+          {action(
+            "underline",
+            "下划线（⌘/Ctrl+U）",
+            () => {
+              editor.toggleStyles({ underline: true });
+              editor.focus();
+            },
+            state.underline,
+          )}
+          {action(
+            "color",
+            "文字颜色",
+            () => openMenu("color"),
+            state.color !== "default",
+          )}
           {action("link", "编辑链接", onLink, state.linked)}
         </div>
-        <div className={styles.toolGroup}>
-          {action("image", "插入图片", onImage)}
-          {action("gallery", "插入图片组", onGallery)}
-          {action("catalog", "插入藏品引用", onCatalog)}
-          {action("divider", "插入分隔线", onDivider)}
-        </div>
-        <div className={styles.toolGroup}>
-          {action("settings", "文章设置", onSettings)}
+        <div className={styles.utilityRow}>
+          {action("undo", "撤销", () => editor.undo(), undefined, !state.undo)}
+          {action("redo", "重做", () => editor.redo(), undefined, !state.redo)}
+          <button
+            type="button"
+            className={styles.insertButton}
+            disabled={disabled || !bodyActive}
+            aria-haspopup="dialog"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => openMenu("insert")}
+          >
+            <ArticleToolIcon name="insert" />
+            插入
+          </button>
           {action("more", "更多块操作", () => openMenu("more"))}
+          {action("settings", "文章设置", onSettings)}
         </div>
       </div>
       {menu === null ? null : (
         <EditorDialog
-          title={menu === "format" ? "段落样式" : "块操作"}
+          title={
+            menu === "format"
+              ? "段落样式"
+              : menu === "color"
+                ? "文字颜色"
+                : menu === "insert"
+                  ? "插入内容"
+                  : "块操作"
+          }
           dataName="article-tools"
           onCancel={() => setMenu(null)}
         >
@@ -318,6 +356,59 @@ export const ArticleTools = ({
                   </span>
                 </button>
               ))
+            ) : menu === "color" ? (
+              (
+                [
+                  { value: "default", label: "默认墨色" },
+                  { value: "gray", label: "灰色" },
+                  { value: "red", label: "朱红" },
+                  { value: "brown", label: "褐色" },
+                ] as const
+              ).map((color) => (
+                <button
+                  type="button"
+                  key={color.value}
+                  aria-pressed={state.color === color.value}
+                  disabled={disabled}
+                  onClick={() =>
+                    submit(() => {
+                      if (color.value === "default")
+                        editor.removeStyles({ textColor: "default" });
+                      else editor.addStyles({ textColor: color.value });
+                    })
+                  }
+                >
+                  <span
+                    className={styles.colorSwatch}
+                    data-article-text-color={color.value}
+                  >
+                    A
+                  </span>
+                  {color.label}
+                  {state.color === color.value ? (
+                    <ArticleToolIcon name="check" />
+                  ) : null}
+                </button>
+              ))
+            ) : menu === "insert" ? (
+              (
+                [
+                  { icon: "image", label: "图片", run: onImage },
+                  { icon: "gallery", label: "图片组", run: onGallery },
+                  { icon: "catalog", label: "藏品引用", run: onCatalog },
+                  { icon: "divider", label: "分隔线", run: onDivider },
+                ] as const
+              ).map((item) => (
+                <button
+                  type="button"
+                  key={item.icon}
+                  disabled={disabled}
+                  onClick={() => submit(item.run)}
+                >
+                  <ArticleToolIcon name={item.icon} />
+                  {item.label}
+                </button>
+              ))
             ) : (
               <>
                 <button
@@ -325,7 +416,11 @@ export const ArticleTools = ({
                   disabled={disabled}
                   onClick={() =>
                     submit(() => {
-                      editor.moveBlocksUp();
+                      stepArticleBlock(
+                        editor,
+                        editor.getTextCursorPosition().block.id,
+                        -1,
+                      );
                     })
                   }
                 >
@@ -337,7 +432,11 @@ export const ArticleTools = ({
                   disabled={disabled}
                   onClick={() =>
                     submit(() => {
-                      editor.moveBlocksDown();
+                      stepArticleBlock(
+                        editor,
+                        editor.getTextCursorPosition().block.id,
+                        1,
+                      );
                     })
                   }
                 >

@@ -1,10 +1,46 @@
 # Special / Article Editor V1
 
-Task: `special-article-editor-v1`, r3. Owner assignment: 2026-09-30. Baseline:
+Task: `special-article-editor-v1`, r4. Owner assignment: 2026-09-30. Baseline:
 `288d4d27e72339402b648f4458ef1aacadcfc681`. Delivery: independently reviewed
 Draft, isolated Development acceptance, private handoff. No Ready, merge, Issue
 closure, release, cloud operation or Production activation. Physical-device and
 visual judgment remain the Owner's.
+
+## r4 — Owner physical-phone acceptance correction
+
+Owner's annotated phone screenshot on 2026-10-01 explicitly authorizes rounded
+floating editor tools, current-UI pill buttons, underline, text color and usable
+image reordering. This supersedes r3's horizontal mobile rail and narrowly
+extends the canonical V1 inline styles with optional underline and exactly
+`default`, `gray`, `red`, `brown` text colors. Existing theme tokens render
+these as primary ink, secondary ink, seal red and ink gray; arbitrary CSS
+values, background colors, fonts/sizes and all other forbidden formats remain
+rejected. This is additive for retained V1 documents; no migration or new
+storage master.
+
+Allowed r4 files: the existing Article authoring directory (including a thin
+`article-block-move.ts` and `article-block-controls.tsx` and directly relevant
+tests), its semantic rich reader styles,
+`packages/contracts/src/article-authoring.ts` and its schemas export,
+`apps/web/lib/public-api/article-authoring-client.ts`, existing affected
+contract/backend/reader/architecture tests, regenerated
+`services/public-api/openapi/openapi.json`, and this specification. No
+dependency, governance, auth, Work, global viewport, migration or native source
+changes. Root is the sole writer in the original worktree, branch and Draft PR.
+
+| Scenario               | Development                                                                                                                                               | Production                                                  | Must Preserve                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Mobile tools           | Inset rounded floating surface with two compact rows; all common formatting fits 320px; insertion and block actions in focused dialogs                    | No editor activation                                        | Visible hit targets, selection, focus, scroll/keyboard and current theme                  |
+| Buttons                | Pill preview/actions and round icon hit areas from current Work/UI tokens                                                                                 | Existing runtime                                            | Disabled/busy states and accessible names                                                 |
+| Underline/color        | Real native styles, finite palette, exact-selection restoration, canonical save/reopen and lightweight reader parity                                      | No authoring activation; existing supported document reader | Unicode, links, undo, prior publication, no arbitrary CSS or editor runtime in reader     |
+| Images/blocks          | Visible drag handle; installed native desktop drag and handle-only touch adapter; top-level order validated, move/up/down/cancel/undo use the same engine | Unavailable                                                 | Stable block/ref IDs, nested list integrity, media lifetime and account/permission fences |
+| Useful engine controls | Reuse native undo/redo, H2/H3/list/quote conversion, slash commands, contextual formatting, keyboard shortcuts, copy/paste and supported block movement   | Existing runtime                                            | Restricted schema and no unsupported paid/AI/collaboration/table features                 |
+| Validation             | One substantive prepared r4 combined plan <=900s and at most two cause-backed corrections; real-phone judgement remains Owner                             | No deployment                                               | All r3 failed/exhausted results preserved, exact-head independent review, Draft stop      |
+
+No unrelated cold-entry history correction is included in this delta; its known
+unresolved observation remains recorded separately. This delta replaces only the
+named mobile presentation and inline-format restrictions; all ownership,
+autosave, media, publication, delegation and Delivery-stop requirements remain.
 
 ## r3 — Owner rejected editor UI and requested redesign
 
