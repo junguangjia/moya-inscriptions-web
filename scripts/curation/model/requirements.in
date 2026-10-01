@@ -1,0 +1,6 @@
+# Direct inputs for the reviewed model/requirements.lock.
+# The only downloaded model is pinned in runtime-metadata.json.
+mlx-vlm==0.7.4
+mlx==0.32.3
+huggingface-hub==1.6.0
+Pillow==12.3.0

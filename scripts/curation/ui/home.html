@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>ArtVenn 本地整理</title>
+    <link rel="stylesheet" href="/assets/home.css" />
+  </head>
+  <body>
+    <div class="workspace">
+      <header>
+        <div class="brand">AV <span>ArtVenn · 本地整理</span></div>
+        <div class="privacy">本机 AI · 原图保留 · 人工确认</div>
+      </header>
+      <main>
+        <div class="intro">
+          <p class="eyebrow">你的照片，整理成认得出的对象</p>
+          <h1>这批资料，接下来做什么？</h1>
+          <p>
+            先看照片认清对象，再核对 AI 建议。每一步完成后，这里会告诉你下一步。
+          </p>
+        </div>
+        <p id="notice" role="status" aria-live="polite"></p>
+        <section id="active-review" class="batch-card" hidden>
+          <div>
+            <h2>继续本次选中照片的整理</h2>
+            <p id="active-review-status"></p>
+          </div>
+          <a id="active-review-link" class="button" href="/objects">继续整理</a>
+        </section>
+        <section class="batch-card" aria-label="当前批次">
+          <div>
+            <span class="eyebrow" id="material">当前批次</span>
+            <h2 id="folder">还没有选择资料</h2>
+            <p id="batch-detail">选择一个小文件夹，从 20–50 张照片开始。</p>
+          </div>
+          <button id="choose" class="secondary">选择本地文件夹</button>
+        </section>
+        <div class="steps">
+          <section class="step" id="step-analysis">
+            <div class="step-number">1</div>
+            <div class="step-body">
+              <h2>让本机 AI 提建议</h2>
+              <p>检查照片，提出对象分组、照片用途和资料字段。</p>
+              <div class="stage-status" id="analysis-status">等待选择照片</div>
+              <div class="metrics" id="metrics"></div>
+              <div class="row">
+                <label for="limit">本批照片上限</label
+                ><input
+                  id="limit"
+                  type="number"
+                  min="1"
+                  max="1000"
+                  value="50"
+                />
+              </div>
+              <div class="actions">
+                <button id="analyze">开始分析</button
+                ><button id="cancel" class="quiet" hidden>取消分析</button>
+              </div>
+              <div id="failure-list"></div>
+            </div>
+          </section>
+          <section class="step" id="step-review">
+            <div class="step-number">2</div>
+            <div class="step-body">
+              <h2>认清对象，逐项审核</h2>
+              <p>
+                每组都有名称、固定编号和整组照片。确认分组后，再核对标题、人物与年代。
+              </p>
+              <div class="stage-status" id="review-status">
+                分析后会生成审核任务
+              </div>
+              <div class="actions">
+                <a id="review" class="button" href="/objects"
+                  >看对象并打开审核</a
+                >
+              </div>
+              <div class="collect">
+                <p>
+                  <strong>审核页点 Submit 后，回到这里收集决定。</strong
+                  ><br />收集后，人工结论才会正式写入本地整理记录。
+                </p>
+                <button id="collect" class="secondary">收集已提交的决定</button>
+              </div>
+            </div>
+          </section>
+          <section class="step" id="step-draft">
+            <div class="step-number">3</div>
+            <div class="step-body">
+              <h2>选择内容，准备本地草稿</h2>
+              <p>
+                自己选择公开文字、照片顺序和代表图。先生成可以检查的本地 Draft
+                文件包。
+              </p>
+              <div class="stage-status" id="draft-status">
+                关键资料经人工确认后可准备
+              </div>
+              <div id="missing-reviews"></div>
+              <button id="open-draft" class="secondary">选择草稿内容</button>
+              <div id="selection" hidden></div>
+            </div>
+          </section>
+        </div>
+        <details class="tools">
+          <summary>测试资料与其他操作</summary>
+          <div class="actions">
+            <button id="synthetic" class="secondary">
+              选择 Synthetic 合成测试资料</button
+            ><a class="button secondary" href="/?material=synthetic"
+              >查看合成测试结果</a
+            ><a class="button secondary" href="/objects?material=local"
+              >查看本机对象资料库</a
+            ><button id="renew" class="secondary">为本批创建新的审核版本</button
+            ><button id="development" class="secondary">
+              验证 Synthetic Development Draft
+            </button>
+          </div>
+          <p>
+            新的审核版本保留已收集记录。Development
+            仅使用合成测试资料；真实资料的草稿保留在本机。
+          </p>
+          <button id="stop" class="quiet danger">停止本任务服务</button>
+        </details>
+        <footer>
+          照片与审核记录保存于本机。Production publication：本轮未授权、未执行。
+        </footer>
+      </main>
+    </div>
+    <script src="/assets/home.js"></script>
+  </body>
+</html>

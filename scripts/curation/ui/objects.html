@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ArtVenn 对象目录</title>
+  <link rel="stylesheet" href="/assets/objects.css" />
+  <body class="av-directory">
+    <header>
+      <a href="/">← 本地整理入口</a>
+      <h1>把同一碑刻的照片放在一起</h1>
+      <p>
+        一块碑刻是一份档案，整体和局部是照片用途。下面的 AI
+        候选组需要你确认；可选中需要整理的组，一起纠正归属、补充资料并保存决定。
+      </p>
+      <nav>
+        <a href="/objects?material=local">本机选定资料</a
+        ><a href="/objects?material=synthetic">Synthetic 测试资料</a
+        ><a href="/objects">全部对象</a>
+      </nav>
+    </header>
+    <p id="av-notice" role="status"></p>
+    <section id="av-review-selection" class="av-object">
+      <strong id="av-selection-count">先勾选要整理的照片组</strong>
+      <button id="av-begin-review" disabled>整理选中的照片</button>
+      <p>只处理你勾选的组。原照片和原审核历史保留。</p>
+    </section>
+    <section id="av-workbench" hidden></section>
+    <main id="av-objects"></main>
+    <script src="/assets/objects.js"></script>
+    <script src="/assets/guided-review.js"></script>
+  </body>
+</html>
