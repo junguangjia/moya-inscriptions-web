@@ -329,6 +329,7 @@ export const T02pQaHarness = ({
                 onHomeFeedChange={setActiveHomeFeed}
                 initialPlatform={initialPlatform}
                 initialTopicId={initialTopicId ?? home.initialTopicId ?? null}
+                liveThreads
                 navigationAction={<QaNavigationSearchAction />}
                 productUtility={
                   <QaProductUtilities

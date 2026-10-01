@@ -3,6 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { inflateSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
+import sharp from "sharp";
 
 const assetsRoot = new URL("../../../packages/ui/src/assets/", import.meta.url);
 const demoAssetsRoot = new URL(
@@ -284,13 +285,46 @@ describe("SVG assets", () => {
     }
   });
 
-  it("preserves the official logo byte-for-byte", async () => {
+  it("preserves the approved logo geometry with neutral deboss paint", async () => {
     const logo = await readFile(new URL("brand/yoyi-logo.svg", assetsRoot));
     const hash = createHash("sha256").update(logo).digest("hex");
     expect(hash).toBe(
-      "3cef0221e44de2587ee153276417e38f702249c36bdf57d0db539236fd45bac3",
+      "02fabd8442e0f0d1cce31f5937862adce2099da868cf6f45b9b9aec537fad70a",
     );
-    expect(logo.toString("utf8").match(/<path\b/g)).toHaveLength(3);
+    expect(logo.toString("utf8").match(/<path\b/g)).toHaveLength(2);
+    expect(logo.toString("utf8")).toContain(
+      '<title id="artvenn-logo-title">由于艺</title>',
+    );
+    const svg = logo.toString("utf8");
+    expect(svg).toContain('viewBox="297 411 658 426"');
+    expect(svg).toContain('fill-rule="evenodd"');
+    expect(svg).toContain('stroke-linecap="round"');
+    expect(svg).toContain('operator="out"');
+    expect(svg).toContain("color: CanvasText");
+    expect(svg).not.toMatch(/#(?:b34a32|ce6f54)/i);
+    const paths = [...svg.matchAll(/\bd="([^"]+)"/g)]
+      .map(([, d]) => d)
+      .join("\n");
+    expect(createHash("sha256").update(paths).digest("hex")).toBe(
+      "9dabd4960db63a169578773281cdaf972eff9b79b27b3bb983376b7f0be99fe6",
+    );
+  });
+
+  it("keeps the full stroked arc and transparent lens after deboss filtering", async () => {
+    const svg = await readFile(new URL("brand/yoyi-logo.svg", assetsRoot));
+    const { data, info } = await sharp(svg)
+      .resize(658, 426)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const alpha = (x: number, y: number) =>
+      data[(y * info.width + x) * info.channels + 3];
+    // The left arc extends beyond the filled path bounding box; a default
+    // 0..1 filter region incorrectly clips these otherwise opaque pixels.
+    for (const x of [2, 5, 12]) expect(alpha(x, 212)).toBe(255);
+    expect(alpha(328, 212)).toBe(0);
+    expect(alpha(0, 0)).toBe(0);
+    expect(alpha(500, 212)).toBe(255);
   });
 
   it("keeps paper texture opacity below the readability ceiling", async () => {

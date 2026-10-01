@@ -1,4 +1,6 @@
 "use client";
+import { UserIdentity } from "../authors/user-identity";
+import { useAuthReturn } from "../auth/auth-return";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "@moya/ui";
@@ -97,6 +99,61 @@ function AccountMessages({
       source?: PrimaryDestination;
     } | null>(null),
     frame = useRef<number | null>(null);
+  const authReturn = useAuthReturn();
+  const restoredAuthView = useRef(false);
+  const authSnapshot = useRef({
+    owner: author.viewer?.id ?? null,
+    open,
+    view,
+    commentTab,
+    positions: new Map<string, number>(),
+  });
+  authSnapshot.current = {
+    owner: author.viewer?.id ?? null,
+    open,
+    view,
+    commentTab,
+    positions: new Map(scroll.current),
+  };
+  useEffect(() => {
+    const destination =
+      opener.current?.closest<HTMLElement>("[data-primary-destination]")
+        ?.dataset.primaryDestination ?? "home";
+    return authReturn?.register(
+      `messages-live:${destination}`,
+      () => authSnapshot.current,
+    );
+  }, [authReturn]);
+  useEffect(() => {
+    if (restoredAuthView.current || author.checking || author.sessionError)
+      return;
+    const destination =
+      opener.current?.closest<HTMLElement>("[data-primary-destination]")
+        ?.dataset.primaryDestination ?? "home";
+    const saved = authReturn?.read(`messages-live:${destination}`) as
+      typeof authSnapshot.current | undefined;
+    restoredAuthView.current = true;
+    if (!saved || saved.owner !== (author.viewer?.id ?? null)) return;
+    scroll.current = new Map(saved.positions);
+    setView(saved.view);
+    setCommentTab(saved.commentTab);
+    setOpen(saved.open);
+    inbox.setFilter(
+      saved.view === "reactions"
+        ? "likes"
+        : saved.view === "comments"
+          ? saved.commentTab === "mentions"
+            ? "mentions"
+            : "comments"
+          : "all",
+    );
+  }, [
+    authReturn,
+    author.checking,
+    author.sessionError,
+    author.viewer?.id,
+    inbox.setFilter,
+  ]);
   const confirmed = !author.checking && !author.sessionError && !!author.viewer;
   const incoming =
     view === "reactions" || (view === "comments" && commentTab !== "sent");
@@ -558,11 +615,19 @@ function AccountMessages({
                                         <span className={local.itemHeading}>
                                           <span className={local.identity}>
                                             <strong>
-                                              {item.actors
-                                                .map(
-                                                  (actor) => actor.displayName,
-                                                )
-                                                .join("、")}
+                                              {item.actors.map(
+                                                (actor, index) => (
+                                                  <span key={actor.id}>
+                                                    {index > 0 && "、"}
+                                                    <UserIdentity
+                                                      name={actor.displayName}
+                                                      studioName={
+                                                        actor.studioName
+                                                      }
+                                                    />
+                                                  </span>
+                                                ),
+                                              )}
                                               {item.actorCount >
                                               item.actors.length
                                                 ? ` 等 ${item.actorCount} 人`
@@ -713,7 +778,12 @@ function Followers({
                 {person.displayName.slice(0, 1)}
               </span>
               <span>
-                <strong>{person.displayName}</strong>
+                <strong>
+                  <UserIdentity
+                    name={person.displayName}
+                    studioName={person.studioName}
+                  />
+                </strong>
                 <span className={styles.secondary}>@{person.handle}</span>
               </span>
             </button>

@@ -1,3 +1,5 @@
+@import "./brand.css";
+
 @keyframes yoyi-appear {
   from {
     opacity: 0;
@@ -78,8 +80,7 @@
   }
 }
 
-.yoyi-icon,
-.yoyi-logo {
+.yoyi-icon {
   display: inline-block;
   flex: 0 0 auto;
   color: inherit;
@@ -223,12 +224,6 @@
 
 .yoyi-icon[data-icon="settings"] {
   --yoyi-icon-mask: url("./assets/icons/settings.svg");
-}
-
-.yoyi-logo {
-  width: 76px;
-  aspect-ratio: 675 / 625;
-  mask-image: url("./assets/brand/yoyi-logo.svg");
 }
 
 .yoyi-fixed-label {

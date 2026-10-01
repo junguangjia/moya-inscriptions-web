@@ -93,11 +93,13 @@ word selects the mode; an unknown or missing mode is a usage error, not a guess.
   That result is labeled `FEEDBACK ONLY — NOT FULL ACCEPTANCE`: it is not formal
   Owner acceptance, not complete task validation, and not permission to merge.
   Do not block every small preview on full CI or push every tiny edit solely to
-  obtain another full CI run. Complete task validation still uses the default
-  entry and the cumulative CI plan. A failed full run is not a feedback PASS.
-  Feedback is capped at 120 seconds; full profiles follow the 2026-09-16
-  validation-profiles amendment (each plan owns its deadline; children receive
-  remaining time). A timeout is a failure. Record preparation time separately.
+  obtain another full CI run. First complete task acceptance uses the default
+  entry. Later upstream synchronization follows the shared workflow's final
+  integration rules: focused local checks of its impact, with cumulative CI for
+  the final candidate. A failed full run is not a feedback PASS. Feedback is
+  capped at 120 seconds; full profiles follow the 2026-09-16 validation-profiles
+  amendment (each plan owns its deadline; children receive remaining time). A
+  timeout is a failure. Record preparation time separately.
 - Commit and push only through the task Git helper: stage the intended paths,
   then `node scripts/task-git.mjs commit --message-file <file>` (or
   `--message <text>`) and `node scripts/task-git.mjs push`. It checks the
@@ -152,3 +154,13 @@ word selects the mode; an unknown or missing mode is a usage error, not a guess.
   PRs and tracked files.
 - Speak to the Owner in Chinese; write instructions, code and configuration in
   English.
+
+## Task preparation and context shortcuts
+
+Use the task-resource prepare/inspect and snapshot/verify commands documented in
+`docs/development/task-workflow.md`. Pass the inspected private resource
+manifest to `verify-task.mjs --resources`; use `--reuse-summary` only for its
+individually validated deterministic checks. An unchanged context snapshot is
+advisory within an already-read session. New sessions still read applicable
+authority, verify the writer checkpoint and keep the established worktree and
+Draft/Owner boundaries.

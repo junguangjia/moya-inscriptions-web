@@ -1,0 +1,100 @@
+.field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.field legend {
+  margin-bottom: var(--yoyi-space-3);
+  padding: 0;
+  font-weight: 500;
+}
+
+.field legend span,
+.hint,
+.preview > span:first-child {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  font-weight: 400;
+}
+
+.inputs {
+  display: flex;
+  align-items: start;
+  gap: var(--yoyi-space-3);
+}
+
+.field label {
+  display: grid;
+  gap: var(--yoyi-space-2);
+  min-width: 0;
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.name {
+  flex: 1;
+}
+.suffix {
+  position: relative;
+  flex: 0 0 88px;
+}
+
+.suffix::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: var(--yoyi-space-4);
+  bottom: var(--yoyi-space-5);
+  width: var(--yoyi-space-2);
+  height: var(--yoyi-space-2);
+  border-inline-end: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.field input,
+.field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-body-size);
+}
+
+.field select {
+  height: 44px;
+  padding-inline-end: var(--yoyi-space-7);
+  appearance: none;
+}
+
+.field input:focus-visible,
+.field select:focus-visible {
+  outline: 2px solid var(--yoyi-color-text-primary);
+  outline-offset: 2px;
+}
+
+.field input[aria-invalid="true"] {
+  border-color: var(--yoyi-color-seal-red);
+}
+
+.custom {
+  margin-top: var(--yoyi-space-3);
+}
+.hint {
+  margin: var(--yoyi-space-3) 0 0;
+  line-height: 1.5;
+}
+.preview {
+  display: flex;
+  align-items: baseline;
+  gap: var(--yoyi-space-3);
+  margin: var(--yoyi-space-3) 0 0;
+  overflow-wrap: anywhere;
+}

@@ -1,4 +1,6 @@
 "use client";
+
+import { useAuthReturnView } from "../auth/auth-return";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DiscussionIcon } from "../discussion-preview/discussion-icons";
 import { AnimatedTopTabs } from "../shell/animated-top-tabs";
@@ -21,7 +23,7 @@ import {
   isArticleId,
   isCollectionId,
 } from "../editorial-content/use-editorial-content";
-import { ThreadsFeed } from "../threads/threads-feed";
+import { ThreadsFeed, ThreadsUnavailable } from "../threads/threads-feed";
 import { isThreadId } from "../threads/use-threads";
 import { TopicCard } from "../topics/topic-card";
 import styles from "./home-screen.module.css";
@@ -55,11 +57,14 @@ export function DiscussionScreen({
   headerStart,
   headerEnd,
   initialTopicId = null,
+  liveThreads = false,
 }: {
   readonly data: HomeSurfaceData["topics"];
   readonly headerStart?: ReactNode;
   readonly headerEnd?: ReactNode;
   readonly initialTopicId?: string | null;
+  /** The live 话题 feed needs the author and publishing providers. */
+  readonly liveThreads?: boolean;
 }) {
   const shell = useProductShell();
   const preview = useDiscussionPreview();
@@ -69,8 +74,23 @@ export function DiscussionScreen({
     (initialTopicId ? "topics" : "news");
   const root = useRef<HTMLDivElement>(null);
   const pager = useRef<HorizontalPagerHandle<DiscussionFeed>>(null);
-  const [active, setActive] = useState<DiscussionFeed>(initialFeed);
-  const [progress, setProgress] = useState(feeds.indexOf(initialFeed));
+  const activeRef = useRef<DiscussionFeed>(initialFeed);
+  const authReturnView = useAuthReturnView("discussion", () => ({
+    feed: activeRef.current,
+    top: shell.readActiveScrollTop(),
+  }));
+  const [active, setActive] = useState<DiscussionFeed>(
+    authReturnView?.feed ?? initialFeed,
+  );
+  activeRef.current = active;
+  useEffect(() => {
+    if (!authReturnView) return;
+    pager.current?.scrollToKey(authReturnView.feed);
+    shell.restoreActiveScrollTop(authReturnView.top);
+  }, [authReturnView, shell.restoreActiveScrollTop]);
+  const [progress, setProgress] = useState(
+    feeds.indexOf(authReturnView?.feed ?? initialFeed),
+  );
   const openedInitial = useRef(false);
   // Guest read memory for Threads (session-local; not synchronized account data).
   const [localRead, setLocalRead] = useState<ReadonlySet<string>>(
@@ -213,7 +233,7 @@ export function DiscussionScreen({
             : {
                 // Real published editorial reads (content-community-completion-v1).
                 news: <EditorialNewsFeed />,
-                threads: (
+                threads: liveThreads ? (
                   <ThreadsFeed
                     localRead={localRead}
                     onOpen={(id, opener) => {
@@ -221,6 +241,8 @@ export function DiscussionScreen({
                       shell.openTopic(id, opener, shell.readActiveScrollTop());
                     }}
                   />
+                ) : (
+                  <ThreadsUnavailable />
                 ),
                 topics: (
                   <>

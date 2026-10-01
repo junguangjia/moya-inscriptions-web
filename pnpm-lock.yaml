@@ -63,6 +63,9 @@ importers:
       '@moya/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@moya/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@payloadcms/db-postgres':
         specifier: 3.88.0
         version: 3.88.0(payload@3.88.0(graphql@16.11.0)(typescript@6.0.3))

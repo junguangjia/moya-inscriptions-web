@@ -2,7 +2,10 @@ import { enqueueNotification } from "./notifications/source.js";
 import { asCommunityOperationError } from "./availability.js";
 import { createHash, randomUUID } from "node:crypto";
 import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
-import { authorProfileSchema } from "@moya/contracts/schemas";
+import {
+  authorProfileSchema,
+  profileUpdateSchema,
+} from "@moya/contracts/schemas";
 import type {
   AuthorCommunityPort,
   AuthorListItem,
@@ -33,6 +36,8 @@ interface UserRow extends QueryResultRow {
   id: string;
   handle: string;
   display_name: string;
+  studio_name: string;
+  studio_name_suffix: string;
   bio: string;
   following_privacy: "public" | "private";
   followers_privacy: "public" | "private";
@@ -270,6 +275,8 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
         id,
         handle: u.handle,
         displayName: u.display_name,
+        studioName: u.studio_name,
+        studioNameSuffix: u.studio_name_suffix,
         bio: u.bio,
         avatar: u.avatar_media_id
           ? ((await this.media(db, [u.avatar_media_id]))[0] ?? null)
@@ -315,6 +322,7 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
     });
   }
   async updateProfile(actor: string, input: ProfileUpdate): Promise<void> {
+    input = profileUpdateSchema.parse(input);
     await this.mutate(
       actor,
       input.requestId,
@@ -323,8 +331,14 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
       input,
       async (db) => {
         await db.query(
-          "UPDATE community.public_users SET display_name=$2,bio=$3,updated_at=CURRENT_TIMESTAMP WHERE id=$1",
-          [actor, input.displayName, input.bio],
+          "UPDATE community.public_users SET display_name=$2,bio=$3,studio_name=CASE WHEN $4::text IS NULL THEN studio_name ELSE $4 END,studio_name_suffix=CASE WHEN $4::text IS NULL THEN studio_name_suffix ELSE $5 END,updated_at=CURRENT_TIMESTAMP WHERE id=$1",
+          [
+            actor,
+            input.displayName,
+            input.bio,
+            input.studioName ?? null,
+            input.studioNameSuffix ?? "",
+          ],
         );
       },
     );
@@ -561,6 +575,7 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
         id: row.id,
         handle: row.handle,
         displayName: row.display_name,
+        studioName: row.studio_name,
         avatar: row.avatar_media_id
           ? (avatars.get(row.avatar_media_id) ?? null)
           : null,

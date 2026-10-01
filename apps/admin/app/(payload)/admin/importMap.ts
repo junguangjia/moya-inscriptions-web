@@ -20,9 +20,12 @@ import { AccountCapacityView as AccountCapacityView_86a1b3c9ec56e37b61bf12e13c3d
 import { PublishingJobsView as PublishingJobsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { AgentOperationsView as AgentOperationsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } from "@payloadcms/next/rsc";
+import { AdminLogo, AdminIcon } from "../../../src/branding/Brand";
 
 /** @type import('payload').ImportMap */
 export const importMap = {
+  "/src/branding/Brand#AdminLogo": AdminLogo,
+  "/src/branding/Brand#AdminIcon": AdminIcon,
   "./src/media/MediaSnapshotPicker#MediaSnapshotPicker":
     MediaSnapshotPicker_a43c203023e3389c5dc6b4863a273b24,
   "/src/owner-workflow/OwnerWithdrawButton#OwnerWithdrawButton":

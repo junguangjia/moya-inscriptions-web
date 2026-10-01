@@ -34,11 +34,11 @@ const rules = [
     // `;`, `&`, `|`), so the same words inside an echo, grep or printf
     // argument never match. A program inside `$( )` or backticks is not
     // matched here; it falls to the normal permission prompt instead.
-    /(?:^|[;&|\n]\s*)(?:psql|pgcli)\b[^|;&\n]*\byoyi_dev\b[^|;&\n]*\b(?:DROP|TRUNCATE|DELETE\s+FROM)\b/iu,
+    /(?:^|[;&|\n]\s*)(?:\/opt\/homebrew\/bin\/mise\s+exec\s+--\s+)?(?:psql|pgcli)\b[^|;&\n]*\byoyi_dev\b[^|;&\n]*\b(?:DROP|TRUNCATE|DELETE\s+FROM)\b/iu,
     "yoyi_dev is the live Development database; never run destructive SQL against it",
   ],
   [
-    /(?:^|[;&|\n]\s*)git\s+(?:-[Cc]\s+\S+\s+)+push\b[^|;&\n]*(?:--force(?:-with-lease)?\b|\s-f\b|\s\+\S|--prune\b|--mirror\b|\s\S*:(?:refs\/heads\/)?main(?:\s|$)|\s(?:origin\s+)?(?:main|refs\/heads\/main)(?:\s|$))/u,
+    /(?:^|[;&|\n]\s*)(?:\/opt\/homebrew\/bin\/mise\s+exec\s+--\s+)?git\s+(?:-[Cc]\s+\S+\s+)+push\b[^|;&\n]*(?:--force(?:-with-lease)?\b|\s-f\b|\s\+\S|--prune\b|--mirror\b|\s\S*:(?:refs\/heads\/)?main(?:\s|$)|\s(?:origin\s+)?(?:main|refs\/heads\/main)(?:\s|$))/u,
     "force push or direct push to main is prohibited in every spelling",
   ],
 ];

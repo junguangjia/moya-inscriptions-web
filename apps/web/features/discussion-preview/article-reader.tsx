@@ -1,4 +1,6 @@
 "use client";
+
+import { useAuthReturnView } from "../auth/auth-return";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -74,11 +76,49 @@ export function PostReader({
   highlightCommentId?: string;
   onOpenProfile: (name: string) => void;
 }) {
+  const postScroll = useRef<HTMLDivElement>(null);
+  const authReturnView = useAuthReturnView(`post-reader:${id}`, () => ({
+    top: postScroll.current?.scrollTop ?? 0,
+  }));
+  useLayoutEffect(() => {
+    const element = postScroll.current;
+    if (!authReturnView || !element) return;
+    let stopped = false;
+    const observer = new MutationObserver(() => restore());
+    const stop = () => {
+      stopped = true;
+      observer.disconnect();
+    };
+    const restore = () => {
+      if (stopped) return;
+      element.scrollTop = authReturnView.top;
+      if (Math.abs(element.scrollTop - authReturnView.top) < 1) stop();
+    };
+    observer.observe(element, { childList: true, subtree: true });
+    element.addEventListener("wheel", stop, { passive: true });
+    element.addEventListener("pointerdown", stop, { passive: true });
+    element.addEventListener("keydown", stop);
+    restore();
+    const frame = requestAnimationFrame(restore);
+    const timer = setTimeout(stop, 10_000);
+    return () => {
+      stop();
+      clearTimeout(timer);
+      cancelAnimationFrame(frame);
+      element.removeEventListener("wheel", stop);
+      element.removeEventListener("pointerdown", stop);
+      element.removeEventListener("keydown", stop);
+    };
+  }, [authReturnView]);
   const [outlet, setOutlet] = useState<HTMLDivElement | null>(null);
   return (
     <div className={styles.reader} data-discussion-comments-host="">
       <CommentComposerPortalProvider target={outlet}>
-        <div className={styles.readerScroll} data-post-reader={id}>
+        <div
+          ref={postScroll}
+          className={styles.readerScroll}
+          data-post-reader={id}
+        >
           {children}
           {comments != null ? (
             <LiveComments>{comments}</LiveComments>
@@ -118,21 +158,38 @@ export function ArticleReader({
   onOpenProfile: (name: string) => void;
 }) {
   const shell = useProductShell();
+  const activeRef = useRef<Page>(highlightCommentId ? "comments" : "reading");
+  const readingRef = useRef<HTMLElement | null>(null);
+  const commentsRef = useRef<HTMLElement | null>(null);
+  const inlineRef = useRef(false);
+  const authReturnView = useAuthReturnView(`reader:${id}`, () => ({
+    page: activeRef.current,
+    top: readingRef.current?.scrollTop ?? 0,
+    commentsTop: commentsRef.current?.scrollTop ?? 0,
+    inline: inlineRef.current,
+  }));
   const [active, setActive] = useState<Page>(
-    highlightCommentId ? "comments" : "reading",
+    authReturnView?.page ?? (highlightCommentId ? "comments" : "reading"),
   );
+  activeRef.current = active;
   const [readingElement, setReadingElement] = useState<HTMLElement | null>(
     null,
   );
+  readingRef.current = readingElement;
+  const [commentsElement, setCommentsElement] = useState<HTMLElement | null>(
+    null,
+  );
+  commentsRef.current = commentsElement;
   const [overlayTarget, setOverlayTarget] = useState<HTMLDivElement | null>(
     null,
   );
   const registerScroller = useCallback((element: HTMLElement) => {
     if (element.dataset.readingPage === "reading") setReadingElement(element);
+    if (element.dataset.readingPage === "comments") setCommentsElement(element);
     return () => {};
   }, []);
-  const [inline, setInline] = useState(false);
-  const inlineRef = useRef(false);
+  const [inline, setInline] = useState(authReturnView?.inline ?? false);
+  inlineRef.current = inline;
   const lastReadingTop = useRef(0);
   const [commentHost, setCommentHost] = useState<HTMLDivElement | null>(null);
   const sideMount = useRef<HTMLDivElement>(null);
@@ -150,6 +207,59 @@ export function ArticleReader({
   const end = useRef<HTMLDivElement>(null);
   const pager = useRef<HorizontalPagerHandle<Page>>(null);
   const [outlet, setOutlet] = useState<HTMLDivElement | null>(null);
+  const restoredScrollers = useRef(new WeakSet<HTMLElement>());
+  useLayoutEffect(() => {
+    if (!authReturnView) return;
+    let cancelled = false;
+    const elements = [readingElement, commentsElement].filter(
+      (element): element is HTMLElement => element !== null,
+    );
+    const observer = new MutationObserver(() => restore());
+    const cancel = () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+    const stop = () => {
+      for (const element of elements) restoredScrollers.current.add(element);
+      cancel();
+    };
+    const restore = () => {
+      if (cancelled) return;
+      for (const [element, top] of [
+        [readingElement, authReturnView.top],
+        [commentsElement, authReturnView.commentsTop],
+      ] as const) {
+        if (!element || restoredScrollers.current.has(element)) continue;
+        element.scrollTop = top;
+        if (Math.abs(element.scrollTop - top) < 1)
+          restoredScrollers.current.add(element);
+      }
+      lastReadingTop.current = readingElement?.scrollTop ?? authReturnView.top;
+      if (elements.every((element) => restoredScrollers.current.has(element)))
+        observer.disconnect();
+    };
+    for (const element of elements) {
+      observer.observe(element, { childList: true, subtree: true });
+      element.addEventListener("wheel", stop, { passive: true });
+      element.addEventListener("pointerdown", stop, { passive: true });
+      element.addEventListener("keydown", stop);
+    }
+    restore();
+    // Comments and their restored source pages arrive after the panels mount.
+    // Retry only until their original offsets fit, or the reader takes control.
+    const frame = requestAnimationFrame(restore);
+    const timer = setTimeout(stop, 10_000);
+    return () => {
+      cancel();
+      clearTimeout(timer);
+      cancelAnimationFrame(frame);
+      for (const element of elements) {
+        element.removeEventListener("wheel", stop);
+        element.removeEventListener("pointerdown", stop);
+        element.removeEventListener("keydown", stop);
+      }
+    };
+  }, [authReturnView, readingElement, commentsElement, commentHost, inline]);
   const changeInline = (next: boolean) => {
     inlineRef.current = next;
     setInline(next);

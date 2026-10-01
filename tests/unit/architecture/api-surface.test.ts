@@ -74,6 +74,7 @@ describe("@moya/api server-only surface", () => {
       "EditorialContentReadService",
       "ExecutionFenceLostError",
       "NotificationService",
+      "PasswordHashBusyError",
       "PublishingOperatorService",
       "PublishingTransferRegistry",
       "ThreadService",
@@ -83,6 +84,7 @@ describe("@moya/api server-only surface", () => {
       "createDevelopmentAuthService",
       "createMemoryCommunityAuthPort",
       "deriveCatalogPeriodLabel",
+      "hashPassword",
       "interpretAliyunCheck",
       "interpretAliyunSend",
       "interpretTencentSendEmail",
@@ -95,6 +97,7 @@ describe("@moya/api server-only surface", () => {
       "isCommunityNotFoundError",
       "isCommunityStoreUnavailableError",
       "isExecutionFenceLostError",
+      "isValidAuthPassword",
       "mapAliyunCheckSmsVerifyCode",
       "mapAliyunSendSmsVerifyCode",
       "mapCatalogDetail",
@@ -102,6 +105,8 @@ describe("@moya/api server-only surface", () => {
       "mapCatalogSummary",
       "mapPublicUserProfile",
       "mapTencentSendEmail",
+      "normalizeStudioName",
+      "normalizeStudioNameInput",
       "parseCatalogListQuery",
       "parseCatalogSearchQuery",
       "parseCommentListingQuery",
@@ -112,6 +117,8 @@ describe("@moya/api server-only surface", () => {
       "parseWorkPublishingSegment",
       "splitParagraphs",
       "targetRequestId",
+      "validPassword",
+      "verifyPassword",
     ]);
   });
 

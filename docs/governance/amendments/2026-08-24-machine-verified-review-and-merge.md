@@ -38,6 +38,14 @@ Green CI or an implementation-agent self-report alone is not sufficient. An
 independent review agent must inspect the actual diff, applicable evidence, and
 current remote state.
 
+Owner clarification, 2026-10-01: after complete task acceptance, an upstream
+synchronization requires local checks and independent review of its actual
+changes and integration impact, not automatic repetition of every local check
+and unchanged review. The final candidate still requires cumulative CI and a
+review decision bound to its HEAD. Apply the final integration rules in
+[`task-workflow.md`](../../development/task-workflow.md#implementation-and-final-integration-boundaries)
+using existing commands and records; no new verification mode is required.
+
 ## 2. Owner decision gates
 
 Stop and obtain an explicit Owner decision only when at least one of these gates
@@ -89,8 +97,13 @@ review agent may:
 
 For user-visible work, the review agent completes all machine review first and
 asks the Owner only for the necessary visual or real-device judgment. After that
-judgment is recorded for the exact reviewed head, the review agent performs the
-routine Ready, merge, and merged-head operations.
+judgment is recorded, the review agent performs the routine Ready, merge, and
+merged-head operations. For a later integration candidate, the reviewer may
+carry forward that judgment only after establishing that the accepted
+presentation, behavior and relevant dependencies/configuration are unchanged,
+and recording the accepted revision and the final HEAD. Changed scenarios need
+Owner acceptance again. Explicit task-specific exact-head and Draft stops remain
+binding.
 
 For a major directional decision, the Owner chooses the direction. Once the
 choice is frozen, implementation and routine review or merge return to the

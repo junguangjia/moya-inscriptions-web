@@ -18,7 +18,13 @@ import {
   runCommunityMigrations,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  passwordAuthCases,
+  registerPasswordCase,
+  preparePasswordResetCase,
+  sendAnonymousSignInCase,
+} from "../../unit/backend/password-auth-cases";
 
 import {
   assertSyntheticTestDatabaseUrl,
@@ -1229,5 +1235,350 @@ describe("email-auth PostgreSQL", () => {
     expect((await service.readAccount(opened.value.session.token)).ok).toBe(
       false,
     );
+  });
+
+  describe("password auth PostgreSQL App-role parity", () => {
+    beforeAll(async () => {
+      // The focused suite also works when prior OTP cases are filtered out.
+      await runCommunityMigrations(owner, migrationsDirectory);
+      await owner.query(catalogStubs);
+      const existing = await owner.query(
+        "SELECT 1 FROM pg_roles WHERE rolname=$1",
+        [appRole],
+      );
+      if (existing.rowCount === 0)
+        await owner.query(
+          `CREATE ROLE ${appRole} LOGIN PASSWORD 'synthetic-test-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`,
+        );
+      await owner.query(
+        `GRANT CONNECT ON DATABASE ${new URL(ownerUrl).pathname.slice(1)} TO ${appRole}`,
+      );
+      await applyGrants(owner, appRole);
+    });
+    beforeEach(async () => {
+      await owner.query("TRUNCATE TABLE community.public_users CASCADE");
+      await owner.query(
+        "TRUNCATE TABLE community.auth_send_counters,community.auth_target_failures",
+      );
+      codes.length = 0;
+    });
+    const makePasswordHarness = () => {
+      let now = new Date("2026-09-30T12:00:00Z");
+      const pool = appPool();
+      const serviceForPort = (
+        port: import("@moya/api").CommunityAuthPort,
+        deliveryOverride?: AuthDeliveryPorts,
+      ) =>
+        new CommunityAuthService(port, {
+          environment: "development",
+          profile: "full-local",
+          keys,
+          emailMode: "local_capture",
+          phoneMode: "simulated",
+          delivery: deliveryOverride ?? delivery(),
+          clock: () => now,
+        });
+      return {
+        service: serviceAt(pool, () => now),
+        port: new PostgresCommunityAuthAdapter(pool),
+        latestCode: latest,
+        serviceForPort,
+        suspend: async (id: string) => {
+          await owner.query(
+            "UPDATE community.public_users SET status='suspended' WHERE id=$1",
+            [id],
+          );
+        },
+        advance: (ms: number) => {
+          now = new Date(now.getTime() + ms);
+        },
+      };
+    };
+    passwordAuthCases(makePasswordHarness);
+    it("rejects an anonymous sign-in when a factor transfers before the first known User lock", async () => {
+      const h = makePasswordHarness(),
+        email = `${key()}@example.invalid`,
+        source = "synthetic-factor-transfer";
+      const anonymous = await sendAnonymousSignInCase(h, email);
+      const original = await registerPasswordCase(h, email, false);
+      const linkProof = await reauthenticate(
+        h.service,
+        original.session.token,
+        "email",
+        source,
+      );
+      const phone = await h.service.sendChallenge({
+        channel: "phone",
+        purpose: "link",
+        identifier: "13800138971",
+        idempotencyKey: key(),
+        source,
+        sessionToken: original.session.token,
+        reauthToken: linkProof,
+      });
+      if (!phone.ok || !phone.value.continuationToken)
+        throw Error("Synthetic alternate factor rejected");
+      const linked = await h.service.completeFactor({
+        challengeId: phone.value.challengeId,
+        continuationToken: phone.value.continuationToken,
+        code: latest(),
+        reauthToken: linkProof,
+        expectedVersion: 0,
+        idempotencyKey: key(),
+        sessionToken: original.session.token,
+      });
+      if (!linked.ok) throw Error("Synthetic alternate factor rejected");
+      const recipient = await register(
+        h.service,
+        "phone",
+        "13800138972",
+        "Synthetic recipient",
+        source,
+      );
+      const before = await h.port.transaction((tx) =>
+        tx.findChallenge(anonymous.challengeId),
+      );
+      if (before === null) throw Error("Synthetic anonymous challenge missing");
+      expect({
+        userId: before.userId,
+        invalidatedAt: before.invalidatedAt,
+        completedAt: before.completedAt,
+      }).toEqual({ userId: null, invalidatedAt: null, completedAt: null });
+
+      let release!: () => void,
+        reached!: () => void,
+        gated = false,
+        identityReads = 0,
+        challengeWrites = 0,
+        sessionWrites = 0,
+        receiptWrites = 0;
+      const paused = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const ready = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const lockedUsers: string[] = [];
+      const observedOwners: (string | null)[] = [];
+      const reader: import("@moya/api").CommunityAuthPort = {
+        transaction: (work) =>
+          h.port.transaction((tx) =>
+            work({
+              ...tx,
+              findIdentity: async (kind, digest) => {
+                const identity = await tx.findIdentity(kind, digest);
+                if (kind === "email" && digest === before.targetDigest) {
+                  identityReads++;
+                  observedOwners.push(identity?.userId ?? null);
+                }
+                return identity;
+              },
+              lockUser: async (id) => {
+                lockedUsers.push(id);
+                // No lock has been acquired yet: A can unlink while this
+                // request still holds only its earlier read of the owner.
+                if (!gated && id === original.session.profile.id) {
+                  gated = true;
+                  reached();
+                  await paused;
+                }
+                return tx.lockUser(id);
+              },
+              saveChallenge: async (row) => {
+                challengeWrites++;
+                await tx.saveChallenge(row);
+              },
+              insertSession: async (row) => {
+                sessionWrites++;
+                await tx.insertSession(row);
+              },
+              insertReceipt: async (row) => {
+                receiptWrites++;
+                return tx.insertReceipt(row);
+              },
+            }),
+          ),
+      };
+      const verifying = h
+        .serviceForPort(reader)
+        .verifyChallenge(anonymous.command);
+      let verified: Awaited<typeof verifying> | undefined;
+      try {
+        await Promise.race([
+          ready,
+          verifying.then(() => {
+            throw Error("Synthetic verification did not reach User gate");
+          }),
+        ]);
+        expect(observedOwners).toEqual([original.session.profile.id]);
+        expect(challengeWrites).toBe(0);
+
+        const unlinkProof = await reauthenticate(
+          h.service,
+          linked.value.session.token,
+          "phone",
+          source,
+        );
+        const unlinked = await h.service.unlinkFactor({
+          channel: "email",
+          reauthToken: unlinkProof,
+          expectedVersion: linked.value.account.email.version,
+          idempotencyKey: key(),
+          sessionToken: linked.value.session.token,
+        });
+        if (!unlinked.ok) throw Error("Synthetic factor unlink rejected");
+        const recipientProof = await reauthenticate(
+          h.service,
+          recipient.token,
+          "phone",
+          source,
+        );
+        const emailLink = await h.service.sendChallenge({
+          channel: "email",
+          purpose: "link",
+          identifier: email,
+          idempotencyKey: key(),
+          source,
+          sessionToken: recipient.token,
+          reauthToken: recipientProof,
+        });
+        if (!emailLink.ok || !emailLink.value.continuationToken)
+          throw Error("Synthetic recipient factor rejected");
+        const transferred = await h.service.completeFactor({
+          challengeId: emailLink.value.challengeId,
+          continuationToken: emailLink.value.continuationToken,
+          code: latest(),
+          reauthToken: recipientProof,
+          expectedVersion: 0,
+          idempotencyKey: key(),
+          sessionToken: recipient.token,
+        });
+        if (!transferred.ok) throw Error("Synthetic factor transfer rejected");
+        const freshOwner = await h.port.transaction((tx) =>
+          tx.findIdentity("email", before.targetDigest),
+        );
+        expect(freshOwner?.userId).toBe(recipient.profile.id);
+        const sessionsBefore = await counted(
+          owner,
+          "SELECT count(*)::text AS count FROM community.sessions",
+          [],
+        );
+        release();
+        verified = await verifying;
+        // The assertion deliberately excludes code, continuation and Session.
+        expect(
+          verified.ok
+            ? { ok: true, outcome: verified.value.outcome }
+            : { ok: false, reason: verified.reason },
+        ).toEqual({ ok: false, reason: "AUTH_PROOF_REJECTED" });
+        expect(identityReads).toBe(2);
+        expect(observedOwners).toEqual([
+          original.session.profile.id,
+          recipient.profile.id,
+        ]);
+        expect(lockedUsers).toEqual([original.session.profile.id]);
+        expect({ challengeWrites, sessionWrites, receiptWrites }).toEqual({
+          challengeWrites: 0,
+          sessionWrites: 0,
+          receiptWrites: 0,
+        });
+        expect(
+          await counted(
+            owner,
+            "SELECT count(*)::text AS count FROM community.sessions",
+            [],
+          ),
+        ).toBe(sessionsBefore);
+        const after = await h.port.transaction((tx) =>
+          tx.findChallenge(anonymous.challengeId),
+        );
+        expect({
+          attempts: after?.attempts,
+          completedAt: after?.completedAt,
+          invalidatedAt: after?.invalidatedAt,
+        }).toEqual({ attempts: 0, completedAt: null, invalidatedAt: null });
+      } finally {
+        release();
+        if (verified === undefined)
+          await verifying.then(
+            () => undefined,
+            () => undefined,
+          );
+      }
+    });
+
+    it("locks the user before the challenge and re-reads invalidation when reset interleaves", async () => {
+      const h = makePasswordHarness(),
+        email = `${key()}@example.invalid`;
+      const original = await registerPasswordCase(h, email),
+        command = await preparePasswordResetCase(h, email);
+      const sent = await h.service.sendChallenge({
+        channel: "email",
+        purpose: "sign_in",
+        identifier: email,
+        idempotencyKey: key(),
+        source: "gated-pg",
+      });
+      if (!sent.ok || !sent.value.continuationToken)
+        throw Error("Synthetic OTP rejected");
+      const code = latest();
+      let release!: () => void,
+        readReached!: () => void,
+        resetReached!: () => void,
+        gated = false;
+      const paused = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const ready = new Promise<void>((resolve) => {
+        readReached = resolve;
+      });
+      const resetWriting = new Promise<void>((resolve) => {
+        resetReached = resolve;
+      });
+      const reader: import("@moya/api").CommunityAuthPort = {
+        transaction: (work) =>
+          h.port.transaction((tx) =>
+            work({
+              ...tx,
+              lockUser: async (id) => {
+                if (!gated && id === original.session.profile.id) {
+                  gated = true;
+                  readReached();
+                  await paused;
+                }
+                return tx.lockUser(id);
+              },
+            }),
+          ),
+      };
+      const writer: import("@moya/api").CommunityAuthPort = {
+        transaction: (work) =>
+          h.port.transaction((tx) =>
+            work({
+              ...tx,
+              invalidatePasswordResetProofs: async (id, at) => {
+                resetReached();
+                await tx.invalidatePasswordResetProofs(id, at);
+              },
+            }),
+          ),
+      };
+      const verifying = h.serviceForPort(reader).verifyChallenge({
+        challengeId: sent.value.challengeId,
+        continuationToken: sent.value.continuationToken,
+        code,
+        idempotencyKey: key(),
+      });
+      await ready;
+      const resetting = h.serviceForPort(writer).resetPassword(command);
+      await resetWriting;
+      release();
+      const [verified, reset] = await Promise.all([verifying, resetting]);
+      expect(reset.ok).toBe(true);
+      expect(verified.ok).toBe(false);
+      expect((await h.service.readAccount(original.session.token)).ok).toBe(
+        false,
+      );
+    });
   });
 });

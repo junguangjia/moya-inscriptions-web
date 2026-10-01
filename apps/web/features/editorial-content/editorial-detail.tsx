@@ -190,14 +190,20 @@ export function LiveArticleReader({
   highlightCommentId,
   renderComments,
   onPresentation,
+  onUnavailable,
 }: {
   id: string;
   highlightCommentId?: string;
   renderComments?: (articleId: string) => ReactNode;
   /** Reports the loaded Article's presentation (the overlay's title). */
   onPresentation?: (presentation: ArticlePresentation) => void;
+  /** Only a source Article, rather than a child reader, requests shell recovery. */
+  onUnavailable?: () => void;
 }) {
   const { state, retry } = useArticle(id);
+  useEffect(() => {
+    if (state.state === "missing") onUnavailable?.();
+  }, [state.state, onUnavailable]);
   const loadedPresentation =
     state.state === "populated" ? state.item.presentation : null;
   useEffect(() => {
@@ -249,12 +255,17 @@ export function LiveArticleReader({
 function CollectionPage({
   id,
   onOpenArticle,
+  onUnavailable,
 }: {
   id: string;
   onOpenArticle: (article: ArticleSummary) => void;
+  onUnavailable?: () => void;
 }) {
   const shell = useProductShell();
   const { state, retry } = useCollection(id);
+  useEffect(() => {
+    if (state.state === "missing") onUnavailable?.();
+  }, [state.state, onUnavailable]);
   if (state.state !== "populated")
     return <DetailState state={state.state} label="专题" onRetry={retry} />;
   const collection: ArticleCollectionDetail = state.item;
@@ -364,11 +375,13 @@ export function EditorialDetail({
   backButtonRef,
   onClose,
   renderComments,
+  onUnavailable,
 }: {
   id: string;
   backButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   renderComments?: (articleId: string) => ReactNode;
+  onUnavailable?: () => void;
 }) {
   const [child, setChild] = useState<string | null>(null);
   const detailScroll = useRef<HTMLDivElement>(null);
@@ -428,6 +441,7 @@ export function EditorialDetail({
       {isArticle ? (
         <LiveArticleReader
           id={id}
+          {...(onUnavailable ? { onUnavailable } : {})}
           onPresentation={reportPresentation}
           {...(renderComments ? { renderComments } : {})}
         />
@@ -444,6 +458,7 @@ export function EditorialDetail({
         >
           <CollectionPage
             id={id}
+            {...(onUnavailable ? { onUnavailable } : {})}
             onOpenArticle={(article) => {
               parentScroll.current = detailScroll.current?.scrollTop ?? 0;
               setChild(article.id);

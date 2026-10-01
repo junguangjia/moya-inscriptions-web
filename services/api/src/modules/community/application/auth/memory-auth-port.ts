@@ -9,6 +9,8 @@ import type {
   StoredReceipt,
   StoredSession,
   StoredUser,
+  StoredPasswordCredential,
+  StoredPasswordResetReceipt,
 } from "./auth-port.js";
 
 interface MemorySession extends StoredSession {
@@ -17,6 +19,8 @@ interface MemorySession extends StoredSession {
 
 interface MemoryState {
   users: StoredUser[];
+  credentials: StoredPasswordCredential[];
+  passwordResetReceipts: StoredPasswordResetReceipt[];
   identities: StoredIdentity[];
   challenges: StoredChallenge[];
   handoffs: StoredHandoff[];
@@ -34,6 +38,8 @@ interface MemoryState {
 
 const emptyState = (): MemoryState => ({
   users: [],
+  credentials: [],
+  passwordResetReceipts: [],
   identities: [],
   challenges: [],
   handoffs: [],
@@ -169,7 +175,14 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
         state.challenges.find((row) => row.idempotencyHash === hash) ?? null,
       saveChallenge: async (row) => {
         const index = state.challenges.findIndex((item) => item.id === row.id);
-        if (index >= 0) state.challenges[index] = row;
+        const current = state.challenges[index];
+        if (current)
+          state.challenges[index] = {
+            ...row,
+            supersededAt: current.supersededAt ?? row.supersededAt,
+            completedAt: current.completedAt ?? row.completedAt,
+            invalidatedAt: current.invalidatedAt ?? row.invalidatedAt,
+          };
       },
       openChallenge: async (filter) =>
         state.challenges
@@ -301,6 +314,26 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
             : row,
         );
       },
+      invalidatePasswordResetProofs: async (id, at) => {
+        const digests = new Set(
+          state.identities
+            .filter((row) => row.userId === id)
+            .map((row) => row.lookupDigest),
+        );
+        state.challenges = state.challenges.map((row) =>
+          (row.userId === id || digests.has(row.targetDigest)) &&
+          row.completedAt === null &&
+          row.invalidatedAt === null
+            ? { ...row, invalidatedAt: at }
+            : row,
+        );
+        state.handoffs = state.handoffs.map((row) =>
+          (row.userId === id || digests.has(row.targetDigest)) &&
+          row.consumedAt === null
+            ? { ...row, consumedAt: at }
+            : row,
+        );
+      },
       insertAudit: async (row) => {
         state.audits.push(row);
       },
@@ -327,6 +360,47 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
         return state.users.find((user) => user.id === session.userId) ?? null;
       },
       countUsers: async () => state.users.length,
+      findPasswordCredential: async (id) =>
+        state.credentials.find((row) => row.userId === id) ?? null,
+      savePasswordCredential: async (row, expected) => {
+        const index = state.credentials.findIndex(
+          (current) => current.userId === row.userId,
+        );
+        const current = state.credentials[index];
+        if ((current?.version ?? null) !== expected) return "stale";
+        if (current) state.credentials[index] = row;
+        else state.credentials.push(row);
+        return "ok";
+      },
+      findPasswordResetReceipt: async (key) =>
+        state.passwordResetReceipts.find((row) => row.keyHash === key) ?? null,
+      insertPasswordResetReceipt: async (row) => {
+        if (
+          state.passwordResetReceipts.some((old) => old.keyHash === row.keyHash)
+        )
+          return "conflict";
+        state.passwordResetReceipts.push(row);
+        return "ok";
+      },
+      revokeAllSessions: async (id, at) => {
+        state.sessions = state.sessions.map((row) =>
+          row.userId === id && row.revokedAt === null
+            ? { ...row, revokedAt: at }
+            : row,
+        );
+      },
+      closeUserReceipts: async (id, at) => {
+        state.receipts = state.receipts.map((row) =>
+          row.userId === id && row.closedAt === null
+            ? { ...row, closedAt: at }
+            : row,
+        );
+        state.passwordResetReceipts = state.passwordResetReceipts.map((row) =>
+          row.userId === id && row.closedAt === null
+            ? { ...row, closedAt: at }
+            : row,
+        );
+      },
     };
   }
 }

@@ -79,6 +79,8 @@ export type {
   StoredReceipt,
   StoredSession,
   StoredUser,
+  StoredPasswordCredential,
+  StoredPasswordResetReceipt,
   VerificationMode,
 } from "./modules/community/application/auth/auth-port.js";
 export type {
@@ -337,3 +339,16 @@ export type {
   DirectMessagePort,
   DirectMessageSendInput,
 } from "./modules/community/application/ports/direct-message-port.js";
+
+export {
+  hashPassword,
+  verifyPassword,
+  validPassword,
+  PasswordHashBusyError,
+} from "./modules/community/application/auth/password-crypto.js";
+
+export {
+  isValidAuthPassword,
+  normalizeStudioName,
+  normalizeStudioNameInput,
+} from "./modules/community/domain/auth-profile-policy.js";

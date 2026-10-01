@@ -47,13 +47,113 @@ export const authAccountSecuritySchema = z.strictObject({
   capabilities: authCapabilitiesSchema,
 });
 
+export const authPasswordSchema = z
+  .string()
+  .refine((value) => {
+    const length = [...value].length;
+    return (
+      length >= 6 &&
+      length <= 20 &&
+      /[A-Z]/u.test(value) &&
+      /[0-9]/u.test(value) &&
+      !value.includes("\u0000") &&
+      !/[\uD800-\uDFFF]/u.test(value)
+    );
+  }, "Password must contain 6–20 Unicode code points, an ASCII uppercase letter and a digit")
+  .meta({
+    description:
+      "6–20 Unicode code points, including an ASCII uppercase letter and digit; do not trim or normalize; no NUL or lone surrogate. Never stored as plaintext.",
+    writeOnly: true,
+  });
+export const studioNameSchema = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      [...value].length <= 6 &&
+      !value.includes("\u0000") &&
+      !/[\uD800-\uDFFF]/u.test(value),
+    "Invalid studio name",
+  );
+
+/** Combined display value; legacy unpaired writes retain their six-code-point limit. */
+export const studioNameDisplaySchema = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      [...value].length <= 7 &&
+      !value.includes("\u0000") &&
+      !/[\uD800-\uDFFF]/u.test(value),
+    "Invalid studio name",
+  );
+export const studioNameSuffixSchema = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      [...value].length <= 2 &&
+      !value.includes("\u0000") &&
+      !/[\uD800-\uDFFF]/u.test(value),
+    "Invalid studio name suffix",
+  );
+
+const validStudioNamePair = (name: string, suffix: string): boolean => {
+  if (name === "" && suffix === "") return true;
+  if (suffix === "" || !name.endsWith(suffix)) return false;
+  const base = name.slice(0, -suffix.length);
+  return base === base.trim() && [...base].length >= 1 && [...base].length <= 5;
+};
+/** New editors send the full combined name and the independently chosen suffix. */
+export const studioNameInputSchema = z
+  .strictObject({
+    studioName: studioNameDisplaySchema,
+    studioNameSuffix: studioNameSuffixSchema,
+  })
+  .refine(
+    (input) => validStudioNamePair(input.studioName, input.studioNameSuffix),
+    {
+      path: ["studioName"],
+      message:
+        "Use a 1–5 character name and a 1–2 character suffix, or clear both",
+    },
+  );
+/** Omitted fields preserve existing profiles; an unpaired value is a legacy write. */
+export const refineStudioNameWrite = (
+  input: {
+    studioName?: string | undefined;
+    studioNameSuffix?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void => {
+  const valid =
+    input.studioNameSuffix === undefined
+      ? input.studioName === undefined ||
+        studioNameSchema.safeParse(input.studioName).success
+      : input.studioName !== undefined &&
+        validStudioNamePair(input.studioName, input.studioNameSuffix);
+  if (!valid)
+    context.addIssue({
+      code: "custom",
+      path: ["studioName"],
+      message: "Invalid studio name and suffix",
+    });
+};
+
 const idempotencyKeySchema = z.string().uuid();
 const continuationTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
 const otpSchema = z.string().regex(/^\d{6}$/u);
 
 export const authChallengeRequestSchema = z.strictObject({
   channel: authChannelSchema,
-  purpose: z.enum(["sign_in", "register", "link", "replace", "reauthenticate"]),
+  purpose: z.enum([
+    "sign_in",
+    "register",
+    "link",
+    "replace",
+    "reauthenticate",
+    "password_reset",
+  ]),
   identifier: z.string().min(1).max(254).optional(),
   idempotencyKey: idempotencyKeySchema,
   reauthToken: continuationTokenSchema.optional(),
@@ -74,12 +174,46 @@ export const authVerifyRequestSchema = z.strictObject({
   idempotencyKey: idempotencyKeySchema,
 });
 
-export const authRegistrationRequestSchema = z.strictObject({
-  handoffToken: continuationTokenSchema,
-  displayName: z.string().min(1).max(40),
-  agreement: z.literal(true),
+export const authRegistrationRequestSchema = z
+  .strictObject({
+    handoffToken: continuationTokenSchema,
+    displayName: z.string().min(1).max(40),
+    password: authPasswordSchema.optional(),
+    studioName: studioNameDisplaySchema.optional(),
+    studioNameSuffix: studioNameSuffixSchema.optional(),
+    agreement: z.literal(true),
+    idempotencyKey: idempotencyKeySchema,
+  })
+  .superRefine(refineStudioNameWrite);
+
+export const authPasswordLoginRequestSchema = z.strictObject({
+  channel: authChannelSchema,
+  identifier: z.string().min(1).max(254),
+  // Do not expose composition differences on sign-in; the service verifies generically.
+  password: z.string().max(80).meta({
+    writeOnly: true,
+    description:
+      "Password input; missing, unset and invalid credentials have the same sign-in result.",
+  }),
   idempotencyKey: idempotencyKeySchema,
 });
+export const authPasswordResetRequestSchema = z.strictObject({
+  handoffToken: continuationTokenSchema,
+  password: authPasswordSchema,
+  idempotencyKey: idempotencyKeySchema,
+});
+export const authPasswordResetResultSchema = z.strictObject({
+  reset: z.literal(true),
+});
+export type AuthPasswordLoginRequest = z.infer<
+  typeof authPasswordLoginRequestSchema
+>;
+export type AuthPasswordResetRequest = z.infer<
+  typeof authPasswordResetRequestSchema
+>;
+export type AuthPasswordResetResult = z.infer<
+  typeof authPasswordResetResultSchema
+>;
 
 export const authFactorCompleteRequestSchema = z.strictObject({
   challengeId: z.string().regex(/^challenge-[0-9a-f]{32}$/u),

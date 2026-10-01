@@ -1,260 +1,654 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import type { AuthorProfile } from "@moya/contracts";
-import Cropper from "react-easy-crop";
+import { useEffect, useId, useRef, useState } from "react";
+import type { RefObject } from "react";
 import type { Area } from "react-easy-crop";
-import "react-easy-crop/react-easy-crop.css";
+import type { AuthorProfile } from "@moya/contracts";
 import { AuthorDialog } from "./author-dialog";
 import { useAuthors } from "./author-context";
 import { authorClient } from "./author-data";
-import { readAvatarImage, normalizeAvatarPng } from "./avatar-image";
-import type { AvatarImage } from "./avatar-image";
+import {
+  CoverError,
+  REFERENCE_HEADERS,
+  coverErrorMessage,
+  deviceForWidth,
+  exportProfileCover,
+  needsFreshIntent,
+  readProfileCoverImage,
+  sameCoverArea,
+} from "./profile-cover";
+import type {
+  CoverDevice,
+  CoverExport,
+  CoverSavePhase,
+  CoverSource,
+  HeaderBox,
+} from "./profile-cover";
+import {
+  DEVICE_LABELS,
+  DeviceTabs,
+  ProfileCoverStage,
+} from "./profile-cover-stage";
+import { ProfileCoverPreview } from "./profile-cover-preview";
 import { requestIdentity } from "../shell/request-identity";
+import editor from "../publishing/ui/editor/editor.module.css";
+import media from "../publishing/ui/media/media.module.css";
+import presentation from "../user/user-presentation.module.css";
+import styles from "./profile-background-editor.module.css";
 
-/** Reuse the image decoder and PNG sanitizer, exporting a bounded wide crop. */
-export const exportProfileBackground = (
-  image: HTMLImageElement,
-  area: Area,
-): Blob => {
-  const { x, y, width, height } = area;
-  if (
-    ![x, y, width, height].every(Number.isFinite) ||
-    x < 0 ||
-    y < 0 ||
-    width <= 0 ||
-    height <= 0 ||
-    x + width > image.naturalWidth ||
-    y + height > image.naturalHeight
-  )
-    throw Error("裁剪区域尚未就绪，请重试");
-  const canvas = document.createElement("canvas");
-  canvas.width = 1280;
-  canvas.height = 720;
-  const context = canvas.getContext("2d", { colorSpace: "srgb" });
-  if (!context) throw Error("当前浏览器无法导出图像");
-  context.drawImage(image, x, y, width, height, 0, 0, 1280, 720);
-  const data = canvas.toDataURL("image/png");
-  if (!data.startsWith("data:image/png;base64,"))
-    throw Error("图像导出失败，请重试");
-  const bytes = normalizeAvatarPng(
-    Uint8Array.from(atob(data.slice("data:image/png;base64,".length)), (char) =>
-      char.charCodeAt(0),
-    ),
-  );
-  return new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "image/png" });
+type Step = "overview" | "crop" | "remove";
+type Phase = "idle" | "export" | "upload" | "bind" | "refresh" | "done";
+const BUSY: readonly Phase[] = ["export", "upload", "bind", "refresh"];
+const SAVE_STEPS = [
+  ["export", "处理图片"],
+  ["upload", "上传"],
+  ["bind", "保存"],
+  ["refresh", "更新主页"],
+] as const;
+const PHASE_STATUS: Partial<Record<Phase, string>> = {
+  export: "正在处理图片…",
+  upload: "正在上传…",
+  bind: "正在保存…",
+  refresh: "正在更新主页…",
+};
+/** The unchanged client request budget; after it the header catches up on reload. */
+const REFRESH_TIMEOUT_MS = 15_000;
+
+interface Chosen {
+  readonly key: number;
+  readonly source: CoverSource;
+}
+/** Upload and save identities pinned to one exported image (or to removal). */
+interface Intent {
+  readonly result: CoverExport | null;
+  readonly uploadId: string;
+  readonly saveId: string;
+  mediaId?: string | null;
+}
+
+/** The owning header's box, measured while it is laid out beneath the dialog. */
+const useHeaderBox = (
+  header: RefObject<HTMLElement | null> | undefined,
+): HeaderBox | null => {
+  const [box, setBox] = useState<HeaderBox | null>(null);
+  useEffect(() => {
+    const element = header?.current;
+    if (!element) return;
+    const read = () => {
+      const rect = element.getBoundingClientRect();
+      const avatar = element.querySelector(`.${presentation.avatar}`);
+      if (!(rect.width > 0 && rect.height > 0) || !avatar) return;
+      const identityTop = avatar.getBoundingClientRect().top - rect.top;
+      setBox((old) =>
+        old?.width === rect.width &&
+        old.height === rect.height &&
+        old.identityTop === identityTop
+          ? old
+          : { width: rect.width, height: rect.height, identityTop },
+      );
+    };
+    read();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(read);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [header]);
+  return box;
 };
 
 export const ProfileBackgroundEditor = ({
   profile,
+  header,
   onClose,
   onSaved,
 }: {
   profile: AuthorProfile;
+  /** The owning profile's header section, measured for the preview frames. */
+  header?: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: () => void;
 }) => {
   const author = useAuthors();
-  const [source, setSource] = useState<AvatarImage | null>(null);
-  const [crop, setCrop] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [ready, setReady] = useState(false);
-  const [blank, setBlank] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [decoding, setDecoding] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
+  const [thisDevice] = useState<CoverDevice>(() =>
+    typeof window === "undefined" ? "phone" : deviceForWidth(window.innerWidth),
+  );
+  const measured = useHeaderBox(header);
+  const headers = measured
+    ? { ...REFERENCE_HEADERS, [thisDevice]: measured }
+    : REFERENCE_HEADERS;
+  const tabsId = useId();
+  const [step, setStep] = useState<Step>("overview"),
+    [device, setDevice] = useState<CoverDevice>(thisDevice),
+    [chosen, setChosen] = useState<Chosen | null>(null),
+    [areaReady, setAreaReady] = useState(false),
+    [decoding, setDecoding] = useState(false),
+    [phase, setPhase] = useState<Phase>("idle"),
+    [failed, setFailed] = useState(false),
+    [error, setError] = useState("");
   const area = useRef<Area | null>(null),
-    owned = useRef<AvatarImage | null>(null),
+    exported = useRef<{ key: number; area: Area; result: CoverExport } | null>(
+      null,
+    ),
+    intent = useRef<Intent | null>(null),
+    owned = useRef<CoverSource | null>(null),
     input = useRef<HTMLInputElement>(null),
+    primary = useRef<HTMLButtonElement>(null),
+    keepRemove = useRef<HTMLButtonElement>(null),
+    shownStep = useRef<Step>("overview"),
     mounted = useRef(false),
     generation = useRef(0),
-    saving = useRef(false);
-  const intent = useRef<{
-    uploadId: string;
-    saveId: string;
-    blob: Blob | null;
-    mediaId?: string | null;
-  } | null>(null);
+    saving = useRef(false),
+    target = useRef<string | null>(null),
+    phaseRef = useRef<Phase>("idle"),
+    /** A bind failed without a definite answer from the server. */
+    uncertain = useRef(false);
+  const busy = BUSY.includes(phase);
+  /** A write is in flight: leaving the page could lose it. */
+  const writing = phase === "export" || phase === "upload" || phase === "bind";
   const allowed =
     profile.isOwner &&
     author.viewer?.id === profile.id &&
     !author.checking &&
     !author.sessionError;
-  const latest = useRef({ allowed, account: author.viewer?.id });
-  latest.current = { allowed, account: author.viewer?.id };
-  const dirty = !saved && (source !== null || blank);
+  const latest = useRef({
+    author,
+    account: author.viewer?.id,
+    profile,
+    onSaved,
+  });
+  latest.current = { author, account: author.viewer?.id, profile, onSaved };
+  /**
+   * After a bind that got no definite answer: an editor-scoped read (never a
+   * page reload, which offline would close the editor). A failed read keeps
+   * the question open for the next exit; a confirmed save refreshes the
+   * owning profile and says so.
+   */
+  const checkUncertain = () => {
+    if (!uncertain.current || phaseRef.current !== "idle") return;
+    const { profile: current } = latest.current;
+    const shown = current.background?.id ?? null;
+    void authorClient
+      .profile(current.id)
+      .then((fresh) => {
+        if (!uncertain.current) return;
+        uncertain.current = false;
+        if ((fresh.background?.id ?? null) === shown) return;
+        latest.current.onSaved();
+        latest.current.author.notify(
+          fresh.background ? "主页背景已保存" : "主页背景已移除",
+        );
+      })
+      .catch(() => {});
+  };
+  const identity = {
+    name: profile.displayName,
+    studioName: profile.studioName,
+    avatarSrc: profile.avatar?.src ?? null,
+  };
+
+  const go = (next: Phase) => {
+    phaseRef.current = next;
+    setPhase(next);
+  };
+  const release = () => {
+    owned.current?.release();
+    owned.current = null;
+    area.current = null;
+    exported.current = null;
+    intent.current = null;
+    setChosen(null);
+    setAreaReady(false);
+  };
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
       generation.current++;
-      if (owned.current) URL.revokeObjectURL(owned.current.url);
+      owned.current?.release();
+      // Leaving after an unconfirmed save still checks it (refs only).
+      checkUncertain();
+      // The save was confirmed but the editor left before the header caught up.
+      if (phaseRef.current === "refresh")
+        latest.current.author.notify(
+          target.current === null ? "主页背景已移除" : "主页背景已保存",
+        );
     };
   }, []);
+
+  // Keyboard and screen-reader users follow the step: the crop area focuses
+  // itself once laid out; the overview and removal focus their safe action.
+  useEffect(() => {
+    if (shownStep.current === step) return;
+    shownStep.current = step;
+    if (step === "overview") primary.current?.focus({ preventScroll: true });
+    if (step === "remove") keepRemove.current?.focus({ preventScroll: true });
+  }, [step]);
+
+  const toOverview = () => {
+    generation.current++;
+    checkUncertain();
+    release();
+    setDecoding(false);
+    setFailed(false);
+    setError("");
+    setStep("overview");
+  };
   const select = async (file: File) => {
     const run = ++generation.current;
     setDecoding(true);
     setError("");
     try {
-      const value = await readAvatarImage(file);
+      const source = await readProfileCoverImage(file);
       if (!mounted.current || run !== generation.current) {
-        URL.revokeObjectURL(value.url);
+        source.release();
         return;
       }
-      if (owned.current) URL.revokeObjectURL(owned.current.url);
-      owned.current = value;
-      area.current = null;
-      intent.current = null;
-      setReady(false);
-      setBlank(false);
-      setCrop({ x: 0, y: 0 });
-      setZoom(1);
-      setSource(value);
+      release();
+      owned.current = source;
+      setChosen({ key: run, source });
+      setFailed(false);
+      setStep("crop");
     } catch (e) {
+      // A failed reselect keeps the current photo and crop.
       if (mounted.current && run === generation.current)
-        setError(e instanceof Error ? e.message : "图像无法打开，请重新选择");
+        setError(coverErrorMessage(e));
     } finally {
       if (mounted.current && run === generation.current) setDecoding(false);
     }
   };
+
+  const fail = (message: string) => {
+    go("idle");
+    setFailed(true);
+    setError(message);
+  };
+  const confirm = (media: string | null) => {
+    uncertain.current = false;
+    target.current = media;
+    go("refresh");
+    onSaved();
+    author.mutate();
+  };
+  /** Epoch and viewer checks only: a session revalidation is not a switch. */
+  const stillCurrent = (epoch: number) =>
+    mounted.current &&
+    latest.current.account === profile.id &&
+    authorClient.accountEpoch() === epoch;
+  const interrupted = () => {
+    intent.current = null;
+    if (!mounted.current) return;
+    fail(
+      authorClient.account() === null
+        ? "暂时无法确认账户，照片和裁剪已保留"
+        : "账户已切换，背景尚未更改",
+    );
+  };
+
+  /** Truthful copy after a failed request, and the right identity for a retry. */
+  const onFailure = (
+    e: unknown,
+    stage: "export" | CoverSavePhase,
+    epoch: number,
+  ) => {
+    if (!mounted.current) return;
+    // A lost bind response may hide a committed save; the overview checks
+    // it when the owner leaves this step (never a page reload from here).
+    if (stage === "bind") uncertain.current = true;
+    if (authorClient.accountEpoch() !== epoch) {
+      if (stage !== "bind") return interrupted();
+      // Same ids are safe to retry: the server replays a committed save.
+      return fail(
+        "账户状态已变化，无法确认是否已保存，请确认账户后重试（不会重复保存）",
+      );
+    }
+    if (needsFreshIntent(e)) intent.current = null;
+    fail(
+      coverErrorMessage(
+        stage === "export" && !(e instanceof CoverError)
+          ? new CoverError("export")
+          : e,
+        stage === "export" ? undefined : stage,
+      ),
+    );
+  };
+
   const save = async () => {
-    if (
-      !latest.current.allowed ||
-      saving.current ||
-      decoding ||
-      !dirty ||
-      (!blank && (!source || !area.current))
-    )
+    const current = chosen,
+      chosenArea = area.current;
+    if (saving.current || !allowed || decoding || !current || !chosenArea)
       return;
-    const accountRun = authorClient.accountEpoch();
-    const current = () =>
-      mounted.current &&
-      latest.current.allowed &&
-      latest.current.account === profile.id &&
-      authorClient.accountEpoch() === accountRun;
     saving.current = true;
-    setBusy(true);
     setError("");
+    setFailed(false);
+    const epoch = authorClient.accountEpoch();
+    let stage: "export" | CoverSavePhase = "export";
     try {
-      const pending = intent.current ?? {
-        uploadId: requestIdentity(),
-        saveId: requestIdentity(),
-        blob: blank
-          ? null
-          : exportProfileBackground(source!.image, area.current!),
-        ...(blank ? { mediaId: null } : {}),
-      };
-      intent.current = pending;
+      let done = exported.current;
+      if (
+        !done ||
+        done.key !== current.key ||
+        !sameCoverArea(done.area, chosenArea, current.source.pixels)
+      ) {
+        go("export");
+        const result = await exportProfileCover(current.source, chosenArea);
+        done = { key: current.key, area: chosenArea, result };
+        exported.current = done;
+      }
+      if (intent.current?.result !== done.result)
+        intent.current = {
+          result: done.result,
+          uploadId: requestIdentity(),
+          saveId: requestIdentity(),
+        };
+      const pending = intent.current;
+      if (!stillCurrent(epoch)) return interrupted();
       if (pending.mediaId === undefined) {
+        stage = "upload";
+        go("upload");
         const media = await authorClient.upload(
-          pending.blob!,
+          done.result.blob,
           pending.uploadId,
         );
-        if (!current()) return;
+        if (!stillCurrent(epoch)) return interrupted();
         pending.mediaId = media.id;
       }
-      if (!current()) return;
+      stage = "bind";
+      go("bind");
       await authorClient.background({
         requestId: pending.saveId,
         mediaId: pending.mediaId,
       });
-      if (!current()) return;
-      setSaved(true);
-      onSaved();
-      author.mutate();
-      author.notify(blank ? "主页背景已清除" : "主页背景已保存");
+      if (mounted.current) confirm(pending.mediaId);
     } catch (e) {
-      if (mounted.current)
-        setError(e instanceof Error ? e.message : "背景保存失败，请重试");
+      onFailure(e, stage, epoch);
     } finally {
       saving.current = false;
-      if (mounted.current) {
-        setBusy(false);
-        if (!current()) setError("账户状态已变化，请确认账户后重试保存");
-      }
     }
   };
+
+  const remove = async () => {
+    if (saving.current || !allowed) return;
+    saving.current = true;
+    setError("");
+    setFailed(false);
+    const epoch = authorClient.accountEpoch();
+    try {
+      if (intent.current?.mediaId !== null)
+        intent.current = {
+          result: null,
+          uploadId: "",
+          saveId: requestIdentity(),
+          mediaId: null,
+        };
+      const pending = intent.current;
+      if (!stillCurrent(epoch)) return interrupted();
+      go("bind");
+      await authorClient.background({
+        requestId: pending.saveId,
+        mediaId: null,
+      });
+      if (mounted.current) confirm(null);
+    } catch (e) {
+      onFailure(e, "bind", epoch);
+    } finally {
+      saving.current = false;
+    }
+  };
+
+  // Close only once the owning header shows the confirmed result, so the
+  // success notice never sits over the previous background.
+  useEffect(() => {
+    if (phase !== "refresh") return;
+    const timer = window.setTimeout(() => {
+      go("done");
+      author.notify(
+        target.current === null
+          ? "主页背景已移除"
+          : "主页背景已保存，刷新后显示",
+      );
+    }, REFRESH_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
+  const shownId = profile.background?.id ?? null,
+    shownSrc = profile.background?.src ?? null;
+  useEffect(() => {
+    if (phase !== "refresh" || shownId !== target.current) return;
+    const finish = () => {
+      if (phaseRef.current !== "refresh") return;
+      go("done");
+      author.notify(shownId ? "主页背景已更新" : "主页背景已移除");
+    };
+    const image = header?.current?.querySelector<HTMLImageElement>(
+      `.${presentation.profileCover} img`,
+    );
+    if (
+      !shownSrc ||
+      !image ||
+      (image.getAttribute("src") === shownSrc &&
+        image.complete &&
+        image.naturalWidth > 0)
+    ) {
+      finish();
+      return;
+    }
+    image.addEventListener("load", finish);
+    image.addEventListener("error", finish);
+    return () => {
+      image.removeEventListener("load", finish);
+      image.removeEventListener("error", finish);
+    };
+  }, [phase, shownId, shownSrc]);
+
+  const pick = () => {
+    if (!busy) input.current?.click();
+  };
+  const onBack = (depth: number) => {
+    if (depth === 0) toOverview();
+  };
+  const saveSteps =
+    step === "remove"
+      ? SAVE_STEPS.filter(([key]) => key !== "upload" && key !== "export")
+      : SAVE_STEPS;
+  const activeIndex = saveSteps.findIndex(([key]) => key === phase);
+  // The composer's step bars; the status line names the phase.
+  const progress = busy && (
+    <>
+      <ol className={editor.stepProgress} aria-hidden="true">
+        {saveSteps.map(([key], index) => (
+          <li
+            key={key}
+            data-reached={index <= activeIndex ? "true" : undefined}
+          />
+        ))}
+      </ol>
+      <p role="status" className={media.dialogNote}>
+        {PHASE_STATUS[phase]}
+      </p>
+    </>
+  );
+  const problems = (
+    <>
+      {!allowed && !author.sessionError && (
+        <p role="status" className={media.dialogNote}>
+          正在确认账户，确认后可保存背景。
+        </p>
+      )}
+      {author.sessionError && (
+        <div className={media.notice} role="alert">
+          <p className={media.errorText}>
+            暂时无法确认账户，照片和裁剪已保留。请检查网络后重试。
+          </p>
+          <button
+            type="button"
+            className={media.secondaryButton}
+            disabled={author.checking || busy}
+            onClick={() => void author.refresh()}
+          >
+            重新确认账户
+          </button>
+        </div>
+      )}
+      {error && (
+        <div className={styles.problem} role="alert">
+          <p className={media.errorText}>{error}</p>
+          {failed && step === "crop" && (
+            <p className={media.dialogNote}>照片和裁剪已保留。</p>
+          )}
+        </div>
+      )}
+    </>
+  );
+  const opening = decoding && (
+    <p role="status" className={media.dialogNote}>
+      正在打开照片…
+    </p>
+  );
+
   return (
     <AuthorDialog
-      title="主页背景"
-      dirty={dirty}
+      title={
+        step === "crop"
+          ? "调整背景"
+          : step === "remove"
+            ? "移除背景"
+            : "主页背景"
+      }
+      navigationDepth={step === "overview" ? 0 : 1}
+      onBack={onBack}
+      dirty={writing}
       dismissible={!busy}
-      closeRequested={saved}
+      closeRequested={phase === "done"}
       onClose={onClose}
     >
-      <div className="phase4-background-editor" aria-busy={busy || decoding}>
-        {source && !blank ? (
+      <div
+        className={`${media.dialogBody} ${styles.editor}`}
+        aria-busy={busy || decoding}
+        data-cover-editor={step}
+      >
+        {step === "crop" && chosen ? (
           <>
-            <div className="phase4-background-crop">
-              <Cropper
-                image={source.url}
-                crop={crop}
-                zoom={zoom}
-                aspect={16 / 9}
-                objectFit="cover"
-                minZoom={1}
-                maxZoom={3}
-                showGrid={false}
-                disableAutomaticStylesInjection
-                cropperProps={{
-                  tabIndex: busy ? -1 : 0,
-                  "aria-label": "拖动照片调整主页背景，可用方向键移动",
-                }}
-                mediaProps={{ alt: "待裁剪的主页背景" }}
-                onCropChange={(value) => {
-                  if (!saving.current) {
-                    setCrop(value);
-                    intent.current = null;
-                  }
-                }}
-                onZoomChange={(value) => {
-                  if (!saving.current) {
-                    setZoom(value);
-                    intent.current = null;
-                  }
-                }}
-                onTouchRequest={() => !saving.current}
-                onWheelRequest={() => !saving.current}
-                onCropAreaChange={(_, value) => {
-                  if (!saving.current) {
-                    area.current = value;
-                    setReady(true);
-                  }
-                }}
-              />
-            </div>
-            <label>
-              缩放
-              <input
-                aria-label="背景缩放"
-                type="range"
-                min="1"
-                max="3"
-                step="0.01"
-                value={zoom}
-                disabled={busy || decoding}
-                onChange={(event) => {
-                  setZoom(Number(event.target.value));
-                  intent.current = null;
-                }}
-              />
-            </label>
+            <ProfileCoverStage
+              key={chosen.key}
+              image={chosen.source.display}
+              sourceWidth={chosen.source.pixels.width}
+              headers={headers}
+              thisDevice={thisDevice}
+              identity={identity}
+              locked={busy}
+              autoFocus
+              onAreaChange={(value) => {
+                area.current = value;
+                setAreaReady(true);
+              }}
+            >
+              {/* Back (header) returns to the overview, as in the publishing crop. */}
+              <div className={media.dialogActions}>
+                <button
+                  type="button"
+                  className={media.secondaryButton}
+                  disabled={busy || decoding}
+                  onClick={pick}
+                >
+                  重新选择
+                </button>
+                <button
+                  type="button"
+                  className={media.primaryButton}
+                  disabled={!allowed || busy || decoding || !areaReady}
+                  onClick={() => void save()}
+                >
+                  {busy ? "保存中…" : failed ? "重试保存" : "保存"}
+                </button>
+              </div>
+            </ProfileCoverStage>
+            {/* Below the buttons: a status never pushes 保存 off a short screen. */}
+            {opening}
+            {progress}
+            {problems}
           </>
         ) : (
-          <div
-            className="phase4-background-preview"
-            aria-label={
-              blank || !profile.background ? "空白主页背景" : "当前主页背景"
-            }
-          >
-            {!blank && profile.background && (
-              <img src={profile.background.src} alt="当前主页背景" />
+          <>
+            <DeviceTabs idBase={tabsId} value={device} onChange={setDevice} />
+            <div
+              className={styles.previewPanel}
+              role="tabpanel"
+              id={`${tabsId}-panel`}
+              aria-labelledby={`${tabsId}-${device}`}
+            >
+              <ProfileCoverPreview
+                src={
+                  step === "remove" ? null : (profile.background?.src ?? null)
+                }
+                header={headers[device]}
+                device={device}
+                identity={identity}
+              />
+              <p className={styles.previewTitle}>
+                {step === "remove"
+                  ? "移除后主页将显示空白背景"
+                  : profile.background
+                    ? `当前背景在${DEVICE_LABELS[device]}上的效果`
+                    : "尚未设置主页背景"}
+              </p>
+            </div>
+            {step === "overview" && (
+              <p className={media.dialogNote}>
+                建议选择横向照片，重要内容放在画面中上部；不同机型显示范围略有差异。
+              </p>
             )}
-          </div>
+            {opening}
+            {progress}
+            {problems}
+            <div className={media.dialogActions}>
+              {step === "remove" ? (
+                <>
+                  <button
+                    ref={keepRemove}
+                    type="button"
+                    className={media.secondaryButton}
+                    disabled={busy}
+                    onClick={toOverview}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className={media.primaryButton}
+                    disabled={!allowed || busy}
+                    onClick={() => void remove()}
+                  >
+                    {busy ? "移除中…" : failed ? "重试移除" : "确认移除"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {profile.background && (
+                    <button
+                      type="button"
+                      className={media.secondaryButton}
+                      disabled={busy || decoding}
+                      onClick={() => {
+                        setError("");
+                        setFailed(false);
+                        setStep("remove");
+                      }}
+                    >
+                      移除背景
+                    </button>
+                  )}
+                  <button
+                    ref={primary}
+                    type="button"
+                    className={media.primaryButton}
+                    disabled={busy || decoding}
+                    onClick={pick}
+                  >
+                    {profile.background ? "更换照片" : "选择照片"}
+                  </button>
+                </>
+              )}
+            </div>
+          </>
         )}
-        <p className="phase4-muted">
-          选择照片后拖动、缩放调整背景，点击保存后生效。
-        </p>
         <input
           ref={input}
           hidden
@@ -264,42 +658,9 @@ export const ProfileBackgroundEditor = ({
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = "";
-            if (file) void select(file);
+            if (file && !saving.current) void select(file);
           }}
         />
-        <div className="phase4-actions">
-          <button
-            type="button"
-            disabled={!allowed || busy || decoding}
-            onClick={() => input.current?.click()}
-          >
-            选择照片
-          </button>
-          {(profile.background || source) && (
-            <button
-              type="button"
-              disabled={!allowed || busy || decoding}
-              onClick={() => {
-                setBlank(true);
-                intent.current = null;
-              }}
-            >
-              恢复空白背景
-            </button>
-          )}
-          <button
-            type="button"
-            disabled={
-              !allowed || busy || decoding || !dirty || (!blank && !ready)
-            }
-            onClick={() => void save()}
-          >
-            {busy ? "保存中…" : "保存背景"}
-          </button>
-        </div>
-        {decoding && <p role="status">正在打开照片…</p>}
-        {!allowed && <p role="status">正在确认账户，确认后可编辑背景。</p>}
-        {error && <p role="alert">{error}</p>}
       </div>
     </AuthorDialog>
   );

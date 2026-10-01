@@ -9,11 +9,10 @@
   color: #fff;
   font: 11px/1.5 var(--yoyi-font-ui, sans-serif);
 }
+/* Layout, buttons and notes come from the publishing crop dialog. */
 .editor {
   max-width: 480px;
-  margin: 24px auto 0;
-  display: grid;
-  gap: 20px;
+  text-align: start;
 }
 .editor p {
   margin: 0;
@@ -23,55 +22,23 @@
   width: 100%;
   aspect-ratio: 1;
   overflow: hidden;
-  border-radius: 16px;
-  background: #202020;
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-paper-dark);
   touch-action: none;
   overscroll-behavior: contain;
+  -webkit-touch-callout: none;
 }
 .viewport .mask {
-  border: 1px solid rgb(255 255 255 / 85%);
-  color: rgb(0 0 0 / 65%);
+  border: 1px solid
+    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
+  color: color-mix(in srgb, var(--yoyi-color-ink-black) 55%, transparent);
 }
 .viewport .mask:focus-visible {
-  outline: 2px solid #fff;
+  outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: 4px;
 }
 .viewport[data-saving="true"] {
   pointer-events: none;
-}
-.zoom {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  font-size: 14px;
-}
-.zoom input {
-  flex: 1;
-  min-width: 0;
-  min-height: 44px;
-  accent-color: var(--yoyi-color-text-primary);
-}
-.actions {
-  display: flex;
-  gap: 12px;
-}
-.actions button {
-  flex: 1;
-  min-height: 48px;
-}
-.actions .save {
-  background: var(--yoyi-color-text-primary);
-  color: var(--yoyi-color-background-page);
-  border-color: transparent;
-}
-.actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.error {
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--yoyi-color-text-primary);
 }
 @media (max-height: 560px) and (orientation: landscape) {
   .editor {

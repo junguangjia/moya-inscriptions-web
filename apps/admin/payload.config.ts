@@ -46,8 +46,19 @@ export default buildConfig({
       baseDir: dirname,
       importMapFile: path.resolve(dirname, "app/(payload)/admin/importMap.ts"),
     },
-    meta: { titleSuffix: "— 由艺（Yoyi）管理端" },
+    meta: {
+      titleSuffix: "— 由于艺管理端",
+      icons: {
+        icon: [
+          { url: "/admin/brand.svg", type: "image/svg+xml", sizes: "any" },
+        ],
+      },
+    },
     components: {
+      graphics: {
+        Logo: "/src/branding/Brand#AdminLogo",
+        Icon: "/src/branding/Brand#AdminIcon",
+      },
       views: {
         editorialWorkflow: {
           Component: "/src/owner-workflow/View#OwnerWorkflowView",

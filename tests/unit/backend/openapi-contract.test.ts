@@ -136,6 +136,8 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/community/relationships/follow",
         "/v1/community/auth/account",
         "/v1/community/auth/capabilities",
+        "/v1/community/auth/passwords/login",
+        "/v1/community/auth/passwords/reset",
         "/v1/community/works/{workId}",
         "/v1/community/editorial/articles",
         "/v1/community/editorial/articles/{articleId}",
@@ -218,6 +220,8 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "/v1/community/relationships/follow": ["post"],
       "/v1/community/auth/account": ["get"],
       "/v1/community/auth/capabilities": ["get"],
+      "/v1/community/auth/passwords/login": ["post"],
+      "/v1/community/auth/passwords/reset": ["post"],
       "/v1/community/works/{workId}": ["get", "delete"],
       "/v1/community/editorial/articles": ["get"],
       "/v1/community/editorial/articles/{articleId}": ["get"],
@@ -395,7 +399,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     );
     expect(
       Object.keys(asObject(asObject(schemas.CommentAuthor).properties)),
-    ).toEqual(["id", "displayName"]);
+    ).toEqual(["id", "displayName", "studioName"]);
     expect(asObject(schemas.CatalogComment).additionalProperties).toBe(false);
     expect(
       asObject(
@@ -495,7 +499,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     });
     expect(
       Object.keys(asObject(asObject(schemas.PublicUserProfile).properties)),
-    ).toEqual(["id", "handle", "displayName"]);
+    ).toEqual(["id", "handle", "displayName", "studioName"]);
     expect(JSON.stringify(schemas.PublicUserProfile).toLowerCase()).not.toMatch(
       /status|token|credential|email|phone|avatar/u,
     );

@@ -1,4 +1,5 @@
 "use client";
+import { useAuthEntry } from "../auth/auth-return";
 import { useEffect, useRef, useState } from "react";
 import type { ContentIdentity } from "@moya/contracts";
 import type { ContentQuickActionEnvironment } from "../quick-actions/quick-action-types";
@@ -157,6 +158,7 @@ export const ContentActionsView = ({
   actions: ReturnType<typeof useContentActions>;
 }) => {
   const { viewer, signInHref, checking } = useAuthors();
+  const enterAuth = useAuthEntry();
   return (
     <div
       className={`phase4-detail-actions ${styles.actions}`}
@@ -199,7 +201,7 @@ export const ContentActionsView = ({
             }
             onClick={() => {
               if (action === "like" && !viewer) {
-                window.location.assign(signInHref);
+                enterAuth(signInHref);
                 return;
               }
               void actions.execute(action, {

@@ -26,6 +26,7 @@ jobs:
     outputs:
       scope: ${{ steps.classify.outputs.scope }}
       web: ${{ steps.classify.outputs.web }}
+      web_workspaces: ${{ steps.classify.outputs.web_workspaces }}
       cms: ${{ steps.classify.outputs.cms }}
       contracts: ${{ steps.classify.outputs.contracts }}
       apple: ${{ steps.classify.outputs.apple }}
@@ -93,6 +94,16 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Restore content-hashed library builds
+        uses: actions/cache@v4
+        with:
+          path: .turbo/library-cache
+          key:
+            library-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml',
+            'turbo.json', 'tsconfig.base.json') }}-${{ github.sha }}-${{
+            github.job }}
+          restore-keys: |
+            library-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml', 'turbo.json', 'tsconfig.base.json') }}-
       - name: Validate shared contracts and their existing consumers
         run: >-
           node scripts/verify-task.mjs --mode contracts --output
@@ -114,6 +125,8 @@ jobs:
     if: needs.classify_e2e.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      MOYA_VERIFY_WORKSPACES: ${{ needs.classify_e2e.outputs.web_workspaces }}
 
     steps:
       - name: Check out repository
@@ -140,6 +153,8 @@ jobs:
     if: needs.classify_e2e.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      MOYA_VERIFY_WORKSPACES: ${{ needs.classify_e2e.outputs.web_workspaces }}
 
     steps:
       - name: Check out repository
@@ -166,6 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      MOYA_VERIFY_WORKSPACES: ${{ needs.classify_e2e.outputs.web_workspaces }}
       DATABASE_URL: postgresql://moya_test:synthetic-ci-postgres-password@127.0.0.1:5432/moya_test
       TEST_DATABASE_URL: postgresql://moya_test:synthetic-ci-postgres-password@127.0.0.1:5432/moya_test
     services:
@@ -197,6 +213,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Restore content-hashed library builds
+        uses: actions/cache@v4
+        with:
+          path: .turbo/library-cache
+          key:
+            library-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml',
+            'turbo.json', 'tsconfig.base.json') }}-${{ github.sha }}-${{
+            github.job }}
+          restore-keys: |
+            library-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml', 'turbo.json', 'tsconfig.base.json') }}-
       - name: Mark the CI PostgreSQL service as a disposable test target
         run: >-
           docker exec -i "${{ job.services.postgres.id }}" psql -v
@@ -236,6 +262,16 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Restore content-hashed library builds
+        uses: actions/cache@v4
+        with:
+          path: .turbo/library-cache
+          key:
+            library-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml',
+            'turbo.json', 'tsconfig.base.json') }}-${{ github.sha }}-${{
+            github.job }}
+          restore-keys: |
+            library-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml', 'turbo.json', 'tsconfig.base.json') }}-
       - name: Mark the CI PostgreSQL service as a disposable test target
         run: >-
           docker exec -i "${{ job.services.postgres.id }}" psql -v
@@ -272,6 +308,8 @@ jobs:
     if: needs.classify_e2e.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      MOYA_VERIFY_WORKSPACES: ${{ needs.classify_e2e.outputs.web_workspaces }}
 
     steps:
       - name: Check out repository

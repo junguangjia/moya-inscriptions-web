@@ -1,4 +1,7 @@
 "use client";
+import { UserIdentity } from "../authors/user-identity";
+
+import { useAuthReturn } from "../auth/auth-return";
 
 import {
   createContext,
@@ -114,10 +117,12 @@ const AuthorName = ({ user }: { user: CommentUserPresentation }) => {
       type="button"
       onClick={(e) => actions.open?.(user.id, e.currentTarget)}
     >
-      {user.name}
+      <UserIdentity name={user.name} studioName={user.studioName} />
     </button>
   ) : (
-    <p className={styles.userName}>{user.name}</p>
+    <p className={styles.userName}>
+      <UserIdentity name={user.name} studioName={user.studioName} />
+    </p>
   );
 };
 const BodyDelete = ({
@@ -211,7 +216,13 @@ const CommentContent = ({
   >
     <p className={styles.commentText}>
       {replyToUser === undefined ? null : (
-        <span className={styles.replyTo}>回复 {replyToUser.name}：</span>
+        <span className={styles.replyTo}>
+          回复{" "}
+          <UserIdentity
+            name={replyToUser.name}
+            studioName={replyToUser.studioName}
+          />
+        </span>
       )}
       {text}
     </p>
@@ -460,6 +471,7 @@ export const CommentSection = ({
   totalCount,
   viewer,
 }: CommentSectionProps) => {
+  const authReturn = useAuthReturn();
   const catalogId = contentKey ?? legacyCatalogId ?? "discussion";
   const sectionRef = useRef<HTMLElement>(null),
     highlighted = useRef<string | null>(null),
@@ -527,6 +539,7 @@ export const CommentSection = ({
   const [replyTarget, setReplyTarget] = useState<CommentReplyTarget | null>(
     null,
   );
+  const recoveredComposer = useRef(false);
   const editorRevision = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorMounted = useRef(true);
@@ -535,6 +548,7 @@ export const CommentSection = ({
     actor: currentUser.id,
   });
   const viewerState = viewer?.state;
+  const loading = loadingOverride ?? scenario === "comment-loading";
   useLayoutEffect(() => {
     editorMounted.current = true;
     return () => {
@@ -551,15 +565,49 @@ export const CommentSection = ({
           : currentUser.id;
     if (
       editorScope.current.catalogId !== catalogId ||
-      editorScope.current.actor !== confirmedActor
+      editorScope.current.actor !== confirmedActor ||
+      (!recoveredComposer.current &&
+        confirmedActor !== null &&
+        viewerState === "signed-in")
     ) {
       editorRevision.current += 1;
-      setDraft("");
-      setMentions([]);
-      setReplyTarget(null);
+      if (confirmedActor !== null) recoveredComposer.current = true;
+      const saved =
+        confirmedActor === null
+          ? undefined
+          : (authReturn?.take(confirmedActor, catalogId) as
+              | {
+                  draft: string;
+                  mentions: readonly MentionReference[];
+                  replyTarget: CommentReplyTarget | null;
+                }
+              | undefined);
+      setDraft(saved?.draft ?? "");
+      setMentions(saved?.mentions ?? []);
+      // Page one cannot prove that a target from a later page disappeared.
+      // An explicit reply still goes through the existing server validation.
+      setReplyTarget(saved?.replyTarget ?? null);
     }
     editorScope.current = { catalogId, actor: confirmedActor };
-  }, [catalogId, currentUser.id, viewerState]);
+  }, [catalogId, currentUser.id, viewerState, authReturn]);
+  useEffect(() => {
+    // Hidden during a refused session; restored only after /me confirms this owner.
+    const owner = editorScope.current.actor;
+    if (
+      presentation === "live" &&
+      owner !== null &&
+      viewerState === "signed-in"
+    )
+      authReturn?.remember(owner, catalogId, { draft, mentions, replyTarget });
+  }, [
+    authReturn,
+    catalogId,
+    draft,
+    mentions,
+    presentation,
+    replyTarget,
+    viewerState,
+  ]);
   const changeReplyTarget = (target: CommentReplyTarget | null) => {
     if (target !== null && textareaRef.current === null) return;
     const identity = (value: CommentReplyTarget | null) =>
@@ -579,7 +627,7 @@ export const CommentSection = ({
   const composerPortalTarget = useCommentComposerPortalTarget();
   const postingAsId = useId();
   const live = presentation === "live";
-  const loading = loadingOverride ?? scenario === "comment-loading";
+
   const hot = hotItems ?? [];
   const count =
     totalCount ??
@@ -648,7 +696,13 @@ export const CommentSection = ({
     >
       {replyTarget === null ? null : (
         <div className={styles.replyMode} data-comment-reply-mode="">
-          <span>回复 {replyTarget.user.name}</span>
+          <span>
+            回复{" "}
+            <UserIdentity
+              name={replyTarget.user.name}
+              studioName={replyTarget.user.studioName}
+            />
+          </span>
           <button onClick={() => changeReplyTarget(null)} type="button">
             取消
           </button>

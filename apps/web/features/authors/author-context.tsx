@@ -1,4 +1,6 @@
 "use client";
+
+import { useAuthReturn } from "../auth/auth-return";
 import {
   createContext,
   useCallback,
@@ -42,8 +44,10 @@ interface Context {
   guestFavorites: readonly ContentIdentity[];
 }
 const AuthorContext = createContext<Context | null>(null);
+/** Public/QA presentation can read identity readiness without owning a provider. */
+export const useOptionalAuthors = () => useContext(AuthorContext);
 export const useAuthors = () => {
-  const value = useContext(AuthorContext);
+  const value = useOptionalAuthors();
   if (!value) throw Error("Author provider missing");
   return value;
 };
@@ -54,6 +58,7 @@ export const AuthorProvider = ({
   children: ReactNode;
   signInHref: string;
 }) => {
+  const authReturn = useAuthReturn();
   const [viewer, setViewer] = useState<Viewer | null>(null),
     [avatarSrc, setAvatarSrc] = useState<string | null>(null),
     [checking, setChecking] = useState(true),
@@ -92,12 +97,14 @@ export const AuthorProvider = ({
         setUndo(null);
         setNotice("");
       }
+      authReturn?.identify(next.id);
       accountRef.current = next.id;
       authorClient.setAccount(next.id);
       confirmed.current = true;
       setViewer((old) =>
         old?.id === next.id &&
         old.displayName === next.displayName &&
+        old.studioName === next.studioName &&
         old.handle === next.handle
           ? old
           : next,
@@ -158,7 +165,7 @@ export const AuthorProvider = ({
     } finally {
       if (run === epoch.current) setChecking(false);
     }
-  }, []);
+  }, [authReturn]);
   const avatarSave = useAvatarSave({
     accountId: viewer?.id ?? null,
     checking,

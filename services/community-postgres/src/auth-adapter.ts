@@ -12,6 +12,8 @@ import type {
   StoredUser,
   VerificationMode,
   AuthEnvironmentName,
+  StoredPasswordCredential,
+  StoredPasswordResetReceipt,
 } from "@moya/api";
 import type { Pool, PoolClient } from "pg";
 
@@ -69,6 +71,8 @@ interface ChallengeRow {
   session_hash: string | null;
   continuation_hash: string;
   expected_version: number | null;
+  identity_id: string | null;
+  credential_version: number | null;
   reauth_hash: string | null;
   provider_correlation: string | null;
   expires_at: Date;
@@ -109,6 +113,8 @@ const mapChallenge = (row: ChallengeRow): StoredChallenge => ({
   sessionHash: row.session_hash,
   continuationHash: row.continuation_hash,
   expectedVersion: row.expected_version,
+  identityId: row.identity_id,
+  credentialVersion: row.credential_version,
   reauthHash: row.reauth_hash,
   providerCorrelation: row.provider_correlation,
   expiresAt: iso(row.expires_at),
@@ -130,10 +136,12 @@ interface ReceiptRow {
   purpose: string;
   origin_session_id: string;
   closed_at: Date | null;
+  payload_hash: string | null;
+  credential_version: number | null;
 }
 
 const receiptSelect =
-  "SELECT key_hash, user_id, session_id, session_token_hash, purpose, origin_session_id, closed_at FROM community.auth_receipts";
+  "SELECT key_hash, user_id, session_id, session_token_hash, purpose, origin_session_id, closed_at, payload_hash, credential_version FROM community.auth_receipts";
 
 const mapReceipt = (row: ReceiptRow) => ({
   keyHash: row.key_hash,
@@ -143,6 +151,8 @@ const mapReceipt = (row: ReceiptRow) => ({
   purpose: row.purpose,
   originSessionId: row.origin_session_id,
   closedAt: nullableIso(row.closed_at),
+  payloadHash: row.payload_hash,
+  credentialVersion: row.credential_version,
 });
 
 const mapHandoff = (row: {
@@ -157,6 +167,8 @@ const mapHandoff = (row: {
   user_id: string | null;
   session_hash: string | null;
   expected_version: number | null;
+  identity_id: string | null;
+  credential_version: number | null;
   expires_at: Date;
   consumed_at: Date | null;
 }): StoredHandoff => ({
@@ -171,6 +183,8 @@ const mapHandoff = (row: {
   userId: row.user_id,
   sessionHash: row.session_hash,
   expectedVersion: row.expected_version,
+  identityId: row.identity_id,
+  credentialVersion: row.credential_version,
   expiresAt: iso(row.expires_at),
   consumedAt: nullableIso(row.consumed_at),
 });
@@ -239,9 +253,14 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
     return {
       findUser: async (id) => {
         const rows = await query<
-          StoredUser & { display_name: string; status: StoredUser["status"] }
+          StoredUser & {
+            display_name: string;
+            studio_name: string;
+            studio_name_suffix: string;
+            status: StoredUser["status"];
+          }
         >(
-          "SELECT id, handle, display_name, status FROM community.public_users WHERE id=$1",
+          "SELECT id, handle, display_name, studio_name, studio_name_suffix, status FROM community.public_users WHERE id=$1",
           [id],
         );
         const row = rows[0];
@@ -251,6 +270,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               id: row.id,
               handle: row.handle,
               displayName: row.display_name,
+              studioName: row.studio_name,
+              studioNameSuffix: row.studio_name_suffix,
               status: row.status,
             };
       },
@@ -272,8 +293,14 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
       insertUser: async (user) => {
         const outcome = await catchKind(async () => {
           await query(
-            "INSERT INTO community.public_users(id, handle, display_name) VALUES($1,$2,$3)",
-            [user.id, user.handle, user.displayName],
+            "INSERT INTO community.public_users(id, handle, display_name, studio_name, studio_name_suffix) VALUES($1,$2,$3,$4,$5)",
+            [
+              user.id,
+              user.handle,
+              user.displayName,
+              user.studioName ?? "",
+              user.studioNameSuffix ?? "",
+            ],
           );
           return "ok" as const;
         });
@@ -350,9 +377,11 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           id: string;
           handle: string;
           display_name: string;
+          studio_name: string;
+          studio_name_suffix: string;
           status: StoredUser["status"];
         }>(
-          "SELECT id, handle, display_name, status FROM community.public_users WHERE id=$1 FOR UPDATE",
+          "SELECT id, handle, display_name, studio_name, studio_name_suffix, status FROM community.public_users WHERE id=$1 FOR UPDATE",
           [userId],
         );
         const row = rows[0];
@@ -362,6 +391,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               id: row.id,
               handle: row.handle,
               displayName: row.display_name,
+              studioName: row.studio_name,
+              studioNameSuffix: row.studio_name_suffix,
               status: row.status,
             };
       },
@@ -378,9 +409,9 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               verification_strategy, provider_mode, environment, user_id, session_hash,
               continuation_hash, expected_version, reauth_hash, provider_correlation,
               expires_at, attempts, resend_available_at, superseded_at, completed_at,
-              invalidated_at, delivery_state, idempotency_hash, created_at
+              invalidated_at, delivery_state, idempotency_hash, created_at, identity_id, credential_version
             ) VALUES(
-              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
             )`,
             [
               row.id,
@@ -407,6 +438,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               row.deliveryState,
               row.idempotencyHash,
               row.createdAt,
+              row.identityId ?? null,
+              row.credentialVersion ?? null,
             ],
           );
           return "ok" as const;
@@ -432,8 +465,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
       saveChallenge: async (row) => {
         await query(
           `UPDATE community.auth_challenges SET
-            attempts=$2, resend_available_at=$3, superseded_at=$4, completed_at=$5,
-            invalidated_at=$6, delivery_state=$7, provider_correlation=$8
+            attempts=$2, resend_available_at=$3, superseded_at=coalesce(superseded_at,$4), completed_at=coalesce(completed_at,$5),
+            invalidated_at=coalesce(invalidated_at,$6), delivery_state=$7, provider_correlation=$8
            WHERE id=$1`,
           [
             row.id,
@@ -499,8 +532,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
         await query(
           `INSERT INTO community.auth_handoffs(
             id, token_hash, purpose, channel, target_digest, ciphertext, provider_mode,
-            environment, user_id, session_hash, expected_version, expires_at, consumed_at
-          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+            environment, user_id, session_hash, expected_version, expires_at, consumed_at, identity_id, credential_version
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
           [
             row.id,
             row.tokenHash,
@@ -515,6 +548,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
             row.expectedVersion,
             row.expiresAt,
             row.consumedAt,
+            row.identityId ?? null,
+            row.credentialVersion ?? null,
           ],
         );
       },
@@ -544,8 +579,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           await query(
             `INSERT INTO community.auth_receipts(
               key_hash, user_id, session_id, session_token_hash, purpose,
-              created_at, origin_session_id
-            ) VALUES($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6)`,
+              created_at, origin_session_id, payload_hash, credential_version
+            ) VALUES($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8)`,
             [
               row.keyHash,
               row.userId,
@@ -553,6 +588,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               row.sessionTokenHash,
               row.purpose,
               row.originSessionId,
+              row.payloadHash ?? null,
+              row.credentialVersion ?? null,
             ],
           );
           return "ok" as const;
@@ -663,6 +700,20 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           [userId, atIso],
         );
       },
+      invalidatePasswordResetProofs: async (id, at) => {
+        await query(
+          `UPDATE community.auth_challenges SET invalidated_at=$2 WHERE
+          (user_id=$1 OR target_digest IN (SELECT lookup_digest FROM community.user_login_identities WHERE user_id=$1))
+          AND completed_at IS NULL AND invalidated_at IS NULL`,
+          [id, at],
+        );
+        await query(
+          `UPDATE community.auth_handoffs SET consumed_at=$2 WHERE
+          (user_id=$1 OR target_digest IN (SELECT lookup_digest FROM community.user_login_identities WHERE user_id=$1))
+          AND consumed_at IS NULL`,
+          [id, at],
+        );
+      },
       insertAudit: async (row) => {
         await query(
           "INSERT INTO community.auth_audit_events(id, user_id, action, occurred_at) VALUES($1,$2,$3,$4)",
@@ -674,9 +725,11 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           id: string;
           handle: string;
           display_name: string;
+          studio_name: string;
+          studio_name_suffix: string;
           status: StoredUser["status"];
         }>(
-          `SELECT u.id, u.handle, u.display_name, u.status
+          `SELECT u.id, u.handle, u.display_name, u.studio_name, u.studio_name_suffix, u.status
            FROM community.sessions s
            JOIN community.public_users u ON u.id = s.user_id
            WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > $2`,
@@ -689,6 +742,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               id: row.id,
               handle: row.handle,
               displayName: row.display_name,
+              studioName: row.studio_name,
+              studioNameSuffix: row.studio_name_suffix,
               status: row.status,
             };
       },
@@ -702,6 +757,91 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           [userId, channel],
         );
         return rows.length > 0;
+      },
+      findPasswordCredential: async (id) => {
+        const [row] = await query<{
+          user_id: string;
+          verifier: string;
+          version: number;
+          updated_at: Date;
+        }>(
+          "SELECT user_id, verifier, version, updated_at FROM community.user_password_credentials WHERE user_id=$1",
+          [id],
+        );
+        return row
+          ? {
+              userId: row.user_id,
+              verifier: row.verifier,
+              version: row.version,
+              updatedAt: iso(row.updated_at),
+            }
+          : null;
+      },
+      savePasswordCredential: async (
+        row: StoredPasswordCredential,
+        expected,
+      ) => {
+        const rows =
+          expected === null
+            ? await query<{ user_id: string }>(
+                "INSERT INTO community.user_password_credentials(user_id,verifier,version,updated_at) VALUES($1,$2,$3,$4) ON CONFLICT (user_id) DO NOTHING RETURNING user_id",
+                [row.userId, row.verifier, row.version, row.updatedAt],
+              )
+            : await query<{ user_id: string }>(
+                "UPDATE community.user_password_credentials SET verifier=$2,version=$3,updated_at=$4 WHERE user_id=$1 AND version=$5 RETURNING user_id",
+                [
+                  row.userId,
+                  row.verifier,
+                  row.version,
+                  row.updatedAt,
+                  expected,
+                ],
+              );
+        return rows.length ? "ok" : "stale";
+      },
+      findPasswordResetReceipt: async (key) => {
+        const [row] = await query<{
+          key_hash: string;
+          user_id: string;
+          payload_hash: string;
+          credential_version: number;
+          closed_at: Date | null;
+        }>(
+          "SELECT key_hash,user_id,payload_hash,credential_version,closed_at FROM community.auth_password_reset_receipts WHERE key_hash=$1",
+          [key],
+        );
+        return row
+          ? {
+              keyHash: row.key_hash,
+              userId: row.user_id,
+              payloadHash: row.payload_hash,
+              credentialVersion: row.credential_version,
+              closedAt: nullableIso(row.closed_at),
+            }
+          : null;
+      },
+      insertPasswordResetReceipt: async (row: StoredPasswordResetReceipt) => {
+        const rows = await query<{ key_hash: string }>(
+          "INSERT INTO community.auth_password_reset_receipts(key_hash,user_id,payload_hash,credential_version) VALUES($1,$2,$3,$4) ON CONFLICT (key_hash) DO NOTHING RETURNING key_hash",
+          [row.keyHash, row.userId, row.payloadHash, row.credentialVersion],
+        );
+        return rows.length ? "ok" : "conflict";
+      },
+      revokeAllSessions: async (id, at) => {
+        await query(
+          "UPDATE community.sessions SET revoked_at=$2 WHERE user_id=$1 AND revoked_at IS NULL",
+          [id, at],
+        );
+      },
+      closeUserReceipts: async (id, at) => {
+        await query(
+          "UPDATE community.auth_receipts SET closed_at=$2 WHERE user_id=$1 AND closed_at IS NULL",
+          [id, at],
+        );
+        await query(
+          "UPDATE community.auth_password_reset_receipts SET closed_at=$2 WHERE user_id=$1 AND closed_at IS NULL",
+          [id, at],
+        );
       },
       countUsers: async () => {
         const rows = await query<{ count: string }>(

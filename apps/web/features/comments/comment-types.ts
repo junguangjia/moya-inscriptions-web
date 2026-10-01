@@ -2,6 +2,7 @@ export interface CommentUserPresentation {
   readonly avatarSrc?: string | null;
   readonly id: string;
   readonly name: string;
+  readonly studioName?: string | undefined;
 }
 
 export interface CommentMediaPresentation {

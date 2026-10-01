@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,9 +12,14 @@ const repositoryRoot = resolve(e2eRoot, "../..");
 const ports = readE2ePorts();
 const webBaseUrl = `http://127.0.0.1:${ports.web}`;
 const publicApiBaseUrl = `http://127.0.0.1:${ports.publicApi}`;
+const defaultArtifactParent = resolve(
+  process.env.MOYA_E2E_ARTIFACT_ROOT ?? tmpdir(),
+);
+if (!process.env.MOYA_E2E_ARTIFACT_DIR)
+  mkdirSync(defaultArtifactParent, { recursive: true, mode: 0o700 });
 const artifactRoot = resolve(
   process.env.MOYA_E2E_ARTIFACT_DIR ??
-    resolve(repositoryRoot, ".local/e2e-ci/unsharded"),
+    mkdtempSync(resolve(defaultArtifactParent, "moya-e2e-")),
 );
 // The daily smoke (scripts/ci-e2e-smoke.mjs) passes the fixture startup
 // timeout it derived from its BROWSER SMOKE ceiling and the parent's remaining
@@ -40,9 +46,7 @@ export default defineConfig({
       runAttempt: process.env.GITHUB_RUN_ATTEMPT,
     },
   },
-  outputDir: process.env.MOYA_E2E_ARTIFACT_DIR
-    ? resolve(artifactRoot, "test-results")
-    : resolve(tmpdir(), "moya-t02p01-playwright-results"),
+  outputDir: resolve(artifactRoot, "test-results"),
   projects: [
     {
       name: "desktop-chromium",

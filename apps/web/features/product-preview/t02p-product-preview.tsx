@@ -1,5 +1,9 @@
 "use client";
 
+import { useCallback, useRef } from "react";
+import { useOptionalAuthors } from "../authors/author-context";
+import { useAuthReturn } from "../auth/auth-return";
+
 import { CatalogBrowseScreen } from "../home/catalog-screen";
 import { AllCalligraphyFeed } from "../calligraphy/calligraphy-category-screen";
 import { HomeScreen } from "../home/home-screen";
@@ -61,6 +65,14 @@ export interface T02pProductPreviewProps {
   readonly developmentDiscussion?: boolean;
   readonly headerStart?: ReactNode;
   readonly headerEnd?: ReactNode;
+  /**
+   * Composes the live 话题 feed and Thread pages. They read the author,
+   * publishing and publishing-entry providers, so only a composition that
+   * mounts them sets it. Without it 话题 shows its unavailable state and a
+   * Thread id opens no Thread page: Community V1 enables nothing in
+   * Production (amendment 2026-09-11, section 7).
+   */
+  readonly liveThreads?: boolean;
   readonly renderProfileOverlay?: (
     properties: ProductShellProfileOverlayRenderProps,
   ) => ReactNode;
@@ -97,6 +109,7 @@ export const T02pProductPreview = ({
   developmentDiscussion = false,
   headerStart,
   headerEnd,
+  liveThreads = false,
   renderProfileOverlay,
   renderEditorOverlay,
   workDetailLoader,
@@ -128,6 +141,7 @@ export const T02pProductPreview = ({
                 headerStart={headerStart}
                 headerEnd={headerEnd}
                 initialTopicId={initialTopicId}
+                liveThreads={liveThreads}
               />
             </ContentQuickActionsProvider>
           </div>
@@ -180,6 +194,7 @@ export const T02pProductPreview = ({
             backButtonRef={backButtonRef}
             key={`${detailScopeKey}:${target.type}:${target.id}:${navigationRevision}`}
             catalogId={target.id}
+            target={target}
             commentSection={
               renderDiscussion?.(target) ??
               (target.type === "catalog"
@@ -202,6 +217,7 @@ export const T02pProductPreview = ({
         renderTopicOverlay={({ backButtonRef, onClose, topicId }) => (
           <PreviewTopicOverlay
             backButtonRef={backButtonRef}
+            liveThreads={liveThreads}
             onClose={onClose}
             topicId={topicId}
             topicsState={states.home.topics}
@@ -215,18 +231,42 @@ export const T02pProductPreview = ({
 
 const PreviewTopicOverlay = ({
   backButtonRef,
+  liveThreads,
   onClose,
   topicId,
   topicsState,
   renderDiscussion,
 }: {
   readonly backButtonRef: RefObject<HTMLButtonElement | null>;
+  readonly liveThreads: boolean;
   readonly onClose: () => void;
   readonly topicId: string;
   readonly topicsState: HomeSurfaceData["topics"];
   readonly renderDiscussion?: (target: DiscussionTarget) => ReactNode;
 }) => {
-  const { feedLayout, platform } = useProductShell();
+  const { feedLayout, platform, recoverUnavailableAuthContent } =
+    useProductShell();
+  const author = useOptionalAuthors();
+  const authReturn = useAuthReturn();
+  const identityReady =
+    author === null || (!author.checking && !author.sessionError);
+  // A 404 read before identity confirmation is not reused by the confirmed
+  // source. Re-key that reader once on confirmation, preserving public
+  // snapshots until it has mounted. Ordinary/focus checks keep the reader.
+  const wasAuthSource = useRef(authReturn?.isRestoring() ?? false);
+  const confirmedReader = useRef<string | null>(null);
+  if (
+    wasAuthSource.current &&
+    confirmedReader.current === null &&
+    identityReady
+  )
+    confirmedReader.current = author?.viewer?.id ?? "guest";
+  const readerKey = wasAuthSource.current
+    ? `${topicId}:auth:${confirmedReader.current ?? "checking"}`
+    : topicId;
+  const recover = useCallback(() => {
+    recoverUnavailableAuthContent();
+  }, [recoverUnavailableAuthContent]);
   const preview = useDiscussionPreview();
   if (preview && previewFeed(topicId))
     return (
@@ -237,13 +277,14 @@ const PreviewTopicOverlay = ({
         onClose={onClose}
       />
     );
-  if (isThreadId(topicId))
+  if (liveThreads && isThreadId(topicId))
     return (
       <ThreadDetail
-        key={topicId}
+        key={readerKey}
         id={topicId}
         backButtonRef={backButtonRef}
         onClose={onClose}
+        {...(identityReady ? { onUnavailable: recover } : {})}
         {...(renderDiscussion
           ? {
               renderComments: (workId: string) =>
@@ -255,10 +296,11 @@ const PreviewTopicOverlay = ({
   if (isArticleId(topicId) || isCollectionId(topicId))
     return (
       <EditorialDetail
-        key={topicId}
+        key={readerKey}
         id={topicId}
         backButtonRef={backButtonRef}
         onClose={onClose}
+        {...(identityReady ? { onUnavailable: recover } : {})}
         {...(renderDiscussion
           ? {
               renderComments: (articleId: string) =>
@@ -278,6 +320,10 @@ const PreviewTopicOverlay = ({
       onClose={onClose}
       platform={platform}
       topic={findTopic(topics, topicId)}
+      {...(identityReady &&
+      (topicsState.state === "populated" || topicsState.state === "empty")
+        ? { onUnavailable: recover }
+        : {})}
     />
   );
 };

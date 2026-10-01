@@ -19,21 +19,21 @@ const sourceWebRoot = join(repositoryRoot, "apps/web");
 const webPort = process.env.MOYA_E2E_WEB_PORT ?? "3100";
 
 const typescriptCli = join(repositoryRoot, "node_modules/typescript/bin/tsc");
-const uiBuild = spawnSync(
-  process.execPath,
-  [typescriptCli, "-p", join(repositoryRoot, "packages/ui/tsconfig.json")],
-  {
-    cwd: repositoryRoot,
-    env: process.env,
-    stdio: "inherit",
-  },
-);
-
-if (uiBuild.error) throw uiBuild.error;
-if (uiBuild.status !== 0) {
-  throw new Error(
-    `Failed to build @moya/ui for Formal Web E2E (exit ${uiBuild.status ?? "unknown"}).`,
+for (const [name, configuration] of [
+  ["@moya/design-tokens", "packages/design-tokens/tsconfig.json"],
+  ["@moya/ui", "packages/ui/tsconfig.json"],
+] as const) {
+  const build = spawnSync(
+    process.execPath,
+    [typescriptCli, "-p", join(repositoryRoot, configuration)],
+    { cwd: repositoryRoot, env: process.env, stdio: "inherit" },
   );
+  if (build.error) throw build.error;
+  if (build.status !== 0) {
+    throw new Error(
+      `Failed to build ${name} for Formal Web E2E (exit ${build.status ?? "unknown"}).`,
+    );
+  }
 }
 
 const temporaryRepositoryRoot = mkdtempSync(

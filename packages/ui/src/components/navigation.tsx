@@ -139,7 +139,7 @@ export type DesktopBrandHeaderProps = HTMLAttributes<HTMLElement> & {
 };
 
 export function DesktopBrandHeader({
-  brandLabel = "由艺",
+  brandLabel = "由于艺",
   subtitle,
   actions,
   className,
@@ -176,7 +176,7 @@ export function DesktopTopNavigation({
   activeId,
   onNavigate,
   label = "主导航",
-  brandLabel = "由艺",
+  brandLabel = "由于艺",
   brandHref,
   searchLabel = "搜索",
   onSearch,

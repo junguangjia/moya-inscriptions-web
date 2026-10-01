@@ -324,3 +324,15 @@ GRANT SELECT, INSERT ON TABLE community.dm_command_receipts TO :"app_role";
 -- write-once, and nothing is deleted.
 GRANT UPDATE (result) ON TABLE community.dm_command_receipts TO :"app_role";
 GRANT SELECT, INSERT ON TABLE community.dm_moderation_events TO :"app_role";
+
+-- Password auth: exact mutable credential fields, no DDL or delete authority.
+GRANT SELECT ON TABLE community.user_password_credentials TO :"app_role";
+GRANT INSERT (user_id, verifier, version, updated_at) ON TABLE community.user_password_credentials TO :"app_role";
+GRANT UPDATE (verifier, version, updated_at) ON TABLE community.user_password_credentials TO :"app_role";
+GRANT SELECT ON TABLE community.auth_password_reset_receipts TO :"app_role";
+GRANT INSERT (key_hash, user_id, payload_hash, credential_version) ON TABLE community.auth_password_reset_receipts TO :"app_role";
+GRANT UPDATE (closed_at) ON TABLE community.auth_password_reset_receipts TO :"app_role";
+GRANT INSERT (studio_name, studio_name_suffix) ON TABLE community.public_users TO :"app_role";
+GRANT UPDATE (studio_name, studio_name_suffix) ON TABLE community.public_users TO :"app_role";
+GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_challenges TO :"app_role";
+GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_handoffs TO :"app_role";

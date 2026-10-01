@@ -57,6 +57,11 @@ describe("UI styles and architecture", () => {
       /html\[data-platform="pc"\]\s*\.yoyi-mobile-bottom-navigation\.yoyi-functional-glass\s*\{[^}]*backdrop-filter:\s*none/s,
     );
     expect(css).not.toContain("opacity: 0.68");
+    const brand = await readFile(new URL("brand.css", uiRoot), "utf8");
+    expect(brand).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(brand).not.toContain("system-orange");
+    expect(brand).toContain("@media (forced-colors: active)");
+    expect(brand).toContain("background-color: CanvasText");
     expect(css).not.toMatch(/#[0-9a-f]{3,8}\b/i);
   });
 

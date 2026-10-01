@@ -1,0 +1,190 @@
+/*
+ * Profile cover editor. Layout, buttons and notes come from the publishing
+ * crop dialog (media.module.css), device choice from the 设置 tabs and the
+ * 参考线 switch from the composer (editor.module.css); this module only adds
+ * what is specific to the cover: header replicas, the 4:3 frame and its
+ * guides. Colours are design tokens only.
+ */
+
+.editor {
+  text-align: start;
+}
+.editor p {
+  margin: 0;
+}
+
+.editor .deviceTabs {
+  margin-bottom: 0;
+}
+.editor .deviceTabs button {
+  min-width: 56px;
+}
+
+.previewPanel {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+
+/* Header replicas and the crop frame share the live cover classes. */
+.preview {
+  position: relative;
+  overflow: hidden;
+  margin-inline: auto;
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-page);
+  box-shadow: 0 0 0 1px var(--yoyi-color-border-subtle);
+  container-type: size;
+}
+.preview[data-device="phone"] {
+  width: min(100%, 240px);
+}
+.preview[data-device="desktop"] {
+  width: 100%;
+}
+.previewTitle {
+  font-size: var(--yoyi-type-caption-size);
+  color: var(--yoyi-color-text-secondary);
+  text-align: center;
+}
+
+.stage {
+  display: contents;
+}
+.stageView,
+.stageControls {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  min-width: 0;
+}
+
+/* The 4:3 master, inset from the screen edges (iOS edge swipe) and height-capped. */
+.frame {
+  position: relative;
+  width: min(100%, calc((100svh - 400px) * 4 / 3));
+  min-width: min(100%, 280px);
+  aspect-ratio: 4 / 3;
+  margin-inline: auto;
+  overflow: hidden;
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-paper-dark);
+  touch-action: none;
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.frame[data-locked="true"] {
+  pointer-events: none;
+}
+.frame .cropArea {
+  color: transparent;
+  border: 0;
+}
+.frame .cropArea:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -4px;
+}
+.frame img {
+  -webkit-user-drag: none;
+}
+
+/* Guides: the publishing crop's ink dim and paper edge, the same in both themes. */
+.overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.window {
+  position: absolute;
+  box-shadow: 0 0 0 100vmax
+    color-mix(in srgb, var(--yoyi-color-ink-black) 55%, transparent);
+  outline: 1px solid
+    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
+  outline-offset: -1px;
+  container-type: size;
+}
+.fade {
+  position: absolute;
+  inset: 0;
+}
+.ghostAvatar {
+  position: absolute;
+  left: 50%;
+  display: grid;
+  aspect-ratio: 1;
+  overflow: hidden;
+  place-items: center;
+  transform: translateX(-50%);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-seal-red);
+  border: 2px solid var(--yoyi-color-background-page);
+  border-radius: var(--yoyi-radius-full);
+  font-family: var(--yoyi-font-editorial);
+  font-weight: 650;
+}
+.ghostAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ghostName {
+  position: absolute;
+  inset-inline: 4%;
+  overflow: hidden;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-editorial);
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ghostPencil {
+  position: absolute;
+  border-radius: var(--yoyi-radius-full);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-background-page) 72%,
+    transparent
+  );
+}
+.reference,
+.safe {
+  position: absolute;
+  outline: 1px dashed
+    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
+  outline-offset: -1px;
+  box-shadow: inset 0 0 0 2px
+    color-mix(in srgb, var(--yoyi-color-ink-black) 30%, transparent);
+}
+.safe {
+  outline-style: solid;
+}
+
+.problem {
+  display: grid;
+  gap: var(--yoyi-space-2);
+}
+
+/* A phone on its side: the frame on the left, controls on the right. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .editor[data-cover-editor="crop"] {
+    max-width: 960px;
+    grid-template-columns: minmax(0, 58fr) minmax(0, 42fr);
+    align-items: start;
+  }
+  .stageView {
+    grid-row: 1 / span 8;
+  }
+  .frame {
+    width: min(100%, calc((100svh - 185px) * 4 / 3));
+  }
+}
+
+.ghostStudio {
+  display: block;
+}
+.ghostStudio > span {
+  font-size: inherit;
+}
