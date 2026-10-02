@@ -89,3 +89,92 @@
   color: var(--yoyi-color-text-secondary);
   font-family: var(--yoyi-font-interface);
 }
+
+.bodyImage {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  border-radius: var(--yoyi-radius-md);
+  cursor: zoom-in;
+}
+.bodyImage[data-crop-enabled="true"] {
+  cursor: crosshair;
+}
+.bodyImage:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: var(--yoyi-space-2);
+}
+.resizeHost {
+  width: 100%;
+  min-width: 0;
+}
+.resizeHost :global(.bn-file-block-content-wrapper) {
+  max-width: none;
+}
+.resizeHost :global(.bn-resize-handle) {
+  position: absolute;
+  bottom: var(--yoyi-space-2);
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  box-shadow: var(--yoyi-shadow-dialog);
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 2;
+}
+.resizeHost :global(.bn-resize-handle)::after {
+  content: "↔";
+  display: grid;
+  place-items: center;
+  height: 100%;
+  font-family: var(--yoyi-font-interface);
+}
+.resizeHost :global(.bn-resize-handle:focus-visible) {
+  display: block !important;
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: var(--yoyi-space-2);
+}
+.resizeHost[data-disabled="true"] :global(.bn-resize-handle) {
+  display: none !important;
+}
+@media (hover: none) {
+  .resizeHost[data-disabled="false"] :global(.bn-resize-handle) {
+    display: block !important;
+  }
+}
+.bodyLive {
+  width: 100%;
+  height: 100%;
+}
+.zoomButton,
+.viewerActions button {
+  min-height: 44px;
+  padding: var(--yoyi-space-2) var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font: var(--yoyi-type-button-weight) var(--yoyi-type-button-size)
+    var(--yoyi-font-interface);
+  cursor: pointer;
+}
+.zoomButton {
+  position: absolute;
+  right: var(--yoyi-space-3);
+  bottom: var(--yoyi-space-3);
+}
+.viewerActions {
+  position: absolute;
+  z-index: 1;
+  bottom: max(var(--yoyi-space-8), env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+}
+.zoomButton:focus-visible,
+.viewerActions button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: var(--yoyi-space-2);
+}

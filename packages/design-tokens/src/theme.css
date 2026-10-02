@@ -114,6 +114,9 @@
 }
 
 :root {
+  --yoyi-type-article-line-height-compact: 1.5;
+  --yoyi-type-article-line-height-normal: 1.9;
+  --yoyi-type-article-line-height-relaxed: 2.2;
   --yoyi-font-editorial:
     "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun",
     serif;

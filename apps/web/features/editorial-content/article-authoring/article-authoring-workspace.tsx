@@ -57,6 +57,7 @@ import { createArticleUploadSession } from "./article-upload-session";
 import type { ArticleUploadSession } from "./article-upload-session";
 import type { ArticleEditorProps } from "./article-editor-props";
 import type { ArticleMediaBridge } from "./article-attachments";
+import { importArticleFiles } from "./article-file-import";
 import styles from "./article-media.module.css";
 
 /** The caller uses the canonical bounded own-media page and account-fenced HTTP client. */
@@ -270,8 +271,36 @@ export const ArticleAuthoringWorkspace = (
       if (!abort.signal.aborted) setCatalogLoading(false);
     }
   };
-  const media = useMemo<ArticleMediaBridge>(
-    () => ({
+  const media = useMemo<ArticleMediaBridge>(() => {
+    const bridge: ArticleMediaBridge = {
+      importFiles: ({ files, signal, allowed }) => {
+        const alive = () =>
+          !lifetime.current?.signal.aborted && sameAccount() && allowed();
+        if (uploads === null || maxUploads === null || !alive())
+          return Promise.resolve([]);
+        return importArticleFiles({
+          files,
+          manager: uploads.manager,
+          maxItems: maxUploads,
+          signal,
+          allowed: alive,
+          recover: (next) => {
+            if (!alive()) return Promise.resolve([]);
+            const answer = bridge.choose({ multiple: true, signal });
+            if (next !== null) {
+              batchRevision.current++;
+              batchRef.current = next;
+              setBatch(next);
+            }
+            setMessage(
+              next === null
+                ? "请确认上传状态，完成后选择图片插入正文。"
+                : "请完成素材选择后插入正文。",
+            );
+            return answer;
+          },
+        });
+      },
       choose: ({ multiple, signal }) => {
         if (signal.aborted || !sameAccount()) return Promise.resolve([]);
         finishImages([]);
@@ -319,7 +348,7 @@ export const ArticleAuthoringWorkspace = (
           if (signal.aborted) onAbort();
         });
       },
-      render: (reference, { alt, active }) =>
+      render: (reference, { alt, active, crop, onCrop }) =>
         resolver === null ? (
           <p role="status">正在准备素材…</p>
         ) : (
@@ -327,6 +356,8 @@ export const ArticleAuthoringWorkspace = (
             resolver={resolver}
             reference={reference}
             alt={alt}
+            crop={crop ?? null}
+            {...(onCrop === undefined ? {} : { onCrop })}
             active={
               active !== false &&
               choice === null &&
@@ -345,18 +376,20 @@ export const ArticleAuthoringWorkspace = (
             onOpen={props.onOpenCatalog}
           />
         ),
-    }),
-    [
-      resolver,
-      props.initial.ownerId,
-      props.sessionKey,
-      props.reloadMedia,
-      props.onOpenCatalog,
-      props.covered,
-      choice,
-      catalogChoice,
-    ],
-  );
+    };
+    return bridge;
+  }, [
+    resolver,
+    props.initial.ownerId,
+    props.sessionKey,
+    props.reloadMedia,
+    props.onOpenCatalog,
+    props.covered,
+    choice,
+    catalogChoice,
+    uploads,
+    maxUploads,
+  ]);
   const client = useMemo<ArticleEditorProps["client"]>(
     () => ({
       ...articleAuthoringClient,

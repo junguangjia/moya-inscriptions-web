@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type {
   ArticleMediaReference,
   CatalogId,
   PublishingMediaItem,
+  MediaCrop,
 } from "@moya/contracts";
-import { LivePhotoFrame } from "../../publishing/ui/live/live-photo";
+import type { DetailMediaPresentation } from "../../detail/catalog-detail-presentation";
+import { ArticleImage } from "./article-image";
+import { ArticleImageCropDialog } from "./article-image-crop-dialog";
 import type { ArticleMediaResolver } from "./article-media-resolver";
 import styles from "./article-media.module.css";
 
@@ -14,10 +17,14 @@ export const ArticleManagedMedia = ({
   item,
   alt,
   active,
+  crop = null,
+  onCrop,
 }: {
   readonly item: PublishingMediaItem;
   readonly alt: string;
   readonly active: boolean;
+  readonly crop?: MediaCrop | null;
+  readonly onCrop?: (crop: MediaCrop | null) => boolean;
 }) => {
   if (
     item.state !== "ready" ||
@@ -25,28 +32,107 @@ export const ArticleManagedMedia = ({
     item.presentation === null
   )
     return <p role="status">素材尚未就绪或已不可用。</p>;
-  const still = (
-    <img
-      alt={alt}
-      src={item.media.displaySrc}
-      width={item.presentation.width}
-      height={item.presentation.height}
-      decoding="async"
-      loading="lazy"
+  return (
+    <ResolvedImage
+      active={active}
+      crop={crop}
+      {...(onCrop ? { onCrop } : {})}
+      media={{
+        id: item.id,
+        src: item.media.displaySrc,
+        alt,
+        width: item.presentation.width,
+        height: item.presentation.height,
+        ...(item.media.fullSrc === undefined
+          ? {}
+          : { fullSrc: item.media.fullSrc }),
+        ...(item.kind === "live" && item.media.motionSrc !== undefined
+          ? {
+              live: {
+                motionSrc: item.media.motionSrc,
+                hasAudio: item.presentation.hasAudio === true,
+              },
+            }
+          : {}),
+      }}
     />
   );
-  return item.kind === "live" && item.media.motionSrc !== undefined ? (
-    <LivePhotoFrame
-      active={active}
-      motion={{
-        motionSrc: item.media.motionSrc,
-        hasAudio: item.presentation.hasAudio === true,
-      }}
-    >
-      {still}
-    </LivePhotoFrame>
+};
+
+const ResolvedImage = ({
+  media,
+  active,
+  crop,
+  onCrop,
+}: {
+  readonly media: DetailMediaPresentation;
+  readonly active: boolean;
+  readonly crop: MediaCrop | null;
+  readonly onCrop?: (crop: MediaCrop | null) => boolean;
+}) => {
+  const basis = JSON.stringify([
+    media.id,
+    media.src,
+    media.fullSrc,
+    media.width,
+    media.height,
+    crop,
+  ]);
+  const current = useRef({ basis, onCrop });
+  current.current = { basis, onCrop };
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  return onCrop === undefined ? (
+    <ArticleImage media={media} active={active} crop={crop} />
   ) : (
-    still
+    <EditableResolvedImage
+      key={basis}
+      media={media}
+      active={active}
+      crop={crop}
+      onCrop={(next) =>
+        alive.current &&
+        current.current.basis === basis &&
+        current.current.onCrop?.(next) === true
+      }
+    />
+  );
+};
+
+const EditableResolvedImage = ({
+  media,
+  active,
+  crop,
+  onCrop,
+}: {
+  readonly media: DetailMediaPresentation;
+  readonly active: boolean;
+  readonly crop: MediaCrop | null;
+  readonly onCrop: (crop: MediaCrop | null) => boolean;
+}) => {
+  const [cropping, setCropping] = useState(false);
+  return (
+    <>
+      <ArticleImage
+        media={media}
+        active={active && !cropping}
+        crop={crop}
+        onCrop={() => setCropping(true)}
+      />
+      {cropping ? (
+        <ArticleImageCropDialog
+          media={media}
+          crop={crop}
+          onApply={onCrop}
+          onCancel={() => setCropping(false)}
+        />
+      ) : null}
+    </>
   );
 };
 
@@ -55,11 +141,15 @@ export const ArticleReferencedMedia = ({
   reference,
   alt,
   active,
+  crop = null,
+  onCrop,
 }: {
   readonly resolver: ArticleMediaResolver;
   readonly active: boolean;
   readonly reference: ArticleMediaReference;
   readonly alt: string;
+  readonly crop?: MediaCrop | null;
+  readonly onCrop?: (crop: MediaCrop | null) => boolean;
 }) => {
   useSyncExternalStore(resolver.subscribe, resolver.version, resolver.version);
   const kind = reference.type;
@@ -77,7 +167,14 @@ export const ArticleReferencedMedia = ({
     ) : item.state === "unavailable" ? (
       <p role="status">素材无法读取，请重新选择。</p>
     ) : (
-      <ArticleManagedMedia item={item.value} alt={alt} active={active} />
+      <ArticleManagedMedia
+        key={reference.itemId}
+        item={item.value}
+        alt={alt}
+        active={active}
+        crop={crop}
+        {...(onCrop === undefined ? {} : { onCrop })}
+      />
     );
   }
   const catalog = resolver.peekCatalog(reference.catalogId);
@@ -91,13 +188,12 @@ export const ArticleReferencedMedia = ({
   return media === undefined ? (
     <p role="status">藏品图片已不可用。</p>
   ) : (
-    <img
-      alt={alt || media.alt}
-      src={media.src}
-      width={media.width}
-      height={media.height}
-      decoding="async"
-      loading="lazy"
+    <ResolvedImage
+      key={`${reference.catalogId}:${reference.mediaId}`}
+      media={{ ...media, alt: alt || media.alt }}
+      active={active}
+      crop={crop}
+      {...(onCrop === undefined ? {} : { onCrop })}
     />
   );
 };

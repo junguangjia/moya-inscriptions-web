@@ -91,7 +91,12 @@ const snapshots = createExternalStore<UploadManagerSnapshot>({
   items: [],
 });
 const session = {
-  manager: { store: snapshots, release: vi.fn() },
+  manager: {
+    store: snapshots,
+    getSnapshot: snapshots.get,
+    addConfirmed: vi.fn(),
+    release: vi.fn(),
+  },
   limits: vi.fn(async () => ({ maxItems: 20 })),
   releaseCommittedUploads: vi.fn(async () => true),
   discard: vi.fn(async () => undefined),
@@ -279,6 +284,34 @@ afterEach(async () => {
 });
 
 describe("Article authoring media workspace", () => {
+  it("exposes direct drop import through the owned manager and cancels on the original account fence", async () => {
+    await mount();
+    identify.files.mockResolvedValue([
+      { ...still(), contentIdentifier: null, appleMakerNote: false },
+    ]);
+    const abort = new AbortController();
+    let answer!: Promise<readonly ArticleMediaReference[]>;
+    await act(async () => {
+      answer = state.editor!.media.importFiles!({
+        files: [still().file],
+        signal: abort.signal,
+        allowed: () => true,
+      });
+    });
+    expect(session.manager.addConfirmed).toHaveBeenCalledWith([
+      expect.objectContaining({ clientSource: "drop" }),
+    ]);
+    abort.abort();
+    expect(await answer).toEqual([]);
+    state.epoch += 1;
+    expect(
+      await state.editor!.media.importFiles!({
+        files: [still().file],
+        signal: new AbortController().signal,
+        allowed: () => true,
+      }),
+    ).toEqual([]);
+  });
   it("does not notify publication after its deferred upload cleanup outlives the workspace", async () => {
     await mount();
     const cleanup = deferred<undefined>();

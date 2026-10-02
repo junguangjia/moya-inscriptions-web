@@ -219,6 +219,34 @@ afterEach(async () => {
 });
 
 describe("Unified private draft cards", () => {
+  it("uses one keyboard-accessible card entry without redundant edit or public buttons", async () => {
+    articleClient.list.mockResolvedValue({
+      items: [article(1, { publicVersion: 2 })],
+      nextCursor: null,
+    });
+    const { node, onOpenDraft, onOpenArticle } = await mount();
+    expect(node.textContent).not.toContain("继续编辑");
+    expect(node.textContent).not.toContain("公开版本");
+    const activate = async (id: string, key: string) =>
+      act(async () => {
+        row(node, id)
+          .querySelector('[role="button"]')!
+          .dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+      });
+    await activate(articleId(1), "Enter");
+    await activate(draftId(2), " ");
+    expect(onOpenArticle).toHaveBeenCalledExactlyOnceWith(articleId(1));
+    expect(onOpenDraft).toHaveBeenCalledExactlyOnceWith(draftId(2));
+    identity.epoch += 1;
+    await activate(articleId(1), "Enter");
+    expect(onOpenArticle).toHaveBeenCalledTimes(1);
+  });
   it("shows both existing draft kinds in one newest-first card grid with no type tabs", async () => {
     workClient.listDrafts.mockResolvedValue(
       page([summary(2, { title: "作品二" }), summary(4, { title: "作品四" })]),

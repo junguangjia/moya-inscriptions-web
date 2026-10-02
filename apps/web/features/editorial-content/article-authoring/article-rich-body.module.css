@@ -1,9 +1,24 @@
 .body {
+  display: flow-root;
   font-family: var(--yoyi-font-editorial);
   color: var(--yoyi-color-text-primary);
   font-size: var(--yoyi-type-body-size);
-  line-height: 1.9;
+  line-height: var(--yoyi-type-article-line-height-normal);
   overflow-wrap: anywhere;
+}
+.body .resizedImage[data-article-image-wrap="true"] {
+  float: inline-start;
+  margin-inline-end: var(--yoyi-space-6);
+}
+.body .resizedImage[data-article-image-wrap="false"],
+.body .gallery,
+.body aside,
+.body hr {
+  clear: both;
+}
+.body ul,
+.body ol {
+  display: flow-root;
 }
 .body p,
 .body li {
@@ -75,4 +90,38 @@
 }
 .body u {
   text-underline-offset: 3px;
+}
+
+.body [data-article-background-color="default"] {
+  background-color: transparent;
+}
+.body [data-article-background-color="gray"] {
+  background-color: var(--yoyi-color-background-muted);
+}
+.body [data-article-background-color="red"] {
+  background-color: var(--yoyi-color-seal-red-muted);
+}
+.body [data-article-background-color="brown"] {
+  background-color: var(--yoyi-color-border-default);
+}
+.body [data-article-text-alignment="left"] {
+  text-align: left;
+}
+.body [data-article-text-alignment="center"] {
+  text-align: center;
+}
+.body [data-article-text-alignment="right"] {
+  text-align: right;
+}
+.body [data-article-text-alignment="justify"] {
+  text-align: justify;
+}
+.body [data-article-line-spacing="normal"] {
+  line-height: var(--yoyi-type-article-line-height-normal);
+}
+.body [data-article-line-spacing="compact"] {
+  line-height: var(--yoyi-type-article-line-height-compact);
+}
+.body [data-article-line-spacing="relaxed"] {
+  line-height: var(--yoyi-type-article-line-height-relaxed);
 }

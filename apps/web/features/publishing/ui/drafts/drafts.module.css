@@ -284,6 +284,12 @@
   margin-top: var(--yoyi-space-3);
 }
 
+.rowBody[role="button"]:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: var(--yoyi-space-2);
+  border-radius: var(--yoyi-radius-md);
+}
+
 /* A confirmation or failure uses the whole row, not the text column. */
 .row > .confirm,
 .row > .alert {

@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { BlockNoteEditor } from "@blocknote/core";
 import { HistoryExtension } from "@blocknote/core/extensions";
-import { act } from "react";
+import { act, useState } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { blockTypeSelectItems } from "@blocknote/react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,11 +17,24 @@ import { articleBlockNoteSchema } from "./article-blocknote-schema";
 import type { ArticleBlockNoteEditor } from "./article-blocknote-schema";
 import { ArticleLinkDialog } from "./article-link-dialog";
 import {
+  ArticleMarkPaletteContext,
+  useArticleMarkPalette,
+  useArticleMarkPaletteContext,
+} from "./article-mark-palette";
+import {
   captureArticleSelection,
   restoreArticleSelection,
 } from "./article-selection";
 import { moveArticleBlock, stepArticleBlock } from "./article-block-move";
-import { formatArticleBlocks } from "./article-tools";
+import {
+  ArticleTools,
+  formatArticleBlocks,
+  formatArticleLayout,
+} from "./article-tools";
+import {
+  articleImageCropProps,
+  getArticleImageCrop,
+} from "./article-image-layout";
 
 const mixed = (): ArticleInlineContent[] => [
   { type: "text", text: "ab", styles: { bold: true } },
@@ -555,6 +570,94 @@ const submitForm = async (form: HTMLFormElement) =>
     );
   });
 
+const renderTools = async (
+  editor: ArticleBlockNoteEditor,
+  canMutate: () => boolean = () => true,
+  options: { disabled?: boolean; bodyActive?: boolean } = {},
+) => {
+  const mount = document.createElement("div");
+  document.body.append(mount);
+  mounts.push(mount);
+  const root = createRoot(mount);
+  roots.push(root);
+  const noop = () => undefined;
+  await act(async () =>
+    root.render(
+      <ArticleTools
+        editor={editor}
+        disabled={options.disabled ?? false}
+        bodyActive={options.bodyActive ?? true}
+        canMutate={canMutate}
+        onLink={noop}
+        onImage={noop}
+        onGallery={noop}
+        onCatalog={noop}
+        onDivider={noop}
+        onSettings={noop}
+      />,
+    ),
+  );
+  return mount;
+};
+const nextEditorFrame = () =>
+  new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+describe("Article color selector preserves the selected editing target", () => {
+  it("colors only the original partial selection after the dialog moves focus, with native undo", async () => {
+    const initial = inlineFixture();
+    const editor = makeEditor(initial);
+    selectInline(editor, "mixed", 1, 4);
+    const before = canonical(editor, initial);
+    const mount = await renderTools(editor);
+    await act(async () =>
+      mount
+        .querySelector<HTMLButtonElement>('[aria-label="文字颜色"]')!
+        .click(),
+    );
+    editor.setTextCursorPosition("other", "end");
+    const red = [
+      ...mount.querySelectorAll<HTMLButtonElement>("dialog button"),
+    ].find((button) => button.textContent?.includes("朱红"))!;
+    await act(async () => red.click());
+    await act(async () => nextEditorFrame());
+    const after = canonical(editor, initial);
+    expect(after.blocks[0]).toMatchObject({
+      content: [
+        { text: "a", styles: { bold: true } },
+        { text: "b", styles: { bold: true, textColor: "red" } },
+        { text: "cd", styles: { italic: true, textColor: "red" } },
+        { text: "ef", styles: {} },
+      ],
+    });
+    expect(after.blocks[1]).toEqual(before.blocks[1]);
+    editor.undo();
+    expect(canonical(editor, initial)).toEqual(before);
+  });
+
+  it("does not apply a queued color choice after editing authorization changes", async () => {
+    const initial = inlineFixture();
+    const editor = makeEditor(initial);
+    selectInline(editor, "mixed", 1, 4);
+    const before = canonical(editor, initial);
+    let authorized = true;
+    const mount = await renderTools(editor, () => authorized);
+    await act(async () =>
+      mount
+        .querySelector<HTMLButtonElement>('[aria-label="文字颜色"]')!
+        .click(),
+    );
+    const red = [
+      ...mount.querySelectorAll<HTMLButtonElement>("dialog button"),
+    ].find((button) => button.textContent?.includes("朱红"))!;
+    await act(async () => {
+      red.click();
+      authorized = false;
+    });
+    await act(async () => nextEditorFrame());
+    expect(canonical(editor, initial)).toEqual(before);
+  });
+});
+
 describe("actual Article link dialog validation", () => {
   it.each([
     "javascript:alert(1)",
@@ -661,5 +764,466 @@ describe("r4 native styles and media reorder", () => {
     expect(canonical(editor, initial)).toEqual(before);
     expect(moveArticleBlock(editor, "photo", "leaf", "before")).toBe(false);
     expect(stepArticleBlock(editor, "outside", -1)).toBe(false);
+  });
+});
+
+const dialogChoice = (mount: HTMLElement, label: string) => {
+  const button = [
+    ...mount.querySelectorAll<HTMLButtonElement>("dialog button"),
+  ].find((candidate) => candidate.textContent?.includes(label));
+  expect(button).toBeDefined();
+  return button!;
+};
+const toolButton = (mount: HTMLElement, label: string) => {
+  const button = mount.querySelector<HTMLButtonElement>(
+    `[aria-label="${label}"]`,
+  );
+  expect(button).not.toBeNull();
+  return button!;
+};
+const cropFixture = (): ArticleDocument => ({
+  ...envelope([
+    prose("first"),
+    {
+      id: "photo",
+      type: "managedImage",
+      props: { refId: "asset", caption: "原图𠮷", alt: "碑面" },
+      children: [],
+    },
+    { id: "last", type: "quote", props: {}, content: mixed(), children: [] },
+  ]),
+  references: {
+    asset: { type: "managed", itemId: `media-item-${"1".repeat(32)}` },
+  },
+});
+
+describe("r9 native background and paragraph controls", () => {
+  it("restores the original partial selection when applying highlight, retaining marks and one native Undo", async () => {
+    const initial = inlineFixture();
+    const editor = makeEditor(initial);
+    selectInline(editor, "mixed", 4, 1);
+    const before = canonical(editor, initial);
+    const mount = await renderTools(editor);
+    await act(async () => toolButton(mount, "文字背景色").click());
+    editor.setTextCursorPosition("other", "end");
+    await act(async () => dialogChoice(mount, "朱红").click());
+    await act(async () => nextEditorFrame());
+    const after = canonical(editor, initial);
+    expect(after.blocks[0]).toMatchObject({
+      content: [
+        { text: "a", styles: { bold: true } },
+        { text: "b", styles: { bold: true, backgroundColor: "red" } },
+        { text: "cd", styles: { italic: true, backgroundColor: "red" } },
+        { text: "ef", styles: {} },
+      ],
+    });
+    expect(after.blocks[1]).toEqual(before.blocks[1]);
+    await act(async () => {
+      expect(editor.undo()).toBe(true);
+    });
+    expect(canonical(editor, initial)).toEqual(before);
+  });
+
+  it("uses exported BlockNote bullet/numbered icons and executes their real commands", async () => {
+    const initial = inlineFixture();
+    const editor = makeEditor(initial);
+    editor.setTextCursorPosition("mixed", "end");
+    const before = canonical(editor, initial);
+    const mount = await renderTools(editor);
+    for (const [type, label] of [
+      ["bulletListItem", "无序列表"],
+      ["numberedListItem", "有序列表"],
+    ] as const) {
+      const native = blockTypeSelectItems(editor.dictionary).find(
+        (item) => item.type === type,
+      )!;
+      expect(native).toBeDefined();
+      const Icon = native.icon;
+      const expected = document.createElement("div");
+      expected.innerHTML = renderToStaticMarkup(<Icon />);
+      const button = toolButton(mount, label);
+      expect(button.querySelector("svg")?.outerHTML).toBe(
+        expected.querySelector("svg")?.outerHTML,
+      );
+      await act(async () => button.click());
+      expect(editor.getBlock("mixed")).toMatchObject({ type });
+      expect(canonical(editor, initial).blocks[1]).toEqual(before.blocks[1]);
+      await act(async () => {
+        expect(editor.undo()).toBe(true);
+      });
+      expect(canonical(editor, initial)).toEqual(before);
+    }
+  });
+
+  it("updates a mixed multi-block selection in one native transaction while preserving media and content", () => {
+    const initial = cropFixture();
+    const editor = makeEditor(initial);
+    const before = canonical(editor, initial);
+    editor.setSelection("first", "last");
+    expect(
+      formatArticleLayout(editor, {
+        textAlignment: "justify",
+        lineSpacing: "relaxed",
+      }),
+    ).toBe(true);
+    const after = canonical(editor, initial);
+    expect(after.blocks.map((block) => block.id)).toEqual(
+      before.blocks.map((block) => block.id),
+    );
+    for (const index of [0, 2]) {
+      expect(after.blocks[index]).toMatchObject({
+        props: { textAlignment: "justify", lineSpacing: "relaxed" },
+      });
+      expect(
+        (
+          after.blocks[index] as Extract<
+            ArticleBlock,
+            { type: "paragraph" | "quote" }
+          >
+        ).content,
+      ).toEqual(
+        (
+          before.blocks[index] as Extract<
+            ArticleBlock,
+            { type: "paragraph" | "quote" }
+          >
+        ).content,
+      );
+    }
+    expect(after.blocks[1]).toEqual(before.blocks[1]);
+    expect(after.references).toEqual(before.references);
+    expect(after.galleries).toEqual(before.galleries);
+    expect(editor.undo()).toBe(true);
+    expect(canonical(editor, initial)).toEqual(before);
+    expect(editor.redo()).toBe(true);
+    expect(canonical(editor, initial)).toEqual(after);
+  });
+
+  it.each([
+    { tool: "对齐方式", choice: "居中", props: { textAlignment: "center" } },
+    { tool: "行间距", choice: "宽松", props: { lineSpacing: "relaxed" } },
+  ])(
+    "restores the selected paragraphs through the $tool dialog",
+    async ({ tool, choice, props }) => {
+      const initial = envelope([
+        prose("first"),
+        prose("last"),
+        prose("unselected"),
+      ]);
+      const editor = makeEditor(initial);
+      editor.setSelection("first", "last");
+      const before = canonical(editor, initial);
+      const mount = await renderTools(editor);
+      await act(async () => toolButton(mount, tool).click());
+      editor.setTextCursorPosition("unselected", "end");
+      await act(async () => dialogChoice(mount, choice).click());
+      await act(async () => nextEditorFrame());
+      const after = canonical(editor, initial);
+      expect(after.blocks[0]).toMatchObject({ props });
+      expect(after.blocks[1]).toMatchObject({ props });
+      expect(after.blocks[2]).toEqual(before.blocks[2]);
+      await act(async () => {
+        expect(editor.undo()).toBe(true);
+      });
+      expect(canonical(editor, initial)).toEqual(before);
+    },
+  );
+
+  it.each([
+    { tool: "文字背景色", choice: "朱红" },
+    { tool: "对齐方式", choice: "居中" },
+    { tool: "行间距", choice: "宽松" },
+  ])(
+    "refuses a queued $tool choice after authorization changes",
+    async ({ tool, choice }) => {
+      const initial = inlineFixture();
+      const editor = makeEditor(initial);
+      selectInline(editor, "mixed", 1, 4);
+      const before = canonical(editor, initial);
+      let authorized = true;
+      const mount = await renderTools(editor, () => authorized);
+      await act(async () => toolButton(mount, tool).click());
+      await act(async () => {
+        dialogChoice(mount, choice).click();
+        authorized = false;
+      });
+      await act(async () => nextEditorFrame());
+      expect(canonical(editor, initial)).toEqual(before);
+    },
+  );
+
+  it.each([
+    { tool: "文字背景色", choice: "朱红" },
+    { tool: "对齐方式", choice: "居中" },
+    { tool: "行间距", choice: "宽松" },
+  ])(
+    "refuses a stale $tool selection after a real document mutation",
+    async ({ tool, choice }) => {
+      const initial = inlineFixture();
+      const editor = makeEditor(initial);
+      selectInline(editor, "mixed", 1, 4);
+      const mount = await renderTools(editor);
+      await act(async () => toolButton(mount, tool).click());
+      await act(async () =>
+        editor.updateBlock("other", { content: "更新后的正文𠮷" }),
+      );
+      editor.setTextCursorPosition("other", "end");
+      const current = canonical(editor, initial);
+      await act(async () => dialogChoice(mount, choice).click());
+      await act(async () => nextEditorFrame());
+      expect(canonical(editor, initial)).toEqual(current);
+    },
+  );
+
+  it.each([{ disabled: true }, { bodyActive: false }])(
+    "keeps all new controls inert when disabled or outside the body",
+    async (options) => {
+      const initial = inlineFixture();
+      const editor = makeEditor(initial);
+      selectInline(editor, "mixed", 1, 4);
+      const before = canonical(editor, initial);
+      const mount = await renderTools(editor, () => true, options);
+      for (const label of [
+        "文字背景色",
+        "对齐方式",
+        "行间距",
+        "无序列表",
+        "有序列表",
+      ]) {
+        const button = toolButton(mount, label);
+        expect(button.disabled).toBe(true);
+        await act(async () => button.click());
+      }
+      await act(async () => nextEditorFrame());
+      expect(mount.querySelector("dialog")).toBeNull();
+      expect(canonical(editor, initial)).toEqual(before);
+    },
+  );
+});
+
+describe("r9 native managed-image crop persistence", () => {
+  it("roundtrips normalized crop command props with stable media identity and one native Undo", () => {
+    const initial = cropFixture();
+    const editor = makeEditor(initial);
+    const before = canonical(editor, initial);
+    const crop = { x: 0.125, y: 0.25, width: 0.5, height: 0.5 };
+    editor.updateBlock("photo", { props: articleImageCropProps(crop) });
+    const saved = canonical(editor, initial);
+    const photo = saved.blocks.find((block) => block.type === "managedImage")!;
+    expect(getArticleImageCrop(photo.props)).toEqual(crop);
+    expect(photo).toMatchObject({
+      id: "photo",
+      props: {
+        refId: "asset",
+        caption: "原图𠮷",
+        alt: "碑面",
+        cropX: 0.125,
+        cropY: 0.25,
+        cropWidth: 0.5,
+        cropHeight: 0.5,
+      },
+    });
+    expect(saved.references).toEqual(before.references);
+    expect(saved.blocks[0]).toEqual(before.blocks[0]);
+    expect(saved.blocks[2]).toEqual(before.blocks[2]);
+    const reopened = makeEditor(saved);
+    expect(canonical(reopened, saved)).toEqual(saved);
+    expect(editor.undo()).toBe(true);
+    expect(canonical(editor, initial)).toEqual(before);
+    expect(editor.redo()).toBe(true);
+    expect(canonical(editor, initial)).toEqual(saved);
+    reopened.updateBlock("photo", { props: articleImageCropProps(null) });
+    expect(
+      canonical(reopened, saved).blocks.find(
+        (block) => block.type === "managedImage",
+      ),
+    ).toMatchObject({
+      props: {
+        refId: "asset",
+        cropX: 0,
+        cropY: 0,
+        cropWidth: 1,
+        cropHeight: 1,
+      },
+    });
+  });
+});
+
+const SelectionPaletteTrigger = ({
+  dismiss,
+}: {
+  readonly dismiss: () => void;
+}) => {
+  const palette = useArticleMarkPaletteContext();
+  return (
+    <div data-selection-palette-popup="">
+      <button
+        type="button"
+        onClick={() => {
+          palette.open("textColor");
+          dismiss();
+        }}
+      >
+        选择文字颜色
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          palette.open("backgroundColor");
+          dismiss();
+        }}
+      >
+        选择文字背景色
+      </button>
+    </div>
+  );
+};
+
+const SharedPaletteHarness = ({
+  editor,
+  canMutate,
+}: {
+  readonly editor: ArticleBlockNoteEditor;
+  readonly canMutate: () => boolean;
+}) => {
+  const [selectionVisible, setSelectionVisible] = useState(true);
+  const palette = useArticleMarkPalette({
+    editor,
+    disabled: false,
+    canMutate,
+    selectedIcon: <span aria-hidden="true">✓</span>,
+  });
+  const noop = () => undefined;
+  return (
+    <ArticleMarkPaletteContext.Provider value={palette}>
+      <ArticleTools
+        editor={editor}
+        disabled={palette.isOpen}
+        bodyActive={true}
+        canMutate={canMutate}
+        markPalette={palette}
+        onLink={noop}
+        onImage={noop}
+        onGallery={noop}
+        onCatalog={noop}
+        onDivider={noop}
+        onSettings={noop}
+      />
+      {selectionVisible ? (
+        <SelectionPaletteTrigger dismiss={() => setSelectionVisible(false)} />
+      ) : null}
+      {palette.dialog}
+    </ArticleMarkPaletteContext.Provider>
+  );
+};
+const renderSharedPalette = async (
+  editor: ArticleBlockNoteEditor,
+  canMutate: () => boolean = () => true,
+) => {
+  const mount = document.createElement("div");
+  document.body.append(mount);
+  mounts.push(mount);
+  const root = createRoot(mount);
+  roots.push(root);
+  await act(async () =>
+    root.render(<SharedPaletteHarness editor={editor} canMutate={canMutate} />),
+  );
+  return mount;
+};
+const paletteChoice = (mount: HTMLElement, label: string) => {
+  const button = [
+    ...mount.querySelectorAll<HTMLButtonElement>("dialog button"),
+  ].find((item) => item.textContent?.includes(label));
+  expect(button).toBeDefined();
+  return button!;
+};
+
+describe("shared selected-text palette lifetime", () => {
+  it.each([
+    { trigger: "选择文字颜色", mark: "textColor" },
+    { trigger: "选择文字背景色", mark: "backgroundColor" },
+  ] as const)(
+    "keeps $mark open after the selection toolbar disappears, restores its exact range and supports native Undo",
+    async ({ trigger, mark }) => {
+      const initial = inlineFixture();
+      const editor = makeEditor(initial);
+      selectInline(editor, "mixed", 4, 1);
+      const before = canonical(editor, initial);
+      const mount = await renderSharedPalette(editor);
+      const source = [
+        ...mount.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent === trigger)!;
+      await act(async () => source.click());
+      expect(mount.querySelector("[data-selection-palette-popup]")).toBeNull();
+      expect(mount.querySelectorAll("dialog[open]")).toHaveLength(1);
+      expect(mount.querySelectorAll("dialog button")).toHaveLength(5);
+      editor.setTextCursorPosition("other", "end");
+      await act(async () => paletteChoice(mount, "朱红").click());
+      await act(async () => nextEditorFrame());
+      const updated = canonical(editor, initial);
+      expect(updated.blocks[0]).toMatchObject({
+        content: [
+          { text: "a", styles: { bold: true } },
+          { text: "b", styles: { bold: true, [mark]: "red" } },
+          { text: "cd", styles: { italic: true, [mark]: "red" } },
+          { text: "ef", styles: {} },
+        ],
+      });
+      expect(updated.blocks[1]).toEqual(before.blocks[1]);
+      expect(mount.querySelector("dialog")).toBeNull();
+      editor.undo();
+      expect(canonical(editor, initial)).toEqual(before);
+    },
+  );
+
+  it("uses the same bounded foreground and background dialog from persistent tools", async () => {
+    const editor = makeEditor(inlineFixture());
+    selectInline(editor, "mixed", 1, 4);
+    const mount = await renderSharedPalette(editor);
+    await act(async () => toolButton(mount, "文字颜色").click());
+    expect(mount.querySelectorAll("dialog[open]")).toHaveLength(1);
+    expect(mount.querySelector("dialog")?.textContent).toContain("默认墨色");
+    await act(async () => paletteChoice(mount, "取消").click());
+    await act(async () => toolButton(mount, "文字背景色").click());
+    expect(mount.querySelectorAll("dialog[open]")).toHaveLength(1);
+    expect(mount.querySelector("dialog")?.textContent).toContain("无背景");
+    expect(mount.querySelector("dialog")?.textContent).not.toContain("黄色");
+  });
+
+  it("refuses an already queued palette choice when the account loses authorization", async () => {
+    const initial = inlineFixture();
+    const editor = makeEditor(initial);
+    selectInline(editor, "mixed", 1, 4);
+    const before = canonical(editor, initial);
+    let authorized = true;
+    const mount = await renderSharedPalette(editor, () => authorized);
+    const trigger = [
+      ...mount.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "选择文字背景色")!;
+    await act(async () => trigger.click());
+    await act(async () => {
+      paletteChoice(mount, "朱红").click();
+      authorized = false;
+    });
+    await act(async () => nextEditorFrame());
+    expect(canonical(editor, initial)).toEqual(before);
+  });
+
+  it("refuses the captured range after a real document mutation without reverting it", async () => {
+    const initial = inlineFixture();
+    const editor = makeEditor(initial);
+    selectInline(editor, "mixed", 1, 4);
+    const mount = await renderSharedPalette(editor);
+    const trigger = [
+      ...mount.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "选择文字颜色")!;
+    await act(async () => trigger.click());
+    editor.updateBlock("other", {
+      content: [{ type: "text", text: "New edit", styles: {} }],
+    });
+    const changed = canonical(editor, initial);
+    await act(async () => paletteChoice(mount, "朱红").click());
+    await act(async () => nextEditorFrame());
+    expect(canonical(editor, initial)).toEqual(changed);
   });
 });

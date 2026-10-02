@@ -98,6 +98,31 @@ const fixture = (): ArticleDocument => ({
 });
 
 describe("restricted Article document", () => {
+  it("accepts bounded responsive body-image widths and retains legacy image documents", () => {
+    const document = fixture();
+    const image = document.blocks.find(
+      (block) => block.type === "managedImage",
+    )!;
+    expect(articleDocumentSchema.safeParse(document).success).toBe(true);
+    for (const width of [0.15, 0.5, 1])
+      expect(
+        articleDocumentSchema.safeParse({
+          ...document,
+          blocks: [
+            { ...image, props: { ...image.props, displayWidth: width } },
+          ],
+        }).success,
+      ).toBe(true);
+    for (const width of [0, 0.149, 1.001, NaN, Infinity])
+      expect(
+        articleDocumentSchema.safeParse({
+          ...document,
+          blocks: [
+            { ...image, props: { ...image.props, displayWidth: width } },
+          ],
+        }).success,
+      ).toBe(false);
+  });
   it("advertises the same Unicode code-point limits that the server enforces", () => {
     const schema = articleAuthoringJsonSchemas.CreateArticleDraftCommand;
     const title = schema.properties?.title;
@@ -195,7 +220,7 @@ describe("restricted Article document", () => {
     for (const props of [
       { textColor: "red" },
       { backgroundColor: "yellow" },
-      { textAlignment: "center" },
+      { textAlignment: "diagonal" },
       { fontSize: 50 },
     ]) {
       expect(
@@ -279,6 +304,124 @@ describe("restricted Article document", () => {
         }).success,
       ).toBe(false);
     }
+  });
+  it("persists finite highlight and paragraph layout without changing old documents", () => {
+    const original = fixture();
+    expect(articleDocumentSchema.parse(original)).toEqual(original);
+    for (const type of [
+      "paragraph",
+      "heading",
+      "quote",
+      "bulletListItem",
+      "numberedListItem",
+    ]) {
+      const input = {
+        ...emptyArticleDocument(),
+        blocks: [
+          {
+            ...paragraph("layout"),
+            type,
+            props: {
+              textAlignment: "justify",
+              lineSpacing: "relaxed",
+              ...(type === "heading" ? { level: 2 } : {}),
+            },
+            content: [
+              {
+                type: "text",
+                text: "繁體𠮷",
+                styles: { backgroundColor: "red", underline: true },
+              },
+            ],
+          },
+        ],
+      };
+      expect(articleDocumentSchema.parse(input)).toEqual(input);
+    }
+    for (const backgroundColor of ["default", "gray", "red", "brown"]) {
+      const input = {
+        ...emptyArticleDocument(),
+        blocks: [
+          {
+            ...paragraph("highlight"),
+            content: [
+              { type: "text", text: "碑", styles: { backgroundColor } },
+            ],
+          },
+        ],
+      };
+      expect(articleDocumentSchema.parse(input)).toEqual(input);
+    }
+    for (const backgroundColor of [
+      "#fff",
+      "yellow",
+      "url(https://example.invalid)",
+      "var(--external)",
+    ]) {
+      expect(
+        articleDocumentSchema.safeParse({
+          ...emptyArticleDocument(),
+          blocks: [
+            {
+              ...paragraph("invalid"),
+              content: [
+                { type: "text", text: "碑", styles: { backgroundColor } },
+              ],
+            },
+          ],
+        }).success,
+      ).toBe(false);
+    }
+    for (const props of [
+      { lineSpacing: "1.234" },
+      { lineSpacing: 2 },
+      { textAlignment: "start" },
+    ]) {
+      expect(
+        articleDocumentSchema.safeParse({
+          ...emptyArticleDocument(),
+          blocks: [{ ...paragraph("invalid"), props }],
+        }).success,
+      ).toBe(false);
+    }
+  });
+  it("persists only complete normalized image crops and retains old uncropped images", () => {
+    const original = fixture();
+    const photo = original.blocks.find(
+      (block) => block.type === "managedImage",
+    )!;
+    expect(photo).toBeDefined();
+    const input = {
+      ...original,
+      blocks: [
+        {
+          ...photo,
+          props: {
+            ...photo.props,
+            cropX: 0.1,
+            cropY: 0.2,
+            cropWidth: 0.5,
+            cropHeight: 0.6,
+          },
+        },
+      ],
+    };
+    expect(articleDocumentSchema.parse(input)).toEqual(input);
+    for (const crop of [
+      { cropX: 0.1 },
+      { cropX: 0.8, cropY: 0, cropWidth: 0.3, cropHeight: 1 },
+      { cropX: 0, cropY: 0.8, cropWidth: 1, cropHeight: 0.3 },
+      { cropX: 0, cropY: 0, cropWidth: 0.001, cropHeight: 1 },
+      { cropX: -0.1, cropY: 0, cropWidth: 1, cropHeight: 1 },
+    ]) {
+      expect(
+        articleDocumentSchema.safeParse({
+          ...original,
+          blocks: [{ ...photo, props: { ...photo.props, ...crop } }],
+        }).success,
+      ).toBe(false);
+    }
+    expect(articleDocumentSchema.parse(original)).toEqual(original);
   });
   it.each([
     "javascript:alert(1)",

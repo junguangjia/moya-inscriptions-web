@@ -1,8 +1,11 @@
 "use client";
 
 import { HistoryExtension } from "@blocknote/core/extensions";
-import { useEditorState } from "@blocknote/react";
+import { blockTypeSelectItems, useEditorState } from "@blocknote/react";
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import type { ArticleBlock } from "@moya/contracts";
+import { articleLineHeight } from "@moya/design-tokens";
 import { EditorDialog } from "../../publishing/ui/editor/editor-dialog";
 import type { ArticleBlockNoteEditor } from "./article-blocknote-schema";
 import {
@@ -11,6 +14,8 @@ import {
 } from "./article-selection";
 import type { ArticleSelection } from "./article-selection";
 import { stepArticleBlock } from "./article-block-move";
+import { useArticleMarkPalette } from "./article-mark-palette";
+import type { ArticleMarkPaletteController } from "./article-mark-palette";
 import styles from "./article-authoring.module.css";
 
 export type ArticleToolName =
@@ -21,6 +26,12 @@ export type ArticleToolName =
   | "italic"
   | "underline"
   | "color"
+  | "background"
+  | "left"
+  | "center"
+  | "right"
+  | "justify"
+  | "spacing"
   | "insert"
   | "drag"
   | "link"
@@ -43,6 +54,12 @@ const paths: Record<ArticleToolName, string> = {
   italic: "M10 4h9M5 20h9M15 4 9 20",
   underline: "M6 4v7a6 6 0 0 0 12 0V4M4 21h16",
   color: "m7 16 5-12 5 12M9 12h6M4 21h16",
+  background: "m5 16 9-12 5 4-9 12H5v-4Zm7-10 5 4M3 22h18",
+  left: "M4 5h16M4 10h10M4 15h16M4 20h10",
+  center: "M4 5h16M7 10h10M4 15h16M7 20h10",
+  right: "M4 5h16M10 10h10M4 15h16M10 20h10",
+  justify: "M4 5h16M4 10h16M4 15h16M4 20h16",
+  spacing: "M10 5h11M10 12h11M10 19h11M4 3v18m-2-16 2-2 2 2m-4 14 2 2 2-2",
   insert: "M12 4v16M4 12h16",
   drag: "M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01",
   link: "m10 13 4-4M9 15l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m0 3 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0",
@@ -132,6 +149,36 @@ export const formatArticleBlocks = (
   return true;
 };
 
+/** Native updates preserve all inline marks, stable IDs and one Undo unit. */
+export const formatArticleLayout = (
+  editor: ArticleBlockNoteEditor,
+  props: Partial<
+    Pick<
+      Extract<ArticleBlock, { type: "paragraph" }>["props"],
+      "textAlignment" | "lineSpacing"
+    >
+  >,
+): boolean => {
+  const blocks = selectedTextBlocks(editor);
+  if (blocks.length === 0) return false;
+  editor.transact(() => {
+    for (const block of blocks) editor.updateBlock(block, { props });
+  });
+  return true;
+};
+
+const alignmentChoices = [
+  { value: "left", label: "左对齐" },
+  { value: "center", label: "居中" },
+  { value: "right", label: "右对齐" },
+  { value: "justify", label: "两端对齐" },
+] as const;
+const spacingChoices = [
+  { value: "compact", label: "紧凑" },
+  { value: "normal", label: "标准" },
+  { value: "relaxed", label: "宽松" },
+] as const;
+
 export const ArticleTools = ({
   editor,
   disabled,
@@ -143,6 +190,7 @@ export const ArticleTools = ({
   onCatalog,
   onDivider,
   onSettings,
+  markPalette,
 }: {
   readonly editor: ArticleBlockNoteEditor;
   readonly disabled: boolean;
@@ -154,9 +202,17 @@ export const ArticleTools = ({
   readonly onCatalog: () => void;
   readonly onDivider: () => void;
   readonly onSettings: () => void;
+  readonly markPalette?: ArticleMarkPaletteController;
 }) => {
+  const localPalette = useArticleMarkPalette({
+    editor,
+    disabled: disabled || !bodyActive,
+    canMutate,
+    selectedIcon: <ArticleToolIcon name="check" />,
+  });
+  const palette = markPalette ?? localPalette;
   const [menu, setMenu] = useState<
-    "format" | "more" | "color" | "insert" | null
+    "format" | "more" | "alignment" | "spacing" | "insert" | null
   >(null);
   const current = useRef({ disabled, bodyActive, canMutate });
   current.current = { disabled, bodyActive, canMutate };
@@ -166,7 +222,7 @@ export const ArticleTools = ({
     current.current.canMutate();
   const selection = useRef<ArticleSelection | null>(null);
   const pending = useRef<(() => void) | null>(null);
-  const openMenu = (value: "format" | "more" | "color" | "insert") => {
+  const openMenu = (value: NonNullable<typeof menu>) => {
     if (!allowed()) return;
     selection.current = captureArticleSelection(editor);
     setMenu(value);
@@ -212,18 +268,29 @@ export const ArticleTools = ({
         italic: current.getActiveStyles().italic === true,
         underline: current.getActiveStyles().underline === true,
         color: current.getActiveStyles().textColor ?? "default",
+        background: current.getActiveStyles().backgroundColor ?? "default",
+        alignment:
+          "textAlignment" in block.props ? block.props.textAlignment : "left",
+        spacing:
+          "lineSpacing" in block.props ? block.props.lineSpacing : "normal",
         linked: current.getSelectedLinkUrl() !== undefined,
         undo: history !== undefined && current.canExec(history.undoCommand),
         redo: history !== undefined && current.canExec(history.redoCommand),
       };
     },
   });
+  const nativeTypes = blockTypeSelectItems(editor.dictionary);
+  const nativeListIcon = (type: "bulletListItem" | "numberedListItem") => {
+    const Icon = nativeTypes.find((item) => item.type === type)?.icon;
+    return Icon === undefined ? null : <Icon />;
+  };
   const action = (
     name: ArticleToolName,
     label: string,
     run: () => void,
     pressed?: boolean,
     unavailable = false,
+    icon?: ReactNode,
   ) => (
     <button
       type="button"
@@ -237,7 +304,7 @@ export const ArticleTools = ({
         if (allowed(name !== "settings")) run();
       }}
     >
-      <ArticleToolIcon name={name} />
+      {icon ?? <ArticleToolIcon name={name} />}
     </button>
   );
   return (
@@ -247,37 +314,10 @@ export const ArticleTools = ({
         role="toolbar"
         aria-label="专题格式工具栏"
       >
-        <div
-          className={`${styles.desktopTools} ${styles.blockStyles}`}
-          role="group"
-          aria-label="段落样式"
-        >
-          {blockChoices.map((choice) => (
-            <button
-              key={choice.label}
-              type="button"
-              className={styles.toolButton}
-              aria-label={choice.label}
-              title={choice.label}
-              aria-pressed={state.label === choice.label}
-              disabled={
-                disabled ||
-                !bodyActive ||
-                !canFormatArticleBlocks(editor, choice)
-              }
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                if (allowed()) formatArticleBlocks(editor, choice);
-              }}
-            >
-              {choice.type === "heading" ? `H${choice.level}` : choice.label}
-            </button>
-          ))}
-        </div>
         <div className={styles.formattingRow}>
           <button
             type="button"
-            className={`${styles.formatButton} ${styles.mobileTools}`}
+            className={styles.formatButton}
             disabled={disabled || !bodyActive}
             aria-label={`段落样式：${state.label}`}
             aria-haspopup="dialog"
@@ -314,54 +354,48 @@ export const ArticleTools = ({
             },
             state.underline,
           )}
-          <span className={styles.mobileTools}>
-            {action(
-              "color",
-              "文字颜色",
-              () => openMenu("color"),
-              state.color !== "default",
-            )}
-          </span>
-          <div
-            className={`${styles.desktopTools} ${styles.colors}`}
-            role="group"
-            aria-label="文字颜色"
-          >
-            {(
-              [
-                { value: "default", label: "默认墨色" },
-                { value: "gray", label: "灰色" },
-                { value: "red", label: "朱红" },
-                { value: "brown", label: "褐色" },
-              ] as const
-            ).map((color) => (
-              <button
-                key={color.value}
-                type="button"
-                className={styles.toolButton}
-                aria-label={`文字颜色：${color.label}`}
-                title={color.label}
-                aria-pressed={state.color === color.value}
-                disabled={disabled || !bodyActive}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  if (!allowed()) return;
-                  if (color.value === "default")
-                    editor.removeStyles({ textColor: "default" });
-                  else editor.addStyles({ textColor: color.value });
-                  editor.focus();
-                }}
-              >
-                <span
-                  className={styles.colorSwatch}
-                  data-article-text-color={color.value}
-                >
-                  A
-                </span>
-              </button>
-            ))}
-          </div>
+          {action(
+            "color",
+            "文字颜色",
+            () => palette.open("textColor"),
+            state.color !== "default",
+          )}
           {action("link", "编辑链接", onLink, state.linked)}
+          {action(
+            "background",
+            "文字背景色",
+            () => palette.open("backgroundColor"),
+            state.background !== "default",
+          )}
+          <div
+            className={styles.layoutTools}
+            role="group"
+            aria-label="段落排版"
+          >
+            {action(state.alignment, "对齐方式", () => openMenu("alignment"))}
+            {action(
+              "spacing",
+              "行间距",
+              () => openMenu("spacing"),
+              state.spacing !== "normal",
+            )}
+            {action(
+              "more",
+              "无序列表",
+              () => formatArticleBlocks(editor, blockChoices[3]),
+              state.type === "bulletListItem",
+              !canFormatArticleBlocks(editor, blockChoices[3]),
+              nativeListIcon("bulletListItem"),
+            )}
+            {action(
+              "more",
+              "有序列表",
+              () => formatArticleBlocks(editor, blockChoices[4]),
+              state.type === "numberedListItem",
+              !canFormatArticleBlocks(editor, blockChoices[4]),
+              nativeListIcon("numberedListItem"),
+            )}
+          </div>
         </div>
         <div className={styles.utilityRow}>
           {action("undo", "撤销", () => editor.undo(), undefined, !state.undo)}
@@ -379,6 +413,15 @@ export const ArticleTools = ({
           </button>
           <span className={styles.mobileTools}>
             {action("more", "更多块操作", () => openMenu("more"))}
+          </span>
+          <span className={styles.mobileTools}>
+            {action(state.alignment, "对齐方式", () => openMenu("alignment"))}
+            {action(
+              "spacing",
+              "行间距",
+              () => openMenu("spacing"),
+              state.spacing !== "normal",
+            )}
           </span>
           <div
             className={styles.desktopTools}
@@ -409,16 +452,19 @@ export const ArticleTools = ({
           {action("settings", "文章设置", onSettings)}
         </div>
       </div>
+      {markPalette === undefined ? localPalette.dialog : null}
       {menu === null ? null : (
         <EditorDialog
           title={
             menu === "format"
               ? "段落样式"
-              : menu === "color"
-                ? "文字颜色"
-                : menu === "insert"
-                  ? "插入内容"
-                  : "块操作"
+              : menu === "alignment"
+                ? "对齐方式"
+                : menu === "spacing"
+                  ? "行间距"
+                  : menu === "insert"
+                    ? "插入内容"
+                    : "块操作"
           }
           dataName="article-tools"
           onCancel={() => setMenu(null)}
@@ -452,36 +498,46 @@ export const ArticleTools = ({
                   </span>
                 </button>
               ))
-            ) : menu === "color" ? (
-              (
-                [
-                  { value: "default", label: "默认墨色" },
-                  { value: "gray", label: "灰色" },
-                  { value: "red", label: "朱红" },
-                  { value: "brown", label: "褐色" },
-                ] as const
-              ).map((color) => (
+            ) : menu === "alignment" ? (
+              alignmentChoices.map((choice) => (
                 <button
                   type="button"
-                  key={color.value}
-                  aria-pressed={state.color === color.value}
+                  key={choice.value}
                   disabled={disabled}
+                  aria-pressed={state.alignment === choice.value}
                   onClick={() =>
                     submit(() => {
-                      if (color.value === "default")
-                        editor.removeStyles({ textColor: "default" });
-                      else editor.addStyles({ textColor: color.value });
+                      formatArticleLayout(editor, {
+                        textAlignment: choice.value,
+                      });
                     })
                   }
                 >
-                  <span
-                    className={styles.colorSwatch}
-                    data-article-text-color={color.value}
-                  >
-                    A
-                  </span>
-                  {color.label}
-                  {state.color === color.value ? (
+                  <ArticleToolIcon name={choice.value} />
+                  {choice.label}
+                  {state.alignment === choice.value ? (
+                    <ArticleToolIcon name="check" />
+                  ) : null}
+                </button>
+              ))
+            ) : menu === "spacing" ? (
+              spacingChoices.map((choice) => (
+                <button
+                  type="button"
+                  key={choice.value}
+                  disabled={disabled}
+                  aria-pressed={state.spacing === choice.value}
+                  onClick={() =>
+                    submit(() => {
+                      formatArticleLayout(editor, {
+                        lineSpacing: choice.value,
+                      });
+                    })
+                  }
+                >
+                  {choice.label}
+                  <span>{articleLineHeight[choice.value]}</span>
+                  {state.spacing === choice.value ? (
                     <ArticleToolIcon name="check" />
                   ) : null}
                 </button>

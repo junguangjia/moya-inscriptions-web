@@ -1,4 +1,7 @@
-import { publishingMediaItemSchema } from "./work-publishing-schemas.ts";
+import {
+  mediaCropSchema,
+  publishingMediaItemSchema,
+} from "./work-publishing-schemas.ts";
 import { z } from "zod";
 
 /** Restricted BlockNote 0.55 document; browser, HTTP and MCP share these limits. */
@@ -95,6 +98,7 @@ export const articleStyledTextSchema = z.strictObject({
     italic: z.boolean().optional(),
     underline: z.boolean().optional(),
     textColor: z.enum(["default", "gray", "red", "brown"]).optional(),
+    backgroundColor: z.enum(["default", "gray", "red", "brown"]).optional(),
   }),
 });
 export const articleInlineContentSchema = z.discriminatedUnion("type", [
@@ -108,16 +112,14 @@ export const articleInlineContentSchema = z.discriminatedUnion("type", [
 export type ArticleInlineContent = z.infer<typeof articleInlineContentSchema>;
 
 const inline = z.array(articleInlineContentSchema).max(4_000);
-// Native BlockNote properties are accepted only at the fixed unformatted values.
+// Native block colors stay fixed; bounded paragraph layout is persisted separately.
 const nativeProps = z.strictObject({
   backgroundColor: z.literal("default").optional(),
   textColor: z.literal("default").optional(),
-  textAlignment: z.literal("left").optional(),
+  textAlignment: z.enum(["left", "center", "right", "justify"]).optional(),
+  lineSpacing: z.enum(["normal", "compact", "relaxed"]).optional(),
 });
-const quoteProps = z.strictObject({
-  backgroundColor: z.literal("default").optional(),
-  textColor: z.literal("default").optional(),
-});
+const quoteProps = nativeProps;
 const textualBlock = <Type extends string>(type: Type) =>
   z.strictObject({
     id: stableIdSchema,
@@ -141,14 +143,52 @@ const divider = z.strictObject({
   type: z.literal("divider"),
   props: z.strictObject({}),
 });
-const image = z.strictObject({
-  id: stableIdSchema,
-  type: z.literal("managedImage"),
-  props: z.strictObject({
+const imageProps = z
+  .strictObject({
     refId: stableIdSchema,
     caption: textSchema(ARTICLE_DOCUMENT_LIMITS.captionCodePoints),
     alt: textSchema(ARTICLE_DOCUMENT_LIMITS.captionCodePoints),
-  }),
+    displayWidth: z.number().finite().min(0.15).max(1).optional(),
+    cropX: mediaCropSchema.shape.x.optional(),
+    cropY: mediaCropSchema.shape.y.optional(),
+    cropWidth: mediaCropSchema.shape.width.optional(),
+    cropHeight: mediaCropSchema.shape.height.optional(),
+  })
+  .superRefine((props, context) => {
+    const coordinates = [
+      props.cropX,
+      props.cropY,
+      props.cropWidth,
+      props.cropHeight,
+    ];
+    const present = coordinates.filter((value) => value !== undefined).length;
+    if (present === 0) return;
+    if (present !== 4) {
+      context.addIssue({
+        code: "custom",
+        path: ["cropX"],
+        message: "article_crop_incomplete",
+      });
+      return;
+    }
+    const result = mediaCropSchema.safeParse({
+      x: props.cropX,
+      y: props.cropY,
+      width: props.cropWidth,
+      height: props.cropHeight,
+    });
+    if (!result.success) {
+      context.addIssue({
+        code: "custom",
+        path: ["cropX"],
+        message: "article_crop_invalid",
+      });
+    }
+  });
+const image = z.strictObject({
+  id: stableIdSchema,
+  type: z.literal("managedImage"),
+  props: imageProps,
 });
 const gallery = z.strictObject({
   id: stableIdSchema,

@@ -5,14 +5,17 @@ import type {
   ArticleInlineContent,
   ArticleMediaReference,
   CatalogId,
+  MediaCrop,
 } from "@moya/contracts";
 import styles from "./article-rich-body.module.css";
+import { getArticleImageCrop } from "./article-image-layout";
 
 interface ReaderProps {
   readonly document: ArticleDocument;
   readonly renderMedia: (
     reference: ArticleMediaReference,
     alt: string,
+    crop: MediaCrop | null,
   ) => ReactNode;
   readonly renderCatalog: (id: CatalogId) => ReactNode;
 }
@@ -49,6 +52,12 @@ const styledText = (
     value = (
       <span data-article-text-color={part.styles.textColor}>{value}</span>
     );
+  if (part.styles.backgroundColor)
+    value = (
+      <span data-article-background-color={part.styles.backgroundColor}>
+        {value}
+      </span>
+    );
   return value;
 };
 const inline = (content: readonly ArticleInlineContent[]) =>
@@ -64,20 +73,41 @@ const inline = (content: readonly ArticleInlineContent[]) =>
     ),
   );
 
+const blockFormatting = (
+  block: Extract<
+    ArticleBlock,
+    {
+      type:
+        | "paragraph"
+        | "heading"
+        | "quote"
+        | "bulletListItem"
+        | "numberedListItem";
+    }
+  >,
+) => ({
+  "data-article-text-alignment": block.props.textAlignment ?? "left",
+  "data-article-line-spacing": block.props.lineSpacing ?? "normal",
+});
+
 /** Semantic reader content. No BlockNote, Tiptap or ProseMirror import path. */
 export const ArticleRichBody = ({
   document,
   renderMedia,
   renderCatalog,
 }: ReaderProps) => {
-  const reference = (id: string, alt: string): ReactNode => {
+  const reference = (
+    id: string,
+    alt: string,
+    crop: MediaCrop | null = null,
+  ): ReactNode => {
     const value = Object.hasOwn(document.references, id)
       ? document.references[id]
       : undefined;
     return value === undefined ? (
       <p role="status">图片引用不可用。</p>
     ) : (
-      renderMedia(value, alt)
+      renderMedia(value, alt, crop)
     );
   };
   const render = (block: ArticleBlock): ReactNode => {
@@ -85,23 +115,23 @@ export const ArticleRichBody = ({
     switch (block.type) {
       case "paragraph":
         return (
-          <p id={id} key={block.id}>
+          <p id={id} key={block.id} {...blockFormatting(block)}>
             {inline(block.content)}
           </p>
         );
       case "heading":
         return block.props.level === 2 ? (
-          <h3 id={id} key={block.id}>
+          <h3 id={id} key={block.id} {...blockFormatting(block)}>
             {inline(block.content)}
           </h3>
         ) : (
-          <h4 id={id} key={block.id}>
+          <h4 id={id} key={block.id} {...blockFormatting(block)}>
             {inline(block.content)}
           </h4>
         );
       case "quote":
         return (
-          <blockquote id={id} key={block.id}>
+          <blockquote id={id} key={block.id} {...blockFormatting(block)}>
             <p>{inline(block.content)}</p>
           </blockquote>
         );
@@ -109,8 +139,20 @@ export const ArticleRichBody = ({
         return <hr id={id} key={block.id} />;
       case "managedImage":
         return (
-          <figure id={id} key={block.id}>
-            {reference(block.props.refId, block.props.alt)}
+          <figure
+            id={id}
+            key={block.id}
+            className={styles.resizedImage}
+            style={{ width: `${(block.props.displayWidth ?? 1) * 100}%` }}
+            data-article-image-wrap={
+              (block.props.displayWidth ?? 1) < 0.99 ? "true" : "false"
+            }
+          >
+            {reference(
+              block.props.refId,
+              block.props.alt,
+              getArticleImageCrop(block.props),
+            )}
             {block.props.caption ? (
               <figcaption>{block.props.caption}</figcaption>
             ) : null}
@@ -149,6 +191,7 @@ export const ArticleRichBody = ({
           <li
             id={id}
             key={block.id}
+            {...blockFormatting(block)}
             {...(block.type === "numberedListItem" &&
             block.props.start !== undefined
               ? { value: block.props.start }

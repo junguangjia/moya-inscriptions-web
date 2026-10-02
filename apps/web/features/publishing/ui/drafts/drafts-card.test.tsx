@@ -300,7 +300,9 @@ describe("Unified owner draft box", () => {
       { pageSize: 20 },
       expect.any(AbortSignal),
     );
-    await act(async () => buttonByText(articleRow!, "继续编辑").click());
+    await act(async () =>
+      articleRow!.querySelector<HTMLElement>('[role="button"]')!.click(),
+    );
     await flush();
     await vi.waitFor(() => expect(shell.openEditor).toHaveBeenCalled());
     expect(shell.openEditor).toHaveBeenCalledExactlyOnceWith(

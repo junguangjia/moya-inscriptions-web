@@ -98,12 +98,62 @@ const article: ArticleDetail = {
 };
 
 describe("Published canonical Article in accepted readers", () => {
+  it("renders saved block-local crop and highlight/layout using public resolved media", () => {
+    const cropped: ArticleDocument = {
+      ...document,
+      blocks: document.blocks.map((block) => {
+        if (block.type === "managedImage")
+          return {
+            ...block,
+            props: {
+              ...block.props,
+              cropX: 0.25,
+              cropY: 0.25,
+              cropWidth: 0.5,
+              cropHeight: 0.5,
+            },
+          };
+        if (block.type === "paragraph")
+          return {
+            ...block,
+            props: {
+              textAlignment: "center" as const,
+              lineSpacing: "relaxed" as const,
+            },
+            content: [
+              {
+                type: "text" as const,
+                text: "合成高亮",
+                styles: { backgroundColor: "red" as const },
+              },
+            ],
+          };
+        return block;
+      }),
+    };
+    const html = renderToStaticMarkup(
+      <ArticlePublishedBody
+        article={article}
+        document={cropped}
+        active={false}
+      />,
+    );
+    expect(html).toContain('data-article-background-color="red"');
+    expect(html).toContain('data-article-text-alignment="center"');
+    expect(html).toContain('data-article-line-spacing="relaxed"');
+    expect(html).toContain("left:-50%;top:-50%;width:200%;height:200%");
+    expect(html).not.toContain("裁剪范围");
+    expect(html).not.toContain("/api/community/media");
+    expect(
+      document.blocks.find((block) => block.type === "managedImage")!.props,
+    ).not.toHaveProperty("cropX");
+  });
   it("uses public resolved media while preserving headings, inline styles, citations, galleries and unavailable refs", () => {
     const html = renderToStaticMarkup(
       <ArticlePublishedBody article={article} active={false} />,
     );
-    expect(html).toContain('<h3 id="article-block-first">');
-    expect(html).toContain('<h4 id="article-block-second">');
+    expect(html).toContain('<h3 id="article-block-first"');
+    expect(html).toContain('<h4 id="article-block-second"');
     expect(html).toContain("<strong>重点</strong>");
     expect(html).toContain('href="https://example.org/source"');
     expect(html).toContain("<blockquote");

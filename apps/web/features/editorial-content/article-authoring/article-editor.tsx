@@ -55,8 +55,15 @@ import type { ArticleEditorProps } from "./article-editor-props";
 import { ArticleRichBody } from "./article-rich-body";
 import { ArticleBlockControls } from "./article-block-controls";
 import { ArticleTools, ArticleToolIcon } from "./article-tools";
+import {
+  ArticleMarkPaletteContext,
+  useArticleMarkPalette,
+  useArticleMarkPaletteContext,
+} from "./article-mark-palette";
 import { ArticleLinkDialog } from "./article-link-dialog";
 import { ArticleImageDialog } from "./article-image-dialog";
+import { articleImageCropProps } from "./article-image-layout";
+import { createArticleFileDrop } from "./article-file-drop";
 import {
   captureArticleSelection,
   restoreArticleSelection,
@@ -67,28 +74,61 @@ import styles from "./article-authoring.module.css";
 const nextStableId = () => requestIdentity().replaceAll("-", "");
 const SelectionTools = () => {
   const { disabled, editLink } = useArticleAttachments();
+  const palette = useArticleMarkPaletteContext();
   const editor = useBlockNoteEditor();
   const selectedText = useEditorState({
     editor,
     selector: ({ editor: current }) => current.getSelectedText(),
   });
-  if (selectedText.length === 0) return null;
+  if (disabled || selectedText.length === 0) return null;
   return (
-    <FormattingToolbar>
-      <BasicTextStyleButton basicTextStyle="bold" />
-      <BasicTextStyleButton basicTextStyle="italic" />
-      <BasicTextStyleButton basicTextStyle="underline" />
-      <button
-        type="button"
-        className={styles.toolButton}
-        aria-label="编辑链接"
-        disabled={disabled}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={editLink}
-      >
-        <ArticleToolIcon name="link" />
-      </button>
-    </FormattingToolbar>
+    <div
+      className={`${styles.selectionToolbar} yoyi-functional-glass`}
+      onClickCapture={(event) => {
+        if (!palette.allowed()) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+    >
+      <FormattingToolbar>
+        <BasicTextStyleButton basicTextStyle="bold" />
+        <BasicTextStyleButton basicTextStyle="italic" />
+        <BasicTextStyleButton basicTextStyle="underline" />
+        <button
+          type="button"
+          className={styles.toolButton}
+          aria-label="文字颜色"
+          aria-haspopup="dialog"
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => palette.open("textColor")}
+        >
+          <ArticleToolIcon name="color" />
+        </button>
+        <button
+          type="button"
+          className={styles.toolButton}
+          aria-label="文字背景色"
+          aria-haspopup="dialog"
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => palette.open("backgroundColor")}
+        >
+          <ArticleToolIcon name="background" />
+        </button>
+        <button
+          type="button"
+          className={styles.toolButton}
+          aria-label="编辑链接"
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={editLink}
+        >
+          <ArticleToolIcon name="link" />
+        </button>
+      </FormattingToolbar>
+    </div>
   );
 };
 const ArticleDragMenu = () => {
@@ -121,8 +161,11 @@ const statusText = {
 export default function ArticleEditor(props: ArticleEditorProps) {
   const { initial, client, media } = props;
   const editorRef = useRef<ArticleBlockNoteEditor | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
   const publicationRef = useRef<ArticlePublicationAttempt | null>(null);
   const busyRef = useRef(false);
+  const [dropPending, setDropPending] = useState(false);
+  const dropPendingRef = useRef(false);
   const [editor, setEditor] = useState<ArticleBlockNoteEditor | null>(null);
   const [title, setTitle] = useState(initial.title);
   const [attachments, setAttachments] = useState(() =>
@@ -136,7 +179,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
   const [preview, setPreview] = useState<ArticlePreview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [compare, setCompare] = useState(false);
-  busyRef.current = busy !== null && busy !== "close";
+  busyRef.current = (busy !== null && busy !== "close") || dropPending;
   const [linkSelection, setLinkSelection] = useState<ArticleSelection | null>(
     null,
   );
@@ -177,13 +220,29 @@ export default function ArticleEditor(props: ArticleEditorProps) {
   const canChange = () =>
     auto?.canMutate() === true && publishedCompletion === null;
   const mutationAllowed = canChange();
-  const dialogOpen =
+  const otherDialogOpen =
     preview !== null ||
     compare ||
     linkSelection !== null ||
     imageDetails !== null ||
     galleryDetails !== null ||
     settingsOpen;
+  const markPalette = useArticleMarkPalette({
+    editor,
+    disabled:
+      !mutationAllowed ||
+      !bodyActive ||
+      dropPending ||
+      busy !== null ||
+      saved.status === "permission_lost" ||
+      otherDialogOpen,
+    canMutate: canChange,
+    selectedIcon: <ArticleToolIcon name="check" />,
+  });
+  const dialogOpen = otherDialogOpen || markPalette.isOpen;
+  const blockedRef = useRef(false);
+  // Initial drops use native isEditable; an accepted upload survives UI dialogs.
+  blockedRef.current = publishedCompletion !== null;
   const activeSave = () => {
     if (auto === null) throw new Error("article_editor_unavailable");
     return auto;
@@ -205,7 +264,14 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     props.onPublished(publishedCompletion);
   }, [publishedCompletion, busy, auto, props.onPublished]);
   const openLink = () => {
-    if (editor === null || !canChange() || busy !== null || dialogOpen) return;
+    if (
+      editor === null ||
+      !canChange() ||
+      busy !== null ||
+      dialogOpen ||
+      dropPendingRef.current
+    )
+      return;
     setLinkSelection(captureArticleSelection(editor));
   };
   useEffect(() => {
@@ -249,11 +315,27 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     }
     const abort = new AbortController();
     abortRef.current = abort;
+    let fileDrop: ReturnType<typeof createArticleFileDrop> | null = null;
     const instance = BlockNoteEditor.create({
       schema: articleBlockNoteSchema,
       initialContent: opening.initial.document.blocks,
       dictionary: zh,
       tabBehavior: "prefer-navigate-ui",
+      dropCursor: {
+        hooks: {
+          computeDropPosition: ({ view, event, defaultPosition }) =>
+            fileDrop?.externalFiles(event)
+              ? fileDrop.cursorPosition(view, event)
+              : defaultPosition,
+        },
+      },
+      _tiptapOptions: {
+        editorProps: {
+          handleDOMEvents: {
+            drop: (view, event) => fileDrop?.handleDrop(view, event) ?? false,
+          },
+        },
+      },
       links: {
         isValidLink: isArticleSafeLink,
         HTMLAttributes: { rel: "noreferrer noopener", target: "_blank" },
@@ -302,6 +384,27 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       requestId: () => requestIdentity(),
     });
     publicationRef.current = publication;
+    fileDrop = createArticleFileDrop({
+      editor: instance,
+      surface: scrollerRef.current,
+      canImport: () => autosave.canMutate() && !blockedRef.current,
+      importFiles: (files, signal, allowed) =>
+        latest.current.media.importFiles?.({ files, signal, allowed }) ??
+        Promise.resolve([]),
+      attachments: () => latest.current.attachments,
+      setAttachments: (value) => {
+        latest.current = { ...latest.current, attachments: value };
+        setAttachments(value);
+      },
+      nextId: nextStableId,
+      changed: () => autosave.changed(),
+      pending: (value) => {
+        dropPendingRef.current = value;
+        setDropPending(value);
+        if (value) setNotice("正在上传图片，你可以继续编辑正文…");
+      },
+      notice: setNotice,
+    });
     const stopDropGuard = instance.onBeforeChange(({ tr }) => {
       if (tr.getMeta("uiEvent") !== "drop") return;
       if (!autosave.canMutate() || !instance.isEditable) return false;
@@ -324,6 +427,8 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       publication.dispose();
       if (publicationRef.current === publication) publicationRef.current = null;
       stopDropGuard();
+      fileDrop?.dispose();
+      dropPendingRef.current = false;
       autosave.dispose();
       abort.abort();
       instance.unmount();
@@ -335,6 +440,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       const publication = publicationRef.current;
       if (
         auto?.isDirty() ||
+        dropPendingRef.current ||
         (publication !== null && publication.pending() !== null)
       )
         event.preventDefault();
@@ -347,7 +453,8 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       auto === null ||
       (!auto.isDirty() &&
         publicationRef.current?.pending() == null &&
-        busy === null)
+        busy === null &&
+        !dropPending)
     )
       return;
     return props.registerLeaveGuard?.((reason) => {
@@ -364,7 +471,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       }
       return "allow";
     });
-  }, [auto, saved.status, busy, props.registerLeaveGuard]);
+  }, [auto, saved.status, busy, dropPending, props.registerLeaveGuard]);
   const failed = (error: unknown) =>
     setNotice(
       publicationRef.current?.unconfirmed()
@@ -378,6 +485,10 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     operation: () => Promise<void>,
   ) => {
     if (busy !== null) return;
+    if (dropPendingRef.current) {
+      setNotice("图片仍在上传，请完成或取消素材选择后再继续。");
+      return;
+    }
     setNotice(null);
     setBusy(kind);
     try {
@@ -452,7 +563,13 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     });
   };
   const insertMedia = async (multiple: boolean) => {
-    if (editor === null || busy !== null || !canChange()) return;
+    if (
+      editor === null ||
+      busy !== null ||
+      dropPendingRef.current ||
+      !canChange()
+    )
+      return;
     const anchor = editor.getTextCursorPosition().block.id;
     setBusy("media");
     try {
@@ -516,7 +633,13 @@ export default function ArticleEditor(props: ArticleEditorProps) {
     }
   };
   const insertCatalog = async () => {
-    if (editor === null || busy !== null || !canChange()) return;
+    if (
+      editor === null ||
+      busy !== null ||
+      dropPendingRef.current ||
+      !canChange()
+    )
+      return;
     const anchor = editor.getTextCursorPosition().block.id;
     setBusy("media");
     try {
@@ -725,6 +848,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
           type="button"
           disabled={
             editor === null ||
+            dropPending ||
             busy !== null ||
             saved.status === "conflict" ||
             saved.status === "permission_lost"
@@ -741,9 +865,12 @@ export default function ArticleEditor(props: ArticleEditorProps) {
       ) : (
         <ArticleTools
           editor={editor}
-          disabled={!mutationAllowed || busy !== null || dialogOpen}
+          disabled={
+            !mutationAllowed || busy !== null || dialogOpen || dropPending
+          }
           bodyActive={bodyActive}
           canMutate={canChange}
+          markPalette={markPalette}
           onLink={openLink}
           onImage={() => void insertMedia(false)}
           onGallery={() => void insertMedia(true)}
@@ -783,7 +910,11 @@ export default function ArticleEditor(props: ArticleEditorProps) {
           </p>
         ) : null}
       </div>
-      <div className={styles.scroller} data-article-scroller="">
+      <div
+        ref={scrollerRef}
+        className={styles.scroller}
+        data-article-scroller=""
+      >
         <label className={styles.title}>
           <span className={styles.srOnly}>专题标题</span>
           <input
@@ -824,17 +955,75 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                 media,
                 disabled:
                   !mutationAllowed ||
+                  dropPending ||
                   busy !== null ||
                   preview !== null ||
                   saved.status === "permission_lost" ||
                   dialogOpen,
                 moveGalleryImage,
+                applyImageWidth: (id, refId, width) => {
+                  if (
+                    !canChange() ||
+                    editorRef.current !== editor ||
+                    busy !== null ||
+                    dialogOpen ||
+                    dropPendingRef.current ||
+                    editor.domElement
+                      ?.closest("[data-article-authoring]")
+                      ?.querySelector("dialog[open]") ||
+                    !Number.isFinite(width) ||
+                    width < 0.15 ||
+                    width > 1
+                  )
+                    return false;
+                  const block = editor.getBlock(id);
+                  if (
+                    block?.type !== "managedImage" ||
+                    block.props.refId !== refId
+                  )
+                    return false;
+                  if (block.props.displayWidth !== width)
+                    editor.updateBlock(block, {
+                      props: { displayWidth: width },
+                    });
+                  return true;
+                },
+                applyImageCrop: (id, refId, crop) => {
+                  if (
+                    !canChange() ||
+                    editorRef.current !== editor ||
+                    busy !== null ||
+                    dialogOpen ||
+                    dropPendingRef.current
+                  )
+                    return false;
+                  const block = editor.getBlock(id);
+                  if (
+                    block?.type !== "managedImage" ||
+                    block.props.refId !== refId
+                  )
+                    return false;
+                  editor.updateBlock(block, {
+                    props: articleImageCropProps(crop),
+                  });
+                  return true;
+                },
                 editImage: (id) => {
-                  if (canChange() && busy === null && !dialogOpen)
+                  if (
+                    canChange() &&
+                    busy === null &&
+                    !dialogOpen &&
+                    !dropPendingRef.current
+                  )
                     setImageDetails(id);
                 },
                 editGallery: (id) => {
-                  if (canChange() && busy === null && !dialogOpen)
+                  if (
+                    canChange() &&
+                    busy === null &&
+                    !dialogOpen &&
+                    !dropPendingRef.current
+                  )
                     setGalleryDetails(id);
                 },
                 editLink: openLink,
@@ -853,54 +1042,56 @@ export default function ArticleEditor(props: ArticleEditorProps) {
                 ),
               }}
             >
-              <BlockNoteView
-                editor={editor}
-                editable={
-                  mutationAllowed &&
-                  busy === null &&
-                  !dialogOpen &&
-                  saved.status !== "permission_lost"
-                }
-                className={styles.blocknote}
-                formattingToolbar={false}
-                linkToolbar={false}
-                slashMenu={false}
-                sideMenu={false}
-                filePanel={false}
-                emojiPicker={false}
-                tableHandles={false}
-                {...(portal === null
-                  ? {}
-                  : { portalElements: { default: portal } })}
-                onChange={(_editor, context) => {
-                  // Editable/focus updates may emit an empty transaction.
-                  // Only document changes advance the persisted edit generation.
-                  if (canChange() && context.getChanges().length !== 0)
-                    auto?.changed();
-                }}
-              >
-                <SideMenuController
-                  sideMenu={ArticleSideMenu}
-                  {...(portal === null ? {} : { portalElement: portal })}
-                />
-                <FormattingToolbarController
-                  formattingToolbar={SelectionTools}
-                  {...(portal === null ? {} : { portalElement: portal })}
-                />
-                <SuggestionMenuController
-                  triggerCharacter="/"
-                  getItems={async (query) =>
-                    filterSuggestionItems(
-                      [
-                        ...getDefaultReactSlashMenuItems(editor),
-                        ...customSlashItems,
-                      ],
-                      query,
-                    )
+              <ArticleMarkPaletteContext.Provider value={markPalette}>
+                <BlockNoteView
+                  editor={editor}
+                  editable={
+                    mutationAllowed &&
+                    busy === null &&
+                    !dialogOpen &&
+                    saved.status !== "permission_lost"
                   }
-                  {...(portal === null ? {} : { portalElement: portal })}
-                />
-              </BlockNoteView>
+                  className={styles.blocknote}
+                  formattingToolbar={false}
+                  linkToolbar={false}
+                  slashMenu={false}
+                  sideMenu={false}
+                  filePanel={false}
+                  emojiPicker={false}
+                  tableHandles={false}
+                  {...(portal === null
+                    ? {}
+                    : { portalElements: { default: portal } })}
+                  onChange={(_editor, context) => {
+                    // Editable/focus updates may emit an empty transaction.
+                    // Only document changes advance the persisted edit generation.
+                    if (canChange() && context.getChanges().length !== 0)
+                      auto?.changed();
+                  }}
+                >
+                  <SideMenuController
+                    sideMenu={ArticleSideMenu}
+                    {...(portal === null ? {} : { portalElement: portal })}
+                  />
+                  <FormattingToolbarController
+                    formattingToolbar={SelectionTools}
+                    {...(portal === null ? {} : { portalElement: portal })}
+                  />
+                  <SuggestionMenuController
+                    triggerCharacter="/"
+                    getItems={async (query) =>
+                      filterSuggestionItems(
+                        [
+                          ...getDefaultReactSlashMenuItems(editor),
+                          ...customSlashItems,
+                        ],
+                        query,
+                      )
+                    }
+                    {...(portal === null ? {} : { portalElement: portal })}
+                  />
+                </BlockNoteView>
+              </ArticleMarkPaletteContext.Provider>
             </ArticleAttachmentContext.Provider>
           )}
         </div>
@@ -910,6 +1101,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
         className={styles.portal}
         data-article-editor-portals=""
       />
+      {markPalette.dialog}
       {linkSelection === null ? null : (
         <ArticleLinkDialog
           selection={linkSelection}
@@ -1082,8 +1274,8 @@ export default function ArticleEditor(props: ArticleEditorProps) {
           <h3>{preview.draft.title}</h3>
           <ArticleRichBody
             document={preview.draft.document}
-            renderMedia={(reference, alt) =>
-              media.render(reference, { alt, active: busy !== "publish" })
+            renderMedia={(reference, alt, crop) =>
+              media.render(reference, { alt, active: busy !== "publish", crop })
             }
             renderCatalog={media.renderCatalog}
           />

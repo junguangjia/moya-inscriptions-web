@@ -76,7 +76,7 @@
   max-width: calc(100% - 24px);
   padding: var(--yoyi-space-2) var(--yoyi-space-3);
   position: relative;
-  border-radius: var(--yoyi-radius-xl);
+  border-radius: var(--yoyi-radius-full);
 }
 .formattingRow,
 .utilityRow {
@@ -90,16 +90,13 @@
   align-items: center;
   gap: var(--yoyi-space-1);
 }
+.layoutTools {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-1);
+}
 .toolbar .mobileTools {
   display: none;
-}
-.blockStyles {
-  flex-wrap: wrap;
-  justify-content: center;
-}
-.blockStyles button {
-  padding-inline: var(--yoyi-space-3);
-  font-size: var(--yoyi-type-body-small-size);
 }
 .utilityRow {
   flex-wrap: wrap;
@@ -355,6 +352,14 @@
   .desktopTools {
     display: none;
   }
+  .layoutTools {
+    display: none;
+  }
+  .formattingRow {
+    flex-wrap: wrap;
+    max-width: 100%;
+    gap: 0;
+  }
   .toolbar .mobileTools {
     display: inline-flex;
   }
@@ -435,7 +440,7 @@
   padding: 0;
   font-family: var(--yoyi-font-interface);
   font-size: var(--yoyi-type-body-size);
-  line-height: 1.8;
+  line-height: var(--yoyi-type-article-line-height-normal);
   background: transparent;
   outline: none;
   overflow-wrap: anywhere;
@@ -489,6 +494,18 @@
 }
 .imageDetails figcaption {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.imageDetails .blockControls {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.imageDetails .blockAction {
+  flex-shrink: 1;
+  white-space: normal;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .blockAction {
   display: inline-flex;
@@ -578,8 +595,73 @@
 .blocknote :global(.bn-block-outer) {
   margin-block: var(--yoyi-space-2);
 }
+.blocknote :global(.bn-editor > .bn-block-group) {
+  display: flow-root;
+}
+.blocknote
+  :global(.bn-block:has(> .bn-block-content[data-content-type="paragraph"])),
+.blocknote
+  :global(.bn-block:has(> .bn-block-content[data-content-type="heading"])),
+.blocknote
+  :global(.bn-block:has(> .bn-block-content[data-content-type="quote"])) {
+  display: block;
+}
+.blocknote :global(.bn-block-content[data-content-type="paragraph"]),
+.blocknote :global(.bn-block-content[data-content-type="heading"]),
+.blocknote :global(.bn-block-content[data-content-type="quote"]) {
+  display: block;
+}
+.blocknote
+  :global(
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type="imageGallery"]
+    )
+  ),
+.blocknote
+  :global(
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type="catalogReference"]
+    )
+  ),
+.blocknote
+  :global(
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type="divider"]
+    )
+  ) {
+  clear: both;
+}
 .blocknote :global(.bn-editor:focus-visible) {
   outline: none;
+}
+
+.editor [data-article-background-color="gray"],
+.portal [data-article-background-color="gray"],
+.blocknote :global([data-article-background-color="gray"]) {
+  background: var(--yoyi-color-background-muted);
+}
+.editor [data-article-background-color="red"],
+.portal [data-article-background-color="red"],
+.blocknote :global([data-article-background-color="red"]) {
+  background: var(--yoyi-color-seal-red-muted);
+}
+.editor [data-article-background-color="brown"],
+.portal [data-article-background-color="brown"],
+.blocknote :global([data-article-background-color="brown"]) {
+  background: var(--yoyi-color-border-default);
+}
+.blocknote :global(.bn-block-content) > :global(.bn-inline-content) {
+  line-height: var(--yoyi-type-article-line-height-normal);
+}
+.blocknote
+  :global(.bn-block-content[data-line-spacing="compact"])
+  > :global(.bn-inline-content) {
+  line-height: var(--yoyi-type-article-line-height-compact);
+}
+.blocknote
+  :global(.bn-block-content[data-line-spacing="relaxed"])
+  > :global(.bn-inline-content) {
+  line-height: var(--yoyi-type-article-line-height-relaxed);
 }
 
 .colorSwatch {
@@ -636,12 +718,65 @@
   touch-action: none;
   cursor: grab !important;
 }
-.blocknote :global([data-article-drop="before"]) {
+.blocknote :global([data-article-drop="before"]),
+.blocknote :global([data-article-file-drop="before"]) {
   box-shadow: 0 -2px var(--yoyi-color-seal-red);
 }
-.blocknote :global([data-article-drop="after"]) {
+.blocknote :global([data-article-drop="after"]),
+.blocknote :global([data-article-file-drop="after"]) {
   box-shadow: 0 2px var(--yoyi-color-seal-red);
 }
 .imageDetails {
   flex-wrap: wrap;
+}
+
+/* Keep native selection positioning and commands within the project's pill. */
+.selectionToolbar {
+  position: relative;
+  border-radius: var(--yoyi-radius-full);
+  padding: var(--yoyi-space-1);
+  max-width: calc(100vw - 24px);
+  overflow: visible;
+}
+.selectionToolbar :global(.bn-formatting-toolbar) {
+  gap: 0;
+  padding: 0;
+  height: auto;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  box-shadow: none;
+  overflow: visible;
+}
+.selectionToolbar :global(.bn-ak-button),
+.selectionToolbar .toolButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: var(--yoyi-space-2);
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  background: transparent;
+  color: var(--yoyi-color-text-primary);
+  box-shadow: none;
+  font-family: var(--yoyi-font-interface);
+}
+.selectionToolbar :global(.bn-ak-button):hover,
+.selectionToolbar .toolButton:hover {
+  background: var(--yoyi-color-background-muted);
+}
+.selectionToolbar :global(.bn-ak-button[data-selected]) {
+  padding: var(--yoyi-space-2);
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-seal-red-muted);
+  box-shadow: none;
+}
+.selectionToolbar button:disabled {
+  color: var(--yoyi-color-text-disabled);
+}
+.selectionToolbar button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
 }

@@ -88,7 +88,7 @@ describe("restricted BlockNote canonical roundtrip", () => {
     expect(canonical.blocks[0]).toMatchObject(content.blocks[0]!);
     expect(canonical.blocks[1]).toMatchObject(content.blocks[1]!);
     expect(canonical.blocks[2]).toMatchObject(content.blocks[2]!);
-    expect(canonical.blocks.slice(3)).toEqual(content.blocks.slice(3));
+    expect(canonical.blocks.slice(3)).toMatchObject(content.blocks.slice(3));
     expect(canonical.references).toEqual(content.references);
     expect(canonical.galleries).toEqual(content.galleries);
     expect(editor.schema.blockSchema.imageGallery.propSchema).toEqual({
@@ -108,6 +108,7 @@ describe("restricted BlockNote canonical roundtrip", () => {
       ].sort(),
     );
     expect(Object.keys(editor.schema.styleSchema).sort()).toEqual([
+      "backgroundColor",
       "bold",
       "italic",
       "textColor",
@@ -136,6 +137,145 @@ describe("restricted BlockNote canonical roundtrip", () => {
       ],
     });
     editor.unmount();
+  });
+  it("reopens highlight, alignment, spacing and crop in the real installed engine", () => {
+    const extended: ArticleDocument = {
+      ...content,
+      blocks: content.blocks.map((block) => {
+        if (block.type === "managedImage")
+          return {
+            ...block,
+            props: {
+              ...block.props,
+              cropX: 0.1,
+              cropY: 0.2,
+              cropWidth: 0.6,
+              cropHeight: 0.5,
+              displayWidth: 0.5,
+            },
+          };
+        if (block.type === "heading")
+          return {
+            ...block,
+            props: {
+              ...block.props,
+              textAlignment: "center" as const,
+              lineSpacing: "compact" as const,
+            },
+            content: [
+              {
+                type: "text" as const,
+                text: "繁體𠮷",
+                styles: {
+                  backgroundColor: "brown" as const,
+                  textColor: "red" as const,
+                  underline: true,
+                },
+              },
+            ],
+          };
+        if (
+          block.type === "paragraph" ||
+          block.type === "bulletListItem" ||
+          block.type === "numberedListItem" ||
+          block.type === "quote"
+        )
+          return {
+            ...block,
+            props: {
+              ...block.props,
+              textAlignment: "center" as const,
+              lineSpacing: "compact" as const,
+            },
+            content: [
+              {
+                type: "text" as const,
+                text: "繁體𠮷",
+                styles: {
+                  backgroundColor: "brown" as const,
+                  textColor: "red" as const,
+                  underline: true,
+                },
+              },
+            ],
+          };
+        return block;
+      }),
+    };
+    const first = BlockNoteEditor.create({
+      schema: articleBlockNoteSchema,
+      initialContent: extended.blocks,
+    });
+    const saved = parseArticleEditorDocument(first.document, extended);
+    const second = BlockNoteEditor.create({
+      schema: articleBlockNoteSchema,
+      initialContent: saved.blocks,
+    });
+    try {
+      expect(parseArticleEditorDocument(second.document, saved)).toEqual(saved);
+      expect(saved.blocks[0]).toMatchObject({
+        props: { level: 2, textAlignment: "center", lineSpacing: "compact" },
+      });
+      expect(saved.blocks[1]).toMatchObject({
+        content: [
+          {
+            type: "text",
+            text: "繁體𠮷",
+            styles: {
+              backgroundColor: "brown",
+              textColor: "red",
+              underline: true,
+            },
+          },
+        ],
+      });
+      expect(
+        saved.blocks.find((block) => block.type === "managedImage"),
+      ).toMatchObject({
+        props: {
+          cropX: 0.1,
+          cropY: 0.2,
+          cropWidth: 0.6,
+          cropHeight: 0.5,
+          displayWidth: 0.5,
+        },
+      });
+      expect(first.schema.blockSchema.heading.propSchema.level).toEqual({
+        default: 2,
+        values: [2, 3],
+      });
+      expect(first.schema.blockSchema.heading.propSchema).not.toHaveProperty(
+        "isToggleable",
+      );
+      expect(
+        saved.blocks.find((block) => block.type === "catalogReference"),
+      ).toEqual(
+        content.blocks.find((block) => block.type === "catalogReference"),
+      );
+    } finally {
+      first.unmount();
+      second.unmount();
+    }
+  });
+  it("filters arbitrary pasted background colors and retains the finite internal mark", async () => {
+    const editor = BlockNoteEditor.create({ schema: articleBlockNoteSchema });
+    try {
+      const blocks = await editor.tryParseHTMLToBlocks(
+        '<p><span data-style-type="backgroundColor" data-value="rgb(1,2,3)">a</span><span data-style-type="backgroundColor" data-value="red">𠮷</span></p>',
+      );
+      const saved = parseArticleEditorDocument(blocks, {
+        references: {},
+        galleries: {},
+      });
+      expect(saved.blocks[0]).toMatchObject({
+        content: [
+          { type: "text", text: "a", styles: {} },
+          { type: "text", text: "𠮷", styles: { backgroundColor: "red" } },
+        ],
+      });
+    } finally {
+      editor.unmount();
+    }
   });
   it("starts a new session with reachable maps while keeping cover references", () => {
     const draft = {

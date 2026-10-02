@@ -8,10 +8,17 @@ import type {
   ArticleDraft,
   ArticleMediaReference,
   CatalogId,
+  MediaCrop,
 } from "@moya/contracts";
 
 /** UI seam for the existing managed-media picker/viewer; this is not a wire DTO. */
 export interface ArticleMediaBridge {
+  /** Active authoring only: reuse the existing managed-media upload session. */
+  importFiles?(options: {
+    readonly files: File[];
+    readonly signal: AbortSignal;
+    readonly allowed: () => boolean;
+  }): Promise<readonly ArticleMediaReference[]>;
   choose(options: {
     readonly multiple: boolean;
     readonly signal: AbortSignal;
@@ -22,6 +29,8 @@ export interface ArticleMediaBridge {
     options: {
       readonly alt: string;
       readonly active?: boolean;
+      readonly crop?: MediaCrop | null;
+      readonly onCrop?: (crop: MediaCrop | null) => boolean;
       readonly onUnavailable?: () => void;
     },
   ): ReactNode;
@@ -35,6 +44,16 @@ export interface ArticleAttachmentContextValue {
   readonly editImage: (blockId: string) => void;
   readonly editGallery: (blockId: string) => void;
   readonly editLink: () => void;
+  readonly applyImageCrop?: (
+    blockId: string,
+    refId: string,
+    crop: MediaCrop | null,
+  ) => boolean;
+  readonly applyImageWidth?: (
+    blockId: string,
+    refId: string,
+    width: number,
+  ) => boolean;
   readonly blockControls?: (blockId: string) => ReactNode;
   readonly moveGalleryImage: (
     blockId: string,

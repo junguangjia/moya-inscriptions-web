@@ -2,7 +2,9 @@
 
 import {
   BlockNoteSchema,
+  type BlockSpecs,
   createStyleSpec,
+  createHeadingBlockSpec,
   defaultBlockSpecs,
   defaultInlineContentSpecs,
   defaultStyleSpecs,
@@ -20,6 +22,8 @@ import {
 } from "./article-attachments";
 import styles from "./article-authoring.module.css";
 import { ArticleToolIcon } from "./article-tools";
+import { getArticleImageCrop } from "./article-image-layout";
+import { ArticleImageResize } from "./article-image-resize";
 
 /** Keep native marks, with a bounded parser for clipboard/internal HTML. */
 const textColorBase = createStyleSpec(
@@ -59,46 +63,100 @@ const textColor = {
   },
 };
 
+/** Reuse BlockNote's native string-mark machinery with the canonical palette. */
+const backgroundColorBase = createStyleSpec(
+  { type: "backgroundColor", propSchema: "string" },
+  {
+    render: (value) => {
+      const dom = document.createElement("span");
+      dom.dataset.articleBackgroundColor = value;
+      return { dom, contentDOM: dom };
+    },
+  },
+);
+const backgroundColor = {
+  ...backgroundColorBase,
+  implementation: {
+    ...backgroundColorBase.implementation,
+    mark: backgroundColorBase.implementation.mark.extend({
+      parseHTML: () => [
+        {
+          tag: '[data-style-type="backgroundColor"]',
+          getAttrs: (element) => {
+            const value = element.getAttribute("data-value");
+            return allowedTextColor(value) ? { stringValue: value } : false;
+          },
+        },
+        {
+          style: "background-color",
+          getAttrs: (value) =>
+            typeof value === "string" && allowedTextColor(value)
+              ? { stringValue: value }
+              : false,
+        },
+      ],
+    }),
+  },
+};
+
 const fixedColors = {
   backgroundColor: { default: "default", values: ["default"] },
   textColor: { default: "default", values: ["default"] },
 } as const;
 const fixedProps = {
   ...fixedColors,
-  textAlignment: { default: "left", values: ["left"] },
+  textAlignment: {
+    default: "left",
+    values: ["left", "center", "right", "justify"],
+  },
+  lineSpacing: { default: "normal", values: ["normal", "compact", "relaxed"] },
 } as const;
 const paragraph = defaultBlockSpecs.paragraph;
 const bullet = defaultBlockSpecs.bulletListItem;
 const numbered = defaultBlockSpecs.numberedListItem;
 const quote = defaultBlockSpecs.quote;
-const heading = createReactBlockSpec(
-  {
-    type: "heading",
-    propSchema: { ...fixedProps, level: { default: 2, values: [2, 3] } },
-    content: "inline",
+// Native factory retains heading input rules, shortcuts and serializers. Schema
+// construction generates node attributes from the modified config via
+// BlockNote's propsToAttributes; defaultBlockSpecs here are unresolved specs.
+const nativeHeading = createHeadingBlockSpec({
+  defaultLevel: 2,
+  levels: [2, 3],
+  allowToggleHeadings: false,
+});
+const parseHeading: NonNullable<typeof nativeHeading.implementation.parse> = (
+  element,
+) =>
+  element.tagName === "H2" || element.tagName === "H3"
+    ? {
+        ...nativeHeading.implementation.parse?.(element),
+        level: element.tagName === "H2" ? 2 : 3,
+      }
+    : undefined;
+// BlockNote 0.55's erased registry declares parse as Partial<Props<PropSchema>>.
+// Props' non-distributive primitive conditional maps that broad union to never,
+// although actual concrete native parsers return primitive prop values. Bridge
+// only this callback declaration: config/schema inference stays fully precise,
+// and the canonical validator still checks every persisted property.
+const registryHeadingParse = parseHeading as NonNullable<
+  BlockSpecs[string]["implementation"]["parse"]
+>;
+const heading = {
+  ...nativeHeading,
+  config: {
+    ...nativeHeading.config,
+    propSchema: {
+      ...fixedProps,
+      level: { default: 2, values: [2, 3] },
+    } as const,
   },
-  {
+  implementation: {
+    ...nativeHeading.implementation,
+    // Retain the native runtime metadata without its declared optional
+    // highlighting callback, whose props belong to the unrestricted schema.
     meta: { isolating: false },
-    parse: (element) =>
-      element.tagName === "H2"
-        ? { level: 2 }
-        : element.tagName === "H3"
-          ? { level: 3 }
-          : undefined,
-    render: ({ block, contentRef }) =>
-      block.props.level === 2 ? (
-        <h2 ref={contentRef} />
-      ) : (
-        <h3 ref={contentRef} />
-      ),
-    toExternalHTML: ({ block, contentRef }) =>
-      block.props.level === 2 ? (
-        <h2 ref={contentRef} />
-      ) : (
-        <h3 ref={contentRef} />
-      ),
+    parse: registryHeadingParse,
   },
-)();
+};
 
 const managedImage = createReactBlockSpec(
   {
@@ -107,20 +165,51 @@ const managedImage = createReactBlockSpec(
       refId: { default: "" },
       caption: { default: "" },
       alt: { default: "" },
+      displayWidth: { default: 1 },
+      cropX: { default: 0 },
+      cropY: { default: 0 },
+      cropWidth: { default: 1 },
+      cropHeight: { default: 1 },
     },
     content: "none",
   },
   {
-    render: ({ block }) => {
-      const { attachments, media, disabled, editImage, blockControls } =
-        useArticleAttachments();
+    render: ({ block, editor }) => {
+      const {
+        attachments,
+        media,
+        disabled,
+        editImage,
+        blockControls,
+        applyImageCrop,
+        applyImageWidth,
+      } = useArticleAttachments();
       const reference = referenceEntry(attachments, block.props.refId);
       return (
         <figure className={styles.imageBlock} contentEditable={false}>
           {reference === undefined ? (
             <p role="alert">图片引用不可用，请重新选择。</p>
           ) : (
-            media.render(reference, { alt: block.props.alt, active: !disabled })
+            <ArticleImageResize
+              editor={editor}
+              block={block}
+              disabled={disabled || applyImageWidth === undefined}
+              onApply={(width) =>
+                applyImageWidth?.(block.id, block.props.refId, width) ?? false
+              }
+            >
+              {media.render(reference, {
+                alt: block.props.alt,
+                active: !disabled,
+                crop: getArticleImageCrop(block.props),
+                ...(disabled || applyImageCrop === undefined
+                  ? {}
+                  : {
+                      onCrop: (crop) =>
+                        applyImageCrop(block.id, block.props.refId, crop),
+                    }),
+              })}
+            </ArticleImageResize>
           )}
           <div className={styles.imageDetails}>
             {blockControls?.(block.id)}
@@ -253,7 +342,7 @@ export const articleBlockNoteSchema = BlockNoteSchema.create({
         propSchema: { ...fixedProps, start: numbered.config.propSchema.start },
       },
     },
-    quote: { ...quote, config: { ...quote.config, propSchema: fixedColors } },
+    quote: { ...quote, config: { ...quote.config, propSchema: fixedProps } },
     divider: defaultBlockSpecs.divider,
     managedImage,
     imageGallery,
@@ -265,6 +354,7 @@ export const articleBlockNoteSchema = BlockNoteSchema.create({
     italic: defaultStyleSpecs.italic,
     underline: defaultStyleSpecs.underline,
     textColor,
+    backgroundColor,
   },
 });
 

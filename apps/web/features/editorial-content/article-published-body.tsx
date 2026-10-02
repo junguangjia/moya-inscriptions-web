@@ -9,9 +9,10 @@ import type {
   ArticleResolvedReference,
   CatalogId,
   WorkMedia,
+  MediaCrop,
 } from "@moya/contracts";
 import { fetchSameOriginCatalogDetail } from "../../lib/public-api/catalog-detail-client";
-import { LivePhotoFrame } from "../publishing/ui/live/live-photo";
+import { ArticleImage } from "./article-authoring/article-image";
 import { ArticleRichBody } from "./article-authoring/article-rich-body";
 import type { AcademicChapterView } from "../discussion-preview/academic-reader";
 
@@ -20,30 +21,30 @@ export const ArticlePublishedMedia = ({
   media,
   alt,
   active,
+  crop = null,
 }: {
   readonly media: WorkMedia;
   readonly alt: string;
   readonly active: boolean;
+  readonly crop?: MediaCrop | null;
 }) => {
-  const still = (
-    <img
-      src={media.src}
-      alt={alt}
-      width={media.width}
-      height={media.height}
-      loading="lazy"
-      decoding="async"
-    />
-  );
-  return media.kind === "live" && media.motionSrc !== undefined ? (
-    <LivePhotoFrame
+  return (
+    <ArticleImage
+      media={{
+        ...media,
+        alt,
+        ...(media.kind === "live" && media.motionSrc !== undefined
+          ? {
+              live: {
+                motionSrc: media.motionSrc,
+                hasAudio: media.hasAudio === true,
+              },
+            }
+          : {}),
+      }}
       active={active}
-      motion={{ motionSrc: media.motionSrc, hasAudio: media.hasAudio === true }}
-    >
-      {still}
-    </LivePhotoFrame>
-  ) : (
-    still
+      crop={crop}
+    />
   );
 };
 const CatalogLink = ({
@@ -107,7 +108,7 @@ export const ArticlePublishedBody = ({
   return (
     <ArticleRichBody
       document={document}
-      renderMedia={(reference, alt) => {
+      renderMedia={(reference, alt, crop) => {
         const resolved = resolutions.get(reference);
         if (resolved === undefined || resolved.type === "unavailable")
           return <p role="status">图片已不可用。</p>;
@@ -116,15 +117,13 @@ export const ArticlePublishedBody = ({
             media={resolved.media}
             alt={alt}
             active={active}
+            crop={crop}
           />
         ) : (
-          <img
-            src={resolved.media.src}
-            alt={alt || resolved.media.alt}
-            width={resolved.media.width}
-            height={resolved.media.height}
-            loading="lazy"
-            decoding="async"
+          <ArticleImage
+            media={{ ...resolved.media, alt: alt || resolved.media.alt }}
+            active={active}
+            crop={crop}
           />
         );
       }}

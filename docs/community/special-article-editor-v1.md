@@ -1,10 +1,186 @@
 # Special / Article Editor V1
 
-Task: `special-article-editor-v1`, r5. Owner assignment: 2026-09-30. Baseline:
+Task: `special-article-editor-v1`, r10. Owner assignment: 2026-09-30. Baseline:
 `288d4d27e72339402b648f4458ef1aacadcfc681`. Delivery: independently reviewed
 Draft, isolated Development acceptance, private handoff. No Ready, merge, Issue
 closure, release, cloud operation or Production activation. Physical-device and
 visual judgment remain the Owner's.
+
+## r10 — Precise selection popup, direct crop and body-image resizing
+
+The Owner's annotated desktop screenshots of 2026-10-01 correct r9's image
+interaction meaning: editor image click must immediately enter crop mode, not
+open a viewer first. Desktop mouse interaction must directly draw and adjust a
+free rectangle on the image. Mobile must reuse avatar/background drag and pinch
+semantics with flexible crop framing. "Enlarge" means dragging an image-edge
+handle to proportionally resize its in-document presentation, with surrounding
+text layout responding to the changed size. Reader-only original viewing stays
+separate. Restore a compact rounded selection popup and add the same bounded
+foreground/background color actions there.
+
+Reuse the pinned native resizable image wrapper through a renderer-only adapter;
+never persist native file URLs or loosen the Article schema. Persist an optional
+finite normalized displayWidth (0.15–1, old document default1) on individual
+managed-image blocks, preserving crop aspect, undo/redo, autosave and preview/
+reader parity. One guarded commit occurs at gesture end; interrupted, stale or
+unauthorized gestures never write. Flexible crop input produces the same
+existing normalized per-block crop fields; no source image mutation. Keep the
+existing sidebar/block drag, managed file drops and shared draft inbox.
+
+Allowed paths: existing article-authoring helpers/editor/schema/tools/media and
+direct tests, new focused resize/crop/palette helpers there, the semantic
+Article reader and direct tests, canonical
+packages/contracts/src/article-authoring.ts and its unit tests, generated public
+OpenAPI if affected, and this specification. The existing authors crop-gestures
+and native BlockNote resize component are read/reuse dependencies; do not modify
+their unrelated flows. No dependency, database, Backend authorization, Work,
+staff/Admin, Production or environment change. Rebuild canonical contracts and
+selectively reload only the existing owned Development Backend when necessary;
+keep all data and the fixed link. Root remains sole writer in the same
+worktree/branch/Draft182.
+
+Validation: two slices (selection popup; crop/resize interactions), one prepared
+candidate plus at most two cause-backed corrections each. One selected feedback
+plan<=120s, applicable build<=300s, focused real Development persistence<=120s,
+and one focused browser smoke<=300s with shared remaining child deadlines. Prior
+closed complete-feature/MCP plans stay closed, and prior failures remain. Stop
+at Draft for Owner desktop/phone visual/device acceptance.
+
+| Scenario          | Development                                                            | Production                   | Must Preserve                                                            |
+| ----------------- | ---------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
+| Selection popup   | Rounded native formatting plus bounded text/background selectors       | No editor entry              | Selection, link safety, account fences, undo and stored styles           |
+| Direct crop       | Click editor image; desktop free rectangle; flexible mobile drag/pinch | Existing cropped reader only | Source integrity, cancel, current crop, stable block/ref and identity    |
+| Image edge resize | Native proportional handles; responsive normalized width               | Semantic reader parity only  | One undo unit, aspect, crop, surrounding layout, stale gesture rejection |
+| Acceptance        | Same Development services, fixed entry and retained test content       | No activation                | Work publishing, shared draft inbox, prior evidence and Draft stop       |
+
+## r9 — Reuse native rich-text tools and existing image interactions
+
+The Owner's explicit capability-completeness correction of 2026-10-01 requests
+an audit of the installed BlockNote capabilities and implementation of image
+zoom/region cropping, text background color, discoverable bullet/numbered lists,
+line spacing and alignment. Reuse the pinned native commands, list/heading
+behavior and available icons; reuse the project's CatalogViewer and
+CropWorkspace for image interactions. Keep the compact rounded floating toolbar,
+one selector per function, direct independent desktop tools and mobile fit.
+
+Persist optional bounded inline background colors, text-block alignment and line
+spacing, and normalized image-block crop coordinates in the existing canonical
+Article v1 JSON document. Old documents remain readable without migration. Crop
+changes only the Article block's visible region, preserving the managed object,
+original image, shared references, Work edits and Live Photo identity. Editor,
+private preview and published semantic reader must agree. Image galleries reuse
+zoom; this delta's crop editing applies to individual body image blocks.
+
+Allowed paths: existing `article-authoring/` helpers, toolbar/schema/workspace/
+media and direct tests; `article-published-body.tsx` and its direct test;
+`features/detail/catalog-viewer.tsx` and its direct test for an optional
+controls slot; `lib/public-api/article-authoring-client.ts`; canonical
+`packages/contracts/src/article-authoring.ts` and its unit test; shared
+`packages/design-tokens/src/typography.ts`/`theme.css`; generated public OpenAPI
+only if affected; this specification. New image-presentation helpers/tests stay
+in `article-authoring/`. Root is the sole writer in the retained worktree/Draft.
+No dependency upgrade, new media storage, database migration, new identity,
+Backend domain/authorization change, arbitrary embeds/tables, paid features,
+hosted AI, Production change or deployment. Rebuild the changed contracts and
+restart only the owned Development Backend if required to load validation;
+retain the same fixed acceptance link, services, data, media and sessions.
+
+Validation: two ordered slices (persisted formatting; image interactions), one
+prepared candidate plus at most two cause-backed corrections per slice. One
+selected feedback plan <=120s; an applicable Web build <=300s and focused live
+Development persistence <=120s get explicit deadlines. Prior complete/MCP
+acceptance failures/budgets remain closed. Stop for Owner desktop/phone visual
+acceptance; no Ready, merge or task closure.
+
+| Scenario                    | Development                                                        | Production                          | Must Preserve                                                           |
+| --------------------------- | ------------------------------------------------------------------ | ----------------------------------- | ----------------------------------------------------------------------- |
+| List/heading tools          | Native behavior, icons and direct list entrypoints                 | No new editor entry                 | Text, stable IDs, bounded nesting, keyboard/slash behavior and undo     |
+| Highlight/alignment/spacing | Canonical optional values survive save/reopen and semantic preview | Reader compatibility only           | Existing formatting/default documents, selection and account fences     |
+| Image zoom                  | Reuse existing viewer gestures and accessible controls             | Existing resolved public media only | Object-key URLs, reader/editor separation, Live Photo controls          |
+| Image crop                  | Existing crop controls; normalized per-block visible region        | Semantic reader compatibility       | Original asset, shared refs, cancel/undo, stale-block/account rejection |
+| Acceptance/runtime          | Same isolated Development services/link/data                       | No activation                       | Previous evidence, Draft stop, Owner physical-device gate               |
+
+## r8 — Image file drops throughout the Article body
+
+The Owner's 2026-10-01 correction extends external image drops from text hits to
+the full existing body scroll surface: horizontal margins, gaps between blocks,
+space before the first block and below the last block, and an empty paragraph.
+Use the nearest top-level block boundary when native text coordinates do not
+resolve a position. The insertion indicator and final placement share that
+destination; upload completion retains its stable block ID, regardless of later
+caret movement. Files still pass through the existing managed uploader before
+one canonical, undoable insertion. Internal BlockNote drags remain native.
+
+Allowed delta: `article-file-drop.ts`, `article-file-drop.test.tsx`,
+`article-editor.tsx`, `article-authoring.module.css`, and this specification.
+Root is the sole writer in the same worktree, branch and Draft PR. No toolbar,
+draft-box, Backend, contract, database, dependency, authorization, publication,
+runtime or Production change. One focused feedback plan at most 120 seconds;
+prior closed complete plans and failures stay recorded. Reuse the retained
+Development entry and stop for Owner actual desktop/device acceptance.
+
+| Scenario                  | Development                                                   | Production        | Must Preserve                                            |
+| ------------------------- | ------------------------------------------------------------- | ----------------- | -------------------------------------------------------- |
+| Body margins and gaps     | External files insert at the indicated nearest block boundary | No new capability | Existing canvas and toolbar, top-level media schema      |
+| Body beginning/end/empty  | Insert before first or after last block without a text hit    | No new capability | Stable IDs, file order, one-step undo                    |
+| Upload/permission failure | No invalid or late insertion; existing recovery and notice    | Unchanged         | Account/session fences, quotas, readiness, autosave      |
+| Internal block drag       | Existing BlockNote handlers and touch controls                | Unchanged         | Native drag, nesting guard, history and marker ownership |
+| Acceptance environment    | Existing fixed Development entry/services/data                | No deployment     | Draft stop and Owner visual/device gate                  |
+
+## r7 — Direct draft-card activation and native-position image file drop
+
+Owner's annotated 2026-10-01 screenshots remove the redundant “Continue editing”
+and “Public version” actions from the unified draft cards. Tapping a card opens
+its existing editor; keyboard activation and long-press selection remain. The
+original Work-only box under the false Article availability gate is unchanged.
+
+Desktop external image files dropped into the Article body use BlockNote's
+native drop coordinates and the established managed-media identification,
+upload, lease and readiness pipeline. Only ready managed references enter the
+canonical document. No temporary URL/file blocks, fabricated Works, new media
+storage or schema are added. Internal block dragging remains native. Pending
+uploads retain the chosen destination and recheck account, editability and
+destination before inserting; no late result may write into another session.
+
+Allowed delta: existing `article-authoring/` editor, media bridge/workspace and
+directly affected helpers/tests; `publishing/ui/drafts/` card activation and
+directly affected tests/styles; this specification. No Backend, database,
+contract, dependency, authorization, publication, runtime or Production change.
+One focused local feedback plan at most 120 seconds; all closed complete plans
+and their failures remain unchanged. Use the retained fixed Development entry
+and stop for Owner visual/device acceptance.
+
+| Scenario                  | Development                                                     | Production                       | Must Preserve                                                        |
+| ------------------------- | --------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------- |
+| Unified draft cards       | One card activation; no redundant edit/public buttons           | Existing Work-only box unchanged | Canonical editor dispatch, keyboard access, hold/multi-select/delete |
+| External image drop       | Existing uploader; ready managed images at native drop position | No new capability                | File recognition, upload quotas, leases, account fences, autosave    |
+| Drop failure/cancellation | Clear feedback; no invalid block or stale insertion             | Unchanged                        | Current content, reusable upload status/retry, no silent failure     |
+| Internal block drag       | Existing BlockNote side-menu/drop transaction                   | Unchanged                        | Stable IDs, bounded nesting, native undo and redo                    |
+| Acceptance                | Same owned Development entry/port/services/data                 | No deployment                    | Draft stop, prior evidence and Owner visual/device gate              |
+
+## r6 — Restore compact desktop function selectors and original toolbar style
+
+Owner's 2026-10-01 annotated desktop screenshot narrows r5's “all tools
+directly” requirement: different functions retain directly visible icon entry
+points, while choices within the same function use one selector. Restore the
+existing paragraph style selector and text-color icon/palette on desktop as on
+mobile; preserve all supported choices and exact selection restoration. Restore
+the original rounded floating toolbar using the existing full-radius token and
+unchanged SVG icons.
+
+Allowed delta: `article-tools.tsx`, `article-authoring.module.css`, directly
+affected `article-tools.test.tsx`, and this specification. No draft-box, editor
+engine/schema, authorization, persistence, publication, runtime, dependencies or
+Production change. One local feedback plan at most 120 seconds; prior complete
+feature validation is not reopened. Stop for Owner visual acceptance on the same
+retained Development entry. A feedback preview is not complete task acceptance.
+
+| Scenario                  | Development                                                                              | Production        | Must Preserve                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------- |
+| Paragraph/color variants  | One style selector and one color icon opening the existing choices                       | No new capability | Selection/bookmark, finite schema and authorization fences |
+| Independent desktop tools | Existing direct style, link, history, media/Catalog/divider, movement and settings icons | Unchanged         | Existing commands/dialogs; no aggregate desktop launcher   |
+| Floating appearance       | Original pill radius, shared glass styling and SVG paths                                 | No new capability | Current tokens; existing mobile two-row layout             |
+| Draft/runtime acceptance  | Existing mixed card box and fixed Development entry                                      | Unchanged         | All r5 deletion semantics, data and launchd supervision    |
 
 ## r5 — Owner desktop tools and unified draft-card acceptance delta
 

@@ -684,6 +684,24 @@ export const DraftsPicker = ({
                   ) : null}
                   <div
                     className={`${styles.rowBody} ${styles.articleCardBody}`}
+                    role={selecting ? undefined : "button"}
+                    tabIndex={selecting ? undefined : 0}
+                    aria-label={
+                      selecting
+                        ? undefined
+                        : `打开${draft.title.trim() || "未命名专题"}`
+                    }
+                    aria-disabled={!allowed() || undefined}
+                    onKeyDown={(event) => {
+                      if (
+                        selecting ||
+                        (event.key !== "Enter" && event.key !== " ")
+                      )
+                        return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (allowed()) onOpenArticle?.(draft.id);
+                    }}
                   >
                     <p className={styles.label}>专题文章</p>
                     <h3 className={styles.rowTitle}>
@@ -709,28 +727,6 @@ export const DraftsPicker = ({
                         {relativeTime(draft.updatedAt, now)}编辑
                       </time>
                     </p>
-                    {!selecting ? (
-                      <div className={styles.actions}>
-                        <button
-                          type="button"
-                          className={`${styles.button} ${styles.primary}`}
-                          disabled={busy || !confirmed}
-                          onClick={() => {
-                            if (allowed()) onOpenArticle?.(draft.id);
-                          }}
-                        >
-                          继续编辑
-                        </button>
-                        {draft.publicVersion !== null ? (
-                          <a
-                            className={styles.button}
-                            href={`/?topic=${encodeURIComponent(draft.id)}`}
-                          >
-                            公开版本
-                          </a>
-                        ) : null}
-                      </div>
-                    ) : null}
                     {bulkErrors[draft.id] ? (
                       <p role="alert" className={styles.alert}>
                         {bulkErrors[draft.id]}
@@ -791,7 +787,26 @@ export const DraftsPicker = ({
                     text=""
                   />
                 ) : null}
-                <div className={styles.rowBody}>
+                <div
+                  className={styles.rowBody}
+                  role={hasArticles && !selecting ? "button" : undefined}
+                  tabIndex={hasArticles && !selecting ? 0 : undefined}
+                  aria-labelledby={
+                    hasArticles && !selecting ? headingId : undefined
+                  }
+                  aria-disabled={hasArticles && !allowed() ? true : undefined}
+                  onKeyDown={(event) => {
+                    if (
+                      !hasArticles ||
+                      selecting ||
+                      (event.key !== "Enter" && event.key !== " ")
+                    )
+                      return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (allowed()) onOpenDraft(draft.id);
+                  }}
+                >
                   {draft.kind === "new" ? (
                     <>
                       <p className={styles.label} data-draft-label="">
@@ -843,7 +858,7 @@ export const DraftsPicker = ({
                       这项编辑还在进行，结束后才能删除这份草稿
                     </p>
                   ) : null}
-                  {!selecting ? (
+                  {!hasArticles && !selecting ? (
                     <div className={styles.actions}>
                       <button
                         aria-describedby={headingId}
