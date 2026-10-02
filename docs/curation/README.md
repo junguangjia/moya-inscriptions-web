@@ -50,7 +50,8 @@ over the verified workflow, not a replacement review/model system.
    click **创建可编辑 Admin Draft**. Internal package preparation needs no
    manual export/import. Real transfer requires the one bounded Owner
    authorization described in the scale-readiness guide. Verified results link
-   directly to editable Admin cards; card information and image choices need no
+   directly to editable Admin cards. The native App opens these in the browser
+   using a verified Draft receipt; card information and image choices need no
    repeated backend annotation. Originals and private evidence remain separate.
    Neither preparation nor Draft creation approves or publishes anything.
 

@@ -457,7 +457,7 @@
             session.package.objects +
             " 个对象、" +
             session.package.media +
-            " 张照片；未上传。",
+            " 张照片。下方可打开已验证的 Draft，或提交当前卡片内容。",
         ),
       );
     for (const item of session.adminDrafts || []) {

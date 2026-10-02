@@ -59,6 +59,32 @@ struct LocalOrigins {
     }
 }
 
+struct VerifiedDraftLinks {
+    struct Receipt: Decodable {
+        struct Draft: Decodable {
+            struct Binding: Decodable { let id: Int; let instance: String; let baseURL: String }
+            let status: String
+            let cmsDraft: Binding
+        }
+        let synthetic: Bool
+        let drafts: [Draft]
+    }
+    static func contains(_ url: URL?, receipt: Data, syntheticOnly: Bool) -> Bool {
+        guard let url, url.scheme == "http", url.host == "127.0.0.1",
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+              let port = url.port, (1024...65535).contains(port), receipt.count <= 1048576,
+              let value = try? JSONDecoder().decode(Receipt.self, from: receipt),
+              !syntheticOnly || value.synthetic else { return false }
+        return value.drafts.contains { draft in
+            guard draft.status == "verified", draft.cmsDraft.instance == "development", draft.cmsDraft.id > 0,
+                  let origin = URL(string: draft.cmsDraft.baseURL), origin.scheme == "http", origin.host == "127.0.0.1",
+                  origin.user == nil, origin.password == nil, origin.query == nil, origin.fragment == nil,
+                  origin.path.isEmpty, origin.port == port else { return false }
+            return url.absoluteString == draft.cmsDraft.baseURL + "/admin/collections/catalogs/" + String(draft.cmsDraft.id)
+        }
+    }
+}
+
 @MainActor
 final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var window: NSWindow!
@@ -207,12 +233,30 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         NSWorkspace.shared.open(runtime.root.appendingPathComponent("state", isDirectory: true))
     }
 
+    func openVerifiedDraft(_ url: URL?) -> Bool {
+        guard ready, let runtime, let url else { return false }
+        let file = runtime.root.appendingPathComponent("state/development-result.json")
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? Int, size <= 1048576,
+              let data = try? Data(contentsOf: file),
+              VerifiedDraftLinks.contains(url, receipt: data, syntheticOnly: syntheticView) else { return false }
+        return NSWorkspace.shared.open(url)
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard allowed(navigationAction.request.url) else { progress.stringValue = "此应用只打开本机整理与审核页面。"; decisionHandler(.cancel); return }
+        guard allowed(navigationAction.request.url) else {
+            let opened = navigationAction.navigationType == .linkActivated && openVerifiedDraft(navigationAction.request.url)
+            progress.stringValue = opened ? "已在浏览器打开可编辑 Admin Draft；尚未发布。" : "此应用只打开本机整理与审核页面及已验证的 Draft。"
+            decisionHandler(.cancel); return
+        }
         decisionHandler(.allow)
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if allowed(navigationAction.request.url) { webView.load(navigationAction.request) }
+        else if navigationAction.navigationType == .linkActivated && openVerifiedDraft(navigationAction.request.url) {
+            progress.stringValue = "已在浏览器打开可编辑 Admin Draft；尚未发布。"
+        }
         return nil
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

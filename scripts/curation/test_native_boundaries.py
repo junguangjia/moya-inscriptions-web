@@ -111,6 +111,37 @@ class PredictionReplayTests(unittest.TestCase):
         with self.assertRaisesRegex(ReviewError,'PREDICTION_READBACK_MISMATCH'):client.import_task(1,task)
 
 
+class NativeDraftLinkTests(unittest.TestCase):
+    def test_native_handoff_rejects_unverified_targets_and_preserves_synthetic_boundary(self):
+        source=(Path(__file__).parent/'native/ArtVennCuration.swift').read_text()
+        policy='struct VerifiedDraftLinks {'+source.split('struct VerifiedDraftLinks {',1)[1].split('\n@MainActor',1)[0]
+        swift='import Foundation\n'+policy+'''
+let binding: [String: Any] = ["id": 12, "instance": "development", "baseURL": "http://127.0.0.1:3590"]
+func receipt(_ binding: [String: Any], _ status: String = "verified", _ synthetic: Bool = true) -> Data {
+    try! JSONSerialization.data(withJSONObject: ["synthetic": synthetic, "drafts": [["status": status, "cmsDraft": binding]]])
+}
+let url = URL(string: "http://127.0.0.1:3590/admin/collections/catalogs/12")!
+precondition(VerifiedDraftLinks.contains(url, receipt: receipt(binding), syntheticOnly: true))
+for invalid in ["http://127.0.0.1:3590/admin/collections/catalogs/13", "http://127.0.0.1:3591/admin/collections/catalogs/12", "https://127.0.0.1:3590/admin/collections/catalogs/12", "http://localhost:3590/admin/collections/catalogs/12", "http://synthetic:TEST_ONLY@127.0.0.1:3590/admin/collections/catalogs/12", "http://127.0.0.1:3590/admin/collections/catalogs/12?publish=1", "http://127.0.0.1:3590/admin/collections/catalogs/12#token"] {
+    precondition(!VerifiedDraftLinks.contains(URL(string: invalid), receipt: receipt(binding), syntheticOnly: false))
+}
+for invalid: [String: Any] in [["id": true, "instance": "development", "baseURL": "http://127.0.0.1:3590"], ["id": 12, "instance": "production", "baseURL": "http://127.0.0.1:3590"], ["id": 12, "instance": "development", "baseURL": "http://synthetic:TEST_ONLY@127.0.0.1:3590"]] {
+    precondition(!VerifiedDraftLinks.contains(url, receipt: receipt(invalid), syntheticOnly: false))
+}
+precondition(!VerifiedDraftLinks.contains(url, receipt: receipt(binding, "pending"), syntheticOnly: false))
+precondition(!VerifiedDraftLinks.contains(url, receipt: receipt(binding, "verified", false), syntheticOnly: true))
+precondition(VerifiedDraftLinks.contains(url, receipt: receipt(binding, "verified", false), syntheticOnly: false))
+precondition(!VerifiedDraftLinks.contains(url, receipt: Data("invalid".utf8), syntheticOnly: false))
+'''
+        with tempfile.TemporaryDirectory(prefix='artvenn-native-draft-test-') as tmp:
+            file=Path(tmp)/'policy.swift';file.write_text(swift)
+            result=subprocess.run(['/usr/bin/xcrun','swift',str(file)],capture_output=True,text=True,timeout=60)
+            self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('navigationAction.navigationType == .linkActivated && openVerifiedDraft',source)
+        self.assertIn('NSWorkspace.shared.open(url)',source)
+        self.assertIn('LocalOrigins(helper: uiPort, review: reviewPort).contains(url)',source)
+
+
 class ProjectionTests(unittest.TestCase):
     def test_partial_receipt_is_never_verified(self):
         with tempfile.TemporaryDirectory(prefix='artvenn-partial-synthetic-') as tmp:
