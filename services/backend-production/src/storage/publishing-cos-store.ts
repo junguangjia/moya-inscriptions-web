@@ -366,8 +366,10 @@ export class CosPublishingMediaStore {
 
   async remove(storageKey: string, signal?: AbortSignal): Promise<void> {
     const Key = this.key(storageKey);
+    if (signal?.aborted) throw new PublishingMediaStoreError("aborted");
     try {
       await this.unversioned(signal);
+      if (signal?.aborted) throw new PublishingMediaStoreError("aborted");
       await this.transport.request(
         "deleteObject",
         { ...this.base(), Key },
@@ -381,6 +383,7 @@ export class CosPublishingMediaStore {
   async listBlobs(options: {
     readonly after?: string | null;
     readonly limit: number;
+    readonly signal?: AbortSignal;
   }) {
     if (
       !Number.isSafeInteger(options.limit) ||
@@ -389,6 +392,7 @@ export class CosPublishingMediaStore {
     )
       throw new PublishingMediaStoreError("invalid_argument");
     const after = options.after == null ? undefined : this.key(options.after);
+    if (options.signal?.aborted) throw new PublishingMediaStoreError("aborted");
     try {
       const page = await this.transport.request<COS.GetBucketResult>(
         "getBucket",
@@ -398,7 +402,10 @@ export class CosPublishingMediaStore {
           MaxKeys: options.limit,
           ...(after ? { Marker: after } : {}),
         },
+        options.signal,
       );
+      if (options.signal?.aborted)
+        throw new PublishingMediaStoreError("aborted");
       if (!Array.isArray(page.Contents) || page.Contents.length > options.limit)
         throw failure();
       let previous = after ?? "";

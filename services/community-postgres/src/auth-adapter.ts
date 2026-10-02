@@ -33,7 +33,12 @@ const persistenceKind = (
     return "attempts";
   if (code === "23514" && message.includes("last login identity"))
     return "last_factor";
-  if (code === "23505" || (code === "23514" && message.includes("mixed login")))
+  if (
+    code === "23505" ||
+    (code === "23514" && message.includes("mixed login")) ||
+    (code === "23P01" &&
+      constraint === "user_login_identities_one_lookup_key_version")
+  )
     return "conflict";
   return null;
 };

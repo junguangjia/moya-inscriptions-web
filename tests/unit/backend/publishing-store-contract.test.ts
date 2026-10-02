@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { cosFixture, cosOptions } from "./publishing-cos-fixture.js";
 import type { PublishingMediaStorePort } from "@moya/api";
+import type { PublishingWorkerStore } from "@moya/backend-production/internal/publishing-job-handlers";
 
 export async function* byteChunks(...values: (string | Uint8Array)[]) {
   for (const value of values)
@@ -36,7 +37,7 @@ describe.each(["filesystem", "cos"] as const)(
   "shared publishing store contract: %s",
   (kind) => {
     let directory: string;
-    let store: PublishingMediaStorePort;
+    let store: PublishingMediaStorePort & PublishingWorkerStore;
     beforeEach(async () => {
       directory = await mkdtemp(path.join(tmpdir(), "publishing-contract-"));
       await mkdir(path.join(directory, "store"), { mode: 0o700 });
@@ -87,6 +88,18 @@ describe.each(["filesystem", "cos"] as const)(
       await store.remove(written.storageKey);
       await store.remove(written.storageKey);
       expect(await store.openRead(written.storageKey)).toBeNull();
+    });
+    it("retains committed bytes when listing or removal is pre-aborted", async () => {
+      const written = await write(byteChunks("abcdef"));
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        store.listBlobs({ limit: 10, signal: controller.signal }),
+      ).rejects.toMatchObject({ code: "aborted" });
+      await expect(
+        store.remove(written.storageKey, controller.signal),
+      ).rejects.toMatchObject({ code: "aborted" });
+      expect((await read(store, written.storageKey)).toString()).toBe("abcdef");
     });
     it.each([
       ["empty_content", [], 6, false],
@@ -141,7 +154,8 @@ describe.each(["filesystem", "cos"] as const)(
       const all: string[] = [];
       let after: string | null = null;
       do {
-        const page = await store.listBlobs({ limit: 1, after });
+        const page: Awaited<ReturnType<PublishingMediaStorePort["listBlobs"]>> =
+          await store.listBlobs({ limit: 1, after });
         expect(page.entries.length).toBeLessThanOrEqual(1);
         all.push(...page.entries.map((e) => e.storageKey));
         after = page.nextAfter;

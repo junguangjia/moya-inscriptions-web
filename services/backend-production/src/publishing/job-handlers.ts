@@ -189,10 +189,11 @@ export interface PublishingWorkerPort {
 
 /** The media store operations the worker uses (filesystem store in Development). */
 export interface PublishingWorkerStore {
-  remove(storageKey: string): Promise<void>;
+  remove(storageKey: string, signal?: AbortSignal): Promise<void>;
   listBlobs(options: {
     readonly after?: string | null;
     readonly limit: number;
+    readonly signal?: AbortSignal;
   }): Promise<{
     readonly entries: readonly PublishingMediaStoreBlobEntry[];
     readonly nextAfter: string | null;
@@ -653,6 +654,7 @@ export function createPublishingJobHandlers(
     plan: PublishingWorkerPurgePlan,
     signal: AbortSignal,
   ): Promise<PublishingJobResult> => {
+    throwIfAborted(signal);
     if (plan.status !== "tombstoned") return COMPLETED;
     const removed: string[] = [];
     let failures = 0;
@@ -663,9 +665,10 @@ export function createPublishingJobHandlers(
         continue;
       }
       try {
-        await store.remove(blob.storageKey);
+        await store.remove(blob.storageKey, signal);
         removed.push(blob.blobId);
       } catch {
+        if (signal.aborted) break;
         failures += 1;
       }
     }
@@ -738,10 +741,17 @@ export function createPublishingJobHandlers(
     let removalFailures = 0;
     for (let page = 0; page < reconcilePagesPerRun; page += 1) {
       throwIfAborted(signal);
-      const listing = await store.listBlobs({
-        after: reconcileAfter,
-        limit: BLOB_LIST_LIMIT,
-      });
+      const listing = await store
+        .listBlobs({
+          after: reconcileAfter,
+          limit: BLOB_LIST_LIMIT,
+          signal,
+        })
+        .catch((error: unknown) => {
+          throwIfAborted(signal);
+          throw error;
+        });
+      throwIfAborted(signal);
       const entries = listing.entries.filter((entry) =>
         PUBLISHING_BLOB_KEY_PATTERN.test(entry.storageKey),
       );
@@ -755,17 +765,20 @@ export function createPublishingJobHandlers(
         // after listing is never old enough to be removed here.
         const cutoff = clock().getTime() - graceMs;
         for (const entry of entries) {
+          throwIfAborted(signal);
           if (!unrecorded.has(entry.storageKey)) continue;
           unrecordedCount += 1;
           if (entry.modifiedAt.getTime() >= cutoff) continue;
           try {
-            await store.remove(entry.storageKey);
+            await store.remove(entry.storageKey, signal);
             removedCount += 1;
           } catch {
+            throwIfAborted(signal);
             removalFailures += 1;
           }
         }
       }
+      throwIfAborted(signal);
       reconcileAfter = listing.nextAfter;
       if (reconcileAfter === null) break;
     }
