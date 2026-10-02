@@ -250,6 +250,73 @@ it("permits actor row locks without granting public-user identity updates", asyn
   }
 });
 
+it("uses existing separate Article roles for Production connections without granting identity or authority mutation", async () => {
+  const development = opaque("article-connection"),
+    production = opaque("article-connection"),
+    client = opaque("synthetic-client");
+  const insert = `INSERT INTO community.article_authoring_connections
+    (id,owner_id,client_id,environment,generation,status,consented_at,updated_at)
+    VALUES($1,$2,$3,$4,1,'authorized',$5,$5)`;
+  for (const [id, environment] of [
+    [development, "development"],
+    [production, "production"],
+  ])
+    await control!.query(insert, [id, user, client, environment, now]);
+  for (const reader of [control!, issuer!, app!])
+    expect(
+      (
+        await reader.query(
+          "SELECT environment FROM community.article_authoring_connections WHERE owner_id=$1 AND client_id=$2 ORDER BY environment",
+          [user, client],
+        )
+      ).rows,
+    ).toEqual([{ environment: "development" }, { environment: "production" }]);
+  for (const writer of [issuer!, app!]) {
+    await expect(
+      writer.query(insert, [
+        opaque("article-connection"),
+        user,
+        client,
+        "production",
+        now,
+      ]),
+    ).rejects.toMatchObject({ code: "42501" });
+    await expect(
+      writer.query(
+        "UPDATE community.article_authoring_connections SET generation=2,status='revoked',revoked_at=$2,updated_at=$2 WHERE id=$1",
+        [production, at(1)],
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+  }
+  await expect(
+    control!.query(
+      "UPDATE community.article_authoring_connections SET environment='development' WHERE id=$1",
+      [production],
+    ),
+  ).rejects.toMatchObject({ code: "42501" });
+  await expect(
+    control!.query(
+      "INSERT INTO community.article_authoring_grants DEFAULT VALUES",
+    ),
+  ).rejects.toMatchObject({ code: "42501" });
+  await expect(
+    control!.query(
+      "UPDATE community.article_authoring_connections SET generation=2,status='revoked',revoked_at=$2,updated_at=$2 WHERE id=$1",
+      [production, at(1)],
+    ),
+  ).resolves.toMatchObject({ rowCount: 1 });
+  expect(
+    (
+      await app!.query(
+        "SELECT environment,status,generation FROM community.article_authoring_connections WHERE id=$1",
+        [production],
+      )
+    ).rows,
+  ).toEqual([
+    { environment: "production", status: "revoked", generation: "2" },
+  ]);
+});
+
 registerArticleDelegationSdkCases({
   get pool() {
     if (app === undefined) throw Error("Resource pool not prepared");
