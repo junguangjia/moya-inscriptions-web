@@ -197,7 +197,10 @@ export interface PublishingWorkerStore {
     readonly entries: readonly PublishingMediaStoreBlobEntry[];
     readonly nextAfter: string | null;
   }>;
-  sweepStaging(olderThan: Date): Promise<{ readonly removed: number }>;
+  sweepStaging(
+    olderThan: Date,
+    signal?: AbortSignal,
+  ): Promise<{ readonly removed: number }>;
 }
 
 export interface PublishingWorkerProcessor {
@@ -695,7 +698,7 @@ export function createPublishingJobHandlers(
     let staging = 0;
     for (let round = 0; round < 10; round += 1) {
       throwIfAborted(signal);
-      const { removed } = await store.sweepStaging(cutoff);
+      const { removed } = await store.sweepStaging(cutoff, signal);
       staging += removed;
       if (removed < STAGING_SWEEP_LIMIT) break;
     }

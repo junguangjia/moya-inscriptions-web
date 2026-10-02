@@ -1547,7 +1547,10 @@ describe("publishing worker maintenance and cleanup jobs", () => {
       PUBLISHING_WORKER_DEFAULTS.leaseMs,
     );
     expect(h.store.sweepStaging).toHaveBeenCalledTimes(2);
-    expect(h.store.sweepStaging).toHaveBeenCalledWith(cutoff);
+    expect(h.store.sweepStaging).toHaveBeenCalledWith(
+      cutoff,
+      expect.any(AbortSignal),
+    );
     expect(toolJobs.sweepJobs).toHaveBeenCalledWith(cutoff);
     expect(h.lines).toContain(
       "[publishing-worker] leftovers removed staging=1003 tool_jobs=2",
