@@ -699,6 +699,15 @@ describe.each(["development", "production"] as const)(
     });
 
     it("forwards same-origin POST to the real logout API and clears the cookie", async () => {
+      const ingress =
+        crypto.randomUUID().replaceAll("-", "") +
+        crypto.randomUUID().replaceAll("-", "");
+      vi.stubEnv("AUTH_INGRESS_TOKEN", ingress);
+      vi.stubEnv(
+        "AUTH_SOURCE_RELAY_TOKEN",
+        crypto.randomUUID().replaceAll("-", "") +
+          crypto.randomUUID().replaceAll("-", ""),
+      );
       vi.stubEnv("NODE_ENV", environment);
       vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
       const upstream = vi
@@ -710,6 +719,8 @@ describe.each(["development", "production"] as const)(
         signOutRequest("POST", {
           origin: "http://127.0.0.1:3410",
           "sec-fetch-site": "same-origin",
+          "x-moya-auth-ingress": ingress,
+          "x-moya-client-ip": "192.0.2.9",
           "content-type": "application/json",
         }),
       );

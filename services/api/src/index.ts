@@ -379,6 +379,7 @@ export {
   parseArticlePendingId,
   parseArticlePendingListQuery,
   parseArticlePendingModerationCommand,
+  parseArticlePendingMediaQuery,
 } from "./modules/editorial/transport/article-publication-operator-parsers.js";
 
 export type {

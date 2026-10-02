@@ -31,6 +31,12 @@ server {
     proxy_set_header X-Forwarded-Host catalog.example.invalid;
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-For $remote_addr;
+    # Public clients cannot supply trusted source or relay admission headers.
+    proxy_set_header X-Moya-Auth-Ingress "";
+    proxy_set_header X-Moya-Client-Ip "";
+    proxy_set_header X-Moya-Auth-Relay "";
+    proxy_set_header X-Moya-Auth-Source "";
+    proxy_set_header Forwarded "";
     proxy_set_header Connection "";
     proxy_connect_timeout 5s;
     proxy_read_timeout 60s;
@@ -66,6 +72,21 @@ server {
     location = /api/catalog { proxy_pass http://yoyi_web; }
     location ^~ /api/catalog/ { proxy_pass http://yoyi_web; }
     location = /api/catalog-search { proxy_pass http://yoyi_web; }
+    # Dedicated Nginx -> Web proof; only this auth family receives it. Render
+    # the marker from protected AUTH_INGRESS_TOKEN during authorized deployment.
+    location ^~ /api/community/auth/ {
+        proxy_set_header Host catalog.example.invalid;
+        proxy_set_header X-Forwarded-Host catalog.example.invalid;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Moya-Auth-Ingress "__AUTH_INGRESS_TOKEN__";
+        proxy_set_header X-Moya-Client-Ip $remote_addr;
+        proxy_set_header X-Moya-Auth-Relay "";
+        proxy_set_header X-Moya-Auth-Source "";
+        proxy_pass http://yoyi_web;
+    }
     # Profile/avatar/background PNG upload: matches the existing 4 MiB Web/Backend limit.
     location = /api/community/media {
         client_max_body_size 4m;
@@ -133,6 +154,10 @@ server {
         proxy_set_header Host article-auth.example.invalid;
         proxy_set_header X-Forwarded-Host article-auth.example.invalid;
         proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Moya-Auth-Ingress "";
+        proxy_set_header X-Moya-Client-Ip "";
+        proxy_set_header X-Moya-Auth-Relay "";
+        proxy_set_header X-Moya-Auth-Source "";
         proxy_set_header Forwarded "";
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-For $remote_addr;

@@ -57,6 +57,9 @@ vi.mock("../../../apps/admin/src/community/content-client", () => ({
 vi.mock("../../../apps/admin/src/community/history-client", () => ({
   CommunityHistoryClient: () => "history",
 }));
+vi.mock("../../../apps/admin/src/community/article-submissions-client", () => ({
+  ArticleSubmissionsQueueClient: () => "article-submissions",
+}));
 vi.mock("../../../apps/admin/src/community/work-submissions-client", () => ({
   WorkSubmissionsQueueClient: () => "submissions",
 }));
@@ -77,6 +80,7 @@ vi.mock("../../../apps/admin/src/community/agent-operations-client", () => ({
 }));
 
 import {
+  ArticleSubmissionsView,
   AccountCapacityView,
   AgentOperationsView,
   CommunityContentView,
@@ -102,6 +106,7 @@ const businessViews = [
   [CommunitySettingsView, "publishing-enabled"],
   [CommunityContentView, "content"],
   [WorkSubmissionsView, "submissions"],
+  [ArticleSubmissionsView, "article-submissions"],
   [AccountCapacityView, "capacity"],
   [PublishingJobsView, "jobs"],
   [ThreadsView, "threads"],
@@ -148,6 +153,7 @@ describe.each(["development", "production"])(
       for (const path of [
         "content",
         "work-submissions",
+        "article-submissions",
         "account-capacity",
         "publishing-jobs",
         "threads",

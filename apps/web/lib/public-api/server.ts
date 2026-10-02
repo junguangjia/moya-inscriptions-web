@@ -1,4 +1,5 @@
 import "server-only";
+import { trustedAuthSourceHeaders } from "./auth-request-source";
 import {
   ARTICLE_DOCUMENT_LIMITS,
   authCapabilitiesSchema,
@@ -1040,7 +1041,15 @@ export const relayServerCommunityAuth = async (
     const base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
     const target = new URL(`v1/community/auth/${suffix}`, base);
     const token = readCommunitySessionToken(request.headers.get("cookie"));
-    const outgoing: Record<string, string> = { accept: "application/json" };
+    const sourceHeaders =
+      request.method === "POST" && process.env.NODE_ENV === "production"
+        ? trustedAuthSourceHeaders(request)
+        : {};
+    if (sourceHeaders === null) return fail(403);
+    const outgoing: Record<string, string> = {
+      accept: "application/json",
+      ...sourceHeaders,
+    };
     if (token !== undefined) outgoing.authorization = `Bearer ${token}`;
     let body: string | undefined;
     if (request.method === "POST") {

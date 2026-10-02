@@ -17,6 +17,7 @@ import {
   handleReadComments,
   handleReadReplies,
 } from "../community/comment-handler.js";
+import type { AuthRequestSource } from "../community/auth-request-source.js";
 import { handleCommunityAuth } from "../community/auth-handler.js";
 import {
   handleCurrentUser,
@@ -81,6 +82,7 @@ export interface CommunityRouterDependencies {
   readonly sessionService: CommunitySessionService;
   /** Authentication supplied by the composition root with provider provenance checked. */
   readonly authService?: CommunityAuthService;
+  readonly authRequestSource?: AuthRequestSource;
   readonly authorService?: AuthorCommunityService;
   /** Work publishing author routes; composed with the author service. */
   readonly publishingService?: WorkPublishingService;
@@ -214,7 +216,12 @@ export const createRouter =
     ) {
       containRequest(
         response,
-        handleCommunityAuth(request, response, community.authService),
+        handleCommunityAuth(
+          request,
+          response,
+          community.authService,
+          community.authRequestSource,
+        ),
         apiFailure,
       );
       return;

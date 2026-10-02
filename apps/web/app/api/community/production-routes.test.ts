@@ -4,6 +4,12 @@ import { GET, POST, PUT } from "./[...path]/route";
 import { GET as authGet, POST as authPost } from "./auth/[...path]/route";
 import { GET as stream } from "./notifications/stream/route";
 
+const ingress =
+  crypto.randomUUID().replaceAll("-", "") +
+  crypto.randomUUID().replaceAll("-", "");
+const relay =
+  crypto.randomUUID().replaceAll("-", "") +
+  crypto.randomUUID().replaceAll("-", "");
 const origin = "https://product.invalid";
 const backend = "http://backend.invalid/";
 const session = "S".repeat(43);
@@ -16,6 +22,8 @@ const request = (path: string, method = "GET", body?: unknown) =>
       origin,
       cookie: `yoyi-session=${session}; payload-token=synthetic-not-forwarded`,
       "x-author-account": account,
+      "x-moya-auth-ingress": ingress,
+      "x-moya-client-ip": "192.0.2.11",
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -29,6 +37,8 @@ const capabilities = (developmentOnly: boolean) => ({
 
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("AUTH_INGRESS_TOKEN", ingress);
+  vi.stubEnv("AUTH_SOURCE_RELAY_TOKEN", relay);
   vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", backend);
 });
 afterEach(() => {

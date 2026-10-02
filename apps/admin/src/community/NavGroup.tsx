@@ -22,6 +22,10 @@ const groups = [
         href: "/admin/community-moderation/work-submissions",
         label: "作品提交审核",
       },
+      {
+        href: "/admin/community-moderation/article-submissions",
+        label: "作者文章审核",
+      },
       { href: "/admin/community-moderation/settings", label: "发布设置" },
       { href: "/admin/community-moderation/history", label: "操作历史" },
       { href: "/admin/community-moderation/content", label: "作品与推荐" },

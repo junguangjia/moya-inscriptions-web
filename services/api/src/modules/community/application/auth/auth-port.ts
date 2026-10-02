@@ -171,6 +171,11 @@ export interface AuthUnitOfWork {
   ): Promise<"ok" | "consumed" | "missing">;
   insertReceipt(row: StoredReceipt): Promise<"ok" | "conflict">;
   findReceipt(keyHash: string): Promise<StoredReceipt | null>;
+  /** Metadata only; callers acquire User before Session for lineage mutations. */
+  findSession(
+    tokenHash: string,
+    requiredEnvironment?: AuthEnvironmentName,
+  ): Promise<LockedAuthSession | null>;
   lockSession(
     tokenHash: string,
     requiredEnvironment?: AuthEnvironmentName,

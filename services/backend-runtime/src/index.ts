@@ -65,3 +65,6 @@ export {
 } from "./community/article-runtime-read.js";
 
 export { handleArticleAuthoringRequest } from "./community/article-authoring-handler.js";
+
+export { createTrustedAuthRequestSource } from "./community/auth-request-source.js";
+export type { AuthRequestSource } from "./community/auth-request-source.js";

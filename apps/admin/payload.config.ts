@@ -100,6 +100,11 @@ export default buildConfig({
         },
         // Work publishing (Development): explicit submission review, account
         // capacity designation and content-free publishing job outcomes.
+        communityArticleSubmissions: {
+          Component: "/src/community/View#ArticleSubmissionsView",
+          path: "/community-moderation/article-submissions",
+          exact: true,
+        },
         communityWorkSubmissions: {
           Component: "/src/community/View#WorkSubmissionsView",
           path: "/community-moderation/work-submissions",

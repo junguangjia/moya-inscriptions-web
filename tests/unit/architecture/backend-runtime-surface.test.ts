@@ -58,6 +58,7 @@ describe("@moya/backend-runtime package boundary", () => {
       "createDevelopmentCatalogFixtureQueryPort",
       "createProductionAuthService",
       "createPublishingTransferRegistry",
+      "createTrustedAuthRequestSource",
       "handleArticleAuthoringRequest",
       "handleArticleDelegationHttpRequest",
       "handleArticleDelegationRequest",

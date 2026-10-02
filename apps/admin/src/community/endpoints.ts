@@ -1,4 +1,11 @@
 import {
+  adminReadArticleSubmissionRequestSchema,
+  adminModerateArticleSubmissionRequestSchema,
+  articlePendingListQuerySchema,
+  articlePendingMediaQuerySchema,
+  articlePendingPageSchema,
+  articlePendingPreviewSchema,
+  articleModerationResultSchema,
   adminBulkModerateCommentsRequestSchema,
   operatorContentQuerySchema,
   operatorWorksQuerySchema,
@@ -405,6 +412,36 @@ export const communityOperations = (
         parse(setWorkPublishingSettingsCommandSchema, input),
       ),
     ),
+  "read-article-submissions": async (_req, input) => {
+    const query = parse(articlePendingListQuerySchema, input);
+    return checked(
+      articlePendingPageSchema,
+      await call(
+        "GET",
+        `articles/submissions${toQuery({
+          cursor: query.cursor,
+          pageSize: query.pageSize,
+        })}`,
+      ),
+    );
+  },
+  "read-article-submission": async (_req, input) => {
+    const { id } = parse(adminReadArticleSubmissionRequestSchema, input);
+    return checked(
+      articlePendingPreviewSchema,
+      await call("GET", `articles/${segment(id)}/submission`),
+    );
+  },
+  "moderate-article-submission": async (_req, input) => {
+    const { id, ...command } = parse(
+      adminModerateArticleSubmissionRequestSchema,
+      input,
+    );
+    return checked(
+      articleModerationResultSchema,
+      await call("POST", `articles/${segment(id)}/moderation`, command),
+    );
+  },
   "read-work-submissions": async (
     _req,
     input,
@@ -631,6 +668,52 @@ const workSubmissionMediaEndpoint = (
   },
 });
 
+/** A private pending-candidate derivative, never an arbitrary author-media proxy. */
+const articleSubmissionMediaEndpoint = (
+  openMedia: OperatorMediaCall,
+): Endpoint => ({
+  path: "/community-moderation/article-submission-media/:id",
+  method: "get",
+  handler: async (req) => {
+    try {
+      requireOwner(req);
+      const { id } = parse(adminReadArticleSubmissionRequestSchema, {
+        id: req.routeParams?.id,
+      });
+      const values: Record<string, string> = {};
+      const url = new URL(req.url ?? "http://request.invalid");
+      for (const [name, value] of url.searchParams) {
+        if (Object.hasOwn(values, name))
+          throw new CommunityOperatorError("COMMAND_INVALID", 400);
+        Object.defineProperty(values, name, { value, enumerable: true });
+      }
+      const query = parse(articlePendingMediaQuerySchema, values);
+      const media = await openMedia(
+        `articles/${segment(id)}/submission-media${toQuery(query)}`,
+        byteRange(req.headers?.get("range")),
+        req.signal,
+      );
+      const headers = new Headers({
+        "Content-Type": media.contentType,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Referrer-Policy": "no-referrer",
+        Vary: "Cookie, Range",
+      });
+      if (media.acceptsRanges) headers.set("Accept-Ranges", "bytes");
+      if (media.contentLength !== null)
+        headers.set("Content-Length", media.contentLength);
+      if (media.contentRange !== null)
+        headers.set("Content-Range", media.contentRange);
+      return new Response(media.body, { status: media.status, headers });
+    } catch (error) {
+      return failure(error, req);
+    }
+  },
+});
+
 /** The real endpoint set, with the transports injectable for boundary tests. */
 export const createCommunityEndpoints = (
   call: OperatorCall = callCommunityOperator,
@@ -641,6 +724,7 @@ export const createCommunityEndpoints = (
     ...agentAdminOperations(call),
   }).map(([name, operation]) => endpoint(name, operation)),
   workSubmissionMediaEndpoint(openMedia),
+  articleSubmissionMediaEndpoint(openMedia),
 ];
 
 export const communityEndpoints: Endpoint[] = createCommunityEndpoints();

@@ -3227,13 +3227,31 @@ describe("semantic workspace selection and cumulative coverage", () => {
       ),
     );
   });
-  it("keeps cache paths restricted to library preparation and adds root/toolchain invalidation", () => {
+  it("keeps persisted cache writes restricted to libraries and adds root/toolchain invalidation", () => {
     const workflow = read(".github/workflows/ci.yml");
     assert.equal(
       (workflow.match(/path: \.turbo\/library-cache/gu) ?? []).length,
       3,
     );
     assert.doesNotMatch(workflow, /path: \.turbo\/cache/u);
+    assert.equal(
+      JSON.parse(read("package.json")).scripts.test,
+      "pnpm test:confidentiality && turbo run test --cache-dir=.turbo/library-cache --cache=local:r",
+    );
+    const scopedTest = verificationCommands(
+      verificationPlan("test", ["--workspaces", "@moya/tests"]),
+    );
+    assert.deepEqual(scopedTest[0], ["pnpm", "test:confidentiality"]);
+    assert.deepEqual(scopedTest[1], [
+      "pnpm",
+      "exec",
+      "turbo",
+      "run",
+      "test",
+      "--filter=@moya/tests",
+      "--cache-dir=.turbo/library-cache",
+      "--cache=local:r",
+    ]);
     const config = JSON.parse(read("turbo.json"));
     assert.ok(config.globalDependencies.includes(".nvmrc"));
     assert.ok(config.globalDependencies.includes("tsconfig.base.json"));

@@ -224,3 +224,63 @@ Current validation/history resides in the existing private task handoff. No
 source patch, synthetic provider result, ingress check or dependency's passing
 CI is a final common-candidate acceptance claim. Final exact-head results and
 remaining gates are added after integration validation and personal browser QA.
+
+## r4 necessary completion delta
+
+The r3 candidate f42f204531f9567968e5e021c2505ce15fee3ade passed local full
+validation. Hosted CI37039859022 completed PostgreSQL and Web assertions but
+exhausted the unchanged 300-second cumulative test deadline during unit tests.
+Prepared dependency hashes were rebuilt through a different default cache. The
+r4 test command reads the same content-hashed library cache; every suite,
+confidentiality check, filter and deadline remains intact. Tests execute on each
+run, and only prepared library builds may be persisted. The interrupted run
+remains INCOMPLETE evidence, not a failed-assertion or acceptance PASS.
+
+The existing Article PRE_MODERATION Backend workflow lacked its human Admin
+bridge. This delta adds the existing Owner queue, exact-candidate preview and
+approve/reject actions to the current community view/nav/config/import map, with
+necessary components, shared internal operator schemas, API/runtime preview
+service/route/composition and directly affected tests. Managed preview media is
+read through the existing derivative store, using only the pending candidate's
+server-derived owner and used body/cover references. Every read pins version and
+fingerprint and rechecks after opening the stream. No original object, arbitrary
+URL, author Session substitute, SQL or grant change is added. Canonical
+formatting and crop semantics remain the public reader's semantics.
+
+Final acceptance uses a fresh empty disposable database and restricted roles.
+The previous actual setup passed 10 Payload and 44 Community migrations, but its
+startup failed because a private browser fixture password exceeded the existing
+6–20 character contract. The fixture is corrected and schema-checked; failed
+evidence and the populated database are retained. No database reset, policy
+change, deleted test or browser credential injection substitutes for the new
+common-candidate HTTP and personal desktop/mobile acceptance.
+
+The Owner's subsequent review of r3 adds three correctness repairs to this same
+round: authenticated source identity across Nginx/Web/Backend for OTP and
+password limits; a Web Production streaming entry with ordinary total-body
+bounds and upload-specific progress/size/concurrency protection; and exact
+factor-completion receipt recovery after a lost response, with original/current
+logout and cross-account replay protection. Scope includes the existing auth
+service/port, non-DDL PostgreSQL adapter and memory test adapter, Web auth relay
+and startup, Backend source admission/composition/router, existing deployment
+templates and directly necessary tests. No client-supplied forwarded header is
+trusted, no Admin operator credential reaches Web, and no migration/grant or
+deadline increase is introduced. All changes after validation require a new
+final run.
+
+The streaming audit also found a wall-clock ceiling inside B's accepted COS
+transport. That owned media repair is a separate dependency; A does not rewrite
+the transport internals. Its exact reviewed result must be integrated and the
+combined candidate revalidated before media streaming is marked complete.
+Completed factor recovery uses existing receipt rows and hash-only lineage, with
+User-first locks across completion, unlink replay and logout; it introduces no
+Session framework, DDL or grants. OTP proof attempts retain their existing
+five-attempt bound even when a caller changes network source.
+
+R4 validation failures are retained: the existing exact Web environment
+inventory was updated only for the two protected source-proof variables; the old
+PostgreSQL concurrent-proof rendezvous now waits before User locking instead of
+waiting behind its own lock. The five-second test deadline, one-winner and exact
+factor-state assertions remain. The losing unlink response specifically reflects
+the freshly revoked Session; the opposite loser still rejects its spent proof.
+Final cumulative and hosted results are recorded for the exact delivery head.

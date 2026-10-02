@@ -1033,6 +1033,17 @@ export class CommunityAuthService {
     const continuationHash = await hashSessionToken(input.continuationToken);
     const sessionHash = await hashSessionToken(input.sessionToken);
     const reauthHash = await hashSessionToken(input.reauthToken);
+    const payloadHash = await keyedHash(
+      this.options.keys.lookupKey,
+      JSON.stringify([
+        "factor-completion",
+        input.challengeId,
+        continuationHash,
+        reauthHash,
+        input.code,
+        input.expectedVersion,
+      ]),
+    );
     const loaded = await this.transactional<{
       challenge: StoredChallenge;
       checkProvider: boolean;
@@ -1040,6 +1051,20 @@ export class CommunityAuthService {
       const challenge = await tx.findChallenge(input.challengeId);
       if (challenge === null || challenge.continuationHash !== continuationHash)
         return fail("AUTH_PROOF_REJECTED");
+      // Completed receipts are authorization recovery, not another OTP use.
+      // The locked final transaction validates the exact payload and lineage.
+      if (
+        challenge.completedAt !== null &&
+        (challenge.purpose === "link" || challenge.purpose === "replace") &&
+        (await tx.findReceipt(
+          await this.receiptKey(
+            input.idempotencyKey,
+            challenge.targetDigest,
+            challenge.purpose,
+          ),
+        )) !== null
+      )
+        return { ok: true, value: { challenge, checkProvider: false } };
       let checkProvider = challenge.strategy === "provider_generated";
       if (checkProvider) {
         if (!this.challengeModeOk(challenge))
@@ -1113,9 +1138,9 @@ export class CommunityAuthService {
       }
       return { ok: true, value: { challenge, checkProvider } };
     });
-    if (!loaded.ok) return loaded;
     let providerPassed = false;
-    if (loaded.value.checkProvider) {
+    let providerFailure: AuthReason | null = loaded.ok ? null : loaded.reason;
+    if (loaded.ok && loaded.value.checkProvider) {
       const plain = await decryptContact(
         this.options.keys,
         loaded.value.challenge.channel,
@@ -1127,20 +1152,119 @@ export class CommunityAuthService {
         code: input.code,
         outId: loaded.value.challenge.id,
       });
-      if (checked === "unknown") return fail("AUTH_DELIVERY_UNKNOWN");
-      if (checked === "malformed") return fail("AUTH_DELIVERY_FAILED");
+      if (checked === "unknown") providerFailure = "AUTH_DELIVERY_UNKNOWN";
+      if (checked === "malformed") providerFailure = "AUTH_DELIVERY_FAILED";
       providerPassed = checked === "pass";
     }
     at = this.clock();
     return this.transactional(async (tx) => {
+      // Serialize completion/recovery with logout, then reload observations
+      // made before a concurrent completion or external provider call.
+      const observed = await tx.findChallenge(input.challengeId);
+      if (observed?.userId === null || observed === null)
+        return fail("AUTH_PROOF_REJECTED");
+      const currentUser = await tx.lockUser(observed.userId);
       const challenge = await tx.findChallenge(input.challengeId);
       if (
+        currentUser === null ||
         challenge === null ||
         challenge.continuationHash !== continuationHash ||
-        (challenge.purpose !== "link" && challenge.purpose !== "replace") ||
+        challenge.userId !== currentUser.id ||
         !this.challengeModeOk(challenge) ||
-        !this.challengeFresh(challenge, at)
+        (challenge.purpose !== "link" && challenge.purpose !== "replace")
       )
+        return fail("AUTH_PROOF_REJECTED");
+      if (currentUser.status !== "active")
+        return fail("AUTH_ACCOUNT_SUSPENDED");
+      const receiptKey = await this.receiptKey(
+        input.idempotencyKey,
+        challenge.targetDigest,
+        challenge.purpose,
+      );
+      const receipt = await tx.findReceipt(receiptKey);
+      if (receipt !== null) {
+        if (
+          challenge.completedAt === null ||
+          challenge.sessionHash === null ||
+          challenge.reauthHash !== reauthHash ||
+          receipt.userId !== currentUser.id ||
+          receipt.payloadHash !== payloadHash ||
+          receipt.purpose !== `factor_change:${challenge.id}`
+        )
+          return fail("AUTH_PROOF_REJECTED");
+        const caller = await tx.findSession(
+          sessionHash,
+          this.requiredSessionEnvironment(),
+        );
+        if (caller === null || caller.userId !== currentUser.id)
+          return fail("AUTH_UNAUTHENTICATED");
+        const source = await tx.lockSession(
+          challenge.sessionHash,
+          this.requiredSessionEnvironment(),
+        );
+        const presented =
+          sessionHash === challenge.sessionHash
+            ? source
+            : await tx.lockSession(
+                sessionHash,
+                this.requiredSessionEnvironment(),
+              );
+        const lineage =
+          presented === null
+            ? null
+            : await tx.findReceipt(
+                await keyedHash(
+                  this.options.keys.lookupKey,
+                  `factor-lineage\0${receipt.keyHash}\0${presented.id}`,
+                ),
+              );
+        const priorCookie =
+          lineage !== null &&
+          lineage.purpose === `factor_lineage:${receipt.keyHash}` &&
+          lineage.userId === currentUser.id &&
+          lineage.sessionId === presented?.id &&
+          lineage.sessionTokenHash === sessionHash;
+        if (
+          source === null ||
+          source.userId !== currentUser.id ||
+          presented === null ||
+          presented.userId !== currentUser.id ||
+          new Date(presented.expiresAt).getTime() <= at.getTime() ||
+          (presented.tokenHash !== challenge.sessionHash &&
+            presented.id !== receipt.originSessionId &&
+            presented.id !== receipt.sessionId &&
+            !priorCookie)
+        )
+          return fail("AUTH_UNAUTHENTICATED");
+        const proof = await tx.findHandoff(reauthHash);
+        if (
+          proof === null ||
+          proof.purpose !== "reauth" ||
+          proof.userId !== currentUser.id ||
+          proof.sessionHash !== challenge.sessionHash ||
+          proof.consumedAt === null ||
+          !this.handoffModeOk(proof)
+        )
+          return fail("AUTH_PROOF_REJECTED");
+        const session = await this.reissue(
+          tx,
+          receipt,
+          currentUser,
+          challenge.channel,
+          at,
+        );
+        return {
+          ok: true,
+          value: {
+            session,
+            account: await this.accountView(tx, currentUser.id),
+          },
+        };
+      }
+      if (providerFailure !== null) return fail(providerFailure);
+      if (challenge.reauthHash !== reauthHash)
+        return fail("AUTH_PROOF_REJECTED");
+      if (!this.challengeFresh(challenge, at))
         return fail("AUTH_PROOF_REJECTED");
       const user = await tx.findSessionUser(
         sessionHash,
@@ -1154,25 +1278,6 @@ export class CommunityAuthService {
       )
         return fail("AUTH_UNAUTHENTICATED");
       if (user.status !== "active") return fail("AUTH_ACCOUNT_SUSPENDED");
-      const receiptKey = await this.receiptKey(
-        input.idempotencyKey,
-        challenge.targetDigest,
-        challenge.purpose,
-      );
-      const receipt = await tx.findReceipt(receiptKey);
-      if (receipt !== null) {
-        const session = await this.reissue(
-          tx,
-          receipt,
-          user,
-          challenge.channel,
-          at,
-        );
-        return {
-          ok: true,
-          value: { session, account: await this.accountView(tx, user.id) },
-        };
-      }
       const since = new Date(at.getTime() - WINDOW_MS).toISOString();
       if (
         (await tx.failureCount(
@@ -1214,7 +1319,6 @@ export class CommunityAuthService {
       );
       if (reauthIdentity === undefined || !this.provenanceOk(reauthIdentity))
         return fail("AUTH_PROOF_REJECTED");
-      await tx.lockUser(user.id);
       const freshReauth = await tx.findHandoff(reauthHash);
       if (
         freshReauth === null ||
@@ -1278,7 +1382,8 @@ export class CommunityAuthService {
         userId: user.id,
         sessionId: session.sessionId,
         sessionTokenHash: session.tokenHash,
-        purpose: challenge.purpose,
+        purpose: `factor_change:${challenge.id}`,
+        payloadHash,
         originSessionId: session.sessionId,
         closedAt: null,
       });
@@ -1306,6 +1411,12 @@ export class CommunityAuthService {
     const sessionHash = await hashSessionToken(input.sessionToken);
     const reauthHash = await hashSessionToken(input.reauthToken);
     return this.transactional(async (tx) => {
+      const observed = await tx.findSession(
+        sessionHash,
+        this.requiredSessionEnvironment(),
+      );
+      if (observed === null) return fail("AUTH_UNAUTHENTICATED");
+      await tx.lockUser(observed.userId);
       const user = await tx.findSessionUser(
         sessionHash,
         at.toISOString(),
@@ -1342,7 +1453,6 @@ export class CommunityAuthService {
         !this.handoffModeOk(reauth)
       )
         return fail("AUTH_PROOF_REJECTED");
-      await tx.lockUser(user.id);
       const freshReauth = await tx.findHandoff(reauthHash);
       if (
         freshReauth === null ||
@@ -1410,6 +1520,12 @@ export class CommunityAuthService {
     const at = this.clock();
     const tokenHash = await hashSessionToken(sessionToken);
     return this.transactional(async (tx) => {
+      const observed = await tx.findSession(
+        tokenHash,
+        this.requiredSessionEnvironment(),
+      );
+      if (observed === null) return fail("AUTH_UNAUTHENTICATED");
+      await tx.lockUser(observed.userId);
       const session = await tx.lockSession(
         tokenHash,
         this.requiredSessionEnvironment(),
@@ -2098,6 +2214,9 @@ export class CommunityAuthService {
     const locked = await tx.lockReceipt(receipt.keyHash);
     const live =
       bound !== null &&
+      bound.userId === user.id &&
+      locked?.userId === user.id &&
+      bound.tokenHash === locked.sessionTokenHash &&
       bound.revokedAt === null &&
       new Date(bound.expiresAt).getTime() > at.getTime();
     if (locked === null || locked.closedAt !== null || !live)
@@ -2105,6 +2224,22 @@ export class CommunityAuthService {
     if (!(await tx.revokeSession(locked.sessionTokenHash, at.toISOString())))
       throw new AuthRollback(fail("AUTH_PROOF_REJECTED"));
     const session = await this.mint(tx, user, channel, at);
+    if (locked.purpose.startsWith("factor_change:")) {
+      // Hash-only receipt lineage, not a second Session store. Keep every
+      // previously returned cookie able to close the canonical receipt.
+      await tx.insertReceipt({
+        keyHash: await keyedHash(
+          this.options.keys.lookupKey,
+          `factor-lineage\0${locked.keyHash}\0${bound.id}`,
+        ),
+        userId: locked.userId,
+        sessionId: bound.id,
+        sessionTokenHash: bound.tokenHash,
+        purpose: `factor_lineage:${locked.keyHash}`,
+        originSessionId: bound.id,
+        closedAt: null,
+      });
+    }
     await tx.updateReceiptSession(
       locked.keyHash,
       session.sessionId,

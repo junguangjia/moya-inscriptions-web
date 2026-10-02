@@ -123,6 +123,7 @@ describe("@moya/api server-only surface", () => {
       "parseArticleOwnMediaListQuery",
       "parseArticlePendingId",
       "parseArticlePendingListQuery",
+      "parseArticlePendingMediaQuery",
       "parseArticlePendingModerationCommand",
       "parseCatalogListQuery",
       "parseCatalogSearchQuery",

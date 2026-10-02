@@ -110,6 +110,8 @@ describe("current repository truth and local configuration", () => {
       "/yoyi_dev",
     );
     expect(Object.keys(web).sort()).toEqual([
+      "AUTH_INGRESS_TOKEN",
+      "AUTH_SOURCE_RELAY_TOKEN",
       "CMS_INTERNAL_URL",
       "MOYA_PUBLIC_API_BASE_URL",
       "NODE_ENV",

@@ -20,6 +20,8 @@ import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
 import { readBearerToken } from "./session-credential.js";
 
+import type { AuthRequestSource } from "./auth-request-source.js";
+
 import type { ApiErrorCode } from "@moya/contracts";
 import type { AuthReason, CommunityAuthService } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -75,19 +77,30 @@ const sessionBody = (session: {
 });
 
 /**
- * Development authentication routes. Production composition does not mount
- * this handler. The session token in a success body is a server-to-server
+ * Authentication routes with composition-owned source forwarding authority. The session token in a success body is a server-to-server
  * grant; the same-origin Web route removes it before browser JavaScript.
  */
 export const handleCommunityAuth = async (
   request: IncomingMessage,
   response: ServerResponse,
   service: CommunityAuthService,
+  resolveSource?: AuthRequestSource,
 ): Promise<void> => {
   const url = new URL(request.url ?? "/", "http://request.invalid");
   const path = url.pathname.slice("/v1/community/auth/".length);
-  const source = trustedRequestSource(request);
   try {
+    const source =
+      request.method !== "POST"
+        ? "unused"
+        : resolveSource !== undefined
+          ? resolveSource(request)
+          : service.capabilities().developmentOnly
+            ? trustedRequestSource(request)
+            : null;
+    if (source === null) {
+      sendApiError(response, "UNAUTHENTICATED", "AUTH_SOURCE_UNTRUSTED");
+      return;
+    }
     if (path === "capabilities" && request.method === "GET") {
       sendJson(
         response,

@@ -60,6 +60,21 @@ Listener arguments are fixed in `ExecStart` so an environment file cannot expose
 a process port. Startup performs readiness checks; it never executes migrations
 or DDL.
 
+Web uses `scripts/start-production.mts` through both `pnpm start` and its unit,
+with Node 24's native TypeScript support and the public Next custom-server API.
+The exact raw component POST upload path can run beyond five minutes while body
+bytes keep arriving. Its 120-second body idle limit, 8 GiB ceiling and 16 active
+upload slots are enforced without buffering; the response is bounded to 75
+seconds after the last body byte. Other requests retain the 300-second total
+body deadline and 120-second idle limit, with the existing 1 MiB default, 4 MiB
+profile media and 1040 KiB Article request ceilings. All paths keep the
+60-second header deadline, 16 KiB header cap, 100 header count, 512 connection
+cap and 5-second keepalive. These are startup code limits, not environment
+overrides. The existing relay, Backend and Nginx authorization/stream limits
+still apply. Development continues to use `next dev`; do not replace the
+Production wrapper with `next start`, whose native total-body deadline would
+interrupt long uploads.
+
 A future deployment operator must install Node 24/pnpm 11.9.0, create the four
 service users, provide a readable release at `/srv/yoyi/current`, create the two
 Next.js `.next/cache` directories writable only by their respective users, and
@@ -149,12 +164,24 @@ production operation. Do not run either migration command as service startup.
 ## COS and environment boundaries
 
 Start from the four `env/*.env.example` files, with private resource values
-provided per service. `web.env` contains only the loopback Backend URL and
-internal CMS preview URL. `backend.env` contains the published-read DB role and
-the independent COS read runtime. `admin.env` contains Payload's own DB role,
-secret, URLs and COS write configuration. Missing required production settings
-fail closed. Staging uses these same contracts with distinct database roles,
-origins and private bucket.
+provided per service. `web.env` contains the loopback Backend URL, internal CMS
+preview URL and two dedicated server-only source-admission credentials.
+`backend.env` contains the published-read DB role and the independent COS read
+runtime. `admin.env` contains Payload's own DB role, secret, URLs and COS write
+configuration. Missing required production settings fail closed. Staging uses
+these same contracts with distinct database roles, origins and private bucket.
+
+For authentication limits, Nginx overwrites source headers with its actual
+network peer and the protected Web `AUTH_INGRESS_TOKEN`. Render only the named
+`__AUTH_INGRESS_TOKEN__` marker into the private Nginx configuration; retain its
+0600 protection and never commit or print the rendered value. Web validates this
+proof before forwarding the canonical source with a different
+`AUTH_SOURCE_RELAY_TOKEN`, which matches Backend's protected value. Both keys
+must differ from each other and the Admin/operator credential. Arbitrary
+`Forwarded`/`X-Forwarded-For` or direct Backend headers confer no source
+authority. Browsers sharing one real network/NAT address still share its
+intended limit. Live credential provisioning remains separately authorized
+deployment work.
 
 `ProductionCosStorageUrlResolver` uses the existing official COS SDK signing,
 short lifetimes, timeout and error handling against an already-authorized

@@ -609,6 +609,31 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
         const row = rows[0];
         return row === undefined ? null : mapReceipt(row);
       },
+      findSession: async (tokenHash, requiredEnvironment) => {
+        const rows = await query<{
+          id: string;
+          token_hash: string;
+          user_id: string;
+          expires_at: Date;
+          revoked_at: Date | null;
+        }>(
+          `SELECT id, token_hash, user_id, expires_at, revoked_at
+           FROM community.sessions WHERE token_hash=$1
+             AND ($2::text IS NULL OR (issuer='verified_login' AND auth_environment=$2))
+`,
+          [tokenHash, requiredEnvironment ?? null],
+        );
+        const row = rows[0];
+        return row === undefined
+          ? null
+          : {
+              id: row.id,
+              tokenHash: row.token_hash,
+              userId: row.user_id,
+              expiresAt: iso(row.expires_at),
+              revokedAt: nullableIso(row.revoked_at),
+            };
+      },
       lockSession: async (tokenHash, requiredEnvironment) => {
         const rows = await query<{
           id: string;
@@ -645,7 +670,22 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
       lockReceiptsForSession: async (sessionId) =>
         (
           await query<ReceiptRow>(
-            `${receiptSelect} WHERE origin_session_id=$1 OR session_id=$1 FOR UPDATE`,
+            `${receiptSelect} WHERE left(purpose,15) <> 'factor_lineage:' AND (
+            origin_session_id=$1 OR session_id=$1
+            OR EXISTS (
+              SELECT 1 FROM community.auth_receipts edge
+              WHERE edge.purpose='factor_lineage:'||community.auth_receipts.key_hash
+                AND edge.user_id=community.auth_receipts.user_id AND edge.session_id=$1
+            )
+            OR EXISTS (
+              SELECT 1 FROM community.auth_challenges c
+              JOIN community.sessions s ON s.token_hash=c.session_hash
+              WHERE s.id=$1 AND s.user_id=community.auth_receipts.user_id
+                AND c.user_id=community.auth_receipts.user_id
+                AND c.completed_at IS NOT NULL
+                AND community.auth_receipts.purpose='factor_change:'||c.id
+            )
+          ) FOR UPDATE`,
             [sessionId],
           )
         ).map(mapReceipt),

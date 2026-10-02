@@ -59,6 +59,7 @@ import type { NodeEnvironment } from "./config.js";
 import type { ArticleDelegationRuntime } from "./community/article-delegation-handler.js";
 import type { createArticleMcpHandler } from "./community/article-mcp.js";
 import type { HealthReadinessCheck } from "./health/health-handler.js";
+import type { AuthRequestSource } from "./community/auth-request-source.js";
 import type { CommunityRouterDependencies } from "./http/router.js";
 import type { RequestListener } from "node:http";
 
@@ -78,6 +79,8 @@ export interface BackendApplicationOptions {
    * Development-only providers; no local provider is used as a fallback.
    */
   readonly authService?: CommunityAuthService;
+  /** Validated Web forwarding authority; never generic client forwarding claims. */
+  readonly authRequestSource?: AuthRequestSource;
   readonly authorCommunityPort?: AuthorCommunityPort;
   readonly discussionPort?: DiscussionPort;
   readonly contentOperatorPort?: CommunityContentOperatorPort;
@@ -213,6 +216,7 @@ const resolveCommunity = (
   options: BackendApplicationOptions,
   catalogPublicationPort: CatalogPublicationPort,
   storageUrlResolver: StorageUrlResolver,
+  catalogReadService: CatalogReadService,
 ): CommunityRouterDependencies | undefined => {
   const { nodeEnv, communityIdentityPort, communityCommentPort } = options;
   if (communityIdentityPort === undefined) return undefined;
@@ -223,6 +227,7 @@ const resolveCommunity = (
   )
     throw new Error("Development authentication is not composed in production");
   const sessionService = new CommunitySessionService(communityIdentityPort);
+  const publishing = resolvePublishing(options);
   const threadService =
     options.threadPort !== undefined
       ? new ThreadService(options.threadPort)
@@ -250,9 +255,14 @@ const resolveCommunity = (
           articlePublicationOperatorService:
             new ArticlePublicationOperatorService(
               options.articlePublicationOperatorPort,
-              options.publishingClock === undefined
-                ? {}
-                : { clock: options.publishingClock },
+              {
+                ...(options.publishingClock === undefined
+                  ? {}
+                  : { clock: options.publishingClock }),
+                publishing: publishing.publishingService,
+                catalog: catalogReadService,
+                authorMedia: options.authorCommunityPort,
+              },
             ),
         }
       : {}),
@@ -271,7 +281,12 @@ const resolveCommunity = (
         }
       : {}),
     ...(options.authService !== undefined
-      ? { authService: options.authService }
+      ? {
+          authService: options.authService,
+          ...(options.authRequestSource === undefined
+            ? {}
+            : { authRequestSource: options.authRequestSource }),
+        }
       : {}),
     ...(options.notificationPort
       ? {
@@ -306,7 +321,7 @@ const resolveCommunity = (
     ...(threadService === undefined ? {} : { threadService }),
     ...(directMessageService === undefined ? {} : { directMessageService }),
     // Publishing reuses the existing services and their access checks.
-    ...resolvePublishing(options),
+    ...publishing,
     developmentEntry: nodeEnv === "development",
     contentOperatorPort: options.contentOperatorPort,
     discussionPort: options.discussionPort,
@@ -363,6 +378,15 @@ export const createBackendApplication = (
 ): RequestListener => {
   const catalogQueryPort = resolveCatalogQueryPort(options);
   const storageUrlResolver = resolveStorageUrlResolver(options);
+  const catalogReadService = new CatalogReadService(
+    catalogQueryPort,
+    storageUrlResolver,
+    options.catalogSearchQueryPort ??
+      (options.nodeEnv !== "production" &&
+      options.catalogQueryPort === undefined
+        ? createDevelopmentCatalogFixtureSearchPort()
+        : undefined),
+  );
   const community = resolveCommunity(
     options,
     options.catalogPublicationPort ?? {
@@ -374,17 +398,10 @@ export const createBackendApplication = (
         (await catalogQueryPort.getById(catalogId))?.title ?? null,
     },
     storageUrlResolver,
+    catalogReadService,
   );
   return createRouter({
-    catalogReadService: new CatalogReadService(
-      catalogQueryPort,
-      storageUrlResolver,
-      options.catalogSearchQueryPort ??
-        (options.nodeEnv !== "production" &&
-        options.catalogQueryPort === undefined
-          ? createDevelopmentCatalogFixtureSearchPort()
-          : undefined),
-    ),
+    catalogReadService,
     healthReadinessCheck:
       options.healthReadinessCheck ?? (async (): Promise<void> => undefined),
     ...(community === undefined ? {} : { community }),

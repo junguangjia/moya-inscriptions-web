@@ -418,3 +418,11 @@ export const excerpt = (text: string, length = 80): string => {
 
 export const shortId = (id: string): string =>
   id.length <= 18 ? id : `${id.slice(0, 12)}…${id.slice(-4)}`;
+
+// Exact Article pending/review presentation DTOs; values stay in Owner endpoints.
+export type {
+  ArticlePendingPage,
+  ArticlePendingPreview,
+  ArticleModerationResult,
+  ModerateArticlePendingCommand,
+} from "@moya/contracts/internal/community-operator";

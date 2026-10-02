@@ -3,6 +3,8 @@ import { OwnerWithdrawButton as OwnerWithdrawButton_9e998a9a7cb97e1d133b14fcf3c6
 import { CatalogOwnershipField as CatalogOwnershipField_d68431953f65de60bd9cd6665817055b } from "../../../src/media/CatalogOwnershipField";
 import { OriginalRightsField as OriginalRightsField_f0988f7c8f9ddbf7bb7be320ee5c0422 } from "../../../src/media/OriginalMediaMetadataField";
 import { OriginalOrderConfidenceField as OriginalOrderConfidenceField_f0988f7c8f9ddbf7bb7be320ee5c0422 } from "../../../src/media/OriginalMediaMetadataField";
+import { AdminIcon as AdminIcon_e783192dc8e4538c63249f534c5a00ac } from "../../../src/branding/Brand";
+import { AdminLogo as AdminLogo_e783192dc8e4538c63249f534c5a00ac } from "../../../src/branding/Brand";
 import { CommunityNavGroups as CommunityNavGroups_2abcbe3af7cd0474b6c7e39c62ec32e3 } from "../../../src/community/NavGroup";
 import { CommunityDashboardCard as CommunityDashboardCard_04d062f16b5363b8f080834354c73870 } from "../../../src/community/DashboardCard";
 import { S3ClientUploadHandler as S3ClientUploadHandler_f97aa6c64367fa259c5bc0567239ef24 } from "@payloadcms/storage-s3/client";
@@ -13,6 +15,7 @@ import { DmModerationView as DmModerationView_86a1b3c9ec56e37b61bf12e13c3d66d2 }
 import { CommunitySettingsView as CommunitySettingsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CommunityContentView as CommunityContentView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CommunityHistoryView as CommunityHistoryView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
+import { ArticleSubmissionsView as ArticleSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { WorkSubmissionsView as WorkSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { AgentConnectionsView as AgentConnectionsView_3d1d3bf96b1194d419c311865cb1d9cc } from "../../../src/agent-connections/View";
 import { AgentConsentView as AgentConsentView_3d1d3bf96b1194d419c311865cb1d9cc } from "../../../src/agent-connections/View";
@@ -20,12 +23,9 @@ import { AccountCapacityView as AccountCapacityView_86a1b3c9ec56e37b61bf12e13c3d
 import { PublishingJobsView as PublishingJobsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { AgentOperationsView as AgentOperationsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } from "@payloadcms/next/rsc";
-import { AdminLogo, AdminIcon } from "../../../src/branding/Brand";
 
 /** @type import('payload').ImportMap */
 export const importMap = {
-  "/src/branding/Brand#AdminLogo": AdminLogo,
-  "/src/branding/Brand#AdminIcon": AdminIcon,
   "./src/media/MediaSnapshotPicker#MediaSnapshotPicker":
     MediaSnapshotPicker_a43c203023e3389c5dc6b4863a273b24,
   "/src/owner-workflow/OwnerWithdrawButton#OwnerWithdrawButton":
@@ -36,6 +36,8 @@ export const importMap = {
     OriginalRightsField_f0988f7c8f9ddbf7bb7be320ee5c0422,
   "./src/media/OriginalMediaMetadataField#OriginalOrderConfidenceField":
     OriginalOrderConfidenceField_f0988f7c8f9ddbf7bb7be320ee5c0422,
+  "/src/branding/Brand#AdminIcon": AdminIcon_e783192dc8e4538c63249f534c5a00ac,
+  "/src/branding/Brand#AdminLogo": AdminLogo_e783192dc8e4538c63249f534c5a00ac,
   "/src/community/NavGroup#CommunityNavGroups":
     CommunityNavGroups_2abcbe3af7cd0474b6c7e39c62ec32e3,
   "/src/community/DashboardCard#CommunityDashboardCard":
@@ -56,6 +58,8 @@ export const importMap = {
     CommunityContentView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#CommunityHistoryView":
     CommunityHistoryView_86a1b3c9ec56e37b61bf12e13c3d66d2,
+  "/src/community/View#ArticleSubmissionsView":
+    ArticleSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#WorkSubmissionsView":
     WorkSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/agent-connections/View#AgentConnectionsView":

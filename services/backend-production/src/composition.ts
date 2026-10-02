@@ -12,6 +12,7 @@ import {
   createArticleCatalogReadCallbacks,
   readBoundedArticleThumbnail,
   createDevelopmentAuthService,
+  createTrustedAuthRequestSource,
   createPublishingTransferRegistry,
   parseRuntimeConfig,
   startBackendProcess,
@@ -193,6 +194,18 @@ export const prepareProductionBackend = async (
     runtimeConfig.nodeEnv === "production"
       ? await loadProductionAuthConfiguration(environment)
       : null;
+  // Validate source authority before opening pools, independently of user and Owner roles.
+  const authRequestSource =
+    authConfiguration === null
+      ? undefined
+      : createTrustedAuthRequestSource(environment.AUTH_SOURCE_RELAY_TOKEN);
+  if (
+    authRequestSource !== undefined &&
+    environment.AUTH_SOURCE_RELAY_TOKEN === environment.COMMUNITY_OPERATOR_TOKEN
+  )
+    throw new Error(
+      "AUTH_SOURCE_RELAY_TOKEN: must be separate from Owner authority",
+    );
   const articleConfiguration = articleBackendConfigurationFrom(
     environment,
     runtimeConfig,
@@ -413,7 +426,12 @@ export const prepareProductionBackend = async (
                   dependencies.authProvider,
                 )
             : createDevelopmentAuthService(adapter, environment);
-        return authService === null ? {} : { authService };
+        return authService === null
+          ? {}
+          : {
+              authService,
+              ...(authRequestSource === undefined ? {} : { authRequestSource }),
+            };
       })(),
       communityCommentPort,
       ...(notificationPort ? { notificationPort, notificationSignals } : {}),

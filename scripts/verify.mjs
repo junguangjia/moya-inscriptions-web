@@ -407,7 +407,13 @@ export function verificationCommands(
       test: [
         ...(env.TEST_DATABASE_URL ? postgres : []),
         pnpm("test:confidentiality"),
-        turbo("test"),
+        // Reuse prepared library outputs without persisting test results.
+        // A missing build cache still executes its normal prerequisite task.
+        [
+          ...turbo("test"),
+          "--cache-dir=.turbo/library-cache",
+          "--cache=local:r",
+        ],
       ],
       build: [turbo("build")],
     };

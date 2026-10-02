@@ -22,6 +22,8 @@ import {
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { authFactorReceiptCases } from "../../unit/backend/auth-factor-receipt-cases";
+
 import {
   passwordAuthCases,
   registerPasswordCase,
@@ -1015,8 +1017,14 @@ describe("email-auth PostgreSQL", () => {
     let arrived = 0;
     let release: () => void = () => undefined;
     const ready = new Promise<void>((resolve, reject) => {
-      release = () => resolve();
-      setTimeout(() => reject(new Error("proof race did not meet")), 5_000);
+      const timer = setTimeout(
+        () => reject(new Error("proof race did not meet")),
+        5_000,
+      );
+      release = () => {
+        clearTimeout(timer);
+        resolve();
+      };
     });
     const racing = new CommunityAuthService(
       {
@@ -1024,12 +1032,13 @@ describe("email-auth PostgreSQL", () => {
           new PostgresCommunityAuthAdapter(pool).transaction((tx) =>
             work({
               ...tx,
-              findHandoff: async (hash) => {
-                const row = await tx.findHandoff(hash);
+              lockUser: async (id) => {
+                // Rendezvous before either transaction owns the User row;
+                // waiting inside findHandoff would deadlock the serialized peer.
                 arrived += 1;
-                if (arrived >= 2) release();
-                else await ready;
-                return row;
+                if (arrived === 2) release();
+                await ready;
+                return tx.lockUser(id);
               },
             }),
           ),
@@ -1061,6 +1070,7 @@ describe("email-auth PostgreSQL", () => {
         sessionToken: token,
       }),
     ]);
+    expect(arrived).toBe(2);
     expect([unlinked, replaced].filter((result) => result.ok)).toHaveLength(1);
     const factors = await factorRows(pool, user.profile.id);
     if (unlinked.ok) {
@@ -1072,9 +1082,11 @@ describe("email-auth PostgreSQL", () => {
       expect(factors[0]?.lookup_digest).toBe(originalEmail);
       return;
     }
+    // Completion revoked the shared original Session. Unlink revalidates it
+    // after the User lock before inspecting the now-consumed proof.
     expect(unlinked).toMatchObject({
       ok: false,
-      reason: "AUTH_PROOF_REJECTED",
+      reason: "AUTH_UNAUTHENTICATED",
     });
     expect(factors.map((row) => row.kind)).toEqual(["email", "phone"]);
     expect(factors.find((row) => row.kind === "email")?.lookup_digest).not.toBe(
@@ -1693,4 +1705,5 @@ describe("email-auth PostgreSQL", () => {
       );
     });
   });
+  authFactorReceiptCases(() => new PostgresCommunityAuthAdapter(appPool()));
 });

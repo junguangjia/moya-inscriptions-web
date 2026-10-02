@@ -2,6 +2,7 @@ import { DefaultTemplate } from "@payloadcms/next/templates";
 import type { AdminViewServerProps } from "payload";
 
 import { isOwner } from "../editorial/access";
+import { ArticleSubmissionsQueueClient } from "./article-submissions-client";
 import { AccountCapacityClient } from "./account-capacity-client";
 import { AgentOperationsClient } from "./agent-operations-client";
 import { CommunityContentClient } from "./content-client";
@@ -99,5 +100,12 @@ export const ThreadsView = (props: AdminViewServerProps) => (
 export const DmModerationView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
     <DmModerationClient />
+  </OwnerOnly>
+);
+
+/** Authored Article submissions, separate from Payload editorial Articles. */
+export const ArticleSubmissionsView = (props: AdminViewServerProps) => (
+  <OwnerOnly props={props}>
+    <ArticleSubmissionsQueueClient />
   </OwnerOnly>
 );

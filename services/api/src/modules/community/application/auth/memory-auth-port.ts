@@ -242,6 +242,23 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
       },
       findReceipt: async (keyHash) =>
         state.receipts.find((row) => row.keyHash === keyHash) ?? null,
+      findSession: async (tokenHash, requiredEnvironment) => {
+        const row = state.sessions.find(
+          (item) =>
+            item.tokenHash === tokenHash &&
+            (requiredEnvironment === undefined ||
+              (item.issuer === "verified_login" &&
+                item.authEnvironment === requiredEnvironment)),
+        );
+        if (row === undefined) return null;
+        return {
+          id: row.id,
+          tokenHash: row.tokenHash,
+          userId: row.userId,
+          expiresAt: row.expiresAt,
+          revokedAt: row.revokedAt,
+        };
+      },
       lockSession: async (tokenHash, requiredEnvironment) => {
         const row = state.sessions.find(
           (item) =>
@@ -264,7 +281,27 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
       lockReceiptsForSession: async (sessionId) =>
         state.receipts.filter(
           (row) =>
-            row.originSessionId === sessionId || row.sessionId === sessionId,
+            !row.purpose.startsWith("factor_lineage:") &&
+            (row.originSessionId === sessionId ||
+              row.sessionId === sessionId ||
+              state.receipts.some(
+                (edge) =>
+                  edge.purpose === `factor_lineage:${row.keyHash}` &&
+                  edge.userId === row.userId &&
+                  edge.sessionId === sessionId,
+              ) ||
+              state.challenges.some(
+                (challenge) =>
+                  row.purpose === `factor_change:${challenge.id}` &&
+                  challenge.completedAt !== null &&
+                  challenge.userId === row.userId &&
+                  state.sessions.some(
+                    (session) =>
+                      session.id === sessionId &&
+                      session.userId === row.userId &&
+                      session.tokenHash === challenge.sessionHash,
+                  ),
+              )),
         ),
       closeReceipt: async (keyHash, atIso) => {
         const index = state.receipts.findIndex(
