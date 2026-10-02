@@ -23,8 +23,8 @@ class SyntheticIdentityFixture:
         self.source = self.base / "synthetic"
         self.source.mkdir()
         from PIL import Image
-        for name in ("one.png", "two.png"):
-            Image.new("RGB", (50, 40), "blue").save(self.source / name)
+        for name, color in (("one.png", "blue"), ("two.png", "green")):
+            Image.new("RGB", (50, 40), color).save(self.source / name)
         self.batch = self.registry.inspect(self.source, synthetic=True)
         self.aids = [a["id"] for a in self.registry.rows("SELECT id FROM assets ORDER BY relative_path")]
         self.add_object("z-first", self.aids)

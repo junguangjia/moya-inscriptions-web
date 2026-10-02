@@ -49,7 +49,8 @@ def certified_asset(registry,asset_id):
     from synthetic_fixture import certified,CERTIFIED_HASHES
     from pathlib import Path
     row=registry.db.execute('SELECT a.relative_path,a.sha256,s.source_root FROM assets a JOIN batches b ON b.id=a.batch_id JOIN sessions s ON s.id=b.session_id WHERE a.id=?',(asset_id,)).fetchone()
-    return bool(row and CERTIFIED_HASHES.get(row['relative_path'])==row['sha256'] and certified(Path(row['source_root'])))
+    from identity import asset_synthetic
+    return bool(row and asset_synthetic(registry,asset_id) and CERTIFIED_HASHES.get(row['relative_path'])==row['sha256'] and certified(Path(row['source_root'])))
 
 def certified_task(registry,task_id):
     row=registry.db.execute('SELECT mapping FROM tasks WHERE task_id=?',(task_id,)).fetchone()

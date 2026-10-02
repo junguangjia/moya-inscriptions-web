@@ -24,7 +24,7 @@ class DailyFlowTests(unittest.TestCase):
         for n, synthetic in enumerate([True, False]):
             source = self.root / f'fixture-{n}'
             source.mkdir()
-            Image.new('RGB', (40, 40), 'blue').save(source / 'test.png')
+            Image.new('RGB', (40, 40), (n * 50, 0, 200)).save(source / 'test.png')
             self.sources.append(source)
             batch = self.registry.inspect(source, synthetic=synthetic)
             self.batches.append(batch)
@@ -114,6 +114,31 @@ class DailyFlowTests(unittest.TestCase):
     def test_missing_reviews_link_to_the_exact_current_task(self):
         missing=missing_reviews(self.registry.db,self.objects[1])
         self.assertEqual(missing,[{'label':'照片分组','status':'pending','url':'/review?task=2'}])
+
+    def test_optional_deferred_history_does_not_block_but_pending_group_does(self):
+        oid=self.objects[1]
+        pid=self.registry.propose(self.batches[1],oid,'field','period_original','未确定',[],'a'*64,'synthetic','unknown-history')
+        with self.registry.db:self.registry.db.execute('INSERT INTO tasks VALUES(?,10,1,?,?,?)',('optional-history','field','{}','a'*64))
+        self.registry.decision({'task_key':'optional-history'},{'id':10},pid,'deferred','未确定','test-reviewer')
+        before=self.registry.rows('SELECT * FROM decisions')
+        self.assertEqual(missing_reviews(self.registry.db,oid),[{'label':'照片分组','status':'pending','url':'/review?task=2'}])
+        self.assertEqual(self.registry.rows('SELECT * FROM decisions'),before)
+        self.assertFalse(self.registry.rows("SELECT * FROM facts WHERE object_id=? AND field='period_original'",(oid,)))
+
+    def test_real_admin_draft_action_stops_before_any_child_without_authorization(self):
+        private_json(self.registry.root/'state/prepared-package.json',{'synthetic':False,'path':'unused'})
+        with patch.object(app.subprocess,'run') as child:
+            with self.assertRaisesRegex(CurationError,'REAL_MATERIAL_TRANSFER_NOT_AUTHORIZED'):
+                self.menu.action({'action':'admin-draft'})
+        child.assert_not_called()
+
+    def test_admin_links_only_include_verified_selected_objects_and_no_credentials(self):
+        from daily import admin_drafts
+        valid={'objectId':self.objects[1],'status':'verified','cmsDraft':{'baseURL':'http://127.0.0.1:43219','id':11,'expectedRevision':3}}
+        private_json(self.registry.root/'state/development-result.json',{'drafts':[valid,{**valid,'objectId':self.objects[0]},
+            {**valid,'status':'failed'},{**valid,'cmsDraft':{**valid['cmsDraft'],'baseURL':'https://example.invalid'}}]})
+        self.assertEqual(admin_drafts(self.registry.root,{self.objects[1]}),[{'objectId':self.objects[1],'id':11,'revision':3,
+            'url':'http://127.0.0.1:43219/admin/collections/catalogs/11'}])
 
     def test_renewal_is_scoped_and_preserves_other_versions(self):
         with patch.object(worker,'review_tasks',return_value=1):

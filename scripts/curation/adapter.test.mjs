@@ -1,7 +1,8 @@
 /** Mocked unit tests only. These are not native CMS integration evidence. */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { Buffer } from "node:buffer";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -58,8 +59,9 @@ const fingerprint = (value) =>
 function mockedCMS(deps) {
   const documents = new Map();
   const receipts = new Map();
+  const media = new Map();
   const calls = [];
-  const server = { failCatalog: null, calls, documents, created: 0 };
+  const server = { failCatalog: null, calls, documents, media, created: 0 };
   const json = (value, status = 200) => Response.json(value, { status });
   server.fetch = async (url, options = {}) => {
     const target = new URL(url);
@@ -71,6 +73,34 @@ function mockedCMS(deps) {
         { ok: false, error: { code: "AUTHORIZATION_REQUIRED" } },
         403,
       );
+    if (route === "/api/media" && options.method === "POST") {
+      const metadata = JSON.parse(options.body.get("_payload"));
+      const bytes = Buffer.from(await options.body.get("file").arrayBuffer());
+      const image = await deps.sharp(bytes).metadata();
+      const record = {
+        ...metadata,
+        id: media.size + 1,
+        objectKey: "synthetic-unit/" + metadata.mediaId,
+        filename: metadata.mediaId + ".png",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        width: image.width,
+        height: image.height,
+      };
+      media.set(metadata.mediaId, { record, bytes });
+      return json({ doc: record });
+    }
+    if (route === "/api/media") {
+      const item = media.get(target.searchParams.get("where[mediaId][equals]"));
+      return json({ docs: item ? [item.record] : [] });
+    }
+    if (route.startsWith("/api/media/file/")) {
+      const item = [...media.values()].find(
+        (value) =>
+          value.record.filename ===
+          decodeURIComponent(route.slice("/api/media/file/".length)),
+      );
+      return item ? new Response(item.bytes) : json({ ok: false }, 404);
+    }
     if (route === "/api/editorial/read-draft") {
       let doc = documents.get(JSON.parse(options.body).id);
       if (doc && server.nativeDefaults)
@@ -360,15 +390,18 @@ test("mocked unit: revised reviewed package reuses mapped Draft and rejects cros
     },
   };
   await atomicPrivateJSON(files.packageFile, fixture([otherInstance]));
-  const refused = await draftRoundtrip({
-    repoRoot,
-    ...files,
-    stateDirectory: path.join(files.directory, "wrong-instance"),
-    deps,
-    fetchImpl: cms.fetch,
-  });
-  assert.equal(refused.failed, 1);
-  assert.equal(refused.results[0].category, "EXISTING_DRAFT_INSTANCE_MISMATCH");
+  const calls = cms.calls.length;
+  await assert.rejects(
+    draftRoundtrip({
+      repoRoot,
+      ...files,
+      stateDirectory: path.join(files.directory, "wrong-instance"),
+      deps,
+      fetchImpl: cms.fetch,
+    }),
+    /EXISTING_DRAFT_INSTANCE_MISMATCH/u,
+  );
+  assert.equal(cms.calls.length, calls);
   assert.equal(cms.created, 1);
 });
 
@@ -528,4 +561,233 @@ test("mapped native patch keeps omitted factual values and relation arrays; expl
     cms.documents.get(third.results[0].id).content.dateText.state,
     "CLEAR",
   );
+});
+
+const grantFor = (input, deps) => ({
+  version: 1,
+  purpose: "admin-draft-only",
+  ownerAuthorized: true,
+  instance: "development",
+  baseURL: fakeConfig.baseURL,
+  packageHash: deps.stableDigest(input),
+  objects: input.objects.map((item) => ({
+    objectId: item.objectId,
+    catalogId: item.catalogId,
+    media: item.media.map((photo) => ({
+      assetId: photo.assetId,
+      sourceSha256: photo.sourceSha256,
+      uploadedSha256: photo.uploadedSha256,
+    })),
+  })),
+  expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+});
+
+async function selectedMaterial(deps) {
+  const input = { ...fixture([object()]), synthetic: false };
+  const files = await workspace(input);
+  const bytes = await deps
+    .sharp({
+      create: { width: 12, height: 8, channels: 3, background: "#777777" },
+    })
+    .png()
+    .toBuffer();
+  const derivativePath = path.join(files.directory, "selected-unit.png");
+  await writeFile(derivativePath, bytes, { mode: 0o600 });
+  input.objects[0].media = [
+    {
+      assetId: "selected-unit-asset",
+      mediaId: "synthetic-selected-unit-media",
+      derivativePath,
+      sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+      uploadedSha256: createHash("sha256").update(bytes).digest("hex"),
+      alt: "Generated unit-test image, no real material",
+      position: 0,
+      isRepresentative: true,
+    },
+  ];
+  await atomicPrivateJSON(files.packageFile, input);
+  return { input, files };
+}
+
+test("mocked real-material gate: exact Owner grant permits Draft, image upload and readback only", async () => {
+  const deps = await dependencies(repoRoot);
+  const { input, files } = await selectedMaterial(deps);
+  const authorizationFile = path.join(files.directory, "owner-grant.json");
+  await atomicPrivateJSON(authorizationFile, grantFor(input, deps));
+  const cms = mockedCMS(deps);
+  const result = await draftRoundtrip({
+    repoRoot,
+    ...files,
+    authorizationFile,
+    deps,
+    fetchImpl: cms.fetch,
+  });
+  assert.equal(result.succeeded, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(
+    result.results[0].adminURL,
+    fakeConfig.baseURL + "/admin/collections/catalogs/1",
+  );
+  assert.equal(result.results[0].exactContentReadback, true);
+  assert.equal(result.results[0].mediaBytesReadback, true);
+  assert.equal(cms.media.size, 1);
+  assert.equal(cms.documents.get(1).content.media.length, 1);
+  assert.ok(
+    cms.calls.every(
+      (route) => !route.includes("publish") && !route.includes("approve"),
+    ),
+  );
+});
+
+test("mocked real-material gate: mismatched, expired and unbounded grants fail before transport", async () => {
+  const deps = await dependencies(repoRoot);
+  const { input, files } = await selectedMaterial(deps);
+  const authorizationFile = path.join(files.directory, "owner-grant.json");
+  const valid = grantFor(input, deps);
+  const changes = [
+    { baseURL: "http://127.0.0.1:43220" },
+    { packageHash: "0".repeat(64) },
+    { purpose: "publish-approved" },
+    { ownerAuthorized: false },
+    { instance: "production" },
+    { expiresAt: new Date(Date.now() - 1000).toISOString() },
+    { expiresAt: new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString() },
+    { expiresAt: "not-a-date" },
+    { objects: [] },
+    { objects: [{ ...valid.objects[0], objectId: "unselected-object" }] },
+    { objects: [{ ...valid.objects[0], catalogId: "unselected-catalog" }] },
+    { objects: [{ ...valid.objects[0], media: [] }] },
+    ...["assetId", "sourceSha256", "uploadedSha256"].map((key) => ({
+      objects: [
+        {
+          ...valid.objects[0],
+          media: [
+            {
+              ...valid.objects[0].media[0],
+              [key]: key === "assetId" ? "unselected-asset" : "0".repeat(64),
+            },
+          ],
+        },
+      ],
+    })),
+  ];
+  for (const change of changes) {
+    await atomicPrivateJSON(authorizationFile, { ...valid, ...change });
+    let calls = 0;
+    await assert.rejects(
+      draftRoundtrip({
+        repoRoot,
+        ...files,
+        authorizationFile,
+        deps,
+        fetchImpl: async () => {
+          calls++;
+        },
+      }),
+      /REAL_MATERIAL_AUTHORIZATION_INVALID/u,
+    );
+    assert.equal(calls, 0);
+  }
+  await atomicPrivateJSON(authorizationFile, valid);
+  await chmod(authorizationFile, 0o400);
+  let calls = 0;
+  await assert.rejects(
+    draftRoundtrip({
+      repoRoot,
+      ...files,
+      authorizationFile,
+      deps,
+      fetchImpl: async () => {
+        calls++;
+      },
+    }),
+    /REAL_MATERIAL_AUTHORIZATION_INVALID/u,
+  );
+  assert.equal(calls, 0);
+});
+
+test("mocked real-material gate: an exact grant cannot exceed three cards or twelve photos", async () => {
+  const deps = await dependencies(repoRoot);
+  const { input, files } = await selectedMaterial(deps);
+  const tooManyCards = {
+    ...input,
+    objects: ["a", "b", "c", "d"].map((suffix) => object(suffix)),
+  };
+  const photo = input.objects[0].media[0];
+  const tooManyPhotos = {
+    ...input,
+    objects: [
+      {
+        ...object(),
+        media: Array.from({ length: 13 }, (_, position) => ({
+          ...photo,
+          assetId: "selected-unit-" + position,
+          mediaId: "synthetic-selected-media-" + position,
+          position,
+          isRepresentative: position === 0,
+        })),
+      },
+    ],
+  };
+  for (const selected of [tooManyCards, tooManyPhotos]) {
+    await atomicPrivateJSON(files.packageFile, selected);
+    const authorizationFile = path.join(files.directory, "owner-grant.json");
+    await atomicPrivateJSON(authorizationFile, grantFor(selected, deps));
+    let calls = 0;
+    await assert.rejects(
+      draftRoundtrip({
+        repoRoot,
+        ...files,
+        authorizationFile,
+        deps,
+        fetchImpl: async () => {
+          calls++;
+        },
+      }),
+      /REAL_MATERIAL_AUTHORIZATION_INVALID/u,
+    );
+    assert.equal(calls, 0);
+  }
+});
+
+test("mocked safety unit: cached mapped Draft cannot bypass target check with zero photos", async () => {
+  const deps = await dependencies(repoRoot);
+  const input = fixture([
+    {
+      ...object(),
+      cmsDraft: {
+        id: 1,
+        expectedRevision: 2,
+        instance: "development",
+        baseURL: "http://127.0.0.1:43220",
+      },
+    },
+  ]);
+  const files = await workspace(input);
+  await atomicPrivateJSON(
+    path.join(files.stateDirectory, "adapter-state.json"),
+    {
+      version: 1,
+      instance: "development",
+      targetIdentity: deps.stableDigest({
+        origin: fakeConfig.baseURL,
+        databaseName: null,
+      }),
+      packageHash: deps.stableDigest(input),
+      objects: { "object-a": { id: 1, revision: 2, phase: "verified" } },
+    },
+  );
+  let calls = 0;
+  await assert.rejects(
+    draftRoundtrip({
+      repoRoot,
+      ...files,
+      deps,
+      fetchImpl: async () => {
+        calls++;
+      },
+    }),
+    /EXISTING_DRAFT_INSTANCE_MISMATCH/u,
+  );
+  assert.equal(calls, 0);
 });

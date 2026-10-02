@@ -103,8 +103,14 @@ def validate_proposal(value, asset_ids):
 
 
 class Registry:
-    def __init__(self, root):
+    def __init__(self, root, *, upgrade_scale=False):
         self.root = Path(root)
+        existing = self.root / "state" / "curation.sqlite"
+        marker = self.root / "state" / "scale-runtime-v1.json"
+        # Legacy retained runtimes require a deliberate upgrade before SQLite opens.
+        # New task roots receive this private marker only after migrations commit.
+        if existing.exists() and not marker.is_file() and upgrade_scale is not True:
+            raise CurationError("EXPLICIT_SCALE_MIGRATION_REQUIRED")
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         for name in ("state", "served-previews", "derivatives", "receipts", "logs", "config"):
             (self.root / name).mkdir(exist_ok=True, mode=0o700)
@@ -131,9 +137,11 @@ class Registry:
         CREATE TRIGGER IF NOT EXISTS immutable_decision_update BEFORE UPDATE ON decisions BEGIN SELECT RAISE(ABORT,'IMMUTABLE_DECISION'); END;
         CREATE TRIGGER IF NOT EXISTS immutable_decision_delete BEFORE DELETE ON decisions BEGIN SELECT RAISE(ABORT,'IMMUTABLE_DECISION'); END;
         ''')
-        migration = (Path(__file__).parent / "migrations/002-object-presentation.sql").read_text()
-        self.db.executescript("BEGIN IMMEDIATE;\n" + migration + "\nCOMMIT;")
+        for filename in ("002-object-presentation.sql", "003-stable-identity.sql", "004-capture-session.sql"):
+            migration = (Path(__file__).parent / "migrations" / filename).read_text()
+            self.db.executescript("BEGIN IMMEDIATE;\n" + migration + "\nCOMMIT;")
         os.chmod(self.root / "state" / "curation.sqlite", 0o600)
+        if not marker.exists():private_json(marker,{"version":1,"schema":4})
 
     def rows(self, sql, args=()):
         return [dict(row) for row in self.db.execute(sql, args)]
@@ -141,26 +149,38 @@ class Registry:
     def status(self):
         return {"exact_duplicate_groups":self.rows("SELECT sha256,count(*) AS files FROM assets GROUP BY sha256 HAVING count(*)>1"),"asset_failures": self.rows("SELECT filename,error FROM assets WHERE status='failed'"),"decoded_assets":self.db.execute("SELECT count(*) FROM assets WHERE status='ready'").fetchone()[0],"batches": self.rows("SELECT id,status,error FROM batches ORDER BY created DESC"), "assets": self.db.execute("SELECT count(*) FROM assets").fetchone()[0], "proposals": self.db.execute("SELECT count(*) FROM proposals").fetchone()[0], "decisions": self.db.execute("SELECT count(*) FROM decisions").fetchone()[0], "objects": self.db.execute("SELECT count(*) FROM objects").fetchone()[0]}
 
-    def inspect(self, source, limit=50, synthetic=False):
+    def inspect(self, source, limit=50, synthetic=False, *, incremental=False, selected_paths=None):
         from PIL import Image, ImageOps
         from raw_decoder import RAW_EXTENSIONS, RAW_PREVIEW_VERSION, preview as raw_preview
+        from identity import register_occurrence
         source = Path(source).absolute()
         if source in (Path("/"), Path.home(), Path("/Volumes"), Path("/Users")) or not source.is_dir():
             raise CurationError("EXPLICIT_BATCH_DIRECTORY_REQUIRED")
         safe_source(source, source)
         session = stable_id("session", str(source))
         paths = []
-        # The selected root is the sole capability. Never follow directory links.
-        for directory, dirs, files in os.walk(source, followlinks=False):
-            dirs[:] = sorted(d for d in dirs if not Path(directory, d).is_symlink() and not d.startswith("."))
-            for name in sorted(files):
-                path = Path(directory, name)
-                if name.startswith(".") or path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tif", ".tiff", ".dng", ".cr2", ".nef", ".arw"}:
-                    continue
-                safe_source(source, path)
-                paths.append(path)
-                if len(paths) > limit:
-                    raise CurationError("BATCH_EXCEEDS_SELECTED_LIMIT")
+        extensions = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tif", ".tiff", ".dng", ".cr2", ".nef", ".arw"}
+        if selected_paths is not None:
+            if not isinstance(selected_paths, list) or not 1 <= len(selected_paths) <= min(limit, 50):
+                raise CurationError("EXPLICIT_PHOTO_SELECTION_REQUIRED")
+            if any(not isinstance(p, str) or not p or Path(p).is_absolute() or ".." in Path(p).parts
+                   or any(part.startswith(".") for part in Path(p).parts) for p in selected_paths):
+                raise CurationError("SELECTED_PHOTO_PATH_INVALID")
+            paths = sorted({safe_source(source, source / p) for p in selected_paths})
+            if len(paths) != len(selected_paths) or any(not p.is_file() or p.suffix.lower() not in extensions for p in paths):
+                raise CurationError("SELECTED_PHOTO_PATH_INVALID")
+        else:
+            # The selected root is the sole capability. Never follow directory links.
+            for directory, dirs, files in os.walk(source, followlinks=False):
+                dirs[:] = sorted(d for d in dirs if not Path(directory, d).is_symlink() and not d.startswith("."))
+                for name in sorted(files):
+                    path = Path(directory, name)
+                    if name.startswith(".") or path.suffix.lower() not in extensions:
+                        continue
+                    safe_source(source, path)
+                    paths.append(path)
+                    if len(paths) > limit:
+                        raise CurationError("BATCH_EXCEEDS_SELECTED_LIMIT")
         if len(paths) > limit:
             raise CurationError("BATCH_EXCEEDS_SELECTED_LIMIT")
         paths = [(p, file_hash(p)) for p in paths]
@@ -173,16 +193,21 @@ class Registry:
             if not synthetic:self.db.execute('UPDATE sessions SET synthetic=0 WHERE id=?',(session,))
         known=self.db.execute('SELECT 1 FROM batches WHERE id=?',(batch,)).fetchone()
         analyzed=self.db.execute('SELECT 1 FROM objects o JOIN batches b ON b.id=o.batch_id WHERE b.session_id=? LIMIT 1',(session,)).fetchone()
-        if analyzed and not known:raise CurationError('ANALYZED_FOLDER_CONTENTS_CHANGED')
+        if analyzed and not known and not incremental:raise CurationError('ANALYZED_FOLDER_CONTENTS_CHANGED')
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO sessions VALUES(?,?,?)", (session, str(source), int(synthetic)))
             self.db.execute("INSERT OR IGNORE INTO batches VALUES(?,?,?,NULL,?)", (batch, session, "inspected", time.time()))
         for path, sha in paths:
             rel = str(path.relative_to(source))
             asset = stable_id("asset", session, rel, sha)
+            logical = self.db.execute("SELECT id FROM logical_assets WHERE sha256=?", (sha,)).fetchone()
+            if logical:asset = logical[0]
             previous=self.db.execute("SELECT * FROM assets WHERE id=?", (asset,)).fetchone()
             if previous:
-                with self.db:self.db.execute("INSERT OR IGNORE INTO batch_assets VALUES(?,?)", (batch,asset))
+                if file_hash(path) != sha:raise CurationError("SOURCE_CHANGED_DURING_PREPARATION")
+                with self.db:
+                    self.db.execute("INSERT OR IGNORE INTO batch_assets VALUES(?,?)", (batch,asset))
+                    register_occurrence(self,asset,batch,session,rel,sha,synthetic)
                 if previous['status']=='ready':continue
                 # Keep the failed attempt before retrying the same logical asset.
                 private_json(self.root/'state'/f"{asset}-decode-failure-{uuid.uuid4().hex}.json",dict(previous))
@@ -213,12 +238,13 @@ class Registry:
             with self.db:
                 if previous:self.db.execute("UPDATE assets SET preview=?,capture=?,status=?,error=? WHERE id=?",(preview,str(capture) if capture else None,status,error,asset))
                 else:self.db.execute("INSERT INTO assets VALUES(?,?,?,?,?,?,?,?,?)", (asset,batch,rel,path.name,sha,preview,str(capture) if capture else None,status,error))
+                register_occurrence(self,asset,batch,session,rel,sha,synthetic)
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO batch_assets SELECT batch_id,id FROM assets WHERE batch_id=?",(batch,))
         return batch
 
     def source_verify(self, batch):
-        rows = self.rows("SELECT a.*,s.source_root FROM assets a JOIN batches b ON b.id=a.batch_id JOIN sessions s ON s.id=b.session_id WHERE a.id IN (SELECT asset_id FROM batch_assets WHERE batch_id=?)", (batch,))
+        rows = self.rows("SELECT o.*,s.source_root FROM asset_occurrences o JOIN sessions s ON s.id=o.session_id WHERE o.batch_id=?", (batch,))
         for row in rows:
             path = safe_source(row["source_root"], Path(row["source_root"]) / row["relative_path"])
             if file_hash(path) != row["sha256"]:
@@ -319,6 +345,6 @@ class Registry:
         return True
 
     def export(self):
-        value={"version":VERSION,"source":"local-curation","tables":{name:self.rows(f"SELECT * FROM {name}") for name in ('sessions','batches','batch_assets','assets','objects','object_presentation','proposals','tasks','decisions','object_assets','facts','relationships','bindings')}}
+        value={"version":VERSION,"source":"local-curation","tables":{name:self.rows(f"SELECT * FROM {name}") for name in ('sessions','batches','batch_assets','assets','objects','object_presentation','proposals','tasks','decisions','object_assets','facts','relationships','bindings','logical_assets','asset_aliases','asset_occurrences','object_alias_events','capture_sessions','capture_session_revisions','capture_asset_associations')}}
         private_json(self.root/'state'/'curation-export-v1.json',value)
         return value

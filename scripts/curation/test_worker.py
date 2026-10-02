@@ -31,7 +31,7 @@ class Tests(unittest.TestCase):
         source = self.base/name
         source.mkdir()
         for i in range(count):
-            Image.new('RGB', (60,40), (i*13 % 256,50,80)).save(source/f'{i}.png')
+            Image.new('RGB', (60,40), (i*13 % 256, sum(name.encode()) % 256,80)).save(source/f'{i}.png')
         return source
 
     def task(self, kind, key):
@@ -199,6 +199,54 @@ class Tests(unittest.TestCase):
         with patch.object(worker.subprocess,'run',return_value=receipt):
             with self.assertRaises(CurationError):worker.prepare(self.registry,[choice])
 
+
+    def test_publication_uses_verified_retained_copy_if_first_source_is_unavailable(self):
+        import shutil
+        source=self.make_source('original-on-removable',1)
+        batch=self.registry.inspect(source,synthetic=False)
+        aid=self.registry.rows('SELECT asset_id FROM batch_assets WHERE batch_id=?',(batch,))[0]['asset_id']
+        obj,pid=self.obj_proposal(batch,aid,'copy-target')
+        self.registry.decision(self.task('group','copy-target'),{'id':1},pid,'accepted',[{'asset_id':aid,'membership':'keep','role':'overview'}],'test-reviewer')
+        retained=self.base/'retained';retained.mkdir()
+        shutil.copyfile(source/'0.png',retained/'copied.png')
+        self.registry.inspect(retained,synthetic=False)
+        shutil.rmtree(source)
+        receipt=subprocess.CompletedProcess([],0,stdout='{"status":"PASS"}',stderr='')
+        actual_run=worker.subprocess.run
+        def adapter_only(args,**kwargs):
+            return receipt if any(str(a).endswith('adapter.mjs') for a in args) else actual_run(args,**kwargs)
+        with patch.object(worker.subprocess,'run',side_effect=adapter_only):
+            result=worker.prepare(self.registry,[{'objectId':obj,'kind':'inscription','title':'Generated copy test','media':[{'assetId':aid,'position':0,'isRepresentative':True}]}])
+        self.assertEqual(result['status'],'package_prepared')
+        prepared=json.loads((self.registry.root/'state/prepared-package.json').read_text())
+        package=json.loads(Path(prepared['path']).read_text())
+        lineage=package['objects'][0]['localAnnotations']['sourceProcessingLineage'][aid]
+        occurrence=self.registry.db.execute('SELECT relative_path FROM asset_occurrences WHERE id=?',(lineage['occurrenceId'],)).fetchone()[0]
+        self.assertEqual(occurrence,'copied.png')
+
+    def test_card_keeps_reviewed_context_and_omits_deferred_history_without_new_decisions(self):
+        batch=self.registry.inspect(self.source,synthetic=False,limit=1,selected_paths=['0.png'])
+        aid=self.registry.rows('SELECT asset_id FROM batch_assets WHERE batch_id=?',(batch,))[0]['asset_id']
+        obj,pid=self.obj_proposal(batch,aid,'card')
+        self.registry.decision(self.task('group','card-group'),{'id':1},pid,'accepted',[{'asset_id':aid,'membership':'keep','role':'overview'}],'test-reviewer')
+        person=self.registry.propose(batch,obj,'field','persons','AI candidate',[aid],'input','synthetic','synthetic')
+        self.registry.decision(self.task('field','card-person'),{'id':2},person,'corrected','张某（角色未确定）','test-reviewer')
+        date=self.registry.propose(batch,obj,'field','period_original','AI candidate date',[aid],'input','synthetic','synthetic')
+        self.registry.decision(self.task('field','card-date'),{'id':3},date,'deferred','未确定','test-reviewer')
+        before=self.registry.rows('SELECT * FROM decisions')
+        reply=subprocess.CompletedProcess([],0,stdout='{"offlineValidation":"PASS"}',stderr='')
+        actual_run=worker.subprocess.run
+        def adapter_only(args,**kwargs):
+            return reply if any(str(a).endswith('adapter.mjs') for a in args) else actual_run(args,**kwargs)
+        with patch.object(worker.subprocess,'run',side_effect=adapter_only):
+            worker.prepare(self.registry,[{'objectId':obj,'kind':'inscription','title':'待考碑刻','media':[{'assetId':aid,'position':0,'isRepresentative':True}]}])
+        saved=json.loads((self.registry.root/'state/prepared-package.json').read_text())
+        card=json.loads(Path(saved['path']).read_text())['objects'][0]
+        self.assertEqual(card['fields'],{'ownerNote':'人物相关资料：张某（角色未确定）'})
+        self.assertEqual(card['localAnnotations']['facts']['persons'],'张某（角色未确定）')
+        self.assertEqual(self.registry.rows('SELECT * FROM decisions'),before)
+        self.assertFalse(card['localAnnotations']['facts'].get('period_original'))
+
     def test_non_synthetic_reassigned_asset_marks_package_non_synthetic(self):
         # All bytes generated here; only the session label is deliberately non-synthetic.
         source_a=self.make_source('classification-a',1);source_b=self.make_source('classification-b',1)
@@ -210,7 +258,10 @@ class Tests(unittest.TestCase):
         self.registry.decision(self.task('group','a'),{'id':1},pa,'corrected',[{'asset_id':aa,'membership':'reassign','role':'detail','target':ob}],'test-reviewer')
         choice={'objectId':ob,'kind':'inscription','title':'Synthetic title','media':[{'assetId':aa,'position':0,'isRepresentative':True}]}
         receipt=subprocess.CompletedProcess([],0,stdout='{"status":"PASS"}',stderr='')
-        with patch.object(worker.subprocess,'run',return_value=receipt):worker.prepare(self.registry,[choice])
+        actual_run=worker.subprocess.run
+        def adapter_only(args,**kwargs):
+            return receipt if any(str(a).endswith('adapter.mjs') for a in args) else actual_run(args,**kwargs)
+        with patch.object(worker.subprocess,'run',side_effect=adapter_only):worker.prepare(self.registry,[choice])
         prepared=json.loads((self.registry.root/'state/prepared-package.json').read_text())
         self.assertIs(prepared['synthetic'],False)
         self.assertIs(json.loads(Path(prepared['path']).read_text())['synthetic'],False)

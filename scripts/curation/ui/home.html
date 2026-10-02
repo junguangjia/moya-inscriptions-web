@@ -17,7 +17,8 @@
           <p class="eyebrow">你的照片，整理成认得出的对象</p>
           <h1>这批资料，接下来做什么？</h1>
           <p>
-            先看照片认清对象，再核对 AI 建议。每一步完成后，这里会告诉你下一步。
+            选择照片 → AI 分组建议 → 修正归属与代表图 → 准备卡片 → 可编辑 Admin
+            Draft。
           </p>
         </div>
         <p id="notice" role="status" aria-live="polite"></p>
@@ -88,10 +89,11 @@
           <section class="step" id="step-draft">
             <div class="step-number">3</div>
             <div class="step-body">
-              <h2>选择内容，准备本地草稿</h2>
+              <h2>准备卡片，送到 Admin Draft</h2>
               <p>
-                自己选择公开文字、照片顺序和代表图。先生成可以检查的本地 Draft
-                文件包。
+                使用已确认的 AI
+                资料与照片准备卡片。暂缓的历史信息保留未知；草稿到 Admin
+                后可继续编辑，再按现有流程发布。
               </p>
               <div class="stage-status" id="draft-status">
                 关键资料经人工确认后可准备
@@ -99,6 +101,11 @@
               <div id="missing-reviews"></div>
               <button id="open-draft" class="secondary">选择草稿内容</button>
               <div id="selection" hidden></div>
+              <button id="admin-draft" class="secondary">
+                创建可编辑 Admin Draft
+              </button>
+              <p id="transfer-status"></p>
+              <div id="admin-drafts"></div>
             </div>
           </section>
         </div>
@@ -118,7 +125,8 @@
           </div>
           <p>
             新的审核版本保留已收集记录。Development
-            仅使用合成测试资料；真实资料的草稿保留在本机。
+            测试仅使用合成资料。真实传输须限定目标与选中照片；仅创建
+            Draft，不发布、不自动批准。
           </p>
           <button id="stop" class="quiet danger">停止本任务服务</button>
         </details>

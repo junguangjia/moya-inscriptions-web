@@ -100,6 +100,14 @@ class GuidedTests(unittest.TestCase):
         self.assertEqual(reloaded["draft"], draft)
         self.assertEqual(reloaded["revision"], 2)
 
+    def test_unknown_optional_shape_can_stay_absent_when_confirming_a_card(self):
+        session,draft=self.start()
+        draft['fields']['object_form'].update(action='skip',value='')
+        view=self.confirm(session,draft)
+        self.assertEqual(view['state'],'collected',view.get('error'))
+        self.assertFalse(self.registry.rows("SELECT * FROM facts WHERE object_id='target' AND field='object_form'"))
+        self.assertFalse(view['missing'])
+
     def test_explicit_confirmation_scoped_collection_roles_and_replay(self):
         session, draft = self.start()
         untouched = guided.snapshot(self.registry, ["unselected"])
@@ -192,7 +200,11 @@ class GuidedTests(unittest.TestCase):
         choice["media"] = [{"assetId": aid, "position": i, "isRepresentative": i == 0} for i, aid in enumerate(self.aids[:3])]
         # The separate native acceptance runs the real Node validator.
         from subprocess import CompletedProcess
-        with patch.object(worker.subprocess, "run", return_value=CompletedProcess([], 0, '{"status":"PASS"}', '')):
+        receipt = CompletedProcess([], 0, '{"status":"PASS"}', '')
+        actual_run = worker.subprocess.run
+        def adapter_only(args, **kwargs):
+            return receipt if any(str(a).endswith("adapter.mjs") for a in args) else actual_run(args, **kwargs)
+        with patch.object(worker.subprocess, "run", side_effect=adapter_only):
             view = guided.prepare_package(self.registry, session, choice, True)
         self.assertEqual(view["state"], "package_prepared")
         self.assertEqual(guided.project(self.registry, guided.read(self.registry, session["id"], "local"))["packageChoice"], choice)

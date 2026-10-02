@@ -394,12 +394,64 @@ export function readbackContent(content, deps) {
   });
 }
 
+const MAX_REAL_AUTHORIZATION_MS = 24 * 60 * 60 * 1000;
+
+/** An Owner grant only permits the selected bytes to reach the isolated Draft target. */
+async function authorizeRealDraft(authorizationFile, prepared, origin, deps) {
+  let grant;
+  try {
+    const info = await lstat(authorizationFile);
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      info.uid !== process.getuid() ||
+      (info.mode & 0o777) !== 0o600
+    )
+      fail("REAL_MATERIAL_AUTHORIZATION_INVALID");
+    grant = await privateJSON(authorizationFile, 64 * 1024);
+  } catch {
+    fail("REAL_MATERIAL_AUTHORIZATION_INVALID");
+  }
+  const expires = Date.parse(grant?.expiresAt);
+  const now = Date.now();
+  const selected = prepared.objects.map((object) => ({
+    objectId: object.objectId,
+    catalogId: object.catalogId,
+    media: object.media.map((media) => ({
+      assetId: media.assetId,
+      sourceSha256: media.sourceSha256,
+      uploadedSha256: media.uploadedSha256,
+    })),
+  }));
+  if (
+    !plain(grant) ||
+    grant.version !== 1 ||
+    grant.purpose !== "admin-draft-only" ||
+    grant.ownerAuthorized !== true ||
+    grant.instance !== "development" ||
+    grant.baseURL !== origin ||
+    grant.packageHash !== prepared.packageHash ||
+    !Array.isArray(grant.objects) ||
+    prepared.objects.length > 3 ||
+    prepared.objects.reduce((count, object) => count + object.media.length, 0) >
+      12 ||
+    deps.stableDigest(grant.objects) !== deps.stableDigest(selected) ||
+    typeof grant.expiresAt !== "string" ||
+    !Number.isFinite(expires) ||
+    new Date(expires).toISOString() !== grant.expiresAt ||
+    expires <= now ||
+    expires - now > MAX_REAL_AUTHORIZATION_MS
+  )
+    fail("REAL_MATERIAL_AUTHORIZATION_INVALID");
+}
+
 /** Executes only save-draft/upload-media using the existing bounded batch client. */
 export async function draftRoundtrip({
   repoRoot,
   packageFile,
   configFile,
   stateDirectory,
+  authorizationFile,
   budgetMs = 120_000,
   signal,
   deps,
@@ -407,14 +459,27 @@ export async function draftRoundtrip({
 }) {
   deps ??= await dependencies(repoRoot);
   const input = await privateJSON(packageFile);
-  if (input.synthetic !== true) fail("REAL_MATERIAL_TRANSFER_NOT_AUTHORIZED");
+  const realMaterial = input.synthetic !== true;
+  if (
+    realMaterial &&
+    (typeof authorizationFile !== "string" || !authorizationFile)
+  )
+    fail("REAL_MATERIAL_TRANSFER_NOT_AUTHORIZED");
   const prepared = await validatePublicationPackage(input, {
     repoRoot,
     packageDirectory: path.dirname(packageFile),
     deps,
   });
   const config = await privateJSON(configFile, 64 * 1024);
-  developmentOrigin(config);
+  const origin = developmentOrigin(config);
+  if (realMaterial)
+    await authorizeRealDraft(authorizationFile, prepared, origin, deps);
+  if (
+    prepared.objects.some(
+      (object) => object.cmsDraft && object.cmsDraft.baseURL !== origin,
+    )
+  )
+    fail("EXISTING_DRAFT_INSTANCE_MISMATCH");
   if (
     !Array.isArray(config.catalogIds) ||
     prepared.objects.some(
@@ -748,6 +813,7 @@ export async function draftRoundtrip({
           id: record.id,
           revision: record.revision,
           status: "verified",
+          adminURL: client.origin + "/admin/collections/catalogs/" + record.id,
           cmsDraft: {
             id: record.id,
             expectedRevision: record.revision,
@@ -796,8 +862,14 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
-  const [operation, repoRoot, packageFile, configFile, stateDirectory] =
-    process.argv.slice(2);
+  const [
+    operation,
+    repoRoot,
+    packageFile,
+    configFile,
+    stateDirectory,
+    authorizationFile,
+  ] = process.argv.slice(2);
   try {
     if (operation === "validate") {
       const prepared = await validatePublicationPackage(
@@ -805,7 +877,7 @@ if (
         { repoRoot, packageDirectory: path.dirname(packageFile) },
       );
       process.stdout.write(
-        `${JSON.stringify({ offlineValidation: "PASS", objects: prepared.objects.length, media: prepared.objects.reduce((sum, item) => sum + item.media.length, 0) })}\n`,
+        `${JSON.stringify({ offlineValidation: "PASS", packageHash: prepared.packageHash, objects: prepared.objects.length, media: prepared.objects.reduce((sum, item) => sum + item.media.length, 0) })}\n`,
       );
     } else if (operation === "draft") {
       const result = await draftRoundtrip({
@@ -813,6 +885,7 @@ if (
         packageFile,
         configFile,
         stateDirectory,
+        authorizationFile,
       });
       process.stdout.write(
         `${JSON.stringify({ developmentIntegration: result.failed ? "PARTIAL" : "PASS", succeeded: result.succeeded, failed: result.failed, productionPublication: result.productionPublication })}\n`,

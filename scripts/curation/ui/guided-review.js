@@ -23,7 +23,7 @@
     submitting: "保存未完成 · 正在核对原生审核提交",
     submitted_waiting_collection: "审核已提交 · 正式收集尚未完成",
     collected: "正式决定已保存到本机",
-    package_prepared: "正式决定与离线文件包已保存",
+    package_prepared: "正式决定与卡片内容已保存",
   };
   const errors = {
     EXISTING_FIELD_DISPOSITION_REQUIRED:
@@ -38,7 +38,7 @@
     REVIEW_FIELD_VALUE_REQUIRED:
       "需要采用的资料尚未填写完整。填写已保留，请补齐后确认。",
     NECESSARY_FIELDS_REQUIRED:
-      "请先填写标题和对象类型；不确定时可以只保存填写，稍后继续。",
+      "请先确认卡片标题；历史资料不确定时可以明确暂缓。",
     NATIVE_DECISIONS_NEED_COLLECTION:
       "这些组还有原审核页已提交但未收集的判断，请先回工作台收集。",
     NATIVE_SUBMISSION_OUTCOME_UNKNOWN:
@@ -46,8 +46,16 @@
     PUBLIC_MEDIA_SCOPE_INVALID: "请明确选择至少一张本次已确认的照片。",
     PUBLIC_MEDIA_ORDER_OR_REPRESENTATIVE_INVALID:
       "请为已选照片设置不同顺序，并选一张代表图。",
-    KEY_FACT_REVIEW_REQUIRED: "还有资料被暂缓，需完成对应审核后才能准备草稿。",
+    KEY_FACT_REVIEW_REQUIRED: "还有 AI 建议未处理；可采用、不采用或明确暂缓。",
+    REAL_MATERIAL_TRANSFER_NOT_AUTHORIZED:
+      "卡片已保存在本机。需明确授权目标环境与这几张照片后，才能上传到 Admin Draft。",
+    REAL_MATERIAL_AUTHORIZATION_INVALID:
+      "目标或选中资料与授权不一致，未执行传输。",
+    EDITORIAL_TARGET_NOT_CONFIGURED: "目标 Admin 尚未配置，卡片保留在本机。",
     UNSUPPORTED_CATALOG_KIND: "请选择草稿正式类型：碑刻或书法。",
+    INTAKE_TARGET_STALE: "目标对象已被更新，请重新选择新增照片并核对目标。",
+    INTAKE_EXISTING_FACTS_PRESERVED:
+      "增补照片时保留原资料，请在对象整理中另行审核资料。",
     CURRENT_MEDIA_REVIEW_REQUIRED:
       "照片的审核版本已变化，请完成当前审核再准备。",
   };
@@ -157,6 +165,13 @@
       });
       const value = await response.json();
       if (!response.ok) throw new Error(value.category || "操作未完成");
+      if (name === "admin-draft") {
+        await load();
+        notice.textContent = value.failed
+          ? "部分草稿未完成，已完成的回执保留，可以继续失败部分。"
+          : "Admin Draft 已保存、图片已上传并回读。可打开草稿继续编辑；未发布。";
+        return;
+      }
       session = value;
       packageDraft = null;
       render();
@@ -236,7 +251,9 @@
     form.className = "av-object av-review-form";
     form.append(el("legend", "1 · 照片归属与用途"));
     const target = select(
-      session.objects.map((o) => [o.id, o.code + " · " + o.name]),
+      session.objects
+        .filter((o) => !session.intake || o.id === session.intake.targetId)
+        .map((o) => [o.id, o.code + " · " + o.name]),
       draft.targetId,
       (value) => {
         draft.targetId = value;
@@ -330,7 +347,7 @@
       persons: "人物与角色（可选）",
       period_original: "年代原文（可选）",
     };
-    for (const key of Object.keys(fieldLabels)) {
+    for (const key of session.intake ? [] : Object.keys(fieldLabels)) {
       const item = draft.fields[key];
       const input = el("input");
       input.value = item.value;
@@ -372,7 +389,8 @@
         ),
       );
     fields.append(references);
-    root.append(fields);
+    if (!session.intake) root.append(fields);
+    else root.append(el("p", "本次只审核新增照片；原有成员和资料决定保留。"));
     const controls = el("section");
     controls.className = "av-object";
     if (editable) {
@@ -425,20 +443,37 @@
     const section = el("section");
     section.className = "av-object";
     section.append(
-      el("h2", "3 · 选择内容，准备离线文件包"),
-      el("p", "只包含你在下面勾选的照片、文字和顺序。文件保存在本机。"),
+      el("h2", "3 · 准备卡片，创建 Admin Draft"),
+      el(
+        "p",
+        "使用已确认的 AI 资料，以及下面选中的照片和代表图。暂缓信息保留未知。",
+      ),
     );
     if (session.package)
       section.append(
         el(
           "strong",
-          "文件包已通过离线校验：" +
+          "卡片内容已准备：" +
             session.package.objects +
             " 个对象、" +
             session.package.media +
-            " 张照片；未上传。",
+            " 张照片。下方可打开已验证的 Draft，或提交当前卡片内容。",
         ),
       );
+    for (const item of session.adminDrafts || []) {
+      const link = el("a", "打开可编辑 Admin Draft");
+      link.href = item.url;
+      section.append(link, el("br"));
+    }
+    if (session.package) {
+      section.append(
+        button("创建可编辑 Admin Draft", () => action("admin-draft")),
+        el(
+          "p",
+          "真实传输只在明确授权的目标与照片范围内执行。仅保存 Draft，不发布或自动批准。",
+        ),
+      );
+    }
     if (session.missing.length) {
       section.append(
         el(
@@ -528,7 +563,7 @@
     }
     section.append(
       grid,
-      button("确认选择并准备离线文件包", () => {
+      button("使用已确认的资料准备卡片", () => {
         const media = chosen
           .filter((p) => p.use.checked)
           .map((p) => ({
