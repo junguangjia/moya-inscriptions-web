@@ -26,3 +26,11 @@ export {
 } from "./article-provider.js";
 export type { ArticleAuthorizationConfig } from "./article-provider.js";
 export { startArticleAuthorizationServer } from "./article-server.js";
+
+export {
+  articleDatabaseRoleTarget,
+  articleAuthorizationPostgresFrom,
+  readArticleSigningJwks,
+  prepareArticleAuthorizationKeys,
+} from "./article-runtime-config.js";
+export { articleAuthorizationRequestAllowed } from "./article-server.js";

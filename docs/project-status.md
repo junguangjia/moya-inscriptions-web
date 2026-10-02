@@ -36,9 +36,11 @@ head”字段。每个新任务开始前必须 fetch 并实时解析最新
 [`full-release-runtime-v1` #191](https://github.com/junguangjia/moya-inscriptions-web/issues/191)
 正在准备 Production runtime、真实业务入口与本地 Production
 build 验收。范围与 Development/Production 行为矩阵见
-[`full-release-runtime-v1`](production/full-release-runtime-v1.md)。此次明确授权仅替代已实现业务的 Development-only 可用性限制；UI、数据身份、权限、审核规则与 QA 隔离不变。认证、媒体、数据库与外部 Article
-MCP/OAuth 的具体依赖仍分别验收，未接入项不得记为通过。交付停在 Draft
-PR 与 Owner 视觉验收；尚未授权或执行公开部署、流量变更、Ready 或合并。
+[`full-release-runtime-v1`](production/full-release-runtime-v1.md)。此次明确授权仅替代已实现业务的 Development-only 可用性限制；UI、数据身份、权限、审核规则与 QA 隔离不变。Owner 的2026-10-02续行授权在同一 PR195 中补齐 Production
+auth factory/provider/config、B 已合入的 COS/worker，以及原 Article
+AI/MCP/OAuth 正式接线。C196 已合入；Owner 已授权合并前向环境约束修复197，并从 main
+6e7b30fbae09715609d3faa521401f0484c09970 整合。其合并后 CI 的随机测试目录碰撞失败已保留并修复，最终候选仍须重新通过全部适用门槛。模拟 provider、真实服务与最终共同候选验收分别记录，未执行项不得记为通过。PR195 交付停在 Draft 与 Owner 视觉验收；尚未授权或执行公开部署、流量变更、PR195
+Ready 或合并。
 
 ## 先前只读阶段基线（完整发布选择前）
 

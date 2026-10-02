@@ -29,12 +29,71 @@ import {
   MappedStorageUrlResolver,
   UnconfiguredStorageUrlResolver,
 } from "@moya/image";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 
 import type { StorageUrlResolver } from "@moya/api";
 import type { BackendProcessHandle } from "@moya/backend-runtime";
+
+// Catalog integration keeps the real Production parser, public resolver, pools
+// and read-only startup checks. Only unrelated publishing-media opening I/O is
+// replaced; every media operation fails if these Catalog cases invoke it.
+vi.mock(
+  "@moya/backend-production/internal/publishing-config",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@moya/backend-production/internal/publishing-config")
+      >();
+    const refuseMediaIo = async (): Promise<never> => {
+      throw new Error(
+        "Catalog integration must not perform publishing media I/O",
+      );
+    };
+    return {
+      ...actual,
+      openProductionPublishingMedia: vi.fn(
+        async () =>
+          ({
+            store: {
+              writeStream: refuseMediaIo,
+              openRead: refuseMediaIo,
+              remove: refuseMediaIo,
+              listBlobs: refuseMediaIo,
+              sweepStaging: refuseMediaIo,
+            },
+            runner: {
+              createJob: refuseMediaIo,
+              run: refuseMediaIo,
+              sweepJobs: refuseMediaIo,
+            },
+            processor: { process: refuseMediaIo },
+          }) satisfies Awaited<
+            ReturnType<typeof actual.openProductionPublishingMedia>
+          >,
+      ),
+    };
+  },
+);
+
+const productionPublishingEnvironment = {
+  WORK_MEDIA_COS_BUCKET: "synthetic-publishing-1250000000",
+  WORK_MEDIA_COS_REGION: "ap-guangzhou",
+  WORK_MEDIA_COS_PREFIX: "ugc/publishing/synthetic/",
+  WORK_MEDIA_COS_SECRET_ID: "synthetic-publishing-id",
+  WORK_MEDIA_COS_SECRET_KEY: "synthetic-publishing-secret",
+  WORK_MEDIA_TOOLS_IMAGE: "yoyi-work-publishing-media-tools:v1",
+  WORK_MEDIA_WORK_DIR: "/Users/synthetic/publishing/work",
+} as const;
 
 const testDatabaseUrl = requireSyntheticTestDatabaseUrl();
 
@@ -1771,6 +1830,7 @@ describe.sequential("PostgreSQL Catalog HTTP integration", () => {
     try {
       await expect(
         prepareProductionBackend({
+          ...productionPublishingEnvironment,
           // Synthetic signing only; these tests never contact COS.
           COS_BUCKET: "synthetic-example-1250000000",
           COS_REGION: "ap-guangzhou",
@@ -1821,6 +1881,7 @@ describe.sequential("PostgreSQL Catalog HTTP integration", () => {
   it("composes production only after read-only migration validation and closes its pool", async () => {
     await insertFixture();
     const prepared = await prepareProductionBackend({
+      ...productionPublishingEnvironment,
       // Synthetic signing only; these tests never contact COS.
       COS_BUCKET: "synthetic-example-1250000000",
       COS_REGION: "ap-guangzhou",

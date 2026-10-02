@@ -3,14 +3,17 @@ import {
   createProviderAdapter,
   createWrapperStore,
   parseRegisteredClients,
-  providerAdapterKeysFrom,
-  wrapperKeysFrom,
   createArticleConsentStore,
   assertArticleScopes,
 } from "@moya/community-postgres";
 import { installAccessTokenWrapper, providerGrantLifecycle } from "./wrap.js";
+import {
+  articleDatabaseRoleTarget,
+  prepareArticleAuthorizationKeys,
+} from "./article-runtime-config.js";
 import type { OidcProvider, ProviderInteraction } from "./provider.js";
 import type { Pool } from "pg";
+import type { ArticleAuthoringGrant } from "@moya/contracts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 /**
@@ -22,16 +25,27 @@ export interface ArticleAuthorizationConfig {
   readonly issuer: string;
   readonly resource: string;
   readonly consentBaseUrl: string;
-  readonly environment: "development";
+  readonly environment: ArticleAuthoringGrant["environment"];
   readonly host: "127.0.0.1";
   readonly port: number;
   readonly databaseUrl: string;
   readonly clients: ReturnType<typeof parseRegisteredClients>;
 }
 
-const origin = (raw: string | undefined, key: string): URL => {
+const origin = (
+  raw: string | undefined,
+  key: string,
+  production: boolean,
+): URL => {
   if (raw === undefined) throw new Error(`${key}: required`);
-  const value = new URL(raw);
+  let value: URL;
+  try {
+    value = new URL(raw);
+  } catch {
+    throw new Error(`${key}: invalid URL`);
+  }
+  if (raw.trim() !== raw || /\s/u.test(raw))
+    throw new Error(`${key}: invalid URL`);
   if (
     !["http:", "https:"].includes(value.protocol) ||
     value.username ||
@@ -40,8 +54,10 @@ const origin = (raw: string | undefined, key: string): URL => {
     value.search
   )
     throw new Error(`${key}: invalid URL`);
-  // This task has authority for local loopback connectivity only.
+  if (production && value.protocol !== "https:")
+    throw new Error(`${key}: Production HTTPS required`);
   if (
+    !production &&
     !["127.0.0.1", "localhost", "[::1]"].includes(value.hostname) &&
     !value.hostname.endsWith(".localhost")
   )
@@ -50,28 +66,34 @@ const origin = (raw: string | undefined, key: string): URL => {
 };
 export const articleAuthorizationConfigFrom = (
   environment: NodeJS.ProcessEnv,
+  options: { readonly databaseRole?: "issuer" | "resource" } = {},
 ): ArticleAuthorizationConfig | null => {
   if (
-    environment.NODE_ENV !== "development" ||
+    !["development", "production"].includes(environment.NODE_ENV ?? "") ||
     environment.ARTICLE_AUTHORING_ENABLED !== "true"
   )
     return null;
+  const production = environment.NODE_ENV === "production";
   const issuer = origin(
     environment.ARTICLE_AUTHORING_ISSUER,
     "ARTICLE_AUTHORING_ISSUER",
+    production,
   );
   const resource = origin(
     environment.ARTICLE_AUTHORING_RESOURCE,
     "ARTICLE_AUTHORING_RESOURCE",
+    production,
   );
   const consent = origin(
     environment.ARTICLE_AUTHORING_CONSENT_ORIGIN,
     "ARTICLE_AUTHORING_CONSENT_ORIGIN",
+    production,
   );
   if (
     issuer.pathname !== "/" ||
     consent.pathname !== "/" ||
-    issuer.hostname === consent.hostname
+    issuer.hostname === consent.hostname ||
+    (production && resource.pathname !== "/mcp/article-authoring")
   )
     throw new Error(
       "Article issuer must have a separate cookie host from human consent",
@@ -81,18 +103,29 @@ export const articleAuthorizationConfigFrom = (
     !Number.isInteger(port) ||
     port < 1 ||
     port > 65535 ||
-    Number(issuer.port || (issuer.protocol === "https:" ? 443 : 80)) !== port
+    (!production &&
+      Number(issuer.port || (issuer.protocol === "https:" ? 443 : 80)) !==
+        port) ||
+    (production && port === Number(issuer.port || 443))
   )
     throw new Error(
       "ARTICLE_AUTHORIZATION_PORT: explicit issuer/listener port must agree",
     );
-  if (issuer.protocol !== "http:")
+  if (!production && issuer.protocol !== "http:")
     throw new Error("Local Article issuer listener requires http");
-  const databaseUrl = environment.ARTICLE_AUTHORIZATION_DATABASE_URL;
+  const databaseUrl =
+    production && options.databaseRole === "resource"
+      ? environment.ARTICLE_AUTHORIZATION_DATABASE_TARGET
+      : environment.ARTICLE_AUTHORIZATION_DATABASE_URL;
   if (databaseUrl === undefined || databaseUrl === "")
     throw new Error(
       "ARTICLE_AUTHORIZATION_DATABASE_URL: required protected issuer-role configuration",
     );
+  if (production)
+    articleDatabaseRoleTarget(databaseUrl, {
+      production,
+      metadata: options.databaseRole === "resource",
+    });
   if (
     environment.AGENT_AUTHORIZATION_ENABLED === "true" &&
     environment.AGENT_AUTHORIZATION_ISSUER !== undefined &&
@@ -108,7 +141,7 @@ export const articleAuthorizationConfigFrom = (
     host: "127.0.0.1",
     port,
     databaseUrl,
-    environment: "development",
+    environment: production ? "production" : "development",
     clients: parseRegisteredClients(
       environment.ARTICLE_AUTHORING_CLIENTS ?? "",
     ),
@@ -124,50 +157,36 @@ export const createArticleAuthorizationProvider = async (options: {
   readonly pool: Pool;
   readonly environment: NodeJS.ProcessEnv;
   readonly recordFailure?: (code: string) => void;
+  readonly preparedKeys?: ReturnType<typeof prepareArticleAuthorizationKeys>;
 }) => {
   const { config, pool, environment } = options;
+  const keys =
+    options.preparedKeys ??
+    prepareArticleAuthorizationKeys(config, environment);
+  if (config.environment === "production" && keys.jwks === undefined)
+    throw new Error("ARTICLE_AUTHORIZATION_KEYS_REFUSED");
   const require_ = createRequire(import.meta.url);
   const loaded = (await import(require_.resolve("oidc-provider"))) as {
     default: new (
       issuer: string,
       configuration: unknown,
     ) => OidcProvider & {
+      proxy: boolean;
+      proxyIpHeader: string;
+      maxIpsCount: number;
       on(
         event: string,
         listener: (context: unknown, error: unknown) => void,
       ): void;
     };
   };
-  // Reuse existing key validation. Explicit separate configured inputs; there
-  // is no fallback to long-term Admin keys and no generated startup default.
-  const providerKeys = providerAdapterKeysFrom({
-    NODE_ENV: environment.NODE_ENV,
-    AGENT_CONNECTION_PROVIDER_INDEX_KEY:
-      environment.ARTICLE_AUTHORING_PROVIDER_INDEX_KEY,
-    AGENT_CONNECTION_PROVIDER_SEAL_KEY:
-      environment.ARTICLE_AUTHORING_PROVIDER_SEAL_KEY,
-  });
-  const wrapperKeys = wrapperKeysFrom({
-    NODE_ENV: environment.NODE_ENV,
-    AGENT_CONNECTION_WRAPPER_INDEX_KEY:
-      environment.ARTICLE_AUTHORING_WRAPPER_INDEX_KEY,
-    AGENT_CONNECTION_WRAPPER_SEAL_KEY:
-      environment.ARTICLE_AUTHORING_WRAPPER_SEAL_KEY,
-  });
+  const { providerKeys, wrapperKeys, cookieKey, jwks } = keys;
   const consents = createArticleConsentStore(pool, config);
   const wrappers = createWrapperStore({
     pool,
     keys: wrapperKeys,
     namespace: "article-authoring",
   });
-  const cookieKey = environment.ARTICLE_AUTHORING_COOKIE_KEY;
-  if (
-    cookieKey === undefined ||
-    new TextEncoder().encode(cookieKey).byteLength < 32
-  )
-    throw new Error(
-      "ARTICLE_AUTHORING_COOKIE_KEY: required server signing key",
-    );
   const provider = new loaded.default(config.issuer, {
     adapter: createProviderAdapter({
       pool,
@@ -183,7 +202,13 @@ export const createArticleAuthorizationProvider = async (options: {
       application_type: "native",
     })),
     pkce: { required: () => true, methods: ["S256"] },
-    cookies: { keys: [cookieKey] },
+    ...(jwks === undefined ? {} : { jwks }),
+    cookies: {
+      keys: [cookieKey],
+      ...(config.environment === "production"
+        ? { long: { secure: true }, short: { secure: true } }
+        : {}),
+    },
     rotateRefreshToken: true,
     scopes: [
       "artvenn:article:draft",
@@ -290,8 +315,9 @@ export const createArticleAuthorizationProvider = async (options: {
         JOIN community.article_authoring_grants g ON g.grant_id=c.current_grant_id
         JOIN community.public_users u ON u.id=c.owner_id
         WHERE g.grant_id=$1 AND c.status='authorized' AND c.revoked_at IS NULL
-          AND c.generation=g.generation AND u.status='active' AND g.issuer=$2 AND g.resource=$3`,
-          [grantId, config.issuer, config.resource],
+          AND c.generation=g.generation AND u.status='active' AND g.issuer=$2 AND g.resource=$3
+          AND c.environment=$4`,
+          [grantId, config.issuer, config.resource, config.environment],
         );
         if (current.rowCount !== 1)
           throw new Error("ARTICLE_GRANT_NO_LONGER_CURRENT");

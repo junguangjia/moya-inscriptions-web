@@ -1,19 +1,18 @@
 [Unit]
-Description=Yoyi production backend
+Description=Yoyi Article authorization issuer
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=yoyi-backend
-Group=yoyi-backend
+User=yoyi-article-authorization
+Group=yoyi-article-authorization
 WorkingDirectory=/srv/yoyi/current
-EnvironmentFile=/etc/yoyi/backend.env
-# ExecStart fixes the listener; EnvironmentFile cannot publish the port externally.
-ExecStart=/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=3001 node services/backend-production/dist/main.js
+EnvironmentFile=/etc/yoyi/article-authorization.env
+ExecStart=/usr/bin/env NODE_ENV=production ARTICLE_AUTHORIZATION_PORT=3003 node services/agent-authorization/dist/main.js
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=90
+TimeoutStopSec=30
 KillSignal=SIGTERM
 KillMode=mixed
 UMask=0077
@@ -21,8 +20,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-# Only the dedicated private processing workspace is writable.
-ReadWritePaths=/var/lib/yoyi-backend/publishing-work
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

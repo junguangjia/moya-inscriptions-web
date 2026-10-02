@@ -242,8 +242,14 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
       },
       findReceipt: async (keyHash) =>
         state.receipts.find((row) => row.keyHash === keyHash) ?? null,
-      lockSession: async (tokenHash) => {
-        const row = state.sessions.find((item) => item.tokenHash === tokenHash);
+      lockSession: async (tokenHash, requiredEnvironment) => {
+        const row = state.sessions.find(
+          (item) =>
+            item.tokenHash === tokenHash &&
+            (requiredEnvironment === undefined ||
+              (item.issuer === "verified_login" &&
+                item.authEnvironment === requiredEnvironment)),
+        );
         if (row === undefined) return null;
         return {
           id: row.id,
@@ -349,10 +355,13 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
             (row.deliveryState === "pending" ||
               row.deliveryState === "accepted"),
         ),
-      findSessionUser: async (tokenHash, atIso) => {
+      findSessionUser: async (tokenHash, atIso, requiredEnvironment) => {
         const session = state.sessions.find(
           (row) =>
             row.tokenHash === tokenHash &&
+            (requiredEnvironment === undefined ||
+              (row.issuer === "verified_login" &&
+                row.authEnvironment === requiredEnvironment)) &&
             row.revokedAt === null &&
             after(row.expiresAt, atIso),
         );

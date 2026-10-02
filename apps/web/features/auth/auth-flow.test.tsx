@@ -47,6 +47,7 @@ const capabilities = (
   phone = false,
   email = true,
   developmentOnly = true,
+  registration?: unknown,
 ): Response => ({
   status: 200,
   body: {
@@ -54,6 +55,7 @@ const capabilities = (
     email: { available: email, reason: null },
     phone: { available: phone, reason: null },
     developmentOnly,
+    ...(registration === undefined ? {} : { registration }),
   },
 });
 const failure = (reason: string): Response => ({
@@ -198,10 +200,13 @@ describe("AuthFlow", () => {
     await setInput(passwordFields()[0]!, value);
     await setInput(passwordFields()[1]!, confirmation);
   };
-  const startProfile = async (developmentOnly = true) => {
+  const startProfile = async (
+    developmentOnly = true,
+    registration?: unknown,
+  ) => {
     request.mockImplementation(async (path: string) => {
       if (path === "capabilities")
-        return capabilities(false, true, developmentOnly);
+        return capabilities(false, true, developmentOnly, registration);
       if (path === "challenges") return accepted();
       if (path === "challenges/verify") return handoff();
       if (path === "registrations")
@@ -608,6 +613,7 @@ describe("AuthFlow", () => {
       await click("创建账户");
       expect(bodies("registrations")[0]!.displayName).toBe("访碑者");
       expect(bodies("registrations")[0]!.agreement).toBe(true);
+      expect(bodies("registrations")[0]).not.toHaveProperty("agreementVersion");
       expect(onReturn).not.toHaveBeenCalled();
       expect(
         container.querySelector("main")?.getAttribute("data-auth-step"),
@@ -630,6 +636,103 @@ describe("AuthFlow", () => {
     await submit();
     expect(calls("registrations")).toHaveLength(0);
   });
+
+  it("renders supplied Production agreement as plain text and binds manual registration retry to its version", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    // Explicit synthetic material verifies wiring; it is not approved legal copy.
+    const agreement = {
+      version: "synthetic-registration-v1",
+      title: "合成注册说明（仅用于自动测试）",
+      body: "Synthetic fixture only.\n<strong>Display this literally.</strong>",
+    };
+    await startProfile(false, { available: true, agreement, reason: null });
+    await setInput(input("input[autocomplete='nickname']"), "Runtime reader");
+    expect(button("创建账户").disabled).toBe(true);
+    await click("注册说明");
+    expect(container.querySelector("h1")?.textContent).toBe(agreement.title);
+    expect(container.textContent).toContain(agreement.body);
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.textContent).not.toContain("开发环境草稿");
+    await click("返回填写");
+    expect(input("input[autocomplete='nickname']").value).toBe(
+      "Runtime reader",
+    );
+    expect(document.activeElement).toBe(button("注册说明"));
+    await act(async () => input("input[type='checkbox']").click());
+    request.mockResolvedValueOnce({ status: 503, body: null });
+    await submit();
+    expect(calls("registrations")).toHaveLength(1);
+    const first = bodies("registrations")[0]!;
+    expect(first.agreement).toBe(true);
+    expect(first.agreementVersion).toBe(agreement.version);
+    await submit();
+    expect(calls("registrations")).toHaveLength(2);
+    expect(bodies("registrations")[1]).toEqual(first);
+    expect(
+      container.querySelector("[data-registration-avatar]"),
+    ).not.toBeNull();
+    expect(onReturn).not.toHaveBeenCalled();
+    await click("跳过");
+    expect(onReturn).toHaveBeenCalledWith("/?catalog=fixture");
+  });
+
+  it("keeps explicitly unavailable Production registration closed after an unknown-account handoff", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    await startProfile(false, {
+      available: false,
+      agreement: null,
+      reason: "AUTH_NOT_CONFIGURED",
+    });
+    await setInput(input("input[autocomplete='nickname']"), "Runtime reader");
+    expect(container.querySelector("input[type='checkbox']")).toBeNull();
+    expect(button("创建账户").disabled).toBe(true);
+    await submit();
+    expect(calls("registrations")).toHaveLength(0);
+  });
+
+  it("does not send an explicit Production registration challenge without agreement material", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    request.mockResolvedValue(capabilities(false, true, false));
+    await render({ mode: "register" });
+    await setInput(input("input[type='email']"), "tester@example.com");
+    expect(container.textContent).toContain("注册说明暂时不可用");
+    expect(button("发送验证码").disabled).toBe(true);
+    await submit();
+    expect(calls("challenges")).toHaveLength(0);
+  });
+
+  it("keeps existing-account Production sign-in independent of registration availability", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    request.mockResolvedValueOnce(capabilities(false, true, false));
+    await render();
+    await startCode();
+    await enterCode();
+    await submit();
+    expect(onReturn).toHaveBeenCalledWith("/?catalog=fixture");
+    expect(calls("registrations")).toHaveLength(0);
+  });
+
+  it.each([
+    { available: true, agreement: null, reason: null },
+    {
+      available: false,
+      agreement: { version: "fixture", title: "Synthetic", body: "Test only" },
+      reason: null,
+    },
+  ])(
+    "does not trust inconsistent Production registration material %j",
+    async (registration) => {
+      vi.stubEnv("NODE_ENV", "production");
+      request.mockResolvedValueOnce(
+        capabilities(false, true, false, registration),
+      );
+      await render({ mode: "register" });
+      expect(container.textContent).toContain("暂时无法获取登录方式");
+      expect(button("发送验证码").disabled).toBe(true);
+      await submit();
+      expect(calls("challenges")).toHaveLength(0);
+    },
+  );
 
   it("does not advertise Development-only verification in a Production client", async () => {
     vi.stubEnv("NODE_ENV", "production");

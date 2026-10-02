@@ -1,5 +1,6 @@
 export {
   authRequest,
+  parseAuthCapabilities,
   hasCompletedAuthSession,
   safeReturnPath,
   validAuthPassword,

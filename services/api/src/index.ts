@@ -49,7 +49,10 @@ export { createMemoryCommunityAuthPort } from "./modules/community/application/a
 export {
   assertProductionAuthConfiguration,
   createDevelopmentAuthService,
+  productionAuthConfigurationFrom,
+  createProductionAuthService,
 } from "./modules/community/application/auth/auth-configuration.js";
+export type { ProductionAuthConfiguration } from "./modules/community/application/auth/auth-configuration.js";
 export {
   assertLoopbackCaptureUrl,
   interpretAliyunCheck,

@@ -105,7 +105,10 @@ completed full-release-media-v1 and full-release-database-v1 dependencies from
 main; separate real authentication and external Article MCP/OAuth remain
 dependencies. Unavailable journeys stay pending; independent work continues.
 
-## Integration inventory and pending dependencies
+## Baseline integration inventory (r1)
+
+This table records the original dispatch baseline. The r3 continuation below
+supersedes its separate-task exclusions and dependency status.
 
 Business availability is changed at each existing boundary, not by globally
 replacing `NODE_ENV`: Web root/providers and business relays; Backend
@@ -175,3 +178,49 @@ verification. Real email/SMS activation and delivery, real credentials, live
 privilege changes and deployment remain outside this authorization. Missing
 implementation must remain explicitly pending rather than being called only
 service activation.
+
+## r3 frozen continuation and implemented boundaries
+
+Scope is extended only to the existing auth application/config/ports, the
+Backend auth factory and exports, shared registration schema/client/dialog,
+existing Article issuer/provider/runtime and protected key/TLS validation,
+non-DDL Session/Article authority reads, the existing composition/router and
+Production deployment templates, and directly affected tests. Root remains the
+sole shared source writer; media internals are consumed from B/main and all
+SQL/manifests/grants remain C-owned. Necessary existing workspace dependency:
+agent-authorization consumes catalog-postgres's verified TLS parser/pool; no
+external version upgrade.
+
+The agreed matrix preserves Development capture/QA and activates explicit
+Production Tencent SES/optional Aliyun providers, versioned approved agreement
+material, verified-login Production Sessions, and the existing Article
+OAuth/PKCE/registry/MCP/human consent/exact candidate publication approvals.
+Provider/signing/file/role configuration is validated before pools. Production
+never uses Development capture/simulation or default signing keys. Five SQL
+identities remain distinct and startup never changes schema/grants.
+
+B's accepted main d434fac2060745d5ed29696197ca1cb857360c66 supplies the COS
+factory/store/processor/runner. Shared composition supplies one transfer
+registry, one store and the existing media/notification workers. The Nginx
+upload bound is 8 GiB only for the exact raw component path; streaming preserves
+cancellation, Range/status/private headers. Systemd Backend stop deadline is 90s
+and only the private processing workspace is writable. Docker access/image/host
+certification remains explicit setup acceptance, never silent privilege
+expansion.
+
+C's forward Article environment migration, PR197 at reviewed head
+1b57fce3425756fbed244ed3cfde3edd9e34b781, was merged with explicit Owner
+authorization into main 6e7b30fbae09715609d3faa521401f0484c09970 and consumed
+unchanged. It permits Production without changing immutable
+environment/owner/client or grants. All applicable PR CI passed; merged-main
+CI37037145277 failed an existing filesystem test because a random first blob
+occupied the directory reserved for its symlink case. The correction chooses a
+disjoint synthetic key while retaining every refusal assertion; fresh candidate
+CI remains required. Production auth factory/provider implementation and full
+application acceptance are assessed separately from missing actual services,
+approved legal material, external client registrations and deployment.
+
+Current validation/history resides in the existing private task handoff. No
+source patch, synthetic provider result, ingress check or dependency's passing
+CI is a final common-candidate acceptance claim. Final exact-head results and
+remaining gates are added after integration validation and personal browser QA.

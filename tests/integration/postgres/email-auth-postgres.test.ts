@@ -7,6 +7,8 @@ import {
   CommunityAuthService,
   assertProductionAuthConfiguration,
   createDevelopmentAuthService,
+  generateOpaqueId,
+  hashSessionToken,
 } from "@moya/api";
 import {
   createPostgresPool,
@@ -14,6 +16,7 @@ import {
 } from "@moya/catalog-postgres";
 import {
   PostgresCommunityAuthAdapter,
+  PostgresCommunityIdentityAdapter,
   requiredCommunityMigrations,
   runCommunityMigrations,
   verifyCommunityMigrationLedger,
@@ -159,10 +162,14 @@ const register = async (
   });
   if (!verified.ok || verified.value.outcome !== "registration_required")
     throw new Error(verified.ok ? verified.value.outcome : verified.reason);
+  const registration = service.capabilities().registration;
   const registered = await service.confirmRegistration({
     handoffToken: verified.value.handoffToken,
     displayName,
     agreement: true,
+    ...(registration?.available
+      ? { agreementVersion: registration.agreement.version }
+      : {}),
     idempotencyKey: key(),
   });
   if (!registered.ok) throw new Error(registered.reason);
@@ -571,6 +578,111 @@ describe("email-auth PostgreSQL", () => {
       createDevelopmentAuthService(new PostgresCommunityAuthAdapter(app), {
         NODE_ENV: "development",
       }),
+    ).toBeNull();
+  });
+
+  it("accepts only verified Production sessions across identity, auth reads and receipt locks", async () => {
+    const app = appPool();
+    const agreement = {
+      version: "synthetic-production-v1",
+      title: "Synthetic agreement",
+      body: "Test fixture only, not approved legal content.",
+    };
+    const production = new CommunityAuthService(
+      new PostgresCommunityAuthAdapter(app),
+      {
+        environment: "production",
+        profile: "email-first",
+        keys,
+        emailMode: "provider",
+        phoneMode: "disabled",
+        delivery: delivery(),
+        registrationAgreement: agreement,
+      },
+    );
+    const accepted = await register(
+      production,
+      "email",
+      "production-session@example.com",
+      "Synthetic Production",
+    );
+    const development = await register(
+      serviceFor(app, "disabled"),
+      "email",
+      "development-session@example.com",
+      "Synthetic Development",
+    );
+    const identity = new PostgresCommunityIdentityAdapter(app, {
+      requireProductionSession: true,
+    });
+    const legacyIdentity = new PostgresCommunityIdentityAdapter(app);
+    const now = new Date();
+    expect(
+      await identity.findSessionUser(
+        await hashSessionToken(accepted.token),
+        now,
+      ),
+    ).toMatchObject({ id: accepted.profile.id });
+    expect(await production.readAccount(accepted.token)).toMatchObject({
+      ok: true,
+    });
+    const legacy = "SYNTHETIC_LEGACY_SESSION".padEnd(43, "_");
+    await owner.query(
+      `INSERT INTO community.sessions(id,token_hash,user_id,issued_at,expires_at)
+      VALUES($1,$2,$3,now(),now()+interval '1 hour')`,
+      [
+        generateOpaqueId("session"),
+        await hashSessionToken(legacy),
+        accepted.profile.id,
+      ],
+    );
+    const devHandle = "SYNTHETIC_HANDLE_SESSION".padEnd(43, "_");
+    await owner.query(
+      `INSERT INTO community.sessions(id,token_hash,user_id,issued_at,expires_at,issuer,auth_environment)
+      VALUES($1,$2,$3,now(),now()+interval '1 hour','development_handle','production')`,
+      [
+        generateOpaqueId("session"),
+        await hashSessionToken(devHandle),
+        accepted.profile.id,
+      ],
+    );
+    const adapter = new PostgresCommunityAuthAdapter(app);
+    for (const token of [development.token, legacy, devHandle]) {
+      const hash = await hashSessionToken(token);
+      expect(await legacyIdentity.findSessionUser(hash, now)).not.toBeNull();
+      expect(await identity.findSessionUser(hash, now)).toBeNull();
+      expect(await production.readAccount(token)).toMatchObject({
+        ok: false,
+        reason: "AUTH_UNAUTHENTICATED",
+      });
+      expect(await production.signOut(token)).toMatchObject({
+        ok: false,
+        reason: "AUTH_UNAUTHENTICATED",
+      });
+      await adapter.transaction(async (tx) => {
+        expect(
+          await tx.findSessionUser(hash, now.toISOString(), "production"),
+        ).toBeNull();
+        expect(await tx.lockSession(hash, "production")).toBeNull();
+        expect(await tx.lockSession(hash)).not.toBeNull();
+      });
+      expect(
+        (
+          await owner.query(
+            "SELECT revoked_at FROM community.sessions WHERE token_hash=$1",
+            [hash],
+          )
+        ).rows[0].revoked_at,
+      ).toBeNull();
+    }
+    expect(await production.signOut(accepted.token)).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await identity.findSessionUser(
+        await hashSessionToken(accepted.token),
+        new Date(),
+      ),
     ).toBeNull();
   });
 

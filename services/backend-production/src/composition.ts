@@ -2,7 +2,11 @@ import { PostgresNotificationAdapter } from "@moya/community-postgres";
 import { NotificationSignals } from "@moya/backend-runtime";
 import { NotificationWorker } from "./notifications/worker.js";
 import {
-  assertProductionAuthConfiguration,
+  createConfiguredProductionAuthService,
+  loadProductionAuthConfiguration,
+} from "./auth/index.js";
+import type { AuthProviderDependencies } from "./auth/index.js";
+import {
   createBackendApplication,
   createArticleAuthoringService,
   createArticleCatalogReadCallbacks,
@@ -48,6 +52,8 @@ import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
   openPublishingMedia,
   parsePublishingMediaConfig,
+  openProductionPublishingMedia,
+  parseProductionPublishingMediaConfig,
 } from "./publishing/config.js";
 import { createPublishingJobHandlers } from "./publishing/job-handlers.js";
 import { PublishingWorker } from "./publishing/worker.js";
@@ -63,6 +69,7 @@ import type {
   RuntimeEnvironment,
 } from "@moya/backend-runtime";
 import type { PostgresConfig } from "@moya/catalog-postgres";
+import type { PublishingCosTransport } from "./storage/publishing-cos-transport.js";
 import type { RequestListener } from "node:http";
 
 export interface PreparedProductionBackend {
@@ -163,11 +170,17 @@ const parseOperatorCredential = (environment: RuntimeEnvironment): string => {
   return value;
 };
 
+/** Code-only low-level dependencies for isolated acceptance; main uses real transports. */
+export interface ProductionBackendDependencies {
+  readonly publishingCosTransport?: PublishingCosTransport;
+  readonly authProvider?: AuthProviderDependencies;
+}
+
 export const prepareProductionBackend = async (
   environment: RuntimeEnvironment,
+  dependencies: ProductionBackendDependencies = {},
 ): Promise<PreparedProductionBackend> => {
   const runtimeConfig = parseRuntimeConfig(environment);
-  assertProductionAuthConfiguration(environment);
   if (
     runtimeConfig.nodeEnv !== "production" &&
     runtimeConfig.nodeEnv !== "development"
@@ -176,6 +189,10 @@ export const prepareProductionBackend = async (
       "NODE_ENV must be production or development for this backend",
     );
   }
+  const authConfiguration =
+    runtimeConfig.nodeEnv === "production"
+      ? await loadProductionAuthConfiguration(environment)
+      : null;
   const articleConfiguration = articleBackendConfigurationFrom(
     environment,
     runtimeConfig,
@@ -207,19 +224,32 @@ export const prepareProductionBackend = async (
     : runtimeConfig.nodeEnv === "development"
       ? createLocalStorageUrlResolver(environment)
       : new ProductionCosStorageUrlResolver(productionCosOptions(environment));
-  // Development work publishing media (design §9.6). Without its keys the
-  // Backend still starts and publishing uploads answer 503; a partial or
-  // unusable configuration fails here, before any pool opens. Production
-  // never reads these keys.
-  const publishingMediaConfig =
-    runtimeConfig.nodeEnv === "development"
-      ? parsePublishingMediaConfig(environment)
-      : null;
-  const publishingMedia = publishingMediaConfig
-    ? await openPublishingMedia(publishingMediaConfig, {
-        foreignDirectories: [environment.CMS_MEDIA_DIR],
-      })
-    : undefined;
+  // Production requires B's COS factory; Development retains its explicit local
+  // configuration. Both branches open exactly one store/processor/runner before
+  // pools, shared by HTTP, Article thumbnails and the worker.
+  const { config: publishingMediaConfig, media: publishingMedia } =
+    await (async () => {
+      if (runtimeConfig.nodeEnv === "production") {
+        const config = parseProductionPublishingMediaConfig(environment);
+        const media = await openProductionPublishingMedia(config, {
+          foreignDirectories: [environment.CMS_MEDIA_DIR],
+          ...(dependencies.publishingCosTransport === undefined
+            ? {}
+            : { transport: dependencies.publishingCosTransport }),
+        });
+        return { config, media };
+      }
+      const config = parsePublishingMediaConfig(environment);
+      return {
+        config,
+        media:
+          config === null
+            ? undefined
+            : await openPublishingMedia(config, {
+                foreignDirectories: [environment.CMS_MEDIA_DIR],
+              }),
+      };
+    })();
   const onUnexpectedIdleError = () => {
     console.error("[backend-production] unexpected PostgreSQL pool error");
   };
@@ -299,6 +329,7 @@ export const prepareProductionBackend = async (
   const catalogQueryPort = new PostgresCatalogQueryAdapter(pool);
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,
+    { requireProductionSession: runtimeConfig.nodeEnv === "production" },
   );
   const communityCommentPort = new PostgresCommunityCommentAdapter(
     communityPool,
@@ -371,11 +402,17 @@ export const prepareProductionBackend = async (
       healthReadinessCheck: readinessCheck,
       communityIdentityPort,
       ...(() => {
-        if (runtimeConfig.nodeEnv !== "development") return {};
-        const authService = createDevelopmentAuthService(
-          new PostgresCommunityAuthAdapter(communityPool),
-          environment,
-        );
+        const adapter = new PostgresCommunityAuthAdapter(communityPool);
+        const authService =
+          runtimeConfig.nodeEnv === "production"
+            ? authConfiguration === null
+              ? null
+              : createConfiguredProductionAuthService(
+                  adapter,
+                  authConfiguration,
+                  dependencies.authProvider,
+                )
+            : createDevelopmentAuthService(adapter, environment);
         return authService === null ? {} : { authService };
       })(),
       communityCommentPort,

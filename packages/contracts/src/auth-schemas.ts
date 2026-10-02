@@ -26,6 +26,44 @@ export const authFactorSchema = z.strictObject({
   usable: z.boolean(),
 });
 
+/** Runtime-supplied approved material, rendered as plain text without HTML parsing. */
+export const authRegistrationAgreementSchema = z.strictObject({
+  version: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine((value) => value.trim().length > 0),
+  title: z
+    .string()
+    .min(1)
+    .max(120)
+    .refine((value) => value.trim().length > 0),
+  body: z
+    .string()
+    .min(1)
+    .max(32_768)
+    .refine(
+      (value) =>
+        value.trim().length > 0 &&
+        !value.includes("\u0000") &&
+        new TextEncoder().encode(value).byteLength <= 32_768,
+      "Registration agreement must be nonempty plain text of at most 32768 UTF-8 bytes",
+    ),
+});
+
+const authRegistrationCapabilitySchema = z.discriminatedUnion("available", [
+  z.strictObject({
+    available: z.literal(true),
+    agreement: authRegistrationAgreementSchema,
+    reason: z.null(),
+  }),
+  z.strictObject({
+    available: z.literal(false),
+    agreement: z.null(),
+    reason: z.string().min(1).max(200).nullable(),
+  }),
+]);
+
 export const authCapabilitiesSchema = z.strictObject({
   profile: z.enum(["full-local", "email-first", "disabled"]),
   email: z.strictObject({
@@ -38,6 +76,8 @@ export const authCapabilitiesSchema = z.strictObject({
   }),
   /** Development labeling. Authentication is not identity proofing. */
   developmentOnly: z.boolean(),
+  /** Absent on legacy Development responses; Production registration fails closed. */
+  registration: authRegistrationCapabilitySchema.optional(),
 });
 
 export const authAccountSecuritySchema = z.strictObject({
@@ -182,6 +222,8 @@ export const authRegistrationRequestSchema = z
     studioName: studioNameDisplaySchema.optional(),
     studioNameSuffix: studioNameSuffixSchema.optional(),
     agreement: z.literal(true),
+    /** Production must match the currently configured approved material. */
+    agreementVersion: z.string().min(1).max(64).optional(),
     idempotencyKey: idempotencyKeySchema,
   })
   .superRefine(refineStudioNameWrite);
@@ -235,6 +277,9 @@ export type AuthChannel = z.infer<typeof authChannelSchema>;
 export type AuthChannelState = z.infer<typeof authChannelStateSchema>;
 export type AuthFactor = z.infer<typeof authFactorSchema>;
 export type AuthCapabilities = z.infer<typeof authCapabilitiesSchema>;
+export type AuthRegistrationAgreement = z.infer<
+  typeof authRegistrationAgreementSchema
+>;
 export type AuthAccountSecurity = z.infer<typeof authAccountSecuritySchema>;
 export type AuthChallengeRequest = z.infer<typeof authChallengeRequestSchema>;
 export type AuthChallengeAccepted = z.infer<typeof authChallengeAcceptedSchema>;

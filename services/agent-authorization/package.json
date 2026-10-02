@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@moya/catalog-postgres": "workspace:*",
     "@moya/community-postgres": "workspace:*",
     "@moya/contracts": "workspace:*",
     "oidc-provider": "9.12.2",

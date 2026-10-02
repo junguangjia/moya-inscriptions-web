@@ -54,6 +54,7 @@ import type {
   StorageUrlResolver,
   WorkPublishingPort,
 } from "@moya/api";
+import type { ArticleAuthoringGrant } from "@moya/contracts";
 import type { NodeEnvironment } from "./config.js";
 import type { ArticleDelegationRuntime } from "./community/article-delegation-handler.js";
 import type { createArticleMcpHandler } from "./community/article-mcp.js";
@@ -93,8 +94,9 @@ export interface BackendApplicationOptions {
   readonly workPublishingPort?: WorkPublishingPort;
   /** Human Article drafts and publication. */
   readonly articleAuthoringPort?: ArticleAuthoringPort;
-  /** One shared authoring service for the Development human and MCP entries. */
+  /** One shared authoring service for explicitly configured human and MCP entries. */
   readonly articleDelegation?: {
+    readonly environment: ArticleAuthoringGrant["environment"];
     readonly human: ArticleDelegationRuntime;
     readonly mcp: ReturnType<typeof createArticleMcpHandler>;
     readonly resource: string;
@@ -229,6 +231,18 @@ const resolveCommunity = (
     options.directMessagePort !== undefined
       ? new DirectMessageService(options.directMessagePort)
       : undefined;
+  const articleDelegation =
+    nodeEnv === "test" ? undefined : options.articleDelegation;
+  if (articleDelegation !== undefined) {
+    if (articleDelegation.environment !== nodeEnv)
+      throw new Error("Article authority environment must match its runtime");
+    if (
+      nodeEnv === "production" &&
+      (new URL(articleDelegation.resource).protocol !== "https:" ||
+        new URL(articleDelegation.human.issuer).protocol !== "https:")
+    )
+      throw new Error("Production Article delegation requires HTTPS");
+  }
   return {
     sessionService,
     ...(options.articlePublicationOperatorPort !== undefined
@@ -242,24 +256,18 @@ const resolveCommunity = (
             ),
         }
       : {}),
-    ...((nodeEnv === "development" &&
-      options.articleDelegation !== undefined) ||
+    ...(articleDelegation !== undefined ||
     options.articleAuthoringPort !== undefined
       ? {
           articleAuthoringService:
-            (nodeEnv === "development"
-              ? options.articleDelegation?.human.authoring
-              : undefined) ??
+            articleDelegation?.human.authoring ??
             new ArticleAuthoringService(
               options.articleAuthoringPort!,
               options.publishingClock === undefined
                 ? {}
                 : { now: options.publishingClock },
             ),
-          ...(nodeEnv !== "development" ||
-          options.articleDelegation === undefined
-            ? {}
-            : { articleDelegation: options.articleDelegation }),
+          ...(articleDelegation === undefined ? {} : { articleDelegation }),
         }
       : {}),
     ...(options.authService !== undefined

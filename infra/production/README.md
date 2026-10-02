@@ -31,34 +31,36 @@ The notification stream disables Nginx buffering; its existing Backend heartbeat
 and session checks are preserved. Internal operator endpoints are never proxied
 directly; Admin retains its Owner authorization and private Backend credential.
 
-Production authentication, media processing and final migration/grant acceptance
-remain separate dependency deliveries. Do not copy Development provider or
-filesystem settings into these templates. Exact upload body/streaming limits,
-processing directories, worker configuration and systemd directory permissions
-must come from `full-release-media-v1`. Runtime startup only verifies readiness
-and the current migration ledger; the explicit migration/grant process must
-consume `full-release-database-v1` before deployment. No automatic grant or
-migration is introduced.
+The continuation integrates the existing Production auth provider factory and
+B's accepted COS factory/store/worker, plus explicitly configured Article
+OAuth/MCP. Real email/SMS activation/delivery remains deferred. Full candidate
+acceptance and C's forward Article environment migration are recorded in the
+[runtime record](../../docs/production/full-release-runtime-v1.md); template
+presence is not acceptance. Startup only validates protected configuration,
+readiness and migration ledgers. It never sends verification messages, migrates,
+grants, pulls an image or makes COS setup requests.
 
-## Three processes behind Nginx
+## Existing processes behind Nginx
 
-| Process | Unix identity  | Listener         | EnvironmentFile         |
-| ------- | -------------- | ---------------- | ----------------------- |
-| Web     | `yoyi-web`     | `127.0.0.1:3000` | `/etc/yoyi/web.env`     |
-| Backend | `yoyi-backend` | `127.0.0.1:3001` | `/etc/yoyi/backend.env` |
-| Admin   | `yoyi-admin`   | `127.0.0.1:3002` | `/etc/yoyi/admin.env`   |
+| Process        | Unix identity                | Listener         | EnvironmentFile                       |
+| -------------- | ---------------------------- | ---------------- | ------------------------------------- |
+| Web            | `yoyi-web`                   | `127.0.0.1:3000` | `/etc/yoyi/web.env`                   |
+| Backend        | `yoyi-backend`               | `127.0.0.1:3001` | `/etc/yoyi/backend.env`               |
+| Admin          | `yoyi-admin`                 | `127.0.0.1:3002` | `/etc/yoyi/admin.env`                 |
+| Article issuer | `yoyi-article-authorization` | `127.0.0.1:3003` | `/etc/yoyi/article-authorization.env` |
 
 All names, paths, hostnames and provider identifiers in these templates are
 fictional examples. Replace them in private deployment input after actual
 resource and release authorization. Do not commit real values or write them to
-logs. The three systemd services use independent non-login users, read-only
-code, `NoNewPrivileges`, strict filesystem protection, no capabilities,
-`Restart=on-failure`, SIGTERM and a 30-second graceful-stop deadline. Listener
-arguments are fixed in `ExecStart` so an environment file cannot expose a
-process port. Startup performs readiness checks; it never executes migrations or
-DDL.
+logs. The services use independent non-login users, read-only code,
+`NoNewPrivileges`, strict filesystem protection, no capabilities,
+`Restart=on-failure` and SIGTERM. Backend has a90-second graceful-stop deadline
+for notification/publishing shutdown before pools; Web/Admin/issuer retain30s.
+Listener arguments are fixed in `ExecStart` so an environment file cannot expose
+a process port. Startup performs readiness checks; it never executes migrations
+or DDL.
 
-A future deployment operator must install Node 24/pnpm 11.9.0, create the three
+A future deployment operator must install Node 24/pnpm 11.9.0, create the four
 service users, provide a readable release at `/srv/yoyi/current`, create the two
 Next.js `.next/cache` directories writable only by their respective users, and
 prepare `/var/lib/yoyi-admin/media` for Admin-only temporary media writes. All
@@ -146,7 +148,7 @@ production operation. Do not run either migration command as service startup.
 
 ## COS and environment boundaries
 
-Start from the three `env/*.env.example` files, with private resource values
+Start from the four `env/*.env.example` files, with private resource values
 provided per service. `web.env` contains only the loopback Backend URL and
 internal CMS preview URL. `backend.env` contains the published-read DB role and
 the independent COS read runtime. `admin.env` contains Payload's own DB role,
@@ -233,3 +235,64 @@ storage boundary. QA filtering remains QA-only; no hard-coded
 dynasty/script/type/region taxonomy enters production contracts or tables. This
 task prepares the existing code and local development environment to connect
 future CVM/TencentDB/COS; it does not release those domains or resources.
+
+## Full-release media and formal Article wiring
+
+B PR194 is consumed from main d434fac2060745d5ed29696197ca1cb857360c66.
+Production requires `WORK_MEDIA_COS_*`, a local pinned `WORK_MEDIA_TOOLS_IMAGE`
+and an existing backend-owned0700 `WORK_MEDIA_WORK_DIR`. One configured COS
+store/processor/runner is shared by upload/read/Article thumbnails and the
+existing publishing worker; one transfer registry handles cancellation. Do not
+set `WORK_MEDIA_STORE_DIR` or reuse Catalog/Payload credentials. Keep one active
+Backend per exclusive `ugc/publishing/<namespace>/`, including restart overlap.
+
+Only the exact component upload route has8GiB ingress. It streams with request
+and response buffering/cache/retry disabled and130s body/send and75s response
+idle limits. Derivative GET/HEAD/Range preserves200/206/416, private headers and
+stream cancellation. Profile PNG remains4MiB; human Article and MCP document
+commands use1MiB+16KiB envelopes. Ordinary Community requests retain1MiB.
+
+The Backend unit permits writes only to `/var/lib/yoyi-backend/publishing-work`.
+Prepare that directory, the existing locally pinned media-tools image and a
+separately authorized Docker daemon access model before service activation.
+Prefer a backend-user rootless daemon and explicitly set its local Unix socket
+in private `DOCKER_HOST`; do not silently add the service to a rootful Docker
+group or remove hardening. The Docker CLI must be in the service PATH and the
+daemon must see that host bind path. Validate real host mounts, sandbox limits,
+image capabilities, memory/disk capacity and shutdown; local offline acceptance
+does not certify the eventual Linux host. See B's
+[exact media requirements](../../docs/development/full-release-media-v1.md). No
+daemon installation, group change or service activation runs here.
+
+The additional Article issuer uses `yoyi-article-authorization.service`,
+loopback3003 and the separate HTTPS cookie host `article-auth.example.invalid`.
+Nginx overwrites Host and trusted HTTPS forwarding headers and clears Forwarded.
+Backend exposes only exact `/mcp/article-authoring` and its protected-resource
+metadata, plus the existing authenticated human consent/approval routes. Generic
+Admin Agent/OAuth remains Development-only. The issuer does not share its
+private signing JWKS or SQL credential with Backend/Web. Backend has App and
+separate Article-control credentials; issuer has only its own SQL credential.
+Role-only `*_DATABASE_TARGET` metadata cannot contain passwords. Public-read,
+CMS, App/resource, Article-control and Article-issuer must remain five distinct
+roles on one database, with verified TLS for remote PostgreSQL.
+
+Prepare the dedicated private RSA signing JWKS outside Git and approved client
+registry through the existing parser. The signing file must be nonsymlink,
+single-link, mode0600 and owned by the issuer service identity (the loader
+checks uid); its parent remains root-controlled. Likewise the optional
+registration agreement JSON is readable by Backend alone. Root-owned0600
+EnvironmentFiles are loaded by systemd before dropping privileges; this does not
+make referenced private files service-readable. Do not change permissions
+broadly to fix that. All keys use their documented canonical encoding and
+separate purposes.
+
+Configure `AUTH_PUBLIC_ENABLED=true` with Tencent SES and optionally Aliyun
+Dypns. Missing approved agreement material closes registration only; malformed
+material refuses startup. Existing-account sign-in/recovery/binding/logout reuse
+existing proofs, receipts and Production verified-login Sessions. Production
+rejects Development/legacy Session provenance. Provider HTTP is signed, bounded,
+exactly one attempt, never startup delivery and never an environment-selected
+test endpoint. Code-only low-level dependency injection exists solely for
+isolated acceptance; main selects real transports. Real providers, approved
+legal copy, external client and real COS verification remain separately recorded
+gates.

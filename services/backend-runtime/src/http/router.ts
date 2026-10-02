@@ -242,10 +242,7 @@ export const createRouter =
     }
 
     const articlePrefix = "/v1/community/article-authoring";
-    if (
-      community?.developmentEntry === true &&
-      community.articleDelegation !== undefined
-    ) {
+    if (community?.articleDelegation !== undefined) {
       const delegated = community.articleDelegation;
       const resource = new URL(delegated.resource);
       if (

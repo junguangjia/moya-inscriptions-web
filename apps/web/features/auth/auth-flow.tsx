@@ -6,6 +6,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { requestIdentity } from "../shell/request-identity";
 import {
   authRequest,
+  parseAuthCapabilities,
   hasCompletedAuthSession,
   safeReturnPath,
   validAuthPassword,
@@ -71,25 +72,6 @@ const reasonOf = (body: unknown): string => {
 
 const messageOf = (body: unknown): string =>
   reasons[reasonOf(body)] ?? "暂时无法完成，请稍后重试。";
-
-const capabilitiesOf = (body: unknown): AuthCapabilitiesView | null => {
-  const value = recordOf(body);
-  const email = recordOf(value?.email);
-  const phone = recordOf(value?.phone);
-  if (
-    value === null ||
-    !["full-local", "email-first", "disabled"].includes(
-      String(value.profile),
-    ) ||
-    typeof value.developmentOnly !== "boolean" ||
-    typeof email?.available !== "boolean" ||
-    typeof phone?.available !== "boolean" ||
-    !(email.reason === null || typeof email.reason === "string") ||
-    !(phone.reason === null || typeof phone.reason === "string")
-  )
-    return null;
-  return value as unknown as AuthCapabilitiesView;
-};
 
 const isProof = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value);
@@ -205,9 +187,15 @@ export const AuthFlow = ({
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState<Operation | null>(null);
   const destination = safeReturnPath(returnTo);
-  // The current registration agreement is an explicit Development draft.
-  // Production registration waits for the separately delivered approved text.
   const developmentAgreementAvailable = process.env.NODE_ENV === "development";
+  const approvedAgreement =
+    !developmentAgreementAvailable && capabilities?.registration?.available
+      ? capabilities.registration.agreement
+      : null;
+  const agreementAvailable =
+    developmentAgreementAvailable || approvedAgreement !== null;
+  const registrationUnavailable =
+    mode === "register" && !resetting && !agreementAvailable;
   const identifier = channel === "email" ? email : phone;
   const available =
     capabilityState === "ready" && capabilities?.[channel].available === true;
@@ -222,7 +210,8 @@ export const AuthFlow = ({
     try {
       const result = await authRequest("capabilities");
       if (current !== capabilityRequest.current) return;
-      const value = result.status === 200 ? capabilitiesOf(result.body) : null;
+      const value =
+        result.status === 200 ? parseAuthCapabilities(result.body) : null;
       if (
         value === null ||
         (process.env.NODE_ENV === "production" && value.developmentOnly)
@@ -477,7 +466,13 @@ export const AuthFlow = ({
   };
 
   const send = async () => {
-    if (!available || pendingRef.current !== null || remaining > 0) return;
+    if (
+      !available ||
+      registrationUnavailable ||
+      pendingRef.current !== null ||
+      remaining > 0
+    )
+      return;
     const normalized = normalizedIdentifier(channel, identifier);
     if (normalized === null) {
       setFeedback({
@@ -697,7 +692,7 @@ export const AuthFlow = ({
       nicknameRef.current?.focus();
       return;
     }
-    if (!agreed || !developmentAgreementAvailable) {
+    if (!agreed || !agreementAvailable) {
       setFeedback({
         message: reasons.AUTH_AGREEMENT_REQUIRED!,
         field: "agreement",
@@ -726,6 +721,9 @@ export const AuthFlow = ({
         password,
         ...(studio.data.studioName ? studio.data : {}),
         agreement: true,
+        ...(approvedAgreement === null
+          ? {}
+          : { agreementVersion: approvedAgreement.version }),
       },
       (result) => {
         if (
@@ -803,7 +801,7 @@ export const AuthFlow = ({
     </div>
   );
 
-  if (agreementOpen && developmentAgreementAvailable)
+  if (agreementOpen && agreementAvailable)
     return (
       <main
         className={styles.page}
@@ -826,16 +824,25 @@ export const AuthFlow = ({
         </nav>
         <article className={`${styles.panel} ${styles.agreement}`}>
           <h1 ref={agreementTitleRef} tabIndex={-1}>
-            开发环境注册说明
+            {approvedAgreement?.title ?? "开发环境注册说明"}
           </h1>
-          <p>这是开发环境草稿，不是已批准的用户协议或隐私政策。</p>
-          <p>
-            注册只创建由于艺
-            的公开账户，用来登录、绑定邮箱或手机号，以及继续使用现有的作品与评论功能。验证邮箱或手机号不是身份证实名，也不是人脸核验。
-          </p>
-          <p>
-            正式上线前需要替换为已批准的法律文本。这里没有客服渠道，也没有账户注销流程。
-          </p>
+          {approvedAgreement === null ? (
+            <>
+              <p>这是开发环境草稿，不是已批准的用户协议或隐私政策。</p>
+              <p>
+                注册只创建由于艺
+                的公开账户，用来登录、绑定邮箱或手机号，以及继续使用现有的作品与评论功能。验证邮箱或手机号不是身份证实名，也不是人脸核验。
+              </p>
+              <p>
+                正式上线前需要替换为已批准的法律文本。这里没有客服渠道，也没有账户注销流程。
+              </p>
+            </>
+          ) : (
+            <>
+              <p>版本：{approvedAgreement.version}</p>
+              <p style={{ whiteSpace: "pre-wrap" }}>{approvedAgreement.body}</p>
+            </>
+          )}
           <Button
             className={styles.primary}
             onClick={() => {
@@ -965,6 +972,11 @@ export const AuthFlow = ({
                   channel === "email" &&
                   !capabilities?.phone.available ? (
                   <p className={styles.channelHint}>手机登录当前不可用。</p>
+                ) : null}
+                {capabilityState === "ready" && registrationUnavailable ? (
+                  <p className={styles.capabilityNotice} role="status">
+                    注册说明暂时不可用，暂时无法创建账户。
+                  </p>
                 ) : null}
                 <div className={styles.field}>
                   <label htmlFor={fieldId}>
@@ -1190,7 +1202,7 @@ export const AuthFlow = ({
                   {fieldFeedback("studioName")}
                 </div>
                 <div className={styles.agreementField}>
-                  {developmentAgreementAvailable ? (
+                  {agreementAvailable ? (
                     <div className={styles.agreementRow}>
                       <label
                         className={styles.agreementChoice}
@@ -1262,12 +1274,13 @@ export const AuthFlow = ({
                 loading={pending !== null}
                 disabled={
                   !available ||
+                  registrationUnavailable ||
                   (step === "identifier" && !passwordLogin && remaining > 0) ||
                   (step === "code" && (code.length !== 6 || !challenge)) ||
                   (step === "password" &&
                     (!password || !passwordConfirm || !handoff)) ||
                   (step === "profile" &&
-                    (!developmentAgreementAvailable ||
+                    (!agreementAvailable ||
                       !agreed ||
                       !displayName.trim() ||
                       !handoff))

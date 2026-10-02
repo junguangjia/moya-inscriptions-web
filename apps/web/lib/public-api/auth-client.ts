@@ -1,3 +1,4 @@
+import type { AuthCapabilities } from "@moya/contracts";
 export type {
   AuthPasswordLoginRequest,
   AuthPasswordResetRequest,
@@ -8,23 +9,20 @@ export type {
 export type { AuthChallengeAccepted as AuthChallengeView } from "@moya/contracts";
 import {
   authPasswordSchema,
+  authCapabilitiesSchema,
   publicUserProfileSchema,
   studioNameSchema,
   studioNameInputSchema,
 } from "@moya/contracts/schemas";
 
-export interface AuthCapabilitiesView {
-  readonly profile: "full-local" | "email-first" | "disabled";
-  readonly email: {
-    readonly available: boolean;
-    readonly reason: string | null;
-  };
-  readonly phone: {
-    readonly available: boolean;
-    readonly reason: string | null;
-  };
-  readonly developmentOnly: boolean;
-}
+export type AuthCapabilitiesView = AuthCapabilities;
+
+export const parseAuthCapabilities = (
+  body: unknown,
+): AuthCapabilitiesView | null => {
+  const parsed = authCapabilitiesSchema.safeParse(body);
+  return parsed.success ? parsed.data : null;
+};
 
 export interface AuthFactorView {
   readonly channel: "email" | "phone";

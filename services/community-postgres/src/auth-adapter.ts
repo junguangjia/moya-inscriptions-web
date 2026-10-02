@@ -609,7 +609,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
         const row = rows[0];
         return row === undefined ? null : mapReceipt(row);
       },
-      lockSession: async (tokenHash) => {
+      lockSession: async (tokenHash, requiredEnvironment) => {
         const rows = await query<{
           id: string;
           token_hash: string;
@@ -618,8 +618,10 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           revoked_at: Date | null;
         }>(
           `SELECT id, token_hash, user_id, expires_at, revoked_at
-           FROM community.sessions WHERE token_hash=$1 FOR UPDATE`,
-          [tokenHash],
+           FROM community.sessions WHERE token_hash=$1
+             AND ($2::text IS NULL OR (issuer='verified_login' AND auth_environment=$2))
+           FOR UPDATE`,
+          [tokenHash, requiredEnvironment ?? null],
         );
         const row = rows[0];
         return row === undefined
@@ -725,7 +727,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           [row.id, row.userId, row.action, row.atIso],
         );
       },
-      findSessionUser: async (tokenHash, atIso) => {
+      findSessionUser: async (tokenHash, atIso, requiredEnvironment) => {
         const rows = await query<{
           id: string;
           handle: string;
@@ -737,8 +739,9 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           `SELECT u.id, u.handle, u.display_name, u.studio_name, u.studio_name_suffix, u.status
            FROM community.sessions s
            JOIN community.public_users u ON u.id = s.user_id
-           WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > $2`,
-          [tokenHash, atIso],
+           WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > $2
+             AND ($3::text IS NULL OR (s.issuer='verified_login' AND s.auth_environment=$3))`,
+          [tokenHash, atIso, requiredEnvironment ?? null],
         );
         const row = rows[0];
         return row === undefined
