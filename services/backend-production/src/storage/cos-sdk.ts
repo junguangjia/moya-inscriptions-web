@@ -81,6 +81,7 @@ export const createCosSdk = (
       invoke: (
         callback: (error: COS.CosError, data?: COS.GeneralResult) => void,
       ) => void,
+      signal?: AbortSignal,
     ): Promise<CosSdkResponse> =>
       new Promise((resolve, reject) => {
         let settled = false;
@@ -91,6 +92,7 @@ export const createCosSdk = (
           if (settled) return;
           settled = true;
           clearTimeout(deadline);
+          signal?.removeEventListener("abort", onAbort);
           client.off("before-send", beforeSend);
           if (error) {
             reject(requestFailure());
@@ -160,6 +162,12 @@ export const createCosSdk = (
           () => finish(requestFailure()),
           options.timeoutMs,
         );
+        const onAbort = () => finish(requestFailure());
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (signal?.aborted) {
+          finish(requestFailure());
+          return;
+        }
         client.on("before-send", beforeSend);
         try {
           invoke((error, data) => {

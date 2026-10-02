@@ -35,6 +35,8 @@ import {
 import { publishingJobKindSchema } from "@moya/contracts/internal/community-operator";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { cosFixture, cosOptions } from "./publishing-cos-fixture.js";
+
 import type { WorkPublishingPort } from "@moya/api";
 import type {
   PublishingJobHandlerOptions,
@@ -1547,7 +1549,10 @@ describe("publishing worker maintenance and cleanup jobs", () => {
       PUBLISHING_WORKER_DEFAULTS.leaseMs,
     );
     expect(h.store.sweepStaging).toHaveBeenCalledTimes(2);
-    expect(h.store.sweepStaging).toHaveBeenCalledWith(cutoff);
+    expect(h.store.sweepStaging).toHaveBeenCalledWith(
+      cutoff,
+      expect.any(AbortSignal),
+    );
     expect(toolJobs.sweepJobs).toHaveBeenCalledWith(cutoff);
     expect(h.lines).toContain(
       "[publishing-worker] leftovers removed staging=1003 tool_jobs=2",
@@ -1592,6 +1597,248 @@ describe("publishing worker maintenance and cleanup jobs", () => {
     for (const line of h.lines) {
       expect(line).not.toMatch(/blobs\/|user-|media-item-|publishing-job-/);
     }
+  });
+});
+
+describe("COS worker maintenance cancellation", () => {
+  const maintenance = () => {
+    const h = harness();
+    const f = cosFixture();
+    for (const key of [blobKey(1), blobKey(2)]) {
+      f.objects.set(cosOptions.prefix + key, {
+        bytes: Buffer.from("x"),
+        headers: {},
+        modified: new Date(START - 8 * 24 * 60 * 60 * 1000),
+      });
+    }
+    const handlers = createPublishingJobHandlers({
+      port: h.port,
+      store: f.store,
+      processor: h.processor,
+      clock: h.timers.clock,
+    });
+    const claim: PublishingWorkerJobClaim = {
+      id: `publishing-job-${hex(1)}`,
+      kind: "reconcile_capacity",
+      subjectId: PUBLISHING_STORE_RECONCILE_SUBJECT,
+      payload: null,
+      attempts: 1,
+      maxAttempts: 5,
+      leaseOwner: "synthetic-maintenance-worker",
+      leaseExpiresAt: new Date(START + 60_000),
+    };
+    return { h, f, handlers, claim, controller: new AbortController() };
+  };
+
+  it("cancels listing through the COS transport without deleting or completing", async () => {
+    const { h, f, handlers, claim, controller } = maintenance();
+    const reason = new Error("synthetic lease lost during listing");
+    f.state.before = async (method, _input, signal) => {
+      expect(signal).toBe(controller.signal);
+      if (method === "getBucket") {
+        controller.abort(reason);
+        throw new PublishingMediaStoreError("aborted");
+      }
+    };
+    await expect(handlers.run(claim, controller.signal)).rejects.toBe(reason);
+    expect(f.calls.map((call) => call.method)).toEqual(["getBucket"]);
+    expect(h.port.unrecordedStorageKeys).not.toHaveBeenCalled();
+    expect(f.objects.size).toBe(2);
+  });
+
+  it("stops after the first completed remote delete when its worker is cancelled", async () => {
+    const { f, handlers, claim, controller } = maintenance();
+    const reason = new Error("synthetic lease lost during delete");
+    f.state.before = async (_method, _input, signal) => {
+      expect(signal).toBe(controller.signal);
+    };
+    f.state.after = (method) => {
+      if (method === "deleteObject") controller.abort(reason);
+    };
+    await expect(handlers.run(claim, controller.signal)).rejects.toBe(reason);
+    expect(f.calls.map((call) => call.method)).toEqual([
+      "getBucket",
+      "getBucketVersioning",
+      "deleteObject",
+    ]);
+    expect(f.objects.has(cosOptions.prefix + blobKey(1))).toBe(false);
+    expect(f.objects.has(cosOptions.prefix + blobKey(2))).toBe(true);
+  });
+
+  it("does not start a DELETE after cancellation during the versioning check", async () => {
+    const { f, handlers, claim, controller } = maintenance();
+    const reason = new Error("synthetic shutdown during versioning");
+    f.state.after = (method) => {
+      if (method === "getBucketVersioning") controller.abort(reason);
+    };
+    await expect(handlers.run(claim, controller.signal)).rejects.toBe(reason);
+    expect(f.calls.map((call) => call.method)).toEqual([
+      "getBucket",
+      "getBucketVersioning",
+    ]);
+    expect(f.objects.size).toBe(2);
+  });
+
+  it("preserves cancellation while the purge plan is being read", async () => {
+    const { h, f, handlers, claim, controller } = maintenance();
+    const plan = deferred<PublishingWorkerPurgePlan>();
+    h.port.purgeItem.mockImplementation(() => plan.promise);
+    const reason = new Error("synthetic lease lost during purge lookup");
+    const result = handlers.run(
+      { ...claim, kind: "purge_item", subjectId: ITEM(4) },
+      controller.signal,
+    );
+    const rejected = expect(result).rejects.toBe(reason);
+    controller.abort(reason);
+    plan.resolve({ status: "missing" });
+    await rejected;
+    expect(f.calls).toEqual([]);
+    expect(h.port.confirmed).toEqual([]);
+  });
+
+  it.each(["reconcile_capacity", "purge_item"] as const)(
+    "normally completes %s cleanup of both old objects",
+    async (kind) => {
+      const { h, f, handlers, claim, controller } = maintenance();
+      h.port.purgePlans.set(ITEM(4), {
+        status: "tombstoned",
+        blobs: [1, 2].map((seed) => ({
+          blobId: `media-blob-${hex(seed)}`,
+          storageKey: blobKey(seed),
+        })),
+      });
+      await expect(
+        handlers.run(
+          {
+            ...claim,
+            kind,
+            subjectId:
+              kind === "purge_item"
+                ? ITEM(4)
+                : PUBLISHING_STORE_RECONCILE_SUBJECT,
+          },
+          controller.signal,
+        ),
+      ).resolves.toEqual({ status: "completed" });
+      expect(
+        f.calls.filter((call) => call.method === "deleteObject"),
+      ).toHaveLength(2);
+      expect(f.objects.size).toBe(0);
+      if (kind === "purge_item") {
+        expect(h.port.confirmed).toEqual([
+          [1, 2].map((seed) => `media-blob-${hex(seed)}`),
+        ]);
+      }
+    },
+  );
+
+  describe.each(["reconcile_capacity", "purge_item"] as const)(
+    "running %s cancellation",
+    (kind) => {
+      it.each(["shutdown", "lease_lost"] as const)(
+        "aborts a pending DELETE on %s without starting another or recording success",
+        async (reason) => {
+          const f = cosFixture();
+          const h = started(
+            harness({
+              handler: { store: f.store },
+              worker: { maintenance: false },
+            }),
+          );
+          for (const key of [blobKey(1), blobKey(2)]) {
+            f.objects.set(cosOptions.prefix + key, {
+              bytes: Buffer.from("x"),
+              headers: {},
+              modified: new Date(START - 8 * 24 * 60 * 60 * 1000),
+            });
+          }
+          h.port.purgePlans.set(ITEM(4), {
+            status: "tombstoned",
+            blobs: [1, 2].map((seed) => ({
+              blobId: `media-blob-${hex(seed)}`,
+              storageKey: blobKey(seed),
+            })),
+          });
+          const pending = deferred<AbortSignal>();
+          f.state.before = async (method, _input, signal) => {
+            expect(signal).toBeDefined();
+            if (method !== "deleteObject") return;
+            pending.resolve(signal!);
+            await new Promise<void>((_resolve, reject) => {
+              signal!.addEventListener(
+                "abort",
+                () => reject(new PublishingMediaStoreError("aborted")),
+                { once: true },
+              );
+            });
+          };
+          const job = h.port.enqueue(
+            kind,
+            kind === "purge_item"
+              ? ITEM(4)
+              : PUBLISHING_STORE_RECONCILE_SUBJECT,
+          );
+          await h.timers.advance(0);
+          const signal = await pending.promise;
+          expect(signal.aborted).toBe(false);
+          if (reason === "shutdown") {
+            const stopped = h.worker.stop();
+            await h.timers.advance(10_000);
+            await stopped;
+            expect(h.port.releaseJob).toHaveBeenCalledTimes(1);
+            expect(job.state).toBe("queued");
+            expect(job.attempts).toBe(0);
+          } else {
+            job.leaseOwner = "other-worker";
+            await h.timers.advance(20_000);
+            expect(h.port.releaseJob).not.toHaveBeenCalled();
+            expect(job.state).toBe("running");
+            expect(job.leaseOwner).toBe("other-worker");
+          }
+          expect(signal.aborted).toBe(true);
+          expect(signal.reason).toMatchObject({ reason });
+          expect(
+            f.calls.filter((call) => call.method === "deleteObject"),
+          ).toHaveLength(1);
+          expect(f.objects.size).toBe(2);
+          expect(h.port.confirmed).toEqual([]);
+          expect(outcomesFor(h, job)).toEqual([]);
+          expect(h.worker.activeJobs).toBe(0);
+          await h.worker.stop();
+          expect(h.timers.pending).toBe(0);
+        },
+      );
+    },
+  );
+
+  it("propagates purge cancellation and confirms only the already removed blob", async () => {
+    const { h, f, handlers, claim, controller } = maintenance();
+    const reason = new Error("synthetic shutdown during purge");
+    h.port.purgePlans.set(ITEM(4), {
+      status: "tombstoned",
+      blobs: [1, 2].map((seed) => ({
+        blobId: `media-blob-${hex(seed)}`,
+        storageKey: blobKey(seed),
+      })),
+    });
+    f.state.before = async (_method, _input, signal) => {
+      expect(signal).toBe(controller.signal);
+    };
+    f.state.after = (method) => {
+      if (method === "deleteObject") controller.abort(reason);
+    };
+    await expect(
+      handlers.run(
+        { ...claim, kind: "purge_item", subjectId: ITEM(4) },
+        controller.signal,
+      ),
+    ).rejects.toBe(reason);
+    expect(f.calls.map((call) => call.method)).toEqual([
+      "getBucketVersioning",
+      "deleteObject",
+    ]);
+    expect(h.port.confirmed).toEqual([[`media-blob-${hex(1)}`]]);
+    expect(f.objects.has(cosOptions.prefix + blobKey(2))).toBe(true);
   });
 });
 

@@ -2,6 +2,12 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  assertPublishingCosOptions,
+  CosPublishingMediaStore,
+} from "../storage/publishing-cos-store.js";
+import { createPublishingCosTransport } from "../storage/publishing-cos-transport.js";
+
+import {
   FilesystemPublishingMediaStore,
   PUBLISHING_MEDIA_TEMPORARY_ROOTS,
   assertPrivateMediaDirectory,
@@ -14,6 +20,9 @@ import type {
   ProcessorOutcome,
 } from "./processing/media-processor.js";
 import type { MediaToolsRunner } from "./processing/media-tools.js";
+import type { PublishingCosStoreOptions } from "../storage/publishing-cos-store.js";
+import type { PublishingCosTransport } from "../storage/publishing-cos-transport.js";
+import type { CosCredentials } from "../storage/cos-read.js";
 
 /*
  * Development configuration of private work publishing media (design §3.5,
@@ -144,7 +153,10 @@ export const parsePublishingMediaConfig = (
 };
 
 export interface PublishingMediaRuntime {
-  readonly store: FilesystemPublishingMediaStore;
+  readonly store: Pick<
+    FilesystemPublishingMediaStore,
+    "writeStream" | "openRead" | "remove" | "listBlobs" | "sweepStaging"
+  >;
   readonly runner: MediaToolsRunner;
   readonly processor: {
     process(input: ProcessorInput): Promise<ProcessorOutcome>;
@@ -178,6 +190,141 @@ const realOrResolved = async (directory: string): Promise<string> => {
     return resolved;
   }
 };
+
+export interface ProductionPublishingMediaConfig extends PublishingCosStoreOptions {
+  readonly credentials: () => Promise<CosCredentials>;
+  readonly requestTimeoutMs: number;
+  readonly toolsImage: string;
+  readonly workDirectory: string;
+  readonly workerConcurrency: number;
+}
+
+/** Required, fail-closed Production configuration. Separate credentials keep
+ * UGC write/delete authority independent of Catalog and Payload credentials.
+ * Neither parsing nor opening this factory makes a cloud or Docker request.
+ */
+export function parseProductionPublishingMediaConfig(
+  environment: Environment,
+): ProductionPublishingMediaConfig {
+  const required = (key: string) => {
+    const value = environment[key];
+    if (!value || value.trim() !== value || /[\r\n\0]/.test(value))
+      throw new Error(`${key} is missing or invalid`);
+    return value;
+  };
+  if (environment.WORK_MEDIA_STORE_DIR)
+    throw new Error(
+      "WORK_MEDIA_STORE_DIR must be absent for Production COS publishing",
+    );
+  const options = {
+    bucket: required("WORK_MEDIA_COS_BUCKET"),
+    region: required("WORK_MEDIA_COS_REGION"),
+    prefix: required("WORK_MEDIA_COS_PREFIX"),
+  };
+  assertPublishingCosOptions(options);
+  const secretId = required("WORK_MEDIA_COS_SECRET_ID");
+  const secretKey = required("WORK_MEDIA_COS_SECRET_KEY");
+  if (!/^[A-Za-z0-9_-]+$/.test(secretId))
+    throw new Error("WORK_MEDIA_COS_SECRET_ID is invalid");
+  const integer = (key: string) => {
+    const value = required(key);
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value)))
+      throw new Error(`${key} is invalid`);
+    return Number(value);
+  };
+  const securityToken =
+    environment.WORK_MEDIA_COS_SECURITY_TOKEN === undefined
+      ? undefined
+      : required("WORK_MEDIA_COS_SECURITY_TOKEN");
+  const expiresAt = securityToken
+    ? integer("WORK_MEDIA_COS_CREDENTIAL_EXPIRES_AT")
+    : undefined;
+  if (
+    !securityToken &&
+    environment.WORK_MEDIA_COS_CREDENTIAL_EXPIRES_AT !== undefined
+  )
+    throw new Error(
+      "WORK_MEDIA_COS_SECURITY_TOKEN is required with credential expiry",
+    );
+  if (
+    expiresAt !== undefined &&
+    expiresAt <= Math.floor(Date.now() / 1000) + 30
+  )
+    throw new Error(
+      "WORK_MEDIA_COS_CREDENTIAL_EXPIRES_AT has insufficient validity",
+    );
+  const timeout =
+    environment.WORK_MEDIA_COS_REQUEST_TIMEOUT_MS === undefined
+      ? 30_000
+      : integer("WORK_MEDIA_COS_REQUEST_TIMEOUT_MS");
+  if (timeout > 120_000)
+    throw new Error("WORK_MEDIA_COS_REQUEST_TIMEOUT_MS must be at most 120000");
+  const toolsImage = required(WORK_MEDIA_TOOLS_IMAGE);
+  if (!IMAGE_PATTERN.test(toolsImage) || !IMAGE_TAG_OR_DIGEST.test(toolsImage))
+    throw new Error(
+      `${WORK_MEDIA_TOOLS_IMAGE} must be a local image reference with an explicit tag or digest`,
+    );
+  return {
+    ...options,
+    credentials: async () => ({
+      secretId,
+      secretKey,
+      ...(securityToken ? { securityToken, expiresAt: expiresAt! } : {}),
+    }),
+    requestTimeoutMs: timeout,
+    toolsImage,
+    workDirectory: parseDirectory(
+      WORK_MEDIA_WORK_DIR,
+      required(WORK_MEDIA_WORK_DIR),
+    ),
+    workerConcurrency: parseConcurrency(
+      configured(environment, WORK_MEDIA_WORKER_CONCURRENCY),
+    ),
+  };
+}
+
+export async function openProductionPublishingMedia(
+  config: ProductionPublishingMediaConfig,
+  options: OpenPublishingMediaOptions & {
+    readonly transport?: PublishingCosTransport;
+  } = {},
+): Promise<PublishingMediaRuntime> {
+  assertPublishingCosOptions(config);
+  if (
+    !Number.isSafeInteger(config.requestTimeoutMs) ||
+    config.requestTimeoutMs < 1 ||
+    config.requestTimeoutMs > 120_000
+  )
+    throw new Error("WORK_MEDIA_COS_REQUEST_TIMEOUT_MS is invalid");
+  parseConcurrency(String(config.workerConcurrency));
+  const directoryOptions = options.temporaryRoots
+    ? { temporaryRoots: options.temporaryRoots }
+    : {};
+  const workReal = await assertPrivateMediaDirectory(
+    config.workDirectory,
+    directoryOptions,
+  ).catch(invalidDirectory(WORK_MEDIA_WORK_DIR));
+  for (const foreign of options.foreignDirectories ?? []) {
+    if (foreign && overlaps(workReal, await realOrResolved(foreign)))
+      throw new Error(
+        "Publishing media directories must be separate from other media namespaces",
+      );
+  }
+  const store = new CosPublishingMediaStore(
+    config,
+    options.transport ?? createPublishingCosTransport(config),
+  );
+  const runner = await createMediaToolsRunner({
+    image: config.toolsImage,
+    workDirectory: workReal,
+    ...directoryOptions,
+  });
+  return {
+    store,
+    runner,
+    processor: createPublishingMediaProcessor({ store, runner }),
+  };
+}
 
 /**
  * Validates both private directories (existing, owner-only, outside temporary

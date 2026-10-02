@@ -15,32 +15,10 @@ import path from "node:path";
 import type { FileHandle } from "node:fs/promises";
 import type { Readable } from "node:stream";
 
-/** Content-free failure codes; mirrors `PublishingMediaStoreFailureCode`. */
-export type PublishingMediaStoreErrorCode =
-  | "invalid_argument"
-  | "invalid_key"
-  | "size_limit_exceeded"
-  | "size_mismatch"
-  | "empty_content"
-  | "aborted"
-  | "not_regular_file"
-  | "unavailable";
-
+import { PublishingMediaStoreError } from "./publishing-media-error.js";
+export { PublishingMediaStoreError } from "./publishing-media-error.js";
+export type { PublishingMediaStoreErrorCode } from "./publishing-media-error.js";
 const SYSTEM_CODE_PATTERN = /^E[A-Z0-9]{1,31}$/;
-
-export class PublishingMediaStoreError extends Error {
-  /** System error code (for example `ENOSPC`) behind `unavailable`, never a path. */
-  readonly systemCode: string | null;
-
-  constructor(
-    readonly code: PublishingMediaStoreErrorCode,
-    systemCode: string | null = null,
-  ) {
-    super(`Publishing media store failure: ${code}`);
-    this.name = "PublishingMediaStoreError";
-    this.systemCode = systemCode;
-  }
-}
 
 /** Keeps store errors content-free: raw filesystem errors carry host paths. */
 const storeFailure = (error: unknown): PublishingMediaStoreError => {
@@ -107,9 +85,13 @@ export const PUBLISHING_BLOB_KEY_PATTERN =
   /^blobs\/([0-9a-f]{2})\/([0-9a-f]{2})\/([0-9a-f]{32})$/;
 const STAGING_NAME_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.part$/;
-const OWNER_ID_PATTERN = /^\S{1,128}$/;
-const PURPOSES = new Set<string>(["original", "standard_master", "derivative"]);
-const CONTENT_TYPES = new Set<string>([
+export const OWNER_ID_PATTERN = /^\S{1,128}$/;
+export const PURPOSES = new Set<string>([
+  "original",
+  "standard_master",
+  "derivative",
+]);
+export const CONTENT_TYPES = new Set<string>([
   "image/jpeg",
   "image/png",
   "image/webp",
@@ -119,7 +101,7 @@ const CONTENT_TYPES = new Set<string>([
   "video/mp4",
 ]);
 /** Sanity bound for a single blob; business limits are stricter. */
-const MAX_BLOB_BYTES = 4 * 1024 * 1024 * 1024;
+export const MAX_BLOB_BYTES = 4 * 1024 * 1024 * 1024;
 const READ_HIGH_WATER_MARK = 256 * 1024;
 /** Staging files removed per sweep call; call again while the limit is hit. */
 export const PUBLISHING_STAGING_SWEEP_LIMIT = 1000;
@@ -256,7 +238,7 @@ const writeAll = async (handle: FileHandle, chunk: Uint8Array) => {
 };
 
 /** Pulls chunks until done, stopping promptly when `signal` aborts. */
-const consume = async (
+export const consume = async (
   source: AsyncIterable<Uint8Array>,
   signal: AbortSignal | undefined,
   onChunk: (chunk: Uint8Array) => Promise<void>,
@@ -298,7 +280,7 @@ const consume = async (
   }
 };
 
-const resolveRange = (
+export const resolveRange = (
   range: PublishingMediaStoreRange | undefined,
   byteSize: number,
 ): { start: number; end: number } | null => {
@@ -476,10 +458,12 @@ export class FilesystemPublishingMediaStore {
     }
   }
 
-  async remove(storageKey: string): Promise<void> {
+  async remove(storageKey: string, signal?: AbortSignal): Promise<void> {
     const filePath = this.blobPath(storageKey);
+    if (signal?.aborted) throw new PublishingMediaStoreError("aborted");
     try {
       if (!(await this.blobDirectoriesExist(storageKey))) return;
+      if (signal?.aborted) throw new PublishingMediaStoreError("aborted");
       try {
         await unlink(filePath);
       } catch (error) {
@@ -499,6 +483,7 @@ export class FilesystemPublishingMediaStore {
   async listBlobs(options: {
     readonly after?: string | null;
     readonly limit: number;
+    readonly signal?: AbortSignal;
   }): Promise<{
     entries: PublishingMediaStoreBlobEntry[];
     nextAfter: string | null;
@@ -512,14 +497,19 @@ export class FilesystemPublishingMediaStore {
       throw new PublishingMediaStoreError("invalid_argument");
     }
     if (after !== null) this.blobPath(after);
+    if (options.signal?.aborted) throw new PublishingMediaStoreError("aborted");
     const [, afterFirst = "", afterSecond = ""] = after?.split("/") ?? [];
     const entries: PublishingMediaStoreBlobEntry[] = [];
     try {
       const blobs = path.join(this.root, "blobs");
       for (const first of await sortedDirectories(blobs, HEX2_PATTERN)) {
+        if (options.signal?.aborted)
+          throw new PublishingMediaStoreError("aborted");
         if (first < afterFirst) continue;
         const firstPath = path.join(blobs, first);
         for (const second of await sortedDirectories(firstPath, HEX2_PATTERN)) {
+          if (options.signal?.aborted)
+            throw new PublishingMediaStoreError("aborted");
           if (first === afterFirst && second < afterSecond) continue;
           const secondPath = path.join(firstPath, second);
           const names = (await readdir(secondPath))
@@ -531,6 +521,8 @@ export class FilesystemPublishingMediaStore {
             )
             .sort();
           for (const name of names) {
+            if (options.signal?.aborted)
+              throw new PublishingMediaStoreError("aborted");
             const storageKey = `blobs/${first}/${second}/${name}`;
             if (after !== null && storageKey <= after) continue;
             const info = await lstat(path.join(secondPath, name)).catch(
@@ -539,6 +531,8 @@ export class FilesystemPublishingMediaStore {
                 throw error;
               },
             );
+            if (options.signal?.aborted)
+              throw new PublishingMediaStoreError("aborted");
             if (!info?.isFile()) continue;
             entries.push({
               storageKey,
@@ -554,6 +548,7 @@ export class FilesystemPublishingMediaStore {
     } catch (error) {
       throw storeFailure(error);
     }
+    if (options.signal?.aborted) throw new PublishingMediaStoreError("aborted");
     return { entries, nextAfter: null };
   }
 
@@ -676,3 +671,18 @@ async function sortedDirectories(
     .map((entry) => entry.name)
     .sort();
 }
+
+// Existing module boundary: no package-export or composition changes required.
+export {
+  CosPublishingMediaStore,
+  PUBLISHING_COS_PART_BYTES,
+  PUBLISHING_COS_READ_BYTES,
+} from "./publishing-cos-store.js";
+export {
+  createPublishingCosTransport,
+  PublishingCosResponseError,
+} from "./publishing-cos-transport.js";
+export type {
+  PublishingCosTransport,
+  PublishingCosMethod,
+} from "./publishing-cos-transport.js";
