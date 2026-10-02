@@ -25,12 +25,16 @@ in the same content database. Community is independent of that choice.
 | Article human control and delegation                     | Community Article connection/consent/approval/provider objects                                                             | Distinct `ARTICLE_AUTHORING_CONTROL_DATABASE_URL`, `ARTICLE_AUTHORIZATION_DATABASE_URL` and App/resource identity              |
 | Existing Agent administration/delegation                 | Existing Community Agent migration range through `20260921010000`                                                          | App plus separately configured `AGENT_AUTHORIZATION_DATABASE_URL`, `AGENT_CONSENT_DATABASE_URL`, `AGENT_RESOURCE_DATABASE_URL` |
 
-Community now contains 43 forward files, ending at
-`20261002010000_login_lookup_version_rotation.sql`. The manifest pins exact
+Community now contains 44 forward files, ending at
+`20261002020000_article_connection_environments.sql`. The manifest pins exact
 SHA-256 bytes; no historical migration or ledger row was rewritten. Current
 sibling records require the existing queue, media references, business tables
-and human Article paths, and request no new schema objects. Agent and external
-Article protocol activation remains governed by their runtime tasks.
+and human Article paths. A additionally requires Production Article connections;
+the new forward file permits only `development` and `production`, preserving
+existing connection rows, immutable environment/identity and per-environment
+uniqueness. It adds no objects or grants and does not activate a runtime. Agent
+and external Article protocol activation remains governed by their runtime
+tasks.
 
 ## Exact preparation order
 
@@ -109,6 +113,13 @@ transaction-local `article_authoring.issuer_role`, `.control_role` and
 `.resource_role` set to three distinct pre-provisioned roles. Agent protocol
 roles use `infra/development/agent-connections/grant-authorization.sql` under
 that surface's separate authority. These scripts are not activation permission.
+No Production-specific database privilege is needed for the Article environment
+correction; the existing named issuer/control/resource grants apply. Runtime
+must use its actual environment, with separately configured issuer, resource and
+consent/token fences. Native Catalog editorial MCP is already enabled in Payload
+and uses the CMS role and native API-key authorization. Agent/external Article
+activation and their final Production composition remain the runtime task's
+responsibility.
 
 ## Identity rotation correction
 
@@ -183,5 +194,12 @@ only and skips the existing remote synthetic CMS mode; remote role provisioning
 is not exercised. Existing PostgreSQL suites cover Work/publication/media
 ownership, capacity races/reconciliation, retained Article snapshots/media,
 notifications, Threads/DM, blocking/suspension and distinct Article
-control/issuer roles. Exact command outcomes, skipped live-only cases, commit
-and migration hashes are recorded in the task's private handoff and PR.
+control/issuer roles. `article-connection-migration.test.ts` reproduces the old
+Production rejection and verifies upgrade/repeat, retained rows/checksums, exact
+environment values, uniqueness and immutable environment. The limited-role
+Article suite verifies Production connection DML and issuer/resource denials.
+These database checks do not establish final mounted Production OAuth/MCP. Final
+acceptance must bind A/B and all enabled MCP paths to one frozen candidate and
+execute actual business operations and refusals, including native Catalog MCP
+key/tool calls. Exact command outcomes, skipped live-only cases, commit and
+migration hashes are recorded in the task's private handoff and PR.
