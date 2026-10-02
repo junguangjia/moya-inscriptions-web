@@ -1,4 +1,5 @@
 import { enqueueNotification } from "./notifications/source.js";
+import { publishedArticleItemSql } from "./article-authoring/published-media.js";
 import { asCommunityOperationError } from "./availability.js";
 import { createHash, randomUUID } from "node:crypto";
 import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
@@ -432,12 +433,14 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
     );
   }
   /**
-   * A user media PNG: the owner always; others for an avatar, or while a
+   * A user media PNG: the owner always; others for profile media, or while a
    * legacy item of it is in the public revision of an effectively public work
    * with its unedited form (edit key `base` without the cover crop). An edited
    * legacy item is shown only through its derivatives, so a rotation or crop
    * never leaves the uncut PNG readable under its old id; a cover crop alone
    * keeps it (the card uses the cover derivative, the work its PNG).
+   * An authored Article exposes only ready, owner-matched base media retained
+   * by its exact current public snapshot. Its envelope has no crop/edit fields.
    */
   async readMedia(
     id: string,
@@ -454,7 +457,10 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
           JOIN community.work_revisions r ON r.id=ri.revision_id
           JOIN community.works w ON w.id=r.work_id AND w.public_revision_id=r.id AND w.author_id=m.owner_id
           WHERE i.legacy_media_id=m.id AND i.owner_id=m.owner_id AND community.work_is_public(w)
-            AND community.media_edit_key(ri.edit,NULL)='base'))`,
+            AND community.media_edit_key(ri.edit,NULL)='base') OR EXISTS (
+          SELECT 1 FROM community.media_items i
+          WHERE i.legacy_media_id=m.id AND i.owner_id=m.owner_id AND i.state='ready'
+            AND ${publishedArticleItemSql("i.id", "$2", "i.owner_id")} ))`,
           [id, viewer],
         )
       ).rows[0];

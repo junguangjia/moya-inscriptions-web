@@ -16,6 +16,12 @@ import type {
   ArticleSummary,
 } from "@moya/contracts";
 import { useProductShell } from "../product-shell/product-shell";
+import {
+  ArticlePublishedBody,
+  ArticlePublishedMedia,
+  articleRichChapters,
+} from "./article-published-body";
+import { articleDocumentPlainText } from "../../lib/public-api/article-authoring-client";
 import { ArticleReader } from "../discussion-preview/article-reader";
 import { AcademicReader } from "../discussion-preview/academic-reader";
 import type { AcademicArticleView } from "../discussion-preview/academic-reader";
@@ -88,7 +94,9 @@ export const academicViewFromArticle = (
     article.issue,
     formatEditorialTime(article.publishedAt),
     `约 ${estimateReadingMinutes(
-      article.sections.flatMap((section) => section.paragraphs),
+      article.document === undefined
+        ? article.sections.flatMap((section) => section.paragraphs)
+        : [articleDocumentPlainText(article.document)],
     )} 分钟`,
   ]
     .filter(Boolean)
@@ -120,7 +128,15 @@ export const academicViewFromArticle = (
   ],
 });
 
-function NewsArticleContent({ article }: { article: ArticleDetail }) {
+function NewsArticleContent({
+  article,
+  active,
+  onOpenCatalog,
+}: {
+  article: ArticleDetail;
+  active: boolean;
+  onOpenCatalog: (id: string) => void;
+}) {
   return (
     <>
       {article.section && <p className={styles.eyebrow}>{article.section}</p>}
@@ -129,35 +145,53 @@ function NewsArticleContent({ article }: { article: ArticleDetail }) {
         {article.byline} · {formatEditorialTime(article.publishedAt)}
       </p>
       {article.intro && <p className={styles.articleLead}>{article.intro}</p>}
-      {article.cover && (
+      {article.managedCover ? (
         <figure>
-          <Picture
-            owner={article.id}
-            src={article.cover.src}
-            alt={article.cover.alt}
+          <ArticlePublishedMedia
+            media={article.managedCover}
+            alt=""
+            active={active}
           />
         </figure>
+      ) : (
+        article.cover && (
+          <figure>
+            <Picture
+              owner={article.id}
+              src={article.cover.src}
+              alt={article.cover.alt}
+            />
+          </figure>
+        )
       )}
-      {article.sections.map((section, index) => (
-        <div key={index}>
-          {section.heading && <h3>{section.heading}</h3>}
-          {section.paragraphs.map((paragraph, paragraphIndex) => (
-            <p key={paragraphIndex}>{paragraph}</p>
-          ))}
-          {section.image && (
-            <figure>
-              <Picture
-                owner={article.id}
-                src={section.image.src}
-                alt={section.image.alt}
-              />
-              {section.imageCaption && (
-                <figcaption>{section.imageCaption}</figcaption>
-              )}
-            </figure>
-          )}
-        </div>
-      ))}
+      {article.document === undefined ? (
+        article.sections.map((section, index) => (
+          <div key={index}>
+            {section.heading && <h3>{section.heading}</h3>}
+            {section.paragraphs.map((paragraph, paragraphIndex) => (
+              <p key={paragraphIndex}>{paragraph}</p>
+            ))}
+            {section.image && (
+              <figure>
+                <Picture
+                  owner={article.id}
+                  src={section.image.src}
+                  alt={section.image.alt}
+                />
+                {section.imageCaption && (
+                  <figcaption>{section.imageCaption}</figcaption>
+                )}
+              </figure>
+            )}
+          </div>
+        ))
+      ) : (
+        <ArticlePublishedBody
+          article={article}
+          active={active}
+          onOpenCatalog={onOpenCatalog}
+        />
+      )}
       {article.citations.length > 0 && (
         <aside aria-label="引用与参考">
           <h3>引用与参考</h3>
@@ -200,6 +234,14 @@ export function LiveArticleReader({
   /** Only a source Article, rather than a child reader, requests shell recovery. */
   onUnavailable?: () => void;
 }) {
+  const shell = useProductShell();
+  const openCatalog = (catalogId: string) =>
+    shell.openCatalog(
+      catalogId,
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : document.body,
+    );
   const { state, retry } = useArticle(id);
   useEffect(() => {
     if (state.state === "missing") onUnavailable?.();
@@ -238,7 +280,35 @@ export function LiveArticleReader({
       {...shared}
       renderContent={({ scrollElement, active, overlayTarget }) => (
         <AcademicReader
-          article={academicViewFromArticle(article)}
+          article={{
+            ...academicViewFromArticle(article),
+            ...(article.managedCover
+              ? {
+                  cover: (
+                    <ArticlePublishedMedia
+                      media={article.managedCover}
+                      alt=""
+                      active={active}
+                    />
+                  ),
+                }
+              : {}),
+            ...(article.document === undefined
+              ? {}
+              : {
+                  chapters: articleRichChapters(
+                    article.document,
+                    (document) => (
+                      <ArticlePublishedBody
+                        article={article}
+                        document={document}
+                        active={active}
+                        onOpenCatalog={openCatalog}
+                      />
+                    ),
+                  ),
+                }),
+          }}
           scrollElement={scrollElement}
           active={active}
           railPortalTarget={overlayTarget}
@@ -246,9 +316,19 @@ export function LiveArticleReader({
       )}
     />
   ) : (
-    <ArticleReader key={article.id} {...shared}>
-      <NewsArticleContent article={article} />
-    </ArticleReader>
+    <ArticleReader
+      key={article.id}
+      {...shared}
+      renderContent={({ active }) => (
+        <article className={styles.article}>
+          <NewsArticleContent
+            article={article}
+            active={active}
+            onOpenCatalog={openCatalog}
+          />
+        </article>
+      )}
+    />
   );
 }
 

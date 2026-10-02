@@ -4,6 +4,9 @@ import { NotificationWorker } from "./notifications/worker.js";
 import {
   assertProductionAuthConfiguration,
   createBackendApplication,
+  createArticleAuthoringService,
+  createArticleCatalogReadCallbacks,
+  readBoundedArticleThumbnail,
   createDevelopmentAuthService,
   createPublishingTransferRegistry,
   parseRuntimeConfig,
@@ -17,10 +20,12 @@ import {
   createPostgresPool,
   parsePostgresConfig,
   PostgresCatalogQueryAdapter,
-  PostgresEditorialContentAdapter,
 } from "@moya/catalog-postgres";
 import {
+  createWrapperStore,
+  selectOwnArticleThumbnail,
   PostgresAgentAdministrationAdapter,
+  PostgresArticleAuthoringAdapter,
   PostgresCommunityContentOperatorAdapter,
   PostgresAuthorCommunityAdapter,
   PostgresCommunityDiscoveryAdapter,
@@ -34,6 +39,12 @@ import {
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { loadPilotConfiguration, openPilotPool } from "./pilot-config.js";
+import { articleBackendConfigurationFrom } from "./article-authoring/runtime-config.js";
+import {
+  createArticleDelegationPersistence,
+  createArticleDelegationRuntime,
+} from "./article-authoring/delegation-composition.js";
+import { createDevelopmentArticleReadPort } from "./article-authoring/read-composition.js";
 import {
   openPublishingMedia,
   parsePublishingMediaConfig,
@@ -165,6 +176,10 @@ export const prepareProductionBackend = async (
       "NODE_ENV must be production or development for this backend",
     );
   }
+  const articleConfiguration = articleBackendConfigurationFrom(
+    environment,
+    runtimeConfig,
+  );
   const contentSource = environment.MOYA_CONTENT_SOURCE ?? "legacy";
   if (contentSource !== "legacy" && contentSource !== "payload")
     throw new Error("MOYA_CONTENT_SOURCE must be legacy or payload");
@@ -224,6 +239,12 @@ export const prepareProductionBackend = async (
   const communityPool = createPostgresPool(communityPostgresConfig, {
     onUnexpectedIdleError,
   });
+  const articleControlPool =
+    articleConfiguration === null
+      ? undefined
+      : createPostgresPool(articleConfiguration.controlPostgres, {
+          onUnexpectedIdleError,
+        });
   const workPublishingPort =
     runtimeConfig.nodeEnv === "development"
       ? new PostgresWorkPublishingAdapter(communityPool)
@@ -269,6 +290,9 @@ export const prepareProductionBackend = async (
     await Promise.all([
       closePostgresPool(pool),
       closePostgresPool(communityPool),
+      ...(articleControlPool === undefined
+        ? []
+        : [closePostgresPool(articleControlPool)]),
     ]);
   };
   try {
@@ -288,7 +312,63 @@ export const prepareProductionBackend = async (
   const readinessCheck = async (): Promise<void> => {
     await checkPostgresReadiness(pool);
     await checkPostgresReadiness(communityPool);
+    if (articleControlPool !== undefined)
+      await checkPostgresReadiness(articleControlPool);
   };
+  const articlePersistence =
+    articleConfiguration === null || articleControlPool === undefined
+      ? undefined
+      : createArticleDelegationPersistence(
+          articleControlPool,
+          articleConfiguration.authorization,
+          { readPool: communityPool },
+        );
+  const articleAdapter =
+    runtimeConfig.nodeEnv === "development"
+      ? new PostgresArticleAuthoringAdapter(
+          communityPool,
+          articlePersistence?.adapterOptions,
+        )
+      : undefined;
+  const articleService =
+    articleConfiguration !== null && articleAdapter !== undefined
+      ? createArticleAuthoringService(articleAdapter)
+      : undefined;
+  const catalogReads = createArticleCatalogReadCallbacks(
+    catalogQueryPort,
+    storageUrlResolver,
+  );
+  const articleDelegation =
+    articleConfiguration === null ||
+    articlePersistence === undefined ||
+    articleAdapter === undefined ||
+    articleService === undefined
+      ? undefined
+      : createArticleDelegationRuntime({
+          nodeEnv: runtimeConfig.nodeEnv,
+          enabled: true,
+          pool: communityPool,
+          authority: articleConfiguration.authorization,
+          wrappers: {
+            resolve: createWrapperStore({
+              pool: communityPool,
+              keys: articleConfiguration.keys,
+              namespace: "article-authoring",
+            }).resolve,
+          },
+          persistence: articlePersistence,
+          authoring: articleService,
+          humanWebOrigin: articleConfiguration.authorization.consentBaseUrl,
+          clients: articleConfiguration.authorization.clients,
+          readPublished: (id) => articleAdapter.readPublished(id),
+          discoverCatalog: (_db, _actor, query) =>
+            catalogReads.discoverCatalog(query),
+          readCatalog: (_db, _actor, id) => catalogReads.readCatalog(id),
+          inspectThumbnail: (db, actor, id) =>
+            readBoundedArticleThumbnail(publishingMedia?.store, () =>
+              selectOwnArticleThumbnail(db, actor.userId, id),
+            ),
+        });
   return {
     runtimeConfig,
     readinessCheck,
@@ -311,13 +391,26 @@ export const prepareProductionBackend = async (
       ...(notificationPort ? { notificationPort, notificationSignals } : {}),
       ...(runtimeConfig.nodeEnv === "development"
         ? {
+            ...(articleAdapter === undefined
+              ? {}
+              : {
+                  articleAuthoringPort: articleAdapter,
+                  ...(articleDelegation === undefined
+                    ? {}
+                    : { articleDelegation }),
+                  articlePublicationOperatorPort: articleAdapter,
+                }),
             discussionPort: communityCommentPort,
             contentOperatorPort: new PostgresCommunityContentOperatorAdapter(
               communityPool,
             ),
             discoveryPort: new PostgresCommunityDiscoveryAdapter(communityPool),
             // Published editorial views through the public read role.
-            editorialContentPort: new PostgresEditorialContentAdapter(pool),
+            editorialContentPort: createDevelopmentArticleReadPort(
+              pool,
+              communityPool,
+              storageUrlResolver,
+            ),
             threadPort: new PostgresThreadAdapter(communityPool),
             directMessagePort: new PostgresDirectMessageAdapter(communityPool),
             authorCommunityPort: new PostgresAuthorCommunityAdapter(

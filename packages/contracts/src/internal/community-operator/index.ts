@@ -305,3 +305,21 @@ export type {
   OperatorDmConversation,
   OperatorDmMessage,
 } from "./content-schemas.js";
+
+// special-article-editor-v1: private exact-candidate staff moderation.
+export {
+  articlePendingListQuerySchema,
+  articlePendingSummarySchema,
+  articlePendingPageSchema,
+  articlePendingCandidateSchema,
+  moderateArticlePendingCommandSchema,
+  articleModerationResultSchema,
+} from "./article-operator-schemas.ts";
+export type {
+  ArticlePendingListQuery,
+  ArticlePendingSummary,
+  ArticlePendingPage,
+  ArticlePendingCandidate,
+  ModerateArticlePendingCommand,
+  ArticleModerationResult,
+} from "./article-operator-schemas.ts";

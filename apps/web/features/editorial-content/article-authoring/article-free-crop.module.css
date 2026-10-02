@@ -1,0 +1,152 @@
+.pointerFrame,
+.touchFrame {
+  position: relative;
+  overflow: hidden;
+  margin-inline: auto;
+  width: 100%;
+  background: var(--yoyi-color-paper-dark);
+  border-radius: var(--yoyi-radius-lg);
+  touch-action: none;
+  overscroll-behavior: contain;
+  -webkit-touch-callout: none;
+}
+.pointerFrame {
+  max-width: calc(min(60dvh, 32rem) * var(--article-crop-aspect));
+  cursor: crosshair;
+}
+.pointerFrame > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+.touchFrame {
+  height: min(60dvh, 32rem);
+  min-height: 160px;
+}
+.rectangle {
+  position: absolute;
+  border: 1px solid var(--yoyi-color-paper-light);
+  box-shadow: 0 0 0 100vmax
+    color-mix(in srgb, var(--yoyi-color-ink-black) 55%, transparent);
+  cursor: move;
+}
+.rectangle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      to right,
+      transparent 33.1%,
+      var(--yoyi-color-paper-light) 33.1%,
+      var(--yoyi-color-paper-light) 33.3%,
+      transparent 33.3%,
+      transparent 66.5%,
+      var(--yoyi-color-paper-light) 66.5%,
+      var(--yoyi-color-paper-light) 66.7%,
+      transparent 66.7%
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 33.1%,
+      var(--yoyi-color-paper-light) 33.1%,
+      var(--yoyi-color-paper-light) 33.3%,
+      transparent 33.3%,
+      transparent 66.5%,
+      var(--yoyi-color-paper-light) 66.5%,
+      var(--yoyi-color-paper-light) 66.7%,
+      transparent 66.7%
+    );
+  opacity: 0.4;
+}
+.touchFrame .touchArea {
+  border-color: var(--yoyi-color-paper-light);
+  color: color-mix(in srgb, var(--yoyi-color-ink-black) 55%, transparent);
+}
+.touchHandles {
+  position: absolute;
+  pointer-events: none;
+}
+.corner {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+  touch-action: none;
+}
+.corner span {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--yoyi-color-paper-light);
+  border-radius: var(--yoyi-radius-sm);
+  background: var(--yoyi-color-seal-red);
+  box-shadow: var(--yoyi-shadow-subtle);
+}
+.corner[data-corner="nw"] {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.corner[data-corner="nw"] span {
+  top: 0;
+  left: 0;
+  transform: translate(-50%, -50%);
+}
+.corner[data-corner="ne"] {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.corner[data-corner="ne"] span {
+  top: 0;
+  right: 0;
+  transform: translate(50%, -50%);
+}
+.corner[data-corner="sw"] {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.corner[data-corner="sw"] span {
+  bottom: 0;
+  left: 0;
+  transform: translate(-50%, 50%);
+}
+.corner[data-corner="se"] {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+.corner[data-corner="se"] span {
+  bottom: 0;
+  right: 0;
+  transform: translate(50%, 50%);
+}
+.touchFrame :global(.reactEasyCrop_Image) {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+}
+.pointerFrame:focus-visible,
+.corner:focus-visible,
+.touchFrame :focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+.hint {
+  margin-block: var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: var(--yoyi-type-article-line-height-compact);
+}

@@ -127,7 +127,20 @@ describe("ProductApplication", () => {
         headerStart?: unknown;
       }>;
     expect(element(props.navigationAction).type).toBe(CreateWorkAction);
-    expect(props.renderEditorOverlay).toBe(renderEditorOverlay);
+    const controls = {
+      backButtonRef: { current: null },
+      close: vi.fn(),
+      completeWith: vi.fn(),
+      replaceTarget: vi.fn(),
+      registerLeaveGuard: vi.fn(() => () => undefined),
+    };
+    const workTarget = { type: "new" } as const;
+    expect(props.renderEditorOverlay?.(workTarget, controls)).toEqual(
+      renderEditorOverlay(workTarget, controls),
+    );
+    expect(
+      props.renderEditorOverlay?.({ type: "article-list" }, controls),
+    ).toBeNull();
     // Live Threads read the providers this composition mounts.
     expect(props.liveThreads).toBe(true);
     // Uploads and editor sessions live above the shell, not inside the overlay.

@@ -95,7 +95,16 @@ export function EditorialNewsFeed() {
               )
             }
           >
-            {item.cover ? (
+            {item.managedCover ? (
+              <img
+                src={item.managedCover.src}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                width={item.managedCover.width}
+                height={item.managedCover.height}
+              />
+            ) : item.cover ? (
               <Picture
                 owner={item.id}
                 src={item.cover.src}
@@ -152,7 +161,16 @@ export function EditorialTopicsFeed() {
               )
             }
           >
-            {item.cover ? (
+            {item.managedCover ? (
+              <img
+                src={item.managedCover.src}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                width={item.managedCover.width}
+                height={item.managedCover.height}
+              />
+            ) : item.cover ? (
               <Picture owner={item.id} src={item.cover.src} alt="" />
             ) : (
               <span className={styles.imageFallback} aria-hidden="true" />

@@ -610,6 +610,146 @@ const isApprovedCatalogSearchClientReference = (
   );
 };
 
+// special-article-editor-v1: exact browser-safe adapters and imported names.
+// Public users receive author DTOs; no server transport, operator or CMS surface.
+const articleClientImports: ReadonlyMap<
+  string,
+  ReadonlyMap<string, ReadonlySet<string>>
+> = new Map(
+  (
+    Object.entries({
+      "features/editorial-content/article-authoring/article-create-entry.tsx": {
+        "author-community-client": ["authorClient"],
+        "article-authoring-client": [
+          "articleAuthoringClient",
+          "ArticleRequestError",
+          "createEmptyArticleDocument",
+        ],
+      },
+      "features/editorial-content/article-authoring/article-drafts-panel.tsx": {
+        "author-community-client": ["authorClient"],
+        "article-authoring-client": ["articleAuthoringClient"],
+      },
+      "features/editorial-content/article-authoring/article-link-dialog.tsx": {
+        "article-authoring-client": ["isArticleSafeLink"],
+      },
+      "features/editorial-content/article-authoring/article-image-dialog.tsx": {
+        "article-authoring-client": [
+          "articleAuthoringLimits",
+          "articleTextLength",
+        ],
+      },
+      "features/publishing/ui/drafts/drafts-picker.tsx": {
+        "author-community-client": ["authorClient"],
+        "article-authoring-client": ["articleAuthoringClient"],
+      },
+      "features/publishing/ui/drafts/drafts-card.tsx": {
+        "author-community-client": ["authorClient"],
+      },
+      "features/editorial-content/article-authoring/article-agent-page.tsx": {
+        "author-community-client": ["authorClient"],
+        "work-publishing-client": ["publishingClient"],
+        "catalog-detail-client": ["fetchSameOriginCatalogDetail"],
+      },
+      "features/editorial-content/article-authoring/article-authoring-workspace.tsx":
+        {
+          "author-community-client": ["authorClient"],
+          "article-authoring-client": [
+            "articleAuthoringClient",
+            "articleAuthoringLimits",
+          ],
+          "catalog-detail-client": ["fetchSameOriginCatalogDetail"],
+          "work-publishing-client": ["publishingClient"],
+          "catalog-list-client": ["fetchSameOriginCatalogPage"],
+        },
+      "features/editorial-content/article-authoring/article-blocknote-schema.tsx":
+        {
+          "article-authoring-client": [
+            "articleAuthoringLimits",
+            "articleTextLength",
+            "parseArticleCatalogIdentity",
+          ],
+        },
+      "features/editorial-content/article-authoring/article-delegation.tsx": {
+        "article-delegation-client": ["articleDelegationClient"],
+        "author-community-client": ["authorClient"],
+      },
+      "features/editorial-content/article-authoring/article-editor.tsx": {
+        "author-community-client": ["authorClient"],
+        "article-authoring-client": [
+          "ArticleRequestError",
+          "articleAuthoringLimits",
+          "articleTextLength",
+          "articleDocumentPlainText",
+          "isArticleSafeLink",
+          "parseArticleEditorDocument",
+        ],
+      },
+      "features/editorial-content/article-authoring/article-host.tsx": {
+        "author-community-client": ["authorClient"],
+        "article-authoring-client": [
+          "articleAuthoringClient",
+          "ArticleRequestError",
+          "createEmptyArticleDocument",
+        ],
+      },
+      "features/editorial-content/article-published-body.tsx": {
+        "catalog-detail-client": ["fetchSameOriginCatalogDetail"],
+      },
+      "features/editorial-content/editorial-detail.tsx": {
+        "article-authoring-client": ["articleDocumentPlainText"],
+      },
+    }) as [string, Record<string, readonly string[]>][]
+  ).map(([file, targets]) => [
+    path.join(webRoot, file),
+    new Map(
+      Object.entries(targets).map(([target, names]) => [
+        path.join(webPublicApiRoot, target),
+        new Set(names),
+      ]),
+    ),
+  ]),
+);
+
+const isApprovedArticleClientReference = (
+  filePath: string,
+  source: string,
+  reference: ModuleReference,
+): boolean => {
+  if (
+    reference.kind !== "static-import" ||
+    reference.typeOnly ||
+    !reference.specifier.startsWith(".")
+  )
+    return false;
+  const namesAllowed = articleClientImports
+    .get(path.resolve(filePath))
+    ?.get(path.resolve(path.dirname(filePath), reference.specifier));
+  if (namesAllowed === undefined) return false;
+  if (
+    extractModuleReferences(source).filter(
+      (candidate) =>
+        candidate.kind === "static-import" &&
+        candidate.specifier === reference.specifier,
+    ).length !== 1
+  )
+    return false;
+  const imports = [
+    ...source.matchAll(/\bimport\s*{([^}]+)}\s*from\s*(["'])([^"']+)\2/g),
+  ].filter((match) => match[3] === reference.specifier);
+  if (imports.length !== 1) return false;
+  const names = (imports[0]?.[1] ?? "")
+    .split(",")
+    .map((name) =>
+      name
+        .trim()
+        .split(/\s+as\s+/)[0]
+        ?.trim(),
+    )
+    .filter((name): name is string => Boolean(name));
+  return names.length > 0 && names.every((name) => namesAllowed.has(name));
+};
+
 const referencesWebPublicApiBoundary = (
   filePath: string,
   specifier: string,
@@ -792,6 +932,22 @@ const allowedClientContractTypes = new Set([
   "DiscoveryQuery",
   "InscriptionFilters",
   "InscriptionFilterOptions",
+
+  // special-article-editor-v1 public authoring document and human-review DTOs.
+  "ArticleApprovalCandidate",
+  "ArticleApprovalReview",
+  "ArticleAuthoringGrant",
+  "ArticleBlock",
+  "ArticleConsentReview",
+  "ArticleDocument",
+  "ArticleDraft",
+  "ArticleDraftSummary",
+  "DeleteArticleDraftCommand",
+  "ArticleDraftDeletionResult",
+  "ArticleMediaReference",
+  "ArticlePreview",
+  "ArticleResolvedReference",
+  "CreateArticleDraftCommand",
 
   // content-community-completion-v1 editorial content read DTOs.
   "ArticleCitation",
@@ -1081,7 +1237,8 @@ export const clientBoundaryViolations = (
   for (const reference of extractModuleReferences(source)) {
     if (
       referencesWebPublicApiBoundary(filePath, reference.specifier) &&
-      !isApprovedCatalogSearchClientReference(filePath, source, reference)
+      !isApprovedCatalogSearchClientReference(filePath, source, reference) &&
+      !isApprovedArticleClientReference(filePath, source, reference)
     ) {
       violations.push(`${reference.specifier} is server/runtime-only`);
     }

@@ -1,7 +1,12 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent,
+  PointerEvent,
+  ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import type { previewSpecials } from "./preview-data";
 import styles from "./academic-reader.module.css";
@@ -20,6 +25,8 @@ export interface AcademicFigure {
 }
 export interface AcademicChapterView extends Chapter {
   readonly figures?: readonly AcademicFigure[];
+  readonly richContent?: ReactNode;
+  readonly headingId?: string;
 }
 /**
  * Presentation input of the academic reader. Real Articles map to it from the
@@ -34,6 +41,7 @@ export interface AcademicArticleView {
   readonly meta: string;
   readonly intro: string | null;
   readonly chapters: readonly AcademicChapterView[];
+  readonly cover?: ReactNode;
   /** Citation lines shown in the footer; the second element is a source note. */
   readonly citation: readonly [string, string | null];
 }
@@ -612,7 +620,7 @@ export function AcademicReader({
           const visible = previewChapter !== null && selectedDistance <= 1;
           return (
             <button
-              key={chapter.title}
+              key={chapter.headingId ?? `${index}:${chapter.title}`}
               type="button"
               aria-label={`第 ${index + 1} 节：${chapter.title}`}
               aria-controls={chapterId(index)}
@@ -692,6 +700,9 @@ export function AcademicReader({
           <p className={styles.author}>{special.byline}</p>
           <p className={styles.meta}>{special.meta}</p>
         </header>
+        {special.cover === undefined ? null : (
+          <figure className={styles.figure}>{special.cover}</figure>
+        )}
         {special.intro && (
           <section className={styles.abstract} aria-label="摘要">
             <h3>摘要</h3>
@@ -709,7 +720,7 @@ export function AcademicReader({
           <p className={styles.tocHeading}>目录</p>
           <ol>
             {chapters.map((chapter, index) => (
-              <li key={chapter.title}>
+              <li key={chapter.headingId ?? `${index}:${chapter.title}`}>
                 <button
                   type="button"
                   onClick={() => jumpTo(index, true)}
@@ -727,52 +738,60 @@ export function AcademicReader({
         <div ref={body} className={styles.body} data-academic-body="">
           {chapters.map((chapter, index) => (
             <section
-              key={chapter.title}
+              key={chapter.headingId ?? `${index}:${chapter.title}`}
               id={chapterId(index)}
               ref={(node) => {
                 chapterNodes.current[index] = node;
               }}
               className={styles.chapter}
               data-academic-chapter={index}
-              aria-labelledby={`${chapterId(index)}-heading`}
+              aria-labelledby={
+                chapter.headingId ?? `${chapterId(index)}-heading`
+              }
             >
-              <p
-                className={styles.chapterNumber}
-                aria-hidden="true"
-                data-academic-section-number=""
-              >
-                {String(index + 1).padStart(2, "0")}
-              </p>
-              <h3 id={`${chapterId(index)}-heading`} tabIndex={-1}>
-                {chapter.title}
-              </h3>
-              {chapter.paragraphs.map((paragraph, paragraphIndex) => (
-                <div
-                  key={`${paragraphIndex}-${paragraph.slice(0, 24)}`}
-                  className={styles.paragraphGroup}
-                >
-                  <p>{paragraph}</p>
-                  {(chapter.figures ?? [])
-                    .filter(
-                      (figure) => figure.afterParagraph === paragraphIndex,
-                    )
-                    .map((figure, figureIndex) => (
-                      <figure
-                        key={figure.src}
-                        className={styles.figure}
-                        data-academic-figure={`${index}-${figureIndex}`}
-                      >
-                        <img
-                          src={figure.src}
-                          alt={figure.alt}
-                          loading="lazy"
-                          decoding="async"
-                        />
-                        <figcaption>{figure.caption}</figcaption>
-                      </figure>
-                    ))}
-                </div>
-              ))}
+              {chapter.richContent !== undefined ? (
+                chapter.richContent
+              ) : (
+                <>
+                  <p
+                    className={styles.chapterNumber}
+                    aria-hidden="true"
+                    data-academic-section-number=""
+                  >
+                    {String(index + 1).padStart(2, "0")}
+                  </p>
+                  <h3 id={`${chapterId(index)}-heading`} tabIndex={-1}>
+                    {chapter.title}
+                  </h3>
+                  {chapter.paragraphs.map((paragraph, paragraphIndex) => (
+                    <div
+                      key={`${paragraphIndex}-${paragraph.slice(0, 24)}`}
+                      className={styles.paragraphGroup}
+                    >
+                      <p>{paragraph}</p>
+                      {(chapter.figures ?? [])
+                        .filter(
+                          (figure) => figure.afterParagraph === paragraphIndex,
+                        )
+                        .map((figure, figureIndex) => (
+                          <figure
+                            key={figure.src}
+                            className={styles.figure}
+                            data-academic-figure={`${index}-${figureIndex}`}
+                          >
+                            <img
+                              src={figure.src}
+                              alt={figure.alt}
+                              loading="lazy"
+                              decoding="async"
+                            />
+                            <figcaption>{figure.caption}</figcaption>
+                          </figure>
+                        ))}
+                    </div>
+                  ))}
+                </>
+              )}
             </section>
           ))}
         </div>

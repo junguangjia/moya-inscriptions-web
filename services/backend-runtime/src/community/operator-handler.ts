@@ -21,9 +21,11 @@ import { handleAgentRequest } from "./agent-handler.js";
 import { handlePublishingOperatorRequest } from "./work-publishing-handler.js";
 import { handleThreadOperatorRequest } from "./thread-handler.js";
 import { handleDirectMessageOperatorRequest } from "./direct-message-handler.js";
+import { handleArticlePublicationOperatorRequest } from "./article-publication-operator-handler.js";
 
 import type {
   AgentAdministrationService,
+  ArticlePublicationOperatorService,
   CommunityContentOperatorPort,
   DiscussionPort,
   CommunityModerationService,
@@ -34,6 +36,8 @@ import type {
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export interface OperatorRouteDependencies {
+  readonly articlePublicationOperatorService?:
+    ArticlePublicationOperatorService | undefined;
   readonly moderationService: CommunityModerationService;
   readonly contentOperatorPort?: CommunityContentOperatorPort | undefined;
   readonly discussionPort?: DiscussionPort | undefined;
@@ -176,6 +180,7 @@ export const handleOperatorRequest = async (
     agentAdministrationService,
     threadService,
     directMessageService,
+    articlePublicationOperatorService,
   }: OperatorRouteDependencies,
 ): Promise<void> => {
   if (!isAuthorizedOperator(request, operatorCredential)) {
@@ -186,6 +191,16 @@ export const handleOperatorRequest = async (
   const methodNotAllowed = () =>
     sendOperatorError(response, 405, "METHOD_NOT_ALLOWED");
   try {
+    if (
+      articlePublicationOperatorService !== undefined &&
+      (await handleArticlePublicationOperatorRequest(
+        request,
+        response,
+        pathname,
+        articlePublicationOperatorService,
+      ))
+    )
+      return;
     // Every operator route family, including the Agent, publishing, direct-
     // message and Thread handlers, runs inside this boundary: an error they do
     // not map themselves becomes a bounded operator failure for this request.

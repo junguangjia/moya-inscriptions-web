@@ -26,14 +26,19 @@ const collectTypeScript = async (directory: string): Promise<string[]> => {
 describe("@moya/catalog-postgres package boundary", () => {
   it("exposes the adapter, shared public Search projection and migration target checks", () => {
     expect(Object.keys(catalogPostgres).sort()).toEqual([
+      "CanonicalAuthoredArticleProjector",
       "DatabaseSchemaNotReadyError",
       "MigrationStateError",
+      "PostgresAuthoredArticleCatalogMediaResolver",
       "PostgresCatalogQueryAdapter",
+      "PostgresCompositeEditorialAdapter",
       "PostgresEditorialContentAdapter",
       "PostgresStartupError",
+      "articleCatalogMediaKey",
       "asPostgresOperationError",
       "assertMigrationTarget",
       "assertPostgresStartupReady",
+      "authoredArticleCatalogPairKey",
       "catalogPageOffset",
       "catalogSearchSourceSelectSql",
       "checkPostgresReadiness",

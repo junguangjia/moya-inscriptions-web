@@ -15,6 +15,9 @@ import { T02pProductPreview } from "../product-preview/t02p-product-preview";
 import { CreateWorkAction } from "../publishing/create-action";
 import { PublishingEntryProvider } from "../publishing/publishing-entry";
 import { PublishingProvider } from "../publishing/publishing-provider";
+import { ArticleCreateEntry } from "../editorial-content/article-authoring/article-create-entry";
+import { ArticleAvailability } from "../editorial-content/article-authoring/article-availability";
+import { ArticleAuthoringHost } from "../editorial-content/article-authoring/article-host";
 import { renderEditorOverlay } from "../publishing/ui/editor/editor-overlay";
 import { EditorSessionProvider } from "../publishing/ui/editor/editor-session-provider";
 import { NotificationProvider } from "../notifications/notification-context";
@@ -51,6 +54,7 @@ export interface ProductApplicationProps extends Pick<
   /** Presentation input until the notification service is connected; never synthesized. */
   readonly messageUnreadCount?: number;
   readonly liveNotifications?: boolean;
+  readonly articleAuthoring?: boolean;
 }
 
 /**
@@ -64,6 +68,7 @@ export const ProductApplication = ({
   authorCommunity = false,
   messageUnreadCount = 0,
   liveNotifications = false,
+  articleAuthoring = false,
   ...preview
 }: ProductApplicationProps) =>
   comments === null || !authorCommunity ? (
@@ -89,6 +94,7 @@ export const ProductApplication = ({
             preview={preview}
             unreadCount={messageUnreadCount}
             liveNotifications={liveNotifications}
+            articleAuthoring={articleAuthoring}
           />
         </DirectMessageEntryProvider>
       </NotificationProvider>
@@ -99,62 +105,89 @@ const AuthorProduct = ({
   preview,
   unreadCount,
   liveNotifications,
+  articleAuthoring,
 }: {
   preview: Omit<
     ProductApplicationProps,
-    "comments" | "authorCommunity" | "messageUnreadCount" | "liveNotifications"
+    | "comments"
+    | "authorCommunity"
+    | "messageUnreadCount"
+    | "liveNotifications"
+    | "articleAuthoring"
   >;
   unreadCount: number;
   liveNotifications: boolean;
+  articleAuthoring: boolean;
 }) => {
   const author = useAuthors();
   return (
     // Uploads and the editor session live above every page and overlay (U01).
-    <PublishingProvider>
-      <EditorSessionProvider>
-        <LiveCatalogCards>
-          {" "}
-          <PublishingEntryProvider>
-            <T02pProductPreview
-              {...preview}
-              detailScopeKey={author.viewer?.id ?? "guest"}
-              liveThreads
-              // Publishing takes the one dock action; Search moves to the headers.
-              navigationAction={<CreateWorkAction />}
-              renderEditorOverlay={renderEditorOverlay}
-              renderProfileOverlay={(properties) => (
-                <AuthorProfileOverlay {...properties} />
-              )}
-              workDetailLoader={loadWorkDetail}
-              renderDiscussion={(target) => (
-                <DiscussionSection
-                  target={target}
-                  key={`${target.type}:${target.id}`}
-                />
-              )}
-              renderDetailActions={(detail) => (
-                <DetailActions detail={detail} />
-              )}
-              renderDiscover={(active) => (
-                <DiscoveryFeed kind="all" active={active} />
-              )}
-              renderInscriptions={(active) => (
-                <FilteredInscriptions active={active} />
-              )}
-              userPage={<UserPage />}
-              headerStart={<CatalogSearchHeaderAction />}
-              headerEnd={
-                <MessageTrigger
-                  liveNotifications={liveNotifications}
-                  developmentPreview={preview.developmentDiscussion ?? false}
-                  unreadCount={unreadCount}
-                />
-              }
-            />
-          </PublishingEntryProvider>
-        </LiveCatalogCards>
-      </EditorSessionProvider>
-    </PublishingProvider>
+    <ArticleAvailability enabled={articleAuthoring}>
+      <PublishingProvider>
+        <EditorSessionProvider>
+          <LiveCatalogCards>
+            {" "}
+            <PublishingEntryProvider>
+              <T02pProductPreview
+                {...preview}
+                detailScopeKey={author.viewer?.id ?? "guest"}
+                liveThreads
+                // Publishing takes the one dock action; Search moves to the headers.
+                navigationAction={
+                  articleAuthoring ? (
+                    <ArticleCreateEntry />
+                  ) : (
+                    <CreateWorkAction />
+                  )
+                }
+                articleEditorEnabled={articleAuthoring}
+                renderEditorOverlay={(target, controls) =>
+                  target.type === "article-list" ||
+                  target.type === "article-draft" ? (
+                    articleAuthoring ? (
+                      <ArticleAuthoringHost
+                        target={target}
+                        controls={controls}
+                      />
+                    ) : null
+                  ) : (
+                    renderEditorOverlay(target, controls)
+                  )
+                }
+                renderProfileOverlay={(properties) => (
+                  <AuthorProfileOverlay {...properties} />
+                )}
+                workDetailLoader={loadWorkDetail}
+                renderDiscussion={(target) => (
+                  <DiscussionSection
+                    target={target}
+                    key={`${target.type}:${target.id}`}
+                  />
+                )}
+                renderDetailActions={(detail) => (
+                  <DetailActions detail={detail} />
+                )}
+                renderDiscover={(active) => (
+                  <DiscoveryFeed kind="all" active={active} />
+                )}
+                renderInscriptions={(active) => (
+                  <FilteredInscriptions active={active} />
+                )}
+                userPage={<UserPage />}
+                headerStart={<CatalogSearchHeaderAction />}
+                headerEnd={
+                  <MessageTrigger
+                    liveNotifications={liveNotifications}
+                    developmentPreview={preview.developmentDiscussion ?? false}
+                    unreadCount={unreadCount}
+                  />
+                }
+              />
+            </PublishingEntryProvider>
+          </LiveCatalogCards>
+        </EditorSessionProvider>
+      </PublishingProvider>
+    </ArticleAvailability>
   );
 };
 

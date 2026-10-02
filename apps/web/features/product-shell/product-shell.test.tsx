@@ -23,7 +23,7 @@ import {
 } from "./product-history";
 
 import type { ReactNode } from "react";
-import type { EditorTarget } from "./product-history";
+import type { ProductEditorTarget } from "./product-history";
 import type {
   ProductShellDetailOverlayRenderProps,
   ProductShellEditorOverlayControls,
@@ -339,14 +339,18 @@ const EditorMountProbe = () => {
   }, []);
   return null;
 };
-const renderEditorShell = (enabled = true, withOverlays = false) => {
+const renderEditorShell = (
+  enabled = true,
+  withOverlays = false,
+  articleEnabled = false,
+) => {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   mountedRoots.push(root);
   let editor:
     | {
-        readonly target: EditorTarget;
+        readonly target: ProductEditorTarget;
         readonly controls: ProductShellEditorOverlayControls;
       }
     | undefined;
@@ -366,6 +370,7 @@ const renderEditorShell = (enabled = true, withOverlays = false) => {
     root.render(
       <ProductShell
         initialPlatform="phone"
+        articleEditorEnabled={articleEnabled}
         home={
           <>
             <ProductShellObserver />
@@ -439,7 +444,7 @@ const renderEditorShell = (enabled = true, withOverlays = false) => {
         {...(enabled
           ? {
               renderEditorOverlay: (
-                target: EditorTarget,
+                target: ProductEditorTarget,
                 controls: ProductShellEditorOverlayControls,
               ) => {
                 editor = { target, controls };
@@ -2141,6 +2146,94 @@ describe("ProductShell", () => {
     );
     expect(observedProductShell?.activeProfile).toBeNull();
     expect(observedProductShell?.activeContent).toBeNull();
+  });
+  it.each([false, true])(
+    "only composes a direct Article editor when its Development seam is enabled: %s",
+    async (articleEnabled) => {
+      window.history.replaceState(null, "", "/dev/t02p#article-editor");
+      const app = renderEditorShell(true, false, articleEnabled);
+      await act(async () => vi.runAllTimers());
+      if (articleEnabled)
+        expect(app.editor().target).toEqual({ type: "article-list" });
+      else expect(editorDialog(app.container)).toBeNull();
+    },
+  );
+  it("synchronizes Article URLs through the Next-style native history wrapper while retaining router state", async () => {
+    const nativePush = History.prototype.pushState.bind(window.history);
+    const nativeReplace = History.prototype.replaceState.bind(window.history);
+    const routerState = {
+      __NA: true,
+      __PRIVATE_NEXTJS_INTERNALS_TREE: ["synthetic-router"],
+    };
+    nativeReplace({ ...window.history.state, ...routerState }, "");
+    let canonical = `${window.location.pathname}${window.location.hash}`;
+    const wrap =
+      (native: typeof window.history.pushState) =>
+      (
+        data: Record<string, unknown>,
+        title: string,
+        url?: string | URL | null,
+      ) => {
+        if (!data?.__NA && !data?._N) {
+          if (url) canonical = String(url);
+          data = {
+            ...data,
+            __NA: window.history.state?.__NA,
+            __PRIVATE_NEXTJS_INTERNALS_TREE:
+              window.history.state?.__PRIVATE_NEXTJS_INTERNALS_TREE,
+          };
+        }
+        native(data, title, url);
+      };
+    const pushMock = vi
+      .spyOn(window.history, "pushState")
+      .mockImplementation(wrap(nativePush));
+    const replaceMock = vi
+      .spyOn(window.history, "replaceState")
+      .mockImplementation(wrap(nativeReplace));
+    const app = renderEditorShell(true, false, true);
+    await act(async () => vi.runAllTimers());
+    act(() =>
+      observedProductShell!.openEditor(
+        { type: "article-list" },
+        buttonByLabel(app.container, "发布作品"),
+      ),
+    );
+    expect(canonical).toContain("#article-editor");
+    expect(window.history.state.__PRIVATE_NEXTJS_INTERNALS_TREE).toEqual(
+      routerState.__PRIVATE_NEXTJS_INTERNALS_TREE,
+    );
+    const target = {
+      type: "article-draft",
+      id: "article-" + "d".repeat(32),
+    } as const;
+    act(() => app.editor().controls.replaceTarget(target));
+    expect(app.editor().target).toEqual(target);
+    nativeReplace(window.history.state, "", canonical);
+    expect(window.location.hash).toBe("#article-editor");
+    pushMock.mockRestore();
+    replaceMock.mockRestore();
+  });
+  it("keeps a private Article draft mounted when its registered guard rejects history Back", async () => {
+    const app = renderEditorShell(true, false, true);
+    await act(async () => vi.runAllTimers());
+    const opener = buttonByLabel(app.container, "发布作品");
+    const target = {
+      type: "article-draft",
+      id: "article-" + "d".repeat(32),
+    } as const;
+    act(() =>
+      expect(observedProductShell!.openEditor(target, opener)).toBe(true),
+    );
+    await act(async () => vi.runAllTimers());
+    const guard = vi.fn(() => "blocked" as const);
+    act(() => app.editor().controls.registerLeaveGuard(guard));
+    traverse(sameDocument(primaryHistoryState("home", 0)));
+    await act(async () => vi.runAllTimers());
+    expect(guard).toHaveBeenCalledWith("history");
+    expect(app.editor().target).toEqual(target);
+    expect(window.location.hash).toBe("#article-editor");
+    expect(editorDialog(app.container)).not.toBeNull();
   });
   it("owns Editor history, inertness, dock hiding, Back scroll, and opener focus", async () => {
     const pushState = vi.spyOn(window.history, "pushState");

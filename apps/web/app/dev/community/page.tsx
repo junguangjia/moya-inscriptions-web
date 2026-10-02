@@ -134,6 +134,13 @@ export default async function CommunityDevelopmentPage({
           </form>
         )}
       </section>
+      {result.state === "success" ? (
+        <p>
+          <a href="/#profile" className={styles.button}>
+            打开草稿箱，测试专题编辑
+          </a>
+        </p>
+      ) : null}
       <p>
         <a href="/?notifications=comments">打开评论与提到我测试</a>
       </p>

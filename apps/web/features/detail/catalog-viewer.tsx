@@ -7,6 +7,7 @@ import styles from "./catalog-detail.module.css";
 
 import type {
   CSSProperties,
+  ReactNode,
   PointerEvent as ReactPointerEvent,
   WheelEvent as ReactWheelEvent,
 } from "react";
@@ -156,6 +157,7 @@ export const clampViewerTransform = (
 };
 
 export interface CatalogViewerProps {
+  readonly controls?: ReactNode;
   readonly index: number;
   readonly media: readonly DetailMediaPresentation[];
   readonly onClose: () => void;
@@ -178,6 +180,7 @@ export const CatalogViewer = ({
   onIndexChange,
   open,
   platform,
+  controls,
 }: CatalogViewerProps) => {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -858,6 +861,7 @@ export const CatalogViewer = ({
           ))}
         </div>
       ) : null}
+      {controls}
     </dialog>
   );
 };

@@ -1,9 +1,11 @@
 import { authPaths } from "./auth-openapi.js";
 import { authorCommunityPaths } from "./author-community-openapi.js";
+import { articleAuthoringPaths } from "./article-authoring-openapi.js";
 import {
   authJsonSchemas,
   authorCommunityJsonSchemas,
   workPublishingJsonSchemas,
+  articleAuthoringJsonSchemas,
 } from "@moya/contracts/json-schema";
 import type { ApiErrorCode } from "@moya/contracts";
 import {
@@ -43,6 +45,30 @@ type JsonObject = Record<string, unknown>;
 type JsonValue = JsonObject | JsonValue[] | boolean | number | string | null;
 
 const asJsonObject = (value: unknown): JsonObject => value as JsonObject;
+
+/** Standalone Contracts/MCP schemas retain local refs; embedding gives them a document location. */
+const componentSchemas = (schemas: Record<string, unknown>): JsonObject =>
+  Object.fromEntries(
+    Object.entries(schemas).map(([name, schema]) => {
+      const prefix = `#/components/schemas/${name.replaceAll("~", "~0").replaceAll("/", "~1")}/`;
+      const embed = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(embed);
+        if (value !== null && typeof value === "object")
+          return Object.fromEntries(
+            Object.entries(value).map(([key, item]) => [
+              key,
+              key === "$ref" &&
+              typeof item === "string" &&
+              item.startsWith("#/$defs/")
+                ? prefix + item.slice(2)
+                : embed(item),
+            ]),
+          );
+        return value;
+      };
+      return [name, embed(schema)];
+    }),
+  );
 
 const schemaProperty = (schema: unknown, propertyName: string): JsonObject => {
   const properties = asJsonObject(asJsonObject(schema).properties);
@@ -175,6 +201,7 @@ export const openApiDocument: JsonObject = {
   },
   paths: {
     ...authorCommunityPaths,
+    ...articleAuthoringPaths,
     ...authPaths,
     "/health": {
       get: {
@@ -367,9 +394,10 @@ export const openApiDocument: JsonObject = {
       },
     },
     schemas: {
-      ...authorCommunityJsonSchemas,
+      ...componentSchemas(authorCommunityJsonSchemas),
       ...authJsonSchemas,
       ...workPublishingJsonSchemas,
+      ...componentSchemas(articleAuthoringJsonSchemas),
       CatalogId: catalogIdJsonSchema,
       CatalogKind: catalogKindJsonSchema,
       CatalogContributorRole: catalogContributorRoleJsonSchema,

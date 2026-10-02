@@ -159,6 +159,7 @@ describe("workspace dependency boundaries", () => {
     expect(moyaDependencies("@moya/contracts")).toEqual([]);
     expect(moyaDependencies("@moya/api")).toEqual(["@moya/contracts"]);
     expect(moyaDependencies("@moya/backend-production")).toEqual([
+      "@moya/agent-authorization",
       "@moya/backend-runtime",
       "@moya/catalog-importer",
       "@moya/catalog-postgres",
@@ -378,6 +379,38 @@ describe("frontend and browser boundaries", () => {
         "Frontend code cannot use private storage-provider or CDN configuration",
       ]),
     );
+  });
+
+  it("admits exact reviewed Article clients and DTOs while retaining private and arbitrary import denial", () => {
+    const file = path.join(
+      repositoryRoot,
+      "apps/web/features/editorial-content/article-authoring/article-host.tsx",
+    );
+    const source =
+      '"use client";\nimport { authorClient } from "../../../lib/public-api/author-community-client";\nimport type { ArticleDraft, ArticleDocument } from "@moya/contracts";';
+    expect(clientBoundaryViolations(file, source)).toEqual([]);
+    expect(
+      clientBoundaryViolations(
+        path.join(
+          repositoryRoot,
+          "apps/web/features/editorial-content/article-authoring/example.tsx",
+        ),
+        source,
+      ).length,
+    ).toBeGreaterThan(0);
+    for (const bad of [
+      'import { authorClient, authorRequest } from "../../../lib/public-api/author-community-client";',
+      'import * as author from "../../../lib/public-api/author-community-client";',
+      'import author from "../../../lib/public-api/author-community-client";',
+      'import("../../../lib/public-api/author-community-client");',
+      'import { relayServerAuthorCommunity } from "../../../lib/public-api/server";',
+      'import { articleDraftSchema } from "@moya/contracts/schemas";',
+      'import { ArticleAuthoringService } from "@moya/api";',
+      'import type { ArticlePendingModerationCommand } from "@moya/contracts";',
+    ])
+      expect(
+        clientBoundaryViolations(file, '"use client";\n' + bad).length,
+      ).toBeGreaterThan(0);
   });
 
   it("rejects internal contract types in Client Components", () => {

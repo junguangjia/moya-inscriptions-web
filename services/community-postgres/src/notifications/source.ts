@@ -50,14 +50,16 @@ export const sourceFactsSql = `SELECT s.action_key,s.kind,s.actor_id,s.created_a
   CASE WHEN s.kind IN ('comment','comment_like') THEN s.subject_id END AS comment_id,
   c.id AS root_id,c.author_id AS root_author,
   CASE WHEN r.id IS NOT NULL THEN COALESCE(rr.author_id,c.author_id) END AS reply_recipient,
-  w.author_id AS work_author,
+  w.author_id AS work_author, authored.owner_id AS article_author,
   CASE WHEN s.kind='work_mention' THEN wr.mentions WHEN r.id IS NOT NULL THEN r.mentions ELSE c.mentions END AS mentions,
   CASE WHEN s.kind IN ('work_like','work_mention') THEN w.text WHEN r.id IS NOT NULL THEN r.text ELSE c.text END AS text,
   (a.status='active' AND
     CASE WHEN t.target_type='work' THEN community.work_is_public(w) AND wa.status='active'
       WHEN t.target_type='catalog' THEN cat.catalog_id IS NOT NULL
-      WHEN t.target_type='article' THEN art.article_id IS NOT NULL ELSE false END
+      WHEN t.target_type='article' THEN CASE WHEN article_document.id IS NOT NULL
+        THEN authored.article_id IS NOT NULL ELSE art.article_id IS NOT NULL END ELSE false END
     AND (w.author_id IS NULL OR community.accounts_can_interact(s.actor_id,w.author_id))
+    AND (authored.owner_id IS NULL OR community.accounts_can_interact(s.actor_id,authored.owner_id))
     AND CASE WHEN s.kind IN ('comment','comment_like') THEN
       c.moderation='visible' AND c.body_deleted_at IS NULL AND c.thread_removed_at IS NULL AND ca.status='active'
       AND community.accounts_can_interact(s.actor_id,c.author_id)
@@ -81,9 +83,12 @@ export const sourceFactsSql = `SELECT s.action_key,s.kind,s.actor_id,s.created_a
   LEFT JOIN community.public_users wa ON wa.id=w.author_id
   LEFT JOIN community.work_revisions wr ON wr.id=w.public_revision_id
   LEFT JOIN public.catalog_discovery cat ON t.target_type='catalog' AND cat.catalog_id=t.target_id
-  LEFT JOIN public.article_entries art ON t.target_type='article' AND art.article_id=t.target_id`;
+  LEFT JOIN public.article_entries art ON t.target_type='article' AND art.article_id=t.target_id
+  LEFT JOIN community.article_documents article_document ON t.target_type='article' AND article_document.id=t.target_id
+  LEFT JOIN community.published_authored_articles authored ON t.target_type='article' AND authored.article_id=t.target_id`;
 /** Used by both reads and projection. $1 is always the recipient. */
 export const recipientEligibleSql = `f.eligible AND u.status='active' AND f.actor_id<>$1
   AND community.accounts_can_interact($1,f.actor_id)
   AND (f.work_author IS NULL OR community.accounts_can_interact($1,f.work_author))
+  AND (f.article_author IS NULL OR community.accounts_can_interact($1,f.article_author))
   AND (f.root_author IS NULL OR community.accounts_can_interact($1,f.root_author))`;

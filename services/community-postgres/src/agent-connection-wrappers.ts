@@ -201,6 +201,8 @@ type Queryable = {
 };
 
 export interface WrapperStoreOptions {
+  /** Explicit domain; omitted keeps every existing Admin caller unchanged. */
+  readonly namespace?: "admin" | "article-authoring";
   readonly pool: Queryable;
   readonly keys: WrapperKeys;
   /**
@@ -216,9 +218,16 @@ const TABLE = "community.agent_connection_wrappers";
 
 export const createWrapperStore = (options: WrapperStoreOptions) => {
   const { pool, keys } = options;
+  const authoring = options.namespace === "article-authoring";
+  const table = authoring ? "community.article_authoring_wrappers" : TABLE;
+  const grantTable = authoring
+    ? "community.article_authoring_grants"
+    : "community.agent_connection_grants";
+  const grantGeneration = authoring ? "generation" : "generation_at_consent";
+  const prefix = authoring ? "artvenn_article_ct_" : WRAPPER_PREFIX;
 
   const newPresented = () =>
-    `${WRAPPER_PREFIX}${randomBytes(WRAPPER_ENTROPY_BYTES).toString("base64url")}`;
+    `${prefix}${randomBytes(WRAPPER_ENTROPY_BYTES).toString("base64url")}`;
 
   return {
     /**
@@ -236,8 +245,8 @@ export const createWrapperStore = (options: WrapperStoreOptions) => {
       readonly expiresAt: Date;
     }): Promise<MintedWrapper> {
       const anchor = await pool.query(
-        `SELECT connection_id, generation_at_consent
-           FROM community.agent_connection_grants WHERE grant_id=$1`,
+        `SELECT connection_id, ${grantGeneration} AS generation_at_consent
+           FROM ${grantTable} WHERE grant_id=$1`,
         [input.grantId],
       );
       const row = anchor.rows[0] as
@@ -264,7 +273,7 @@ export const createWrapperStore = (options: WrapperStoreOptions) => {
       );
 
       await pool.query(
-        `INSERT INTO ${TABLE}
+        `INSERT INTO ${table}
            (lookup_digest, sealed_jti, format_version, grant_id, connection_id,
             generation, expires_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -300,12 +309,12 @@ export const createWrapperStore = (options: WrapperStoreOptions) => {
      * token indistinguishable from a typo.
      */
     async resolve(presented: string): Promise<ResolvedWrapper | undefined> {
-      if (!presented.startsWith(WRAPPER_PREFIX)) return undefined;
+      if (!presented.startsWith(prefix)) return undefined;
       const lookupDigest = lookupDigestOf(keys, presented);
       const { rows } = await pool.query(
         `SELECT sealed_jti, format_version, grant_id, connection_id, generation,
                 expires_at, invalidated_at
-           FROM ${TABLE} WHERE lookup_digest=$1`,
+           FROM ${table} WHERE lookup_digest=$1`,
         [lookupDigest],
       );
       const row = rows[0] as
@@ -369,7 +378,7 @@ export const createWrapperStore = (options: WrapperStoreOptions) => {
      */
     async invalidateByGrant(grantId: string, at: Date): Promise<number> {
       const { rowCount } = await pool.query(
-        `UPDATE ${TABLE} SET invalidated_at=$2
+        `UPDATE ${table} SET invalidated_at=$2
           WHERE grant_id=$1 AND invalidated_at IS NULL`,
         [grantId, at],
       );
@@ -379,8 +388,8 @@ export const createWrapperStore = (options: WrapperStoreOptions) => {
     /** Bounded reaping of wrappers whose own expiry has passed. */
     async deleteExpired(before: Date, limit = 1000): Promise<number> {
       const { rowCount } = await pool.query(
-        `DELETE FROM ${TABLE} WHERE lookup_digest IN (
-           SELECT lookup_digest FROM ${TABLE} WHERE expires_at <= $1 LIMIT $2)`,
+        `DELETE FROM ${table} WHERE lookup_digest IN (
+           SELECT lookup_digest FROM ${table} WHERE expires_at <= $1 LIMIT $2)`,
         [before, limit],
       );
       return rowCount ?? 0;

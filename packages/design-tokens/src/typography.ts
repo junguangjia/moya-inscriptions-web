@@ -5,6 +5,12 @@ export const fontFamily = {
     '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif',
 } as const;
 
+export const articleLineHeight = {
+  compact: 1.5,
+  normal: 1.9,
+  relaxed: 2.2,
+} as const;
+
 export const typographyNames = [
   "display",
   "page-title",

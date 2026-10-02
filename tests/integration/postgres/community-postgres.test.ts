@@ -144,6 +144,11 @@ beforeAll(async () => {
   await pool.query(
     "CREATE TABLE IF NOT EXISTS public.catalog_discovery(catalog_id text PRIMARY KEY,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb)",
   );
+  // Article discussion admission reads the same published staff projection.
+  // Own this shared substrate for the file, like catalog_discovery above.
+  await pool.query(
+    "CREATE TABLE IF NOT EXISTS public.article_entries(article_id text PRIMARY KEY,title text)",
+  );
 });
 
 afterEach(async () => {

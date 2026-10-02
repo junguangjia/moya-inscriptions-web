@@ -404,38 +404,53 @@ export const registerThreadTests = (
     it("stores article discussion targets under the retained physical names and refuses other kinds", async () => {
       const author = await user("文章评论者");
       const articleId = `article-${randomUUID().replaceAll("-", "")}`;
-      const result = await comments.submitDiscussion(
-        { type: "article", id: articleId as never },
-        author,
-        "文章评论",
-        undefined,
-        undefined,
+      // A concrete published staff Article, rather than an arbitrary target id.
+      await pool.query(
+        "INSERT INTO public.article_entries(article_id,title) VALUES($1,'合成公开专题')",
+        [articleId],
       );
-      const stored = (
-        await pool.query<{ target_type: string; catalog_id: string }>(
-          "SELECT target_type, catalog_id FROM community.catalog_comments WHERE id=$1",
-          [result.rootId],
-        )
-      ).rows[0]!;
-      expect(stored).toEqual({ target_type: "article", catalog_id: articleId });
-      expect(await comments.discussionTarget(result.rootId)).toEqual({
-        type: "article",
-        id: articleId,
-      });
-      await expect(
-        pool.query(
-          "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation) VALUES($1,$2,'user',$3,'x','visible')",
-          [id("comment"), author, author],
-        ),
-      ).rejects.toMatchObject({ code: "23514" });
-      const page = await comments.readDiscussion(
-        { type: "article", id: articleId as never },
-        null,
-        { page: 1, pageSize: 10 },
-      );
-      expect(page.items.map((item) => item.id)).toEqual([result.rootId]);
-      // The retained column name still bounds the identity length.
-      expect(articleId.length).toBeLessThanOrEqual(128);
+      try {
+        const result = await comments.submitDiscussion(
+          { type: "article", id: articleId as never },
+          author,
+          "文章评论",
+          undefined,
+          undefined,
+        );
+        const stored = (
+          await pool.query<{ target_type: string; catalog_id: string }>(
+            "SELECT target_type, catalog_id FROM community.catalog_comments WHERE id=$1",
+            [result.rootId],
+          )
+        ).rows[0]!;
+        expect(stored).toEqual({
+          target_type: "article",
+          catalog_id: articleId,
+        });
+        expect(await comments.discussionTarget(result.rootId)).toEqual({
+          type: "article",
+          id: articleId,
+        });
+        await expect(
+          pool.query(
+            "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation) VALUES($1,$2,'user',$3,'x','visible')",
+            [id("comment"), author, author],
+          ),
+        ).rejects.toMatchObject({ code: "23514" });
+        const page = await comments.readDiscussion(
+          { type: "article", id: articleId as never },
+          null,
+          { page: 1, pageSize: 10 },
+        );
+        expect(page.items.map((item) => item.id)).toEqual([result.rootId]);
+        // The retained column name still bounds the identity length.
+        expect(articleId.length).toBeLessThanOrEqual(128);
+      } finally {
+        await pool.query(
+          "DELETE FROM public.article_entries WHERE article_id=$1",
+          [articleId],
+        );
+      }
     });
   });
 };

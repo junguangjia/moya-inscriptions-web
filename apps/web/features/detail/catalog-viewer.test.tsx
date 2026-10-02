@@ -14,6 +14,7 @@ import {
 } from "./catalog-viewer";
 
 import type { Root } from "react-dom/client";
+import type { ReactNode } from "react";
 import type { MediaId, PublicMedia } from "@moya/contracts";
 
 (
@@ -42,6 +43,7 @@ const pointerEvent = (
 };
 
 interface ViewerTestProperties {
+  readonly controls?: ReactNode;
   readonly index?: number;
   readonly open?: boolean;
   readonly selectedMedia?: readonly PublicMedia[];
@@ -64,6 +66,7 @@ const renderViewer = (properties?: ViewerTestProperties) => {
           onIndexChange={onIndexChange}
           open={next.open ?? true}
           platform="phone"
+          controls={next.controls}
         />,
       ),
     );
@@ -122,6 +125,43 @@ afterEach(() => {
 });
 
 describe("CatalogViewer geometry", () => {
+  it("keeps optional editor controls outside image pan and tap-to-close gestures", () => {
+    const crop = vi.fn();
+    const value = renderViewer({
+      controls: (
+        <div data-detail-viewer-control="">
+          <button type="button" onClick={crop}>
+            裁剪范围
+          </button>
+        </div>
+      ),
+    });
+    const button = [...value.container.querySelectorAll("button")].find(
+      (button) => button.textContent === "裁剪范围",
+    )!;
+    act(() => {
+      button.dispatchEvent(
+        pointerEvent("pointerdown", {
+          pointerId: 1,
+          clientX: 100,
+          clientY: 100,
+          button: 0,
+        }),
+      );
+      button.dispatchEvent(
+        pointerEvent("pointerup", {
+          pointerId: 1,
+          clientX: 100,
+          clientY: 100,
+          button: 0,
+        }),
+      );
+      button.click();
+    });
+    expect(crop).toHaveBeenCalledOnce();
+    expect(value.onClose).not.toHaveBeenCalled();
+    expect(value.onIndexChange).not.toHaveBeenCalled();
+  });
   it("locks a decisive axis and applies the accepted release threshold", () => {
     expect(resolveViewerAxis(6, 2)).toBeNull();
     expect(resolveViewerAxis(20, 4)).toBe("horizontal");

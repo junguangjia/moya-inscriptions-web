@@ -4,6 +4,10 @@ import type {
   ArticleId,
   ArticleListQuery,
   ArticlePresentation,
+  ArticleDocument,
+  ArticleResolvedReferences,
+  PublicMedia,
+  WorkMedia,
   MediaId,
 } from "@moya/contracts";
 
@@ -28,6 +32,8 @@ export interface ArticleSummaryRecord {
   readonly issue: string | null;
   readonly byline: string;
   readonly cover: EditorialMediaRecord | null;
+  readonly resolvedCover?: PublicMedia | null;
+  readonly managedCover?: WorkMedia | null;
   readonly firstPublishedAt: string;
   readonly publishedAt: string;
   readonly updatedAt: string;
@@ -50,6 +56,8 @@ export interface ArticleDetailRecord extends ArticleSummaryRecord {
   readonly intro: string | null;
   readonly sections: readonly ArticleSectionRecord[];
   readonly citations: readonly ArticleCitationRecord[];
+  readonly document?: ArticleDocument;
+  readonly resolvedReferences?: ArticleResolvedReferences;
 }
 
 export interface ArticleCollectionSummaryRecord {

@@ -230,9 +230,33 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
         "4774f8a17ee2fb249f00bf58bf05ca9489a7fb5e0fb415e64c74842904de2b74",
     }),
     Object.freeze({
+      migrationId: "20260930020000",
+      filename: "20260930020000_article_authoring.sql",
+      checksum:
+        "b402302332fbcb593376fb429ab8cceb72ea8c43eb154b2b126f08797c37d27e",
+    }),
+    Object.freeze({
+      migrationId: "20260930030000",
+      filename: "20260930030000_article_authoring_delegation.sql",
+      checksum:
+        "7220564f1578105597902b151dc1ee5d1e902c3eaf2d0a0aec7c46aa2cab445c",
+    }),
+    Object.freeze({
+      migrationId: "20260930040000",
+      filename: "20260930040000_article_consent_uid_check.sql",
+      checksum:
+        "7eada86a6707ff2aae73055f31629af3de810dc4fecadef4edcd46df09f05b05",
+    }),
+    Object.freeze({
       migrationId: "20261001010000",
       filename: "20261001010000_profile_studio_name_suffix.sql",
       checksum:
         "e87e1fb157c220be2695bd7eb54093b9467138d72be31d1dd1b0cbc7803f561d",
+    }),
+    Object.freeze({
+      migrationId: "20261001020000",
+      filename: "20261001020000_article_draft_deletion.sql",
+      checksum:
+        "f5aec5a753968fbc29861f4dfffe3bf1ae945ca3f15db8fc0a717ca73c21a598",
     }),
   ]);
