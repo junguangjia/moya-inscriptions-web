@@ -47,6 +47,7 @@ let container: HTMLDivElement;
 let editor: ArticleBlockNoteEditor | null;
 let observer: MutationObserver | null;
 let unsubscribe: (() => void) | null;
+let restoreElementsFromPoint: () => void;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
@@ -68,6 +69,34 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  // jsdom omits this browser API used by BlockNote's native side controls.
+  // Preserve hit testing: offscreen coordinates and zero-size boxes do not hit.
+  const descriptor = Object.getOwnPropertyDescriptor(
+    document,
+    "elementsFromPoint",
+  );
+  Object.defineProperty(document, "elementsFromPoint", {
+    configurable: true,
+    value: (x: number, y: number) =>
+      [...document.querySelectorAll<HTMLElement>("*")]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            x >= rect.left &&
+            x < rect.right &&
+            y >= rect.top &&
+            y < rect.bottom
+          );
+        })
+        .reverse(),
+  });
+  restoreElementsFromPoint = () => {
+    if (descriptor)
+      Object.defineProperty(document, "elementsFromPoint", descriptor);
+    else Reflect.deleteProperty(document, "elementsFromPoint");
+  };
   const getWidth = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "clientWidth",
@@ -96,6 +125,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   editor?.unmount();
   container.remove();
+  restoreElementsFromPoint();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });

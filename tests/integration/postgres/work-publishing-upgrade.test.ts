@@ -231,6 +231,9 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         [user, `studio-${index}`, legacy[index]],
       );
     expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([
+      "20260930020000",
+      "20260930030000",
+      "20260930040000",
       "20261001010000",
       "20261001020000",
     ]);
