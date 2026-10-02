@@ -53,16 +53,16 @@ def _latest(registry, oid):
         ORDER BY p.kind,p.field,p.id""", (oid,))
 
 
-def snapshot(registry, ids):
+def snapshot(registry, ids, ignored_assets=()):
     result = []
     for oid in ids:
         obj = card(registry.db, oid)
         proposals = _latest(registry, oid)
         tasks = [t for t in registry.rows("SELECT * FROM tasks ORDER BY task_key")
                  if json.loads(t["mapping"])["subject_id"] == oid]
-        result.append({"id": oid, "workingName": obj["workingName"], "assets": [a["id"] for a in obj["assets"]],
+        result.append({"id": oid, "workingName": obj["workingName"], "assets": [a["id"] for a in obj["assets"] if a["id"] not in ignored_assets],
                        "proposals": proposals, "tasks": tasks,
-                       "links": registry.rows("SELECT * FROM object_assets WHERE object_id=? ORDER BY asset_id", (oid,)),
+                       "links": [r for r in registry.rows("SELECT * FROM object_assets WHERE object_id=? ORDER BY asset_id", (oid,)) if r["asset_id"] not in ignored_assets],
                        "facts": registry.rows("SELECT * FROM facts WHERE object_id=? ORDER BY field", (oid,)),
                        "decisions": registry.rows("SELECT d.* FROM decisions d JOIN proposals p ON p.id=d.proposal_id WHERE p.subject=? ORDER BY d.id", (oid,))})
     return digest(result)
@@ -91,7 +91,7 @@ def begin(registry, object_ids, material):
     facts = {r["field"]: json.loads(r["value"]) for r in registry.rows("SELECT * FROM facts WHERE object_id=?", (target,))}
     for key in FIELDS:
         candidate = next((p["value"] for p in candidates if p["objectId"] == target and p["field"] == key), "")
-        fields[key] = {"action": "set" if key in {"title", "object_form"} or candidate else "skip",
+        fields[key] = {"action": "set" if key == "title" or candidate else "skip",
                        "value": facts.get(key, candidate), "label": FIELD_LABELS[key]}
     session = {"id": uuid.uuid4().hex, "material": material, "objectIds": list(object_ids), "assetIds": list(photos),
                "objects": [{"id": o["id"], "code": o["code"], "name": o["name"], "photoCount": len(o["assets"])} for o in objects],
@@ -109,6 +109,8 @@ def begin(registry, object_ids, material):
 def _validate_draft(session, draft, confirming=False):
     if not isinstance(draft, dict) or draft.get("targetId") not in session["objectIds"]:
         raise CurationError("REVIEW_TARGET_INVALID")
+    if session.get("mode") == "incremental/v1" and draft.get("targetId") != session["intake"]["targetId"]:
+        raise CurationError("INTAKE_TARGET_CHANGED")
     name = draft.get("workingName", "")
     if not isinstance(name, str) or len(name) > 120 or any(ord(c) < 32 or 127 <= ord(c) < 160 for c in name):
         raise CurationError("WORKING_NAME_INVALID")
@@ -122,6 +124,8 @@ def _validate_draft(session, draft, confirming=False):
             raise CurationError("REVIEW_PHOTO_CHOICE_INVALID")
     if not any(a["destination"] == draft["targetId"] for a in photos):
         raise CurationError("REVIEW_TARGET_EMPTY")
+    if session.get("mode") == "incremental/v1" and any(x.get("action") != "skip" for x in draft.get("fields", {}).values()):
+        raise CurationError("INTAKE_EXISTING_FACTS_PRESERVED")
     fields = draft.get("fields")
     if not isinstance(fields, dict) or set(fields) != set(FIELDS):
         raise CurationError("REVIEW_FIELDS_INVALID")
@@ -134,7 +138,7 @@ def _validate_draft(session, draft, confirming=False):
         existing = any(p["objectId"] == draft["targetId"] and p["field"] == key for p in session["candidates"])
         if confirming and item["action"] == "set" and not value.strip():
             raise CurationError("REVIEW_FIELD_VALUE_REQUIRED")
-        if confirming and key in {"title", "object_form"} and item["action"] != "set":
+        if confirming and session.get("mode") != "incremental/v1" and key == "title" and item["action"] != "set":
             raise CurationError("NECESSARY_FIELDS_REQUIRED")
         if confirming and item["action"] == "skip" and existing:
             raise CurationError("EXISTING_FIELD_DISPOSITION_REQUIRED")
@@ -182,7 +186,8 @@ def _intents(registry, session):
     intents = []
     for oid in session["objectIds"]:
         ids = [a["id"] for a in session["photos"] if oid in a["origins"]]
-        intents.append({"subject": oid, "kind": "group", "field": None, "value": ids, "evidence": ids})
+        if ids:
+            intents.append({"subject": oid, "kind": "group", "field": None, "value": ids, "evidence": ids})
     target_evidence = [a["assetId"] for a in photos.values() if a["destination"] == draft["targetId"]]
     for key, item in draft["fields"].items():
         if item["action"] == "skip":
@@ -241,6 +246,8 @@ def confirm(registry, config, session, draft, revision, confirmed):
     from worker import ls, collect
     if confirmed is not True:
         raise CurationError("EXPLICIT_REVIEW_CONFIRMATION_REQUIRED")
+    from intake import validate_session
+    validate_session(registry, session, session["state"] == "draft")
     client = ls(config)
     if session["state"] == "draft":
         save(registry, session, draft, revision)
@@ -256,6 +263,7 @@ def confirm(registry, config, session, draft, revision, confirmed):
     if session["state"] in {"collected", "package_prepared"}:
         return project(registry, session)
     try:
+        validate_session(registry, session, session["state"] == "submitting")
         _stage(registry, config, session)
         intents = {i["proposalId"]: i for i in session["intents"]}
         approved = {}
@@ -287,6 +295,8 @@ def confirm(registry, config, session, draft, revision, confirmed):
         session["approvedAnnotations"] = approved
         session["state"] = "submitted_waiting_collection"
         persist(registry, session)
+        if session.get("mode") == "incremental/v1":
+            validate_session(registry, session, True)
         result = collect(registry, config, task_keys=session["taskKeys"], expected_annotations=approved)
         if result["failures"]:
             session["error"] = result["failures"][0]
@@ -295,7 +305,7 @@ def confirm(registry, config, session, draft, revision, confirmed):
         if any(not registry.db.execute("SELECT 1 FROM decisions WHERE task_key=? AND annotation_id=? AND annotation_hash=?", (key, value["id"], value["hash"])).fetchone() for key, value in approved.items()):
             raise CurationError("REVIEW_COLLECTION_INCOMPLETE")
         from presentation import rename
-        if session["draft"]["workingName"].strip():
+        if session.get("mode") != "incremental/v1" and session["draft"]["workingName"].strip():
             rename(registry.db, session["draft"]["targetId"], session["draft"]["workingName"])
         session["state"] = "collected"
         session.pop("error", None)
@@ -315,9 +325,11 @@ def project(registry, session):
     submitted = submitted_tasks(registry.root, [r["task_id"] for r in tasks])
     collected = sum(bool(registry.db.execute("SELECT 1 FROM decisions WHERE task_key=?", (r["task_key"],)).fetchone()) for r in tasks)
     result = {key: session[key] for key in ("id", "material", "objectIds", "assetIds", "objects", "photos", "candidates", "draft", "revision", "state", "updated")}
-    result.update(error=session.get("error"), stale=bool(session.get("collectedSnapshot") and session["collectedSnapshot"] != snapshot(registry, session["objectIds"])), progress={"tasks": len(tasks), "submitted": len(submitted) if submitted is not None else None, "collected": collected},
+    result.update(mode=session.get("mode"), intake=session.get("intake"), error=session.get("error"), stale=bool(session.get("collectedSnapshot") and session["collectedSnapshot"] != snapshot(registry, session["objectIds"])), progress={"tasks": len(tasks), "submitted": len(submitted) if submitted is not None else None, "collected": collected},
                   tasks=[{"id": t["task_id"], "kind": t["kind"], "url": "/review?task=" + str(t["task_id"]) + ("&synthetic=1" if session["material"] == "synthetic" else "")} for t in tasks],
                   missing=missing_reviews(registry.db, session["draft"]["targetId"]), package=session.get("package"), packageChoice=session.get("packageChoice"))
+    from daily import admin_drafts
+    result['adminDrafts']=admin_drafts(registry.root,{session['draft']['targetId']})
     return result
 
 
@@ -326,7 +338,7 @@ def active(registry, material, allowed_ids):
     if not file.exists():
         return None
     session = read(registry, json.loads(file.read_text())["id"], material)
-    if not set(session["objectIds"]) <= set(allowed_ids):
+    if session.get("mode") != "incremental/v1" and not set(session["objectIds"]) <= set(allowed_ids):
         return None
     return {"id": session["id"], "photos": len(session["assetIds"]), "state": session["state"],
             "url": "/objects?material=" + material + "&review=" + session["id"]}

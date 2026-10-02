@@ -44,8 +44,11 @@
     PUBLIC_MEDIA_ORDER_OR_REPRESENTATIVE_INVALID:
       "照片顺序不能重复，并且需要选一张代表图。",
     REAL_MATERIAL_TRANSFER_NOT_AUTHORIZED:
-      "这批是真实资料，草稿只保留在本机。Development 验证仅允许合成测试资料。",
-    PREPARE_PACKAGE_FIRST: "先准备 Synthetic 草稿文件包。",
+      "卡片已保存在本机。需要先明确授权目标环境和这几张照片，才会上传到 Admin Draft。",
+    REAL_MATERIAL_AUTHORIZATION_INVALID:
+      "目标或选中资料与授权范围不一致，未执行传输。",
+    EDITORIAL_TARGET_NOT_CONFIGURED: "目标 Admin 尚未配置，卡片保留在本机。",
+    PREPARE_PACKAGE_FIRST: "先选择照片并准备卡片内容。",
     SOURCE_HASH_CHANGED:
       "原文件已发生变化，草稿准备已停止。请重新选择并分析这一批。",
     BATCH_LIMIT_INVALID: "本批上限需要是 1–1000 的整数。",
@@ -76,6 +79,11 @@
     q("open-draft").disabled = busy || latest.running || !latest.draftReady;
     q("development").disabled =
       busy || latest.running || !latest.prepared?.synthetic;
+    q("admin-draft").disabled =
+      busy ||
+      latest.running ||
+      !latest.prepared ||
+      (!latest.prepared.synthetic && !latest.realDraftAuthorized);
     q("review").setAttribute("aria-disabled", String(!latest.objects.length));
   }
   async function refresh() {
@@ -179,7 +187,7 @@
         ? "收集 " + value.review.waitingCollection + " 项已提交的决定"
         : "检查并收集本批决定";
       q("draft-status").textContent = value.prepared
-        ? "本地草稿已准备：" +
+        ? "卡片内容已准备：" +
           value.prepared.objects +
           " 个对象、" +
           value.prepared.media +
@@ -187,6 +195,22 @@
         : value.draftReady
           ? value.draftReady + " 个对象已完成关键审核，可以选择草稿内容"
           : "先完成下面的关键审核，并收集决定";
+      q("transfer-status").textContent =
+        value.prepared &&
+        !value.prepared.synthetic &&
+        !value.realDraftAuthorized
+          ? "等待对目标环境与这几张照片的明确传输授权。已确认的资料保留，无需在 Admin 重复填写。"
+          : "仅保存 Draft、上传所选图片并回读；不会发布或自动批准。";
+      q("admin-drafts").replaceChildren();
+      for (const draft of value.integration.drafts || []) {
+        const object = value.objects.find((o) => o.id === draft.objectId);
+        const link = el(
+          "a",
+          "打开可编辑 Admin Draft · " + (object?.name || "卡片"),
+        );
+        link.href = draft.url;
+        q("admin-drafts").append(link, el("br"));
+      }
       q("missing-reviews").replaceChildren();
       for (const object of value.objects.filter((o) => o.missing.length)) {
         const box = el("div");
@@ -253,6 +277,8 @@
         stopping_persistent_data_retained:
           "本任务服务正在停止；数据保留。重新打开 App 即可继续。",
         development_draft_verified: "Synthetic Development Draft 已验证。",
+        admin_draft_verified:
+          "Admin Draft 已保存、图片已上传并完成服务器回读。可打开草稿继续编辑；未发布。",
       };
       if (result.status === "collected" || result.status === "partial")
         notice(
@@ -266,11 +292,11 @@
         );
       else if (result.status === "package_prepared")
         notice(
-          "本地 Draft 文件包已准备：" +
+          "卡片内容已准备：" +
             result.objects +
             " 个对象、" +
             result.media +
-            " 张照片。可在 App 菜单里打开草稿目录。真实资料未外发。",
+            " 张照片。下一步创建可编辑 Admin Draft；当前尚未上传。",
         );
       else if (result.status === "development_partial")
         notice(
@@ -316,6 +342,7 @@
       action("renew-review", { confirmed: true });
   };
   q("development").onclick = () => action("development");
+  q("admin-draft").onclick = () => action("admin-draft");
   q("stop").onclick = () => {
     if (confirm("停止本任务的分析和本地服务？照片、审核记录与进度都会保留。"))
       action("stop");
@@ -414,7 +441,7 @@
       card.append(photos, el("p", "照片均需明确勾选；展签和证据图默认不选。"));
       root.append(card);
     }
-    const prepare = el("button", "确认选择，准备本地 Draft 文件包");
+    const prepare = el("button", "使用已确认的资料准备卡片");
     prepare.onclick = () => {
       const objects = [...root.querySelectorAll(".draft-object")]
         .filter((c) => c.querySelector(".use").checked)

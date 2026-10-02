@@ -36,6 +36,26 @@ class Application:
 
     def registry(self): return Registry(self.root)
 
+    def execute_editorial(self,args,timeout=180,allow_partial=False):
+        result=subprocess.run(['/opt/homebrew/bin/mise','exec','--','node',*args],cwd=CODE.parents[1],capture_output=True,text=True,timeout=timeout)
+        try:receipt=json.loads(result.stdout)
+        except ValueError:raise CurationError('DEVELOPMENT_CHILD_FAILED') from None
+        if result.returncode and not (allow_partial and receipt.get('developmentIntegration')=='PARTIAL'):raise CurationError(receipt.get('category','DEVELOPMENT_CHILD_FAILED'))
+        return receipt
+
+    def remember_drafts(self,batch_dir,result,synthetic):
+        summary=json.loads((batch_dir/'integration-summary.json').read_text())
+        mapping_file=self.root/'state/cms-draft-mappings.json'
+        bindings=json.loads(mapping_file.read_text()) if mapping_file.exists() else {}
+        drafts=[row for row in summary['results'] if row['status']=='verified']
+        for row in drafts:bindings[row['objectId']]=row['cmsDraft']
+        private_json(mapping_file,bindings)
+        private_json(self.root/'state/development-result.json',{**result,'synthetic':synthetic,'packageHash':summary['packageHash'],'drafts':drafts})
+        from daily import admin_drafts
+        return {'status':('development_draft_verified' if synthetic else 'admin_draft_verified') if not summary['failed'] else 'development_partial',
+                'succeeded':summary['succeeded'],'failed':summary['failed'],
+                'drafts':admin_drafts(self.root,{r['objectId'] for r in drafts}),'production_publication':'NOT AUTHORIZED'}
+
     def current_job(self):
         from registry import digest
         selection=self.root/'state/selection.json'
@@ -99,6 +119,48 @@ class Application:
             from registry import digest
             if self.selected:private_json(self.root/'state/worker-status.json',{**self.job,'selection_key':digest({'source':self.selected['source'],'synthetic':self.selected['synthetic']})})
             return self.job
+        if action in {'save-capture', 'resolve-object-alias'}:
+            if analysis_process(self.root) or (self.worker and self.worker.poll() is None):raise CurationError('ANALYSIS_RUNNING')
+            if value.get('confirmed') is not True:raise CurationError('EXPLICIT_CONFIRMATION_REQUIRED')
+            registry=self.registry()
+            try:
+                oid=value.get('objectId')
+                obj=__import__('presentation').card(registry.db,oid)
+                if action=='resolve-object-alias':
+                    from identity import record_object_alias
+                    decision=registry.db.execute("SELECT d.id FROM decisions d JOIN proposals p ON p.id=d.proposal_id WHERE p.subject=? AND p.kind='group' AND d.status IN ('accepted','corrected') ORDER BY p.version DESC,d.created DESC LIMIT 1",(oid,)).fetchone()
+                    if not decision:raise CurationError('OBJECT_ALIAS_REVIEW_REQUIRED')
+                    return record_object_alias(registry,oid,value.get('targetId'),decision[0],whole_object_confirmed=True,expected_revision=value.get('revision',0))
+                from identity import occurrences
+                allowed={o['id'] for a in obj['assets'] for o in occurrences(registry,a['id'])}
+                requested=value.get('occurrenceIds',[])
+                if not isinstance(requested,list) or any(not isinstance(oid,str) for oid in requested) or not set(requested)<=allowed:raise CurationError('CAPTURE_OCCURRENCE_SCOPE_INVALID')
+                from capture_session import create,save
+                provenance={'kind':'manual','actor':'local-form'}
+                if value.get('captureId'):
+                    return save(registry,value['captureId'],value.get('metadata',{}),provenance,expected_revision=value.get('revision'),occurrence_ids=requested)
+                return create(registry,value.get('metadata',{}),provenance,occurrence_ids=requested)
+            finally:registry.db.close()
+        if action in {'begin-intake', 'export-dataset'}:
+            if analysis_process(self.root) or (self.worker and self.worker.poll() is None):raise CurationError('ANALYSIS_RUNNING')
+            registry=self.registry()
+            try:
+                if action=='export-dataset':
+                    if value.get('confirmed') is not True:raise CurationError('EXPLICIT_DATASET_SELECTION_REQUIRED')
+                    ids=value.get('objectIds')
+                    if not isinstance(ids,list) or not 1<=len(ids)<=12 or any(not isinstance(oid,str) for oid in ids) or len(set(ids))!=len(ids):raise CurationError('DATASET_SELECTION_INVALID')
+                    for oid in ids:__import__('presentation').card(registry.db,oid)
+                    registry.db.close()
+                    from dataset_export import export_dataset
+                    return export_dataset(self.root/'state/curation.sqlite',ids,self.root/'state/datasets')
+                source=value.get('path')
+                if source is None:
+                    chosen=subprocess.run(['/usr/bin/osascript','-e','POSIX path of (choose folder with prompt "选择要增补的一小批照片（最多50张）")'],capture_output=True,text=True,timeout=300)
+                    if chosen.returncode:return {'status':'selection_cancelled'}
+                    source=chosen.stdout.strip()
+                from intake import begin
+                return begin(registry,value.get('objectId'),source,value.get('paths'),value.get('captureSessionId'))
+            finally:registry.db.close()
         if action=='rename-object':
             registry=self.registry()
             try:return rename(registry.db,value.get('objectId'),value.get('name'))
@@ -116,7 +178,7 @@ class Application:
                     ids=selected_objects(registry,self.selected,material,requested)
                     return guided_review.begin(registry,ids,material)
                 session=guided_review.read(registry,value.get('reviewId'),material)
-                selected_objects(registry,self.selected,material,session['objectIds'])
+                if session.get('mode') != 'incremental/v1':selected_objects(registry,self.selected,material,session['objectIds'])
                 if action=='save-review-draft':return guided_review.save(registry,session,value.get('draft'),value.get('revision'))
                 if action=='confirm-review':return guided_review.confirm(registry,self.config,session,value.get('draft'),value.get('revision'),value.get('confirmed'))
                 return guided_review.prepare_package(registry,session,value.get('choice',{}),value.get('confirmed'))
@@ -138,6 +200,36 @@ class Application:
                 from worker import prepare
                 return prepare(registry,value.get('objects',[]))
             finally:registry.db.close()
+        if action=='admin-draft':
+            if analysis_process(self.root) or (self.worker and self.worker.poll() is None):raise CurationError('ANALYSIS_RUNNING')
+            saved=self.root/'state/prepared-package.json'
+            if not saved.exists():raise CurationError('PREPARE_PACKAGE_FIRST')
+            prepared=json.loads(saved.read_text())
+            if value.get('reviewId'):
+                import guided_review
+                registry=self.registry()
+                try:
+                    session=guided_review.read(registry,value['reviewId'],value.get('material'))
+                    expected=session.get('package',{}).get('offline_validation',{}).get('packageHash')
+                    if (session.get('state')!='package_prepared' or not expected
+                        or expected!=prepared.get('validation',{}).get('packageHash')
+                        or session.get('revision')!=value.get('revision')
+                        or session.get('collectedSnapshot')!=guided_review.snapshot(registry,session['objectIds'])):
+                        raise CurationError('REVIEW_PREVIEW_STALE')
+                finally:registry.db.close()
+            if prepared.get('synthetic') is True:return self.action({**value,'action':'development'})
+            authorization=self.root/'state/real-draft-authorization.json'
+            target=self.root/'config/editorial-target.json'
+            if not authorization.is_file():raise CurationError('REAL_MATERIAL_TRANSFER_NOT_AUTHORIZED')
+            if not target.is_file():raise CurationError('EDITORIAL_TARGET_NOT_CONFIGURED')
+            package=Path(prepared['path'])
+            data=json.loads(package.read_text())
+            registry=self.registry()
+            try:selected_objects(registry,self.selected,value.get('material','current'),[o['objectId'] for o in data['objects']])
+            finally:registry.db.close()
+            batch_dir=self.root/'receipts'/('authorized-draft-'+__import__('hashlib').sha256(package.read_bytes()).hexdigest())
+            result=self.execute_editorial([str(CODE/'adapter.mjs'),'draft',str(CODE.parents[1]),str(package),str(target),str(batch_dir),str(authorization)],allow_partial=True)
+            return self.remember_drafts(batch_dir,result,False)
         if action=='development':
             prepared_file=self.root/'state'/'prepared-package.json'
             if not prepared_file.exists():raise CurationError('PREPARE_PACKAGE_FIRST')
@@ -150,12 +242,7 @@ class Application:
             finally:registry.db.close()
             state_dir=self.root/'development';state_dir.mkdir(exist_ok=True,mode=0o700)
             package=Path(prepared['path']);repo=CODE.parents[1]
-            def execute(args,timeout,allow_partial=False):
-                result=subprocess.run(['/opt/homebrew/bin/mise','exec','--','node',*args],cwd=repo,capture_output=True,text=True,timeout=timeout)
-                try:receipt=json.loads(result.stdout)
-                except ValueError:raise CurationError('DEVELOPMENT_CHILD_FAILED') from None
-                if result.returncode and not (allow_partial and receipt.get('developmentIntegration')=='PARTIAL'):raise CurationError(receipt.get('category','DEVELOPMENT_CHILD_FAILED'))
-                return receipt
+            execute=self.execute_editorial
             lifecycle=CODE/'setup-development.mjs'
             if (state_dir/'development-processes.json').exists():
                 execute([str(lifecycle),'restart',str(state_dir)],180)
@@ -163,14 +250,7 @@ class Application:
                 execute([str(lifecycle),'setup',str(repo),str(package),str(state_dir),'postgres:18.4'],330)
             batch_dir=self.root/'receipts'/('development-'+__import__('hashlib').sha256(package.read_bytes()).hexdigest())
             result=execute([str(CODE/'adapter.mjs'),'draft',str(repo),str(package),str(state_dir/'cms-config.json'),str(batch_dir)],180,allow_partial=True)
-            summary=json.loads((batch_dir/'integration-summary.json').read_text())
-            mapping_file=self.root/'state'/'cms-draft-mappings.json'
-            bindings=json.loads(mapping_file.read_text()) if mapping_file.exists() else {}
-            for row in summary['results']:
-                if row['status']=='verified':bindings[row['objectId']]=row['cmsDraft']
-            private_json(mapping_file,bindings)
-            private_json(self.root/'state'/'development-result.json',result)
-            return {'status':'development_draft_verified' if not summary['failed'] else 'development_partial','succeeded':summary['succeeded'],'failed':summary['failed'],'production_publication':'NOT AUTHORIZED'}
+            return self.remember_drafts(batch_dir,result,True)
         if action=='stop':
             self.action({'action':'cancel'})
             state_dir=self.root/'development'
@@ -207,7 +287,7 @@ def run(root):
             cookies=http.cookies.SimpleCookie(self.headers.get('Cookie',''))
             if cookies.get('curation_session') is None or cookies['curation_session'].value!=app.config['ui_session']:
                 return self.send(403,{'category':'LOCAL_SESSION_REQUIRED'})
-            if parsed.path in {'/assets/objects.js','/assets/objects.css','/assets/home.js','/assets/home.css','/assets/guided-review.js'}:
+            if parsed.path in {'/assets/objects.js','/assets/objects.css','/assets/home.js','/assets/home.css','/assets/guided-review.js','/assets/capture.js'}:
                 name=parsed.path.rsplit('/',1)[1]
                 return self.send(200,(CODE/'ui'/name).read_text(),'text/javascript; charset=utf-8' if name.endswith('.js') else 'text/css; charset=utf-8')
             if parsed.path=='/guided-review':
@@ -217,8 +297,20 @@ def run(root):
                     query=urllib.parse.parse_qs(parsed.query)
                     material=query.get('material',[''])[0]
                     session=guided_review.read(registry,query.get('id',[''])[0],material)
-                    selected_objects(registry,app.selected,material,session['objectIds'])
+                    if session.get('mode') != 'incremental/v1':selected_objects(registry,app.selected,material,session['objectIds'])
                     return self.send(200,guided_review.project(registry,session))
+                except CurationError as exc:return self.send(400,{'category':str(exc)})
+                finally:registry.db.close()
+            if parsed.path=='/capture-data':
+                registry=app.registry()
+                try:
+                    query=urllib.parse.parse_qs(parsed.query)
+                    obj=__import__('presentation').card(registry.db,query.get('objectId',[''])[0])
+                    from capture_session import read
+                    from identity import occurrences
+                    origins=[{'id':o['id'],'assetId':a['id'],'filename':o['relative_path'],'batchId':o['batch_id']} for a in obj['assets'] for o in occurrences(registry,a['id'])]
+                    captures=[read(registry,r['id']) for r in registry.rows('SELECT id FROM capture_sessions ORDER BY created,id')]
+                    return self.send(200,{'occurrences':origins,'captures':captures})
                 except CurationError as exc:return self.send(400,{'category':str(exc)})
                 finally:registry.db.close()
             if parsed.path=='/object-data':

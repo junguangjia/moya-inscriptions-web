@@ -118,7 +118,7 @@ class ProjectionTests(unittest.TestCase):
             try:
                 for status,failed,expected in [('PASS',0,'verified'),('PARTIAL',1,'partial'),('FAILED',1,'failed'),('PASS',1,'failed')]:
                     private_json(registry.root/'state/development-result.json',{'developmentIntegration':status,'succeeded':1,'failed':failed})
-                    actual=overview(registry,None,{},False)['integration']
+                    actual=overview(registry,None,{},False,'synthetic')['integration']
                     self.assertEqual(actual['status'],expected)
                     self.assertEqual(actual['failed'],failed)
             finally:registry.db.close()

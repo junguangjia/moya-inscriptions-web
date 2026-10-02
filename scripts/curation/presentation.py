@@ -36,17 +36,19 @@ def rename(db, object_id, name):
 
 
 def assets(db, ids, native=False):
+    from identity import asset_synthetic, canonical_asset
     result = []
     for aid in dict.fromkeys(ids):
         row = db.execute("""SELECT a.id,a.filename,a.preview,s.synthetic FROM assets a JOIN batches b ON b.id=a.batch_id JOIN sessions s ON s.id=b.session_id WHERE a.id=? AND a.status='ready'""", (aid,)).fetchone()
         if row is None or not row["preview"] or not PREVIEW.fullmatch(row["preview"]):
             continue
         url = ("/data/local-files/?d=" + urllib.parse.quote(row["preview"], safe="/")) if native else "/preview/" + row["preview"]
-        result.append({"id": row["id"], "filename": row["filename"], "url": url, "synthetic": bool(row["synthetic"])})
+        result.append({"id": row["id"], "logicalAssetId": canonical_asset(db, row["id"]), "filename": row["filename"], "url": url, "synthetic": asset_synthetic(db, row["id"])})
     return result
 
 
 def card(db, object_id, native=False):
+    from identity import resolve_object
     row = db.execute("""SELECT o.id,o.batch_id,p.number,p.working_name,s.synthetic
         FROM objects o JOIN object_presentation p ON p.object_id=o.id
         JOIN batches b ON b.id=o.batch_id JOIN sessions s ON s.id=b.session_id WHERE o.id=?""", (object_id,)).fetchone()
@@ -84,7 +86,7 @@ def card(db, object_id, native=False):
                     if dest:moved_to.append(f"AV-{dest['number']:04d}")
     synthetic=bool(row["synthetic"]) and all(a["synthetic"] for a in photos)
     material_label="SYNTHETIC FIXTURE / 合成测试" if synthetic else "混合来源 · 包含本机选定资料" if row["synthetic"] else "本机选定资料"
-    return {"id": row["id"], "code": f"AV-{row['number']:04d}", "name": name, "workingName": row["working_name"],
+    return {"id": row["id"], "canonicalObjectId": resolve_object(db, object_id), "code": f"AV-{row['number']:04d}", "name": name, "workingName": row["working_name"],
             "nameSource": source, "synthetic": synthetic, "materialLabel": material_label, "membership": "已收集的人工分组" if reviewed else "AI 候选分组 · 待人工确认",
             "assets": photos,"movedTo":moved_to}
 

@@ -38,7 +38,7 @@ class DailyTests(unittest.TestCase):
             self.calls.append(args)
             if str(app.CODE/'adapter.mjs') in args:
                 self.assertIn('draft',args)
-                summary={'succeeded':1,'failed':1 if partial else 0,'results':[{'status':'verified','objectId':'synthetic-object','cmsDraft':self.mapping}]}
+                summary={'packageHash':'a'*64,'succeeded':1,'failed':1 if partial else 0,'results':[{'status':'verified','objectId':'synthetic-object','cmsDraft':self.mapping}]}
                 if partial:summary['results'].append({'status':'failed','objectId':'failed-object','category':'SYNTHETIC_CONFLICT'})
                 private_json(Path(args[-1])/'integration-summary.json',summary)
                 receipt={'developmentIntegration':'PARTIAL' if partial else 'PASS','succeeded':1,'failed':1 if partial else 0,'productionPublication':'NOT AUTHORIZED'}
@@ -76,6 +76,7 @@ class DailyTests(unittest.TestCase):
         mappings=json.loads((self.root/'state/cms-draft-mappings.json').read_text())
         self.assertEqual(mappings['synthetic-object'],self.mapping)
         self.assertIn('other-object',mappings)
+        self.assertEqual(result['drafts'][0]['url'],'http://127.0.0.1:3590/admin/collections/catalogs/12')
 
     def test_partial_nonzero_persists_only_verified_mappings_and_reports_partial(self):
         with patch.object(app.subprocess,'run',side_effect=self.child(partial=True)):result=self.menu.action({'action':'development'})
@@ -89,6 +90,44 @@ class DailyTests(unittest.TestCase):
         with patch.object(app.subprocess,'run') as child:
             with self.assertRaisesRegex(CurationError,'REAL_MATERIAL_TRANSFER_NOT_AUTHORIZED'):self.menu.action({'action':'development'})
         child.assert_not_called()
+
+    def test_review_a_cannot_transfer_later_prepared_package_b(self):
+        private_json(self.root/'state/prepared-package.json',{'path':str(self.package),'synthetic':True,'validation':{'packageHash':'b'*64}})
+        session={'state':'package_prepared','revision':2,'objectIds':['review-a-object'],
+                 'collectedSnapshot':'snapshot-a','package':{'offline_validation':{'packageHash':'a'*64}}}
+        with patch('guided_review.read',return_value=session),patch('guided_review.snapshot',return_value='snapshot-a'),patch.object(app.subprocess,'run') as child:
+            with self.assertRaisesRegex(CurationError,'REVIEW_PREVIEW_STALE'):
+                self.menu.action({'action':'admin-draft','reviewId':'review-a','material':'synthetic','revision':2})
+        child.assert_not_called()
+
+    def test_review_matching_package_rechecks_collected_decisions_before_transfer(self):
+        private_json(self.root/'state/prepared-package.json',{'path':str(self.package),'synthetic':True,'validation':{'packageHash':'a'*64}})
+        session={'state':'package_prepared','revision':2,'objectIds':['synthetic-object'],
+                 'collectedSnapshot':'snapshot-a','package':{'offline_validation':{'packageHash':'a'*64}}}
+        with patch('guided_review.read',return_value=session),patch('guided_review.snapshot',return_value='new-decisions'),patch.object(app.subprocess,'run') as child:
+            with self.assertRaisesRegex(CurationError,'REVIEW_PREVIEW_STALE'):
+                self.menu.action({'action':'admin-draft','reviewId':'review-a','material':'synthetic','revision':2})
+        child.assert_not_called()
+        with patch('guided_review.read',return_value=session),patch('guided_review.snapshot',return_value='snapshot-a'),patch.object(app.subprocess,'run',side_effect=self.child()):
+            result=self.menu.action({'action':'admin-draft','reviewId':'review-a','material':'synthetic','revision':2})
+        self.assertEqual(result['status'],'development_draft_verified')
+
+    def test_real_action_uses_bound_grant_and_existing_adapter_not_synthetic_setup(self):
+        private_json(self.root/'state/prepared-package.json',{'path':str(self.package),'synthetic':False})
+        private_json(self.root/'state/real-draft-authorization.json',{'fixture':'synthetic unit grant; adapter tests validate full scope'})
+        private_json(self.root/'config/editorial-target.json',{'fixture':'synthetic protected target'})
+        def adapter(args,**kwargs):
+            self.assertIn(str(app.CODE/'adapter.mjs'),args)
+            self.assertNotIn(str(app.CODE/'setup-development.mjs'),args)
+            self.assertEqual(args[-1],str(self.root/'state/real-draft-authorization.json'))
+            private_json(Path(args[-2])/'integration-summary.json',{'packageHash':'a'*64,'succeeded':1,'failed':0,
+                'results':[{'status':'verified','objectId':'synthetic-object','cmsDraft':self.mapping}]})
+            return subprocess.CompletedProcess(args,0,'{"developmentIntegration":"PASS","succeeded":1,"failed":0}','')
+        with patch.object(app,'selected_objects',return_value=['synthetic-object']),patch.object(app.subprocess,'run',side_effect=adapter):
+            result=self.menu.action({'action':'admin-draft'})
+        self.assertEqual(result['status'],'admin_draft_verified')
+        self.assertEqual(result['drafts'][0]['id'],12)
+        self.assertIs(json.loads((self.root/'state/development-result.json').read_text())['synthetic'],False)
 
     def test_stop_uses_detached_controller_after_response(self):
         with patch.object(app.threading,'Timer') as timer, patch.object(app.subprocess,'Popen') as child:

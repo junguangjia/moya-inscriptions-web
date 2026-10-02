@@ -242,6 +242,8 @@ def synthetic_package_verified(registry,package):
             asset=registry.db.execute('SELECT batch_id FROM assets WHERE id=?',(media.get('assetId'),)).fetchone()
             if not asset:return False
             batches.add(asset['batch_id'])
+        from identity import asset_synthetic
+        if any(not asset_synthetic(registry,m['assetId']) for m in obj.get('media',[])):return False
         for batch in batches-checked:
             origin=registry.db.execute('SELECT s.source_root,s.synthetic FROM sessions s JOIN batches b ON b.session_id=s.id WHERE b.id=?',(batch,)).fetchone()
             if not origin or not origin['synthetic'] or not certified(Path(origin['source_root'])):return False
@@ -257,46 +259,52 @@ def prepare(registry,choices):
     for choice in choices:
         obj=registry.db.execute("SELECT o.*,s.synthetic FROM objects o JOIN batches b ON b.id=o.batch_id JOIN sessions s ON s.id=b.session_id WHERE o.id=?",(choice['objectId'],)).fetchone()
         if not obj:raise CurationError('OBJECT_UNKNOWN')
-        registry.source_verify(obj['batch_id']);synthetic_only &= bool(obj['synthetic'])
+        synthetic_only &= bool(obj['synthetic'])
         if choice.get('kind') not in {'inscription','calligraphy'}:raise CurationError('UNSUPPORTED_CATALOG_KIND')
         if not choice.get('title','').strip():raise CurationError('PUBLIC_TITLE_REQUIRED')
         facts={r['field']:json.loads(r['value']) for r in registry.rows("SELECT * FROM facts WHERE object_id=?",(obj['id'],))}
         group=registry.db.execute("SELECT p.id,d.status FROM proposals p LEFT JOIN decisions d ON d.proposal_id=p.id WHERE p.subject=? AND p.kind='group' ORDER BY p.version DESC LIMIT 1",(obj['id'],)).fetchone()
         if group and group['status'] not in {'accepted','corrected'}:raise CurationError('GROUP_REVIEW_REQUIRED')
         # Every candidate factual field needs an explicit human disposition.
-        missing=registry.rows("SELECT p.id FROM proposals p WHERE p.subject=? AND p.kind='field' AND p.version=(SELECT max(p2.version) FROM proposals p2 WHERE p2.subject=p.subject AND p2.kind=p.kind AND p2.field=p.field) AND NOT EXISTS(SELECT 1 FROM decisions d WHERE d.proposal_id=p.id AND d.status IN ('accepted','corrected','rejected'))",(obj['id'],))
+        missing=registry.rows("SELECT p.id FROM proposals p WHERE p.subject=? AND p.kind='field' AND p.version=(SELECT max(p2.version) FROM proposals p2 WHERE p2.subject=p.subject AND p2.kind=p.kind AND p2.field=p.field) AND NOT EXISTS(SELECT 1 FROM decisions d WHERE d.proposal_id=p.id AND d.status IN ('accepted','corrected','rejected','deferred'))",(obj['id'],))
         if missing:raise CurationError('KEY_FACT_REVIEW_REQUIRED')
-        media=[];preview_lineage={};photo_roles={};media_decisions=set()
+        media=[];preview_lineage={};photo_roles={};media_decisions=set();source_lineage={}
         for item in choice.get('media',[]):
             asset=registry.db.execute("SELECT a.*,l.role FROM assets a JOIN object_assets l ON l.asset_id=a.id WHERE a.id=? AND l.object_id=?",(item['assetId'],obj['id'])).fetchone()
             if not asset:raise CurationError('UNREVIEWED_MEDIA_REFUSED')
-            registry.source_verify(asset['batch_id'])
-            source_kind=registry.db.execute("SELECT s.synthetic FROM batches b JOIN sessions s ON s.id=b.session_id WHERE b.id=?",(asset['batch_id'],)).fetchone()[0]
-            synthetic_only &= bool(source_kind)
             origin=registry.db.execute("SELECT p.subject,p.kind,p.field,p.version,d.status,d.id AS decision_id FROM object_assets a JOIN decisions d ON d.id=a.decision_id JOIN proposals p ON p.id=d.proposal_id WHERE a.asset_id=? AND a.object_id=?",(asset['id'],obj['id'])).fetchone()
             if not origin or origin['status'] not in {'accepted','corrected'}:raise CurationError('CURRENT_MEDIA_REVIEW_REQUIRED')
             version=registry.db.execute("SELECT max(version) FROM proposals WHERE subject=? AND kind=? AND field IS ?",(origin['subject'],origin['kind'],origin['field'])).fetchone()[0]
             if origin['version']!=version:raise CurationError('CURRENT_MEDIA_REVIEW_REQUIRED')
             photo_roles[asset['id']]={'role':asset['role'],'decisionId':origin['decision_id'],'originObjectId':origin['subject']}
             media_decisions.add(origin['decision_id'])
-            derivative=registry.root/'derivatives'/f"{asset['id']}-{PREVIEW_DERIVATIVE_VERSION}.jpg"
-            # Explicit independent derivative generation; uploader stays byte-preserving.
-            from PIL import Image
-            with Image.open(registry.root/'served-previews'/asset['preview']) as image:image.save(derivative,'JPEG',quality=92)
-            sha=file_hash(derivative)
+            from identity import original_source, asset_synthetic
+            from publication_derivatives import render
+            source=original_source(registry,asset['id'])
+            derivative=render(registry.root,source['path'],asset['sha256'],asset['id'],source_root=source['source_root'])
+            source_lineage[asset['id']]={**derivative.pop('lineage'),'occurrenceId':source['id']}
+            synthetic_only &= asset_synthetic(registry,asset['id'])
+            sha=derivative['uploadedSha256']
             preview_record=registry.root/'state'/f"{asset['id']}-preview.json"
             if preview_record.exists():preview_lineage[asset['id']]=json.loads(preview_record.read_text())
-            media.append({'assetId':asset['id'],'derivativePath':str(derivative),'sourceSha256':asset['sha256'],'uploadedSha256':sha,'derivativeVersion':PREVIEW_DERIVATIVE_VERSION,'mediaId':registry.bind('development',obj['id']+':'+asset['id']+':'+sha,'media'),'alt':choice['title'].strip(),'position':int(item['position']),'isRepresentative':bool(item['isRepresentative'])})
+            media.append({**derivative,'mediaId':registry.bind('development',obj['id']+':'+asset['id']+':'+sha,'media'),'alt':choice['title'].strip(),'position':int(item['position']),'isRepresentative':bool(item['isRepresentative'])})
         if len({m['position'] for m in media})!=len(media) or (media and sum(m['isRepresentative'] for m in media)!=1):raise CurationError('PUBLIC_MEDIA_ORDER_OR_REPRESENTATIVE_INVALID')
         fields={}
         if facts.get('period_original'):fields['dateText']={'state':'VALUE','value':facts['period_original']}
+        context=[]
+        for key,label in [('persons','人物相关资料'),('object_form','对象形制')]:
+            if facts.get(key):context.append(label+'：'+facts[key])
+        if context:
+            note='\n'.join(context)
+            if len(note.encode('utf-16-le'))//2>2000:raise CurationError('REVIEWED_CONTEXT_TOO_LONG')
+            fields['ownerNote']=note
         decisions=registry.rows("SELECT d.* FROM decisions d JOIN proposals p ON p.id=d.proposal_id WHERE p.subject=? ORDER BY d.created,d.id",(obj['id'],))
         known={d['id'] for d in decisions}
         for did in sorted(media_decisions-known):
             decisions.extend(registry.rows('SELECT * FROM decisions WHERE id=?',(did,)))
         snapshots=[str(registry.root/'state'/f"{d['task_key']}-{d['annotation_id']}-{d['annotation_hash']}-annotation.json") for d in decisions]
         provenance=registry.rows("SELECT p.id,p.field,p.model_revision,p.prompt_version,p.evidence,d.id AS decision_id FROM proposals p JOIN decisions d ON d.proposal_id=p.id WHERE p.subject=? AND p.kind='field' ORDER BY p.field,p.version",(obj['id'],))
-        objects.append({'objectId':obj['id'],'catalogId':registry.bind('development',obj['id'],'catalog'),'sourceId':registry.bind('development',obj['id'],'source'),'kind':choice['kind'],'title':choice['title'].strip(),'fields':fields,'media':media,'localAnnotations':{'previewProcessingLineage':preview_lineage,'photoRoles':photo_roles,'fieldProvenance':provenance,'facts':facts,'unsupportedFields':[f for f in facts if f in {'persons','object_form'}],'reviewDecisions':decisions, 'annotationSnapshots':snapshots, 'relationships':registry.rows("SELECT p.*,r.value AS reviewed_value FROM proposals p LEFT JOIN relationships r ON r.proposal_id=p.id WHERE p.subject=? AND p.kind='relationship'",(obj['id'],))}})
+        objects.append({'objectId':obj['id'],'catalogId':registry.bind('development',obj['id'],'catalog'),'sourceId':registry.bind('development',obj['id'],'source'),'kind':choice['kind'],'title':choice['title'].strip(),'fields':fields,'media':media,'localAnnotations':{'previewProcessingLineage':preview_lineage,'sourceProcessingLineage':source_lineage,'photoRoles':photo_roles,'fieldProvenance':provenance,'facts':facts,'unsupportedFields':[f for f in facts if f in {'persons','object_form'}],'reviewDecisions':decisions, 'annotationSnapshots':snapshots, 'relationships':registry.rows("SELECT p.*,r.value AS reviewed_value FROM proposals p LEFT JOIN relationships r ON r.proposal_id=p.id WHERE p.subject=? AND p.kind='relationship'",(obj['id'],))}})
     mapping_file=registry.root/'state'/'cms-draft-mappings.json'
     if mapping_file.exists():
         bindings=json.loads(mapping_file.read_text())
@@ -311,7 +319,7 @@ def prepare(registry,choices):
     receipt=json.loads(result.stdout)
     if result.returncode:raise CurationError(receipt.get('category','OFFLINE_VALIDATION_FAILED'))
     private_json(registry.root/'state'/'prepared-package.json',{'path':str(file),'synthetic':synthetic_only,'validation':receipt})
-    return {'status':'package_prepared','objects':len(objects),'media':sum(len(o['media']) for o in objects),'offline_validation':receipt,'unmapped_fields':['persons','object_form'],'real_outbound':'DISABLED'}
+    return {'status':'package_prepared','objects':len(objects),'media':sum(len(o['media']) for o in objects),'offline_validation':receipt,'unmapped_fields':[],'real_outbound':'EXPLICIT_BOUNDED_AUTHORIZATION_REQUIRED'}
 
 
 PREVIEW_DERIVATIVE_VERSION='public-jpeg-v1'

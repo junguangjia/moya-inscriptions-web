@@ -24,8 +24,15 @@
       <button id="av-begin-review" disabled>整理选中的照片</button>
       <p>只处理你勾选的组。原照片和原审核历史保留。</p>
     </section>
+    <section class="av-object" id="av-dataset-export">
+      <button id="av-export-dataset">导出选中对象的 Algorithm Dataset</button>
+      <p>
+        只在本机保存元数据、稳定引用和哈希；包含明确标记的建议、决定和历史。
+      </p>
+    </section>
     <section id="av-workbench" hidden></section>
     <main id="av-objects"></main>
+    <script src="/assets/capture.js"></script>
     <script src="/assets/objects.js"></script>
     <script src="/assets/guided-review.js"></script>
   </body>

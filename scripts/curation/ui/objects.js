@@ -1,4 +1,4 @@
-/* global document, location, URLSearchParams, fetch */
+/* global document, location, URLSearchParams, fetch, window */
 (() => {
   "use strict";
   const root = document.getElementById("av-objects");
@@ -16,6 +16,7 @@
   if (options.get("review")) {
     root.hidden = true;
     document.getElementById("av-review-selection").hidden = true;
+    document.getElementById("av-dataset-export").hidden = true;
     return;
   }
   let available = [];
@@ -56,6 +57,33 @@
       notice.textContent = error.message;
       starting = false;
       selectionChanged();
+    }
+  };
+  document.getElementById("av-export-dataset").onclick = async () => {
+    const ids = available.filter((o) => selected.has(o.id)).map((o) => o.id);
+    if (!ids.length) {
+      notice.textContent = "请先选择要导出的对象。";
+      return;
+    }
+    const control = document.getElementById("av-export-dataset");
+    control.disabled = true;
+    try {
+      const response = await fetch("/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        body: JSON.stringify({
+          action: "export-dataset",
+          objectIds: ids,
+          confirmed: true,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.category || "导出未完成");
+      notice.textContent = "Dataset 已保存到本机：" + result.path;
+    } catch (error) {
+      notice.textContent = error.message;
+    } finally {
+      control.disabled = false;
     }
   };
   const labels = {
@@ -106,6 +134,41 @@
           " 选择这组 " + object.assets.length + " 张照片",
         );
         card.append(chooseLabel);
+      }
+      if (object.membership === "已收集的人工分组" && object.assets.length) {
+        const add = el("button", "为这个对象增补照片");
+        add.type = "button";
+        add.onclick = async () => {
+          add.disabled = true;
+          try {
+            const response = await fetch("/action", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": csrf,
+              },
+              body: JSON.stringify({
+                action: "begin-intake",
+                objectId: object.id,
+              }),
+            });
+            const value = await response.json();
+            if (!response.ok) throw new Error(value.category || "无法增补照片");
+            if (value.id)
+              location.href =
+                "/objects?material=" + value.material + "&review=" + value.id;
+            else
+              notice.textContent =
+                value.status === "already_present"
+                  ? "这些照片已经属于这个对象，来源位置已保留。"
+                  : "已取消选择。";
+          } catch (error) {
+            notice.textContent = error.message;
+          } finally {
+            add.disabled = false;
+          }
+        };
+        card.append(add);
       }
       const meta = el(
         "p",
@@ -198,6 +261,7 @@
       if (!object.tasks.length)
         actions.append(el("p", "此对象暂无当前审核任务。"));
       card.append(actions);
+      window.artvennCapture?.(card, object, objects, csrf, notice);
       root.append(card);
     }
     if (!objects.length)

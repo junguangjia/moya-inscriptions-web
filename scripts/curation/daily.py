@@ -67,7 +67,7 @@ def missing_reviews(db, object_id):
         AND p.kind IN ('group','field') AND p.version=(SELECT max(q.version) FROM proposals q
         WHERE q.subject=p.subject AND q.kind=p.kind AND q.field IS p.field)""", (object_id,)):
         status = db.execute('SELECT status FROM decisions WHERE proposal_id=? ORDER BY created DESC LIMIT 1', (row['id'],)).fetchone()
-        accepted = {'accepted', 'corrected'} if row['kind'] == 'group' else {'accepted', 'corrected', 'rejected'}
+        accepted = {'accepted', 'corrected'} if row['kind'] == 'group' else {'accepted', 'corrected', 'rejected', 'deferred'}
         if status and status['status'] in accepted:
             continue
         task = db.execute('SELECT task_id,mapping FROM tasks WHERE kind=? ORDER BY task_id DESC', (row['kind'],)).fetchall()
@@ -108,6 +108,25 @@ def submitted_tasks(root, task_ids):
             db.close()
     except sqlite3.Error:
         return None
+
+
+def admin_drafts(root, object_ids):
+    """Expose only verified, non-authorizing Admin edit links for these objects."""
+    from urllib.parse import urlsplit
+    path = Path(root) / 'state/development-result.json'
+    if not path.exists():return []
+    receipt=json.loads(path.read_text())
+    result=[]
+    for row in receipt.get('drafts',[]):
+        mapping=row.get('cmsDraft',{})
+        if row.get('status')!='verified' or row.get('objectId') not in object_ids:continue
+        origin=urlsplit(mapping.get('baseURL',''))
+        if (origin.scheme!='http' or origin.hostname not in {'127.0.0.1','localhost','::1'}
+                or not origin.port or origin.username or origin.password or origin.query or origin.fragment
+                or origin.path not in {'','/'} or type(mapping.get('id')) is not int or mapping['id']<1):continue
+        result.append({'objectId':row['objectId'],'id':mapping['id'],'revision':mapping['expectedRevision'],
+                       'url':origin.scheme+'://'+origin.netloc+'/admin/collections/catalogs/'+str(mapping['id'])})
+    return result
 
 
 def overview(registry, selected, job, running, material='current'):
@@ -151,9 +170,12 @@ def overview(registry, selected, job, running, material='current'):
     if integration_path.exists():
         receipt=json.loads(integration_path.read_text())
         status=receipt.get('developmentIntegration')
-        integration={'status':'verified' if status=='PASS' and not receipt.get('failed',0) else 'partial' if status=='PARTIAL' else 'failed',
-                     'label':'Synthetic Development 已验证' if status=='PASS' and not receipt.get('failed',0) else 'Synthetic Development 部分未完成' if status=='PARTIAL' else 'Development 尚未验证成功',
-                     'succeeded':receipt.get('succeeded',0),'failed':receipt.get('failed',0)}
+        if receipt.get('synthetic',True)==(effective=='synthetic'):
+            integration={'status':'verified' if status=='PASS' and not receipt.get('failed',0) else 'partial' if status=='PARTIAL' else 'failed',
+                         'label':'Admin Draft 已保存并回读' if status=='PASS' and not receipt.get('failed',0) else 'Admin Draft 部分未完成' if status=='PARTIAL' else 'Admin Draft 尚未验证成功',
+                         'succeeded':receipt.get('succeeded',0),'failed':receipt.get('failed',0)}
+    drafts=admin_drafts(registry.root,{c['id'] for c in cards})
+    integration['drafts']=drafts
     from guided_review import active
     active_review=active(registry,effective,[c['id'] for c in cards])
     return {'activeReview':active_review,'material': effective, 'viewOnly': not same, 'selection': {'present': bool(source),
@@ -166,6 +188,7 @@ def overview(registry, selected, job, running, material='current'):
                        'collected': len(collected), 'waitingCollection': len(pending_collect)},
             'objects': projected, 'draftReady': sum(c['ready'] for c in projected), 'prepared': prepared,
             'integration': integration,
+            'realDraftAuthorized':(registry.root/'state/real-draft-authorization.json').is_file(),
             'production': '本轮未授权、未执行'}
 
 

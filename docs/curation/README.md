@@ -3,9 +3,11 @@
 This workstation path is configured and tested through the full Synthetic
 review/Draft flow; the user-selected45-photo RAW sample also completed local
 inference and reached native Review. Real human review is pending. Real material
-stays local. The development adapter refuses every package containing
-real-origin material. Production publication and Owner approval are not
-available from this tool.
+stays local until the Owner authorizes an exact Development target and a small
+photo/card selection. The existing Editorial adapter then saves editable Admin
+Drafts, uploads selected derivatives and reads them back. Transfer is refused by
+default. Production publication and Owner approval are not available from this
+tool.
 
 ## Daily use in the Mac application
 
@@ -38,14 +40,19 @@ over the verified workflow, not a replacement review/model system.
    workspace shows submitted and collected counts separately. Collection
    formally writes immutable human decisions locally; repeat collection is a
    no-op.
-3. **Prepare a local Draft.** Missing-review links lead to the exact current
-   tasks, including reassigned photos' originating group. After required
-   review/collection, click **选择草稿内容** and explicitly choose the object,
-   public title, supported kind, individual public photos, order and one
-   representative. Evidence/label photos start unchecked. Confirm to generate
-   the validated offline publication package; originals and private evidence
-   remain separate. Real materials remain offline. Preparing a package does not
-   approve or Publish anything.
+3. **Prepare a card and create an editable Admin Draft.** Missing-review links
+   lead to the exact current tasks, including reassigned photos' originating
+   group. After required review/collection, click **选择草稿内容** and
+   explicitly choose the object, public title, supported kind, individual public
+   photos, order and one representative. Evidence/label photos start unchecked.
+   AI proposals and collected corrections supply the card information;
+   explicitly deferred historical fields remain unknown. Confirm the card, then
+   click **创建可编辑 Admin Draft**. Internal package preparation needs no
+   manual export/import. Real transfer requires the one bounded Owner
+   authorization described in the scale-readiness guide. Verified results link
+   directly to editable Admin cards; card information and image choices need no
+   repeated backend annotation. Originals and private evidence remain separate.
+   Neither preparation nor Draft creation approves or publishes anything.
 
 The top toolbar provides **工作台**, **对象资料库**, **返回** and **刷新**. The
 main Review link is limited to the current batch; the library separately shows
@@ -64,9 +71,12 @@ App again to continue. Other tasks' services are not stopped.
 
 This version refuses a changed photo list or changed file contents in an already
 analyzed folder before creating new objects. Put additional photos into a new
-small batch folder; previous objects remain in the library. Automatic stable
-identity across added or independently selected batches is not implemented. New
-human reassignment can associate a photo with an existing local object.
+small batch folder; previous objects remain in the library. The scale-readiness
+source adds stable logical assets, explicit source occurrences, CaptureSession
+metadata and reviewed incremental intake. See
+[the scale-readiness guide](scale-readiness-v1.md) for the new local workflow
+and explicit migration boundary. The retained r4 runtime is not upgraded by this
+source change.
 
 Unsupported formal kinds such as `seal_carving` must remain local; never select
 `calligraphy` to disguise them. The first version has no automatic cross-session
@@ -145,10 +155,11 @@ child with a 60-second per-photo deadline. The named preview recipe uses camera
 white balance, half-size development, explicit BT.709 gamma, no automatic
 brightness and the RAW orientation exactly once. It does not claim to reproduce
 the camera JPEG colors. Review previews have a 1536-pixel maximum edge; the
-current public JPEG derivative is separately generated from that normalized
-review preview. Original full-resolution RAW remains unchanged. Decoder, LibRaw,
-recipe, orientation, source/preview hashes and derivative lineage are retained
-locally. Failed assets can retry with the same identity; the previous failure is
+Publication JPEG derivative is generated directly from a registered Original,
+using the versioned 4096-pixel recipe described in the scale-readiness guide.
+Original full-resolution RAW remains unchanged. Decoder, LibRaw, recipe,
+orientation, source/preview hashes and derivative lineage are retained locally.
+Failed assets can retry with the same identity; the previous failure is
 retained. Ready reviewed preview bytes are reused. Completed model windows keep
 their membership, and newly recovered photos append new windows. HEIC and other
 formats still depend on the installed decoder; support is not claimed without an
@@ -165,7 +176,7 @@ force overwrite. A port occupied by another task is reported and left untouched.
 See [validation report](validation-report.md) and the local private receipts for
 the actual completed gates and original failures.
 
-## Scoped photo correction and offline handoff (r4)
+## Scoped photo correction and Admin Draft handoff
 
 In the existing local App, open the workspace, then the object directory. Select
 only the candidate groups you intend to review and choose **Start this review**
@@ -177,10 +188,11 @@ overview, detail, label and context are independent photo roles.
    individual photos, or explicitly choose that the selected photos depict the
    same object. A removed assignment retains the original source file. Empty
    source groups remain as history and indicate the destination code.
-2. Confirm a title and object description. Optional person/date fields may be
+2. Confirm a title. Optional object description/person/date fields may be
    entered, rejected or deferred. Existing candidate fields require an explicit
-   disposition; deferred fields block package preparation. Manual additions use
-   `human-entry/v1`, not a model inference claim.
+   disposition; explicitly deferred fields remain unknown and do not block card
+   preparation. Manual additions use `human-entry/v1`, not a model inference
+   claim.
 3. **Save entries for later** stores only a private form. **Confirm and save
    decisions** requires the page acknowledgement, submits versioned native LS
    annotations and collects exactly those tasks. LS supplies annotation IDs and
@@ -189,9 +201,11 @@ overview, detail, label and context are independent photo roles.
    resumable; an uncertain POST is reconciled by readback rather than blindly
    repeated.
 4. Select the draft's formal Catalog type, photos, order and one representative
-   image. **Prepare offline package** uses the existing adapter's real offline
-   contract and media validation. Saved selections remain visible on reopening.
-   This does not transfer real material or create a remote Draft.
+   image. Card preparation uses the existing adapter's contract and media
+   validation. Saved selections remain visible on reopening. After bounded
+   authorization, **创建可编辑 Admin Draft** uses the same Editorial adapter for
+   Draft creation, selected image upload and server readback. The page returns
+   the editable Admin link and keeps partial receipts for retry.
 
 The workspace's **Continue this review** entry reopens the saved form. Native
 Review records remain accessible from that page. Changed proposal/decision
@@ -200,6 +214,7 @@ new scoped review from current object cards. Previous annotations and decisions
 are retained. Package local annotations include selected photo roles, incoming
 reassignment decisions, scoped annotation snapshots and manual field provenance.
 
-This is a bounded daily workflow improvement. Cross-batch identity stability,
-incremental catalog consolidation, full-resolution publication quality and
-Algorithm Dataset export remain a next-stage prerequisite for large-scale use.
+The daily workflow is photo selection, AI grouping proposals, human correction
+and representative selection, AI-assisted card preparation, then editable Admin
+Draft. Dataset export, automatic cross-batch matching, model training and
+comprehensive metadata completion are not prerequisites for making cards.
