@@ -1,0 +1,15 @@
+<View>
+  <Header value="Relationship review / 对象关系检查"/>
+  <Text name="context" value="$context"/>
+  <Text name="candidate" value="$candidate_display"/>
+  <Image name="images" valueList="$images" zoom="true" zoomControl="true" maxWidth="1100px"/>
+  <Header value="原碑与拓本、印章与印蜕可以相关但不等于同一实物。不能确认时暂缓；不会自动做身份合并。"/>
+  <Choices name="relationship" toName="candidate" choice="single-radio">
+    <Choice value="same_physical_object"/><Choice value="different_but_related"/><Choice value="unrelated"/><Choice value="uncertain"/>
+  </Choices>
+  <Choices name="decision" toName="candidate" choice="single-radio" required="true">
+    <Choice value="accepted"/><Choice value="corrected"/><Choice value="rejected"/><Choice value="deferred"/>
+  </Choices>
+  <TextArea name="reason" toName="candidate" editable="true" maxSubmissions="1" rows="2" placeholder="可选：关系依据或不确定原因"/>
+  <RectangleLabels name="regions" toName="images"><Label value="evidence" background="#3482c3"/></RectangleLabels>
+</View>

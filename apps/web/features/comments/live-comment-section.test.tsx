@@ -18,8 +18,16 @@ const roots: Root[] = [];
 const now = () => new Date("2026-09-12T12:00:00.000Z");
 const catalogId = "catalog-dev-acceptance-01";
 const authors = [
-  { id: "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01", displayName: "拓片爱好者" },
-  { id: "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f02", displayName: "书法学徒" },
+  {
+    id: "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
+    displayName: "拓片爱好者",
+    studioName: "听雨斋",
+  },
+  {
+    id: "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f02",
+    displayName: "书法学徒",
+    studioName: "山水书屋",
+  },
 ] as const;
 const profile = { ...authors[0], handle: "dev-user-01" };
 
@@ -133,6 +141,43 @@ afterEach(() => {
 });
 
 describe("LiveCommentSection", () => {
+  it("preserves the live author and reply-target studio names through presentation mapping", async () => {
+    const container = await render(
+      fakeSource({
+        readListing: vi.fn().mockResolvedValue({
+          state: "success",
+          page: {
+            hot: [],
+            items: [
+              root(1, [
+                reply(1, {
+                  replyTo: authors[0] as CatalogCommentReply["author"],
+                }),
+              ]),
+            ],
+            total: 1,
+            page: 1,
+            pageSize: 10,
+            totalPages: 1,
+          },
+        }),
+      }),
+    );
+    expect(
+      container.querySelector('[data-comment-id] [aria-label="斋号：听雨斋"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-comment-reply] [aria-label="斋号：山水书屋"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-comment-reply] [aria-label="斋号：听雨斋"]',
+      ),
+    ).not.toBeNull();
+  });
+
   it("renders the Backend's hot section above the latest list, without sort or like controls", async () => {
     const hot = [
       root(1, [reply(1), reply(2), reply(3)], 12),

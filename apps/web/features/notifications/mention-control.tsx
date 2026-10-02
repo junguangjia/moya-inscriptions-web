@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "../authors/user-identity";
 import { useEffect, useId, useRef, useState } from "react";
 import type { MentionReference, PublicUserProfile } from "@moya/contracts";
 import { normalizeMentionText } from "./mention-data";
@@ -129,7 +130,11 @@ export function MentionControl({
                     setQuery("");
                   }}
                 >
-                  {person.displayName} <span>@{person.handle}</span>
+                  <UserIdentity
+                    name={person.displayName}
+                    studioName={person.studioName}
+                  />{" "}
+                  <span>@{person.handle}</span>
                 </button>
               </li>
             ))}

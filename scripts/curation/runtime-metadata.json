@@ -1,0 +1,26 @@
+{
+  "schema_version": "artvenn-local-vlm-runtime-v1",
+  "python": "3.12",
+  "mlx_vlm": "0.7.4",
+  "mlx": "0.32.3",
+  "model_id": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+  "model_revision": "2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b",
+  "license": "Apache-2.0",
+  "weights_file": "model.safetensors",
+  "weights_size_bytes": 3093767283,
+  "weights_sha256": "90eeb02604181dbcccd0a30a1f550a4a8928ca7dcbee4aee1449239306cfdfca",
+  "maximum_images_per_call": 8,
+  "maximum_preview_edge": 1536,
+  "inference_network": "offline",
+  "sources": [
+    "https://huggingface.co/mlx-community/Qwen3-VL-4B-Instruct-4bit/tree/2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b",
+    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct",
+    "https://pypi.org/project/mlx-vlm/0.7.4/",
+    "https://pypi.org/pypi/mlx/json",
+    "https://github.com/Blaizzy/mlx-vlm/blob/v0.7.4/mlx_vlm/generate/dispatch.py",
+    "https://github.com/Blaizzy/mlx-vlm/blob/v0.7.4/mlx_vlm/prompt_utils.py",
+    "https://github.com/Blaizzy/mlx-vlm/blob/v0.7.4/mlx_vlm/utils.py"
+  ],
+  "verification_status": "installed_and_actual_synthetic_multi_image_inference_verified",
+  "verification_evidence": "docs/curation/validation-report.md; private runtime/receipts/actual-model-metrics.json"
+}

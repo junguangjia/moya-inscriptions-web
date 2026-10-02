@@ -71,6 +71,67 @@
   display: grid;
   gap: var(--yoyi-space-5);
 }
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--yoyi-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+.steps li {
+  display: grid;
+  justify-items: center;
+  gap: var(--yoyi-space-2);
+  text-align: center;
+}
+.steps li > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-full);
+}
+.steps [aria-current="step"] {
+  color: var(--yoyi-color-seal-red);
+  font-weight: 600;
+}
+.steps [aria-current="step"] > span {
+  border-color: currentColor;
+}
+.stepTitle {
+  margin: 0;
+  font-size: var(--yoyi-type-body-size);
+}
+.stepTitle:focus {
+  outline: none;
+}
+.form .muted {
+  margin: 0;
+}
+.help,
+.success {
+  margin: 0;
+  padding: var(--yoyi-space-4);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.success {
+  margin-bottom: var(--yoyi-space-5);
+  color: var(--yoyi-color-text-primary);
+}
+.panel button:focus-visible,
+.field input:focus-visible {
+  outline: 2px solid var(--yoyi-color-seal-red);
+  outline-offset: 3px;
+}
 .field {
   display: grid;
   gap: var(--yoyi-space-3);

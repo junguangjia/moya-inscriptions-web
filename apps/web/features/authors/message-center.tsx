@@ -53,6 +53,7 @@ const LiveDirectMessages = ({
   const [openWith, setOpenWith] = useState<{
     userId: string;
     displayName: string;
+    studioName?: string | undefined;
   } | null>(null);
   const consumedEntry = useRef<number | null>(null);
   useEffect(() => {
@@ -63,6 +64,7 @@ const LiveDirectMessages = ({
     setOpenWith({
       userId: request.userId,
       displayName: request.displayName,
+      studioName: request.studioName,
     });
   }, [directEntry]);
   return (
@@ -166,6 +168,7 @@ function ScopedMessageTrigger({
   const [directOpenWith, setDirectOpenWith] = useState<{
     userId: string;
     displayName: string;
+    studioName?: string | undefined;
   } | null>(null);
   const consumedEntry = useRef<number | null>(null);
   useEffect(() => {
@@ -182,6 +185,7 @@ function ScopedMessageTrigger({
     setDirectOpenWith({
       userId: request.userId,
       displayName: request.displayName,
+      studioName: request.studioName,
     });
     setActive("direct");
     setCloseRequested(false);

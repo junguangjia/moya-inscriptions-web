@@ -23,6 +23,7 @@ export interface AuthorListItem {
   readonly id: string;
   readonly handle: string;
   readonly displayName: string;
+  readonly studioName?: string;
   readonly avatar: AuthorMedia | null;
 }
 export interface OwnedMediaInput {

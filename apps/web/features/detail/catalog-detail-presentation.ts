@@ -82,6 +82,7 @@ export type CatalogDetailPresentation = DetailPresentationBase &
         readonly contentType: "work";
         readonly authorId: string;
         readonly authorName: string;
+        readonly authorStudioName?: string | undefined;
         readonly canEdit: boolean;
         readonly available: boolean;
         /** Null until the first public exposure; never labelled as pending. */

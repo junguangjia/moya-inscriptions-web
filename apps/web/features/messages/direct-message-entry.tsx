@@ -15,12 +15,17 @@ export interface DirectMessageOpenRequest {
   /** Open the conversation with this account (created on the first actual send). */
   readonly userId: string;
   readonly displayName: string;
+  readonly studioName?: string | undefined;
   readonly token: number;
 }
 
 interface DirectMessageEntryValue {
   readonly request: DirectMessageOpenRequest | null;
-  readonly openWith: (userId: string, displayName: string) => void;
+  readonly openWith: (
+    userId: string,
+    displayName: string,
+    studioName?: string | undefined,
+  ) => void;
   readonly consume: (token: number) => void;
   /** Unread (unhidden) conversations, polled once for every trigger. */
   readonly unreadConversations: number;
@@ -42,9 +47,17 @@ export const DirectMessageEntryProvider = ({
 }) => {
   const [request, setRequest] = useState<DirectMessageOpenRequest | null>(null);
   const sequence = useRef(0);
-  const openWith = useCallback((userId: string, displayName: string) => {
-    setRequest({ userId, displayName, token: ++sequence.current });
-  }, []);
+  const openWith = useCallback(
+    (userId: string, displayName: string, studioName?: string) => {
+      setRequest({
+        userId,
+        displayName,
+        studioName,
+        token: ++sequence.current,
+      });
+    },
+    [],
+  );
   const consume = useCallback((token: number) => {
     setRequest((current) => (current?.token === token ? null : current));
   }, []);

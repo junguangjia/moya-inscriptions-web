@@ -399,4 +399,5 @@ export {
 export {
   isValidAuthPassword,
   normalizeStudioName,
+  normalizeStudioNameInput,
 } from "./modules/community/domain/auth-profile-policy.js";

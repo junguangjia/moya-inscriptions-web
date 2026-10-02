@@ -10,6 +10,7 @@ import {
   authPasswordSchema,
   publicUserProfileSchema,
   studioNameSchema,
+  studioNameInputSchema,
 } from "@moya/contracts/schemas";
 
 export interface AuthCapabilitiesView {
@@ -109,4 +110,14 @@ export const validAuthPassword = (value: string): boolean =>
 export const normalizedStudioName = (value: string): string | null => {
   const parsed = studioNameSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
+};
+
+/** New editors share the same paired-name validation as the Backend. */
+export const studioNameInput = (name: string, suffix: string) => {
+  const base = name.trim();
+  const ending = suffix.trim();
+  return studioNameInputSchema.safeParse({
+    studioName: base ? base + ending : "",
+    studioNameSuffix: base ? ending : "",
+  });
 };

@@ -293,7 +293,11 @@ export const editorPreviewPresentation = (
     readonly authorship?: WorkAuthorship | null;
   },
   media: readonly EditorMediaSource[],
-  author: { readonly id: string; readonly displayName: string },
+  author: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly studioName?: string | undefined;
+  },
 ): CatalogDetailPresentation => {
   const title = checkEditorText(state.title, titleRule).value;
   const body = checkEditorText(state.body, bodyRule).value;
@@ -303,6 +307,7 @@ export const editorPreviewPresentation = (
     id: state.workId ?? "work-preview",
     authorId: author.id,
     authorName: author.displayName,
+    authorStudioName: author.studioName,
     canEdit: false,
     available: true,
     title,

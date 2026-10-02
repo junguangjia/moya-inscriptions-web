@@ -9,6 +9,7 @@ import type { CommentModerationState } from "@moya/contracts/internal/community-
 export interface CommentAuthorRecord {
   readonly id: PublicUserId;
   readonly displayName: string;
+  readonly studioName?: string;
 }
 
 /** Internal comment record. It is neither a Public DTO nor a persistence row. */

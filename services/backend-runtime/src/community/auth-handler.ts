@@ -243,7 +243,9 @@ export const handleCommunityAuth = async (
           parsed.error.issues.some((issue) => issue.path[0] === "password")
             ? "AUTH_INVALID_PASSWORD"
             : parsed.error.issues.some(
-                  (issue) => issue.path[0] === "studioName",
+                  (issue) =>
+                    issue.path[0] === "studioName" ||
+                    issue.path[0] === "studioNameSuffix",
                 )
               ? "AUTH_INVALID_STUDIO_NAME"
               : "AUTH_AGREEMENT_REQUIRED",

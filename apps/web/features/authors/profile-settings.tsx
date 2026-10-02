@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "./user-identity";
 import {
   useCallback,
   useEffect,
@@ -709,7 +710,7 @@ export const ProfileSettings = ({
                     <section className={styles.group}>
                       <h3>账户</h3>
                       <div className={styles.rows}>
-                        {row("账号与安全", "security")}
+                        {row("账号与安全", "security", "手机号、邮箱换绑")}
                         {onEdit && (
                           <button
                             type="button"
@@ -846,7 +847,10 @@ export const ProfileSettings = ({
                       {blocks.items.map((person) => (
                         <div className={styles.row} key={person.id}>
                           <span className={styles.rowText}>
-                            <span>{person.displayName}</span>
+                            <UserIdentity
+                              name={person.displayName}
+                              studioName={person.studioName}
+                            />
                             <small>@{person.handle}</small>
                           </span>
                           <button

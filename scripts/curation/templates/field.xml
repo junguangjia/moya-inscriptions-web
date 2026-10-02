@@ -1,0 +1,14 @@
+<View>
+  <Header value="Field review / 字段检查"/>
+  <Text name="context" value="$context"/>
+  <Text name="candidate" value="$candidate_display"/>
+  <Header value="来源图可放大；原文中的传、疑、缺字等不能静默去掉。"/>
+  <Image name="images" valueList="$images" zoom="true" zoomControl="true" maxWidth="1100px"/>
+  <Header value="候选值可编辑；接受组别不等于接受本字段。"/>
+  <TextArea name="field_value" toName="candidate" editable="true" transcription="true" maxSubmissions="1" rows="3"/>
+  <Choices name="decision" toName="candidate" choice="single-radio" required="true">
+    <Choice value="accepted"/><Choice value="corrected"/><Choice value="rejected"/><Choice value="deferred"/>
+  </Choices>
+  <TextArea name="reason" toName="candidate" editable="true" maxSubmissions="1" rows="2" placeholder="可选：修正理由或不确定原因"/>
+  <RectangleLabels name="regions" toName="images"><Label value="evidence" background="#3482c3"/></RectangleLabels>
+</View>

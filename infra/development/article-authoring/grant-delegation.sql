@@ -20,8 +20,9 @@ BEGIN
   EXECUTE format('GRANT USAGE ON SCHEMA community TO %I,%I,%I',issuer,control,resource);
   EXECUTE format('GRANT SELECT ON community.public_users TO %I,%I,%I',issuer,control,resource);
   -- Existing actor fence uses SELECT FOR NO KEY UPDATE, requiring a column
-  -- UPDATE grant. Public identity constraints/ownership remain independently enforced.
-  EXECUTE format('GRANT UPDATE(id) ON community.public_users TO %I,%I',control,resource);
+  -- UPDATE grant. Use non-identity metadata and remove the prior narrow ID grant.
+  EXECUTE format('REVOKE UPDATE(id) ON community.public_users FROM %I,%I',control,resource);
+  EXECUTE format('GRANT UPDATE(updated_at) ON community.public_users TO %I,%I',control,resource);
   EXECUTE format('GRANT SELECT ON community.article_authoring_connections,community.article_authoring_grants TO %I,%I,%I',issuer,control,resource);
   EXECUTE format('GRANT UPDATE(updated_at) ON community.article_authoring_connections TO %I',resource);
   EXECUTE format('GRANT INSERT ON community.article_authoring_connections TO %I',control);

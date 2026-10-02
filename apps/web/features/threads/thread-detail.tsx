@@ -1,4 +1,5 @@
 "use client";
+import { UserIdentity } from "../authors/user-identity";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { Icon } from "@moya/ui";
@@ -28,7 +29,12 @@ const PostCard = ({
       <span className={styles.avatar} aria-hidden="true">
         {work.authorName.slice(0, 1)}
       </span>
-      <strong>{work.authorName}</strong>
+      <strong>
+        <UserIdentity
+          name={work.authorName}
+          studioName={work.authorStudioName}
+        />
+      </strong>
       {work.firstPublishedAt && (
         <time dateTime={work.firstPublishedAt}>
           {formatEditorialTime(work.firstPublishedAt)}
@@ -81,7 +87,10 @@ const ThreadPost = ({
       <p className={styles.eyebrow}>参与话题</p>
       <h2 className={styles.postTopicTitle}>{threadTitle}</h2>
       <p className={styles.byline}>
-        {work.authorName}
+        <UserIdentity
+          name={work.authorName}
+          studioName={work.authorStudioName}
+        />
         {work.firstPublishedAt &&
           ` · ${formatEditorialTime(work.firstPublishedAt)}`}
       </p>

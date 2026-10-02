@@ -193,6 +193,13 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
   });
 
   it("delivers real likes/comments/replies with overlap deduplication and no self effects", async () => {
+    await authors.updateProfile(bob, {
+      ...request(),
+      displayName: "同名读者",
+      bio: "",
+      studioName: "问石斋",
+      studioNameSuffix: "斋",
+    });
     const targetWork = { type: "work" as const, id: work };
     await authors.changeRelation(bob, "like", {
       ...request(),
@@ -234,6 +241,15 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
       b = await page(bob),
       c = await page(cara);
     expect(a.unread).toEqual({ total: 3, likes: 1, comments: 1, mentions: 1 });
+    expect(
+      a.items.flatMap((item) => item.actors).find((actor) => actor.id === bob)
+        ?.studioName,
+    ).toBe("问石斋");
+    expect(
+      (await inbox.lookup(alice, "reader-bob")).items.find(
+        (actor) => actor.id === bob,
+      )?.studioName,
+    ).toBe("问石斋");
     expect(a.items.find((i) => i.reason === "like")?.actorCount).toBe(2);
     expect(b.items.map((i) => i.reason).sort()).toEqual(["like", "reply"]);
     expect(c.items.map((i) => i.reason)).toEqual(["mention"]);

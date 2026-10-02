@@ -789,12 +789,12 @@ describe("settings authentication return", () => {
     expect(view.node.textContent).toContain(person.displayName);
     await pop(rootEntry);
     await click(view.node, "账号与安全");
-    await click(view.node, "更换");
+    await click(view.node, "换绑");
     const code = view.node.querySelector<HTMLInputElement>(
       'input[autocomplete="one-time-code"]',
     )!;
     await changeInput(code, "123456");
-    await click(view.node, "继续");
+    await click(view.node, "验证并继续");
     const identifier = view.node.querySelector<HTMLInputElement>(
       'input[autocomplete="email"]',
     )!;
@@ -868,7 +868,7 @@ describe("settings authentication return", () => {
     useSyntheticAccount();
     const view = await journey();
     await click(view.node, "账号与安全");
-    await click(view.node, "更换");
+    await click(view.node, "换绑");
     expect(view.page()).toBe("factor");
     expect(
       authRequest.mock.calls.filter(([path]) => path === "challenges"),
@@ -887,7 +887,7 @@ describe("settings authentication return", () => {
     expect(
       view.node.querySelector('input[autocomplete="one-time-code"]'),
     ).toBeNull();
-    expect(button(view.node, "更换")).toBeDefined();
+    expect(button(view.node, "换绑")).toBeDefined();
     expectReadOnlyReturn();
   });
 

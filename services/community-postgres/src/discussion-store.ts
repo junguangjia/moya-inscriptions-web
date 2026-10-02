@@ -46,7 +46,7 @@ const likeCount = (
   alias: string,
 ) => `(SELECT count(*)::integer FROM community.comment_likes l JOIN community.public_users lu ON lu.id=l.user_id
  WHERE l.comment_id=${alias}.id AND lu.status='active' AND community.accounts_can_interact(l.user_id,${alias}.author_id))`;
-const rootProjection = `c.id,c.author_id,u.display_name,c.text,c.created_at,c.body_deleted_at,
+const rootProjection = `c.id,c.author_id,u.display_name,u.studio_name,c.text,c.created_at,c.body_deleted_at,
  CASE WHEN ${rootPublic} AND c.body_deleted_at IS NULL THEN ${likeCount("c")} ELSE 0 END AS like_count,
  EXISTS(SELECT 1 FROM community.comment_likes WHERE comment_id=c.id AND user_id=$3) AS liked`;
 const replyFromFor = (roots: string) =>
@@ -57,16 +57,17 @@ const replyFrom = replyFromFor("r.root_comment_id=$4");
 /** The same audience rules over every root of a page (`$4` text[]). */
 const groupedReplyFrom = replyFromFor("r.root_comment_id=ANY($4::text[])");
 const replyVisible = `${rootPublic} AND r.moderation='visible' AND r.body_deleted_at IS NULL`;
-const replyProjection = `r.id,r.author_id,ru.display_name,r.text,r.created_at,r.body_deleted_at,
+const replyProjection = `r.id,r.author_id,ru.display_name,ru.studio_name,r.text,r.created_at,r.body_deleted_at,
  CASE WHEN ${rootPublic} AND r.moderation='visible' AND r.body_deleted_at IS NULL THEN ${likeCount("r")} ELSE 0 END AS like_count,
  EXISTS(SELECT 1 FROM community.comment_likes WHERE comment_id=r.id AND user_id=$3) AS liked,
- (SELECT json_build_object('id',tu.id,'displayName',tu.display_name) FROM community.catalog_comment_replies tr
+ (SELECT json_build_object('id',tu.id,'displayName',tu.display_name,'studioName',tu.studio_name) FROM community.catalog_comment_replies tr
  JOIN community.public_users tu ON tu.id=tr.author_id WHERE tr.id=r.reply_to_reply_id
  AND community.accounts_can_interact($3,tu.id) AND (tr.moderation='visible' OR (tr.author_id=$3 AND tu.status='active'))) AS reply_to`;
 interface ItemRow extends QueryResultRow {
   id: string;
   author_id: string;
   display_name: string;
+  studio_name: string;
   text: string;
   created_at: Date;
   body_deleted_at: Date | null;
@@ -77,7 +78,11 @@ interface ItemRow extends QueryResultRow {
 const item = (r: ItemRow): DiscussionReply =>
   discussionReplySchema.parse({
     id: r.id,
-    author: { id: r.author_id, displayName: r.display_name },
+    author: {
+      id: r.author_id,
+      displayName: r.display_name,
+      studioName: r.studio_name,
+    },
     text: r.body_deleted_at ? deletedText : r.text,
     createdAt: r.created_at.toISOString(),
     deleted: r.body_deleted_at !== null,
@@ -568,7 +573,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
       await this.authorAudit(db, actor, "comment_sent", id);
       const author = (
         await db.query(
-          "SELECT display_name FROM community.public_users WHERE id=$1",
+          "SELECT display_name,studio_name FROM community.public_users WHERE id=$1",
           [actor],
         )
       ).rows[0];
@@ -581,7 +586,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
       const to = replyTo
         ? (
             await db.query(
-              "SELECT u.id,u.display_name FROM community.catalog_comment_replies r JOIN community.public_users u ON u.id=r.author_id WHERE r.id=$1",
+              "SELECT u.id,u.display_name,u.studio_name FROM community.catalog_comment_replies r JOIN community.public_users u ON u.id=r.author_id WHERE r.id=$1",
               [replyTo],
             )
           ).rows[0]
@@ -592,14 +597,24 @@ export class PostgresDiscussionStore implements DiscussionPort {
         awaitingApproval: moderation === "pending",
         item: discussionReplySchema.parse({
           id,
-          author: { id: actor, displayName: author?.display_name },
+          author: {
+            id: actor,
+            displayName: author?.display_name,
+            studioName: author?.studio_name,
+          },
           text,
           createdAt: created?.created_at.toISOString(),
           likeCount: 0,
           liked: false,
           deleted: false,
           ...(to
-            ? { replyTo: { id: to.id, displayName: to.display_name } }
+            ? {
+                replyTo: {
+                  id: to.id,
+                  displayName: to.display_name,
+                  studioName: to.studio_name,
+                },
+              }
             : {}),
         }),
       };

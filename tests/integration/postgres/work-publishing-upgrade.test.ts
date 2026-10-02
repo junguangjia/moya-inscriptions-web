@@ -79,6 +79,7 @@ const workPublishingMigrations = [
   "20260930030000",
   "20260930040000",
   "20261001010000",
+  "20261001020000",
 ];
 const backfillMigration = "20260914092000";
 const bridgeMigration = "20260914093000";
@@ -215,6 +216,52 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         through: "20260913999999",
       }),
     ).rejects.toBeInstanceOf(CommunityMigrationStateError);
+  });
+
+  it("upgrades legacy studio names byte-for-byte and enforces new paired bounds", async () => {
+    const pool = await createDedicatedDatabase("upgrade");
+    await runCommunityMigrations(pool, migrationsDirectory, {
+      through: "20260930010000",
+    });
+    const users = [opaque("user"), opaque("user"), opaque("user")];
+    const legacy = ["", "旧六字无后缀", "🌿".repeat(6)];
+    for (const [index, user] of users.entries())
+      await pool.query(
+        "INSERT INTO community.public_users(id,handle,display_name,studio_name) VALUES($1,$2,'同名作者',$3)",
+        [user, `studio-${index}`, legacy[index]],
+      );
+    expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([
+      "20261001010000",
+      "20261001020000",
+    ]);
+    for (const [index, user] of users.entries())
+      expect(
+        (
+          await pool.query(
+            "SELECT studio_name,studio_name_suffix FROM community.public_users WHERE id=$1",
+            [user],
+          )
+        ).rows,
+      ).toEqual([{ studio_name: legacy[index], studio_name_suffix: "" }]);
+    const update = (name: string, suffix: string) =>
+      pool.query(
+        "UPDATE community.public_users SET studio_name=$2,studio_name_suffix=$3 WHERE id=$1",
+        [users[0], name, suffix],
+      );
+    await update("🌿".repeat(5) + "书斋", "书斋");
+    for (const [name, suffix] of [
+      ["🌿".repeat(6) + "斋", "斋"],
+      ["山斋", "阁"],
+      ["斋", "斋"],
+      ["山藏书楼", "藏书楼"],
+      ["七个字符不可用", ""],
+      ["山 斋", "斋"],
+    ])
+      await expect(update(name!, suffix!)).rejects.toMatchObject({
+        code: "23514",
+      });
+    await update("", "");
+    expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([]);
   });
 
   describe("upgrade from representative Phase 4 data", () => {
@@ -846,6 +893,7 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
           ...user,
           background_media_id: null,
           studio_name: "",
+          studio_name_suffix: "",
         })),
       });
       expect(
@@ -1562,6 +1610,7 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         "20260930030000",
         "20260930040000",
         "20261001010000",
+        "20261001020000",
       ]);
 
       // Declared submissions: stored hashes unchanged and still exactly what

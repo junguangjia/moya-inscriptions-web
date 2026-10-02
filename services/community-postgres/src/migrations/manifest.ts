@@ -249,7 +249,13 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
     }),
     Object.freeze({
       migrationId: "20261001010000",
-      filename: "20261001010000_article_draft_deletion.sql",
+      filename: "20261001010000_profile_studio_name_suffix.sql",
+      checksum:
+        "e87e1fb157c220be2695bd7eb54093b9467138d72be31d1dd1b0cbc7803f561d",
+    }),
+    Object.freeze({
+      migrationId: "20261001020000",
+      filename: "20261001020000_article_draft_deletion.sql",
       checksum:
         "f5aec5a753968fbc29861f4dfffe3bf1ae945ca3f15db8fc0a717ca73c21a598",
     }),

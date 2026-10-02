@@ -202,6 +202,10 @@ beforeAll(async () => {
       "SELECT set_config('article_authoring.control_role',$1,true),set_config('article_authoring.issuer_role',$2,true),set_config('article_authoring.resource_role',$3,true)",
       [extraRoles[0], extraRoles[1], role],
     );
+    // Reapplying the corrected grant also removes the legacy identity privilege.
+    await grantClient.query(
+      `GRANT UPDATE(id) ON community.public_users TO "${extraRoles[0]}","${role}"`,
+    );
     await grantClient.query(
       await readFile(
         `${root}/infra/development/article-authoring/grant-delegation.sql`,
@@ -228,6 +232,22 @@ afterAll(async () => {
     await administration.query(`DROP ROLE ${roleName}`);
   if (createdRole && role) await administration.query(`DROP ROLE ${role}`);
   await administration.end();
+});
+
+it("permits actor row locks without granting public-user identity updates", async () => {
+  for (const connection of [control!, app!]) {
+    await expect(
+      connection.query(
+        "SELECT id FROM community.public_users WHERE id=$1 FOR NO KEY UPDATE",
+        [user],
+      ),
+    ).resolves.toMatchObject({ rowCount: 1 });
+    await expect(
+      connection.query("UPDATE community.public_users SET id=id WHERE id=$1", [
+        user,
+      ]),
+    ).rejects.toMatchObject({ code: "42501" });
+  }
 });
 
 registerArticleDelegationSdkCases({

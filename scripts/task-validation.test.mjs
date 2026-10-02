@@ -270,6 +270,15 @@ describe("task routing follows the complete changed-path set", () => {
     [["eslint.config.mjs"], { web: true, scope: "smoke" }],
     [["prettier.config.mjs"], { web: true, scope: "smoke" }],
     [["scripts/confidentiality-scan.test.mjs"], {}],
+    [
+      [
+        "scripts/turbo-cache-prune.mjs",
+        "scripts/turbo-cache-prune.test.mjs",
+        "docs/development/turbo-cache-retention.md",
+      ],
+      {},
+    ],
+    [["turbo.json"], { web: true, cms: true, scope: "smoke" }],
     [["scripts/confidentiality-scan.mjs"], { web: true, scope: "smoke" }],
     [
       ["apps/apple/ArtVenn/Assets 由艺.xcassets/Contents.json"],

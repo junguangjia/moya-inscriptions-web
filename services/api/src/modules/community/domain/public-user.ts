@@ -7,5 +7,6 @@ export interface PublicUserRecord {
   readonly id: PublicUserId;
   readonly handle: string;
   readonly displayName: string;
+  readonly studioName?: string;
   readonly status: PublicUserStatus;
 }

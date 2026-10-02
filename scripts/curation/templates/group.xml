@@ -1,0 +1,18 @@
+<View>
+  <Header value="Group review / 分组检查"/>
+  <Text name="context" value="$context"/>
+  <Header value="逐图选择所属关系和用途；移出后可在其他对象中重新分配。Submit 仅提交人工检查，不授权上传或公开。"/>
+  <Image name="images" valueList="$images" zoom="true" zoomControl="true" rotateControl="true" maxWidth="1100px"/>
+  <Choices name="membership" toName="images" perItem="true" choice="single-radio" required="true">
+    <Choice value="belongs"/><Choice value="remove"/><Choice value="reassign"/><Choice value="split"/><Choice value="unresolved"/>
+  </Choices>
+  <Choices name="role" toName="images" perItem="true" choice="single-radio" required="true">
+    <Choice value="overview"/><Choice value="detail"/><Choice value="label"/><Choice value="context"/><Choice value="unspecified"/>
+  </Choices>
+  <Header value="重新分配时选择目标对象；拆分时输入新组名称。不确定时选择 unresolved。"/>
+  <Choices name="reassign_target" toName="images" perItem="true" choice="single-radio" value="$reassign_choices"/>
+  <TextArea name="split_label" toName="images" perItem="true" editable="true" maxSubmissions="1" rows="1" placeholder="拆分后的新组名称"/>
+  <RectangleLabels name="regions" toName="images">
+    <Label value="evidence" background="#3482c3"/>
+  </RectangleLabels>
+</View>

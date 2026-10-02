@@ -76,6 +76,70 @@ export const studioNameSchema = z
     "Invalid studio name",
   );
 
+/** Combined display value; legacy unpaired writes retain their six-code-point limit. */
+export const studioNameDisplaySchema = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      [...value].length <= 7 &&
+      !value.includes("\u0000") &&
+      !/[\uD800-\uDFFF]/u.test(value),
+    "Invalid studio name",
+  );
+export const studioNameSuffixSchema = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      [...value].length <= 2 &&
+      !value.includes("\u0000") &&
+      !/[\uD800-\uDFFF]/u.test(value),
+    "Invalid studio name suffix",
+  );
+
+const validStudioNamePair = (name: string, suffix: string): boolean => {
+  if (name === "" && suffix === "") return true;
+  if (suffix === "" || !name.endsWith(suffix)) return false;
+  const base = name.slice(0, -suffix.length);
+  return base === base.trim() && [...base].length >= 1 && [...base].length <= 5;
+};
+/** New editors send the full combined name and the independently chosen suffix. */
+export const studioNameInputSchema = z
+  .strictObject({
+    studioName: studioNameDisplaySchema,
+    studioNameSuffix: studioNameSuffixSchema,
+  })
+  .refine(
+    (input) => validStudioNamePair(input.studioName, input.studioNameSuffix),
+    {
+      path: ["studioName"],
+      message:
+        "Use a 1–5 character name and a 1–2 character suffix, or clear both",
+    },
+  );
+/** Omitted fields preserve existing profiles; an unpaired value is a legacy write. */
+export const refineStudioNameWrite = (
+  input: {
+    studioName?: string | undefined;
+    studioNameSuffix?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void => {
+  const valid =
+    input.studioNameSuffix === undefined
+      ? input.studioName === undefined ||
+        studioNameSchema.safeParse(input.studioName).success
+      : input.studioName !== undefined &&
+        validStudioNamePair(input.studioName, input.studioNameSuffix);
+  if (!valid)
+    context.addIssue({
+      code: "custom",
+      path: ["studioName"],
+      message: "Invalid studio name and suffix",
+    });
+};
+
 const idempotencyKeySchema = z.string().uuid();
 const continuationTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
 const otpSchema = z.string().regex(/^\d{6}$/u);
@@ -110,14 +174,17 @@ export const authVerifyRequestSchema = z.strictObject({
   idempotencyKey: idempotencyKeySchema,
 });
 
-export const authRegistrationRequestSchema = z.strictObject({
-  handoffToken: continuationTokenSchema,
-  displayName: z.string().min(1).max(40),
-  password: authPasswordSchema.optional(),
-  studioName: studioNameSchema.optional(),
-  agreement: z.literal(true),
-  idempotencyKey: idempotencyKeySchema,
-});
+export const authRegistrationRequestSchema = z
+  .strictObject({
+    handoffToken: continuationTokenSchema,
+    displayName: z.string().min(1).max(40),
+    password: authPasswordSchema.optional(),
+    studioName: studioNameDisplaySchema.optional(),
+    studioNameSuffix: studioNameSuffixSchema.optional(),
+    agreement: z.literal(true),
+    idempotencyKey: idempotencyKeySchema,
+  })
+  .superRefine(refineStudioNameWrite);
 
 export const authPasswordLoginRequestSchema = z.strictObject({
   channel: authChannelSchema,

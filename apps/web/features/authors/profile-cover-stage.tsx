@@ -1,4 +1,6 @@
 "use client";
+import { spacing, typography } from "@moya/design-tokens";
+import { StudioName } from "./user-identity";
 import { useId, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import Cropper from "react-easy-crop";
@@ -28,6 +30,7 @@ export const DEVICE_LABELS: Readonly<Record<CoverDevice, string>> = {
 
 export interface CoverIdentity {
   readonly name: string;
+  readonly studioName?: string | undefined;
   readonly avatarSrc: string | null;
 }
 
@@ -80,6 +83,19 @@ export const HeaderGhost = ({
         }}
       >
         {identity.name}
+        {identity.studioName && (
+          <span
+            className={styles.ghostStudio}
+            style={
+              {
+                fontSize: `${((Number.parseFloat(typography.caption.mobileSize) * 0.9) / header.width) * 100}cqw`,
+                marginTop: `${(Number.parseFloat(spacing[2]) / header.width) * 100}cqw`,
+              } as CSSProperties
+            }
+          >
+            <StudioName value={identity.studioName} prominent />
+          </span>
+        )}
       </span>
     </>
   );

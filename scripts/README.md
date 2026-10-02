@@ -31,3 +31,17 @@ runtime依赖。
 
 输入只有变量名，输出为一行 JSON（变量名、库名、结果或类别），从不打印连接串。幂等：重复`mark`结果相同。`verify.mjs test`、其触发的`migrate.mjs`（通过
 `MOYA_EXPECT_DISPOSABLE_TARGET=1`）与`editorial/verify-cms.mjs`都在破坏性准备之前调用这些检查。
+
+## Turbo cache prune
+
+`turbo-cache-prune.mjs` is a dependency-free, dry-run-by-default maintenance
+command for the shared local Turborepo cache (`<main checkout>/.turbo/cache`,
+used by every linked worktree). `plan` (default, `pnpm cache:prune`) prints
+totals; with `--plan-file` it writes a reviewable JSON plan that keeps every
+archive an existing worktree currently hits (ordinary and verification runs),
+every worktree HEAD's archives and recent history inside a size budget.
+`apply --from-plan` deletes exactly that plan after re-checking file identity,
+refuses incomplete or stale plans without an explicit flag, and is idempotent.
+Path guards limit it to a real `.turbo/cache` directory and the three recognized
+files per hash. Policy and limits: `docs/development/turbo-cache-retention.md`.
+It never runs automatically.

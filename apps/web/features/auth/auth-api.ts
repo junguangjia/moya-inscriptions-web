@@ -4,6 +4,7 @@ export {
   safeReturnPath,
   validAuthPassword,
   normalizedStudioName,
+  studioNameInput,
 } from "../../lib/public-api/auth-client";
 export type {
   AuthAccountView,

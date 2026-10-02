@@ -148,7 +148,10 @@ for (const channel of ["email", "phone"] as const) {
     await secretFill(page, "确认密码", oldPassword);
     await page.locator('form button[type="submit"]').click();
     await page.getByLabel("昵称", { exact: true }).fill("密码预览访客");
-    await page.getByLabel(/斋号/).fill("听雨斋");
+    await page.getByLabel("名称", { exact: true }).fill("听雨");
+    await expect(
+      page.getByRole("combobox", { name: "称谓", exact: true }),
+    ).toHaveValue("斋");
     await page.getByRole("checkbox").check();
     const creation = post(page, "registrations");
     await page.getByRole("button", { name: "创建账户", exact: true }).click();

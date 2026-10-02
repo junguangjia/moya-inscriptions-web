@@ -102,18 +102,29 @@ Unavailable PR CI does not prevent applicable local feedback through the
 existing entry below; feedback does not replace required CI or final acceptance.
 
 At the final integration/delivery boundary, refresh relevant upstream state,
-integrate and resolve conflicts when needed for the actual candidate, then run
-the existing applicable cumulative validation and required CI. Bind validation
-and independent review to that candidate and its tested base; preserve strict
-up-to-date protection and every task-specific acceptance requirement. An earlier
-HEAD's green CI is not evidence that a changed candidate passed.
+integrate and resolve conflicts when needed, and bind the final review and
+required cumulative CI to that candidate and its tested base. Preserve strict
+up-to-date protection and task-specific delivery stops. An earlier HEAD's green
+CI is not evidence that a changed candidate passed.
 
-Reuse unchanged applicable evidence under the existing rules below. Relevant
-upstream changes can invalidate integration evidence and require further
-conflict resolution or validation; conflicts are not promised to resolve only
-once. Use the existing finite repair limits in the validation-profiles
-amendment, without an unbounded chase-main/retest loop. Report any remaining
-integration blocker, missing or blocked CI, and a Draft pending integration as
+The first complete task acceptance uses the existing cumulative validation
+entry. Once that acceptance exists, synchronizing `main` alone does not require
+another complete local run. Run existing focused commands for the new changes,
+conflict resolutions and affected dependencies; the final candidate still needs
+all applicable cumulative CI checks. Use the complete local path when prior
+coverage is missing or the impact cannot be established. Keep failures visible
+and resolve applicable blockers; never relabel a focused run as full acceptance.
+
+The independent reviewer examines the new diff and integration impact, retains
+the review of unchanged parts, and records a decision for the final HEAD. Carry
+forward Owner visual/device acceptance only when that comparison establishes
+that the accepted presentation, behavior and relevant dependencies/configuration
+remain unchanged. Otherwise obtain acceptance for the affected scenarios. Record
+the earlier accepted revision and this conclusion in the existing PR or handoff;
+no additional record format is needed.
+
+Use the existing finite repair limits without an unbounded chase-main/retest
+loop. Missing or blocked checks and unresolved integration findings remain
 pending, not merge-ready.
 
 ## Use the applicable local entry
@@ -162,13 +173,14 @@ recorded evidence are labeled `FEEDBACK ONLY — NOT FULL ACCEPTANCE`. That
 preview is not formal Owner acceptance, not complete task validation, and not
 permission to merge. A failed full run is not a feedback PASS. Do not block
 every small preview on full CI, and do not push every tiny edit solely to obtain
-another full CI run. Commit, required CI, independent review and final delivery
-still use the default `verify-task` entry (committed, staged, unstaged and
-untracked union) and the cumulative PR plan. A tip-only or feedback plan cannot
-satisfy `assertTaskGate` / `ci-task-gate` when a cumulative plan is required.
-Existing required CI checks and branch protections stay in force. Unchanged
-applicable evidence may be reused; changing HEAD or the implementing tool alone
-does not require a full historical rerun.
+another full CI run. Complete task acceptance uses the default `verify-task`
+entry (committed, staged, unstaged and untracked union); later synchronization
+follows the final integration rules above. Required CI retains the cumulative PR
+plan. A tip-only or feedback plan cannot satisfy `assertTaskGate` /
+`ci-task-gate` when a cumulative plan is required. Existing required CI checks
+and branch protections stay in force. Unchanged applicable evidence may be
+reused; changing HEAD or the implementing tool alone does not require a full
+historical rerun.
 
 Pure Web work retains the existing `pnpm verify` entry with already prepared
 dependencies. Pure Apple work may use the standalone entry without installing
@@ -287,10 +299,11 @@ active amendments, this workflow and the local rules for the task's paths — wh
 entering a task context: a new task, a tool handoff, or after those files
 changed. Within the same unchanged task context, reuse what was read; a small
 check that the rule files are unchanged (for example their Git blob ids) is
-enough. Read the latest task specification and decisions when they matter, the
-explicit delta and affected rules for a change, and current facts only for a
-status report. Refresh the local instructions when work enters another
-directory's domain.
+enough. Owner acceptance or a request to finish merging the same task does not
+by itself start a new context or require resource preparation again. Read the
+latest task specification and decisions when they matter, the explicit delta and
+affected rules for a change, and current facts only for a status report. Refresh
+the local instructions when work enters another directory's domain.
 
 After rule edits or a tool handoff, have the current session explicitly read the
 root entry, its referenced authority/workflow and the applicable local rules.

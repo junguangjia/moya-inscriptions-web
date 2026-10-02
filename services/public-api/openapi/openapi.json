@@ -11379,6 +11379,9 @@
                 "id": {
                   "pattern": "^user-[0-9a-f]{32}$",
                   "type": "string"
+                },
+                "studioName": {
+                  "type": "string"
                 }
               },
               "required": ["id", "handle", "displayName", "avatar"],
@@ -11531,6 +11534,9 @@
             "type": "object"
           },
           "studioName": {
+            "type": "string"
+          },
+          "studioNameSuffix": {
             "type": "string"
           },
           "totals": {
@@ -11705,6 +11711,9 @@
           },
           "studioName": {
             "type": "string"
+          },
+          "studioNameSuffix": {
+            "type": "string"
           }
         },
         "required": [
@@ -11797,6 +11806,9 @@
                 "minLength": 1,
                 "pattern": "^\\S+$",
                 "type": "string"
+              },
+              "studioName": {
+                "type": "string"
               }
             },
             "required": ["id", "displayName"],
@@ -11836,6 +11848,9 @@
                       "minLength": 1,
                       "pattern": "^\\S+$",
                       "type": "string"
+                    },
+                    "studioName": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "displayName"],
@@ -11864,6 +11879,9 @@
                       "maxLength": 128,
                       "minLength": 1,
                       "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    "studioName": {
                       "type": "string"
                     }
                   },
@@ -11931,6 +11949,9 @@
                       "minLength": 1,
                       "pattern": "^\\S+$",
                       "type": "string"
+                    },
+                    "studioName": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "displayName"],
@@ -11970,6 +11991,9 @@
                             "minLength": 1,
                             "pattern": "^\\S+$",
                             "type": "string"
+                          },
+                          "studioName": {
+                            "type": "string"
                           }
                         },
                         "required": ["id", "displayName"],
@@ -11998,6 +12022,9 @@
                             "maxLength": 128,
                             "minLength": 1,
                             "pattern": "^\\S+$",
+                            "type": "string"
+                          },
+                          "studioName": {
                             "type": "string"
                           }
                         },
@@ -12057,6 +12084,9 @@
                       "minLength": 1,
                       "pattern": "^\\S+$",
                       "type": "string"
+                    },
+                    "studioName": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "displayName"],
@@ -12096,6 +12126,9 @@
                             "minLength": 1,
                             "pattern": "^\\S+$",
                             "type": "string"
+                          },
+                          "studioName": {
+                            "type": "string"
                           }
                         },
                         "required": ["id", "displayName"],
@@ -12124,6 +12157,9 @@
                             "maxLength": 128,
                             "minLength": 1,
                             "pattern": "^\\S+$",
+                            "type": "string"
+                          },
+                          "studioName": {
                             "type": "string"
                           }
                         },
@@ -12206,6 +12242,9 @@
                 "minLength": 1,
                 "pattern": "^\\S+$",
                 "type": "string"
+              },
+              "studioName": {
+                "type": "string"
               }
             },
             "required": ["id", "displayName"],
@@ -12234,6 +12273,9 @@
                 "maxLength": 128,
                 "minLength": 1,
                 "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "studioName": {
                 "type": "string"
               }
             },
@@ -12270,6 +12312,9 @@
                       "minLength": 1,
                       "pattern": "^\\S+$",
                       "type": "string"
+                    },
+                    "studioName": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "displayName"],
@@ -12298,6 +12343,9 @@
                       "maxLength": 128,
                       "minLength": 1,
                       "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    "studioName": {
                       "type": "string"
                     }
                   },
@@ -13101,6 +13149,9 @@
             "maxLength": 128,
             "minLength": 1,
             "pattern": "^\\S+$",
+            "type": "string"
+          },
+          "studioName": {
             "type": "string"
           }
         },
@@ -15122,6 +15173,9 @@
               "id": {
                 "pattern": "^user-[0-9a-f]{32}$",
                 "type": "string"
+              },
+              "studioName": {
+                "type": "string"
               }
             },
             "required": ["id", "displayName", "available"],
@@ -15253,6 +15307,9 @@
                     },
                     "id": {
                       "pattern": "^user-[0-9a-f]{32}$",
+                      "type": "string"
+                    },
+                    "studioName": {
                       "type": "string"
                     }
                   },
@@ -15454,6 +15511,9 @@
                   },
                   "id": {
                     "pattern": "^user-[0-9a-f]{32}$",
+                    "type": "string"
+                  },
+                  "studioName": {
                     "type": "string"
                   }
                 },
@@ -15901,6 +15961,9 @@
                 "minLength": 1,
                 "pattern": "^\\S+$",
                 "type": "string"
+              },
+              "studioName": {
+                "type": "string"
               }
             },
             "required": ["id", "displayName"],
@@ -15945,6 +16008,9 @@
                       "minLength": 1,
                       "pattern": "^\\S+$",
                       "type": "string"
+                    },
+                    "studioName": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "displayName"],
@@ -15984,6 +16050,9 @@
                       "maxLength": 128,
                       "minLength": 1,
                       "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    "studioName": {
                       "type": "string"
                     }
                   },
@@ -16026,6 +16095,9 @@
                 "maxLength": 128,
                 "minLength": 1,
                 "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "studioName": {
                 "type": "string"
               }
             },
@@ -16153,6 +16225,9 @@
                       "minLength": 1,
                       "pattern": "^\\S+$",
                       "type": "string"
+                    },
+                    "studioName": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "displayName"],
@@ -16197,6 +16272,9 @@
                             "minLength": 1,
                             "pattern": "^\\S+$",
                             "type": "string"
+                          },
+                          "studioName": {
+                            "type": "string"
                           }
                         },
                         "required": ["id", "displayName"],
@@ -16236,6 +16314,9 @@
                             "maxLength": 128,
                             "minLength": 1,
                             "pattern": "^\\S+$",
+                            "type": "string"
+                          },
+                          "studioName": {
                             "type": "string"
                           }
                         },
@@ -16278,6 +16359,9 @@
                       "maxLength": 128,
                       "minLength": 1,
                       "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    "studioName": {
                       "type": "string"
                     }
                   },
@@ -16380,6 +16464,9 @@
                       "minLength": 1,
                       "pattern": "^\\S+$",
                       "type": "string"
+                    },
+                    "studioName": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "displayName"],
@@ -16424,6 +16511,9 @@
                             "minLength": 1,
                             "pattern": "^\\S+$",
                             "type": "string"
+                          },
+                          "studioName": {
+                            "type": "string"
                           }
                         },
                         "required": ["id", "displayName"],
@@ -16463,6 +16553,9 @@
                             "maxLength": 128,
                             "minLength": 1,
                             "pattern": "^\\S+$",
+                            "type": "string"
+                          },
+                          "studioName": {
                             "type": "string"
                           }
                         },
@@ -16505,6 +16598,9 @@
                       "maxLength": 128,
                       "minLength": 1,
                       "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    "studioName": {
                       "type": "string"
                     }
                   },
@@ -16644,6 +16740,9 @@
                 "minLength": 1,
                 "pattern": "^\\S+$",
                 "type": "string"
+              },
+              "studioName": {
+                "type": "string"
               }
             },
             "required": ["id", "displayName"],
@@ -16683,6 +16782,9 @@
                 "maxLength": 128,
                 "minLength": 1,
                 "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "studioName": {
                 "type": "string"
               }
             },
@@ -16726,6 +16828,9 @@
                       "minLength": 1,
                       "pattern": "^\\S+$",
                       "type": "string"
+                    },
+                    "studioName": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "displayName"],
@@ -16765,6 +16870,9 @@
                       "maxLength": 128,
                       "minLength": 1,
                       "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    "studioName": {
                       "type": "string"
                     }
                   },
@@ -16855,6 +16963,9 @@
                     "minLength": 1,
                     "pattern": "^\\S+$",
                     "type": "string"
+                  },
+                  "studioName": {
+                    "type": "string"
                   }
                 },
                 "required": ["id", "displayName"],
@@ -16894,6 +17005,9 @@
                     "maxLength": 128,
                     "minLength": 1,
                     "pattern": "^\\S+$",
+                    "type": "string"
+                  },
+                  "studioName": {
                     "type": "string"
                   }
                 },
@@ -17887,6 +18001,9 @@
                   "minLength": 1,
                   "pattern": "^\\S+$",
                   "type": "string"
+                },
+                "studioName": {
+                  "type": "string"
                 }
               },
               "required": ["id", "handle", "displayName"],
@@ -17955,6 +18072,9 @@
                         "maxLength": 128,
                         "minLength": 1,
                         "pattern": "^\\S+$",
+                        "type": "string"
+                      },
+                      "studioName": {
                         "type": "string"
                       }
                     },
@@ -18438,6 +18558,9 @@
           },
           "studioName": {
             "type": "string"
+          },
+          "studioNameSuffix": {
+            "type": "string"
           }
         },
         "required": ["requestId", "displayName", "bio"],
@@ -18550,6 +18673,9 @@
             "maxLength": 128,
             "minLength": 1,
             "pattern": "^\\S+$",
+            "type": "string"
+          },
+          "studioName": {
             "type": "string"
           }
         },
@@ -27175,6 +27301,9 @@
               }
             ]
           },
+          "authorStudioName": {
+            "type": "string"
+          },
           "available": {
             "type": "boolean"
           },
@@ -27742,6 +27871,9 @@
                       "type": "object"
                     }
                   ]
+                },
+                "authorStudioName": {
+                  "type": "string"
                 },
                 "available": {
                   "type": "boolean"

@@ -1,10 +1,32 @@
 # Special / Article Editor V1
 
-Task: `special-article-editor-v1`, r10. Owner assignment: 2026-09-30. Baseline:
-`288d4d27e72339402b648f4458ef1aacadcfc681`. Delivery: independently reviewed
-Draft, isolated Development acceptance, private handoff. No Ready, merge, Issue
-closure, release, cloud operation or Production activation. Physical-device and
-visual judgment remain the Owner's.
+Task: `special-article-editor-v1`, r11 closure. Owner assignment: 2026-09-30.
+Baseline: `288d4d27e72339402b648f4458ef1aacadcfc681`. The Owner accepted the r10
+visual/device candidate and instructed merge on 2026-10-01. Delivery now
+includes independent final integration review, current candidate CI,
+expected-head squash merge and merged-head verification. No release, cloud
+operation or Production activation.
+
+## r11 — Owner acceptance and final integration
+
+The accepted editor presentation and behavior remain unchanged. Integrate
+current main's account/profile contracts alongside Article contracts. Preserve
+main's immutable profile migration at `20261001010000`; allocate the unmerged
+Article draft-deletion migration `20261001020000`, retaining its exact SQL
+bytes. The old isolated acceptance ledger is a preserved historical snapshot; do
+not rewrite it or apply the reconciled manifest to it. Fresh disposable targets
+validate the canonical combined migration sequence.
+
+The public-user row-lock grant uses `UPDATE(updated_at)` and revokes only the
+earlier `UPDATE(id)` column privilege from control/resource roles. Human and
+delegated actor fences remain unchanged; public-user identity cannot be updated
+with those roles. The independently protected Article-document lock grant
+remains.
+
+Preserve all prior failed and exhausted checks. Final closure validates the
+missing mounted-editor regression and integration impact, followed by cumulative
+CI bound to the final head. Earlier feedback is not relabeled as full
+acceptance. The original full-feature and MCP plans remain closed.
 
 ## r10 — Precise selection popup, direct crop and body-image resizing
 
@@ -220,7 +242,7 @@ tests; `packages/contracts/src/article-authoring.ts` with existing
 exports/schema/JSON schema; existing Article authoring application
 ports/services/parsers, HTTP handler and PostgreSQL adapter; existing Article
 delegation exact-candidate query; one forward
-`20261001010000_article_draft_deletion.sql` plus community manifest and existing
+`20261001020000_article_draft_deletion.sql` plus community manifest and existing
 runtime grants; existing Article public-API client, OpenAPI source/generated
 output and architecture allowlists; directly affected contract, HTTP and
 isolated PostgreSQL tests; the existing Development sign-in page acceptance

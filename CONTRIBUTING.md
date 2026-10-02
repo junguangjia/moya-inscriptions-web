@@ -65,7 +65,10 @@ the affected validation. Record each applicable command and result in the PR.
   desktop Chromium, one worker, zero retries, first failure stops execution.
 - During implementation, run relevant unit files and targeted browser cases for
   the behavior being changed. Preserve failures; do not automatically repeat an
-  unchanged full suite. A timing investigation may request targeted repetition.
+  unchanged full suite. After complete task acceptance, upstream synchronization
+  uses focused local checks under the shared workflow's final integration rules;
+  the final candidate still requires cumulative CI. A timing investigation may
+  request targeted repetition.
 - Full cross-browser regression is explicit: `pnpm test:e2e`, or **CI → Run
   workflow** for the intended branch. It retains all five projects, three CI
   shards and the strict complete-report gate. It is not a daily prerequisite.
@@ -90,12 +93,13 @@ exclusions, evidence locations, free test ports and the full regression policy.
   the expected head SHA, and complete merged-head verification.
 - Ask the Owner only when an active gate requires human visual or real-device
   judgment, a major directional decision, production authority, or resolution of
-  a mandatory STOP condition. After the Owner records the necessary judgment for
-  the exact reviewed head, the review agent performs the routine Ready, merge,
-  and merged-head operations.
-- Reply to, fix, and resolve review findings in the PR. Any substantive new
-  commit invalidates earlier review approval and requires review of the updated
-  diff.
+  a mandatory STOP condition. The review agent records the accepted revision and
+  performs the routine Ready, merge, and merged-head operations. A later
+  integration may retain that acceptance only under the shared workflow's
+  unchanged-presentation and behavior conditions.
+- Reply to, fix, and resolve review findings in the PR. New commits require
+  review of their delta and integration impact; retain review of unchanged parts
+  and bind the final decision to the current HEAD.
 - Automated validation, independent diff or code review, and any applicable
   Owner judgment are distinct gates. For user-visible work, provide evidence for
   the task's approved platform matrix instead of a universal pair of phone and

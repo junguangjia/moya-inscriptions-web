@@ -351,6 +351,7 @@ const ReturnBar = ({
 interface Viewer {
   readonly id: string;
   readonly displayName: string;
+  readonly studioName?: string | undefined;
 }
 
 const EditorSessionHost = ({
