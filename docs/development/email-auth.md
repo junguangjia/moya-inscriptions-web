@@ -33,9 +33,13 @@ Three 32-byte keys, base64, versioned by `AUTH_KEY_VERSION`:
 - `AUTH_OTP_KEY` — HMAC for application-generated email and simulated SMS codes
 
 The unique database key is `(kind, lookup_digest)`. Key version is not part of
-that key. A trigger refuses mixed lookup-key versions. Rotation rewrites every
-digest under the new key in one migration-privileged transaction before the new
-key accepts writes. Do not run two versions side by side.
+that key. A deferrable exclusion constraint refuses mixed lookup-key versions,
+including concurrent writes. Controlled rotation rewrites every digest and
+re-encrypts its contact ciphertext in one migration-privileged transaction
+before the new key accepts writes. Multiple statements explicitly defer only the
+version constraint, then validate it before commit. See the
+[controlled rotation procedure](../deployment/full-release-database-v1.md#identity-rotation-correction).
+Do not run two versions side by side or relabel old verification provenance.
 
 Email lookup lowercases the local-part and the ASCII domain. Delivery keeps the
 original local-part, including dots and plus suffixes. Phone storage is E.164.

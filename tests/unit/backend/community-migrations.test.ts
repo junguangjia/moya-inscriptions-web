@@ -37,7 +37,7 @@ describe("community migration family", () => {
         checksum,
       })),
     ).toEqual(requiredCommunityMigrations);
-    // Append-only: Phase 4 plus the work-publishing-v1 forward files.
+    // Append-only: implemented Community features and release corrections.
     expect(requiredCommunityMigrations.map(({ filename }) => filename)).toEqual(
       [
         "20260912030000_community_identity_sessions.sql",
@@ -82,6 +82,7 @@ describe("community migration family", () => {
         "20260930040000_article_consent_uid_check.sql",
         "20261001010000_profile_studio_name_suffix.sql",
         "20261001020000_article_draft_deletion.sql",
+        "20261002010000_login_lookup_version_rotation.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);
