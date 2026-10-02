@@ -325,6 +325,19 @@ GRANT SELECT, INSERT ON TABLE community.dm_command_receipts TO :"app_role";
 GRANT UPDATE (result) ON TABLE community.dm_command_receipts TO :"app_role";
 GRANT SELECT, INSERT ON TABLE community.dm_moderation_events TO :"app_role";
 
+-- special-article-editor-v1: public-user Article commands. Identity/owner and
+-- immutable publication snapshots are never updated or deleted by this role.
+GRANT SELECT, INSERT ON TABLE community.article_documents,
+  community.article_revisions TO :"app_role";
+-- Existing comment and notification eligibility reuse the current public
+-- Article projection; this adds no Payload CRUD or owner reassignment.
+GRANT SELECT ON TABLE community.published_authored_articles TO :"app_role";
+GRANT UPDATE (version, title, cover_ref_id, document, fingerprint, status,
+  published_version, pending_version, first_published_at, published_at, updated_at, deleted_at)
+ON TABLE community.article_documents TO :"app_role";
+GRANT EXECUTE ON FUNCTION
+  community.article_catalog_references_published(TEXT[], TEXT[], TEXT[])
+TO :"app_role";
 -- Password auth: exact mutable credential fields, no DDL or delete authority.
 GRANT SELECT ON TABLE community.user_password_credentials TO :"app_role";
 GRANT INSERT (user_id, verifier, version, updated_at) ON TABLE community.user_password_credentials TO :"app_role";

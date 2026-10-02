@@ -19,3 +19,10 @@ export { startAuthorizationServer } from "./server.js";
 export type { AuthorizationServer, StartOptions } from "./server.js";
 export { RESUME_PATH, resumeInteraction } from "./resume.js";
 export type { ResumeOutcome } from "./resume.js";
+
+export {
+  articleAuthorizationConfigFrom,
+  createArticleAuthorizationProvider,
+} from "./article-provider.js";
+export type { ArticleAuthorizationConfig } from "./article-provider.js";
+export { startArticleAuthorizationServer } from "./article-server.js";

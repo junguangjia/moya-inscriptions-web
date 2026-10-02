@@ -13,6 +13,8 @@ import { createRouter } from "./http/router.js";
 
 import {
   AgentAdministrationService,
+  ArticleAuthoringService,
+  ArticlePublicationOperatorService,
   AuthorCommunityService,
   CatalogCommentService,
   CatalogReadService,
@@ -30,6 +32,8 @@ import { MappedStorageUrlResolver } from "@moya/image";
 
 import type {
   AgentAdministrationPort,
+  ArticleAuthoringPort,
+  ArticlePublicationOperatorPort,
   AuthorCommunityPort,
   CommunityContentOperatorPort,
   DiscussionPort,
@@ -51,6 +55,8 @@ import type {
   WorkPublishingPort,
 } from "@moya/api";
 import type { NodeEnvironment } from "./config.js";
+import type { ArticleDelegationRuntime } from "./community/article-delegation-handler.js";
+import type { createArticleMcpHandler } from "./community/article-mcp.js";
 import type { HealthReadinessCheck } from "./health/health-handler.js";
 import type { CommunityRouterDependencies } from "./http/router.js";
 import type { RequestListener } from "node:http";
@@ -85,6 +91,16 @@ export interface BackendApplicationOptions {
   readonly communityOperatorCredential?: string;
   /** Work publishing persistence; composed only under NODE_ENV=development with the author port. */
   readonly workPublishingPort?: WorkPublishingPort;
+  /** Article drafts and publication; composed only in Development. */
+  readonly articleAuthoringPort?: ArticleAuthoringPort;
+  /** One shared authoring service for the Development human and MCP entries. */
+  readonly articleDelegation?: {
+    readonly human: ArticleDelegationRuntime;
+    readonly mcp: ReturnType<typeof createArticleMcpHandler>;
+    readonly resource: string;
+  };
+  /** Separate staff moderation authority; public humans and Agents cannot compose it. */
+  readonly articlePublicationOperatorPort?: ArticlePublicationOperatorPort;
   /** Owner work publishing operations; composed only under NODE_ENV=development. */
   readonly publishingOperatorPort?: PublishingOperatorPort;
   /** Agent administration persistence; composed only under NODE_ENV=development. */
@@ -213,6 +229,35 @@ const resolveCommunity = (
       : undefined;
   return {
     sessionService,
+    ...(nodeEnv === "development" &&
+    options.articlePublicationOperatorPort !== undefined
+      ? {
+          articlePublicationOperatorService:
+            new ArticlePublicationOperatorService(
+              options.articlePublicationOperatorPort,
+              options.publishingClock === undefined
+                ? {}
+                : { clock: options.publishingClock },
+            ),
+        }
+      : {}),
+    ...(nodeEnv === "development" &&
+    (options.articleDelegation !== undefined ||
+      options.articleAuthoringPort !== undefined)
+      ? {
+          articleAuthoringService:
+            options.articleDelegation?.human.authoring ??
+            new ArticleAuthoringService(
+              options.articleAuthoringPort!,
+              options.publishingClock === undefined
+                ? {}
+                : { now: options.publishingClock },
+            ),
+          ...(options.articleDelegation === undefined
+            ? {}
+            : { articleDelegation: options.articleDelegation }),
+        }
+      : {}),
     ...(nodeEnv === "development" && options.authService !== undefined
       ? { authService: options.authService }
       : {}),

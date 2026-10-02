@@ -244,7 +244,8 @@ export type RefHolderKind = "draft" | "snapshot" | "session";
 
 /** The refs one holder group lets go of (only of `itemIds` when given). */
 export interface RefRelease {
-  readonly holderKind: RefHolderKind | "revision";
+  readonly holderKind:
+    RefHolderKind | "revision" | "article_draft" | "article_revision";
   readonly holderIds: readonly string[];
   readonly itemIds?: readonly string[];
 }
@@ -387,6 +388,7 @@ export const cancelItems = async (
     await db.query<{ id: string }>(
       `SELECT i.id FROM community.media_items i
        WHERE i.id=ANY($1::text[]) AND i.state <> 'purged'
+       AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id AND r.holder_kind='article_revision')
        ${options.onlyUnreferenced === true ? "AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id)" : ""}
        ORDER BY i.id`,
       [unique],
@@ -1006,7 +1008,7 @@ export const cancelItem = async (
         // unavailable) and holds the purge back until it is evicted; the
         // explicit cancel still stops the transfer (U07).
         const kept = await db.query(
-          "SELECT 1 FROM community.media_item_refs WHERE item_id=$1 AND holder_kind='revision' LIMIT 1",
+          "SELECT 1 FROM community.media_item_refs WHERE item_id=$1 AND holder_kind IN ('revision','article_revision') LIMIT 1",
           [itemId],
         );
         if ((kept.rowCount ?? 0) === 0)

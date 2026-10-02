@@ -481,6 +481,89 @@ describe("relayServerLocalEditorialMedia (Development)", () => {
   });
 });
 
+describe("Article authoring relay preserves existing Work boundaries", () => {
+  const account = `user-${"7".repeat(32)}`;
+  const write = (path: string, body: string, method = "PUT") =>
+    new Request(`http://localhost:3410/api/community/${path}`, {
+      method,
+      headers: {
+        host: "localhost:3410",
+        origin: "http://localhost:3410",
+        "content-type": "application/json",
+        "x-author-account": account,
+      },
+      body,
+    });
+  it("forwards PUT and a document above the ordinary Work cap through the bounded Article namespace", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ saved: true }));
+    vi.stubGlobal("fetch", upstream);
+    expect(
+      (
+        await relayServerAuthorCommunity(
+          write(
+            `article-authoring/article-${"1".repeat(32)}`,
+            "x".repeat(110000),
+          ),
+        )
+      ).status,
+    ).toBe(200);
+    expect(upstream.mock.calls[0]?.[1]?.method).toBe("PUT");
+    expect(
+      new Headers(upstream.mock.calls[0]?.[1]?.headers).get("x-author-account"),
+    ).toBe(account);
+    expect(
+      (await relayServerAuthorCommunity(write("works/example", "{}"))).status,
+    ).toBe(405);
+    expect(
+      (
+        await relayServerAuthorCommunity(
+          write("works", "x".repeat(110000), "POST"),
+        )
+      ).status,
+    ).toBe(413);
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+  it("forwards the current account fence on private GET and passes no-content revocation", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ items: [] }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", upstream);
+    await relayServerAuthorCommunity(
+      new Request(
+        "http://localhost:3410/api/community/article-authoring/connections",
+        { headers: { "x-author-account": account } },
+      ),
+    );
+    expect(
+      new Headers(upstream.mock.calls[0]?.[1]?.headers).get("x-author-account"),
+    ).toBe(account);
+    const revoked = await relayServerAuthorCommunity(
+      write("article-authoring/connections/example/revoke", "{}", "POST"),
+    );
+    expect(revoked.status).toBe(204);
+    expect(await revoked.text()).toBe("");
+    expect(revoked.headers.get("cache-control")).toContain("no-store");
+  });
+  it("refuses an over-limit streamed Article body before contacting Backend", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", upstream);
+    expect(
+      (
+        await relayServerAuthorCommunity(
+          write("article-authoring/example", "x".repeat(1048576 + 16385)),
+        )
+      ).status,
+    ).toBe(413);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
 describe("Password reset and stale authentication cookie recovery", () => {
   // Reviewed synthetic fixtures only; no real Session or password is used.
   const request = (suffix: string) =>

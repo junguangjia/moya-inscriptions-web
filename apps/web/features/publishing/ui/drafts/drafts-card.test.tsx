@@ -2,15 +2,49 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { client, author, entry } = vi.hoisted(() => ({
+const { client, author, entry, shell, articleClient } = vi.hoisted(() => ({
   client: { listDrafts: vi.fn(), deleteDraft: vi.fn() },
   author: {
     cache: new Map<string, unknown>(),
     revision: 1,
     notify: vi.fn(),
+    viewer: { id: `user-${"a".repeat(32)}` },
+    checking: false,
+    sessionError: false,
   },
   entry: { checking: false, openEditor: vi.fn() },
+  shell: { activeEditor: null, activeProfile: null, openEditor: vi.fn() },
+  articleClient: { list: vi.fn(), deleteDraft: vi.fn() },
 }));
+vi.mock(
+  "../../../../lib/public-api/author-community-client",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("../../../../lib/public-api/author-community-client")
+      >();
+    return {
+      ...original,
+      authorClient: {
+        ...original.authorClient,
+        account: () => `user-${"a".repeat(32)}`,
+        accountEpoch: () => 1,
+      },
+    };
+  },
+);
+vi.mock("../../../product-shell/product-shell", () => ({
+  useProductShell: () => shell,
+}));
+vi.mock(
+  "../../../../lib/public-api/article-authoring-client",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../../lib/public-api/article-authoring-client")
+    >()),
+    articleAuthoringClient: articleClient,
+  }),
+);
 vi.mock("../../publishing-data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../publishing-data")>()),
   publishingClient: client,
@@ -32,6 +66,7 @@ vi.mock("../../publishing-entry", () => ({
 
 import { PublishingRequestError } from "../../publishing-data";
 import { DraftsCard } from "./drafts-card";
+import { ArticleAvailability } from "../../../editorial-content/article-authoring/article-availability";
 import {
   ACCOUNT,
   buttonByText,
@@ -52,6 +87,28 @@ beforeEach(() => {
   author.cache.clear();
   author.revision = 1;
   entry.openEditor.mockReturnValue(true);
+  shell.openEditor.mockReturnValue(true);
+  shell.activeEditor = null;
+  shell.activeProfile = null;
+  author.checking = false;
+  author.sessionError = false;
+  author.viewer = { id: ACCOUNT };
+  articleClient.list.mockResolvedValue({
+    items: [
+      {
+        id: `article-${"b".repeat(32)}`,
+        ownerId: ACCOUNT,
+        version: 5,
+        title: "专题测试草稿",
+        coverRefId: null,
+        status: "draft",
+        publicVersion: null,
+        updatedAt: "2026-09-13T12:00:00.000Z",
+        fingerprint: "a".repeat(64),
+      },
+    ],
+    nextCursor: null,
+  });
   window.history.replaceState({ kind: "profile" }, "", "/#profile");
 });
 afterEach(async () => {
@@ -187,5 +244,73 @@ describe("Drafts card", () => {
     );
     // The editor entry never inherits the picker's history marker.
     expect(markerAtOpen).toEqual([undefined]);
+  });
+});
+
+describe("Unified owner draft box", () => {
+  it("keeps the Work-only false gate even when an Article return intent exists", async () => {
+    author.cache.set(`drafts-box-return:${ACCOUNT}`, "article");
+    client.listDrafts.mockResolvedValue(page([], 0));
+    await render(
+      <ArticleAvailability enabled={false}>
+        <DraftsCard accountId={ACCOUNT} active />
+      </ArticleAvailability>,
+    );
+    await flush();
+    expect(document.querySelector("dialog")).toBeNull();
+    await act(async () => openButton().click());
+    await flush();
+    expect(document.querySelector('[role="tablist"]')).toBeNull();
+    expect(document.querySelector("[data-article-drafts-panel]")).toBeNull();
+    expect(articleClient.list).not.toHaveBeenCalled();
+    expect(card().querySelector("h3")?.textContent).toBe("草稿");
+  });
+
+  it("hands an Article selection to its existing editor only after the shared dialog's history marker retires", async () => {
+    vi.spyOn(window.history, "back").mockImplementation(() => {
+      window.history.replaceState({ kind: "profile" }, "", "/#profile");
+      window.dispatchEvent(
+        new PopStateEvent("popstate", { state: { kind: "profile" } }),
+      );
+    });
+    const markerAtOpen: unknown[] = [];
+    shell.openEditor.mockImplementation(() => {
+      markerAtOpen.push(window.history.state?.phase4Dialog);
+      return true;
+    });
+    client.listDrafts.mockResolvedValue(page([], 0));
+    await render(
+      <ArticleAvailability enabled>
+        <DraftsCard accountId={ACCOUNT} active />
+      </ArticleAvailability>,
+    );
+    await flush();
+    expect(card().textContent).toContain("作品与专题草稿");
+    expect(card().textContent).not.toContain("0 份专题");
+    await act(async () => openButton().click());
+    await flush();
+    expect(document.querySelector('[role="tablist"]')).toBeNull();
+    expect(document.querySelector('[role="tab"]')).toBeNull();
+    const articleRow = document.querySelector<HTMLElement>(
+      `li[data-article-draft-id="article-${"b".repeat(32)}"]`,
+    );
+    expect(articleRow).not.toBeNull();
+    expect(articleRow?.textContent).toContain("专题测试草稿");
+    expect(articleClient.list).toHaveBeenCalledWith(
+      { pageSize: 20 },
+      expect.any(AbortSignal),
+    );
+    await act(async () =>
+      articleRow!.querySelector<HTMLElement>('[role="button"]')!.click(),
+    );
+    await flush();
+    await vi.waitFor(() => expect(shell.openEditor).toHaveBeenCalled());
+    expect(shell.openEditor).toHaveBeenCalledExactlyOnceWith(
+      { type: "article-draft", id: `article-${"b".repeat(32)}` },
+      openButton(),
+    );
+    expect(entry.openEditor).not.toHaveBeenCalled();
+    expect(markerAtOpen).toEqual([undefined]);
+    expect(author.cache.get(`drafts-box-return:${ACCOUNT}`)).toBe("article");
   });
 });

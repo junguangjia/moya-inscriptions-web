@@ -6,6 +6,7 @@ import type { Pool, QueryResultRow } from "pg";
 import { readTransaction } from "./db.js";
 import type { PublishingDb } from "./db.js";
 import { legacyMediaSrc, publishingMediaSrc } from "./media.js";
+import { publishedArticleItemSql } from "../article-authoring/published-media.js";
 
 /*
  * Private derivative read authorization for owners and third parties, and the
@@ -348,6 +349,8 @@ export const resolveMediaRead = async (
                 AND community.accounts_can_interact($4::text,w.author_id)
                 AND d.edit_key=${variantEditKeySql("d.variant", "ri", "r")}
             )
+            OR (i.state='ready' AND d.edit_key='base'
+              AND ${publishedArticleItemSql("d.item_id", "$4::text")})
           )`,
           [itemId, variant, editKey, viewerId],
         )

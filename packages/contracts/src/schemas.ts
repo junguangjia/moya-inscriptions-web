@@ -1,4 +1,8 @@
 import {
+  articleDocumentSchema,
+  articleReferences,
+} from "./article-authoring.ts";
+import {
   studioNameDisplaySchema,
   studioNameSuffixSchema,
   refineStudioNameWrite,
@@ -1168,14 +1172,24 @@ const optionalEditorialText = (max: number) =>
 export const articleSummarySchema = z.strictObject({
   id: articleIdSchema,
   presentation: articlePresentationSchema,
-  title: z.string().min(1).max(120),
+  title: z
+    .string()
+    .min(1)
+    .max(240)
+    .refine((value) => [...value].length <= 120),
   subtitle: optionalEditorialText(120),
   summary: optionalEditorialText(400),
   section: optionalEditorialText(40),
   issue: optionalEditorialText(40),
-  /** Editorial display attribution; not a public user and never an account. */
-  byline: z.string().min(1).max(60),
+  /** Display attribution only; never an authorization identity. */
+  byline: z
+    .string()
+    .min(1)
+    .max(120)
+    .refine((value) => [...value].length <= 60),
   cover: publicMediaSchema.nullable(),
+  /** Current managed Article cover, using existing derivative/Live Photo paths. */
+  managedCover: workMediaSchema.nullable().optional(),
   firstPublishedAt: editorialInstant,
   publishedAt: editorialInstant,
   updatedAt: editorialInstant,
@@ -1193,11 +1207,87 @@ export const articleCitationSchema = z.strictObject({
   url: z.string().url().max(500).nullable(),
 });
 export type ArticleCitation = z.infer<typeof articleCitationSchema>;
-export const articleDetailSchema = articleSummarySchema.extend({
-  intro: optionalEditorialText(2000),
-  sections: z.array(articleSectionSchema).min(1).max(40),
-  citations: z.array(articleCitationSchema).max(50),
-});
+/** Public read resolution never carries object keys, originals or private metadata. */
+export const articleResolvedReferenceSchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("managed"), media: workMediaSchema }),
+  z.strictObject({ type: z.literal("catalog"), media: publicMediaSchema }),
+  z.strictObject({
+    type: z.literal("unavailable"),
+    reason: z.enum(["media_unavailable", "catalog_unavailable"]),
+  }),
+]);
+export type ArticleResolvedReference = z.infer<
+  typeof articleResolvedReferenceSchema
+>;
+export const articleResolvedReferencesSchema = z
+  .record(
+    z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9_-]+$/u),
+    articleResolvedReferenceSchema,
+  )
+  .refine((references) => Object.keys(references).length <= 60, {
+    message: "article_reference_limit",
+  });
+export type ArticleResolvedReferences = z.infer<
+  typeof articleResolvedReferencesSchema
+>;
+export const articleDetailSchema = articleSummarySchema
+  .extend({
+    intro: optionalEditorialText(2000),
+    sections: z.array(articleSectionSchema).max(40),
+    citations: z.array(articleCitationSchema).max(50),
+    /** Optional only for retained legacy Articles, whose sections stay authoritative. */
+    document: articleDocumentSchema.optional(),
+    resolvedReferences: articleResolvedReferencesSchema.optional(),
+  })
+  .superRefine((article, context) => {
+    if (article.document === undefined) {
+      if (article.sections.length === 0)
+        context.addIssue({
+          code: "custom",
+          path: ["sections"],
+          message: "legacy Article requires sections",
+        });
+      if (article.resolvedReferences !== undefined)
+        context.addIssue({
+          code: "custom",
+          path: ["resolvedReferences"],
+          message: "rich references require a document",
+        });
+      return;
+    }
+    if (article.sections.length !== 0)
+      context.addIssue({
+        code: "custom",
+        path: ["sections"],
+        message: "rich Article body is its canonical document",
+      });
+    if (article.resolvedReferences === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["resolvedReferences"],
+        message: "rich Article requires reference resolutions",
+      });
+      return;
+    }
+    for (const { refId } of articleReferences(article.document))
+      if (!Object.hasOwn(article.resolvedReferences, refId))
+        context.addIssue({
+          code: "custom",
+          path: ["resolvedReferences", refId],
+          message: "Article reference resolution missing",
+        });
+    for (const refId of Object.keys(article.resolvedReferences))
+      if (!Object.hasOwn(article.document.references, refId))
+        context.addIssue({
+          code: "custom",
+          path: ["resolvedReferences", refId],
+          message: "Article reference does not exist",
+        });
+  });
 export type ArticleDetail = z.infer<typeof articleDetailSchema>;
 export const ARTICLE_PAGE_SIZE_MAXIMUM = 50;
 export const articleListQuerySchema = z.strictObject({
@@ -1487,3 +1577,69 @@ export const directMessageFailureCodeSchema = z.enum([
 export type DirectMessageFailureCode = z.infer<
   typeof directMessageFailureCodeSchema
 >;
+
+// Restricted Article commands and canonical document; no editor runtime.
+export {
+  ARTICLE_DOCUMENT_LIMITS,
+  articleCodePointLength,
+  articleUtf8ByteLength,
+  articleAuthoringArticleIdSchema,
+  articleSafeLinkSchema,
+  articleStyledTextSchema,
+  articleInlineContentSchema,
+  articleBlockSchema,
+  articleMediaReferenceSchema,
+  articleGalleryGroupSchema,
+  articleDocumentSchema,
+  articleAuthoringDocumentSchema,
+  emptyArticleDocument,
+  extractArticleText,
+  articleReferences,
+  articleCatalogReferences,
+  articleDraftStatusSchema,
+  articleDraftSchema,
+  createArticleDraftCommandSchema,
+  updateArticleDraftCommandSchema,
+  deleteArticleDraftCommandSchema,
+  articleDraftDeletionResultSchema,
+  articleCandidateCommandSchema,
+  publishArticleCommandSchema,
+  articleAuthoringCreateSchema,
+  articleAuthoringUpdateSchema,
+  articleAuthoringCandidateSchema,
+  articleAuthoringPublishSchema,
+  articleAuthoringWithdrawSchema,
+  articleOwnMediaListQuerySchema,
+  articleOwnMediaPageSchema,
+  articleDraftListQuerySchema,
+  articleAuthoringListQuerySchema,
+  articleDraftSummarySchema,
+  articleDraftPageSchema,
+  articlePublishResultSchema,
+  articlePublicationResultSchema,
+  articleValidationIssueSchema,
+  articleValidationResultSchema,
+  articlePreviewSchema,
+  articleAuthoringScopeSchema,
+  articleConnectionIdSchema,
+  articleAuthoringGrantSchema,
+  createArticleAuthoringGrantCommandSchema,
+  articleCandidateApprovalCommandSchema,
+  revokeArticleAuthoringGrantCommandSchema,
+  articleAuthoringFailureCodeSchema,
+  articleBlockEditSchema,
+  articleBlockEditsCommandSchema,
+  applyArticleBlockEdits,
+  legacyArticleToDocument,
+} from "./article-authoring.ts";
+
+export {
+  articleApprovalCandidateSchema,
+  articleApprovalResultSchema,
+  articleCandidateApprovalSubmissionSchema,
+  articleApprovalReviewSchema,
+  articleConsentReviewSchema,
+  articleAuthoringConnectionsSchema,
+  articleConnectionRevocationSchema,
+  articleConsentDecisionSchema,
+} from "./article-delegation.ts";

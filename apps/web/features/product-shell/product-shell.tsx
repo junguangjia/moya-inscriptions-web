@@ -28,7 +28,7 @@ import {
   directEditorTargetFromLocation,
   editorHistoryState,
   editorLocation,
-  parseEditorTarget,
+  parseProductEditorTarget,
   sameEditorLink,
   sameEditorTarget,
   profileHistoryState,
@@ -75,7 +75,7 @@ import type { ReactNode, RefObject } from "react";
 import type { ContentIdentity } from "@moya/contracts";
 import type {
   EditorProductHistoryState,
-  EditorTarget,
+  ProductEditorTarget,
   ProfileProductHistoryState,
   ProfileTab,
   ProductHistoryState,
@@ -123,18 +123,34 @@ const entryIdentity = (state: ProductHistoryState | null) =>
           : state.kind === "topic"
             ? state.topicId
             : state.kind === "editor"
-              ? `editor:${state.editorTarget.type}:${state.editorTarget.type === "new" ? "" : state.editorTarget.id}`
+              ? `editor:${state.editorTarget.type}:${"id" in state.editorTarget ? state.editorTarget.id : ""}`
               : state.kind;
-const currentProductHistoryState = (state: ProductHistoryState) => ({
-  ...mergeProductHistoryState(window.history.state, state),
-  __artvennDocument: historyDocumentId,
-  __artvennEntry:
-    entryIdentity(parseProductHistoryState(window.history.state)) ===
-      entryIdentity(state) &&
-    typeof window.history.state?.__artvennEntry === "string"
-      ? window.history.state.__artvennEntry
-      : requestIdentity(),
-});
+const currentProductHistoryState = (state: ProductHistoryState) => {
+  const articleEntry = (value: ProductHistoryState | null) =>
+    value?.kind === "editor" &&
+    (value.editorTarget.type === "article-list" ||
+      value.editorTarget.type === "article-draft");
+  const merged: ProductHistoryState & Record<string, unknown> = {
+    ...mergeProductHistoryState(window.history.state, state),
+    __artvennDocument: historyDocumentId,
+    __artvennEntry:
+      entryIdentity(parseProductHistoryState(window.history.state)) ===
+        entryIdentity(state) &&
+      typeof window.history.state?.__artvennEntry === "string"
+        ? window.history.state.__artvennEntry
+        : requestIdentity(),
+  };
+  // Next's native History wrapper copies its router state. Supplying its
+  // internal markers ourselves bypasses canonical URL synchronization.
+  if (
+    articleEntry(state) ||
+    articleEntry(parseProductHistoryState(window.history.state))
+  ) {
+    delete merged.__NA;
+    delete merged._N;
+  }
+  return merged;
+};
 const rememberHistoryOffset = (top: number) => {
   const id = window.history.state?.__artvennEntry;
   if (typeof id !== "string") return;
@@ -165,11 +181,14 @@ export interface ProductShellContextValue {
   readonly activeCatalogId: string | null;
   readonly activeContent: ContentIdentity | null;
   readonly activeProfile: ProfileProductHistoryState | null;
-  readonly activeEditor: EditorTarget | null;
+  readonly activeEditor: ProductEditorTarget | null;
   readonly openContent: (target: ContentIdentity, opener: HTMLElement) => void;
   readonly openProfile: (authorId: string | null, opener: HTMLElement) => void;
   /** False when the editor is disabled or another layer refuses it. */
-  readonly openEditor: (target: EditorTarget, opener: HTMLElement) => boolean;
+  readonly openEditor: (
+    target: ProductEditorTarget,
+    opener: HTMLElement,
+  ) => boolean;
   readonly activeDestination: PrimaryDestination;
   readonly navigatePrimary: (destination: PrimaryDestination) => void;
   readonly registerActiveDiscussionScrollElement: (
@@ -234,8 +253,9 @@ export interface ProductShellProps {
     properties: ProductShellProfileOverlayRenderProps,
   ) => ReactNode;
   /** Enables the history-owned `#editor` overlay; absent keeps it closed. */
+  readonly articleEditorEnabled?: boolean;
   readonly renderEditorOverlay?: (
-    target: EditorTarget,
+    target: ProductEditorTarget,
     controls: ProductShellEditorOverlayControls,
   ) => ReactNode;
   readonly renderDetailOverlay?: (
@@ -290,7 +310,9 @@ export interface ProductShellEditorOverlayControls {
     guard: ProductShellEditorLeaveGuard,
   ) => () => void;
   /** Replaces the current editor entry, e.g. once a new work gains a draft. */
-  readonly replaceTarget: (target: EditorTarget) => void;
+  readonly replaceTarget: (target: ProductEditorTarget) => void;
+  /** Retires only the legacy Article list alias into the existing own profile. */
+  readonly openDraftBox?: () => void;
 }
 
 export interface ProductShellTopicOverlayRenderProps {
@@ -332,6 +354,7 @@ export const ProductShell = ({
   navigationAction,
   renderDetailOverlay,
   renderEditorOverlay,
+  articleEditorEnabled = false,
   renderProfileOverlay,
   renderTopicOverlay,
   showDevelopmentPagerControls = false,
@@ -394,6 +417,14 @@ export const ProductShell = ({
   const [editorSession, setEditorSession] = useState(0);
   const editorOpen = activeEditor !== null;
   const editorEnabled = renderEditorOverlay !== undefined;
+  const allowedEditorTarget = useCallback(
+    (target: ProductEditorTarget | null) =>
+      target !== null &&
+      (!target.type.startsWith("article-") || articleEditorEnabled)
+        ? target
+        : null,
+    [articleEditorEnabled],
+  );
   const viewerMediaIdRef = useRef<string | null>(null);
   const topicIdRef = useRef<string | null>(null);
   const scrollPositionsRef = useRef<ScrollPositions>({
@@ -1239,8 +1270,10 @@ export const ProductShell = ({
     });
   }, []);
   const openEditor = useCallback(
-    (target: EditorTarget, opener: HTMLElement) => {
-      const editorTarget = parseEditorTarget(target);
+    (target: ProductEditorTarget, opener: HTMLElement) => {
+      const editorTarget = allowedEditorTarget(
+        parseProductEditorTarget(target),
+      );
       // content-community-completion-v1: the Thread quick composer opens the
       // editor above the Thread overlay it was started from; closing the
       // editor returns to that Thread through the history entry below.
@@ -1279,6 +1312,7 @@ export const ProductShell = ({
     },
     [
       editorEnabled,
+      allowedEditorTarget,
       saveCurrentEntry,
       setDetailVisibility,
       setEditorLeaveApproval,
@@ -1410,9 +1444,11 @@ export const ProductShell = ({
     [setEditorLeaveApproval],
   );
   const replaceEditorTarget = useCallback(
-    (target: EditorTarget) => {
+    (target: ProductEditorTarget) => {
       const current = editorRef.current;
-      const editorTarget = parseEditorTarget(target);
+      const editorTarget = allowedEditorTarget(
+        parseProductEditorTarget(target),
+      );
       if (
         current === null ||
         editorTarget === null ||
@@ -1432,8 +1468,40 @@ export const ProductShell = ({
         );
       setEditorVisibility(next, true);
     },
-    [setEditorVisibility],
+    [setEditorVisibility, allowedEditorTarget],
   );
+  const openEditorDraftBox = useCallback(() => {
+    const current = editorRef.current;
+    if (
+      !articleEditorEnabled ||
+      !profileEnabled ||
+      current?.editorTarget.type !== "article-list"
+    )
+      return;
+    const profile = profileHistoryState(
+      null,
+      requestIdentity(),
+      "works",
+      0,
+      current.sourceDestination,
+      current.sourceScrollTop,
+    );
+    window.history.replaceState(
+      currentProductHistoryState(profile),
+      "",
+      profileLocation(window.location, null),
+    );
+    disposeEditorLeaveGuard();
+    editorBelowRef.current = null;
+    setEditorVisibility(null);
+    setProfileVisibility(profile);
+  }, [
+    articleEditorEnabled,
+    profileEnabled,
+    disposeEditorLeaveGuard,
+    setEditorVisibility,
+    setProfileVisibility,
+  ]);
   const editorControls = useMemo<ProductShellEditorOverlayControls>(
     () => ({
       backButtonRef: editorBackRef,
@@ -1441,12 +1509,14 @@ export const ProductShell = ({
       completeWith: completeEditor,
       registerLeaveGuard: registerEditorLeaveGuard,
       replaceTarget: replaceEditorTarget,
+      openDraftBox: openEditorDraftBox,
     }),
     [
       closeEditor,
       completeEditor,
       registerEditorLeaveGuard,
       replaceEditorTarget,
+      openEditorDraftBox,
     ],
   );
 
@@ -1840,7 +1910,9 @@ export const ProductShell = ({
     const storedState =
       authReturnView?.history ?? parseProductHistoryState(window.history.state);
     const initialState =
-      storedState === null
+      storedState === null ||
+      (storedState.kind === "editor" &&
+        allowedEditorTarget(storedState.editorTarget) === null)
         ? null
         : authReturnView
           ? storedState
@@ -1860,7 +1932,7 @@ export const ProductShell = ({
     const directMediaId = directMediaIdFromLocation(window.location);
     const directSettings = window.location.hash === "#settings";
     const directEditor = editorEnabled
-      ? directEditorTargetFromLocation(window.location)
+      ? allowedEditorTarget(directEditorTargetFromLocation(window.location))
       : null;
     let destination: PrimaryDestination = "home";
 
@@ -2085,6 +2157,11 @@ export const ProductShell = ({
     const handlePopState = (event: PopStateEvent) => {
       cancelSettingsFocus();
       let state = restoredHistoryState(event.state);
+      if (
+        state?.kind === "editor" &&
+        allowedEditorTarget(state.editorTarget) === null
+      )
+        state = null;
       // An entry this shell never wrote, such as a native fragment link's.
       const nativeEntry = state === null;
       let reloadDetail = false;
@@ -2098,7 +2175,7 @@ export const ProductShell = ({
           : undefined;
         const destination = activeDestinationRef.current;
         const editorTarget = editorEnabled
-          ? directEditorTargetFromLocation(window.location)
+          ? allowedEditorTarget(directEditorTargetFromLocation(window.location))
           : null;
         if (editorTarget !== null) {
           const current = editorRef.current;
@@ -2296,6 +2373,7 @@ export const ProductShell = ({
   }, [
     cancelSettingsFocus,
     editorEnabled,
+    allowedEditorTarget,
     expandNavigation,
     restoreCatalogFocus,
     restoreEditorFocus,

@@ -68,6 +68,7 @@
     "dev": "tsx src/main.ts"
   },
   "dependencies": {
+    "@moya/agent-authorization": "workspace:*",
     "@moya/backend-runtime": "workspace:*",
     "@moya/catalog-importer": "workspace:*",
     "@moya/catalog-postgres": "workspace:*",

@@ -75,7 +75,11 @@ const workPublishingMigrations = [
   "20260922031000",
   "20260922032000",
   "20260930010000",
+  "20260930020000",
+  "20260930030000",
+  "20260930040000",
   "20261001010000",
+  "20261001020000",
 ];
 const backfillMigration = "20260914092000";
 const bridgeMigration = "20260914093000";
@@ -227,7 +231,11 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         [user, `studio-${index}`, legacy[index]],
       );
     expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([
+      "20260930020000",
+      "20260930030000",
+      "20260930040000",
       "20261001010000",
+      "20261001020000",
     ]);
     for (const [index, user] of users.entries())
       expect(
@@ -357,7 +365,7 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
       ).toEqual(
         requiredCommunityMigrations
           .map(({ migrationId }) => migrationId)
-          .filter((id) => !workPublishingMigrations.includes(id)),
+          .filter((id) => id <= phase4LastMigration),
       );
 
       for (const [user, handle] of [
@@ -1601,7 +1609,11 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         "20260922031000",
         "20260922032000",
         "20260930010000",
+        "20260930020000",
+        "20260930030000",
+        "20260930040000",
         "20261001010000",
+        "20261001020000",
       ]);
 
       // Declared submissions: stored hashes unchanged and still exactly what

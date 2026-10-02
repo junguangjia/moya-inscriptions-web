@@ -77,10 +77,15 @@ export type EditorTarget =
     }
   | { readonly type: "draft"; readonly id: string }
   | { readonly type: "work"; readonly id: string };
+/** Article targets remain separate from Work publishing targets. */
+export type ArticleEditorTarget =
+  | { readonly type: "article-list" }
+  | { readonly type: "article-draft"; readonly id: string };
+export type ProductEditorTarget = EditorTarget | ArticleEditorTarget;
 export interface EditorProductHistoryState {
   readonly kind: "editor";
   readonly version: typeof PRODUCT_SHELL_HISTORY_VERSION;
-  readonly editorTarget: EditorTarget;
+  readonly editorTarget: ProductEditorTarget;
   readonly sourceDestination: PrimaryDestination;
   readonly sourceScrollTop: number;
 }
@@ -258,7 +263,7 @@ export const parseProductHistoryState = (
     );
 
   if (candidate.kind === "editor") {
-    const editorTarget = parseEditorTarget(candidate.editorTarget);
+    const editorTarget = parseProductEditorTarget(candidate.editorTarget);
     return editorTarget !== null &&
       isPrimaryDestination(candidate.sourceDestination) &&
       typeof candidate.sourceScrollTop === "number" &&
@@ -458,12 +463,29 @@ export const parseEditorTarget = (value: unknown): EditorTarget | null => {
       ? { type: "work", id: r.id }
       : null;
 };
-export const sameEditorTarget = (left: EditorTarget, right: EditorTarget) =>
-  left.type === "new"
-    ? right.type === "new"
-    : right.type === left.type && right.id === left.id;
+export const parseProductEditorTarget = (
+  value: unknown,
+): ProductEditorTarget | null => {
+  if (value && typeof value === "object") {
+    const target = value as Record<string, unknown>;
+    if (target.type === "article-list") return { type: "article-list" };
+    if (
+      target.type === "article-draft" &&
+      typeof target.id === "string" &&
+      /^article-[0-9a-f]{32}$/u.test(target.id)
+    )
+      return { type: "article-draft", id: target.id };
+  }
+  return parseEditorTarget(value);
+};
+export const sameEditorTarget = (
+  left: ProductEditorTarget,
+  right: ProductEditorTarget,
+) =>
+  left.type === right.type &&
+  ("id" in left ? "id" in right && right.id === left.id : true);
 export const editorHistoryState = (
-  editorTarget: EditorTarget,
+  editorTarget: ProductEditorTarget,
   sourceDestination: PrimaryDestination,
   sourceScrollTop: number,
 ): EditorProductHistoryState => ({
@@ -479,21 +501,30 @@ export const editorHistoryState = (
  * never carry it (P13: no draft share links). An own work keeps its existing
  * public `workId`.
  */
-export const editorLocation = (location: Location, target: EditorTarget) => {
+export const editorLocation = (
+  location: Location,
+  target: ProductEditorTarget,
+) => {
   const url = new URL(primaryLocation(location), location.origin);
   if (target.type === "work") url.searchParams.set("workId", target.id);
-  return `${url.pathname}${url.search}#editor`;
+  return `${url.pathname}${url.search}${target.type.startsWith("article-") ? "#article-editor" : "#editor"}`;
 };
 /** Whether two targets share one visible `#editor` link. */
-export const sameEditorLink = (left: EditorTarget, right: EditorTarget) =>
-  left.type === "work" && right.type === "work"
-    ? left.id === right.id
-    : left.type !== "work" && right.type !== "work";
+export const sameEditorLink = (
+  left: ProductEditorTarget,
+  right: ProductEditorTarget,
+) =>
+  left.type.startsWith("article-") || right.type.startsWith("article-")
+    ? left.type.startsWith("article-") && right.type.startsWith("article-")
+    : left.type === "work" && right.type === "work"
+      ? left.id === right.id
+      : left.type !== "work" && right.type !== "work";
 /** Rebuilds only an exact `#editor` link; any other shape is not an editor. */
 export const directEditorTargetFromLocation = (
   location: Pick<Location, "search" | "hash">,
-): EditorTarget | null => {
-  if (location.hash !== "#editor") return null;
+): ProductEditorTarget | null => {
+  if (location.hash !== "#editor" && location.hash !== "#article-editor")
+    return null;
   const p = new URLSearchParams(location.search);
   if (
     p.has("catalogId") ||
@@ -502,6 +533,10 @@ export const directEditorTargetFromLocation = (
     p.has("draftId")
   )
     return null;
+  if (location.hash === "#article-editor")
+    return p.has("workId") || p.has("articleId")
+      ? null
+      : { type: "article-list" };
   const works = p.getAll("workId");
   if (works.length > 1) return null;
   return works.length === 1

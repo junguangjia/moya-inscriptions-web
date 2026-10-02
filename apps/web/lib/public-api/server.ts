@@ -1,5 +1,8 @@
 import "server-only";
-import { authPasswordResetResultSchema } from "@moya/contracts/schemas";
+import {
+  ARTICLE_DOCUMENT_LIMITS,
+  authPasswordResetResultSchema,
+} from "@moya/contracts/schemas";
 import { localCatalogFileUrl } from "../../features/detail/local-catalog-media";
 import {
   isSecureRequest,
@@ -270,7 +273,8 @@ export const relayServerAuthorCommunity = async (
     "x-content-type-options": "nosniff",
   };
   const fail = (status: number) => new Response(null, { status, headers });
-  if (!["GET", "POST", "DELETE"].includes(request.method)) return fail(405);
+  if (!["GET", "POST", "PUT", "DELETE"].includes(request.method))
+    return fail(405);
   const incoming = new URL(request.url);
   // Next's development Request.url may normalize the hostname to localhost.
   // Host is the browser's requested authority; scripts cannot forge it. Never
@@ -297,6 +301,9 @@ export const relayServerAuthorCommunity = async (
   const prefix = "/api/community/";
   if (!incoming.pathname.startsWith(prefix)) return fail(404);
   const suffix = incoming.pathname.slice(prefix.length);
+  const articleAuthoring =
+    suffix === "article-authoring" || suffix.startsWith("article-authoring/");
+  if (request.method === "PUT" && !articleAuthoring) return fail(405);
   try {
     if (
       suffix.split("/").some((p) => {
@@ -320,7 +327,10 @@ export const relayServerAuthorCommunity = async (
     };
     if (token !== undefined) outgoing.Authorization = `Bearer ${token}`;
     // Bind private inbox reads to the UI's confirmed account when another tab changed the cookie.
-    if (request.method === "GET" && suffix === "notifications") {
+    if (
+      request.method === "GET" &&
+      (suffix === "notifications" || articleAuthoring)
+    ) {
       const expected = request.headers.get("x-author-account");
       if (expected) {
         if (!/^user-[0-9a-f]{32}$/u.test(expected)) return fail(422);
@@ -343,7 +353,13 @@ export const relayServerAuthorCommunity = async (
       if (!reader) return fail(422);
       const chunks: Uint8Array[] = [];
       let size = 0;
-      const limit = type === "image/png" ? 4194304 : 100000;
+      if (articleAuthoring && type !== "application/json") return fail(422);
+      const limit =
+        type === "image/png"
+          ? 4194304
+          : articleAuthoring
+            ? ARTICLE_DOCUMENT_LIMITS.documentBytes + 16_384
+            : 100000;
       for (;;) {
         const part = await reader.read();
         if (part.done) break;
@@ -386,6 +402,10 @@ export const relayServerAuthorCommunity = async (
         delete signedOut.Authorization;
         upstream = await send(signedOut);
       }
+    }
+    if (articleAuthoring && upstream.status === 204) {
+      await upstream.body?.cancel().catch(() => undefined);
+      return new Response(null, { status: 204, headers });
     }
     const type = upstream.headers.get("content-type")?.split(";")[0];
     if (type !== "application/json" && type !== "image/png")

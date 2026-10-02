@@ -77,7 +77,11 @@ describe("community migration family", () => {
         "20260922031000_article_discussion_target.sql",
         "20260922032000_direct_messages.sql",
         "20260930010000_password_credentials_and_studio.sql",
+        "20260930020000_article_authoring.sql",
+        "20260930030000_article_authoring_delegation.sql",
+        "20260930040000_article_consent_uid_check.sql",
         "20261001010000_profile_studio_name_suffix.sql",
+        "20261001020000_article_draft_deletion.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);

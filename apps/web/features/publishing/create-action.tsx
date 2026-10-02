@@ -91,7 +91,13 @@ const resumeTarget = (
  * count (§11 item 9). Whenever an editor session is kept, it returns to that
  * editor, also once its work has settled. There is no second button.
  */
-export const CreateWorkAction = () => {
+export const CreateWorkAction = ({
+  onNew,
+  newLabel = "发布作品",
+}: {
+  readonly onNew?: (opener: HTMLElement) => void;
+  readonly newLabel?: string;
+} = {}) => {
   const { checking, openEditor } = usePublishingEntry();
   const progress = useGlobalUploadProgress();
   const upload = useUploadSession();
@@ -105,7 +111,7 @@ export const CreateWorkAction = () => {
     (progress.hasUnsavedChanges ? "有未保存的更改" : null);
   const label =
     resume === null
-      ? "发布作品"
+      ? newLabel
       : `返回正在编辑的作品${active && state !== null ? `：${state}` : ""}`;
   return (
     <>
@@ -119,7 +125,9 @@ export const CreateWorkAction = () => {
         data-paused={active && progress.paused ? "true" : undefined}
         disabled={checking}
         onClick={(event) =>
-          openEditor(resume ?? { type: "new" }, event.currentTarget)
+          resume === null && onNew !== undefined
+            ? onNew(event.currentTarget)
+            : openEditor(resume ?? { type: "new" }, event.currentTarget)
         }
         type="button"
       >

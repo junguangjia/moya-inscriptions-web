@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { NotificationService } from "@moya/api";
+import { CommunityNotFoundError, NotificationService } from "@moya/api";
 import {
   createPostgresPool,
   parsePostgresConfig,
@@ -713,17 +713,36 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
   });
 
   it("never delivers or leaks text for an unpublished or withdrawn Article", async () => {
-    // (7) an Article with no published projection row delivers nothing.
-    const pendingRoot = await comments.submitDiscussion(
-      { type: "article", id: unpublishedArticle },
-      bob,
-      "未发布文章根评论",
+    // New writes to an unavailable Article fail closed. Historical retained
+    // rows may still exist, so seed those using the fixture's privileged role
+    // and exercise the real limited App-role projection below.
+    await expect(
+      comments.submitDiscussion(
+        { type: "article", id: unpublishedArticle },
+        bob,
+        "不可发布的评论",
+      ),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    const pendingRoot = { id: catalogCommentIdSchema.parse(key("comment")) };
+    const pendingReply = { id: catalogCommentIdSchema.parse(key("comment")) };
+    await setup!.query(
+      "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation,was_public) VALUES($1,$2,'article',$3,'未发布文章根评论','visible',true)",
+      [pendingRoot.id, unpublishedArticle, bob],
     );
-    const pendingReply = await comments.submitDiscussion(
-      { type: "article", id: unpublishedArticle },
-      cara,
-      "未发布文章回复",
-      pendingRoot.id,
+    await setup!.query(
+      "INSERT INTO community.catalog_comment_replies(id,root_comment_id,author_id,text,moderation,was_public) VALUES($1,$2,$3,'未发布文章回复','visible',true)",
+      [pendingReply.id, pendingRoot.id, cara],
+    );
+    await setup!.query(
+      "INSERT INTO community.notification_sources(action_key,kind,subject_id,actor_id) VALUES($1,'comment',$2,$3),($4,'comment',$5,$6)",
+      [
+        `comment:${pendingRoot.id}`,
+        pendingRoot.id,
+        bob,
+        `comment:${pendingReply.id}`,
+        pendingReply.id,
+        cara,
+      ],
     );
     await pump();
     expect(
@@ -734,6 +753,8 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
         )
       ).rows,
     ).toEqual([]);
+    expect(JSON.stringify(await page(bob))).not.toContain("未发布文章回复");
+    expect(JSON.stringify(await page(cara))).not.toContain("未发布文章根评论");
     // (6) an Article withdrawn after delivery becomes the safe unavailable
     // state: no excerpt, no actor, no navigable target, and not unread.
     const secret = "撤回后不得泄露的评论正文";

@@ -31,7 +31,7 @@ export default async function FormalPage({
     <CatalogSearchProvider>
       <ProductApplication
         {...(process.env.NODE_ENV === "development"
-          ? { liveNotifications: true }
+          ? { liveNotifications: true, articleAuthoring: true }
           : {})}
         authorCommunity={resolveCommunityCommentSurface() !== null}
         comments={resolveCommunityCommentSurface()}
