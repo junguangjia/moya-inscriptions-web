@@ -138,7 +138,10 @@ describe("login lookup-key rotation and lifecycle", () => {
       ),
     ).rejects.toMatchObject({ code: "23514" });
     expect(await rows()).toEqual(original);
-    expect(await runCommunityMigrations(pool, directory)).toEqual([forward]);
+    expect(await runCommunityMigrations(pool, directory)).toEqual([
+      forward,
+      "20261002020000",
+    ]);
     expect((await ledger()).slice(0, originalLedger.length)).toEqual(
       originalLedger,
     );
