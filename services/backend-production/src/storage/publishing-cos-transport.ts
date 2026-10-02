@@ -73,6 +73,10 @@ export function createPublishingCosTransport(
               );
           },
         );
+        // Credential acquisition remains bounded. Multipart body transmission
+        // uses the SDK's socket inactivity bound plus setup/header deadlines;
+        // it must not be cancelled merely because a part is still progressing.
+        if (method === "multipartUpload") clearTimeout(deadline);
         const now = Math.floor(Date.now() / 1000);
         const expiresAt = Math.min(
           now + 300,
@@ -99,6 +103,9 @@ export function createPublishingCosTransport(
             startsAt: now,
             expiresAt,
             timeoutMs: options.requestTimeoutMs,
+            ...(method === "multipartUpload"
+              ? { timeoutMode: "upload-idle" as const }
+              : {}),
           },
           dependencies,
         );
