@@ -1035,6 +1035,7 @@ export const relayServerCommunityAuth = async (
   const prefix = "/api/community/auth/";
   if (!incoming.pathname.startsWith(prefix)) return fail(404);
   const suffix = incoming.pathname.slice(prefix.length);
+  if (suffix === "sign-out" && request.method !== "POST") return fail(405);
   try {
     const base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
     const target = new URL(`v1/community/auth/${suffix}`, base);

@@ -19,6 +19,7 @@ import {
   PostgresWorkPublishingAdapter,
 } from "@moya/community-postgres";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
+import { publicUserIdSchema } from "@moya/contracts/schemas";
 import sharp from "sharp";
 import {
   afterAll,
@@ -1559,7 +1560,7 @@ export const registerPhase4AuthorTests = (
       const issuedAt = new Date();
       await new PostgresCommunityIdentityAdapter(pool).createSession({
         id: id("session"),
-        userId: a,
+        userId: publicUserIdSchema.parse(a),
         tokenHash: await hashSessionToken(token),
         issuedAt,
         expiresAt: new Date(issuedAt.getTime() + 60_000),

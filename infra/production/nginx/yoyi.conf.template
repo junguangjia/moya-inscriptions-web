@@ -33,6 +33,8 @@ server {
     proxy_set_header Connection "";
     proxy_connect_timeout 5s;
     proxy_read_timeout 60s;
+    # Keep ordinary request bodies bounded; only the named upload/document paths differ.
+    client_max_body_size 1m;
 
     # Shared hostname preserves the existing host-only Payload preview cookie.
     location = /admin { proxy_pass http://yoyi_admin; }
@@ -50,6 +52,20 @@ server {
     location = /api/catalog { proxy_pass http://yoyi_web; }
     location ^~ /api/catalog/ { proxy_pass http://yoyi_web; }
     location = /api/catalog-search { proxy_pass http://yoyi_web; }
+    # Profile/avatar/background PNG upload: matches the existing 4 MiB Web/Backend limit.
+    location = /api/community/media {
+        client_max_body_size 4m;
+        proxy_pass http://yoyi_web;
+    }
+    # Human Article JSON: 1 MiB document plus the existing 16 KiB command envelope.
+    location = /api/community/article-authoring {
+        client_max_body_size 1040k;
+        proxy_pass http://yoyi_web;
+    }
+    location ^~ /api/community/article-authoring/ {
+        client_max_body_size 1040k;
+        proxy_pass http://yoyi_web;
+    }
     # Notification SSE uses the Web session relay; stream without proxy buffering.
     # Backend keepalives occur every 15 seconds within the existing read timeout.
     location = /api/community/notifications/stream {

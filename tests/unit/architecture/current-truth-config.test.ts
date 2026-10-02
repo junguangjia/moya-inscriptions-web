@@ -1,3 +1,4 @@
+import { ARTICLE_DOCUMENT_LIMITS } from "@moya/contracts/schemas";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -237,6 +238,41 @@ describe("current repository truth and local configuration", () => {
       expect(runtimeGrants.indexOf("REVOKE UPDATE ON TABLE")).toBeLessThan(
         runtimeGrants.indexOf(`GRANT UPDATE (`, runtimeGrants.indexOf(table)),
       );
+  });
+
+  it("allows the existing PNG and Article body bounds only at their own ingress paths", async () => {
+    const nginx = await readFile(
+      path.join(repositoryRoot, "infra/production/nginx/yoyi.conf.template"),
+      "utf8",
+    );
+    const locationBody = (header: string) => {
+      const marker = `${header} {`;
+      const start = nginx.indexOf(marker);
+      expect(start, header).toBeGreaterThanOrEqual(0);
+      return nginx.slice(start + marker.length, nginx.indexOf("}", start));
+    };
+    expect(nginx.match(/client_max_body_size 1m;/g)).toHaveLength(1);
+    expect(nginx).not.toMatch(/client_max_body_size\s+0\s*;/);
+    expect(locationBody("location = /api/community/media")).toContain(
+      "client_max_body_size 4m;",
+    );
+    const articleKilobytes =
+      (ARTICLE_DOCUMENT_LIMITS.documentBytes + 16_384) / 1024;
+    for (const header of [
+      "location = /api/community/article-authoring",
+      "location ^~ /api/community/article-authoring/",
+    ]) {
+      expect(locationBody(header)).toContain(
+        `client_max_body_size ${articleKilobytes}k;`,
+      );
+      expect(locationBody(header)).toContain("proxy_pass http://yoyi_web;");
+    }
+    expect(locationBody("location ^~ /api/community/")).not.toContain(
+      "client_max_body_size",
+    );
+    expect(locationBody("location /api/")).toContain(
+      "client_max_body_size 50m;",
+    );
   });
 
   it("routes Community V1 same-origin paths to Web, never to Payload", async () => {

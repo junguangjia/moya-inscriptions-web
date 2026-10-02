@@ -125,3 +125,53 @@ cancellation and expiry fencing.
 No sibling delivery was present in main at the baseline. Existing exported ports
 are retained; no sibling internals, migrations or grants are duplicated. These
 pending journeys do not constitute a staged or read-only release decision.
+
+## Owner continuation r2: review repairs
+
+The Owner renewed implementation on PR #195 on 2026-10-02. This revision first
+addresses review comment 5954099894 in the same worktree and Draft PR. Previous
+r1 failures remain evidence; they are not replaced with a passing claim.
+
+- Construct the synthetic session identity with the existing PublicUserId
+  schema.
+- Reject GET sign-out with 405 before any upstream request or cookie change;
+  preserve cross-site POST rejection and legitimate same-origin POST logout.
+- Keep the general Nginx body bound at 1 MiB. The exact profile media route uses
+  its existing 4 MiB limit; exact and descendant Article routes use 1 MiB plus
+  the existing 16 KiB JSON envelope. Publishing upload limits await B's reviewed
+  delivery rather than inheriting these unrelated limits.
+- Consume database PR #196 from main `2ae25785bf8a7a06d240bd1b730e524c8b39621f`.
+  C remains the sole writer of migrations, manifests and coordinated named
+  grants.
+
+Focused evidence and cumulative validation are recorded with the new candidate
+in the private handoff and PR. Real proxy requests use a valid PNG and a valid
+Article document near the document limit, with separate rejection checks for
+oversized and ordinary-route bodies. Proxy ingress evidence alone does not
+establish authenticated application or external-service acceptance.
+
+## Authorized continuation after the review repairs
+
+The Owner now authorizes implementation of the missing Production auth factory,
+provider/configuration wiring and formal Article AI/MCP/OAuth integration in
+this task. This supersedes the r1 exclusion of those implementations; the
+existing auth, Session, provider ports, Article authorization and database
+boundaries remain authoritative. No new framework, dependency upgrade or
+parallel Session system is authorized. The next phase freezes its concrete paths
+and behavior matrix before source edits and is delivered through the same Draft
+PR.
+
+Root owns shared composition, routers and deployment configuration. Production
+Article environment constraints and any necessary named grant changes are sent
+to C. B's COS factory, shared store, upload and worker are consumed only after
+the repaired media PR is reviewed and merged into main.
+
+The final common candidate requires a disposable database, Production build,
+real HTTP and personally operated desktop/mobile browser acceptance for auth,
+account isolation, media lifecycle and worker recovery, Article, comments,
+notifications, messages, Admin and AI authorization/edit/publish/revoke.
+Provider simulation is recorded separately from real external-service
+verification. Real email/SMS activation and delivery, real credentials, live
+privilege changes and deployment remain outside this authorization. Missing
+implementation must remain explicitly pending rather than being called only
+service activation.
