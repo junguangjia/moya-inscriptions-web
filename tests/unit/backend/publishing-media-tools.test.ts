@@ -18,6 +18,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { crc32, deflateSync } from "node:zlib";
 
+import { cosFixture } from "./publishing-cos-fixture.js";
+
 import { FilesystemPublishingMediaStore } from "@moya/backend-production/internal/publishing-media-store";
 import {
   MOTION_DERIVATIVE,
@@ -1488,13 +1490,18 @@ const fakeMediaSandbox = (
 
 const OWNER = `user-${"2".repeat(32)}`;
 
+let processorStoreKind: "filesystem" | "cos" = "filesystem";
+
 const setup = async (
   sandbox: ReturnType<typeof fakeMediaSandbox> = fakeMediaSandbox(),
   wrap: (tools: MediaToolsRunner) => MediaToolsRunner = (tools) => tools,
 ) => {
-  const store = await FilesystemPublishingMediaStore.open(storeRoot, {
-    temporaryRoots: [],
-  });
+  const store =
+    processorStoreKind === "cos"
+      ? cosFixture().store
+      : await FilesystemPublishingMediaStore.open(storeRoot, {
+          temporaryRoots: [],
+        });
   const tools: MediaToolsRunner = wrap(await runner(sandbox.spawn));
   const processor: PublishingMediaProcessorPort =
     createPublishingMediaProcessor({ store, runner: tools });
@@ -1515,12 +1522,7 @@ const setup = async (
     };
   };
   const blobCount = async () =>
-    (
-      await readdir(path.join(storeRoot, "blobs"), {
-        recursive: true,
-        withFileTypes: true,
-      })
-    ).filter((e) => e.isFile()).length;
+    (await store.listBlobs({ limit: 1000 })).entries.length;
   const toolsRun = () => sandbox.runs.map((run) => run.tool);
   return { store, tools, processor, put, blobCount, toolsRun, sandbox };
 };
@@ -1551,7 +1553,7 @@ const processed = (outcome: PublishingProcessOutcome) => {
   return outcome;
 };
 
-describe("publishing media processor", () => {
+const processorCases = () => {
   it("keeps processor, port and contracts failure codes identical", () => {
     expect(failureCodesMatchContracts).toBe(true);
   });
@@ -1776,7 +1778,11 @@ describe("publishing media processor", () => {
       qualityMode: "original",
       components: [
         { role: "still", declaredType: "image/jpeg", ...stillComponent },
-        { role: "motion", declaredType: "video/quicktime", ...motionComponent },
+        {
+          role: "motion",
+          declaredType: "video/quicktime",
+          ...motionComponent,
+        },
       ],
       variants: ["thumb"],
       ...extra,
@@ -1999,7 +2005,10 @@ describe("publishing media processor", () => {
     ).toEqual([["cover", "e".repeat(32), 150, 200]]);
     expect(reads).toEqual([still.storageKey]);
     expect(toolsRun()).toEqual([]);
-    const moving = await processor.process({ ...input, variants: ["motion"] });
+    const moving = await processor.process({
+      ...input,
+      variants: ["motion"],
+    });
     expect(moving.status).toBe("derived");
     expect(reads.slice(1)).toEqual([motion.storageKey]);
     expect(toolsRun()).toEqual(["ffprobe", "ffmpeg", "ffprobe"]);
@@ -2115,7 +2124,17 @@ describe("publishing media processor", () => {
     expect((failure as Error).message).not.toContain(storeRoot);
     expect(await readdir(work)).toEqual([]);
   });
-});
+};
+
+describe.each(["filesystem", "cos"] as const)(
+  "publishing media processor (%s)",
+  (kind) => {
+    beforeEach(() => {
+      processorStoreKind = kind;
+    });
+    processorCases();
+  },
+);
 
 describe("publishing media processor legacy user media stills", () => {
   const LEGACY_MEDIA_ID = `user-media-${"3".repeat(32)}`;

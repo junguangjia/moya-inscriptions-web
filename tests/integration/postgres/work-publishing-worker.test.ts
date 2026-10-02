@@ -5,7 +5,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
-import { FilesystemPublishingMediaStore } from "@moya/backend-production/internal/publishing-media-store";
+import {
+  cosFixture,
+  cosOptions,
+} from "../../unit/backend/publishing-cos-fixture.js";
+
+import {
+  CosPublishingMediaStore,
+  FilesystemPublishingMediaStore,
+} from "@moya/backend-production/internal/publishing-media-store";
 import {
   MediaToolError,
   createMediaToolsRunner,
@@ -74,7 +82,8 @@ const suiteJobIds = new Set<string>();
 const suiteUsers: string[] = [];
 let base: string;
 let workBase: string;
-let store: FilesystemPublishingMediaStore;
+let store: FilesystemPublishingMediaStore | CosPublishingMediaStore;
+let cos: ReturnType<typeof cosFixture> | undefined;
 
 interface JobRow {
   kind: string;
@@ -391,15 +400,17 @@ afterAll(async () => {
   }
 });
 
-describe("publishing worker on the PostgreSQL job queue", () => {
+const workerCases = () => {
   it(
     "leases, renews and completes a store reconciliation job that removes only old unrecorded blobs",
     { timeout: 20_000 },
     async () => {
       const owner = `user-${hex()}`;
       // File ages are compared with the handler clock: date them on it.
-      const touch = async (storageKey: string, at: Date) =>
-        utimes(path.join(base, storageKey), at, at);
+      const touch = async (storageKey: string, at: Date) => {
+        if (cos) cos.objects.get(cosOptions.prefix + storageKey)!.modified = at;
+        else await utimes(path.join(base, storageKey), at, at);
+      };
       const oldOrphan = (await writeDerivative(owner)).storageKey;
       await touch(oldOrphan, new Date(clock().getTime() - 200 * DAY_MS));
       const freshOrphan = (await writeDerivative(owner)).storageKey;
@@ -501,6 +512,14 @@ describe("publishing worker on the PostgreSQL job queue", () => {
       });
       expect(job.run_after.getTime()).toBeGreaterThanOrEqual(stopping);
       expect(job.run_after.getTime()).toBeLessThanOrEqual(clock().getTime());
+      const restarted = newWorker(
+        suitePort(),
+        { run: async () => ({ status: "completed" }) },
+        { kinds: ["sweep_staging"] },
+      );
+      restarted.start();
+      await settled(jobId, "succeeded");
+      await restarted.stop();
     },
   );
 
@@ -795,4 +814,19 @@ describe("publishing worker on the PostgreSQL job queue", () => {
       expect(capacity.rows[0]?.reserved_bytes).toBe("0");
     },
   );
-});
+};
+
+describe.each(["filesystem", "cos"] as const)(
+  "publishing worker on PostgreSQL (%s)",
+  (kind) => {
+    beforeAll(async () => {
+      cos = kind === "cos" ? cosFixture() : undefined;
+      store =
+        cos?.store ??
+        (await FilesystemPublishingMediaStore.open(base, {
+          temporaryRoots: [],
+        }));
+    });
+    workerCases();
+  },
+);
