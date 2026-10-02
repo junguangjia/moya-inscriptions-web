@@ -1,9 +1,11 @@
 import * as https from "node:https";
+import { TLSSocket } from "node:tls";
 
 import COS from "cos-nodejs-sdk-v5";
 
 import type { ClientRequest } from "node:http";
 import type { RequestOptions } from "node:https";
+import type { Socket } from "node:net";
 
 export type CosSdkClient = Pick<
   COS,
@@ -42,6 +44,8 @@ export const createCosSdk = (
     readonly startsAt: number;
     readonly expiresAt: number;
     readonly timeoutMs: number;
+    /** Only publishing multipart body uploads may progress beyond a total deadline. */
+    readonly timeoutMode?: "upload-idle";
   },
   dependencies: CosSdkDependencies = {},
 ) => {
@@ -86,12 +90,24 @@ export const createCosSdk = (
       new Promise((resolve, reject) => {
         let settled = false;
         let outgoing: ClientRequest | undefined;
+        let socket: Socket | undefined;
+        let responseDeadline: ReturnType<typeof setTimeout> | undefined;
         let received = 0;
         const chunks: Buffer[] = [];
+        const connected = () => {
+          if (socket instanceof TLSSocket && !socket.authorized) {
+            finish(requestFailure());
+            return;
+          }
+          clearTimeout(deadline);
+        };
         const finish = (error?: Error, statusCode?: number) => {
           if (settled) return;
           settled = true;
           clearTimeout(deadline);
+          clearTimeout(responseDeadline);
+          socket?.removeListener("connect", connected);
+          socket?.removeListener("secureConnect", connected);
           signal?.removeEventListener("abort", onAbort);
           client.off("before-send", beforeSend);
           if (error) {
@@ -104,6 +120,15 @@ export const createCosSdk = (
             });
           }
         };
+        const startResponseDeadline = () => {
+          if (settled || responseDeadline !== undefined) return;
+          // Start at the first flushed upload or early final response. Headers,
+          // body bytes and a later upload finish must never renew this bound.
+          responseDeadline = setTimeout(
+            () => finish(requestFailure()),
+            options.timeoutMs,
+          );
+        };
         const nativeRequest = ((requestOptions: RequestOptions) => {
           if (outgoing || settled) throw requestFailure();
           outgoing = (dependencies.nativeRequest ?? https.request)({
@@ -111,7 +136,27 @@ export const createCosSdk = (
             rejectUnauthorized: true,
           });
           outgoing.on("error", () => finish(requestFailure()));
+          if (options.timeoutMode === "upload-idle") {
+            outgoing.on("socket", (assigned) => {
+              socket = assigned;
+              // The finite setup timer includes DNS/TCP and TLS. Plain sockets
+              // occur only through the native loopback test seam.
+              if (assigned instanceof TLSSocket) {
+                // A verified pooled socket emits no second secureConnect.
+                if (assigned.authorized) connected();
+                else assigned.once("secureConnect", connected);
+              } else if (assigned.connecting)
+                assigned.once("connect", connected);
+              else connected();
+            });
+            // Keep the SDK's native socket inactivity timeout. Node observes
+            // pending native write-queue progress even for one buffered part;
+            // SDK onProgress/body consumption does not establish that progress.
+            outgoing.on("timeout", () => finish(requestFailure()));
+            outgoing.on("finish", startResponseDeadline);
+          }
           outgoing.on("response", (incoming) => {
+            if (options.timeoutMode === "upload-idle") startResponseDeadline();
             incoming.on("error", () => finish(requestFailure()));
             incoming.on("aborted", () => finish(requestFailure()));
             const emit = incoming.emit;

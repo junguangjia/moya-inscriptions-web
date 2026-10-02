@@ -284,3 +284,48 @@ waiting behind its own lock. The five-second test deadline, one-winner and exact
 factor-state assertions remain. The losing unlink response specifically reflects
 the freshly revoked Session; the opposite loser still rejects its spent proof.
 Final cumulative and hosted results are recorded for the exact delivery head.
+
+## r5 common candidate after the media dependency
+
+The Owner explicitly authorized exact-head PR198 integration. Reviewed head
+32ac6a17aab2c373469ed2ea42e08ca4a9f75052 passed independent review and regular
+CI37051226231 under the unchanged 300-second test ceiling. It was squash-merged
+into main cb082829a22ecfd8abcd41eb2441c7584f9212a4 and consumed here. Only
+publishing COS multipart transmission receives the existing bounded idle mode;
+credential acquisition, connection/TLS, response headers, cancellation, size,
+single attempt and other COS operations remain bounded. The filesystem fixture
+merge retains this task's already reviewed disjoint initial shard and all
+symlink refusal assertions. No composition interface, grant or dependency is
+replaced.
+
+The subsequent integration review found that a reused verified TLS socket emits
+no second secureConnect, and that the response body still needs a finite
+completion boundary. B repaired both in PR199 head
+61ae1e67d0fd3df3f75853e36383b57bdb17f0aa. Independent review and complete
+CI37056308076 attempt2 passed (250557ms within300000ms); the first unchanged
+catalog workbook timeout and its diagnosis are retained. The Owner authorized
+integration after main37fbb10cb6a23bce26a8dbc1786c05d1adc9ae2e was merged;
+merged-main CI37058882555 also passed. The accepted four-path change is consumed
+without replacing the Root fixture or shared interfaces. Verified reused TLS
+clears only the completed setup phase; a one-shot response completion timer
+retains a finite body boundary. These dependency passes do not establish a
+combined PR195 acceptance. Cloud AI review remains unavailable due quota402.
+
+The r4 Draft checkpoint is 65b6bdea430ff740f8d1ff6751a66af82e8ffa19. Its last
+cumulative local validation remains FAIL: Web2440, unit2176, PostgreSQL599 and
+CMS57 passed, but native Admin browser bootstrap refused the previously consumed
+Owner fixture. All original failures and conditional skips remain recorded. The
+two environment templates subsequently adopted the repository's recognized
+explicit placeholder convention; the focused inventory passed11 checks, which
+does not establish a new cumulative PASS.
+
+The integrated r5 source is frozen before fresh complete validation, exact-head
+CI, current-template Nginx ingress, restricted-role HTTP and personal
+desktop/mobile acceptance. A fresh task-owned disposable database replaces the
+consumed test input; the old database is retained without reset or adoption.
+Formal Article SDK authorization, human consent and exact approval, editing,
+Owner moderation/public reading and revocation use the same candidate and
+existing identity/database boundaries. Simulated provider/COS transport results
+remain separate from real external services. Registration agreement text/version
+approval, real service credentials and delivery, live host configuration,
+permission changes and deployment remain pending Owner gates. PR195 stays Draft.
