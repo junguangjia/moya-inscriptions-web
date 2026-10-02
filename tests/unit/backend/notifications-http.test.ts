@@ -1,4 +1,4 @@
-import type { NotificationPort } from "@moya/api";
+import { CommunitySessionService, type NotificationPort } from "@moya/api";
 import {
   createBackendApplication,
   createBackendServer,
@@ -54,6 +54,14 @@ async function start(production = false) {
   const address = await startServer(server, { host: "127.0.0.1", port: 0 }),
     base = `http://${address.address}:${address.port}`;
   const signIn = async () => {
+    if (production) {
+      // Test-only grant in the injected identity store; no Production sign-in fallback.
+      const grant = await new CommunitySessionService(
+        identity,
+      ).signInDevelopmentAccount(fixtureUsers.active.handle);
+      if (grant === null) throw new Error("Missing synthetic account");
+      return grant.token;
+    }
     const response = await fetch(`${base}/v1/development/sign-in`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -64,116 +72,137 @@ async function start(production = false) {
   return { identity, signals, base, signIn };
 }
 describe("notification HTTP and actual SSE sockets", () => {
-  it("requires session truth, rejects forged cursor/recipient/query/body and is absent in Production", async () => {
-    const { base, signIn } = await start(),
-      token = await signIn(),
-      headers = { authorization: `Bearer ${token}` };
-    expect((await fetch(`${base}/v1/community/notifications`)).status).toBe(
-      401,
-    );
-    expect(
-      (
-        await fetch(`${base}/v1/community/notifications`, {
-          headers: { ...headers, "x-author-account": fixtureUsers.second.id },
-        })
-      ).status,
-    ).toBe(401);
-    for (const suffix of [
-      "?recipient=someone",
-      "?cursor=forged",
-      "?limit=51",
-      "?limit=1&limit=2",
-    ])
+  it.each([false, true])(
+    "requires session truth and rejects forged cursor/recipient/query/body (Production=%s)",
+    async (production) => {
+      const { base, signIn } = await start(production),
+        token = await signIn(),
+        headers = { authorization: `Bearer ${token}` };
+      expect((await fetch(`${base}/v1/community/notifications`)).status).toBe(
+        401,
+      );
       expect(
         (
-          await fetch(`${base}/v1/community/notifications${suffix}`, {
-            headers,
+          await fetch(`${base}/v1/community/notifications`, {
+            headers: { ...headers, "x-author-account": fixtureUsers.second.id },
+          })
+        ).status,
+      ).toBe(401);
+      for (const suffix of [
+        "?recipient=someone",
+        "?cursor=forged",
+        "?limit=51",
+        "?limit=1&limit=2",
+      ])
+        expect(
+          (
+            await fetch(`${base}/v1/community/notifications${suffix}`, {
+              headers,
+            })
+          ).status,
+        ).toBe(422);
+      expect(
+        (
+          await fetch(`${base}/v1/community/notifications/read`, {
+            method: "POST",
+            headers: { ...headers, "content-type": "application/json" },
+            body: "{",
           })
         ).status,
       ).toBe(422);
-    expect(
-      (
-        await fetch(`${base}/v1/community/notifications/read`, {
-          method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
-          body: "{",
-        })
-      ).status,
-    ).toBe(422);
-    expect(
-      (
-        await fetch(`${base}/v1/community/notifications/stream?token=forged`, {
-          headers,
-        })
-      ).status,
-    ).toBe(422);
-    expect(
-      (
-        await fetch(`${base}/v1/community/notifications/stream`, {
-          headers: { ...headers, "last-event-id": "other" },
-        })
-      ).status,
-    ).toBe(422);
-    const production = await start(true);
-    for (const suffix of [
-      "notifications",
-      "notifications/stream",
-      "mentions?q=dev",
-    ])
       expect(
-        (await fetch(`${production.base}/v1/community/${suffix}`, { headers }))
+        (
+          await fetch(
+            `${base}/v1/community/notifications/stream?token=forged`,
+            {
+              headers,
+            },
+          )
+        ).status,
+      ).toBe(422);
+      expect(
+        (
+          await fetch(`${base}/v1/community/notifications/stream`, {
+            headers: { ...headers, "last-event-id": "other" },
+          })
+        ).status,
+      ).toBe(422);
+      const page = await fetch(`${base}/v1/community/notifications`, {
+        headers,
+      });
+      expect(page.status).toBe(200);
+      expect(await page.json()).toMatchObject({
+        items: [],
+        unread: { total: 0, likes: 0, comments: 0, mentions: 0 },
+      });
+      expect(
+        (await fetch(`${base}/v1/community/mentions?q=dev`, { headers }))
           .status,
-      ).toBe(404);
-  });
-  it("streams private refresh only after authentication; scopes fan-out, bounds sockets, and rejects a revoked old socket before its next emit", async () => {
-    const { base, signIn, identity, signals } = await start(),
-      token = await signIn();
-    const streams = [];
-    for (let i = 0; i < 4; i++) {
-      const abort = new AbortController();
-      aborts.add(abort);
-      const response = await fetch(
-        `${base}/v1/community/notifications/stream`,
-        { headers: { authorization: `Bearer ${token}` }, signal: abort.signal },
-      );
-      expect(response.status).toBe(200);
-      expect(response.headers.get("cache-control")).toContain("no-store");
-      expect(response.headers.get("x-accel-buffering")).toBe("no");
-      const reader = response.body!.getReader();
-      const chunk = await reader.read();
-      expect(new TextDecoder().decode(chunk.value)).toBe(
-        "event: refresh\ndata: {}\n\n",
-      );
-      streams.push(reader);
-    }
-    expect(
-      (
-        await fetch(`${base}/v1/community/notifications/stream`, {
-          headers: { authorization: `Bearer ${token}` },
-        })
-      ).status,
-    ).toBe(503);
-    const first = streams[0]!.read();
-    signals.publish([fixtureUsers.second.id]);
-    const outcome = await Promise.race([
-      first.then(() => "unexpected"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("scoped"), 25)),
-    ]);
-    expect(outcome).toBe("scoped");
-    for (const session of identity.sessions.values())
-      session.revokedAt = new Date();
-    signals.publish([fixtureUsers.active.id]);
-    expect((await first).done).toBe(true);
-    for (const reader of streams.slice(1))
-      expect((await reader.read()).done).toBe(true);
-    expect(
-      (
-        await fetch(`${base}/v1/community/notifications`, {
-          headers: { authorization: `Bearer ${token}` },
-        })
-      ).status,
-    ).toBe(401);
-  });
+      ).toBe(200);
+      if (production)
+        expect(
+          (await fetch(`${base}/v1/development/sign-in`, { method: "POST" }))
+            .status,
+        ).toBe(404);
+    },
+  );
+  it.each([false, true])(
+    "streams private refresh, scopes fan-out, bounds sockets and rechecks revoked sessions (Production=%s)",
+    async (production) => {
+      const { base, signIn, identity, signals } = await start(production),
+        token = await signIn();
+      const streams = [];
+      for (let i = 0; i < 4; i++) {
+        const abort = new AbortController();
+        aborts.add(abort);
+        const response = await fetch(
+          `${base}/v1/community/notifications/stream`,
+          {
+            headers: { authorization: `Bearer ${token}` },
+            signal: abort.signal,
+          },
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toContain("no-store");
+        expect(response.headers.get("x-accel-buffering")).toBe("no");
+        const reader = response.body!.getReader();
+        const chunk = await reader.read();
+        expect(new TextDecoder().decode(chunk.value)).toBe(
+          "event: refresh\ndata: {}\n\n",
+        );
+        streams.push(reader);
+      }
+      expect(
+        (
+          await fetch(`${base}/v1/community/notifications/stream`, {
+            headers: { authorization: `Bearer ${token}` },
+          })
+        ).status,
+      ).toBe(503);
+      const first = streams[0]!.read();
+      signals.publish([fixtureUsers.second.id]);
+      const outcome = await Promise.race([
+        first.then(() => "unexpected"),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve("scoped"), 25),
+        ),
+      ]);
+      expect(outcome).toBe("scoped");
+      for (const session of identity.sessions.values())
+        session.revokedAt = new Date();
+      signals.publish([fixtureUsers.active.id]);
+      expect((await first).done).toBe(true);
+      for (const reader of streams.slice(1))
+        expect((await reader.read()).done).toBe(true);
+      expect(
+        (
+          await fetch(`${base}/v1/community/notifications`, {
+            headers: { authorization: `Bearer ${token}` },
+          })
+        ).status,
+      ).toBe(401);
+    },
+  );
   it("disconnects a suspended idle session on the 15-second control heartbeat", async () => {
     const { base, signIn, identity } = await start(),
       token = await signIn();

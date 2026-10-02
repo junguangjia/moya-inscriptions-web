@@ -43,13 +43,17 @@ const accepted = (overrides: Record<string, unknown> = {}): Response => ({
     ...overrides,
   },
 });
-const capabilities = (phone = false, email = true): Response => ({
+const capabilities = (
+  phone = false,
+  email = true,
+  developmentOnly = true,
+): Response => ({
   status: 200,
   body: {
     profile: phone ? "full-local" : "email-first",
     email: { available: email, reason: null },
     phone: { available: phone, reason: null },
-    developmentOnly: true,
+    developmentOnly,
   },
 });
 const failure = (reason: string): Response => ({
@@ -91,6 +95,7 @@ describe("AuthFlow", () => {
   const onModeChange = vi.fn();
 
   beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "development");
     request.mockReset();
     onReturn.mockReset();
     onModeChange.mockReset();
@@ -120,6 +125,7 @@ describe("AuthFlow", () => {
     container.remove();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   const render = async (changes: Partial<Props> = {}, selectCode = true) => {
@@ -192,9 +198,10 @@ describe("AuthFlow", () => {
     await setInput(passwordFields()[0]!, value);
     await setInput(passwordFields()[1]!, confirmation);
   };
-  const startProfile = async () => {
+  const startProfile = async (developmentOnly = true) => {
     request.mockImplementation(async (path: string) => {
-      if (path === "capabilities") return capabilities();
+      if (path === "capabilities")
+        return capabilities(false, true, developmentOnly);
       if (path === "challenges") return accepted();
       if (path === "challenges/verify") return handoff();
       if (path === "registrations")
@@ -610,6 +617,26 @@ describe("AuthFlow", () => {
       expect(localStorage.length).toBe(0);
     },
   );
+
+  it("keeps Development agreement drafts and acceptance out of Production registration", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    await startProfile(false);
+    await setInput(input("input[autocomplete='nickname']"), "Runtime reader");
+    expect(container.textContent).toContain("注册说明暂时不可用");
+    expect(container.textContent).not.toContain("开发环境注册说明");
+    expect(container.querySelector("input[type='checkbox']")).toBeNull();
+    expect(container.querySelector('a[href="/login/agreements"]')).toBeNull();
+    expect(button("创建账户").disabled).toBe(true);
+    await submit();
+    expect(calls("registrations")).toHaveLength(0);
+  });
+
+  it("does not advertise Development-only verification in a Production client", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    await render();
+    expect(button("发送验证码").disabled).toBe(true);
+    expect(calls("challenges")).toHaveLength(0);
+  });
 
   it("asks an already registered account to go to login and verify again", async () => {
     await render({ mode: "register" });

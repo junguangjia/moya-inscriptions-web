@@ -8,7 +8,7 @@ import styles from "./community.module.css";
 
 /**
  * Work-oriented navigation for the Owner: the Community group (queue,
- * publication setting, operation history, and in Development the content and
+ * publication setting, operation history, and the content and
  * work publishing views) and the automation tools group (the editorial batch
  * workflow). Rendered inside Payload's own sidebar through `afterNavLinks`,
  * so the built-in collection groups stay intact.
@@ -54,22 +54,16 @@ const groups = [
   },
 ] as const;
 
-/** Development-only surfaces, hidden from the sidebar everywhere else. */
+/** Agent-only surfaces remain hidden outside Development. */
 const developmentLinks: ReadonlySet<string> = new Set([
-  "/admin/community-moderation/content",
-  "/admin/community-moderation/work-submissions",
-  "/admin/community-moderation/account-capacity",
-  "/admin/community-moderation/publishing-jobs",
   "/admin/community-moderation/agent-operations",
   "/admin/agent-connections",
-  "/admin/community-moderation/threads",
-  "/admin/community-moderation/direct-messages",
 ]);
 
 export const CommunityNavGroups = ({
-  phase4Enabled = false,
+  developmentAgentsEnabled = false,
 }: {
-  readonly phase4Enabled?: boolean;
+  readonly developmentAgentsEnabled?: boolean;
 }) => {
   const { user } = useAuth();
   const pathname = usePathname();
@@ -79,7 +73,10 @@ export const CommunityNavGroups = ({
       {groups.map((group) => (
         <NavGroup isOpen key={group.label} label={group.label}>
           {group.links
-            .filter((link) => phase4Enabled || !developmentLinks.has(link.href))
+            .filter(
+              (link) =>
+                developmentAgentsEnabled || !developmentLinks.has(link.href),
+            )
             .map((link) => {
               const active = pathname === link.href;
               return (

@@ -1,19 +1,12 @@
-/**
- * parallel-community-integration-qa: each track proves that Production omits its
- * own routes with its own port in isolation. This proves it for the COMBINED
- * composition, where application.ts wires A's authentication, N's notifications
- * and C's editorial reads, Threads and direct messages together.
- *
- * The Development control composes the same options and must mount every probe,
- * so a wrong path cannot make the Production assertions pass vacuously.
- */
-import type {
-  AuthorCommunityPort,
+/** Combined business routing with explicit synthetic ports and real services. */
+import {
   CommunityAuthService,
-  DirectMessagePort,
-  EditorialContentReadPort,
-  NotificationPort,
-  ThreadPort,
+  createMemoryCommunityAuthPort,
+  type AuthorCommunityPort,
+  type DirectMessagePort,
+  type EditorialContentReadPort,
+  type NotificationPort,
+  type ThreadPort,
 } from "@moya/api";
 import {
   NotificationSignals,
@@ -21,6 +14,7 @@ import {
   createBackendServer,
   createDevelopmentCatalogFixtureQueryPort,
   startServer,
+  stopServer,
 } from "@moya/backend-runtime";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
 import type { Server } from "node:http";
@@ -29,97 +23,180 @@ import { InMemoryCommunityIdentityPort } from "./community-identity-fixture.js";
 
 const servers = new Set<Server>();
 afterEach(async () => {
-  await Promise.all(
-    [...servers].map(
-      (server) => new Promise<void>((resolve) => server.close(() => resolve())),
-    ),
-  );
+  await Promise.all([...servers].map((server) => stopServer(server)));
   servers.clear();
 });
 
-// Never called in Production: those ports are not composed there. C's editorial,
-// Thread and direct-message routes are dispatched through the author handler,
-// so the author port is part of the combined composition, as in Development.
-const combined = {
-  authorCommunityPort: {} as unknown as AuthorCommunityPort,
-  notificationPort: {} as unknown as NotificationPort,
-  notificationSignals: new NotificationSignals(),
-  editorialContentPort: {} as unknown as EditorialContentReadPort,
-  threadPort: {} as unknown as ThreadPort,
-  directMessagePort: {} as unknown as DirectMessagePort,
+// The routes below use the actual runtime services. Only persistence and
+// delivery are test injections; the Production composition has no fixture fallback.
+const notificationPort: NotificationPort = {
+  read: async () => ({
+    highWater: "0",
+    items: [],
+    unread: { total: 0, likes: 0, comments: 0, mentions: 0 },
+    hasMore: false,
+  }),
+  markRead: async () => {},
+  lookup: async () => ({ items: [] }),
 };
-const shared = {
+const editorialContentPort: EditorialContentReadPort = {
+  listArticles: async (query) => ({
+    items: [],
+    total: 0,
+    page: query.page,
+    pageSize: query.pageSize,
+  }),
+  findArticle: async () => null,
+  isArticlePublished: async () => false,
+  listCollections: async (query) => ({
+    items: [],
+    total: 0,
+    page: query.page,
+    pageSize: query.pageSize,
+  }),
+  findCollection: async () => null,
+};
+const unused = async (): Promise<never> => {
+  throw new Error("Unexpected fixture operation");
+};
+const threadPort: ThreadPort = {
+  listThreads: async (_viewer, query) => ({
+    items: [],
+    total: 0,
+    page: query.page,
+    pageSize: query.pageSize,
+    totalPages: 0,
+    anchor: "2026-10-02T00:00:00.000Z",
+  }),
+  readThread: unused,
+  listThreadPosts: unused,
+  markThreadRead: unused,
+  threadOfWork: async () => null,
+  operatorListThreads: unused,
+  operatorCreateThread: unused,
+  operatorUpdateThread: unused,
+};
+const directMessagePort: DirectMessagePort = {
+  send: unused,
+  listConversations: unused,
+  readConversation: unused,
+  findConversationWith: unused,
+  setHidden: unused,
+  setMuted: unused,
+  markRead: unused,
+  unread: unused,
+  operatorReadConversation: unused,
+  operatorFindConversation: unused,
+  operatorRemoveMessage: unused,
+};
+const combined = {
+  // Author profile persistence is not touched by editorial/Thread/DM dispatch.
+  authorCommunityPort: {} as AuthorCommunityPort,
+  notificationPort,
+  notificationSignals: new NotificationSignals(),
+  editorialContentPort,
+  threadPort,
+  directMessagePort,
+};
+const shared = () => ({
   communityIdentityPort: new InMemoryCommunityIdentityPort(),
   catalogQueryPort: createDevelopmentCatalogFixtureQueryPort(),
   storageUrlResolver: new UnconfiguredStorageUrlResolver(),
-};
+});
+const developmentAuth = () =>
+  new CommunityAuthService(createMemoryCommunityAuthPort(), {
+    environment: "development",
+    profile: "full-local",
+    keys: {
+      version: 1,
+      lookupKey: Buffer.alloc(32, 1),
+      encryptionKey: Buffer.alloc(32, 2),
+      otpKey: Buffer.alloc(32, 3),
+    },
+    emailMode: "local_capture",
+    phoneMode: "disabled",
+    delivery: { sendEmail: unused, sendPhone: unused, checkPhone: unused },
+  });
 
-// Every Development-only route the three tracks added, plus the sign-in entry.
-const probes: readonly (readonly [method: string, path: string])[] = [
-  ["GET", "/v1/community/auth/capabilities"],
-  ["GET", "/v1/community/auth/account"],
-  ["POST", "/v1/community/auth/challenges"],
-  ["GET", "/v1/community/notifications"],
-  ["GET", "/v1/community/notifications/stream"],
-  ["GET", "/v1/community/mentions?q=dev"],
-  ["GET", "/v1/community/editorial/articles"],
-  ["GET", "/v1/community/editorial/collections"],
-  ["GET", "/v1/community/threads"],
-  ["GET", "/v1/community/messages"],
-  ["GET", "/v1/community/messages/unread"],
-  ["POST", "/v1/development/sign-in"],
-];
-
-const statusesOf = async (
+const start = async (
   options: Parameters<typeof createBackendApplication>[0],
 ) => {
   const server = createBackendServer(createBackendApplication(options));
   servers.add(server);
   const address = await startServer(server, { host: "127.0.0.1", port: 0 });
-  const base = `http://${address.address}:${address.port}`;
-  const statuses: Record<string, number> = {};
-  for (const [method, path] of probes) {
-    const response = await fetch(`${base}${path}`, {
-      method,
-      signal: AbortSignal.timeout(2000),
-      ...(method === "POST"
-        ? { headers: { "content-type": "application/json" }, body: "{}" }
-        : {}),
-    }).catch(() => null);
-    statuses[`${method} ${path}`] = response?.status ?? 0;
-    await response?.body?.cancel().catch(() => undefined);
-  }
-  return statuses;
+  return `http://${address.address}:${address.port}`;
 };
 
-describe("combined A/N/C Production exclusion", () => {
-  it("refuses Track A authentication in a Production composition", () => {
-    expect(() =>
-      createBackendApplication({
-        nodeEnv: "production",
-        ...shared,
-        ...combined,
-        authService: {} as unknown as CommunityAuthService,
-      }),
-    ).toThrow(/not composed in production/u);
+describe("combined Production business services and Development exclusions", () => {
+  it("refuses Development authentication and missing capability provenance in Production", () => {
+    for (const authService of [
+      developmentAuth(),
+      { capabilities: () => ({}) } as CommunityAuthService,
+    ])
+      expect(() =>
+        createBackendApplication({
+          nodeEnv: "production",
+          ...shared(),
+          ...combined,
+          authService,
+        }),
+      ).toThrow(/not composed in production/u);
   });
 
-  it("mounts every combined route in Development (control) and none in Production", async () => {
-    const development = await statusesOf({
-      nodeEnv: "development",
-      ...shared,
-      ...combined,
-      authService: {} as unknown as CommunityAuthService,
-    });
-    for (const [probe, status] of Object.entries(development))
-      expect(status, `Development should mount ${probe}`).not.toBe(404);
+  it.each(["development", "production"] as const)(
+    "runs public business services and enforces private sessions in %s",
+    async (nodeEnv) => {
+      const base = await start({ nodeEnv, ...shared(), ...combined });
+      for (const path of [
+        "editorial/articles",
+        "editorial/collections",
+        "threads",
+      ]) {
+        const response = await fetch(`${base}/v1/community/${path}`);
+        expect(response.status, path).toBe(200);
+        expect(await response.json()).toMatchObject({ items: [], total: 0 });
+      }
+      for (const path of [
+        "notifications",
+        "notifications/stream",
+        "mentions?q=dev",
+        "messages",
+        "messages/unread",
+      ])
+        expect((await fetch(`${base}/v1/community/${path}`)).status, path).toBe(
+          401,
+        );
+      if (nodeEnv === "production") {
+        for (const path of ["capabilities", "account"])
+          expect(
+            (await fetch(`${base}/v1/community/auth/${path}`)).status,
+          ).toBe(404);
+        expect(
+          (await fetch(`${base}/v1/development/sign-in`, { method: "POST" }))
+            .status,
+        ).toBe(404);
+      }
+    },
+  );
 
-    const production = await statusesOf({
-      nodeEnv: "production",
-      ...shared,
+  it("preserves the Development authentication and sign-in control", async () => {
+    const base = await start({
+      nodeEnv: "development",
+      ...shared(),
       ...combined,
+      authService: developmentAuth(),
     });
-    for (const [probe, status] of Object.entries(production))
-      expect(status, `Production must not expose ${probe}`).toBe(404);
+    const capabilities = await fetch(`${base}/v1/community/auth/capabilities`);
+    expect(capabilities.status).toBe(200);
+    expect(await capabilities.json()).toMatchObject({ developmentOnly: true });
+    expect(
+      (
+        await fetch(`${base}/v1/development/sign-in`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(400);
   });
 });

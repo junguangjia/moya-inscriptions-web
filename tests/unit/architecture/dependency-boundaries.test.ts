@@ -740,6 +740,46 @@ describe("frontend and browser boundaries", () => {
     ).toContain(expectedViolation);
   });
 
+  it("allows only the build mode for the reviewed Production auth guards", () => {
+    for (const relative of [
+      "features/auth/auth-flow.tsx",
+      "lib/public-api/server.ts",
+    ]) {
+      const file = path.join(repositoryRoot, "apps/web", relative);
+      const prefix = relative.startsWith("features/")
+        ? '"use client";\n'
+        : 'import "server-only";\n';
+      expect(
+        frontendBoundaryViolations(
+          file,
+          prefix + 'const production = process.env.NODE_ENV === "production";',
+        ),
+      ).toEqual([]);
+      expect(
+        frontendBoundaryViolations(
+          file,
+          prefix + "const credential = process.env.DATABASE_URL;",
+        ).length,
+      ).toBeGreaterThan(0);
+      expect(
+        frontendBoundaryViolations(
+          file,
+          prefix + "const credential = process.env.NODE_ENV_PRIVATE_API_KEY;",
+        ).length,
+      ).toBeGreaterThan(0);
+    }
+    const unrelated = path.join(
+      repositoryRoot,
+      "apps/web/features/home/example.tsx",
+    );
+    expect(
+      frontendBoundaryViolations(
+        unrelated,
+        '"use client"; const mode = process.env.NODE_ENV;',
+      ),
+    ).toContain("server-only configuration or secret access");
+  });
+
   it("keeps all real Web, Admin and UI files outside server boundaries", async () => {
     const workspaces = await discoverWorkspaces();
     const guardedRoots = [

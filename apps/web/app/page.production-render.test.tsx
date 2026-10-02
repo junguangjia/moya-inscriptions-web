@@ -7,9 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /*
  * The Formal root is rendered for real here: only the Catalog HTTP boundary
- * and the request headers are replaced. A Production build composes no author
- * community (amendment 2026-09-11, section 7), so every surface of the root
- * must render without the author, publishing and publishing-entry providers.
+ * and request/HTTP boundaries are replaced. Production mounts the existing
+ * author, publishing and notification providers, with no QA fixture source.
  */
 const { loadHomeCatalogStateMock } = vi.hoisted(() => ({
   loadHomeCatalogStateMock: vi.fn(),
@@ -70,23 +69,25 @@ afterEach(() => {
 });
 
 describe("Formal root in a Production build", () => {
-  it("renders the Catalog and an unavailable 话题 without the author community", async () => {
+  it("renders the Catalog and live business providers without QA fixtures", async () => {
     const container = document.createElement("div");
     container.innerHTML = renderToStaticMarkup(await FormalPage({}));
 
+    expect(container.textContent).toContain("真实书法样例");
     expect(
-      container.querySelector('[data-product-panel="home"]')?.textContent,
-    ).toContain("真实刻石样例");
-    const threads = container.querySelector("#discussion-panel-threads");
+      container.querySelector('[data-threads-state="loading"]'),
+    ).not.toBeNull();
+    expect(container.querySelector("[data-create-work-action]")).not.toBeNull();
     expect(
-      threads?.querySelector('[data-threads-state="unavailable"]')?.textContent,
-    ).toBe("话题暂时不可用");
-    expect(threads?.querySelector('[role="status"]')).not.toBeNull();
-    expect(threads?.querySelector("button")).toBeNull();
-    expect(container.querySelector("[data-threads-feed]")).toBeNull();
+      container.querySelector("[data-phase4-inscriptions]"),
+    ).not.toBeNull();
+    expect(container.querySelector("[data-t02p-qa-harness]")).toBeNull();
+    expect(
+      container.querySelector("[data-development-primary-pager]"),
+    ).toBeNull();
   });
 
-  it("opens no Thread page for a Thread link after the root mounts", async () => {
+  it("opens the real Thread page and reads its existing API in Production", async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       "IntersectionObserver",
@@ -96,9 +97,41 @@ describe("Formal root in a Production build", () => {
         disconnect() {}
       },
     );
-    const fetchMock = vi.fn<typeof fetch>(
-      async () => new Response(null, { status: 404 }),
-    );
+    const thread = {
+      id: threadId,
+      title: "Runtime thread",
+      description: "Published thread from the HTTP boundary",
+      tags: [],
+      status: "open",
+      heat: 0,
+      postCount: 0,
+      latestActivityAt: null,
+      createdAt: "2026-10-02T00:00:00.000Z",
+      unread: null,
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input).split("?")[0];
+      if (path === `/api/community/threads/${threadId}`)
+        return Response.json(thread);
+      if (path === `/api/community/threads/${threadId}/posts`)
+        return Response.json({
+          items: [],
+          total: 0,
+          page: 1,
+          pageSize: 20,
+          totalPages: 0,
+        });
+      if (path === "/api/community/threads")
+        return Response.json({
+          items: [thread],
+          total: 1,
+          page: 1,
+          pageSize: 22,
+          totalPages: 1,
+          anchor: "2026-10-02T00:00:00.000Z",
+        });
+      return new Response(null, { status: 401 });
+    });
     vi.stubGlobal("fetch", fetchMock);
     window.history.replaceState(null, "", "/");
     for (const [name, value] of Object.entries({
@@ -130,12 +163,13 @@ describe("Formal root in a Production build", () => {
     for (let frame = 0; frame < 4; frame += 1)
       await act(() => vi.advanceTimersByTimeAsync(20));
 
-    const opened = container.querySelector("[data-topic-detail]");
-    expect(opened?.getAttribute("data-topic-detail-state")).toBe("not-found");
-    expect(container.querySelector("[data-thread-detail]")).toBeNull();
-    // Nothing reads Threads for the link.
+    const opened = container.querySelector("[data-thread-detail]");
+    expect(opened?.getAttribute("data-thread-detail")).toBe(threadId);
+    expect(opened?.textContent).toContain("Runtime thread");
     expect(
-      fetchMock.mock.calls.filter(([url]) => String(url).includes("threads")),
-    ).toEqual([]);
+      fetchMock.mock.calls.some(
+        ([url]) => String(url) === `/api/community/threads/${threadId}`,
+      ),
+    ).toBe(true);
   });
 });

@@ -205,6 +205,9 @@ export const AuthFlow = ({
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState<Operation | null>(null);
   const destination = safeReturnPath(returnTo);
+  // The current registration agreement is an explicit Development draft.
+  // Production registration waits for the separately delivered approved text.
+  const developmentAgreementAvailable = process.env.NODE_ENV === "development";
   const identifier = channel === "email" ? email : phone;
   const available =
     capabilityState === "ready" && capabilities?.[channel].available === true;
@@ -220,7 +223,10 @@ export const AuthFlow = ({
       const result = await authRequest("capabilities");
       if (current !== capabilityRequest.current) return;
       const value = result.status === 200 ? capabilitiesOf(result.body) : null;
-      if (value === null) {
+      if (
+        value === null ||
+        (process.env.NODE_ENV === "production" && value.developmentOnly)
+      ) {
         setCapabilityState("error");
         return;
       }
@@ -691,7 +697,7 @@ export const AuthFlow = ({
       nicknameRef.current?.focus();
       return;
     }
-    if (!agreed) {
+    if (!agreed || !developmentAgreementAvailable) {
       setFeedback({
         message: reasons.AUTH_AGREEMENT_REQUIRED!,
         field: "agreement",
@@ -797,7 +803,7 @@ export const AuthFlow = ({
     </div>
   );
 
-  if (agreementOpen)
+  if (agreementOpen && developmentAgreementAvailable)
     return (
       <main
         className={styles.page}
@@ -1184,39 +1190,43 @@ export const AuthFlow = ({
                   {fieldFeedback("studioName")}
                 </div>
                 <div className={styles.agreementField}>
-                  <div className={styles.agreementRow}>
-                    <label
-                      className={styles.agreementChoice}
-                      htmlFor={agreementId}
-                    >
-                      <input
-                        id={agreementId}
-                        type="checkbox"
-                        checked={agreed}
-                        disabled={pending !== null || !handoff}
-                        aria-invalid={
-                          feedbackFor("agreement") ? true : undefined
-                        }
-                        aria-describedby={
-                          feedbackFor("agreement") ? feedbackId : undefined
-                        }
-                        onChange={(event) => {
-                          setAgreed(event.target.checked);
-                          if (feedbackFor("agreement")) setFeedback(null);
-                        }}
-                      />
-                      <span>我已阅读并同意</span>
-                    </label>
-                    <Button
-                      ref={agreementButtonRef}
-                      variant="quiet"
-                      className={styles.agreementLink}
-                      disabled={locked}
-                      onClick={() => setAgreementOpen(true)}
-                    >
-                      注册说明
-                    </Button>
-                  </div>
+                  {developmentAgreementAvailable ? (
+                    <div className={styles.agreementRow}>
+                      <label
+                        className={styles.agreementChoice}
+                        htmlFor={agreementId}
+                      >
+                        <input
+                          id={agreementId}
+                          type="checkbox"
+                          checked={agreed}
+                          disabled={pending !== null || !handoff}
+                          aria-invalid={
+                            feedbackFor("agreement") ? true : undefined
+                          }
+                          aria-describedby={
+                            feedbackFor("agreement") ? feedbackId : undefined
+                          }
+                          onChange={(event) => {
+                            setAgreed(event.target.checked);
+                            if (feedbackFor("agreement")) setFeedback(null);
+                          }}
+                        />
+                        <span>我已阅读并同意</span>
+                      </label>
+                      <Button
+                        ref={agreementButtonRef}
+                        variant="quiet"
+                        className={styles.agreementLink}
+                        disabled={locked}
+                        onClick={() => setAgreementOpen(true)}
+                      >
+                        注册说明
+                      </Button>
+                    </div>
+                  ) : (
+                    <p role="status">注册说明暂时不可用，暂时无法创建账户。</p>
+                  )}
                   {fieldFeedback("agreement")}
                 </div>
               </>
@@ -1257,7 +1267,10 @@ export const AuthFlow = ({
                   (step === "password" &&
                     (!password || !passwordConfirm || !handoff)) ||
                   (step === "profile" &&
-                    (!agreed || !displayName.trim() || !handoff))
+                    (!developmentAgreementAvailable ||
+                      !agreed ||
+                      !displayName.trim() ||
+                      !handoff))
                 }
               >
                 {pending === "send"

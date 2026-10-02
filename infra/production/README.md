@@ -15,6 +15,31 @@ use a Tencent database SDK. Local development has its own
 [guide](../../docs/development.md); staging uses this same topology with
 isolated resources and the overlay in `../env/staging.env.example`.
 
+## Full release runtime integration (Issue #191)
+
+The Owner selected one full release of the implemented product. The current
+integration promotes the existing human business routes, Web session consumers,
+Admin operations and notification worker to Production-capable composition. This
+is code preparation and local synthetic acceptance, not deployment. The
+[runtime scope and dependency record](../../docs/production/full-release-runtime-v1.md)
+supersedes older Development-only availability statements for those business
+surfaces only. QA, local verification providers and test sign-in stay excluded.
+
+`/api/community/` stays with Web, including profile/settings, social activity,
+publishing, Threads, messages, human Article authoring, auth and notifications.
+The notification stream disables Nginx buffering; its existing Backend heartbeat
+and session checks are preserved. Internal operator endpoints are never proxied
+directly; Admin retains its Owner authorization and private Backend credential.
+
+Production authentication, media processing and final migration/grant acceptance
+remain separate dependency deliveries. Do not copy Development provider or
+filesystem settings into these templates. Exact upload body/streaming limits,
+processing directories, worker configuration and systemd directory permissions
+must come from `full-release-media-v1`. Runtime startup only verifies readiness
+and the current migration ledger; the explicit migration/grant process must
+consume `full-release-database-v1` before deployment. No automatic grant or
+migration is introduced.
+
 ## Three processes behind Nginx
 
 | Process | Unix identity  | Listener         | EnvironmentFile         |

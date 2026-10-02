@@ -48,7 +48,7 @@ const expectPrivate = (response: Response) => {
 };
 
 beforeEach(() => {
-  vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("NODE_ENV", "production");
   vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", backend);
 });
 
@@ -59,18 +59,6 @@ afterEach(() => {
 });
 
 describe("work publishing media relay", () => {
-  it.each(["production", "test"])(
-    "is not served when NODE_ENV is %s",
-    async (environment) => {
-      vi.stubEnv("NODE_ENV", environment);
-      const upstream = vi.fn<typeof fetch>();
-      vi.stubGlobal("fetch", upstream);
-      const response = await GET(mediaRequest(), params());
-      expect(response.status).toBe(404);
-      expect(upstream).not.toHaveBeenCalled();
-    },
-  );
-
   it("streams a ranged derivative back as the browser reads it", async () => {
     const chunkCount = 64;
     let produced = 0;

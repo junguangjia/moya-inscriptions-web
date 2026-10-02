@@ -143,7 +143,7 @@ export default buildConfig({
         {
           path: "/src/community/NavGroup#CommunityNavGroups",
           clientProps: {
-            phase4Enabled: process.env.NODE_ENV === "development",
+            developmentAgentsEnabled: process.env.NODE_ENV === "development",
           },
         },
       ],

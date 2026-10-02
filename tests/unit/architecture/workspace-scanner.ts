@@ -1264,9 +1264,15 @@ export const clientBoundaryViolations = (
   }
   violations.push(...clientContractTypeViolations(source));
 
+  // Next replaces NODE_ENV at build time. This one auth presentation uses it
+  // only to exclude Development verification and draft registration agreements.
+  const configurationSource =
+    path.resolve(filePath) === path.join(webRoot, "features/auth/auth-flow.tsx")
+      ? source.replace(/\bprocess\.env\.NODE_ENV(?![\w$])/g, "")
+      : source;
   if (
     /\bDATABASE_URL\b|\b(?:API_SECRET|PRIVATE_KEY|STORAGE_SECRET)\b|process\.env\.(?!NEXT_PUBLIC_)[A-Z0-9_]+/.test(
-      source,
+      configurationSource,
     )
   ) {
     violations.push("server-only configuration or secret access");
@@ -1398,7 +1404,11 @@ export const frontendBoundaryViolations = (
     for (const match of source.matchAll(/\bprocess\.env\.([A-Z0-9_]+)/g)) {
       if (
         match[1] !== "MOYA_PUBLIC_API_BASE_URL" &&
-        !(isPreviewTransport && match[1] === "CMS_INTERNAL_URL")
+        !(isPreviewTransport && match[1] === "CMS_INTERNAL_URL") &&
+        !(
+          path.resolve(filePath) === path.join(webPublicApiRoot, "server.ts") &&
+          match[1] === "NODE_ENV"
+        )
       ) {
         violations.push(
           `${match[1] ?? "unknown environment variable"} is not authorized for the Web Public API boundary`,

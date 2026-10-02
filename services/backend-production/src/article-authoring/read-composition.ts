@@ -11,8 +11,8 @@ type StorageUrlResolver = ConstructorParameters<
   typeof PostgresAuthoredArticleCatalogMediaResolver
 >[1];
 
-/** Inject only in the existing Development branch; opens no resources or credentials. */
-export const createDevelopmentArticleReadPort = (
+/** Published Article projection shared by the real Development and Production runtimes. */
+export const createArticleReadPort = (
   publicPool: Pool,
   communityPool: Pool,
   storage: StorageUrlResolver,

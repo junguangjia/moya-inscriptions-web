@@ -7,7 +7,10 @@ import {
   startBackendProcess,
 } from "@moya/backend-runtime";
 import { createPostgresPool } from "@moya/catalog-postgres";
-import { PostgresWorkPublishingAdapter } from "@moya/community-postgres";
+import {
+  PostgresWorkPublishingAdapter,
+  PostgresNotificationAdapter,
+} from "@moya/community-postgres";
 import {
   catalogDetailSchema,
   catalogPageSchema,
@@ -565,8 +568,11 @@ describe("Development work publishing composition", () => {
     await prepared.closeResources();
   });
 
-  it("never reads the media keys, composes publishing or starts a worker in production", async () => {
+  it("composes Production business and notification services without Development media fallback", async () => {
     const queue = quietQueue();
+    const notificationClaim = vi
+      .spyOn(PostgresNotificationAdapter.prototype, "claim")
+      .mockResolvedValue([]);
     const prepared = await prepareProductionBackend({
       ...environment,
       WORK_MEDIA_STORE_DIR: "relative",
@@ -586,16 +592,28 @@ describe("Development work publishing composition", () => {
         await fetch(`${base}/v1/community/${suffix}`).then(
           (response) => response.status,
         ),
-      ).toBe(404);
+      ).toBe(401);
     }
+    expect(
+      await fetch(`${base}/v1/development/sign-in`, { method: "POST" }).then(
+        (response) => response.status,
+      ),
+    ).toBe(404);
     await pause(20);
+    expect(notificationClaim).toHaveBeenCalled();
     expect(openPublishingMedia).not.toHaveBeenCalled();
     expect(queue.claim).not.toHaveBeenCalled();
     const [application] = vi
       .mocked(createBackendApplication)
       .mock.calls.at(-1)!;
-    expect(application.publishingTransfers).toBeUndefined();
-    expect(application.workPublishingPort).toBeUndefined();
+    expect(application.publishingTransfers).toBeDefined();
+    expect(application.workPublishingPort).toBeDefined();
     expect(createPublishingJobHandlers).not.toHaveBeenCalled();
+    expect(application.notificationPort).toBeDefined();
+    expect(application.authorCommunityPort).toBeDefined();
+    expect(application.articleAuthoringPort).toBeDefined();
+    expect(application.authService).toBeUndefined();
+    expect(application.agentAdministrationPort).toBeUndefined();
+    expect(application.articleDelegation).toBeUndefined();
   });
 });

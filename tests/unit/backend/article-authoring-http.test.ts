@@ -201,17 +201,41 @@ describe("private human Article HTTP boundary", () => {
     port.deleteDraft.mockRejectedValueOnce(new CommunityNotFoundError());
     expect((await send(`/${id}`, "DELETE", command)).status).toBe(404);
   });
-  it("mounts the authenticated route in Development and excludes it elsewhere", async () => {
-    const development = await start("development");
-    expect((await development.send("", "POST", createCommand)).status).toBe(
-      201,
-    );
-    for (const nodeEnv of ["test", "production"] as const) {
-      const isolated = await start(nodeEnv);
-      expect((await isolated.send("", "POST", createCommand)).status).toBe(404);
-      expect(isolated.port.create).not.toHaveBeenCalled();
-    }
-  });
+  it.each(["development", "test", "production"] as const)(
+    "mounts the human service with unchanged identity and revision checks in %s",
+    async (nodeEnv) => {
+      const { port, send, headers, sessions, grant } = await start(nodeEnv);
+      expect((await send("", "POST", createCommand, {} as never)).status).toBe(
+        401,
+      );
+      expect(
+        (
+          await send("", "POST", createCommand, {
+            ...headers,
+            "x-author-account": fixtureUsers.second.id,
+          })
+        ).status,
+      ).toBe(401);
+      expect(port.create).not.toHaveBeenCalled();
+      const created = await send("", "POST", createCommand);
+      expect(created.status).toBe(201);
+      expect(articleDraftSchema.parse(await created.json()).id).toBe(id);
+      expect(port.create.mock.calls[0]?.[0]).toEqual({
+        source: "human",
+        userId: fixtureUsers.active.id,
+      });
+      port.save.mockRejectedValueOnce(
+        new CommunityConflictError("article_revision_conflict"),
+      );
+      expect(
+        (await send(`/${id}`, "PUT", { ...createCommand, expectedVersion: 1 }))
+          .status,
+      ).toBe(409);
+      await sessions.signOut(grant.token);
+      expect((await send(`/${id}`)).status).toBe(401);
+      expect(port.read).not.toHaveBeenCalled();
+    },
+  );
   it("refuses anonymous requests before calling persistence", async () => {
     const { port, send } = await start();
     const response = await send("", "POST", createCommand, {} as never);

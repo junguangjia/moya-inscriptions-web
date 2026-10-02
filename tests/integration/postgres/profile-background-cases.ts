@@ -150,7 +150,7 @@ export const registerProfileBackgroundTests = (
         }),
       ).rejects.toBeInstanceOf(CommunityNotFoundError);
     });
-    it("requires a real session and account assertion through HTTP, validates input, and stays absent in Production", async () => {
+    it("requires a real session and account assertion through HTTP, validates input, and preserves those checks in Production", async () => {
       const start = async (nodeEnv: "development" | "production") => {
         server = await startBackendProcess({
           listen: { host: "127.0.0.1", port: 0 },
@@ -171,8 +171,13 @@ export const registerProfileBackgroundTests = (
         body: JSON.stringify({ handle: `background-${owner.slice(-16)}` }),
       });
       const { token } = (await login.json()) as { token: string };
-      const post = (body: unknown, account = owner, authenticated = true) =>
-        fetch(`${base}/v1/community/me/background`, {
+      const post = (
+        body: unknown,
+        account = owner,
+        authenticated = true,
+        target = base,
+      ) =>
+        fetch(`${target}/v1/community/me/background`, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -191,9 +196,20 @@ export const registerProfileBackgroundTests = (
       expect((await post(body)).status).toBe(200);
       await server!.shutdown();
       const production = await start("production");
+      const productionBody = { requestId: randomUUID(), mediaId: null };
+      expect(
+        (await post(productionBody, owner, false, production)).status,
+      ).toBe(401);
+      expect((await post(productionBody, other, true, production)).status).toBe(
+        401,
+      );
+      expect((await post(productionBody, owner, true, production)).status).toBe(
+        200,
+      );
+      expect((await adapter.readProfile(owner, owner)).background).toBeNull();
       expect(
         (
-          await fetch(`${production}/v1/community/me/background`, {
+          await fetch(`${production}/v1/development/sign-in`, {
             method: "POST",
           })
         ).status,

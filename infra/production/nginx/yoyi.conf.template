@@ -50,7 +50,15 @@ server {
     location = /api/catalog { proxy_pass http://yoyi_web; }
     location ^~ /api/catalog/ { proxy_pass http://yoyi_web; }
     location = /api/catalog-search { proxy_pass http://yoyi_web; }
-    # Community V1 identity and session routes are Web route handlers, never Payload.
+    # Notification SSE uses the Web session relay; stream without proxy buffering.
+    # Backend keepalives occur every 15 seconds within the existing read timeout.
+    location = /api/community/notifications/stream {
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_pass http://yoyi_web;
+    }
+    # Existing business and auth relays belong to Web, never Payload.
+    # Publishing upload limits/streaming directives await the media task's exact requirements.
     location ^~ /api/community/ { proxy_pass http://yoyi_web; }
     # Includes /editorial-preview/:id and Web assets; draft fetches use loopback CMS_INTERNAL_URL.
     location / { proxy_pass http://yoyi_web; }

@@ -6,14 +6,17 @@ import {
 } from "./community-comment-surface";
 
 describe("resolveCommunityCommentSurface", () => {
-  it("composes comments with the Development sign-in path in the Development runtime", () => {
-    expect(resolveCommunityCommentSurface("development")).toEqual({
-      signInHref: developmentSignInPath,
-    });
-    expect(developmentSignInPath).toBe("/login");
-  });
+  it.each(["development", "production"])(
+    "composes the real comments and sign-in entry in %s",
+    (environment) => {
+      expect(resolveCommunityCommentSurface(environment)).toEqual({
+        signInHref: developmentSignInPath,
+      });
+      expect(developmentSignInPath).toBe("/login");
+    },
+  );
 
-  it.each(["production", "test", undefined])(
+  it.each(["test", undefined])(
     "composes no comment section and no sign-in link under %s",
     (nodeEnv) => {
       expect(resolveCommunityCommentSurface(nodeEnv)).toBeNull();

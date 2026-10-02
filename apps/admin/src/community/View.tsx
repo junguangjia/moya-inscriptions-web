@@ -16,7 +16,7 @@ import { WorkSubmissionsQueueClient } from "./work-submissions-client";
 /**
  * The Community views inside the standard Admin shell: the review queue (the
  * primary working surface), the publication setting and the operation
- * history, plus the Development-only content and work publishing views (work
+ * history, plus the content and work publishing views (work
  * submissions, account capacity, publishing jobs). Each is Owner-only;
  * `automation` never moderates.
  */
@@ -37,17 +37,13 @@ const OwnerOnly = ({
 
 export const CommunityModerationView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
-    <CommunityQueueClient
-      phase4Enabled={process.env.NODE_ENV === "development"}
-    />
+    <CommunityQueueClient phase4Enabled />
   </OwnerOnly>
 );
 
 export const CommunitySettingsView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
-    <CommunitySettingsClient
-      workPublishing={process.env.NODE_ENV === "development"}
-    />
+    <CommunitySettingsClient workPublishing />
   </OwnerOnly>
 );
 
@@ -59,42 +55,25 @@ export const CommunityHistoryView = (props: AdminViewServerProps) => (
 
 export const CommunityContentView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
-    {process.env.NODE_ENV === "development" ? (
-      <CommunityContentClient />
-    ) : (
-      <p>此页面暂不可用。</p>
-    )}
+    <CommunityContentClient />
   </OwnerOnly>
 );
 
-const DevelopmentOnly = ({
-  children,
-}: {
-  readonly children: React.ReactNode;
-}) =>
-  process.env.NODE_ENV === "development" ? children : <p>此页面暂不可用。</p>;
-
 export const WorkSubmissionsView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
-    <DevelopmentOnly>
-      <WorkSubmissionsQueueClient />
-    </DevelopmentOnly>
+    <WorkSubmissionsQueueClient />
   </OwnerOnly>
 );
 
 export const AccountCapacityView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
-    <DevelopmentOnly>
-      <AccountCapacityClient />
-    </DevelopmentOnly>
+    <AccountCapacityClient />
   </OwnerOnly>
 );
 
 export const PublishingJobsView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
-    <DevelopmentOnly>
-      <PublishingJobsClient />
-    </DevelopmentOnly>
+    <PublishingJobsClient />
   </OwnerOnly>
 );
 
@@ -109,20 +88,16 @@ export const AgentOperationsView = (props: AdminViewServerProps) => (
   </OwnerOnly>
 );
 
-// content-community-completion-v1: operator-managed Threads (Development only).
+// content-community-completion-v1: operator-managed Threads.
 export const ThreadsView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
-    <DevelopmentOnly>
-      <ThreadsClient />
-    </DevelopmentOnly>
+    <ThreadsClient />
   </OwnerOnly>
 );
 
-// content-community-completion-v1: narrow Owner-only DM moderation (Development only).
+// content-community-completion-v1: narrow Owner-only DM moderation.
 export const DmModerationView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
-    <DevelopmentOnly>
-      <DmModerationClient />
-    </DevelopmentOnly>
+    <DmModerationClient />
   </OwnerOnly>
 );

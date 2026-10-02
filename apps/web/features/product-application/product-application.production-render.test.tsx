@@ -48,4 +48,26 @@ describe("ProductApplication public server rendering", () => {
       expect(markup).not.toContain('data-create-work-action=""');
     },
   );
+  it.each(["phone", "pc"] as const)(
+    "renders the full %s business composition without provider errors",
+    (initialPlatform) => {
+      const markup = renderToStaticMarkup(
+        <CatalogSearchProvider>
+          <ProductApplication
+            comments={{ signInHref: "/login" }}
+            authorCommunity
+            liveNotifications
+            articleAuthoring
+            initialPlatform={initialPlatform}
+            states={states}
+          />
+        </CatalogSearchProvider>,
+      );
+      expect(markup).toContain('data-product-shell=""');
+      expect(markup).toContain('data-threads-state="loading"');
+      expect(markup).toContain('data-create-work-action=""');
+      expect(markup).not.toContain('data-t02p-qa-harness=""');
+      expect(markup).not.toContain('data-development-primary-pager=""');
+    },
+  );
 });

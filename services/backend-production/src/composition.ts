@@ -44,7 +44,7 @@ import {
   createArticleDelegationPersistence,
   createArticleDelegationRuntime,
 } from "./article-authoring/delegation-composition.js";
-import { createDevelopmentArticleReadPort } from "./article-authoring/read-composition.js";
+import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
   openPublishingMedia,
   parsePublishingMediaConfig,
@@ -71,8 +71,8 @@ export interface PreparedProductionBackend {
   readonly requestListener: RequestListener;
   readonly runtimeConfig: RuntimeConfig;
   /**
-   * Starts background work once the listener is up: the Development
-   * publishing worker when publishing media is configured, otherwise nothing.
+   * Starts notifications and, when media is configured, publishing work
+   * once the listener is up.
    * `closeResources` stops it (bounded) before the pools close.
    */
   readonly startBackgroundWork: () => void;
@@ -245,10 +245,7 @@ export const prepareProductionBackend = async (
       : createPostgresPool(articleConfiguration.controlPostgres, {
           onUnexpectedIdleError,
         });
-  const workPublishingPort =
-    runtimeConfig.nodeEnv === "development"
-      ? new PostgresWorkPublishingAdapter(communityPool)
-      : undefined;
+  const workPublishingPort = new PostgresWorkPublishingAdapter(communityPool);
   // One upload registry shared by the HTTP upload route and the worker: a
   // session the worker expires stops its transfers still streaming here.
   const publishingTransfers = workPublishingPort
@@ -274,10 +271,7 @@ export const prepareProductionBackend = async (
         })
       : undefined;
   const notificationSignals = new NotificationSignals();
-  const notificationPort =
-    runtimeConfig.nodeEnv === "development"
-      ? new PostgresNotificationAdapter(communityPool)
-      : undefined;
+  const notificationPort = new PostgresNotificationAdapter(communityPool);
   const notificationWorker = notificationPort
     ? new NotificationWorker(notificationPort, (ids) =>
         notificationSignals.publish(ids),
@@ -323,13 +317,10 @@ export const prepareProductionBackend = async (
           articleConfiguration.authorization,
           { readPool: communityPool },
         );
-  const articleAdapter =
-    runtimeConfig.nodeEnv === "development"
-      ? new PostgresArticleAuthoringAdapter(
-          communityPool,
-          articlePersistence?.adapterOptions,
-        )
-      : undefined;
+  const articleAdapter = new PostgresArticleAuthoringAdapter(
+    communityPool,
+    articlePersistence?.adapterOptions,
+  );
   const articleService =
     articleConfiguration !== null && articleAdapter !== undefined
       ? createArticleAuthoringService(articleAdapter)
@@ -389,50 +380,48 @@ export const prepareProductionBackend = async (
       })(),
       communityCommentPort,
       ...(notificationPort ? { notificationPort, notificationSignals } : {}),
-      ...(runtimeConfig.nodeEnv === "development"
-        ? {
-            ...(articleAdapter === undefined
-              ? {}
-              : {
-                  articleAuthoringPort: articleAdapter,
-                  ...(articleDelegation === undefined
-                    ? {}
-                    : { articleDelegation }),
-                  articlePublicationOperatorPort: articleAdapter,
-                }),
-            discussionPort: communityCommentPort,
-            contentOperatorPort: new PostgresCommunityContentOperatorAdapter(
-              communityPool,
-            ),
-            discoveryPort: new PostgresCommunityDiscoveryAdapter(communityPool),
-            // Published editorial views through the public read role.
-            editorialContentPort: createDevelopmentArticleReadPort(
-              pool,
-              communityPool,
-              storageUrlResolver,
-            ),
-            threadPort: new PostgresThreadAdapter(communityPool),
-            directMessagePort: new PostgresDirectMessageAdapter(communityPool),
-            authorCommunityPort: new PostgresAuthorCommunityAdapter(
-              communityPool,
-            ),
-            ...(workPublishingPort && publishingTransfers
-              ? { workPublishingPort, publishingTransfers }
-              : {}),
-            publishingOperatorPort: new PostgresPublishingOperatorAdapter(
-              communityPool,
-            ),
-            agentAdministrationPort: new PostgresAgentAdministrationAdapter(
-              communityPool,
-            ),
-            ...(publishingMedia
-              ? {
-                  publishingMediaStore: publishingMedia.store,
-                  publishingMediaProcessor: publishingMedia.processor,
-                }
-              : {}),
-          }
-        : {}),
+      ...{
+        ...(articleAdapter === undefined
+          ? {}
+          : {
+              articleAuthoringPort: articleAdapter,
+              ...(articleDelegation === undefined ? {} : { articleDelegation }),
+              articlePublicationOperatorPort: articleAdapter,
+            }),
+        discussionPort: communityCommentPort,
+        contentOperatorPort: new PostgresCommunityContentOperatorAdapter(
+          communityPool,
+        ),
+        discoveryPort: new PostgresCommunityDiscoveryAdapter(communityPool),
+        // Published editorial views through the public read role.
+        editorialContentPort: createArticleReadPort(
+          pool,
+          communityPool,
+          storageUrlResolver,
+        ),
+        threadPort: new PostgresThreadAdapter(communityPool),
+        directMessagePort: new PostgresDirectMessageAdapter(communityPool),
+        authorCommunityPort: new PostgresAuthorCommunityAdapter(communityPool),
+        ...(workPublishingPort && publishingTransfers
+          ? { workPublishingPort, publishingTransfers }
+          : {}),
+        publishingOperatorPort: new PostgresPublishingOperatorAdapter(
+          communityPool,
+        ),
+        ...(runtimeConfig.nodeEnv === "development"
+          ? {
+              agentAdministrationPort: new PostgresAgentAdministrationAdapter(
+                communityPool,
+              ),
+            }
+          : {}),
+        ...(publishingMedia
+          ? {
+              publishingMediaStore: publishingMedia.store,
+              publishingMediaProcessor: publishingMedia.processor,
+            }
+          : {}),
+      },
       // A comment attaches only to a currently published Catalog record; the
       // published read role answers that, so the App role needs no Catalog grant.
       catalogPublicationPort: {

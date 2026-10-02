@@ -199,19 +199,20 @@ describe("Development Article dispatch and identity", () => {
     expect(mcp).toHaveBeenCalledTimes(2);
   });
   it.each(["test", "production"] as const)(
-    "keeps all composed delegation routes absent in %s",
+    "keeps external delegation absent while mounting the independent human service in %s",
     async (env) => {
-      const { send, mcp, connections, shared } = await start(env);
+      const { send, mcp, connections, shared, fallback } = await start(env);
       for (const path of [
         "/mcp/article-authoring",
         "/.well-known/oauth-protected-resource/mcp/article-authoring",
         "/v1/community/article-authoring/connections",
-        "/v1/community/article-authoring",
       ])
         expect((await send(path)).status).toBe(404);
       expect(mcp).not.toHaveBeenCalled();
       expect(connections.list).not.toHaveBeenCalled();
       expect(shared.list).not.toHaveBeenCalled();
+      expect((await send("/v1/community/article-authoring")).status).toBe(200);
+      expect(fallback.list).toHaveBeenCalledOnce();
     },
   );
   it("Production and disabled Development read no Article configuration", () => {

@@ -70,6 +70,9 @@
     "./agent-connections-decide": "./src/agent-connections/decide.ts",
     "./agent-connections-resource": "./src/agent-connections/resource.ts",
     "./editorial-content": "./src/editorial-content/index.ts",
-    "./branding": "./src/branding/Brand.tsx"
+    "./branding": "./src/branding/Brand.tsx",
+    "./community-views": "./src/community/View.tsx",
+    "./community-navigation": "./src/community/NavGroup.tsx",
+    "./community-dashboard": "./src/community/DashboardCard.tsx"
   }
 }

@@ -45,7 +45,7 @@ export interface ProductApplicationProps extends Pick<
    */
   readonly comments: CommunityCommentSurface | null;
   /**
-   * Formal Development composition; the clean Catalog preview keeps its data.
+   * Formal business composition; the clean Catalog preview keeps its data.
    * With comments, it replaces `navigationAction` with the publishing plus and
    * puts Search in the headers, so it must render inside
    * `CatalogSearchProvider`.

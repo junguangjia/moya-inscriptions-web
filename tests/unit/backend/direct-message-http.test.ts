@@ -1,3 +1,4 @@
+import { CommunitySessionService } from "@moya/api";
 import {
   createBackendApplication,
   createBackendServer,
@@ -6,7 +7,6 @@ import {
 } from "@moya/backend-runtime";
 import {
   apiErrorSchema,
-  developmentSessionSchema,
   directConversationPageSchema,
   directMessageSchema,
   directMessageUnreadSchema,
@@ -105,10 +105,12 @@ const start = async (
   nodeEnv: "development" | "production",
   port?: DirectMessagePort,
 ) => {
+  const identity = new InMemoryCommunityIdentityPort();
+  const sessions = new CommunitySessionService(identity);
   const server = createBackendServer(
     createBackendApplication({
       nodeEnv,
-      communityIdentityPort: new InMemoryCommunityIdentityPort(),
+      communityIdentityPort: identity,
       authorCommunityPort: {} as unknown as AuthorCommunityPort,
       storageUrlResolver: new MappedStorageUrlResolver(new Map()),
       ...(port ? { directMessagePort: port } : {}),
@@ -130,18 +132,14 @@ const start = async (
   );
   servers.add(server);
   const address = await startServer(server, { host: "127.0.0.1", port: 0 });
-  return `http://${address.address}:${address.port}`;
+  return { base: `http://${address.address}:${address.port}`, sessions };
 };
-const signIn = async (base: string, handle: string) =>
-  developmentSessionSchema.parse(
-    await (
-      await fetch(`${base}/v1/development/sign-in`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ handle }),
-      })
-    ).json(),
-  );
+const signIn = async (sessions: CommunitySessionService, handle: string) => {
+  // Synthetic Backend-owned grant injected by the test, never by the runtime.
+  const grant = await sessions.signInDevelopmentAccount(handle);
+  if (grant === null) throw new Error("Missing synthetic account");
+  return grant;
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -153,86 +151,91 @@ afterEach(async () => {
 });
 
 describe("direct message HTTP surface (content-community-completion-v1)", () => {
-  it("requires a session everywhere and derives the sender from it, never from the body", async () => {
-    const port = new FixturePort();
-    const base = await start("development", port);
-    expect((await fetch(`${base}/v1/community/messages`)).status).toBe(401);
-    expect((await fetch(`${base}/v1/community/messages/unread`)).status).toBe(
-      401,
-    );
-    const session = await signIn(base, "dev-user-01");
-    const headers = {
-      authorization: `Bearer ${session.token}`,
-      "content-type": "application/json",
-      "x-author-account": session.profile.id,
-    };
-    const sent = await fetch(`${base}/v1/community/messages`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        requestId: "11111111-1111-4111-8111-111111111111",
-        recipientId: `user-${"9".repeat(32)}`,
-        text: "  你好  ",
-        senderId: "user-forged",
-      }),
-    });
-    // A forged senderId is not part of the contract: strict input refuses it.
-    expect(sent.status).toBe(422);
-    const ok = await fetch(`${base}/v1/community/messages`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        requestId: "11111111-1111-4111-8111-111111111111",
-        recipientId: `user-${"9".repeat(32)}`,
-        text: "  你好  ",
-      }),
-    });
-    expect(ok.status).toBe(201);
-    const message = directMessageSchema.parse(await ok.json());
-    expect(message.senderId).toBe(session.profile.id);
-    expect(port.sends[0]?.actor).toBe(session.profile.id);
-    const list = directConversationPageSchema.parse(
-      await (await fetch(`${base}/v1/community/messages`, { headers })).json(),
-    );
-    expect(list.items[0]?.sendRefusal).toBe("request_pending");
-    const unread = directMessageUnreadSchema.parse(
-      await (
-        await fetch(`${base}/v1/community/messages/unread`, { headers })
-      ).json(),
-    );
-    expect(unread.unreadConversations).toBe(2);
-    const read = await fetch(
-      `${base}/v1/community/messages/${conversationId}/read`,
-      {
+  it.each(["development", "production"] as const)(
+    "requires a session and derives the sender from it in %s",
+    async (nodeEnv) => {
+      const port = new FixturePort();
+      const { base, sessions } = await start(nodeEnv, port);
+      expect((await fetch(`${base}/v1/community/messages`)).status).toBe(401);
+      expect((await fetch(`${base}/v1/community/messages/unread`)).status).toBe(
+        401,
+      );
+      const session = await signIn(sessions, "dev-user-01");
+      const headers = {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json",
+        "x-author-account": session.profile.id,
+      };
+      const sent = await fetch(`${base}/v1/community/messages`, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          requestId: "22222222-2222-4222-8222-222222222222",
-          sequence: 5,
+          requestId: "11111111-1111-4111-8111-111111111111",
+          recipientId: `user-${"9".repeat(32)}`,
+          text: "  你好  ",
+          senderId: "user-forged",
         }),
-      },
-    );
-    expect(read.status).toBe(200);
-    expect(port.reads).toEqual([{ actor: session.profile.id, sequence: 5 }]);
-    const both = await fetch(`${base}/v1/community/messages`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        requestId: "33333333-3333-4333-8333-333333333333",
-        recipientId: `user-${"9".repeat(32)}`,
-        conversationId,
-        text: "x",
-      }),
-    });
-    expect(both.status).toBe(422);
-    expect(apiErrorSchema.parse(await both.json()).error.code).toBe(
-      "INVALID_INPUT",
-    );
-  });
+      });
+      // A forged senderId is not part of the contract: strict input refuses it.
+      expect(sent.status).toBe(422);
+      const ok = await fetch(`${base}/v1/community/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          requestId: "11111111-1111-4111-8111-111111111111",
+          recipientId: `user-${"9".repeat(32)}`,
+          text: "  你好  ",
+        }),
+      });
+      expect(ok.status).toBe(201);
+      const message = directMessageSchema.parse(await ok.json());
+      expect(message.senderId).toBe(session.profile.id);
+      expect(port.sends[0]?.actor).toBe(session.profile.id);
+      const list = directConversationPageSchema.parse(
+        await (
+          await fetch(`${base}/v1/community/messages`, { headers })
+        ).json(),
+      );
+      expect(list.items[0]?.sendRefusal).toBe("request_pending");
+      const unread = directMessageUnreadSchema.parse(
+        await (
+          await fetch(`${base}/v1/community/messages/unread`, { headers })
+        ).json(),
+      );
+      expect(unread.unreadConversations).toBe(2);
+      const read = await fetch(
+        `${base}/v1/community/messages/${conversationId}/read`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            requestId: "22222222-2222-4222-8222-222222222222",
+            sequence: 5,
+          }),
+        },
+      );
+      expect(read.status).toBe(200);
+      expect(port.reads).toEqual([{ actor: session.profile.id, sequence: 5 }]);
+      const both = await fetch(`${base}/v1/community/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          requestId: "33333333-3333-4333-8333-333333333333",
+          recipientId: `user-${"9".repeat(32)}`,
+          conversationId,
+          text: "x",
+        }),
+      });
+      expect(both.status).toBe(422);
+      expect(apiErrorSchema.parse(await both.json()).error.code).toBe(
+        "INVALID_INPUT",
+      );
+    },
+  );
 
-  it("is absent without a port and outside Development, including the operator routes", async () => {
-    const withoutPort = await start("development");
-    const session = await signIn(withoutPort, "dev-user-01");
+  it("requires a port and keeps Production messages behind Backend session authorization", async () => {
+    const { base: withoutPort, sessions } = await start("development");
+    const session = await signIn(sessions, "dev-user-01");
     expect(
       (
         await fetch(`${withoutPort}/v1/community/messages`, {
@@ -240,9 +243,13 @@ describe("direct message HTTP surface (content-community-completion-v1)", () => 
         })
       ).status,
     ).toBe(404);
-    const production = await start("production", new FixturePort());
+    const { base: production } = await start("production", new FixturePort());
     expect((await fetch(`${production}/v1/community/messages`)).status).toBe(
-      404,
+      401,
     );
+    expect(
+      (await fetch(`${production}/v1/development/sign-in`, { method: "POST" }))
+        .status,
+    ).toBe(404);
   });
 });

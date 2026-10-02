@@ -387,7 +387,7 @@ describe("Phase 4 Owner command envelopes", () => {
       "featured/settings",
     ],
   ])(
-    "validates %s through Owner-only Development transport",
+    "validates %s through Owner-only Development and Production transport",
     async (name, body, method, path) => {
       vi.stubEnv("NODE_ENV", "development");
       const { call, calls } = recorder();
@@ -413,10 +413,16 @@ describe("Phase 4 Owner command envelopes", () => {
       expect(calls[0]).toMatchObject({ method, path });
       expect(calls[0]?.body).not.toHaveProperty("id");
       vi.stubEnv("NODE_ENV", "production");
+      for (const role of ["automation", null] as const)
+        expect(
+          (await invoke(endpoints, String(name), request(body, role))).status,
+        ).toBe(403);
+      expect(calls).toHaveLength(1);
       expect(
         (await invoke(endpoints, String(name), request(body))).status,
-      ).toBe(404);
-      expect(calls).toHaveLength(1);
+      ).toBe(200);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toEqual(calls[0]);
     },
   );
   it("preserves unbounded business quantity and rejects invalid sequence/count controls", async () => {
@@ -455,7 +461,62 @@ describe("Phase 4 Owner command envelopes", () => {
   });
 });
 
-describe("Work publishing Owner envelopes (Development)", () => {
+describe("Production Thread and direct-message administration", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const otherUserId = `user-${"b".repeat(32)}`;
+  it.each([
+    {
+      name: "read-threads",
+      input: {},
+      method: "GET",
+      path: "threads?page=1&pageSize=20&includeHidden=true",
+      answer: { items: [], total: 0, page: 1, pageSize: 20 },
+    },
+    {
+      name: "lookup-dm-conversation",
+      input: { userIds: [userId, otherUserId], purpose: "Owner report review" },
+      method: "POST",
+      path: "messages/lookup",
+      answer: {
+        id: `dm-${"c".repeat(32)}`,
+        participants: [
+          { id: userId, displayName: "First author", status: "active" },
+          { id: otherUserId, displayName: "Second author", status: "active" },
+        ],
+        initiatorId: userId,
+        state: "active",
+        messageCount: 0,
+        createdAt: "2026-10-02T00:00:00.000Z",
+        messages: [],
+      },
+    },
+  ])(
+    "forwards $name only for the Owner with a valid envelope",
+    async ({ name, input, method, path, answer }) => {
+      vi.stubEnv("NODE_ENV", "production");
+      const call = vi.fn(async () => answer) as unknown as OperatorCall;
+      const endpoints = createCommunityEndpoints(call);
+      for (const role of ["automation", null] as const)
+        expect(
+          (await invoke(endpoints, name, request(input, role))).status,
+        ).toBe(403);
+      expect(
+        (await invoke(endpoints, name, request({ ...input, actor: "owner" })))
+          .status,
+      ).toBe(400);
+      expect(call).not.toHaveBeenCalled();
+      expect(await invoke(endpoints, name, request(input))).toEqual({
+        status: 200,
+        body: { ok: true, result: answer },
+      });
+      if (method === "POST")
+        expect(call).toHaveBeenCalledWith(method, path, input);
+      else expect(call).toHaveBeenCalledWith(method, path);
+    },
+  );
+});
+
+describe("Work publishing Owner envelopes", () => {
   afterEach(() => vi.unstubAllEnvs());
   const receipt = "7c1d7f0e-5b8a-4a51-9d0c-2f3e4a5b6c7d";
   const timestamp = "2026-09-13T12:00:00.000Z";
@@ -679,7 +740,7 @@ describe("Work publishing Owner envelopes (Development)", () => {
       { requestId: receipt },
     ],
   ])(
-    "maps %s onto the Backend route, Owner-only and Development-only",
+    "maps %s onto the Backend route, Owner-only in Development and Production",
     async (name, body, method, path, forwarded) => {
       vi.stubEnv("NODE_ENV", "development");
       const { call, calls } = answering();
@@ -712,11 +773,17 @@ describe("Work publishing Owner envelopes (Development)", () => {
       expect(calls[0]?.body ?? {}).not.toHaveProperty("id");
       expect(calls[0]?.body ?? {}).not.toHaveProperty("accountId");
       vi.stubEnv("NODE_ENV", "production");
-      expect(await invoke(endpoints, name, request(body))).toEqual({
-        status: 404,
-        body: { ok: false, error: { code: "NOT_FOUND" } },
-      });
+      for (const role of ["automation", null] as const)
+        expect(await invoke(endpoints, name, request(body, role))).toEqual({
+          status: 403,
+          body: { ok: false, error: { code: "COMMUNITY_OWNER_ONLY" } },
+        });
       expect(calls).toHaveLength(1);
+      const production = await invoke(endpoints, name, request(body));
+      expect(production.status).toBe(200);
+      expect(production.body.ok).toBe(true);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toEqual(calls[0]);
     },
   );
 
@@ -1371,35 +1438,38 @@ describe("Work submission media relay", () => {
     );
   });
 
-  it("streams an allow-listed derivative privately to the Owner in Development", async () => {
-    vi.stubEnv("NODE_ENV", "development");
-    const { call } = recorder();
-    const { openMedia, calls } = opener();
-    const viewer = new AbortController();
-    const response = await serve(
-      createCommunityEndpoints(call, openMedia),
-      mediaRequest(params, "owner", {}, viewer.signal),
-    );
-    expect(response.status).toBe(200);
-    expect(Object.fromEntries(response.headers.entries())).toEqual({
-      "cache-control": "private, no-store",
-      "content-length": "4",
-      "content-security-policy": "default-src 'none'; sandbox",
-      "content-type": "image/webp",
-      "cross-origin-resource-policy": "same-origin",
-      "referrer-policy": "no-referrer",
-      vary: "Cookie, Range",
-      "x-content-type-options": "nosniff",
-    });
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
-    expect(calls).toEqual([
-      {
-        path: `publishing/media/${revisionId}/${itemId}/thumb/${editKey}`,
-        range: null,
-        signal: viewer.signal,
-      },
-    ]);
-  });
+  it.each(["development", "production"])(
+    "streams an allow-listed derivative privately to the Owner in %s",
+    async (nodeEnv) => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      const { call } = recorder();
+      const { openMedia, calls } = opener();
+      const viewer = new AbortController();
+      const response = await serve(
+        createCommunityEndpoints(call, openMedia),
+        mediaRequest(params, "owner", {}, viewer.signal),
+      );
+      expect(response.status).toBe(200);
+      expect(Object.fromEntries(response.headers.entries())).toEqual({
+        "cache-control": "private, no-store",
+        "content-length": "4",
+        "content-security-policy": "default-src 'none'; sandbox",
+        "content-type": "image/webp",
+        "cross-origin-resource-policy": "same-origin",
+        "referrer-policy": "no-referrer",
+        vary: "Cookie, Range",
+        "x-content-type-options": "nosniff",
+      });
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+      expect(calls).toEqual([
+        {
+          path: `publishing/media/${revisionId}/${itemId}/thumb/${editKey}`,
+          range: null,
+          signal: viewer.signal,
+        },
+      ]);
+    },
+  );
 
   it("relays one well-formed byte range and its partial answer", async () => {
     vi.stubEnv("NODE_ENV", "development");
@@ -1432,37 +1502,38 @@ describe("Work submission media relay", () => {
     ]);
   });
 
-  it("refuses non-Owners, Production and malformed subjects before opening anything", async () => {
-    vi.stubEnv("NODE_ENV", "development");
-    const { openMedia, calls } = opener();
-    const endpoints = createCommunityEndpoints(recorder().call, openMedia);
-    for (const role of ["automation", null] as const) {
-      const response = await serve(endpoints, mediaRequest(params, role));
-      expect(response.status).toBe(403);
-      expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(await response.json()).toEqual({
-        ok: false,
-        error: { code: "COMMUNITY_OWNER_ONLY" },
-      });
-    }
-    for (const invalid of [
-      { variant: "original" },
-      { variant: "standard_master" },
-      { editKey: "../../blobs" },
-      { editKey: "BASE" },
-      { itemId: "media-item-x" },
-      { revisionId: `work-${"a".repeat(32)}` },
-    ]) {
-      const response = await serve(
-        endpoints,
-        mediaRequest({ ...params, ...invalid }),
-      );
-      expect(response.status).toBe(400);
-    }
-    vi.stubEnv("NODE_ENV", "production");
-    expect((await serve(endpoints, mediaRequest(params))).status).toBe(404);
-    expect(calls).toEqual([]);
-  });
+  it.each(["development", "production"])(
+    "refuses non-Owners and malformed media subjects in %s before opening anything",
+    async (nodeEnv) => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      const { openMedia, calls } = opener();
+      const endpoints = createCommunityEndpoints(recorder().call, openMedia);
+      for (const role of ["automation", null] as const) {
+        const response = await serve(endpoints, mediaRequest(params, role));
+        expect(response.status).toBe(403);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(await response.json()).toEqual({
+          ok: false,
+          error: { code: "COMMUNITY_OWNER_ONLY" },
+        });
+      }
+      for (const invalid of [
+        { variant: "original" },
+        { variant: "standard_master" },
+        { editKey: "../../blobs" },
+        { editKey: "BASE" },
+        { itemId: "media-item-x" },
+        { revisionId: `work-${"a".repeat(32)}` },
+      ]) {
+        const response = await serve(
+          endpoints,
+          mediaRequest({ ...params, ...invalid }),
+        );
+        expect(response.status).toBe(400);
+      }
+      expect(calls).toEqual([]);
+    },
+  );
 
   it("passes the Backend's missing-subject answer through as JSON, never bytes", async () => {
     vi.stubEnv("NODE_ENV", "development");
@@ -1950,7 +2021,7 @@ describe("Agent administration Owner envelopes (Development)", () => {
     return { call, calls };
   };
 
-  it("is Owner-only and Development-only like every phase 4 operation", async () => {
+  it("keeps Agent administration Owner-only and Development-only", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const { call, calls } = answering({ items: [principal] });
     const endpoints = createCommunityEndpoints(call);

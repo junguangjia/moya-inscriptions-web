@@ -72,27 +72,27 @@ const sendRouteError = (
 };
 
 export interface CommunityRouterDependencies {
-  /** Separate user-owned Article operations; Development only. */
+  /** Separate user-owned Article operations. */
   readonly articleAuthoringService?: ArticleAuthoringService;
   readonly articleDelegation?: BackendApplicationOptions["articleDelegation"];
   readonly articlePublicationOperatorService?: ArticlePublicationOperatorService;
   readonly notificationService?: NotificationService;
   readonly notificationStreams?: NotificationStreams;
   readonly sessionService: CommunitySessionService;
-  /** Email and phone authentication. Mounted only for a Development acceptance profile. */
+  /** Authentication supplied by the composition root with provider provenance checked. */
   readonly authService?: CommunityAuthService;
   readonly authorService?: AuthorCommunityService;
-  /** Work publishing author routes; composed only with the author service in Development. */
+  /** Work publishing author routes; composed with the author service. */
   readonly publishingService?: WorkPublishingService;
-  /** Work publishing operator routes; composed only in Development. */
+  /** Work publishing operator routes behind the private operator boundary. */
   readonly publishingOperatorService?: PublishingOperatorService;
   /** Agent administration routes; composed only in Development with a port. */
   readonly agentAdministrationService?: AgentAdministrationService;
   readonly contentOperatorPort?: CommunityContentOperatorPort | undefined;
   readonly discussionPort?: DiscussionPort | undefined;
-  /** content-community-completion-v1 Thread operator routes; Development only. */
+  /** Operator-managed Thread routes. */
   readonly threadService?: ThreadService | undefined;
-  /** content-community-completion-v1 DM moderation routes; Development only. */
+  /** Owner-only direct-message moderation routes. */
   readonly directMessageService?: DirectMessageService | undefined;
   /** True only under NODE_ENV=development; Production never composes the entry. */
   readonly developmentEntry: boolean;
@@ -221,8 +221,7 @@ export const createRouter =
     }
 
     if (
-      community?.developmentEntry &&
-      community.notificationService &&
+      community?.notificationService &&
       community.notificationStreams &&
       (pathname === "/v1/community/mentions" ||
         pathname === "/v1/community/notifications" ||
@@ -277,10 +276,22 @@ export const createRouter =
       }
     }
     if (
-      community?.developmentEntry === true &&
-      community.articleAuthoringService !== undefined &&
+      community?.articleAuthoringService !== undefined &&
       (pathname === articlePrefix || pathname.startsWith(`${articlePrefix}/`))
     ) {
+      // These names belong to the separate delegation boundary above. When it
+      // is absent, never reinterpret them as human Article IDs or commands.
+      const articleOperation = pathname
+        .slice(articlePrefix.length + 1)
+        .split("/")[0];
+      if (
+        ["connections", "consents", "approvals"].includes(
+          articleOperation ?? "",
+        )
+      ) {
+        sendRouteError(response, 404, "Not Found");
+        return;
+      }
       containRequest(
         response,
         handleArticleAuthoringRequest(
@@ -298,8 +309,7 @@ export const createRouter =
     }
 
     if (
-      community?.developmentEntry === true &&
-      community.authorService !== undefined &&
+      community?.authorService !== undefined &&
       pathname.startsWith("/v1/community/")
     ) {
       containRequest(
