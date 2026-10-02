@@ -1,4 +1,5 @@
 import * as https from "node:https";
+import { TLSSocket } from "node:tls";
 
 import COS from "cos-nodejs-sdk-v5";
 
@@ -90,15 +91,21 @@ export const createCosSdk = (
         let settled = false;
         let outgoing: ClientRequest | undefined;
         let socket: Socket | undefined;
-        let responseStarted = false;
-        let deadline: ReturnType<typeof setTimeout> | undefined;
+        let responseDeadline: ReturnType<typeof setTimeout> | undefined;
         let received = 0;
         const chunks: Buffer[] = [];
-        const connected = () => clearTimeout(deadline);
+        const connected = () => {
+          if (socket instanceof TLSSocket && !socket.authorized) {
+            finish(requestFailure());
+            return;
+          }
+          clearTimeout(deadline);
+        };
         const finish = (error?: Error, statusCode?: number) => {
           if (settled) return;
           settled = true;
           clearTimeout(deadline);
+          clearTimeout(responseDeadline);
           socket?.removeListener("connect", connected);
           socket?.removeListener("secureConnect", connected);
           signal?.removeEventListener("abort", onAbort);
@@ -113,6 +120,15 @@ export const createCosSdk = (
             });
           }
         };
+        const startResponseDeadline = () => {
+          if (settled || responseDeadline !== undefined) return;
+          // Start at the first flushed upload or early final response. Headers,
+          // body bytes and a later upload finish must never renew this bound.
+          responseDeadline = setTimeout(
+            () => finish(requestFailure()),
+            options.timeoutMs,
+          );
+        };
         const nativeRequest = ((requestOptions: RequestOptions) => {
           if (outgoing || settled) throw requestFailure();
           outgoing = (dependencies.nativeRequest ?? https.request)({
@@ -125,29 +141,22 @@ export const createCosSdk = (
               socket = assigned;
               // The finite setup timer includes DNS/TCP and TLS. Plain sockets
               // occur only through the native loopback test seam.
-              if ("encrypted" in assigned && assigned.encrypted === true)
-                assigned.once("secureConnect", connected);
-              else if (assigned.connecting) assigned.once("connect", connected);
+              if (assigned instanceof TLSSocket) {
+                // A verified pooled socket emits no second secureConnect.
+                if (assigned.authorized) connected();
+                else assigned.once("secureConnect", connected);
+              } else if (assigned.connecting)
+                assigned.once("connect", connected);
               else connected();
             });
             // Keep the SDK's native socket inactivity timeout. Node observes
             // pending native write-queue progress even for one buffered part;
             // SDK onProgress/body consumption does not establish that progress.
             outgoing.on("timeout", () => finish(requestFailure()));
-            outgoing.on("finish", () => {
-              if (settled || responseStarted) return;
-              // finish means flushed to the OS, not acknowledged by COS. Bound
-              // the subsequent header wait even if a peer trickles raw bytes.
-              clearTimeout(deadline);
-              deadline = setTimeout(
-                () => finish(requestFailure()),
-                options.timeoutMs,
-              );
-            });
+            outgoing.on("finish", startResponseDeadline);
           }
           outgoing.on("response", (incoming) => {
-            responseStarted = true;
-            if (options.timeoutMode === "upload-idle") clearTimeout(deadline);
+            if (options.timeoutMode === "upload-idle") startResponseDeadline();
             incoming.on("error", () => finish(requestFailure()));
             incoming.on("aborted", () => finish(requestFailure()));
             const emit = incoming.emit;
@@ -194,7 +203,7 @@ export const createCosSdk = (
           requestOptions.followRedirect = false;
           requestOptions.followAllRedirects = false;
         };
-        deadline = setTimeout(
+        const deadline = setTimeout(
           () => finish(requestFailure()),
           options.timeoutMs,
         );

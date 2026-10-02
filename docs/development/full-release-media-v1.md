@@ -50,20 +50,20 @@ credential, policy, Docker or media-tool availability. Production must not call
 the Development parser as fallback. Development keeps
 `parsePublishingMediaConfig` and `openPublishingMedia` unchanged in behavior.
 
-| Environment key                        | Requirement                                                                                                                                                                                    |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WORK_MEDIA_COS_BUCKET`                | Required COS bucket name including its numeric account suffix                                                                                                                                  |
-| `WORK_MEDIA_COS_REGION`                | Required COS region identifier                                                                                                                                                                 |
-| `WORK_MEDIA_COS_PREFIX`                | Required exclusive `ugc/publishing/<namespace>/` prefix; namespace is 1–63 lowercase letters, digits or hyphens, starting with a letter or digit                                               |
-| `WORK_MEDIA_COS_SECRET_ID`             | Required server-only identity for the UGC role                                                                                                                                                 |
-| `WORK_MEDIA_COS_SECRET_KEY`            | Required server-only credential for that identity                                                                                                                                              |
-| `WORK_MEDIA_COS_SECURITY_TOKEN`        | Optional temporary-credential token; when present, expiry is required                                                                                                                          |
-| `WORK_MEDIA_COS_CREDENTIAL_EXPIRES_AT` | Unix seconds; required with a token and forbidden without one; must have more than 30 seconds remaining at parsing                                                                             |
-| `WORK_MEDIA_COS_REQUEST_TIMEOUT_MS`    | Optional positive integer, default 30000, maximum 120000; total bound for control/read operations; multipart part uploads use the setup, inactivity and response-header bounds described below |
-| `WORK_MEDIA_TOOLS_IMAGE`               | Required local Docker image reference with explicit tag or digest; the runner never pulls it                                                                                                   |
-| `WORK_MEDIA_WORK_DIR`                  | Required private local processing directory, separate from code and retained media                                                                                                             |
-| `WORK_MEDIA_WORKER_CONCURRENCY`        | Optional integer 1–4, default 1                                                                                                                                                                |
-| `WORK_MEDIA_STORE_DIR`                 | Must be absent or empty in Production COS configuration; retained filesystem storage remains Development-only                                                                                  |
+| Environment key                        | Requirement                                                                                                                                                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORK_MEDIA_COS_BUCKET`                | Required COS bucket name including its numeric account suffix                                                                                                                                      |
+| `WORK_MEDIA_COS_REGION`                | Required COS region identifier                                                                                                                                                                     |
+| `WORK_MEDIA_COS_PREFIX`                | Required exclusive `ugc/publishing/<namespace>/` prefix; namespace is 1–63 lowercase letters, digits or hyphens, starting with a letter or digit                                                   |
+| `WORK_MEDIA_COS_SECRET_ID`             | Required server-only identity for the UGC role                                                                                                                                                     |
+| `WORK_MEDIA_COS_SECRET_KEY`            | Required server-only credential for that identity                                                                                                                                                  |
+| `WORK_MEDIA_COS_SECURITY_TOKEN`        | Optional temporary-credential token; when present, expiry is required                                                                                                                              |
+| `WORK_MEDIA_COS_CREDENTIAL_EXPIRES_AT` | Unix seconds; required with a token and forbidden without one; must have more than 30 seconds remaining at parsing                                                                                 |
+| `WORK_MEDIA_COS_REQUEST_TIMEOUT_MS`    | Optional positive integer, default 30000, maximum 120000; total bound for control/read operations; multipart part uploads use the setup, inactivity and response-completion bounds described below |
+| `WORK_MEDIA_TOOLS_IMAGE`               | Required local Docker image reference with explicit tag or digest; the runner never pulls it                                                                                                       |
+| `WORK_MEDIA_WORK_DIR`                  | Required private local processing directory, separate from code and retained media                                                                                                                 |
+| `WORK_MEDIA_WORKER_CONCURRENCY`        | Optional integer 1–4, default 1                                                                                                                                                                    |
+| `WORK_MEDIA_STORE_DIR`                 | Must be absent or empty in Production COS configuration; retained filesystem storage remains Development-only                                                                                      |
 
 Keep these values in protected runtime configuration. UGC credentials are
 separate from Catalog's `COS_*` credentials and Payload identity. Do not expose
@@ -133,19 +133,22 @@ bounded responses and operation timeouts. A fresh SDK instance per operation
 keeps cancellation isolated. Errors exposed outside storage are content-free.
 
 For `multipartUpload` only, the configured timeout bounds credential
-acquisition, connection setup through the TLS handshake, socket inactivity
-during transmission and the wait for complete response headers after the native
-request's `finish` event. That event means bytes were handed to the operating
-system, not confirmed received by COS. A peer trickling incomplete headers
-cannot extend this header bound. The SDK's native socket inactivity timer
-remains enabled; Node checks pending native write-queue progress even when the
-existing 8 MiB part is submitted as one Buffer. SDK `onProgress`, local Buffer
-consumption and queued byte counts are not used to renew deadlines. A
-continuously progressing part may take longer than the configured timeout in
-total; a stalled part still fails and cancellation destroys its own request.
-Catalog/Pilot and every other publishing COS operation retain their existing
-total deadline. The environment name, default, maximum, part size,
-single-attempt behavior and public/store interfaces are unchanged.
+acquisition, connection setup through the verified TLS handshake, socket
+inactivity during transmission and completion of the response. An already
+verified pooled TLS socket clears the setup timer immediately; a new connection
+retains its handshake deadline. The response deadline starts at the first native
+request `finish` event or final response headers, including an early response
+during upload. `finish` means bytes were handed to the operating system, not
+confirmed received by COS. Headers, response body bytes and a later upload
+finish cannot extend or restart this deadline. The SDK's native socket
+inactivity timer remains enabled; Node checks pending native write-queue
+progress even when the existing 8 MiB part is submitted as one Buffer. SDK
+`onProgress`, local Buffer consumption and queued byte counts are not used to
+renew deadlines. A continuously progressing part may take longer than the
+configured timeout in total; a stalled part still fails and cancellation
+destroys its own request. Catalog/Pilot and every other publishing COS operation
+retain their existing total deadline. The environment name, default, maximum,
+part size, single-attempt behavior and public/store interfaces are unchanged.
 
 Database recording still follows blob commitment. The existing upload and worker
 code performs compensating cleanup for definite recording failures; unknown

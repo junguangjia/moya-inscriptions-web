@@ -74,7 +74,7 @@ export function createPublishingCosTransport(
           },
         );
         // Credential acquisition remains bounded. Multipart body transmission
-        // uses the SDK's socket inactivity bound plus setup/header deadlines;
+        // uses the SDK's socket inactivity bound plus setup/response deadlines;
         // it must not be cancelled merely because a part is still progressing.
         if (method === "multipartUpload") clearTimeout(deadline);
         const now = Math.floor(Date.now() / 1000);
