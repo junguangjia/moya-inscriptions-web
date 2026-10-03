@@ -43,7 +43,9 @@ export function createEditorialStoragePlugin(
   )
     throw new Error("CMS_STORAGE_ENDPOINT_INVALID");
   return s3Storage({
-    collections: { media: { signedDownloads: false } },
+    // Enabled storage needs an explicit prefix to register the existing DB
+    // field. Individual documents retain their own non-composite prefixes.
+    collections: { media: { prefix: "", signedDownloads: false } },
     bucket: environment.CMS_COS_BUCKET!,
     clientCacheKey: `editorial:${environment.CMS_COS_BUCKET}:${environment.CMS_COS_ENDPOINT}`,
     clientUploads: false,
