@@ -22,9 +22,16 @@ import {
   articleAuthorizationRequestAllowed,
   articleDatabaseRoleTarget,
   authorizationEnabled,
+  installAccessTokenWrapper,
   prepareArticleAuthorizationKeys,
   readArticleSigningJwks,
   startArticleAuthorizationServer,
+} from "@moya/agent-authorization";
+
+import type {
+  OidcProvider,
+  ProviderBundle,
+  ProviderContext,
 } from "@moya/agent-authorization";
 
 // Only persistence is replaced in this focused protocol-boundary test. The
@@ -598,4 +605,109 @@ describe("Actual Production issuer HTTPS proxy boundary", () => {
       await issuer.close();
     }
   }, 15_000);
+});
+
+describe("Article token wrapping distinguishes stale grants from service faults", () => {
+  const fixture = (assertGrantCurrent?: () => Promise<void | false>) => {
+    let middleware: Parameters<OidcProvider["use"]>[0] | undefined;
+    const find = vi.fn(async () => ({ grantId: "synthetic-grant" }));
+    const revoke = vi.fn(async () => undefined);
+    const mint = vi.fn(async () => ({ presented: "synthetic-wrapped-access" }));
+    const recordFailure = vi.fn();
+    const provider = {
+      use: (handler: Parameters<OidcProvider["use"]>[0]) => {
+        middleware = handler;
+      },
+      AccessToken: { find, revokeByGrantId: revoke },
+    } as unknown as OidcProvider;
+    const wrappers = { mint } as unknown as ProviderBundle["wrappers"];
+    installAccessTokenWrapper(
+      { provider, wrappers },
+      {
+        ...(assertGrantCurrent ? { assertGrantCurrent } : {}),
+        recordFailure,
+      },
+    );
+    const body = {
+      access_token: "synthetic-unwrapped-access",
+      expires_in: 300,
+      refresh_token: "synthetic-refresh",
+    };
+    const ctx: ProviderContext = {
+      oidc: { route: "token" },
+      status: 200,
+      body,
+    };
+    const run = async () => {
+      if (!middleware) throw new Error("TEST_WRAPPER_NOT_INSTALLED");
+      await middleware(ctx, async () => undefined);
+    };
+    return { ctx, run, find, revoke, mint, recordFailure };
+  };
+
+  it("returns exact invalid_grant only for a completed authoritative policy refusal", async () => {
+    const f = fixture(async () => false);
+    await f.run();
+    expect(f.ctx.status).toBe(400);
+    expect(f.ctx.body).toEqual({ error: "invalid_grant" });
+    expect(f.mint).not.toHaveBeenCalled();
+    expect(f.revoke).toHaveBeenCalledExactlyOnceWith("synthetic-grant");
+    expect(f.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("keeps a current-grant database failure as an empty server error", async () => {
+    const f = fixture(async () => {
+      throw new Error("synthetic database fault");
+    });
+    await f.run();
+    expect(f.ctx.status).toBe(500);
+    expect(f.ctx.body).toBeUndefined();
+    expect(f.mint).not.toHaveBeenCalled();
+    expect(f.revoke).toHaveBeenCalledExactlyOnceWith("synthetic-grant");
+    expect(f.recordFailure).toHaveBeenCalledExactlyOnceWith(
+      "WRAP_PERSISTENCE_FAILED",
+    );
+  });
+
+  it("keeps wrapper persistence faults distinct from invalid_grant", async () => {
+    const f = fixture(async () => undefined);
+    f.mint.mockRejectedValueOnce(new Error("synthetic persistence fault"));
+    await f.run();
+    expect(f.ctx.status).toBe(500);
+    expect(f.ctx.body).toBeUndefined();
+    expect(f.revoke).toHaveBeenCalledExactlyOnceWith("synthetic-grant");
+    expect(f.recordFailure).toHaveBeenCalledExactlyOnceWith(
+      "WRAP_PERSISTENCE_FAILED",
+    );
+  });
+
+  it.each([false, true])(
+    "preserves successful wrapping with or without the Article policy (%s)",
+    async (policy) => {
+      const f = fixture(policy ? async () => undefined : undefined);
+      await f.run();
+      expect(f.ctx.status).toBe(200);
+      expect(f.ctx.body).toEqual({
+        access_token: "synthetic-wrapped-access",
+        expires_in: 300,
+        refresh_token: "synthetic-refresh",
+      });
+      expect(f.revoke).not.toHaveBeenCalled();
+      expect(f.recordFailure).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the no-provider-grant refusal without calling policy or mint", async () => {
+    const policy = vi.fn(async () => undefined);
+    const f = fixture(policy);
+    f.find.mockRejectedValueOnce(new Error("synthetic token lookup fault"));
+    await f.run();
+    expect(f.ctx.status).toBe(500);
+    expect(f.ctx.body).toBeUndefined();
+    expect(policy).not.toHaveBeenCalled();
+    expect(f.mint).not.toHaveBeenCalled();
+    expect(f.recordFailure).toHaveBeenCalledExactlyOnceWith(
+      "WRAP_NO_PROVIDER_GRANT",
+    );
+  });
 });

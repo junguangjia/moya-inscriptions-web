@@ -1033,6 +1033,9 @@ export const registerArticleDelegationSdkCases = (fixture: {
         }),
       });
       expect(callReplay.status).toBe(401);
-      if (production) await expect(grant.refresh()).rejects.toThrow();
+      if (production)
+        await expect(grant.refresh()).rejects.toMatchObject({
+          errorCode: "invalid_grant",
+        });
     });
   });

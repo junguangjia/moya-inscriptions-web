@@ -319,8 +319,9 @@ export const createArticleAuthorizationProvider = async (options: {
           AND c.environment=$4`,
           [grantId, config.issuer, config.resource, config.environment],
         );
+        if (current.rowCount === 0) return false;
         if (current.rowCount !== 1)
-          throw new Error("ARTICLE_GRANT_NO_LONGER_CURRENT");
+          throw new Error("ARTICLE_GRANT_LOOKUP_INVALID");
       },
     },
   );
