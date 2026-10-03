@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import http from "node:http";
 import https from "node:https";
@@ -79,6 +79,9 @@ vi.mock("@moya/community-postgres", async (original) => {
         }
       };
     },
+    createWrapperStore: () => ({
+      mint: async () => ({ presented: "synthetic-wrapped-access" }),
+    }),
     createArticleConsentStore: () => ({
       open: async () => undefined,
       read: async () => null,
@@ -381,7 +384,7 @@ const close = (server: http.Server | https.Server) =>
     server.closeAllConnections();
     server.close((error) => (error ? reject(error) : resolve()));
   });
-const request = (options: https.RequestOptions, tls = false) =>
+const request = (options: https.RequestOptions, tls = false, data?: string) =>
   new Promise<{
     status: number;
     headers: http.IncomingHttpHeaders;
@@ -402,7 +405,7 @@ const request = (options: https.RequestOptions, tls = false) =>
       );
     });
     outgoing.on("error", reject);
-    outgoing.end();
+    outgoing.end(data);
   });
 
 describe("Actual Production issuer HTTPS proxy boundary", () => {
@@ -531,7 +534,12 @@ describe("Actual Production issuer HTTPS proxy boundary", () => {
               port,
               path: incoming.url,
               method: incoming.method,
-              headers: goodHeaders,
+              headers: {
+                ...goodHeaders,
+                ...(incoming.headers["content-type"]
+                  ? { "content-type": incoming.headers["content-type"] }
+                  : {}),
+              },
             },
             (upstream) => {
               response.writeHead(upstream.statusCode ?? 502, upstream.headers);
@@ -582,6 +590,7 @@ describe("Actual Production issuer HTTPS proxy boundary", () => {
         prompt: "consent",
         state: "synthetic-state",
       });
+      query.append("resource", env.ARTICLE_AUTHORING_RESOURCE!);
       const authorization = await request(
         { ...base, path: `/auth?${query.toString()}` },
         true,
@@ -599,7 +608,127 @@ describe("Actual Production issuer HTTPS proxy boundary", () => {
           (cookie) => /; secure/iu.test(cookie) && /; httponly/iu.test(cookie),
         ),
       ).toBe(true);
+      for (const resources of [
+        [
+          env.ARTICLE_AUTHORING_RESOURCE!,
+          "https://foreign.example.invalid/mcp",
+        ],
+        [""],
+      ]) {
+        const rejected = new URLSearchParams(query);
+        rejected.delete("resource");
+        for (const resource of resources) rejected.append("resource", resource);
+        const result = await request(
+          { ...base, path: `/auth?${rejected.toString()}` },
+          true,
+        );
+        expect(
+          result.headers.location?.startsWith(
+            "https://app.example.invalid/article-authoring/consent/",
+          ),
+        ).not.toBe(true);
+      }
       expect(pool.query).not.toHaveBeenCalled();
+      // Seed synthetic native grant artifacts to exercise the maintained token
+      // endpoint, PKCE, resource selection, rotation and replay over real HTTPS.
+      // These fixtures do not represent a human consent or a live acceptance.
+      vi.mocked(pool.query).mockResolvedValue({
+        rows: [{ id: "synthetic" }],
+        rowCount: 1,
+      } as never);
+      const native = issuer.bundle.provider as unknown as {
+        Client: { find(id: string): Promise<unknown> };
+        Grant: new (input: Record<string, unknown>) => {
+          addResourceScope(resource: string, scope: string): void;
+          save(): Promise<string>;
+        };
+        AuthorizationCode: new (input: Record<string, unknown>) => {
+          save(): Promise<string>;
+        };
+        RefreshToken: new (input: Record<string, unknown>) => {
+          save(): Promise<string>;
+        };
+      };
+      const client = await native.Client.find("synthetic-article-client");
+      const resource = env.ARTICLE_AUTHORING_RESOURCE!;
+      const scope = "artvenn:article:draft";
+      const verifier = randomBytes(32).toString("base64url");
+      const tokenRequest = async (params: URLSearchParams) =>
+        request(
+          {
+            ...base,
+            path: "/token",
+            method: "POST",
+            headers: {
+              host,
+              "content-type": "application/x-www-form-urlencoded",
+            },
+          },
+          true,
+          params.toString(),
+        );
+      for (const grantType of ["authorization_code", "refresh_token"]) {
+        for (const resources of [
+          [resource, resource],
+          [resource, "https://foreign.example.invalid/mcp"],
+          [""],
+        ]) {
+          const grant = new native.Grant({
+            accountId: "synthetic-owner",
+            clientId: "synthetic-article-client",
+          });
+          grant.addResourceScope(resource, scope);
+          const grantId = await grant.save();
+          const values = {
+            accountId: "synthetic-owner",
+            client,
+            grantId,
+            resource: [resource],
+            scope,
+            expiresWithSession: false,
+          };
+          const source =
+            grantType === "authorization_code"
+              ? new native.AuthorizationCode({
+                  ...values,
+                  redirectUri: "http://127.0.0.1:44553/callback",
+                  codeChallenge: createHash("sha256")
+                    .update(verifier)
+                    .digest("base64url"),
+                  codeChallengeMethod: "S256",
+                })
+              : new native.RefreshToken(values);
+          const token = await source.save();
+          const params = new URLSearchParams({
+            grant_type: grantType,
+            client_id: "synthetic-article-client",
+          });
+          if (grantType === "authorization_code") {
+            params.set("code", token);
+            params.set("redirect_uri", "http://127.0.0.1:44553/callback");
+            params.set("code_verifier", verifier);
+          } else params.set("refresh_token", token);
+          for (const target of resources) params.append("resource", target);
+          const result = await tokenRequest(params);
+          if (resources.every((entry) => entry === resource)) {
+            expect(
+              result.status,
+              result.status === 200
+                ? undefined
+                : `${grantType}: ${result.body}`,
+            ).toBe(200);
+            expect(JSON.parse(result.body).access_token).toBe(
+              "synthetic-wrapped-access",
+            );
+            const replay = await tokenRequest(params);
+            expect(replay.status).toBe(400);
+            expect(JSON.parse(replay.body).error).toBe("invalid_grant");
+          } else {
+            expect(result.status).toBe(400);
+            expect(JSON.parse(result.body).error).toBe("invalid_target");
+          }
+        }
+      }
     } finally {
       if (proxy) await close(proxy);
       await issuer.close();

@@ -74,9 +74,14 @@ it("upgrades the Development-only connection constraint without relabelling rows
     constraint: "article_authoring_connections_environment_check",
   });
   expect(await rows()).toEqual(original);
-  expect(await runCommunityMigrations(pool, directory)).toEqual([forward]);
+  expect(await runCommunityMigrations(pool, directory)).toEqual([
+    forward,
+    "20261003010000",
+  ]);
   expect(await rows()).toEqual(original);
-  expect((await ledger()).slice(0, -1)).toEqual(originalLedger);
+  expect((await ledger()).slice(0, originalLedger.length)).toEqual(
+    originalLedger,
+  );
   await pool.query(insert, [connection(2), owner, "production"]);
   const upgraded = await rows();
   expect(upgraded.map((row) => row.environment)).toEqual([

@@ -89,6 +89,7 @@ export const createProductionAuthDelivery = (
   };
   return {
     async sendEmail(input) {
+      if (config.email === null) return { state: "failed" };
       try {
         const mapped = mapTencentSendEmail({
           ...input,

@@ -11100,6 +11100,35 @@
                 "required": ["available", "reason"],
                 "type": "object"
               },
+              "password": {
+                "additionalProperties": false,
+                "properties": {
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "identifiers": {
+                    "items": {
+                      "enum": ["email", "phone", "handle"],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["available", "identifiers", "reason"],
+                "type": "object"
+              },
               "phone": {
                 "additionalProperties": false,
                 "properties": {
@@ -11123,7 +11152,12 @@
                 "type": "object"
               },
               "profile": {
-                "enum": ["full-local", "email-first", "disabled"],
+                "enum": [
+                  "full-local",
+                  "email-first",
+                  "password-only",
+                  "disabled"
+                ],
                 "type": "string"
               },
               "registration": {
@@ -11303,6 +11337,35 @@
             "required": ["available", "reason"],
             "type": "object"
           },
+          "password": {
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "identifiers": {
+                "items": {
+                  "enum": ["email", "phone", "handle"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["available", "identifiers", "reason"],
+            "type": "object"
+          },
           "phone": {
             "additionalProperties": false,
             "properties": {
@@ -11326,7 +11389,7 @@
             "type": "object"
           },
           "profile": {
-            "enum": ["full-local", "email-first", "disabled"],
+            "enum": ["full-local", "email-first", "password-only", "disabled"],
             "type": "string"
           },
           "registration": {
@@ -11757,7 +11820,7 @@
         "additionalProperties": false,
         "properties": {
           "channel": {
-            "enum": ["email", "phone"],
+            "enum": ["email", "phone", "handle"],
             "type": "string"
           },
           "idempotencyKey": {

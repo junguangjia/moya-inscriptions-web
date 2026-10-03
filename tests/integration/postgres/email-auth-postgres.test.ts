@@ -1386,6 +1386,126 @@ describe("email-auth PostgreSQL", () => {
       );
       codes.length = 0;
     });
+
+    it("provisions controlled operator accounts once, denies App authority, and uses real password sessions", async () => {
+      const { provisionPasswordAccount } = await import(
+        new URL(
+          "../../../scripts/provision-password-account.mjs",
+          import.meta.url,
+        ).href
+      );
+      const password = `SyntheticA1${randomBytes(3).toString("hex")}`;
+      const input = {
+        requestId: randomUUID(),
+        handle: "operator-account",
+        displayName: "合成账号",
+        environment: "production",
+        operatorLabel: "synthetic-operator",
+        password,
+      };
+      const [one, two] = await Promise.all([
+        provisionPasswordAccount(owner, input),
+        provisionPasswordAccount(owner, input),
+      ]);
+      expect([one.outcome, two.outcome].sort()).toEqual([
+        "created",
+        "existing",
+      ]);
+      expect(one.userId).toBe(two.userId);
+      expect(
+        (
+          await owner.query(
+            "SELECT count(*)::int AS n FROM community.user_login_identities",
+          )
+        ).rows[0].n,
+      ).toBe(0);
+      expect(
+        (await owner.query("SELECT count(*)::int AS n FROM community.sessions"))
+          .rows[0].n,
+      ).toBe(0);
+      expect(
+        (
+          await owner.query(
+            "SELECT count(*)::int AS n FROM community.auth_audit_events WHERE action='operator_password_provision'",
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      for (const delta of [
+        { requestId: randomUUID() },
+        { handle: "different-handle" },
+        { password: `SyntheticA1-${randomBytes(12).toString("hex")}` },
+        { displayName: "不同名" },
+      ])
+        await expect(
+          provisionPasswordAccount(owner, { ...input, ...delta }),
+        ).rejects.toThrow("OPERATOR_PASSWORD_SETUP_REFUSED");
+      const app = appPool();
+      await expect(provisionPasswordAccount(app, input)).rejects.toThrow(
+        "OPERATOR_PASSWORD_SETUP_REFUSED",
+      );
+      for (const sql of [
+        "DELETE FROM community.operator_password_accounts",
+        "UPDATE community.operator_password_accounts SET operator_label='forged-operator'",
+        "INSERT INTO community.operator_password_accounts SELECT * FROM community.operator_password_accounts",
+      ])
+        await expect(app.query(sql)).rejects.toMatchObject({ code: "42501" });
+      const service = new CommunityAuthService(
+        new PostgresCommunityAuthAdapter(app),
+        {
+          environment: "production",
+          profile: "password-only",
+          keys,
+          emailMode: "disabled",
+          phoneMode: "disabled",
+          delivery: delivery(),
+        },
+      );
+      const request = {
+        channel: "handle" as const,
+        identifier: input.handle,
+        password,
+        idempotencyKey: randomUUID(),
+        source: "synthetic-operator-login",
+      };
+      const signed = await service.passwordLogin(request);
+      if (!signed.ok) throw new Error(signed.reason);
+      const tokenHash = await hashSessionToken(signed.value.token);
+      const identity = new PostgresCommunityIdentityAdapter(app, {
+        requireProductionSession: true,
+      });
+      expect(
+        await identity.findSessionUser(tokenHash, new Date()),
+      ).toMatchObject({ id: one.userId });
+      expect(await service.readAccount(signed.value.token)).toMatchObject({
+        ok: true,
+        value: { email: { state: "unbound" }, phone: { state: "unbound" } },
+      });
+      expect(
+        (
+          await owner.query(
+            "SELECT issuer,auth_channel FROM community.sessions WHERE token_hash=$1",
+            [tokenHash],
+          )
+        ).rows[0],
+      ).toEqual({ issuer: "password_login", auth_channel: null });
+      await service.signOut(signed.value.token);
+      expect(await service.passwordLogin(request)).toMatchObject({
+        ok: false,
+        reason: "AUTH_PROOF_REJECTED",
+      });
+      expect(await identity.findSessionUser(tokenHash, new Date())).toBeNull();
+      await owner.query(
+        "UPDATE community.user_password_credentials SET version=version+1 WHERE user_id=$1",
+        [one.userId],
+      );
+      expect(
+        await service.passwordLogin({
+          ...request,
+          idempotencyKey: randomUUID(),
+        }),
+      ).toMatchObject({ ok: false, reason: "AUTH_INVALID_CREDENTIALS" });
+    });
+
     const makePasswordHarness = () => {
       let now = new Date("2026-09-30T12:00:00Z");
       const pool = appPool();

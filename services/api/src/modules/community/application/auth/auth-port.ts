@@ -120,14 +120,19 @@ export interface StoredSession {
   readonly userId: string;
   readonly issuedAt: string;
   readonly expiresAt: string;
-  readonly issuer: "verified_login";
+  readonly issuer: "verified_login" | "password_login";
   readonly authEnvironment: AuthEnvironmentName;
-  readonly authChannel: AuthChannelName;
+  readonly authChannel: AuthChannelName | null;
 }
 
 /** Persistence for one authentication transaction. Business rules stay in the service. */
 export interface AuthUnitOfWork {
   findUser(id: string): Promise<StoredUser | null>;
+  /** Read-only operator authority; the runtime cannot provision this record. */
+  findProvisionedPasswordUser(
+    handle: string,
+    environment: AuthEnvironmentName,
+  ): Promise<StoredUser | null>;
   findIdentity(
     kind: AuthChannelName,
     digest: string,

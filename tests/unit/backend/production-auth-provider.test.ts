@@ -40,10 +40,15 @@ const environment = () => ({
   ALIYUN_SMS_TEMPLATE_CODE: "SYNTHETIC_ONLY",
   ALIYUN_SMS_SCHEME_NAME: "synthetic",
 });
-const configuration = async (): Promise<ConfiguredProductionAuth> => {
+const configuration = async (): Promise<
+  ConfiguredProductionAuth & {
+    email: NonNullable<ConfiguredProductionAuth["email"]>;
+  }
+> => {
   const config = await loadProductionAuthConfiguration(environment());
-  if (config === null) throw new Error("Missing synthetic config");
-  return config;
+  if (config === null || config.email === null)
+    throw new Error("Missing synthetic config");
+  return { ...config, email: config.email };
 };
 const refusesConfig = async (pending: Promise<unknown>): Promise<void> => {
   try {
@@ -120,7 +125,7 @@ describe("Production auth protected configuration", () => {
       TENCENT_SES_ENDPOINT: "https://ses.intl.tencentcloudapi.com",
       TENCENT_SES_REGION: "ap-singapore",
     });
-    expect(international?.email.region).toBe("ap-singapore");
+    expect(international?.email?.region).toBe("ap-singapore");
   });
   it("allows no approved agreement, but refuses an unsafe or malformed supplied file", async () => {
     expect((await configuration()).agreement).toBeNull();

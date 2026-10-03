@@ -11,10 +11,21 @@ import {
   articleDatabaseRoleTarget,
   prepareArticleAuthorizationKeys,
 } from "./article-runtime-config.js";
-import type { OidcProvider, ProviderInteraction } from "./provider.js";
+import type {
+  OidcProvider,
+  ProviderInteraction as ScalarProviderInteraction,
+} from "./provider.js";
 import type { Pool } from "pg";
 import type { ArticleAuthoringGrant } from "@moya/contracts";
 import type { IncomingMessage, ServerResponse } from "node:http";
+
+type ProviderInteraction = Omit<ScalarProviderInteraction, "params"> & {
+  readonly params: {
+    readonly scope?: string;
+    readonly client_id?: string;
+    readonly resource?: string | readonly string[];
+  };
+};
 
 /**
  * Same maintained oidc-provider and encrypted store implementation, with a
@@ -148,6 +159,33 @@ export const articleAuthorizationConfigFrom = (
   };
 };
 
+/** Omission uses the configured default; duplicate exact targets are one resource. */
+export const articleResourceMatches = (
+  value: unknown,
+  configured: string,
+): boolean =>
+  value === undefined ||
+  value === configured ||
+  (Array.isArray(value) &&
+    value.length > 0 &&
+    Array.from(value).every((entry) => entry === configured));
+
+// oidc-provider normalizes an explicit empty parameter to undefined. Inspect
+// its already-parsed input at the native resource hooks before applying a default.
+const requestedArticleResourceMatches = (
+  context: unknown,
+  configured: string,
+): boolean => {
+  if (context === null || typeof context !== "object") return false;
+  const ctx = context as {
+    method?: string;
+    query?: { resource?: unknown };
+    oidc?: { body?: { resource?: unknown } };
+  };
+  const source = ctx.method === "POST" ? ctx.oidc?.body : ctx.query;
+  return articleResourceMatches(source?.resource, configured);
+};
+
 export const ARTICLE_CONSENT_PREFIX = "/article-authoring/consent";
 export const ARTICLE_RESUME_PATH =
   /^\/article-authoring\/consent\/([A-Za-z0-9_-]{1,256})\/resume$/u;
@@ -167,6 +205,7 @@ export const createArticleAuthorizationProvider = async (options: {
     throw new Error("ARTICLE_AUTHORIZATION_KEYS_REFUSED");
   const require_ = createRequire(import.meta.url);
   const loaded = (await import(require_.resolve("oidc-provider"))) as {
+    errors: { InvalidTarget: new (description: string) => Error };
     default: new (
       issuer: string,
       configuration: unknown,
@@ -218,10 +257,28 @@ export const createArticleAuthorizationProvider = async (options: {
     features: {
       resourceIndicators: {
         enabled: true,
-        defaultResource: () => config.resource,
-        getResourceServerInfo: (_ctx: unknown, resource: string) => {
-          if (resource !== config.resource)
-            throw new Error("Article audience is unavailable");
+        defaultResource: (
+          ctx: unknown,
+          _client: unknown,
+          resources: unknown,
+        ) => {
+          if (
+            !requestedArticleResourceMatches(ctx, config.resource) ||
+            !articleResourceMatches(resources, config.resource)
+          )
+            throw new loaded.errors.InvalidTarget(
+              "Article audience is unavailable",
+            );
+          return config.resource;
+        },
+        getResourceServerInfo: (ctx: unknown, resource: string) => {
+          if (
+            !requestedArticleResourceMatches(ctx, config.resource) ||
+            resource !== config.resource
+          )
+            throw new loaded.errors.InvalidTarget(
+              "Article audience is unavailable",
+            );
           return {
             scope: "artvenn:article:draft artvenn:article:publish",
             audience: config.resource,
@@ -263,9 +320,9 @@ export const createArticleAuthorizationProvider = async (options: {
         const scopes = assertArticleScopes(
           raw.filter((scope) => scope !== "offline_access"),
         );
-        const resource = interaction.params.resource ?? config.resource;
+        const resource: unknown = interaction.params.resource;
         if (
-          resource !== config.resource ||
+          !articleResourceMatches(resource, config.resource) ||
           !config.clients.has(interaction.params.client_id ?? "")
         )
           throw new Error("Article authorization request is unavailable");
@@ -353,6 +410,7 @@ export const createArticleAuthorizationProvider = async (options: {
     const consent = await consents.read(uid);
     if (
       interaction.uid !== uid ||
+      !articleResourceMatches(interaction.params.resource, config.resource) ||
       consent === null ||
       consent.decision !== "approved" ||
       consent.ownerId === null ||

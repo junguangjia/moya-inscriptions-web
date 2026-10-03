@@ -138,9 +138,9 @@ export interface AuthDeliveryPorts {
 
 export interface CommunityAuthServiceOptions {
   readonly environment: AuthEnvironmentName;
-  readonly profile: "full-local" | "email-first";
+  readonly profile: "full-local" | "email-first" | "password-only";
   readonly keys: AuthKeys;
-  readonly emailMode: VerificationMode;
+  readonly emailMode: VerificationMode | "disabled";
   readonly phoneMode: VerificationMode | "disabled";
   readonly delivery: AuthDeliveryPorts;
   readonly clock?: () => Date;
@@ -223,8 +223,11 @@ export class CommunityAuthService {
     if (
       options.environment === "production" &&
       (options.profile === "full-local" ||
-        options.emailMode !== "provider" ||
-        (options.phoneMode !== "provider" && options.phoneMode !== "disabled"))
+        (options.profile === "password-only"
+          ? options.emailMode !== "disabled" || options.phoneMode !== "disabled"
+          : options.emailMode !== "provider" ||
+            (options.phoneMode !== "provider" &&
+              options.phoneMode !== "disabled")))
     )
       throw new Error("Production authentication requires real provider modes");
     this.registrationAgreement =
@@ -237,10 +240,24 @@ export class CommunityAuthService {
   }
 
   capabilities(): AuthCapabilities {
-    const phone = this.options.phoneMode !== "disabled";
+    const phone = this.channelAvailable("phone");
+    const email = this.channelAvailable("email");
     return {
       profile: this.options.profile,
-      email: { available: true, reason: null },
+      email: {
+        available: email,
+        reason: email ? null : "Email verification is unavailable.",
+      },
+      password: {
+        available: true,
+        identifiers:
+          this.options.profile === "password-only"
+            ? ["handle"]
+            : phone
+              ? ["email", "phone"]
+              : ["email"],
+        reason: null,
+      },
       phone: phone
         ? { available: true, reason: null }
         : {
@@ -250,18 +267,17 @@ export class CommunityAuthService {
       developmentOnly: this.options.environment === "development",
       ...(this.options.environment === "production"
         ? {
-            registration:
-              this.registrationAgreement === null
-                ? {
-                    available: false,
-                    agreement: null,
-                    reason: "Registration agreement is not configured.",
-                  }
-                : {
-                    available: true,
-                    agreement: { ...this.registrationAgreement },
-                    reason: null,
-                  },
+            registration: !this.registrationAvailable()
+              ? {
+                  available: false,
+                  agreement: null,
+                  reason: "Registration agreement is not configured.",
+                }
+              : {
+                  available: true,
+                  agreement: { ...this.registrationAgreement! },
+                  reason: null,
+                },
           }
         : {}),
     };
@@ -276,6 +292,8 @@ export class CommunityAuthService {
     readonly sessionToken?: string | undefined;
     readonly reauthToken?: string | undefined;
   }): Promise<AuthResult<AuthChallengeAccepted>> {
+    if (this.options.profile === "password-only")
+      return fail("AUTH_CHANNEL_UNAVAILABLE");
     if (input.purpose === "register" && !this.registrationAvailable())
       return fail("AUTH_NOT_CONFIGURED");
     if (!this.channelAvailable(input.channel))
@@ -347,6 +365,8 @@ export class CommunityAuthService {
     readonly continuationToken: string;
     readonly idempotencyKey: string;
   }): Promise<AuthResult<AuthVerifyValue>> {
+    if (this.options.profile === "password-only")
+      return fail("AUTH_CHANNEL_UNAVAILABLE");
     const at = this.clock();
     const continuationHash = await hashSessionToken(input.continuationToken);
     const loaded = await this.transactional<{
@@ -661,21 +681,39 @@ export class CommunityAuthService {
   }
 
   async passwordLogin(input: {
-    readonly channel: AuthChannelName;
+    readonly channel: AuthChannelName | "handle";
     readonly identifier: string;
     readonly password: string;
     readonly idempotencyKey: string;
     readonly source: string;
   }): Promise<AuthResult<AuthSessionGrant>> {
-    if (!this.channelAvailable(input.channel))
+    const handleLogin = input.channel === "handle";
+    if (
+      this.options.profile === "password-only"
+        ? !handleLogin
+        : handleLogin ||
+          !this.channelAvailable(input.channel as AuthChannelName)
+    )
       return fail("AUTH_CHANNEL_UNAVAILABLE");
-    const normalized = this.normalize(input.channel, input.identifier);
+    const normalized = handleLogin
+      ? /^[a-z][a-z0-9-]{2,31}$/u.test(input.identifier)
+        ? { lookup: input.identifier }
+        : null
+      : this.normalize(input.channel as AuthChannelName, input.identifier);
     if (normalized === null) return fail("AUTH_INVALID_IDENTIFIER");
-    const digest = await lookupDigest(
-      input.channel,
-      normalized.lookup,
-      this.options.keys,
-    );
+    const digest = handleLogin
+      ? await keyedHash(
+          this.options.keys.lookupKey,
+          `password-handle\0${normalized.lookup}`,
+        )
+      : await lookupDigest(
+          input.channel as AuthChannelName,
+          normalized.lookup,
+          this.options.keys,
+        );
+    const sessionMethod = handleLogin
+      ? "password"
+      : (input.channel as AuthChannelName);
     const at = this.clock();
     // Every attempt reserves all three scopes atomically before expensive work.
     const reserved = await this.transactional(async (tx) => {
@@ -686,9 +724,17 @@ export class CommunityAuthService {
         at,
       );
       if (!budget.ok) return budget;
-      const identity = await tx.findIdentity(input.channel, digest);
-      const user =
-        identity === null ? null : await tx.findUser(identity.userId);
+      const identity = handleLogin
+        ? null
+        : await tx.findIdentity(input.channel as AuthChannelName, digest);
+      const user = handleLogin
+        ? await tx.findProvisionedPasswordUser(
+            normalized.lookup,
+            this.options.environment,
+          )
+        : identity === null
+          ? null
+          : await tx.findUser(identity.userId);
       const credential =
         user === null ? null : await tx.findPasswordCredential(user.id);
       return { ok: true as const, value: { identity, user, credential } };
@@ -700,8 +746,7 @@ export class CommunityAuthService {
       matched = await verifyPassword(
         input.password,
         user?.status === "active" &&
-          identity !== null &&
-          this.provenanceOk(identity)
+          (handleLogin || (identity !== null && this.provenanceOk(identity)))
           ? (credential?.verifier ?? null)
           : null,
       );
@@ -712,23 +757,35 @@ export class CommunityAuthService {
     }
     if (
       !matched ||
-      identity === null ||
+      (!handleLogin && identity === null) ||
       user === null ||
       credential === null ||
       user.status !== "active" ||
-      !this.provenanceOk(identity)
+      (!handleLogin && (identity === null || !this.provenanceOk(identity)))
     )
       return fail("AUTH_INVALID_CREDENTIALS");
     return this.transactional<AuthSessionGrant>(async (tx) => {
       const currentUser = await tx.lockUser(user.id);
-      const currentIdentity = await tx.findIdentity(input.channel, digest);
+      const currentIdentity = handleLogin
+        ? null
+        : await tx.findIdentity(input.channel as AuthChannelName, digest);
+      const currentProvisioned = handleLogin
+        ? await tx.findProvisionedPasswordUser(
+            normalized.lookup,
+            this.options.environment,
+          )
+        : null;
       const currentCredential = await tx.findPasswordCredential(user.id);
       if (
         currentUser?.status !== "active" ||
-        currentIdentity?.id !== identity.id ||
-        currentIdentity.version !== identity.version ||
-        currentIdentity.userId !== user.id ||
-        !this.provenanceOk(currentIdentity) ||
+        (handleLogin
+          ? currentProvisioned?.id !== user.id
+          : identity === null ||
+            currentIdentity === null ||
+            currentIdentity.id !== identity.id ||
+            currentIdentity.version !== identity.version ||
+            currentIdentity.userId !== user.id ||
+            !this.provenanceOk(currentIdentity)) ||
         currentCredential?.version !== credential.version ||
         currentCredential.verifier !== credential.verifier
       )
@@ -762,12 +819,12 @@ export class CommunityAuthService {
             tx,
             receipt,
             currentUser,
-            input.channel,
+            sessionMethod,
             at,
           ),
         };
       }
-      const session = await this.mint(tx, currentUser, input.channel, at);
+      const session = await this.mint(tx, currentUser, sessionMethod, at);
       await tx.insertReceipt({
         keyHash: receiptKey,
         userId: user.id,
@@ -790,6 +847,8 @@ export class CommunityAuthService {
     readonly idempotencyKey: string;
     readonly source?: string;
   }): Promise<AuthResult<{ readonly reset: true }>> {
+    if (this.options.profile === "password-only")
+      return fail("AUTH_CHANNEL_UNAVAILABLE");
     if (!validPassword(input.password)) return fail("AUTH_INVALID_PASSWORD");
     const tokenHash = await hashSessionToken(input.handoffToken),
       at = this.clock();
@@ -1029,6 +1088,8 @@ export class CommunityAuthService {
       readonly account: AuthAccountSecurity;
     }>
   > {
+    if (this.options.profile === "password-only")
+      return fail("AUTH_CHANNEL_UNAVAILABLE");
     let at = this.clock();
     const continuationHash = await hashSessionToken(input.continuationToken);
     const sessionHash = await hashSessionToken(input.sessionToken);
@@ -1407,6 +1468,8 @@ export class CommunityAuthService {
       readonly account: AuthAccountSecurity;
     }>
   > {
+    if (this.options.profile === "password-only")
+      return fail("AUTH_CHANNEL_UNAVAILABLE");
     const at = this.clock();
     const sessionHash = await hashSessionToken(input.sessionToken);
     const reauthHash = await hashSessionToken(input.reauthToken);
@@ -2154,7 +2217,7 @@ export class CommunityAuthService {
   private async mint(
     tx: AuthUnitOfWork,
     user: StoredUser,
-    channel: AuthChannelName,
+    channel: AuthChannelName | "password",
     at: Date,
   ): Promise<Minted> {
     const token = generateSessionToken(this.randomBytes);
@@ -2167,9 +2230,9 @@ export class CommunityAuthService {
       userId: user.id,
       issuedAt: at.toISOString(),
       expiresAt,
-      issuer: "verified_login",
+      issuer: channel === "password" ? "password_login" : "verified_login",
       authEnvironment: this.options.environment,
-      authChannel: channel,
+      authChannel: channel === "password" ? null : channel,
     });
     return {
       token,
@@ -2204,7 +2267,7 @@ export class CommunityAuthService {
     tx: AuthUnitOfWork,
     receipt: StoredReceipt,
     user: StoredUser,
-    channel: AuthChannelName,
+    channel: AuthChannelName | "password",
     at: Date,
   ): Promise<AuthSessionGrant> {
     const bound = await tx.lockSession(
@@ -2415,13 +2478,17 @@ export class CommunityAuthService {
 
   private registrationAvailable(): boolean {
     return (
-      this.options.environment !== "production" ||
-      this.registrationAgreement !== null
+      this.options.profile !== "password-only" &&
+      (this.options.environment !== "production" ||
+        this.registrationAgreement !== null)
     );
   }
 
   private channelAvailable(channel: AuthChannelName): boolean {
-    return this.modeFor(channel) !== "disabled";
+    return (
+      this.options.profile !== "password-only" &&
+      this.modeFor(channel) !== "disabled"
+    );
   }
 
   private modeFor(channel: AuthChannelName): VerificationMode | "disabled" {

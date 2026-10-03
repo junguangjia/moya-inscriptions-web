@@ -76,6 +76,8 @@
     "./community-dashboard": "./src/community/DashboardCard.tsx",
     "./community-api": "./src/community/api.ts",
     "./community-article-client": "./src/community/article-submissions-client.tsx",
-    "./community-article-preview": "./src/community/article-submission-preview.tsx"
+    "./community-article-preview": "./src/community/article-submission-preview.tsx",
+    "./users": "./src/users.ts",
+    "./initial-owner": "./src/editorial/provision-owner.ts"
   }
 }

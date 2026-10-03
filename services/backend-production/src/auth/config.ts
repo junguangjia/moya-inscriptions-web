@@ -25,7 +25,7 @@ export interface AliyunDypnsConfiguration {
 }
 export interface ConfiguredProductionAuth {
   readonly service: ProductionAuthConfiguration;
-  readonly email: TencentSesConfiguration;
+  readonly email: TencentSesConfiguration | null;
   readonly phone: AliyunDypnsConfiguration | null;
   readonly agreement: AuthRegistrationAgreement | null;
 }
@@ -92,6 +92,8 @@ export const loadProductionAuthConfiguration = async (
 ): Promise<ConfiguredProductionAuth | null> => {
   const service = productionAuthConfigurationFrom(env);
   if (service === null) return null;
+  if (service.profile === "password-only")
+    return { service, email: null, phone: null, agreement: null };
   const selected = required(env, "TENCENT_SES_ENDPOINT");
   if (
     selected !== "https://ses.tencentcloudapi.com" &&

@@ -349,3 +349,7 @@ GRANT INSERT (studio_name, studio_name_suffix) ON TABLE community.public_users T
 GRANT UPDATE (studio_name, studio_name_suffix) ON TABLE community.public_users TO :"app_role";
 GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_challenges TO :"app_role";
 GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_handoffs TO :"app_role";
+
+-- production-deployment-v3: offline operator authority, never runtime provisionable.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLE community.operator_password_accounts FROM :"app_role";
+GRANT SELECT ON TABLE community.operator_password_accounts TO :"app_role";
