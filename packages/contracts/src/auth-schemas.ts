@@ -65,7 +65,15 @@ const authRegistrationCapabilitySchema = z.discriminatedUnion("available", [
 ]);
 
 export const authCapabilitiesSchema = z.strictObject({
-  profile: z.enum(["full-local", "email-first", "disabled"]),
+  profile: z.enum(["full-local", "email-first", "password-only", "disabled"]),
+  /** Independent of OTP delivery; optional for older Development clients. */
+  password: z
+    .strictObject({
+      available: z.boolean(),
+      identifiers: z.array(z.enum(["email", "phone", "handle"])),
+      reason: z.string().min(1).max(200).nullable(),
+    })
+    .optional(),
   email: z.strictObject({
     available: z.boolean(),
     reason: z.string().min(1).max(200).nullable(),
@@ -229,7 +237,7 @@ export const authRegistrationRequestSchema = z
   .superRefine(refineStudioNameWrite);
 
 export const authPasswordLoginRequestSchema = z.strictObject({
-  channel: authChannelSchema,
+  channel: z.enum(["email", "phone", "handle"]),
   identifier: z.string().min(1).max(254),
   // Do not expose composition differences on sign-in; the service verifies generically.
   password: z.string().max(80).meta({

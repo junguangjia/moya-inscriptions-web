@@ -17,6 +17,7 @@ const keyFrom = (value: string | undefined, name: string): Uint8Array => {
 
 export interface ProductionAuthConfiguration {
   readonly keys: AuthKeys;
+  readonly profile?: "email-first" | "password-only";
   readonly phoneEnabled: boolean;
 }
 
@@ -28,13 +29,13 @@ export const productionAuthConfigurationFrom = (
   if (
     (env.AUTH_PROFILE !== undefined &&
       env.AUTH_PROFILE !== "" &&
-      env.AUTH_PROFILE !== "email-first") ||
+      !["email-first", "password-only"].includes(env.AUTH_PROFILE)) ||
     [env.AUTH_EMAIL_CAPTURE_URL, env.AUTH_PHONE_CAPTURE_URL].some(
       (value) => value !== undefined && value !== "",
     ) ||
     (env.AUTH_EMAIL_PROVIDER !== undefined &&
       env.AUTH_EMAIL_PROVIDER !== "" &&
-      env.AUTH_EMAIL_PROVIDER !== "tencent-ses") ||
+      !["disabled", "tencent-ses"].includes(env.AUTH_EMAIL_PROVIDER)) ||
     (env.AUTH_PHONE_PROVIDER !== undefined &&
       env.AUTH_PHONE_PROVIDER !== "" &&
       !["disabled", "aliyun-dypns"].includes(env.AUTH_PHONE_PROVIDER))
@@ -50,7 +51,22 @@ export const productionAuthConfigurationFrom = (
     return null;
   if (env.AUTH_PUBLIC_ENABLED !== "true")
     throw new Error("AUTH_PUBLIC_ENABLED must be true or false");
-  if (env.AUTH_EMAIL_PROVIDER !== "tencent-ses")
+  const passwordOnly = env.AUTH_PROFILE === "password-only";
+  if (passwordOnly) {
+    if (
+      env.AUTH_EMAIL_PROVIDER !== "disabled" ||
+      env.AUTH_PHONE_PROVIDER !== "disabled" ||
+      Object.entries(env).some(
+        ([name, value]) =>
+          /^(TENCENT_SES_|ALIYUN_)/u.test(name) &&
+          value !== undefined &&
+          value !== "",
+      )
+    )
+      throw new Error(
+        "password-only requires disabled OTP providers and no delivery configuration",
+      );
+  } else if (env.AUTH_EMAIL_PROVIDER !== "tencent-ses")
     throw new Error("AUTH_EMAIL_PROVIDER must be tencent-ses when enabled");
   const version = env.AUTH_KEY_VERSION;
   if (
@@ -60,6 +76,7 @@ export const productionAuthConfigurationFrom = (
   )
     throw new Error("AUTH_KEY_VERSION must be a positive safe integer");
   return {
+    profile: passwordOnly ? "password-only" : "email-first",
     keys: {
       version: Number(version),
       lookupKey: keyFrom(env.AUTH_LOOKUP_KEY, "AUTH_LOOKUP_KEY"),
@@ -85,9 +102,9 @@ export const createProductionAuthService = (
 ): CommunityAuthService =>
   new CommunityAuthService(port, {
     environment: "production",
-    profile: "email-first",
+    profile: config.profile ?? "email-first",
     keys: config.keys,
-    emailMode: "provider",
+    emailMode: config.profile === "password-only" ? "disabled" : "provider",
     phoneMode: config.phoneEnabled ? "provider" : "disabled",
     delivery,
     registrationAgreement,

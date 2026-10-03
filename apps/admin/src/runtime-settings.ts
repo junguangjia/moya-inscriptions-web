@@ -228,3 +228,21 @@ export const assertCmsProductionEnvironment = (
       throw new Error("Invalid production CMS URL configuration");
   }
 };
+
+/** Validate before loading Payload or opening its privileged setup connection. */
+export const assertInitialOwnerDatabaseTLS = (
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): void => {
+  try {
+    const url = new URL(environment.CMS_DATABASE_URL ?? "");
+    if (url.searchParams.getAll("sslmode").join(",") !== "verify-full")
+      throw new Error();
+    const config = parsePostgresConfig({
+      DATABASE_URL: environment.CMS_DATABASE_URL,
+      DATABASE_SSL_CA_FILE: environment.CMS_DATABASE_SSL_CA_FILE,
+    });
+    if (!config.ssl) throw new Error();
+  } catch {
+    throw new Error("INITIAL_OWNER_DATABASE_TLS_REFUSED");
+  }
+};

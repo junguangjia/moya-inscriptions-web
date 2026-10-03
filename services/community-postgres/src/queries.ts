@@ -17,7 +17,7 @@ export const findSessionUserSql = `
   WHERE s.token_hash = $1::text
     AND s.revoked_at IS NULL
     AND s.expires_at > $2::timestamptz
-    AND (NOT $3::boolean OR (s.issuer = 'verified_login' AND s.auth_environment = 'production'))
+    AND (NOT $3::boolean OR (s.issuer IN ('verified_login','password_login') AND s.auth_environment = 'production'))
 `;
 
 export const revokeSessionSql = `

@@ -256,6 +256,20 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
       }
     };
     return {
+      findProvisionedPasswordUser: async (handle, environment) => {
+        const rows = await query<{ user_id: string }>(
+          `SELECT p.user_id FROM community.operator_password_accounts p
+           JOIN community.public_users u ON u.id=p.user_id AND u.handle=p.handle
+           JOIN community.user_password_credentials c ON c.user_id=p.user_id
+             AND c.version=p.credential_version
+             AND encode(sha256(convert_to(c.verifier,'UTF8')),'hex')=p.credential_fingerprint
+           WHERE p.handle=$1 AND p.environment=$2`,
+          [handle, environment],
+        );
+        return rows[0] === undefined
+          ? null
+          : this.unit(client).findUser(rows[0].user_id);
+      },
       findUser: async (id) => {
         const rows = await query<
           StoredUser & {
@@ -619,7 +633,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
         }>(
           `SELECT id, token_hash, user_id, expires_at, revoked_at
            FROM community.sessions WHERE token_hash=$1
-             AND ($2::text IS NULL OR (issuer='verified_login' AND auth_environment=$2))
+             AND ($2::text IS NULL OR (issuer IN ('verified_login','password_login') AND auth_environment=$2))
 `,
           [tokenHash, requiredEnvironment ?? null],
         );
@@ -644,7 +658,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
         }>(
           `SELECT id, token_hash, user_id, expires_at, revoked_at
            FROM community.sessions WHERE token_hash=$1
-             AND ($2::text IS NULL OR (issuer='verified_login' AND auth_environment=$2))
+             AND ($2::text IS NULL OR (issuer IN ('verified_login','password_login') AND auth_environment=$2))
            FOR UPDATE`,
           [tokenHash, requiredEnvironment ?? null],
         );
@@ -780,7 +794,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
            FROM community.sessions s
            JOIN community.public_users u ON u.id = s.user_id
            WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > $2
-             AND ($3::text IS NULL OR (s.issuer='verified_login' AND s.auth_environment=$3))`,
+             AND ($3::text IS NULL OR (s.issuer IN ('verified_login','password_login') AND s.auth_environment=$3))`,
           [tokenHash, atIso, requiredEnvironment ?? null],
         );
         const row = rows[0];

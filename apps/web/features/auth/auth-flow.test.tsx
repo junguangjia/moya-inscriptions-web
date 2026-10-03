@@ -1181,4 +1181,53 @@ describe("AuthFlow", () => {
     expect(calls("challenges")).toHaveLength(0);
     expect(calls("passwords/reset")).toHaveLength(0);
   });
+  it("uses the existing password form for a controlled handle while OTP operations are unavailable", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    request.mockImplementation(async (path: string) =>
+      path === "capabilities"
+        ? {
+            status: 200,
+            body: {
+              profile: "password-only",
+              developmentOnly: false,
+              password: {
+                available: true,
+                identifiers: ["handle"],
+                reason: null,
+              },
+              email: { available: false, reason: "disabled" },
+              phone: { available: false, reason: "disabled" },
+              registration: {
+                available: false,
+                agreement: null,
+                reason: "disabled",
+              },
+            },
+          }
+        : { status: 200, body: { session: syntheticSession } },
+    );
+    await render({}, false);
+    expect(container.textContent).toContain(
+      "验证码登录、注册、找回密码和联系方式绑定暂不可用",
+    );
+    expect(button("验证码登录").disabled).toBe(true);
+    expect(button("忘记密码").disabled).toBe(true);
+    expect(
+      container.querySelector('a[aria-disabled="true"]')?.textContent,
+    ).toBe("去注册");
+    await setInput(
+      input('input[autocomplete="username"]'),
+      "synthetic-operator",
+    );
+    await setInput(input('input[type="password"]'), syntheticPassword);
+    expect(button("登录").disabled).toBe(false);
+    await submit();
+    expect(calls("passwords/login")[0]?.[1]?.body).toMatchObject({
+      channel: "handle",
+      identifier: "synthetic-operator",
+      password: syntheticPassword,
+    });
+    expect(calls("challenges")).toHaveLength(0);
+    expect(onReturn).toHaveBeenCalled();
+  });
 });

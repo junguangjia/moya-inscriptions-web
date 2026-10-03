@@ -164,6 +164,7 @@ export const AuthFlow = ({
   >("loading");
   const [channel, setChannel] = useState<Channel>(initialChannel);
   const [email, setEmail] = useState(initialEmail);
+  const [handle, setHandle] = useState("");
   const [phone, setPhone] = useState(
     initialPhone.replace(/^(?:\+86|0086)/u, ""),
   );
@@ -196,9 +197,21 @@ export const AuthFlow = ({
     developmentAgreementAvailable || approvedAgreement !== null;
   const registrationUnavailable =
     mode === "register" && !resetting && !agreementAvailable;
-  const identifier = channel === "email" ? email : phone;
+  const passwordOnly = capabilities?.profile === "password-only";
+  const handleLogin =
+    passwordOnly && mode === "sign-in" && method === "password" && !resetting;
+  const identifier = handleLogin ? handle : channel === "email" ? email : phone;
+  const passwordIdentifier = handleLogin ? "handle" : channel;
+  const passwordAvailable =
+    capabilities?.password === undefined
+      ? capabilities?.[channel].available === true
+      : capabilities.password.available &&
+        capabilities.password.identifiers.includes(passwordIdentifier);
   const available =
-    capabilityState === "ready" && capabilities?.[channel].available === true;
+    capabilityState === "ready" &&
+    (mode === "sign-in" && method === "password" && !resetting
+      ? passwordAvailable
+      : capabilities?.[channel].available === true);
   const locked = pending !== null && pending !== "send";
   const passwordLogin =
     mode === "sign-in" && method === "password" && !resetting;
@@ -341,6 +354,11 @@ export const AuthFlow = ({
   };
 
   const updateIdentifier = (value: string) => {
+    if (handleLogin) {
+      setHandle(value);
+      if (feedback?.field === "identifier") setFeedback(null);
+      return;
+    }
     if (channel === "email") setEmail(value);
     else setPhone(value.replace(/^(?:\+86|0086)/u, ""));
     onInputChange?.(
@@ -599,12 +617,17 @@ export const AuthFlow = ({
   };
 
   const validateIdentifier = () => {
-    const normalized = normalizedIdentifier(channel, identifier);
+    const normalized = handleLogin
+      ? /^[a-z][a-z0-9-]{2,31}$/u.test(identifier)
+        ? identifier
+        : null
+      : normalizedIdentifier(channel, identifier);
     if (normalized === null) {
       setFeedback({
         field: "identifier",
-        message:
-          channel === "email"
+        message: handleLogin
+          ? "请输入有效的账号。"
+          : channel === "email"
             ? "请输入有效的邮箱地址。"
             : "请输入 11 位中国大陆手机号。",
       });
@@ -645,7 +668,7 @@ export const AuthFlow = ({
     await perform(
       "password-login",
       "passwords/login",
-      { channel, identifier: normalized, password },
+      { channel: passwordIdentifier, identifier: normalized, password },
       (result) => {
         if (result.status === 200 && hasCompletedAuthSession(result.body)) {
           finish();
@@ -927,22 +950,28 @@ export const AuthFlow = ({
                   role="group"
                   aria-label={mode === "register" ? "注册方式" : "登录方式"}
                 >
-                  {(["email", "phone"] as const).map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      aria-pressed={channel === option}
-                      disabled={
-                        locked ||
-                        capabilityState !== "ready" ||
-                        !capabilities?.[option].available
-                      }
-                      onClick={() => changeChannel(option)}
-                    >
-                      {option === "email" ? "邮箱" : "手机"}
-                    </button>
-                  ))}
+                  {!passwordOnly &&
+                    (["email", "phone"] as const).map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        aria-pressed={channel === option}
+                        disabled={
+                          locked ||
+                          capabilityState !== "ready" ||
+                          !capabilities?.[option].available
+                        }
+                        onClick={() => changeChannel(option)}
+                      >
+                        {option === "email" ? "邮箱" : "手机"}
+                      </button>
+                    ))}
                 </div>
+                {passwordOnly && (
+                  <p className={styles.channelHint}>
+                    验证码登录、注册、找回密码和联系方式绑定暂不可用。请使用已开通的账号和密码登录。
+                  </p>
+                )}
                 {capabilityState === "loading" ? (
                   <p className={styles.capabilityNotice} role="status">
                     <Icon name="loading" />
@@ -969,6 +998,7 @@ export const AuthFlow = ({
                       : "请稍后再试。"}
                   </p>
                 ) : capabilityState === "ready" &&
+                  !passwordOnly &&
                   channel === "email" &&
                   !capabilities?.phone.available ? (
                   <p className={styles.channelHint}>手机登录当前不可用。</p>
@@ -980,14 +1010,20 @@ export const AuthFlow = ({
                 ) : null}
                 <div className={styles.field}>
                   <label htmlFor={fieldId}>
-                    {channel === "email" ? "邮箱地址" : "手机号"}
+                    {handleLogin
+                      ? "账号"
+                      : channel === "email"
+                        ? "邮箱地址"
+                        : "手机号"}
                   </label>
                   <div
                     className={
-                      channel === "phone" ? styles.phoneField : undefined
+                      !handleLogin && channel === "phone"
+                        ? styles.phoneField
+                        : undefined
                     }
                   >
-                    {channel === "phone" && (
+                    {!handleLogin && channel === "phone" && (
                       <span className={styles.dialCode} aria-hidden="true">
                         +86
                       </span>
@@ -995,7 +1031,13 @@ export const AuthFlow = ({
                     <Input
                       id={fieldId}
                       ref={identifierRef}
-                      type={channel === "email" ? "email" : "tel"}
+                      type={
+                        handleLogin
+                          ? "text"
+                          : channel === "email"
+                            ? "email"
+                            : "tel"
+                      }
                       autoComplete={
                         passwordLogin
                           ? "username"
@@ -1003,12 +1045,22 @@ export const AuthFlow = ({
                             ? "email"
                             : "tel-national"
                       }
-                      inputMode={channel === "email" ? "email" : "tel"}
+                      inputMode={
+                        handleLogin
+                          ? "text"
+                          : channel === "email"
+                            ? "email"
+                            : "tel"
+                      }
                       autoCapitalize="none"
                       autoCorrect="off"
                       spellCheck={false}
                       placeholder={
-                        channel === "email" ? "邮箱地址" : "11 位手机号"
+                        handleLogin
+                          ? "账号"
+                          : channel === "email"
+                            ? "邮箱地址"
+                            : "11 位手机号"
                       }
                       value={identifier}
                       onChange={(event) => updateIdentifier(event.target.value)}
@@ -1019,7 +1071,7 @@ export const AuthFlow = ({
                       className={styles.input}
                     />
                   </div>
-                  {channel === "phone" && (
+                  {!handleLogin && channel === "phone" && (
                     <p className={styles.hint}>仅支持中国大陆手机号（+86）。</p>
                   )}
                   {fieldFeedback("identifier")}
@@ -1317,7 +1369,7 @@ export const AuthFlow = ({
               <div className={styles.secondaryActions}>
                 <Button
                   variant="quiet"
-                  disabled={locked}
+                  disabled={locked || passwordOnly}
                   onClick={() =>
                     changeMethod(passwordLogin ? "code" : "password")
                   }
@@ -1327,7 +1379,7 @@ export const AuthFlow = ({
                 {!resetting && (
                   <Button
                     variant="quiet"
-                    disabled={locked}
+                    disabled={locked || passwordOnly}
                     onClick={beginReset}
                   >
                     忘记密码
@@ -1348,11 +1400,18 @@ export const AuthFlow = ({
               {mode === "register" ? "已有账户？" : "还没有账户？"}{" "}
               <a
                 href={modeLink}
-                aria-disabled={locked || undefined}
-                tabIndex={locked ? -1 : undefined}
+                aria-disabled={
+                  locked || (passwordOnly && mode !== "register") || undefined
+                }
+                tabIndex={
+                  locked || (passwordOnly && mode !== "register")
+                    ? -1
+                    : undefined
+                }
                 onClick={(event) => {
                   event.preventDefault();
-                  changeMode(mode === "register" ? "sign-in" : "register");
+                  if (!passwordOnly || mode === "register")
+                    changeMode(mode === "register" ? "sign-in" : "register");
                 }}
               >
                 {mode === "register" ? "去登录" : "去注册"}

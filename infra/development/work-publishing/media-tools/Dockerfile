@@ -17,6 +17,7 @@ RUN apt-get update \
     libavformat61=7:7.1.5-0+deb13u1 \
     libde265-0=1.0.15-1+deb13u2 \
     libheif-examples=1.19.8-1+deb13u1 \
+    libheif-plugin-dav1d=1.19.8-1+deb13u1 \
     libheif-plugin-libde265=1.19.8-1+deb13u1 \
     libheif1=1.19.8-1+deb13u1 \
     libx264-164=2:0.164.3108+git31e19f9-2+b1 \

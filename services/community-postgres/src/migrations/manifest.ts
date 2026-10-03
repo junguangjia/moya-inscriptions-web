@@ -271,4 +271,10 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "47984e4202ab4fe4b27c890f686081d9364dfdb388658147362d3885d5ab343c",
     }),
+    Object.freeze({
+      migrationId: "20261003010000",
+      filename: "20261003010000_operator_password_accounts.sql",
+      checksum:
+        "5b4b2937e392cfba0a52074007a1bdb1e0be2c05834641fd55db68dbbbb8c36b",
+    }),
   ]);

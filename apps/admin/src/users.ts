@@ -3,6 +3,22 @@ const owner: Access = ({ req }) =>
   req.user?.collection === "users" && req.user.role === "owner";
 const ownerField: FieldAccess = ({ req }) =>
   req.user?.collection === "users" && req.user.role === "owner";
+export const initialUserEndpoints = (
+  environment = process.env.CMS_ENVIRONMENT,
+): NonNullable<CollectionConfig["endpoints"]> =>
+  environment === "synthetic"
+    ? []
+    : [
+        {
+          path: "/first-register",
+          method: "post",
+          handler: () =>
+            Response.json(
+              { error: "OPERATOR_SETUP_REQUIRED" },
+              { status: 403 },
+            ),
+        },
+      ];
 export const Users: CollectionConfig = {
   slug: "users",
   labels: { singular: "操作身份", plural: "操作身份" },
@@ -25,6 +41,7 @@ export const Users: CollectionConfig = {
     delete: () => false,
     unlock: owner,
   },
+  endpoints: initialUserEndpoints(),
   fields: [
     {
       name: "role",

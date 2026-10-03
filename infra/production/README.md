@@ -40,6 +40,57 @@ presence is not acceptance. Startup only validates protected configuration,
 readiness and migration ledgers. It never sends verification messages, migrates,
 grants, pulls an image or makes COS setup requests.
 
+## Controlled password-only acceptance
+
+For a release with real verification delivery disabled, use
+`AUTH_PUBLIC_ENABLED=true`, `AUTH_PROFILE=password-only`,
+`AUTH_EMAIL_PROVIDER=disabled`, and `AUTH_PHONE_PROVIDER=disabled`. Remove all
+`TENCENT_SES_*` and `ALIYUN_*` delivery settings from that Backend environment.
+Keep the existing dedicated auth key configuration: it protects rate-limit
+identifiers and encrypted login receipts even when no OTP is sent. The existing
+login form accepts a controlled account handle and password. Verification
+registration/login, password recovery, and contact binding/unbinding are
+unavailable on both the UI and service entry points. Provisioned accounts have
+no verified email or phone; their sessions carry `password_login` provenance.
+
+Apply the forward community migration and named runtime grants before startup.
+The App role has SELECT only on `community.operator_password_accounts`; it must
+not own that table, inherit an operator role, or receive write grants on it. An
+operator uses `scripts/provision-password-account.mjs --input <private-file>`
+with the built server packages, `NODE_ENV=production`,
+`AUTH_PROFILE=password-only`, and a separately protected
+`APP_PROVISION_DATABASE_URL` (plus `APP_PROVISION_DATABASE_SSL_CA_FILE` if
+needed). The dedicated operator connection uses the existing verified TLS parser
+and never falls back to App credentials. Do not put connection strings or
+passwords in command arguments or logs.
+
+The input is an operator-owned regular JSON file with mode `0600`, no symlink,
+and exactly these fields: `requestId` (stable UUID), `handle` (3–32 lowercase
+letters/digits/hyphens, beginning with a letter), `displayName` (1–40
+characters), `environment` (`production`), `operatorLabel` (3–64 lowercase
+letters/digits/hyphens, beginning with a letter), and `password` (the existing
+password policy). Create it through a protected input mechanism; keep its
+password out of shell history. A matching retry returns the existing account.
+Reused identifiers, changed input, existing unprovisioned handles, inactive
+users, or changed initial credentials fail without resetting or adopting an
+account. Provisioning is transactional and audited; it does not create contacts,
+challenges, or sessions. Use the normal website login to verify each account.
+
+The Admin Owner is a separate native Payload user. On a migrated, empty Admin
+user table, run
+`pnpm --filter admin exec payload run scripts/provision-initial-owner.ts` with
+the protected Admin configuration, `CMS_ENVIRONMENT=production`, and
+`CMS_INITIAL_OWNER_INPUT` pointing to a mode `0600`, operator-owned regular JSON
+file containing only `email` and `password` (20–128 characters). The command
+serializes setup, refuses any nonempty user table, and creates one native Owner
+without an API key. Then use normal Admin login. Outside the synthetic test
+profile, both the native public `/api/users/first-register` endpoint and the
+`/admin/create-first-user` page are closed. This command is initial
+provisioning, not a password reset or public-user privilege promotion.
+
+These instructions describe the operator boundary. Local synthetic checks do not
+establish that a release was deployed or that real acceptance passed.
+
 ## Existing processes behind Nginx
 
 | Process        | Unix identity                | Listener         | EnvironmentFile                       |

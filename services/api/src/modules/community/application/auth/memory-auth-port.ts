@@ -19,6 +19,13 @@ interface MemorySession extends StoredSession {
 
 interface MemoryState {
   users: StoredUser[];
+  operatorPasswordAccounts: {
+    userId: string;
+    handle: string;
+    environment: "development" | "production";
+    verifier: string;
+    version: number;
+  }[];
   credentials: StoredPasswordCredential[];
   passwordResetReceipts: StoredPasswordResetReceipt[];
   identities: StoredIdentity[];
@@ -38,6 +45,7 @@ interface MemoryState {
 
 const emptyState = (): MemoryState => ({
   users: [],
+  operatorPasswordAccounts: [],
   credentials: [],
   passwordResetReceipts: [],
   identities: [],
@@ -67,6 +75,29 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
     if (current !== undefined) this.state.users[index] = { ...current, status };
   }
 
+  /** Synthetic setup seam, never exposed by the application persistence port. */
+  provisionPasswordAccount(
+    user: StoredUser,
+    credential: StoredPasswordCredential,
+    environment: "development" | "production",
+  ): void {
+    if (
+      this.state.users.some(
+        (row) => row.id === user.id || row.handle === user.handle,
+      )
+    )
+      throw new Error("Synthetic provisioning conflict");
+    this.state.users.push(user);
+    this.state.credentials.push(credential);
+    this.state.operatorPasswordAccounts.push({
+      userId: user.id,
+      handle: user.handle,
+      environment,
+      verifier: credential.verifier,
+      version: credential.version,
+    });
+  }
+
   async transaction<T>(work: (tx: AuthUnitOfWork) => Promise<T>): Promise<T> {
     const run = async (): Promise<T> => {
       const snapshot = clone(this.state);
@@ -88,6 +119,24 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
   private unit(): AuthUnitOfWork {
     const state = this.state;
     return {
+      findProvisionedPasswordUser: async (handle, environment) => {
+        const authority = state.operatorPasswordAccounts.find(
+          (row) =>
+            row.handle === handle &&
+            row.environment === environment &&
+            state.credentials.some(
+              (c) =>
+                c.userId === row.userId &&
+                c.verifier === row.verifier &&
+                c.version === row.version,
+            ),
+        );
+        return authority === undefined
+          ? null
+          : (state.users.find(
+              (user) => user.id === authority.userId && user.handle === handle,
+            ) ?? null);
+      },
       findUser: async (id) =>
         state.users.find((user) => user.id === id) ?? null,
       findIdentity: async (kind, digest) =>
@@ -247,7 +296,7 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
           (item) =>
             item.tokenHash === tokenHash &&
             (requiredEnvironment === undefined ||
-              (item.issuer === "verified_login" &&
+              (["verified_login", "password_login"].includes(item.issuer) &&
                 item.authEnvironment === requiredEnvironment)),
         );
         if (row === undefined) return null;
@@ -264,7 +313,7 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
           (item) =>
             item.tokenHash === tokenHash &&
             (requiredEnvironment === undefined ||
-              (item.issuer === "verified_login" &&
+              (["verified_login", "password_login"].includes(item.issuer) &&
                 item.authEnvironment === requiredEnvironment)),
         );
         if (row === undefined) return null;
@@ -397,7 +446,7 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
           (row) =>
             row.tokenHash === tokenHash &&
             (requiredEnvironment === undefined ||
-              (row.issuer === "verified_login" &&
+              (["verified_login", "password_login"].includes(row.issuer) &&
                 row.authEnvironment === requiredEnvironment)) &&
             row.revokedAt === null &&
             after(row.expiresAt, atIso),
