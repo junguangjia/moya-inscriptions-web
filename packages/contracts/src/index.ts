@@ -138,6 +138,7 @@ export type {
   AuthChallengeAccepted,
   AuthChallengeRequest,
   AuthRegistrationRequest,
+  AuthRegistrationAgreement,
   AuthFactor,
 } from "./auth-schemas.ts";
 export type { MentionReference } from "./mention-references.js";

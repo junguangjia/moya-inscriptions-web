@@ -61,6 +61,7 @@ let setup: ReturnType<typeof poolFor> | undefined,
 let control: ReturnType<typeof poolFor> | undefined,
   issuer: ReturnType<typeof poolFor> | undefined;
 const createdDelegationRoles: string[] = [];
+let issuerDatabaseTarget: string | undefined;
 let database: string | undefined,
   role: string | undefined,
   adapter: PostgresArticleAuthoringAdapter;
@@ -193,7 +194,12 @@ beforeAll(async () => {
     roleUrl.username = roleName;
     roleUrl.password = rolePassword;
     if (purpose === "control") control = poolFor(roleUrl.href);
-    else issuer = poolFor(roleUrl.href);
+    else {
+      issuer = poolFor(roleUrl.href);
+      const metadata = new URL(roleUrl);
+      metadata.password = "";
+      issuerDatabaseTarget = metadata.href;
+    }
   }
   const grantClient = await setup.connect();
   try {
@@ -317,22 +323,29 @@ it("uses existing separate Article roles for Production connections without gran
   ]);
 });
 
-registerArticleDelegationSdkCases({
-  get pool() {
-    if (app === undefined) throw Error("Resource pool not prepared");
-    return app;
-  },
-  get controlPool() {
-    if (control === undefined) throw Error("Control pool not prepared");
-    return control;
-  },
-  get issuerPool() {
-    if (issuer === undefined) throw Error("Issuer pool not prepared");
-    return issuer;
-  },
-  userId: user,
-  handle: "article-qa-owner",
-});
+for (const environment of ["development", "production"] as const)
+  registerArticleDelegationSdkCases({
+    environment,
+    get issuerDatabaseTarget() {
+      if (issuerDatabaseTarget === undefined)
+        throw Error("Issuer role target not prepared");
+      return issuerDatabaseTarget;
+    },
+    get pool() {
+      if (app === undefined) throw Error("Resource pool not prepared");
+      return app;
+    },
+    get controlPool() {
+      if (control === undefined) throw Error("Control pool not prepared");
+      return control;
+    },
+    get issuerPool() {
+      if (issuer === undefined) throw Error("Issuer pool not prepared");
+      return issuer;
+    },
+    userId: user,
+    handle: "article-qa-owner",
+  });
 
 it("consent UID SQL accepts the complete 256-character ASCII contract and rejects invalid input", async () => {
   const insert = (uid: string) =>

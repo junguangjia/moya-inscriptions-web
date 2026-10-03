@@ -6,13 +6,13 @@ Connection identities are not public accounts.
 
 ## Status
 
-| Gate                     | State                                                                                     |
-| ------------------------ | ----------------------------------------------------------------------------------------- |
-| SOFTWARE IMPLEMENTED     | Yes, in this Draft                                                                        |
-| LOCAL FLOW VERIFIED      | Automated service and HTTP tests. Owner visual and device acceptance are pending          |
-| PROVIDER CONTRACT TESTED | Tencent SendEmail and Aliyun check mapping, including non-PASS failure, with no live call |
-| LIVE DELIVERY NOT TESTED | No Tencent or Aliyun request is made                                                      |
-| PRODUCTION NOT ENABLED   | Production refuses local capture, simulation and public auth exposure                     |
+| Gate                     | State                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| SOFTWARE IMPLEMENTED     | Yes, in this Draft                                                                                                                         |
+| LOCAL FLOW VERIFIED      | Automated service and HTTP tests. Owner visual and device acceptance are pending                                                           |
+| PROVIDER CONTRACT TESTED | Tencent SendEmail and Aliyun check mapping, including non-PASS failure, with no live call                                                  |
+| LIVE DELIVERY NOT TESTED | No Tencent or Aliyun request is made                                                                                                       |
+| PRODUCTION FACTORY WIRED | full-release-runtime-v1 reuses the existing service with signed Tencent SES/optional Aliyun Dypns; final acceptance is recorded separately |
 
 ## Profiles
 
@@ -73,15 +73,18 @@ provider-generated codes (`##code##`), six digits, 300 seconds, resend interval
 `Model.VerifyResult` is `PASS`. `OutId` is correlation, not an authorization
 key. A response that echoes the code is a failure.
 
-Configure later, outside this task:
+Configure protected server inputs when separately authorized; no live activation
+or delivery runs in the runtime task:
 
 - `TENCENT_SES_SECRET_ID`, `TENCENT_SES_SECRET_KEY`, `TENCENT_SES_REGION`,
-  `TENCENT_SES_FROM`, `TENCENT_SES_TEMPLATE_ID`
+  `TENCENT_SES_FROM`, `TENCENT_SES_TEMPLATE_ID`, `TENCENT_SES_ENDPOINT`
 - `ALIYUN_ACCESS_KEY_ID`, `ALIYUN_ACCESS_KEY_SECRET`, `ALIYUN_SMS_SIGN_NAME`,
   `ALIYUN_SMS_TEMPLATE_CODE`, `ALIYUN_SMS_SCHEME_NAME`
 
-SDK retries stay at one attempt. An unknown timeout is not retried and does not
-verify the contact.
+Signed HTTPS transport uses one attempt, an8-second deadline and64KiB response
+ceiling; redirects are rejected. Aliyun `AutoRetry=0` prevents provider
+template/signature retry. An unknown timeout is not retried and does not verify
+the contact.
 
 ## Sessions
 
@@ -116,6 +119,35 @@ defaults and do not receive the owner publishing class.
 
 ## Rollback
 
-Leave `AUTH_PROFILE` unset and do not set auth variables in production. The new
-routes stay unmounted. A forward migration can be corrected only by another
+Leave `AUTH_PROFILE` unset in Development, or set `AUTH_PUBLIC_ENABLED=false` in
+Production. The routes stay unmounted; a local/capture/simulated Production
+profile remains invalid. A forward migration can be corrected only by another
 forward migration after it has been applied.
+
+## Production continuation in full-release-runtime-v1
+
+`loadProductionAuthConfiguration` validates enabled configuration and the
+optional approved registration file before database pools. `AUTH_PUBLIC_ENABLED`
+unset/false keeps auth unmounted; enabled incomplete configuration refuses
+startup. `AUTH_PROFILE=email-first`, `AUTH_EMAIL_PROVIDER=tencent-ses`, optional
+`AUTH_PHONE_PROVIDER=aliyun-dypns` (otherwise disabled) select existing mappings
+and the existing CommunityAuthService, never a second Session/provider system.
+
+`AUTH_REGISTRATION_AGREEMENT_FILE` points to private approved plain-text JSON
+{version,title,body}. Missing material closes registration; a supplied invalid
+file refuses startup. The capability carries its version and material to the
+existing escaped-text agreement dialog. Production registration must submit the
+same version; the idempotency receipt binds it. Development keeps its labeled
+draft/legacy boolean. No approved legal copy is assumed or shipped.
+
+Production identity/account/factor/receipt-lock checks admit only active
+`issuer=verified_login`, `auth_environment=production` Sessions. Legacy or
+Development cookies/bearers do not grant Production authority. Factor and proof
+provenance, lookup-version constraints, last-login-factor protection and logout
+receipt closure remain enforced in the existing implementation.
+
+Official-provider wire tests and code-only simulated low-level transport tests
+are distinct from activation, actual inbox/SMS receipt and vendor integration.
+Use the common candidate's
+[runtime evidence](../production/full-release-runtime-v1.md) for current
+acceptance, not this earlier Development status table.

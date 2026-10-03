@@ -1,3 +1,4 @@
+import { ARTICLE_DOCUMENT_LIMITS } from "@moya/contracts/schemas";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -109,6 +110,8 @@ describe("current repository truth and local configuration", () => {
       "/yoyi_dev",
     );
     expect(Object.keys(web).sort()).toEqual([
+      "AUTH_INGRESS_TOKEN",
+      "AUTH_SOURCE_RELAY_TOKEN",
       "CMS_INTERNAL_URL",
       "MOYA_PUBLIC_API_BASE_URL",
       "NODE_ENV",
@@ -169,7 +172,7 @@ describe("current repository truth and local configuration", () => {
       for (const setting of [
         "Restart=on-failure",
         "KillSignal=SIGTERM",
-        "TimeoutStopSec=30",
+        service === "backend" ? "TimeoutStopSec=90" : "TimeoutStopSec=30",
         "NoNewPrivileges=true",
         "ProtectSystem=strict",
       ])
@@ -239,17 +242,131 @@ describe("current repository truth and local configuration", () => {
       );
   });
 
+  it("allows the existing PNG and Article body bounds only at their own ingress paths", async () => {
+    const nginx = await readFile(
+      path.join(repositoryRoot, "infra/production/nginx/yoyi.conf.template"),
+      "utf8",
+    );
+    const locationBody = (header: string) => {
+      const marker = `${header} {`;
+      const start = nginx.indexOf(marker);
+      expect(start, header).toBeGreaterThanOrEqual(0);
+      return nginx.slice(start + marker.length, nginx.indexOf("}", start));
+    };
+    expect(nginx.match(/client_max_body_size 1m;/g)).toHaveLength(1);
+    expect(nginx).not.toMatch(/client_max_body_size\s+0\s*;/);
+    expect(locationBody("location = /api/community/media")).toContain(
+      "client_max_body_size 4m;",
+    );
+    const articleKilobytes =
+      (ARTICLE_DOCUMENT_LIMITS.documentBytes + 16_384) / 1024;
+    for (const header of [
+      "location = /api/community/article-authoring",
+      "location ^~ /api/community/article-authoring/",
+    ]) {
+      expect(locationBody(header)).toContain(
+        `client_max_body_size ${articleKilobytes}k;`,
+      );
+      expect(locationBody(header)).toContain("proxy_pass http://yoyi_web;");
+    }
+    expect(locationBody("location /api/community/")).not.toContain(
+      "client_max_body_size",
+    );
+    expect(locationBody("location /api/")).toContain(
+      "client_max_body_size 50m;",
+    );
+  });
+
+  it("keeps media streaming and Article issuer boundaries explicit", async () => {
+    const nginx = await readFile(
+      path.join(repositoryRoot, "infra/production/nginx/yoyi.conf.template"),
+      "utf8",
+    );
+    const upload = nginx.slice(
+      nginx.indexOf('location ~ "^/api/community/publishing/uploads/'),
+      nginx.indexOf("    # Private derivative bytes"),
+    );
+    for (const directive of [
+      "client_max_body_size 8g;",
+      "client_body_timeout 130s;",
+      "proxy_request_buffering off;",
+      "proxy_buffering off;",
+      "proxy_cache off;",
+      "proxy_next_upstream off;",
+      "proxy_send_timeout 130s;",
+      "proxy_read_timeout 75s;",
+    ])
+      expect(upload).toContain(directive);
+    expect(nginx.match(/client_max_body_size 8g;/g)).toHaveLength(1);
+    for (const exact of [
+      "/mcp/article-authoring",
+      "/.well-known/oauth-protected-resource/mcp/article-authoring",
+    ])
+      expect(nginx).toMatch(
+        new RegExp(
+          `location = ${exact.replaceAll(".", "\\.")} \\{[^}]*proxy_pass http://yoyi_backend;`,
+        ),
+      );
+    expect(nginx).toContain("server_name article-auth.example.invalid;");
+    expect(nginx).toContain("proxy_set_header X-Forwarded-Proto https;");
+    expect(nginx).toContain(
+      "proxy_set_header X-Forwarded-Host article-auth.example.invalid;",
+    );
+    const unit = await readFile(
+      path.join(
+        repositoryRoot,
+        "infra/production/systemd/yoyi-backend.service",
+      ),
+      "utf8",
+    );
+    expect(unit).toContain(
+      "ReadWritePaths=/var/lib/yoyi-backend/publishing-work",
+    );
+    expect(unit).toContain("ProtectSystem=strict");
+    const backend = parseEnv(
+      await readFile(
+        path.join(repositoryRoot, "infra/production/env/backend.env.example"),
+        "utf8",
+      ),
+    );
+    const issuer = parseEnv(
+      await readFile(
+        path.join(
+          repositoryRoot,
+          "infra/production/env/article-authorization.env.example",
+        ),
+        "utf8",
+      ),
+    );
+    expect(backend.ARTICLE_AUTHORIZATION_DATABASE_URL).toBeUndefined();
+    expect(backend.ARTICLE_AUTHORIZATION_SIGNING_JWKS_FILE).toBeUndefined();
+    expect(issuer.APP_DATABASE_URL).toBeUndefined();
+    expect(issuer.ARTICLE_AUTHORING_CONTROL_DATABASE_URL).toBeUndefined();
+    expect(issuer.CMS_DATABASE_URL).toBeUndefined();
+    expect(backend.AUTH_PHONE_PROVIDER).toBe("disabled");
+    expect(backend.WORK_MEDIA_STORE_DIR).toBeUndefined();
+    for (const name of [
+      "ARTICLE_AUTHORING_ISSUER",
+      "ARTICLE_AUTHORING_RESOURCE",
+      "ARTICLE_AUTHORING_CONSENT_ORIGIN",
+      "ARTICLE_AUTHORING_CLIENTS",
+      "ARTICLE_AUTHORING_WRAPPER_INDEX_KEY",
+      "ARTICLE_AUTHORING_WRAPPER_SEAL_KEY",
+    ])
+      expect(issuer[name]).toBe(backend[name]);
+  });
+
   it("routes Community V1 same-origin paths to Web, never to Payload", async () => {
     const nginx = await readFile(
       path.join(repositoryRoot, "infra/production/nginx/yoyi.conf.template"),
       "utf8",
     );
     const communityLocations = [
-      ...nginx.matchAll(/location\s+(\S+)\s+\/api\/community\/\s*\{([^}]*)\}/g),
+      ...nginx.matchAll(/location\s+\/api\/community\/\s*\{([^}]*)\}/g),
     ];
     expect(communityLocations).toHaveLength(1);
-    expect(communityLocations[0]?.[1]).toBe("^~");
-    expect(communityLocations[0]?.[2]).toContain("proxy_pass http://yoyi_web;");
+    expect(communityLocations[0]?.[1]).toContain("proxy_pass http://yoyi_web;");
+    expect(nginx).not.toContain("location ^~ /api/community/ {");
     expect(nginx).not.toMatch(/community[^\n]*yoyi_admin/);
     const local = parseEnv(
       await readFile(

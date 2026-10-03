@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   AuthorCommunityService,
+  generateSessionToken,
+  hashSessionToken,
   CommunityConflictError,
   CommunityNotFoundError,
 } from "@moya/api";
@@ -11,11 +13,13 @@ import {
 } from "@moya/backend-runtime";
 import {
   PostgresAuthorCommunityAdapter,
+  PostgresCommunityDiscoveryAdapter,
   PostgresCommunityIdentityAdapter,
   PostgresCommunityCommentAdapter,
   PostgresWorkPublishingAdapter,
 } from "@moya/community-postgres";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
+import { publicUserIdSchema } from "@moya/contracts/schemas";
 import sharp from "sharp";
 import {
   afterAll,
@@ -230,6 +234,10 @@ export const registerPhase4AuthorTests = (
           nodeEnv,
           communityIdentityPort: new PostgresCommunityIdentityAdapter(pool),
           authorCommunityPort: adapter,
+          workPublishingPort: publishing,
+          ...(nodeEnv === "production"
+            ? { discoveryPort: new PostgresCommunityDiscoveryAdapter(pool) }
+            : {}),
           discussionPort: discussion,
           communityCommentPort: discussion,
           catalogQueryPort: createDevelopmentCatalogFixtureQueryPort(),
@@ -1547,24 +1555,39 @@ export const registerPhase4AuthorTests = (
       });
       expect(noReceipt.status).toBe(422);
     });
-    it("does not compose any Phase 4 route in Production even with an adapter supplied", async () => {
+    it("serves Production business routes with PostgreSQL sessions while excluding Development sign-in", async () => {
+      const token = generateSessionToken();
+      const issuedAt = new Date();
+      await new PostgresCommunityIdentityAdapter(pool).createSession({
+        id: id("session"),
+        userId: publicUserIdSchema.parse(a),
+        tokenHash: await hashSessionToken(token),
+        issuedAt,
+        expiresAt: new Date(issuedAt.getTime() + 60_000),
+      });
       const base = await server("production");
       for (const route of [
         "discover",
         "filter-options",
         `content/work/${work}/card`,
         `discussion/work/${work}`,
-        "me/comments",
-        "me/blocks",
-        "publishing/drafts",
+        `authors/${a}`,
+        `works/${work}`,
       ])
-        expect((await fetch(`${base}/v1/community/${route}`)).status).toBe(404);
-      expect((await fetch(`${base}/v1/community/authors/${a}`)).status).toBe(
-        404,
-      );
-      expect((await fetch(`${base}/v1/community/works/${work}`)).status).toBe(
-        404,
-      );
+        expect(
+          (await fetch(`${base}/v1/community/${route}`)).status,
+          route,
+        ).toBe(200);
+      for (const route of ["me/comments", "me/blocks", "publishing/drafts"]) {
+        expect((await fetch(`${base}/v1/community/${route}`)).status).toBe(401);
+        expect(
+          (
+            await fetch(`${base}/v1/community/${route}`, {
+              headers: { authorization: `Bearer ${token}` },
+            })
+          ).status,
+        ).toBe(200);
+      }
       expect(
         (await fetch(`${base}/v1/development/sign-in`, { method: "POST" }))
           .status,

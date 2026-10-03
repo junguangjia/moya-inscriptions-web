@@ -8,3 +8,6 @@ export * from "./components/navigation.js";
 export * from "./components/overlays.js";
 export * from "./components/primitives.js";
 export * from "./components/tabs.js";
+
+// Canonical scoped styling for content rendered inside existing application shells.
+export { articleLineHeight, lightTheme } from "@moya/design-tokens";

@@ -6,6 +6,7 @@ import {
   CommunityConflictError,
   CommunityInputError,
   CommunityNotFoundError,
+  CommunitySessionService,
   PublishingTransferRegistry,
   WorkPublishingService,
 } from "@moya/api";
@@ -348,6 +349,14 @@ const start = async ({
   const address = await startServer(server, { host: "127.0.0.1", port: 0 });
   const base = `http://${address.address}:${address.port}`;
   const signIn = async (handle = "dev-user-01") => {
+    if (nodeEnv !== "development") {
+      // The test seeds the injected identity port; Production has no Development entry.
+      const grant = await new CommunitySessionService(
+        identity,
+      ).signInDevelopmentAccount(handle);
+      if (grant === null) throw new Error("Missing synthetic account");
+      return grant.token;
+    }
     const response = await fetch(`${base}/v1/development/sign-in`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1572,115 +1581,132 @@ describe("work publishing author HTTP surface", () => {
     ]);
   });
 
-  it("answers 503 for uploads, item registration and media reads without a configured store", async () => {
-    const fake = fakePort({});
-    const { base, signIn } = await start({ port: fake.port, media: false });
-    const token = await signIn();
-    const upload = rawUpload(base, uploadHeaders(token, 16 * KiB));
-    upload.client.end(randomBytes(16 * KiB));
-    const answer = await upload.answer;
-    expect(answer.status).toBe(503);
-    expect(apiErrorSchema.parse(JSON.parse(answer.text)).error.code).toBe(
-      "SERVICE_UNAVAILABLE",
-    );
-    await expectApiError(
-      await fetch(
-        `${base}/v1/community/publishing/items`,
-        json(token, { requestId: randomUUID() }),
-      ),
-      503,
-      "SERVICE_UNAVAILABLE",
-    );
-    await expectApiError(
-      await fetch(
-        `${base}/v1/community/publishing/media/${itemId}/display/base`,
-      ),
-      503,
-      "SERVICE_UNAVAILABLE",
-    );
-    // A store without the processor still refuses new media.
-    const withStoreOnly = await start({
-      port: fake.port,
-      store: new MemoryMediaStore(),
-      media: false,
-    });
-    const storeToken = await withStoreOnly.signIn();
-    const refused = rawUpload(
-      withStoreOnly.base,
-      uploadHeaders(storeToken, 16 * KiB),
-    );
-    refused.client.end(randomBytes(16 * KiB));
-    expect((await refused.answer).status).toBe(503);
-    expect(fake.calls).toHaveLength(0);
-  });
+  it.each(["development", "production"] as const)(
+    "reports unavailable media dependencies honestly in %s",
+    async (nodeEnv) => {
+      const fake = fakePort({});
+      const { base, signIn } = await start({
+        port: fake.port,
+        media: false,
+        nodeEnv,
+      });
+      const token = await signIn();
+      const upload = rawUpload(base, uploadHeaders(token, 16 * KiB));
+      upload.client.end(randomBytes(16 * KiB));
+      const answer = await upload.answer;
+      expect(answer.status).toBe(503);
+      expect(apiErrorSchema.parse(JSON.parse(answer.text)).error.code).toBe(
+        "SERVICE_UNAVAILABLE",
+      );
+      await expectApiError(
+        await fetch(
+          `${base}/v1/community/publishing/items`,
+          json(token, { requestId: randomUUID() }),
+        ),
+        503,
+        "SERVICE_UNAVAILABLE",
+      );
+      await expectApiError(
+        await fetch(
+          `${base}/v1/community/publishing/media/${itemId}/display/base`,
+        ),
+        503,
+        "SERVICE_UNAVAILABLE",
+      );
+      // A store without the processor still refuses new media.
+      const withStoreOnly = await start({
+        port: fake.port,
+        store: new MemoryMediaStore(),
+        media: false,
+        nodeEnv,
+      });
+      const storeToken = await withStoreOnly.signIn();
+      const refused = rawUpload(
+        withStoreOnly.base,
+        uploadHeaders(storeToken, 16 * KiB),
+      );
+      refused.client.end(randomBytes(16 * KiB));
+      expect((await refused.answer).status).toBe(503);
+      expect(fake.calls).toHaveLength(0);
+    },
+  );
 
-  it("requires a session and the matching account for commands", async () => {
-    const fake = fakePort({ readDraft: () => draft, createDraft: () => draft });
-    const { base, signIn } = await start({
-      port: fake.port,
-      store: new MemoryMediaStore(),
-    });
-    const token = await signIn();
-    const body = { requestId: randomUUID(), content, deviceClass: null };
+  it.each(["development", "production"] as const)(
+    "requires session and account truth for draft commands in %s",
+    async (nodeEnv) => {
+      const fake = fakePort({
+        readDraft: () => draft,
+        createDraft: () => draft,
+      });
+      const { base, signIn } = await start({
+        port: fake.port,
+        nodeEnv,
+        store: new MemoryMediaStore(),
+      });
+      const token = await signIn();
+      const body = { requestId: randomUUID(), content, deviceClass: null };
 
-    await expectApiError(
-      await fetch(`${base}/v1/community/publishing/drafts`, json(null, body)),
-      401,
-      "UNAUTHENTICATED",
-    );
-    await expectApiError(
-      await fetch(
+      await expectApiError(
+        await fetch(`${base}/v1/community/publishing/drafts`, json(null, body)),
+        401,
+        "UNAUTHENTICATED",
+      );
+      await expectApiError(
+        await fetch(
+          `${base}/v1/community/publishing/drafts`,
+          json(token, body, "POST", other),
+        ),
+        401,
+        "UNAUTHENTICATED",
+      );
+      await expectApiError(
+        await fetch(
+          `${base}/v1/community/publishing/drafts`,
+          json(token, body, "POST", null),
+        ),
+        401,
+        "UNAUTHENTICATED",
+      );
+      await expectApiError(
+        await fetch(`${base}/v1/community/publishing/drafts/${draftId}`, {
+          headers: { authorization: `Bearer ${"A".repeat(43)}` },
+        }),
+        401,
+        "UNAUTHENTICATED",
+      );
+      await expectApiError(
+        await fetch(`${base}/v1/community/publishing/limits`),
+        401,
+        "UNAUTHENTICATED",
+      );
+      const upload = rawUpload(base, {
+        ...uploadHeaders(token, KiB),
+        "x-author-account": other,
+      });
+      upload.client.end(randomBytes(KiB));
+      const refused = await upload.answer;
+      expect(refused.status).toBe(401);
+      expect(fake.calls).toHaveLength(0);
+
+      const created = await fetch(
         `${base}/v1/community/publishing/drafts`,
-        json(token, body, "POST", other),
-      ),
-      401,
-      "UNAUTHENTICATED",
-    );
-    await expectApiError(
-      await fetch(
-        `${base}/v1/community/publishing/drafts`,
-        json(token, body, "POST", null),
-      ),
-      401,
-      "UNAUTHENTICATED",
-    );
-    await expectApiError(
-      await fetch(`${base}/v1/community/publishing/drafts/${draftId}`, {
-        headers: { authorization: `Bearer ${"A".repeat(43)}` },
-      }),
-      401,
-      "UNAUTHENTICATED",
-    );
-    await expectApiError(
-      await fetch(`${base}/v1/community/publishing/limits`),
-      401,
-      "UNAUTHENTICATED",
-    );
-    const upload = rawUpload(base, {
-      ...uploadHeaders(token, KiB),
-      "x-author-account": other,
-    });
-    upload.client.end(randomBytes(KiB));
-    const refused = await upload.answer;
-    expect(refused.status).toBe(401);
-    expect(fake.calls).toHaveLength(0);
-
-    const created = await fetch(
-      `${base}/v1/community/publishing/drafts`,
-      json(token, body),
-    );
-    expect(created.status).toBe(201);
-    expect(created.headers.get("cache-control")).toBe("private, no-store");
-    expect(publishingDraftSchema.parse(await created.json()).id).toBe(draftId);
-    // GET reads need no account assertion.
-    const read = await fetch(
-      `${base}/v1/community/publishing/drafts/${draftId}`,
-      {
-        headers: { authorization: `Bearer ${token}` },
-      },
-    );
-    expect(read.status).toBe(200);
-  });
+        json(token, body),
+      );
+      expect(created.status).toBe(201);
+      expect(created.headers.get("cache-control")).toBe("private, no-store");
+      expect(publishingDraftSchema.parse(await created.json()).id).toBe(
+        draftId,
+      );
+      // GET reads need no account assertion.
+      const read = await fetch(
+        `${base}/v1/community/publishing/drafts/${draftId}`,
+        {
+          headers: { authorization: `Bearer ${token}` },
+        },
+      );
+      expect(read.status).toBe(200);
+    },
+  );
 
   it("answers an opened edit draft with whether the request created it", async () => {
     const edit = {
@@ -2497,40 +2523,33 @@ describe("work publishing author HTTP surface", () => {
   });
 
   it.each(["test", "production"] as const)(
-    "composes no publishing route under NODE_ENV=%s even with the ports supplied",
+    "mounts the supplied publishing service without a Development sign-in fallback in %s",
     async (nodeEnv) => {
       const fake = fakePort({ readSettings: () => settings });
-      const { base } = await start({
-        port: fake.port,
-        store: new MemoryMediaStore(),
-        nodeEnv,
+      const { base, signIn } = await start({ port: fake.port, nodeEnv });
+      expect(
+        (await fetch(`${base}/v1/community/publishing/limits`)).status,
+      ).toBe(401);
+      const token = await signIn();
+      const limits = await fetch(`${base}/v1/community/publishing/limits`, {
+        headers: { authorization: `Bearer ${token}` },
       });
-      for (const path of [
-        "publishing/limits",
-        "publishing/drafts",
-        `publishing/media/${itemId}/display/base`,
-        `publishing/uploads/${componentId}`,
-      ])
-        expect((await fetch(`${base}/v1/community/${path}`)).status).toBe(404);
-      const upload = await fetch(
-        `${base}/v1/community/publishing/uploads/${componentId}`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/octet-stream" },
-          body: randomBytes(16),
-        },
+      expect(limits.status).toBe(200);
+      expect(publishingLimitsSchema.parse(await limits.json()).maxItems).toBe(
+        settings.maxItemsPerWork,
       );
-      expect(upload.status).toBe(404);
-      const operator = await fetch(
-        `${base}/internal/community/publishing/settings`,
-        {
-          headers: {
-            authorization: `Bearer ${operatorCredential}`,
-          },
-        },
-      );
-      expect(operator.status).toBe(404);
-      expect(fake.calls).toHaveLength(0);
+      expect(fake.named("readSettings")).toHaveLength(1);
+      expect(
+        (await fetch(`${base}/v1/development/sign-in`, { method: "POST" }))
+          .status,
+      ).toBe(404);
+      expect(
+        (
+          await fetch(`${base}/internal/community/publishing/settings`, {
+            headers: { authorization: `Bearer ${token}` },
+          })
+        ).status,
+      ).toBe(401);
     },
   );
 });

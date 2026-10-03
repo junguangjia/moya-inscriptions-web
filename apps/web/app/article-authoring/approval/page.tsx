@@ -6,7 +6,6 @@ export default async function ArticleApprovalPage({
 }: {
   readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  if (process.env.NODE_ENV !== "development") notFound();
   const candidate = parseArticleApprovalEntry(await searchParams);
   if (candidate === null) notFound();
   return <ArticleAgentPage candidate={candidate} />;

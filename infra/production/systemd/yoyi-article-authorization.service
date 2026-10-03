@@ -1,0 +1,31 @@
+[Unit]
+Description=Yoyi Article authorization issuer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yoyi-article-authorization
+Group=yoyi-article-authorization
+WorkingDirectory=/srv/yoyi/current
+EnvironmentFile=/etc/yoyi/article-authorization.env
+ExecStart=/usr/bin/env NODE_ENV=production ARTICLE_AUTHORIZATION_PORT=3003 node services/agent-authorization/dist/main.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

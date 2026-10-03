@@ -73,7 +73,7 @@ describe("FormalPage", () => {
     );
   });
 
-  it("composes the live comment section with the Development sign-in entry only in Development", async () => {
+  it("composes real business features in Production while retaining Development-only fixtures", async () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("NEXT_PUBLIC_MOYA_DISCUSSION_PREVIEW", "true");
     renderToStaticMarkup(await FormalPage({}));
@@ -88,14 +88,13 @@ describe("FormalPage", () => {
     vi.stubEnv("NODE_ENV", "production");
     renderToStaticMarkup(await FormalPage({}));
     expect(productApplicationMock.mock.calls[0]?.[0]).toMatchObject({
-      comments: null,
-      authorCommunity: false,
+      comments: { signInHref: "/login" },
+      authorCommunity: true,
+      liveNotifications: true,
+      articleAuthoring: true,
     });
     expect(productApplicationMock.mock.calls[0]?.[0]).not.toHaveProperty(
       "developmentDiscussion",
-    );
-    expect(productApplicationMock.mock.calls[0]?.[0]).not.toHaveProperty(
-      "liveNotifications",
     );
   });
 

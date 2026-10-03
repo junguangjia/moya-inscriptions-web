@@ -1,13 +1,19 @@
 import { prepareProductionBackend } from "@moya/backend-production";
 import { ProductionCosStorageUrlResolver } from "@moya/backend-production/internal/production-cos";
-import { openPublishingMedia } from "@moya/backend-production/internal/publishing-config";
+import {
+  openPublishingMedia,
+  openProductionPublishingMedia,
+} from "@moya/backend-production/internal/publishing-config";
 import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
 import {
   createBackendApplication,
   startBackendProcess,
 } from "@moya/backend-runtime";
 import { createPostgresPool } from "@moya/catalog-postgres";
-import { PostgresWorkPublishingAdapter } from "@moya/community-postgres";
+import {
+  PostgresWorkPublishingAdapter,
+  PostgresNotificationAdapter,
+} from "@moya/community-postgres";
 import {
   catalogDetailSchema,
   catalogPageSchema,
@@ -15,6 +21,18 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BackendProcessHandle } from "@moya/backend-runtime";
+
+const productionMedia = vi.hoisted(() => ({
+  store: {
+    writeStream: vi.fn(),
+    openRead: vi.fn(),
+    remove: vi.fn(),
+    listBlobs: vi.fn(),
+    sweepStaging: vi.fn(),
+  },
+  runner: { createJob: vi.fn(), run: vi.fn(), sweepJobs: vi.fn() },
+  processor: { process: vi.fn() },
+}));
 
 const database = vi.hoisted(() => ({
   published: true,
@@ -82,8 +100,8 @@ vi.mock("@moya/community-postgres", async (importOriginal) => {
   };
 });
 
-// Opening real private media directories is covered by the publishing worker
-// tests; compositions here observe the call and may substitute fakes.
+// Factory/store/processor contracts are covered separately. This composition
+// suite preserves real configuration parsing and replaces only opening I/O.
 vi.mock(
   "@moya/backend-production/internal/publishing-config",
   async (importOriginal) => {
@@ -94,6 +112,7 @@ vi.mock(
     return {
       ...actual,
       openPublishingMedia: vi.fn(actual.openPublishingMedia),
+      openProductionPublishingMedia: vi.fn(async () => productionMedia),
     };
   },
 );
@@ -135,6 +154,14 @@ const environment = {
   COS_MEDIA_ORIGIN: "https://media.example.invalid",
   COS_SECRET_ID: "synthetic-unit-id",
   COS_SECRET_KEY: "synthetic-unit-secret",
+  WORK_MEDIA_COS_BUCKET: "synthetic-publishing-1250000000",
+  WORK_MEDIA_COS_REGION: "ap-guangzhou",
+  WORK_MEDIA_COS_PREFIX: "ugc/publishing/synthetic/",
+  WORK_MEDIA_COS_SECRET_ID: "synthetic-publishing-id",
+  WORK_MEDIA_COS_SECRET_KEY: "synthetic-publishing-secret",
+  WORK_MEDIA_TOOLS_IMAGE: "yoyi-work-publishing-media-tools:v1",
+  WORK_MEDIA_WORK_DIR: "/Users/synthetic/publishing/work",
+  WORK_MEDIA_WORKER_CONCURRENCY: "2",
 } as const;
 const handles = new Set<BackendProcessHandle>();
 const start = async () => {
@@ -169,6 +196,62 @@ describe("non-Pilot production public media composition", () => {
     ).rejects.toThrow(
       `Production COS configuration missing or invalid: ${key}`,
     );
+    expect(createPostgresPool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "WORK_MEDIA_COS_BUCKET",
+    "WORK_MEDIA_COS_REGION",
+    "WORK_MEDIA_COS_PREFIX",
+    "WORK_MEDIA_COS_SECRET_ID",
+    "WORK_MEDIA_COS_SECRET_KEY",
+    "WORK_MEDIA_TOOLS_IMAGE",
+    "WORK_MEDIA_WORK_DIR",
+  ])("fails closed without required Production publishing %s", async (key) => {
+    await expect(
+      prepareProductionBackend({ ...environment, [key]: undefined }),
+    ).rejects.toThrow(key);
+    expect(openProductionPublishingMedia).not.toHaveBeenCalled();
+    expect(openPublishingMedia).not.toHaveBeenCalled();
+    expect(createPostgresPool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      { WORK_MEDIA_STORE_DIR: "relative" },
+      /WORK_MEDIA_STORE_DIR must be absent/,
+    ],
+    [
+      { WORK_MEDIA_COS_PREFIX: "editorial/synthetic/" },
+      /WORK_MEDIA_COS_PREFIX/,
+    ],
+    [{ WORK_MEDIA_TOOLS_IMAGE: "latest" }, /WORK_MEDIA_TOOLS_IMAGE/],
+    [{ WORK_MEDIA_WORK_DIR: "relative" }, /WORK_MEDIA_WORK_DIR/],
+    [
+      { WORK_MEDIA_WORKER_CONCURRENCY: "not-a-number" },
+      /WORK_MEDIA_WORKER_CONCURRENCY/,
+    ],
+  ])(
+    "refuses invalid Production media configuration before pools %#",
+    async (invalid, message) => {
+      await expect(
+        prepareProductionBackend({ ...environment, ...invalid }),
+      ).rejects.toThrow(message);
+      expect(openProductionPublishingMedia).not.toHaveBeenCalled();
+      expect(openPublishingMedia).not.toHaveBeenCalled();
+      expect(createPostgresPool).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not fall back or open pools when the Production media factory refuses", async () => {
+    vi.mocked(openProductionPublishingMedia).mockRejectedValueOnce(
+      new Error("Synthetic Production media open refusal"),
+    );
+    await expect(prepareProductionBackend(environment)).rejects.toThrow(
+      "Synthetic Production media open refusal",
+    );
+    expect(openProductionPublishingMedia).toHaveBeenCalledTimes(1);
+    expect(openPublishingMedia).not.toHaveBeenCalled();
     expect(createPostgresPool).not.toHaveBeenCalled();
   });
 
@@ -355,7 +438,7 @@ describe("local development database boundary", () => {
   );
 });
 
-describe("Development work publishing composition", () => {
+describe("Work publishing composition", () => {
   const local = {
     NODE_ENV: "development",
     HOST: "127.0.0.1",
@@ -378,6 +461,9 @@ describe("Development work publishing composition", () => {
   const quietQueue = () => {
     const prototype = PostgresWorkPublishingAdapter.prototype;
     return {
+      notificationClaim: vi
+        .spyOn(PostgresNotificationAdapter.prototype, "claim")
+        .mockResolvedValue([]),
       claim: vi.spyOn(prototype, "claimJobs").mockResolvedValue([]),
       requeue: vi.spyOn(prototype, "requeueExpiredJobs").mockResolvedValue(0),
       cleanup: vi.spyOn(prototype, "scheduleCleanup").mockResolvedValue({
@@ -432,126 +518,172 @@ describe("Development work publishing composition", () => {
     },
   );
 
-  it("starts the worker only on request and stops it before the pools close", async () => {
-    const queue = quietQueue();
-    const media = {
-      store: {
-        writeStream: vi.fn(),
-        openRead: vi.fn(),
-        remove: vi.fn(),
-        listBlobs: vi.fn(),
-        sweepStaging: vi.fn(),
-      },
-      runner: { createJob: vi.fn(), run: vi.fn(), sweepJobs: vi.fn() },
-      processor: { process: vi.fn() },
-    };
-    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
-      media as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
-    );
-    const prepared = await prepareProductionBackend({
-      ...local,
-      ...publishingKeys,
-      WORK_MEDIA_WORKER_CONCURRENCY: "2",
-    });
-    expect(openPublishingMedia).toHaveBeenCalledWith(
-      {
-        storeDirectory: publishingKeys.WORK_MEDIA_STORE_DIR,
-        toolsImage: publishingKeys.WORK_MEDIA_TOOLS_IMAGE,
-        workDirectory: publishingKeys.WORK_MEDIA_WORK_DIR,
-        workerConcurrency: 2,
-      },
-      { foreignDirectories: [local.CMS_MEDIA_DIR] },
-    );
-    await pause(20);
-    expect(queue.claim).not.toHaveBeenCalled();
+  it.each(["development", "production"] as const)(
+    "%s starts the worker only on request and stops it before the pools close",
+    async (mode) => {
+      const queue = quietQueue();
+      const media = {
+        store: {
+          writeStream: vi.fn(),
+          openRead: vi.fn(),
+          remove: vi.fn(),
+          listBlobs: vi.fn(),
+          sweepStaging: vi.fn(),
+        },
+        runner: { createJob: vi.fn(), run: vi.fn(), sweepJobs: vi.fn() },
+        processor: { process: vi.fn() },
+      };
+      const factory =
+        mode === "development"
+          ? openPublishingMedia
+          : openProductionPublishingMedia;
+      vi.mocked(factory).mockResolvedValueOnce(
+        media as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+      );
+      const prepared = await prepareProductionBackend(
+        mode === "development"
+          ? {
+              ...local,
+              ...publishingKeys,
+              WORK_MEDIA_WORKER_CONCURRENCY: "2",
+            }
+          : environment,
+      );
+      if (mode === "development")
+        expect(openPublishingMedia).toHaveBeenCalledWith(
+          {
+            storeDirectory: publishingKeys.WORK_MEDIA_STORE_DIR,
+            toolsImage: publishingKeys.WORK_MEDIA_TOOLS_IMAGE,
+            workDirectory: publishingKeys.WORK_MEDIA_WORK_DIR,
+            workerConcurrency: 2,
+          },
+          { foreignDirectories: [local.CMS_MEDIA_DIR] },
+        );
+      else
+        expect(openProductionPublishingMedia).toHaveBeenCalledWith(
+          expect.objectContaining({
+            bucket: environment.WORK_MEDIA_COS_BUCKET,
+            region: environment.WORK_MEDIA_COS_REGION,
+            prefix: environment.WORK_MEDIA_COS_PREFIX,
+            workDirectory: environment.WORK_MEDIA_WORK_DIR,
+            workerConcurrency: 2,
+          }),
+          { foreignDirectories: [undefined] },
+        );
+      const [application] = vi
+        .mocked(createBackendApplication)
+        .mock.calls.at(-1)!;
+      const [handlers] = vi
+        .mocked(createPublishingJobHandlers)
+        .mock.calls.at(-1)!;
+      expect(application.publishingMediaStore).toBe(media.store);
+      expect(application.publishingMediaProcessor).toBe(media.processor);
+      expect(handlers.store).toBe(media.store);
+      expect(handlers.processor).toBe(media.processor);
+      expect(handlers.toolJobs).toBe(media.runner);
+      await pause(20);
+      expect(queue.claim).not.toHaveBeenCalled();
 
-    prepared.startBackgroundWork();
-    await vi.waitFor(() =>
-      expect(queue.claim).toHaveBeenCalledWith(
-        expect.objectContaining({ limit: 2, leaseMs: 5 * 60 * 1000 }),
-        expect.any(Date),
-      ),
-    );
-    expect(queue.requeue).toHaveBeenCalledTimes(1);
-    expect(queue.cleanup).toHaveBeenCalledTimes(1);
-    expect(queue.enqueue.mock.calls.map(([job]) => job.kind)).toEqual([
-      "sweep_staging",
-      "reconcile_capacity",
-    ]);
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(queue.claim).toHaveBeenCalledWith(
+          expect.objectContaining({ limit: 2, leaseMs: 5 * 60 * 1000 }),
+          expect.any(Date),
+        ),
+      );
+      expect(queue.requeue).toHaveBeenCalledTimes(1);
+      expect(queue.cleanup).toHaveBeenCalledTimes(1);
+      expect(queue.enqueue.mock.calls.map(([job]) => job.kind)).toEqual([
+        "sweep_staging",
+        "reconcile_capacity",
+      ]);
 
-    // Hold the worker inside its next claim: closing must wait for it before
-    // any pool ends.
-    let releaseClaim: (claims: []) => void = () => undefined;
-    const polled = queue.claim.mock.calls.length;
-    queue.claim.mockImplementation(
-      () =>
-        new Promise<[]>((resolve) => {
-          releaseClaim = resolve;
-        }),
-    );
-    await vi.waitFor(
-      () => expect(queue.claim.mock.calls.length).toBeGreaterThan(polled),
-      { timeout: 3_000 },
-    );
-    let closed = false;
-    const closing = prepared.closeResources().then(() => {
-      closed = true;
-    });
-    await pause(50);
-    expect(closed).toBe(false);
-    expect(database.end).not.toHaveBeenCalled();
-    releaseClaim([]);
-    await closing;
-    expect(database.end).toHaveBeenCalledTimes(2);
-    const claims = queue.claim.mock.calls.length;
-    await pause(1_100);
-    expect(queue.claim.mock.calls.length).toBe(claims);
-    expect(media.processor.process).not.toHaveBeenCalled();
-  });
+      // Hold the worker inside its next claim: closing must wait for it before
+      // any pool ends.
+      let releaseClaim: (claims: []) => void = () => undefined;
+      const polled = queue.claim.mock.calls.length;
+      queue.claim.mockImplementation(
+        () =>
+          new Promise<[]>((resolve) => {
+            releaseClaim = resolve;
+          }),
+      );
+      await vi.waitFor(
+        () => expect(queue.claim.mock.calls.length).toBeGreaterThan(polled),
+        { timeout: 3_000 },
+      );
+      let closed = false;
+      const closing = prepared.closeResources().then(() => {
+        closed = true;
+      });
+      await pause(50);
+      expect(closed).toBe(false);
+      expect(database.end).not.toHaveBeenCalled();
+      releaseClaim([]);
+      await closing;
+      expect(database.end).toHaveBeenCalledTimes(2);
+      const claims = queue.claim.mock.calls.length;
+      await pause(1_100);
+      expect(queue.claim.mock.calls.length).toBe(claims);
+      expect(media.processor.process).not.toHaveBeenCalled();
+    },
+  );
 
-  it("shares one upload registry between the upload route and the worker's session expiry", async () => {
-    quietQueue();
-    const media = {
-      store: {
-        writeStream: vi.fn(),
-        openRead: vi.fn(),
-        remove: vi.fn(),
-        listBlobs: vi.fn(),
-        sweepStaging: vi.fn(),
-      },
-      runner: { createJob: vi.fn(), run: vi.fn(), sweepJobs: vi.fn() },
-      processor: { process: vi.fn() },
-    };
-    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
-      media as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
-    );
-    const prepared = await prepareProductionBackend({
-      ...local,
-      ...publishingKeys,
-    });
-    const [application] = vi
-      .mocked(createBackendApplication)
-      .mock.calls.at(-1)!;
-    const [handlers] = vi
-      .mocked(createPublishingJobHandlers)
-      .mock.calls.at(-1)!;
-    const transfers = application.publishingTransfers;
-    if (transfers === undefined) throw new Error("expected a shared registry");
-    expect(application.workPublishingPort).toBe(handlers.port);
-    const componentId = `media-component-${"2".repeat(32)}`;
-    const stops: string[] = [];
-    const streaming = transfers.claim(componentId, () => stops.push("stop"));
-    streaming.markStreaming();
-    const opening = transfers.claim(componentId, () => stops.push("never"));
+  it.each(["development", "production"] as const)(
+    "%s shares one upload registry between upload and worker session expiry",
+    async (mode) => {
+      quietQueue();
+      const media = {
+        store: {
+          writeStream: vi.fn(),
+          openRead: vi.fn(),
+          remove: vi.fn(),
+          listBlobs: vi.fn(),
+          sweepStaging: vi.fn(),
+        },
+        runner: { createJob: vi.fn(), run: vi.fn(), sweepJobs: vi.fn() },
+        processor: { process: vi.fn() },
+      };
+      const factory =
+        mode === "development"
+          ? openPublishingMedia
+          : openProductionPublishingMedia;
+      vi.mocked(factory).mockResolvedValueOnce(
+        media as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+      );
+      const prepared = await prepareProductionBackend(
+        mode === "development"
+          ? {
+              ...local,
+              ...publishingKeys,
+            }
+          : environment,
+      );
+      const [application] = vi
+        .mocked(createBackendApplication)
+        .mock.calls.at(-1)!;
+      const [handlers] = vi
+        .mocked(createPublishingJobHandlers)
+        .mock.calls.at(-1)!;
+      const transfers = application.publishingTransfers;
+      if (transfers === undefined)
+        throw new Error("expected a shared registry");
+      expect(application.workPublishingPort).toBe(handlers.port);
+      const componentId = `media-component-${"2".repeat(32)}`;
+      const stops: string[] = [];
+      const streaming = transfers.claim(componentId, () => stops.push("stop"));
+      streaming.markStreaming();
+      const opening = transfers.claim(componentId, () => stops.push("never"));
 
-    // What the worker calls with the component ids of an expired session.
-    handlers.onUploadsCancelled?.([componentId]);
-    expect(stops).toEqual(["stop"]);
-    expect(transfers.isActive(componentId)).toBe(false);
-    opening.release();
-    expect(transfers.size).toBe(0);
-    await prepared.closeResources();
-  });
+      // What the worker calls with the component ids of an expired session.
+      handlers.onUploadsCancelled?.([componentId]);
+      expect(stops).toEqual(["stop"]);
+      expect(transfers.isActive(componentId)).toBe(false);
+      opening.release();
+      expect(transfers.size).toBe(0);
+      await prepared.closeResources();
+    },
+  );
 
   it("composes the upload registry without a worker when publishing media is off", async () => {
     quietQueue();
@@ -565,13 +697,12 @@ describe("Development work publishing composition", () => {
     await prepared.closeResources();
   });
 
-  it("never reads the media keys, composes publishing or starts a worker in production", async () => {
+  it("composes Production business and notification services without Development media fallback", async () => {
     const queue = quietQueue();
-    const prepared = await prepareProductionBackend({
-      ...environment,
-      WORK_MEDIA_STORE_DIR: "relative",
-      WORK_MEDIA_TOOLS_IMAGE: "latest",
-      WORK_MEDIA_WORKER_CONCURRENCY: "not-a-number",
+    const notificationClaim = queue.notificationClaim;
+    const transport = { request: vi.fn() };
+    const prepared = await prepareProductionBackend(environment, {
+      publishingCosTransport: transport,
     });
     prepared.startBackgroundWork();
     const handle = await startBackendProcess({
@@ -586,16 +717,38 @@ describe("Development work publishing composition", () => {
         await fetch(`${base}/v1/community/${suffix}`).then(
           (response) => response.status,
         ),
-      ).toBe(404);
+      ).toBe(401);
     }
+    expect(
+      await fetch(`${base}/v1/development/sign-in`, { method: "POST" }).then(
+        (response) => response.status,
+      ),
+    ).toBe(404);
     await pause(20);
+    expect(notificationClaim).toHaveBeenCalled();
     expect(openPublishingMedia).not.toHaveBeenCalled();
-    expect(queue.claim).not.toHaveBeenCalled();
+    expect(queue.claim).toHaveBeenCalled();
+    expect(openProductionPublishingMedia).toHaveBeenCalledTimes(1);
+    expect(openProductionPublishingMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket: environment.WORK_MEDIA_COS_BUCKET }),
+      { foreignDirectories: [undefined], transport },
+    );
+    expect(transport.request).not.toHaveBeenCalled();
     const [application] = vi
       .mocked(createBackendApplication)
       .mock.calls.at(-1)!;
-    expect(application.publishingTransfers).toBeUndefined();
-    expect(application.workPublishingPort).toBeUndefined();
-    expect(createPublishingJobHandlers).not.toHaveBeenCalled();
+    expect(application.publishingTransfers).toBeDefined();
+    expect(application.workPublishingPort).toBeDefined();
+    expect(createPublishingJobHandlers).toHaveBeenCalledTimes(1);
+    expect(application.publishingMediaStore).toBe(productionMedia.store);
+    expect(application.publishingMediaProcessor).toBe(
+      productionMedia.processor,
+    );
+    expect(application.notificationPort).toBeDefined();
+    expect(application.authorCommunityPort).toBeDefined();
+    expect(application.articleAuthoringPort).toBeDefined();
+    expect(application.authService).toBeUndefined();
+    expect(application.agentAdministrationPort).toBeUndefined();
+    expect(application.articleDelegation).toBeUndefined();
   });
 });

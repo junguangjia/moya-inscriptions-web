@@ -2,10 +2,12 @@ import {
   CommunityInputError,
   parseArticlePendingId,
   parseArticlePendingListQuery,
+  parseArticlePendingMediaQuery,
   parseArticlePendingModerationCommand,
 } from "@moya/api";
 import type { ArticlePublicationOperatorService } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
 import { collectTransportQuery } from "../http/transport-query.js";
@@ -19,7 +21,7 @@ export const handleArticlePublicationOperatorRequest = async (
 ): Promise<boolean> => {
   const root = "/internal/community/articles/submissions";
   const subject =
-    /^\/internal\/community\/articles\/(article-[0-9a-f]{32})\/(submission|moderation)$/u.exec(
+    /^\/internal\/community\/articles\/(article-[0-9a-f]{32})\/(submission|submission-media|moderation)$/u.exec(
       pathname,
     );
   if (pathname !== root && subject === null) return false;
@@ -43,9 +45,25 @@ export const handleArticlePublicationOperatorRequest = async (
     );
     return true;
   }
+  const id = parseArticlePendingId(subject![1]);
+  if (subject![2] === "submission-media") {
+    if (method !== "GET" && method !== "HEAD") {
+      wrongMethod();
+      return true;
+    }
+    const query = parseArticlePendingMediaQuery(
+      collectTransportQuery(url.searchParams),
+    );
+    await deliverPublishingMedia(
+      request,
+      response,
+      (range) => service.openPendingMedia(id, query, range),
+      { "cache-control": "private, no-store" },
+    );
+    return true;
+  }
   if (url.search !== "")
     throw new CommunityInputError("Invalid operator query");
-  const id = parseArticlePendingId(subject![1]);
   if (subject![2] === "submission") {
     if (method !== "GET") {
       wrongMethod();

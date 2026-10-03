@@ -5,6 +5,7 @@ import {
 import { articleAuthoringArticleIdSchema } from "@moya/contracts/schemas";
 import {
   articlePendingListQuerySchema,
+  articlePendingMediaQuerySchema,
   moderateArticlePendingCommandSchema,
 } from "@moya/contracts/internal/community-operator";
 
@@ -22,5 +23,11 @@ export const parseArticlePendingModerationCommand = (value: unknown) => {
   const result = moderateArticlePendingCommandSchema.safeParse(value);
   if (!result.success)
     throw new CommunityInputError("Invalid operator command");
+  return result.data;
+};
+
+export const parseArticlePendingMediaQuery = (value: unknown) => {
+  const result = articlePendingMediaQuerySchema.safeParse(value);
+  if (!result.success) throw new CommunityInputError("Invalid operator query");
   return result.data;
 };

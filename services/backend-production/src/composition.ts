@@ -2,12 +2,17 @@ import { PostgresNotificationAdapter } from "@moya/community-postgres";
 import { NotificationSignals } from "@moya/backend-runtime";
 import { NotificationWorker } from "./notifications/worker.js";
 import {
-  assertProductionAuthConfiguration,
+  createConfiguredProductionAuthService,
+  loadProductionAuthConfiguration,
+} from "./auth/index.js";
+import type { AuthProviderDependencies } from "./auth/index.js";
+import {
   createBackendApplication,
   createArticleAuthoringService,
   createArticleCatalogReadCallbacks,
   readBoundedArticleThumbnail,
   createDevelopmentAuthService,
+  createTrustedAuthRequestSource,
   createPublishingTransferRegistry,
   parseRuntimeConfig,
   startBackendProcess,
@@ -44,10 +49,12 @@ import {
   createArticleDelegationPersistence,
   createArticleDelegationRuntime,
 } from "./article-authoring/delegation-composition.js";
-import { createDevelopmentArticleReadPort } from "./article-authoring/read-composition.js";
+import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
   openPublishingMedia,
   parsePublishingMediaConfig,
+  openProductionPublishingMedia,
+  parseProductionPublishingMediaConfig,
 } from "./publishing/config.js";
 import { createPublishingJobHandlers } from "./publishing/job-handlers.js";
 import { PublishingWorker } from "./publishing/worker.js";
@@ -63,6 +70,7 @@ import type {
   RuntimeEnvironment,
 } from "@moya/backend-runtime";
 import type { PostgresConfig } from "@moya/catalog-postgres";
+import type { PublishingCosTransport } from "./storage/publishing-cos-transport.js";
 import type { RequestListener } from "node:http";
 
 export interface PreparedProductionBackend {
@@ -71,8 +79,8 @@ export interface PreparedProductionBackend {
   readonly requestListener: RequestListener;
   readonly runtimeConfig: RuntimeConfig;
   /**
-   * Starts background work once the listener is up: the Development
-   * publishing worker when publishing media is configured, otherwise nothing.
+   * Starts notifications and, when media is configured, publishing work
+   * once the listener is up.
    * `closeResources` stops it (bounded) before the pools close.
    */
   readonly startBackgroundWork: () => void;
@@ -163,11 +171,17 @@ const parseOperatorCredential = (environment: RuntimeEnvironment): string => {
   return value;
 };
 
+/** Code-only low-level dependencies for isolated acceptance; main uses real transports. */
+export interface ProductionBackendDependencies {
+  readonly publishingCosTransport?: PublishingCosTransport;
+  readonly authProvider?: AuthProviderDependencies;
+}
+
 export const prepareProductionBackend = async (
   environment: RuntimeEnvironment,
+  dependencies: ProductionBackendDependencies = {},
 ): Promise<PreparedProductionBackend> => {
   const runtimeConfig = parseRuntimeConfig(environment);
-  assertProductionAuthConfiguration(environment);
   if (
     runtimeConfig.nodeEnv !== "production" &&
     runtimeConfig.nodeEnv !== "development"
@@ -176,6 +190,22 @@ export const prepareProductionBackend = async (
       "NODE_ENV must be production or development for this backend",
     );
   }
+  const authConfiguration =
+    runtimeConfig.nodeEnv === "production"
+      ? await loadProductionAuthConfiguration(environment)
+      : null;
+  // Validate source authority before opening pools, independently of user and Owner roles.
+  const authRequestSource =
+    authConfiguration === null
+      ? undefined
+      : createTrustedAuthRequestSource(environment.AUTH_SOURCE_RELAY_TOKEN);
+  if (
+    authRequestSource !== undefined &&
+    environment.AUTH_SOURCE_RELAY_TOKEN === environment.COMMUNITY_OPERATOR_TOKEN
+  )
+    throw new Error(
+      "AUTH_SOURCE_RELAY_TOKEN: must be separate from Owner authority",
+    );
   const articleConfiguration = articleBackendConfigurationFrom(
     environment,
     runtimeConfig,
@@ -207,19 +237,32 @@ export const prepareProductionBackend = async (
     : runtimeConfig.nodeEnv === "development"
       ? createLocalStorageUrlResolver(environment)
       : new ProductionCosStorageUrlResolver(productionCosOptions(environment));
-  // Development work publishing media (design §9.6). Without its keys the
-  // Backend still starts and publishing uploads answer 503; a partial or
-  // unusable configuration fails here, before any pool opens. Production
-  // never reads these keys.
-  const publishingMediaConfig =
-    runtimeConfig.nodeEnv === "development"
-      ? parsePublishingMediaConfig(environment)
-      : null;
-  const publishingMedia = publishingMediaConfig
-    ? await openPublishingMedia(publishingMediaConfig, {
-        foreignDirectories: [environment.CMS_MEDIA_DIR],
-      })
-    : undefined;
+  // Production requires B's COS factory; Development retains its explicit local
+  // configuration. Both branches open exactly one store/processor/runner before
+  // pools, shared by HTTP, Article thumbnails and the worker.
+  const { config: publishingMediaConfig, media: publishingMedia } =
+    await (async () => {
+      if (runtimeConfig.nodeEnv === "production") {
+        const config = parseProductionPublishingMediaConfig(environment);
+        const media = await openProductionPublishingMedia(config, {
+          foreignDirectories: [environment.CMS_MEDIA_DIR],
+          ...(dependencies.publishingCosTransport === undefined
+            ? {}
+            : { transport: dependencies.publishingCosTransport }),
+        });
+        return { config, media };
+      }
+      const config = parsePublishingMediaConfig(environment);
+      return {
+        config,
+        media:
+          config === null
+            ? undefined
+            : await openPublishingMedia(config, {
+                foreignDirectories: [environment.CMS_MEDIA_DIR],
+              }),
+      };
+    })();
   const onUnexpectedIdleError = () => {
     console.error("[backend-production] unexpected PostgreSQL pool error");
   };
@@ -245,10 +288,7 @@ export const prepareProductionBackend = async (
       : createPostgresPool(articleConfiguration.controlPostgres, {
           onUnexpectedIdleError,
         });
-  const workPublishingPort =
-    runtimeConfig.nodeEnv === "development"
-      ? new PostgresWorkPublishingAdapter(communityPool)
-      : undefined;
+  const workPublishingPort = new PostgresWorkPublishingAdapter(communityPool);
   // One upload registry shared by the HTTP upload route and the worker: a
   // session the worker expires stops its transfers still streaming here.
   const publishingTransfers = workPublishingPort
@@ -274,10 +314,7 @@ export const prepareProductionBackend = async (
         })
       : undefined;
   const notificationSignals = new NotificationSignals();
-  const notificationPort =
-    runtimeConfig.nodeEnv === "development"
-      ? new PostgresNotificationAdapter(communityPool)
-      : undefined;
+  const notificationPort = new PostgresNotificationAdapter(communityPool);
   const notificationWorker = notificationPort
     ? new NotificationWorker(notificationPort, (ids) =>
         notificationSignals.publish(ids),
@@ -305,6 +342,7 @@ export const prepareProductionBackend = async (
   const catalogQueryPort = new PostgresCatalogQueryAdapter(pool);
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,
+    { requireProductionSession: runtimeConfig.nodeEnv === "production" },
   );
   const communityCommentPort = new PostgresCommunityCommentAdapter(
     communityPool,
@@ -323,13 +361,10 @@ export const prepareProductionBackend = async (
           articleConfiguration.authorization,
           { readPool: communityPool },
         );
-  const articleAdapter =
-    runtimeConfig.nodeEnv === "development"
-      ? new PostgresArticleAuthoringAdapter(
-          communityPool,
-          articlePersistence?.adapterOptions,
-        )
-      : undefined;
+  const articleAdapter = new PostgresArticleAuthoringAdapter(
+    communityPool,
+    articlePersistence?.adapterOptions,
+  );
   const articleService =
     articleConfiguration !== null && articleAdapter !== undefined
       ? createArticleAuthoringService(articleAdapter)
@@ -380,59 +415,68 @@ export const prepareProductionBackend = async (
       healthReadinessCheck: readinessCheck,
       communityIdentityPort,
       ...(() => {
-        if (runtimeConfig.nodeEnv !== "development") return {};
-        const authService = createDevelopmentAuthService(
-          new PostgresCommunityAuthAdapter(communityPool),
-          environment,
-        );
-        return authService === null ? {} : { authService };
+        const adapter = new PostgresCommunityAuthAdapter(communityPool);
+        const authService =
+          runtimeConfig.nodeEnv === "production"
+            ? authConfiguration === null
+              ? null
+              : createConfiguredProductionAuthService(
+                  adapter,
+                  authConfiguration,
+                  dependencies.authProvider,
+                )
+            : createDevelopmentAuthService(adapter, environment);
+        return authService === null
+          ? {}
+          : {
+              authService,
+              ...(authRequestSource === undefined ? {} : { authRequestSource }),
+            };
       })(),
       communityCommentPort,
       ...(notificationPort ? { notificationPort, notificationSignals } : {}),
-      ...(runtimeConfig.nodeEnv === "development"
-        ? {
-            ...(articleAdapter === undefined
-              ? {}
-              : {
-                  articleAuthoringPort: articleAdapter,
-                  ...(articleDelegation === undefined
-                    ? {}
-                    : { articleDelegation }),
-                  articlePublicationOperatorPort: articleAdapter,
-                }),
-            discussionPort: communityCommentPort,
-            contentOperatorPort: new PostgresCommunityContentOperatorAdapter(
-              communityPool,
-            ),
-            discoveryPort: new PostgresCommunityDiscoveryAdapter(communityPool),
-            // Published editorial views through the public read role.
-            editorialContentPort: createDevelopmentArticleReadPort(
-              pool,
-              communityPool,
-              storageUrlResolver,
-            ),
-            threadPort: new PostgresThreadAdapter(communityPool),
-            directMessagePort: new PostgresDirectMessageAdapter(communityPool),
-            authorCommunityPort: new PostgresAuthorCommunityAdapter(
-              communityPool,
-            ),
-            ...(workPublishingPort && publishingTransfers
-              ? { workPublishingPort, publishingTransfers }
-              : {}),
-            publishingOperatorPort: new PostgresPublishingOperatorAdapter(
-              communityPool,
-            ),
-            agentAdministrationPort: new PostgresAgentAdministrationAdapter(
-              communityPool,
-            ),
-            ...(publishingMedia
-              ? {
-                  publishingMediaStore: publishingMedia.store,
-                  publishingMediaProcessor: publishingMedia.processor,
-                }
-              : {}),
-          }
-        : {}),
+      ...{
+        ...(articleAdapter === undefined
+          ? {}
+          : {
+              articleAuthoringPort: articleAdapter,
+              ...(articleDelegation === undefined ? {} : { articleDelegation }),
+              articlePublicationOperatorPort: articleAdapter,
+            }),
+        discussionPort: communityCommentPort,
+        contentOperatorPort: new PostgresCommunityContentOperatorAdapter(
+          communityPool,
+        ),
+        discoveryPort: new PostgresCommunityDiscoveryAdapter(communityPool),
+        // Published editorial views through the public read role.
+        editorialContentPort: createArticleReadPort(
+          pool,
+          communityPool,
+          storageUrlResolver,
+        ),
+        threadPort: new PostgresThreadAdapter(communityPool),
+        directMessagePort: new PostgresDirectMessageAdapter(communityPool),
+        authorCommunityPort: new PostgresAuthorCommunityAdapter(communityPool),
+        ...(workPublishingPort && publishingTransfers
+          ? { workPublishingPort, publishingTransfers }
+          : {}),
+        publishingOperatorPort: new PostgresPublishingOperatorAdapter(
+          communityPool,
+        ),
+        ...(runtimeConfig.nodeEnv === "development"
+          ? {
+              agentAdministrationPort: new PostgresAgentAdministrationAdapter(
+                communityPool,
+              ),
+            }
+          : {}),
+        ...(publishingMedia
+          ? {
+              publishingMediaStore: publishingMedia.store,
+              publishingMediaProcessor: publishingMedia.processor,
+            }
+          : {}),
+      },
       // A comment attaches only to a currently published Catalog record; the
       // published read role answers that, so the App role needs no Catalog grant.
       catalogPublicationPort: {

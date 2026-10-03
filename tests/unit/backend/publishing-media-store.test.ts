@@ -447,8 +447,8 @@ describe("publishing media store reads and removal", () => {
 
   it("refuses symlinked blobs, symlinked key directories and non-regular files", async () => {
     const store = await openStore();
-    // Reserve a distinct shard for the later malicious directory symlink.
-    forcedRandom.values = [Buffer.from(`abcd${"0".repeat(28)}`, "hex")];
+    // Keep the first blob out of the cd directory reserved for the symlink case.
+    forcedRandom.values = [Buffer.alloc(16, 0x00)];
     const key = await writeDigits(store);
     const outside = path.join(base, "outside.txt");
     await writeFile(outside, "not a blob", { mode: 0o600 });

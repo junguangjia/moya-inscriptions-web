@@ -5,6 +5,7 @@ log_format yoyi_status '$time_iso8601 $status $request_time';
 upstream yoyi_web { server 127.0.0.1:3000; }
 upstream yoyi_backend { server 127.0.0.1:3001; }
 upstream yoyi_admin { server 127.0.0.1:3002; }
+upstream yoyi_article_authorization { server 127.0.0.1:3003; }
 
 server {
     listen 80 default_server;
@@ -30,10 +31,31 @@ server {
     proxy_set_header X-Forwarded-Host catalog.example.invalid;
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-For $remote_addr;
+    # Public clients cannot supply trusted source or relay admission headers.
+    proxy_set_header X-Moya-Auth-Ingress "";
+    proxy_set_header X-Moya-Client-Ip "";
+    proxy_set_header X-Moya-Auth-Relay "";
+    proxy_set_header X-Moya-Auth-Source "";
+    proxy_set_header Forwarded "";
     proxy_set_header Connection "";
     proxy_connect_timeout 5s;
     proxy_read_timeout 60s;
+    # Keep ordinary request bodies bounded; only the named upload/document paths differ.
+    client_max_body_size 1m;
 
+    # Only the configured Article audience reaches Backend; internal/operator
+    # and generic Admin agent paths remain unexposed.
+    location = /mcp/article-authoring {
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_next_upstream off;
+        client_max_body_size 1040k;
+        proxy_pass http://yoyi_backend;
+    }
+    location = /.well-known/oauth-protected-resource/mcp/article-authoring {
+        proxy_cache off;
+        proxy_pass http://yoyi_backend;
+    }
     # Shared hostname preserves the existing host-only Payload preview cookie.
     location = /admin { proxy_pass http://yoyi_admin; }
     location ^~ /admin/ { proxy_pass http://yoyi_admin; }
@@ -50,8 +72,101 @@ server {
     location = /api/catalog { proxy_pass http://yoyi_web; }
     location ^~ /api/catalog/ { proxy_pass http://yoyi_web; }
     location = /api/catalog-search { proxy_pass http://yoyi_web; }
-    # Community V1 identity and session routes are Web route handlers, never Payload.
-    location ^~ /api/community/ { proxy_pass http://yoyi_web; }
+    # Dedicated Nginx -> Web proof; only this auth family receives it. Render
+    # the marker from protected AUTH_INGRESS_TOKEN during authorized deployment.
+    location ^~ /api/community/auth/ {
+        proxy_set_header Host catalog.example.invalid;
+        proxy_set_header X-Forwarded-Host catalog.example.invalid;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Moya-Auth-Ingress "__AUTH_INGRESS_TOKEN__";
+        proxy_set_header X-Moya-Client-Ip $remote_addr;
+        proxy_set_header X-Moya-Auth-Relay "";
+        proxy_set_header X-Moya-Auth-Source "";
+        proxy_pass http://yoyi_web;
+    }
+    # Profile/avatar/background PNG upload: matches the existing 4 MiB Web/Backend limit.
+    location = /api/community/media {
+        client_max_body_size 4m;
+        proxy_pass http://yoyi_web;
+    }
+    # Human Article JSON: 1 MiB document plus the existing 16 KiB command envelope.
+    location = /api/community/article-authoring {
+        client_max_body_size 1040k;
+        proxy_pass http://yoyi_web;
+    }
+    location ^~ /api/community/article-authoring/ {
+        client_max_body_size 1040k;
+        proxy_pass http://yoyi_web;
+    }
+    # Notification SSE uses the Web session relay; stream without proxy buffering.
+    # Backend keepalives occur every 15 seconds within the existing read timeout.
+    location = /api/community/notifications/stream {
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_pass http://yoyi_web;
+    }
+    # Existing business and auth relays belong to Web, never Payload.
+    # Raw component bytes alone use the existing 8 GiB component ceiling. An
+    # ordinary prefix (not ^~) lets these exact bounded regex routes win.
+    location ~ "^/api/community/publishing/uploads/media-component-[0-9a-f]{32}$" {
+        client_max_body_size 8g;
+        client_body_timeout 130s;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_next_upstream off;
+        proxy_send_timeout 130s;
+        proxy_read_timeout 75s;
+        proxy_pass http://yoyi_web;
+    }
+    # Private derivative bytes keep Range/status/headers and stream to the viewer.
+    location ~ "^/api/community/publishing/media/media-item-[0-9a-f]{32}/(thumb|display|full|cover|motion)/(base|[0-9a-f]{32})$" {
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_next_upstream off;
+        proxy_read_timeout 75s;
+        proxy_pass http://yoyi_web;
+    }
+    location /api/community/ { proxy_pass http://yoyi_web; }
     # Includes /editorial-preview/:id and Web assets; draft fetches use loopback CMS_INTERNAL_URL.
     location / { proxy_pass http://yoyi_web; }
+}
+
+# Separate cookie host for the existing Article OAuth issuer. Forwarding headers
+# are overwritten here; the loopback issuer refuses missing/mismatched values.
+server {
+    listen 443 ssl;
+    server_name article-auth.example.invalid;
+    ssl_certificate /etc/yoyi/tls/article-fullchain.pem;
+    ssl_certificate_key /etc/yoyi/tls/article-privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+    if ($host != article-auth.example.invalid) { return 421; }
+    access_log /var/log/nginx/yoyi-article-status.log yoyi_status;
+    error_log /dev/null;
+    add_header Referrer-Policy no-referrer always;
+    client_max_body_size 64k;
+    location / {
+        proxy_http_version 1.1;
+        proxy_set_header Host article-auth.example.invalid;
+        proxy_set_header X-Forwarded-Host article-auth.example.invalid;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Moya-Auth-Ingress "";
+        proxy_set_header X-Moya-Client-Ip "";
+        proxy_set_header X-Moya-Auth-Relay "";
+        proxy_set_header X-Moya-Auth-Source "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_next_upstream off;
+        proxy_pass http://yoyi_article_authorization;
+    }
 }

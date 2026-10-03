@@ -1280,7 +1280,7 @@
                 "$ref": "#/components/schemas/ArticleApprovalReview/$defs/__schema49"
               },
               "environment": {
-                "const": "development",
+                "enum": ["development", "production"],
                 "type": "string"
               },
               "generation": {
@@ -1460,7 +1460,7 @@
                 "$ref": "#/components/schemas/ArticleAuthoringConnections/$defs/__schema3"
               },
               "environment": {
-                "const": "development",
+                "enum": ["development", "production"],
                 "type": "string"
               },
               "generation": {
@@ -2662,7 +2662,7 @@
             "$ref": "#/components/schemas/ArticleAuthoringGrant/$defs/__schema2"
           },
           "environment": {
-            "const": "development",
+            "enum": ["development", "production"],
             "type": "string"
           },
           "generation": {
@@ -11125,6 +11125,72 @@
               "profile": {
                 "enum": ["full-local", "email-first", "disabled"],
                 "type": "string"
+              },
+              "registration": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agreement": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "body": {
+                            "maxLength": 32768,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "title": {
+                            "maxLength": 120,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "version": {
+                            "maxLength": 64,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["version", "title", "body"],
+                        "type": "object"
+                      },
+                      "available": {
+                        "const": true,
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "type": "null"
+                      }
+                    },
+                    "required": ["available", "agreement", "reason"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agreement": {
+                        "type": "null"
+                      },
+                      "available": {
+                        "const": false,
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["available", "agreement", "reason"],
+                    "type": "object"
+                  }
+                ]
               }
             },
             "required": ["profile", "email", "phone", "developmentOnly"],
@@ -11262,6 +11328,72 @@
           "profile": {
             "enum": ["full-local", "email-first", "disabled"],
             "type": "string"
+          },
+          "registration": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "agreement": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "body": {
+                        "maxLength": 32768,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "version": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": ["version", "title", "body"],
+                    "type": "object"
+                  },
+                  "available": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "null"
+                  }
+                },
+                "required": ["available", "agreement", "reason"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "agreement": {
+                    "type": "null"
+                  },
+                  "available": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["available", "agreement", "reason"],
+                "type": "object"
+              }
+            ]
           }
         },
         "required": ["profile", "email", "phone", "developmentOnly"],
@@ -11689,6 +11821,11 @@
           "agreement": {
             "const": true,
             "type": "boolean"
+          },
+          "agreementVersion": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
           },
           "displayName": {
             "maxLength": 40,

@@ -86,7 +86,7 @@ describe("affected workspace command boundaries", () => {
       root,
     );
     assert.deepEqual(selected.workspaces, ["@moya/tests", "web"]);
-    assert.deepEqual(verificationCommands(selected).at(-1).slice(-2), [
+    assert.deepEqual(verificationCommands(selected).at(-1).slice(5, 7), [
       "--filter=@moya/tests",
       "--filter=web",
     ]);
@@ -238,11 +238,20 @@ describe("affected workspace command boundaries", () => {
     );
     assert.deepEqual(verificationCommands(selectedTest), [
       ["pnpm", "test:confidentiality"],
-      ["pnpm", "exec", "turbo", "run", "test", "--filter=@moya/tests"],
+      [
+        "pnpm",
+        "exec",
+        "turbo",
+        "run",
+        "test",
+        "--filter=@moya/tests",
+        "--cache-dir=.turbo/library-cache",
+        "--cache=local:r",
+      ],
     ]);
   });
 
-  it("keeps PostgreSQL preparation uncached and only library builds use their cache", () => {
+  it("keeps PostgreSQL preparation uncached and test cache consumption read only", () => {
     const commands = verificationCommands(verificationPlan("test"), {
       TEST_DATABASE_URL: "synthetic-target-present",
     });
@@ -250,6 +259,14 @@ describe("affected workspace command boundaries", () => {
       "--cache-dir",
       ".turbo/library-cache",
     ]);
+    const { scripts } = JSON.parse(
+      readFileSync(join(import.meta.dirname, "../package.json"), "utf8"),
+    );
+    assert.equal(
+      scripts.test,
+      "pnpm test:confidentiality && turbo run test --cache-dir=.turbo/library-cache --cache=local:r",
+    );
+    assert.ok(!commands[0].some((argument) => argument.startsWith("--cache=")));
     assert.deepEqual(
       commands.slice(1).map((command) => command.slice(1)),
       [

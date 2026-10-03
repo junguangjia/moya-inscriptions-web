@@ -54,10 +54,12 @@ import type {
   StorageUrlResolver,
   WorkPublishingPort,
 } from "@moya/api";
+import type { ArticleAuthoringGrant } from "@moya/contracts";
 import type { NodeEnvironment } from "./config.js";
 import type { ArticleDelegationRuntime } from "./community/article-delegation-handler.js";
 import type { createArticleMcpHandler } from "./community/article-mcp.js";
 import type { HealthReadinessCheck } from "./health/health-handler.js";
+import type { AuthRequestSource } from "./community/auth-request-source.js";
 import type { CommunityRouterDependencies } from "./http/router.js";
 import type { RequestListener } from "node:http";
 
@@ -73,10 +75,12 @@ export interface BackendApplicationOptions {
   /** Backend-owned identity and sessions; without it every credential is unauthenticated. */
   readonly communityIdentityPort?: CommunityIdentityPort;
   /**
-   * Email and phone authentication. Refused in production: this task does not
-   * expose public registration there.
+   * Real authentication supplied by the composition root. Production rejects
+   * Development-only providers; no local provider is used as a fallback.
    */
   readonly authService?: CommunityAuthService;
+  /** Validated Web forwarding authority; never generic client forwarding claims. */
+  readonly authRequestSource?: AuthRequestSource;
   readonly authorCommunityPort?: AuthorCommunityPort;
   readonly discussionPort?: DiscussionPort;
   readonly contentOperatorPort?: CommunityContentOperatorPort;
@@ -89,19 +93,20 @@ export interface BackendApplicationOptions {
   readonly communityAnalysisPort?: CommentAnalysisPort;
   /** The Owner's operator credential; empty leaves the internal subpath closed. */
   readonly communityOperatorCredential?: string;
-  /** Work publishing persistence; composed only under NODE_ENV=development with the author port. */
+  /** Work publishing persistence; requires the author port. */
   readonly workPublishingPort?: WorkPublishingPort;
-  /** Article drafts and publication; composed only in Development. */
+  /** Human Article drafts and publication. */
   readonly articleAuthoringPort?: ArticleAuthoringPort;
-  /** One shared authoring service for the Development human and MCP entries. */
+  /** One shared authoring service for explicitly configured human and MCP entries. */
   readonly articleDelegation?: {
+    readonly environment: ArticleAuthoringGrant["environment"];
     readonly human: ArticleDelegationRuntime;
     readonly mcp: ReturnType<typeof createArticleMcpHandler>;
     readonly resource: string;
   };
   /** Separate staff moderation authority; public humans and Agents cannot compose it. */
   readonly articlePublicationOperatorPort?: ArticlePublicationOperatorPort;
-  /** Owner work publishing operations; composed only under NODE_ENV=development. */
+  /** Owner work publishing operations behind the private operator boundary. */
   readonly publishingOperatorPort?: PublishingOperatorPort;
   /** Agent administration persistence; composed only under NODE_ENV=development. */
   readonly agentAdministrationPort?: AgentAdministrationPort;
@@ -115,11 +120,11 @@ export interface BackendApplicationOptions {
    * {@link createPublishingTransferRegistry}. A private registry otherwise.
    */
   readonly publishingTransfers?: PublishingTransferRegistry;
-  /** Published editorial content reads; composed only under NODE_ENV=development. */
+  /** Published editorial content reads from the real read projection. */
   readonly editorialContentPort?: EditorialContentReadPort;
-  /** Threads over Works; composed only under NODE_ENV=development. */
+  /** Threads over Works. */
   readonly threadPort?: ThreadPort;
-  /** Direct messages; composed only under NODE_ENV=development. */
+  /** Direct messages. */
   readonly directMessagePort?: DirectMessagePort;
   /** Injected clock for publishing commands; defaults to the system clock. */
   readonly publishingClock?: () => Date;
@@ -166,15 +171,13 @@ const resolveStorageUrlResolver = ({
   );
 };
 
-// Work publishing exists only under NODE_ENV=development: the author routes
-// with the author port, the operator routes with the operator port.
+// Publishing routes require their real ports; operator authority stays separate.
 const resolvePublishing = (
   options: BackendApplicationOptions,
 ): Pick<
   CommunityRouterDependencies,
   "publishingService" | "publishingOperatorService"
 > => {
-  if (options.nodeEnv !== "development") return {};
   const shared = {
     store: options.publishingMediaStore,
     clock: options.publishingClock,
@@ -213,55 +216,79 @@ const resolveCommunity = (
   options: BackendApplicationOptions,
   catalogPublicationPort: CatalogPublicationPort,
   storageUrlResolver: StorageUrlResolver,
+  catalogReadService: CatalogReadService,
 ): CommunityRouterDependencies | undefined => {
   const { nodeEnv, communityIdentityPort, communityCommentPort } = options;
   if (communityIdentityPort === undefined) return undefined;
-  if (nodeEnv === "production" && options.authService !== undefined)
-    throw new Error("Public authentication is not composed in production");
+  if (
+    nodeEnv === "production" &&
+    options.authService !== undefined &&
+    options.authService.capabilities().developmentOnly !== false
+  )
+    throw new Error("Development authentication is not composed in production");
   const sessionService = new CommunitySessionService(communityIdentityPort);
+  const publishing = resolvePublishing(options);
   const threadService =
-    nodeEnv === "development" && options.threadPort !== undefined
+    options.threadPort !== undefined
       ? new ThreadService(options.threadPort)
       : undefined;
   const directMessageService =
-    nodeEnv === "development" && options.directMessagePort !== undefined
+    options.directMessagePort !== undefined
       ? new DirectMessageService(options.directMessagePort)
       : undefined;
+  const articleDelegation =
+    nodeEnv === "test" ? undefined : options.articleDelegation;
+  if (articleDelegation !== undefined) {
+    if (articleDelegation.environment !== nodeEnv)
+      throw new Error("Article authority environment must match its runtime");
+    if (
+      nodeEnv === "production" &&
+      (new URL(articleDelegation.resource).protocol !== "https:" ||
+        new URL(articleDelegation.human.issuer).protocol !== "https:")
+    )
+      throw new Error("Production Article delegation requires HTTPS");
+  }
   return {
     sessionService,
-    ...(nodeEnv === "development" &&
-    options.articlePublicationOperatorPort !== undefined
+    ...(options.articlePublicationOperatorPort !== undefined
       ? {
           articlePublicationOperatorService:
             new ArticlePublicationOperatorService(
               options.articlePublicationOperatorPort,
-              options.publishingClock === undefined
-                ? {}
-                : { clock: options.publishingClock },
+              {
+                ...(options.publishingClock === undefined
+                  ? {}
+                  : { clock: options.publishingClock }),
+                publishing: publishing.publishingService,
+                catalog: catalogReadService,
+                authorMedia: options.authorCommunityPort,
+              },
             ),
         }
       : {}),
-    ...(nodeEnv === "development" &&
-    (options.articleDelegation !== undefined ||
-      options.articleAuthoringPort !== undefined)
+    ...(articleDelegation !== undefined ||
+    options.articleAuthoringPort !== undefined
       ? {
           articleAuthoringService:
-            options.articleDelegation?.human.authoring ??
+            articleDelegation?.human.authoring ??
             new ArticleAuthoringService(
               options.articleAuthoringPort!,
               options.publishingClock === undefined
                 ? {}
                 : { now: options.publishingClock },
             ),
-          ...(options.articleDelegation === undefined
-            ? {}
-            : { articleDelegation: options.articleDelegation }),
+          ...(articleDelegation === undefined ? {} : { articleDelegation }),
         }
       : {}),
-    ...(nodeEnv === "development" && options.authService !== undefined
-      ? { authService: options.authService }
+    ...(options.authService !== undefined
+      ? {
+          authService: options.authService,
+          ...(options.authRequestSource === undefined
+            ? {}
+            : { authRequestSource: options.authRequestSource }),
+        }
       : {}),
-    ...(nodeEnv === "development" && options.notificationPort
+    ...(options.notificationPort
       ? {
           notificationService: new NotificationService(
             options.notificationPort,
@@ -272,7 +299,7 @@ const resolveCommunity = (
           ),
         }
       : {}),
-    ...(nodeEnv === "development" && options.authorCommunityPort !== undefined
+    ...(options.authorCommunityPort !== undefined
       ? {
           authorService: new AuthorCommunityService(
             options.authorCommunityPort,
@@ -293,15 +320,11 @@ const resolveCommunity = (
       : {}),
     ...(threadService === undefined ? {} : { threadService }),
     ...(directMessageService === undefined ? {} : { directMessageService }),
-    // Work publishing is Development only, like the Phase 4 author surface.
-    ...resolvePublishing(options),
+    // Publishing reuses the existing services and their access checks.
+    ...publishing,
     developmentEntry: nodeEnv === "development",
-    ...(nodeEnv === "development"
-      ? {
-          contentOperatorPort: options.contentOperatorPort,
-          discussionPort: options.discussionPort,
-        }
-      : {}),
+    contentOperatorPort: options.contentOperatorPort,
+    discussionPort: options.discussionPort,
     // Comments and moderation need their own port; identity works without it.
     ...(communityCommentPort === undefined
       ? {}
@@ -309,7 +332,7 @@ const resolveCommunity = (
           commentService: new CatalogCommentService(
             communityCommentPort,
             catalogPublicationPort,
-            nodeEnv === "development" && options.discussionPort
+            options.discussionPort
               ? { discussionPort: options.discussionPort }
               : {},
           ),
@@ -318,7 +341,7 @@ const resolveCommunity = (
             communityIdentityPort,
             catalogPublicationPort,
             {
-              ...(nodeEnv === "development" && options.contentOperatorPort
+              ...(options.contentOperatorPort
                 ? { contentOperatorPort: options.contentOperatorPort }
                 : {}),
               ...(options.communityAnalysisPort === undefined
@@ -328,7 +351,7 @@ const resolveCommunity = (
           ),
         }),
     // Agent administration shares the moderation and content operator ports;
-    // it exists only in Development, like every phase 4 operator surface.
+    // it remains Development-only, separately from human operator services.
     ...(nodeEnv === "development" &&
     communityCommentPort !== undefined &&
     options.agentAdministrationPort !== undefined
@@ -355,6 +378,15 @@ export const createBackendApplication = (
 ): RequestListener => {
   const catalogQueryPort = resolveCatalogQueryPort(options);
   const storageUrlResolver = resolveStorageUrlResolver(options);
+  const catalogReadService = new CatalogReadService(
+    catalogQueryPort,
+    storageUrlResolver,
+    options.catalogSearchQueryPort ??
+      (options.nodeEnv !== "production" &&
+      options.catalogQueryPort === undefined
+        ? createDevelopmentCatalogFixtureSearchPort()
+        : undefined),
+  );
   const community = resolveCommunity(
     options,
     options.catalogPublicationPort ?? {
@@ -366,17 +398,10 @@ export const createBackendApplication = (
         (await catalogQueryPort.getById(catalogId))?.title ?? null,
     },
     storageUrlResolver,
+    catalogReadService,
   );
   return createRouter({
-    catalogReadService: new CatalogReadService(
-      catalogQueryPort,
-      storageUrlResolver,
-      options.catalogSearchQueryPort ??
-        (options.nodeEnv !== "production" &&
-        options.catalogQueryPort === undefined
-          ? createDevelopmentCatalogFixtureSearchPort()
-          : undefined),
-    ),
+    catalogReadService,
     healthReadinessCheck:
       options.healthReadinessCheck ?? (async (): Promise<void> => undefined),
     ...(community === undefined ? {} : { community }),

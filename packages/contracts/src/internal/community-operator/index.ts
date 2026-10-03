@@ -323,3 +323,21 @@ export type {
   ModerateArticlePendingCommand,
   ArticleModerationResult,
 } from "./article-operator-schemas.ts";
+
+export {
+  adminReadArticleSubmissionRequestSchema,
+  adminModerateArticleSubmissionRequestSchema,
+} from "./article-operator-schemas.ts";
+export type {
+  AdminReadArticleSubmissionRequest,
+  AdminModerateArticleSubmissionRequest,
+} from "./article-operator-schemas.ts";
+
+export {
+  articlePendingPreviewSchema,
+  articlePendingMediaQuerySchema,
+} from "./article-operator-schemas.ts";
+export type {
+  ArticlePendingPreview,
+  ArticlePendingMediaQuery,
+} from "./article-operator-schemas.ts";

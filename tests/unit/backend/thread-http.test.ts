@@ -1,3 +1,5 @@
+import { CommunitySessionService } from "@moya/api";
+import { InMemoryCommunityCommentPort } from "./community-comment-fixture.js";
 import {
   createBackendApplication,
   createBackendServer,
@@ -6,7 +8,6 @@ import {
 } from "@moya/backend-runtime";
 import {
   apiErrorSchema,
-  developmentSessionSchema,
   threadPageSchema,
   threadReadResultSchema,
   threadSummarySchema,
@@ -14,7 +15,10 @@ import {
 import { MappedStorageUrlResolver } from "@moya/image";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { InMemoryCommunityIdentityPort } from "./community-identity-fixture.js";
+import {
+  fixtureUsers,
+  InMemoryCommunityIdentityPort,
+} from "./community-identity-fixture.js";
 
 import type { AuthorCommunityPort, ThreadPort } from "@moya/api";
 import type { ThreadId, ThreadSummary } from "@moya/contracts";
@@ -89,10 +93,13 @@ const start = async (
   nodeEnv: "development" | "production",
   port?: ThreadPort,
 ) => {
+  const identity = new InMemoryCommunityIdentityPort();
+  const sessions = new CommunitySessionService(identity);
   const server = createBackendServer(
     createBackendApplication({
       nodeEnv,
-      communityIdentityPort: new InMemoryCommunityIdentityPort(),
+      communityIdentityPort: identity,
+      communityCommentPort: new InMemoryCommunityCommentPort(),
       authorCommunityPort: {} as unknown as AuthorCommunityPort,
       storageUrlResolver: new MappedStorageUrlResolver(new Map()),
       ...(port ? { threadPort: port } : {}),
@@ -115,7 +122,7 @@ const start = async (
   );
   servers.add(server);
   const address = await startServer(server, { host: "127.0.0.1", port: 0 });
-  return `http://${address.address}:${address.port}`;
+  return { base: `http://${address.address}:${address.port}`, sessions };
 };
 
 afterEach(async () => {
@@ -128,92 +135,114 @@ afterEach(async () => {
 });
 
 describe("Thread HTTP surface (content-community-completion-v1)", () => {
-  it("lists at an anchor, reads one Thread and answers 404 for unknown or malformed ids", async () => {
-    const port = new FixturePort();
-    const base = await start("development", port);
-    const first = threadPageSchema.parse(
-      await (await fetch(`${base}/v1/community/threads`)).json(),
-    );
-    expect(first.items[0]?.unread).toBeNull();
-    const second = await fetch(
-      `${base}/v1/community/threads?page=2&anchor=${encodeURIComponent(first.anchor)}`,
-    );
-    expect(second.status).toBe(200);
-    expect(port.anchors).toEqual([undefined, first.anchor]);
-    const one = threadSummarySchema.parse(
-      await (await fetch(`${base}/v1/community/threads/${threadId}`)).json(),
-    );
-    expect(one.id).toBe(threadId);
-    const missing = await fetch(
-      `${base}/v1/community/threads/thread-${"f".repeat(32)}`,
-    );
-    expect(missing.status).toBe(404);
-    expect(apiErrorSchema.parse(await missing.json()).error.code).toBe(
-      "ITEM_NOT_FOUND",
-    );
-    expect(
-      (await fetch(`${base}/v1/community/threads/not-a-thread`)).status,
-    ).toBe(404);
-    expect(
-      (await fetch(`${base}/v1/community/threads?pageSize=999`)).status,
-    ).toBe(400);
-  });
+  it.each(["development", "production"] as const)(
+    "lists anchored Threads and rejects invalid ids in %s",
+    async (nodeEnv) => {
+      const port = new FixturePort();
+      const { base } = await start(nodeEnv, port);
+      const first = threadPageSchema.parse(
+        await (await fetch(`${base}/v1/community/threads`)).json(),
+      );
+      expect(first.items[0]?.unread).toBeNull();
+      const second = await fetch(
+        `${base}/v1/community/threads?page=2&anchor=${encodeURIComponent(first.anchor)}`,
+      );
+      expect(second.status).toBe(200);
+      expect(port.anchors).toEqual([undefined, first.anchor]);
+      const one = threadSummarySchema.parse(
+        await (await fetch(`${base}/v1/community/threads/${threadId}`)).json(),
+      );
+      expect(one.id).toBe(threadId);
+      const missing = await fetch(
+        `${base}/v1/community/threads/thread-${"f".repeat(32)}`,
+      );
+      expect(missing.status).toBe(404);
+      expect(apiErrorSchema.parse(await missing.json()).error.code).toBe(
+        "ITEM_NOT_FOUND",
+      );
+      expect(
+        (await fetch(`${base}/v1/community/threads/not-a-thread`)).status,
+      ).toBe(404);
+      expect(
+        (await fetch(`${base}/v1/community/threads?pageSize=999`)).status,
+      ).toBe(400);
+    },
+  );
 
-  it("records the read marker only for a session and never from a client instant", async () => {
-    const port = new FixturePort();
-    const base = await start("development", port);
-    const anonymous = await fetch(
-      `${base}/v1/community/threads/${threadId}/read`,
-      { method: "POST" },
-    );
-    expect(anonymous.status).toBe(401);
-    const signedIn = await fetch(`${base}/v1/development/sign-in`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ handle: "dev-user-01" }),
-    });
-    const session = developmentSessionSchema.parse(await signedIn.json());
-    const marked = await fetch(
-      `${base}/v1/community/threads/${threadId}/read`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${session.token}`,
-          "content-type": "application/json",
-          "x-author-account": session.profile.id,
+  it.each(["development", "production"] as const)(
+    "records session-bound read markers in %s",
+    async (nodeEnv) => {
+      const port = new FixturePort();
+      const { base, sessions } = await start(nodeEnv, port);
+      const anonymous = await fetch(
+        `${base}/v1/community/threads/${threadId}/read`,
+        { method: "POST" },
+      );
+      expect(anonymous.status).toBe(401);
+      // Test-only session injection, also when the Development sign-in route is absent.
+      const session = await sessions.signInDevelopmentAccount(
+        fixtureUsers.active.handle,
+      );
+      if (session === null) throw new Error("Missing synthetic account");
+      const marked = await fetch(
+        `${base}/v1/community/threads/${threadId}/read`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${session.token}`,
+            "content-type": "application/json",
+            "x-author-account": session.profile.id,
+          },
+          body: JSON.stringify({
+            observedActivityAt: "2999-01-01T00:00:00.000Z",
+          }),
         },
-        body: JSON.stringify({
-          observedActivityAt: "2999-01-01T00:00:00.000Z",
-        }),
-      },
-    );
-    expect(marked.status).toBe(200);
-    expect(
-      threadReadResultSchema.parse(await marked.json()).observedActivityAt,
-    ).toBe("2026-09-22T00:00:00.000Z");
-    expect(port.marked).toEqual([`${session.profile.id}:${threadId}`]);
-    const listed = threadPageSchema.parse(
-      await (
-        await fetch(`${base}/v1/community/threads`, {
-          headers: { authorization: `Bearer ${session.token}` },
-        })
-      ).json(),
-    );
-    expect(listed.items[0]?.unread).toBe(true);
-  });
+      );
+      expect(marked.status).toBe(200);
+      expect(
+        threadReadResultSchema.parse(await marked.json()).observedActivityAt,
+      ).toBe("2026-09-22T00:00:00.000Z");
+      expect(port.marked).toEqual([`${session.profile.id}:${threadId}`]);
+      const listed = threadPageSchema.parse(
+        await (
+          await fetch(`${base}/v1/community/threads`, {
+            headers: { authorization: `Bearer ${session.token}` },
+          })
+        ).json(),
+      );
+      expect(listed.items[0]?.unread).toBe(true);
+    },
+  );
 
-  it("is absent without a Thread port and outside Development, including the operator routes", async () => {
-    const withoutPort = await start("development");
+  it("requires a Thread port and keeps Production operator access private", async () => {
+    const { base: withoutPort } = await start("development");
     expect((await fetch(`${withoutPort}/v1/community/threads`)).status).toBe(
       404,
     );
-    const production = await start("production", new FixturePort());
-    expect((await fetch(`${production}/v1/community/threads`)).status).toBe(
-      404,
+    const { base: production, sessions } = await start(
+      "production",
+      new FixturePort(),
     );
+    expect((await fetch(`${production}/v1/community/threads`)).status).toBe(
+      200,
+    );
+    const session = await sessions.signInDevelopmentAccount(
+      fixtureUsers.active.handle,
+    );
+    if (session === null) throw new Error("Missing synthetic account");
+    for (const headers of [{}, { authorization: `Bearer ${session.token}` }])
+      expect(
+        (await fetch(`${production}/internal/community/threads`, { headers }))
+          .status,
+      ).toBe(401);
     const operator = await fetch(`${production}/internal/community/threads`, {
       headers: { authorization: `Bearer ${operatorCredential}` },
     });
-    expect(operator.status).toBe(404);
+    expect(operator.status).toBe(200);
+    expect(await operator.json()).toMatchObject({ items: [] });
+    expect(
+      (await fetch(`${production}/v1/development/sign-in`, { method: "POST" }))
+        .status,
+    ).toBe(404);
   });
 });

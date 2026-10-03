@@ -88,6 +88,10 @@ afterEach(async () => {
 });
 const start = async (
   nodeEnv: "development" | "production" | "test" = "development",
+  delegated = nodeEnv !== "production",
+  authorityEnvironment: "development" | "production" = nodeEnv === "production"
+    ? "production"
+    : "development",
 ) => {
   const identity = new InMemoryCommunityIdentityPort();
   const sessions = new CommunitySessionService(identity);
@@ -116,7 +120,10 @@ const start = async (
       decide: unreachable,
       finalizeGrant: unreachable,
     },
-    issuer: "http://issuer.localhost:44551",
+    issuer:
+      nodeEnv === "production"
+        ? "https://issuer.example.invalid"
+        : "http://issuer.localhost:44551",
     clients: new Map(),
     authoring: new ArticleAuthoringService(shared),
     readPublished: async () => null,
@@ -145,11 +152,19 @@ const start = async (
       storageUrlResolver: new UnconfiguredStorageUrlResolver(),
       communityIdentityPort: identity,
       articleAuthoringPort: fallback,
-      articleDelegation: {
-        human,
-        mcp,
-        resource: "http://127.0.0.1:44552/mcp/article-authoring",
-      },
+      ...(delegated
+        ? {
+            articleDelegation: {
+              human,
+              mcp,
+              environment: authorityEnvironment,
+              resource:
+                nodeEnv === "production"
+                  ? "https://catalog.example.invalid/mcp/article-authoring"
+                  : "http://127.0.0.1:44552/mcp/article-authoring",
+            },
+          }
+        : {}),
     }),
   );
   servers.add(server);
@@ -199,26 +214,54 @@ describe("Development Article dispatch and identity", () => {
     expect(mcp).toHaveBeenCalledTimes(2);
   });
   it.each(["test", "production"] as const)(
-    "keeps all composed delegation routes absent in %s",
+    "keeps external delegation absent while mounting the independent human service in %s",
     async (env) => {
-      const { send, mcp, connections, shared } = await start(env);
+      const { send, mcp, connections, shared, fallback } = await start(env);
       for (const path of [
         "/mcp/article-authoring",
         "/.well-known/oauth-protected-resource/mcp/article-authoring",
         "/v1/community/article-authoring/connections",
-        "/v1/community/article-authoring",
       ])
         expect((await send(path)).status).toBe(404);
       expect(mcp).not.toHaveBeenCalled();
       expect(connections.list).not.toHaveBeenCalled();
       expect(shared.list).not.toHaveBeenCalled();
+      expect((await send("/v1/community/article-authoring")).status).toBe(200);
+      expect(fallback.list).toHaveBeenCalledOnce();
     },
   );
-  it("Production and disabled Development read no Article configuration", () => {
+  it("mounts explicit Production delegation using the same human service and existing identity checks", async () => {
+    const { send, mcp, connections, shared, fallback } = await start(
+      "production",
+      true,
+    );
+    expect((await send("/mcp/article-authoring", false)).status).toBe(200);
+    expect(mcp).toHaveBeenCalledOnce();
+    expect(
+      (await send("/v1/community/article-authoring/connections", false)).status,
+    ).toBe(401);
+    expect(connections.list).not.toHaveBeenCalled();
+    expect(
+      (await send("/v1/community/article-authoring/connections")).status,
+    ).toBe(200);
+    expect(connections.list).toHaveBeenCalledWith(fixtureUsers.active.id);
+    expect((await send("/v1/community/article-authoring")).status).toBe(200);
+    expect(shared.list).toHaveBeenCalledOnce();
+    expect(fallback.list).not.toHaveBeenCalled();
+    // This in-memory routing fixture is not Production provider/Session evidence.
+  });
+  it("refuses a Development delegation configured into Production", async () => {
+    await expect(start("production", true, "development")).rejects.toThrow(
+      "Article authority environment must match its runtime",
+    );
+  });
+  it("disabled Production and Development read no protected Article configuration", () => {
     const env = new Proxy(
       {},
       {
-        get() {
+        get(_target, key) {
+          if (key === "ARTICLE_AUTHORING_ENABLED" || key === "NODE_ENV")
+            return undefined;
           throw Error("Protected setting must remain unread");
         },
       },
@@ -391,4 +434,77 @@ describe("Article backend role configuration before any resource opens", () => {
       ),
     ).toThrow();
   });
+});
+
+const productionEnvironment = () => ({
+  ...configuredEnvironment(),
+  NODE_ENV: "production",
+  ARTICLE_AUTHORING_ISSUER: "https://article-auth.example.invalid",
+  ARTICLE_AUTHORING_RESOURCE:
+    "https://catalog.example.invalid/mcp/article-authoring",
+  ARTICLE_AUTHORING_CONSENT_ORIGIN: "https://catalog.example.invalid",
+  ARTICLE_AUTHORIZATION_DATABASE_URL: undefined,
+  ARTICLE_AUTHORIZATION_DATABASE_TARGET:
+    "postgres://article_issuer@127.0.0.1:5432/synthetic_test?sslmode=disable",
+  ARTICLE_AUTHORING_CONTROL_DATABASE_URL:
+    "postgres://article_control@127.0.0.1:5432/synthetic_test?sslmode=disable",
+  APP_DATABASE_URL:
+    "postgres://article_resource@127.0.0.1:5432/synthetic_test?sslmode=disable",
+  DATABASE_URL:
+    "postgres://public_read@127.0.0.1:5432/synthetic_test?sslmode=disable",
+  CMS_DATABASE_TARGET:
+    "postgres://cms_runtime@127.0.0.1:5432/synthetic_test?sslmode=disable",
+});
+describe("Production Article composition configuration", () => {
+  const runtime = parseRuntimeConfig({
+    NODE_ENV: "production",
+    HOST: "127.0.0.1",
+    PORT: "44552",
+  });
+  it("uses role-only issuer metadata and HTTPS external resource with a private listener", () => {
+    const value = articleBackendConfigurationFrom(
+      productionEnvironment(),
+      runtime,
+    );
+    expect(value?.authorization.environment).toBe("production");
+    expect(value?.authorization.resource).toBe(
+      "https://catalog.example.invalid/mcp/article-authoring",
+    );
+    expect(value?.controlPostgres.ssl).toBe(false);
+  });
+  it.each([
+    {
+      ARTICLE_AUTHORIZATION_DATABASE_TARGET:
+        "postgres://article_issuer:synthetic-test-only@127.0.0.1:5432/synthetic_test?sslmode=disable",
+    },
+    {
+      CMS_DATABASE_TARGET:
+        "postgres://article_control@127.0.0.1:5432/synthetic_test?sslmode=disable",
+    },
+    {
+      APP_DATABASE_URL:
+        "postgres://public_read@127.0.0.1:5432/synthetic_test?sslmode=disable",
+    },
+    {
+      ARTICLE_AUTHORING_CONTROL_DATABASE_URL:
+        "postgres://article_control@remote.example.invalid:5432/synthetic_test?sslmode=disable",
+    },
+    {
+      ARTICLE_AUTHORING_RESOURCE:
+        "http://catalog.example.invalid/mcp/article-authoring",
+    },
+    {
+      ARTICLE_AUTHORING_RESOURCE: "https://catalog.example.invalid/mcp/foreign",
+    },
+  ])(
+    "refuses conflated or unverifiable Production authority %j",
+    (override) => {
+      expect(() =>
+        articleBackendConfigurationFrom(
+          { ...productionEnvironment(), ...override },
+          runtime,
+        ),
+      ).toThrow();
+    },
+  );
 });

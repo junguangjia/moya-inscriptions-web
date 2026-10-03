@@ -691,7 +691,7 @@ export const articleAuthoringGrantSchema = z.strictObject({
     .refine((value) => articleUtf8ByteLength(value) <= 1_024, {
       message: "article_invalid_client_identity",
     }),
-  environment: z.literal("development"),
+  environment: z.enum(["development", "production"]),
   issuer: articleSafeLinkSchema,
   resource: articleSafeLinkSchema,
   scopes: grantScopesSchema,

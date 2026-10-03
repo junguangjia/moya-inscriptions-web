@@ -31,7 +31,8 @@ import type {
 
 export interface WrapDiagnostics {
   /** Optional public-user policy; default preserves existing Admin wrapping. */
-  readonly assertGrantCurrent?: (grantId: string) => Promise<void>;
+  /** False is an authoritative policy refusal; thrown lookup faults remain server errors. */
+  readonly assertGrantCurrent?: (grantId: string) => Promise<void | false>;
   /** Bare codes only. Never a token, never a jti, never a grant id. */
   readonly recordFailure?: (code: string) => void;
 }
@@ -58,8 +59,8 @@ export const installAccessTokenWrapper = (
       grantId = undefined;
     }
 
-    const refuse = (code: string) => {
-      diagnostics.recordFailure?.(code);
+    const refuse = (code: string, invalidGrant = false) => {
+      if (!invalidGrant) diagnostics.recordFailure?.(code);
       // Destroy what was just issued rather than leave a live provider token
       // that nothing on our side can revoke, then refuse. One sympathetic
       // `catch` upstream returning the original body is exactly the shape
@@ -67,14 +68,15 @@ export const installAccessTokenWrapper = (
       void provider.AccessToken.revokeByGrantId?.(grantId ?? "").catch(
         () => undefined,
       );
-      ctx.status = 500;
-      ctx.body = undefined;
+      ctx.status = invalidGrant ? 400 : 500;
+      ctx.body = invalidGrant ? { error: "invalid_grant" } : undefined;
     };
 
     if (grantId === undefined) return refuse("WRAP_NO_PROVIDER_GRANT");
 
     try {
-      await diagnostics.assertGrantCurrent?.(grantId);
+      if ((await diagnostics.assertGrantCurrent?.(grantId)) === false)
+        return refuse("WRAP_GRANT_NO_LONGER_CURRENT", true);
       const minted = await wrappers.mint({
         grantId,
         jti: issued,

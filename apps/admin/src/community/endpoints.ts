@@ -1,4 +1,11 @@
 import {
+  adminReadArticleSubmissionRequestSchema,
+  adminModerateArticleSubmissionRequestSchema,
+  articlePendingListQuerySchema,
+  articlePendingMediaQuerySchema,
+  articlePendingPageSchema,
+  articlePendingPreviewSchema,
+  articleModerationResultSchema,
   adminBulkModerateCommentsRequestSchema,
   operatorContentQuerySchema,
   operatorWorksQuerySchema,
@@ -268,7 +275,7 @@ export const communityOperations = (
       await call("POST", `messages/${segment(id)}/remove`, command),
     );
   },
-  // content-community-completion-v1: operator-managed Threads (Development).
+  // content-community-completion-v1: operator-managed Threads.
   "read-threads": async (_req, input) =>
     checked(
       operatorThreadPageSchema,
@@ -405,6 +412,36 @@ export const communityOperations = (
         parse(setWorkPublishingSettingsCommandSchema, input),
       ),
     ),
+  "read-article-submissions": async (_req, input) => {
+    const query = parse(articlePendingListQuerySchema, input);
+    return checked(
+      articlePendingPageSchema,
+      await call(
+        "GET",
+        `articles/submissions${toQuery({
+          cursor: query.cursor,
+          pageSize: query.pageSize,
+        })}`,
+      ),
+    );
+  },
+  "read-article-submission": async (_req, input) => {
+    const { id } = parse(adminReadArticleSubmissionRequestSchema, input);
+    return checked(
+      articlePendingPreviewSchema,
+      await call("GET", `articles/${segment(id)}/submission`),
+    );
+  },
+  "moderate-article-submission": async (_req, input) => {
+    const { id, ...command } = parse(
+      adminModerateArticleSubmissionRequestSchema,
+      input,
+    );
+    return checked(
+      articleModerationResultSchema,
+      await call("POST", `articles/${segment(id)}/moderation`, command),
+    );
+  },
   "read-work-submissions": async (
     _req,
     input,
@@ -522,36 +559,10 @@ export const communityOperations = (
   },
 });
 
-const phase4Operations = new Set([
-  "read-dm-conversation",
-  "lookup-dm-conversation",
-  "remove-dm-message",
-  "read-threads",
-  "create-thread",
-  "update-thread",
-  "read-users",
-  "recommend-user",
-  "read-works",
-  "moderate-work",
-  "read-featured",
-  "set-featured",
-  "set-featured-quantity",
-  "delete-body",
-  "remove-thread",
-  "read-feature-catalogs",
-  "read-work-publishing-settings",
-  "set-work-publishing-settings",
-  "read-work-submissions",
-  "read-work-submission",
-  "moderate-work-submission",
-  "read-account-capacity",
-  "set-account-capacity",
-  "read-publishing-jobs",
-  "retry-publishing-job",
-  "abandon-publishing-job",
-  // Agent administration (Issue #141 r3, Phase B) is Development-only too.
-  ...agentAdminOperationNames,
-]);
+// Machine administration remains a separate Development-only boundary.
+const developmentOnlyOperations: ReadonlySet<string> = new Set(
+  agentAdminOperationNames,
+);
 
 /** A single well-formed byte range is relayed; anything else reads the whole derivative. */
 const byteRange = (value: string | null | undefined): string | null => {
@@ -589,7 +600,10 @@ const endpoint = (name: string, operation: CommunityOperation): Endpoint => ({
   handler: async (req) => {
     try {
       requireOwner(req);
-      if (phase4Operations.has(name) && process.env.NODE_ENV !== "development")
+      if (
+        developmentOnlyOperations.has(name) &&
+        process.env.NODE_ENV !== "development"
+      )
         throw new CommunityOperatorError("NOT_FOUND", 404);
       const input = await readJson(req);
       const result = await operation(req, input);
@@ -604,7 +618,7 @@ const endpoint = (name: string, operation: CommunityOperation): Endpoint => ({
 });
 
 /**
- * The Owner-only, Development-only binary relay for submission previews:
+ * The Owner-only binary relay for submission previews:
  * `<img>`/`<video>` sources on the same origin, streamed from the Backend
  * operator media route. Only derivatives exist there; the relay repeats the
  * content-type allow-list, never lets a response be cached, sniffed, framed
@@ -618,8 +632,6 @@ const workSubmissionMediaEndpoint = (
   handler: async (req) => {
     try {
       requireOwner(req);
-      if (process.env.NODE_ENV !== "development")
-        throw new CommunityOperatorError("NOT_FOUND", 404);
       const params = req.routeParams ?? {};
       const { revisionId, itemId, variant, editKey } = parse(
         workSubmissionMediaRequestSchema,
@@ -656,6 +668,52 @@ const workSubmissionMediaEndpoint = (
   },
 });
 
+/** A private pending-candidate derivative, never an arbitrary author-media proxy. */
+const articleSubmissionMediaEndpoint = (
+  openMedia: OperatorMediaCall,
+): Endpoint => ({
+  path: "/community-moderation/article-submission-media/:id",
+  method: "get",
+  handler: async (req) => {
+    try {
+      requireOwner(req);
+      const { id } = parse(adminReadArticleSubmissionRequestSchema, {
+        id: req.routeParams?.id,
+      });
+      const values: Record<string, string> = {};
+      const url = new URL(req.url ?? "http://request.invalid");
+      for (const [name, value] of url.searchParams) {
+        if (Object.hasOwn(values, name))
+          throw new CommunityOperatorError("COMMAND_INVALID", 400);
+        Object.defineProperty(values, name, { value, enumerable: true });
+      }
+      const query = parse(articlePendingMediaQuerySchema, values);
+      const media = await openMedia(
+        `articles/${segment(id)}/submission-media${toQuery(query)}`,
+        byteRange(req.headers?.get("range")),
+        req.signal,
+      );
+      const headers = new Headers({
+        "Content-Type": media.contentType,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Referrer-Policy": "no-referrer",
+        Vary: "Cookie, Range",
+      });
+      if (media.acceptsRanges) headers.set("Accept-Ranges", "bytes");
+      if (media.contentLength !== null)
+        headers.set("Content-Length", media.contentLength);
+      if (media.contentRange !== null)
+        headers.set("Content-Range", media.contentRange);
+      return new Response(media.body, { status: media.status, headers });
+    } catch (error) {
+      return failure(error, req);
+    }
+  },
+});
+
 /** The real endpoint set, with the transports injectable for boundary tests. */
 export const createCommunityEndpoints = (
   call: OperatorCall = callCommunityOperator,
@@ -666,6 +724,7 @@ export const createCommunityEndpoints = (
     ...agentAdminOperations(call),
   }).map(([name, operation]) => endpoint(name, operation)),
   workSubmissionMediaEndpoint(openMedia),
+  articleSubmissionMediaEndpoint(openMedia),
 ];
 
 export const communityEndpoints: Endpoint[] = createCommunityEndpoints();

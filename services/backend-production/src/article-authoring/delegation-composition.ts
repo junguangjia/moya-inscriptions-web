@@ -71,7 +71,13 @@ export const createArticleDelegationRuntime = (options: {
     itemId: string,
   ) => ReturnType<ArticleMcpDependencies["inspectThumbnail"]>;
 }) => {
-  if (options.nodeEnv !== "development" || !options.enabled) return undefined;
+  if (
+    !options.enabled ||
+    !["development", "production"].includes(options.nodeEnv)
+  )
+    return undefined;
+  if (options.authority.environment !== options.nodeEnv)
+    throw new Error("Article authority environment must match its runtime");
   const now = options.now ?? (() => new Date());
   const { connections, consents } = options.persistence;
   const admitted = async <T>(
@@ -128,5 +134,10 @@ export const createArticleDelegationRuntime = (options: {
     inspectThumbnail: (actor, id) =>
       admitted(actor, (db) => options.inspectThumbnail(db, actor, id)),
   });
-  return { human, mcp, resource: options.authority.resource };
+  return {
+    human,
+    mcp,
+    resource: options.authority.resource,
+    environment: options.authority.environment,
+  };
 };

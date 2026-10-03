@@ -1,4 +1,5 @@
 import type {
+  AuthRegistrationAgreement,
   AuthAccountSecurity,
   AuthCapabilities,
   AuthChallengeAccepted,
@@ -145,6 +146,7 @@ export interface CommunityAuthServiceOptions {
   readonly clock?: () => Date;
   readonly randomBytes?: RandomBytes;
   readonly sessionTtlMs?: number;
+  readonly registrationAgreement?: AuthRegistrationAgreement | null;
 }
 
 interface Target {
@@ -211,12 +213,24 @@ export class CommunityAuthService {
   private readonly clock: () => Date;
   private readonly randomBytes: RandomBytes;
   private readonly sessionTtlMs: number;
+  private readonly registrationAgreement: AuthRegistrationAgreement | null;
 
   constructor(
     private readonly port: CommunityAuthPort,
     private readonly options: CommunityAuthServiceOptions,
   ) {
     assertAuthKeys(options.keys);
+    if (
+      options.environment === "production" &&
+      (options.profile === "full-local" ||
+        options.emailMode !== "provider" ||
+        (options.phoneMode !== "provider" && options.phoneMode !== "disabled"))
+    )
+      throw new Error("Production authentication requires real provider modes");
+    this.registrationAgreement =
+      options.registrationAgreement == null
+        ? null
+        : Object.freeze({ ...options.registrationAgreement });
     this.clock = options.clock ?? (() => new Date());
     this.randomBytes = options.randomBytes ?? defaultRandomBytes;
     this.sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
@@ -234,6 +248,22 @@ export class CommunityAuthService {
             reason: "Phone sign-in is turned off in this acceptance profile.",
           },
       developmentOnly: this.options.environment === "development",
+      ...(this.options.environment === "production"
+        ? {
+            registration:
+              this.registrationAgreement === null
+                ? {
+                    available: false,
+                    agreement: null,
+                    reason: "Registration agreement is not configured.",
+                  }
+                : {
+                    available: true,
+                    agreement: { ...this.registrationAgreement },
+                    reason: null,
+                  },
+          }
+        : {}),
     };
   }
 
@@ -246,6 +276,8 @@ export class CommunityAuthService {
     readonly sessionToken?: string | undefined;
     readonly reauthToken?: string | undefined;
   }): Promise<AuthResult<AuthChallengeAccepted>> {
+    if (input.purpose === "register" && !this.registrationAvailable())
+      return fail("AUTH_NOT_CONFIGURED");
     if (!this.channelAvailable(input.channel))
       return fail("AUTH_CHANNEL_UNAVAILABLE");
     const at = this.clock();
@@ -317,32 +349,95 @@ export class CommunityAuthService {
   }): Promise<AuthResult<AuthVerifyValue>> {
     const at = this.clock();
     const continuationHash = await hashSessionToken(input.continuationToken);
-    const loaded = await this.transactional<StoredChallenge>(async (tx) => {
+    const loaded = await this.transactional<{
+      challenge: StoredChallenge;
+      checkProvider: boolean;
+    }>(async (tx) => {
       const challenge = await tx.findChallenge(input.challengeId);
       if (challenge === null || challenge.continuationHash !== continuationHash)
         return fail("AUTH_PROOF_REJECTED");
-      return { ok: true, value: challenge };
+      let checkProvider = challenge.strategy === "provider_generated";
+      if (checkProvider) {
+        if (!this.challengeModeOk(challenge))
+          return fail("AUTH_PROVENANCE_REJECTED");
+        if (challenge.invalidatedAt !== null || challenge.supersededAt !== null)
+          return this.staleChallenge(challenge, at);
+        const receipt = await tx.findReceipt(
+          await this.receiptKey(
+            input.idempotencyKey,
+            challenge.targetDigest,
+            challenge.purpose,
+          ),
+        );
+        // Receipt replay is authorized by the final locked transaction. It never
+        // spends another provider verification attempt, even after OTP expiry.
+        if (receipt !== null && challenge.purpose === "sign_in")
+          checkProvider = false;
+        else {
+          const ready = await this.providerChallengeReady(tx, challenge, at);
+          if (!ready.ok) return ready;
+          if (challenge.purpose === "link" || challenge.purpose === "replace")
+            return fail("AUTH_PROOF_REJECTED");
+          const identity = await tx.findIdentity(
+            challenge.channel,
+            challenge.targetDigest,
+          );
+          if (
+            (challenge.purpose === "register" ||
+              (challenge.purpose === "sign_in" && identity === null)) &&
+            !this.registrationAvailable()
+          )
+            return fail("AUTH_NOT_CONFIGURED");
+          if (identity !== null && challenge.purpose !== "register") {
+            if (!this.provenanceOk(identity))
+              return fail("AUTH_PROVENANCE_REJECTED");
+            const user = await tx.findUser(identity.userId);
+            if (user === null || user.status !== "active")
+              return fail("AUTH_ACCOUNT_SUSPENDED");
+          }
+          if (challenge.purpose === "reauthenticate") {
+            const user =
+              challenge.sessionHash === null
+                ? null
+                : await tx.findSessionUser(
+                    challenge.sessionHash,
+                    at.toISOString(),
+                    this.requiredSessionEnvironment(),
+                  );
+            if (user === null || user.id !== challenge.userId)
+              return fail("AUTH_UNAUTHENTICATED");
+            if (user.status !== "active") return fail("AUTH_ACCOUNT_SUSPENDED");
+          }
+        }
+      }
+      return { ok: true, value: { challenge, checkProvider } };
     });
     if (!loaded.ok) return loaded;
     let providerPassed = false;
-    if (loaded.value.strategy === "provider_generated") {
+    if (loaded.value.checkProvider) {
       const plain = await decryptContact(
         this.options.keys,
-        loaded.value.channel,
-        loaded.value.ciphertext,
+        loaded.value.challenge.channel,
+        loaded.value.challenge.ciphertext,
       );
       if (plain === null) return fail("AUTH_PROOF_REJECTED");
       const checked = await this.options.delivery.checkPhone({
         e164: plain,
         code: input.code,
-        outId: loaded.value.id,
+        outId: loaded.value.challenge.id,
       });
       if (checked === "unknown") return fail("AUTH_DELIVERY_UNKNOWN");
       if (checked === "malformed") return fail("AUTH_DELIVERY_FAILED");
       providerPassed = checked === "pass";
     }
     return this.transactional<AuthVerifyValue>((tx) =>
-      this.finishVerify(tx, input, continuationHash, providerPassed, at),
+      this.finishVerify(
+        tx,
+        input,
+        continuationHash,
+        providerPassed,
+        this.clock(),
+      ),
     );
   }
 
@@ -350,12 +445,19 @@ export class CommunityAuthService {
     readonly handoffToken: string;
     readonly displayName: string;
     readonly agreement: boolean;
+    readonly agreementVersion?: string | undefined;
     readonly idempotencyKey: string;
     readonly password?: string | undefined;
     readonly studioName?: string | undefined;
     readonly studioNameSuffix?: string | undefined;
     readonly source?: string;
   }): Promise<AuthResult<AuthSessionGrant>> {
+    if (
+      !this.registrationAvailable() ||
+      (this.options.environment === "production" &&
+        input.agreementVersion !== this.registrationAgreement?.version)
+    )
+      return fail("AUTH_NOT_CONFIGURED");
     if (input.agreement !== true) return fail("AUTH_AGREEMENT_REQUIRED");
     const displayName = input.displayName.trim();
     if (
@@ -477,6 +579,8 @@ export class CommunityAuthService {
             )
               return fail("AUTH_PROOF_REJECTED");
             if (receipt.payloadHash == null) {
+              if (this.options.environment === "production")
+                return fail("AUTH_PROOF_REJECTED");
               // Legacy receipts may replay only their original OTP-only public fields.
               if (
                 input.password !== undefined ||
@@ -878,9 +982,18 @@ export class CommunityAuthService {
     return keyedHash(
       this.options.keys.lookupKey,
       JSON.stringify(
-        studioNameSuffix === ""
-          ? ["register", displayName, studioName, verifier]
-          : ["register", displayName, studioName, verifier, studioNameSuffix],
+        this.options.environment === "production"
+          ? [
+              "register-production",
+              displayName,
+              studioName,
+              verifier,
+              studioNameSuffix,
+              this.registrationAgreement?.version,
+            ]
+          : studioNameSuffix === ""
+            ? ["register", displayName, studioName, verifier]
+            : ["register", displayName, studioName, verifier, studioNameSuffix],
       ),
     );
   }
@@ -891,7 +1004,11 @@ export class CommunityAuthService {
     const at = this.clock();
     const tokenHash = await hashSessionToken(sessionToken);
     return this.transactional(async (tx) => {
-      const user = await tx.findSessionUser(tokenHash, at.toISOString());
+      const user = await tx.findSessionUser(
+        tokenHash,
+        at.toISOString(),
+        this.requiredSessionEnvironment(),
+      );
       if (user === null) return fail("AUTH_UNAUTHENTICATED");
       if (user.status !== "active") return fail("AUTH_ACCOUNT_SUSPENDED");
       return { ok: true, value: await this.accountView(tx, user.id) };
@@ -912,51 +1029,153 @@ export class CommunityAuthService {
       readonly account: AuthAccountSecurity;
     }>
   > {
-    const at = this.clock();
+    let at = this.clock();
     const continuationHash = await hashSessionToken(input.continuationToken);
-    const loaded = await this.transactional<StoredChallenge>(async (tx) => {
+    const sessionHash = await hashSessionToken(input.sessionToken);
+    const reauthHash = await hashSessionToken(input.reauthToken);
+    const payloadHash = await keyedHash(
+      this.options.keys.lookupKey,
+      JSON.stringify([
+        "factor-completion",
+        input.challengeId,
+        continuationHash,
+        reauthHash,
+        input.code,
+        input.expectedVersion,
+      ]),
+    );
+    const loaded = await this.transactional<{
+      challenge: StoredChallenge;
+      checkProvider: boolean;
+    }>(async (tx) => {
       const challenge = await tx.findChallenge(input.challengeId);
       if (challenge === null || challenge.continuationHash !== continuationHash)
         return fail("AUTH_PROOF_REJECTED");
-      return { ok: true, value: challenge };
+      // Completed receipts are authorization recovery, not another OTP use.
+      // The locked final transaction validates the exact payload and lineage.
+      if (
+        challenge.completedAt !== null &&
+        (challenge.purpose === "link" || challenge.purpose === "replace") &&
+        (await tx.findReceipt(
+          await this.receiptKey(
+            input.idempotencyKey,
+            challenge.targetDigest,
+            challenge.purpose,
+          ),
+        )) !== null
+      )
+        return { ok: true, value: { challenge, checkProvider: false } };
+      let checkProvider = challenge.strategy === "provider_generated";
+      if (checkProvider) {
+        if (!this.challengeModeOk(challenge))
+          return fail("AUTH_PROVENANCE_REJECTED");
+        if (!this.challengeFresh(challenge, at))
+          return this.staleChallenge(challenge, at);
+        if (challenge.purpose !== "link" && challenge.purpose !== "replace")
+          return fail("AUTH_PROOF_REJECTED");
+        const user = await tx.findSessionUser(
+          sessionHash,
+          at.toISOString(),
+          this.requiredSessionEnvironment(),
+        );
+        if (
+          user === null ||
+          challenge.userId !== user.id ||
+          challenge.sessionHash !== sessionHash
+        )
+          return fail("AUTH_UNAUTHENTICATED");
+        if (user.status !== "active") return fail("AUTH_ACCOUNT_SUSPENDED");
+        const receipt = await tx.findReceipt(
+          await this.receiptKey(
+            input.idempotencyKey,
+            challenge.targetDigest,
+            challenge.purpose,
+          ),
+        );
+        if (receipt !== null) checkProvider = false;
+        else {
+          const ready = await this.providerChallengeReady(tx, challenge, at);
+          if (!ready.ok) return ready;
+          const reauth = await tx.findHandoff(reauthHash);
+          if (
+            reauth === null ||
+            reauth.purpose !== "reauth" ||
+            reauth.userId !== user.id ||
+            reauth.sessionHash !== sessionHash ||
+            reauth.consumedAt !== null ||
+            !this.handoffModeOk(reauth) ||
+            new Date(reauth.expiresAt).getTime() <= at.getTime()
+          )
+            return fail("AUTH_PROOF_REJECTED");
+          const identities = await tx.listIdentities(user.id);
+          const reauthIdentity = identities.find(
+            (row) => row.kind === reauth.channel,
+          );
+          if (
+            reauthIdentity === undefined ||
+            !this.provenanceOk(reauthIdentity)
+          )
+            return fail("AUTH_PROOF_REJECTED");
+          const current = identities.find(
+            (row) => row.kind === challenge.channel,
+          );
+          if (
+            current === undefined
+              ? challenge.purpose !== "link" || input.expectedVersion !== 0
+              : challenge.purpose !== "replace" ||
+                current.version !== input.expectedVersion
+          )
+            return fail("AUTH_STALE_VERSION");
+          if (current !== undefined && !this.provenanceOk(current))
+            return fail("AUTH_PROVENANCE_REJECTED");
+          const owner = await tx.findIdentity(
+            challenge.channel,
+            challenge.targetDigest,
+          );
+          if (owner !== null && owner.userId !== user.id)
+            return fail("AUTH_IDENTIFIER_CONFLICT");
+        }
+      }
+      return { ok: true, value: { challenge, checkProvider } };
     });
-    if (!loaded.ok) return loaded;
     let providerPassed = false;
-    if (loaded.value.strategy === "provider_generated") {
+    let providerFailure: AuthReason | null = loaded.ok ? null : loaded.reason;
+    if (loaded.ok && loaded.value.checkProvider) {
       const plain = await decryptContact(
         this.options.keys,
-        loaded.value.channel,
-        loaded.value.ciphertext,
+        loaded.value.challenge.channel,
+        loaded.value.challenge.ciphertext,
       );
       if (plain === null) return fail("AUTH_PROOF_REJECTED");
       const checked = await this.options.delivery.checkPhone({
         e164: plain,
         code: input.code,
-        outId: loaded.value.id,
+        outId: loaded.value.challenge.id,
       });
-      if (checked === "unknown") return fail("AUTH_DELIVERY_UNKNOWN");
-      if (checked === "malformed") return fail("AUTH_DELIVERY_FAILED");
+      if (checked === "unknown") providerFailure = "AUTH_DELIVERY_UNKNOWN";
+      if (checked === "malformed") providerFailure = "AUTH_DELIVERY_FAILED";
       providerPassed = checked === "pass";
     }
-    const sessionHash = await hashSessionToken(input.sessionToken);
-    const reauthHash = await hashSessionToken(input.reauthToken);
+    at = this.clock();
     return this.transactional(async (tx) => {
+      // Serialize completion/recovery with logout, then reload observations
+      // made before a concurrent completion or external provider call.
+      const observed = await tx.findChallenge(input.challengeId);
+      if (observed?.userId === null || observed === null)
+        return fail("AUTH_PROOF_REJECTED");
+      const currentUser = await tx.lockUser(observed.userId);
       const challenge = await tx.findChallenge(input.challengeId);
       if (
+        currentUser === null ||
         challenge === null ||
         challenge.continuationHash !== continuationHash ||
-        (challenge.purpose !== "link" && challenge.purpose !== "replace") ||
-        !this.challengeFresh(challenge, at)
+        challenge.userId !== currentUser.id ||
+        !this.challengeModeOk(challenge) ||
+        (challenge.purpose !== "link" && challenge.purpose !== "replace")
       )
         return fail("AUTH_PROOF_REJECTED");
-      const user = await tx.findSessionUser(sessionHash, at.toISOString());
-      if (
-        user === null ||
-        challenge.userId !== user.id ||
-        challenge.sessionHash !== sessionHash
-      )
-        return fail("AUTH_UNAUTHENTICATED");
-      if (user.status !== "active") return fail("AUTH_ACCOUNT_SUSPENDED");
+      if (currentUser.status !== "active")
+        return fail("AUTH_ACCOUNT_SUSPENDED");
       const receiptKey = await this.receiptKey(
         input.idempotencyKey,
         challenge.targetDigest,
@@ -964,18 +1183,101 @@ export class CommunityAuthService {
       );
       const receipt = await tx.findReceipt(receiptKey);
       if (receipt !== null) {
+        if (
+          challenge.completedAt === null ||
+          challenge.sessionHash === null ||
+          challenge.reauthHash !== reauthHash ||
+          receipt.userId !== currentUser.id ||
+          receipt.payloadHash !== payloadHash ||
+          receipt.purpose !== `factor_change:${challenge.id}`
+        )
+          return fail("AUTH_PROOF_REJECTED");
+        const caller = await tx.findSession(
+          sessionHash,
+          this.requiredSessionEnvironment(),
+        );
+        if (caller === null || caller.userId !== currentUser.id)
+          return fail("AUTH_UNAUTHENTICATED");
+        const source = await tx.lockSession(
+          challenge.sessionHash,
+          this.requiredSessionEnvironment(),
+        );
+        const presented =
+          sessionHash === challenge.sessionHash
+            ? source
+            : await tx.lockSession(
+                sessionHash,
+                this.requiredSessionEnvironment(),
+              );
+        const lineage =
+          presented === null
+            ? null
+            : await tx.findReceipt(
+                await keyedHash(
+                  this.options.keys.lookupKey,
+                  `factor-lineage\0${receipt.keyHash}\0${presented.id}`,
+                ),
+              );
+        const priorCookie =
+          lineage !== null &&
+          lineage.purpose === `factor_lineage:${receipt.keyHash}` &&
+          lineage.userId === currentUser.id &&
+          lineage.sessionId === presented?.id &&
+          lineage.sessionTokenHash === sessionHash;
+        if (
+          source === null ||
+          source.userId !== currentUser.id ||
+          presented === null ||
+          presented.userId !== currentUser.id ||
+          new Date(presented.expiresAt).getTime() <= at.getTime() ||
+          (presented.tokenHash !== challenge.sessionHash &&
+            presented.id !== receipt.originSessionId &&
+            presented.id !== receipt.sessionId &&
+            !priorCookie)
+        )
+          return fail("AUTH_UNAUTHENTICATED");
+        const proof = await tx.findHandoff(reauthHash);
+        if (
+          proof === null ||
+          proof.purpose !== "reauth" ||
+          proof.userId !== currentUser.id ||
+          proof.sessionHash !== challenge.sessionHash ||
+          proof.consumedAt === null ||
+          !this.handoffModeOk(proof)
+        )
+          return fail("AUTH_PROOF_REJECTED");
         const session = await this.reissue(
           tx,
           receipt,
-          user,
+          currentUser,
           challenge.channel,
           at,
         );
         return {
           ok: true,
-          value: { session, account: await this.accountView(tx, user.id) },
+          value: {
+            session,
+            account: await this.accountView(tx, currentUser.id),
+          },
         };
       }
+      if (providerFailure !== null) return fail(providerFailure);
+      if (challenge.reauthHash !== reauthHash)
+        return fail("AUTH_PROOF_REJECTED");
+      if (!this.challengeFresh(challenge, at))
+        return fail("AUTH_PROOF_REJECTED");
+      const user = await tx.findSessionUser(
+        sessionHash,
+        at.toISOString(),
+        this.requiredSessionEnvironment(),
+      );
+      if (
+        user === null ||
+        challenge.userId !== user.id ||
+        challenge.sessionHash !== sessionHash
+      )
+        return fail("AUTH_UNAUTHENTICATED");
+      if (user.status !== "active") return fail("AUTH_ACCOUNT_SUSPENDED");
       const since = new Date(at.getTime() - WINDOW_MS).toISOString();
       if (
         (await tx.failureCount(
@@ -1017,7 +1319,6 @@ export class CommunityAuthService {
       );
       if (reauthIdentity === undefined || !this.provenanceOk(reauthIdentity))
         return fail("AUTH_PROOF_REJECTED");
-      await tx.lockUser(user.id);
       const freshReauth = await tx.findHandoff(reauthHash);
       if (
         freshReauth === null ||
@@ -1081,7 +1382,8 @@ export class CommunityAuthService {
         userId: user.id,
         sessionId: session.sessionId,
         sessionTokenHash: session.tokenHash,
-        purpose: challenge.purpose,
+        purpose: `factor_change:${challenge.id}`,
+        payloadHash,
         originSessionId: session.sessionId,
         closedAt: null,
       });
@@ -1109,7 +1411,17 @@ export class CommunityAuthService {
     const sessionHash = await hashSessionToken(input.sessionToken);
     const reauthHash = await hashSessionToken(input.reauthToken);
     return this.transactional(async (tx) => {
-      const user = await tx.findSessionUser(sessionHash, at.toISOString());
+      const observed = await tx.findSession(
+        sessionHash,
+        this.requiredSessionEnvironment(),
+      );
+      if (observed === null) return fail("AUTH_UNAUTHENTICATED");
+      await tx.lockUser(observed.userId);
+      const user = await tx.findSessionUser(
+        sessionHash,
+        at.toISOString(),
+        this.requiredSessionEnvironment(),
+      );
       if (user === null) return fail("AUTH_UNAUTHENTICATED");
       if (user.status !== "active") return fail("AUTH_ACCOUNT_SUSPENDED");
       const receiptKey = await this.receiptKey(
@@ -1141,7 +1453,6 @@ export class CommunityAuthService {
         !this.handoffModeOk(reauth)
       )
         return fail("AUTH_PROOF_REJECTED");
-      await tx.lockUser(user.id);
       const freshReauth = await tx.findHandoff(reauthHash);
       if (
         freshReauth === null ||
@@ -1209,7 +1520,16 @@ export class CommunityAuthService {
     const at = this.clock();
     const tokenHash = await hashSessionToken(sessionToken);
     return this.transactional(async (tx) => {
-      const session = await tx.lockSession(tokenHash);
+      const observed = await tx.findSession(
+        tokenHash,
+        this.requiredSessionEnvironment(),
+      );
+      if (observed === null) return fail("AUTH_UNAUTHENTICATED");
+      await tx.lockUser(observed.userId);
+      const session = await tx.lockSession(
+        tokenHash,
+        this.requiredSessionEnvironment(),
+      );
       if (session === null) return fail("AUTH_UNAUTHENTICATED");
       if (
         session.revokedAt === null &&
@@ -1335,6 +1655,12 @@ export class CommunityAuthService {
     // here must not set completedAt, or that proof can never be used.
     if (challenge.purpose === "link" || challenge.purpose === "replace")
       return fail("AUTH_PROOF_REJECTED");
+    if (
+      (challenge.purpose === "register" ||
+        (challenge.purpose === "sign_in" && identity === null)) &&
+      !this.registrationAvailable()
+    )
+      return fail("AUTH_NOT_CONFIGURED");
     await tx.saveChallenge({ ...challenge, completedAt: at.toISOString() });
     if (challenge.purpose === "reauthenticate") {
       if (challenge.userId === null || challenge.sessionHash === null)
@@ -1728,7 +2054,11 @@ export class CommunityAuthService {
     if (token === undefined) return { ok: true, value: null };
     const sessionHash = await hashSessionToken(token);
     return this.transactional(async (tx) => {
-      const user = await tx.findSessionUser(sessionHash, at.toISOString());
+      const user = await tx.findSessionUser(
+        sessionHash,
+        at.toISOString(),
+        this.requiredSessionEnvironment(),
+      );
       if (user === null) return fail("AUTH_UNAUTHENTICATED");
       return { ok: true, value: { user, sessionHash } };
     });
@@ -1877,10 +2207,16 @@ export class CommunityAuthService {
     channel: AuthChannelName,
     at: Date,
   ): Promise<AuthSessionGrant> {
-    const bound = await tx.lockSession(receipt.sessionTokenHash);
+    const bound = await tx.lockSession(
+      receipt.sessionTokenHash,
+      this.requiredSessionEnvironment(),
+    );
     const locked = await tx.lockReceipt(receipt.keyHash);
     const live =
       bound !== null &&
+      bound.userId === user.id &&
+      locked?.userId === user.id &&
+      bound.tokenHash === locked.sessionTokenHash &&
       bound.revokedAt === null &&
       new Date(bound.expiresAt).getTime() > at.getTime();
     if (locked === null || locked.closedAt !== null || !live)
@@ -1888,6 +2224,22 @@ export class CommunityAuthService {
     if (!(await tx.revokeSession(locked.sessionTokenHash, at.toISOString())))
       throw new AuthRollback(fail("AUTH_PROOF_REJECTED"));
     const session = await this.mint(tx, user, channel, at);
+    if (locked.purpose.startsWith("factor_change:")) {
+      // Hash-only receipt lineage, not a second Session store. Keep every
+      // previously returned cookie able to close the canonical receipt.
+      await tx.insertReceipt({
+        keyHash: await keyedHash(
+          this.options.keys.lookupKey,
+          `factor-lineage\0${locked.keyHash}\0${bound.id}`,
+        ),
+        userId: locked.userId,
+        sessionId: bound.id,
+        sessionTokenHash: bound.tokenHash,
+        purpose: `factor_lineage:${locked.keyHash}`,
+        originSessionId: bound.id,
+        closedAt: null,
+      });
+    }
     await tx.updateReceiptSession(
       locked.keyHash,
       session.sessionId,
@@ -1992,6 +2344,29 @@ export class CommunityAuthService {
     };
   }
 
+  /** Read-only refusal before a live provider call; final transaction rechecks races. */
+  private async providerChallengeReady(
+    tx: AuthUnitOfWork,
+    challenge: StoredChallenge,
+    at: Date,
+  ): Promise<AuthResult<true>> {
+    if (!this.challengeModeOk(challenge))
+      return fail("AUTH_PROVENANCE_REJECTED");
+    if (!this.challengeFresh(challenge, at))
+      return this.staleChallenge(challenge, at);
+    const since = new Date(at.getTime() - WINDOW_MS).toISOString();
+    if (
+      challenge.attempts >= MAX_ATTEMPTS ||
+      (await tx.failureCount(
+        challenge.targetDigest,
+        challenge.purpose,
+        since,
+      )) >= MAX_ATTEMPTS
+    )
+      return fail("AUTH_CODE_EXHAUSTED");
+    return { ok: true, value: true };
+  }
+
   private staleChallenge(
     challenge: StoredChallenge,
     at: Date,
@@ -2032,6 +2407,17 @@ export class CommunityAuthService {
     const phone = normalizePhone(identifier);
     if (phone === null) return null;
     return { lookup: phone, delivery: phone, masked: maskPhone(phone) };
+  }
+
+  private requiredSessionEnvironment(): "production" | undefined {
+    return this.options.environment === "production" ? "production" : undefined;
+  }
+
+  private registrationAvailable(): boolean {
+    return (
+      this.options.environment !== "production" ||
+      this.registrationAgreement !== null
+    );
   }
 
   private channelAvailable(channel: AuthChannelName): boolean {

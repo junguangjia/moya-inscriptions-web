@@ -106,7 +106,7 @@ const socketClosed = (code: "EPIPE" | "ECONNRESET") =>
   });
 
 beforeEach(() => {
-  vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("NODE_ENV", "production");
   vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", backend);
 });
 
@@ -117,22 +117,6 @@ afterEach(() => {
 });
 
 describe("work publishing upload relay", () => {
-  it.each(["production", "test"])(
-    "is not served when NODE_ENV is %s",
-    async (environment) => {
-      vi.stubEnv("NODE_ENV", environment);
-      const upstream = vi.fn<typeof fetch>();
-      vi.stubGlobal("fetch", upstream);
-      const response = await POST(
-        uploadRequest({ body: bytes(4), length: 4 }),
-        context(),
-      );
-      expect(response.status).toBe(404);
-      expect(response.headers.get("cache-control")).toBe("private, no-store");
-      expect(upstream).not.toHaveBeenCalled();
-    },
-  );
-
   it("streams a large body to the Backend one chunk at a time and passes the JSON answer through", async () => {
     const chunkCount = 256;
     const chunk = bytes(MiB);

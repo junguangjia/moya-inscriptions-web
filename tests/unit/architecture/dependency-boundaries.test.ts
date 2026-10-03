@@ -237,6 +237,57 @@ describe("frontend and browser boundaries", () => {
     expect(clientBoundaryViolations(file, allowed)).toEqual([]);
   });
 
+  it("permits canonical Article inline DTOs without admitting internal runtime values", () => {
+    const file = path.join(
+      repositoryRoot,
+      "apps/admin/src/community/article-submission-preview.tsx",
+    );
+    expect(
+      clientBoundaryViolations(
+        file,
+        '"use client"; import type { ArticleInlineContent } from "@moya/contracts";',
+      ),
+    ).toEqual([]);
+    expect(
+      clientBoundaryViolations(
+        file,
+        '"use client"; import { articlePendingPreviewSchema } from "@moya/contracts/internal/community-operator";',
+      ),
+    ).not.toEqual([]);
+  });
+
+  it("limits native Web startup to fixed server entries and denies browser imports", () => {
+    const entry = path.join(
+      repositoryRoot,
+      "apps/web/scripts/production-http-server.mts",
+    );
+    const http = 'import { createServer } from "node:http";';
+    expect(frontendBoundaryViolations(entry, http)).toEqual([]);
+    expect(
+      frontendBoundaryViolations(entry, '"use client"; ' + http),
+    ).not.toEqual([]);
+    expect(
+      frontendBoundaryViolations(
+        path.join(repositoryRoot, "apps/web/scripts/unapproved.mts"),
+        http,
+      ),
+    ).not.toEqual([]);
+    expect(
+      frontendBoundaryViolations(entry, 'import fs from "node:fs";'),
+    ).not.toEqual([]);
+    const browser = path.join(repositoryRoot, "apps/web/features/example.tsx");
+    for (const extension of [".mts", ".mjs", ""]) {
+      expect(
+        frontendBoundaryViolations(
+          browser,
+          '"use client"; import { startProductionWeb } from "../scripts/start-production' +
+            extension +
+            '";',
+        ),
+      ).not.toEqual([]);
+    }
+  });
+
   it("resolves actual CMS relative files and index exports without blocking client helpers", () => {
     const file = path.join(
       repositoryRoot,
@@ -740,6 +791,46 @@ describe("frontend and browser boundaries", () => {
     ).toContain(expectedViolation);
   });
 
+  it("allows only the build mode for the reviewed Production auth guards", () => {
+    for (const relative of [
+      "features/auth/auth-flow.tsx",
+      "lib/public-api/server.ts",
+    ]) {
+      const file = path.join(repositoryRoot, "apps/web", relative);
+      const prefix = relative.startsWith("features/")
+        ? '"use client";\n'
+        : 'import "server-only";\n';
+      expect(
+        frontendBoundaryViolations(
+          file,
+          prefix + 'const production = process.env.NODE_ENV === "production";',
+        ),
+      ).toEqual([]);
+      expect(
+        frontendBoundaryViolations(
+          file,
+          prefix + "const credential = process.env.DATABASE_URL;",
+        ).length,
+      ).toBeGreaterThan(0);
+      expect(
+        frontendBoundaryViolations(
+          file,
+          prefix + "const credential = process.env.NODE_ENV_PRIVATE_API_KEY;",
+        ).length,
+      ).toBeGreaterThan(0);
+    }
+    const unrelated = path.join(
+      repositoryRoot,
+      "apps/web/features/home/example.tsx",
+    );
+    expect(
+      frontendBoundaryViolations(
+        unrelated,
+        '"use client"; const mode = process.env.NODE_ENV;',
+      ),
+    ).toContain("server-only configuration or secret access");
+  });
+
   it("keeps all real Web, Admin and UI files outside server boundaries", async () => {
     const workspaces = await discoverWorkspaces();
     const guardedRoots = [
@@ -1121,4 +1212,37 @@ describe("formal runtime dataset boundary", () => {
 
     expect(violations).toEqual([]);
   });
+});
+
+it("confines auth source crypto and protected forwarding configuration to its exact server-only transport", () => {
+  const file = path.join(
+    repositoryRoot,
+    "apps/web/lib/public-api/auth-request-source.ts",
+  );
+  const source =
+    'import "server-only";\nimport { timingSafeEqual } from "node:crypto";\nimport { isIP } from "node:net";\nconst ingress = process.env.AUTH_INGRESS_TOKEN; const relay = process.env.AUTH_SOURCE_RELAY_TOKEN;';
+  expect(frontendBoundaryViolations(file, source)).toEqual([]);
+  expect(
+    frontendBoundaryViolations(
+      file.replace("auth-request-source", "arbitrary-helper"),
+      source,
+    ).length,
+  ).toBeGreaterThan(0);
+  expect(
+    frontendBoundaryViolations(file, '"use client";\n' + source).length,
+  ).toBeGreaterThan(0);
+  expect(
+    frontendBoundaryViolations(
+      file,
+      source.replace('import "server-only";', ""),
+    ).length,
+  ).toBeGreaterThan(0);
+  expect(
+    frontendBoundaryViolations(
+      file,
+      source + "\nconst operator = process.env.COMMUNITY_OPERATOR_TOKEN;",
+    ),
+  ).toContain(
+    "COMMUNITY_OPERATOR_TOKEN is not authorized for the Web Public API boundary",
+  );
 });

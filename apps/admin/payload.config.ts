@@ -100,6 +100,11 @@ export default buildConfig({
         },
         // Work publishing (Development): explicit submission review, account
         // capacity designation and content-free publishing job outcomes.
+        communityArticleSubmissions: {
+          Component: "/src/community/View#ArticleSubmissionsView",
+          path: "/community-moderation/article-submissions",
+          exact: true,
+        },
         communityWorkSubmissions: {
           Component: "/src/community/View#WorkSubmissionsView",
           path: "/community-moderation/work-submissions",
@@ -143,7 +148,7 @@ export default buildConfig({
         {
           path: "/src/community/NavGroup#CommunityNavGroups",
           clientProps: {
-            phase4Enabled: process.env.NODE_ENV === "development",
+            developmentAgentsEnabled: process.env.NODE_ENV === "development",
           },
         },
       ],

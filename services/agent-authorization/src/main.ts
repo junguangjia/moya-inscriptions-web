@@ -1,4 +1,9 @@
 import pg from "pg";
+import { createPostgresPool } from "@moya/catalog-postgres";
+import {
+  articleAuthorizationPostgresFrom,
+  prepareArticleAuthorizationKeys,
+} from "./article-runtime-config.js";
 import {
   AUTHORIZATION_ENABLED_SETTING,
   authorizationConfigFrom,
@@ -14,16 +19,35 @@ const main = async (): Promise<void> => {
   const adminEnabled = authorizationEnabled();
   if (!adminEnabled && articleConfig === null) {
     process.stderr.write(
-      `agent authorization is composed only in development with ${AUTHORIZATION_ENABLED_SETTING}=true or ARTICLE_AUTHORING_ENABLED=true\n`,
+      `authorization requires an explicit enabled Article profile or Development ${AUTHORIZATION_ENABLED_SETTING}=true\n`,
     );
     process.exitCode = 78;
     return;
   }
+  // Validate issuer keys and role/TLS configuration before any pool opens.
+  const articleKeys =
+    articleConfig === null
+      ? undefined
+      : prepareArticleAuthorizationKeys(articleConfig, process.env);
+  const articlePostgres =
+    articleConfig === null
+      ? undefined
+      : articleAuthorizationPostgresFrom(articleConfig, process.env);
   const pools: pg.Pool[] = [];
   const listeners: { close: () => Promise<void> }[] = [];
   const close = async () => {
-    await Promise.allSettled(listeners.map((server) => server.close()));
-    await Promise.allSettled(pools.map((pool) => pool.end()));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, 6_000);
+    });
+    await Promise.race([
+      (async () => {
+        await Promise.allSettled(listeners.map((server) => server.close()));
+        await Promise.allSettled(pools.map((pool) => pool.end()));
+      })(),
+      deadline,
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
   };
   const recordFailure = (code: string) =>
     process.stderr.write(`authorization-failure ${code}\n`);
@@ -42,12 +66,20 @@ const main = async (): Promise<void> => {
         }),
       );
     }
-    if (articleConfig !== null) {
-      const pool = new pg.Pool({ connectionString: articleConfig.databaseUrl });
+    if (
+      articleConfig !== null &&
+      articlePostgres !== undefined &&
+      articleKeys !== undefined
+    ) {
+      const pool = createPostgresPool(articlePostgres, {
+        onUnexpectedIdleError: () =>
+          recordFailure("ARTICLE_DATABASE_IDLE_ERROR"),
+      });
       pools.push(pool);
       listeners.push(
         await startArticleAuthorizationServer({
           config: articleConfig,
+          preparedKeys: articleKeys,
           pool,
           environment: process.env,
           buildId: process.env.ARTICLE_AUTHORIZATION_BUILD_ID ?? "unknown",
@@ -71,5 +103,5 @@ const main = async (): Promise<void> => {
 };
 void main().catch(() => {
   process.stderr.write("agent authorization startup refused\n");
-  process.exitCode = 78;
+  process.exit(78);
 });

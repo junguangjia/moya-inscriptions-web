@@ -98,7 +98,9 @@ export interface ProviderInteraction {
 export interface ProviderContext {
   readonly oidc?: { route?: string };
   status?: number;
-  body?: { access_token?: string; expires_in?: number } | undefined;
+  body?:
+    | { access_token?: string; expires_in?: number; error?: "invalid_grant" }
+    | undefined;
 }
 
 /**

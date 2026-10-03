@@ -171,7 +171,15 @@ export interface AuthUnitOfWork {
   ): Promise<"ok" | "consumed" | "missing">;
   insertReceipt(row: StoredReceipt): Promise<"ok" | "conflict">;
   findReceipt(keyHash: string): Promise<StoredReceipt | null>;
-  lockSession(tokenHash: string): Promise<LockedAuthSession | null>;
+  /** Metadata only; callers acquire User before Session for lineage mutations. */
+  findSession(
+    tokenHash: string,
+    requiredEnvironment?: AuthEnvironmentName,
+  ): Promise<LockedAuthSession | null>;
+  lockSession(
+    tokenHash: string,
+    requiredEnvironment?: AuthEnvironmentName,
+  ): Promise<LockedAuthSession | null>;
   lockReceipt(keyHash: string): Promise<StoredReceipt | null>;
   lockReceiptsForSession(sessionId: string): Promise<readonly StoredReceipt[]>;
   closeReceipt(keyHash: string, atIso: string): Promise<void>;
@@ -195,7 +203,11 @@ export interface AuthUnitOfWork {
     readonly action: string;
     readonly atIso: string;
   }): Promise<void>;
-  findSessionUser(tokenHash: string, atIso: string): Promise<StoredUser | null>;
+  findSessionUser(
+    tokenHash: string,
+    atIso: string,
+    requiredEnvironment?: AuthEnvironmentName,
+  ): Promise<StoredUser | null>;
   hasOpenFactorChange(
     userId: string,
     channel: AuthChannelName,

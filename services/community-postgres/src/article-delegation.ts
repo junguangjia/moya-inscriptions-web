@@ -9,6 +9,7 @@ import {
 import { articleApprovalResultSchema } from "@moya/contracts/schemas";
 import type {
   ArticleAuthoringScope,
+  ArticleAuthoringGrant,
   PublicUserId,
   ArticleApprovalCandidate,
   ArticleApprovalResult,
@@ -23,14 +24,14 @@ export type { ArticleDelegationActor } from "@moya/api";
 export interface ArticleDelegationAuthority {
   readonly issuer: string;
   readonly resource: string;
-  readonly environment: "development";
+  readonly environment: ArticleAuthoringGrant["environment"];
 }
 
 interface AuthorityRow {
   id: string;
   owner_id: PublicUserId;
   client_id: string;
-  environment: "development";
+  environment: ArticleAuthoringGrant["environment"];
   generation: string;
   status: "authorized" | "revoked";
   current_grant_id: string | null;

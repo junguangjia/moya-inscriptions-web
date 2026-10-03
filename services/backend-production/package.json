@@ -57,6 +57,18 @@
     "./internal/publishing-worker": {
       "types": "./src/publishing/worker.ts",
       "import": "./dist/publishing/worker.js"
+    },
+    "./internal/auth": {
+      "types": "./src/auth/index.ts",
+      "import": "./dist/auth/index.js"
+    },
+    "./internal/auth-signing": {
+      "types": "./src/auth/signing.ts",
+      "import": "./dist/auth/signing.js"
+    },
+    "./internal/auth-transport": {
+      "types": "./src/auth/transport.ts",
+      "import": "./dist/auth/transport.js"
     }
   },
   "scripts": {

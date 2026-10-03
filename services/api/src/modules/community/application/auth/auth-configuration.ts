@@ -1,6 +1,8 @@
 import { createMailpitCapture } from "./delivery.js";
 import { CommunityAuthService } from "./community-auth-service.js";
 import type { CommunityAuthPort } from "./auth-port.js";
+import type { AuthRegistrationAgreement } from "@moya/contracts";
+import type { AuthDeliveryPorts } from "./community-auth-service.js";
 import type { AuthKeys } from "./contact-crypto.js";
 
 const keyFrom = (value: string | undefined, name: string): Uint8Array => {
@@ -13,28 +15,83 @@ const keyFrom = (value: string | undefined, name: string): Uint8Array => {
   return key;
 };
 
-/**
- * Production must not select local capture, simulation, or public registration.
- * Missing real provider configuration fails closed by leaving authentication
- * unmounted; selecting any provider in this task is also refused.
- */
+export interface ProductionAuthConfiguration {
+  readonly keys: AuthKeys;
+  readonly phoneEnabled: boolean;
+}
+
+/** Explicit Production configuration only; no local-provider fallback. */
+export const productionAuthConfigurationFrom = (
+  env: Readonly<Record<string, string | undefined>>,
+): ProductionAuthConfiguration | null => {
+  if (env.NODE_ENV !== "production") return null;
+  if (
+    (env.AUTH_PROFILE !== undefined &&
+      env.AUTH_PROFILE !== "" &&
+      env.AUTH_PROFILE !== "email-first") ||
+    [env.AUTH_EMAIL_CAPTURE_URL, env.AUTH_PHONE_CAPTURE_URL].some(
+      (value) => value !== undefined && value !== "",
+    ) ||
+    (env.AUTH_EMAIL_PROVIDER !== undefined &&
+      env.AUTH_EMAIL_PROVIDER !== "" &&
+      env.AUTH_EMAIL_PROVIDER !== "tencent-ses") ||
+    (env.AUTH_PHONE_PROVIDER !== undefined &&
+      env.AUTH_PHONE_PROVIDER !== "" &&
+      !["disabled", "aliyun-dypns"].includes(env.AUTH_PHONE_PROVIDER))
+  )
+    throw new Error(
+      "Production rejects local authentication providers and unsupported profiles",
+    );
+  if (
+    env.AUTH_PUBLIC_ENABLED === undefined ||
+    env.AUTH_PUBLIC_ENABLED === "" ||
+    env.AUTH_PUBLIC_ENABLED === "false"
+  )
+    return null;
+  if (env.AUTH_PUBLIC_ENABLED !== "true")
+    throw new Error("AUTH_PUBLIC_ENABLED must be true or false");
+  if (env.AUTH_EMAIL_PROVIDER !== "tencent-ses")
+    throw new Error("AUTH_EMAIL_PROVIDER must be tencent-ses when enabled");
+  const version = env.AUTH_KEY_VERSION;
+  if (
+    version === undefined ||
+    !/^[1-9][0-9]*$/u.test(version) ||
+    !Number.isSafeInteger(Number(version))
+  )
+    throw new Error("AUTH_KEY_VERSION must be a positive safe integer");
+  return {
+    keys: {
+      version: Number(version),
+      lookupKey: keyFrom(env.AUTH_LOOKUP_KEY, "AUTH_LOOKUP_KEY"),
+      encryptionKey: keyFrom(env.AUTH_ENCRYPTION_KEY, "AUTH_ENCRYPTION_KEY"),
+      otpKey: keyFrom(env.AUTH_OTP_KEY, "AUTH_OTP_KEY"),
+    },
+    phoneEnabled: env.AUTH_PHONE_PROVIDER === "aliyun-dypns",
+  };
+};
+
 export const assertProductionAuthConfiguration = (
   env: Readonly<Record<string, string | undefined>>,
 ): void => {
-  if (env.NODE_ENV !== "production") return;
-  const selected = [
-    env.AUTH_PROFILE,
-    env.AUTH_PUBLIC_ENABLED,
-    env.AUTH_EMAIL_PROVIDER,
-    env.AUTH_PHONE_PROVIDER,
-    env.AUTH_EMAIL_CAPTURE_URL,
-    env.AUTH_PHONE_CAPTURE_URL,
-  ].some((value) => value !== undefined && value !== "");
-  if (selected)
-    throw new Error(
-      "Production rejects local authentication providers and public authentication exposure",
-    );
+  productionAuthConfigurationFrom(env);
 };
+
+/** The existing service owns proofs, identities and Sessions in both environments. */
+export const createProductionAuthService = (
+  port: CommunityAuthPort,
+  config: ProductionAuthConfiguration,
+  delivery: AuthDeliveryPorts,
+  registrationAgreement: AuthRegistrationAgreement | null,
+): CommunityAuthService =>
+  new CommunityAuthService(port, {
+    environment: "production",
+    profile: "email-first",
+    keys: config.keys,
+    emailMode: "provider",
+    phoneMode: config.phoneEnabled ? "provider" : "disabled",
+    delivery,
+    registrationAgreement,
+  });
 
 /** Development acceptance profiles. Unset AUTH_PROFILE leaves authentication unmounted. */
 export const createDevelopmentAuthService = (

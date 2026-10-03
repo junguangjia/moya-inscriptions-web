@@ -226,110 +226,123 @@ const expectOperatorError = async (
 };
 
 describe("work publishing operator HTTP surface", () => {
-  it("requires the operator credential on every publishing route", async () => {
-    const fake = fakeOperatorPort({ readSettings: () => settings });
-    const base = await start(fake.port);
-    for (const authorization of [
-      undefined,
-      "Bearer wrong",
-      `Basic ${credential}`,
-      `Bearer ${credential} extra`,
-    ]) {
-      const response = await fetch(`${base}/settings`, {
-        headers: authorization === undefined ? {} : { authorization },
+  it.each(["development", "production"] as const)(
+    "requires the operator credential on publishing routes in %s",
+    async (nodeEnv) => {
+      const fake = fakeOperatorPort({ readSettings: () => settings });
+      const base = await start(fake.port, { nodeEnv });
+      for (const authorization of [
+        undefined,
+        "Bearer wrong",
+        `Basic ${credential}`,
+        `Bearer ${credential} extra`,
+      ]) {
+        const response = await fetch(`${base}/settings`, {
+          headers: authorization === undefined ? {} : { authorization },
+        });
+        await expectOperatorError(response, 401, "OPERATOR_UNAUTHORIZED");
+      }
+      // A session credential of the Public API is not an operator credential.
+      await expectOperatorError(
+        await fetch(`${base}/jobs`, {
+          headers: { authorization: `Bearer ${"A".repeat(43)}` },
+        }),
+        401,
+        "OPERATOR_UNAUTHORIZED",
+      );
+      expect(fake.calls).toHaveLength(0);
+    },
+  );
+
+  it.each(["development", "production"] as const)(
+    "reads and replaces settings with the fixed operator and injected clock in %s",
+    async (nodeEnv) => {
+      const fake = fakeOperatorPort({
+        readSettings: () => settings,
+        setSettings: () => ({ ...settings, version: 4 }),
       });
-      await expectOperatorError(response, 401, "OPERATOR_UNAUTHORIZED");
-    }
-    // A session credential of the Public API is not an operator credential.
-    await expectOperatorError(
-      await fetch(`${base}/jobs`, {
-        headers: { authorization: `Bearer ${"A".repeat(43)}` },
-      }),
-      401,
-      "OPERATOR_UNAUTHORIZED",
-    );
-    expect(fake.calls).toHaveLength(0);
-  });
+      const base = await start(fake.port, { nodeEnv });
+      const read = await fetch(`${base}/settings`, {
+        headers: operatorHeaders(),
+      });
+      expect(read.status).toBe(200);
+      expect(workPublishingSettingsSchema.parse(await read.json())).toEqual(
+        settings,
+      );
 
-  it("reads and replaces the work publishing settings with the fixed operator and injected clock", async () => {
-    const fake = fakeOperatorPort({
-      readSettings: () => settings,
-      setSettings: () => ({ ...settings, version: 4 }),
-    });
-    const base = await start(fake.port);
-    const read = await fetch(`${base}/settings`, {
-      headers: operatorHeaders(),
-    });
-    expect(read.status).toBe(200);
-    expect(workPublishingSettingsSchema.parse(await read.json())).toEqual(
-      settings,
-    );
+      const command = {
+        requestId: randomUUID(),
+        expectedVersion: 3,
+        ...limits,
+        policy: "PRE_MODERATION",
+      };
+      const saved = await fetch(`${base}/settings`, {
+        method: "PUT",
+        headers: operatorHeaders(true),
+        body: JSON.stringify(command),
+      });
+      expect(saved.status).toBe(200);
+      expect(fake.named("setSettings")[0]?.args).toEqual([
+        "owner",
+        command,
+        now,
+      ]);
 
-    const command = {
-      requestId: randomUUID(),
-      expectedVersion: 3,
-      ...limits,
-      policy: "PRE_MODERATION",
-    };
-    const saved = await fetch(`${base}/settings`, {
-      method: "PUT",
-      headers: operatorHeaders(true),
-      body: JSON.stringify(command),
-    });
-    expect(saved.status).toBe(200);
-    expect(fake.named("setSettings")[0]?.args).toEqual(["owner", command, now]);
-
-    // The configurable item maximum stays within 100 (a full draft save must
-    // fit the JSON command limit).
-    const bounded = await fetch(`${base}/settings`, {
-      method: "PUT",
-      headers: operatorHeaders(true),
-      body: JSON.stringify({ ...command, maxItemsPerWork: 100 }),
-    });
-    expect(bounded.status).toBe(200);
-    for (const body of [
-      { ...command, operator: "someone" },
-      { ...command, maxItemsPerWork: 0 },
-      { ...command, maxItemsPerWork: 101 },
-      { ...command, maxItemsPerWork: 500 },
-      { ...command, requestId: "not-a-uuid" },
-    ])
+      // The configurable item maximum stays within 100 (a full draft save must
+      // fit the JSON command limit).
+      const bounded = await fetch(`${base}/settings`, {
+        method: "PUT",
+        headers: operatorHeaders(true),
+        body: JSON.stringify({ ...command, maxItemsPerWork: 100 }),
+      });
+      expect(bounded.status).toBe(200);
+      for (const body of [
+        { ...command, operator: "someone" },
+        { ...command, maxItemsPerWork: 0 },
+        { ...command, maxItemsPerWork: 101 },
+        { ...command, maxItemsPerWork: 500 },
+        { ...command, requestId: "not-a-uuid" },
+      ])
+        await expectOperatorError(
+          await fetch(`${base}/settings`, {
+            method: "PUT",
+            headers: operatorHeaders(true),
+            body: JSON.stringify(body),
+          }),
+          400,
+          "INVALID_COMMAND",
+        );
+      await expectOperatorError(
+        await fetch(`${base}/settings?x=1`, { headers: operatorHeaders() }),
+        400,
+        "INVALID_COMMAND",
+      );
       await expectOperatorError(
         await fetch(`${base}/settings`, {
           method: "PUT",
-          headers: operatorHeaders(true),
-          body: JSON.stringify(body),
+          headers: operatorHeaders(),
+          body: "{}",
         }),
         400,
         "INVALID_COMMAND",
       );
-    await expectOperatorError(
-      await fetch(`${base}/settings?x=1`, { headers: operatorHeaders() }),
-      400,
-      "INVALID_COMMAND",
-    );
-    await expectOperatorError(
-      await fetch(`${base}/settings`, {
-        method: "PUT",
-        headers: operatorHeaders(),
-        body: "{}",
-      }),
-      400,
-      "INVALID_COMMAND",
-    );
-    await expectOperatorError(
-      await fetch(`${base}/settings`, {
-        method: "POST",
-        headers: operatorHeaders(true),
-        body: "{}",
-      }),
-      405,
-      "METHOD_NOT_ALLOWED",
-    );
-    expect(fake.named("setSettings").map((call) => call.args[1])).toMatchObject(
-      [{ maxItemsPerWork: limits.maxItemsPerWork }, { maxItemsPerWork: 100 }],
-    );
-  });
+      await expectOperatorError(
+        await fetch(`${base}/settings`, {
+          method: "POST",
+          headers: operatorHeaders(true),
+          body: "{}",
+        }),
+        405,
+        "METHOD_NOT_ALLOWED",
+      );
+      expect(
+        fake.named("setSettings").map((call) => call.args[1]),
+      ).toMatchObject([
+        { maxItemsPerWork: limits.maxItemsPerWork },
+        { maxItemsPerWork: 100 },
+      ]);
+    },
+  );
 
   it("lists and moderates explicit submissions with strict queries and stale-version conflicts", async () => {
     const fake = fakeOperatorPort({
@@ -637,25 +650,33 @@ describe("work publishing operator HTTP surface", () => {
   });
 
   it.each(["test", "production"] as const)(
-    "composes no publishing operator route under NODE_ENV=%s",
+    "mounts explicitly supplied publishing operator reads in %s without crossing the public identity boundary",
     async (nodeEnv) => {
       const fake = fakeOperatorPort({ readSettings: () => settings });
-      const base = await start(fake.port, {
-        nodeEnv,
-        store: singleBlobStore(randomBytes(8)),
+      const base = await start(fake.port, { nodeEnv });
+      await expectOperatorError(
+        await fetch(`${base}/settings`),
+        401,
+        "OPERATOR_UNAUTHORIZED",
+      );
+      const response = await fetch(`${base}/settings`, {
+        headers: operatorHeaders(),
       });
-      for (const path of [
-        "settings",
-        "submissions",
-        `media/${revisionId}/${itemId}/display/base`,
-        "jobs",
-      ])
-        await expectOperatorError(
-          await fetch(`${base}/${path}`, { headers: operatorHeaders() }),
-          404,
-          "NOT_FOUND",
-        );
-      expect(fake.calls).toHaveLength(0);
+      expect(response.status).toBe(200);
+      expect(workPublishingSettingsSchema.parse(await response.json())).toEqual(
+        settings,
+      );
+      expect(fake.named("readSettings")).toHaveLength(1);
+      expect(
+        (
+          await fetch(
+            `${new URL(base).origin}/v1/community/publishing/settings`,
+            {
+              headers: operatorHeaders(),
+            },
+          )
+        ).status,
+      ).toBe(401);
     },
   );
 

@@ -19,7 +19,7 @@
     "db:migrate:community": "node scripts/migrate-community.mjs",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "test": "pnpm test:confidentiality && turbo run test",
+    "test": "pnpm test:confidentiality && turbo run test --cache-dir=.turbo/library-cache --cache=local:r",
     "test:e2e": "pnpm --filter @moya/tests test:e2e",
     "verify": "node scripts/verify.mjs",
     "test:e2e:smoke": "node scripts/verify.mjs e2e",

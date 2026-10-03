@@ -1,6 +1,8 @@
 import "server-only";
+import { trustedAuthSourceHeaders } from "./auth-request-source";
 import {
   ARTICLE_DOCUMENT_LIMITS,
+  authCapabilitiesSchema,
   authPasswordResetResultSchema,
 } from "@moya/contracts/schemas";
 import { localCatalogFileUrl } from "../../features/detail/local-catalog-media";
@@ -263,7 +265,7 @@ const communitySessionRefused = async (
   }
 };
 
-/** Fixed Development namespace relay. Credentials stay on the server and every read is private. */
+/** Fixed business namespace relay. Credentials stay on the server and every read is private. */
 export const relayServerAuthorCommunity = async (
   request: Request,
 ): Promise<Response> => {
@@ -594,7 +596,7 @@ export const relayServerLocalCatalogMedia = async (
   }
 };
 
-// Work publishing (Development): dedicated streaming relays. JSON commands keep
+// Work publishing: dedicated streaming relays. JSON commands keep
 // using relayServerAuthorCommunity; these two carry raw component bytes and
 // private derivative bytes, which are never buffered in Web memory.
 
@@ -1034,11 +1036,20 @@ export const relayServerCommunityAuth = async (
   const prefix = "/api/community/auth/";
   if (!incoming.pathname.startsWith(prefix)) return fail(404);
   const suffix = incoming.pathname.slice(prefix.length);
+  if (suffix === "sign-out" && request.method !== "POST") return fail(405);
   try {
     const base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
     const target = new URL(`v1/community/auth/${suffix}`, base);
     const token = readCommunitySessionToken(request.headers.get("cookie"));
-    const outgoing: Record<string, string> = { accept: "application/json" };
+    const sourceHeaders =
+      request.method === "POST" && process.env.NODE_ENV === "production"
+        ? trustedAuthSourceHeaders(request)
+        : {};
+    if (sourceHeaders === null) return fail(403);
+    const outgoing: Record<string, string> = {
+      accept: "application/json",
+      ...sourceHeaders,
+    };
     if (token !== undefined) outgoing.authorization = `Bearer ${token}`;
     let body: string | undefined;
     if (request.method === "POST") {
@@ -1068,6 +1079,18 @@ export const relayServerCommunityAuth = async (
     if (!type.includes("application/json"))
       return fail(upstream.ok ? 502 : upstream.status);
     const payload: unknown = await upstream.json();
+    // A misrouted Development Backend cannot advertise simulated verification
+    // as a Production login capability. Real authentication is supplied by the
+    // separately delivered Backend implementation through this same relay.
+    if (suffix === "capabilities" && upstream.ok) {
+      const capabilities = authCapabilitiesSchema.safeParse(payload);
+      if (!capabilities.success) return fail(502);
+      if (
+        process.env.NODE_ENV === "production" &&
+        capabilities.data.developmentOnly
+      )
+        return fail(503);
+    }
     const secure = isSecureRequest(request);
     let setCookie: string | undefined;
     if (

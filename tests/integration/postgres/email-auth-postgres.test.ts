@@ -7,6 +7,8 @@ import {
   CommunityAuthService,
   assertProductionAuthConfiguration,
   createDevelopmentAuthService,
+  generateOpaqueId,
+  hashSessionToken,
 } from "@moya/api";
 import {
   createPostgresPool,
@@ -14,11 +16,14 @@ import {
 } from "@moya/catalog-postgres";
 import {
   PostgresCommunityAuthAdapter,
+  PostgresCommunityIdentityAdapter,
   requiredCommunityMigrations,
   runCommunityMigrations,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { authFactorReceiptCases } from "../../unit/backend/auth-factor-receipt-cases";
+
 import {
   passwordAuthCases,
   registerPasswordCase,
@@ -159,10 +164,14 @@ const register = async (
   });
   if (!verified.ok || verified.value.outcome !== "registration_required")
     throw new Error(verified.ok ? verified.value.outcome : verified.reason);
+  const registration = service.capabilities().registration;
   const registered = await service.confirmRegistration({
     handoffToken: verified.value.handoffToken,
     displayName,
     agreement: true,
+    ...(registration?.available
+      ? { agreementVersion: registration.agreement.version }
+      : {}),
     idempotencyKey: key(),
   });
   if (!registered.ok) throw new Error(registered.reason);
@@ -574,6 +583,111 @@ describe("email-auth PostgreSQL", () => {
     ).toBeNull();
   });
 
+  it("accepts only verified Production sessions across identity, auth reads and receipt locks", async () => {
+    const app = appPool();
+    const agreement = {
+      version: "synthetic-production-v1",
+      title: "Synthetic agreement",
+      body: "Test fixture only, not approved legal content.",
+    };
+    const production = new CommunityAuthService(
+      new PostgresCommunityAuthAdapter(app),
+      {
+        environment: "production",
+        profile: "email-first",
+        keys,
+        emailMode: "provider",
+        phoneMode: "disabled",
+        delivery: delivery(),
+        registrationAgreement: agreement,
+      },
+    );
+    const accepted = await register(
+      production,
+      "email",
+      "production-session@example.com",
+      "Synthetic Production",
+    );
+    const development = await register(
+      serviceFor(app, "disabled"),
+      "email",
+      "development-session@example.com",
+      "Synthetic Development",
+    );
+    const identity = new PostgresCommunityIdentityAdapter(app, {
+      requireProductionSession: true,
+    });
+    const legacyIdentity = new PostgresCommunityIdentityAdapter(app);
+    const now = new Date();
+    expect(
+      await identity.findSessionUser(
+        await hashSessionToken(accepted.token),
+        now,
+      ),
+    ).toMatchObject({ id: accepted.profile.id });
+    expect(await production.readAccount(accepted.token)).toMatchObject({
+      ok: true,
+    });
+    const legacy = "SYNTHETIC_LEGACY_SESSION".padEnd(43, "_");
+    await owner.query(
+      `INSERT INTO community.sessions(id,token_hash,user_id,issued_at,expires_at)
+      VALUES($1,$2,$3,now(),now()+interval '1 hour')`,
+      [
+        generateOpaqueId("session"),
+        await hashSessionToken(legacy),
+        accepted.profile.id,
+      ],
+    );
+    const devHandle = "SYNTHETIC_HANDLE_SESSION".padEnd(43, "_");
+    await owner.query(
+      `INSERT INTO community.sessions(id,token_hash,user_id,issued_at,expires_at,issuer,auth_environment)
+      VALUES($1,$2,$3,now(),now()+interval '1 hour','development_handle','production')`,
+      [
+        generateOpaqueId("session"),
+        await hashSessionToken(devHandle),
+        accepted.profile.id,
+      ],
+    );
+    const adapter = new PostgresCommunityAuthAdapter(app);
+    for (const token of [development.token, legacy, devHandle]) {
+      const hash = await hashSessionToken(token);
+      expect(await legacyIdentity.findSessionUser(hash, now)).not.toBeNull();
+      expect(await identity.findSessionUser(hash, now)).toBeNull();
+      expect(await production.readAccount(token)).toMatchObject({
+        ok: false,
+        reason: "AUTH_UNAUTHENTICATED",
+      });
+      expect(await production.signOut(token)).toMatchObject({
+        ok: false,
+        reason: "AUTH_UNAUTHENTICATED",
+      });
+      await adapter.transaction(async (tx) => {
+        expect(
+          await tx.findSessionUser(hash, now.toISOString(), "production"),
+        ).toBeNull();
+        expect(await tx.lockSession(hash, "production")).toBeNull();
+        expect(await tx.lockSession(hash)).not.toBeNull();
+      });
+      expect(
+        (
+          await owner.query(
+            "SELECT revoked_at FROM community.sessions WHERE token_hash=$1",
+            [hash],
+          )
+        ).rows[0].revoked_at,
+      ).toBeNull();
+    }
+    expect(await production.signOut(accepted.token)).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await identity.findSessionUser(
+        await hashSessionToken(accepted.token),
+        new Date(),
+      ),
+    ).toBeNull();
+  });
+
   it("rejects duplicate, stale, replayed and cross-purpose proofs", async () => {
     const appUrl = new URL(ownerUrl);
     appUrl.username = appRole;
@@ -903,8 +1017,14 @@ describe("email-auth PostgreSQL", () => {
     let arrived = 0;
     let release: () => void = () => undefined;
     const ready = new Promise<void>((resolve, reject) => {
-      release = () => resolve();
-      setTimeout(() => reject(new Error("proof race did not meet")), 5_000);
+      const timer = setTimeout(
+        () => reject(new Error("proof race did not meet")),
+        5_000,
+      );
+      release = () => {
+        clearTimeout(timer);
+        resolve();
+      };
     });
     const racing = new CommunityAuthService(
       {
@@ -912,12 +1032,13 @@ describe("email-auth PostgreSQL", () => {
           new PostgresCommunityAuthAdapter(pool).transaction((tx) =>
             work({
               ...tx,
-              findHandoff: async (hash) => {
-                const row = await tx.findHandoff(hash);
+              lockUser: async (id) => {
+                // Rendezvous before either transaction owns the User row;
+                // waiting inside findHandoff would deadlock the serialized peer.
                 arrived += 1;
-                if (arrived >= 2) release();
-                else await ready;
-                return row;
+                if (arrived === 2) release();
+                await ready;
+                return tx.lockUser(id);
               },
             }),
           ),
@@ -949,6 +1070,7 @@ describe("email-auth PostgreSQL", () => {
         sessionToken: token,
       }),
     ]);
+    expect(arrived).toBe(2);
     expect([unlinked, replaced].filter((result) => result.ok)).toHaveLength(1);
     const factors = await factorRows(pool, user.profile.id);
     if (unlinked.ok) {
@@ -960,9 +1082,11 @@ describe("email-auth PostgreSQL", () => {
       expect(factors[0]?.lookup_digest).toBe(originalEmail);
       return;
     }
+    // Completion revoked the shared original Session. Unlink revalidates it
+    // after the User lock before inspecting the now-consumed proof.
     expect(unlinked).toMatchObject({
       ok: false,
-      reason: "AUTH_PROOF_REJECTED",
+      reason: "AUTH_UNAUTHENTICATED",
     });
     expect(factors.map((row) => row.kind)).toEqual(["email", "phone"]);
     expect(factors.find((row) => row.kind === "email")?.lookup_digest).not.toBe(
@@ -1581,4 +1705,5 @@ describe("email-auth PostgreSQL", () => {
       );
     });
   });
+  authFactorReceiptCases(() => new PostgresCommunityAuthAdapter(appPool()));
 });

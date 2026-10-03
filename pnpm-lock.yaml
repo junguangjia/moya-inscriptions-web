@@ -250,6 +250,9 @@ importers:
 
   services/agent-authorization:
     dependencies:
+      '@moya/catalog-postgres':
+        specifier: workspace:*
+        version: link:../catalog-postgres
       '@moya/community-postgres':
         specifier: workspace:*
         version: link:../community-postgres

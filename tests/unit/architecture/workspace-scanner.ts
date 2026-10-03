@@ -938,6 +938,7 @@ const allowedClientContractTypes = new Set([
   "ArticleApprovalReview",
   "ArticleAuthoringGrant",
   "ArticleBlock",
+  "ArticleInlineContent",
   "ArticleConsentReview",
   "ArticleDocument",
   "ArticleDraft",
@@ -1264,15 +1265,38 @@ export const clientBoundaryViolations = (
   }
   violations.push(...clientContractTypeViolations(source));
 
+  // Next replaces NODE_ENV at build time. This one auth presentation uses it
+  // only to exclude Development verification and draft registration agreements.
+  const configurationSource =
+    path.resolve(filePath) === path.join(webRoot, "features/auth/auth-flow.tsx")
+      ? source.replace(/\bprocess\.env\.NODE_ENV(?![\w$])/g, "")
+      : source;
   if (
     /\bDATABASE_URL\b|\b(?:API_SECRET|PRIVATE_KEY|STORAGE_SECRET)\b|process\.env\.(?!NEXT_PUBLIC_)[A-Z0-9_]+/.test(
-      source,
+      configurationSource,
     )
   ) {
     violations.push("server-only configuration or secret access");
   }
 
   return violations;
+};
+
+// The two fixed native Production entry modules are executable server code.
+// This does not authorize browser imports, neighboring scripts or DB/runtime APIs.
+const webStartupFiles = new Set([
+  path.join(webRoot, "scripts/production-http-server.mts"),
+  path.join(webRoot, "scripts/start-production.mts"),
+]);
+const referencesWebStartup = (file: string, specifier: string): boolean => {
+  if (!specifier.startsWith(".")) return false;
+  const resolved = path.resolve(path.dirname(file), specifier);
+  return (
+    webStartupFiles.has(resolved) ||
+    webStartupFiles.has(`${resolved}.mts`) ||
+    (resolved.endsWith(".mjs") &&
+      webStartupFiles.has(`${resolved.slice(0, -4)}.mts`))
+  );
 };
 
 export const frontendBoundaryViolations = (
@@ -1282,10 +1306,18 @@ export const frontendBoundaryViolations = (
   const violations = clientBoundaryViolations(filePath, source);
   const isAuthorizedPublicApi = isAuthorizedWebPublicApiFile(filePath, source);
   const isCmsServer = isAuthorizedCmsServerFile(filePath, source);
+  const isWebStartup =
+    !hasUseClientDirective(source) &&
+    webStartupFiles.has(path.resolve(filePath));
   const isPreviewTransport =
     !hasUseClientDirective(source) &&
     path.resolve(filePath) ===
       path.join(webPublicApiRoot, "editorial-preview-server.ts");
+  const isAuthSourceTransport =
+    !hasUseClientDirective(source) &&
+    path.resolve(filePath) ===
+      path.join(webPublicApiRoot, "auth-request-source.ts") &&
+    /import\s*["']server-only["']/u.test(source);
   const isPreviewPage =
     !hasUseClientDirective(source) &&
     path.resolve(filePath) ===
@@ -1298,6 +1330,10 @@ export const frontendBoundaryViolations = (
   );
 
   for (const reference of extractModuleReferences(source)) {
+    if (referencesWebStartup(filePath, reference.specifier) && !isWebStartup)
+      violations.push(`${reference.specifier} is server/runtime-only`);
+    const approvedWebStartupNodeImport =
+      isWebStartup && ["node:http", "node:url"].includes(reference.specifier);
     const approvedPublicApiRuntimeImport =
       isAuthorizedPublicApi &&
       (reference.specifier === "@moya/contracts/schemas" ||
@@ -1341,8 +1377,14 @@ export const frontendBoundaryViolations = (
     if (
       isForbiddenServerReference(reference.specifier) &&
       !isCmsServer &&
+      !approvedWebStartupNodeImport &&
       !isOwnerWorkflowTypes(filePath, reference) &&
       !approvedPublicApiRuntimeImport &&
+      !(
+        isAuthSourceTransport &&
+        reference.kind === "static-import" &&
+        ["node:crypto", "node:net"].includes(reference.specifier)
+      ) &&
       !(isPreviewTransport && reference.specifier === "next/headers") &&
       !(
         isPreviewPage &&
@@ -1398,7 +1440,17 @@ export const frontendBoundaryViolations = (
     for (const match of source.matchAll(/\bprocess\.env\.([A-Z0-9_]+)/g)) {
       if (
         match[1] !== "MOYA_PUBLIC_API_BASE_URL" &&
-        !(isPreviewTransport && match[1] === "CMS_INTERNAL_URL")
+        !(
+          isAuthSourceTransport &&
+          ["AUTH_INGRESS_TOKEN", "AUTH_SOURCE_RELAY_TOKEN"].includes(
+            match[1] ?? "",
+          )
+        ) &&
+        !(isPreviewTransport && match[1] === "CMS_INTERNAL_URL") &&
+        !(
+          path.resolve(filePath) === path.join(webPublicApiRoot, "server.ts") &&
+          match[1] === "NODE_ENV"
+        )
       ) {
         violations.push(
           `${match[1] ?? "unknown environment variable"} is not authorized for the Web Public API boundary`,

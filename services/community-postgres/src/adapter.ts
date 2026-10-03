@@ -24,7 +24,12 @@ import type { Pool } from "pg";
 
 /** App-role adapter: DML only on the community namespace, never DDL. */
 export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly options: {
+      readonly requireProductionSession?: boolean;
+    } = {},
+  ) {}
 
   async findDevelopmentAccountByHandle(
     handle: string,
@@ -54,6 +59,7 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
     const result = await this.query<PublicUserRow>(findSessionUserSql, [
       tokenHash,
       now,
+      this.options.requireProductionSession === true,
     ]);
     const row = result[0];
     return row === undefined ? null : mapPublicUserRow(row);

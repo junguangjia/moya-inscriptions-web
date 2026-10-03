@@ -637,3 +637,109 @@ describe("Password reset and stale authentication cookie recovery", () => {
     ).toHaveLength(1);
   });
 });
+
+describe.each(["development", "production"] as const)(
+  "Community sign-out relay in %s",
+  (environment) => {
+    const sessionToken = "SYNTHETIC_SIGNOUT_SESSION_TOKEN".padEnd(43, "_");
+    const signOutRequest = (
+      method: "GET" | "POST",
+      requestHeaders: Record<string, string>,
+    ) =>
+      new Request("http://127.0.0.1:3410/api/community/auth/sign-out", {
+        method,
+        headers: {
+          host: "127.0.0.1:3410",
+          cookie: `yoyi-session=${sessionToken}`,
+          ...requestHeaders,
+        },
+        ...(method === "POST" ? { body: "{}" } : {}),
+      });
+
+    it.each([undefined, "https://foreign.invalid"])(
+      "rejects cross-site GET with origin %s before forwarding or changing the cookie",
+      async (origin) => {
+        vi.stubEnv("NODE_ENV", environment);
+        vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+        const upstream = vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(new Response(null, { status: 400 }));
+        vi.stubGlobal("fetch", upstream);
+
+        const response = await relayServerCommunityAuth(
+          signOutRequest("GET", {
+            "sec-fetch-site": "cross-site",
+            ...(origin === undefined ? {} : { origin }),
+          }),
+        );
+
+        expect(response.status).toBe(405);
+        expect(response.headers.get("set-cookie")).toBeNull();
+        expect(upstream).not.toHaveBeenCalled();
+      },
+    );
+
+    it("rejects cross-site POST before forwarding or changing the cookie", async () => {
+      vi.stubEnv("NODE_ENV", environment);
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = vi.fn<typeof fetch>();
+      vi.stubGlobal("fetch", upstream);
+
+      const response = await relayServerCommunityAuth(
+        signOutRequest("POST", {
+          origin: "https://foreign.invalid",
+          "sec-fetch-site": "cross-site",
+          "content-type": "application/json",
+        }),
+      );
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(upstream).not.toHaveBeenCalled();
+    });
+
+    it("forwards same-origin POST to the real logout API and clears the cookie", async () => {
+      const ingress =
+        crypto.randomUUID().replaceAll("-", "") +
+        crypto.randomUUID().replaceAll("-", "");
+      vi.stubEnv("AUTH_INGRESS_TOKEN", ingress);
+      vi.stubEnv(
+        "AUTH_SOURCE_RELAY_TOKEN",
+        crypto.randomUUID().replaceAll("-", "") +
+          crypto.randomUUID().replaceAll("-", ""),
+      );
+      vi.stubEnv("NODE_ENV", environment);
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", upstream);
+
+      const response = await relayServerCommunityAuth(
+        signOutRequest("POST", {
+          origin: "http://127.0.0.1:3410",
+          "sec-fetch-site": "same-origin",
+          "x-moya-auth-ingress": ingress,
+          "x-moya-client-ip": "192.0.2.9",
+          "content-type": "application/json",
+        }),
+      );
+
+      expect(response.status).toBe(204);
+      expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+      expect(upstream).toHaveBeenCalledOnce();
+      expect(String(upstream.mock.calls[0]?.[0])).toBe(
+        "http://127.0.0.1:3411/v1/community/auth/sign-out",
+      );
+      expect(upstream.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          method: "POST",
+          body: "{}",
+          headers: expect.objectContaining({
+            authorization: `Bearer ${sessionToken}`,
+          }),
+        }),
+      );
+    });
+  },
+);

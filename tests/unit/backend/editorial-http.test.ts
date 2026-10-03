@@ -1,6 +1,7 @@
 import {
   createBackendApplication,
   createBackendServer,
+  createDevelopmentCatalogFixtureQueryPort,
   startServer,
   stopServer,
 } from "@moya/backend-runtime";
@@ -113,6 +114,7 @@ const start = async (
   const server = createBackendServer(
     createBackendApplication({
       nodeEnv,
+      catalogQueryPort: createDevelopmentCatalogFixtureQueryPort(),
       communityIdentityPort: new InMemoryCommunityIdentityPort(),
       // The editorial reads never touch the author port; the branch only needs it composed.
       authorCommunityPort: {} as unknown as AuthorCommunityPort,
@@ -137,90 +139,76 @@ afterEach(async () => {
 });
 
 describe("published editorial content HTTP reads (content-community-completion-v1)", () => {
-  it("lists and reads Articles with resolved media and split paragraphs", async () => {
-    const base = await start("development", new FixtureEditorialPort());
-    const list = await fetch(
-      `${base}/articles?pageSize=5&presentation=academic`,
-    );
-    expect(list.status).toBe(200);
-    expect(list.headers.get("cache-control")).toBe("private, no-store");
-    const page = articlePageSchema.parse(await list.json());
-    expect(page.items[0]?.cover?.src).toBe("http://media.invalid/cover.jpg");
-    expect(page.totalPages).toBe(1);
-    const detail = await fetch(`${base}/articles/${articleId}`);
-    expect(detail.status).toBe(200);
-    const body = articleDetailSchema.parse(await detail.json());
-    expect(body.sections[0]?.paragraphs).toEqual([
-      "第一段。",
-      "第二段。",
-      "第三段。",
-    ]);
-    expect(body.sections[0]?.image?.src).toBe("http://media.invalid/cover.jpg");
-    expect(JSON.stringify(body)).not.toContain("objectKey");
-  });
+  it.each(["development", "production"] as const)(
+    "lists and reads Articles with resolved media and split paragraphs in %s",
+    async (nodeEnv) => {
+      const base = await start(nodeEnv, new FixtureEditorialPort());
+      const list = await fetch(
+        `${base}/articles?pageSize=5&presentation=academic`,
+      );
+      expect(list.status).toBe(200);
+      expect(list.headers.get("cache-control")).toBe("private, no-store");
+      const page = articlePageSchema.parse(await list.json());
+      expect(page.items[0]?.cover?.src).toBe("http://media.invalid/cover.jpg");
+      expect(page.totalPages).toBe(1);
+      const detail = await fetch(`${base}/articles/${articleId}`);
+      expect(detail.status).toBe(200);
+      const body = articleDetailSchema.parse(await detail.json());
+      expect(body.sections[0]?.paragraphs).toEqual([
+        "第一段。",
+        "第二段。",
+        "第三段。",
+      ]);
+      expect(body.sections[0]?.image?.src).toBe(
+        "http://media.invalid/cover.jpg",
+      );
+      expect(JSON.stringify(body)).not.toContain("objectKey");
+    },
+  );
 
-  it("answers 404 for an unknown, malformed or withdrawn identity and 400 for a bad query", async () => {
-    const base = await start("development", new FixtureEditorialPort());
-    const missing = await fetch(`${base}/articles/article-${"f".repeat(32)}`);
-    expect(missing.status).toBe(404);
-    expect(apiErrorSchema.parse(await missing.json()).error.code).toBe(
-      "ITEM_NOT_FOUND",
-    );
-    const malformed = await fetch(`${base}/articles/12`);
-    expect(malformed.status).toBe(404);
-    const badQuery = await fetch(`${base}/articles?presentation=video`);
-    expect(badQuery.status).toBe(400);
-    expect(apiErrorSchema.parse(await badQuery.json()).error.code).toBe(
-      "INVALID_QUERY",
-    );
-    const post = await fetch(`${base}/articles`, { method: "POST" });
-    expect(post.status).toBe(405);
-  });
+  it.each(["development", "production"] as const)(
+    "rejects unknown or malformed identities and bad queries in %s",
+    async (nodeEnv) => {
+      const base = await start(nodeEnv, new FixtureEditorialPort());
+      const missing = await fetch(`${base}/articles/article-${"f".repeat(32)}`);
+      expect(missing.status).toBe(404);
+      expect(apiErrorSchema.parse(await missing.json()).error.code).toBe(
+        "ITEM_NOT_FOUND",
+      );
+      const malformed = await fetch(`${base}/articles/12`);
+      expect(malformed.status).toBe(404);
+      const badQuery = await fetch(`${base}/articles?presentation=video`);
+      expect(badQuery.status).toBe(400);
+      expect(apiErrorSchema.parse(await badQuery.json()).error.code).toBe(
+        "INVALID_QUERY",
+      );
+      const post = await fetch(`${base}/articles`, { method: "POST" });
+      expect(post.status).toBe(405);
+    },
+  );
 
-  it("lists and reads Collections with typed eligible members", async () => {
-    const base = await start("development", new FixtureEditorialPort());
-    const list = articleCollectionPageSchema.parse(
-      await (await fetch(`${base}/collections`)).json(),
-    );
-    expect(list.items[0]?.memberTotal).toBe(1);
-    const detail = articleCollectionDetailSchema.parse(
-      await (await fetch(`${base}/collections/${collectionId}`)).json(),
-    );
-    expect(detail.members[0]?.kind).toBe("article");
-    if (detail.members[0]?.kind === "article")
-      expect(detail.members[0].article.id).toBe(articleId);
-  });
+  it.each(["development", "production"] as const)(
+    "lists and reads Collections with typed eligible members in %s",
+    async (nodeEnv) => {
+      const base = await start(nodeEnv, new FixtureEditorialPort());
+      const list = articleCollectionPageSchema.parse(
+        await (await fetch(`${base}/collections`)).json(),
+      );
+      expect(list.items[0]?.memberTotal).toBe(1);
+      const detail = articleCollectionDetailSchema.parse(
+        await (await fetch(`${base}/collections/${collectionId}`)).json(),
+      );
+      expect(detail.members[0]?.kind).toBe("article");
+      if (detail.members[0]?.kind === "article")
+        expect(detail.members[0].article.id).toBe(articleId);
+    },
+  );
 
-  it("is absent without a composed editorial port and outside Development", async () => {
-    const withoutPort = await start("development");
-    expect((await fetch(`${withoutPort}/articles`)).status).toBe(404);
-    const production = createBackendServer(
-      createBackendApplication({
-        nodeEnv: "production",
-        communityIdentityPort: new InMemoryCommunityIdentityPort(),
-        authorCommunityPort: {} as unknown as AuthorCommunityPort,
-        editorialContentPort: new FixtureEditorialPort(),
-        catalogQueryPort: {
-          list: async () => ({
-            items: [],
-            total: 0,
-            page: 1,
-            pageSize: 1,
-            totalPages: 0,
-          }),
-          getById: async () => null,
-        },
-        storageUrlResolver: new MappedStorageUrlResolver(new Map()),
-      }),
-    );
-    servers.add(production);
-    const address = await startServer(production, {
-      host: "127.0.0.1",
-      port: 0,
-    });
-    const response = await fetch(
-      `http://${address.address}:${address.port}/v1/community/editorial/articles`,
-    );
-    expect(response.status).toBe(404);
-  });
+  it.each(["development", "production"] as const)(
+    "requires an explicitly composed editorial port in %s",
+    async (nodeEnv) => {
+      const withoutPort = await start(nodeEnv);
+      expect((await fetch(`${withoutPort}/articles`)).status).toBe(404);
+    },
+  );
 });

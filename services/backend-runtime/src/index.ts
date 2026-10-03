@@ -1,6 +1,23 @@
 export {
+  interpretAliyunCheck,
+  interpretAliyunSend,
+  interpretTencentSendEmail,
+  mapAliyunCheckSmsVerifyCode,
+  mapAliyunSendSmsVerifyCode,
+  mapTencentSendEmail,
+} from "@moya/api";
+export type {
+  ProductionAuthConfiguration,
+  AuthDeliveryPorts,
+  CommunityAuthPort,
+} from "@moya/api";
+export { authRegistrationAgreementSchema } from "@moya/contracts/schemas";
+export type { AuthRegistrationAgreement } from "@moya/contracts";
+export {
   assertProductionAuthConfiguration,
   createDevelopmentAuthService,
+  productionAuthConfigurationFrom,
+  createProductionAuthService,
 } from "@moya/api";
 export {
   createBackendApplication,
@@ -48,3 +65,6 @@ export {
 } from "./community/article-runtime-read.js";
 
 export { handleArticleAuthoringRequest } from "./community/article-authoring-handler.js";
+
+export { createTrustedAuthRequestSource } from "./community/auth-request-source.js";
+export type { AuthRequestSource } from "./community/auth-request-source.js";
