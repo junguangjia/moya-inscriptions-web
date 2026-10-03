@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { publicUserDisplayNameSchema } from "../packages/contracts/dist/schemas.js";
 import {
   hashPassword,
   verifyPassword,
@@ -58,10 +59,7 @@ export function validatePasswordAccountInput(input) {
     ) ||
     typeof input.handle !== "string" ||
     !/^[a-z][a-z0-9-]{2,31}$/u.test(input.handle) ||
-    typeof input.displayName !== "string" ||
-    input.displayName.trim() !== input.displayName ||
-    [...input.displayName].length < 1 ||
-    [...input.displayName].length > 40 ||
+    !publicUserDisplayNameSchema.safeParse(input.displayName).success ||
     /[\u0000\uD800-\uDFFF]/u.test(input.displayName) ||
     !["development", "production"].includes(input.environment) ||
     typeof input.operatorLabel !== "string" ||

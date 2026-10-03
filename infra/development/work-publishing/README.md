@@ -81,8 +81,10 @@ docker build -t yoyi-work-publishing-media-tools:v1 infra/development/work-publi
   trixie versions: `ffmpeg`, `libavcodec61`, `libavformat61` and `libavfilter10`
   `7:7.1.5-0+deb13u1`; `libx264-164` `2:0.164.3108+git31e19f9-2+b1`; `libzimg2`
   `3.0.5+ds1-1+b2` (zscale colour conversion); `libheif-examples` (`heif-dec`),
-  `libheif1` and `libheif-plugin-libde265` `1.19.8-1+deb13u1`; `libde265-0`
-  `1.0.15-1+deb13u2`.
+  `libheif1`, `libheif-plugin-dav1d` and `libheif-plugin-libde265`
+  `1.19.8-1+deb13u1`; `libde265-0` `1.0.15-1+deb13u2`. The required dav1d
+  decoder plugin is pinned to the same version as libheif so APT cannot select
+  an incompatible newer plugin.
 - Reproducibility: when Debian supersedes a pinned version (for example with a
   security update) the build fails rather than silently changing the toolchain.
   Update the pins deliberately and re-run the checks below. Other transitive

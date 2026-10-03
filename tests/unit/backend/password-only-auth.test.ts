@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { publicUserDisplayNameSchema } from "@moya/contracts/schemas";
 import {
   CommunityAuthService,
   createMemoryCommunityAuthPort,
@@ -274,6 +275,42 @@ describe("Production password-only controlled authentication", () => {
     ).toBeNull();
   });
 });
+
+it.each(["😀", "𠮷"])(
+  "keeps operator display names compatible with public profiles for %s",
+  async (character) => {
+    const setup = await import(
+      new URL(
+        "../../../scripts/provision-password-account.mjs",
+        import.meta.url,
+      ).href
+    );
+    const input = {
+      requestId: randomUUID(),
+      handle: "synthetic-unicode",
+      displayName: character.repeat(20),
+      environment: "production",
+      operatorLabel: "synthetic-operator",
+      password: syntheticPassword,
+    };
+    expect(input.displayName).toHaveLength(40);
+    expect(setup.validatePasswordAccountInput(input)).toEqual(input);
+    expect(publicUserDisplayNameSchema.parse(input.displayName)).toBe(
+      input.displayName,
+    );
+    const overLimit = { ...input, displayName: character.repeat(21) };
+    expect(
+      publicUserDisplayNameSchema.safeParse(overLimit.displayName).success,
+    ).toBe(false);
+    const connect = vi.fn(async () => {
+      throw new Error("UNEXPECTED_DATABASE_CONNECTION");
+    });
+    await expect(
+      setup.provisionPasswordAccount({ connect }, overLimit),
+    ).rejects.toThrow("OPERATOR_PASSWORD_SETUP_REFUSED");
+    expect(connect).not.toHaveBeenCalled();
+  },
+);
 
 it("protects operator inputs and refuses insecure Production configuration before connection", async () => {
   const { mkdtemp, writeFile, chmod, symlink, rm } =

@@ -1398,7 +1398,7 @@ describe("email-auth PostgreSQL", () => {
       const input = {
         requestId: randomUUID(),
         handle: "operator-account",
-        displayName: "合成账号",
+        displayName: "𠮷".repeat(20),
         environment: "production",
         operatorLabel: "synthetic-operator",
         password,
@@ -1475,7 +1475,7 @@ describe("email-auth PostgreSQL", () => {
       });
       expect(
         await identity.findSessionUser(tokenHash, new Date()),
-      ).toMatchObject({ id: one.userId });
+      ).toMatchObject({ id: one.userId, displayName: input.displayName });
       expect(await service.readAccount(signed.value.token)).toMatchObject({
         ok: true,
         value: { email: { state: "unbound" }, phone: { state: "unbound" } },
