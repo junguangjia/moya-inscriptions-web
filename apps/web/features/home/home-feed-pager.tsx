@@ -11,6 +11,22 @@ import type { HomeFeed } from "./home-feed";
 export interface HomeFeedPagerHandle {
   readonly scrollToFeed: (feed: HomeFeed) => void;
 }
+
+const withFilingFooter = (content: ReactNode) => (
+  <>
+    {content}
+    <footer className={styles.filingFooter}>
+      <a
+        href="https://beian.miit.gov.cn"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        豫ICP备2026047894号-1
+      </a>
+    </footer>
+  </>
+);
+
 export interface HomeFeedPagerProps {
   readonly activeFeed: HomeFeed;
   readonly onCommit: (feed: HomeFeed) => void;
@@ -45,6 +61,12 @@ export const HomeFeedPager = forwardRef<
   return (
     <HorizontalPager
       {...props}
+      panels={{
+        discover: withFilingFooter(props.panels.discover),
+        nearby: withFilingFooter(props.panels.nearby),
+        inscriptions: withFilingFooter(props.panels.inscriptions),
+        calligraphy: withFilingFooter(props.panels.calligraphy),
+      }}
       activeKey={activeFeed}
       keys={homeFeeds}
       platform={platform}

@@ -106,6 +106,27 @@
     calc(96px + env(safe-area-inset-bottom));
 }
 
+.filingFooter {
+  padding: var(--yoyi-space-6) var(--yoyi-space-3);
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.7;
+  text-align: center;
+}
+
+.filingFooter a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: inherit;
+  text-underline-offset: 3px;
+}
+
+.filingFooter a:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 4px;
+}
+
 .masonry {
   position: relative;
   width: 100%;
