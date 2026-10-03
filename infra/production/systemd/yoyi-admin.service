@@ -11,6 +11,7 @@ WorkingDirectory=/srv/yoyi/current/apps/admin
 EnvironmentFile=/etc/yoyi/admin.env
 # ExecStart fixes the listener; EnvironmentFile cannot publish the port externally.
 ExecStart=/usr/bin/env NODE_ENV=production node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3002
+SuccessExitStatus=143
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
