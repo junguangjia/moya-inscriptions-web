@@ -36,6 +36,23 @@
   min-width: 44px;
   padding: 0;
 }
+/* While the editor prepares, Back sits where the bar places it. */
+.preparing {
+  display: flex;
+  align-self: start;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+  min-height: 64px;
+  padding: var(--yoyi-space-2) var(--yoyi-space-5);
+}
+.preparing > button {
+  flex-shrink: 0;
+}
+.preparing p {
+  min-width: 0;
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+}
 .bar > button:last-child {
   background: var(--yoyi-color-seal-red);
   color: var(--yoyi-color-text-inverse);
@@ -405,7 +422,8 @@
     gap: var(--yoyi-space-2);
     flex-wrap: wrap;
   }
-  .bar {
+  .bar,
+  .preparing {
     gap: var(--yoyi-space-2);
     padding-inline: var(--yoyi-space-3);
   }

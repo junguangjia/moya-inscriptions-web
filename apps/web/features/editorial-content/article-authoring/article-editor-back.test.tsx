@@ -110,9 +110,16 @@ describe("Article editor top-bar back", () => {
         />,
       ),
     );
+    // The editor is live: the body is editable and Preview is enabled.
+    expect(container.querySelector("[contenteditable='true']")).not.toBeNull();
+    const preview = [
+      ...container.querySelectorAll<HTMLButtonElement>("header button"),
+    ].find((button) => button.textContent === "预览");
+    expect(preview?.disabled).toBe(false);
     const back = container.querySelector<HTMLButtonElement>(
       "header button[aria-label='返回草稿箱']",
     );
+    expect(back?.disabled).toBe(false);
     expect(back).not.toBeNull();
     expect(backButtonRef.current).toBe(back);
     expect(back!.textContent).toBe("");

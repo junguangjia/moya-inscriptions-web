@@ -5,26 +5,6 @@
   min-height: 0;
 }
 
-/* While the editor prepares, Back sits where the editor bar places it. */
-.preparing {
-  display: flex;
-  align-self: start;
-  align-items: center;
-  gap: var(--yoyi-space-4);
-  min-height: 64px;
-  padding: var(--yoyi-space-2) var(--yoyi-space-5);
-}
-.preparing p {
-  margin: 0;
-  color: var(--yoyi-color-text-secondary);
-}
-@media (max-width: 760px) {
-  .preparing {
-    gap: var(--yoyi-space-2);
-    padding-inline: var(--yoyi-space-3);
-  }
-}
-
 .picker button {
   min-width: 44px;
   min-height: 44px;

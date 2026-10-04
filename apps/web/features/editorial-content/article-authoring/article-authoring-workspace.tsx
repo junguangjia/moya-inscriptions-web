@@ -60,6 +60,7 @@ import type { ArticleEditorProps } from "./article-editor-props";
 import type { ArticleMediaBridge } from "./article-attachments";
 import { importArticleFiles } from "./article-file-import";
 import styles from "./article-media.module.css";
+import authoringStyles from "./article-authoring.module.css";
 
 /** The caller uses the canonical bounded own-media page and account-fenced HTTP client. */
 export interface ArticleAuthoringWorkspaceProps extends Pick<
@@ -549,7 +550,7 @@ export const ArticleAuthoringWorkspace = (
         )}
       </div>
       {uploads === null || resolver === null ? (
-        <div className={styles.preparing}>
+        <div className={authoringStyles.preparing}>
           <IconButton
             ref={props.backButtonRef}
             icon={<Icon name="back" />}
