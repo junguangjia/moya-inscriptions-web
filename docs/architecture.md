@@ -224,8 +224,9 @@ explicit migration command
   → listener
 ```
 
-Startup does not execute DDL. Current Compose and CI compatibility baseline is
-PostgreSQL 18.4.
+Startup does not execute DDL. Supported PostgreSQL majors are 16 (the minimum
+Production major) and 18. CI runs both (16.15 and 18.4); local Compose uses
+18.4.
 
 The controlled write path is:
 

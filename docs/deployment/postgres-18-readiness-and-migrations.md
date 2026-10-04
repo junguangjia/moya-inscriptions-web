@@ -1,8 +1,27 @@
-# PostgreSQL 18 migration and readiness baseline
+# PostgreSQL migration and readiness baseline (supported majors 16 and 18)
 
-T05.2的本地Compose与GitHub
-CI固定使用官方`postgres:18.4-alpine`。18.4是本checkpoint唯一测试过的minor；升级到18.5或后续版本必须作为显式infrastructure
-maintenance change，同时更新Compose、CI与本文件并重新运行真实数据库测试。
+## Supported PostgreSQL majors
+
+| Major | Role                               | CI test image           |
+| ----- | ---------------------------------- | ----------------------- |
+| 16    | minimum supported Production major | `postgres:16.15-alpine` |
+| 18    | newer validated major              | `postgres:18.4-alpine`  |
+
+Production startup（`assertPostgresStartupReady`）只接受 major
+16 或 18；未经验证的 major（包括 17）在 listener 创建前失败。GitHub CI 的 `test`
+job 先在 18.4 上运行完整 test milestone，再用
+`node scripts/verify.mjs postgres --profile complete`
+在 16.15 上运行同一套 migrations 与 PostgreSQL integration suite；`cms`
+job 在两个 major 上都运行 Payload migrations/integration 与 native Owner browser
+flow。本地 Compose 与 Development 仍固定 `postgres:18.4-alpine`。
+
+Migrations、named runtime grants 与 runtime
+queries 必须在 16 与 18 上都有效。只在较新 major 存在的 privilege 或语法（例如 PostgreSQL
+17 起的 `MAINTAIN` privilege）只能按 `server_version_num`
+条件执行；不得为此修改已记录 checksum 的 historical
+migration。新增或更换 major/minor 必须作为显式 infrastructure maintenance
+change，同时更新 Compose、CI、本文件与 readiness
+allowlist，并在受支持的 major 上重新运行真实数据库测试。
 
 ## Deployment order
 

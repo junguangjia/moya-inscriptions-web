@@ -287,7 +287,7 @@ afterAll(async () => {
 describe.sequential("PostgreSQL Catalog HTTP integration", () => {
   it("runs the explicitly required PostgreSQL minor version", async () => {
     const expected = process.env.TEST_DATABASE_EXPECTED_VERSION_NUM ?? "180004";
-    expect(["180004", "180006"]).toContain(expected);
+    expect(["160015", "180004", "180006"]).toContain(expected);
     const version = await pool.query("SHOW server_version_num");
     expect(String(version.rows[0]?.server_version_num)).toBe(expected);
   });

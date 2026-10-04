@@ -351,5 +351,18 @@ GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_challenge
 GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_handoffs TO :"app_role";
 
 -- production-deployment-v3: offline operator authority, never runtime provisionable.
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLE community.operator_password_accounts FROM :"app_role";
+-- The list names every non-SELECT table privilege of PostgreSQL 16. MAINTAIN
+-- exists only from PostgreSQL 17, so it is revoked separately on 17 and later.
+-- SET accepts the identifier form, so psql and the integration suites (which
+-- substitute :"app_role" textually) pass the same role name to the DO block.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE community.operator_password_accounts FROM :"app_role";
+SET LOCAL moya.runtime_app_role = :"app_role";
+DO $$
+BEGIN
+  IF current_setting('server_version_num')::integer >= 170000 THEN
+    EXECUTE format(
+      'REVOKE MAINTAIN ON TABLE community.operator_password_accounts FROM %I',
+      current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;
 GRANT SELECT ON TABLE community.operator_password_accounts TO :"app_role";

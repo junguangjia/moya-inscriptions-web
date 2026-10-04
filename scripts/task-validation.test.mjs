@@ -988,6 +988,61 @@ describe("the real CI wiring preserves required-check closure", () => {
     );
   });
 
+  it("runs the PostgreSQL integration and Payload suites on both supported majors", () => {
+    const { jobs } = workflowJobs();
+    // One services entry: from its key to the next service key or the steps.
+    const service = (body, name) =>
+      body
+        .split(`\n      ${name}:\n`)[1]
+        ?.split(/\n {6}[\w-]+:\n|\n {4}steps:/u)[0] ?? "";
+    const pg16Marker =
+      /docker exec -i "\$\{\{ job\.services\.postgres16\.id \}\}" psql/u;
+    for (const job of ["test", "cms"]) {
+      const body = jobs.get(job);
+      assert.match(
+        service(body, "postgres"),
+        /image: postgres:18\.4-alpine\n/u,
+      );
+      assert.match(service(body, "postgres"), /- 5432:5432\n/u);
+      assert.match(
+        service(body, "postgres16"),
+        /image: postgres:16\.15-alpine\n/u,
+      );
+      assert.match(service(body, "postgres16"), /- 5433:5432\n/u);
+      assert.match(body, pg16Marker, job);
+    }
+    // test: the PostgreSQL 16 slice follows the unchanged PostgreSQL 18
+    // milestone, after its own disposable marker, against the 5433 service.
+    const test = jobs.get("test");
+    const milestone = test.indexOf(
+      "run: node scripts/verify.mjs test --ci-milestone\n",
+    );
+    const pg16 = test.indexOf(
+      "run: node scripts/verify.mjs postgres --profile complete\n",
+    );
+    assert.ok(milestone > 0 && pg16 > milestone);
+    assert.ok(test.search(pg16Marker) > milestone);
+    assert.ok(test.search(pg16Marker) < pg16);
+    const pg16Step = test.slice(test.lastIndexOf("- name:", pg16), pg16);
+    assert.match(
+      pg16Step,
+      /TEST_DATABASE_URL: postgresql:\/\/\S+@127\.0\.0\.1:5433\/moya_test\n/u,
+    );
+    assert.match(pg16Step, /TEST_DATABASE_EXPECTED_VERSION_NUM: "160015"\n/u);
+    // cms: Payload migrations/integration and the native Owner browser flow
+    // each run once more against the 5433 service, after its marker.
+    const cms = jobs.get("cms");
+    const pg16Url =
+      "CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test\n";
+    for (const command of [
+      "pnpm test:cms --profile complete",
+      "pnpm test:cms:browser --profile complete",
+    ]) {
+      const step = cms.indexOf(`${pg16Url}        run: ${command}\n`);
+      assert.ok(step > cms.search(pg16Marker), command);
+    }
+  });
+
   it("prepares every internal Admin runtime dependency before the native CMS build", () => {
     const manifests = new Map(
       ["apps", "packages", "services"].flatMap((parent) =>

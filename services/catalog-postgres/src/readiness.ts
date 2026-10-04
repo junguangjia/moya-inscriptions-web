@@ -9,6 +9,11 @@ interface ServerVersionRow extends QueryResultRow {
   readonly server_version_num: unknown;
 }
 
+// PostgreSQL majors the migrations, grants and runtime queries are validated
+// against: 16 is the minimum supported Production major and 18 the newer one.
+// CI runs both; any other major, including the unvalidated 17, is refused.
+const SUPPORTED_POSTGRES_MAJORS: readonly number[] = [16, 18];
+
 export class PostgresStartupError extends Error {
   override readonly name = "PostgresStartupError";
 
@@ -54,11 +59,10 @@ export const assertPostgresStartupReady = async (
         typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
       if (
         !Number.isSafeInteger(versionNumber) ||
-        versionNumber < 180_000 ||
-        versionNumber >= 190_000
+        !SUPPORTED_POSTGRES_MAJORS.includes(Math.floor(versionNumber / 10_000))
       ) {
         throw new PostgresStartupError(
-          "PostgreSQL major version 18 is required",
+          "PostgreSQL major version 16 or 18 is required",
         );
       }
     } finally {
