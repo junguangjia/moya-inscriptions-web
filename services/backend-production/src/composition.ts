@@ -47,6 +47,7 @@ import {
 } from "@moya/community-postgres";
 import { loadPilotConfiguration, openPilotPool } from "./pilot-config.js";
 import { articleBackendConfigurationFrom } from "./article-authoring/runtime-config.js";
+import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
   createArticleDelegationPersistence,
   createArticleDelegationRuntime,
@@ -85,7 +86,6 @@ import type {
   RuntimeConfig,
   RuntimeEnvironment,
 } from "@moya/backend-runtime";
-import type { PostgresConfig } from "@moya/catalog-postgres";
 import type { PublishingMediaStoreRuntime } from "./publishing/config.js";
 import type { PublishingCosTransport } from "./storage/publishing-cos-transport.js";
 import type { RequestListener } from "node:http";
@@ -147,33 +147,6 @@ const assertLocalDevelopmentDatabase = (
     throw new Error(
       "Local Backend, Admin and App roles must use the same loopback yoyi_dev database with different users",
     );
-};
-
-/**
- * The Community App role is read at runtime only by the composition roots (the
- * Backend here and the media worker, which reuses this parser) and is DML-only.
- */
-export const parseCommunityPostgresConfig = (
-  environment: RuntimeEnvironment,
-): PostgresConfig => {
-  const url = environment.APP_DATABASE_URL;
-  if (url === undefined || url === "")
-    throw new Error("APP_DATABASE_URL is required");
-  try {
-    return parsePostgresConfig({
-      DATABASE_URL: url,
-      DATABASE_SSL_CA_FILE: environment.APP_DATABASE_SSL_CA_FILE,
-      DATABASE_POOL_MAX: environment.DATABASE_POOL_MAX,
-      DATABASE_IDLE_TIMEOUT_MS: environment.DATABASE_IDLE_TIMEOUT_MS,
-    });
-  } catch (error) {
-    throw new Error(
-      error instanceof Error
-        ? error.message.replace(/\bDATABASE_URL\b/g, "APP_DATABASE_URL")
-        : "APP_DATABASE_URL is invalid",
-      { cause: error },
-    );
-  }
 };
 
 /**

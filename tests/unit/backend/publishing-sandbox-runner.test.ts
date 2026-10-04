@@ -16,6 +16,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  openProductionPublishingMedia,
+  openPublishingMedia,
+  parseProductionPublishingMediaConfig,
+} from "@moya/backend-production/internal/publishing-config";
+import {
   MediaProcessingInputError,
   MediaProcessingUnavailableError,
   MediaToolError,
@@ -40,8 +45,9 @@ import {
   sandboxManifest,
 } from "@moya/backend-production/internal/publishing-sandbox";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { cosFixture, cosOptions } from "./publishing-cos-fixture.js";
 import {
   inProcessSandbox,
   isolatedFacts,
@@ -135,6 +141,7 @@ const stillJob = async (
       clientPairing: null,
       edit: { rotation: 0, crop: null },
       coverCrop: null,
+      plan: "work",
       renditions: plannedStillRequests(roles),
       motion: false,
       placeholder: roles.includes("thumb"),
@@ -577,6 +584,84 @@ describe("media sandbox runner", () => {
     ).rejects.toBeInstanceOf(MediaProcessingUnavailableError);
   });
 
+  it("compares the renderer build with its sources only in Development; Production runs its release build", async () => {
+    // A release whose source tree beside the build looks newer (copied or
+    // extracted after the build): only Development refuses it.
+    const release = path.join(base, "release");
+    const dist = path.join(release, "dist");
+    await mkdir(path.join(dist, "publishing", "sandbox"), { recursive: true });
+    await writeFile(
+      path.join(dist, "publishing", "sandbox", "renderer-main.js"),
+      "",
+    );
+    const sources = path.join(release, "src");
+    await mkdir(path.join(sources, "publishing"), { recursive: true });
+    await writeFile(path.join(sources, "publishing", "newer.ts"), "");
+    const future = new Date(Date.now() + 3_600_000);
+    await utimes(path.join(sources, "publishing", "newer.ts"), future, future);
+    const seams = {
+      appDist: dist,
+      sourceDirectory: sources,
+      spawn: inProcessSandbox().spawn,
+      temporaryRoots: [],
+    };
+    const reported = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const production = await openProductionPublishingMedia(
+        {
+          ...parseProductionPublishingMediaConfig({
+            NODE_ENV: "production",
+            WORK_MEDIA_COS_BUCKET: cosOptions.bucket,
+            WORK_MEDIA_COS_REGION: cosOptions.region,
+            WORK_MEDIA_COS_PREFIX: cosOptions.prefix,
+            WORK_MEDIA_COS_SECRET_ID: "synthetic-unit-id",
+            WORK_MEDIA_COS_SECRET_KEY: "synthetic-unit-secret",
+            WORK_MEDIA_TOOLS_IMAGE: IMAGE,
+            WORK_MEDIA_WORK_DIR: "/srv/synthetic/jobs",
+          }),
+          workDirectory: work,
+        },
+        { ...seams, transport: cosFixture().transport },
+      );
+      const job = await production.sandbox.createJob();
+      expect(
+        (
+          await production.sandbox.run(job, await stillJob(job), {
+            timeoutMs: 1000,
+          })
+        ).manifest.status,
+      ).toBe("derived");
+      expect(reported).not.toHaveBeenCalled();
+
+      const store = path.join(base, "store");
+      const developmentWork = path.join(base, "development-work");
+      for (const directory of [store, developmentWork]) {
+        await mkdir(directory, { mode: 0o700 });
+        await chmod(directory, 0o700);
+      }
+      const development = await openPublishingMedia(
+        {
+          storeDirectory: store,
+          toolsImage: IMAGE,
+          workDirectory: developmentWork,
+          workerConcurrency: 1,
+        },
+        seams,
+      );
+      const second = await development.sandbox.createJob();
+      await expect(
+        development.sandbox.run(second, await stillJob(second), {
+          timeoutMs: 1000,
+        }),
+      ).rejects.toBeInstanceOf(MediaProcessingUnavailableError);
+      expect(reported).toHaveBeenCalledWith(
+        "[media-sandbox] renderer build missing or stale: run `pnpm --filter @moya/backend-production build`",
+      );
+    } finally {
+      reported.mockRestore();
+    }
+  });
+
   it("self-checks versions and isolation through the same arguments", async () => {
     const ok = await (await runnerWith(inProcessSandbox().spawn)).selfCheck();
     expect(ok).toMatchObject({ status: "ok", runtime: sandboxRuntime() });
@@ -910,8 +995,21 @@ describe("media sandbox protocol", () => {
       { ...job, item: { ...item, edit: { rotation: 45, crop: null } } },
       { ...job, item: { ...item, kind: "live" }, operation: "process" },
       { ...job, limits: { ...job.limits, tools: {} } },
+      // Every job names its plan; the Catalog plan never asks for full.
+      { ...job, item: { ...item, plan: undefined } },
+      { ...job, item: { ...item, plan: "pilot" } },
+      { ...job, item: { ...item, plan: "catalog" } },
     ])
       expect(() => parseSandboxJob(invalid)).toThrow(SandboxJobError);
+    const catalog = {
+      ...job,
+      item: {
+        ...item,
+        plan: "catalog",
+        renditions: item.renditions.filter((entry) => entry.role !== "full"),
+      },
+    };
+    expect(parseSandboxJob(catalog)).toEqual(catalog);
     // A Live edit stages only what its renditions need.
     expect(
       parseSandboxJob({
@@ -1007,6 +1105,51 @@ describe("media sandbox protocol", () => {
         outputs: [...manifest.outputs, output("viewer", 64, 48)],
       }),
     ).toBe("outputs_mismatch");
+    // So is a work item's viewer that would equal its full; the Catalog plan
+    // (no full) expects the same viewer.
+    const photo = {
+      ...manifest,
+      inspection: { width: 3000, height: 2000, hasAlpha: false },
+      outputs: [
+        output("thumb", 480, 320),
+        output("cover", 1080, 720),
+        output("display", 2048, 1365),
+        output("full", 3000, 2000),
+      ],
+    };
+    expect(() => validateSandboxManifest(photo, request)).not.toThrow();
+    expect(
+      violation({
+        ...photo,
+        outputs: [...photo.outputs, output("viewer", 3000, 2000)],
+      }),
+    ).toBe("outputs_mismatch");
+    const catalogRequest: SandboxJob = {
+      ...request,
+      item: {
+        ...request.item!,
+        plan: "catalog",
+        renditions: request.item!.renditions.filter(
+          (entry) => entry.role !== "full",
+        ),
+      },
+    };
+    const catalogOutputs = [
+      ...photo.outputs.slice(0, 3),
+      output("viewer", 3000, 2000),
+    ];
+    expect(() =>
+      validateSandboxManifest(
+        { ...photo, outputs: catalogOutputs },
+        catalogRequest,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateSandboxManifest(
+        { ...photo, outputs: photo.outputs.slice(0, 3) },
+        catalogRequest,
+      ),
+    ).toThrow(SandboxProtocolError);
     expect(violation({ ...manifest, outputs: manifest.outputs.slice(1) })).toBe(
       "outputs_mismatch",
     );

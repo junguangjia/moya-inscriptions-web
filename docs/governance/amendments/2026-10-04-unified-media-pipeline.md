@@ -5,8 +5,11 @@
 - Authority: Owner instruction: unified media pipeline, 2026-10-04 (explicit
   current Owner instruction, held privately by the task writer and cited here by
   name only), its Owner decisions and continuation of 2026-10-04 (section 3),
-  recorded as the `unified-media-pipeline-v1` task, Issue #206 (revisions r2 and
-  r3).
+  recorded as the `unified-media-pipeline-v1` task, Issue #206: the Owner
+  decisions in revision r2, EdgeOne delivery and the PostgreSQL 16 sequencing in
+  r3, the Owner's acceptance of the prepared media hostname and its non-public
+  sequence in r4, the two root configuration lines of the scope in r5, and
+  Production deployments from tags in r6.
 - Applies to: increments 1–4 of that task. Each entry authorizes the change of
   its increment; until that increment is deployed, the existing behavior and its
   rule stay in force.
@@ -20,8 +23,9 @@ coherent pipeline: one asset/rendition/reference model, private source and
 master storage, bounded asynchronous sandboxed processing, versioned
 role-appropriate renditions, direct uploads, published delivery through the
 Owner's existing Tencent Cloud EdgeOne subscription and deep zoom in the
-existing Web Viewer. Each increment is merged PRs, a Production deployment, a
-real acceptance run and a recorded rollback point.
+existing Web Viewer. Each increment is merged PRs, a Production deployment from
+an approved annotated tag (entry 9), a real acceptance run and a recorded
+rollback point.
 
 1. **Pipeline.** PR 1a (not user-visible): rendition model, central versioned
    recipes with a bounded `viewer` role, a separately supervised media worker, a
@@ -66,7 +70,7 @@ deletion of pre-existing data inside the retention window (entry 13).
 | 6   | Avatar and background bytes kept in PostgreSQL: `full-release-media-v1.md` scope table and "Do not … rewrite retained `user_media` rows"                                                                                                                               | MODERNIZE                             | 3         | Profile imagery becomes pipeline assets with renditions; PostgreSQL receives no new image bytes. Existing bytes are relocated through an explicit mapping with hash verification and stay unchanged until the retention follow-up (entry 13). Public profile-media IDs do not change.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 7   | No browser-to-storage upload: `full-release-media-v1.md` "Do not add direct browser-to-COS uploads …"                                                                                                                                                                  | MODERNIZE                             | 3         | Direct upload, switched by configuration: the Backend authenticates, checks quota and intent and issues short-lived authority limited to one staging object; the server verifies total size and SHA-256 and binds an immutable verified copy before processing. The relay stays for legacy migration and import until their cutover, and as the rollback path. Requires entries 10 and 11.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | 8   | Community V1 §2: "The Payload runtime role and the Public read role receive no privilege on community relations."                                                                                                                                                      | MODERNIZE (narrow)                    | 1 (PR 1b) | The Public read role may receive `USAGE` on schema `community`, `SELECT` on named `security_barrier` views that expose only currently published content, and `EXECUTE` on named `STABLE` functions over them. Never table access, never a write, never unpublished, private-master or staging facts. Each grant is named in the grant files and the deployment record. This entry covers the existing published-Article view grant (precedent, recorded here) and the Catalog media delivery view. The Payload runtime role gains nothing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 9   | Single-main §3: Production release from an approved tag                                                                                                                                                                                                                | MODERNIZE (task-scoped)               | 1–4       | Each increment's Production deployment uses a verified merged `main` commit through the established verified-release procedure under the Owner instruction's Production authorization, with a verified database backup before any migration and a recorded rollback point. No annotated tag or GitHub Release unless the Owner makes a milestone decision. Rationale: the Owner instruction delivers each increment as merged PRs, a deployment, a real acceptance run and a rollback point. Unchanged for every other task.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 9   | Single-main §3: Production release from an approved tag                                                                                                                                                                                                                | PRESERVE                              | 1–4       | Owner decision 2026-10-04 (Issue #206 r6): each of the four increment deployments runs from an approved annotated tag on the merged `main` commit (for example `media-pipeline-inc1` to `media-pipeline-inc4`), created before that increment's Production deployment, then through the protected Production environment and the deployment, smoke and rollback gates of the established verified-release procedure, with a verified database backup before any migration. Rollback points are the previous release plus the previous tag. As §3 states, a tag does not itself authorize Production resources, credentials or deployment.                                                                                                                                                                                                                                                                                                                                                                                          |
 | 10  | Constitution §19 "Architecture and data boundaries": "Frontend code must not receive or access object keys, buckets, storage provider details, storage credentials, or raw source datasets. It must not compose provider or CDN URLs from object keys …"               | MODERNIZE (Owner-approved, in effect) | 3, 4      | The browser receives only Backend-resolved URLs: (a) unsigned published URLs; (b) private read URLs valid for at most 300 s; (c) presigned upload URLs valid for at most 300 s, each for a single part of one staging object (one part number, exact length), which may carry a scoped temporary token and address the storage service's own host. IIIF clients derive `info.json` and tile URLs from a Backend-resolved service URL as the IIIF protocol defines. Frontend code never stores, composes or chooses keys, buckets or credentials. The rest of the bullet is unchanged. Authority: an explicit Owner instruction naming §19, recorded on 2026-10-04 (Issue #206 r2).                                                                                                                                                                                                                                                                                                                                                 |
 | 11  | ADR 0003: object key, bucket, provider internals, credentials and client URL concatenation permanently excluded from the frontend                                                                                                                                      | MODERNIZE (Owner-approved, in effect) | 3, 4      | The same two exceptions and nothing wider: the scoped temporary token inside a single-part upload URL (entry 10 c), and IIIF-protocol derivation of `info.json` and tile URLs from a Backend-resolved service URL. First-party Web code composes no URL; the contract carries the info URL as a resolved value. Approved with entry 10 (2026-10-04, Issue #206 r2).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 12  | 2026-09-22 PRESERVE "P2-04 media boundary (no object key in frontend code)"                                                                                                                                                                                            | PRESERVE (interpreted)                | all       | Frontend code never holds, stores, composes or chooses an object key. An opaque Backend-resolved URL whose path contains a published path or a staging key is not frontend key access.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -79,8 +83,11 @@ deletion of pre-existing data inside the retention window (entry 13).
 
 ## 3. Owner decisions recorded
 
-The Owner answered the batched questions on 2026-10-04 (Issue #206 r2) and
-continued the instruction the same day (r3):
+The Owner answered the batched questions on 2026-10-04 (Issue #206 r2),
+continued the instruction the same day with EdgeOne delivery and the PostgreSQL
+16 sequencing (r3), accepted the prepared media hostname while keeping it
+non-public (r4) and decided that the increments deploy from tags (r6); r5 only
+recorded two root configuration lines in the task scope:
 
 - **Constitution §19 and ADR 0003:** approved as entries 10 and 11, in effect.
 - **Public resolution:** long scrolls (long edge above 2.5 times the short edge)
@@ -91,7 +98,8 @@ continued the instruction the same day (r3):
   these bounds, and the authorized relay applies the same rule.
 - **Cloud identity for increments 2 and 3:** approved as proposed. Two new
   keyless roles, one for publishing (writing and deleting only the published
-  origin's task paths, and creating and reading EdgeOne purge tasks, with the
+  origin's task paths, creating and reading EdgeOne purge tasks, and reading the
+  new media hostname's request metrics for the monthly request warning, with the
   application refusing any purge target outside the new media hostname) and one
   for short-lived upload credentials limited to one staging object, each
   assumable only by the existing publishing identity, which may assume exactly
@@ -99,11 +107,17 @@ continued the instruction the same day (r3):
   renewal cannot deploy itself. No new long-lived keys; this delta and the
   published origin's read-only access statement for EdgeOne are the ceiling.
 - **Retention:** only task-initiated deletions are held (entry 13).
-- **Delivery provider and sequencing:** increment 2 uses the existing EdgeOne
-  subscription (section 1); production media changes wait for the PostgreSQL 16
-  migration task's handoff (section 1). The new media hostname gets no public
-  DNS record and public reads are not switched until publication and withdrawal,
-  including the purge, pass acceptance on a warmed edge.
+- **Delivery provider and sequencing (r3):** increment 2 uses the existing
+  EdgeOne subscription (section 1); production media changes wait for the
+  PostgreSQL 16 migration task's handoff (section 1), and this task's migrations
+  must pass on PostgreSQL 16.
+- **Prepared media hostname (r4):** accepted by the Owner but kept non-public.
+  It gets no public DNS record and public reads are not switched until the
+  database handoff, the media migrations and publication and withdrawal,
+  including the purge on a warmed edge, have passed acceptance.
+- **Release source (r6):** each increment's Production deployment runs from an
+  approved annotated tag on the verified merged `main` commit, followed by a
+  GitHub Release; entry 9 keeps the single-main Production-from-tag rule.
 
 ## 4. What stays as it was
 

@@ -327,9 +327,11 @@ const componentLayout = (input: ProcessorInput) => {
 };
 
 /**
- * The still renditions a job renders: the requested still variants, plus the
+ * The still renditions a job asks for: the requested still variants, plus the
  * optional bounded `viewer` whenever the job renders the complete framing of
- * its edit (it asks for `display`). The viewer's own recipe may skip it.
+ * its edit (it asks for `display`). The renderer skips the viewer where its
+ * recipe or the job's plan says so (`plannedStillSize`): a work item's viewer
+ * exists only when it is smaller than its `full`.
  */
 export const plannedStillRequests = (
   roles: readonly StillRole[],
@@ -437,6 +439,7 @@ export function validateSandboxManifest(
       inspection!,
       item.edit,
       item.coverCrop,
+      item.plan,
     );
     if (size !== null) {
       expected.set(`${rendition.role}.webp`, { role: rendition.role, ...size });
@@ -703,6 +706,8 @@ async function processItem(
       clientPairing: input.clientPairing,
       edit,
       coverCrop,
+      // Every item edit has its `full` (readiness requires it).
+      plan: "work",
       renditions,
       motion: input.variants.includes("motion"),
       placeholder,

@@ -364,14 +364,20 @@ describe("Catalog rendering in the media sandbox", () => {
         currentRecipe(role).digest,
       ]),
     );
-    // Identity edit, complete framing, the placeholder from the thumb.
+    // Identity edit, complete framing, the placeholder from the thumb, and the
+    // Catalog plan: no full, so the viewer (as large as the full a work item
+    // of this size would have, and not rendered for one) is the largest image.
     expect(sandbox.jobs[0]!.item).toMatchObject({
       kind: "static",
       edit: { rotation: 0, crop: null },
       coverCrop: null,
+      plan: "catalog",
       placeholder: true,
       motion: false,
     });
+    expect(
+      sandbox.jobs[0]!.item!.renditions.map((request) => request.role),
+    ).toEqual(["thumb", "cover", "display", "viewer"]);
     expect(
       (await publishingStore.listBlobs({ limit: 10 })).entries,
     ).toHaveLength(4);

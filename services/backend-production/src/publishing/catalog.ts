@@ -117,7 +117,10 @@ export interface CatalogRenderer {
 /** Owner label the publishing store sees for Catalog writes (never recorded). */
 export const CATALOG_STORE_OWNER = "catalog";
 
-/** Roles every Catalog asset receives; `viewer` follows `display` when not skipped. */
+/**
+ * Roles every Catalog asset receives; `viewer` follows `display` whenever it
+ * differs from `display` (the Catalog plan has no `full`).
+ */
 export const CATALOG_ALWAYS_RENDERED_ROLES = [
   "thumb",
   "cover",
@@ -186,6 +189,8 @@ export function createCatalogRenderer(
             clientPairing: null,
             edit: { rotation: 0, crop: null },
             coverCrop: null,
+            // No `full`: a viewer that differs from `display` is the largest.
+            plan: "catalog",
             renditions: plannedStillRequests([
               ...CATALOG_ALWAYS_RENDERED_ROLES,
             ]),
@@ -322,7 +327,7 @@ export interface CatalogSyncPort {
 
 /** Largest published list one sync accepts (the store's bound). */
 export const CATALOG_SYNC_MAX_SOURCES = 10_000;
-/** New assets and new jobs per sync pass. */
+/** New assets and queued jobs per sync pass. */
 export const CATALOG_SYNC_BATCH = 100;
 /** Sync cadence in the worker maintenance (spec: every 5 minutes). */
 export const CATALOG_SYNC_INTERVAL_MS = 5 * 60 * 1000;

@@ -90,6 +90,7 @@ const deriveJob = (
     clientPairing: null,
     edit: { rotation: 0, crop: null },
     coverCrop: null,
+    plan: "work",
     renditions: ALL_STILLS.map((role) => {
       const recipe = currentRecipe(role);
       return { role, version: recipe.version, digest: recipe.digest };
@@ -233,6 +234,7 @@ describe("media sandbox renderer (in-process, real sharp)", () => {
           body.inspection!,
           job.item!.edit,
           job.item!.coverCrop,
+          job.item!.plan,
         ),
       ).toEqual({ width: output.width, height: output.height });
     }
@@ -295,7 +297,7 @@ describe("media sandbox renderer (in-process, real sharp)", () => {
     );
   });
 
-  it("renders a long scroll with the short-edge rules and a viewer between display and full", async () => {
+  it("renders a long scroll with the short-edge rules and no viewer that would repeat full", async () => {
     const tall = await sharp({
       create: {
         width: 1300,
@@ -306,17 +308,40 @@ describe("media sandbox renderer (in-process, real sharp)", () => {
     })
       .jpeg({ quality: 80 })
       .toBuffer();
-    const body = derived(
+    const sizes = (body: SandboxRenderBody) =>
+      body.outputs.map((output) => [output.role, output.width, output.height]);
+    // A work item: the viewer (1300 × 3400) would equal its long-scroll full.
+    const work = derived(
       await render(deriveJob(tall, "image/jpeg", { placeholder: false }), tall),
     );
-    expect(
-      body.outputs.map((output) => [output.role, output.width, output.height]),
-    ).toEqual([
+    expect(sizes(work)).toEqual([
+      ["thumb", 184, 480],
+      ["cover", 413, 1080],
+      ["display", 1280, 3348],
+      ["full", 1300, 3400],
+    ]);
+    // The Catalog plan has no full: its viewer is the largest image.
+    await rm(paths.output, { recursive: true });
+    await mkdir(paths.output);
+    const catalog = derived(
+      await render(
+        deriveJob(tall, "image/jpeg", {
+          plan: "catalog",
+          renditions: (["thumb", "cover", "display", "viewer"] as const).map(
+            (role) => {
+              const recipe = currentRecipe(role);
+              return { role, version: recipe.version, digest: recipe.digest };
+            },
+          ),
+        }),
+        tall,
+      ),
+    );
+    expect(sizes(catalog)).toEqual([
       ["thumb", 184, 480],
       ["cover", 413, 1080],
       ["display", 1280, 3348],
       ["viewer", 1300, 3400],
-      ["full", 1300, 3400],
     ]);
   });
 
@@ -439,6 +464,7 @@ describe("media sandbox renderer (in-process, real sharp)", () => {
           inspection,
           { rotation: 0, crop: null },
           null,
+          "work",
         )!;
         // The pre-task chain: decode limits, resize when smaller, WebP quality.
         let legacy = sharp(fixture.bytes, {

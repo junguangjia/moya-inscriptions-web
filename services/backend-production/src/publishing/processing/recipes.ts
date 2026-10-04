@@ -75,7 +75,9 @@ export const STILL_INPUT_LIMITS = STILL_PIPELINE_V1.decode;
  * Version 1 parameters per role. `card` framing applies the cover crop when
  * the reference has one (thumb and cover); `complete` framing never does.
  * `viewer` is skipped (not rendered) when its size equals `display`'s or
- * exceeds `full`'s.
+ * exceeds `full`'s; a plan that renders `full` also skips it when it would be
+ * at least as large as `full` ({@link RENDITION_PLANS}). That plan rule decides
+ * only whether a viewer exists, never its bytes, so it is not in the digest.
  */
 export const RECIPE_PARAMETERS_V1 = {
   thumb: {
@@ -207,6 +209,21 @@ export const isCurrentRecipe = (identity: {
   identity.version === RECIPE_PARAMETERS_V1[identity.role].version &&
   identity.digest === RECIPE_DIGESTS_V1[identity.role];
 
+/**
+ * What a job renders for: an edit of a work item (every role it needs, `full`
+ * included) or a Catalog asset (no `full` in increment 1). A plan decides only
+ * whether the optional `viewer` is worth rendering (see
+ * {@link plannedStillSize}); it changes no rendered byte and no recipe digest.
+ */
+export const RENDITION_PLANS = {
+  work: { full: true },
+  catalog: { full: false },
+} as const;
+export type RenditionPlan = keyof typeof RENDITION_PLANS;
+
+export const isRenditionPlan = (value: unknown): value is RenditionPlan =>
+  typeof value === "string" && Object.hasOwn(RENDITION_PLANS, value);
+
 export const isStillRole = (value: unknown): value is StillRole =>
   typeof value === "string" &&
   (STILL_ROLES as readonly string[]).includes(value);
@@ -314,13 +331,20 @@ export function stillOutputSize(role: StillRole, frame: FrameSize): FrameSize {
 }
 
 /**
- * The size a planned still role is rendered at, or `null` when its recipe
- * skips it: `viewer` is not rendered when it would equal `display` or exceed
- * `full` on either side. Every other role is always rendered.
+ * The size a planned still role is rendered at for `plan`, or `null` when it
+ * is not rendered. Every role but `viewer` is always rendered. `viewer` is
+ * skipped by its recipe when it would equal `display` or exceed `full` on
+ * either side, and by a plan that renders `full` when it would be at least as
+ * large as `full` on both sides (the same size, as for any frame of at most
+ * 4096 px on its long edge, or a long scroll within the viewer's bounds), so
+ * no plan stores one size twice. Long scrolls compare their long-scroll
+ * geometry. A plan without `full` keeps every viewer that differs from
+ * `display`: it is that plan's largest image.
  */
 export function plannedStillSize(
   role: StillRole,
   frame: FrameSize,
+  plan: RenditionPlan,
 ): FrameSize | null {
   const size = stillOutputSize(role, frame);
   if (role !== "viewer") return size;
@@ -329,7 +353,10 @@ export function plannedStillSize(
   if (
     (size.width === display.width && size.height === display.height) ||
     size.width > full.width ||
-    size.height > full.height
+    size.height > full.height ||
+    (RENDITION_PLANS[plan].full &&
+      size.width >= full.width &&
+      size.height >= full.height)
   )
     return null;
   return size;
@@ -364,13 +391,19 @@ export const renditionRegion = (
 
 /**
  * The exact output size of a planned still role for an oriented source, an
- * edit and the reference's cover crop, or `null` when the recipe skips it.
- * The renderer renders with this size and the coordinator requires it.
+ * edit, the reference's cover crop and the job's plan, or `null` when the role
+ * is not rendered. The renderer renders with this size and the coordinator
+ * requires it.
  */
 export const expectedStillSize = (
   role: StillRole,
   source: FrameSize,
   edit: MediaEdit,
   coverCrop: NormalizedCrop | null,
+  plan: RenditionPlan,
 ): FrameSize | null =>
-  plannedStillSize(role, renditionRegion(role, source, edit, coverCrop).region);
+  plannedStillSize(
+    role,
+    renditionRegion(role, source, edit, coverCrop).region,
+    plan,
+  );

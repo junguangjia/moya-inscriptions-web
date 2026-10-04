@@ -299,7 +299,7 @@ describe("catalog_render job handler", () => {
     );
   });
 
-  it("fails the asset, not the job, on a content rejection", async () => {
+  it("fails a pending asset, not the job, on a content rejection", async () => {
     const { handlers, catalogPort } = setup({
       status: "rejected",
       failureCode: "decode_failed",
@@ -313,6 +313,89 @@ describe("catalog_render job handler", () => {
       new Date(START),
     );
     expect(catalogPort.recordCatalogRenditions).not.toHaveBeenCalled();
+  });
+
+  it("fails the job, never a ready asset, when its re-render is rejected", async () => {
+    // A ready asset re-rendered for a new recipe or a lost rendition keeps
+    // its state and its ready renditions; the rejection is recorded as the
+    // job's own final failure (content-free code), which the Catalog sync
+    // queues again a day later instead of enqueueing on every pass.
+    const ready: CatalogWorkerRenderPlan = {
+      ...plan,
+      state: "ready",
+      ready: (["thumb", "cover", "display"] as const).map((role) => ({
+        role,
+        version: 1,
+        digest: "0".repeat(16),
+        width: 64,
+        height: 48,
+      })),
+    };
+    for (const failureCode of ["decode_failed", "source_hash_mismatch"]) {
+      const { handlers, catalogPort } = setup(
+        { status: "rejected", failureCode },
+        ready,
+      );
+      expect(
+        await handlers.run(claim("catalog_render", ASSET), signal),
+      ).toEqual({ status: "failed", errorCode: failureCode, retryable: false });
+      expect(catalogPort.failCatalogAsset).not.toHaveBeenCalled();
+      expect(catalogPort.recordCatalogRenditions).not.toHaveBeenCalled();
+    }
+    const unreadable: CatalogRenderResult = {
+      status: "rejected",
+      failureCode: "source_unreadable",
+    };
+    const early = setup(unreadable, ready);
+    expect(
+      await early.handlers.run(claim("catalog_render", ASSET), signal),
+    ).toEqual({
+      status: "failed",
+      errorCode: "source_unreadable",
+      retryable: true,
+    });
+    const last = setup(unreadable, ready);
+    expect(
+      await last.handlers.run(
+        { ...claim("catalog_render", ASSET), attempts: 5 },
+        signal,
+      ),
+    ).toEqual({
+      status: "failed",
+      errorCode: "source_unreadable",
+      retryable: false,
+    });
+    expect(last.catalogPort.failCatalogAsset).not.toHaveBeenCalled();
+  });
+
+  it("records a ready asset's rejected re-render as a final job failure through the worker", async () => {
+    const timers = new ManualTimers();
+    const job = claim("catalog_render", ASSET);
+    const port = queuePort([job]);
+    port.failJob.mockResolvedValue("failed" as never);
+    const { handlers } = setup(
+      { status: "rejected", failureCode: "decode_failed" },
+      { ...plan, state: "ready" },
+    );
+    const worker = new PublishingWorker({
+      port: port as unknown as PublishingWorkerPort,
+      handlers,
+      kinds: ["catalog_render"],
+      maintenance: false,
+      timers,
+      clock: timers.clock,
+      logger: silent,
+    });
+    worker.start();
+    await timers.advance(0);
+    await worker.stop();
+    expect(port.failJob).toHaveBeenCalledWith(
+      { id: job.id, leaseOwner: job.leaseOwner },
+      "decode_failed",
+      new Date(START),
+      { retryable: false },
+    );
+    expect(port.completeJob).not.toHaveBeenCalled();
   });
 
   it("retries an unreadable source while attempts remain, then fails the asset", async () => {

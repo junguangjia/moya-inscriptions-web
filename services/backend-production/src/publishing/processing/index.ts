@@ -86,6 +86,7 @@ export {
   MAX_OUTPUT_EDGE,
   RECIPE_DIGESTS_V1,
   RECIPE_PARAMETERS_V1,
+  RENDITION_PLANS,
   RENDITION_ROLES,
   STILL_INPUT_LIMITS,
   STILL_PIPELINE_V1,
@@ -95,6 +96,7 @@ export {
   editRegion,
   expectedStillSize,
   isCurrentRecipe,
+  isRenditionPlan,
   isRenditionRole,
   isStillRole,
   plannedStillSize,
@@ -107,6 +109,7 @@ export {
 export type {
   FrameSize,
   RecipeIdentity,
+  RenditionPlan,
   RenditionRole,
   StillRole,
 } from "./recipes.js";

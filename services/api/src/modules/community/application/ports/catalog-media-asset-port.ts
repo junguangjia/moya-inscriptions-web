@@ -41,7 +41,7 @@ export interface CatalogRenditionIdentity {
 }
 
 export interface CatalogAssetSyncOptions {
-  /** 1..1000 new assets and 1..1000 new jobs per call. */
+  /** 1..1000 new assets and 1..1000 queued jobs per call. */
   readonly limit: number;
   /**
    * The current identity of every role each asset always receives. A ready
@@ -62,7 +62,10 @@ export interface CatalogAssetSyncCounts {
   readonly created: number;
   /** Assets newly marked unreferenced (no longer named by the list). */
   readonly unreferenced: number;
-  /** New `catalog_render` jobs. */
+  /**
+   * `catalog_render` jobs queued by this pass: new ones, and failed render
+   * jobs of ready assets queued again after the retry delay.
+   */
   readonly enqueued: number;
 }
 
@@ -123,7 +126,11 @@ export interface CatalogMediaAssetPort {
    * `catalog_render` per named asset that is pending, or ready but missing a
    * listed identity on a committed blob. Enqueueing is idempotent (one queued
    * or running job per asset); an asset whose job failed or was abandoned
-   * waits for the operator. Nothing is deleted. A list longer than 10,000
+   * waits for the operator, except that the latest failed job of a ready
+   * asset still missing a listed identity (a rejected re-render, see
+   * `failCatalogAsset`) is queued again, with fresh attempts, once 24 hours
+   * passed since it failed; an abandoned job always waits. At most `limit`
+   * jobs are queued per pass. Nothing is deleted. A list longer than 10,000
    * entries is refused (TypeError).
    */
   syncCatalogAssets(
@@ -152,7 +159,9 @@ export interface CatalogMediaAssetPort {
    * example `source_hash_mismatch`, or `source_unreadable` once the job's
    * attempts are used up): a pending asset becomes `failed`; a ready asset
    * keeps its renditions and state. Only `source_unreadable` is retried
-   * later (see `syncCatalogAssets`).
+   * later (see `syncCatalogAssets`). The worker records a ready asset's
+   * rejected re-render as the failure of its render job instead (the code
+   * and the time on the failed job), which the sync retries a day later.
    */
   failCatalogAsset(
     assetId: string,

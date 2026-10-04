@@ -1,8 +1,13 @@
-import { isCurrentRecipe, isStillRole } from "../processing/recipes.js";
+import {
+  RENDITION_PLANS,
+  isCurrentRecipe,
+  isRenditionPlan,
+  isStillRole,
+} from "../processing/recipes.js";
 
 import type { MediaEdit, NormalizedCrop } from "../processing/edits.js";
 import type { MediaFailureCode } from "../processing/errors.js";
-import type { StillRole } from "../processing/recipes.js";
+import type { RenditionPlan, StillRole } from "../processing/recipes.js";
 
 /*
  * The private wire protocol between the media worker's coordinator and the
@@ -107,7 +112,12 @@ export interface SandboxItemRequest {
   readonly edit: MediaEdit;
   /** Applied to card roles (`thumb`, `cover`) only. */
   readonly coverCrop: NormalizedCrop | null;
-  /** Still renditions; `viewer` may be skipped by its recipe. */
+  /**
+   * What the job renders for: `work` (an item edit) or `catalog` (never asks
+   * for `full`). Decides with the recipe whether `viewer` is rendered.
+   */
+  readonly plan: RenditionPlan;
+  /** Still renditions; `viewer` may be skipped by its recipe or the plan. */
   readonly renditions: readonly SandboxRenditionRequest[];
   /** Render the motion derivative (Live items only). */
   readonly motion: boolean;
@@ -419,6 +429,7 @@ const itemLayout = (value: unknown): string | null => {
     "clientPairing",
     "edit",
     "coverCrop",
+    "plan",
     "renditions",
     "motion",
     "placeholder",
@@ -433,6 +444,7 @@ const itemLayout = (value: unknown): string | null => {
     !clientPairing(fields.clientPairing) ||
     edit(fields.edit) === undefined ||
     crop(fields.coverCrop) === undefined ||
+    !isRenditionPlan(fields.plan) ||
     !Array.isArray(fields.renditions) ||
     fields.renditions.length > MAX_RENDITIONS ||
     !fields.renditions.every(renditionRequest) ||
@@ -442,6 +454,8 @@ const itemLayout = (value: unknown): string | null => {
     return null;
   const roles = fields.renditions.map((entry) => (entry as Fields).role);
   if (new Set(roles).size !== roles.length) return null;
+  // A plan without `full` never asks for it.
+  if (!RENDITION_PLANS[fields.plan].full && roles.includes("full")) return null;
   if (fields.placeholder && !roles.includes("thumb")) return null;
   if (fields.renditions.length === 0 && !fields.motion) return null;
   const inputRoles = fields.inputs.map((input) => {

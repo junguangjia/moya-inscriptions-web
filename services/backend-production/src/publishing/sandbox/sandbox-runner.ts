@@ -191,7 +191,8 @@ export interface SandboxRunnerOptions {
   readonly appDist: string;
   /**
    * Source tree of the renderer in Development; a `dist` older than it is
-   * refused with an actionable message instead of running stale code.
+   * refused with an actionable message instead of running stale code. Never
+   * set in Production, where the release build is authoritative.
    */
   readonly sourceDirectory?: string;
   readonly spawn?: SandboxSpawn;

@@ -1058,6 +1058,212 @@ describe("media renditions, Catalog assets and the D7 hold on a dedicated synthe
   );
 
   it(
+    "retries a ready asset's rejected re-render a day later, not on every pass, and keeps its renditions",
+    async () => {
+      const asset = () => {
+        const sha = sha256(hex());
+        const source: CatalogMediaSource = {
+          mediaId: `media_${hex()}`,
+          objectKey: `display/v1/media_${hex()}/${sha}.webp`,
+          width: 4000,
+          height: 3000,
+        };
+        return {
+          source,
+          sha,
+          id: `catalog-asset-${md5(`${source.mediaId}:${source.objectKey}`)}`,
+        };
+      };
+      const [ready, second, pending, stopped] = [
+        asset(),
+        asset(),
+        asset(),
+        asset(),
+      ];
+      const sources = [ready, second, pending, stopped].map(
+        (entry) => entry.source,
+      );
+      const v1 = (["thumb", "cover", "display"] as const).map(
+        (role): CatalogRenditionIdentity => ({
+          role,
+          version: 1,
+          digest: currentRecipe(role).digest,
+        }),
+      );
+      // A newer display recipe that the ready assets do not hold yet.
+      const v2: CatalogRenditionIdentity[] = [
+        ...v1.filter((entry) => entry.role !== "display"),
+        { role: "display", version: 2, digest: "fedcba9876543210" },
+      ];
+      const sync = (now: Date, wanted = v2, limit = 10) =>
+        adapter.syncCatalogAssets(sources, now, { limit, renditions: wanted });
+      const jobs = async (assetId: string) =>
+        (
+          await pool.query<{
+            id: string;
+            state: string;
+            attempts: number;
+            last_error_code: string | null;
+            finished_at: Date | null;
+          }>(
+            `SELECT id, state, attempts, last_error_code, finished_at FROM community.publishing_jobs
+             WHERE kind='catalog_render' AND subject_id=$1 ORDER BY created_at, id`,
+            [assetId],
+          )
+        ).rows;
+      /** The worker's path: claim the queued job, then record a final failure. */
+      const fail = async (assetId: string, code: string, now: Date) => {
+        const claimed = (
+          await pool.query<{ id: string }>(
+            `UPDATE community.publishing_jobs
+             SET state='running', attempts=attempts+1, lease_owner='synthetic-worker',
+                 lease_expires_at=$2::timestamptz + interval '5 minutes', updated_at=$2::timestamptz
+             WHERE kind='catalog_render' AND subject_id=$1 AND state='queued'
+             RETURNING id`,
+            [assetId, now],
+          )
+        ).rows;
+        expect(claimed).toHaveLength(1);
+        expect(
+          await adapter.failJob(
+            { id: claimed[0]!.id, leaseOwner: "synthetic-worker" },
+            code,
+            now,
+            { retryable: false },
+          ),
+        ).toBe("failed");
+        return claimed[0]!.id;
+      };
+      const complete = (assetId: string, now: Date) =>
+        pool.query(
+          `UPDATE community.publishing_jobs SET state='succeeded', finished_at=$2::timestamptz, updated_at=$2::timestamptz
+           WHERE kind='catalog_render' AND subject_id=$1 AND state='queued'`,
+          [assetId, now],
+        );
+
+      expect(await sync(t0, v1)).toMatchObject({ created: 4, enqueued: 4 });
+      // Three assets become ready with version 1 renditions; one stays
+      // pending with a failed job, which waits for the operator as before.
+      for (const entry of [ready, second, stopped]) {
+        await complete(entry.id, t0);
+        expect(
+          await adapter.recordCatalogRenditions(
+            entry.id,
+            {
+              masterSha256: entry.sha,
+              masterWidth: 4000,
+              masterHeight: 3000,
+              placeholderColor: null,
+              renditions: (
+                ["thumb", "cover", "display", "viewer"] as const
+              ).map((role) => ({
+                ...written(500),
+                role,
+                recipeVersion: 1,
+                recipeDigest: currentRecipe(role).digest,
+                contentType: "image/webp" as const,
+                width: 480,
+                height: 360,
+              })),
+            },
+            t0,
+          ),
+        ).toEqual({ status: "recorded" });
+      }
+      await fail(pending.id, "processing_unavailable", t0);
+
+      // The new display recipe renders the ready assets again; the worker
+      // records a rejected re-render as the job's failure (code and time).
+      const t1 = new Date(t0.getTime() + HOUR);
+      expect(await sync(t1)).toMatchObject({ enqueued: 3 });
+      const rejected = await fail(ready.id, "decode_failed", t1);
+      await fail(second.id, "source_unreadable", t1);
+      await fail(stopped.id, "decode_failed", t1);
+      // The operator stops one of them.
+      await pool.query(
+        "UPDATE community.publishing_jobs SET state='abandoned' WHERE kind='catalog_render' AND subject_id=$1 AND state='failed'",
+        [stopped.id],
+      );
+      expect(await jobs(ready.id)).toEqual([
+        expect.objectContaining({ state: "succeeded" }),
+        {
+          id: rejected,
+          state: "failed",
+          attempts: 1,
+          last_error_code: "decode_failed",
+          finished_at: t1,
+        },
+      ]);
+      // The asset keeps its state and its usable version 1 renditions.
+      expect(
+        (
+          await pool.query(
+            "SELECT state, failure_code FROM community.catalog_media_assets WHERE id=$1",
+            [ready.id],
+          )
+        ).rows,
+      ).toEqual([{ state: "ready", failure_code: null }]);
+      expect(await adapter.readCatalogRenderPlan(ready.id)).toMatchObject({
+        state: "ready",
+        ready: ["cover", "display", "thumb", "viewer"].map((role) => ({
+          role,
+          version: 1,
+        })),
+      });
+
+      // No new job on any pass within the day, however often the sync runs.
+      for (const minutes of [5, 10, 60, 23 * 60]) {
+        expect(
+          await sync(new Date(t1.getTime() + minutes * 60_000)),
+        ).toMatchObject({ enqueued: 0 });
+      }
+      expect((await jobs(ready.id)).map((job) => job.state)).toEqual([
+        "succeeded",
+        "failed",
+      ]);
+      // Nothing is retried while the asset misses no listed identity.
+      const t2 = new Date(t1.getTime() + 25 * HOUR);
+      expect(await sync(t2, v1)).toMatchObject({ enqueued: 0 });
+      // After the day: the failed job is queued again with fresh attempts,
+      // one per pass within the bound; abandoned jobs and a pending asset's
+      // failed job still wait for the operator.
+      expect(await sync(t2, v2, 1)).toMatchObject({ enqueued: 1 });
+      expect(await sync(t2, v2, 1)).toMatchObject({ enqueued: 1 });
+      expect(await sync(t2)).toMatchObject({ enqueued: 0 });
+      for (const entry of [ready, second])
+        expect((await jobs(entry.id)).at(-1)).toMatchObject({
+          state: "queued",
+          attempts: 0,
+          last_error_code: null,
+          finished_at: null,
+        });
+      expect((await jobs(ready.id)).map((job) => job.id)).toContain(rejected);
+      expect((await jobs(ready.id)).length).toBe(2);
+      expect((await jobs(stopped.id)).map((job) => job.state)).toEqual([
+        "succeeded",
+        "abandoned",
+      ]);
+      expect((await jobs(pending.id)).map((job) => job.state)).toEqual([
+        "failed",
+      ]);
+
+      // Rejected again: again a day of quiet before the next try.
+      await fail(ready.id, "decode_failed", t2);
+      expect(await sync(new Date(t2.getTime() + 23 * HOUR))).toMatchObject({
+        enqueued: 0,
+      });
+      expect(await sync(new Date(t2.getTime() + 25 * HOUR))).toMatchObject({
+        enqueued: 1,
+      });
+      expect((await jobs(ready.id)).map((job) => job.state)).toEqual([
+        "succeeded",
+        "queued",
+      ]);
+    },
+    SLOW,
+  );
+
+  it(
     "holds pre-task bytes a task-initiated replacement frees and keeps the user lifecycle as today",
     async () => {
       // Owner answer Q4 (2026-10-04): user-initiated deletion is unchanged.

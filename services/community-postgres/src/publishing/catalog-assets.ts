@@ -27,15 +27,32 @@ import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
 const MAX_SOURCES = 10_000;
 const MAX_BATCH = 1000;
 /**
- * An asset that failed only because its source could not be read (missing or
+ * How long a failed render waits before the sync tries it again. A pending
+ * asset that failed only because its source could not be read (missing or
  * forbidden: a read permission not granted yet, a transient signing or
- * deployment error) is rendered again this long after it failed. Every other
- * failure code is a fact of the hash-pinned source bytes and stays final.
+ * deployment error) is rendered again this long after it failed; every other
+ * failure of a pending asset is a fact of the hash-pinned source bytes and
+ * stays final. A ready asset never fails: its failed render job (a rejected
+ * re-render, or attempts used up) is queued again this long after it failed,
+ * while the asset keeps its ready renditions.
  */
-const UNREADABLE_RETRY_SQL = "interval '24 hours'";
+const RETRY_DELAY_SQL = "interval '24 hours'";
 /** A ready rendition counts only while its blob is committed (a rollback can purge it). */
 const LIVE_RENDITION_SQL = `community.media_renditions r
   JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed'`;
+/**
+ * SQL: asset `a` misses a ready rendition, on a committed blob, of one of the
+ * listed identities (`$3`, a JSON array of `{role, version, digest}`).
+ */
+const MISSING_IDENTITY_SQL = `EXISTS (
+  SELECT 1 FROM jsonb_to_recordset($3::jsonb) AS want(role text, version integer, digest text)
+  WHERE NOT EXISTS (
+    SELECT 1 FROM ${LIVE_RENDITION_SQL}
+    WHERE r.catalog_asset_id=a.id AND r.state='ready' AND r.role=want.role
+      AND r.recipe_version=want.version AND r.recipe_digest=want.digest))`;
+/** SQL: when job `j` ended (failed rows always carry `finished_at`). */
+const endedAtSql = (job: string): string =>
+  `COALESCE(${job}.finished_at, ${job}.updated_at)`;
 const MAX_DIMENSION = 65_535;
 const ASSET_ID = /^catalog-asset-[0-9a-f]{32}$/u;
 const MEDIA_ID = /^[^\s]{1,128}$/u;
@@ -206,7 +223,7 @@ export const syncCatalogAssets = async (
          SELECT id FROM community.catalog_media_assets
          WHERE id=ANY($1::text[]) AND unreferenced_since IS NULL
            AND state='failed' AND failure_code='source_unreadable'
-           AND updated_at < $2::timestamptz - ${UNREADABLE_RETRY_SQL}
+           AND updated_at < $2::timestamptz - ${RETRY_DELAY_SQL}
          ORDER BY updated_at, id
          LIMIT $3
          FOR UPDATE
@@ -214,27 +231,20 @@ export const syncCatalogAssets = async (
        WHERE a.id=due.id`,
       [ids, at, options.limit],
     );
+    const wanted = JSON.stringify(options.renditions);
     // A named asset is rendered while pending, or again while ready but
     // missing a ready rendition (on a committed blob) of a listed identity.
     // One queued or running job per asset (the active unique index); a
     // failed or abandoned job waits for the operator, as every scheduled
-    // kind does.
-    const enqueued = await db.query(
+    // kind does, except as below.
+    const inserted = await db.query(
       `INSERT INTO community.publishing_jobs(id,kind,subject_id,state,attempts,run_after,created_at,updated_at)
        SELECT 'publishing-job-' || replace(gen_random_uuid()::text, '-', ''), 'catalog_render', c.id,
          'queued', 0, $2::timestamptz, $2::timestamptz, $2::timestamptz
        FROM (
          SELECT a.id FROM community.catalog_media_assets a
          WHERE a.id=ANY($1::text[]) AND a.unreferenced_since IS NULL
-           AND (
-             a.state='pending'
-             OR (a.state='ready' AND EXISTS (
-               SELECT 1 FROM jsonb_to_recordset($3::jsonb) AS want(role text, version integer, digest text)
-               WHERE NOT EXISTS (
-                 SELECT 1 FROM ${LIVE_RENDITION_SQL}
-                 WHERE r.catalog_asset_id=a.id AND r.state='ready' AND r.role=want.role
-                   AND r.recipe_version=want.version AND r.recipe_digest=want.digest)))
-           )
+           AND (a.state='pending' OR (a.state='ready' AND ${MISSING_IDENTITY_SQL}))
            AND NOT EXISTS (
              SELECT 1 FROM community.publishing_jobs j
              WHERE j.kind='catalog_render' AND j.subject_id=a.id
@@ -244,14 +254,52 @@ export const syncCatalogAssets = async (
        ) c
        ON CONFLICT (kind, subject_id, md5(COALESCE(payload, '{}'::jsonb)::text)) WHERE state IN ('queued', 'running') DO NOTHING
        RETURNING id`,
-      [ids, at, JSON.stringify(options.renditions), options.limit],
+      [ids, at, wanted, options.limit],
     );
+    const insertedCount = inserted.rowCount ?? 0;
+    // A ready asset still missing a listed identity whose latest render job
+    // failed (its re-render was rejected, or its attempts were used up) keeps
+    // its ready renditions; that job is queued again, with fresh attempts,
+    // once the retry delay passed since it failed, so a rejection is retried
+    // daily instead of on every pass. An abandoned job (the operator's stop)
+    // still blocks. Within the same per-pass bound as new jobs.
+    const requeued =
+      insertedCount >= options.limit
+        ? 0
+        : ((
+            await db.query(
+              `UPDATE community.publishing_jobs j
+               SET state='queued', attempts=0, run_after=$2::timestamptz, lease_owner=NULL,
+                   lease_expires_at=NULL, last_error_code=NULL, finished_at=NULL,
+                   updated_at=$2::timestamptz
+               FROM (
+                 SELECT f.id FROM community.publishing_jobs f
+                 JOIN community.catalog_media_assets a ON a.id=f.subject_id
+                 WHERE f.kind='catalog_render' AND f.state='failed'
+                   AND ${endedAtSql("f")} < $2::timestamptz - ${RETRY_DELAY_SQL}
+                   AND a.id=ANY($1::text[]) AND a.unreferenced_since IS NULL
+                   AND a.state='ready' AND ${MISSING_IDENTITY_SQL}
+                   AND NOT EXISTS (
+                     SELECT 1 FROM community.publishing_jobs o
+                     WHERE o.kind='catalog_render' AND o.subject_id=f.subject_id AND o.id<>f.id
+                       AND (o.state IN ('queued','running','abandoned')
+                         OR (o.state='failed'
+                           AND (${endedAtSql("o")}, o.id) > (${endedAtSql("f")}, f.id))))
+                 ORDER BY ${endedAtSql("f")}, f.id
+                 LIMIT $4
+                 FOR UPDATE OF f SKIP LOCKED
+               ) due
+               WHERE j.id=due.id AND j.state='failed'
+               RETURNING j.id`,
+              [ids, at, wanted, options.limit - insertedCount],
+            )
+          ).rowCount ?? 0);
     return {
       referenced: ids.length,
       skipped,
       created: created.rowCount ?? 0,
       unreferenced: unreferenced.rowCount ?? 0,
-      enqueued: enqueued.rowCount ?? 0,
+      enqueued: insertedCount + requeued,
     };
   });
 };

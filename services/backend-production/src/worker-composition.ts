@@ -10,7 +10,7 @@ import {
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 
-import { parseCommunityPostgresConfig } from "./composition.js";
+import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
   CATALOG_SYNC_INTERVAL_MS,
   createCatalogRenderer,

@@ -548,6 +548,7 @@ async function renderItem(
       still!.inspection,
       item.edit,
       item.coverCrop,
+      item.plan,
     );
     if (size === null) continue;
     const rendered = await renderStaticDerivative(

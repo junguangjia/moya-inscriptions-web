@@ -1310,6 +1310,8 @@ const processorCases = () => {
     expect(
       sandbox.jobs.map((job) => job.item?.renditions.map((r) => r.role)),
     ).toEqual([["thumb", "display", "viewer", "full"]]);
+    // A work item edit: its viewer never repeats its full.
+    expect(sandbox.jobs.map((job) => job.item?.plan)).toEqual(["work"]);
     const read = await store.openRead(outcome.derivatives[0]!.storageKey);
     if (read?.status !== "ok") throw new Error("expected derivative");
     const parts: Buffer[] = [];

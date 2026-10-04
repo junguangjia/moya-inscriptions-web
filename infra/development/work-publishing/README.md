@@ -264,6 +264,13 @@ docker run --rm --pull never --log-driver none --name yoyi-wp-media-<24hex>
   one rendition at a time without an operation cache, and runs `heif-dec`,
   `ffprobe` and `ffmpeg` as direct child processes with an empty environment and
   their own deadlines (60 s, 20 s, 180 s) and output caps.
+- Before a container starts, the coordinator refuses a job whose staged input
+  (the components it processes; a Live item's still and motion together) exceeds
+  512 MiB, as `dimensions_exceeded`. That bound is below the per-item upload
+  limits the Admin settings allow (up to 8 GiB). With the default limits (128
+  MiB per Original item, 256 MiB per Standard component) every item fits;
+  raising them so that an item exceeds 512 MiB in total makes its upload fail
+  processing as `dimensions_exceeded`, so keep the defaults.
 - Timeout, cancellation, lease loss and shutdown run `docker kill <name>`,
   SIGKILL the CLI after a grace period and run `docker rm --force <name>` twice
   (at once and after the grace). The container wall clock is 300 s for stills

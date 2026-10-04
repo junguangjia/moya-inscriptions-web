@@ -15,7 +15,10 @@ operations records.
 
 ## Owner decisions and sequencing
 
-Recorded in the amendment (section 3) and Issue #206 r2/r3, 2026-10-04:
+Recorded in the amendment (section 3) and Issue #206, 2026-10-04: the Owner
+decisions in revision r2, the delivery provider and the database sequencing in
+r3, and the acceptance of the prepared media hostname with its non-public
+sequence in r4.
 
 - **Public resolution.** Long scrolls keep today's short-edge-aware bounds
   (`full` at most 16,000 px on the long edge and 40 MP; `display` at most 1,280
@@ -39,12 +42,23 @@ Recorded in the amendment (section 3) and Issue #206 r2/r3, 2026-10-04:
   behaviour-changing deployments) wait for its recorded handoff, then a fresh
   verified backup of the authoritative database. Every migration of this task
   passes on PostgreSQL 16 (the minimum supported Production major) and 18.
+- **Prepared media hostname (r4).** The Owner accepted the prepared hostname,
+  which stays non-public: no public DNS record and no switch of application
+  media reads until PR 1a's verification and independent review are complete,
+  the PostgreSQL 16 task has handed off the Production database, and this task
+  has verified the Production target, taken a fresh backup, applied the media
+  migrations and passed publication and withdrawal acceptance through the edge
+  without public DNS. Permissions are not widened beyond the approved set.
 
 ## Increments
 
 Each increment is merged PRs, a Production deployment through the established
 verified-release procedure (a verified database backup before any migration), a
-real acceptance run and a recorded rollback point.
+real acceptance run and a recorded rollback point. Per the Owner decision
+recorded in Issue #206 r6, each increment's deployment runs from an approved
+annotated tag on the verified merged `main` commit (for example
+`media-pipeline-inc1` to `media-pipeline-inc4`), followed by a GitHub Release;
+the rollback point is the previous release together with the previous tag.
 
 | Increment                       | Content                                                                                                                                                                                                           | User-visible                                                 | Switch and rollback                                                                                       |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
@@ -120,16 +134,27 @@ the digests the migration writes for adopted rows to the registry. The community
 store records the identity the processor names and only checks its form; it
 never defaults or computes one.
 
-| Role@version     | Framing                                                   | Geometry (never upscaled)                                                                                                                                                                        | WebP quality | Planned for                    |
-| ---------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | ------------------------------ |
-| `thumb@1`        | Card (the author's cover crop where it applies)           | Long edge ≤ 480                                                                                                                                                                                  | 80           | Work items, Catalog            |
-| `cover@1`        | Card for work items; complete for Catalog (no cover crop) | Long edge ≤ 1080                                                                                                                                                                                 | 86           | Work items, Catalog            |
-| `display@1`      | Complete                                                  | Long edge ≤ 2048; long scroll: short edge ≤ 1280, long edge ≤ 16,000, ≤ 20 MP                                                                                                                    | 86           | Work items, Catalog            |
-| `viewer@1` (new) | Complete                                                  | Long edge ≤ 4096 (≤ 4096 × 4096 pixels); long scroll: short edge ≤ 2048, long edge ≤ 16,000, ≤ 20 MP; never above `full`. Not rendered when its size equals `display`'s or would exceed `full`'s | 88           | Work items (optional), Catalog |
-| `full@1`         | Complete                                                  | Long edge ≤ 8192; long scroll: long edge ≤ 16,000, ≤ 40 MP                                                                                                                                       | 90           | Work items only                |
-| `motion@1`       | Complete                                                  | Unchanged motion profile (H.264, long edge ≤ 1920)                                                                                                                                               | —            | Live items                     |
+| Role@version     | Framing                                                   | Geometry (never upscaled)                                                                                                                                                                                                           | WebP quality | Planned for                    |
+| ---------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------ |
+| `thumb@1`        | Card (the author's cover crop where it applies)           | Long edge ≤ 480                                                                                                                                                                                                                     | 80           | Work items, Catalog            |
+| `cover@1`        | Card for work items; complete for Catalog (no cover crop) | Long edge ≤ 1080                                                                                                                                                                                                                    | 86           | Work items, Catalog            |
+| `display@1`      | Complete                                                  | Long edge ≤ 2048; long scroll: short edge ≤ 1280, long edge ≤ 16,000, ≤ 20 MP                                                                                                                                                       | 86           | Work items, Catalog            |
+| `viewer@1` (new) | Complete                                                  | Long edge ≤ 4096 (≤ 4096 × 4096 pixels); long scroll: short edge ≤ 2048, long edge ≤ 16,000, ≤ 20 MP; never above `full`. Rendered only when it differs from `display` and, for a work item, is smaller than its `full` (see below) | 88           | Work items (optional), Catalog |
+| `full@1`         | Complete                                                  | Long edge ≤ 8192; long scroll: long edge ≤ 16,000, ≤ 40 MP                                                                                                                                                                          | 90           | Work items only                |
+| `motion@1`       | Complete                                                  | Unchanged motion profile (H.264, long edge ≤ 1920)                                                                                                                                                                                  | —            | Live items                     |
 
 A long scroll is an image whose long edge exceeds 2.5 times its short edge.
+
+The viewer is never a second copy of another rendition. It is not rendered when
+its size equals `display`'s or would exceed `full`'s, and a work item gets none
+when it would be as large as the item's `full`: any frame up to 4096 px on the
+long edge, or a long scroll within the viewer's bounds. A Catalog asset has no
+`full`, so its viewer exists whenever it differs from `display`. These rules
+decide only whether a viewer exists, never its bytes: the job's plan (`work` for
+an item edit, `catalog` for a Catalog asset) travels in the sandbox request, the
+renderer and the coordinator evaluate the same registry function with it, and
+the plan rule is not part of the `viewer@1` digest. Readiness, submission and
+the Catalog sync never require a viewer.
 
 Common still pipeline:
 
@@ -216,7 +241,7 @@ nor touch staged inputs and outputs.
 | Container              | No network, read-only root, all capabilities dropped, no new privileges, uid/gid 10001                                                                                                                                                       |
 | CPU, memory, processes | 1 CPU; 1536 MiB with no swap; 256 PIDs; 1024 open files; no core dumps; preferred OOM victim                                                                                                                                                 |
 | Temporary disk         | tmpfs: `/tmp` 64 MiB, work area 768 MiB, output 256 MiB                                                                                                                                                                                      |
-| Input                  | ≤ 512 MiB of staged input per job                                                                                                                                                                                                            |
+| Input                  | ≤ 512 MiB of staged input per job (below the operator-configurable upload maximum; see the note under this table)                                                                                                                            |
 | Decoded image          | ≤ 120 MP and ≤ 512 MiB decoded bytes, checked before any pixel decode; first page only; animations refused. HEIF: checked on the decoded primary image; until a header check lands, its decode is bounded by the memory and work-area limits |
 | Loaders                | sharp limited to JPEG, PNG and WebP loaders; HEIF through the pinned HEIF decoder; motion through FFmpeg                                                                                                                                     |
 | Rendering              | sharp cache off, one thread, renditions rendered sequentially with a per-rendition timeout of 120 s                                                                                                                                          |
@@ -226,6 +251,17 @@ nor touch staged inputs and outputs.
 
 Refusals are precise and content-free, using the existing media failure codes
 (for example `dimensions_exceeded`, `decode_failed`, `unsupported_type`).
+
+The staged-input bound is lower than what the operator settings allow. The
+per-item upload limits (Original item, Standard component) can be raised up to 8
+GiB, while one sandbox job stages at most 512 MiB: the components it processes
+(a Live item's still and motion together) or the legacy still. With the default
+limits (128 MiB per Original item, 256 MiB per Standard component) every item
+fits. An item whose staged components exceed 512 MiB after the limits are raised
+is accepted as an upload but fails processing as `dimensions_exceeded`. Keep the
+default upload limits, or any setting under which an item stays at or below 512
+MiB in total, while this bound holds; the contracts and the settings bounds are
+unchanged.
 
 The coordinator validates every output before upload: each still is re-checked
 against the recipe's exact size and parsed header-only (one image chunk, no
@@ -274,10 +310,11 @@ follow-up for the increment-4 format validation.
   `unreferenced_since`, and enqueues `catalog_render` for assets that lack a
   current-version `ready` rendition, on a committed blob, of a role every asset
   receives (`thumb`, `cover`, `display`). A render always plans `viewer` too
-  (skipped where its recipe says so), so it also restores a missing `viewer`; a
-  future `viewer` recipe version needs its own re-render rule, because the store
-  cannot evaluate the skip geometry. The worker therefore uses both the Catalog
-  read connection and the Community App-role connection.
+  (skipped only where it would equal `display`: the Catalog plan has no `full`),
+  so it also restores a missing `viewer`; a future `viewer` recipe version needs
+  its own re-render rule, because the store cannot evaluate the skip geometry.
+  The worker therefore uses both the Catalog read connection and the Community
+  App-role connection.
 - **`catalog_render`.** The coordinator reads the source with the existing
   Catalog read identity over the storage service's internal endpoint (never the
   public media hostname), checks the size bound and, when known, the SHA-256,
@@ -293,6 +330,14 @@ follow-up for the increment-4 format validation.
   (for example a hash mismatch or an undecodable source) is a fact of the
   hash-pinned source bytes and stays final. Development reads sources from the
   local store.
+- **Rejected re-renders.** A `ready` asset is rendered again for a new recipe
+  version or a lost rendition. When that render is rejected (or its attempts are
+  used up), the asset keeps its state and its ready renditions, and the
+  rejection is recorded as the failure of its render job (content-free code and
+  time). The sync enqueues nothing for the asset while that failed job is
+  younger than a day, then queues the same job again with fresh attempts, within
+  the per-pass bound. An abandoned job, and the failed job of a `pending` asset,
+  still wait for the operator.
 - **Sources are never touched.** The pipeline never writes, renames or deletes
   Catalog source objects or Admin media.
 - **Read side (PR 1b).** A `security_barrier` view exposes delivery facts of
@@ -368,7 +413,10 @@ documented in
 [`infra/development/work-publishing/README.md`](../../infra/development/work-publishing/README.md);
 a missing image fails processing with one actionable message. This is a
 cross-task Development change: other tasks' stacks on `main` need the same
-one-time build.
+one-time build. The root `package.json` script `dev:media-sandbox` builds the
+image, and the root `turbo.json` passes `WORK_MEDIA_WORKER` through to the
+Development Backend; Issue #206 r5 records these two root configuration lines in
+the task scope.
 
 ## Operations notes
 
@@ -433,9 +481,9 @@ one-time build.
     the media hostname only, plus a daily worker job that totals the plan
     month's requests from the provider's analytics and warns at 2,000,000.
     Cutoff enforcement is delayed, so it is not an instantaneous spending cap.
-  - Sequencing: the hostname gets no public DNS record and Web reads are not
-    switched until the publication and withdrawal lifecycle, including the purge
-    on a warmed edge, passes acceptance without public DNS.
+  - Sequencing (Issue #206 r4): the hostname gets no public DNS record and Web
+    reads are not switched until the publication and withdrawal lifecycle,
+    including the purge on a warmed edge, passes acceptance without public DNS.
   - Configuration: `MEDIA_PUBLIC_DELIVERY` and `MEDIA_PUBLISHED_ORIGIN`.
     Publisher credentials (the approved keyless role) are delivered to the
     worker only. A cost projection is reported before switch-on.

@@ -214,6 +214,12 @@ export interface PublishingMediaRuntime {
 export interface SandboxRuntimeOptions {
   /** The release `dist` mounted into the container (default: this package's). */
   readonly appDist?: string;
+  /**
+   * The renderer's source tree that Development compares `appDist` with
+   * (default: this package's `src` when `appDist` is not overridden).
+   * Ignored in Production, where the release build is authoritative.
+   */
+  readonly sourceDirectory?: string;
   readonly spawn?: SandboxSpawn;
 }
 
@@ -401,20 +407,30 @@ export const openPublishingStore = async (
   ).catch(invalidDirectory(WORK_MEDIA_STORE_DIR));
 };
 
-/** The sandbox runner over a validated work directory. Performs no Docker call. */
+/**
+ * The sandbox runner over a validated work directory. Performs no Docker
+ * call. Only Development compares the renderer build with its sources (a
+ * stale `dist` is refused with an actionable message); a Production release
+ * runs exactly the build it ships, whatever the file times of a source tree
+ * beside it.
+ */
 const openSandbox = (
   image: string,
   workDirectory: string,
   options: OpenPublishingMediaOptions,
+  runtime: "development" | "production",
 ): Promise<SandboxRunner> => {
   const defaults = defaultSandboxAppDist();
+  const sourceDirectory =
+    runtime === "production"
+      ? undefined
+      : (options.sourceDirectory ??
+        (options.appDist === undefined ? defaults.sourceDirectory : undefined));
   return createSandboxRunner({
     image,
     workDirectory,
     appDist: options.appDist ?? defaults.appDist,
-    ...(options.appDist === undefined
-      ? { sourceDirectory: defaults.sourceDirectory }
-      : {}),
+    ...(sourceDirectory === undefined ? {} : { sourceDirectory }),
     ...(options.spawn ? { spawn: options.spawn } : {}),
     ...(options.temporaryRoots
       ? { temporaryRoots: options.temporaryRoots }
@@ -445,7 +461,12 @@ export async function openProductionPublishingMedia(
       );
   }
   const store = openProductionPublishingStore(config, options);
-  const sandbox = await openSandbox(config.toolsImage, workReal, options);
+  const sandbox = await openSandbox(
+    config.toolsImage,
+    workReal,
+    options,
+    "production",
+  );
   return {
     store,
     sandbox,
@@ -496,6 +517,7 @@ export const openPublishingMedia = async (
     config.toolsImage,
     config.workDirectory,
     options,
+    "development",
   ).catch(invalidDirectory(WORK_MEDIA_WORK_DIR));
   return {
     store,

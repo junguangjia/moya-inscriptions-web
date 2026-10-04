@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -14,7 +14,8 @@ import {
  * the media worker's coordinator never reach `sharp` at runtime, and the
  * renderer that runs inside the container (with only the release `dist` and
  * the image's `sharp` available) reaches nothing but Node built-ins, `sharp`
- * and the processing and sandbox modules.
+ * and the processing and sandbox modules. The media worker does not load the
+ * Backend composition either.
  */
 
 const sourceRoot = path.join(
@@ -74,6 +75,48 @@ describe("media sandbox import boundary", () => {
         "publishing/sandbox/renderer.ts",
       );
     }
+  });
+
+  it("keeps the Backend composition and its HTTP runtime out of the media worker", async () => {
+    for (const entry of ["worker-main.ts", "worker-composition.ts"]) {
+      const closure = await runtimeClosure(entry);
+      // The Community App role parser is the one module both roots share.
+      expect(closure.files, entry).toContain("community-postgres-config.ts");
+      expect(
+        closure.files.filter(
+          (file) =>
+            file === "main.ts" ||
+            file === "composition.ts" ||
+            /^(?:article-authoring|auth|notifications)\//u.test(file),
+        ),
+        entry,
+      ).toEqual([]);
+    }
+    // Only the worker entry uses the runtime's process shutdown helper; the
+    // worker composition loads no Backend runtime (HTTP application, sign-in).
+    expect(
+      (await runtimeClosure("worker-composition.ts")).bare.has(
+        "@moya/backend-runtime",
+      ),
+    ).toBe(false);
+    const parser = path.join(sourceRoot, "community-postgres-config.ts");
+    const importers: string[] = [];
+    for (const name of await readdir(sourceRoot, { recursive: true })) {
+      if (!name.endsWith(".ts")) continue;
+      const file = path.join(sourceRoot, name);
+      const imported = extractModuleReferences(await readFile(file, "utf8"))
+        .filter((reference) => reference.specifier.startsWith("."))
+        .map((reference) =>
+          path
+            .resolve(path.dirname(file), reference.specifier)
+            .replace(/\.js$/, ".ts"),
+        );
+      if (imported.includes(parser)) importers.push(name);
+    }
+    expect(importers.sort()).toEqual([
+      "composition.ts",
+      "worker-composition.ts",
+    ]);
   });
 
   it("lets the in-container renderer reach only node built-ins, sharp and the processing and sandbox modules", async () => {

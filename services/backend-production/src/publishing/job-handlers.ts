@@ -851,11 +851,15 @@ export function createPublishingJobHandlers(
 
   /**
    * Renders one Catalog asset in the sandbox and records its renditions and
-   * facts. A content rejection fails the asset (not the job); infrastructure
-   * failures are retried. An unreadable source (missing or forbidden) is
-   * retried while the job has attempts left, then fails the asset, which the
-   * Catalog sync renders again after a delay. An unknown, failed or
-   * unreferenced asset needs no work.
+   * facts. A content rejection fails a pending asset (not the job);
+   * infrastructure failures are retried. An unreadable source (missing or
+   * forbidden) is retried while the job has attempts left, then fails the
+   * asset, which the Catalog sync renders again after a delay. A ready asset
+   * (a re-render for a new recipe or a lost rendition) never fails: a
+   * rejection fails this job instead, with its content-free code, and the
+   * asset keeps serving its ready renditions until the Catalog sync queues
+   * the job again a day later. An unknown, failed or unreferenced asset needs
+   * no work.
    */
   const renderCatalogAsset = async (
     claim: PublishingWorkerJobClaim,
@@ -873,6 +877,7 @@ export function createPublishingJobHandlers(
     )
       return failed("source_unreadable", true);
     if (result.status === "rejected") {
+      if (plan.state === "ready") return failed(result.failureCode, false);
       await catalog.port.failCatalogAsset(
         plan.assetId,
         result.failureCode,
