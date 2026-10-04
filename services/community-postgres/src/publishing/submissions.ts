@@ -432,8 +432,8 @@ const notReadyKeys = async (
           ELSE NOT EXISTS (
             SELECT 1 FROM community.media_required_derivatives(i.kind,e.item->'edit',e.item->>'key' IS NOT DISTINCT FROM $2::text,CASE WHEN e.item->>'key'=$2::text THEN $3::jsonb END) req
             WHERE ${legacyNeedsSql("i", "req")} AND NOT EXISTS (
-              SELECT 1 FROM community.media_derivatives d
-              WHERE d.item_id=i.id AND d.variant=req.variant AND d.edit_key=req.edit_key
+              SELECT 1 FROM community.media_renditions d
+              WHERE d.item_id=i.id AND d.role=req.variant AND d.edit_key=req.edit_key AND d.state='ready'
             )
           )
         END AS ready

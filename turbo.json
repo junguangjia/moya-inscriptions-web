@@ -94,6 +94,7 @@
         "WORK_MEDIA_STORE_DIR",
         "WORK_MEDIA_TOOLS_IMAGE",
         "WORK_MEDIA_WORK_DIR",
+        "WORK_MEDIA_WORKER",
         "WORK_MEDIA_WORKER_CONCURRENCY"
       ]
     }

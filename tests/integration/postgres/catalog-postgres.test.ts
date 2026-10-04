@@ -61,24 +61,16 @@ vi.mock(
     };
     return {
       ...actual,
-      openProductionPublishingMedia: vi.fn(
-        async () =>
+      openProductionPublishingStore: vi.fn(
+        () =>
           ({
-            store: {
-              writeStream: refuseMediaIo,
-              openRead: refuseMediaIo,
-              remove: refuseMediaIo,
-              listBlobs: refuseMediaIo,
-              sweepStaging: refuseMediaIo,
-            },
-            runner: {
-              createJob: refuseMediaIo,
-              run: refuseMediaIo,
-              sweepJobs: refuseMediaIo,
-            },
-            processor: { process: refuseMediaIo },
-          }) satisfies Awaited<
-            ReturnType<typeof actual.openProductionPublishingMedia>
+            writeStream: refuseMediaIo,
+            openRead: refuseMediaIo,
+            remove: refuseMediaIo,
+            listBlobs: refuseMediaIo,
+            sweepStaging: refuseMediaIo,
+          }) as unknown as ReturnType<
+            typeof actual.openProductionPublishingStore
           >,
       ),
     };

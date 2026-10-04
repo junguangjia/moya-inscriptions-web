@@ -49,6 +49,26 @@ const OWNER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 /** Longest margin before lease expiry at which an unrenewed job is aborted. */
 const MAX_LEASE_SAFETY_MS = 30_000;
 
+/** Which built-in maintenance steps a worker runs (all of them by default). */
+export interface PublishingWorkerMaintenanceSteps {
+  /** Requeue expired leases (every kind; idempotent across processes). */
+  readonly requeue?: boolean;
+  /** Schedule cleanup jobs, including `expire_session`. */
+  readonly cleanup?: boolean;
+  /** Enqueue the `sweep_staging` job. */
+  readonly sweep?: boolean;
+  /** Enqueue the store-wide `reconcile_capacity` job. */
+  readonly reconcile?: boolean;
+}
+
+/** An additional periodic step of the maintenance pass (for example the Catalog sync). */
+export interface PublishingWorkerExtraStep {
+  /** Content-free label used in failure logs. */
+  readonly label: string;
+  readonly intervalMs: number;
+  run(now: Date): Promise<unknown>;
+}
+
 export interface PublishingWorkerOptions {
   readonly port: PublishingWorkerPort;
   readonly handlers: PublishingJobHandlers;
@@ -64,10 +84,13 @@ export interface PublishingWorkerOptions {
   readonly kinds?: readonly PublishingWorkerJobKind[];
   /**
    * Run the periodic queue maintenance (lease requeue, cleanup scheduling,
-   * sweep and reconciliation enqueueing). Default true; a worker that shares
-   * its queue with another maintaining worker may turn it off.
+   * sweep and reconciliation enqueueing). Default true (every step); an
+   * object selects steps, and a worker that shares its queue with another
+   * maintaining worker may turn it off.
    */
-  readonly maintenance?: boolean;
+  readonly maintenance?: boolean | PublishingWorkerMaintenanceSteps;
+  /** Additional periodic steps, run after the built-in ones. */
+  readonly extraMaintenance?: readonly PublishingWorkerExtraStep[];
   readonly clock?: () => Date;
   readonly timers?: PublishingWorkerTimers;
   readonly logger?: PublishingWorkerLogger;
@@ -186,7 +209,11 @@ export class PublishingWorker {
   private readonly concurrency: number;
   private readonly owner: string;
   private readonly kinds: readonly PublishingWorkerJobKind[] | undefined;
-  private readonly maintenance: boolean;
+  private readonly steps: Required<PublishingWorkerMaintenanceSteps>;
+  private readonly extraSteps: readonly {
+    readonly step: PublishingWorkerExtraStep;
+    nextAt: number;
+  }[];
   private readonly clock: () => Date;
   private readonly timers: PublishingWorkerTimers;
   private readonly logger: PublishingWorkerLogger;
@@ -234,7 +261,22 @@ export class PublishingWorker {
       throw new Error("Publishing worker owner label is invalid");
     }
     this.kinds = options.kinds ? [...options.kinds] : undefined;
-    this.maintenance = options.maintenance ?? true;
+    const maintenance = options.maintenance ?? true;
+    const all = maintenance === true;
+    const selected = typeof maintenance === "object" ? maintenance : {};
+    this.steps = {
+      requeue: all || selected.requeue === true,
+      cleanup: all || selected.cleanup === true,
+      sweep: all || selected.sweep === true,
+      reconcile: all || selected.reconcile === true,
+    };
+    this.extraSteps = (options.extraMaintenance ?? []).map((step) => {
+      positive(step.intervalMs, step.intervalMs, "maintenance step interval");
+      if (!/^[a-z][a-z0-9 _-]{0,63}$/.test(step.label)) {
+        throw new Error("Publishing worker maintenance step label is invalid");
+      }
+      return { step, nextAt: 0 };
+    });
     this.clock = options.clock ?? (() => new Date());
     this.timers = options.timers ?? defaultPublishingWorkerTimers;
     this.logger = options.logger ?? console;
@@ -415,7 +457,7 @@ export class PublishingWorker {
 
   private async tick(): Promise<void> {
     let healthy = true;
-    if (this.maintenance) {
+    if (Object.values(this.steps).some(Boolean) || this.extraSteps.length > 0) {
       try {
         await this.maintain();
       } catch {
@@ -487,48 +529,65 @@ export class PublishingWorker {
         this.logFailureOnce(`[publishing-worker] ${label} failed`);
       }
     };
-    await step(
-      this.nextRequeueAt,
-      this.requeueIntervalMs,
-      () => this.port.requeueExpiredJobs(now, this.maintenanceLimit),
-      (next) => (this.nextRequeueAt = next),
-      "lease requeue",
-    );
-    await step(
-      this.nextCleanupAt,
-      this.cleanupIntervalMs,
-      () => this.port.scheduleCleanup(now, this.maintenanceLimit),
-      (next) => (this.nextCleanupAt = next),
-      "cleanup scheduling",
-    );
-    await step(
-      this.nextSweepAt,
-      this.sweepIntervalMs,
-      () =>
-        this.port.enqueueJob(
-          {
-            kind: "sweep_staging",
-            subjectId: PUBLISHING_STAGING_SWEEP_SUBJECT,
-          },
-          now,
-        ),
-      (next) => (this.nextSweepAt = next),
-      "staging sweep scheduling",
-    );
-    await step(
-      this.nextReconcileAt,
-      this.reconcileIntervalMs,
-      () =>
-        this.port.enqueueJob(
-          {
-            kind: "reconcile_capacity",
-            subjectId: PUBLISHING_STORE_RECONCILE_SUBJECT,
-          },
-          now,
-        ),
-      (next) => (this.nextReconcileAt = next),
-      "store reconciliation scheduling",
-    );
+    if (this.steps.requeue) {
+      await step(
+        this.nextRequeueAt,
+        this.requeueIntervalMs,
+        () => this.port.requeueExpiredJobs(now, this.maintenanceLimit),
+        (next) => (this.nextRequeueAt = next),
+        "lease requeue",
+      );
+    }
+    if (this.steps.cleanup) {
+      await step(
+        this.nextCleanupAt,
+        this.cleanupIntervalMs,
+        () => this.port.scheduleCleanup(now, this.maintenanceLimit),
+        (next) => (this.nextCleanupAt = next),
+        "cleanup scheduling",
+      );
+    }
+    if (this.steps.sweep) {
+      await step(
+        this.nextSweepAt,
+        this.sweepIntervalMs,
+        () =>
+          this.port.enqueueJob(
+            {
+              kind: "sweep_staging",
+              subjectId: PUBLISHING_STAGING_SWEEP_SUBJECT,
+            },
+            now,
+          ),
+        (next) => (this.nextSweepAt = next),
+        "staging sweep scheduling",
+      );
+    }
+    if (this.steps.reconcile) {
+      await step(
+        this.nextReconcileAt,
+        this.reconcileIntervalMs,
+        () =>
+          this.port.enqueueJob(
+            {
+              kind: "reconcile_capacity",
+              subjectId: PUBLISHING_STORE_RECONCILE_SUBJECT,
+            },
+            now,
+          ),
+        (next) => (this.nextReconcileAt = next),
+        "store reconciliation scheduling",
+      );
+    }
+    for (const extra of this.extraSteps) {
+      await step(
+        extra.nextAt,
+        extra.step.intervalMs,
+        () => extra.step.run(now),
+        (next) => (extra.nextAt = next),
+        extra.step.label,
+      );
+    }
     if (failure) throw new Error("maintenance failed");
   }
 

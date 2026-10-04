@@ -257,6 +257,11 @@ export const publishingJobIdSchema = z
 /** Media blob ids are operator-visible job subjects only; never public. */
 export const mediaBlobIdSchema = z.string().regex(/^media-blob-[0-9a-f]{32}$/u);
 
+/**
+ * Every durable job kind: the one definition. The PostgreSQL CHECK
+ * `publishing_jobs_kind_valid` restates this list in each migration that
+ * changes it, and an integration test compares both.
+ */
 export const publishingJobKindSchema = z.enum([
   "process_item",
   "derive_edit",
@@ -266,6 +271,7 @@ export const publishingJobKindSchema = z.enum([
   "purge_trashed_work",
   "sweep_staging",
   "reconcile_capacity",
+  "catalog_render",
 ]);
 
 export const publishingJobStateSchema = z.enum([

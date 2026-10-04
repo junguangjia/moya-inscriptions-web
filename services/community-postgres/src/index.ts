@@ -29,6 +29,19 @@ export { PostgresAuthorCommunityAdapter } from "./author-adapter.js";
 export { PostgresCommunityDiscoveryAdapter } from "./discovery-adapter.js";
 export { PostgresCommunityContentOperatorAdapter } from "./content-operator-adapter.js";
 export { PostgresWorkPublishingAdapter } from "./work-publishing-adapter.js";
+// unified-media-pipeline-v1: the recorded form of rendition recipe
+// identities (the registry itself lives with the processor) and the D7 hold.
+export {
+  ADOPTED_DERIVATIVE_ROLES,
+  RECIPE_DIGEST_PATTERN,
+  RENDITION_ROLES,
+  isRenditionRole,
+} from "./publishing/recipe-identity.js";
+export type {
+  RecipeIdentity,
+  RenditionRole,
+} from "./publishing/recipe-identity.js";
+export { USER_PURGE_HOLDS_PRE_TASK_BLOBS } from "./publishing/renditions.js";
 export { PostgresPublishingOperatorAdapter } from "./publishing-operator-adapter.js";
 export { PostgresAgentAdministrationAdapter } from "./agent-administration-adapter.js";
 export {

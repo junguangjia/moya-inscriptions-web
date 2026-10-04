@@ -62,25 +62,57 @@ export type {
   MotionDerivativeFile,
   MotionProbe,
 } from "./live-processor.js";
-export { createPublishingMediaProcessor } from "./media-processor.js";
+export {
+  createPublishingMediaProcessor,
+  plannedStillRequests,
+  probeSandboxOutputs,
+  validateSandboxManifest,
+} from "./media-processor.js";
 export type {
   ProcessorDerivative,
   ProcessorInput,
+  ProcessorLogger,
   ProcessorMediaStore,
   ProcessorMode,
   ProcessorOutcome,
   ProcessorPairing,
+  ProcessorRenditionRole,
   PublishingMediaProcessorOptions,
 } from "./media-processor.js";
+export { probeMp4, probeWebp } from "./output-probe.js";
+export type { WebpProbe } from "./output-probe.js";
 export {
-  CONTAINER_INPUT_DIRECTORY,
-  CONTAINER_OUTPUT_DIRECTORY,
-  CONTAINER_TIMEOUT_ENTRYPOINT,
+  LONG_SCROLL_ASPECT_RATIO,
+  MAX_OUTPUT_EDGE,
+  RECIPE_DIGESTS_V1,
+  RECIPE_PARAMETERS_V1,
+  RENDITION_ROLES,
+  STILL_INPUT_LIMITS,
+  STILL_PIPELINE_V1,
+  STILL_ROLES,
+  canonicalRecipeJson,
+  currentRecipe,
+  editRegion,
+  expectedStillSize,
+  isCurrentRecipe,
+  isRenditionRole,
+  isStillRole,
+  plannedStillSize,
+  recipeDigest,
+  recipeFraming,
+  recipeQuality,
+  renditionRegion,
+  stillOutputSize,
+} from "./recipes.js";
+export type {
+  FrameSize,
+  RecipeIdentity,
+  RenditionRole,
+  StillRole,
+} from "./recipes.js";
+export {
   MediaToolError,
-  acceptToolOutput,
-  buildDockerRunArguments,
-  containerTimeoutSeconds,
-  createMediaToolsRunner,
+  assertToolOutput,
   ffmpegColorFilters,
   ffmpegMotionArguments,
   ffmpegMotionDerivative,
@@ -90,14 +122,8 @@ export {
 export type {
   MediaTool,
   MediaToolFailure,
-  MediaToolJob,
-  MediaToolProcess,
   MediaToolRunOptions,
-  MediaToolRunResult,
-  MediaToolSpawn,
-  MediaToolSpawnOptions,
-  MediaToolsRunner,
-  MediaToolsRunnerOptions,
+  MediaToolRunner,
   MotionColor,
   MotionSource,
 } from "./media-tools.js";
@@ -125,13 +151,13 @@ export {
 export type { MediaSignature, SniffedMediaType } from "./signature.js";
 export {
   inspectStaticSource,
+  placeholderColour,
   renderStaticDerivative,
-  staticDerivativeSize,
-  staticEditRegion,
 } from "./static-processor.js";
 export type {
   StaticDerivative,
   StaticInspection,
+  StaticInspectionLimits,
   StaticSource,
 } from "./static-processor.js";
 export {

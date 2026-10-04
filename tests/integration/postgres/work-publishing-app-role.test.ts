@@ -786,6 +786,110 @@ describe.each(["clean", "phase4-upgrade", "legacy-grants-upgrade"] as const)(
       expect(await publishing.completeJob(claim, now)).toBe(true);
       await publishing.scheduleCleanup(now, 10);
       await publishing.reconcileCapacity(actor, now);
+      // unified-media-pipeline-v1: item renditions (record, supersede,
+      // placeholder colour) and the Catalog asset store run as the App role.
+      const renditionKey = () => {
+        const key = randomBytes(16).toString("hex");
+        return `blobs/${key.slice(0, 2)}/${key.slice(2, 4)}/${key}`;
+      };
+      const renditionItem = opaque("media-item");
+      await setup.query(
+        "INSERT INTO community.media_items(id,owner_id,kind,quality_mode,source,state,presentation) VALUES($1,$2,'static','standard','upload','ready','{\"width\":4,\"height\":3}'::jsonb)",
+        [renditionItem, actor],
+      );
+      for (const recipeVersion of [1, 2])
+        expect(
+          await publishing.recordDerivatives(
+            renditionItem,
+            {
+              status: "derived",
+              derivatives: [
+                {
+                  storageKey: renditionKey(),
+                  byteSize: 10,
+                  sha256: "e".repeat(64),
+                  variant: "viewer",
+                  editKey: "base",
+                  contentType: "image/webp",
+                  width: 4,
+                  height: 3,
+                  durationMs: null,
+                  recipeVersion,
+                  recipeDigest: "0123456789abcdef",
+                },
+              ],
+              placeholderColor: "#102030",
+            },
+            now,
+          ),
+        ).toEqual({ status: "recorded" });
+      const catalogSha = "c".repeat(64);
+      const catalogSource = {
+        mediaId: `media_${suffix}`,
+        objectKey: `display/v1/media_${"d".repeat(32)}/${catalogSha}.webp`,
+        width: 4,
+        height: 3,
+      };
+      const otherSource = {
+        mediaId: `media_${suffix}_other`,
+        objectKey: `display/v1/media_${"d".repeat(32)}/${"f".repeat(64)}.webp`,
+        width: 4,
+        height: 3,
+      };
+      expect(
+        await publishing.syncCatalogAssets([catalogSource, otherSource], now, {
+          limit: 5,
+          renditions: [],
+        }),
+      ).toMatchObject({ created: 2, enqueued: 2 });
+      const assetOf = async (mediaId: string) =>
+        (
+          await app.query<{ id: string }>(
+            "SELECT id FROM community.catalog_media_assets WHERE media_id=$1",
+            [mediaId],
+          )
+        ).rows[0]!.id;
+      const catalogAsset = await assetOf(catalogSource.mediaId);
+      expect(
+        await publishing.readCatalogRenderPlan(catalogAsset),
+      ).toMatchObject({ sourceSha256: catalogSha, state: "pending" });
+      for (const recipeVersion of [1, 2])
+        expect(
+          await publishing.recordCatalogRenditions(
+            catalogAsset,
+            {
+              masterSha256: catalogSha,
+              masterWidth: 4,
+              masterHeight: 3,
+              placeholderColor: null,
+              renditions: [
+                {
+                  storageKey: renditionKey(),
+                  byteSize: 10,
+                  sha256: "e".repeat(64),
+                  role: "thumb",
+                  recipeVersion,
+                  recipeDigest: "0123456789abcdef",
+                  contentType: "image/webp",
+                  width: 4,
+                  height: 3,
+                },
+              ],
+            },
+            now,
+          ),
+        ).toEqual({ status: "recorded" });
+      await publishing.failCatalogAsset(
+        await assetOf(otherSource.mediaId),
+        "source_unreadable",
+        now,
+      );
+      expect(
+        await publishing.syncCatalogAssets([], now, {
+          limit: 5,
+          renditions: [],
+        }),
+      ).toMatchObject({ unreferenced: 2 });
       if (kind === "phase4-upgrade") {
         expect((await authors.readWork(legacy, other)).title).toBe(
           "升级前作品",

@@ -1,16 +1,11 @@
 import { EventEmitter } from "node:events";
 import {
   chmod,
-  lstat,
   mkdir,
   mkdtemp,
-  readFile,
   readdir,
-  realpath,
   rm,
-  stat,
   symlink,
-  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,6 +14,7 @@ import { PassThrough } from "node:stream";
 import { crc32, deflateSync } from "node:zlib";
 
 import { cosFixture } from "./publishing-cos-fixture.js";
+import { inProcessSandbox } from "./publishing-sandbox-fixture.js";
 
 import { FilesystemPublishingMediaStore } from "@moya/backend-production/internal/publishing-media-store";
 import {
@@ -28,8 +24,8 @@ import {
   MediaRejectedError,
   MediaToolError,
   contentIdentifierSha256,
-  createMediaToolsRunner,
   createPublishingMediaProcessor,
+  editRegion,
   ffmpegColorFilters,
   ffmpegEditFilters,
   ffmpegMotionArguments,
@@ -41,10 +37,13 @@ import {
   parseEdit,
   pixelRegion,
   renderStaticDerivative,
-  staticDerivativeSize,
-  staticEditRegion,
   validateMotionProbe,
 } from "@moya/backend-production/internal/publishing-processing";
+import {
+  createLocalToolRunner,
+  createSandboxRunner,
+  defaultSandboxAppDist,
+} from "@moya/backend-production/internal/publishing-sandbox";
 import {
   mediaFailureCodeSchema,
   mediaPresentationSchema,
@@ -60,13 +59,15 @@ import type {
 } from "@moya/api";
 import type {
   MediaFailureCode,
+  MediaToolRunner,
   ProcessorInput,
-  MediaToolProcess,
-  MediaToolSpawn,
-  MediaToolSpawnOptions,
-  MediaToolsRunner,
   MotionColor,
 } from "@moya/backend-production/internal/publishing-processing";
+import type {
+  LocalToolProcess,
+  LocalToolSpawn,
+  LocalToolSpawnOptions,
+} from "@moya/backend-production/internal/publishing-sandbox";
 import type { MediaFailureCode as ContractMediaFailureCode } from "@moya/contracts";
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -77,7 +78,7 @@ const failureCodesMatchContracts: Same<
 > &
   Same<PublishingMediaFailureCode, ContractMediaFailureCode> = true;
 
-const IMAGE = "yoyi-work-publishing-media-tools:v1";
+const IMAGE = "yoyi-work-publishing-media-tools:v2";
 let base: string;
 let work: string;
 let storeRoot: string;
@@ -96,107 +97,49 @@ afterEach(async () => {
   await rm(base, { recursive: true, force: true });
 });
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** Injected stand-in for `child_process.spawn`; Docker is never required. */
-class FakeProcess extends EventEmitter {
+/** Injected stand-in for `child_process.spawn` of an in-sandbox tool. */
+class FakeToolProcess extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly signals: string[] = [];
-  onKill: ((signal: string) => void) | null = null;
 
   kill(signal: NodeJS.Signals = "SIGTERM") {
     this.signals.push(signal);
-    this.onKill?.(signal);
+    if (signal === "SIGKILL") this.exit(null);
     return true;
   }
 
   exit(code: number | null) {
+    if (this.stdout.writableEnded) return;
     this.stdout.end();
     this.stderr.end();
     setImmediate(() => this.emit("close", code, null));
   }
 }
 
-interface SpawnCall {
+interface ToolCall {
   readonly command: string;
   readonly args: string[];
-  readonly options: MediaToolSpawnOptions;
-  readonly process: FakeProcess;
+  readonly options: LocalToolSpawnOptions;
+  readonly process: FakeToolProcess;
 }
 
-interface RunView {
-  readonly tool: string;
-  readonly toolArgs: string[];
-  readonly containerName: string;
-  readonly inputDirectory: string;
-  /** This run's writable mount, or null when it has none. */
-  readonly outputDirectory: string | null;
-  readonly process: FakeProcess;
-}
-
-const mountSource = (args: readonly string[], target: string) => {
-  const mount = args.find(
-    (arg) => arg.startsWith("type=bind,") && arg.includes(`,target=${target}`),
-  );
-  return mount
-    ? mount.slice("type=bind,source=".length, mount.indexOf(",target="))
-    : null;
-};
-
-const fakeDocker = (
-  onRun: (run: RunView) => void,
-  options: { ignoreKill?: boolean; throwOnSpawn?: boolean } = {},
+/** A fake `spawn` for the in-sandbox tool runner. */
+const fakeToolSpawn = (
+  onRun: (call: ToolCall) => void | Promise<void>,
+  options: { throwOnSpawn?: boolean } = {},
 ) => {
-  const calls: SpawnCall[] = [];
-  const running = new Map<string, FakeProcess>();
-  const spawn: MediaToolSpawn = (command, args, spawnOptions) => {
+  const calls: ToolCall[] = [];
+  const spawn: LocalToolSpawn = (command, args, spawnOptions) => {
     if (options.throwOnSpawn) throw new Error("spawn EACCES");
-    const child = new FakeProcess();
-    calls.push({ command, args, options: spawnOptions, process: child });
-    setImmediate(() => {
-      if (args[0] === "run") {
-        const name = args[args.indexOf("--name") + 1]!;
-        const imageIndex = args.indexOf(IMAGE);
-        running.set(name, child);
-        onRun({
-          tool: args[imageIndex + 3]!,
-          toolArgs: args.slice(imageIndex + 4),
-          containerName: name,
-          inputDirectory: mountSource(args, "/job/in")!,
-          outputDirectory: mountSource(args, "/job/out"),
-          process: child,
-        });
-      } else if (args[0] === "kill") {
-        const target = running.get(args[1]!);
-        if (target && !options.ignoreKill) target.exit(137);
-        child.exit(0);
-      } else {
-        child.exit(0);
-      }
-    });
-    return child as unknown as MediaToolProcess;
+    const child = new FakeToolProcess();
+    const call = { command, args, options: spawnOptions, process: child };
+    calls.push(call);
+    setImmediate(() => void onRun(call));
+    return child as unknown as LocalToolProcess;
   };
   return { spawn, calls };
 };
-
-const runner = (
-  spawn: MediaToolSpawn,
-  extra: {
-    killGraceMs?: number;
-    environment?: Readonly<Record<string, string>>;
-  } = {},
-) =>
-  createMediaToolsRunner({
-    image: IMAGE,
-    workDirectory: work,
-    spawn,
-    temporaryRoots: [],
-    environment: extra.environment ?? { PATH: "/usr/bin" },
-    ...(extra.killGraceMs === undefined
-      ? {}
-      : { killGraceMs: extra.killGraceMs }),
-  });
 
 const toolFailure = async (run: () => Promise<unknown>) => {
   try {
@@ -218,212 +161,79 @@ const rejection = async (run: () => Promise<unknown>) => {
   throw new Error("expected a rejection");
 };
 
-describe("publishing media tools runner", () => {
-  it("validates the image reference and the work directory", async () => {
-    const { spawn } = fakeDocker(() => undefined);
-    for (const image of ["--privileged", "Bad Image", "evil;rm", ""]) {
-      await expect(
-        createMediaToolsRunner({
-          image,
-          workDirectory: work,
-          spawn,
-          temporaryRoots: [],
-        }),
-      ).rejects.toThrow("image reference");
-    }
-    await expect(
-      createMediaToolsRunner({
-        image: IMAGE,
-        workDirectory: work,
-        spawn,
-        temporaryRoots: [base],
-      }),
-    ).rejects.toThrow("temporary storage");
-    await chmod(work, 0o755);
-    await expect(
-      createMediaToolsRunner({
-        image: IMAGE,
-        workDirectory: work,
-        spawn,
-        temporaryRoots: [],
-      }),
-    ).rejects.toThrow("owner-only");
-  });
-
-  it("creates a private job directory with a read-only, host-written input", async () => {
-    const tools = await runner(fakeDocker(() => undefined).spawn);
-    const job = await tools.createJob();
-    const root = path.dirname(job.inputDirectory);
-    expect(path.dirname(root)).toBe(await realpath(work));
-    expect((await stat(root)).mode & 0o777).toBe(0o700);
-    expect((await stat(job.inputDirectory)).mode & 0o777).toBe(0o755);
-    expect(await readdir(root)).toEqual(["in"]);
-    expect(() => job.inputPath("../escape")).toThrow("file name");
-    expect(() => job.inputPath("a/b")).toThrow("file name");
-    await job.dispose();
-    await expect(lstat(root)).rejects.toThrow();
-  });
-
-  it("spawns docker with an argument array, exact sandbox flags, a fresh output mount and a filtered environment", async () => {
-    const { spawn, calls } = fakeDocker(async (run) => {
-      await writeFile(path.join(run.outputDirectory!, "still.png"), "png");
-      run.process.exit(0);
+describe("publishing in-sandbox tool runner", () => {
+  it("spawns the tool by absolute path with an argument array, no shell and an empty environment", async () => {
+    const { spawn, calls } = fakeToolSpawn(async (call) => {
+      await writeFile(call.args.at(-1)!, "png");
+      call.process.exit(0);
     });
-    const tools = await runner(spawn, {
-      environment: {
-        PATH: "/usr/bin",
-        HOME: "/home/media",
-        DOCKER_HOST: "unix:///run/docker.sock",
-        APP_DATABASE_URL: "postgres://synthetic-secret",
-        COS_SECRET_KEY: "synthetic-secret",
-      },
-    });
-    const job = await tools.createJob();
-    const output = await heifDecodeToPng(tools, job, "still");
-    expect(output).toEqual({ path: job.inputPath("still.png"), byteSize: 3 });
-    expect(await readFile(output.path, "utf8")).toBe("png");
-    expect(calls).toHaveLength(1);
-    const [call] = calls;
-    const name = call!.args[call!.args.indexOf("--name") + 1]!;
-    expect(name).toMatch(/^yoyi-wp-media-[0-9a-f]{24}$/);
-    const outputDirectory = mountSource(call!.args, "/job/out")!;
-    expect(path.dirname(outputDirectory)).toBe(
-      path.dirname(job.inputDirectory),
+    const tools = createLocalToolRunner({ spawn });
+    const decoded = await heifDecodeToPng(
+      tools,
+      path.join(base, "still"),
+      work,
     );
-    expect(path.basename(outputDirectory)).toMatch(/^out-[0-9a-f]{16}$/);
-    // The run's output directory is gone once its file was accepted.
-    await expect(lstat(outputDirectory)).rejects.toThrow();
-    expect(call!.command).toBe("docker");
-    expect(call!.args).toEqual([
-      "run",
-      "--rm",
-      "--pull",
-      "never",
-      "--name",
-      name,
-      "--network",
-      "none",
-      "--read-only",
-      "--tmpfs",
-      "/tmp:rw,size=512m",
-      "--memory",
-      "1536m",
-      "--cpus",
-      "2",
-      "--pids-limit",
-      "256",
-      "--security-opt",
-      "no-new-privileges",
-      "--cap-drop",
-      "ALL",
-      "--user",
-      "10001:10001",
-      "--mount",
-      `type=bind,source=${job.inputDirectory},target=/job/in,readonly`,
-      "--mount",
-      `type=bind,source=${outputDirectory},target=/job/out`,
-      "--workdir",
-      "/tmp",
-      "--entrypoint",
-      "/usr/bin/timeout",
-      IMAGE,
-      "--signal=KILL",
-      "70s",
-      "heif-dec",
+    expect(decoded.byteSize).toBe(3);
+    // A fresh directory per decode, below the scratch directory.
+    expect(path.dirname(path.dirname(decoded.path))).toBe(work);
+    expect(path.basename(decoded.path)).toBe("still.png");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("/usr/bin/heif-dec");
+    expect(calls[0]!.args).toEqual([
       "--quiet",
-      "/job/in/still",
-      "/job/out/still.png",
+      path.join(base, "still"),
+      decoded.path,
     ]);
-    expect(call!.options).toEqual({
+    expect(calls[0]!.options).toEqual({
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
-      env: {
-        PATH: "/usr/bin",
-        HOME: "/home/media",
-        DOCKER_HOST: "unix:///run/docker.sock",
-      },
+      env: {},
     });
   });
 
-  it("refuses multi-image, symlinked and non-file tool output", async () => {
-    const cases: ((directory: string) => Promise<void>)[] = [
-      async (directory) => {
-        await writeFile(path.join(directory, "still-1.png"), "a");
-        await writeFile(path.join(directory, "still-2.png"), "b");
+  it("refuses multi-image, auxiliary, symlinked, directory and empty decoder output", async () => {
+    const cases: ((target: string) => Promise<void>)[] = [
+      async (target) => {
+        await writeFile(path.join(path.dirname(target), "still-1.png"), "a");
+        await writeFile(path.join(path.dirname(target), "still-2.png"), "b");
       },
-      async (directory) => {
-        await writeFile(path.join(directory, "still.png"), "a");
-        await writeFile(path.join(directory, "still.png-depth.png"), "b");
+      async (target) => {
+        await writeFile(target, "a");
+        await writeFile(`${target}-depth.png`, "b");
       },
-      (directory) => symlink("/etc/hosts", path.join(directory, "still.png")),
-      (directory) => mkdir(path.join(directory, "still.png")),
-      (directory) => writeFile(path.join(directory, "still.png"), ""),
+      (target) => symlink("/etc/hosts", target),
+      (target) => mkdir(target),
+      (target) => writeFile(target, ""),
+      async () => undefined,
     ];
     for (const produce of cases) {
-      const tools = await runner(
-        fakeDocker(async (run) => {
-          await produce(run.outputDirectory!);
-          run.process.exit(0);
+      const tools = createLocalToolRunner({
+        spawn: fakeToolSpawn(async (call) => {
+          await produce(call.args.at(-1)!);
+          call.process.exit(0);
         }).spawn,
-      );
-      const job = await tools.createJob();
+      });
       expect(
-        await toolFailure(() => heifDecodeToPng(tools, job, "still")),
+        await toolFailure(() =>
+          heifDecodeToPng(tools, path.join(base, "still"), work),
+        ),
       ).toEqual(["tool_failed", null]);
-      expect(await readdir(job.inputDirectory)).toEqual([]);
     }
   });
 
-  it("never mounts a writable directory into a later container", async () => {
-    const mounts: { tool: string; output: string | null }[] = [];
-    const { spawn } = fakeDocker(async (run) => {
-      mounts.push({ tool: run.tool, output: run.outputDirectory });
-      if (run.tool === "heif-dec") {
-        const name = path.basename(run.toolArgs.at(-1)!);
-        await writeFile(path.join(run.outputDirectory!, name), "decoded");
-      } else {
-        run.process.stdout.write("{}");
-      }
-      run.process.exit(0);
+  it("runs ffprobe with the pinned demuxer and parses its JSON", async () => {
+    const { spawn, calls } = fakeToolSpawn((call) => {
+      call.process.stdout.write(JSON.stringify({ streams: [], format: {} }));
+      call.process.exit(0);
     });
-    const tools = await runner(spawn);
-    const job = await tools.createJob();
-    const decoded = await heifDecodeToPng(tools, job, "still");
-    expect(await ffprobeJson(tools, job, "still.png")).toEqual({});
-    await heifDecodeToPng(tools, job, "motion");
-    expect(mounts.map((mount) => mount.tool)).toEqual([
-      "heif-dec",
-      "ffprobe",
-      "heif-dec",
-    ]);
-    expect(mounts[1]!.output).toBeNull();
-    expect(mounts[0]!.output).not.toBe(mounts[2]!.output);
-    expect(path.dirname(decoded.path)).toBe(job.inputDirectory);
-    expect(await readFile(decoded.path, "utf8")).toBe("decoded");
-    expect((await lstat(decoded.path)).isFile()).toBe(true);
-    expect(await readdir(path.dirname(job.inputDirectory))).toEqual(["in"]);
-  });
-
-  it("runs ffprobe with the pinned demuxer on a job input without a writable mount", async () => {
-    const { spawn, calls } = fakeDocker((run) => {
-      run.process.stdout.write(JSON.stringify({ streams: [], format: {} }));
-      run.process.exit(0);
-    });
-    const tools = await runner(spawn);
-    const job = await tools.createJob();
-    expect(await ffprobeJson(tools, job, "motion")).toEqual({
+    const tools = createLocalToolRunner({ spawn });
+    expect(await ffprobeJson(tools, "/job/in/motion")).toEqual({
       streams: [],
       format: {},
     });
-    expect(mountSource(calls[0]!.args, "/job/out")).toBeNull();
-    expect(calls[0]!.args.slice(calls[0]!.args.indexOf(IMAGE) - 2)).toEqual([
-      "--entrypoint",
-      "/usr/bin/timeout",
-      IMAGE,
-      "--signal=KILL",
-      "30s",
-      "ffprobe",
+    expect([calls[0]!.command, ...calls[0]!.args]).toEqual([
+      "/usr/bin/ffprobe",
       "-v",
       "error",
       "-f",
@@ -436,171 +246,89 @@ describe("publishing media tools runner", () => {
     ]);
   });
 
-  it("kills the container by name when stdout exceeds its cap and removes it twice", async () => {
-    const { spawn, calls } = fakeDocker((run) => {
-      run.process.stdout.write(Buffer.alloc(1024 * 1024 + 1, 0x7b));
+  it("kills the tool when stdout or stderr exceed their caps", async () => {
+    const flood = fakeToolSpawn((call) => {
+      call.process.stdout.write(Buffer.alloc(1024 * 1024 + 1, 0x7b));
     });
-    const tools = await runner(spawn, { killGraceMs: 10 });
-    const job = await tools.createJob();
-    expect(await toolFailure(() => ffprobeJson(tools, job, "motion"))).toEqual([
-      "output_limit",
-      137,
-    ]);
-    const name = calls[0]!.args[calls[0]!.args.indexOf("--name") + 1]!;
-    await sleep(60);
-    expect(calls.slice(1).map((call) => call.args)).toEqual([
-      ["kill", name],
-      ["rm", "--force", name],
-      ["rm", "--force", name],
-    ]);
+    expect(
+      await toolFailure(() =>
+        ffprobeJson(createLocalToolRunner({ spawn: flood.spawn }), "/x"),
+      ),
+    ).toEqual(["output_limit", null]);
+    expect(flood.calls[0]!.process.signals).toEqual(["SIGKILL"]);
+    const noisy = fakeToolSpawn((call) => {
+      call.process.stderr.write(Buffer.alloc(64 * 1024 + 1, 0x20));
+    });
+    expect(
+      await toolFailure(() =>
+        createLocalToolRunner({ spawn: noisy.spawn }).run("ffmpeg", [], {
+          timeoutMs: 5000,
+        }),
+      ),
+    ).toEqual(["output_limit", null]);
   });
 
-  it("enforces the hard timeout by killing the container, then the CLI after a grace period", async () => {
-    const hanging = fakeDocker(() => undefined);
-    const tools = await runner(hanging.spawn, { killGraceMs: 10 });
-    const job = await tools.createJob();
+  it("kills a tool at its deadline or on abort and classifies exits", async () => {
+    const hanging = fakeToolSpawn(() => undefined);
     const started = Date.now();
     expect(
       await toolFailure(() =>
-        tools.run(job, "ffmpeg", ["-version"], { timeoutMs: 20 }),
-      ),
-    ).toEqual(["timeout", 137]);
-    expect(Date.now() - started).toBeLessThan(2000);
-    const name =
-      hanging.calls[0]!.args[hanging.calls[0]!.args.indexOf("--name") + 1]!;
-    // The container carries its own backstop: host limit + 10 s grace.
-    expect(hanging.calls[0]!.args.slice(-4)).toEqual([
-      "--signal=KILL",
-      "11s",
-      "ffmpeg",
-      "-version",
-    ]);
-    await sleep(60);
-    expect(hanging.calls.slice(1).map((call) => call.args)).toEqual([
-      ["kill", name],
-      ["rm", "--force", name],
-      ["rm", "--force", name],
-    ]);
-
-    const stubborn = fakeDocker(
-      (run) => {
-        run.process.onKill = () => run.process.exit(null);
-      },
-      { ignoreKill: true },
-    );
-    const graceful = await runner(stubborn.spawn, { killGraceMs: 10 });
-    const second = await graceful.createJob();
-    expect(
-      await toolFailure(() =>
-        graceful.run(second, "ffmpeg", ["-version"], { timeoutMs: 10 }),
+        createLocalToolRunner({ spawn: hanging.spawn }).run(
+          "ffmpeg",
+          ["-version"],
+          { timeoutMs: 20 },
+        ),
       ),
     ).toEqual(["timeout", null]);
-    expect(stubborn.calls[0]!.process.signals).toEqual(["SIGKILL"]);
-  });
-
-  it("classifies exit codes, spawn failures and aborts", async () => {
-    const exitWith = (code: number) =>
-      runner(fakeDocker((run) => run.process.exit(code)).spawn);
-    for (const [code, failure] of [
-      [1, "tool_failed"],
-      [137, "tool_failed"],
-      [125, "sandbox_unavailable"],
-      [127, "sandbox_unavailable"],
-    ] as const) {
-      const tools = await exitWith(code);
-      expect(
-        await toolFailure(async () =>
-          tools.run(await tools.createJob(), "ffprobe", [], {
-            timeoutMs: 1000,
-          }),
-        ),
-      ).toEqual([failure, code]);
-    }
-    const throwing = await runner(
-      fakeDocker(() => undefined, { throwOnSpawn: true }).spawn,
-    );
-    expect(
-      await toolFailure(async () =>
-        throwing.run(await throwing.createJob(), "ffprobe", [], {
-          timeoutMs: 1000,
-        }),
-      ),
-    ).toEqual(["spawn_failed", null]);
-    const erroring = await runner(
-      fakeDocker((run) => run.process.emit("error", new Error("ENOENT"))).spawn,
-    );
-    expect(
-      await toolFailure(async () =>
-        erroring.run(await erroring.createJob(), "ffprobe", [], {
-          timeoutMs: 1000,
-        }),
-      ),
-    ).toEqual(["spawn_failed", null]);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(hanging.calls[0]!.process.signals).toEqual(["SIGKILL"]);
     const controller = new AbortController();
-    const aborting = await runner(fakeDocker(() => controller.abort()).spawn);
+    const aborting = fakeToolSpawn(() => controller.abort());
     expect(
-      await toolFailure(async () =>
-        aborting.run(await aborting.createJob(), "ffmpeg", [], {
+      await toolFailure(() =>
+        createLocalToolRunner({ spawn: aborting.spawn }).run("ffmpeg", [], {
           timeoutMs: 5000,
           signal: controller.signal,
         }),
       ),
-    ).toEqual(["aborted", 137]);
-  });
-
-  it("rejects unknown tools, unsafe arguments and foreign or disposed jobs without spawning", async () => {
-    const { spawn, calls } = fakeDocker(() => undefined);
-    const tools = await runner(spawn);
-    const job = await tools.createJob();
-    const other = await (await runner(spawn)).createJob();
-    const bad = [
-      () => tools.run(job, "sh" as "ffmpeg", ["-c", "id"], { timeoutMs: 1000 }),
-      () => tools.run(job, "ffmpeg", ["a\0b"], { timeoutMs: 1000 }),
-      () => tools.run(job, "ffmpeg", [], { timeoutMs: 0 }),
-      () =>
-        tools.run(
-          { ...job, inputDirectory: "/elsewhere/job-x/in" },
-          "ffmpeg",
-          [],
-          { timeoutMs: 1000 },
-        ),
-      () => tools.run(other, "ffmpeg", [], { timeoutMs: 1000 }),
-    ];
-    for (const run of bad)
-      await expect(run()).rejects.toThrow("Invalid media tool invocation");
-    await job.dispose();
-    await expect(
-      tools.run(job, "ffmpeg", [], { timeoutMs: 1000 }),
-    ).rejects.toThrow("Invalid media tool invocation");
-    expect(calls).toEqual([]);
-  });
-
-  it("sweeps stale leftover job directories but never an active job, and runs touch their job", async () => {
-    const tools = await runner(fakeDocker((run) => run.process.exit(0)).spawn);
-    const active = await tools.createJob();
-    const activeRoot = path.dirname(active.inputDirectory);
-    const leftover = path.join(work, `job-${"c".repeat(32)}`);
-    const freshLeftover = path.join(work, `job-${"d".repeat(32)}`);
-    await mkdir(leftover);
-    await mkdir(freshLeftover);
-    await writeFile(path.join(work, "keep.txt"), "x");
-    const old = new Date(Date.now() - 3 * 3600_000);
-    await utimes(leftover, old, old);
-    await utimes(activeRoot, old, old);
-    expect(await tools.sweepJobs(new Date(Date.now() - 3600_000))).toEqual({
-      removed: 1,
+    ).toEqual(["aborted", null]);
+    const failing = fakeToolSpawn((call) => call.process.exit(1));
+    expect(
+      await toolFailure(() =>
+        createLocalToolRunner({ spawn: failing.spawn }).run("ffprobe", [], {
+          timeoutMs: 1000,
+        }),
+      ),
+    ).toEqual(["tool_failed", 1]);
+    expect(
+      await toolFailure(() =>
+        createLocalToolRunner({
+          spawn: fakeToolSpawn(() => undefined, { throwOnSpawn: true }).spawn,
+        }).run("ffprobe", [], { timeoutMs: 1000 }),
+      ),
+    ).toEqual(["spawn_failed", null]);
+    const erroring = fakeToolSpawn((call) => {
+      call.process.emit("error", new Error("ENOENT"));
     });
-    expect((await readdir(work)).sort()).toEqual(
-      [
-        path.basename(activeRoot),
-        path.basename(freshLeftover),
-        "keep.txt",
-      ].sort(),
-    );
-    await tools.run(active, "ffprobe", [], { timeoutMs: 1000 });
-    expect((await stat(activeRoot)).mtimeMs).toBeGreaterThan(
-      Date.now() - 60_000,
-    );
+    expect(
+      await toolFailure(() =>
+        createLocalToolRunner({ spawn: erroring.spawn }).run("ffprobe", [], {
+          timeoutMs: 1000,
+        }),
+      ),
+    ).toEqual(["spawn_failed", null]);
+  });
+
+  it("rejects unknown tools and unsafe arguments without spawning", async () => {
+    const { spawn, calls } = fakeToolSpawn(() => undefined);
+    const tools = createLocalToolRunner({ spawn });
+    for (const run of [
+      () => tools.run("sh" as "ffmpeg", ["-c", "id"], { timeoutMs: 1000 }),
+      () => tools.run("ffmpeg", ["a\0b"], { timeoutMs: 1000 }),
+      () => tools.run("ffmpeg", [], { timeoutMs: 0 }),
+    ])
+      await expect(run()).rejects.toThrow("Invalid media tool invocation");
+    expect(calls).toEqual([]);
   });
 });
 
@@ -616,8 +344,8 @@ const SDR_709: MotionColor = {
 describe("publishing motion derivative arguments", () => {
   it("bakes rotation, crops in exact pixels, strips metadata and tags BT.709", () => {
     const args = ffmpegMotionArguments(
-      "motion",
-      "motion-output.mp4",
+      "/job/in/motion",
+      "/job/out/motion.mp4",
       { rotation: 90, crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.25 } },
       { width: 1440, height: 1920, color: SDR_709 },
     );
@@ -669,7 +397,7 @@ describe("publishing motion derivative arguments", () => {
       "+faststart",
       "-f",
       "mp4",
-      "/job/out/motion-output.mp4",
+      "/job/out/motion.mp4",
     ]);
     expect(args).not.toContain("-noautorotate");
     expect(MOTION_DERIVATIVE.maxLongEdge).toBe(1920);
@@ -955,7 +683,7 @@ describe("publishing edits", () => {
       height: 1,
     });
     expect(
-      staticEditRegion(
+      editRegion(
         { width: 2000, height: 1000 },
         { rotation: 90, crop: { x: 0, y: 0.5, width: 1, height: 0.5 } },
         { x: 0.5, y: 0, width: 0.5, height: 1 },
@@ -989,7 +717,7 @@ describe("publishing edits", () => {
       [1441, 1921],
       [1000, 999],
     ] as const) {
-      const still = staticEditRegion(
+      const still = editRegion(
         { width, height },
         { rotation: 0, crop },
         null,
@@ -1001,7 +729,7 @@ describe("publishing edits", () => {
         `crop=w=${still.width}:h=${still.height}:x=${still.left}:y=${still.top}:exact=1`,
       );
     }
-    const rotatedStill = staticEditRegion(
+    const rotatedStill = editRegion(
       { width: 1440, height: 1920 },
       { rotation: 270, crop },
       null,
@@ -1023,54 +751,6 @@ describe("publishing edits", () => {
         1920,
       )[0],
     ).toBe("crop=w=2:h=100:x=98:y=0:exact=1");
-  });
-
-  it("sizes derivatives without upscaling and keeps long scrolls legible", () => {
-    expect(staticDerivativeSize("thumb", 4032, 3024)).toEqual({
-      width: 480,
-      height: 360,
-    });
-    expect(staticDerivativeSize("display", 800, 600)).toEqual({
-      width: 800,
-      height: 600,
-    });
-    expect(staticDerivativeSize("full", 12000, 9000)).toEqual({
-      width: 8192,
-      height: 6144,
-    });
-    expect(staticDerivativeSize("full", 1200, 16000)).toEqual({
-      width: 1200,
-      height: 16000,
-    });
-    expect(staticDerivativeSize("full", 4000, 20000)).toEqual({
-      width: 2828,
-      height: 14142,
-    });
-    expect(staticDerivativeSize("cover", 1200, 16000)).toEqual({
-      width: 81,
-      height: 1080,
-    });
-    expect(staticDerivativeSize("full", 6000, 16000)).toEqual({
-      width: 3873,
-      height: 10328,
-    });
-    expect(staticDerivativeSize("display", 1200, 16000)).toEqual({
-      width: 1200,
-      height: 16000,
-    });
-    expect(staticDerivativeSize("display", 2000, 16000)).toEqual({
-      width: 1280,
-      height: 10240,
-    });
-    expect(staticDerivativeSize("display", 16000, 2000)).toEqual({
-      width: 10240,
-      height: 1280,
-    });
-    // Aspect 2.33 is not a long scroll: the ordinary 2048 long edge applies.
-    expect(staticDerivativeSize("display", 3000, 7000)).toEqual({
-      width: 878,
-      height: 2048,
-    });
   });
 });
 
@@ -1450,51 +1130,68 @@ const motionProbeJson = (output: boolean) =>
     format: { duration: "2.900000" },
   });
 
-interface SandboxRun {
-  readonly tool: string;
-  readonly output: string | null;
-}
+/** A minimal ISO BMFF file the coordinator's header probe accepts. */
+const syntheticMp4 = () =>
+  concat(
+    box("ftyp", ascii("isom"), u32(0), ascii("isom")),
+    box("mdat", zeros(8)),
+  );
 
-/** Sandbox stand-in: ffprobe prints fixed JSON, heif-dec and ffmpeg write files. */
-const fakeMediaSandbox = (
+/**
+ * In-sandbox tool stand-in: ffprobe prints fixed JSON, heif-dec and FFmpeg
+ * write their output files. Records the tools run in order.
+ */
+const fakeTools = (
   options: {
-    ffmpegExit?: number;
+    ffmpegFailure?: MediaToolError;
     decodedPng?: Buffer;
-    onRun?: (run: RunView) => Promise<void>;
   } = {},
 ) => {
-  const runs: SandboxRun[] = [];
-  const docker = fakeDocker(async (run) => {
-    runs.push({ tool: run.tool, output: run.outputDirectory });
-    await options.onRun?.(run);
-    const target = run.outputDirectory
-      ? path.join(run.outputDirectory, path.basename(run.toolArgs.at(-1)!))
-      : null;
-    if (run.tool === "ffprobe") {
-      const isOutput = run.toolArgs.at(-1) === "/job/in/motion-output.mp4";
-      run.process.stdout.write(motionProbeJson(isOutput));
-      run.process.exit(0);
-    } else if (run.tool === "ffmpeg") {
-      const code = options.ffmpegExit ?? 0;
-      if (code === 0) await writeFile(target!, "synthetic-mp4");
-      run.process.exit(code);
-    } else if (run.tool === "heif-dec" && options.decodedPng) {
-      await writeFile(target!, options.decodedPng);
-      run.process.exit(0);
-    } else {
-      run.process.exit(1);
-    }
-  });
-  return { ...docker, runs };
+  const runs: { tool: string; args: readonly string[] }[] = [];
+  const tools: MediaToolRunner = {
+    async run(tool, args) {
+      runs.push({ tool, args });
+      if (tool === "ffprobe") {
+        return Buffer.from(
+          motionProbeJson(path.basename(args.at(-1)!) === "motion.mp4"),
+        );
+      }
+      if (tool === "ffmpeg") {
+        if (options.ffmpegFailure) throw options.ffmpegFailure;
+        await writeFile(args.at(-1)!, syntheticMp4());
+        return Buffer.alloc(0);
+      }
+      if (tool === "heif-dec" && options.decodedPng) {
+        await writeFile(args.at(-1)!, options.decodedPng);
+        return Buffer.alloc(0);
+      }
+      throw new MediaToolError("tool_failed", 1);
+    },
+  };
+  return { tools, runs };
 };
 
 const OWNER = `user-${"2".repeat(32)}`;
 
 let processorStoreKind: "filesystem" | "cos" = "filesystem";
 
+const silentLogger = { error: () => undefined };
+
+const sandboxRunner = (sandbox: ReturnType<typeof inProcessSandbox>) =>
+  createSandboxRunner({
+    image: IMAGE,
+    workDirectory: work,
+    appDist: defaultSandboxAppDist().appDist,
+    spawn: sandbox.spawn,
+    temporaryRoots: [],
+    environment: { PATH: "/usr/bin" },
+    killGraceMs: 10,
+    logger: silentLogger,
+  });
+
 const setup = async (
-  sandbox: ReturnType<typeof fakeMediaSandbox> = fakeMediaSandbox(),
-  wrap: (tools: MediaToolsRunner) => MediaToolsRunner = (tools) => tools,
+  toolFake: ReturnType<typeof fakeTools> = fakeTools(),
+  sandboxOptions: Parameters<typeof inProcessSandbox>[0] = {},
 ) => {
   const store =
     processorStoreKind === "cos"
@@ -1502,9 +1199,17 @@ const setup = async (
       : await FilesystemPublishingMediaStore.open(storeRoot, {
           temporaryRoots: [],
         });
-  const tools: MediaToolsRunner = wrap(await runner(sandbox.spawn));
+  const sandbox = inProcessSandbox({
+    tools: toolFake.tools,
+    ...sandboxOptions,
+  });
+  const runner = await sandboxRunner(sandbox);
   const processor: PublishingMediaProcessorPort =
-    createPublishingMediaProcessor({ store, runner: tools });
+    createPublishingMediaProcessor({
+      store,
+      sandbox: runner,
+      logger: silentLogger,
+    });
   const put = async (bytes: Buffer) => {
     const written = await store.writeStream(
       OWNER,
@@ -1523,8 +1228,8 @@ const setup = async (
   };
   const blobCount = async () =>
     (await store.listBlobs({ limit: 1000 })).entries.length;
-  const toolsRun = () => sandbox.runs.map((run) => run.tool);
-  return { store, tools, processor, put, blobCount, toolsRun, sandbox };
+  const toolsRun = () => toolFake.runs.map((run) => run.tool);
+  return { store, runner, processor, put, blobCount, toolsRun, sandbox };
 };
 
 const baseInput = {
@@ -1558,8 +1263,8 @@ const processorCases = () => {
     expect(failureCodesMatchContracts).toBe(true);
   });
 
-  it("processes a static JPEG without the sandbox and commits WebP derivatives", async () => {
-    const { store, processor, put, toolsRun } = await setup();
+  it("processes a static JPEG in one sandbox job and commits WebP derivatives", async () => {
+    const { store, processor, put, toolsRun, sandbox } = await setup();
     const still = await put(await orientedJpeg());
     const outcome = processed(
       await processor.process({
@@ -1580,6 +1285,7 @@ const processorCases = () => {
     expect(outcome.detectedTypes).toEqual([
       { role: "still", contentType: "image/jpeg" },
     ]);
+    // `viewer` would equal `display` at this size, so its recipe skips it.
     expect(
       outcome.derivatives.map((d) => [
         d.variant,
@@ -1587,12 +1293,23 @@ const processorCases = () => {
         d.contentType,
         d.width,
         d.height,
+        d.recipeVersion,
       ]),
     ).toEqual([
-      ["thumb", "base", "image/webp", 200, 300],
-      ["display", "base", "image/webp", 200, 300],
-      ["full", "base", "image/webp", 200, 300],
+      ["thumb", "base", "image/webp", 200, 300, 1],
+      ["display", "base", "image/webp", 200, 300, 1],
+      ["full", "base", "image/webp", 200, 300, 1],
     ]);
+    expect(outcome.derivatives.map((d) => d.recipeDigest)).toEqual([
+      "02deba84f648b4c8",
+      "fa0cc28bb9865f16",
+      "acb3027f6e2affec",
+    ]);
+    // Red over blue: the mean colour of the base thumb.
+    expect(outcome.placeholderColor).toMatch(/^#[0-9a-f]{6}$/);
+    expect(
+      sandbox.jobs.map((job) => job.item?.renditions.map((r) => r.role)),
+    ).toEqual([["thumb", "display", "viewer", "full"]]);
     const read = await store.openRead(outcome.derivatives[0]!.storageKey);
     if (read?.status !== "ok") throw new Error("expected derivative");
     const parts: Buffer[] = [];
@@ -1753,11 +1470,8 @@ const processorCases = () => {
       ["motion", "video/mp4", 2900],
     ]);
     expect(toolsRun()).toEqual(["ffprobe", "ffmpeg", "ffprobe"]);
-    expect(sandbox.runs.map((run) => run.output === null)).toEqual([
-      true,
-      false,
-      true,
-    ]);
+    // One sandbox job does all of it.
+    expect(sandbox.jobs).toHaveLength(1);
     expect(await blobCount()).toBe(4);
   });
 
@@ -1905,33 +1619,14 @@ const processorCases = () => {
     expect(await blobCount()).toBe(5);
   });
 
-  it("decodes HEIC through the sandbox and reads only host-written copies afterwards", async () => {
+  it("decodes HEIC with heif-dec inside the sandbox, into its scratch directory", async () => {
     const decodedPng = await sharp({
       create: { width: 40, height: 30, channels: 3, background: BLUE },
     })
       .png()
       .toBuffer();
-    const observations: string[] = [];
-    let jobInput = "";
-    const sandbox = fakeMediaSandbox({
-      decodedPng,
-      onRun: async (run) => {
-        jobInput = run.inputDirectory;
-        if (run.tool !== "ffmpeg") return;
-        // A hostile later container can only touch its own fresh directory.
-        await symlink(
-          "/etc/hosts",
-          path.join(run.outputDirectory!, "still.png"),
-        );
-        await rm(path.join(run.outputDirectory!, "still.png"));
-        const accepted = await lstat(path.join(jobInput, "still.png"));
-        observations.push(accepted.isFile() ? "still-copy-regular" : "link");
-        observations.push(
-          (await readdir(path.dirname(jobInput))).sort().join(","),
-        );
-      },
-    });
-    const { processor, put, toolsRun } = await setup(sandbox);
+    const toolFake = fakeTools({ decodedPng });
+    const { processor, put, toolsRun } = await setup(toolFake);
     const still = await put(heicStill());
     const motion = await put(quickTime(null));
     const outcome = processed(
@@ -1951,15 +1646,15 @@ const processorCases = () => {
       }),
     );
     expect(toolsRun()).toEqual(["heif-dec", "ffprobe", "ffmpeg", "ffprobe"]);
-    const outputs = sandbox.runs.map((run) => run.output);
-    expect(outputs[1]).toBeNull();
-    expect(outputs[3]).toBeNull();
-    expect(outputs[0]).not.toBe(outputs[2]);
-    expect(observations[0]).toBe("still-copy-regular");
-    // Only `in/` and the ffmpeg run's own directory exist during ffmpeg.
-    expect(observations[1]).toBe(
-      ["in", path.basename(outputs[2]!)].sort().join(","),
+    // heif-dec reads the read-only staged still and writes to the scratch
+    // directory; FFmpeg writes the motion output directly to the output tmpfs.
+    const [heif, , ffmpeg] = toolFake.runs;
+    expect(path.basename(heif!.args.at(-2)!)).toBe("still");
+    expect(path.basename(heif!.args.at(-1)!)).toBe("still.png");
+    expect(path.dirname(heif!.args.at(-1)!)).not.toBe(
+      path.dirname(heif!.args.at(-2)!),
     );
+    expect(path.basename(ffmpeg!.args.at(-1)!)).toBe("motion.mp4");
     expect(outcome.detectedTypes).toEqual([
       { role: "still", contentType: "image/heic" },
       { role: "motion", contentType: "video/quicktime" },
@@ -1969,7 +1664,7 @@ const processorCases = () => {
   });
 
   it("derives an edit from only the components its variants need, without re-verifying pairing", async () => {
-    const { store, tools, put, toolsRun } = await setup();
+    const { store, runner, put, toolsRun } = await setup();
     const reads: string[] = [];
     const countingStore = {
       openRead: (key: string) => {
@@ -1980,7 +1675,11 @@ const processorCases = () => {
       remove: store.remove.bind(store),
     };
     const processor: PublishingMediaProcessorPort =
-      createPublishingMediaProcessor({ store: countingStore, runner: tools });
+      createPublishingMediaProcessor({
+        store: countingStore,
+        sandbox: runner,
+        logger: silentLogger,
+      });
     const still = await put(await orientedJpeg());
     const motion = await put(quickTime(OTHER_IDENTIFIER));
     const input: PublishingProcessInput = {
@@ -2016,17 +1715,8 @@ const processorCases = () => {
   });
 
   it("rejects a timeout during processing but retries it for an edit derivation, cleaning derivatives", async () => {
-    const timingOut = (tools: MediaToolsRunner): MediaToolsRunner => ({
-      createJob: () => tools.createJob(),
-      sweepJobs: (olderThan) => tools.sweepJobs(olderThan),
-      run: (job, tool, args, options) =>
-        tool === "ffmpeg"
-          ? Promise.reject(new MediaToolError("timeout"))
-          : tools.run(job, tool, args, options),
-    });
     const { processor, put, blobCount } = await setup(
-      fakeMediaSandbox(),
-      timingOut,
+      fakeTools({ ffmpegFailure: new MediaToolError("timeout") }),
     );
     const still = await put(await liveStillJpeg(IDENTIFIER));
     const motion = await put(quickTime(IDENTIFIER));
@@ -2048,7 +1738,9 @@ const processorCases = () => {
   });
 
   it("maps a failing transcoder to a rejection and a sandbox outage to a retryable failure, cleaning derivatives", async () => {
-    const failing = await setup(fakeMediaSandbox({ ffmpegExit: 1 }));
+    const failing = await setup(
+      fakeTools({ ffmpegFailure: new MediaToolError("tool_failed", 1) }),
+    );
     const still = await failing.put(await liveStillJpeg(IDENTIFIER));
     const motion = await failing.put(quickTime(IDENTIFIER));
     const input: PublishingProcessInput = {
@@ -2066,31 +1758,60 @@ const processorCases = () => {
 
     await rm(storeRoot, { recursive: true, force: true });
     await mkdir(storeRoot, { mode: 0o700 });
-    const outage = await setup(fakeMediaSandbox({ ffmpegExit: 125 }));
+    // A tool that cannot start is the renderer's internal failure (exit 70).
+    const broken = await setup(
+      fakeTools({ ffmpegFailure: new MediaToolError("spawn_failed") }),
+    );
     const again = {
       ...input,
       components: [
         {
           role: "still" as const,
           declaredType: "image/jpeg" as const,
-          ...(await outage.put(await liveStillJpeg(IDENTIFIER))),
+          ...(await broken.put(await liveStillJpeg(IDENTIFIER))),
         },
         {
           role: "motion" as const,
           declaredType: "video/quicktime" as const,
-          ...(await outage.put(quickTime(IDENTIFIER))),
+          ...(await broken.put(quickTime(IDENTIFIER))),
         },
       ],
     };
-    await expect(outage.processor.process(again)).rejects.toMatchObject({
+    await expect(broken.processor.process(again)).rejects.toBeInstanceOf(
+      MediaProcessingUnavailableError,
+    );
+    // A missing image or daemon (`docker run` exit 125) is retried too.
+    const outage = await setup(fakeTools(), {
+      exitCode: 125,
+      stream: async () => Buffer.alloc(0),
+    });
+    await expect(
+      outage.processor.process({
+        ...input,
+        components: [
+          {
+            role: "still",
+            declaredType: "image/jpeg",
+            ...(await outage.put(await liveStillJpeg(IDENTIFIER))),
+          },
+          {
+            role: "motion",
+            declaredType: "video/quicktime",
+            ...(await outage.put(quickTime(IDENTIFIER))),
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      name: "MediaToolError",
       code: "sandbox_unavailable",
     });
-    expect(await outage.blobCount()).toBe(2);
+    // Only the components remain in each store; no rendition was written.
+    expect(await outage.blobCount()).toBe(processorStoreKind === "cos" ? 2 : 4);
     expect(await readdir(work)).toEqual([]);
   });
 
   it("wraps unexpected infrastructure errors without paths", async () => {
-    const { store, tools, put } = await setup();
+    const { store, runner, put } = await setup();
     const still = await put(await orientedJpeg());
     const brokenStore = {
       openRead: async () => {
@@ -2104,7 +1825,8 @@ const processorCases = () => {
     };
     const processor = createPublishingMediaProcessor({
       store: brokenStore,
-      runner: tools,
+      sandbox: runner,
+      logger: silentLogger,
     });
     const failure = await processor
       .process({
@@ -2173,10 +1895,19 @@ describe("publishing media processor legacy user media stills", () => {
   });
   const storedBlobs = async (count: () => Promise<number>) =>
     count().catch(() => 0);
+  const legacyProcessor = (
+    store: Awaited<ReturnType<typeof setup>>["store"],
+    runner: Awaited<ReturnType<typeof setup>>["runner"],
+  ) =>
+    createPublishingMediaProcessor({
+      store,
+      sandbox: runner,
+      logger: silentLogger,
+    });
 
   it("derives an edited legacy PNG from the job input and stores only its derivatives", async () => {
-    const { store, tools, blobCount, toolsRun } = await setup();
-    const processor = createPublishingMediaProcessor({ store, runner: tools });
+    const { store, runner, blobCount, toolsRun } = await setup();
+    const processor = legacyProcessor(store, runner);
     const png = await translucentPng();
     const untouched = Buffer.from(png);
     const outcome = await processor.process(legacyInput(png));
@@ -2194,10 +1925,12 @@ describe("publishing media processor legacy user media stills", () => {
       ]),
     ).toEqual([
       ["thumb", "f".repeat(32), "image/webp", 20, 20],
-      ["display", "f".repeat(32), "image/webp", 20, 40],
       ["cover", "f".repeat(32), "image/webp", 20, 20],
+      ["display", "f".repeat(32), "image/webp", 20, 40],
     ]);
-    const read = await store.openRead(outcome.derivatives[1]!.storageKey);
+    // An edit key other than `base` never carries a placeholder colour.
+    expect(outcome).not.toHaveProperty("placeholderColor");
+    const read = await store.openRead(outcome.derivatives[2]!.storageKey);
     if (read?.status !== "ok") throw new Error("expected derivative");
     const parts: Buffer[] = [];
     for await (const part of read.body) parts.push(part as Buffer);
@@ -2211,8 +1944,8 @@ describe("publishing media processor legacy user media stills", () => {
   });
 
   it("rejects legacy bytes that are not a still PNG without storing anything", async () => {
-    const { store, tools, blobCount, toolsRun } = await setup();
-    const processor = createPublishingMediaProcessor({ store, runner: tools });
+    const { store, runner, blobCount, toolsRun } = await setup();
+    const processor = legacyProcessor(store, runner);
     const jpeg = await orientedJpeg();
     expectRejected(
       await processor.process(legacyInput(jpeg)),
@@ -2231,8 +1964,8 @@ describe("publishing media processor legacy user media stills", () => {
   });
 
   it("throws input errors for legacy sources outside an edit of a static item", async () => {
-    const { store, tools, put } = await setup();
-    const processor = createPublishingMediaProcessor({ store, runner: tools });
+    const { store, runner, put } = await setup();
+    const processor = legacyProcessor(store, runner);
     const png = await translucentPng();
     const valid = legacyInput(png);
     const source = valid.source as Extract<

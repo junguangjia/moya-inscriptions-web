@@ -316,13 +316,34 @@ future CVM/TencentDB/COS; it does not release those domains or resources.
 
 ## Full-release media and formal Article wiring
 
-B PR194 is consumed from main d434fac2060745d5ed29696197ca1cb857360c66.
-Production requires `WORK_MEDIA_COS_*`, a local pinned `WORK_MEDIA_TOOLS_IMAGE`
-and an existing backend-owned0700 `WORK_MEDIA_WORK_DIR`. One configured COS
-store/processor/runner is shared by upload/read/Article thumbnails and the
-existing publishing worker; one transfer registry handles cancellation. Do not
-set `WORK_MEDIA_STORE_DIR` or reuse Catalog/Payload credentials. Keep one active
-Backend per exclusive `ugc/publishing/<namespace>/`, including restart overlap.
+B PR194 is consumed from main d434fac2060745d5ed29696197ca1cb857360c66. Since
+the unified media pipeline (increment 1) media is processed by a separate
+process, `yoyi-media-worker.service`
+([template](systemd/yoyi-media-worker.service),
+[environment](env/media-worker.env.example)); the Backend
+(`WORK_MEDIA_WORKER=external`, the Production default; `embedded` is refused)
+opens only the COS store from `WORK_MEDIA_COS_*` and shares it with
+upload/read/Article thumbnails, and keeps one loop that claims only session
+expiry and staging sweeps and also runs the shared, idempotent lease requeue and
+cleanup scheduling, so sessions expire while the worker is down. One transfer
+registry handles cancellation. Do not set `WORK_MEDIA_STORE_DIR` or reuse
+Catalog/Payload credentials in the UGC keys. Exactly one process, the Backend,
+claims staging sweeps of an exclusive `ugc/publishing/<namespace>/`; the worker
+completes its own multipart writes well within the six-hour sweep age.
+
+The media worker uses the same UGC identity and App role as the Backend, the
+public read role for the published Catalog list, the Catalog read identity
+(`COS_*`) for Catalog source reads through the COS API endpoint, a local pinned
+`WORK_MEDIA_TOOLS_IMAGE` (the
+[media sandbox image](../development/work-publishing/README.md), built on the
+host from its pinned inputs) and its own 0700 `WORK_MEDIA_WORK_DIR`, owned by
+the worker's dedicated user. Each job runs in one no-network sandbox container
+(1 CPU, 1536 MiB without swap, 256 PIDs, size-capped tmpfs, no writable host
+path, read-only release `dist`); concurrency stays 1 on a two-vCPU host. Its
+unit has `MemoryMax=512M`, `TasksMax=64` and `RestartPreventExitStatus=78`:
+startup exits 78 on a configuration or sandbox isolation mismatch (no restart)
+and 75 when the container daemon or image is unavailable (restarted). It opens
+no listener.
 
 Only the exact component upload route has8GiB ingress. It streams with request
 and response buffering/cache/retry disabled and130s body/send and75s response
@@ -330,17 +351,38 @@ idle limits. Derivative GET/HEAD/Range preserves200/206/416, private headers and
 stream cancellation. Profile PNG remains4MiB; human Article and MCP document
 commands use1MiB+16KiB envelopes. Ordinary Community requests retain1MiB.
 
-The Backend unit permits writes only to `/var/lib/yoyi-backend/publishing-work`.
-Prepare that directory, the existing locally pinned media-tools image and a
-separately authorized Docker daemon access model before service activation.
-Prefer a backend-user rootless daemon and explicitly set its local Unix socket
-in private `DOCKER_HOST`; do not silently add the service to a rootful Docker
-group or remove hardening. The Docker CLI must be in the service PATH and the
-daemon must see that host bind path. Validate real host mounts, sandbox limits,
-image capabilities, memory/disk capacity and shutdown; local offline acceptance
-does not certify the eventual Linux host. See B's
-[exact media requirements](../../docs/development/full-release-media-v1.md). No
-daemon installation, group change or service activation runs here.
+The Backend unit has no writable path and no container daemon access. The media
+worker runs as its own user, `yoyi-media`, which alone owns the rootless
+container daemon (its socket in that user's runtime directory) and the job
+workspace `/var/lib/yoyi-media/publishing-work` (0700), the only path the worker
+unit may write. A shared user is not a boundary: a same-user process can reach
+another process's mount namespace through `/proc`. Host-local units and drop-ins
+(not in this repository) provide the daemon readiness gate and the host metadata
+guard that the unit's `REPLACE_ME_*` `Requires=`/`After=` lines name, and bind
+only that daemon's socket read-only; set its local Unix socket in the private
+`DOCKER_HOST`. Remove any earlier drop-in that gave the Backend unit a daemon
+socket. Do not add either service to a rootful Docker group or remove hardening.
+The Docker CLI must be in the service PATH, the daemon must see the host bind
+paths, and the release `dist` must be world-readable (`o+rX`) for the sandbox
+user. Activation order: stop the worker first (its drain is not part of the
+serving outage), swap and start the app units, then start the worker last; stop
+the worker before any on-host build or prepare step (the queue is durable).
+Validate real host mounts, sandbox limits, image capabilities, memory/disk
+capacity and shutdown with
+`node services/backend-production/dist/worker-main.js --sandbox-check` and the
+active bound probes `--sandbox-bounds-check` (worker stopped) under the worker's
+unit properties, and show from the Backend unit's properties (its user and
+hardening) that the worker's daemon socket cannot be connected and its job
+workspace cannot be read; local offline acceptance does not certify the eventual
+Linux host. A rollback to the previous release restores its Backend unit (with
+its `ReadWritePaths`), its daemon drop-in and the Backend user's daemon, and
+relies on the rollback-retained `WORK_MEDIA_TOOLS_IMAGE`, `WORK_MEDIA_WORK_DIR`
+and `WORK_MEDIA_WORKER_CONCURRENCY` in `backend.env`; the media worker stays
+stopped. See B's
+[exact media requirements](../../docs/development/full-release-media-v1.md) and
+the
+[unified media pipeline record](../../docs/development/unified-media-pipeline-v1.md).
+No daemon installation, group change or service activation runs here.
 
 The additional Article issuer uses `yoyi-article-authorization.service`,
 loopback3003 and the separate HTTPS cookie host `article-auth.example.invalid`.

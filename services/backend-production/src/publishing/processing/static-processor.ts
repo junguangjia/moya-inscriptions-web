@@ -1,19 +1,23 @@
 import sharp from "sharp";
 
-import { composeRegion, pixelRegion, rotatedSize } from "./edits.js";
 import { MediaRejectedError } from "./errors.js";
 import {
-  COVER_CROPPED_VARIANTS,
-  LONG_SCROLL_ASPECT_RATIO,
-  LONG_SCROLL_DISPLAY,
-  LONG_SCROLL_FULL,
-  STATIC_DERIVATIVES,
-  STATIC_INPUT_LIMITS,
-} from "./profiles.js";
+  STILL_INPUT_LIMITS,
+  STILL_PIPELINE_V1,
+  recipeQuality,
+  renditionRegion,
+  stillOutputSize,
+} from "./recipes.js";
 
-import type { Metadata } from "sharp";
-import type { MediaEdit, NormalizedCrop, PixelRegion } from "./edits.js";
-import type { StaticDerivativeVariant } from "./profiles.js";
+import type { Metadata, OutputInfo, Stats } from "sharp";
+import type { MediaEdit, NormalizedCrop } from "./edits.js";
+import type { StillRole } from "./recipes.js";
+
+/*
+ * Still decoding and rendering with sharp. Runs only inside the media
+ * sandbox (the renderer), never in the coordinator or the Backend. Geometry
+ * and encoder parameters come from the recipe registry (`recipes.ts`).
+ */
 
 export type StaticDecodedFormat = "jpeg" | "png" | "webp";
 
@@ -45,25 +49,58 @@ export interface StaticDerivative {
   readonly contentType: "image/webp";
 }
 
+export interface StaticInspectionLimits {
+  /** Decoded pixel ceiling (at most the still pipeline's input limit). */
+  readonly maxPixels?: number;
+  /** width × height × channels × bytes per sample ceiling, when set. */
+  readonly maxDecodedBytes?: number;
+}
+
+/** Bytes per decoded sample of a libvips band format; unknown counts as 8. */
+const SAMPLE_BYTES: Readonly<Record<string, number>> = {
+  uchar: 1,
+  char: 1,
+  ushort: 2,
+  short: 2,
+  uint: 4,
+  int: 4,
+  float: 4,
+  complex: 8,
+  double: 8,
+  dpcomplex: 16,
+};
+
+/**
+ * Opens a still with the recipe decode limits. The embedded ICC profile is
+ * honoured (never ignored), so the conversion to sRGB is colour-managed.
+ */
 const open = (source: StaticSource) =>
   sharp(source.input, {
-    limitInputPixels: STATIC_INPUT_LIMITS.limitInputPixels,
-    failOn: STATIC_INPUT_LIMITS.failOn,
-    pages: STATIC_INPUT_LIMITS.pages,
+    limitInputPixels: STILL_INPUT_LIMITS.limitInputPixels,
+    failOn: STILL_INPUT_LIMITS.failOn,
+    pages: STILL_INPUT_LIMITS.pages,
     autoOrient: source.autoOrient,
+    ignoreIcc: false,
   });
 
 const decodeFailure = (error: unknown): MediaRejectedError => {
   if (error instanceof MediaRejectedError) return error;
   const message = error instanceof Error ? error.message : "";
+  if (/^timeout/i.test(message)) {
+    return new MediaRejectedError("processing_timeout");
+  }
   return new MediaRejectedError(
     /pixel limit/i.test(message) ? "dimensions_exceeded" : "decode_failed",
   );
 };
 
-/** Header-level validation: format, single page, pixel ceiling. */
+/**
+ * Header-level validation before any pixel decode: format, single page,
+ * pixel ceiling and, when set, the decoded-bytes ceiling.
+ */
 export async function inspectStaticSource(
   source: StaticSource,
+  limits: StaticInspectionLimits = {},
 ): Promise<StaticInspection> {
   let metadata: Metadata;
   try {
@@ -89,8 +126,22 @@ export async function inspectStaticSource(
   ) {
     throw new MediaRejectedError("decode_failed");
   }
-  if (width * height > STATIC_INPUT_LIMITS.limitInputPixels) {
+  const maxPixels = Math.min(
+    limits.maxPixels ?? STILL_INPUT_LIMITS.limitInputPixels,
+    STILL_INPUT_LIMITS.limitInputPixels,
+  );
+  if (width * height > maxPixels) {
     throw new MediaRejectedError("dimensions_exceeded");
+  }
+  if (limits.maxDecodedBytes !== undefined) {
+    const channels =
+      Number.isSafeInteger(metadata.channels) && metadata.channels > 0
+        ? metadata.channels
+        : 4;
+    const sampleBytes = SAMPLE_BYTES[metadata.depth ?? ""] ?? 8;
+    if (width * height * channels * sampleBytes > limits.maxDecodedBytes) {
+      throw new MediaRejectedError("dimensions_exceeded");
+    }
   }
   const reported = metadata.orientation;
   const orientation =
@@ -104,71 +155,21 @@ export async function inspectStaticSource(
 }
 
 /**
- * Output size for a variant, never upscaled. Long scrolls keep a readable
- * short-edge-bounded `display` and a taller `full`.
- */
-export function staticDerivativeSize(
-  variant: StaticDerivativeVariant,
-  width: number,
-  height: number,
-): { width: number; height: number } {
-  const longEdge = Math.max(width, height);
-  const shortEdge = Math.min(width, height);
-  const pixels = width * height;
-  const longScroll = longEdge > LONG_SCROLL_ASPECT_RATIO * shortEdge;
-  let scale = Math.min(1, STATIC_DERIVATIVES[variant].maxLongEdge / longEdge);
-  if (longScroll && variant === "full") {
-    scale = Math.min(
-      1,
-      LONG_SCROLL_FULL.maxLongEdge / longEdge,
-      Math.sqrt(LONG_SCROLL_FULL.maxPixels / pixels),
-    );
-  } else if (longScroll && variant === "display") {
-    scale = Math.min(
-      1,
-      LONG_SCROLL_DISPLAY.maxShortEdge / shortEdge,
-      LONG_SCROLL_DISPLAY.maxLongEdge / longEdge,
-      Math.sqrt(LONG_SCROLL_DISPLAY.maxPixels / pixels),
-    );
-  }
-  return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
-  };
-}
-
-/** Pixel region of the edited (and optionally cover-cropped) frame. */
-export function staticEditRegion(
-  inspection: { readonly width: number; readonly height: number },
-  edit: MediaEdit,
-  coverCrop: NormalizedCrop | null,
-): { frame: { width: number; height: number }; region: PixelRegion } {
-  const frame = rotatedSize(inspection.width, inspection.height, edit.rotation);
-  const edited = pixelRegion(edit.crop, frame.width, frame.height);
-  const region = coverCrop
-    ? composeRegion(edited, pixelRegion(coverCrop, edited.width, edited.height))
-    : edited;
-  return { frame, region };
-}
-
-/**
- * Renders one WebP derivative: orientation → rotation → crop (→ cover crop
- * for the card variants `thumb` and `cover`) → downscale. Output never
- * carries EXIF, XMP, ICC or GPS metadata.
+ * Renders one still role as WebP with its recipe: orientation → rotation →
+ * crop (→ cover crop for the card roles `thumb` and `cover`) → downscale →
+ * sRGB. The output never carries EXIF, XMP, IPTC, ICC or GPS metadata, and
+ * every byte is re-encoded.
  */
 export async function renderStaticDerivative(
   source: StaticSource,
   inspection: StaticInspection,
-  variant: StaticDerivativeVariant,
+  role: StillRole,
   edit: MediaEdit,
   coverCrop: NormalizedCrop | null = null,
+  options: { readonly timeoutSeconds?: number } = {},
 ): Promise<StaticDerivative> {
-  const { frame, region } = staticEditRegion(
-    inspection,
-    edit,
-    COVER_CROPPED_VARIANTS.has(variant) ? coverCrop : null,
-  );
-  const target = staticDerivativeSize(variant, region.width, region.height);
+  const { frame, region } = renditionRegion(role, inspection, edit, coverCrop);
+  const target = stillOutputSize(role, region);
   let pipeline = open(source);
   if (edit.rotation !== 0) pipeline = pipeline.rotate(edit.rotation);
   if (region.width !== frame.width || region.height !== frame.height) {
@@ -177,17 +178,60 @@ export async function renderStaticDerivative(
   if (target.width !== region.width || target.height !== region.height) {
     pipeline = pipeline.resize(target.width, target.height, { fit: "fill" });
   }
+  const encoder = STILL_PIPELINE_V1.encoder;
+  pipeline = pipeline.toColourspace("srgb").webp({
+    quality: recipeQuality(role),
+    effort: encoder.effort,
+    smartSubsample: encoder.smartSubsample,
+    alphaQuality: encoder.alphaQuality,
+  });
+  if (options.timeoutSeconds !== undefined) {
+    pipeline = pipeline.timeout({ seconds: options.timeoutSeconds });
+  }
+  let rendered: { data: Buffer; info: OutputInfo };
   try {
-    const { data, info } = await pipeline
-      .webp({ quality: STATIC_DERIVATIVES[variant].quality })
-      .toBuffer({ resolveWithObject: true });
-    return {
-      buffer: data,
-      width: info.width,
-      height: info.height,
-      contentType: "image/webp",
-    };
+    rendered = await pipeline.toBuffer({ resolveWithObject: true });
   } catch (error) {
     throw decodeFailure(error);
   }
+  if (
+    rendered.info.width !== target.width ||
+    rendered.info.height !== target.height
+  ) {
+    throw new MediaRejectedError("processing_failed");
+  }
+  return {
+    buffer: rendered.data,
+    width: rendered.info.width,
+    height: rendered.info.height,
+    contentType: "image/webp",
+  };
+}
+
+const hex2 = (value: number) =>
+  Math.min(255, Math.max(0, Math.round(value)))
+    .toString(16)
+    .padStart(2, "0");
+
+/**
+ * Placeholder colour of a rendered still: the gamma-space sRGB channel mean
+ * as `#rrggbb`, or `null` when any pixel is not fully opaque.
+ */
+export async function placeholderColour(
+  input: string | Buffer,
+): Promise<string | null> {
+  let stats: Stats;
+  try {
+    stats = await sharp(input, { failOn: "error" }).stats();
+  } catch (error) {
+    throw decodeFailure(error);
+  }
+  if (!stats.isOpaque) return null;
+  const [first, second, third] = stats.channels;
+  if (first === undefined) throw new MediaRejectedError("processing_failed");
+  const [red, green, blue] =
+    second === undefined || third === undefined
+      ? [first.mean, first.mean, first.mean]
+      : [first.mean, second.mean, third.mean];
+  return `#${hex2(red)}${hex2(green)}${hex2(blue)}`;
 }

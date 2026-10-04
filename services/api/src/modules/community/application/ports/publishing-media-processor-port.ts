@@ -10,6 +10,12 @@ export type PublishingQualityMode = "standard" | "original";
 export type PublishingComponentRole = "still" | "motion" | "package";
 export type PublishingDerivativeVariant =
   "thumb" | "display" | "full" | "motion" | "cover";
+/**
+ * Every role a recorded rendition may carry: the derivative variants plus the
+ * bounded `viewer` image, which is optional everywhere (recorded and read,
+ * never required for readiness or submission).
+ */
+export type PublishingRenditionRole = PublishingDerivativeVariant | "viewer";
 export type PublishingPairingMethod =
   "apple-content-identifier" | "motion-photo-container" | "none";
 
@@ -111,12 +117,23 @@ export interface PublishingMediaPairing {
 }
 
 export interface PublishingDerivativeRecord extends PublishingMediaWriteResult {
-  readonly variant: PublishingDerivativeVariant;
+  /** The rendition role. */
+  readonly variant: PublishingRenditionRole;
   readonly editKey: string;
   readonly contentType: "image/webp" | "video/mp4";
   readonly width: number;
   readonly height: number;
   readonly durationMs: number | null;
+  /**
+   * The recipe the bytes were rendered with, as the one recipe registry
+   * names it: version (integer >= 1) and digest (16 lowercase hex). Required:
+   * the store never defaults an identity. A result of a newer version than
+   * the slot's ready rendition supersedes it (the old row is kept, never
+   * deleted; a pre-task blob behind it is held for the D7 follow-up); an
+   * equal or older version is a duplicate.
+   */
+  readonly recipeVersion: number;
+  readonly recipeDigest: string;
 }
 
 /**
@@ -144,10 +161,20 @@ export type PublishingProcessOutcome =
        */
       readonly stillExifOrientation: number | null;
       readonly derivatives: readonly PublishingDerivativeRecord[];
+      /**
+       * Mean colour (`#rrggbb`) of the base-edit `thumb`, or `null` when the
+       * image has a non-opaque pixel; omitted leaves the stored value.
+       */
+      readonly placeholderColor?: string | null;
     }
   | {
       readonly status: "derived";
       readonly derivatives: readonly PublishingDerivativeRecord[];
+      /**
+       * As for `processed`; only with derivatives of edit key `base` (a
+       * backfill of an existing item), never with an edit.
+       */
+      readonly placeholderColor?: string | null;
     }
   | {
       readonly status: "rejected";

@@ -3,6 +3,11 @@ import { LEGACY_USER_MEDIA_MAX_BYTES } from "./processing/profiles.js";
 import { sniffSignature } from "./processing/signature.js";
 
 import type { PublishingMediaStoreBlobEntry } from "../storage/publishing-media-store.js";
+import type {
+  CatalogRenderer,
+  CatalogWorkerRenderOutcome,
+  CatalogWorkerRenderPlan,
+} from "./catalog.js";
 import type { MediaEdit, NormalizedCrop } from "./processing/edits.js";
 import type { MediaFailureCode } from "./processing/errors.js";
 import type {
@@ -34,7 +39,30 @@ export type PublishingWorkerJobKind =
   | "expire_session"
   | "purge_trashed_work"
   | "sweep_staging"
-  | "reconcile_capacity";
+  | "reconcile_capacity"
+  | "catalog_render";
+
+/**
+ * Job kinds coupled to the Backend's own upload state (W3): staging sweeps
+ * skip multipart uploads in flight in the Backend process, and session expiry
+ * stops transfers still streaming through it. The Backend keeps claiming
+ * these while uploads stream through it.
+ */
+export const UPLOAD_COUPLED_JOB_KINDS = [
+  "expire_session",
+  "sweep_staging",
+] as const satisfies readonly PublishingWorkerJobKind[];
+
+/** Every other kind: processing, purges, reconciliation and Catalog renders. */
+export const MEDIA_WORKER_JOB_KINDS = [
+  "process_item",
+  "derive_edit",
+  "purge_item",
+  "purge_blob",
+  "purge_trashed_work",
+  "reconcile_capacity",
+  "catalog_render",
+] as const satisfies readonly PublishingWorkerJobKind[];
 
 /** Mirror of `PublishingDeriveEditPayload`. */
 export interface PublishingWorkerDerivePayload {
@@ -187,6 +215,23 @@ export interface PublishingWorkerPort {
   confirmPurged(blobIds: readonly string[], now: Date): Promise<void>;
 }
 
+/** The Catalog asset operations a `catalog_render` job uses (structural mirror). */
+export interface PublishingWorkerCatalogPort {
+  readCatalogRenderPlan(
+    assetId: string,
+  ): Promise<CatalogWorkerRenderPlan | null>;
+  recordCatalogRenditions(
+    assetId: string,
+    outcome: CatalogWorkerRenderOutcome,
+    now: Date,
+  ): Promise<PublishingWorkerDerivativeCommit>;
+  failCatalogAsset(
+    assetId: string,
+    failureCode: string,
+    now: Date,
+  ): Promise<void>;
+}
+
 /** The media store operations the worker uses (filesystem store in Development). */
 export interface PublishingWorkerStore {
   remove(storageKey: string, signal?: AbortSignal): Promise<void>;
@@ -266,13 +311,24 @@ const BLOB_ID_PATTERN = /^media-blob-[0-9a-f]{32}$/;
 const SESSION_ID_PATTERN = /^publishing-session-[0-9a-f]{32}$/;
 const WORK_ID_PATTERN = /^work-[0-9a-f]{32}$/;
 const LEGACY_MEDIA_ID_PATTERN = /^user-media-[0-9a-f]{32}$/;
+const CATALOG_ASSET_ID_PATTERN = /^catalog-asset-[0-9a-f]{32}$/;
 const STAGING_SWEEP_LIMIT = 1000;
 const BLOB_LIST_LIMIT = 1000;
 
 export interface PublishingJobHandlerOptions {
   readonly port: PublishingWorkerPort;
   readonly store: PublishingWorkerStore;
-  readonly processor: PublishingWorkerProcessor;
+  /**
+   * The media processor. Absent in a Backend whose media worker runs
+   * separately: a processing claim then fails retryably (it never claims
+   * one, but a misrouted claim must not be lost).
+   */
+  readonly processor?: PublishingWorkerProcessor;
+  /** Catalog rendering; absent where Catalog processing is off. */
+  readonly catalog?: {
+    readonly port: PublishingWorkerCatalogPort;
+    readonly renderer: CatalogRenderer;
+  };
   readonly toolJobs?: PublishingWorkerToolJobs;
   readonly clock?: () => Date;
   readonly timers?: PublishingWorkerTimers;
@@ -396,7 +452,7 @@ export class PublishingJobSystemError extends Error {
 export function createPublishingJobHandlers(
   options: PublishingJobHandlerOptions,
 ): PublishingJobHandlers {
-  const { port, store, processor } = options;
+  const { port, store, processor, catalog } = options;
   const clock = options.clock ?? (() => new Date());
   const timers = options.timers ?? defaultPublishingWorkerTimers;
   const cancellationCheckMs =
@@ -507,7 +563,7 @@ export function createPublishingJobHandlers(
     };
     watch();
     try {
-      return await processor.process({ ...input, signal: controller.signal });
+      return await processor!.process({ ...input, signal: controller.signal });
     } catch (error) {
       if (
         !signal.aborted &&
@@ -793,7 +849,58 @@ export function createPublishingJobHandlers(
     return COMPLETED;
   };
 
+  /**
+   * Renders one Catalog asset in the sandbox and records its renditions and
+   * facts. A content rejection fails the asset (not the job); infrastructure
+   * failures are retried. An unreadable source (missing or forbidden) is
+   * retried while the job has attempts left, then fails the asset, which the
+   * Catalog sync renders again after a delay. An unknown, failed or
+   * unreferenced asset needs no work.
+   */
+  const renderCatalogAsset = async (
+    claim: PublishingWorkerJobClaim,
+    signal: AbortSignal,
+  ): Promise<PublishingJobResult> => {
+    if (catalog === undefined) return failed("catalog_unavailable", true);
+    const plan = await catalog.port.readCatalogRenderPlan(claim.subjectId);
+    if (plan === null || !plan.referenced) return COMPLETED;
+    throwIfAborted(signal);
+    const result = await catalog.renderer.render(plan, signal);
+    if (
+      result.status === "rejected" &&
+      result.failureCode === "source_unreadable" &&
+      claim.attempts < claim.maxAttempts
+    )
+      return failed("source_unreadable", true);
+    if (result.status === "rejected") {
+      await catalog.port.failCatalogAsset(
+        plan.assetId,
+        result.failureCode,
+        clock(),
+      );
+      return COMPLETED;
+    }
+    const keys = result.outcome.renditions.map(
+      (rendition) => rendition.storageKey,
+    );
+    if (signal.aborted) {
+      await Promise.all(
+        keys.map((key) => store.remove(key).catch(() => undefined)),
+      );
+      throw signal.reason;
+    }
+    await commitDerivatives(keys, () =>
+      catalog.port.recordCatalogRenditions(
+        plan.assetId,
+        result.outcome,
+        clock(),
+      ),
+    );
+    return COMPLETED;
+  };
+
   const invalidSubject = failed("invalid_job_subject", false);
+  const unavailable = failed("processing_unavailable", true);
 
   return {
     async onJobFailed(claim) {
@@ -815,15 +922,13 @@ export function createPublishingJobHandlers(
       const subject = claim.subjectId;
       switch (claim.kind) {
         case "process_item":
-          return ITEM_ID_PATTERN.test(subject)
-            ? processItem(claim, signal)
-            : invalidSubject;
+          if (!ITEM_ID_PATTERN.test(subject)) return invalidSubject;
+          return processor ? processItem(claim, signal) : unavailable;
         case "derive_edit":
           if (claim.payload === null)
             return failed("invalid_job_payload", false);
-          return ITEM_ID_PATTERN.test(subject)
-            ? deriveEdit(claim, signal)
-            : invalidSubject;
+          if (!ITEM_ID_PATTERN.test(subject)) return invalidSubject;
+          return processor ? deriveEdit(claim, signal) : unavailable;
         case "purge_item":
           return ITEM_ID_PATTERN.test(subject)
             ? finishPurge(await port.purgeItem(subject, clock()), signal)
@@ -849,6 +954,10 @@ export function createPublishingJobHandlers(
           if (!ACCOUNT_ID_PATTERN.test(subject)) return invalidSubject;
           await port.reconcileCapacity(subject, clock());
           return COMPLETED;
+        case "catalog_render":
+          return CATALOG_ASSET_ID_PATTERN.test(subject)
+            ? renderCatalogAsset(claim, signal)
+            : invalidSubject;
         default:
           return failed("unsupported_job_kind", false);
       }
