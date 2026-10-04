@@ -9,12 +9,14 @@ import { normalizeAvatarPng } from "./avatar-image";
 import { AuthorRequestError, authorClient } from "./author-data";
 
 /**
- * The profile cover is one derived image shown behind the profile identity.
- * The header's own shape varies (portrait on phones, wide on desktops), so the
- * saved master is 4:3 and the live cover is top-anchored
- * (`user-presentation.module.css`): every device shows a window of the same
- * master that starts at its top edge. The editor draws those windows and the
- * area every device keeps clear (see docs/community/profile-cover-upload-redesign-v1.md).
+ * The profile cover is one derived image filling most of the profile's first
+ * screen, with the identity on a paper panel at its bottom-left. The header's
+ * own shape varies (portrait on phones, wide on desktops), so the saved master
+ * is 4:3 and the live cover is top-anchored (`user-presentation.module.css`):
+ * every device shows a window of the same master that starts at its top edge.
+ * The editor draws those windows and the area every device keeps clear (see
+ * docs/community/profile-cover-upload-redesign-v1.md and
+ * docs/community/profile-hero-layout-v1.md).
  */
 export const COVER_ASPECT = 4 / 3;
 
@@ -43,32 +45,78 @@ export interface CoverRect {
   readonly height: number;
 }
 
-/** A profile header box in CSS pixels; `identityTop` is the avatar's top edge. */
-export interface HeaderBox {
+/** A rectangle in CSS pixels of a header box. */
+export interface PixelRect {
+  readonly x: number;
+  readonly y: number;
   readonly width: number;
   readonly height: number;
-  readonly identityTop: number;
 }
 
 /**
- * Typical headers with a one-line bio (390×844 phone, 1280×800 desktop),
- * from the header CSS; the editor measures the owner's own header instead
- * whenever it is laid out.
+ * A profile header (the cover box) in CSS pixels, laid out with a photo; the
+ * other members are relative to its top-left corner.
+ */
+export interface HeaderBox {
+  readonly width: number;
+  readonly height: number;
+  /** Top of the identity panel, where its paper fade starts. */
+  readonly panelTop: number;
+  /** The avatar circle, `size` across. */
+  readonly avatar: {
+    readonly x: number;
+    readonly y: number;
+    readonly size: number;
+  };
+  /** The display name's line box and font size. */
+  readonly name: {
+    readonly x: number;
+    readonly y: number;
+    readonly size: number;
+  };
+  /** Round controls over the cover: top-bar icons and the owner's pencil. */
+  readonly controls: readonly PixelRect[];
+}
+
+/**
+ * The owner's own header with a one-line bio (390×844 phone, 1280×800
+ * desktop), measured from the header CSS; the editor measures the owner's
+ * header instead whenever it is laid out.
  */
 export const REFERENCE_HEADERS: Readonly<Record<CoverDevice, HeaderBox>> = {
-  phone: { width: 390, height: 569, identityTop: 330 },
-  desktop: { width: 960, height: 556, identityTop: 308 },
+  phone: {
+    width: 390,
+    height: 844,
+    panelTop: 477.6,
+    avatar: { x: 16, y: 573.6, size: 80 },
+    name: { x: 108, y: 587.7, size: 24 },
+    controls: [
+      { x: 12, y: 4, width: 44, height: 44 },
+      { x: 334, y: 4, width: 44, height: 44 },
+      { x: 334, y: 56, width: 44, height: 44 },
+    ],
+  },
+  desktop: {
+    width: 960,
+    height: 800,
+    panelTop: 433.6,
+    avatar: { x: 16, y: 529.6, size: 80 },
+    name: { x: 108, y: 538.9, size: 32 },
+    controls: [{ x: 904, y: 56, width: 44, height: 44 }],
+  },
 };
 
 /**
- * Visible and above the fade on portrait phones (bio up to three lines) and on
- * desktop windows from 1366×657 up; landscape phones are best effort.
+ * Visible, clear of the top-bar icons and the pencil, and above the identity
+ * panel on portrait phones from 360 px wide and tablets (bio up to three
+ * lines) and on desktop windows from 1366×657 (bio up to one line); landscape
+ * phones are best effort.
  */
 export const COVER_SAFE_RECT: CoverRect = {
-  x: 0.27,
-  y: 0,
-  width: 0.46,
-  height: 0.22,
+  x: 0.34,
+  y: 0.16,
+  width: 0.32,
+  height: 0.23,
 };
 
 export const deviceForWidth = (width: number): CoverDevice =>
@@ -90,29 +138,32 @@ export const coverWindow = (
 export interface CoverGuides {
   /** Region of the master this header shows. */
   readonly window: CoverRect;
-  /** The rest below are fractions of that header window. */
-  readonly avatarTop: number;
-  readonly avatarSize: number;
-  readonly nameTop: number;
-  readonly nameSize: number;
-  readonly pencil: CoverRect;
+  /** The rest are fractions of that header window: x of its width, y of its height. */
+  readonly panelTop: number;
+  readonly avatar: CoverRect;
+  readonly name: {
+    readonly x: number;
+    readonly y: number;
+    readonly size: number;
+  };
+  readonly controls: readonly CoverRect[];
 }
 
-/** Mirrors the header CSS: 80 px avatar + 4 px gap, h1 clamp(24px, 5vw, 32px), 44 px pencil at 8/12 px. */
+/** The measured header as fractions of itself (sizes across are of its width). */
 export const guidesFor = (header: HeaderBox): CoverGuides => {
-  const { width, height, identityTop } = header;
+  const { width, height, avatar, name } = header;
+  const fraction = (rect: PixelRect): CoverRect => ({
+    x: rect.x / width,
+    y: rect.y / height,
+    width: rect.width / width,
+    height: rect.height / height,
+  });
   return {
     window: coverWindow(width / height),
-    avatarTop: identityTop / height,
-    avatarSize: 80 / width,
-    nameTop: (identityTop + 84) / height,
-    nameSize: Math.min(32, Math.max(24, 0.05 * width)) / width,
-    pencil: {
-      x: (width - 12 - 44) / width,
-      y: 8 / height,
-      width: 44 / width,
-      height: 44 / height,
-    },
+    panelTop: header.panelTop / height,
+    avatar: fraction({ ...avatar, width: avatar.size, height: avatar.size }),
+    name: { x: name.x / width, y: name.y / height, size: name.size / width },
+    controls: header.controls.map(fraction),
   };
 };
 

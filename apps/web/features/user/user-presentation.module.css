@@ -131,18 +131,6 @@
   overflow: hidden;
   background: var(--yoyi-color-background-page);
 }
-.profileCover:has(img)::after,
-.coverFade::after {
-  position: absolute;
-  inset: 0;
-  content: "";
-  background: linear-gradient(
-    to bottom,
-    transparent 35%,
-    color-mix(in srgb, var(--yoyi-color-background-page) 78%, transparent) 52%,
-    var(--yoyi-color-background-page)
-  );
-}
 .profileCover img {
   width: 100%;
   height: 100%;
@@ -201,6 +189,698 @@
 }
 .relationshipCount {
   color: var(--yoyi-color-seal-red);
+}
+
+/*
+ * Cover-first profile (profile-hero-layout-v1). The photo fills most of the
+ * first screen and runs up under a transparent top bar; the identity sits at
+ * its bottom-left on a paper panel that fades in over the photo. The
+ * background editor draws the same panel (`.coverPanel`) at the measured
+ * place, scaled by `--cover-px`. Scoped classes: the QA prototype shares the
+ * base `.header`, `.profile` and `.identity` rules.
+ */
+/*
+ * Safari 26 tints its status bar from the background colour of a sticky bar
+ * at the top edge. The bar's own colour is clipped to text, so it paints
+ * nothing: over a photo it carries the photo's top-edge colour (--cover-tint)
+ * and the status bar continues the photo; once passed it carries the page
+ * colour. The solid bar the reader sees is a
+ * layer that fades in, so the switch never flashes.
+ */
+.coverHeader {
+  margin-bottom: calc(-1 * var(--profile-header-height));
+  background-color: var(--cover-tint, transparent);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.coverHeader[data-cover-passed] {
+  background-color: var(--yoyi-color-background-page);
+}
+.coverHeader::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: "";
+  background: var(--cover-paper, var(--yoyi-color-background-page));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+.coverHeader[data-cover-passed]::before {
+  opacity: 1;
+}
+.coverRoot[data-cover-instant] .coverHeader::before {
+  transition: none;
+}
+.header.coverHeader > button,
+.header.coverHeader > nav > button {
+  color: var(--yoyi-color-text-primary);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-background-page) 72%,
+    transparent
+  );
+  border-radius: var(--yoyi-radius-full);
+}
+.header.coverHeader[data-cover-passed] > button,
+.header.coverHeader[data-cover-passed] > nav > button {
+  background: transparent;
+}
+@media (hover: hover) {
+  .header.coverHeader > button:hover:not(:disabled),
+  .header.coverHeader > nav > button:hover:not(:disabled) {
+    background: var(--yoyi-color-background-muted);
+  }
+}
+.profile.coverProfile {
+  display: grid;
+  min-height: 0;
+  align-content: end;
+  padding-top: var(--profile-header-height);
+  text-align: start;
+}
+/*
+ * Only a photo earns the cover, and it fills the first screen (the small
+ * viewport, which in Safari ends at its bottom bar); the collections wait
+ * below. The editor measures it with the flag.
+ */
+.profile.coverProfile:has(.profileCover img),
+.profile.coverProfile[data-cover-measure] {
+  min-height: 100svh;
+  padding-top: calc(var(--profile-header-height) + 36svh);
+}
+/*
+ * The whole first screen is the photo, sinking below into its own dark tone
+ * (--cover-shade-photo, sampled from the photo; paper-dark until then),
+ * whatever the theme. --cover-progress (0 photo, 1 collections; written on
+ * scroll) frosts the photo into the compact cover and turns the shade, and
+ * with it the whole page behind the profile, into the page colour. Declared
+ * on the root, outside the identity's dark theme, so the page colour is the
+ * reader's own.
+ */
+.coverRoot {
+  --cover-paper: color-mix(
+    in srgb,
+    var(--yoyi-color-background-page) calc(var(--cover-progress, 1) * 100%),
+    var(--cover-shade-photo, var(--yoyi-color-paper-dark))
+  );
+  /* The compact cover's finish arrives over the first half of the way. */
+  --cover-frost: min(1, var(--cover-progress, 0) * 2);
+  /* The glass card arrives as the identity lands in it (the last 8%). */
+  --cover-card-fade: clamp(0, (var(--cover-progress, 0) - 0.92) * 12.5, 1);
+  --cover-card-radius: 20px;
+  /* Room for the frost around the card inside its blurred copy. */
+  --cover-card-reach: 24px;
+}
+.coverRoot.overlay,
+.coverRoot.page,
+.coverRoot .tabs {
+  background: var(--cover-paper);
+}
+/*
+ * The photo stays at the top of the screen while the identity rises over it:
+ * its box is the part of the cover still on screen above the tabs
+ * (--cover-scroll), down to the compact cover behind the identity. The image
+ * keeps its full-cover size, so the compact cover shows the photo's top part
+ * rather than a zoomed-out copy. Transparent parts of a photo show the dark
+ * paper in either theme.
+ */
+.coverProfile > .profileCover {
+  /* Its layers (the glass card among them) stay under the identity. */
+  isolation: isolate;
+  top: min(var(--cover-scroll, 0px), var(--cover-rest, 0px));
+  bottom: auto;
+  height: calc(100% - var(--cover-scroll, 0px));
+}
+.coverProfile > .profileCover:has(img) {
+  background: var(--yoyi-color-paper-dark);
+}
+.coverProfile > .profileCover img {
+  height: var(--cover-height, 100%);
+}
+/*
+ * In the collections stage the identity sits on a card of frosted glass made
+ * of the photo itself (an Owner-requested treatment of the reader's own
+ * upload, not the Functional Glass material), over the sharp photo: the
+ * photo's texture stays crisp around the card and soft through it. The card
+ * sits where the identity rests (--cover-card-*, from the layout) and never
+ * moves; only its opacity follows the scroll.
+ */
+.coverGlass,
+.coverCard {
+  position: absolute;
+  z-index: 2;
+  opacity: var(--cover-card-fade, 0);
+  pointer-events: none;
+}
+/*
+ * The frost: the photo laid out exactly as the sharp image (full-cover
+ * height, centred, top-anchored) over the photo box's own dark paper, so a
+ * transparent photo frosts too, blurred and clipped to the card. The blur
+ * and the paper match what samples the card's tint (COVER_CARD_BLUR).
+ */
+.coverGlass {
+  background-color: var(--yoyi-color-paper-dark);
+  top: calc(var(--cover-card-top, 0px) - var(--cover-card-reach));
+  right: calc(var(--cover-card-right, 0px) - var(--cover-card-reach));
+  left: calc(var(--cover-card-left, 0px) - var(--cover-card-reach));
+  height: calc(var(--cover-card-height, 0px) + 2 * var(--cover-card-reach));
+  background-repeat: no-repeat;
+  background-position: 50%
+    calc(var(--cover-card-reach) - var(--cover-card-top, 0px));
+  background-size: max(
+      100% + var(--cover-card-left, 0px) + var(--cover-card-right, 0px) - 2 *
+        var(--cover-card-reach),
+      var(--cover-height, 100%) * var(--cover-ratio, 1.333)
+    )
+    auto;
+  filter: blur(5px) saturate(1.15);
+  clip-path: inset(var(--cover-card-reach) round var(--cover-card-radius));
+}
+/*
+ * The glass: the photo's own shade at the sampled opacity (just enough for
+ * the identity's text; the default holds for any photo), a top sheen, a rim
+ * catching the light from the top left, an inner highlight and a soft shadow.
+ */
+.coverCard {
+  top: var(--cover-card-top, 0px);
+  right: var(--cover-card-right, 0px);
+  left: var(--cover-card-left, 0px);
+  height: var(--cover-card-height, 0px);
+  border-radius: var(--cover-card-radius);
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--yoyi-color-paper-light) 6%, transparent),
+      transparent 18px
+    ),
+    color-mix(
+      in srgb,
+      var(
+          --cover-card-tint,
+          var(--cover-shade-photo, var(--yoyi-color-paper-dark))
+        )
+        calc(var(--cover-card-alpha, 0.8) * 100%),
+      transparent
+    );
+  box-shadow:
+    inset 0 1px 0
+      color-mix(in srgb, var(--yoyi-color-paper-light) 28%, transparent),
+    inset 0 -1px 0
+      color-mix(in srgb, var(--yoyi-color-ink-black) 18%, transparent),
+    0 8px 20px -10px
+      color-mix(in srgb, var(--yoyi-color-ink-black) 40%, transparent),
+    0 1px 3px color-mix(in srgb, var(--yoyi-color-ink-black) 18%, transparent);
+}
+.coverCard::before {
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  content: "";
+  background: linear-gradient(
+    150deg,
+    color-mix(in srgb, var(--yoyi-color-paper-light) 40%, transparent),
+    color-mix(in srgb, var(--yoyi-color-paper-light) 10%, transparent) 36%,
+    color-mix(in srgb, var(--yoyi-color-paper-light) 6%, transparent) 64%,
+    color-mix(in srgb, var(--yoyi-color-paper-light) 20%, transparent)
+  );
+  border-radius: inherit;
+  -webkit-mask:
+    linear-gradient(var(--yoyi-color-ink-black) 0 0) content-box,
+    linear-gradient(var(--yoyi-color-ink-black) 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+/* A fine bevel (a dark line over a light one) closes the photo above the
+   tabs. */
+.coverProfile > .profileCover:has(img)::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  box-shadow:
+    inset 0 -1px 0
+      color-mix(in srgb, var(--yoyi-color-paper-light) 22%, transparent),
+    inset 0 -2px 0
+      color-mix(in srgb, var(--yoyi-color-ink-black) 28%, transparent);
+  opacity: var(--cover-frost, 0);
+  pointer-events: none;
+}
+/* Reduced transparency and more contrast get a solid card instead. */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .coverGlass {
+    display: none;
+  }
+  .coverCard {
+    background: var(--cover-shade-photo, var(--yoyi-color-paper-dark));
+  }
+}
+/*
+ * In the collections stage the photo cover sticks at its second resting
+ * place: compact cover, identity and tabs stay, and only the collections
+ * scroll. The identity's bottom padding then lies, empty and clear, over the
+ * collections below the tabs: only the cover's controls take input.
+ */
+.coverRoot:not([data-cover-free]) .profile.coverProfile:has(.profileCover img) {
+  position: sticky;
+  z-index: 2;
+  top: calc(-1 * var(--cover-rest, 0px));
+}
+.coverRoot:not([data-cover-free])
+  .profile.coverProfile:has(.profileCover img)
+  > .coverIdentity,
+.coverRoot:not([data-cover-free]) .profile.coverProfile:has(.profileCover img) {
+  pointer-events: none;
+}
+.coverRoot:not([data-cover-free])
+  .profile.coverProfile:has(.profileCover img)
+  > :is(.profileCover, .backgroundEdit, .scrollHint),
+.coverRoot:not([data-cover-free])
+  .profile.coverProfile:has(.profileCover img)
+  > .coverIdentity
+  > * {
+  pointer-events: auto;
+}
+.coverRoot:not([data-cover-free]):has(.coverProfile .profileCover img) .tabs {
+  top: var(--cover-pinned, var(--profile-header-height));
+}
+/* The tabs' page colour runs edge to edge, closing the compact cover. */
+.coverRoot:has(.coverProfile .profileCover img) .tabs {
+  box-shadow: 0 0 0 100vmax var(--cover-paper);
+  clip-path: inset(0 -100vmax);
+}
+/*
+ * Safari 26 tints the strip under its bottom bar from a fixed element at the
+ * bottom edge, read when that element appears (a colour change mid-scroll is
+ * ignored). A fixed chin, clipped to text so it paints nothing, carries the
+ * dark shade over the photo and the page colour after; the profile re-inserts
+ * it when the stage changes and scrolling rests.
+ */
+/* Above the scroll hint (Safari reads the topmost layer at the edge); it
+   takes no input, so the hint stays tappable through it. */
+.coverChin {
+  position: fixed;
+  z-index: 2;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 80px;
+  background-color: var(--yoyi-color-background-page);
+  -webkit-background-clip: text;
+  background-clip: text;
+  pointer-events: none;
+}
+.coverChin[data-chin="cover"] {
+  background-color: var(--cover-shade-photo, var(--yoyi-color-paper-dark));
+}
+/* The identity resolves its own theme's text colour (dark over the photo). */
+.coverIdentity,
+.coverIdentity [data-theme] {
+  color: var(--yoyi-color-text-primary);
+}
+/* Colours that change with the stage ease over. */
+.coverIdentity,
+.coverIdentity :where(h1, p, span, strong, button, a) {
+  transition:
+    color 220ms var(--yoyi-easing-standard),
+    background-color 220ms var(--yoyi-easing-standard),
+    border-color 220ms var(--yoyi-easing-standard);
+}
+/* Loading, restoring and resizing apply the theme without the ease. */
+.coverRoot[data-cover-instant] :is(.coverIdentity, .coverHeader, .scrollHint),
+.coverRoot[data-cover-instant]
+  :is(.coverIdentity, .coverHeader, .backgroundEdit)
+  :where(*) {
+  transition: none;
+}
+.coverRoot[data-cover-instant] .backgroundEdit {
+  transition: none;
+}
+/* The photo's top edge melts into the status-bar tint above it. */
+.coverProfile > .profileCover::before {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: calc(var(--profile-header-height) + var(--yoyi-space-4));
+  content: "";
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--cover-tint) 92%, transparent),
+    transparent
+  );
+  /* Thinner over the compact cover, so the texture runs up to the bar. */
+  opacity: calc(1 - 0.7 * var(--cover-frost, 0));
+  pointer-events: none;
+}
+.coverProfile > .backgroundEdit {
+  top: calc(var(--profile-header-height) + var(--yoyi-space-2));
+}
+/*
+ * A long eased shade (176 px) from the photo into its dark tone. As the
+ * identity lands at the collections stage it hands over to the glass card.
+ */
+.coverIdentity,
+.coverPanel {
+  --cover-shade: var(--cover-shade-photo, var(--yoyi-color-paper-dark));
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--cover-shade) 3%, transparent)
+      calc(var(--cover-px, 1px) * 22),
+    color-mix(in srgb, var(--cover-shade) 11%, transparent)
+      calc(var(--cover-px, 1px) * 44),
+    color-mix(in srgb, var(--cover-shade) 25%, transparent)
+      calc(var(--cover-px, 1px) * 66),
+    color-mix(in srgb, var(--cover-shade) 43%, transparent)
+      calc(var(--cover-px, 1px) * 88),
+    color-mix(in srgb, var(--cover-shade) 62%, transparent)
+      calc(var(--cover-px, 1px) * 110),
+    color-mix(in srgb, var(--cover-shade) 79%, transparent)
+      calc(var(--cover-px, 1px) * 132),
+    color-mix(in srgb, var(--cover-shade) 92%, transparent)
+      calc(var(--cover-px, 1px) * 154),
+    var(--cover-shade) calc(var(--cover-px, 1px) * 176)
+  );
+}
+.coverIdentity {
+  --cover-shade: color-mix(
+    in srgb,
+    var(--cover-shade-photo, var(--yoyi-color-paper-dark))
+      calc(clamp(0, (1 - var(--cover-progress, 0)) * 12.5, 1) * 100%),
+    transparent
+  );
+}
+/*
+ * The identity sits above the scroll hint and, on the primary page, above
+ * the floating dock (--cover-bottom-inset).
+ */
+.page > .coverProfile {
+  --cover-bottom-inset: calc(
+    60px + max(var(--yoyi-space-3), env(safe-area-inset-bottom))
+  );
+}
+.profileIdentity.coverIdentity {
+  display: grid;
+  justify-items: stretch;
+  gap: var(--yoyi-space-3);
+  padding: calc(var(--yoyi-space-10) * 2)
+    max(var(--yoyi-space-5), env(safe-area-inset-right))
+    calc(var(--cover-bottom-inset, 0px) + var(--yoyi-space-9))
+    max(var(--yoyi-space-5), env(safe-area-inset-left));
+}
+.coverProfile:not(:has(.profileCover img)):not([data-cover-measure])
+  > .coverIdentity {
+  padding-top: var(--yoyi-space-4);
+  padding-bottom: var(--yoyi-space-5);
+  background: none;
+}
+/*
+ * A quiet chevron at the foot of the cover: more lies below. It fades in,
+ * floats a few times and goes for good once the collections have been
+ * reached; tapping it makes the same glide.
+ */
+.scrollHint {
+  position: absolute;
+  z-index: 1;
+  bottom: calc(var(--cover-bottom-inset, 0px) + var(--yoyi-space-3));
+  left: 50%;
+  display: grid;
+  width: 44px;
+  height: 28px;
+  margin-left: -22px;
+  padding: 0;
+  place-items: center;
+  color: color-mix(in srgb, var(--yoyi-color-paper-light) 72%, transparent);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 160ms var(--yoyi-easing-standard);
+  -webkit-tap-highlight-color: transparent;
+}
+/* Shown, floating, each time the reader is back on the photo. */
+.coverRoot[data-profile-stage="cover"] .scrollHint {
+  animation:
+    cover-hint-in 360ms var(--yoyi-easing-standard) 500ms forwards,
+    cover-hint-float 1800ms ease-in-out 900ms 3;
+}
+/* 28 px to the eye, 44 px to the finger. */
+.scrollHint::after {
+  position: absolute;
+  inset: -8px 0;
+  content: "";
+}
+.scrollHint svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.scrollHint:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+@keyframes cover-hint-in {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes cover-hint-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(5px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coverRoot[data-profile-stage="cover"] .scrollHint {
+    animation: cover-hint-in 1ms linear 500ms forwards;
+  }
+}
+/* Without a photo the owner's pencil sits beside the name row. */
+.coverProfile:has(> .backgroundEdit):not(:has(.profileCover img)):not(
+    [data-cover-measure]
+  )
+  .coverHead {
+  padding-inline-end: calc(44px + var(--yoyi-space-2));
+}
+.coverHead {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+}
+.coverHead > .avatar {
+  flex: none;
+  border: 3px solid var(--yoyi-color-background-page);
+  border-radius: var(--yoyi-radius-full);
+}
+/* Over a photo the avatar floats off it, ringed in the photo's shade. */
+.coverProfile:is(:has(.profileCover img), [data-cover-measure])
+  .coverHead
+  > .avatar {
+  border-color: var(--cover-shade-photo, var(--yoyi-color-paper-dark));
+  box-shadow:
+    0 10px 28px color-mix(in srgb, var(--yoyi-color-ink-black) 26%, transparent),
+    0 2px 6px color-mix(in srgb, var(--yoyi-color-ink-black) 16%, transparent);
+}
+
+.profile .coverNames {
+  display: grid;
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: var(--yoyi-space-1);
+}
+.coverNames h1 {
+  overflow-wrap: anywhere;
+}
+.identity .coverMeta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+  gap: var(--yoyi-space-1) var(--yoyi-space-3);
+}
+.coverBio {
+  max-width: 40em;
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.coverBar {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-2) var(--yoyi-space-4);
+}
+.coverBar:empty {
+  display: none;
+}
+.coverCounts {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-5);
+}
+.coverCount {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: var(--yoyi-type-label-size);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.coverCount strong {
+  font-weight: 650;
+}
+/*
+ * In the collections stage all of the identity's text, the seal-red counts
+ * included, takes the primary text colour, with a tight shadow off the
+ * texture: the glass card's tint keeps it at 4.5:1 or more while letting the
+ * photo show.
+ */
+.coverRoot[data-profile-stage="content"]
+  .coverProfile:has(.profileCover img)
+  .coverIdentity
+  :is(h1, p, .coverCount) {
+  text-shadow: 0 1px 2px
+    color-mix(in srgb, var(--yoyi-color-ink-black) 45%, transparent);
+}
+.coverRoot[data-profile-stage="content"]
+  .coverProfile:has(.profileCover img)
+  .coverIdentity
+  [data-theme="dark"] {
+  --yoyi-color-text-secondary: var(--yoyi-color-text-primary);
+}
+.coverRoot[data-profile-stage="content"]
+  .coverProfile:has(.profileCover img)
+  .coverCount
+  strong {
+  color: var(--yoyi-color-text-primary);
+}
+.coverActions {
+  display: flex;
+  align-items: center;
+  margin-inline-start: auto;
+  gap: var(--yoyi-space-3);
+}
+/*
+ * The publishing pills (media.module.css), compact for this row: 34 px to
+ * the eye, still 44 px to the finger.
+ */
+.coverActions > .coverButton,
+.moreButton {
+  position: relative;
+  display: inline-flex;
+  box-sizing: border-box;
+  height: 34px;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding-inline: var(--yoyi-space-5);
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.coverActions > .coverButton::after,
+.moreButton::after {
+  position: absolute;
+  inset: -5px 0;
+  content: "";
+}
+.coverActions > .coverPrimary {
+  min-width: 68px;
+  box-shadow: 0 4px 14px
+    color-mix(in srgb, var(--yoyi-color-seal-red) 28%, transparent);
+}
+.coverActions > .coverButton:not(.coverPrimary),
+.moreButton {
+  color: var(--yoyi-color-text-primary);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-background-surface) 88%,
+    transparent
+  );
+  border: 1px solid var(--yoyi-color-border-default);
+  box-shadow: 0 2px 8px
+    color-mix(in srgb, var(--yoyi-color-ink-black) 6%, transparent);
+}
+.moreActions {
+  position: relative;
+}
+.moreButton {
+  width: 34px;
+  padding: 0;
+  border-radius: var(--yoyi-radius-full);
+  cursor: pointer;
+}
+.moreButton::after {
+  inset: -5px;
+}
+.moreButton svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+/* The composer's 更多操作 menu (editor.module.css), opening upward. */
+.moreMenu {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: calc(100% + var(--yoyi-space-2));
+  display: grid;
+  min-width: 140px;
+  padding: var(--yoyi-space-2);
+  background: var(--yoyi-color-background-elevated);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  box-shadow: var(--yoyi-shadow-dialog);
+}
+.moreMenu button {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 0 var(--yoyi-space-4);
+  color: var(--yoyi-color-error);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  text-align: start;
+  cursor: pointer;
+}
+.coverCount:focus-visible,
+.moreButton:focus-visible,
+.moreMenu button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+@media (hover: hover) {
+  .coverCount:hover {
+    color: var(--yoyi-color-text-primary);
+  }
+  .moreButton:hover,
+  .moreMenu button:hover {
+    background: var(--yoyi-color-background-muted);
+  }
 }
 
 .avatar {

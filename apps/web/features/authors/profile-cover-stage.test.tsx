@@ -46,15 +46,20 @@ vi.mock("react-easy-crop", async () => {
   };
 });
 import { ProfileCoverStage } from "./profile-cover-stage";
-import { COVER_ASPECT, COVER_SAFE_RECT, coverWindow } from "./profile-cover";
+import {
+  COVER_ASPECT,
+  COVER_SAFE_RECT,
+  REFERENCE_HEADERS,
+  coverWindow,
+} from "./profile-cover";
 import type { HeaderBox } from "./profile-cover";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const headers: Record<"phone" | "desktop", HeaderBox> = {
-  phone: { width: 390, height: 544, identityTop: 330 },
-  desktop: { width: 960, height: 556, identityTop: 308 },
+  phone: { ...REFERENCE_HEADERS.phone, height: 544, panelTop: 333.6 },
+  desktop: REFERENCE_HEADERS.desktop,
 };
 let root: Root | null = null;
 const onAreaChange = vi.fn();
@@ -129,7 +134,10 @@ it("frames the 4:3 master with the measured phone window, the desktop reference 
   const reference = document.querySelector<HTMLElement>(
     '[data-cover-reference="desktop"]',
   )!;
-  expect(reference.style.height).toBe(percent(coverWindow(960 / 556).height));
+  // A full-height desktop cover (960×800) shows a centred strip too.
+  const desktop = coverWindow(960 / 800);
+  expect(reference.style.width).toBe(percent(desktop.width));
+  expect(reference.style.left).toBe(percent(desktop.x));
   expect(
     document.querySelector<HTMLElement>("[data-cover-safe]")!.style.width,
   ).toBe(percent(COVER_SAFE_RECT.width));

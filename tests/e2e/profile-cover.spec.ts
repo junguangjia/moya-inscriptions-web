@@ -278,19 +278,30 @@ async function mediaScale(page: Page) {
     .evaluate((node) => new DOMMatrix(getComputedStyle(node).transform).a);
 }
 
-/** Header fractions inside the clear top band, away from the pencil. */
+/**
+ * Header fractions inside the clear photo band: below the top bar (which may
+ * be solid), away from the pencil and above the identity panel.
+ */
 const HEADER_POINTS = [
-  [0.3, 0.08],
-  [0.5, 0.18],
-  [0.65, 0.28],
+  [0.3, 0.14],
+  [0.5, 0.22],
+  [0.65, 0.3],
 ] as const;
 
+/**
+ * The header's shape with a photo. A header without one is compact, so it is
+ * read the way the editor reads it: with the cover geometry flag, for one
+ * synchronous measurement (profile-hero-layout-v1).
+ */
 async function headerWindow(page: Page) {
   return page.evaluate(() => {
     const section = document.querySelector<HTMLElement>(
       "[data-author-profile] [data-profile-background-slot]",
     )!;
+    const bare = !section.querySelector("img");
+    if (bare) section.setAttribute("data-cover-measure", "");
     const { width, height } = section.getBoundingClientRect();
+    if (bare) section.removeAttribute("data-cover-measure");
     const aspect = width / height;
     const master = 4 / 3;
     return aspect <= master
@@ -338,6 +349,11 @@ test("Crop frame, saved bytes and the reloaded header show the same framing", as
   expect(Math.abs(info.width / info.height - 4 / 3)).toBeLessThan(0.01);
   expect(info.width).toBe(1600);
   expect(state.uploads[0]!.bytes.length).toBeLessThanOrEqual(4 * 1024 * 1024);
+  // The saved photo gives the header exactly the shape the editor framed.
+  const live = await headerWindow(page);
+  expect(Math.abs(live.aspect - window.aspect)).toBeLessThan(
+    0.005 * window.aspect,
+  );
   const cover = "[data-author-profile] [data-profile-background-slot]";
   for (const readBack of [
     await decode(page, cover, HEADER_POINTS),
