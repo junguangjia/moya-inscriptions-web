@@ -549,7 +549,7 @@ export const ArticleAuthoringWorkspace = (
         )}
       </div>
       {uploads === null || resolver === null ? (
-        <>
+        <div className={styles.preparing}>
           <IconButton
             ref={props.backButtonRef}
             icon={<Icon name="back" />}
@@ -561,7 +561,7 @@ export const ArticleAuthoringWorkspace = (
               ? "正在准备专题素材…"
               : "账号状态已变化，请返回后重新打开专题。"}
           </p>
-        </>
+        </div>
       ) : (
         <ArticleAuthoringBoundary
           active

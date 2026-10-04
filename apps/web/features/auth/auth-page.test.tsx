@@ -56,6 +56,7 @@ describe("authentication loading and error return", () => {
     me.mockReturnValue(new Promise(() => undefined));
     await render();
     expect(container.textContent).toContain("正在准备登录…");
+    expect(back()?.closest("nav")?.getAttribute("aria-label")).toBe("认证导航");
     expect(back()?.textContent?.trim()).toBe("");
     expect(back()?.querySelector("[data-icon='back']")).not.toBeNull();
     expect(container.textContent).not.toContain("返回");
