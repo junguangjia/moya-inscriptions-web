@@ -13,6 +13,7 @@ import type {
   CatalogPage,
   PublishingMediaItem,
 } from "@moya/contracts";
+import { Icon, IconButton } from "@moya/ui";
 import { authorClient } from "../../../lib/public-api/author-community-client";
 import {
   articleAuthoringClient,
@@ -549,9 +550,12 @@ export const ArticleAuthoringWorkspace = (
       </div>
       {uploads === null || resolver === null ? (
         <>
-          <button type="button" ref={props.backButtonRef} onClick={close}>
-            返回
-          </button>
+          <IconButton
+            ref={props.backButtonRef}
+            icon={<Icon name="back" />}
+            label="返回"
+            onClick={close}
+          />
           <p role="status">
             {sameAccount()
               ? "正在准备专题素材…"

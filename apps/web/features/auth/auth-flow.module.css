@@ -20,13 +20,12 @@
   gap: var(--yoyi-space-3);
 }
 
+/* Icon-only back: the 44px target is centred on the 24px icon, so the inset
+   keeps the icon on the content edge. */
 .back {
-  min-height: 44px;
-  padding-inline: var(--yoyi-space-3);
-  margin-inline-start: calc(-1 * var(--yoyi-space-3));
-  font-weight: 400;
+  flex-shrink: 0;
+  margin-inline-start: calc((24px - 44px) / 2);
   border-radius: var(--yoyi-radius-full);
-  white-space: nowrap;
 }
 
 .progress {
@@ -412,10 +411,6 @@
 @media (max-width: 359px) {
   .progress {
     gap: var(--yoyi-space-2);
-  }
-
-  .back {
-    font-size: 0.875rem;
   }
 }
 

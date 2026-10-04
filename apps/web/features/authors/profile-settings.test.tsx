@@ -165,6 +165,10 @@ describe("grouped My settings", () => {
     expect(node.querySelector("dialog")?.open).toBe(true);
     expect(node.querySelector("a")?.getAttribute("href")).toBe("/login");
     expect(node.textContent).toContain("登录后管理账户设置");
+    const back = button(node, "返回");
+    expect(back.querySelector("[data-icon='back']")).not.toBeNull();
+    expect(back.querySelector("svg")).toBeNull();
+    expect(back.textContent).toBe("");
     await click(node, "外观");
     await click(node, "深色");
     await click(node, "单列");

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button } from "@moya/ui";
+import { Button, Icon, IconButton } from "@moya/ui";
 import { useRouter } from "next/navigation";
 import { AuthFlow } from "./auth-flow";
+import styles from "./auth-flow.module.css";
 import { safeReturnPath } from "./auth-api";
 import { useAuthReturn } from "./auth-return";
 import { authorClient, AuthorRequestError } from "../authors/author-data";
@@ -62,13 +63,16 @@ export const AuthPage = ({
         }}
         aria-live="polite"
       >
+        <IconButton
+          className={styles.back}
+          icon={<Icon name="back" />}
+          label="返回原页面"
+          onClick={() => returnToSource(returnTo)}
+        />
         <p>{failed ? "暂时无法连接登录服务，请重试。" : "正在准备登录…"}</p>
         {failed && (
           <Button onClick={() => setRevision((old) => old + 1)}>重试</Button>
         )}
-        <Button variant="quiet" onClick={() => returnToSource(returnTo)}>
-          返回原页面
-        </Button>
       </main>
     );
   return (

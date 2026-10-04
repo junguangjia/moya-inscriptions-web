@@ -1,6 +1,6 @@
 "use client";
 
-import { Icon } from "@moya/ui";
+import { Icon, IconButton } from "@moya/ui";
 import {
   useCallback,
   useDeferredValue,
@@ -502,9 +502,11 @@ const UnavailablePanel = ({
         >
           重试
         </button>
-        <button className={styles.textButton} onClick={onBack} type="button">
-          返回
-        </button>
+        <IconButton
+          icon={<Icon aria-hidden="true" name="back" />}
+          label="返回"
+          onClick={onBack}
+        />
       </div>
     </div>
   );

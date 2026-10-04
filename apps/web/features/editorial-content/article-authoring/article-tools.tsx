@@ -19,7 +19,6 @@ import type { ArticleMarkPaletteController } from "./article-mark-palette";
 import styles from "./article-authoring.module.css";
 
 export type ArticleToolName =
-  | "back"
   | "undo"
   | "redo"
   | "bold"
@@ -47,7 +46,6 @@ export type ArticleToolName =
   | "close";
 
 const paths: Record<ArticleToolName, string> = {
-  back: "m15 5-7 7 7 7",
   undo: "M8 4 3 9l5 5M3 9h11a7 7 0 0 1 0 14",
   redo: "m16 4 5 5-5 5m5-5H10a7 7 0 0 0 0 14",
   bold: "M7 4h6a4 4 0 0 1 0 8H7V4Zm0 8h7a4 4 0 0 1 0 8H7v-8Z",

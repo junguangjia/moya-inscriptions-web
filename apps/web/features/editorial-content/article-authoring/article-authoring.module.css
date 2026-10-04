@@ -30,6 +30,12 @@
   font: inherit;
   cursor: pointer;
 }
+/* The back control is icon-only: a 44px target centred on the shared icon. */
+.bar > button:first-child {
+  justify-content: center;
+  min-width: 44px;
+  padding: 0;
+}
 .bar > button:last-child {
   background: var(--yoyi-color-seal-red);
   color: var(--yoyi-color-text-inverse);
@@ -402,9 +408,6 @@
   .bar {
     gap: var(--yoyi-space-2);
     padding-inline: var(--yoyi-space-3);
-  }
-  .bar > button:first-child span {
-    display: none;
   }
   .scroller {
     padding-top: var(--yoyi-space-6);

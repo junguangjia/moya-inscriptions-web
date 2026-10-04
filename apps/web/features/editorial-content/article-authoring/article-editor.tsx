@@ -20,6 +20,7 @@ import {
 } from "@blocknote/react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ArticlePreview } from "@moya/contracts";
+import { Icon } from "@moya/ui";
 import type { KeyboardEvent } from "react";
 import { authorClient } from "../../../lib/public-api/author-community-client";
 import { requestIdentity } from "../../shell/request-identity";
@@ -826,8 +827,7 @@ export default function ArticleEditor(props: ArticleEditorProps) {
             })
           }
         >
-          <ArticleToolIcon name="back" />
-          <span>返回</span>
+          <Icon name="back" />
         </button>
         <div className={styles.status}>
           <strong>写专题</strong>

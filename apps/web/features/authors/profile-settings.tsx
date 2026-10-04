@@ -651,7 +651,6 @@ export const ProfileSettings = ({
   );
   return (
     <AuthorDialog
-      backIcon={<SettingsIcon name="arrow-left" />}
       title={page === "factor" ? factorTitle : titles[page]}
       titleContent={
         <span ref={title} className={styles.title} tabIndex={-1}>
