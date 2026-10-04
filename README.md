@@ -38,7 +38,7 @@ fixture 的仓库存在不授权 Production 使用。
 - `services/backend-production`：PostgreSQL-backed production composition
   root；启动时只读验证所选内容源的 schema readiness。
 - `services/api`：backend-only Catalog application boundary。
-- `services/catalog-postgres`：private PostgreSQL 18
+- `services/catalog-postgres`：private PostgreSQL 16/18
   adapter、queries、migrations/readiness integration。
 - `services/catalog-importer`：受控 CSV/XLSX parsing、canonical
   convergence、dry-run、hash-bound approval 与 transactional apply。
@@ -113,7 +113,7 @@ pnpm build
 pnpm test:e2e
 ```
 
-PostgreSQL integration tests 需要显式迁移的 PostgreSQL 18 test instance 和
+PostgreSQL integration tests 需要显式迁移的 PostgreSQL 16 或 18 test instance 和
 `TEST_DATABASE_URL`。
 
 ## 分支与发布

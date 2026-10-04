@@ -186,6 +186,10 @@ its fixed `max=5`. `DATABASE_IDLE_TIMEOUT_MS` defaults to 10000 milliseconds.
 Choose the instance connection budget after counting both pools, independent
 instances and controlled operational connections.
 
+The supported server majors are PostgreSQL 16 (minimum) and 18; the Backend
+refuses any other major at startup, and the named runtime grants apply on both
+([baseline](../../docs/deployment/postgres-18-readiness-and-migrations.md)).
+
 Use `sslmode=verify-full` in each remote database URL. Optional
 `DATABASE_SSL_CA_FILE` / `CMS_DATABASE_SSL_CA_FILE` supplies a custom CA when
 the provider requires one; otherwise TLS uses system trusted CAs. TLS always

@@ -228,6 +228,12 @@ export const WEB_VERIFICATION_PROFILES = Object.freeze({
     quick: VALIDATION_PROFILES.webQuick,
     complete: VALIDATION_PROFILES.webComplete,
   }),
+  // Only the PostgreSQL slice of `test` (migrations and the integration
+  // suite), for a further supported PostgreSQL major's test database.
+  postgres: Object.freeze({
+    quick: VALIDATION_PROFILES.webQuick,
+    complete: VALIDATION_PROFILES.webComplete,
+  }),
   build: Object.freeze({
     quick: VALIDATION_PROFILES.webQuick,
     complete: VALIDATION_PROFILES.webComplete,
@@ -321,6 +327,8 @@ export function verificationPlan(mode, flags = [], env = {}, root) {
       );
     options.profile = "complete";
   }
+  if (mode === "postgres" && !env.TEST_DATABASE_URL)
+    throw new Error("The postgres stage requires an explicit test database");
   const selected = options.profile ?? "quick";
   return {
     mode,
@@ -383,6 +391,7 @@ export function verificationCommands(
     lint: [pnpm("format:check"), pnpm("lint")],
     typecheck: [pnpm("typecheck")],
     test: [...(env.TEST_DATABASE_URL ? postgres : []), pnpm("test")],
+    postgres,
     build: [pnpm("build")],
     e2e: [bounded(smoke)],
   };
@@ -415,6 +424,9 @@ export function verificationCommands(
           "--cache=local:r",
         ],
       ],
+      // Database preparation and the integration suite are not workspace
+      // scoped; the selection only narrows the unit and build stages.
+      postgres,
       build: [turbo("build")],
     };
     return scoped[mode];
@@ -432,7 +444,10 @@ if (
   process.env.MOYA_VERIFICATION_TOOLCHAIN = `${process.version}/${process.platform}/${process.arch}`;
   // Migration and integration tests must use the same explicitly supplied test
   // database, even when the developer also has an ordinary DATABASE_URL set.
-  if (["all", "test"].includes(mode) && process.env.TEST_DATABASE_URL) {
+  if (
+    ["all", "test", "postgres"].includes(mode) &&
+    process.env.TEST_DATABASE_URL
+  ) {
     process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
     process.env.MOYA_CONTENT_SOURCE = "legacy";
     // The migration entry below must itself refuse anything but a marked

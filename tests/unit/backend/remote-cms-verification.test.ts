@@ -43,7 +43,7 @@ afterEach(async () => {
   );
 });
 
-async function fixture() {
+async function fixture(serverVersionNum = 180006) {
   const directory = await mkdtemp(path.join(tmpdir(), "remote-cms-synthetic-"));
   directories.push(directory);
   const caFile = path.join(directory, "public-ca.pem");
@@ -57,7 +57,7 @@ async function fixture() {
     database: "p2r2b_cms_test_0123456789",
     user: "p2r2b_test_0123456789",
     databaseOid: "12345",
-    serverVersionNum: 180006,
+    serverVersionNum,
     caSha256: createHash("sha256").update(ca).digest("hex"),
   };
   const database = `postgresql://${target.user}@${target.host}:${target.port}/${target.database}?sslmode=verify-full`;
@@ -135,6 +135,8 @@ describe("explicit remote synthetic CMS verification", () => {
     ["database", "p2r2b_cms_test_other"],
     ["user", "p2r2b_test_other"],
     ["serverVersionNum", 180004],
+    ["serverVersionNum", 160014],
+    ["serverVersionNum", 170006],
     ["caSha256", "0".repeat(64)],
   ])(
     "rejects a mismatched or unapproved record field: %s",
@@ -239,6 +241,39 @@ describe("explicit remote synthetic CMS verification", () => {
       { custom_schemas: 1 },
       { other_extensions: 1 },
       { large_objects: 1 },
+    ])
+      await expect(
+        runner.verifyRemoteSyntheticDatabase(environment, async () => ({
+          rows: [{ ...identity, ...changed }],
+        })),
+      ).rejects.toThrow("PREFLIGHT_FAILED");
+  });
+
+  it("accepts the approved PostgreSQL 16 build only with its exact live version", async () => {
+    const { environment, target } = await fixture(160015);
+    expect(cmsRemoteSyntheticTarget(environment).serverVersionNum).toBe(160015);
+    const identity = {
+      database: target.database,
+      username: target.user,
+      database_oid: target.databaseOid,
+      version_num: "160015",
+      server_version: "16.15",
+      tls: true,
+      user_objects: 0,
+      custom_schemas: 0,
+      other_extensions: 0,
+      large_objects: 0,
+    };
+    await expect(
+      runner.verifyRemoteSyntheticDatabase(environment, async () => ({
+        rows: [identity],
+      })),
+    ).resolves.toEqual({ versionNum: 160015, tls: true, empty: true });
+    for (const changed of [
+      { version_num: "180006" },
+      { server_version: "16.1" },
+      { server_version: "16.150" },
+      { server_version: "18.6" },
     ])
       await expect(
         runner.verifyRemoteSyntheticDatabase(environment, async () => ({

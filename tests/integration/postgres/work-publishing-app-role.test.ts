@@ -304,6 +304,17 @@ describe.each(["clean", "phase4-upgrade", "legacy-grants-upgrade"] as const)(
         } finally {
           await fresh.end();
         }
+        // A broader residue on the offline operator authority table must also
+        // converge to SELECT only, including MAINTAIN where the server has it
+        // (PostgreSQL 17 and later; 16 has no such privilege).
+        const { maintain } = (
+          await setup.query<{ maintain: boolean }>(
+            "SELECT current_setting('server_version_num')::integer >= 170000 AS maintain",
+          )
+        ).rows[0]!;
+        await setup.query(
+          `GRANT INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER${maintain ? ", MAINTAIN" : ""} ON TABLE community.operator_password_accounts TO "${role}"`,
+        );
         referenceRole = `${role}_ref`;
         const reference = {
           database: "",
@@ -322,6 +333,18 @@ describe.each(["clean", "phase4-upgrade", "legacy-grants-upgrade"] as const)(
       }
       await setup.query(grantSql);
       await setup.query(grantSql); // supported bootstrap is idempotent
+      expect(
+        (
+          await setup.query<{ privilege_type: string }>(
+            `SELECT a.privilege_type FROM pg_class c, aclexplode(c.relacl) a
+               JOIN pg_roles r ON r.oid=a.grantee
+              WHERE c.oid='community.operator_password_accounts'::regclass
+                AND r.rolname=$1
+              ORDER BY 1`,
+            [role],
+          )
+        ).rows.map((row) => row.privilege_type),
+      ).toEqual(["SELECT"]);
       // Effective privileges after the bootstrap: no table-level UPDATE remains
       // on any community table (the plan is column-level everywhere), and an
       // upgraded role holds exactly what a fresh role holds.

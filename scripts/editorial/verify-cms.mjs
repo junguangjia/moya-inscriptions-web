@@ -225,6 +225,16 @@ export async function verifyLoopbackDisposableTarget(environment, query) {
   }
 }
 
+// server_version text ("16.15", "18.6 (...)") of one exact server_version_num.
+const matchesServerVersion = (text, versionNum) => {
+  const prefix = `${Math.floor(versionNum / 10_000)}.${versionNum % 10_000}`;
+  return (
+    typeof text === "string" &&
+    text.startsWith(prefix) &&
+    !/\d/u.test(text.charAt(prefix.length))
+  );
+};
+
 /** The caller invokes this after library builds and before the first DDL. */
 export async function verifyRemoteSyntheticDatabase(environment, query) {
   if (!environment.CMS_TEST_REMOTE_TARGET_JSON) return;
@@ -300,7 +310,7 @@ export async function verifyRemoteSyntheticDatabase(environment, query) {
       row.username !== target.user ||
       row.database_oid !== target.databaseOid ||
       row.version_num !== String(target.serverVersionNum) ||
-      !/^18\.6(?:\D|$)/.test(row.server_version ?? "") ||
+      !matchesServerVersion(row.server_version, target.serverVersionNum) ||
       row.tls !== true ||
       row.user_objects !== 0 ||
       row.custom_schemas !== 0 ||
