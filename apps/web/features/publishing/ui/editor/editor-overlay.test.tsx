@@ -1250,6 +1250,21 @@ describe("Publishing editor", () => {
       id: WORK_ID,
     });
   });
+  it("offers 重试 and an icon-only back when a work cannot be opened", async () => {
+    const harness = await renderEditor({ type: "work", id: WORK_ID }, () => {
+      fn("editableWork").mockRejectedValue(new Error("synthetic outage"));
+    });
+    const panel = query("[data-editor-unavailable]");
+    expect(panel).not.toBeNull();
+    expect(buttonByText("重试")).not.toBeNull();
+    const back = panel!.querySelector<HTMLButtonElement>(
+      "button[aria-label='返回']",
+    );
+    expect(back?.textContent?.trim()).toBe("");
+    expect(back?.querySelector("[data-icon='back']")).not.toBeNull();
+    await click(back);
+    expect(harness.controls.close).toHaveBeenCalledOnce();
+  });
   it("keeps a legacy work's undeclared 作品性质 undeclared through an edit", async () => {
     // A Phase 4 work whose author never declared one: editing and saving it
     // again must not put 原创 on it (C05).

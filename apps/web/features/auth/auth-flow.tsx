@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Icon, Input, YoyiLogo } from "@moya/ui";
+import { Button, Icon, IconButton, Input, YoyiLogo } from "@moya/ui";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { requestIdentity } from "../shell/request-identity";
@@ -833,17 +833,15 @@ export const AuthFlow = ({
         data-auth-channel={channel}
       >
         <nav className={styles.navigation} aria-label="注册说明">
-          <Button
-            variant="quiet"
+          <IconButton
             className={styles.back}
+            icon={<Icon name="back" />}
+            label="返回填写"
             onClick={() => {
               restoreAgreementFocus.current = true;
               setAgreementOpen(false);
             }}
-          >
-            <Icon name="back" />
-            返回填写
-          </Button>
+          />
         </nav>
         <article className={`${styles.panel} ${styles.agreement}`}>
           <h1 ref={agreementTitleRef} tabIndex={-1}>
@@ -889,15 +887,13 @@ export const AuthFlow = ({
       data-auth-purpose={resetting ? "password-reset" : mode}
     >
       <nav className={styles.navigation} aria-label="认证导航">
-        <Button
-          variant="quiet"
+        <IconButton
           className={styles.back}
           disabled={locked}
+          icon={<Icon name="back" />}
+          label="返回原页面"
           onClick={returnToSource}
-        >
-          <Icon name="back" />
-          返回
-        </Button>
+        />
       </nav>
       <section className={styles.panel} aria-labelledby={titleId}>
         <header className={styles.intro}>

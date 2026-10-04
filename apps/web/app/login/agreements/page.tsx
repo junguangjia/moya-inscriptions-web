@@ -1,9 +1,17 @@
+import { Icon } from "@moya/ui/brand";
 import { notFound } from "next/navigation";
 
 export default function AgreementsPage() {
   if (process.env.NODE_ENV !== "development") notFound();
   return (
     <main style={{ maxWidth: "40rem", margin: "0 auto", padding: "24px 16px" }}>
+      <a
+        aria-label="返回注册"
+        className="yoyi-icon-button yoyi-icon-button--quiet yoyi-icon-button--md"
+        href="/register"
+      >
+        <Icon name="back" />
+      </a>
       <h1>开发环境注册说明</h1>
       <p>这是开发环境草稿，不是已批准的用户协议或隐私政策。</p>
       <p>
@@ -12,9 +20,6 @@ export default function AgreementsPage() {
       </p>
       <p>
         正式上线前需要替换为已批准的法律文本。这里没有客服渠道，也没有账户注销流程。
-      </p>
-      <p>
-        <a href="/register">返回注册</a>
       </p>
     </main>
   );

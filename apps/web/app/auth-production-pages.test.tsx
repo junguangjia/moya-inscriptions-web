@@ -49,3 +49,15 @@ describe("Production real authentication pages", () => {
     expect(() => AgreementsPage()).toThrow("NEXT_NOT_FOUND");
   });
 });
+
+describe("Development registration instructions page", () => {
+  it("returns to registration through the shared icon-only back", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const markup = renderToStaticMarkup(AgreementsPage());
+    // The link leads the page and holds only the shared icon, no text.
+    expect(markup).toMatch(
+      /<main[^>]*><a aria-label="返回注册"[^>]*href="\/register"><span[^>]*data-icon="back"[^>]*><\/span><\/a><h1>/,
+    );
+    expect(markup).not.toContain(">返回注册<");
+  });
+});

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { ArticleApprovalCandidate } from "@moya/contracts";
+import { Icon } from "@moya/ui";
 import { authorClient } from "../../../lib/public-api/author-community-client";
 import { publishingClient } from "../../../lib/public-api/work-publishing-client";
 import { fetchSameOriginCatalogDetail } from "../../../lib/public-api/catalog-detail-client";
@@ -72,7 +73,13 @@ const HumanEntry = ({
   }, [ownerId, epoch, approval]);
   return (
     <main className="phase4-page">
-      <a href="/#article-editor">返回专题文章与草稿</a>
+      <a
+        aria-label="返回专题文章与草稿"
+        className="yoyi-icon-button yoyi-icon-button--quiet yoyi-icon-button--md"
+        href="/#article-editor"
+      >
+        <Icon name="back" />
+      </a>
       {author.viewer === null && !author.checking ? (
         <p>
           <a href={author.signInHref}>登录当前作者账户</a>

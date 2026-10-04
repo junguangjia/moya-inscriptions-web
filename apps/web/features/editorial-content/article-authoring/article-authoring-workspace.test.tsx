@@ -355,11 +355,12 @@ describe("Article authoring media workspace", () => {
     expect(state.editor).toBeNull();
     expect(session.limits).not.toHaveBeenCalled();
     expect(node.textContent).toContain("账号状态已变化");
-    await click(
-      [...node.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent === "返回",
-      )!,
-    );
+    const back = node.querySelector<HTMLButtonElement>(
+      "button[aria-label='返回']",
+    )!;
+    expect(back.textContent).toBe("");
+    expect(back.querySelector("[data-icon='back']")).not.toBeNull();
+    await click(back);
     expect(session.discard).not.toHaveBeenCalled();
     expect(onBack).toHaveBeenCalledOnce();
   });

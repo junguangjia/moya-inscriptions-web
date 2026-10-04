@@ -155,9 +155,12 @@ describe("AuthFlow", () => {
       element.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
+  // Icon-only controls are named by aria-label; others by their visible text.
   const button = (text: string): HTMLButtonElement => {
     const element = [...container.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === text,
+      (candidate) =>
+        candidate.getAttribute("aria-label") === text ||
+        candidate.textContent?.trim() === text,
     );
     expect(element).toBeDefined();
     return element!;
@@ -500,7 +503,7 @@ describe("AuthFlow", () => {
     });
     expect(calls("challenges/verify")).toHaveLength(1);
     expect(button("修改账号").disabled).toBe(true);
-    expect(button("返回").disabled).toBe(true);
+    expect(button("返回原页面").disabled).toBe(true);
     expect(
       container.querySelector("footer a")?.getAttribute("aria-disabled"),
     ).toBe("true");
@@ -606,6 +609,17 @@ describe("AuthFlow", () => {
       ).toBe("agreements");
       expect(container.textContent).toContain("不是已批准的用户协议或隐私政策");
       expect(container.textContent).toContain("也不是人脸核验");
+      const agreementBack = button("返回填写");
+      expect(agreementBack.closest("nav")?.getAttribute("aria-label")).toBe(
+        "注册说明",
+      );
+      expect(agreementBack.textContent?.trim()).toBe("");
+      expect(agreementBack.querySelector("[data-icon='back']")).not.toBeNull();
+      expect(
+        [...container.querySelectorAll("article button")].map((candidate) =>
+          candidate.textContent?.trim(),
+        ),
+      ).toContain("返回填写");
       await click("返回填写");
       expect(input("input[autocomplete='nickname']").value).toBe("  访碑者  ");
       expect(input("input[type='checkbox']").checked).toBe(true);
@@ -842,7 +856,11 @@ describe("AuthFlow", () => {
 
   it("uses the existing safe return path before its return callback", async () => {
     await render({ returnTo: "//outside.invalid/path" });
-    await click("返回");
+    const back = button("返回原页面");
+    expect(back.closest("nav")?.getAttribute("aria-label")).toBe("认证导航");
+    expect(back.textContent?.trim()).toBe("");
+    expect(back.querySelector("[data-icon='back']")).not.toBeNull();
+    await click("返回原页面");
     expect(onReturn).toHaveBeenCalledWith("/");
   });
   it("defaults to password login and sends existing passwords without imposing the creation policy", async () => {
@@ -1142,7 +1160,7 @@ describe("AuthFlow", () => {
     const oldReset = deferred();
     request.mockImplementationOnce(() => oldReset.promise);
     await click("重置密码");
-    expect(button("返回").disabled).toBe(true);
+    expect(button("返回原页面").disabled).toBe(true);
     await render({ mode: "register" });
     expect(container.querySelector("input[type='password']")).toBeNull();
     const nextSend = deferred();

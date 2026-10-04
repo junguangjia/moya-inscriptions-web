@@ -12,7 +12,6 @@ export interface AuthorDialogNavigationHandle {
 export const AuthorDialog = ({
   title,
   titleContent,
-  backIcon,
   onBack,
   navigationDepth,
   navigationRef,
@@ -27,8 +26,6 @@ export const AuthorDialog = ({
 }: {
   title: string;
   titleContent?: ReactNode;
-  /** Settings-local presentation; other consumers retain the existing icon. */
-  backIcon?: ReactNode;
   /** Restore the local view represented by the given child depth. */
   onBack?: ((targetDepth: number) => void) | undefined;
   /** Opt in to browser history for local child pages; the modal root is zero. */
@@ -244,7 +241,7 @@ export const AuthorDialog = ({
             onClick={back}
             disabled={!dismissible}
           >
-            {backIcon ?? <Icon aria-hidden="true" name="back" />}
+            <Icon aria-hidden="true" name="back" />
           </button>
           <h2>{titleContent ?? title}</h2>
         </header>
