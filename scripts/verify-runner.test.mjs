@@ -277,6 +277,39 @@ describe("affected workspace command boundaries", () => {
       ],
     );
   });
+
+  it("runs only the PostgreSQL slice for a further supported major", (t) => {
+    const env = { TEST_DATABASE_URL: "synthetic-target-present" };
+    assert.throws(
+      () => verificationPlan("postgres", ["--profile", "complete"], {}),
+      /requires an explicit test database/u,
+    );
+    const plan = verificationPlan("postgres", ["--profile", "complete"], env);
+    assert.equal(plan.profile, "web-complete");
+    assert.equal(plan.ceilingMs, 300000);
+    const commands = verificationCommands(plan, env);
+    assert.deepEqual(
+      commands.slice(1).map((command) => command.slice(1)),
+      [
+        ["scripts/test-target.mjs", "check", "TEST_DATABASE_URL"],
+        ["db:migrate"],
+        ["test:postgres"],
+      ],
+    );
+    // The same preparation as the test stage, never the unit suite.
+    assert.deepEqual(
+      commands,
+      verificationCommands(verificationPlan("test", [], env), env).slice(0, -1),
+    );
+    // A classifier workspace selection narrows nothing here.
+    const scoped = verificationPlan(
+      "postgres",
+      ["--profile", "complete"],
+      { ...env, MOYA_VERIFY_WORKSPACES: "@moya/tests" },
+      workspaceFixture(t),
+    );
+    assert.deepEqual(verificationCommands(scoped, env), commands);
+  });
 });
 
 describe("bounded independent checks", () => {

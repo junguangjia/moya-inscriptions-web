@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { CatalogQueryUnavailableError } from "@moya/api";
 import {
   asPostgresOperationError,
+  assertPostgresStartupReady,
   catalogPageOffset,
   mapAliasRows,
   mapCatalogDetailRow,
@@ -529,4 +530,40 @@ describe("migration manifest", () => {
       "manifest mismatch",
     );
   });
+});
+
+describe("PostgreSQL startup major version", () => {
+  // Every query answers with the version row, so the ledger read that follows
+  // an accepted major finds no migrations and fails startup validation, while
+  // a refused major stops at the version check.
+  const poolReporting = (serverVersionNum: string) =>
+    ({
+      connect: async () => ({
+        query: async () => ({
+          rows: [{ server_version_num: serverVersionNum }],
+        }),
+        release: () => undefined,
+      }),
+      query: async () => {
+        throw new Error("synthetic ledger probe");
+      },
+    }) as unknown as Parameters<typeof assertPostgresStartupReady>[0];
+
+  it.each(["160000", "160015", "180004", "180006"])(
+    "accepts validated major %s and continues to the ledger check",
+    async (version) => {
+      await expect(
+        assertPostgresStartupReady(poolReporting(version)),
+      ).rejects.toThrow(/^PostgreSQL startup validation failed$/);
+    },
+  );
+
+  it.each(["150013", "170006", "190000", "16.15", ""])(
+    "refuses unvalidated server_version_num %j before any ledger read",
+    async (version) => {
+      await expect(
+        assertPostgresStartupReady(poolReporting(version)),
+      ).rejects.toThrow(/^PostgreSQL major version 16 or 18 is required$/);
+    },
+  );
 });

@@ -6,7 +6,7 @@ provider/resource；这些文档不能作为真实外部操作授权。
 
 ## Active documents
 
-- [PostgreSQL 18 migration and readiness baseline](postgres-18-readiness-and-migrations.md)
+- [PostgreSQL migration and readiness baseline (supported majors 16 and 18)](postgres-18-readiness-and-migrations.md)
 - [Provider-neutral deployment checklist](deployment-checklist.md)
 - [Provider-neutral rollback principles](rollback-plan.md)
 

@@ -11,6 +11,10 @@ import {
   type PostgresConfig,
 } from "@moya/catalog-postgres";
 
+// Exact TencentDB builds approved as remote synthetic targets: the PostgreSQL
+// 16 minimum supported Production major and the PostgreSQL 18 one.
+const REMOTE_SYNTHETIC_SERVER_VERSIONS: readonly unknown[] = [160015, 180006];
+
 /** Explicit remote verification exception; ordinary targets retain their guard. */
 export function cmsRemoteSyntheticTarget(
   environment: Readonly<Record<string, string | undefined>> = process.env,
@@ -38,7 +42,7 @@ export function cmsRemoteSyntheticTarget(
         "caSha256,database,databaseOid,host,kind,port,serverVersionNum,user,version" ||
       record.version !== 1 ||
       record.kind !== "p2-r2b-remote-synthetic" ||
-      record.serverVersionNum !== 180006 ||
+      !REMOTE_SYNTHETIC_SERVER_VERSIONS.includes(record.serverVersionNum) ||
       typeof record.host !== "string" ||
       !record.host ||
       !Number.isSafeInteger(record.port) ||

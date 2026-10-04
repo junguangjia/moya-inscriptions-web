@@ -196,6 +196,19 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U moya_test -d moya_test" --health-interval
           2s --health-timeout 3s --health-retries 20
+      # PostgreSQL 16 is the minimum supported Production major; 18 above is
+      # the newer one. Both run the same migrations and integration suite.
+      postgres16:
+        image: postgres:16.15-alpine
+        env:
+          POSTGRES_DB: moya_test
+          POSTGRES_PASSWORD: synthetic-ci-postgres-password
+          POSTGRES_USER: moya_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U moya_test -d moya_test" --health-interval
+          2s --health-timeout 3s --health-retries 20
 
     steps:
       - name: Check out repository
@@ -234,6 +247,21 @@ jobs:
       - name: Complete CI test milestone within 300 seconds
         run: node scripts/verify.mjs test --ci-milestone
 
+      - name: Mark the CI PostgreSQL 16 service as a disposable test target
+        run: >-
+          docker exec -i "${{ job.services.postgres16.id }}" psql -v
+          ON_ERROR_STOP=1 -U moya_test -d moya_test -f -
+          <infra/test/disposable-test-target.sql
+
+      # The same migrations and PostgreSQL integration suite on the minimum
+      # supported major, as their own explicit complete profile.
+      - name: PostgreSQL 16 migrations and integration within 300 seconds
+        env:
+          DATABASE_URL: postgresql://moya_test:synthetic-ci-postgres-password@127.0.0.1:5433/moya_test
+          TEST_DATABASE_URL: postgresql://moya_test:synthetic-ci-postgres-password@127.0.0.1:5433/moya_test
+          TEST_DATABASE_EXPECTED_VERSION_NUM: "160015"
+        run: node scripts/verify.mjs postgres --profile complete
+
   cms:
     name: cms
     needs: classify_e2e
@@ -251,6 +279,18 @@ jobs:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cms_qa -d cms_synthetic_test"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+      # The minimum supported Production major, for the Payload checks below.
+      postgres16:
+        image: postgres:16.15-alpine
+        env:
+          POSTGRES_DB: cms_synthetic_test
+          POSTGRES_USER: cms_qa
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5433:5432
         options: >-
           --health-cmd "pg_isready -U cms_qa -d cms_synthetic_test"
           --health-interval 2s --health-timeout 3s --health-retries 20
@@ -283,6 +323,15 @@ jobs:
           # Explicitly fictional, isolated CI database; no cloud access.
           CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5432/cms_synthetic_test
         run: pnpm test:cms --profile complete
+      - name: Mark the CI PostgreSQL 16 service as a disposable test target
+        run: >-
+          docker exec -i "${{ job.services.postgres16.id }}" psql -v
+          ON_ERROR_STOP=1 -U cms_qa -d cms_synthetic_test -f -
+          <infra/test/disposable-test-target.sql
+      - name: Real Payload migrations and PostgreSQL 16 integration
+        env:
+          CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test
+        run: pnpm test:cms --profile complete
       - name: Prepare native Admin browser validation
         run: |
           pnpm --filter @moya/tests exec playwright install --with-deps --only-shell chromium
@@ -290,6 +339,10 @@ jobs:
       - name: Native Owner create, publish, autosave, batch approval and restore
         env:
           CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5432/cms_synthetic_test
+        run: pnpm test:cms:browser --profile complete
+      - name: Native Owner browser flow on PostgreSQL 16
+        env:
+          CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test
         run: pnpm test:cms:browser --profile complete
       # Mandatory, and last so the Production Admin browser check above runs
       # against a tree this harness has not touched. The harness owns
