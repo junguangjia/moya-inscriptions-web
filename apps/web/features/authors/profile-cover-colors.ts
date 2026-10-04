@@ -11,6 +11,14 @@ const COVER_SHADE_MAX_LUMINANCE = 0.016;
 /** The card's frost, in CSS px; the stylesheet's blur matches it. */
 const COVER_CARD_BLUR = 5;
 /**
+ * The frost as sampled: three 9-px box blurs (sigma about 4.5), a little
+ * sharper than the stylesheet's blur, so bright detail is never
+ * underestimated…
+ */
+const COVER_CARD_BOX_RADIUS = 4;
+/** …then the stylesheet's saturate(), as browsers apply it (in sRGB). */
+const COVER_CARD_SATURATE = 1.15;
+/**
  * Behind its text the glass stays this dark at most: the dark theme's
  * primary text (#e7e1d6) reads at 4.5:1 up to 0.129.
  */
@@ -170,7 +178,7 @@ export interface CoverCardLayout {
 }
 /**
  * The glass card's tint, sampled from the photo as the card shows it (the
- * photo over the box colour under the card, blurred as the CSS blurs it): the
+ * photo over the box colour under the card, frosted as the CSS frosts it): the
  * card's own average colour darkened into a shade, so the glass keeps the
  * photo's hue, laid on at the thinnest opacity under which every line of the
  * identity's text (the dark theme's primary text on the glass) reads at 4.5:1
@@ -229,7 +237,7 @@ export const coverCard = (
         plane[index] = data[index * 4 + offset]!;
       return plane;
     });
-    const radius = COVER_CARD_BLUR,
+    const radius = COVER_CARD_BOX_RADIUS,
       span = 2 * radius + 1,
       scratch = new Float32Array(columns * rows);
     const clamp = (value: number, last: number) =>
@@ -260,6 +268,28 @@ export const coverCard = (
           }
         }
       }
+    // Then the stylesheet's saturate() (the Filter Effects matrix, in sRGB,
+    // clamped as painted): it brightens saturated colours.
+    const amount = COVER_CARD_SATURATE;
+    for (let index = 0; index < columns * rows; index++) {
+      const [red, green, blue] = channels.map(
+        (plane) => plane[index]!,
+      ) as Channels;
+      const mixed = [
+        (0.213 + 0.787 * amount) * red +
+          (0.715 - 0.715 * amount) * green +
+          (0.072 - 0.072 * amount) * blue,
+        (0.213 - 0.213 * amount) * red +
+          (0.715 + 0.285 * amount) * green +
+          (0.072 - 0.072 * amount) * blue,
+        (0.213 - 0.213 * amount) * red +
+          (0.715 - 0.715 * amount) * green +
+          (0.072 + 0.928 * amount) * blue,
+      ];
+      mixed.forEach((value, channel) => {
+        channels[channel]![index] = Math.min(255, Math.max(0, value));
+      });
+    }
     const glassAt = (x: number, y: number): Channels => {
       const index =
         clamp(Math.round(y) - top, rows - 1) * columns +
@@ -337,8 +367,12 @@ export const coverCard = (
       }
       alpha = dark;
     }
-    // Rounded up, so the painted tint is never thinner than the solved one.
-    return { tint: rgb(shade), alpha: Math.ceil(alpha * 1000) / 1000 };
+    // Rounded up to the next 1/255 (as browsers paint opacity), so the
+    // painted tint is never thinner than the solved one.
+    return {
+      tint: rgb(shade),
+      alpha: Math.ceil((Math.ceil(alpha * 255) / 255) * 10000) / 10000,
+    };
   } catch {
     return null;
   }

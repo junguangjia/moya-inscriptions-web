@@ -84,9 +84,41 @@ describe("coverCard", () => {
     ).toBeGreaterThan(0.115);
   });
 
+  it("counts the frost's saturation over a vivid red photo", () => {
+    // saturate(1.15), as browsers apply it in sRGB, brightens the red.
+    const red = [220, 40, 40];
+    const matrix = [
+      [0.213 + 0.787 * 1.15, 0.715 - 0.715 * 1.15, 0.072 - 0.072 * 1.15],
+      [0.213 - 0.213 * 1.15, 0.715 + 0.285 * 1.15, 0.072 - 0.072 * 1.15],
+      [0.213 - 0.213 * 1.15, 0.715 - 0.715 * 1.15, 0.072 + 0.928 * 1.15],
+    ];
+    const saturated = matrix.map((weights) =>
+      Math.min(
+        255,
+        Math.max(
+          0,
+          weights.reduce(
+            (sum, weight, column) => sum + weight * red[column]!,
+            0,
+          ),
+        ),
+      ),
+    );
+    const result = coverCard(photo([220, 40, 40]), layout)!;
+    const tint = channels(result.tint);
+    expect(
+      luminance(veiled(saturated, tint, result.alpha)),
+    ).toBeLessThanOrEqual(0.115);
+    // Without the saturation the same tint would look thicker than needed.
+    expect(luminance(veiled(red, tint, result.alpha))).toBeLessThan(
+      luminance(veiled(saturated, tint, result.alpha)),
+    );
+  });
+
   it("keeps the thinnest tint over a mid-dark photo", () => {
     const result = coverCard(photo([70, 74, 68]), layout)!;
-    expect(result.alpha).toBe(0.18);
+    // The floor, 0.18, rounded up to a step browsers paint (46/255).
+    expect(result.alpha).toBe(0.1804);
   });
 
   it("frosts a dark photo with a faint milky light instead", () => {
@@ -107,7 +139,7 @@ describe("coverCard", () => {
       ),
       layout,
     )!;
-    expect(plain.alpha).toBe(0.18);
+    expect(plain.alpha).toBe(0.1804);
     expect(stroke.alpha).toBeGreaterThan(0.45);
   });
 

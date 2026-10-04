@@ -284,6 +284,17 @@ const ScopedAuthorProfile = ({
     },
     [],
   );
+  // A web font arriving can rewrap the identity's text without resizing it:
+  // the card's tint is sampled again for the new lines.
+  useEffect(() => {
+    let current = true;
+    void document.fonts?.ready.then(() => {
+      if (current) sampleCard();
+    });
+    return () => {
+      current = false;
+    };
+  }, []);
   const positions = useRef<Record<string, number>>(
     isPreview
       ? {}
@@ -569,6 +580,11 @@ const ScopedAuthorProfile = ({
         .querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
         ?.focus({ preventScroll: true });
     hint?.toggleAttribute("inert", !onPhoto);
+    // A pinned cover scrolls the owner's pencil off the top: out of reach
+    // there, so focus cannot land on it and leave the page mid-glide.
+    profileHeader.current
+      ?.querySelector(`.${styles.backgroundEdit}`)
+      ?.toggleAttribute("inert", photo && !free && !onPhoto);
   };
   const scrollElement = () =>
     embedded
@@ -928,6 +944,8 @@ const ScopedAuthorProfile = ({
                 const image = event.currentTarget;
                 const src = image.getAttribute("src") ?? "";
                 void decoded(image).then(() => {
+                  // A newer photo may have replaced this one meanwhile.
+                  if (image.getAttribute("src") !== src) return;
                   const colors = coverColors(image);
                   setTint(
                     colors

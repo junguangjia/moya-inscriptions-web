@@ -47,8 +47,11 @@ sits on a card of frosted glass.
     eased shade (176 px), into its own dark tone.
     - That tone (`--cover-shade-photo`) is the average of the photo's lower
       part, sampled on a canvas and darkened until its luminance is at most
-      0.016. So the dark theme's text, including the seal-red counts, reads at
-      4.5:1 or more whatever the photo.
+      0.016. Where the shade is solid (the counts and actions row), the dark
+      theme's text, the seal-red counts included, reads at 4.5:1 or more
+      whatever the photo. The name and handle sit higher on the fade, where the
+      photo still shows through it; over a very bright photo they read less
+      strongly there than on the glass card.
     - Transparent areas of a photo show `paper-dark` in either theme, and are
       sampled as such. Before sampling, and when sampling fails, the tone falls
       back to `paper-dark`.
@@ -109,13 +112,15 @@ sits on a card of frosted glass.
     rim catching the light from the top left, an inner highlight and a soft
     shadow. A fine bevel closes the photo above the tabs.
   - The tint's opacity (`--cover-card-alpha`) is sampled per photo, after the
-    image decodes and once the layout settles. The photo under the card is
-    blurred as the CSS blurs it, and every laid-out line of the identity's text
-    is measured (a short name is a short box). The opacity is the thinnest (at
-    least 0.18) under which the brightest point of the glass behind every line
-    stays at luminance 0.115 or less. So all of the identity's text, which takes
-    the dark theme's primary colour there, reads at 4.5:1 or more, even over a
-    bright carved stroke.
+    image decodes, once the layout settles and once web fonts are ready. The
+    photo under the card is frosted as the CSS frosts it: a slightly sharper
+    blur, so bright detail is never underestimated, then the same
+    saturate(1.15). Every laid-out line of the identity's text is measured (a
+    short name is a short box). The opacity is the thinnest (at least 0.18,
+    rounded up to a step browsers paint) under which the brightest point of the
+    glass behind every line stays at luminance 0.115 or less. So all of the
+    identity's text, which takes the dark theme's primary colour there, reads at
+    4.5:1 or more, even over a bright carved stroke.
   - A photo already that dark behind the text gets a faint milky frost instead.
   - Until sampling finishes, if it fails, or if the photo draws blank, a default
     tint of 0.8 holds for any photo, pure white included.
