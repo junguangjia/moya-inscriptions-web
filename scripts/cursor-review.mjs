@@ -440,6 +440,47 @@ export function parseCLIResult(raw, packet) {
   return parseReport(envelope.result, packet);
 }
 
+export function parseModelSelection(value) {
+  const match = /^([a-zA-Z0-9._-]{1,80})(?:\[([^\]]{1,140})\])?$/u.exec(value);
+  if (!match) throw new Error("INVALID_MODEL");
+  const parameters = {};
+  for (const entry of match[2]?.split(",") || []) {
+    const [key, setting, extra] = entry.split("=");
+    const valid = {
+      context: /^[1-9][0-9]{0,3}[km]$/u,
+      effort: /^(?:none|minimal|low|medium|high|xhigh|max)$/u,
+      fast: /^(?:true|false)$/u,
+    };
+    if (
+      extra !== undefined ||
+      !Object.hasOwn(valid, key) ||
+      Object.hasOwn(parameters, key) ||
+      !valid[key].test(setting || "")
+    )
+      throw new Error("INVALID_MODEL");
+    parameters[key] = setting;
+  }
+  return { modelId: match[1], parameters };
+}
+
+export function confirmModelSelection(selection, configuration) {
+  if (!Object.keys(selection.parameters).length) return;
+  const selected = configuration?.selectedModel;
+  const actual = Object.fromEntries(
+    (selected?.parameters || []).map(({ id, value }) => [
+      id === "reasoning_effort" ? "effort" : id,
+      value,
+    ]),
+  );
+  if (
+    selected?.modelId !== selection.modelId ||
+    Object.entries(selection.parameters).some(
+      ([key, value]) => actual[key] !== value,
+    )
+  )
+    throw new Error("MODEL_SELECTION_NOT_CONFIRMED");
+}
+
 function analyze(directory, env) {
   const packet = readJSON(join(directory, "context.json"));
   const unavailable = (reason) =>
@@ -457,8 +498,12 @@ function analyze(directory, env) {
       "No reviewable text was collected. See coverage omissions.",
     );
   const model = env.CURSOR_MODEL || "composer-2.5";
-  if (!/^[a-zA-Z0-9._-]{1,80}$/u.test(model))
+  let selection;
+  try {
+    selection = parseModelSelection(model);
+  } catch {
     return unavailable("Invalid CURSOR_MODEL setting.");
+  }
   const home = join(directory, "agent-home");
   mkdirSync(join(home, ".cursor"), { recursive: true });
   mkdirSync(join(directory, ".cursor"), { recursive: true });
@@ -489,14 +534,20 @@ function analyze(directory, env) {
         killSignal: "SIGKILL",
       },
     );
-    save(join(directory, "report.json"), {
-      ...parseCLIResult(raw, packet),
-      model,
-    });
-  } catch {
+    const report = parseCLIResult(raw, packet);
+    // Read only our fresh CLI configuration, never any user credentials/config.
+    // A successful response must not hide a fallback to different parameters.
+    confirmModelSelection(
+      selection,
+      readJSON(join(home, ".cursor/cli-config.json")),
+    );
+    save(join(directory, "report.json"), { ...report, model });
+  } catch (error) {
     // Do not print CLI stderr: auth/network diagnostics can contain credentials.
     unavailable(
-      "Cursor analysis unavailable (authentication, quota, model, timeout or invalid response). No clean verdict; check Cursor usage/settings. No automatic paid fallback or retry.",
+      error.message === "MODEL_SELECTION_NOT_CONFIRMED"
+        ? "Cursor CLI did not confirm the requested model parameters. Analysis was not accepted. No automatic fallback or retry."
+        : "Cursor analysis unavailable (authentication, quota, model, timeout or invalid response). No clean verdict; check Cursor usage/settings. No automatic paid fallback or retry.",
     );
   }
 }
@@ -520,6 +571,8 @@ export function renderReport(packet, report) {
     plainMarkdown(report.summary),
     "",
   ];
+  if (report.model)
+    lines.push(`Model selection: ${plainMarkdown(report.model)}`, "");
   if (packet.runId)
     lines.push(
       `[CI run](https://github.com/${packet.repository}/actions/runs/${packet.runId}/attempts/${packet.attempt})`,

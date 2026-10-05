@@ -99,6 +99,28 @@ workflow. The value applies to subsequent runs. Other models may use a different
 included pool/rate; retain disabled on-demand usage. An unavailable model fails
 visibly without a paid fallback.
 
+The Owner's selected configuration is Grok 4.7, 500K context, Extra High effort
+and Fast enabled. Set `CURSOR_MODEL` to the exact CLI selection:
+
+```text
+grok-4.7[context=500k,effort=xhigh,fast=true]
+```
+
+The pinned official CLI supports bracket overrides on `--model`. After each
+successful inference, the workflow checks the CLI's persisted model selection
+against all requested parameters before accepting the response. A missing or
+different selection produces `unavailable`, never an accepted downgraded review.
+The PR summary includes the accepted model selection. This is runtime selection
+verification, not independent proof of the provider's internal computation.
+
+[Cursor's Grok 4.7 guide](https://prod.cursor.com/help/models-and-usage/grok-4-7)
+documents Ultra access through the included Cursor Models pool, the 500K option,
+four effort levels and Fast. Keep on-demand disabled. A
+[reported local-SDK limitation](https://forum.cursor.com/t/grok-4-7-run-rejects-advertised-context-500k/172554/6)
+means catalog availability alone is insufficient: verify this exact CLI setup
+with a real hosted run before claiming it works. The bounded review packet is
+unchanged; selecting 500K does not imply every large PR is fully covered.
+
 Codex and Claude Code sessions are not automatically messaged by this workflow.
 The following is an explicit handoff instruction to give a coding session:
 

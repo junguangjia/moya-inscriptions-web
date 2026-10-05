@@ -18,12 +18,14 @@ import {
   agentConfiguration,
   agentEnvironment,
   collectFileEvidence,
+  confirmModelSelection,
   currentRun,
   eligiblePR,
   marker,
   ownedComment,
   parseReport,
   parseCLIResult,
+  parseModelSelection,
   renderReport,
   safeText,
   selectEvent,
@@ -610,7 +612,49 @@ process.stdout.write(JSON.stringify(result));
   }
 });
 
-test("inference passes all evidence on stdin with no positional prompt or raw failure output", () => {
+test("parameterized models reject malformed input and unconfirmed or downgraded selections", () => {
+  const selection = parseModelSelection(
+    "grok-4.7[context=500k,effort=xhigh,fast=true]",
+  );
+  const configuration = {
+    selectedModel: {
+      modelId: "grok-4.7",
+      parameters: [
+        { id: "context", value: "500k" },
+        { id: "reasoning_effort", value: "xhigh" },
+        { id: "fast", value: "true" },
+      ],
+    },
+  };
+  confirmModelSelection(selection, configuration);
+  confirmModelSelection(parseModelSelection("composer-2.5"), {});
+  assert.throws(() => confirmModelSelection(selection, {}));
+  for (const [index, value] of [
+    [0, "256k"],
+    [1, "high"],
+    [2, "false"],
+  ]) {
+    const changed = JSON.parse(JSON.stringify(configuration));
+    changed.selectedModel.parameters[index].value = value;
+    assert.throws(() => confirmModelSelection(selection, changed));
+  }
+  assert.throws(() =>
+    confirmModelSelection(selection, {
+      selectedModel: { ...configuration.selectedModel, modelId: "other" },
+    }),
+  );
+  for (const invalid of [
+    "grok-4.7[context=500k,context=256k]",
+    "grok-4.7[unknown=true]",
+    "grok-4.7[fast=true=false]",
+    "grok-4.7[effort=extra high]",
+    "grok-4.7[fast=yes]",
+    "grok-4.7[context=500k];echo",
+  ])
+    assert.throws(() => parseModelSelection(invalid));
+});
+
+test("inference passes exact model and evidence on stdin, rejects hidden parameter fallback and conceals raw errors", () => {
   const temp = mkdtempSync(join(tmpdir(), "cursor-inference-test-"));
   try {
     const directory = join(temp, "cursor-review");
@@ -623,6 +667,11 @@ test("inference passes all evidence on stdin with no positional prompt or raw fa
 const fs = require('node:fs');
 const input = fs.readFileSync(0, 'utf8');
 if (!input.includes('${head}') || process.argv.at(-1) !== 'json' || process.env.GH_TOKEN) process.exit(2);
+if (process.argv[process.argv.indexOf('--model') + 1] !== 'grok-4.7[context=500k,effort=xhigh,fast=true]') process.exit(3);
+const configPath = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
+const configuration = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+configuration.selectedModel = { modelId: 'grok-4.7', parameters: [{ id: 'context', value: '500k' }, { id: 'reasoning_effort', value: 'xhigh' }, { id: 'fast', value: 'true' }] };
+fs.writeFileSync(configPath, JSON.stringify(configuration));
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: ${JSON.stringify(JSON.stringify(clean))} }));
 `,
       { mode: 0o700 },
@@ -632,6 +681,7 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
       RUNNER_TEMP: temp,
       CURSOR_AGENT_BIN: stub,
       CURSOR_API_KEY: "test-only",
+      CURSOR_MODEL: "grok-4.7[context=500k,effort=xhigh,fast=true]",
       GH_TOKEN: "test-only",
     };
     const script = resolve(import.meta.dirname, "cursor-review.mjs");
@@ -645,6 +695,25 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
         .assessment,
       "no_findings",
     );
+    const successful = JSON.parse(
+      readFileSync(join(directory, "report.json"), "utf8"),
+    );
+    assert.equal(successful.model, env.CURSOR_MODEL);
+    assert.match(renderReport(packet, successful), /Model selection:/u);
+    writeFileSync(
+      stub,
+      readFileSync(stub, "utf8").replace("value: '500k'", "value: '256k'"),
+    );
+    result = spawnSync(process.execPath, [script, "analyze"], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0);
+    const downgraded = JSON.parse(
+      readFileSync(join(directory, "report.json"), "utf8"),
+    );
+    assert.equal(downgraded.assessment, "unavailable");
+    assert.match(downgraded.summary, /did not confirm/u);
     writeFileSync(
       stub,
       `#!${process.execPath}\nprocess.stderr.write('raw-diagnostic-must-not-escape'); process.exit(1);`,
