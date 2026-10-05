@@ -17,16 +17,20 @@ import test from "node:test";
 import {
   agentConfiguration,
   agentEnvironment,
+  boundedBody,
   collectFileEvidence,
   confirmModelSelection,
   cursorFailure,
   currentRun,
   eligiblePR,
   marker,
+  main,
+  modelInventory,
   ownedComment,
   parseReport,
   parseCLIResult,
   parseModelSelection,
+  readJobLogs,
   renderReport,
   safeText,
   selectEvent,
@@ -147,6 +151,26 @@ test("credential scanning withholds complete source rather than leaking matched 
   );
   assert.equal(safeText("\u001b[31merror\u001b[0m"), "error");
   assert.equal(safeText(`safe\u0000${syntheticValue}`), null);
+});
+
+test("job logs support gh ANSI protection without exposing controls or credentials", () => {
+  for (const recent of [true, false]) {
+    const runner = (bin, args) => {
+      assert.equal(bin, "gh");
+      if (args[1] === "--help")
+        return recent ? "--allow-escape-sequences" : "older gh help";
+      assert.equal(args[1], `repos/${repository}/actions/jobs/12/logs`);
+      assert.equal(args.includes("--allow-escape-sequences"), recent);
+      return "\u001b[31mtest failed\u001b[0m";
+    };
+    assert.equal(readJobLogs(repository, 12, runner), "test failed");
+  }
+  assert.equal(
+    readJobLogs(repository, 12, (_bin, args) =>
+      args[1] === "--help" ? "" : ["ghp_", "A".repeat(36)].join(""),
+    ),
+    null,
+  );
 });
 
 test("large prose and generated additions cannot displace executable patch coverage", () => {
@@ -501,6 +525,11 @@ test("workflow keeps trusted checkout, pinned CLI, separate credentials and no P
     /format\('review-\{0\}',\s+github.event.pull_request.number \|\| inputs.pr\)/u,
   );
   assert.match(workflow, /steps.fresh.outputs.ready/u);
+  assert.match(workflow, /format\('ci-\{0\}',\s+inputs.expected_head\)/u);
+  assert.match(
+    workflow,
+    /format\('ci-\{0\}', github.event.workflow_run.head_sha\)/u,
+  );
   assert.match(
     workflow,
     /install-confidentiality-hooks.mjs --confirm-current-identity-approved/u,
@@ -549,7 +578,11 @@ const state = JSON.parse(fs.readFileSync(file, 'utf8'));
 const method = process.argv[4], path = process.argv[5];
 let result;
 if (method === 'GET' && path.includes('/pulls/')) result = state.pr;
-else if (method === 'GET') result = state.comments;
+else if (method === 'GET' && path.includes('/actions/runs/')) result = state.run;
+else if (method === 'GET') {
+ result = state.comments;
+ if (state.replaceAttempt) { state.run.run_attempt++; fs.writeFileSync(file, JSON.stringify(state)); }
+}
 else {
  const body = JSON.parse(fs.readFileSync(0, 'utf8')).body;
  state.writes.push(method);
@@ -608,6 +641,39 @@ process.stdout.write(JSON.stringify(result));
     assert.equal(readFileSync(env.GITHUB_OUTPUT, "utf8"), "");
     saved = JSON.parse(readFileSync(state, "utf8"));
     assert.deepEqual(saved.writes, ["POST", "PATCH"]);
+    const ciPacket = {
+      ...packet,
+      kind: "ci",
+      manualCI: true,
+      runId: 12,
+      attempt: 1,
+      baseRef: "claude/media",
+      headBranch: "claude/child",
+    };
+    saved.pr = {
+      ...pr,
+      base: { ...pr.base, ref: ciPacket.baseRef },
+      head: { ...pr.head, sha: head, ref: ciPacket.headBranch },
+    };
+    saved.run = {
+      ...run,
+      event: "workflow_dispatch",
+      repository: { full_name: repository },
+      head_branch: ciPacket.headBranch,
+      pull_requests: [{ number: 7, head: { sha: head } }],
+    };
+    writeFileSync(state, JSON.stringify(saved));
+    writeFileSync(join(directory, "context.json"), JSON.stringify(ciPacket));
+    execute(process.execPath, ["scripts/cursor-review.mjs", "fresh"]);
+    execute(process.execPath, ["scripts/cursor-review.mjs", "publish"]);
+    saved = JSON.parse(readFileSync(state, "utf8"));
+    assert.deepEqual(saved.writes, ["POST", "PATCH", "POST"]);
+    saved.replaceAttempt = true;
+    writeFileSync(state, JSON.stringify(saved));
+    execute(process.execPath, ["scripts/cursor-review.mjs", "publish"]);
+    saved = JSON.parse(readFileSync(state, "utf8"));
+    assert.equal(saved.run.run_attempt, 2);
+    assert.deepEqual(saved.writes, ["POST", "PATCH", "POST"]);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -675,6 +741,187 @@ test("CLI diagnostics emit only fixed failure categories without raw values", ()
     cursorFailure({ error: { code: "ETIMEDOUT" } }),
     "CURSOR_TIMEOUT",
   );
+});
+
+test("model inventory publishes only scoped IDs and known parameter values", () => {
+  const inventory = modelInventory(
+    "Available models\n\u001b[32mgrok-4.7-xhigh-fast\u001b[0m - Grok\ngrok-4.7 - Grok\nother-model - private-name\n",
+    {
+      items: [
+        {
+          id: "grok-4.7",
+          description: "private-diagnostic-must-not-escape",
+          parameters: [
+            {
+              id: "context",
+              values: [{ value: "500k" }, { value: "private-value" }],
+            },
+            { id: "private-field", values: [{ value: "private-value" }] },
+          ],
+          variants: [
+            {
+              params: [
+                { id: "context", value: "500k" },
+                { id: "reasoning_effort", value: "xhigh" },
+                { id: "fast", value: "true" },
+                { id: "credential", value: "private-value" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  );
+  assert.deepEqual(inventory.cliModelIds, ["grok-4.7-xhigh-fast", "grok-4.7"]);
+  assert.deepEqual(inventory.cloudModel.parameters, [
+    { id: "context", values: ["500k"] },
+  ]);
+  assert.equal(inventory.cloudModel.variants[0].length, 3);
+  assert.doesNotMatch(
+    JSON.stringify(inventory),
+    /private|credential|other-model/u,
+  );
+  assert.deepEqual(modelInventory("", { items: [] }), {
+    cliModelIds: [],
+    cloudModel: null,
+  });
+});
+
+test("catalog size is capped while reading and an oversized body is cancelled", async () => {
+  let cancelled = false;
+  const response = {
+    body: new globalThis.ReadableStream({
+      start(controller) {
+        controller.enqueue(Buffer.alloc(5));
+        controller.enqueue(Buffer.alloc(5));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+  };
+  await assert.rejects(boundedBody(response, 8), /CATALOG_TOO_LARGE/u);
+  assert.equal(cancelled, true);
+  const small = {
+    body: new globalThis.ReadableStream({
+      start(controller) {
+        controller.enqueue(Buffer.from("{}"));
+        controller.close();
+      },
+    }),
+  };
+  assert.equal(await boundedBody(small), "{}");
+});
+
+test("manual CI diagnosis binds a stacked PR to its exact canonical run and attempt", () => {
+  const event = {
+    inputs: {
+      operation: "diagnose-ci",
+      pr: "7",
+      ci_run: "12",
+      ci_attempt: "1",
+      expected_head: head,
+      base_ref: "claude/media",
+    },
+  };
+  const target = {
+    ...selectEvent("workflow_dispatch", event, repository),
+    repository,
+    headBranch: "claude/media-child",
+    base,
+  };
+  const stacked = {
+    ...pr,
+    base: { ...pr.base, ref: "claude/media" },
+    head: { ...pr.head, ref: "claude/media-child" },
+  };
+  const manualRun = {
+    ...run,
+    id: 12,
+    run_attempt: 1,
+    event: "workflow_dispatch",
+    repository: { full_name: repository },
+    head_branch: "claude/media-child",
+    pull_requests: [{ number: 7, head: { sha: head } }],
+  };
+  assert.equal(eligiblePR(stacked, repository, head), false);
+  assert.equal(eligiblePR(stacked, repository, head, target), true);
+  assert.equal(currentRun(manualRun, target), true);
+  for (const update of [
+    { run_attempt: 2 },
+    { head_sha: base },
+    { path: ".github/workflows/other.yml" },
+    { event: "push" },
+    { name: "Other" },
+    { head_branch: "other" },
+    { repository: { full_name: "other/project" } },
+    { pull_requests: [] },
+  ])
+    assert.equal(currentRun({ ...manualRun, ...update }, target), false);
+  assert.equal(
+    eligiblePR(
+      { ...stacked, base: { ...stacked.base, sha: head } },
+      repository,
+      head,
+      target,
+    ),
+    false,
+  );
+  assert.equal(
+    eligiblePR(
+      { ...stacked, base: { ...stacked.base, ref: "other" } },
+      repository,
+      head,
+      target,
+    ),
+    false,
+  );
+  assert.equal(
+    selectEvent(
+      "workflow_run",
+      { action: "completed", workflow_run: manualRun },
+      repository,
+    ),
+    null,
+  );
+  assert.throws(
+    () =>
+      selectEvent(
+        "workflow_dispatch",
+        { inputs: { ...event.inputs, ci_attempt: "" } },
+        repository,
+      ),
+    /INVALID_CI_TARGET/u,
+  );
+});
+
+test("manual model metadata works while paused but only for trusted main dispatch", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "cursor-models-test-"));
+  try {
+    const event = join(temp, "event.json");
+    const output = join(temp, "output");
+    writeFileSync(
+      event,
+      JSON.stringify({ inputs: { operation: "inspect-models" } }),
+    );
+    writeFileSync(output, "");
+    const env = {
+      RUNNER_TEMP: temp,
+      GITHUB_EVENT_PATH: event,
+      GITHUB_OUTPUT: output,
+      GITHUB_REPOSITORY: repository,
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REF: "refs/heads/untrusted",
+      CURSOR_AUTOMATION_ENABLED: "false",
+    };
+    await main("prepare", env);
+    await main("models", env); // Must return without accessing key, CLI or network.
+    assert.equal(readFileSync(output, "utf8"), "");
+    await main("prepare", { ...env, GITHUB_REF: "refs/heads/main" });
+    assert.equal(readFileSync(output, "utf8"), "models=true\n");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
 
 test("inference passes exact model and evidence on stdin, rejects hidden parameter fallback and conceals raw errors", () => {

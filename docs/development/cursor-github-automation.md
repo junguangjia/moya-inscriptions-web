@@ -121,8 +121,21 @@ means catalog availability alone is insufficient: verify this exact CLI setup
 with a real hosted run before claiming it works. The bounded review packet is
 unchanged; selecting 500K does not imply every large PR is fully covered.
 
-Codex and Claude Code sessions are not automatically messaged by this workflow.
-The following is an explicit handoff instruction to give a coding session:
+For model compatibility diagnosis, manually run this workflow from `main` with
+`operation=inspect-models`; no PR number is needed. This metadata-only operation
+works while automatic review is paused. It invokes the pinned CLI's
+`--list-models` and the official Cloud Agent API's `GET /v1/models`, then
+reports only CLI Grok IDs and Grok 4.7 context/effort/Fast values in the Actions
+summary. It starts no inference or cloud agent and posts no PR comment. These
+two catalogs describe different runtimes; neither alone proves an inference will
+succeed. Errors, account details, descriptions and credentials are not
+published.
+
+The root `AGENTS.md` now contains the evidence-reuse rule; `CLAUDE.md` imports
+that shared authority. Codex and Claude Code use the rule with whichever model
+the coding session selects. New sessions need an updated checkout, and existing
+sessions must explicitly reread changed instructions. This workflow does not
+send chat messages. The shared rule means:
 
 > Before reviewing a PR or diagnosing CI, read the latest Cursor PR review and
 > Cursor CI diagnosis comments, compare their commit SHA (and CI run/attempt)
@@ -138,6 +151,20 @@ This documentation does not automatically install a global agent instruction.
 The separate Cursor summary never waives mandatory repository review or testing.
 
 ## Event and permission boundary
+
+For an explicitly requested diagnosis of an existing failed CI run, use manual
+`operation=diagnose-ci` from `main`. Supply `pr`, `ci_run`, `ci_attempt`,
+`expected_head` (40-character SHA), and `base_ref` (the current PR base branch).
+This supports same-repository stacked Draft PRs and CI runs started with
+`workflow_dispatch`, without changing the PR base, marking it Ready or rerunning
+CI. It only reads existing evidence and updates the separate CI diagnosis
+comment. The run must belong to the canonical `CI` workflow, have a
+failed/timed-out final result, and match the repository, associated PR, current
+head, branch and exact attempt. Base branch/SHA and run freshness are rechecked
+before inference and publication. Changed or mismatched targets are skipped.
+This explicit manual operation can run while automatic reviews are paused; it
+preserves the same trusted-main checkout, isolated credentials, model
+constraints and coverage limits.
 
 - `pull_request_target` triggers on open, reopen, update and ready-for-review;
   Draft PRs are included. Only open, same-repository PRs targeting `main`
@@ -201,17 +228,19 @@ checks. Cursor does not run tests, so a review comment cannot prove CI passed.
 
 The inference deadline is seven minutes and the job ceiling is fifteen minutes.
 Automatic and manual review events share a PR concurrency group. CI diagnosis
-has its own branch group. A freshness step immediately before inference checks
-the PR head and CI run attempt again after installation. Publication rechecks
-the PR head; the commit is always visible in the report. Review and diagnosis
-have separate comments so one does not overwrite the other. Older comments
-remain visibly bound to their old commit until replaced; readers must compare
-that SHA to the PR's current head.
+uses the same commit group for manual and automatic requests. A freshness step
+immediately before inference checks the PR head and CI run attempt again after
+installation. Publication rechecks the PR head; the commit is always visible in
+the report. Review and diagnosis have separate comments so one does not
+overwrite the other. Older comments remain visibly bound to their old commit
+until replaced; readers must compare that SHA to the PR's current head.
 
-To pause, set repository variable `CURSOR_AUTOMATION_ENABLED=false`. To resume,
-remove it or set it to `true`. The advisory workflow is not a required check. To
-revoke access, delete the repository secret and revoke this dedicated key in
-Cursor. No local machine or background app needs to remain running.
+To pause automatic reviews, set repository variable
+`CURSOR_AUTOMATION_ENABLED=false`. Explicit metadata inspection and manual CI
+diagnosis remain available. To resume, remove it or set it to `true`. The
+advisory workflow is not a required check. To revoke access, delete the
+repository secret and revoke this dedicated key in Cursor. No local machine or
+background app needs to remain running.
 
 ## Verification
 
