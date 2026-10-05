@@ -1,0 +1,97 @@
+name: Cursor review
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Same-repository PR number to review
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group:
+    cursor-${{ github.event_name == 'workflow_run' && format('ci-{0}',
+    github.event.workflow_run.head_branch) || format('review-{0}',
+    github.event.pull_request.number || inputs.pr) }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    if: >-
+      vars.CURSOR_AUTOMATION_ENABLED != 'false' && (github.event_name !=
+      'workflow_run' || github.event.workflow_run.conclusion == 'failure' ||
+      github.event.workflow_run.conclusion == 'timed_out')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      # Always trusted default-branch automation. NEVER check out PR head here.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+      - name: Collect current PR evidence
+        id: context
+        env:
+          GH_TOKEN: # Ephemeral GitHub token for the deterministic collector.
+            ${{ github.token }}
+          CURSOR_AUTOMATION_ENABLED: ${{ vars.CURSOR_AUTOMATION_ENABLED }}
+        run: node scripts/cursor-review.mjs prepare
+      - name: Install pinned official Cursor CLI
+        if: steps.context.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://downloads.cursor.com/lab/2026.10.01-e373342/linux/x64/agent-cli-package.tar.gz \
+            -o "$RUNNER_TEMP/cursor-cli.tar.gz"
+          echo "a79726c6e644520e993970be4c45775a6889802b67abe461a677a53219ae28e8  $RUNNER_TEMP/cursor-cli.tar.gz" | sha256sum --check --status
+          mkdir -p "$RUNNER_TEMP/cursor-cli"
+          tar --strip-components=1 -xzf "$RUNNER_TEMP/cursor-cli.tar.gz" -C "$RUNNER_TEMP/cursor-cli"
+          echo "CURSOR_AGENT_BIN=$RUNNER_TEMP/cursor-cli/cursor-agent" >> "$GITHUB_ENV"
+      - name: Skip work superseded during installation
+        id: fresh
+        if: steps.context.outputs.ready == 'true'
+        env:
+          GH_TOKEN: # Freshness checks run outside the agent process.
+            ${{ github.token }}
+        run: node scripts/cursor-review.mjs fresh
+      - name: Analyze with Cursor included usage
+        if: steps.fresh.outputs.ready == 'true'
+        env:
+          CURSOR_API_KEY: # Resolved by GitHub; never a literal credential.
+            ${{ secrets.CURSOR_API_KEY }}
+          CURSOR_MODEL: ${{ vars.CURSOR_MODEL || 'composer-2.5' }}
+        run: node scripts/cursor-review.mjs analyze
+      - name: Publish concise revision-bound findings
+        if: steps.fresh.outputs.ready == 'true'
+        env:
+          GH_TOKEN: # The agent never receives this publishing credential.
+            ${{ github.token }}
+          CONFIDENTIALITY_BATCH_ID:
+            cursor-${{ github.run_id }}-${{ github.run_attempt }}
+        # Fresh hosted checkout: provision the existing scanner once, preserving
+        # the repository's approved anonymous identity. No commit or push occurs.
+        # Preparation and publication share one real 120-second ceiling.
+        run: |
+          timeout --kill-after=5s 115s bash -euo pipefail -c '
+            git config --local user.name nontwo
+            git config --local user.email 163475477+nontwo@users.noreply.github.com
+            git config --local user.useConfigOnly true
+            node scripts/install-confidentiality-hooks.mjs --confirm-current-identity-approved
+            node scripts/cursor-review.mjs publish
+          '
