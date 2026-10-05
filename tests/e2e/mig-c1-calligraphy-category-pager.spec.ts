@@ -274,6 +274,10 @@ const trustedHorizontalCardDrag = async (
       for (const yFactor of [0.4, 0.25, 0.6]) {
         const x = rect.left + rect.width * xFactor;
         const y = rect.top + Math.min(rect.height * yFactor, 120);
+        const pager = node.closest<HTMLElement>("[data-home-feed-pager]");
+        if (!pager) throw new Error("Missing card pager");
+        const available = dragDirection === 1 ? x - 8 : innerWidth - x - 8;
+        if (available <= pager.clientWidth / 2) continue;
         const hit = document.elementFromPoint(x, y);
         if (node.contains(hit)) return { hits, point: { x, y } };
         hits.push(
@@ -289,7 +293,14 @@ const trustedHorizontalCardDrag = async (
     );
   }
   const { x, y } = startEvidence.point;
-  await trustedHorizontalPointDrag(page, session, pager, { x, y }, direction);
+  await trustedHorizontalPointDrag(
+    page,
+    session,
+    pager,
+    { x, y },
+    direction,
+    true,
+  );
 };
 
 const trustedDragEvidence = (pager: Locator) =>
@@ -408,7 +419,9 @@ test("MIG-C1 card actions preserve trusted touch paging with local horizontal co
   );
   const homeCard = homePager
     .locator('[data-home-feed-panel="discover"] [data-open-catalog]')
-    .nth(1);
+    // The second card is in the left column: its on-screen leftward travel
+    // cannot cross half the pager. Use the fixture's right-column card.
+    .nth(2);
   await expect(homeCard).toBeVisible();
   await expect(homeCard).toHaveCSS(
     "touch-action",
@@ -429,7 +442,9 @@ test("MIG-C1 card actions preserve trusted touch paging with local horizontal co
   );
   const calligraphyCard = calligraphyPager
     .locator('[data-home-feed-panel="calligraphy"] [data-open-catalog]')
-    .nth(1);
+    // A rightward drag starts on the left-column card; the helper also
+    // verifies its actual available distance before injecting touch input.
+    .first();
   await expect(calligraphyCard).toBeVisible();
   await expect(calligraphyCard).toHaveCSS(
     "touch-action",
@@ -874,6 +889,7 @@ for (const chrome of ["default", "hidden"] as const) {
       ] as const) {
         await page.goto(
           chrome === "hidden" ? "/dev/t02p/qa?qaChrome=hidden" : "/dev/t02p/qa",
+          { waitUntil: "domcontentloaded" },
         );
         await expect(page.locator("[data-product-boot]")).toHaveCount(0);
         const home = page.locator("[data-home-surface]");
@@ -893,29 +909,35 @@ for (const chrome of ["default", "hidden"] as const) {
         const scroller = panels.nth(startIndex);
         await expect(frame).toHaveCSS("touch-action", "pan-y pinch-zoom");
         if (surface !== "user") await waitForInitialFeedScroll(home, surface);
-        const box = await frame.boundingBox();
-        if (!box) throw new Error("Missing pager");
-        const point = await frame.evaluate((node, dragDirection) => {
-          const box = node.getBoundingClientRect();
-          for (const fraction of dragDirection === 1
-            ? [0.92, 0.85, 0.75, 0.65]
-            : [0.08, 0.15, 0.25, 0.35]) {
-            const x = box.x + box.width * fraction;
-            const travel = dragDirection === 1 ? x - 8 : innerWidth - x - 8;
-            if (travel < 240) continue;
-            for (
-              let y = Math.min(innerHeight - 120, box.bottom - 24);
-              y > Math.max(box.top + 60, 24);
-              y -= 16
-            ) {
-              if (node.contains(document.elementFromPoint(x, y)))
-                return { x, y };
-            }
-          }
-          throw new Error(
-            "No exposed pager point beneath the existing QA controls",
+        const exposedPoint = (dragDirection: number, distance: number) =>
+          frame.evaluate(
+            (node, input) => {
+              const box = node.getBoundingClientRect();
+              for (const fraction of input.dragDirection === 1
+                ? [0.92, 0.85, 0.75, 0.65]
+                : [0.08, 0.15, 0.25, 0.35]) {
+                const x = box.x + box.width * fraction;
+                const travel =
+                  input.dragDirection === 1 ? x - 8 : innerWidth - x - 8;
+                if (travel < input.distance) continue;
+                for (
+                  // Reserve the expanded Phone dock (60px, 12px bottom gap,
+                  // 16px clearance), even while its idle expansion is in flight.
+                  let y = Math.min(innerHeight - 88, box.bottom - 24);
+                  y > Math.max(box.top + 60, 24);
+                  y -= 16
+                ) {
+                  if (node.contains(document.elementFromPoint(x, y)))
+                    return { x, y };
+                }
+              }
+              throw new Error(
+                "No exposed pager point beneath the existing QA controls",
+              );
+            },
+            { dragDirection, distance },
           );
-        }, direction);
+        const point = await exposedPoint(direction, 240);
         await expect(frame).toHaveAttribute(
           "data-category-pager-engine",
           "embla",
@@ -927,6 +949,8 @@ for (const chrome of ["default", "hidden"] as const) {
               n.firstElementChild!.firstElementChild!.getBoundingClientRect()
                 .left,
           );
+        const surfaceEvidence: Record<string, unknown> = { surface, chrome };
+        evidence.push(surfaceEvidence);
         const initialOffset = await horizontalOffset();
         const beforeY = await scroller.evaluate((n) => n.scrollTop);
         await touch("touchStart", [{ id: 1, ...point }]);
@@ -956,8 +980,39 @@ for (const chrome of ["default", "hidden"] as const) {
               maximum: 0,
               commitCount: 0,
               remainingAtCommit: 0,
+              events: [] as unknown[],
             };
             Object.assign(f, { controlledEvidence: data });
+            for (const type of [
+              "touchstart",
+              "touchmove",
+              "touchend",
+              "touchcancel",
+            ] as const) {
+              window.addEventListener(
+                type,
+                (event) => {
+                  const target = event.target as Element;
+                  data.events.push({
+                    type,
+                    cancelable: event.cancelable,
+                    trusted: event.isTrusted,
+                    target: target.tagName,
+                    quickAction: target
+                      .closest("[data-quick-actions]")
+                      ?.getAttribute("data-quick-action-phase"),
+                    contained: f.contains(target),
+                    progress: f.dataset.horizontalPagerProgress,
+                    active: f.dataset.horizontalPagerActiveKey,
+                    touches: Array.from(event.touches, (point) => ({
+                      x: point.clientX,
+                      y: point.clientY,
+                    })),
+                  });
+                },
+                { capture: true, passive: true },
+              );
+            }
             f.addEventListener(
               "pointermove",
               (e) => {
@@ -975,9 +1030,9 @@ for (const chrome of ["default", "hidden"] as const) {
               true,
             );
             f.addEventListener(
-              "pointerup",
+              "touchend",
               () => {
-                data.released = performance.now();
+                if (!data.released) data.released = performance.now();
               },
               true,
             );
@@ -1007,8 +1062,9 @@ for (const chrome of ["default", "hidden"] as const) {
           },
           { selector: panelSelector, targetIndex, initialOffset },
         );
-        await touch("touchStart", [{ id: 1, ...point }]);
-        await move(point, -direction * 240, 4);
+        const forward = await exposedPoint(direction, 240);
+        await touch("touchStart", [{ id: 1, ...forward }]);
+        await move(forward, -direction * 240, 4);
         expect(
           Math.abs((await horizontalOffset()) - initialOffset),
         ).toBeGreaterThan(100);
@@ -1039,20 +1095,46 @@ for (const chrome of ["default", "hidden"] as const) {
         expect(timing.trusted).toBeGreaterThan(0);
         expect(timing.maximum).toBeGreaterThan(100);
         expect(timing.commitCount).toBe(1);
+        expect(timing.released).toBeGreaterThan(0);
         expect(timing.committed - timing.released).toBeGreaterThanOrEqual(0);
         // The Home pager hands interaction over before its visual tail ends.
         expect(timing.remainingAtCommit).toBeGreaterThan(2);
+        surfaceEvidence.timing = timing;
         // A new opposite input during the next settle supersedes that animation.
-        const reverse = {
-          x: box.x + box.width * (direction === 1 ? 0.25 : 0.75),
-          y: point.y,
-        };
+        const reverse = await exposedPoint(-direction, 220);
+        const beforeReverse = await horizontalOffset();
         await touch("touchStart", [{ id: 1, ...reverse }]);
         await move(reverse, direction * 220, 0);
+        // Prove that the reverse reached the pager, before sending another
+        // forward input. A covered start cannot satisfy this precondition.
+        const afterReverse = await horizontalOffset();
+        surfaceEvidence.reverse = {
+          beforeReverse,
+          afterReverse,
+          point: reverse,
+        };
+        expect((beforeReverse - afterReverse) * direction).toBeGreaterThan(100);
         await touch("touchEnd", []);
-        await touch("touchStart", [{ id: 1, ...point }]);
-        await move(point, -direction * 240, 0);
+        surfaceEvidence.afterReverseRelease = await frame.evaluate((node) => ({
+          active: node.getAttribute("data-horizontal-pager-active-key"),
+          progress: node.getAttribute("data-horizontal-pager-progress"),
+          panels: Array.from(node.querySelectorAll("[aria-hidden]"), (n) => ({
+            key: n.getAttribute("data-horizontal-panel-key"),
+            hidden: n.getAttribute("aria-hidden"),
+          })),
+        }));
+        const resumed = await exposedPoint(direction, 240);
+        await touch("touchStart", [{ id: 1, ...resumed }]);
+        await move(resumed, -direction * 240, 0);
         await touch("touchEnd", []);
+        surfaceEvidence.events = await frame.evaluate(
+          (node) =>
+            (
+              node as HTMLElement & {
+                controlledEvidence: { events: unknown[] };
+              }
+            ).controlledEvidence.events,
+        );
         await expect(panels.nth(targetIndex)).toHaveAttribute(
           "aria-hidden",
           "false",
@@ -1061,12 +1143,30 @@ for (const chrome of ["default", "hidden"] as const) {
           .nth(targetIndex)
           .evaluate((n) => (n as HTMLElement).offsetLeft);
         // Second finger joins an already controlled horizontal drag. Neither finger lifts before scale proof.
-        await touch("touchStart", [{ id: 1, x: 150, y: point.y }]);
-        await touch("touchMove", [{ id: 1, x: 120, y: point.y }]);
+        const pinchY = await frame.evaluate((node) => {
+          const box = node.getBoundingClientRect();
+          for (
+            let y = Math.min(innerHeight - 88, box.bottom - 24);
+            y > Math.max(box.top + 60, 24);
+            y -= 16
+          ) {
+            if (
+              [120, 150, 210].every((x) =>
+                node.contains(document.elementFromPoint(x, y)),
+              )
+            )
+              return y;
+          }
+          throw new Error(
+            "No exposed two-finger pager start beneath QA controls",
+          );
+        });
+        await touch("touchStart", [{ id: 1, x: 150, y: pinchY }]);
+        await touch("touchMove", [{ id: 1, x: 120, y: pinchY }]);
         const initialScale = await page.evaluate(() => visualViewport!.scale);
         await touch("touchStart", [
-          { id: 1, x: 120, y: point.y },
-          { id: 2, x: 210, y: point.y },
+          { id: 1, x: 120, y: pinchY },
+          { id: 2, x: 210, y: pinchY },
         ]);
         await expect(frame).toHaveAttribute(
           "data-horizontal-pager-scrolling",
@@ -1074,8 +1174,8 @@ for (const chrome of ["default", "hidden"] as const) {
         );
         for (let step = 1; step <= 12; step++) {
           await touch("touchMove", [
-            { id: 1, x: 120 - step * 4, y: point.y },
-            { id: 2, x: 210 + step * 10, y: point.y },
+            { id: 1, x: 120 - step * 4, y: pinchY },
+            { id: 2, x: 210 + step * 10, y: pinchY },
           ]);
           await page.waitForTimeout(30);
         }
@@ -1092,7 +1192,7 @@ for (const chrome of ["default", "hidden"] as const) {
           Math.abs((await horizontalOffset()) - committedLeft),
         ).toBeLessThanOrEqual(2);
         await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
-        evidence.push({ surface, chrome, timing, initialScale, afterScale });
+        Object.assign(surfaceEvidence, { initialScale, afterScale });
       }
     } finally {
       await testInfo.attach("controlled-pager-input", {

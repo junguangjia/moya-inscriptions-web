@@ -56,24 +56,33 @@ let pagingRuntime:
     }
   | undefined;
 
-const waitForRuntime = async (baseUrl: string, child: ChildProcess) => {
-  const deadline = Date.now() + 120_000;
+const waitForRuntime = async (
+  baseUrl: string,
+  child: ChildProcess,
+  deadline: number,
+) => {
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Paging Formal runtime exited with ${child.exitCode}`);
     }
     try {
-      const response = await fetch(baseUrl);
+      const response = await fetch(baseUrl, {
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      });
       if (response.status === 200) return;
     } catch {
       // The disposable server is still starting.
     }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    const remaining = deadline - Date.now();
+    if (remaining > 0)
+      await new Promise((resolveWait) =>
+        setTimeout(resolveWait, Math.min(200, remaining)),
+      );
   }
   throw new Error("Timed out starting the paging Formal runtime");
 };
 
-const startPagingRuntime = async (projectName: string) => {
+const startPagingRuntime = async (projectName: string, deadline: number) => {
   const port = projectPorts[projectName as keyof typeof projectPorts];
   const apiPort = projectApiPorts[projectName as keyof typeof projectApiPorts];
   if (port === undefined || apiPort === undefined) {
@@ -118,70 +127,69 @@ const startPagingRuntime = async (projectName: string) => {
     stdio: ["ignore", logDescriptor, logDescriptor],
   });
   const publicApiOrigin = `http://127.0.0.1:${apiPort}`;
-  try {
-    await waitForRuntime(`${publicApiOrigin}/health`, apiChild);
-  } catch (error) {
-    apiChild.kill("SIGTERM");
-    closeSync(logDescriptor);
-    rmSync(temporaryRoot, { force: true, recursive: true });
-    throw error;
-  }
-  const nextCli = join(sourceWebRoot, "node_modules/next/dist/bin/next");
-  const webChild = spawn(
-    process.execPath,
-    [
-      nextCli,
-      "dev",
-      "--webpack",
-      "--hostname",
-      "127.0.0.1",
-      "--port",
-      String(port),
-    ],
-    {
-      cwd: temporaryWebRoot,
-      env: {
-        ...process.env,
-        MOYA_PUBLIC_API_BASE_URL: `${publicApiOrigin}/paging/`,
-      },
-      stdio: ["ignore", logDescriptor, logDescriptor],
-    },
-  );
   const baseUrl = `http://127.0.0.1:${port}`;
+  const children = [apiChild];
+  // Register ownership before readiness: failed partial starts use the same
+  // bounded shutdown as afterAll, including confirmation that children exited.
+  pagingRuntime = { baseUrl, children, logDescriptor, temporaryRoot };
   try {
-    await waitForRuntime(baseUrl, webChild);
+    await waitForRuntime(`${publicApiOrigin}/health`, apiChild, deadline);
+    const nextCli = join(sourceWebRoot, "node_modules/next/dist/bin/next");
+    const webChild = spawn(
+      process.execPath,
+      [
+        nextCli,
+        "dev",
+        "--webpack",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        String(port),
+      ],
+      {
+        cwd: temporaryWebRoot,
+        env: {
+          ...process.env,
+          MOYA_PUBLIC_API_BASE_URL: `${publicApiOrigin}/paging/`,
+        },
+        stdio: ["ignore", logDescriptor, logDescriptor],
+      },
+    );
+    children.unshift(webChild);
+    await waitForRuntime(baseUrl, webChild, deadline);
   } catch (error) {
-    webChild.kill("SIGTERM");
-    apiChild.kill("SIGTERM");
-    closeSync(logDescriptor);
-    rmSync(temporaryRoot, { force: true, recursive: true });
+    await stopPagingRuntime();
     throw error;
   }
-  pagingRuntime = {
-    baseUrl,
-    children: [webChild, apiChild],
-    logDescriptor,
-    temporaryRoot,
-  };
 };
 
 const stopPagingRuntime = async () => {
   const runtime = pagingRuntime;
-  pagingRuntime = undefined;
   if (runtime === undefined) return;
   await Promise.all(
     runtime.children.map(async (child) => {
-      if (child.exitCode !== null) return;
-      await new Promise<void>((resolveExit) => {
-        const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
-        child.once("exit", () => {
-          clearTimeout(timeout);
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      await new Promise<void>((resolveExit, rejectExit) => {
+        const escalate = setTimeout(() => child.kill("SIGKILL"), 4_000);
+        const deadline = setTimeout(() => {
+          child.removeListener("exit", exited);
+          rejectExit(
+            new Error("Paging child did not exit within cleanup reserve"),
+          );
+        }, 4_500);
+        const exited = () => {
+          clearTimeout(escalate);
+          clearTimeout(deadline);
           resolveExit();
-        });
+        };
+        child.once("exit", exited);
         child.kill("SIGTERM");
       });
     }),
   );
+  // Retain ownership and files if exit cannot be confirmed; afterAll can still
+  // identify the exact partial runtime, rather than losing its cleanup handle.
+  pagingRuntime = undefined;
   closeSync(runtime.logDescriptor);
   rmSync(runtime.temporaryRoot, { force: true, recursive: true });
 };
@@ -357,14 +365,21 @@ const openViewerAndReturn = async (
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async ({ browser, request }, workerInfo) => {
+test.beforeAll(async ({ browser, request }, testInfo) => {
   void browser;
-  await startPagingRuntime(workerInfo.project.name);
+  // Keep the existing hook limit, including owned-child cleanup. Inner waits
+  // and HTTP preparation must not silently claim a separate 120-second budget.
+  const deadline = Date.now() + testInfo.timeout - 5_000;
+  await startPagingRuntime(testInfo.project.name, deadline);
   // This spec owns a separate paging server, so the shared server's route
   // preparation cannot prevent its cold mounted routes from compiling mid-test.
-  await prepareFormalRoutes(request, pagingRuntime!.baseUrl);
+  await prepareFormalRoutes(request, pagingRuntime!.baseUrl, deadline);
+  const remaining = deadline - Date.now();
+  if (remaining <= 0)
+    throw new Error("Paging preparation deadline expired before Detail");
   const detail = await request.get(
     `${pagingRuntime!.baseUrl}/api/catalog/runtime-paging-inscription-22`,
+    { timeout: remaining },
   );
   expect(detail.status(), "Prepare paging Catalog Detail").toBe(200);
 });

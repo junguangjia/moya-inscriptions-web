@@ -1,30 +1,136 @@
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, Request } from "@playwright/test";
 
 test.beforeAll(async ({ request }) => {
   await prepareFormalRoutes(request);
 });
 
 const pageErrors = new WeakMap<Page, string[]>();
+const lifecycle = new WeakMap<string[], unknown[]>();
 
-const observePageErrors = (page: Page, errors: string[]) => {
+let observedPages = 0;
+const observePageErrors = async (page: Page, errors: string[]) => {
+  const events = lifecycle.get(errors) ?? [];
+  lifecycle.set(errors, events);
+  const pageId = `page-${++observedPages}`;
+  let documentId: string | null = null;
+  let documents = 0;
+  let requests = 0;
+  const requestOrigins = new WeakMap<
+    Request,
+    { requestId: string; originDocumentId: string | null }
+  >();
+  const location = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      const query = new URLSearchParams();
+      for (const key of [
+        "qaChrome",
+        "scenario",
+        "feed",
+        "page",
+        "pageSize",
+        "presentation",
+      ])
+        for (const value of parsed.searchParams.getAll(key))
+          query.append(key, value);
+      return `${parsed.pathname}${query.size ? `?${query}` : ""}${parsed.hash}`;
+    } catch {
+      return url;
+    }
+  };
+  const record = (kind: string, detail: object) =>
+    events.push({
+      at: Date.now(),
+      kind,
+      pageId,
+      documentId,
+      location: location(page.url()),
+      ...detail,
+    });
+  const origin = (request: Request) => {
+    let identity = requestOrigins.get(request);
+    if (!identity) {
+      identity = {
+        requestId: `${pageId}:request-${++requests}`,
+        originDocumentId: documentId,
+      };
+      requestOrigins.set(request, identity);
+    }
+    return identity;
+  };
+  // A main-frame navigation event can be same-document pushState. A fresh
+  // realm's init script, rather than framenavigated, establishes document IDs.
+  await page.exposeBinding(
+    "__moyaQAObserveDocument",
+    ({ frame }, timeOrigin: number) => {
+      if (frame !== page.mainFrame()) return;
+      documentId = `${pageId}:document-${++documents}`;
+      record("document-created", { timeOrigin });
+    },
+  );
+  await page.addInitScript(() => {
+    const observe = (
+      window as unknown as Window & {
+        __moyaQAObserveDocument: (timeOrigin: number) => Promise<void>;
+      }
+    ).__moyaQAObserveDocument;
+    // Only this diagnostic binding can reject during owned page shutdown.
+    // Application pageerrors and rejected fetches remain unfiltered below.
+    void observe(performance.timeOrigin).catch(() => {});
+  });
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) record("frame-navigation", {});
+  });
+  page.on("request", (request) => {
+    const identity = origin(request);
+    if (
+      request.isNavigationRequest() ||
+      new URL(request.url()).pathname.startsWith("/api/")
+    )
+      record("request", {
+        ...identity,
+        location: location(request.url()),
+        navigation: request.isNavigationRequest(),
+      });
+  });
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname.startsWith("/api/"))
+      record("response", {
+        ...origin(response.request()),
+        location: location(response.url()),
+        status: response.status(),
+      });
+  });
+  page.on("requestfailed", (request) =>
+    record("request-failed", {
+      ...origin(request),
+      location: location(request.url()),
+      error: request.failure()?.errorText,
+    }),
+  );
   page.on("pageerror", (error) => {
     errors.push(`${page.url()}\n${error.stack ?? error.message}`);
+    record("pageerror", { error: error.stack ?? error.message });
   });
 };
 
 test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
   pageErrors.set(page, errors);
-  observePageErrors(page, errors);
+  await observePageErrors(page, errors);
 });
 
 test.afterEach(async ({ page }, testInfo) => {
   const errors = pageErrors.get(page) ?? [];
   await testInfo.attach("unfiltered-pageerrors", {
     body: JSON.stringify(errors, null, 2),
+    contentType: "application/json",
+  });
+  await testInfo.attach("navigation-request-lifecycle", {
+    body: JSON.stringify(lifecycle.get(errors) ?? [], null, 2),
     contentType: "application/json",
   });
   expect(errors, "Every pageerror, including ResizeObserver errors").toEqual(
@@ -106,7 +212,19 @@ const catalogSnapshot = async (shell: Locator, settleMedia = true) => {
   expect(count).toBeGreaterThan(0);
   if (settleMedia) {
     for (let index = 0; index < count; index += 1) {
-      await cards.nth(index).scrollIntoViewIfNeeded();
+      const card = cards.nth(index);
+      const needsReveal = await card.evaluate((node) => {
+        const media = node.querySelector<HTMLElement>(
+          "[data-catalog-media-state]",
+        );
+        if (
+          ["failed", "missing"].includes(media?.dataset.catalogMediaState ?? "")
+        )
+          return false;
+        const image = media?.querySelector("img");
+        return image?.complete !== true || image.naturalWidth === 0;
+      });
+      if (needsReveal) await card.scrollIntoViewIfNeeded();
     }
     const media = cards.locator("[data-catalog-media-state]");
     await expect(media).toHaveCount(count);
@@ -196,7 +314,7 @@ test("QA chrome uses only its URL mode and hidden mode survives reload and a cop
   expect((await page.reload())?.status()).toBe(200);
   await expectChrome(surface, "hidden");
   const copiedPage = await context.newPage();
-  observePageErrors(copiedPage, pageErrors.get(page)!);
+  await observePageErrors(copiedPage, pageErrors.get(page)!);
   try {
     expect((await copiedPage.goto(copiedUrl))?.status()).toBe(200);
     await expectChrome(copiedPage.locator("[data-t02p-qa-harness]"), "hidden");
