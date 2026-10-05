@@ -183,13 +183,13 @@ describe("FormalPage", () => {
   });
 
   it.each([
-    [{ state: "sign_in_required" }, "内测进行中", "登录"],
+    [{ state: "sign_in_required" }, "网站施工中", "登录"],
     [
       {
         state: "restricted",
         account: { displayName: "访碑者", handle: "member-04" },
       },
-      "暂未获得内测资格",
+      "网站施工中",
       "退出登录",
     ],
     [{ state: "unavailable" }, "暂时无法访问", "重试"],

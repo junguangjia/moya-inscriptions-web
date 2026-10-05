@@ -23,14 +23,12 @@ export type ProductAccessNoticeState =
 
 const copy = {
   sign_in_required: {
-    title: "内测进行中",
-    description:
-      "由于艺目前仅向已获邀请的内测用户开放。如果你已获得内测资格，请登录后继续。",
+    title: "网站施工中",
+    description: "内测请联系博主本人，小红书、B站、抖音、微信都可以。",
   },
   restricted: {
-    title: "暂未获得内测资格",
-    description:
-      "由于艺目前仅向已获邀请的内测用户开放，当前账号尚未获得内测资格。",
+    title: "网站施工中",
+    description: "内测请联系博主本人，小红书、B站、抖音、微信都可以。",
   },
   unavailable: {
     title: "暂时无法访问",
