@@ -19,6 +19,7 @@ import {
   agentEnvironment,
   collectFileEvidence,
   confirmModelSelection,
+  cursorFailure,
   currentRun,
   eligiblePR,
   marker,
@@ -654,6 +655,24 @@ test("parameterized models reject malformed input and unconfirmed or downgraded 
     assert.throws(() => parseModelSelection(invalid));
 });
 
+test("CLI diagnostics emit only fixed failure categories without raw values", () => {
+  for (const [stderr, category] of [
+    ["Invalid model parameter: context 500k", "CURSOR_MODEL_REJECTED"],
+    ["model unavailable for this account", "CURSOR_MODEL_REJECTED"],
+    ["You have exceeded your quota", "CURSOR_USAGE_LIMIT"],
+    [
+      "unauthenticated; private-diagnostic-must-not-escape",
+      "CURSOR_AUTHENTICATION",
+    ],
+    ["private-diagnostic-must-not-escape", "CURSOR_COMMAND_FAILED"],
+  ])
+    assert.equal(cursorFailure({ stderr }), category);
+  assert.equal(
+    cursorFailure({ error: { code: "ETIMEDOUT" } }),
+    "CURSOR_TIMEOUT",
+  );
+});
+
 test("inference passes exact model and evidence on stdin, rejects hidden parameter fallback and conceals raw errors", () => {
   const temp = mkdtempSync(join(tmpdir(), "cursor-inference-test-"));
   try {
@@ -713,7 +732,7 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
       readFileSync(join(directory, "report.json"), "utf8"),
     );
     assert.equal(downgraded.assessment, "unavailable");
-    assert.match(downgraded.summary, /did not confirm/u);
+    assert.match(downgraded.summary, /MODEL_SELECTION_NOT_CONFIRMED/u);
     writeFileSync(
       stub,
       `#!${process.execPath}\nprocess.stderr.write('raw-diagnostic-must-not-escape'); process.exit(1);`,
