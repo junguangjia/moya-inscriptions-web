@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { expectPanelAlignment } from "./support/pager-alignment";
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { readPagingWebPort } from "./support/e2e-ports";
 import type { Locator, Page } from "@playwright/test";
@@ -49,37 +50,22 @@ const selectHomeFeed = async (
   await home
     .getByRole("tab", { exact: true, name })
     .evaluate((button) => (button as HTMLButtonElement).click());
-  await expect(productShell(page)).toHaveAttribute(
-    "data-active-destination",
-    "home",
-  );
-  await expect(home).toHaveAttribute("data-active-home-feed", feed);
-  await expect(feedSurface(page, feed)).toHaveAttribute("aria-hidden", "false");
-  await expect(feedSurface(page, feed)).not.toHaveAttribute("inert", "");
   const pager = home.locator("[data-home-feed-pager]");
   // Business selection commits before the pager finishes restoring panel scroll.
-  // Start a new reading offset only after that existing motion has settled.
-  await expect
-    .poll(
-      () =>
-        pager.evaluate(async (node, target) => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
-          const panel = node.querySelector<HTMLElement>(
-            `[data-home-feed-panel="${target}"]`,
-          )!;
-          return (
-            (node as HTMLElement).dataset.homePagerScrolling === "false" &&
-            Math.abs(
-              panel.getBoundingClientRect().left -
-                node.getBoundingClientRect().left,
-            ) <= 2
-          );
-        }, feed),
-      { intervals: [0] },
-    )
-    .toBe(true);
+  // Observe independent state and geometry conditions together, then start the
+  // next reading offset only after all original conditions have settled.
+  await Promise.all([
+    expect(productShell(page)).toHaveAttribute(
+      "data-active-destination",
+      "home",
+    ),
+    expect(home).toHaveAttribute("data-active-home-feed", feed),
+    expect(feedSurface(page, feed)).toHaveAttribute("aria-hidden", "false"),
+    expect(feedSurface(page, feed)).not.toHaveAttribute("inert", ""),
+    expectPanelAlignment(pager, `[data-home-feed-panel="${feed}"]`, {
+      idle: true,
+    }),
+  ]);
 };
 
 const settleFeedRestore = (page: Page) =>

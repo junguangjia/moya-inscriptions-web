@@ -272,6 +272,12 @@ for (const surface of ["home", "discussion"] as const) {
         "data-category-pager-engine",
         "embla",
       );
+      // The engine name is present in SSR; its first published progress proves
+      // that the client engine has attached before the input sequence starts.
+      await expect(pager).toHaveAttribute(
+        "data-horizontal-pager-progress",
+        /^-?\d+(?:\.\d+)?$/u,
+      );
       const samples = await pager.evaluate(async (element, incomingKey) => {
         const frame = element as HTMLElement;
         const home = frame.closest(

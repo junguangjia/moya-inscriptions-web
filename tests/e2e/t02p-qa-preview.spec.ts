@@ -71,6 +71,9 @@ const observePageErrors = async (page: Page, errors: string[]) => {
       record("document-created", { timeOrigin });
     },
   );
+  await page.exposeBinding("__moyaQAObserveReadLifecycle", (_source, detail) =>
+    record("document-read-lifecycle", detail),
+  );
   await page.addInitScript(() => {
     const observe = (
       window as unknown as Window & {
@@ -80,6 +83,44 @@ const observePageErrors = async (page: Page, errors: string[]) => {
     // Only this diagnostic binding can reject during owned page shutdown.
     // Application pageerrors and rejected fetches remain unfiltered below.
     void observe(performance.timeOrigin).catch(() => {});
+    const observeReads = (
+      window as unknown as Window & {
+        __moyaQAObserveReadLifecycle: (detail: object) => Promise<void>;
+      }
+    ).__moyaQAObserveReadLifecycle;
+    const recordRead = (kind: string, detail: object = {}) => {
+      void observeReads({
+        kind,
+        browserAt: performance.timeOrigin + performance.now(),
+        timeOrigin: performance.timeOrigin,
+        ...detail,
+      }).catch(() => {});
+    };
+    for (const kind of ["beforeunload", "pagehide", "pageshow"])
+      window.addEventListener(kind, () => recordRead(kind));
+    const fetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = new URL(
+        input instanceof Request ? input.url : String(input),
+        window.location.href,
+      );
+      if (url.pathname.startsWith("/api/community/")) {
+        const signal =
+          init?.signal ?? (input instanceof Request ? input.signal : null);
+        // Only the public path and timing are recorded, never credentials,
+        // bodies, headers or authorizing query parameters.
+        recordRead("fetch-call", {
+          path: url.pathname,
+          aborted: signal?.aborted ?? false,
+        });
+        signal?.addEventListener(
+          "abort",
+          () => recordRead("read-abort", { path: url.pathname }),
+          { once: true },
+        );
+      }
+      return fetch(input, init);
+    };
   });
   page.on("framenavigated", (frame) => {
     if (frame === page.mainFrame()) record("frame-navigation", {});
@@ -138,16 +179,44 @@ test.afterEach(async ({ page }, testInfo) => {
   );
 });
 
-const openQa = async (page: Page, query = "") => {
-  const response = await page.goto(`/dev/t02p/qa${query}`);
-  expect(response?.status()).toBe(200);
+const expectQaReady = async (page: Page) => {
   const surface = page.locator("[data-t02p-qa-harness]");
   const shell = surface.locator("[data-product-shell]");
   await expect(surface).toHaveCount(1);
   await expect(shell).toHaveCount(1);
-  await expect(shell.locator("[data-search-trigger]")).toBeVisible();
-  await expect(shell.locator("[data-user-trigger]")).toBeVisible();
+  // SSR controls alone are not an interactive document. The boot component
+  // disappears only after ProductShell's client effect commits; the HTML boot
+  // attribute has an independent failsafe and is insufficient here.
+  await expect(surface.locator("[data-product-boot]")).toHaveCount(0);
+  const destination =
+    (await shell.getAttribute("data-active-destination")) === "discussion"
+      ? "discussion"
+      : "home";
+  const pager = shell.locator(
+    `[data-${destination}-surface] [data-horizontal-pager]`,
+  );
+  if ((await shell.getAttribute("data-platform")) === "pc")
+    await expect(pager).toHaveAttribute(
+      `data-${destination}-pager-settle-mode`,
+      /^(scrollend|stable-frames)$/u,
+    );
+  else
+    await expect(pager).toHaveAttribute(
+      "data-horizontal-pager-progress",
+      /^-?\d+(?:\.\d+)?$/u,
+    );
   return { surface, shell };
+};
+
+const openQa = async (page: Page, query = "") => {
+  const response = await page.goto(`/dev/t02p/qa${query}`, {
+    waitUntil: "domcontentloaded",
+  });
+  expect(response?.status()).toBe(200);
+  const ready = await expectQaReady(page);
+  await expect(ready.shell.locator("[data-search-trigger]")).toBeVisible();
+  await expect(ready.shell.locator("[data-user-trigger]")).toBeVisible();
+  return ready;
 };
 
 const expectChrome = async (surface: Locator, mode: "visible" | "hidden") => {
@@ -311,12 +380,20 @@ test("QA chrome uses only its URL mode and hidden mode survives reload and a cop
 
   const { surface } = await openQa(page, "?qaChrome=hidden");
   const copiedUrl = page.url();
-  expect((await page.reload())?.status()).toBe(200);
+  expect((await page.reload({ waitUntil: "domcontentloaded" }))?.status()).toBe(
+    200,
+  );
+  await expectQaReady(page);
   await expectChrome(surface, "hidden");
   const copiedPage = await context.newPage();
   await observePageErrors(copiedPage, pageErrors.get(page)!);
   try {
-    expect((await copiedPage.goto(copiedUrl))?.status()).toBe(200);
+    expect(
+      (
+        await copiedPage.goto(copiedUrl, { waitUntil: "domcontentloaded" })
+      )?.status(),
+    ).toBe(200);
+    await expectQaReady(copiedPage);
     await expectChrome(copiedPage.locator("[data-t02p-qa-harness]"), "hidden");
     const ordinary = await openQa(copiedPage);
     await expectChrome(ordinary.surface, "visible");
@@ -452,7 +529,10 @@ test("hidden QA preserves existing scenario feed and topic entry parameters", as
     "data-active-home-feed",
     "nearby",
   );
-  expect((await page.reload())?.status()).toBe(200);
+  expect((await page.reload({ waitUntil: "domcontentloaded" }))?.status()).toBe(
+    200,
+  );
+  await expectQaReady(page);
   await expectChrome(surface, "hidden");
   await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
     "data-active-home-feed",
@@ -463,8 +543,10 @@ test("hidden QA preserves existing scenario feed and topic entry parameters", as
   for (const mode of ["visible", "hidden"] as const) {
     const response = await page.goto(
       `/dev/t02p/qa?${mode === "hidden" ? "qaChrome=hidden&" : ""}scenario=topics-editorial&feed=topics&topic=topic-cliff-paths`,
+      { waitUntil: "domcontentloaded" },
     );
     expect(response?.status()).toBe(200);
+    await expectQaReady(page);
     await expectChrome(surface, mode);
     await expect(surface).toHaveAttribute(
       "data-home-scenario",

@@ -1,5 +1,6 @@
 import { setTimeout as pause } from "node:timers/promises";
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
+import { expectPanelAlignment } from "./support/pager-alignment";
 import { devices, expect, test } from "@playwright/test";
 
 import type { CDPSession, Locator, Page } from "@playwright/test";
@@ -882,17 +883,31 @@ for (const chrome of ["default", "hidden"] as const) {
       }
     };
     try {
+      const response = await page.goto(
+        chrome === "hidden" ? "/dev/t02p/qa?qaChrome=hidden" : "/dev/t02p/qa",
+        { waitUntil: "domcontentloaded" },
+      );
+      expect(response?.status()).toBe(200);
+      await expect(page.locator("[data-product-boot]")).toHaveCount(0);
       for (const surface of [
         "discover",
         "inscriptions",
         "calligraphy",
         "user",
       ] as const) {
-        await page.goto(
-          chrome === "hidden" ? "/dev/t02p/qa?qaChrome=hidden" : "/dev/t02p/qa",
-          { waitUntil: "domcontentloaded" },
-        );
-        await expect(page.locator("[data-product-boot]")).toHaveCount(0);
+        // Reload used to reset the previous pinch, not to prove navigation.
+        // Reset only setup scale here; each native pinch below still needs its
+        // own trusted input and measured visualViewport scale increase.
+        await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+        await expect
+          .poll(() => page.evaluate(() => visualViewport!.scale))
+          .toBe(1);
+        await page.evaluate(async () => {
+          window.scrollTo(0, 0);
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+        });
         const home = page.locator("[data-home-surface]");
         if (surface === "user")
           await page.locator("[data-user-trigger]").click();
@@ -910,6 +925,18 @@ for (const chrome of ["default", "hidden"] as const) {
         const scroller = panels.nth(startIndex);
         await expect(frame).toHaveCSS("touch-action", "pan-y pinch-zoom");
         if (surface !== "user") await waitForInitialFeedScroll(home, surface);
+        await expectPanelAlignment(
+          frame,
+          `${panelSelector}:nth-child(${startIndex + 1})`,
+          { idle: true },
+        );
+        await scroller.evaluate((node) => {
+          node.scrollTop = 0;
+          node.dispatchEvent(new Event("scroll"));
+        });
+        await expect
+          .poll(() => scroller.evaluate((node) => node.scrollTop))
+          .toBe(0);
         const exposedPoint = (dragDirection: number, distance: number) =>
           frame.evaluate(
             (node, input) => {
@@ -983,6 +1010,7 @@ for (const chrome of ["default", "hidden"] as const) {
               remainingAtCommit: 0,
               events: [] as unknown[],
             };
+            const diagnostics = new AbortController();
             Object.assign(f, { controlledEvidence: data });
             for (const type of [
               "touchstart",
@@ -1011,7 +1039,7 @@ for (const chrome of ["default", "hidden"] as const) {
                     })),
                   });
                 },
-                { capture: true, passive: true },
+                { capture: true, passive: true, signal: diagnostics.signal },
               );
             }
             f.addEventListener(
@@ -1028,14 +1056,14 @@ for (const chrome of ["default", "hidden"] as const) {
                   ),
                 );
               },
-              true,
+              { capture: true, signal: diagnostics.signal },
             );
             f.addEventListener(
               "touchend",
               () => {
                 if (!data.released) data.released = performance.now();
               },
-              true,
+              { capture: true, signal: diagnostics.signal },
             );
             const observer = new MutationObserver(() => {
               const target = f.querySelectorAll<HTMLElement>(input.selector)[
@@ -1059,6 +1087,12 @@ for (const chrome of ["default", "hidden"] as const) {
               subtree: true,
               attributes: true,
               attributeFilter: ["inert", "aria-hidden"],
+            });
+            Object.assign(f, {
+              controlledPagerCleanup: () => {
+                diagnostics.abort();
+                observer.disconnect();
+              },
             });
           },
           { selector: panelSelector, targetIndex, initialOffset },
@@ -1194,8 +1228,24 @@ for (const chrome of ["default", "hidden"] as const) {
         ).toBeLessThanOrEqual(2);
         await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
         Object.assign(surfaceEvidence, { initialScale, afterScale });
+        await frame.evaluate((node) => {
+          (
+            node as HTMLElement & { controlledPagerCleanup: () => void }
+          ).controlledPagerCleanup();
+        });
       }
     } finally {
+      // Also dispose unfinished diagnostics after a failed assertion. Reusing
+      // a document must not accumulate the old surface's capture listeners.
+      await page
+        .locator("[data-home-feed-pager], [data-user-pager]")
+        .evaluateAll((frames) => {
+          for (const frame of frames)
+            (
+              frame as HTMLElement & { controlledPagerCleanup?: () => void }
+            ).controlledPagerCleanup?.();
+        })
+        .catch(() => {});
       await testInfo.attach("controlled-pager-input", {
         body: JSON.stringify(evidence, null, 2),
         contentType: "application/json",
