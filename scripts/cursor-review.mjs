@@ -21,7 +21,7 @@ const root = resolve(import.meta.dirname, "..");
 const readJSON = (file) => JSON.parse(readFileSync(file, "utf8"));
 const save = (file, value) =>
   writeFileSync(file, JSON.stringify(value), { mode: 0o600 });
-const command = (bin, args, options = {}) => {
+const command = (bin, args, options = {}, failure = () => "COMMAND_FAILED") => {
   const result = spawnSync(bin, args, {
     encoding: "utf8",
     timeout: 30000,
@@ -29,7 +29,7 @@ const command = (bin, args, options = {}) => {
     stdio: ["pipe", "pipe", "pipe"],
     ...options,
   });
-  if (result.error || result.status !== 0) throw new Error("COMMAND_FAILED");
+  if (result.error || result.status !== 0) throw new Error(failure(result));
   return result.stdout;
 };
 function api(path, body) {
@@ -440,6 +440,31 @@ export function parseCLIResult(raw, packet) {
   return parseReport(envelope.result, packet);
 }
 
+export function cursorFailure(result) {
+  if (result.error?.code === "ETIMEDOUT") return "CURSOR_TIMEOUT";
+  const diagnostic = `${result.stderr || ""}\n${result.stdout || ""}`;
+  // Inspect bounded diagnostics in memory; only fixed categories may escape.
+  if (
+    /quota|usage limit|spend(?:ing)? limit|insufficient credits|payment required/iu.test(
+      diagnostic,
+    )
+  )
+    return "CURSOR_USAGE_LIMIT";
+  if (
+    /unauthorized|unauthenticated|invalid api key|authentication failed/iu.test(
+      diagnostic,
+    )
+  )
+    return "CURSOR_AUTHENTICATION";
+  if (
+    /cannot use this model|invalid.*(?:model|parameter|context)|(?:model|parameter|context).*(?:not (?:found|supported|allowed)|unavailable|invalid)|max.mode.*(?:not|unsupported)/iu.test(
+      diagnostic,
+    )
+  )
+    return "CURSOR_MODEL_REJECTED";
+  return "CURSOR_COMMAND_FAILED";
+}
+
 export function parseModelSelection(value) {
   const match = /^([a-zA-Z0-9._-]{1,80})(?:\[([^\]]{1,140})\])?$/u.exec(value);
   if (!match) throw new Error("INVALID_MODEL");
@@ -533,6 +558,7 @@ function analyze(directory, env) {
         maxBuffer: 256 * 1024,
         killSignal: "SIGKILL",
       },
+      cursorFailure,
     );
     const report = parseCLIResult(raw, packet);
     // Read only our fresh CLI configuration, never any user credentials/config.
@@ -544,10 +570,24 @@ function analyze(directory, env) {
     save(join(directory, "report.json"), { ...report, model });
   } catch (error) {
     // Do not print CLI stderr: auth/network diagnostics can contain credentials.
+    const allowed = new Set([
+      "CURSOR_TIMEOUT",
+      "CURSOR_USAGE_LIMIT",
+      "CURSOR_AUTHENTICATION",
+      "CURSOR_MODEL_REJECTED",
+      "CURSOR_COMMAND_FAILED",
+      "INVALID_CLI_RESULT",
+      "INVALID_REPORT",
+      "INVALID_FINDING",
+      "INCONSISTENT_REPORT",
+      "CREDENTIAL_IN_REPORT",
+      "MODEL_SELECTION_NOT_CONFIRMED",
+    ]);
+    const category = allowed.has(error.message)
+      ? error.message
+      : "CURSOR_RESPONSE_OR_CONFIG_INVALID";
     unavailable(
-      error.message === "MODEL_SELECTION_NOT_CONFIRMED"
-        ? "Cursor CLI did not confirm the requested model parameters. Analysis was not accepted. No automatic fallback or retry."
-        : "Cursor analysis unavailable (authentication, quota, model, timeout or invalid response). No clean verdict; check Cursor usage/settings. No automatic paid fallback or retry.",
+      `Cursor analysis unavailable (${category}). No clean verdict; check Cursor usage/settings. No automatic paid fallback or retry.`,
     );
   }
 }
