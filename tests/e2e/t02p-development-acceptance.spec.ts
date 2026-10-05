@@ -1,3 +1,4 @@
+import { expectPanelAlignment } from "./support/pager-alignment";
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
@@ -122,24 +123,7 @@ const touchSettleHomeFeed = async (home: Locator, feed: HomeFeedName) => {
   // Each old scrollTo(auto) step was aligned before the next geometry input.
   // This setup helper waits for that actual position, not for interaction.
   const atPage = async (targetFeed: HomeFeedName) => {
-    await expect
-      .poll(
-        () =>
-          pager.evaluate(async (node, target) => {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
-            const panel = node.querySelector<HTMLElement>(
-              `[data-home-feed-panel="${target}"]`,
-            )!;
-            return Math.abs(
-              panel.getBoundingClientRect().left -
-                node.getBoundingClientRect().left,
-            );
-          }, targetFeed),
-        { intervals: [0] },
-      )
-      .toBeLessThanOrEqual(2);
+    await expectPanelAlignment(pager, `[data-home-feed-panel="${targetFeed}"]`);
   };
   let active = (await home.getAttribute(
     "data-active-home-feed",
@@ -1618,35 +1602,12 @@ test("Home touch release commits once without post-release programmatic drift", 
   const expectSettledFeed = async (feed: (typeof feeds)[number]) => {
     // Confirm the full visual tail before the short out-and-back gesture;
     // ordinary repeated releases below can still interrupt a moving tail.
-    await expect
-      .poll(
-        () =>
-          pager.evaluate(async (node, targetFeed) => {
-            const frame = node as HTMLElement;
-            const panel = frame.querySelector<HTMLElement>(
-              `[data-home-feed-panel="${targetFeed}"]`,
-            );
-            if (panel === null) throw new Error("Missing settled Home panel");
-            const settled = () =>
-              frame.dataset.homePagerScrolling === "false" &&
-              Math.abs(
-                panel.getBoundingClientRect().left -
-                  frame.getBoundingClientRect().left,
-              ) < 1;
-            if (!settled()) return false;
-            // Check consecutive animation frames, including the first scroll frame
-            // where an initially false motion attribute alone would be misleading.
-            for (let index = 0; index < 2; index += 1) {
-              await new Promise<void>((resolve) =>
-                requestAnimationFrame(() => resolve()),
-              );
-              if (!settled()) return false;
-            }
-            return true;
-          }, feed),
-        { intervals: [16] },
-      )
-      .toBe(true);
+    await expectPanelAlignment(pager, `[data-home-feed-panel="${feed}"]`, {
+      gap: 1,
+      strict: true,
+      idle: true,
+      frames: 3,
+    });
     await expect(home).toHaveAttribute("data-active-home-feed", feed);
   };
   let currentIndex = 0;
@@ -1659,25 +1620,11 @@ test("Home touch release commits once without post-release programmatic drift", 
     // Wait for the committed panel to cross its final quarter-width, while
     // retaining the animation tail. A reverse gesture must start from the
     // selected panel's side of the midpoint, not from its previous neighbor.
-    await expect
-      .poll(
-        () =>
-          pager.evaluate((node, sourceIndex) => {
-            const source = node.querySelectorAll("[data-home-feed-panel]")[
-              sourceIndex
-            ];
-            if (source === undefined)
-              throw new Error("Missing current Home panel");
-            return (
-              Math.abs(
-                source.getBoundingClientRect().left -
-                  node.getBoundingClientRect().left,
-              ) / node.clientWidth
-            );
-          }, currentIndex),
-        { intervals: [16] },
-      )
-      .toBeLessThanOrEqual(0.25);
+    await expectPanelAlignment(
+      pager,
+      `[data-home-feed-panel="${feeds[currentIndex]}"]`,
+      { gap: 0.25, fraction: true },
+    );
     await pager.evaluate(
       (node, input) => {
         const frame = node as HTMLElement;

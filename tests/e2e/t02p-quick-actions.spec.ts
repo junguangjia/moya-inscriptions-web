@@ -1,3 +1,4 @@
+import { setTimeout as pause } from "node:timers/promises";
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { writeFile } from "node:fs/promises";
 import { devices, expect, test } from "@playwright/test";
@@ -140,7 +141,6 @@ const touch = (
   points: { x: number; y: number; id: number }[],
 ) => session.send("Input.dispatchTouchEvent", { type, touchPoints: points });
 const drag = async (
-  page: Page,
   session: CDPSession,
   from: { x: number; y: number },
   to: { x: number; y: number },
@@ -153,7 +153,7 @@ const drag = async (
         y: from.y + ((to.y - from.y) * step) / 10,
       },
     ]);
-    await page.waitForTimeout(16);
+    await pause(16);
   }
 };
 
@@ -342,7 +342,7 @@ for (const chrome of ["default", "hidden"] as const) {
             ).toBeVisible();
           if (phase === "sliding") {
             const target = await targetFor(page, "favorite");
-            await drag(page, session, first, target);
+            await drag(session, first, target);
             first = { ...target, id: 1 };
             await expect(
               page.locator('[data-quick-action="favorite"]'),
@@ -374,7 +374,7 @@ for (const chrome of ["default", "hidden"] as const) {
               { id: 1, x: first.x - (40 * step) / 12, y: first.y },
               { id: 2, x: first.x + 80 + (120 * step) / 12, y: first.y },
             ]);
-            await page.waitForTimeout(30);
+            await pause(30);
           }
           // A cancelled menu is insufficient: assert actual compositor zoom before lifting either finger.
           await expect
@@ -425,7 +425,7 @@ for (const chrome of ["default", "hidden"] as const) {
               { id: 1, x: 60 + (125 * step) / 12, y: 300 },
               { id: 2, x: 330 - (125 * step) / 12, y: 300 },
             ]);
-            await page.waitForTimeout(30);
+            await pause(30);
           }
           await touch(session, "touchEnd", []);
           await expect
@@ -458,7 +458,7 @@ for (const chrome of ["default", "hidden"] as const) {
           );
           const { point: scrollStart } = await nativeCard(page, surface);
           await touch(session, "touchStart", [{ ...scrollStart, id: 1 }]);
-          await drag(page, session, scrollStart, {
+          await drag(session, scrollStart, {
             x: scrollStart.x,
             y: scrollStart.y - 110,
           });
@@ -474,7 +474,7 @@ for (const chrome of ["default", "hidden"] as const) {
           await touch(session, "touchStart", [{ ...pageStart, id: 1 }]);
           // Discover advances to Nearby; the last Home tab, Calligraphy, returns
           // to Inscriptions with a rightward swipe instead of a removed category.
-          await drag(page, session, pageStart, {
+          await drag(session, pageStart, {
             x: surface === "home" ? 5 : page.viewportSize()!.width - 5,
             y: pageStart.y,
           });
@@ -531,7 +531,7 @@ for (const surface of ["home", "calligraphy"] as const) {
       await activate();
       const { point: start } = await nativeCard(page, surface);
       await touch(session, "touchStart", [{ ...start, id: 1 }]);
-      await drag(page, session, start, { x: start.x, y: start.y - 110 });
+      await drag(session, start, { x: start.x, y: start.y - 110 });
       await touch(session, "touchEnd", []);
       await expect
         .poll(() => scrollOwner.evaluate((node) => node.scrollTop))
@@ -546,7 +546,7 @@ for (const surface of ["home", "calligraphy"] as const) {
         surface === "home",
       );
       await touch(session, "touchStart", [{ ...origin, id: 1 }]);
-      await drag(page, session, origin, {
+      await drag(session, origin, {
         x: surface === "home" ? 5 : page.viewportSize()!.width - 5,
         y: origin.y,
       });
@@ -564,7 +564,7 @@ for (const surface of ["home", "calligraphy"] as const) {
       await touch(session, "touchStart", [{ ...hold, id: 1 }]);
       await expect(page.locator("[data-quick-action-menu]")).toBeVisible();
       const destination = await targetFor(page, "favorite");
-      await drag(page, session, hold, destination);
+      await drag(session, hold, destination);
       await expect(
         page.locator('[data-quick-action="favorite"]'),
       ).toHaveAttribute("data-candidate", "true");
@@ -574,7 +574,7 @@ for (const surface of ["home", "calligraphy"] as const) {
       await expect(
         page.locator('[data-quick-action="favorite"]'),
       ).toHaveAttribute("data-state-active", "true");
-      await drag(page, session, hold, await targetFor(page, "favorite"));
+      await drag(session, hold, await targetFor(page, "favorite"));
       await touch(session, "touchEnd", []);
       await touch(session, "touchStart", [{ ...hold, id: 1 }]);
       await expect(
@@ -704,7 +704,7 @@ for (const surface of ["home", "calligraphy"] as const) {
           { x: point.x - (40 * step) / 12, y: point.y, id: 1 },
           { x: point.x + 80 + (120 * step) / 12, y: point.y, id: 2 },
         ]);
-        await page.waitForTimeout(30);
+        await pause(30);
       }
       await touch(session, "touchEnd", []);
       await expect
@@ -716,7 +716,7 @@ for (const surface of ["home", "calligraphy"] as const) {
         y: window.visualViewport!.height * 0.8,
       }));
       await touch(session, "touchStart", [{ ...pan, id: 1 }]);
-      await drag(page, session, pan, { x: pan.x, y: pan.y / 4 });
+      await drag(session, pan, { x: pan.x, y: pan.y / 4 });
       await touch(session, "touchEnd", []);
       // Let native fling finish before starting a fresh press. Input used to
       // stop an active fling is noncancelable in Chromium.
@@ -820,7 +820,7 @@ for (const surface of ["home", "calligraphy"] as const) {
         expect(box.width * viewport.scale).toBeCloseTo(64, 1);
       }
       const target = bounds.find((box) => box.action === "share")!;
-      await drag(page, session, input, {
+      await drag(session, input, {
         x: target.x + target.width / 2 - viewport.left,
         y: target.y + target.height / 2 - viewport.top,
       });
@@ -1045,6 +1045,10 @@ for (const chrome of ["default", "hidden"] as const) {
           const buttons = page.locator(
             `[data-quick-action-content-kind="${kind}"]`,
           );
+          // The visible QA aside covers the first Topic cards. Reveal later
+          // real content through its existing scroll owner before hit testing.
+          if (chrome === "default" && kind === "topic")
+            await buttons.last().scrollIntoViewIfNeeded();
           const findHit = () =>
             buttons.evaluateAll((nodes) => {
               for (const [index, node] of nodes.entries()) {
@@ -1112,7 +1116,7 @@ for (const chrome of ["default", "hidden"] as const) {
               { id: 1, x: first.x - step * 3, y: first.y },
               { id: 2, x: first.x + 80 + step * 10, y: first.y },
             ]);
-            await page.waitForTimeout(30);
+            await pause(30);
           }
           await expect
             .poll(() => page.evaluate(() => visualViewport!.scale))
@@ -1128,7 +1132,7 @@ for (const chrome of ["default", "hidden"] as const) {
               { id: 1, x: 60 + (125 * step) / 12, y: 300 },
               { id: 2, x: 330 - (125 * step) / 12, y: 300 },
             ]);
-            await page.waitForTimeout(30);
+            await pause(30);
           }
           await touch(session, "touchEnd", []);
           await expect

@@ -1,198 +1,10 @@
-import { spawn } from "node:child_process";
-import {
-  closeSync,
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  openSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { expect, test } from "@playwright/test";
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
-
-import type { ChildProcess } from "node:child_process";
+import { readPagingWebPort } from "./support/e2e-ports";
 import type { Locator, Page } from "@playwright/test";
 
 type HomeFeed = "calligraphy" | "discover" | "inscriptions";
-
-const e2eRoot = dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = resolve(e2eRoot, "../..");
-const sourceWebRoot = join(repositoryRoot, "apps/web");
-const projectPorts = {
-  "desktop-chromium": 3210,
-  "desktop-webkit": 3211,
-  "mobile-webkit": 3212,
-  "tablet-landscape-webkit": 3214,
-  "tablet-webkit": 3213,
-} as const;
-const projectApiPorts = {
-  "desktop-chromium": 3220,
-  "desktop-webkit": 3221,
-  "mobile-webkit": 3222,
-  "tablet-landscape-webkit": 3224,
-  "tablet-webkit": 3223,
-} as const;
-
-const excludedWebEntries = new Set([
-  ".next",
-  ".turbo",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "node_modules",
-  "tsconfig.tsbuildinfo",
-]);
-
-let pagingRuntime:
-  | {
-      readonly baseUrl: string;
-      readonly children: readonly ChildProcess[];
-      readonly logDescriptor: number;
-      readonly temporaryRoot: string;
-    }
-  | undefined;
-
-const waitForRuntime = async (
-  baseUrl: string,
-  child: ChildProcess,
-  deadline: number,
-) => {
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Paging Formal runtime exited with ${child.exitCode}`);
-    }
-    try {
-      const response = await fetch(baseUrl, {
-        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-      });
-      if (response.status === 200) return;
-    } catch {
-      // The disposable server is still starting.
-    }
-    const remaining = deadline - Date.now();
-    if (remaining > 0)
-      await new Promise((resolveWait) =>
-        setTimeout(resolveWait, Math.min(200, remaining)),
-      );
-  }
-  throw new Error("Timed out starting the paging Formal runtime");
-};
-
-const startPagingRuntime = async (projectName: string, deadline: number) => {
-  const port = projectPorts[projectName as keyof typeof projectPorts];
-  const apiPort = projectApiPorts[projectName as keyof typeof projectApiPorts];
-  if (port === undefined || apiPort === undefined) {
-    throw new Error(`Unknown E2E project ${projectName}`);
-  }
-  const temporaryRoot = mkdtempSync(join(tmpdir(), "moya-catalog-paging-"));
-  const temporaryWebRoot = join(temporaryRoot, "apps/web");
-  mkdirSync(join(temporaryRoot, "apps"), { recursive: true });
-  cpSync(
-    join(repositoryRoot, "tsconfig.base.json"),
-    join(temporaryRoot, "tsconfig.base.json"),
-  );
-  cpSync(sourceWebRoot, temporaryWebRoot, {
-    filter: (source) => {
-      const pathFromWebRoot = relative(sourceWebRoot, source);
-      const topLevelEntry = pathFromWebRoot.split(sep)[0] ?? "";
-      return !excludedWebEntries.has(topLevelEntry);
-    },
-    recursive: true,
-  });
-  symlinkSync(join(repositoryRoot, "docs"), join(temporaryRoot, "docs"), "dir");
-  symlinkSync(
-    join(repositoryRoot, "packages"),
-    join(temporaryRoot, "packages"),
-    "dir",
-  );
-  symlinkSync(
-    join(sourceWebRoot, "node_modules"),
-    join(temporaryWebRoot, "node_modules"),
-    "dir",
-  );
-
-  const logPath = join(tmpdir(), `moya-catalog-paging-${projectName}.log`);
-  const logDescriptor = openSync(logPath, "w");
-  const publicApiScript = join(e2eRoot, "support/public-api.ts");
-  const apiChild = spawn(process.execPath, [publicApiScript], {
-    cwd: repositoryRoot,
-    env: {
-      ...process.env,
-      MOYA_E2E_PUBLIC_API_PORT: String(apiPort),
-    },
-    stdio: ["ignore", logDescriptor, logDescriptor],
-  });
-  const publicApiOrigin = `http://127.0.0.1:${apiPort}`;
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const children = [apiChild];
-  // Register ownership before readiness: failed partial starts use the same
-  // bounded shutdown as afterAll, including confirmation that children exited.
-  pagingRuntime = { baseUrl, children, logDescriptor, temporaryRoot };
-  try {
-    await waitForRuntime(`${publicApiOrigin}/health`, apiChild, deadline);
-    const nextCli = join(sourceWebRoot, "node_modules/next/dist/bin/next");
-    const webChild = spawn(
-      process.execPath,
-      [
-        nextCli,
-        "dev",
-        "--webpack",
-        "--hostname",
-        "127.0.0.1",
-        "--port",
-        String(port),
-      ],
-      {
-        cwd: temporaryWebRoot,
-        env: {
-          ...process.env,
-          MOYA_PUBLIC_API_BASE_URL: `${publicApiOrigin}/paging/`,
-        },
-        stdio: ["ignore", logDescriptor, logDescriptor],
-      },
-    );
-    children.unshift(webChild);
-    await waitForRuntime(baseUrl, webChild, deadline);
-  } catch (error) {
-    await stopPagingRuntime();
-    throw error;
-  }
-};
-
-const stopPagingRuntime = async () => {
-  const runtime = pagingRuntime;
-  if (runtime === undefined) return;
-  await Promise.all(
-    runtime.children.map(async (child) => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      await new Promise<void>((resolveExit, rejectExit) => {
-        const escalate = setTimeout(() => child.kill("SIGKILL"), 4_000);
-        const deadline = setTimeout(() => {
-          child.removeListener("exit", exited);
-          rejectExit(
-            new Error("Paging child did not exit within cleanup reserve"),
-          );
-        }, 4_500);
-        const exited = () => {
-          clearTimeout(escalate);
-          clearTimeout(deadline);
-          resolveExit();
-        };
-        child.once("exit", exited);
-        child.kill("SIGTERM");
-      });
-    }),
-  );
-  // Retain ownership and files if exit cannot be confirmed; afterAll can still
-  // identify the exact partial runtime, rather than losing its cleanup handle.
-  pagingRuntime = undefined;
-  closeSync(runtime.logDescriptor);
-  rmSync(runtime.temporaryRoot, { force: true, recursive: true });
-};
+const pagingRuntime = { baseUrl: `http://127.0.0.1:${readPagingWebPort()}` };
 
 const formalSurface = (page: Page) =>
   page.locator("[data-clean-product-preview]");
@@ -365,15 +177,13 @@ const openViewerAndReturn = async (
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async ({ browser, request }, testInfo) => {
-  void browser;
+test.beforeAll(async ({ request }, testInfo) => {
   // Keep the existing hook limit, including owned-child cleanup. Inner waits
   // and HTTP preparation must not silently claim a separate 120-second budget.
   const deadline = Date.now() + testInfo.timeout - 5_000;
-  await startPagingRuntime(testInfo.project.name, deadline);
   // This spec owns a separate paging server, so the shared server's route
   // preparation cannot prevent its cold mounted routes from compiling mid-test.
-  await prepareFormalRoutes(request, pagingRuntime!.baseUrl, deadline);
+  await prepareFormalRoutes(request, pagingRuntime.baseUrl, deadline);
   const remaining = deadline - Date.now();
   if (remaining <= 0)
     throw new Error("Paging preparation deadline expired before Detail");
@@ -382,10 +192,6 @@ test.beforeAll(async ({ browser, request }, testInfo) => {
     { timeout: remaining },
   );
   expect(detail.status(), "Prepare paging Catalog Detail").toBe(200);
-});
-
-test.afterAll(async () => {
-  await stopPagingRuntime();
 });
 
 test("Formal Home catalog feeds progressively load and retain later pages", async ({

@@ -5,13 +5,14 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
-import { readE2ePorts } from "./support/e2e-ports";
+import { readE2ePorts, readPagingWebPort } from "./support/e2e-ports";
 
 const e2eRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(e2eRoot, "../..");
 const ports = readE2ePorts();
 const webBaseUrl = `http://127.0.0.1:${ports.web}`;
 const publicApiBaseUrl = `http://127.0.0.1:${ports.publicApi}`;
+const pagingPort = readPagingWebPort();
 const defaultArtifactParent = resolve(
   process.env.MOYA_E2E_ARTIFACT_ROOT ?? tmpdir(),
 );
@@ -117,6 +118,28 @@ export default defineConfig({
       gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
       timeout: webServerTimeoutMs,
       url: webBaseUrl,
+    },
+    {
+      // Cold process/library preparation belongs to the existing bounded
+      // service phase, before a 30-second paging hook starts. The immutable
+      // paging dataset is shared; each test still owns its browser and faults.
+      command: "node tests/e2e/support/start-formal-web.ts",
+      name: "Paging Web fixture",
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: repositoryRoot,
+      env: {
+        ...process.env,
+        AI_AGENT: "",
+        CODEX_CI: "",
+        CODEX_SANDBOX: "",
+        CODEX_THREAD_ID: "",
+        MOYA_E2E_WEB_PORT: String(pagingPort),
+        MOYA_PUBLIC_API_BASE_URL: `${publicApiBaseUrl}/paging/`,
+      },
+      gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
+      timeout: webServerTimeoutMs,
+      url: `http://127.0.0.1:${pagingPort}`,
     },
   ],
 });

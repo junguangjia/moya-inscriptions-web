@@ -47,6 +47,24 @@ interface Parser<T> {
 }
 let expectedAccount: string | null = null;
 let accountEpoch = 0;
+const documentReads = new WeakMap<Window, AbortController>();
+const documentReadSignal = () => {
+  if (typeof window === "undefined") return undefined;
+  const owner = window;
+  let controller = documentReads.get(owner);
+  if (!controller) {
+    controller = new AbortController();
+    documentReads.set(owner, controller);
+    owner.addEventListener("pagehide", () => documentReads.get(owner)?.abort());
+    owner.addEventListener("pageshow", () => {
+      // A restored back/forward-cache document may read again. Merely losing
+      // focus does not cancel reads or any author command/upload.
+      if (documentReads.get(owner)?.signal.aborted)
+        documentReads.set(owner, new AbortController());
+    });
+  }
+  return controller.signal;
+};
 export class AuthorRequestError extends Error {
   constructor(
     readonly status: number,
@@ -81,14 +99,22 @@ const request = async <T>(
     method === "GET" && !options.accountScoped
       ? {}
       : { "x-author-account": expectedAccount! };
+  const signals = [AbortSignal.timeout(15000)];
+  if (options.signal) signals.push(options.signal);
+  if (method === "GET") {
+    const documentSignal = documentReadSignal();
+    if (documentSignal) signals.push(documentSignal);
+  }
+  const signal = AbortSignal.any(signals);
+  // React need not unmount during a full navigation. Do not start another
+  // read from a departed document, including its late effect/retry callbacks.
+  signal.throwIfAborted();
   const response = await fetch(`/api/community/${path}`, {
     method: options.method ?? "GET",
     cache: "no-store",
     credentials: "same-origin",
     redirect: "error",
-    signal: options.signal
-      ? AbortSignal.any([options.signal, AbortSignal.timeout(15000)])
-      : AbortSignal.timeout(15000),
+    signal,
     headers: options.upload
       ? {
           ...identityHeaders,

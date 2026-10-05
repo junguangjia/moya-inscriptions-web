@@ -1,3 +1,4 @@
+import { expectPanelAlignment } from "./support/pager-alignment";
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
@@ -96,30 +97,11 @@ const selectFeed = async (
     .locator(`[data-tab-key="${feed}"]`)
     .evaluate((button) => (button as HTMLButtonElement).click());
   await expect(home).toHaveAttribute("data-active-home-feed", feed);
-  await expect
-    .poll(
-      () =>
-        home.evaluate(async (node, target) => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
-          const pager = node.querySelector<HTMLElement>(
-            "[data-home-feed-pager]",
-          )!;
-          const panel = pager.querySelector<HTMLElement>(
-            `[data-home-feed-panel="${target}"]`,
-          )!;
-          return (
-            pager.dataset.homePagerScrolling === "false" &&
-            Math.abs(
-              panel.getBoundingClientRect().left -
-                pager.getBoundingClientRect().left,
-            ) <= 2
-          );
-        }, feed),
-      { intervals: [0] },
-    )
-    .toBe(true);
+  await expectPanelAlignment(
+    home.locator("[data-home-feed-pager]"),
+    `[data-home-feed-panel="${feed}"]`,
+    { idle: true },
+  );
 };
 
 const enterCalligraphy = async (page: Page, hidden: boolean) => {

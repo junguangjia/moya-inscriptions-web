@@ -160,6 +160,7 @@ const ScopedAuthorProfile = ({
     positions: { ...positions.current },
   };
   const scrollTab = viewTab;
+  const departingTab = useRef<string | null>(null);
   const scrollElement = () =>
     embedded
       ? shell.platform === "pc"
@@ -195,9 +196,13 @@ const ScopedAuthorProfile = ({
         : state.profileScrollTop || positions.current[scrollTab]) ??
       0;
     pendingScrollTop.current = null;
+    departingTab.current = null;
     positions.current[scrollTab] = node.scrollTop;
     const target = embedded && shell.platform === "pc" ? window : node;
     const scroll = () => {
+      // Resizing for the next collection may clamp the document before its
+      // commit. Preserve the position captured before that height write.
+      if (departingTab.current === scrollTab) return;
       positions.current[scrollTab] = node.scrollTop;
       if (!isPreview)
         author.cache.set(`profile-scroll:${state.entryId}`, positions.current);
@@ -539,6 +544,11 @@ const ScopedAuthorProfile = ({
           keys={visibleTabs}
           activeKey={viewTab as (typeof tabs)[number]}
           onCommit={changeTab}
+          onBeforeCommit={() => {
+            positions.current[viewTab] =
+              scrollElement()?.scrollTop ?? positions.current[viewTab] ?? 0;
+            departingTab.current = viewTab;
+          }}
           onProgress={setProgress}
           panels={panels}
           platform={shell.platform}

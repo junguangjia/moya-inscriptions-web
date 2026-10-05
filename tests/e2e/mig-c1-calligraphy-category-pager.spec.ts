@@ -1,3 +1,4 @@
+import { setTimeout as pause } from "node:timers/promises";
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { devices, expect, test } from "@playwright/test";
 
@@ -877,7 +878,7 @@ for (const chrome of ["default", "hidden"] as const) {
         await touch("touchMove", [
           { id: 1, x: from.x + (dx * step) / 10, y: from.y + (dy * step) / 10 },
         ]);
-        await page.waitForTimeout(16);
+        await pause(16);
       }
     };
     try {
@@ -1177,7 +1178,7 @@ for (const chrome of ["default", "hidden"] as const) {
             { id: 1, x: 120 - step * 4, y: pinchY },
             { id: 2, x: 210 + step * 10, y: pinchY },
           ]);
-          await page.waitForTimeout(30);
+          await pause(30);
         }
         await expect
           .poll(() => page.evaluate(() => visualViewport!.scale))
