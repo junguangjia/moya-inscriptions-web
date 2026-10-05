@@ -20,6 +20,7 @@ const webPort = process.env.MOYA_E2E_WEB_PORT ?? "3100";
 
 const typescriptCli = join(repositoryRoot, "node_modules/typescript/bin/tsc");
 for (const [name, configuration] of [
+  ["@moya/contracts", "packages/contracts/tsconfig.json"],
   ["@moya/design-tokens", "packages/design-tokens/tsconfig.json"],
   ["@moya/ui", "packages/ui/tsconfig.json"],
 ] as const) {

@@ -232,9 +232,8 @@ test("Phone Detail shows complete portrait and landscape images inside a borderl
 test("Phone Live Photo preview and Viewer keep still and motion complete", async ({
   page,
 }) => {
-  // Browser shards have no compiled contracts; validate with the canonical source.
-  const { workSchema } =
-    await import("../../packages/contracts/src/schemas.ts");
+  // Discovery precedes startup; load the package schema after fixtures are ready.
+  const { workSchema } = await import("@moya/contracts/schemas");
   const workId = `work-${"e".repeat(32)}`;
   const itemId = `media-item-${"d".repeat(32)}`;
   const mediaPath = `/api/community/publishing/media/${itemId}`;
