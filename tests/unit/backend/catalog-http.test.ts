@@ -13,11 +13,15 @@ import {
   mediaIdSchema,
 } from "@moya/contracts/schemas";
 import { CatalogQueryUnavailableError } from "@moya/api";
-import { UnconfiguredStorageUrlResolver } from "@moya/image";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  MappedStorageUrlResolver,
+  UnconfiguredStorageUrlResolver,
+} from "@moya/image";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   CatalogDetailProjection,
+  CatalogMediaProjection,
   CatalogQueryPort,
   StorageUrlResolver,
 } from "@moya/api";
@@ -520,4 +524,174 @@ describe("Catalog composition and transport errors", () => {
       });
     },
   );
+});
+
+describe("Catalog rendition delivery over HTTP (unified media pipeline, PR 1b)", () => {
+  const catalogId = catalogIdSchema.parse("rendition-catalog-001");
+  const mediaId = mediaIdSchema.parse("media-rendition-http");
+  const key = (n: number) => `media-rendition-${String(n).repeat(32)}`;
+  const deliveryUrl = (n: number) =>
+    `http://127.0.0.1:3001/v1/development/catalog-renditions/${key(n)}`;
+  const media: CatalogMediaProjection = {
+    id: mediaId,
+    position: 0,
+    isRepresentative: true,
+    kind: "image",
+    alt: "分级测试图",
+    width: 4096,
+    height: 2731,
+    objectKey: "private/approved.webp",
+    renditions: [
+      {
+        key: key(1),
+        width: 480,
+        height: 320,
+        contentType: "image/webp",
+        level: "card",
+      },
+      {
+        key: key(2),
+        width: 1080,
+        height: 720,
+        contentType: "image/webp",
+        level: "card",
+      },
+      {
+        key: key(3),
+        width: 2048,
+        height: 1365,
+        contentType: "image/webp",
+        level: "display",
+      },
+      {
+        key: key(4),
+        width: 4096,
+        height: 2731,
+        contentType: "image/webp",
+        level: "zoom",
+      },
+    ],
+    placeholderColor: "#3a2f28",
+  };
+  const port: CatalogQueryPort = {
+    async list({ page, pageSize }) {
+      return {
+        items: [
+          {
+            id: catalogId,
+            kind: "inscription",
+            title: "分级资料",
+            aliases: [],
+            representativeMedia: media,
+          },
+        ],
+        total: 1,
+        page,
+        pageSize,
+        totalPages: 1,
+      };
+    },
+    async getById(id) {
+      return id === catalogId
+        ? {
+            id,
+            kind: "inscription",
+            title: "分级资料",
+            aliases: [],
+            representativeMedia: media,
+            sourceCitations: [],
+            media: [media],
+          }
+        : null;
+    },
+  };
+  const approved = new Map([
+    ["private/approved.webp", "https://media.example.invalid/approved.webp"],
+  ]);
+  const candidate = (n: number, width: number, height: number) => ({
+    src: deliveryUrl(n),
+    width,
+    height,
+    contentType: "image/webp",
+  });
+  const cardList = [
+    candidate(1, 480, 320),
+    candidate(2, 1080, 720),
+    candidate(3, 2048, 1365),
+  ];
+
+  it("lists card candidates on list pages and zoom levels in the detail gallery", async () => {
+    const { baseUrl } = await startCatalogServer({
+      catalogQueryPort: port,
+      storageUrlResolver: new MappedStorageUrlResolver(
+        approved,
+        new Map([1, 2, 3, 4].map((n) => [key(n), deliveryUrl(n)] as const)),
+      ),
+    });
+    const page = catalogPageSchema.parse(
+      await (await fetch(`${baseUrl}/v1/catalog`)).json(),
+    );
+    expect(page.items[0]?.representativeMedia).toEqual({
+      id: mediaId,
+      kind: "image",
+      src: deliveryUrl(3),
+      alt: "分级测试图",
+      width: 2048,
+      height: 1365,
+      renditions: cardList,
+      placeholderColor: "#3a2f28",
+    });
+    const detail = catalogDetailSchema.parse(
+      await (await fetch(`${baseUrl}/v1/catalog/${catalogId}`)).json(),
+    );
+    expect(detail.representativeMedia?.renditions).toEqual(cardList);
+    expect(detail.media[0]?.renditions).toEqual([
+      ...cardList,
+      candidate(4, 4096, 2731),
+    ]);
+    expect(JSON.stringify(detail)).not.toContain("private/approved.webp");
+  });
+
+  it("keeps the approved image when a candidate does not resolve and answers 503 when the batch fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const partial = await startCatalogServer({
+      catalogQueryPort: port,
+      storageUrlResolver: new MappedStorageUrlResolver(
+        approved,
+        new Map([[key(3), deliveryUrl(3)]]),
+      ),
+    });
+    const page = catalogPageSchema.parse(
+      await (await fetch(`${partial.baseUrl}/v1/catalog`)).json(),
+    );
+    expect(page.items[0]?.representativeMedia).toEqual({
+      id: mediaId,
+      kind: "image",
+      src: "https://media.example.invalid/approved.webp",
+      alt: "分级测试图",
+      width: 4096,
+      height: 2731,
+      placeholderColor: "#3a2f28",
+    });
+    expect(warn.mock.calls).toEqual([["[catalog-media] rendition_fallback"]]);
+    warn.mockRestore();
+    const failing = await startCatalogServer({
+      catalogQueryPort: port,
+      storageUrlResolver: {
+        resolveMany: async () =>
+          new Map([[mediaId, "https://media.example.invalid/approved.webp"]]),
+        resolveKeys: async () => {
+          throw new Error("private rendition resolver exception");
+        },
+      },
+    });
+    for (const path of ["/v1/catalog", `/v1/catalog/${catalogId}`]) {
+      const error = await parseApiError(
+        await fetch(`${failing.baseUrl}${path}`),
+        503,
+        "SERVICE_UNAVAILABLE",
+      );
+      expect(JSON.stringify(error)).not.toContain("private");
+    }
+  });
 });

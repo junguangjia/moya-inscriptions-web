@@ -6,6 +6,7 @@ import { Icon } from "@moya/ui";
 
 import { CatalogCard, isUltraWideCatalogMedia } from "../home/catalog-card";
 import { CatalogMasonry } from "../home/catalog-masonry";
+import { MEDIA_SIZES, responsiveImage } from "../media/responsive-media";
 import styles from "./topic-detail.module.css";
 
 import type { CSSProperties, RefObject } from "react";
@@ -15,6 +16,7 @@ import type { Topic, TopicImageBlock } from "./topic";
 
 const TopicImage = ({ block }: { readonly block: TopicImageBlock }) => {
   const [failed, setFailed] = useState(false);
+  const image = responsiveImage(block.media, MEDIA_SIZES.topicBlock());
   return (
     <figure className={styles.imageBlock} data-topic-block="image">
       {failed ? (
@@ -37,8 +39,11 @@ const TopicImage = ({ block }: { readonly block: TopicImageBlock }) => {
           alt={block.media.alt}
           decoding="async"
           height={block.media.height}
+          loading="lazy"
           onError={() => setFailed(true)}
-          src={block.media.src}
+          sizes={image.sizes}
+          src={image.src}
+          srcSet={image.srcSet}
           width={block.media.width}
         />
       )}

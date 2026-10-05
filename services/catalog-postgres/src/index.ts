@@ -38,6 +38,8 @@ export type { PostgresConfig, PostgresEnvironment } from "./config.js";
 export type { RequiredMigration } from "./migrations/manifest.js";
 export type { MigrationFile } from "./migrations/runner.js";
 export type { PostgresPoolOptions } from "./pool.js";
+// unified-media-pipeline-v1: readers join the Catalog rendition delivery view by option.
+export type { CatalogReaderOptions } from "./catalog-media-delivery.js";
 export type {
   CatalogAliasRow,
   CatalogCitationRow,

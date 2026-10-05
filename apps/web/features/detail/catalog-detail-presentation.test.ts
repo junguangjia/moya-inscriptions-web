@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   toCatalogDetailPresentation,
@@ -171,6 +171,116 @@ describe("Work media presentation", () => {
         "春日临帖",
       ).fullSrc,
     ).toBe(`/api/community/publishing/media/${id}/full/base`);
+  });
+
+  // unified-media-pipeline-v1: the candidates and colour reach the carousel
+  // and the Viewer unchanged.
+  it("passes the rendition candidates and the placeholder colour through", () => {
+    const id = `media-item-${"4".repeat(32)}`;
+    const path = (variant: string) =>
+      `/api/community/publishing/media/${id}/${variant}/base`;
+    const renditions = [
+      {
+        src: path("thumb"),
+        width: 360,
+        height: 480,
+        contentType: "image/webp",
+      },
+      {
+        src: path("display"),
+        width: 1536,
+        height: 2048,
+        contentType: "image/webp",
+      },
+      {
+        src: path("viewer"),
+        width: 3072,
+        height: 4096,
+        contentType: "image/webp",
+      },
+    ] as const;
+    expect(
+      toWorkMediaPresentation(
+        {
+          id,
+          src: path("display"),
+          width: 1536,
+          height: 2048,
+          renditions: [...renditions],
+          placeholderColor: "#2f2a26",
+        },
+        "春日临帖",
+      ),
+    ).toEqual({
+      id,
+      src: path("display"),
+      alt: "春日临帖",
+      width: 1536,
+      height: 2048,
+      renditions: [...renditions],
+      placeholderColor: "#2f2a26",
+    });
+  });
+});
+
+describe("Catalog media presentation (unified-media-pipeline-v1)", () => {
+  const id = (hex: string) => `media-rendition-${hex.repeat(32)}`;
+  const loopback = (hex: string) =>
+    `http://127.0.0.1:3411/v1/development/catalog-renditions/${id(hex)}`;
+  const detailWith = (src: (hex: string) => string): CatalogDetail => ({
+    ...completeDetail,
+    media: [
+      {
+        alt: "详情图像",
+        height: 900,
+        id: "media-detail" as MediaId,
+        kind: "image",
+        src: src("b"),
+        width: 1600,
+        placeholderColor: "#8b735f",
+        renditions: [
+          { src: src("a"), width: 480, height: 270, contentType: "image/webp" },
+          {
+            src: src("b"),
+            width: 1600,
+            height: 900,
+            contentType: "image/webp",
+          },
+          {
+            src: src("c"),
+            width: 3200,
+            height: 1800,
+            contentType: "image/webp",
+          },
+        ],
+      },
+    ],
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("passes every candidate, zoom levels included, and the colour through", () => {
+    const remote = (hex: string) => `https://media.example.invalid/${hex}.webp`;
+    const detail = detailWith(remote);
+    expect(toCatalogDetailPresentation(detail, "runtime").media).toEqual(
+      detail.media,
+    );
+  });
+
+  it("serves Development renditions through the Web origin, anchor included", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const [media] = toCatalogDetailPresentation(
+      detailWith(loopback),
+      "runtime",
+    ).media;
+    const relay = (hex: string) =>
+      `/api/development/catalog-renditions/${id(hex)}`;
+    expect(media?.src).toBe(relay("b"));
+    expect(media?.renditions?.map(({ src }) => src)).toEqual([
+      relay("a"),
+      relay("b"),
+      relay("c"),
+    ]);
+    expect(media?.placeholderColor).toBe("#8b735f");
   });
 });
 

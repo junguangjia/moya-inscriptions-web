@@ -35,6 +35,7 @@ import type {
   PublishingNormalizedCrop,
   PublishingProcessedOutcome,
   PublishingProcessingInput,
+  PublishingRenditionRole,
 } from "@moya/api";
 import type { Pool } from "pg";
 
@@ -151,10 +152,10 @@ const publicPresentation = (
   };
 };
 
-/** The same-origin derivative path of one item, variant and edit key. */
+/** The same-origin derivative path of one item, rendition role and edit key. */
 export const publishingMediaSrc = (
   itemId: string,
-  variant: PublishingDerivativeVariant,
+  variant: PublishingRenditionRole,
   editKey: string,
 ): string => `${PUBLISHING_MEDIA_PATH_PREFIX}${itemId}/${variant}/${editKey}`;
 

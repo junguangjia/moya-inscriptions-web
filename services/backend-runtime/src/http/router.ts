@@ -25,6 +25,8 @@ import {
   handleDevelopmentSignOut,
 } from "../community/community-handler.js";
 import { handleAuthorRequest } from "../community/author-handler.js";
+import { handleDevelopmentCatalogRendition } from "../community/development-catalog-rendition-handler.js";
+import type { DevelopmentCatalogRenditions } from "../community/development-catalog-rendition-handler.js";
 import { handleOperatorRequest } from "../community/operator-handler.js";
 import { healthHandler } from "../health/health-handler.js";
 import { sendJson } from "./json-response.js";
@@ -98,6 +100,12 @@ export interface CommunityRouterDependencies {
   readonly directMessageService?: DirectMessageService | undefined;
   /** True only under NODE_ENV=development; Production never composes the entry. */
   readonly developmentEntry: boolean;
+  /**
+   * Catalog rendition bytes for the Development delivery resolver; composed
+   * only with the Development entry, in synthetic Development with local
+   * storage (unified media pipeline, PR 1b).
+   */
+  readonly developmentCatalogRenditions?: DevelopmentCatalogRenditions;
   /** Present only when a comment port is composed; identity works without it. */
   readonly commentService?: CatalogCommentService;
   readonly moderationService?: CommunityModerationService;
@@ -204,6 +212,29 @@ export const createRouter =
         containRequest(
           response,
           handleDevelopmentSignOut(request, response, community.sessionService),
+          apiFailure,
+        );
+        return;
+      }
+
+      // Development only: Catalog rendition bytes (unified media pipeline,
+      // PR 1b); every other form of this path falls through to 404.
+      const catalogRendition =
+        /^\/v1\/development\/catalog-renditions\/(media-rendition-[0-9a-f]{32})$/.exec(
+          pathname,
+        );
+      if (
+        catalogRendition !== null &&
+        community.developmentCatalogRenditions !== undefined
+      ) {
+        containRequest(
+          response,
+          handleDevelopmentCatalogRendition(
+            request,
+            response,
+            catalogRendition[1]!,
+            community.developmentCatalogRenditions,
+          ),
           apiFailure,
         );
         return;

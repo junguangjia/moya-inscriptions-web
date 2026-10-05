@@ -1,13 +1,20 @@
 import { CatalogMediaResolutionError } from "../../../catalog/application/errors/catalog-media-resolution-error.js";
-import { mapCatalogSummary } from "../../../catalog/application/mappers/catalog-public-contract-mapper.js";
+import {
+  catalogMediaRenditionKeys,
+  mapCatalogPublicMedia,
+  mapCatalogSummary,
+} from "../../../catalog/application/mappers/catalog-public-contract-mapper.js";
 import {
   parseArticleCollectionDetail,
   parseArticleCollectionPage,
   parseArticleDetail,
   parseArticlePage,
-  safeParsePublicMedia,
 } from "../mappers/editorial-content-contract-mapper.js";
 
+import type {
+  CatalogMediaContext,
+  CatalogRenditionUrls,
+} from "../../../catalog/application/mappers/catalog-public-contract-mapper.js";
 import type {
   StorageMediaLocator,
   StorageUrlResolver,
@@ -35,9 +42,17 @@ import type {
   PublicMedia,
 } from "@moya/contracts";
 
-type Resolved = ReadonlyMap<MediaId, ResolvedMediaUrl>;
+/** Approved image URLs by MediaId and rendition delivery URLs by key. */
+interface Resolved {
+  readonly media: ReadonlyMap<MediaId, ResolvedMediaUrl>;
+  readonly renditions: CatalogRenditionUrls;
+}
 
-const noResolvedMedia: Resolved = new Map();
+const noRenditionUrls: CatalogRenditionUrls = new Map();
+const nothingResolved: Resolved = {
+  media: new Map(),
+  renditions: noRenditionUrls,
+};
 
 /** Blank lines separate paragraphs; surrounding whitespace never becomes content. */
 export const splitParagraphs = (body: string): string[] =>
@@ -53,7 +68,10 @@ const totalPages = (total: number, pageSize: number) =>
  * Application boundary for the public editorial reads: resolves approved
  * Catalog media through the same storage resolver the Catalog uses (object
  * keys never leave the Backend) and validates every response against the
- * public contract before it is sent.
+ * public contract before it is sent. Article and Collection lists and
+ * Collection pages show their images as cards; an Article page shows its
+ * cover and section images in the detail context (unified media pipeline,
+ * CW4).
  */
 export class EditorialContentReadService {
   constructor(
@@ -69,12 +87,31 @@ export class EditorialContentReadService {
     return [...seen.values()];
   }
 
+  /**
+   * Approved image URLs and the rendition delivery URLs of one context; either
+   * batch failing fails the read, as before renditions.
+   */
   private async resolve(
-    locators: readonly StorageMediaLocator[],
+    media: readonly (EditorialMediaRecord | null)[],
+    context: CatalogMediaContext,
   ): Promise<Resolved> {
-    if (locators.length === 0) return noResolvedMedia;
+    const locators = this.collectLocators(media);
+    if (locators.length === 0) return nothingResolved;
+    const keys = [
+      ...new Set(
+        media.flatMap((item) =>
+          item === null ? [] : catalogMediaRenditionKeys(item, context),
+        ),
+      ),
+    ];
     try {
-      return await this.storageUrlResolver.resolveMany(locators);
+      const [urls, renditions] = await Promise.all([
+        this.storageUrlResolver.resolveMany(locators),
+        keys.length === 0 || this.storageUrlResolver.resolveKeys === undefined
+          ? noRenditionUrls
+          : this.storageUrlResolver.resolveKeys(keys),
+      ]);
+      return { media: urls, renditions };
     } catch (error) {
       if (error instanceof CatalogMediaResolutionError) throw error;
       throw new CatalogMediaResolutionError({ cause: error });
@@ -84,27 +121,23 @@ export class EditorialContentReadService {
   private media(
     record: EditorialMediaRecord | null,
     resolved: Resolved,
+    context: CatalogMediaContext,
   ): PublicMedia | null {
-    if (record === null) return null;
-    const src = resolved.get(record.id);
-    if (src === undefined)
-      throw new CatalogMediaResolutionError({
-        cause: new Error(`Missing resolved URL for MediaId ${record.id}`),
-      });
-    const media = safeParsePublicMedia({
-      id: record.id,
-      kind: "image",
-      src,
-      alt: record.alt,
-      width: record.width,
-      height: record.height,
-    });
-    if (!media.success)
-      throw new CatalogMediaResolutionError({ cause: media.error });
-    return media.data;
+    return record === null
+      ? null
+      : mapCatalogPublicMedia(
+          record,
+          resolved.media,
+          resolved.renditions,
+          context,
+        );
   }
 
-  private summary(record: ArticleSummaryRecord, resolved: Resolved) {
+  private summary(
+    record: ArticleSummaryRecord,
+    resolved: Resolved,
+    context: CatalogMediaContext,
+  ) {
     return {
       id: record.id,
       presentation: record.presentation,
@@ -117,7 +150,7 @@ export class EditorialContentReadService {
       cover:
         record.resolvedCover !== undefined
           ? record.resolvedCover
-          : this.media(record.cover, resolved),
+          : this.media(record.cover, resolved, context),
       ...(record.managedCover !== undefined
         ? { managedCover: record.managedCover }
         : {}),
@@ -138,7 +171,7 @@ export class EditorialContentReadService {
       summary: record.summary,
       category: record.category,
       issue: record.issue,
-      cover: this.media(record.cover, resolved),
+      cover: this.media(record.cover, resolved, "card"),
       memberTotal: record.memberTotal,
       firstPublishedAt: record.firstPublishedAt,
       publishedAt: record.publishedAt,
@@ -149,10 +182,11 @@ export class EditorialContentReadService {
   async listArticles(query: ArticleListQuery): Promise<ArticlePage> {
     const page = await this.port.listArticles(query);
     const resolved = await this.resolve(
-      this.collectLocators(page.items.map((item) => item.cover)),
+      page.items.map((item) => item.cover),
+      "card",
     );
     return parseArticlePage({
-      items: page.items.map((item) => this.summary(item, resolved)),
+      items: page.items.map((item) => this.summary(item, resolved, "card")),
       total: page.total,
       page: page.page,
       pageSize: page.pageSize,
@@ -168,13 +202,11 @@ export class EditorialContentReadService {
 
   private async detail(record: ArticleDetailRecord): Promise<ArticleDetail> {
     const resolved = await this.resolve(
-      this.collectLocators([
-        record.cover,
-        ...record.sections.map((section) => section.image),
-      ]),
+      [record.cover, ...record.sections.map((section) => section.image)],
+      "detail",
     );
     return parseArticleDetail({
-      ...this.summary(record, resolved),
+      ...this.summary(record, resolved, "detail"),
       intro: record.intro,
       ...(record.document !== undefined ? { document: record.document } : {}),
       ...(record.resolvedReferences !== undefined
@@ -183,7 +215,7 @@ export class EditorialContentReadService {
       sections: record.sections.map((section) => ({
         heading: section.heading,
         paragraphs: splitParagraphs(section.body),
-        image: this.media(section.image, resolved),
+        image: this.media(section.image, resolved, "detail"),
         imageCaption: section.imageCaption,
       })),
       citations: record.citations.map((citation) => ({
@@ -202,7 +234,8 @@ export class EditorialContentReadService {
   ): Promise<ArticleCollectionPage> {
     const page = await this.port.listCollections(query);
     const resolved = await this.resolve(
-      this.collectLocators(page.items.map((item) => item.cover)),
+      page.items.map((item) => item.cover),
+      "card",
     );
     return parseArticleCollectionPage({
       items: page.items.map((item) => this.collectionSummary(item, resolved)),
@@ -225,31 +258,25 @@ export class EditorialContentReadService {
     const memberMedia = record.members.map((member) =>
       member.kind === "article"
         ? member.article.cover
-        : member.record.representativeMedia
-          ? {
-              id: member.record.representativeMedia.id,
-              objectKey: member.record.representativeMedia.objectKey,
-              alt: member.record.representativeMedia.alt,
-              width: member.record.representativeMedia.width,
-              height: member.record.representativeMedia.height,
-            }
-          : null,
+        : (member.record.representativeMedia ?? null),
     );
-    const resolved = await this.resolve(
-      this.collectLocators([record.cover, ...memberMedia]),
-    );
+    const resolved = await this.resolve([record.cover, ...memberMedia], "card");
     const members = record.members.map(
       (member: ArticleCollectionMemberRecord) =>
         member.kind === "article"
           ? {
               kind: "article" as const,
               position: member.position,
-              article: this.summary(member.article, resolved),
+              article: this.summary(member.article, resolved, "card"),
             }
           : {
               kind: "catalog" as const,
               position: member.position,
-              record: mapCatalogSummary(member.record, resolved),
+              record: mapCatalogSummary(
+                member.record,
+                resolved.media,
+                resolved.renditions,
+              ),
             },
     );
     return parseArticleCollectionDetail({

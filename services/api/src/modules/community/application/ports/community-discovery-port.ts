@@ -6,7 +6,9 @@ import type {
   DiscoveryQuery,
   InscriptionFilterOptions,
   MediaId,
+  MediaRendition,
 } from "@moya/contracts";
+import type { CatalogMediaRenditionProjection } from "../../../catalog/application/catalog-read-projections.js";
 import type { AuthorPage } from "./author-community-port.js";
 export type DiscoveryCardRecord = Omit<ContentCard, "media"> & {
   readonly media:
@@ -17,6 +19,13 @@ export type DiscoveryCardRecord = Omit<ContentCard, "media"> & {
             readonly objectKey: string;
             readonly width: number;
             readonly height: number;
+            /**
+             * Ready renditions of the image's Catalog asset by delivery key;
+             * the service resolves the card candidates.
+             */
+            readonly renditions?: readonly CatalogMediaRenditionProjection[];
+            /** Loading colour of an opaque image whose Catalog asset is ready. */
+            readonly placeholderColor?: string;
           }
         | {
             readonly type: "work";
@@ -32,6 +41,14 @@ export type DiscoveryCardRecord = Omit<ContentCard, "media"> & {
             readonly src: string;
             readonly width: number;
             readonly height: number;
+            /**
+             * Card candidates of the cover still in its own framing, `src`
+             * as the anchor; absent for a Phase 4 PNG and when the anchor
+             * has no ready candidate.
+             */
+            readonly renditions?: readonly MediaRendition[];
+            /** The cover item's loading colour; absent for a non-opaque image. */
+            readonly placeholderColor?: string;
           }
       )
     | null;

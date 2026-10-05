@@ -273,6 +273,20 @@ const webCommunityServerImports: ReadonlyMap<string, string> = new Map([
     ),
     "{relayServerLocalEditorialMedia}",
   ],
+  // unified-media-pipeline-v1: Development-only Catalog renditions for a phone
+  // on the LAN acceptance origin, named by the opaque rendition id.
+  [
+    path.join(
+      webRoot,
+      "app",
+      "api",
+      "development",
+      "catalog-renditions",
+      "[renditionId]",
+      "route.ts",
+    ),
+    "{relayServerDevelopmentCatalogRendition}",
+  ],
   [
     path.join(webRoot, "app", "api", "community", "[...path]", "route.ts"),
     "{relayServerAuthorCommunity}",
@@ -998,6 +1012,9 @@ const allowedClientContractTypes = new Set([
   "MediaId",
   "PublicMedia",
   "PublicSourceCitation",
+
+  // unified-media-pipeline-v1 rendition candidate of a public or work image.
+  "MediaRendition",
 
   // work-publishing-v1 public publishing DTO, command and enum types.
   "CreatePublishingDraftCommand",

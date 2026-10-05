@@ -596,6 +596,63 @@ export const relayServerLocalCatalogMedia = async (
   }
 };
 
+const developmentCatalogRenditionPattern = /^media-rendition-[0-9a-f]{32}$/u;
+const developmentCatalogRenditionTypes: ReadonlySet<string> = new Set([
+  "image/webp",
+  "image/jpeg",
+]);
+
+/**
+ * Development-only caller (unified-media-pipeline-v1): one Catalog rendition
+ * for a phone on the LAN acceptance origin. The Backend's Development route
+ * serves only a ready rendition of a ready, published asset; this relay
+ * names nothing but the opaque rendition id, reads anonymously and passes
+ * only a still image type.
+ */
+export const relayServerDevelopmentCatalogRendition = async (
+  renditionId: string,
+): Promise<Response> => {
+  const headers = {
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+  };
+  const fail = (status: number) => new Response(null, { status, headers });
+  if (!developmentCatalogRenditionPattern.test(renditionId)) return fail(404);
+  try {
+    const response = await fetch(
+      new URL(
+        `v1/development/catalog-renditions/${renditionId}`,
+        parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL),
+      ),
+      {
+        method: "GET",
+        headers: { accept: "image/webp,image/jpeg" },
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return fail(
+        response.status === 404 || response.status === 403 ? 404 : 503,
+      );
+    }
+    const type = mediaTypeOf(response);
+    if (!type || !developmentCatalogRenditionTypes.has(type)) {
+      await response.body?.cancel().catch(() => undefined);
+      return fail(502);
+    }
+    const body = await readBoundedUpstreamBody(response.body, 12 * 1024 * 1024);
+    if (body === null) return fail(502);
+    return new Response(body, {
+      headers: { ...headers, "content-type": type },
+    });
+  } catch {
+    return fail(503);
+  }
+};
+
 // Work publishing: dedicated streaming relays. JSON commands keep
 // using relayServerAuthorCommunity; these two carry raw component bytes and
 // private derivative bytes, which are never buffered in Web memory.
@@ -638,6 +695,7 @@ const publishingMediaVariants: ReadonlySet<string> = new Set([
   "full",
   "cover",
   "motion",
+  "viewer",
 ]);
 const publishingAccountPattern = /^user-[0-9a-f]{32}$/u;
 const publishingAttemptPattern =

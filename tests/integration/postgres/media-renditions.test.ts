@@ -71,6 +71,8 @@ if (
   );
 
 const RENDITIONS_MIGRATION = "20261004010000";
+// The PR 1b Catalog delivery view; it follows the renditions migration.
+const DELIVERY_MIGRATION = "20261004020000";
 const PREVIOUS_MIGRATION = "20261003010000";
 const SLOW = 60_000;
 const HOUR = 60 * 60 * 1000;
@@ -328,6 +330,7 @@ describe("media_renditions migration on a dedicated synthetic database", () => {
 
       expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([
         RENDITIONS_MIGRATION,
+        DELIVERY_MIGRATION,
       ]);
       // The retained table is byte-identical.
       expect(await checksum()).toBe(before);

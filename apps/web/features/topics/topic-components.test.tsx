@@ -159,4 +159,36 @@ describe("Topic components", () => {
     ).toBe("600 / 400");
     expect(block.querySelector("figcaption")?.textContent).toBe("图注");
   });
+
+  // unified-media-pipeline-v1: the tolerant Topic guard keeps candidates.
+  it("offers a block image its inline candidates and loads it lazily", () => {
+    const candidate = (width: number, height: number) => ({
+      src: `https://example.invalid/topic-${width}.webp`,
+      width,
+      height,
+      contentType: "image/webp" as const,
+    });
+    const responsive = {
+      ...media,
+      src: candidate(600, 400).src,
+      renditions: [
+        candidate(300, 200),
+        candidate(600, 400),
+        candidate(1200, 800),
+      ],
+    };
+    const markup = renderDetail({
+      ...editorial,
+      blocks: [{ caption: "图注", media: responsive, type: "image" }],
+    });
+    expect(markup).toContain(`src="${responsive.src}"`);
+    expect(markup).toContain(
+      `srcSet="https://example.invalid/topic-300.webp 300w, ${responsive.src} 600w"`,
+    );
+    expect(markup).toContain(
+      'sizes="(min-width: 760px) 728px, calc(100vw - 32px)"',
+    );
+    expect(markup).toContain('loading="lazy"');
+    expect(markup).not.toContain("topic-1200.webp");
+  });
 });

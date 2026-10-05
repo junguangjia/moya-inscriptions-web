@@ -393,3 +393,6 @@ GRANT UPDATE (retention_hold) ON TABLE community.media_blobs TO :"app_role";
 GRANT EXECUTE ON FUNCTION
   community.media_wanted_renditions(TEXT, JSONB, BOOLEAN, JSONB)
 TO :"app_role";
+-- PR 1b: discovery cards read the published-only Catalog rendition delivery
+-- view (migration 20261004020000) next to the published Catalog projection.
+GRANT SELECT ON community.catalog_media_delivery TO :"app_role";

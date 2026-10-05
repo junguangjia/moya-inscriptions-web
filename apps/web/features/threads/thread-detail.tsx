@@ -3,8 +3,9 @@ import { UserIdentity } from "../authors/user-identity";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { Icon } from "@moya/ui";
-import type { UserWork } from "@moya/contracts";
+import type { UserWork, WorkMedia } from "@moya/contracts";
 import { useAuthors } from "../authors/author-context";
+import { MEDIA_SIZES, responsiveImage } from "../media/responsive-media";
 import { recordOwnWorkAudience } from "../authors/own-work-audience";
 import { usePublishingEntry } from "../publishing/publishing-entry";
 import { useSubmission } from "../publishing/publishing-provider";
@@ -16,6 +17,34 @@ import homeStyles from "../home/home-screen.module.css";
 import { formatEditorialTime } from "../editorial-content/format-time";
 import { authorClient } from "./thread-data";
 import { useThread, useThreadPosts } from "./use-threads";
+
+/**
+ * A post image: inline candidates up to the display anchor and its size
+ * reserved. Both post layouts letterbox (contain), so no placeholder colour.
+ */
+const PostImage = ({
+  media,
+  alt,
+  sizes,
+}: {
+  media: WorkMedia;
+  alt: string;
+  sizes: (media: WorkMedia) => string;
+}) => {
+  const image = responsiveImage(media, sizes(media));
+  return (
+    <img
+      src={image.src}
+      srcSet={image.srcSet}
+      sizes={image.sizes}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+      width={media.width}
+      height={media.height}
+    />
+  );
+};
 
 const PostCard = ({
   work,
@@ -54,12 +83,11 @@ const PostCard = ({
       {work.media.length > 0 && (
         <span className={styles.postThumbnails}>
           {work.media.slice(0, 3).map((media) => (
-            <img
+            <PostImage
               key={media.id}
-              src={media.src}
+              media={media}
               alt=""
-              loading="lazy"
-              decoding="async"
+              sizes={MEDIA_SIZES.threadThumbnail}
             />
           ))}
           {work.media.length > 3 && <span>+{work.media.length - 3}</span>}
@@ -103,12 +131,11 @@ const ThreadPost = ({
       {work.media.length > 0 && (
         <div className={styles.postGallery}>
           {work.media.map((media) => (
-            <img
+            <PostImage
               key={media.id}
-              src={media.src}
+              media={media}
               alt={`${work.authorName}分享的图片`}
-              loading="lazy"
-              decoding="async"
+              sizes={MEDIA_SIZES.threadGallery}
             />
           ))}
         </div>

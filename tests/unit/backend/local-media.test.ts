@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PayloadRequest } from "payload";
 
 import { createLocalStorageUrlResolver } from "@moya/backend-production/internal/local-media";
+import { parseRuntimeConfig } from "@moya/backend-runtime";
 import { createLocalPublishedMediaReadAccess } from "admin/local-media-read";
 
 const environment = {
@@ -42,6 +43,67 @@ describe("existing local Payload media delivery", () => {
       createLocalStorageUrlResolver({ ...environment, ...invalid }),
     ).toThrow();
   });
+
+  const renditionId = `media-rendition-${"0123456789abcdef".repeat(2)}`;
+
+  it("names a Catalog rendition id on the Backend's own loopback Development route", async () => {
+    // Without HOST and PORT the Development listener is 127.0.0.1:3001.
+    const resolver = createLocalStorageUrlResolver(environment);
+    expect([...(await resolver.resolveKeys([renditionId]))]).toEqual([
+      [
+        renditionId,
+        `http://127.0.0.1:3001/v1/development/catalog-renditions/${renditionId}`,
+      ],
+    ]);
+    // The listen configuration names the port; the URL shape stays fixed.
+    for (const listen of [
+      { HOST: "127.0.0.1", PORT: "4310" },
+      { HOST: "localhost", PORT: "4311" },
+      { HOST: "::1", PORT: "4312" },
+    ]) {
+      const configured = { ...environment, ...listen };
+      expect(
+        (
+          await createLocalStorageUrlResolver(
+            configured,
+            parseRuntimeConfig(configured),
+          ).resolveKeys([renditionId])
+        ).get(renditionId),
+      ).toBe(
+        `http://127.0.0.1:${listen.PORT}/v1/development/catalog-renditions/${renditionId}`,
+      );
+    }
+  });
+
+  it.each([
+    `blobs/aa/bb/${"c".repeat(32)}`,
+    objectKey,
+    `media-rendition-${"A".repeat(32)}`,
+    `media-rendition-${"0".repeat(31)}`,
+    `${renditionId}/../file`,
+    `media-item-${"0".repeat(32)}`,
+    "",
+  ])("leaves out a key that is not a rendition id: %j", async (key) => {
+    expect(
+      (await createLocalStorageUrlResolver(environment).resolveKeys([key]))
+        .size,
+    ).toBe(0);
+  });
+
+  it.each(["0.0.0.0", "192.0.2.10", "media.example.invalid"])(
+    "refuses a Backend listener that is not loopback: %s",
+    (host) => {
+      expect(() =>
+        createLocalStorageUrlResolver({ ...environment, HOST: host }),
+      ).toThrow("Local media requires a loopback Backend listener");
+      expect(() =>
+        createLocalStorageUrlResolver(
+          environment,
+          parseRuntimeConfig({ ...environment, HOST: host }),
+        ),
+      ).toThrow("Local media requires a loopback Backend listener");
+    },
+  );
 
   it.each([
     "/private/synthetic/file.webp",

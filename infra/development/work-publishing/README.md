@@ -57,7 +57,10 @@ comment/session domain only and is insufficient for Phase 4/publishing. Backend
 startup never applies either script. Payload authentication remains separate:
 the authenticated Admin bridge calls Backend, whose App SQL role also serves the
 processing worker (in the Backend in Development by default, or the separate
-media worker). CMS and public Catalog read roles gain no community grant.
+media worker). The CMS role gains no community grant, and the public Catalog
+read role none from this script; it reads only the named published-only views of
+the separate post-Community phases (`article-authoring/` and
+`catalog-media/grant-public-read.sql`, amendment entry 8).
 
 `tests/integration/postgres/work-publishing-app-role.test.ts` exercises clean
 installation, a Phase 4 upgrade and an upgrade of the SAME role from the Mission

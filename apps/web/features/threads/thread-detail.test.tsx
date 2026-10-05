@@ -180,3 +180,68 @@ describe("ThreadDetail posts", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 });
+
+/*
+ * unified-media-pipeline-v1 (CW13): post images pick small inline candidates
+ * and reserve their size; both layouts letterbox, so no placeholder colour.
+ */
+describe("ThreadDetail post images", () => {
+  const item = `media-item-${"5".repeat(32)}`;
+  const path = (variant: string) =>
+    `/api/community/publishing/media/${item}/${variant}/base`;
+  const candidate = (variant: string, width: number, height: number) => ({
+    src: path(variant),
+    width,
+    height,
+    contentType: "image/webp",
+  });
+  const responsive = {
+    ...work,
+    id: `work-${"8".repeat(32)}`,
+    media: [
+      {
+        id: item,
+        src: path("display"),
+        width: 2048,
+        height: 1536,
+        placeholderColor: "#575049",
+        renditions: [
+          candidate("thumb", 480, 360),
+          candidate("display", 2048, 1536),
+          candidate("full", 4032, 3024),
+        ],
+      },
+    ],
+  };
+
+  it("offers inline candidates up to the anchor in thumbnails and the gallery", async () => {
+    fixture.items = [responsive];
+    await act(async () => root!.render(element()));
+    const thumbnail = node.querySelector<HTMLImageElement>(
+      `[data-thread-post="${responsive.id}"] img`,
+    )!;
+    expect(thumbnail.getAttribute("src")).toBe(path("display"));
+    expect(thumbnail.getAttribute("srcset")).toBe(
+      `${path("thumb")} 480w, ${path("display")} 2048w`,
+    );
+    expect(thumbnail.getAttribute("sizes")).toBe(
+      "(min-width: 760px) 238px, calc(33.34vw - 16px)",
+    );
+    expect(thumbnail.getAttribute("width")).toBe("2048");
+    expect(thumbnail.getAttribute("height")).toBe("1536");
+    expect(thumbnail.style.backgroundColor).toBe("");
+    await openPost(responsive.id);
+    const gallery = node.querySelector<HTMLImageElement>(
+      `[data-thread-post-detail="${responsive.id}"] img`,
+    )!;
+    expect(gallery.getAttribute("srcset")).toBe(
+      `${path("thumb")} 480w, ${path("display")} 2048w`,
+    );
+    expect(gallery.getAttribute("sizes")).toBe(
+      "(min-width: 768px) 656px, calc(100vw - 40px)",
+    );
+    expect(gallery.getAttribute("width")).toBe("2048");
+    expect(gallery.getAttribute("height")).toBe("1536");
+    expect(gallery.style.backgroundColor).toBe("");
+  });
+});

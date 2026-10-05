@@ -11,7 +11,10 @@ import type {
   MediaId,
 } from "@moya/contracts";
 
-import type { CatalogListItemProjection } from "../../../catalog/application/catalog-read-projections.js";
+import type {
+  CatalogListItemProjection,
+  CatalogMediaRenditionProjection,
+} from "../../../catalog/application/catalog-read-projections.js";
 
 /** Approved Catalog media referenced by an Article; resolved to a URL by the service. */
 export interface EditorialMediaRecord {
@@ -20,6 +23,9 @@ export interface EditorialMediaRecord {
   readonly alt: string;
   readonly width: number;
   readonly height: number;
+  /** Ready renditions of its Catalog asset, as the Catalog projection carries them. */
+  readonly renditions?: readonly CatalogMediaRenditionProjection[];
+  readonly placeholderColor?: string;
 }
 
 export interface ArticleSummaryRecord {

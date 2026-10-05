@@ -45,6 +45,21 @@ export class ProductionCosStorageUrlResolver {
     }
     return result;
   }
+
+  /**
+   * Catalog rendition delivery is off in Production during increment 1 of
+   * the unified media pipeline: the only identity able to sign rendition
+   * reads is the work-media storage identity, whose key identifier would
+   * then appear in public URLs. No delivery key resolves, so Catalog
+   * responses keep the approved image's `src`; increment 2 resolves keys to
+   * published URLs by configuration.
+   */
+  async resolveKeys(
+    keys: readonly string[],
+  ): Promise<ReadonlyMap<string, string>> {
+    void keys;
+    return new Map();
+  }
 }
 
 /** Validation happens before database initialization and makes no cloud call. */

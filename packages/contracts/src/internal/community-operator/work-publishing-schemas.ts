@@ -123,7 +123,10 @@ export const operatorWorkSubmissionQuerySchema = z.strictObject({
  * media proxy. `editKey` addresses the display, full and motion variants (the
  * item edit alone). `coverEditKey` addresses the thumb and cover variants of
  * the revision's cover item (its edit and the revision cover crop); it is null
- * for every other item, whose thumb and cover use `editKey`.
+ * for every other item, whose thumb and cover use `editKey`. `variants` names
+ * the five moderation derivatives only: the optional `viewer` zoom still
+ * (unified media pipeline) is a reader candidate, never listed here or
+ * requested through the Admin media proxy.
  */
 export const operatorSubmissionMediaSchema = z.strictObject({
   position: z.number().int().min(1).max(WORK_ITEMS_HARD_MAXIMUM),
@@ -136,7 +139,7 @@ export const operatorSubmissionMediaSchema = z.strictObject({
   coverEditKey: mediaEditKeySchema.nullable(),
   presentation: mediaPresentationSchema.nullable(),
   variants: z
-    .array(mediaVariantSchema)
+    .array(mediaVariantSchema.exclude(["viewer"]))
     .max(5)
     .refine((variants) => new Set(variants).size === variants.length, {
       message: "variants must be unique",

@@ -283,4 +283,10 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "8141be52c2ba205b46fd7562859aac155a22eebb768dd149862ad5d62d08a1db",
     }),
+    Object.freeze({
+      migrationId: "20261004020000",
+      filename: "20261004020000_catalog_media_delivery.sql",
+      checksum:
+        "61b66ed22843b23df1bf2de6f5d3f2ba5cef7b89053ddbe3e49d1fa2cd2656dc",
+    }),
   ]);

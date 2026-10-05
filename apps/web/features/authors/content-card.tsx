@@ -1,8 +1,12 @@
 "use client";
-import { localCatalogMediaSrc } from "../detail/local-catalog-media";
+import {
+  localCatalogMediaSrc,
+  localCatalogRenditions,
+} from "../detail/local-catalog-media";
 import type { ContentCard as Card } from "@moya/contracts";
 import { CatalogCardMedia, CatalogProvinceBadge } from "../home/catalog-card";
 import type { CatalogCardVariant } from "../home/catalog-card";
+import type { MediaPriority } from "../media/responsive-media";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 import { useProductShell } from "../product-shell/product-shell";
 import { useContentActions } from "./content-actions";
@@ -22,10 +26,13 @@ export const contentLabel = (item: Pick<Card, "target" | "title">) =>
 export const ContentCard = ({
   item,
   onMediaSettled,
+  priority,
   variant = "feed",
 }: {
   item: Card;
   onMediaSettled?: () => void;
+  /** Set by the list for the first cards of the first visible page only. */
+  priority?: MediaPriority | undefined;
   variant?: CatalogCardVariant;
 }) => {
   const label = contentLabel(item);
@@ -71,18 +78,23 @@ export const ContentCard = ({
                 item.media
                   ? {
                       ...item.media,
-                      src:
-                        item.target.type === "catalog"
-                          ? localCatalogMediaSrc(
+                      ...(item.target.type === "catalog"
+                        ? {
+                            src: localCatalogMediaSrc(
                               item.media.src,
                               item.target.id,
                               item.media.id,
-                            )
-                          : item.media.src,
+                            ),
+                            renditions: localCatalogRenditions(
+                              item.media.renditions,
+                            ),
+                          }
+                        : {}),
                       alt: label,
                     }
                   : undefined
               }
+              priority={priority}
               title={label}
               variant={variant}
               {...(onMediaSettled ? { onMediaSettled } : {})}

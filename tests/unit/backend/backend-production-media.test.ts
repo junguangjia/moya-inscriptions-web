@@ -10,7 +10,10 @@ import {
   createBackendApplication,
   startBackendProcess,
 } from "@moya/backend-runtime";
-import { createPostgresPool } from "@moya/catalog-postgres";
+import {
+  assertPostgresStartupReady,
+  createPostgresPool,
+} from "@moya/catalog-postgres";
 import {
   PostgresWorkPublishingAdapter,
   PostgresNotificationAdapter,
@@ -22,6 +25,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BackendProcessHandle } from "@moya/backend-runtime";
+import type { MediaId } from "@moya/contracts";
 
 const productionStore = vi.hoisted(() => ({
   writeStream: vi.fn(),
@@ -767,8 +771,82 @@ describe("Work publishing composition", () => {
     expect(application.publishingTransfers).toBeDefined();
     expect(application.workPublishingPort).toBeDefined();
     expect(createPublishingJobHandlers).not.toHaveBeenCalled();
+    // Without a publishing store there are no rendition bytes to deliver, so
+    // no Catalog rendition is named either: the approved image's src stays.
+    expect(application.developmentCatalogRenditions).toBeUndefined();
+    expect(application.storageUrlResolver?.resolveKeys).toBeUndefined();
+    expect(
+      await application.storageUrlResolver?.resolveMany([
+        {
+          mediaId: "media-unit-local" as MediaId,
+          objectKey: `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.webp`,
+        },
+      ]),
+    ).toEqual(
+      new Map([
+        [
+          "media-unit-local",
+          `http://127.0.0.1:3002/api/media/file/${"b".repeat(64)}-${"c".repeat(64)}.webp`,
+        ],
+      ]),
+    );
     await prepared.closeResources();
   });
+
+  it.each(["development", "production"] as const)(
+    "%s joins Catalog renditions, checks their read grant and composes the delivery route only in Development",
+    async (mode) => {
+      quietQueue();
+      const media = fakeMedia();
+      if (mode === "development")
+        vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+          media as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+        );
+      const pools = vi.mocked(createPostgresPool).mock.results.length;
+      const prepared = await prepareProductionBackend(
+        mode === "development" ? { ...local, ...publishingKeys } : environment,
+      );
+      const [application] = vi
+        .mocked(createBackendApplication)
+        .mock.calls.at(-1)!;
+      expect(assertPostgresStartupReady).toHaveBeenCalledWith(
+        expect.anything(),
+        "payload",
+        { renditions: true },
+      );
+      // Discovery cards join the view through the App role, whose read of it
+      // is verified at startup as well.
+      const statements = vi
+        .mocked(createPostgresPool)
+        .mock.results.slice(pools)
+        .flatMap(({ value }) =>
+          (
+            value as unknown as { query: { mock: { calls: unknown[][] } } }
+          ).query.mock.calls.map(([sql]) => sql),
+        );
+      expect(statements).toContain(
+        "SELECT 1 FROM community.catalog_media_delivery LIMIT 0",
+      );
+      const renditionId = `media-rendition-${"7".repeat(32)}`;
+      const named = await application.storageUrlResolver?.resolveKeys?.([
+        renditionId,
+      ]);
+      if (mode === "development") {
+        // The Development resolver names this Backend's listener (3001 by default).
+        expect(named?.get(renditionId)).toBe(
+          `http://127.0.0.1:3001/v1/development/catalog-renditions/${renditionId}`,
+        );
+        expect(application.developmentCatalogRenditions?.store).toBe(
+          media.store,
+        );
+      } else {
+        // Production Catalog rendition delivery stays off in increment 1.
+        expect(named?.size).toBe(0);
+        expect(application.developmentCatalogRenditions).toBeUndefined();
+      }
+      await prepared.closeResources();
+    },
+  );
 
   it("composes Production business and notification services without Development media fallback", async () => {
     const queue = quietQueue();

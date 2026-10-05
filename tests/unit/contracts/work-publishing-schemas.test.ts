@@ -11,6 +11,7 @@ import {
   mediaCropSchema,
   mediaEditSchema,
   mediaItemIdSchema,
+  mediaVariantSchema,
   publishingDraftDeletionCommandSchema,
   publishingDraftSaveResultSchema,
   publishingDraftSchema,
@@ -18,6 +19,7 @@ import {
   publishingHolderSchema,
   publishingLimitsSchema,
   publishingMediaItemSchema,
+  publishingMediaSrcSchema,
   publishingOpenedEditDraftSchema,
   publishingSessionSchema,
   publishingSnapshotPageSchema,
@@ -1690,6 +1692,8 @@ describe("backward-compatible Phase 4 adjustments", () => {
       src("cover"),
       `/api/community/publishing/media/${itemId}/cover/${hex("7")}`,
       src("display"),
+      // unified-media-pipeline-v1 (CW6): the unsigned published still.
+      "https://example.com/cover.webp",
     ])
       expect(
         workSchema.safeParse({ ...work, coverSrc }).success,
@@ -1699,7 +1703,9 @@ describe("backward-compatible Phase 4 adjustments", () => {
       "",
       src("motion"),
       `/api/community/publishing/media/${itemId}/original/base`,
-      "https://example.com/cover.webp",
+      "https://example.com/cover.webp?sign=1",
+      "https://example.com/cover.webp#cover",
+      "https://reader@example.com/cover.webp",
       `/api/community/media/${itemId}`,
     ])
       expect(
@@ -1775,6 +1781,310 @@ describe("backward-compatible Phase 4 adjustments", () => {
       { publiclyVisible: "yes" },
     ])
       expect(workSchema.safeParse({ ...own, ...invalid }).success).toBe(false);
+  });
+});
+
+describe("media delivery on work reads (unified-media-pipeline-v1)", () => {
+  const editKey = hex("7");
+  const coverKey = hex("8");
+  const otherItem = `media-item-${hex("b")}`;
+  const path = (role: string, key = editKey, id = itemId) =>
+    `/api/community/publishing/media/${id}/${role}/${key}`;
+  const published = (name: string) =>
+    `https://img.example.invalid/v1/${hex("1")}/${hex("2")}/${editKey}/${name}.r1.webp`;
+  const signed = `https://img.example.invalid/display.webp?sign=${hex("3")}`;
+  const rendition = (src: string, width: number, height: number) => ({
+    src,
+    width,
+    height,
+    contentType: "image/webp",
+  });
+  type Rendition = ReturnType<typeof rendition>;
+  const replaced = (
+    list: readonly Rendition[],
+    index: number,
+    entry: Record<string, unknown>,
+  ) =>
+    list.map((current, at) =>
+      at === index ? { ...current, ...entry } : current,
+    );
+  const asPublished = (list: readonly Rendition[]) =>
+    list.map((entry, index) => ({ ...entry, src: published(`r${index}`) }));
+  const detail = [
+    rendition(path("thumb"), 480, 320),
+    rendition(path("cover"), 1_080, 720),
+    rendition(path("display"), 2_048, 1_365),
+    rendition(path("viewer"), 4_096, 2_731),
+    rendition(path("full"), 8_192, 5_461),
+  ];
+  const media = {
+    id: itemId,
+    src: path("display"),
+    width: 2_048,
+    height: 1_365,
+    kind: "static",
+    renditions: detail,
+    placeholderColor: "#5f6f58",
+  };
+  const coverList = [
+    rendition(path("thumb", coverKey), 480, 480),
+    rendition(path("cover", coverKey), 1_080, 1_080),
+  ];
+
+  it("adds the viewer variant to the authorized relay only", () => {
+    expect(mediaVariantSchema.options).toEqual([
+      "thumb",
+      "display",
+      "full",
+      "motion",
+      "cover",
+      "viewer",
+    ]);
+    // Owner and MCP shapes keep their derivative paths and no published URL.
+    for (const value of [path("viewer"), published("display")])
+      expect(publishingMediaSrcSchema.safeParse(value).success, value).toBe(
+        false,
+      );
+  });
+
+  it("anchors work media candidates of its edit framing at src", () => {
+    expect(workMediaSchema.parse(media)).toEqual(media);
+    // A published group switches src, motion and every candidate together.
+    const publishedLive = {
+      ...media,
+      src: published("r2"),
+      kind: "live",
+      motionSrc: published("motion").replace(/\.webp$/u, ".mp4"),
+      hasAudio: true,
+      renditions: asPublished(detail),
+    };
+    for (const valid of [
+      publishedLive,
+      { ...media, kind: "live", motionSrc: path("motion"), hasAudio: true },
+      { ...media, src: published("display"), renditions: undefined },
+      { ...media, renditions: undefined, placeholderColor: undefined },
+      { ...media, renditions: detail.slice(0, 3) },
+    ])
+      expect(
+        workMediaSchema.safeParse(valid).success,
+        JSON.stringify(valid),
+      ).toBe(true);
+    for (const invalid of [
+      // src is not one of the candidates, or not of their form.
+      {
+        ...media,
+        renditions: detail.filter((entry) => entry.src !== media.src),
+      },
+      { ...media, renditions: asPublished(detail) },
+      { ...publishedLive, renditions: detail },
+      { ...media, renditions: replaced(detail, 4, { src: published("r4") }) },
+      // Every same-origin candidate names this item and the edit of src.
+      {
+        ...media,
+        renditions: replaced(detail, 0, {
+          src: path("thumb", editKey, otherItem),
+        }),
+      },
+      {
+        ...media,
+        renditions: replaced(detail, 1, { src: path("cover", coverKey) }),
+      },
+      { ...media, renditions: replaced(detail, 3, { src: path("motion") }) },
+      // A 1:1 cover-crop list under a 3:2 parent.
+      { ...media, src: path("cover", coverKey), renditions: coverList },
+      // Signed URLs never appear in work reads.
+      { ...media, src: signed, renditions: undefined },
+      { ...publishedLive, motionSrc: `${published("motion")}?sign=1` },
+      { ...media, renditions: replaced(detail, 0, { src: signed }) },
+      {
+        ...media,
+        renditions: replaced(detail, 1, { contentType: "image/png" }),
+      },
+      { ...media, renditions: replaced(detail, 1, { storageKey: "blobs/aa" }) },
+      { ...media, placeholderColor: "#ABCDEF" },
+      { ...media, placeholderColor: "#abc" },
+      // A Live Photo still needs its motion; only a Live Photo has one.
+      { ...publishedLive, motionSrc: undefined },
+      { ...media, motionSrc: published("motion") },
+      // Never half of a Live Photo published: still and motion share a form.
+      { ...publishedLive, motionSrc: path("motion") },
+      {
+        ...media,
+        kind: "live",
+        motionSrc: publishedLive.motionSrc,
+        hasAudio: true,
+      },
+    ])
+      expect(
+        workMediaSchema.safeParse(invalid).success,
+        JSON.stringify(invalid),
+      ).toBe(false);
+  });
+
+  it("keeps Phase 4 and legacy entries on their user media path without candidates", () => {
+    const phase4 = {
+      id: `user-media-${hex("a")}`,
+      src: legacySrc,
+      width: 1200,
+      height: 800,
+    };
+    const candidates = [rendition(legacySrc, 1200, 800)];
+    for (const invalid of [
+      { ...phase4, renditions: candidates },
+      { ...phase4, renditions: [rendition(published("r0"), 1200, 800)] },
+      { ...phase4, src: published("r0") },
+      {
+        ...phase4,
+        src: published("r0"),
+        renditions: [rendition(published("r0"), 1200, 800)],
+      },
+      { ...phase4, kind: "live", motionSrc: published("motion") },
+      {
+        id: itemId,
+        src: legacySrc,
+        width: 1200,
+        height: 800,
+        renditions: [rendition(path("display"), 1200, 800)],
+      },
+    ])
+      expect(
+        workMediaSchema.safeParse(invalid).success,
+        JSON.stringify(invalid),
+      ).toBe(false);
+  });
+
+  it("anchors the cover candidates of a work at coverSrc", () => {
+    const work = {
+      id: `work-${hex("d")}`,
+      authorId: `user-${hex("1")}`,
+      authorName: "合成作者",
+      title: "",
+      text: "正文",
+      media: [media],
+      coverMediaId: itemId,
+      coverSrc: path("cover", coverKey),
+      coverRenditions: coverList,
+      firstPublishedAt: at,
+      version: 1,
+      canEdit: false,
+      available: true,
+    };
+    expect(workSchema.parse(work)).toEqual(work);
+    expect(
+      workSchema.safeParse({
+        ...work,
+        coverSrc: published("r1"),
+        coverRenditions: asPublished(coverList),
+      }).success,
+    ).toBe(true);
+    for (const invalid of [
+      { coverSrc: undefined },
+      { coverSrc: null },
+      { coverSrc: path("display") },
+      { coverSrc: legacySrc },
+      { coverRenditions: [] },
+      { coverRenditions: asPublished(coverList) },
+      {
+        coverRenditions: replaced(coverList, 0, {
+          src: path("thumb", coverKey, otherItem),
+        }),
+      },
+      { coverRenditions: replaced(coverList, 0, { src: path("thumb") }) },
+      { coverRenditions: replaced(coverList, 0, { width: 480, height: 320 }) },
+      { coverRenditions: replaced(coverList, 0, { src: signed }) },
+    ])
+      expect(
+        workSchema.safeParse({ ...work, ...invalid }).success,
+        JSON.stringify(invalid),
+      ).toBe(false);
+  });
+
+  it("gives a card one form of card candidates anchored at its image", () => {
+    const card = {
+      aliases: [],
+      target: { type: "work", id: `work-${hex("d")}` },
+      title: "",
+      kind: null,
+      authorId: `user-${hex("1")}`,
+      firstPublishedAt: null,
+      media: {
+        id: itemId,
+        src: path("cover", coverKey),
+        width: 1_080,
+        height: 1_080,
+        renditions: coverList,
+        placeholderColor: "#5f6f58",
+      },
+    };
+    const catalogSrc = (name: string) =>
+      `https://media.example.invalid/${name}.webp?sign=${hex("4")}`;
+    const catalogCard = {
+      ...card,
+      target: { type: "catalog", id: "catalog-example-001" },
+      kind: "inscription",
+      authorId: null,
+      media: {
+        id: "media-example-001",
+        src: catalogSrc("display"),
+        width: 1_600,
+        height: 900,
+        renditions: [
+          rendition(catalogSrc("thumb"), 480, 270),
+          rendition(catalogSrc("cover"), 1_080, 608),
+          rendition(catalogSrc("display"), 1_600, 900),
+        ],
+      },
+    };
+    for (const valid of [
+      card,
+      catalogCard,
+      {
+        ...card,
+        media: {
+          ...card.media,
+          src: published("r1"),
+          renditions: asPublished(coverList),
+        },
+      },
+    ])
+      expect(
+        contentCardSchema.safeParse(valid).success,
+        JSON.stringify(valid),
+      ).toBe(true);
+    for (const media of [
+      // One form per list: never Catalog URLs and relay paths together.
+      {
+        ...catalogCard.media,
+        renditions: replaced(catalogCard.media.renditions, 0, {
+          src: path("thumb", coverKey),
+        }),
+      },
+      { ...card.media, renditions: replaced(coverList, 0, { src: signed }) },
+      { ...card.media, src: signed, renditions: undefined },
+      { ...card.media, src: path("display") },
+      // A 1:1 cover-crop list under a 3:2 parent.
+      { ...card.media, width: 1_620, height: 1_080 },
+      {
+        ...card.media,
+        renditions: replaced(coverList, 0, { contentType: "image/png" }),
+      },
+      {
+        ...card.media,
+        renditions: replaced(coverList, 0, { objectKey: "a.webp" }),
+      },
+      { ...card.media, placeholderColor: "#5F6F58" },
+      // A work card never lists signed URLs, even as a whole Catalog-form list.
+      catalogCard.media,
+    ])
+      expect(
+        contentCardSchema.safeParse({ ...card, media }).success,
+        JSON.stringify(media),
+      ).toBe(false);
+    // A Catalog card lists only the resolved form of Catalog media.
+    expect(
+      contentCardSchema.safeParse({ ...catalogCard, media: card.media })
+        .success,
+    ).toBe(false);
   });
 });
 
@@ -2002,6 +2312,9 @@ describe("operator work publishing shapes", () => {
       { title: " 标题" },
       { body: "𠀀".repeat(10_001) },
       { items: [{ ...submission.items[0], variants: ["thumb", "thumb"] }] },
+      // The viewer zoom still is a reader candidate, never a moderation
+      // derivative of the queue (unified media pipeline).
+      { items: [{ ...submission.items[0], variants: ["display", "viewer"] }] },
     ])
       expect(
         operatorWorkSubmissionSchema.safeParse({ ...submission, ...invalid })

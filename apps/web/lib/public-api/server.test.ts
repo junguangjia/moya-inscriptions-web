@@ -6,6 +6,7 @@ import {
   parsePublicApiBaseUrl,
   relayServerAuthorCommunity,
   relayServerCommunityAuth,
+  relayServerDevelopmentCatalogRendition,
   relayServerLocalEditorialMedia,
 } from "./server.js";
 
@@ -478,6 +479,96 @@ describe("relayServerLocalEditorialMedia (Development)", () => {
     expect((await relayServerLocalEditorialMedia(article, file)).status).toBe(
       502,
     );
+  });
+});
+
+/* unified-media-pipeline-v1: Development Catalog renditions for a phone on the LAN. */
+
+const renditionId = `media-rendition-${"9".repeat(32)}`;
+const image = (type: string, size = 4) =>
+  new Response(new Uint8Array(size), { headers: { "content-type": type } });
+
+describe("relayServerDevelopmentCatalogRendition (Development)", () => {
+  it.each(["image/webp", "image/jpeg"])(
+    "serves a %s rendition read anonymously from the Backend Development route",
+    async (type) => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3521");
+      const upstream = vi.fn<typeof fetch>().mockResolvedValue(image(type));
+      vi.stubGlobal("fetch", upstream);
+      const response =
+        await relayServerDevelopmentCatalogRendition(renditionId);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe(type);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect((await response.arrayBuffer()).byteLength).toBe(4);
+      expect(String(upstream.mock.calls[0]![0])).toBe(
+        `http://127.0.0.1:3521/v1/development/catalog-renditions/${renditionId}`,
+      );
+      const headers = new Headers(upstream.mock.calls[0]![1]?.headers);
+      expect(headers.get("cookie")).toBeNull();
+      expect(headers.get("authorization")).toBeNull();
+      expect(upstream.mock.calls[0]![1]?.redirect).toBe("error");
+    },
+  );
+
+  it.each([
+    `media-rendition-${"9".repeat(31)}`,
+    `media-rendition-${"G".repeat(32)}`,
+    `media-item-${"9".repeat(32)}`,
+    `../media-rendition-${"9".repeat(32)}`,
+    `media-rendition-${"9".repeat(32)}/extra`,
+  ])("refuses %s without reading anything", async (id) => {
+    const upstream = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", upstream);
+    expect((await relayServerDevelopmentCatalogRendition(id)).status).toBe(404);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("passes only still WebP or JPEG bytes within the size bound", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3521");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(image("image/png"))
+        .mockResolvedValueOnce(image("text/html"))
+        .mockResolvedValueOnce(new Response(new Uint8Array(4)))
+        .mockResolvedValueOnce(image("image/webp", 12 * 1024 * 1024 + 1)),
+    );
+    for (let attempt = 0; attempt < 4; attempt++)
+      expect(
+        (await relayServerDevelopmentCatalogRendition(renditionId)).status,
+      ).toBe(502);
+  });
+
+  it("answers 404 for a rendition the Backend does not serve and 503 otherwise", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3521");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(new Response(null, { status: 404 }))
+        .mockResolvedValueOnce(new Response(null, { status: 403 }))
+        .mockResolvedValueOnce(new Response(null, { status: 500 }))
+        .mockRejectedValueOnce(new TypeError("unreachable")),
+    );
+    const statuses = [];
+    for (let attempt = 0; attempt < 4; attempt++)
+      statuses.push(
+        (await relayServerDevelopmentCatalogRendition(renditionId)).status,
+      );
+    expect(statuses).toEqual([404, 404, 503, 503]);
+  });
+
+  it("answers 503 without a configured Backend", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "");
+    const upstream = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", upstream);
+    expect(
+      (await relayServerDevelopmentCatalogRendition(renditionId)).status,
+    ).toBe(503);
+    expect(upstream).not.toHaveBeenCalled();
   });
 });
 

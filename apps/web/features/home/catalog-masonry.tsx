@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import styles from "./home-screen.module.css";
 import {
@@ -9,8 +17,19 @@ import {
 } from "./catalog-masonry-layout";
 
 import type { CSSProperties, ReactNode } from "react";
+import type { MediaSlot } from "../media/responsive-media";
 import type { FeedLayoutPreference } from "../product-shell/preferences";
 import type { PresentationPlatform } from "../shell/device-platform";
+
+/**
+ * The slot of the item being rendered, so its image can name the width it is
+ * drawn at (`sizes`) without each list passing layout facts down.
+ */
+const MasonrySlotContext = createContext<MediaSlot | null>(null);
+
+/** The masonry slot of the nearest enclosing item, or null outside a masonry list. */
+export const useMasonrySlot = (): MediaSlot | null =>
+  useContext(MasonrySlotContext);
 
 interface RenderedLayout {
   readonly height: number;
@@ -30,7 +49,12 @@ export interface CatalogMasonryProps<T> {
   readonly spanAtAlignedRows?: boolean;
   readonly items: readonly T[];
   readonly platform: PresentationPlatform;
-  readonly renderItem: (item: T, onMediaSettled: () => void) => ReactNode;
+  /** `index` is the item's list position (the first visible cards load first). */
+  readonly renderItem: (
+    item: T,
+    onMediaSettled: () => void,
+    index: number,
+  ) => ReactNode;
 }
 
 const layoutSignature = (
@@ -206,6 +230,7 @@ export const CatalogMasonry = <T,>({
         const position = retainedLayout?.positions[index];
         const startsFull = spanAtAlignedRows && columns === 2 && index === 0;
         const itemWidth = startsFull || spans[index] ? width : columnWidth;
+        const spansAll = position?.width === width && columns > 1;
         const style = {
           left: position?.x ?? 0,
           top: position?.y ?? 0,
@@ -221,13 +246,19 @@ export const CatalogMasonry = <T,>({
             }}
             className={styles.masonryItem}
             data-home-masonry-item=""
-            data-home-masonry-span={
-              position?.width === width && columns > 1 ? "full" : undefined
-            }
+            data-home-masonry-span={spansAll ? "full" : undefined}
             role="presentation"
             style={style}
           >
-            {renderItem(item, onMediaSettled)}
+            <MasonrySlotContext.Provider
+              value={{
+                platform,
+                columns,
+                span: startsFull || spans[index] === true || spansAll,
+              }}
+            >
+              {renderItem(item, onMediaSettled, index)}
+            </MasonrySlotContext.Provider>
           </div>
         );
       })}

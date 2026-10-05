@@ -20,6 +20,9 @@ type Chapter = {
 export interface AcademicFigure {
   readonly afterParagraph: number;
   readonly src: string;
+  /** Rendition candidates up to `src` and their `sizes`, when the image has them. */
+  readonly srcSet?: string;
+  readonly sizes?: string;
   readonly alt: string;
   readonly caption: string;
 }
@@ -781,6 +784,8 @@ export function AcademicReader({
                           >
                             <img
                               src={figure.src}
+                              srcSet={figure.srcSet}
+                              sizes={figure.sizes}
                               alt={figure.alt}
                               loading="lazy"
                               decoding="async"

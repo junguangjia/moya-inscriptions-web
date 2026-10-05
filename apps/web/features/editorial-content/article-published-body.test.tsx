@@ -192,3 +192,85 @@ describe("Published canonical Article in accepted readers", () => {
     expect(html).toContain("<strong>重点</strong>");
   });
 });
+
+/*
+ * unified-media-pipeline-v1: published managed media passes its candidates
+ * and colour through to the body image, and a resized block narrows `sizes`
+ * by its display width.
+ */
+describe("Published Article media candidates", () => {
+  const item = `media-item-${"2".repeat(32)}`;
+  const path = (variant: string) =>
+    `/api/community/publishing/media/${item}/${variant}/base`;
+  const responsive: ArticleDetail = {
+    ...article,
+    resolvedReferences: {
+      ...article.resolvedReferences,
+      photo: {
+        type: "managed",
+        media: {
+          id: item,
+          src: path("display"),
+          width: 2048,
+          height: 1536,
+          placeholderColor: "#5a4e44",
+          renditions: [
+            {
+              src: path("thumb"),
+              width: 480,
+              height: 360,
+              contentType: "image/webp",
+            },
+            {
+              src: path("display"),
+              width: 2048,
+              height: 1536,
+              contentType: "image/webp",
+            },
+            {
+              src: path("viewer"),
+              width: 4096,
+              height: 3072,
+              contentType: "image/webp",
+            },
+          ],
+        },
+      },
+    },
+  };
+  const withDisplayWidth = (displayWidth: number): ArticleDocument => ({
+    ...document,
+    blocks: document.blocks.map((block) =>
+      block.type === "managedImage"
+        ? { ...block, props: { ...block.props, displayWidth } }
+        : block,
+    ),
+  });
+
+  it("offers inline candidates up to the anchor with the colour on the box", () => {
+    const html = renderToStaticMarkup(
+      <ArticlePublishedBody article={responsive} active={false} />,
+    );
+    expect(html).toContain(
+      `srcSet="${path("thumb")} 480w, ${path("display")} 2048w"`,
+    );
+    expect(html).not.toContain(`${path("viewer")} 4096w`);
+    expect(html).toContain("background-color:#5a4e44");
+    expect(html).toContain(
+      'sizes="(min-width: 760px) 692px, calc(100vw - 40px)"',
+    );
+  });
+
+  it("narrows a resized block's sizes to its display width", () => {
+    const html = renderToStaticMarkup(
+      <ArticlePublishedBody
+        article={responsive}
+        document={withDisplayWidth(0.5)}
+        active={false}
+      />,
+    );
+    expect(html).toContain(
+      'sizes="(min-width: 760px) 346px, calc(50vw - 20px)"',
+    );
+  });
+});

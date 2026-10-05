@@ -35,6 +35,7 @@ import {
   publicUserIdJsonSchema,
   publicUserProfileJsonSchema,
 } from "@moya/contracts/json-schema";
+import { mediaVariantSchema } from "@moya/contracts/schemas";
 import { openApiDocument, serializeOpenApiDocument } from "@moya/public-api";
 import { format, resolveConfig } from "prettier";
 import { describe, expect, it } from "vitest";
@@ -591,6 +592,49 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         },
       },
     });
+    // unified-media-pipeline-v1: optional rendition candidates and an
+    // optional placeholder colour; every candidate src has the src form.
+    expect(
+      Object.keys(asObject(asObject(schemas.PublicMedia).properties)),
+    ).toEqual([
+      "id",
+      "kind",
+      "src",
+      "alt",
+      "width",
+      "height",
+      "renditions",
+      "placeholderColor",
+    ]);
+    expect(requiredProperties(schemas.PublicMedia)).toEqual([
+      "id",
+      "kind",
+      "src",
+      "alt",
+      "width",
+      "height",
+    ]);
+    const renditions = schemaProperty(schemas.PublicMedia, "renditions");
+    expect(renditions).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: {
+        additionalProperties: false,
+        required: ["src", "width", "height", "contentType"],
+        type: "object",
+      },
+    });
+    expect(
+      Object.keys(asObject(asObject(renditions.items).properties)),
+    ).toEqual(["src", "width", "height", "contentType"]);
+    expect(schemaProperty(renditions.items, "src")).toEqual(
+      schemaProperty(schemas.PublicMedia, "src"),
+    );
+    expect(schemaProperty(schemas.PublicMedia, "placeholderColor")).toEqual({
+      pattern: "^#[0-9a-f]{6}$",
+      type: "string",
+    });
 
     // Catalog's public boundary remains unchanged. Author-owned document,
     // preview and human consent contracts intentionally use candidate/review
@@ -906,7 +950,10 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         asObject(asObject(schemas.WorkDraftContent).properties).authorship,
       ),
     ).toContain('{"type":"null"}');
-    // The card cover is an optional media path of a work read, or null.
+    // The card cover is an optional media path of a work read, or null;
+    // unified-media-pipeline-v1 (CW6) also admits the unsigned published URL
+    // of the same still (https; plain http only on a loopback host), so the
+    // increment-2 delivery switch is configuration.
     expect(asObject(schemas.UserWork).required).not.toContain("coverSrc");
     expect(
       asObject(asObject(asObject(schemas.UserWork).properties).coverSrc),
@@ -922,6 +969,16 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
             {
               type: "string",
               pattern: "^\\/api\\/community\\/media\\/user-media-[0-9a-f]{32}$",
+            },
+            {
+              allOf: [
+                { type: "string", format: "uri" },
+                {
+                  type: "string",
+                  pattern:
+                    "^[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^\\s/\\\\?#@]+\\/[^\\s\\\\?#]*$",
+                },
+              ],
             },
           ],
         },
@@ -974,6 +1031,13 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         asObject(asObject(asObject(media.responses)["206"]).content),
       ).sort(),
     ).toEqual(["image/webp", "video/mp4"]);
+    // The relay path names exactly the contract's variants, the `viewer`
+    // zoom still of the unified media pipeline included.
+    expect(
+      ((media.parameters ?? []) as unknown[])
+        .map(asObject)
+        .find((parameter) => parameter.name === "variant")?.schema,
+    ).toEqual({ type: "string", enum: [...mediaVariantSchema.options] });
 
     const trash = operationOf("/v1/community/works/{workId}", "delete");
     expect(trash.operationId).toBe("deleteOwnWorkPermanently");

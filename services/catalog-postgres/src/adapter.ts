@@ -11,7 +11,9 @@ import {
   listCatalogCitationsSql,
   listCatalogContributorsSql,
   listCatalogEntriesSql,
+  listCatalogMediaDeliverySql,
   listCatalogMediaSql,
+  listRepresentativeCatalogMediaDeliverySql,
   listRepresentativeCatalogMediaSql,
 } from "./queries.js";
 import {
@@ -27,6 +29,7 @@ import {
   catalogSearchReadySql,
 } from "./search-queries.js";
 
+import type { CatalogReaderOptions } from "./catalog-media-delivery.js";
 import type {
   CatalogAliasRow,
   CatalogCitationScopeRow,
@@ -110,11 +113,27 @@ const withReadTransaction = async <Result>(
   }
 };
 
-/** PostgreSQL infrastructure implementation of the frozen Catalog read port. */
+/**
+ * PostgreSQL infrastructure implementation of the frozen Catalog read port.
+ * With `renditions`, media rows carry their rendition delivery facts.
+ */
 export class PostgresCatalogQueryAdapter
   implements CatalogQueryPort, CatalogSearchQueryPort
 {
-  constructor(private readonly pool: Pool) {}
+  private readonly representativeMediaSql: string;
+  private readonly mediaSql: string;
+
+  constructor(
+    private readonly pool: Pool,
+    options: CatalogReaderOptions = {},
+  ) {
+    this.representativeMediaSql = options.renditions
+      ? listRepresentativeCatalogMediaDeliverySql
+      : listRepresentativeCatalogMediaSql;
+    this.mediaSql = options.renditions
+      ? listCatalogMediaDeliverySql
+      : listCatalogMediaSql;
+  }
 
   async search(
     query: CatalogSearchQuery,
@@ -147,7 +166,7 @@ export class PostgresCatalogQueryAdapter
               client.query<CatalogAliasRow>(listCatalogAliasesSql, [
                 catalogIds,
               ]),
-              client.query<CatalogMediaRow>(listRepresentativeCatalogMediaSql, [
+              client.query<CatalogMediaRow>(this.representativeMediaSql, [
                 catalogIds,
               ]),
             ]);
@@ -198,7 +217,7 @@ export class PostgresCatalogQueryAdapter
               client.query<CatalogAliasRow>(listCatalogAliasesSql, [
                 catalogIds,
               ]),
-              client.query<CatalogMediaRow>(listRepresentativeCatalogMediaSql, [
+              client.query<CatalogMediaRow>(this.representativeMediaSql, [
                 catalogIds,
               ]),
             ]);
@@ -245,7 +264,7 @@ export class PostgresCatalogQueryAdapter
         client.query<CatalogCitationScopeRow>(listCatalogCitationScopesSql, [
           id,
         ]),
-        client.query<CatalogMediaRow>(listCatalogMediaSql, [id]),
+        client.query<CatalogMediaRow>(this.mediaSql, [id]),
       ]);
       const aliases = mapAliasRows(aliasesResult.rows);
 

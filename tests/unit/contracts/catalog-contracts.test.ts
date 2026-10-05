@@ -11,6 +11,7 @@ import type {
   CatalogPage,
   CatalogSummary,
   MediaId,
+  MediaRendition,
   PublicMedia,
   PublicSourceCitation,
 } from "@moya/contracts";
@@ -186,6 +187,104 @@ describe("Catalog Media public identity and contract", () => {
       { ...valid, resolverConfiguration: "private" },
     ]) {
       expect(publicMediaSchema.safeParse(invalid).success).toBe(false);
+    }
+  });
+
+  it("anchors finite rendition candidates at src with an optional placeholder colour", () => {
+    // unified-media-pipeline-v1: resolved candidates may be signed, like src.
+    const signed = (name: string) =>
+      `https://media.example.invalid/${name}.webp?sign=${"0".repeat(32)}&expires=300`;
+    const renditions: MediaRendition[] = [
+      {
+        src: signed("thumb"),
+        width: 480,
+        height: 320,
+        contentType: "image/webp",
+      },
+      {
+        src: signed("cover"),
+        width: 1_080,
+        height: 720,
+        contentType: "image/webp",
+      },
+      {
+        src: signed("display"),
+        width: 2_048,
+        height: 1_365,
+        contentType: "image/webp",
+      },
+      {
+        src: signed("viewer"),
+        width: 4_096,
+        height: 2_731,
+        contentType: "image/webp",
+      },
+    ];
+    const media: PublicMedia = {
+      id: mediaIdSchema.parse("media-example-003"),
+      kind: "image",
+      src: signed("display"),
+      alt: "有候选尺寸的图像",
+      width: 2_048,
+      height: 1_365,
+      renditions,
+      placeholderColor: "#5f6f58",
+    };
+    const legacy = {
+      id: media.id,
+      kind: media.kind,
+      src: "https://media.example.invalid/legacy.webp",
+      alt: media.alt,
+      width: 4_096,
+      height: 2_731,
+    };
+
+    expect(publicMediaSchema.parse(media)).toEqual(media);
+    // Production keeps the legacy object; its colour needs no candidates.
+    expect(publicMediaSchema.parse(legacy)).toEqual(legacy);
+    expect(
+      publicMediaSchema.safeParse({ ...legacy, placeholderColor: "#000000" })
+        .success,
+    ).toBe(true);
+    expect(
+      catalogDetailSchema.safeParse({
+        ...catalogDetail,
+        representativeMedia: media,
+        media: [media, publicRepresentativeMedia],
+      }).success,
+    ).toBe(true);
+    const replaced = (index: number, entry: Record<string, unknown>) =>
+      renditions.map((rendition, at) =>
+        at === index ? { ...rendition, ...entry } : rendition,
+      );
+    for (const invalid of [
+      // src is not one of the candidates.
+      { ...legacy, renditions },
+      { ...media, src: signed("full") },
+      { ...media, renditions: [] },
+      { ...media, renditions: replaced(0, { src: "/media/thumb.webp" }) },
+      { ...media, renditions: replaced(1, { contentType: "image/png" }) },
+      { ...media, placeholderColor: "#5F6F58" },
+      { ...media, placeholderColor: "#abc" },
+      // A 1:1 cover crop never shares a full-frame list or a 3:2 parent.
+      { ...media, renditions: replaced(0, { width: 480, height: 480 }) },
+      {
+        ...media,
+        renditions: [
+          { ...renditions[0]!, width: 480, height: 480 },
+          { ...renditions[2]!, width: 1_080, height: 1_080 },
+        ],
+      },
+      { ...media, width: 1_080, height: 1_080 },
+      { ...media, renditions: [...renditions].reverse() },
+      { ...media, renditions: replaced(2, { objectKey: "display/v1/a.webp" }) },
+      { ...media, renditions: replaced(2, { bucket: "private" }) },
+      { ...media, renditions: replaced(2, { role: "display" }) },
+    ]) {
+      expect(
+        publicMediaSchema.safeParse(invalid).success,
+        JSON.stringify(invalid),
+      ).toBe(false);
     }
   });
 });

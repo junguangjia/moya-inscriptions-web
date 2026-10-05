@@ -172,7 +172,8 @@ describe("work publishing media relay", () => {
     );
   });
 
-  it.each(["thumb", "display", "full", "cover", "motion"])(
+  // unified-media-pipeline-v1: `viewer` is the bounded zoom still (CW7).
+  it.each(["thumb", "display", "full", "cover", "motion", "viewer"])(
     "accepts the %s variant",
     async (variant) => {
       vi.stubGlobal(

@@ -1,12 +1,16 @@
 import { asPostgresOperationError } from "./availability.js";
 import { parseCatalogCount } from "./adapter.js";
-import { listCatalogAliasesSql } from "./queries.js";
+import {
+  listCatalogAliasesSql,
+  listRepresentativeCatalogMediaDeliverySql,
+} from "./queries.js";
 import {
   mapAliasRows,
   mapCatalogEntryRow,
   mapRepresentativeMediaRows,
 } from "./row-mapper.js";
 
+import type { CatalogReaderOptions } from "./catalog-media-delivery.js";
 import type {
   CatalogAliasRow,
   CatalogEntryRow,
@@ -183,10 +187,20 @@ const withReadTransaction = async <Result>(
  * PostgreSQL read adapter over the published-only editorial views, using the
  * same public read role as the Catalog adapter. Cover and section images are
  * the representative media of the referenced published Catalog record; a
- * reference to a record that is no longer published reads as no image.
+ * reference to a record that is no longer published reads as no image. With
+ * `renditions`, those images carry their rendition delivery facts.
  */
 export class PostgresEditorialContentAdapter implements EditorialContentReadPort {
-  constructor(private readonly pool: Pool) {}
+  private readonly representativeMediaSql: string;
+
+  constructor(
+    private readonly pool: Pool,
+    options: CatalogReaderOptions = {},
+  ) {
+    this.representativeMediaSql = options.renditions
+      ? listRepresentativeCatalogMediaDeliverySql
+      : representativeMediaSql;
+  }
 
   private async representativeMedia(
     client: PoolClient,
@@ -194,9 +208,10 @@ export class PostgresEditorialContentAdapter implements EditorialContentReadPort
   ): Promise<ReadonlyMap<string, EditorialMediaRecord>> {
     const ids = [...new Set(catalogIds.filter((id): id is string => !!id))];
     if (ids.length === 0) return new Map();
-    const rows = await client.query<CatalogMediaRow>(representativeMediaSql, [
-      ids,
-    ]);
+    const rows = await client.query<CatalogMediaRow>(
+      this.representativeMediaSql,
+      [ids],
+    );
     const media = mapRepresentativeMediaRows(rows.rows);
     return new Map(
       [...media.entries()].map(([catalogId, projection]) => [
@@ -207,6 +222,12 @@ export class PostgresEditorialContentAdapter implements EditorialContentReadPort
           alt: projection.alt,
           width: projection.width,
           height: projection.height,
+          ...(projection.renditions === undefined
+            ? {}
+            : { renditions: projection.renditions }),
+          ...(projection.placeholderColor === undefined
+            ? {}
+            : { placeholderColor: projection.placeholderColor }),
         },
       ]),
     );
@@ -397,7 +418,7 @@ export class PostgresEditorialContentAdapter implements EditorialContentReadPort
       );
       const aliasMap = mapAliasRows(aliases.rows);
       const catalogMedia = await client.query<CatalogMediaRow>(
-        representativeMediaSql,
+        this.representativeMediaSql,
         [catalogIds.length ? catalogIds : ["-"]],
       );
       const representative = mapRepresentativeMediaRows(catalogMedia.rows);

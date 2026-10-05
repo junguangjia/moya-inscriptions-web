@@ -376,6 +376,8 @@
 .article figure img {
   display: block;
   width: 100%;
+  /* The width and height attributes then reserve the image's aspect. */
+  height: auto;
   max-height: 350px;
   object-fit: contain;
   background: var(--yoyi-color-background-muted);
@@ -534,6 +536,8 @@
 .postThumbnails img {
   display: block;
   width: calc((100% - 16px) / 3);
+  /* The square stays square beside the image's width and height attributes. */
+  height: auto;
   aspect-ratio: 1;
   object-fit: contain;
   background: var(--yoyi-color-background-muted);
@@ -558,6 +562,8 @@
 }
 .postGallery img {
   width: 100%;
+  /* The width and height attributes then reserve the image's aspect. */
+  height: auto;
   max-height: 600px;
   object-fit: contain;
   border-radius: var(--yoyi-radius-sm);

@@ -40,11 +40,14 @@ work-publishing runtime plan
 bootstrap granted before granting its column lists, so the role ends with
 exactly the runtime plan whichever grants it held before — and seeds the three
 Development test accounts
-(`infra/development/community-development-accounts.sql`). The grant commands
-address only this Compose container; do not edit local URLs to target another
-server. Database and Admin startup run no DDL. Run migrations explicitly when
-the code changes them; an existing `yoyi_dev` that received only the bootstrap
-before this chain converges the next time `dev:migrate` runs.
+(`infra/development/community-development-accounts.sql`). Last, it grants the
+local public role `SELECT` on the Catalog rendition delivery view
+(`infra/development/catalog-media/grant-public-read.sql`, piped to `psql` with
+`-v public_read_role=yoyi_dev_public`); the Backend refuses to start without it.
+The grant commands address only this Compose container; do not edit local URLs
+to target another server. Database and Admin startup run no DDL. Run migrations
+explicitly when the code changes them; an existing `yoyi_dev` that received only
+the bootstrap before this chain converges the next time `dev:migrate` runs.
 
 `dev:all` runs the existing Turbo watch mode and the standard `tsx` development
 runner; Turbo rebuilds shared dependencies and restarts affected tasks. It
@@ -83,8 +86,8 @@ Do not commit media, secrets or synthetic database dumps.
   health.
 - `pnpm dev:db:down`: stop it while retaining the named volume and data.
 - `pnpm dev:migrate`: explicit Payload migrations, local published-read grants,
-  community migrations, the local App-role grants and the Development test
-  accounts.
+  community migrations, the local App-role grants, the Development test accounts
+  and the Catalog rendition delivery read grant.
 - `pnpm db:migrate:community`: the community migration family alone, with
   `APP_MIGRATION_DATABASE_URL` (add `--development` for the local preflight).
 - `pnpm dev:backend`: run the Backend and rebuild changed shared dependencies.

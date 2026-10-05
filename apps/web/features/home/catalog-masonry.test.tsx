@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CatalogMasonry } from "./catalog-masonry";
+import { CatalogMasonry, useMasonrySlot } from "./catalog-masonry";
 
 import type { Root } from "react-dom/client";
 
@@ -143,6 +143,60 @@ describe("CatalogMasonry measurement lifecycle", () => {
         .slice(0, 4)
         .map((item) => item.getAttribute("style")),
     ).toEqual(existingPositions);
+  });
+
+  // unified-media-pipeline-v1: an item's image names the width it is drawn
+  // at from its slot; the list learns each item's position for priority.
+  it("gives every item its slot and its list position", () => {
+    heights = { a: 100, b: 80, c: 80, d: 90 };
+    const SlotProbe = ({ item }: { readonly item: string }) => {
+      const slot = useMasonrySlot();
+      return (
+        <span
+          data-test-card={item}
+          data-slot={`${slot?.platform}:${slot?.columns}:${slot?.span}`}
+        />
+      );
+    };
+    const indexes: number[] = [];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() =>
+      root.render(
+        <CatalogMasonry
+          feedLayout="double"
+          spanAtAlignedRows
+          getKey={(item) => item}
+          items={["a", "b", "c", "d"]}
+          platform="phone"
+          renderItem={(item, _settled, index) => {
+            indexes.push(index);
+            return <SlotProbe item={item} />;
+          }}
+        />,
+      ),
+    );
+    expect(
+      Array.from(container.querySelectorAll("[data-slot]"), (node) =>
+        node.getAttribute("data-slot"),
+      ),
+    ).toEqual([
+      "phone:2:true",
+      "phone:2:false",
+      "phone:2:false",
+      "phone:2:true",
+    ]);
+    expect(indexes.slice(-4)).toEqual([0, 1, 2, 3]);
+    const outside = document.createElement("div");
+    document.body.append(outside);
+    const plain = createRoot(outside);
+    roots.push(plain);
+    act(() => plain.render(<SlotProbe item="x" />));
+    expect(
+      outside.querySelector("[data-slot]")?.getAttribute("data-slot"),
+    ).toBe("undefined:undefined:undefined");
   });
 
   it("does not replace a measured layout with zero-height items during a hidden rerender", () => {

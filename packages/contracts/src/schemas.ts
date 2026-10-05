@@ -19,6 +19,32 @@ export {
   normalizeMentionText,
   MENTION_LIMIT,
 } from "./mention-references.ts";
+import {
+  addMediaRenditionAnchorIssues,
+  cardMediaRenditionListSchema,
+  mediaRenditionListSchema,
+  placeholderColorSchema,
+  publicMediaRenditionListSchema,
+  resolvedMediaUrlSchema,
+} from "./media-delivery.ts";
+export {
+  MEDIA_RENDITIONS_MAXIMUM,
+  addMediaRenditionAnchorIssues,
+  cardMediaRenditionListSchema,
+  mediaRenditionContentTypeSchema,
+  mediaRenditionListOf,
+  mediaRenditionListSchema,
+  mediaRenditionPathParts,
+  mediaRenditionPathSchema,
+  mediaRenditionSchema,
+  placeholderColorSchema,
+  publicMediaRenditionListSchema,
+  publicMediaRenditionSchema,
+  publishedMediaUrlSchema,
+  renditionDimensionSchema,
+  resolvedMediaUrlSchema,
+  sameMediaFraming,
+} from "./media-delivery.ts";
 
 import {
   workAuthorshipSchema,
@@ -261,18 +287,27 @@ const aliasSchema = exactTextSchema(500);
 const summarySchema = exactTextSchema(2_000);
 const displayLabelSchema = exactTextSchema(500);
 const mediaAltSchema = exactTextSchema(2_000);
-const httpOrHttpsUrlSchema = z
-  .url({ protocol: /^https?$/ })
-  .and(z.string().regex(/^[Hh][Tt][Tt][Pp][Ss]?:\/\//));
 
-export const publicMediaSchema = z.strictObject({
-  id: mediaIdSchema,
-  kind: z.literal("image"),
-  src: httpOrHttpsUrlSchema,
-  alt: mediaAltSchema,
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-});
+/**
+ * `src`, `width` and `height` describe one complete image: the anchor of
+ * `renditions` when present, else the legacy object. `placeholderColor` is
+ * present only for an opaque image.
+ */
+export const publicMediaSchema = z
+  .strictObject({
+    id: mediaIdSchema,
+    kind: z.literal("image"),
+    src: resolvedMediaUrlSchema,
+    alt: mediaAltSchema,
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    renditions: publicMediaRenditionListSchema.optional(),
+    placeholderColor: placeholderColorSchema.optional(),
+  })
+  .superRefine((media, context) => {
+    if (media.renditions !== undefined)
+      addMediaRenditionAnchorIssues(media, media.renditions, context);
+  });
 
 export const publicSourceCitationSchema = z.strictObject({
   label: displayLabelSchema,
@@ -765,6 +800,12 @@ export const workSchema = z
      * when no cover was chosen; null without a presentable cover.
      */
     coverSrc: workCoverSrcSchema.nullable().optional(),
+    /**
+     * Card candidates of the cover still in its own framing (the cover crop
+     * when one is set), with `coverSrc` as the anchor; never mixed with the
+     * full-frame `renditions` of `media`.
+     */
+    coverRenditions: mediaRenditionListSchema.optional(),
     /** Null until the first public exposure (a self-only or pending first submission). */
     firstPublishedAt: z.iso.datetime().nullable(),
     version,
@@ -815,6 +856,13 @@ export const workSchema = z
         path: ["coverMediaId"],
         message: "the cover names one of the work's media",
       });
+    if (work.coverRenditions !== undefined)
+      addMediaRenditionAnchorIssues(
+        { src: work.coverSrc },
+        work.coverRenditions,
+        context,
+        ["coverRenditions"],
+      );
   });
 export const profileUpdateSchema = z
   .strictObject({
@@ -952,7 +1000,7 @@ export type DiscussionPage = z.infer<typeof discussionPageSchema>;
 export type DiscussionReplyPage = z.infer<typeof discussionReplyPageSchema>;
 export type OwnComment = z.infer<typeof ownCommentSchema>;
 
-export const contentCardSchema = z.strictObject({
+const contentCardFields = z.strictObject({
   aliases: catalogSummarySchema.shape.aliases,
   /** Present only for official Catalog content with a known province. */
   province: catalogSummarySchema.shape.province,
@@ -968,15 +1016,57 @@ export const contentCardSchema = z.strictObject({
   kind: catalogKindSchema.nullable(),
   authorId: userId.nullable(),
   firstPublishedAt: z.iso.datetime().nullable(),
+  /**
+   * The card image: Catalog media, or a work's cover still in its cover
+   * framing. `renditions` are card candidates with `src` as the anchor.
+   */
   media: z
     .strictObject({
       id: z.string(),
       src: z.string(),
       width: z.number().int().positive(),
       height: z.number().int().positive(),
+      renditions: cardMediaRenditionListSchema.optional(),
+      placeholderColor: placeholderColorSchema.optional(),
+    })
+    .superRefine((media, context) => {
+      if (media.renditions !== undefined)
+        addMediaRenditionAnchorIssues(media, media.renditions, context);
     })
     .nullable(),
 });
+/**
+ * A work card lists its cover in the community forms (unsigned published
+ * URLs or the authorized path, never a signed URL); a Catalog card in the
+ * resolved form of Catalog media.
+ */
+export const contentCardSchema = contentCardFields.superRefine(
+  (card, context) => {
+    if (
+      card.target.type === "work" &&
+      card.media !== null &&
+      !workCoverSrcSchema.safeParse(card.media.src).success
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["media", "src"],
+        message:
+          "work card media uses an authorized path or unsigned published URL",
+      });
+    const renditions = card.media?.renditions;
+    if (renditions === undefined) return;
+    const form =
+      card.target.type === "work"
+        ? mediaRenditionListSchema
+        : publicMediaRenditionListSchema;
+    if (!form.safeParse(renditions).success)
+      context.addIssue({
+        code: "custom",
+        path: ["media", "renditions"],
+        message: "card renditions take the delivery form of their target",
+      });
+  },
+);
 const filterValues = z
   .array(authorText(80).min(1))
   .max(25)

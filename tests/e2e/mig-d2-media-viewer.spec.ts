@@ -509,3 +509,102 @@ test("MIG-D2 Viewer rejects foreign media and reports a valid broken image truth
   ).toContainText("图像无法加载");
   await expect(viewer.locator("[data-detail-viewer-image]")).toHaveCount(0);
 });
+
+test("MIG-D2 Viewer upgrades a zoomed rendition progressively and drops it when paged away", async ({
+  page,
+}, testInfo) => {
+  // unified-media-pipeline-v1 (CW14): the Formal runtime fixture gives this
+  // image the candidates 480, 1080, 1600 (its anchor) and 3200 wide.
+  const response = await page.goto(
+    "/?catalogId=runtime-inscription-multi-media&image=runtime-inscription-detail",
+  );
+  expect(response?.status()).toBe(200);
+  const viewer = page.getByRole("dialog", { name: "图像查看" });
+  const stage = viewer.locator("[data-viewer-scale]");
+  const image = viewer.locator("[data-detail-viewer-image]");
+  await expect(viewer).toBeVisible();
+  await expect(page.locator("[data-product-boot]")).toHaveCount(0);
+  await expect(image).toHaveAttribute("alt", "运行时多图碑刻局部");
+  const shownImage = () =>
+    image.evaluate((node) => {
+      const element = node as HTMLImageElement;
+      const width = element.getAttribute("data-detail-viewer-rendition-width");
+      return {
+        currentSrc: element.currentSrc,
+        // Loaded, and the file is the candidate the Viewer names.
+        shown:
+          element.complete &&
+          element.naturalWidth > 0 &&
+          width !== null &&
+          new RegExp(`-${width}x\\d+\\.webp$`, "u").test(element.currentSrc),
+        width,
+      };
+    });
+  await expect.poll(async () => (await shownImage()).shown).toBe(true);
+  const fitWidth = (await shownImage()).width;
+  expect(fitWidth).toMatch(/^(?:480|1080|1600|3200)$/u);
+  // On the evidence projects (1280 × 720 at 1x, iPhone 15 at 3x) the image
+  // fits about 1100 device pixels wide and opens on its 1600 anchor, so the
+  // pinch below exercises a real upgrade.
+  if (["desktop-chromium", "mobile-webkit"].includes(testInfo.project.name)) {
+    expect(fitWidth).toBe("1600");
+  }
+
+  const box = await stage.boundingBox();
+  if (box === null) throw new Error("Missing Viewer geometry");
+  const pointer = (
+    type: "pointerdown" | "pointermove" | "pointerup",
+    pointerId: number,
+    x: number,
+    isPrimary: boolean,
+  ) =>
+    stage.dispatchEvent(type, {
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+      clientX: x,
+      clientY: box.y + box.height / 2,
+      isPrimary,
+      pointerId,
+      pointerType: "touch",
+    });
+  const pinch = async (from: number, to: number) => {
+    const start = box.x + box.width * 0.3;
+    await pointer("pointerdown", 701, start, true);
+    await pointer("pointerdown", 702, start + box.width * from, false);
+    await pointer("pointermove", 702, start + box.width * to, false);
+    await pointer("pointerup", 702, start + box.width * to, false);
+    await pointer("pointerup", 701, start, true);
+  };
+
+  // Pinch to 3x: the demand passes the anchor, so the widest candidate is
+  // decoded off-DOM and swapped in.
+  await pinch(0.1, 0.3);
+  await expect(stage).toHaveAttribute("data-viewer-scale", "zoomed");
+  await expect(image).toHaveAttribute(
+    "data-detail-viewer-rendition-width",
+    "3200",
+  );
+  await expect
+    .poll(async () => (await shownImage()).currentSrc)
+    .toMatch(/\/media\/renditions\/inscription-detail-3200x1800\.webp$/u);
+
+  // Zooming out never shrinks the current image.
+  await pinch(0.4, 0.1);
+  await expect(stage).toHaveAttribute("data-viewer-scale", "fit");
+  await page.waitForTimeout(400);
+  await expect(image).toHaveAttribute(
+    "data-detail-viewer-rendition-width",
+    "3200",
+  );
+
+  // Paged away and back, the image opens on its fit candidate again.
+  await page.keyboard.press("ArrowLeft");
+  await expect(page).toHaveURL(/image=runtime-inscription-front/u);
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/image=runtime-inscription-detail/u);
+  await expect(image).toHaveAttribute("alt", "运行时多图碑刻局部");
+  await expect(image).toHaveAttribute(
+    "data-detail-viewer-rendition-width",
+    fitWidth!,
+  );
+});

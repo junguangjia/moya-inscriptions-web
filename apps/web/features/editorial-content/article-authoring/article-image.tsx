@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import type { MediaCrop } from "@moya/contracts";
 import { CatalogViewer } from "../../detail/catalog-viewer";
 import type { DetailMediaPresentation } from "../../detail/catalog-detail-presentation";
+import {
+  MEDIA_SIZES,
+  placeholderStyle,
+  responsiveImage,
+} from "../../media/responsive-media";
 import { resolveRuntimePresentationPlatform } from "../../shell/device-platform";
 import { LivePhotoFrame } from "../../publishing/ui/live/live-photo";
 import { previewPlacement } from "../../publishing/ui/media/media-geometry";
@@ -15,11 +20,14 @@ export const ArticleImage = ({
   active,
   crop = null,
   onCrop,
+  share = 1,
 }: {
   readonly media: DetailMediaPresentation;
   readonly active: boolean;
   readonly crop?: MediaCrop | null;
   readonly onCrop?: () => void;
+  /** The block's display width as a share of the reading column. */
+  readonly share?: number;
 }) => {
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -33,16 +41,26 @@ export const ArticleImage = ({
     objectFit: "fill" as const,
     borderRadius: 0,
   };
+  // Every candidate shows the same framing, so the crop geometry above holds
+  // for whichever one the browser picks; a crop draws the image wider.
+  const image = responsiveImage(
+    media,
+    MEDIA_SIZES.articleBody({ cropWidth: crop?.width ?? 1, share }),
+  );
   const still = (
     <img
       alt={media.alt}
-      src={media.src}
+      src={image.src}
+      srcSet={image.srcSet}
+      sizes={image.sizes}
       width={media.width}
       height={media.height}
       loading="lazy"
       decoding="async"
       draggable={false}
-      style={frame}
+      // The image covers its box, so it carries the loading colour too: a
+      // figure rule may paint its own background on images (news covers).
+      style={{ ...frame, ...placeholderStyle(media.placeholderColor) }}
     />
   );
   return (
@@ -64,7 +82,11 @@ export const ArticleImage = ({
             onCrop();
           }
         }}
-        style={{ aspectRatio: placement.aspectRatio }}
+        style={{
+          aspectRatio: placement.aspectRatio,
+          // The box has the exact crop aspect, so the image covers it fully.
+          ...placeholderStyle(media.placeholderColor),
+        }}
         onClick={(event) => {
           if (
             event.target instanceof Element &&
