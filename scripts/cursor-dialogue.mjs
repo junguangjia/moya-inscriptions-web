@@ -47,14 +47,30 @@ export const BUDGET = Object.freeze({
   recordChars: 24000,
   originalBytes: 2 * 1024 * 1024,
 });
+// One explicit Owner resumption, never a generic retry or a counter reset.
+export const RESUMPTION = Object.freeze({
+  id: "owner-2026-10-05T18:39Z",
+  dialogueId: "ffd4a715a80589390dea6007",
+  priorRun: 37353258884,
+  priorCandidate: "0491225497c00a85e0539ac164de8ce290172a43",
+  priorRecordSha256:
+    "fde366766494d1189f146fb70376bb772380ba166eee15edd6903bdc7048b64a",
+  startedAt: 1791223498000,
+  inferenceMs: 358385,
+  authorizedAt: Date.parse("2026-10-05T18:39:00Z"),
+  expiresAt: Date.parse("2026-10-05T19:39:00Z"),
+  wallMs: 900000,
+});
 export const ORIGINALS = Object.freeze({
   preparation:
     "a32c7a1d068d25a57f289465dbfd63a68cc4834fc7bf32296da42e4bcc80030d",
   feedback: "903babcd7757c71dd11714a5b1729d0555fd7551b7c64e61abe31bcc2a1b0b98",
   execution: "e5f37f5cf14a11048d253a877988502f43d7df350813f0141bc6e5c89340f1fe",
 });
-const fail = (code) => {
-  throw new Error(code);
+const fail = (code, detail) => {
+  const error = new Error(code);
+  if (detail) error.detail = detail;
+  throw error;
 };
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const read = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -88,6 +104,140 @@ export function scannedJSON(raw) {
       pending.push(...Object.keys(next), ...Object.values(next));
   }
   return value;
+}
+const resumed = (request) => request.resumption === RESUMPTION.id;
+export function dialogueDeadline(request) {
+  return resumed(request)
+    ? Math.min(
+        RESUMPTION.expiresAt,
+        (request.resumeAdmittedAt ?? RESUMPTION.expiresAt) + RESUMPTION.wallMs,
+      )
+    : request.startedAt + BUDGET.wallMs;
+}
+export function validateResumePrior(prior) {
+  if (
+    !prior ||
+    prior.runId !== RESUMPTION.priorRun ||
+    prior.candidate !== RESUMPTION.priorCandidate ||
+    prior.dialogueId !== RESUMPTION.dialogueId ||
+    prior.round !== 1 ||
+    prior.invocationCount !== 1 ||
+    prior.startedAt !== RESUMPTION.startedAt ||
+    prior.inferenceMs !== RESUMPTION.inferenceMs ||
+    prior.status !== "incomplete" ||
+    prior.error !== "ENGLISH_REQUIRED" ||
+    prior.model !== MODEL ||
+    !same(prior.target, TARGET)
+  )
+    fail("RESUMPTION_PRIOR_MISMATCH");
+}
+export function decodeResumeRecord(encoded) {
+  if (
+    typeof encoded !== "string" ||
+    encoded.length > 24000 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)
+  )
+    fail("RESUMPTION_PRIOR_MISMATCH");
+  const raw = gunzipSync(Buffer.from(encoded, "base64"), {
+    maxOutputLength: 128 * 1024,
+  });
+  if (digest(raw) !== RESUMPTION.priorRecordSha256)
+    fail("RESUMPTION_PRIOR_MISMATCH");
+  const prior = scannedJSON(raw.toString("utf8"));
+  validateResumePrior(prior);
+  return prior;
+}
+// Retain only a scanned answer, never stderr, credentials or arbitrary envelope
+// fields. Redact an entire sensitive scalar/key rather than guess secret spans.
+export function retainedResponse(raw) {
+  let redactions = 0;
+  let visited = 0;
+  const text = (value) => {
+    let decoded = value;
+    for (let i = 0; i < 3; i++) {
+      if (safeText(decoded) === null) {
+        redactions++;
+        return "[REDACTED: credential-bearing text]";
+      }
+      decoded = decoded
+        .replace(/\\u([0-9a-f]{4})/giu, (_, hex) =>
+          String.fromCharCode(parseInt(hex, 16)),
+        )
+        .replace(/\\x([0-9a-f]{2})/giu, (_, hex) =>
+          String.fromCharCode(parseInt(hex, 16)),
+        )
+        .replace(/\\[nrt]/gu, " ");
+    }
+    if (safeText(decoded) === null) {
+      redactions++;
+      return "[REDACTED: credential-bearing text]";
+    }
+    return safeText(value);
+  };
+  const visit = (value, depth = 0) => {
+    if (++visited > 10000 || depth > 32) {
+      redactions++;
+      return "[REDACTED: retention limit]";
+    }
+    if (typeof value === "string") return text(value);
+    if (Array.isArray(value))
+      return value.map((item) => visit(item, depth + 1));
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item], index) => {
+          const safeKey = text(key);
+          return [
+            safeKey === key ? key : `[redacted-key-${index}]`,
+            visit(item, depth + 1),
+          ];
+        }),
+      );
+    return value;
+  };
+  if (typeof raw !== "string" || Buffer.byteLength(raw) > 256 * 1024)
+    fail("MODEL_RESPONSE_TOO_LARGE");
+  let envelope;
+  try {
+    envelope = JSON.parse(raw);
+  } catch {
+    /* Retain scanned malformed transport. */
+  }
+  const body = envelope?.result;
+  let parsed;
+  let format = "text";
+  if (typeof body === "string") {
+    try {
+      parsed = JSON.parse(body);
+      format = "json";
+    } catch {
+      parsed = body;
+    }
+  } else parsed = body === undefined ? null : body;
+  const artifact = {
+    version: 1,
+    transportSha256: digest(raw),
+    transportBytes: Buffer.byteLength(raw),
+    format: envelope === undefined ? "invalid-transport" : format,
+    body: visit(envelope === undefined ? raw : parsed),
+    redactions: 0,
+    accepted: false,
+  };
+  artifact.redactions = redactions;
+  // Scan the exact artifact representation AND all decoded retained values.
+  scannedJSON(JSON.stringify(artifact));
+  return { artifact, envelope, body };
+}
+function numericUsage(envelope) {
+  if (!envelope?.usage || typeof envelope.usage !== "object") return null;
+  const usage = Object.fromEntries(
+    ["input_tokens", "output_tokens", "total_tokens"]
+      .filter(
+        (key) =>
+          Number.isFinite(envelope.usage[key]) && envelope.usage[key] >= 0,
+      )
+      .map((key) => [key, envelope.usage[key]]),
+  );
+  return Object.keys(usage).length ? usage : null;
 }
 export function validateNativeIdentity(identity) {
   if (
@@ -325,6 +475,25 @@ export function validateEvidence(records) {
 }
 export function validateRequest(request, now = Date.now(), prepared = false) {
   if (
+    request.resumption !== undefined &&
+    (!resumed(request) ||
+      request.dialogueId !== RESUMPTION.dialogueId ||
+      request.candidatePR !== 224 ||
+      ![2, 3].includes(request.round) ||
+      request.startedAt !== RESUMPTION.startedAt ||
+      now < RESUMPTION.authorizedAt ||
+      now >= RESUMPTION.expiresAt ||
+      (request.round === 2 && request.previousRun !== RESUMPTION.priorRun) ||
+      ((prepared || request.round === 3) &&
+        (!Number.isFinite(request.resumeAdmittedAt) ||
+          request.resumeAdmittedAt < RESUMPTION.authorizedAt ||
+          request.resumeAdmittedAt > now)) ||
+      (!prepared &&
+        request.round === 2 &&
+        request.resumeAdmittedAt !== undefined))
+  )
+    fail("INVALID_RESUMPTION");
+  if (
     (!prepared &&
       Buffer.byteLength(JSON.stringify(request)) > BUDGET.transportBytes) ||
     !same(request.target, TARGET) ||
@@ -337,7 +506,7 @@ export function validateRequest(request, now = Date.now(), prepared = false) {
     request.round > BUDGET.rounds ||
     !Number.isFinite(request.startedAt) ||
     request.startedAt > now ||
-    now - request.startedAt >= BUDGET.wallMs ||
+    now >= dialogueDeadline(request) ||
     typeof request.question !== "string" ||
     request.question.length > 2400 ||
     !request.question.trim() ||
@@ -355,7 +524,7 @@ export function validateRequest(request, now = Date.now(), prepared = false) {
     !request.selectors.length ||
     request.selectors.length > 24 ||
     (!prepared &&
-      (request.round === 1
+      (request.round === 1 || (resumed(request) && request.round === 2)
         ? typeof request.originals !== "string"
         : request.originals !== undefined))
   )
@@ -410,19 +579,24 @@ function fresh(request, prepared = false) {
   );
 }
 export function validatePrevious(request, prior, now = Date.now()) {
+  const resumeEntry = resumed(request) && request.round === 2;
+  if (resumeEntry) validateResumePrior(prior);
   if (
     !prior ||
     prior.version !== 1 ||
     prior.dialogueId !== request.dialogueId ||
-    prior.candidate !== request.candidate ||
+    (!resumeEntry && prior.candidate !== request.candidate) ||
     !same(prior.target, TARGET) ||
     prior.round + 1 !== request.round ||
     prior.runId !== request.previousRun ||
     prior.startedAt !== request.startedAt ||
-    prior.status !== "needs_evidence" ||
+    (!resumeEntry && prior.status !== "needs_evidence") ||
     !Number.isFinite(prior.inferenceMs) ||
     prior.inferenceMs >= BUDGET.inferenceMs ||
-    now - prior.startedAt >= BUDGET.wallMs ||
+    now >= dialogueDeadline(request) ||
+    (!resumeEntry &&
+      (prior.resumption !== request.resumption ||
+        prior.resumeAdmittedAt !== request.resumeAdmittedAt)) ||
     !Array.isArray(prior.seenEvidence) ||
     !Array.isArray(prior.seenCoverage)
   )
@@ -438,8 +612,10 @@ function loadPrevious(request, directory) {
   if (request.round === 1)
     return { prior: null, cache: decodeOriginals(request.originals) };
   const previous = api(`actions/runs/${request.previousRun}`);
+  const resumeEntry = resumed(request) && request.round === 2;
   if (
-    previous.head_sha !== request.candidate ||
+    previous.head_sha !==
+      (resumeEntry ? RESUMPTION.priorCandidate : request.candidate) ||
     previous.event !== "workflow_dispatch" ||
     previous.path !== ".github/workflows/cursor-review.yml" ||
     previous.run_attempt !== 1 ||
@@ -447,6 +623,11 @@ function loadPrevious(request, directory) {
     previous.display_title !== title(request.dialogueId, request.round - 1)
   )
     fail("PRIOR_RUN_MISMATCH");
+  if (resumeEntry)
+    return {
+      prior: decodeResumeRecord(request.resumeRecord),
+      cache: decodeOriginals(request.originals),
+    };
   const artifact = api(
     `actions/runs/${request.previousRun}/artifacts?per_page=100`,
   ).artifacts.find(
@@ -518,6 +699,7 @@ Do not run tools, shell, tests, browse URLs, edit files, approve/merge or claim 
 English is preferred for generated narrative: answers, claims, uncertainty, reasons, next steps and follow-up responses. It is a recommendation, not a requirement. Preserve useful evidence-backed content in other languages; do not translate solely for this preference. Preserve literal quoted evidence in its original form.
 Every finding must cite an exact substring from a supplied evidence item's text, identified by its id. Do not invent citations or infer that omitted events did not occur. Receive-time intervals are not native execution timing. Separate measured facts, hypotheses and unavailable mechanisms.
 Return JSON only: {"status":"answered|needs_evidence|incomplete","answer":"concise answer","findings":[{"claim":"supported fact","confidence":"observed|inferred","citations":[{"id":"supplied evidence id","quote":"exact substring, 1-800 characters"}],"next_step":"concrete next action within existing authority, or precise missing input"}],"uncertainty":["limitation"],"missing_evidence":[{"file":"preparation|feedback|execution","pointer":"JSON pointer","start":0,"count":8,"reason":"reason"}],"next_verification":["bounded verification proposal"]}.
+Each narrative field must be nonempty and at most 2400 characters; prefer fewer than 600 characters per field and a compact response under 8000 characters. No reasoning transcript is requested.
 At most 6 findings, 3 citations per finding, 6 uncertainties, 4 missing-evidence requests and 4 verification items. Use needs_evidence only for a specific new selector that might resolve the question. If originals lack it or the question cannot be resolved, return incomplete and explain the limit; do not prescribe speculative changes. Prior answers are context, not evidence. No automatic retry or paid/model fallback.`;
 export function validateAnswer(answer, records) {
   const only = (value, keys) =>
@@ -548,14 +730,20 @@ export function validateAnswer(answer, records) {
   )
     fail("INVALID_ANSWER");
   const narrative = [
-    answer.answer,
-    ...answer.uncertainty,
-    ...answer.next_verification,
+    ["answer", answer.answer],
+    ...answer.uncertainty.map((value, i) => [`uncertainty.${i}`, value]),
+    ...answer.next_verification.map((value, i) => [
+      `next_verification.${i}`,
+      value,
+    ]),
   ];
-  for (const finding of answer.findings) {
+  for (const [index, finding] of answer.findings.entries()) {
     if (!only(finding, ["claim", "confidence", "citations", "next_step"]))
       fail("INVALID_ANSWER");
-    narrative.push(finding.claim, finding.next_step);
+    narrative.push(
+      [`findings.${index}.claim`, finding.claim],
+      [`findings.${index}.next_step`, finding.next_step],
+    );
     if (
       !["observed", "inferred"].includes(finding.confidence) ||
       !Array.isArray(finding.citations) ||
@@ -576,10 +764,10 @@ export function validateAnswer(answer, records) {
         fail("CITATION_NOT_IN_ORIGINAL");
     }
   }
-  for (const selector of answer.missing_evidence) {
+  for (const [index, selector] of answer.missing_evidence.entries()) {
     if (!only(selector, ["file", "pointer", "start", "count", "reason"]))
       fail("INVALID_EVIDENCE_REQUEST");
-    narrative.push(selector.reason);
+    narrative.push([`missing_evidence.${index}.reason`, selector.reason]);
     if (
       !Object.hasOwn(ORIGINALS, selector.file) ||
       !/^(?:\/[A-Za-z0-9_.-]+)*$/u.test(selector.pointer) ||
@@ -593,9 +781,25 @@ export function validateAnswer(answer, records) {
     )
       fail("INVALID_EVIDENCE_REQUEST");
   }
-  if (narrative.some((text) => typeof text !== "string" || !text.trim()))
-    fail("INVALID_NARRATIVE");
-  if (narrative.some((text) => text.length > 2400)) fail("NARRATIVE_TOO_LONG");
+  for (const [field, text] of narrative) {
+    if (typeof text !== "string" || !text.trim())
+      fail("INVALID_NARRATIVE", {
+        field,
+        issue:
+          text === undefined || text === null
+            ? "missing"
+            : typeof text !== "string"
+              ? "type"
+              : "empty",
+      });
+    if (text.length > 2400)
+      fail("NARRATIVE_TOO_LONG", {
+        field,
+        issue: "length",
+        characters: text.length,
+        limit: 2400,
+      });
+  }
   if (answer.status === "needs_evidence" && !answer.missing_evidence.length)
     fail("MISSING_FOLLOWUP_SELECTOR");
   if (safeText(JSON.stringify(answer)) === null) fail("UNSAFE_ANSWER");
@@ -607,7 +811,13 @@ export function promptFor(request, prior, sources) {
     question: request.question,
     evidence: request.evidence,
     prior: prior
-      ? { question: prior.question, answer: prior.answer, round: prior.round }
+      ? {
+          question: prior.question,
+          answer: prior.answer,
+          round: prior.round,
+          status: prior.status,
+          error: prior.error,
+        }
       : null,
     source: sources,
     evidenceLimit:
@@ -631,6 +841,20 @@ function render(record) {
     escape(record.answer?.answer || record.error),
     `Effective model selection: ${escape(JSON.stringify(record.effectiveSelection || null))}`,
   ];
+  if (record.resumption)
+    lines.push(
+      `Owner-authorized resumption: ${record.resumption}; original start ${new Date(record.startedAt).toISOString()} retained after its expired window. Calls ${record.invocationCount}/${BUDGET.rounds}; cumulative inference ${record.inferenceMs}ms/${BUDGET.inferenceMs}ms. Earlier round remains incomplete.`,
+    );
+  if (record.validationDetail)
+    lines.push(
+      `Validation detail: ${escape(JSON.stringify(record.validationDetail))}`,
+    );
+  if (record.responseArtifact)
+    lines.push(
+      `Scanned response retained in the run artifact as model-response.json; redactions: ${record.responseArtifact.redactions}. Retention does not imply answer acceptance.`,
+    );
+  if (record.selectionError)
+    lines.push(`Runtime selection: ${record.selectionError}.`);
   for (const finding of record.answer?.findings || []) {
     lines.push(
       `- ${escape(finding.claim)} (${finding.confidence})`,
@@ -665,7 +889,7 @@ function analyze(directory, env) {
   const timeout = Math.min(
     BUDGET.callMs,
     BUDGET.inferenceMs - elapsed,
-    request.startedAt + BUDGET.wallMs - Date.now() - 10000,
+    dialogueDeadline(request) - Date.now() - 10000,
   );
   if (timeout <= 0 || env.CURSOR_MODEL !== MODEL)
     fail("MODEL_OR_BUDGET_REFUSED");
@@ -683,6 +907,12 @@ function analyze(directory, env) {
     round: request.round,
     runId: Number(env.GITHUB_RUN_ID),
     startedAt: request.startedAt,
+    ...(resumed(request)
+      ? {
+          resumption: request.resumption,
+          resumeAdmittedAt: request.resumeAdmittedAt,
+        }
+      : {}),
     question: request.question,
     status: "incomplete",
     model: MODEL,
@@ -734,36 +964,57 @@ function analyze(directory, env) {
         killSignal: "SIGKILL",
       },
     );
+    // Preserve independent runtime metadata even when answer validation fails.
+    try {
+      record.effectiveSelection = confirmModelSelection(
+        parseModelSelection(MODEL),
+        read(join(home, ".cursor/cli-config.json")),
+      );
+    } catch {
+      record.selectionError = "MODEL_SELECTION_NOT_CONFIRMED";
+    }
+    const captured = retainedResponse(result.stdout || "");
+    save(join(directory, "output/model-response.json"), captured.artifact);
+    record.responseArtifact = {
+      file: "model-response.json",
+      redactions: captured.artifact.redactions,
+      format: captured.artifact.format,
+    };
+    const { envelope, body } = captured;
+    record.usage = numericUsage(envelope);
     if (result.error || result.status !== 0) fail(cursorFailure(result));
-    const envelope = scannedJSON(result.stdout);
     if (
-      envelope.type !== "result" ||
-      envelope.subtype !== "success" ||
-      envelope.is_error !== false
+      envelope?.type !== "result" ||
+      envelope?.subtype !== "success" ||
+      envelope?.is_error !== false
     )
       fail("INVALID_CLI_RESULT");
-    const answer = validateAnswer(
-      scannedJSON(envelope.result),
-      request.evidence,
-    );
-    record.effectiveSelection = confirmModelSelection(
-      parseModelSelection(MODEL),
-      read(join(home, ".cursor/cli-config.json")),
-    );
+    if (captured.artifact.redactions) fail("UNSAFE_MODEL_OUTPUT");
+    if (
+      body === undefined ||
+      body === null ||
+      (typeof body === "string" && !body.trim())
+    )
+      fail("MODEL_BODY_MISSING");
+    if (typeof body !== "string") fail("MODEL_BODY_TYPE");
+    let parsed;
+    try {
+      parsed = scannedJSON(body);
+    } catch (error) {
+      fail(
+        error instanceof SyntaxError
+          ? "MODEL_BODY_JSON_INVALID"
+          : "UNSAFE_MODEL_OUTPUT",
+      );
+    }
+    const answer = validateAnswer(parsed, request.evidence);
+    if (record.selectionError) fail(record.selectionError);
     record.answer = answer;
     record.status = answer.status;
     if (request.round === BUDGET.rounds && record.status === "needs_evidence")
       record.status = "incomplete";
-    if (envelope.usage && typeof envelope.usage === "object") {
-      const usage = Object.fromEntries(
-        ["input_tokens", "output_tokens", "total_tokens"]
-          .filter(
-            (k) => Number.isFinite(envelope.usage[k]) && envelope.usage[k] >= 0,
-          )
-          .map((k) => [k, envelope.usage[k]]),
-      );
-      if (Object.keys(usage).length) record.usage = usage;
-    }
+    captured.artifact.accepted = true;
+    save(join(directory, "output/model-response.json"), captured.artifact);
   } catch (error) {
     const allowed = new Set([
       "CURSOR_TIMEOUT",
@@ -773,6 +1024,14 @@ function analyze(directory, env) {
       "INVALID_ANSWER",
       "INVALID_NARRATIVE",
       "NARRATIVE_TOO_LONG",
+      "MODEL_BODY_MISSING",
+      "MODEL_BODY_TYPE",
+      "MODEL_BODY_JSON_INVALID",
+      "MODEL_RESPONSE_TOO_LARGE",
+      "UNSAFE_MODEL_OUTPUT",
+      "INVALID_CLI_RESULT",
+      "INVALID_EVIDENCE_REQUEST",
+      "MISSING_FOLLOWUP_SELECTOR",
       "CITATION_NOT_IN_ORIGINAL",
       "INVALID_CITATION",
       "MODEL_SELECTION_NOT_CONFIRMED",
@@ -780,14 +1039,22 @@ function analyze(directory, env) {
     record.error = allowed.has(error.message)
       ? error.message
       : "DIALOGUE_RESPONSE_UNAVAILABLE";
+    if (
+      error.detail &&
+      /^[a-z_.0-9]+$/u.test(error.detail.field) &&
+      ["missing", "type", "empty", "length"].includes(error.detail.issue)
+    )
+      record.validationDetail = error.detail;
     record.status = "incomplete";
   }
   record.roundInferenceMs = Date.now() - start;
   record.inferenceMs += record.roundInferenceMs;
   record.wallMs = Date.now() - request.startedAt;
+  if (resumed(request))
+    record.resumeWallMs = Date.now() - request.resumeAdmittedAt;
   if (
     record.inferenceMs > BUDGET.inferenceMs ||
-    record.wallMs > BUDGET.wallMs
+    Date.now() >= dialogueDeadline(request)
   ) {
     record.status = "incomplete";
     record.error = "DIALOGUE_BUDGET_EXHAUSTED";
@@ -805,6 +1072,8 @@ export async function dialogueMain(stage, env = process.env) {
     const request = validateRequest(scannedJSON(event.inputs.dialogue_request));
     const admittedAt = validateCandidateRoute(request, env);
     if (request.round === 1) request.startedAt = admittedAt;
+    if (resumed(request) && request.round === 2)
+      request.resumeAdmittedAt = admittedAt;
     fresh(request);
     mkdirSync(join(directory, "output"), { recursive: true, mode: 0o700 });
     const { prior, cache } = loadPrevious(request, directory);
@@ -828,6 +1097,7 @@ export async function dialogueMain(stage, env = process.env) {
       { mode: 0o600 },
     );
     delete request.originals;
+    delete request.resumeRecord;
     request.bundleVerified = true;
     const sources = {
       kind: "ci",
@@ -850,7 +1120,8 @@ export async function dialogueMain(stage, env = process.env) {
     promptFor(request, prior, sources);
     const collection = {
       originalCiNetworkDownloads: 0,
-      priorCacheArtifactRestores: prior ? 1 : 0,
+      priorCacheArtifactRestores:
+        prior && !(resumed(request) && request.round === 2) ? 1 : 0,
       sourceLookups,
       selectedRecords: request.evidence.length,
       selectedCharacters: request.evidence.reduce(

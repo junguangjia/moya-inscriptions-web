@@ -379,3 +379,39 @@ Follow-up novelty is computed from original JSON leaf locations and values.
 Overlapping parent/child selectors or longer requested array windows cannot
 reset coverage. The initial run timestamp is read from GitHub and retained
 unchanged across rounds; caller timestamps cannot extend the wall limit.
+
+## Explicit interruption resumption and response retention (r7)
+
+The Owner resumed this exact task at 2026-10-05 18:39 UTC. The original dialogue
+`ffd4a715a80589390dea6007` started at 18:04:58 UTC; its 1800-second window
+expired and is not relabeled. One narrowly pinned resumption admits round 2 from
+the hash-verified retained record of run 37353258884. That failed round and its
+358385ms/one-call cost remain unchanged. At most two calls and 541615ms
+aggregate inference remain; the per-call limit stays 360000ms.
+
+Requests use `resumption=owner-2026-10-05T18:39Z`, the original `startedAt`,
+round 2, its exact `previousRun`, `originals`, and a gzip/base64 `resumeRecord`
+of the already-downloaded `round.json`. The helper verifies its pinned SHA-256
+and live prior-run metadata. It downloads neither the original CI artifacts nor
+the cached prior record. GitHub's round-2 admission timestamp starts one
+explicit resume interval of at most 900 seconds, capped at 19:39 UTC. The
+interval and old elapsed wall time are recorded separately. Round 3 must carry
+the unchanged `resumeAdmittedAt`, restore its exact predecessor, and supply new
+evidence after `needs_evidence`. Other errors remain terminal; this is not a
+general retry switch, count reset or permission expansion.
+
+Dialogue output is now retained as `model-response.json` before answer
+acceptance. The bounded body is scanned, including decoded values and escaped
+credential forms. A credential-bearing string or key is wholly redacted;
+redacted output cannot pass as an accepted answer. Only the scanned artifact is
+stored/uploaded for seven days, never raw stderr or arbitrary transport fields.
+Malformed but safe responses remain inspectable. Retention limits and scanning
+failure can still prevent retaining unsafe/unbounded content.
+
+Missing body, wrong body type, invalid JSON/schema, missing/empty narrative,
+overlength narrative and unsafe output have separate categories. Narrative
+failures retain only safe field paths, issue categories and lengths. Available
+runtime-selection confirmation and numeric usage are retained independently of
+answer validity. A retained response, model selection or usage value is not
+diagnostic acceptance or a billing receipt. The old discarded answer remains
+unrecoverable. These retention changes apply to the bounded dialogue path.

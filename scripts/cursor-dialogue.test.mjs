@@ -17,17 +17,22 @@ import {
   TARGET,
   MODEL,
   ORIGINALS,
+  RESUMPTION,
   DIALOGUE_PROMPT,
   decodeOriginals,
+  decodeResumeRecord,
+  dialogueDeadline,
   dialogueMain,
   extractJSON,
   scannedJSON,
   selectionCoverage,
+  retainedResponse,
   validateAdmission,
   validateAnswer,
   validateEvidence,
   validateNativeIdentity,
   validatePrevious,
+  validateResumePrior,
   validateRequest,
 } from "./cursor-dialogue.mjs";
 import {
@@ -192,6 +197,119 @@ test("original bundle rejects unrelated, corrupt and oversized compressed inputs
   assert.throws(() => decodeOriginals("A".repeat(BUDGET.transportBytes + 1)));
   assert.throws(() => decodeOriginals("e30="));
   assert.throws(() => scannedJSON("x".repeat(BUDGET.originalBytes + 1)));
+});
+test("retained responses preserve rejected bodies while redacting credential scalars and encoded secrets", () => {
+  const token = ["ghp_", "A".repeat(36)].join("");
+  const result = retainedResponse(
+    JSON.stringify({
+      type: "result",
+      result: JSON.stringify({
+        answer: "useful evidence",
+        secret: token,
+        nested: [token],
+      }),
+      unrelated: token,
+    }),
+  );
+  assert.equal(result.artifact.body.answer, "useful evidence");
+  assert.equal(result.artifact.redactions, 2);
+  assert.ok(!JSON.stringify(result.artifact).includes(token));
+  assert.equal(result.artifact.accepted, false);
+  const malformed = retainedResponse(
+    JSON.stringify({
+      result: '{"answer":"' + token.replaceAll("A", "\\u0041"),
+    }),
+  );
+  assert.equal(malformed.artifact.redactions, 1);
+  assert.match(malformed.artifact.body, /REDACTED/u);
+  const valid = retainedResponse(
+    JSON.stringify({ result: JSON.stringify({ answer: "证".repeat(2401) }) }),
+  );
+  assert.equal(valid.artifact.body.answer.length, 2401);
+  assert.equal(valid.artifact.redactions, 0);
+  assert.equal(
+    retainedResponse("malformed safe output").artifact.format,
+    "invalid-transport",
+  );
+});
+test("one pinned resumption preserves original cost and expired start without reopening other failures", () => {
+  const now = RESUMPTION.authorizedAt + 1000;
+  const next = {
+    ...request,
+    dialogueId: RESUMPTION.dialogueId,
+    round: 2,
+    previousRun: RESUMPTION.priorRun,
+    startedAt: RESUMPTION.startedAt,
+    resumption: RESUMPTION.id,
+    resumeRecord: "encoded",
+    evidence: [evidence],
+  };
+  validateRequest(next, now);
+  assert.throws(() => validateRequest({ ...next, resumption: undefined }, now));
+  assert.throws(() =>
+    validateRequest({ ...next, dialogueId: "a".repeat(24) }, now),
+  );
+  assert.throws(() => validateRequest({ ...next, startedAt: now }, now));
+  assert.throws(() => validateRequest(next, RESUMPTION.expiresAt));
+  assert.throws(() => validateRequest({ ...next, resumeAdmittedAt: now }, now));
+  const prepared = { ...next, resumeAdmittedAt: now };
+  validateRequest(prepared, now, true);
+  assert.equal(dialogueDeadline(prepared), now + RESUMPTION.wallMs);
+  assert.throws(() => validateRequest(prepared, now + RESUMPTION.wallMs, true));
+  const prior = {
+    version: 1,
+    runId: RESUMPTION.priorRun,
+    candidate: RESUMPTION.priorCandidate,
+    dialogueId: RESUMPTION.dialogueId,
+    target: TARGET,
+    model: MODEL,
+    round: 1,
+    invocationCount: 1,
+    startedAt: RESUMPTION.startedAt,
+    inferenceMs: RESUMPTION.inferenceMs,
+    status: "incomplete",
+    error: "ENGLISH_REQUIRED",
+    seenEvidence: [],
+    seenCoverage: [],
+  };
+  validateResumePrior(prior);
+  validatePrevious(prepared, prior, now);
+  for (const changed of [
+    { ...prior, inferenceMs: 0 },
+    { ...prior, error: "CURSOR_TIMEOUT" },
+    { ...prior, invocationCount: 0 },
+  ])
+    assert.throws(() => validatePrevious(prepared, changed, now));
+  assert.throws(() => decodeResumeRecord("e30="));
+  const round3 = {
+    ...prepared,
+    round: 3,
+    previousRun: 777,
+    originals: undefined,
+  };
+  const second = {
+    ...prior,
+    ...prepared,
+    runId: 777,
+    round: 2,
+    invocationCount: 2,
+    status: "needs_evidence",
+    inferenceMs: 500000,
+  };
+  validatePrevious(round3, second, now);
+  assert.throws(() =>
+    validatePrevious({ ...round3, resumeAdmittedAt: now + 1 }, second, now),
+  );
+  assert.throws(() =>
+    validatePrevious(round3, { ...second, status: "incomplete" }, now),
+  );
+  assert.throws(() =>
+    validatePrevious(
+      round3,
+      { ...second, inferenceMs: BUDGET.inferenceMs },
+      now,
+    ),
+  );
 });
 test("evidence hash/id integrity and exact quote citations cannot silently drift", () => {
   validateEvidence([evidence]);
@@ -443,6 +561,9 @@ for (const [label, returnedAnswer, expectedError] of [
     { ...answer, answer: "证".repeat(2401) },
     "NARRATIVE_TOO_LONG",
   ],
+  ["missing-body", undefined, "MODEL_BODY_MISSING"],
+  ["missing-narrative", { ...answer, answer: undefined }, "INVALID_NARRATIVE"],
+  ["invalid-schema", {}, "INVALID_ANSWER"],
 ])
   test(`isolated fake-CLI stage handles ${label} output without translation or retry`, async () => {
     const temp = mkdtempSync(join(tmpdir(), "cursor-dialogue-stage-"));
@@ -495,6 +616,27 @@ process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:fa
       assert.equal(record.status, "incomplete");
       assert.equal(record.error, expectedError);
       assert.equal(record.invocationCount, 1);
+      assert.equal(record.effectiveSelection.modelId, "grok-4.7");
+      assert.deepEqual(record.usage, { input_tokens: 10, output_tokens: 20 });
+      const retained = JSON.parse(
+        readFileSync(join(directory, "output/model-response.json"), "utf8"),
+      );
+      assert.equal(retained.accepted, !expectedError);
+      assert.equal(retained.redactions, 0);
+      if (label === "overlength") {
+        assert.equal(retained.body.answer.length, 2401);
+        assert.deepEqual(record.validationDetail, {
+          field: "answer",
+          issue: "length",
+          characters: 2401,
+          limit: 2400,
+        });
+      }
+      if (label === "missing-narrative")
+        assert.deepEqual(record.validationDetail, {
+          field: "answer",
+          issue: "missing",
+        });
       if (!expectedError) {
         assert.equal(record.answer.answer, returnedAnswer.answer);
         assert.equal(record.effectiveSelection.modelId, "grok-4.7");
@@ -504,7 +646,9 @@ process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:fa
       assert.equal(record.evidence[0].text, undefined);
       assert.match(
         readFileSync(join(directory, "output/report.md"), "utf8"),
-        expectedError ? /NARRATIVE&#95;TOO&#95;LONG/u : /FEEDBACK/u,
+        expectedError
+          ? new RegExp(expectedError.replaceAll("_", "&#95;"), "u")
+          : /FEEDBACK/u,
       );
       await assert.rejects(
         dialogueMain("analyze", env),
