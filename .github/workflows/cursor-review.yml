@@ -147,7 +147,11 @@ jobs:
             node scripts/cursor-review.mjs "$CURSOR_OPERATION"
           fi
       - name: Publish concise revision-bound findings
-        if: steps.fresh.outputs.ready == 'true'
+        # This exact Owner-requested native diagnosis is retained privately.
+        if: >-
+          steps.fresh.outputs.ready == 'true' && (inputs.operation != 'dialogue'
+          || fromJSON(inputs.dialogue_request).dialogueId !=
+          '67e0b2cbd0929234627fd35d')
         env:
           GH_TOKEN: # The agent never receives this publishing credential.
             ${{ github.token }}

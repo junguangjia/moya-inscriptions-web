@@ -28,11 +28,11 @@ import {
 export const TARGET = Object.freeze({
   repository: "junguangjia/moya-inscriptions-web",
   pr: 214,
-  source: "7a2cba05b8596579fd1fcb6a58ba6ba9c018e8f1",
-  tree: "b82796ec4f2a7e226ca4bae1eeca9a2d35ee286f",
-  workflow: "4d819e1af7c60f13f5ced38cb7868b26b3444817",
+  source: "defaea4fc58e6c0a3c3cccfcda29714561a6045c",
+  tree: "02f304ce9f96b11e7a1955d21af48bdb536661de",
+  workflow: "defaea4fc58e6c0a3c3cccfcda29714561a6045c",
   workflowId: 327712419,
-  run: 37347927743,
+  run: 37377833576,
   attempt: 1,
   base: "claude/unified-media-pipeline-v1",
 });
@@ -63,9 +63,9 @@ export const RESUMPTION = Object.freeze({
 });
 export const ORIGINALS = Object.freeze({
   preparation:
-    "a32c7a1d068d25a57f289465dbfd63a68cc4834fc7bf32296da42e4bcc80030d",
-  feedback: "903babcd7757c71dd11714a5b1729d0555fd7551b7c64e61abe31bcc2a1b0b98",
-  execution: "e5f37f5cf14a11048d253a877988502f43d7df350813f0141bc6e5c89340f1fe",
+    "f1665c7585bad4b5719c3ae50016fb631ddf7b51a65e107f4f2a03df3b96b251",
+  feedback: "8dd3589c40c1525689eb9958b34bb6b82f578c48e926d9622c5fbdd639bfad9e",
+  execution: "31e0a1d12ca5078631cfaa442215ddcac021a2ecc8588d7c91f9f77cbfe015ba",
 });
 const fail = (code, detail) => {
   const error = new Error(code);

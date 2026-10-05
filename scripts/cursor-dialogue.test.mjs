@@ -115,7 +115,7 @@ const candidate = {
 test("dual workflow/source identity is explicit and rejects stale or foreign candidates", () => {
   validateAdmission(request, media, diagnostic, commit, candidate);
   for (const run of [
-    { ...diagnostic, head_sha: TARGET.source },
+    { ...diagnostic, head_sha: "f".repeat(40) },
     { ...diagnostic, run_attempt: 2 },
     { ...diagnostic, workflow_id: TARGET.workflowId + 1 },
     { ...diagnostic, status: "in_progress" },
