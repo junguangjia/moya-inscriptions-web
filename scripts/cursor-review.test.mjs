@@ -22,6 +22,7 @@ import {
   collectFailureSources,
   collectRequestedSources,
   parseSourceRequests,
+  parseCIEvidence,
   confirmModelSelection,
   cursorFailure,
   currentRun,
@@ -397,6 +398,74 @@ test("requested source paths, ranges and full-content credential scan remain bou
   assert.deepEqual(ordinary.relatedSources, []);
 });
 
+test("supplied native observations bind the exact tuple and cannot smuggle extra fields or credentials", () => {
+  const target = { head, runId: 12, attempt: 1 };
+  const supplied = {
+    ...target,
+    provenance: "Synthetic CI trace: chromium, test A, retry1, call56",
+    observations: [
+      "Reported pre-snapshot delay100ms; matcher2ms; not a product wait measurement.",
+    ],
+  };
+  const parsed = parseCIEvidence(
+    JSON.stringify({ ...supplied, extra: "discard me" }),
+    target,
+  );
+  assert.equal(parsed.independentlyVerified, false);
+  assert.equal(parsed.kind, "supplied_native_observations");
+  assert.equal(Object.hasOwn(parsed, "extra"), false);
+  for (const delta of [
+    { head: base },
+    { runId: 13 },
+    { attempt: 2 },
+    { observations: [] },
+    { observations: Array(9).fill("observation") },
+    { observations: [{}] },
+    { extra: ["ghp_", "A".repeat(36)].join("") },
+    { extra: "界".repeat(3000) },
+  ])
+    assert.throws(
+      () => parseCIEvidence(JSON.stringify({ ...supplied, ...delta }), target),
+      /INVALID_CI_EVIDENCE/u,
+    );
+  assert.throws(
+    () => parseCIEvidence("malformed", target),
+    /INVALID_CI_EVIDENCE/u,
+  );
+  const inputs = {
+    pr: "7",
+    operation: "diagnose-ci",
+    expected_head: head,
+    ci_run: "12",
+    ci_attempt: "1",
+    base_ref: "main",
+    ci_evidence: JSON.stringify(supplied),
+  };
+  assert.deepEqual(
+    selectEvent("workflow_dispatch", { inputs }, repository)
+      .supplementalEvidence,
+    parsed,
+  );
+  assert.throws(() =>
+    selectEvent(
+      "workflow_dispatch",
+      { inputs: { ...inputs, expected_head: base } },
+      repository,
+    ),
+  );
+  assert.equal(
+    Object.hasOwn(
+      selectEvent(
+        "workflow_dispatch",
+        { inputs: { pr: "7", operation: "review", ci_evidence: "malformed" } },
+        repository,
+      ),
+      "supplementalEvidence",
+    ),
+    false,
+  );
+});
+
 test("source collection rejects wrong-path metadata, oversized files and unrelated file types", () => {
   assert.deepEqual(
     failureSourceReferences([
@@ -717,6 +786,19 @@ test("reports cannot invent paths, silently pass missing evidence, or contain cr
     findings: [finding],
   };
   assert.equal(parseReport(JSON.stringify(report), packet).findings.length, 1);
+  const partial = parseReport(
+    JSON.stringify({ ...report, assessment: "incomplete" }),
+    packet,
+  );
+  assert.equal(partial.assessment, "incomplete");
+  assert.deepEqual(partial.findings, [finding]);
+  const mislabeled = parseReport(
+    JSON.stringify({ ...report, assessment: "no_findings" }),
+    packet,
+  );
+  assert.equal(mislabeled.assessment, "incomplete");
+  assert.deepEqual(mislabeled.findings, [finding]);
+  assert.match(mislabeled.formatWarning, /label disagreed/u);
   for (const delta of [
     { path: "invented.js" },
     { line: -1 },
@@ -730,6 +812,16 @@ test("reports cannot invent paths, silently pass missing evidence, or contain cr
         packet,
       ),
     );
+    assert.throws(() =>
+      parseReport(
+        JSON.stringify({
+          ...report,
+          assessment: "incomplete",
+          findings: [{ ...finding, ...delta }],
+        }),
+        packet,
+      ),
+    );
   }
   assert.throws(() =>
     parseReport(
@@ -737,8 +829,21 @@ test("reports cannot invent paths, silently pass missing evidence, or contain cr
       packet,
     ),
   );
+  const emptyFindings = parseReport(
+    JSON.stringify({ ...clean, assessment: "findings" }),
+    packet,
+  );
+  assert.equal(emptyFindings.assessment, "incomplete");
+  assert.match(emptyFindings.formatWarning, /label disagreed/u);
   assert.throws(() =>
-    parseReport(JSON.stringify({ ...clean, assessment: "findings" }), packet),
+    parseReport(
+      JSON.stringify({
+        ...report,
+        assessment: "incomplete",
+        findings: [{ ...finding, body: ["ghp_", "A".repeat(36)].join("") }],
+      }),
+      packet,
+    ),
   );
   assert.throws(() => parseReport("error: unavailable", packet));
   assert.equal(
@@ -1285,6 +1390,27 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
       renderReport(packet, successful),
       /Effective selection \(fresh CLI configuration after inference\):/u,
     );
+    writeFileSync(
+      stub,
+      readFileSync(stub, "utf8").replace(
+        JSON.stringify(JSON.stringify(clean)),
+        JSON.stringify(JSON.stringify({ ...clean, assessment: "findings" })),
+      ),
+    );
+    result = spawnSync(process.execPath, [script, "analyze"], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0);
+    const normalized = JSON.parse(
+      readFileSync(join(directory, "report.json"), "utf8"),
+    );
+    assert.equal(normalized.assessment, "incomplete");
+    assert.deepEqual(
+      normalized.effectiveSelection,
+      successful.effectiveSelection,
+    );
+    assert.match(renderReport(packet, normalized), /label disagreed/u);
     writeFileSync(
       stub,
       readFileSync(stub, "utf8").replace("value: '500k'", "value: '256k'"),

@@ -35,6 +35,11 @@ on:
           Up to 8 comma-separated code paths or path:start-end ranges
           (diagnose-ci only)
         type: string
+      ci_evidence:
+        description:
+          Optional exact-head/run/attempt-bound native observation JSON (8 KiB
+          maximum)
+        type: string
 
 permissions: {}
 

@@ -203,6 +203,20 @@ are disclosed instead of silently reduced to their first lines. Missing source
 or runtime evidence can still produce `incomplete`. This input does not run CI
 or grant the model file, shell or GitHub access.
 
+When already-saved native traces supply necessary timing observations, manual
+diagnosis can also include `ci_evidence` JSON with `head`, numeric `runId` and
+`attempt`, `provenance` (test/project/retry/call and timing semantics), and up
+to eight observation strings. The exact tuple must match; the entire input is
+scanned and capped at 8 KiB before parsing, and only those fields enter the
+existing packet budget. These remain supplied observations, explicitly not
+host-verified artifacts. No links or artifacts are fetched by this input.
+
+An `incomplete` report may retain validated partial findings. If the model's
+label conflicts with its finding count, the host preserves the validated content
+as `incomplete` with a fixed warning. Schema, path, credential and exact model
+checks still apply; an incomplete publication still fails the workflow and
+cannot be treated as a clean review or complete causal diagnosis.
+
 CI evidence prioritizes GitHub error annotations and assertion/timeout windows
 inside failed steps, followed by the failed-step tail. Setup and post-job
 cleanup cannot crowd failure bodies out of the bounded packet. Excerpts and
