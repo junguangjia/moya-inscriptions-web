@@ -17,15 +17,19 @@ import test from "node:test";
 import {
   agentConfiguration,
   agentEnvironment,
+  collectFileEvidence,
+  confirmModelSelection,
   currentRun,
   eligiblePR,
   marker,
   ownedComment,
   parseReport,
   parseCLIResult,
+  parseModelSelection,
   renderReport,
   safeText,
   selectEvent,
+  LIMITS,
 } from "./cursor-review.mjs";
 import { classifyTask } from "./ci-task-scope.mjs";
 
@@ -142,6 +146,200 @@ test("credential scanning withholds complete source rather than leaking matched 
   );
   assert.equal(safeText("\u001b[31merror\u001b[0m"), "error");
   assert.equal(safeText(`safe\u0000${syntheticValue}`), null);
+});
+
+test("large prose and generated additions cannot displace executable patch coverage", () => {
+  const evidence = { ...packet, files: [], omissions: [], failedJobs: [] };
+  const paths = [
+    "database/migration.sql",
+    "packages/contracts/schema.ts",
+    "services/backend/worker.ts",
+    "tests/worker.test.ts",
+    "infra/Dockerfile",
+    "infra/backend.env.example",
+    "infra/worker.service",
+    ".github/workflows/ci.yml",
+    "package.json",
+  ];
+  const source = paths.map((filename) => ({
+    filename,
+    status: "added",
+    sha: base,
+    patch: "+// small executable change",
+  }));
+  const docs = Array.from({ length: 90 }, (_, i) => ({
+    filename: `docs/${i}.md`,
+    status: "added",
+    sha: base,
+    patch: `+${"Long prose. ".repeat(1300)}`,
+  }));
+  let reads = 0;
+  collectFileEvidence(
+    evidence,
+    [
+      ...docs,
+      {
+        filename: "infra/package-lock.json",
+        status: "added",
+        sha: base,
+        patch: `+${"lock entry ".repeat(1800)}`,
+      },
+      {
+        filename: "services/oversized.ts",
+        status: "added",
+        sha: base,
+        patch: `+${"x".repeat(LIMITS.source)}`,
+      },
+      ...source,
+      {
+        filename: "z/renamed.ts",
+        status: "renamed",
+        sha: base,
+        patch: "+updated();",
+      },
+    ],
+    () => {
+      reads++;
+      assert.ok(
+        paths.every((path) =>
+          evidence.files.some((file) => file.path === path),
+        ),
+      );
+      return {
+        encoding: "base64",
+        size: 20000,
+        content: Buffer.from("// " + "context ".repeat(2499)).toString(
+          "base64",
+        ),
+      };
+    },
+  );
+  assert.equal(
+    reads,
+    1,
+    "added files, prose and lockfiles must not duplicate full source",
+  );
+  assert.ok(
+    paths.every((path) => evidence.files.some((file) => file.path === path)),
+  );
+  assert.ok(
+    evidence.omissions.some((value) => value.includes("services/oversized.ts")),
+  );
+  assert.ok(
+    evidence.omissions.some((value) => value.startsWith("Patch omitted by")),
+  );
+  assert.ok(evidence.files.length <= LIMITS.files);
+  assert.ok(JSON.stringify(evidence).length <= LIMITS.packet);
+});
+
+test("patch allocation respects serialized Unicode/escape size and preserves CI log room", () => {
+  const evidence = {
+    ...packet,
+    kind: "ci",
+    files: [],
+    omissions: [],
+    failedJobs: [],
+  };
+  const patch = `+// ${'文字 " \\ '.repeat(1200)}`;
+  collectFileEvidence(
+    evidence,
+    Array.from({ length: 80 }, (_, i) => ({
+      filename: `services/模块-${i}.ts`,
+      status: "added",
+      sha: base,
+      patch,
+    })),
+    () => {
+      throw new Error("unexpected source fetch");
+    },
+  );
+  evidence.failedJobs.push({ id: 12, logs: '"'.repeat(LIMITS.logs) });
+  assert.ok(evidence.files.length > 0);
+  assert.ok(evidence.omissions.length > 0);
+  assert.ok(JSON.stringify(evidence).length <= LIMITS.packet);
+  assert.ok(evidence.files.every((file) => file.patch === patch));
+});
+
+test("executable prototypes under docs outrank even smaller prose patches", () => {
+  const evidence = { ...packet, files: [], omissions: [], failedJobs: [] };
+  collectFileEvidence(
+    evidence,
+    [
+      { filename: "docs/a.md", status: "added", patch: "+x" },
+      {
+        filename: "docs/prototypes/preview.js",
+        status: "added",
+        patch: "+renderPreview();",
+      },
+      {
+        filename: "docs/prototypes/preview.css",
+        status: "added",
+        patch: "+main { color: inherit; }",
+      },
+    ],
+    () => {
+      throw new Error("unexpected source fetch");
+    },
+  );
+  assert.deepEqual(
+    evidence.files.map((file) => file.path),
+    ["docs/prototypes/preview.js", "docs/prototypes/preview.css", "docs/a.md"],
+  );
+});
+
+test("optional source credentials withhold the entire file; missing and invalid evidence stays explicit", () => {
+  const evidence = { ...packet, files: [], omissions: [], failedJobs: [] };
+  const synthetic = ["ghp_", "A".repeat(36)].join("");
+  const file = (filename, extra = {}) => ({
+    filename,
+    status: "modified",
+    sha: base,
+    patch: "+safe();",
+    ...extra,
+  });
+  collectFileEvidence(
+    evidence,
+    [
+      file("src/credential.ts"),
+      file("src/invalid.ts", { sha: head }),
+      file("src/removed.ts", { status: "removed" }),
+      file("src/no-patch.ts", { patch: undefined }),
+      file("assets/binary.png", { patch: undefined }),
+      file("docs/guide.md"),
+    ],
+    (blobSha) =>
+      blobSha === base
+        ? {
+            encoding: "base64",
+            size: synthetic.length,
+            content: Buffer.from(synthetic).toString("base64"),
+          }
+        : {
+            encoding: "base64",
+            size: 1,
+            content: Buffer.from([255]).toString("base64"),
+          },
+  );
+  assert.ok(!evidence.files.some((file) => file.path === "src/credential.ts"));
+  assert.ok(evidence.files.some((file) => file.path === "src/removed.ts"));
+  assert.ok(evidence.files.some((file) => file.path === "docs/guide.md"));
+  assert.ok(
+    evidence.omissions.some((value) =>
+      value.includes("Credential finding: src/credential.ts"),
+    ),
+  );
+  assert.ok(
+    evidence.omissions.some((value) =>
+      value.includes("Full source unavailable: src/invalid.ts"),
+    ),
+  );
+  assert.ok(
+    evidence.omissions.some((value) => value.includes("src/no-patch.ts")),
+  );
+  assert.ok(
+    evidence.omissions.some((value) => value.includes("assets/binary.png")),
+  );
+  assert.ok(!JSON.stringify(evidence).includes(synthetic));
 });
 
 test("agent receives no GitHub/runner credentials and has no shell/write/network tools", () => {
@@ -414,7 +612,49 @@ process.stdout.write(JSON.stringify(result));
   }
 });
 
-test("inference passes all evidence on stdin with no positional prompt or raw failure output", () => {
+test("parameterized models reject malformed input and unconfirmed or downgraded selections", () => {
+  const selection = parseModelSelection(
+    "grok-4.7[context=500k,effort=xhigh,fast=true]",
+  );
+  const configuration = {
+    selectedModel: {
+      modelId: "grok-4.7",
+      parameters: [
+        { id: "context", value: "500k" },
+        { id: "reasoning_effort", value: "xhigh" },
+        { id: "fast", value: "true" },
+      ],
+    },
+  };
+  confirmModelSelection(selection, configuration);
+  confirmModelSelection(parseModelSelection("composer-2.5"), {});
+  assert.throws(() => confirmModelSelection(selection, {}));
+  for (const [index, value] of [
+    [0, "256k"],
+    [1, "high"],
+    [2, "false"],
+  ]) {
+    const changed = JSON.parse(JSON.stringify(configuration));
+    changed.selectedModel.parameters[index].value = value;
+    assert.throws(() => confirmModelSelection(selection, changed));
+  }
+  assert.throws(() =>
+    confirmModelSelection(selection, {
+      selectedModel: { ...configuration.selectedModel, modelId: "other" },
+    }),
+  );
+  for (const invalid of [
+    "grok-4.7[context=500k,context=256k]",
+    "grok-4.7[unknown=true]",
+    "grok-4.7[fast=true=false]",
+    "grok-4.7[effort=extra high]",
+    "grok-4.7[fast=yes]",
+    "grok-4.7[context=500k];echo",
+  ])
+    assert.throws(() => parseModelSelection(invalid));
+});
+
+test("inference passes exact model and evidence on stdin, rejects hidden parameter fallback and conceals raw errors", () => {
   const temp = mkdtempSync(join(tmpdir(), "cursor-inference-test-"));
   try {
     const directory = join(temp, "cursor-review");
@@ -427,6 +667,11 @@ test("inference passes all evidence on stdin with no positional prompt or raw fa
 const fs = require('node:fs');
 const input = fs.readFileSync(0, 'utf8');
 if (!input.includes('${head}') || process.argv.at(-1) !== 'json' || process.env.GH_TOKEN) process.exit(2);
+if (process.argv[process.argv.indexOf('--model') + 1] !== 'grok-4.7[context=500k,effort=xhigh,fast=true]') process.exit(3);
+const configPath = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
+const configuration = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+configuration.selectedModel = { modelId: 'grok-4.7', parameters: [{ id: 'context', value: '500k' }, { id: 'reasoning_effort', value: 'xhigh' }, { id: 'fast', value: 'true' }] };
+fs.writeFileSync(configPath, JSON.stringify(configuration));
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: ${JSON.stringify(JSON.stringify(clean))} }));
 `,
       { mode: 0o700 },
@@ -436,6 +681,7 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
       RUNNER_TEMP: temp,
       CURSOR_AGENT_BIN: stub,
       CURSOR_API_KEY: "test-only",
+      CURSOR_MODEL: "grok-4.7[context=500k,effort=xhigh,fast=true]",
       GH_TOKEN: "test-only",
     };
     const script = resolve(import.meta.dirname, "cursor-review.mjs");
@@ -449,6 +695,25 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
         .assessment,
       "no_findings",
     );
+    const successful = JSON.parse(
+      readFileSync(join(directory, "report.json"), "utf8"),
+    );
+    assert.equal(successful.model, env.CURSOR_MODEL);
+    assert.match(renderReport(packet, successful), /Model selection:/u);
+    writeFileSync(
+      stub,
+      readFileSync(stub, "utf8").replace("value: '500k'", "value: '256k'"),
+    );
+    result = spawnSync(process.execPath, [script, "analyze"], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0);
+    const downgraded = JSON.parse(
+      readFileSync(join(directory, "report.json"), "utf8"),
+    );
+    assert.equal(downgraded.assessment, "unavailable");
+    assert.match(downgraded.summary, /did not confirm/u);
     writeFileSync(
       stub,
       `#!${process.execPath}\nprocess.stderr.write('raw-diagnostic-must-not-escape'); process.exit(1);`,
@@ -475,7 +740,7 @@ test("real stage process collects immutable evidence; missing key produces unava
     mkdirSync(bin);
     // Fixture CLI returns only synthetic API data; no network or real credentials.
     const responses = {
-      [`repos/${repository}/pulls/7`]: pr,
+      [`repos/${repository}/pulls/7`]: { ...pr, changed_files: 101 },
       [`repos/${repository}/pulls/7/files?per_page=100`]: [
         {
           filename: "src/example.js",
@@ -521,6 +786,13 @@ test("real stage process collects immutable evidence; missing key produces unava
     );
     assert.equal(collected.files[0].source, "example();");
     assert.equal(collected.head, head);
+    assert.ok(
+      collected.omissions.some(
+        (value) =>
+          value ===
+          "Changed-file listing limited: 100 additional files not retrieved",
+      ),
+    );
     const analyzed = spawnSync(process.execPath, [script, "analyze"], {
       env,
       encoding: "utf8",

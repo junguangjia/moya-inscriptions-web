@@ -81,6 +81,62 @@ have separate charges. This workflow uses `ubuntu-24.04`, installs no paid
 GitHub feature, and needs no GitHub PAT or Copilot subscription. Account limits,
 concurrency and service availability still apply.
 
+## Viewing runs, choosing models and coding-agent handoff
+
+Use
+[Actions → Cursor review](https://github.com/junguangjia/moya-inscriptions-web/actions/workflows/cursor-review.yml)
+for queued/running/completed tasks, timing, cancellation and manual dispatch.
+The result is the `Cursor PR review` or `Cursor CI diagnosis` comment on the
+corresponding PR. These are GitHub-hosted CLI tasks; the separate native Cursor
+Automation named `Moya PR review and CI feedback` is not required and should
+remain inactive to avoid duplicate reviews.
+
+Set the repository Actions **variable** `CURSOR_MODEL` in
+[Settings → Secrets and variables → Actions → Variables](https://github.com/junguangjia/moya-inscriptions-web/settings/variables/actions).
+The default is `composer-2.5`. Use a CLI model ID available to the account; a
+Cursor desktop/chat or native-Automation model selector does not change this
+workflow. The value applies to subsequent runs. Other models may use a different
+included pool/rate; retain disabled on-demand usage. An unavailable model fails
+visibly without a paid fallback.
+
+The Owner's selected configuration is Grok 4.7, 500K context, Extra High effort
+and Fast enabled. Set `CURSOR_MODEL` to the exact CLI selection:
+
+```text
+grok-4.7[context=500k,effort=xhigh,fast=true]
+```
+
+The pinned official CLI supports bracket overrides on `--model`. After each
+successful inference, the workflow checks the CLI's persisted model selection
+against all requested parameters before accepting the response. A missing or
+different selection produces `unavailable`, never an accepted downgraded review.
+The PR summary includes the accepted model selection. This is runtime selection
+verification, not independent proof of the provider's internal computation.
+
+[Cursor's Grok 4.7 guide](https://prod.cursor.com/help/models-and-usage/grok-4-7)
+documents Ultra access through the included Cursor Models pool, the 500K option,
+four effort levels and Fast. Keep on-demand disabled. A
+[reported local-SDK limitation](https://forum.cursor.com/t/grok-4-7-run-rejects-advertised-context-500k/172554/6)
+means catalog availability alone is insufficient: verify this exact CLI setup
+with a real hosted run before claiming it works. The bounded review packet is
+unchanged; selecting 500K does not imply every large PR is fully covered.
+
+Codex and Claude Code sessions are not automatically messaged by this workflow.
+The following is an explicit handoff instruction to give a coding session:
+
+> Before reviewing a PR or diagnosing CI, read the latest Cursor PR review and
+> Cursor CI diagnosis comments, compare their commit SHA (and CI run/attempt)
+> with the current PR and checks, and inspect their assessment and omissions.
+> Reuse current, supported findings for the covered scope. Do not repeat a full
+> review or reread every CI log solely to restate that summary. Inspect targeted
+> source/logs when needed to verify a finding; fill only missing, stale or
+> incomplete coverage. Treat model output as evidence to assess, not authority.
+> After a fix, run the relevant existing checks and require fresh evidence for
+> the new commit. Preserve required CI, independent review and merge rules.
+
+This documentation does not automatically install a global agent instruction.
+The separate Cursor summary never waives mandatory repository review or testing.
+
 ## Event and permission boundary
 
 - `pull_request_target` triggers on open, reopen, update and ready-for-review;
@@ -122,6 +178,14 @@ when truncated. Binary files, oversized/missing patches and unavailable context
 are reported explicitly. This is advisory change review, not a complete
 repository security audit or a replacement for secret scanning, dependency
 analysis or CI.
+
+Within the first 100 file entries returned by GitHub, executable source, tests,
+migrations and configuration take priority over prose and generated lockfiles.
+Smaller patches are allocated first within each group, then optional full source
+uses the remaining space. Added-file patches are not duplicated as full source.
+Every skipped patch is disclosed; files beyond the API listing are counted as
+missing. Oversized or missing patches still prevent a complete review. Empty CI
+logs are normal for PR review; failure logs are required only for CI diagnosis.
 
 The existing core-credential rules scan the exact selected content before model
 input and again before publication. A finding withholds the complete affected
