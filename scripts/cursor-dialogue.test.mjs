@@ -209,10 +209,11 @@ test("evidence hash/id integrity and exact quote citations cannot silently drift
   };
   assert.throws(() => validateAnswer(forged, [evidence]));
 });
-test("English is required on every narrative path while literal cited evidence stays intact", () => {
+test("English is preferred without rejecting other languages or altering evidence", () => {
   for (const prompt of [PROMPT, DIALOGUE_PROMPT]) {
     assert.doesNotMatch(prompt, /Chinese summary|Chinese:|用中文|中文输出/u);
-    assert.match(prompt, /English|ENGLISH/u);
+    assert.doesNotMatch(prompt, /Write ALL generated narrative in ENGLISH/u);
+    assert.match(prompt, /English is preferred/u);
   }
   for (const change of [
     (a) => {
@@ -230,37 +231,87 @@ test("English is required on every narrative path while literal cited evidence s
     (a) => {
       a.next_verification = ["重新测试"];
     },
+    (a) => {
+      a.missing_evidence = [{ ...selection, reason: "补充已保存的证据" }];
+    },
   ]) {
     const changed = globalThis.structuredClone(answer);
     change(changed);
-    assert.throws(
-      () => validateAnswer(changed, [evidence]),
-      /ENGLISH_REQUIRED/u,
-    );
+    assert.deepEqual(validateAnswer(changed, [evidence]), changed);
   }
   const original = { ...evidence, text: "原始报错" };
   const quoted = globalThis.structuredClone(answer);
   quoted.findings[0].citations[0].quote = original.text;
   validateAnswer(quoted, [original]);
-  assert.throws(
-    () =>
-      parseReport(
-        JSON.stringify({
-          assessment: "incomplete",
-          summary: "中文摘要",
-          findings: [],
-        }),
-        { files: [], omissions: [], kind: "ci" },
-      ),
-    /ENGLISH_REQUIRED/u,
+  const report = {
+    assessment: "incomplete",
+    summary: "中文摘要",
+    findings: [],
+  };
+  assert.equal(
+    parseReport(JSON.stringify(report), {
+      files: [],
+      omissions: [],
+      kind: "ci",
+    }).summary,
+    report.summary,
   );
+  validateRequest({ ...request, question: "哪些结论有证据？" }, 100001);
+});
+test("all dialogue narrative fields retain required content and length bounds regardless of language", () => {
+  const setters = [
+    (a, value) => {
+      a.answer = value;
+    },
+    (a, value) => {
+      a.findings[0].claim = value;
+    },
+    (a, value) => {
+      a.findings[0].next_step = value;
+    },
+    (a, value) => {
+      a.uncertainty = [value];
+    },
+    (a, value) => {
+      a.next_verification = [value];
+    },
+    (a, value) => {
+      a.missing_evidence = [{ ...selection, reason: value }];
+    },
+  ];
+  for (const set of setters) {
+    for (const value of [undefined, null, 0, "", "   "]) {
+      const changed = globalThis.structuredClone(answer);
+      set(changed, value);
+      assert.throws(
+        () => validateAnswer(changed, [evidence]),
+        /INVALID_NARRATIVE/u,
+      );
+    }
+    for (const value of ["a".repeat(2401), "证".repeat(2401)]) {
+      const changed = globalThis.structuredClone(answer);
+      set(changed, value);
+      assert.throws(
+        () => validateAnswer(changed, [evidence]),
+        /NARRATIVE_TOO_LONG/u,
+      );
+    }
+    const changed = globalThis.structuredClone(answer);
+    set(changed, "证".repeat(2400));
+    validateAnswer(changed, [evidence]);
+  }
+  const unsafe = globalThis.structuredClone(answer);
+  unsafe.answer = "证据 " + ["ghp_", "A".repeat(36)].join("");
+  assert.throws(() => validateAnswer(unsafe, [evidence]), /UNSAFE_ANSWER/u);
 });
 test("requests have finite time, size and round bounds", () => {
   validateRequest(request, 100001);
   for (const changed of [
     { ...request, round: 4 },
     { ...request, previousRun: 7 },
-    { ...request, question: "中文问题" },
+    { ...request, question: "   " },
+    { ...request, question: undefined },
+    { ...request, question: 0 },
     { ...request, question: "q".repeat(2401) },
     { ...request, startedAt: 200000 },
     { ...request, startedAt: 100002 },
@@ -380,29 +431,42 @@ test("tool, environment, candidate-route and validation profile boundaries remai
   assert.equal(plan.web, false);
 });
 
-test("isolated real stage retains an English cited round, numeric usage and refuses duplicate invocation", async () => {
-  const temp = mkdtempSync(join(tmpdir(), "cursor-dialogue-stage-"));
-  try {
-    const directory = join(temp, "cursor-dialogue");
-    mkdirSync(join(directory, "output"), { recursive: true });
-    const prepared = {
-      ...request,
-      startedAt: Date.now(),
-      evidence: [evidence],
-    };
-    delete prepared.originals;
-    writeFileSync(
-      join(directory, "prepared.json"),
-      JSON.stringify({
-        request: prepared,
-        prior: null,
-        sources: { omissions: [] },
-      }),
-    );
-    const stub = join(temp, "agent");
-    writeFileSync(
-      stub,
-      `#!${process.execPath}
+for (const [label, returnedAnswer, expectedError] of [
+  ["English", answer, undefined],
+  [
+    "non-English",
+    { ...answer, answer: "诊断达到反馈时限；现有证据不足以确定根因。" },
+    undefined,
+  ],
+  [
+    "overlength",
+    { ...answer, answer: "证".repeat(2401) },
+    "NARRATIVE_TOO_LONG",
+  ],
+])
+  test(`isolated fake-CLI stage handles ${label} output without translation or retry`, async () => {
+    const temp = mkdtempSync(join(tmpdir(), "cursor-dialogue-stage-"));
+    try {
+      const directory = join(temp, "cursor-dialogue");
+      mkdirSync(join(directory, "output"), { recursive: true });
+      const prepared = {
+        ...request,
+        startedAt: Date.now(),
+        evidence: [evidence],
+      };
+      delete prepared.originals;
+      writeFileSync(
+        join(directory, "prepared.json"),
+        JSON.stringify({
+          request: prepared,
+          prior: null,
+          sources: { omissions: [] },
+        }),
+      );
+      const stub = join(temp, "agent");
+      writeFileSync(
+        stub,
+        `#!${process.execPath}
 const fs = require('node:fs');
 const input = fs.readFileSync(0, 'utf8');
 if (!input.includes('FEEDBACK_DEADLINE_EXCEEDED') || process.env.GH_TOKEN || process.argv.includes('--resume')) process.exit(2);
@@ -411,36 +475,42 @@ const config = JSON.parse(fs.readFileSync(path, 'utf8'));
 if(config.permissions.allow.length || !config.permissions.deny.includes('Read(**)')) process.exit(3);
 config.selectedModel = { modelId: 'grok-4.7', parameters: [{id:'context',value:'500k'},{id:'reasoning_effort',value:'xhigh'},{id:'fast',value:'true'}] };
 config.maxMode = true; fs.writeFileSync(path, JSON.stringify(config));
-process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(JSON.stringify(answer))},usage:{input_tokens:10,output_tokens:20,extra:'discard'}}));
+process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(JSON.stringify(returnedAnswer))},usage:{input_tokens:10,output_tokens:20,extra:'discard'}}));
 `,
-      { mode: 0o700 },
-    );
-    const env = {
-      PATH: process.env.PATH,
-      RUNNER_TEMP: temp,
-      GITHUB_RUN_ID: "999",
-      CURSOR_MODEL: MODEL,
-      CURSOR_API_KEY: "test-only",
-      GH_TOKEN: "test-only",
-      CURSOR_AGENT_BIN: stub,
-    };
-    await dialogueMain("analyze", env);
-    const record = JSON.parse(
-      readFileSync(join(directory, "output/round.json"), "utf8"),
-    );
-    assert.equal(record.status, "incomplete");
-    assert.equal(record.error, undefined);
-    assert.equal(record.invocationCount, 1);
-    assert.equal(record.effectiveSelection.modelId, "grok-4.7");
-    assert.deepEqual(record.usage, { input_tokens: 10, output_tokens: 20 });
-    assert.ok(record.roundInferenceMs > 0);
-    assert.equal(record.evidence[0].text, undefined);
-    assert.match(
-      readFileSync(join(directory, "output/report.md"), "utf8"),
-      /FEEDBACK/u,
-    );
-    await assert.rejects(dialogueMain("analyze", env), /DUPLICATE_INVOCATION/u);
-  } finally {
-    rmSync(temp, { recursive: true, force: true });
-  }
-});
+        { mode: 0o700 },
+      );
+      const env = {
+        PATH: process.env.PATH,
+        RUNNER_TEMP: temp,
+        GITHUB_RUN_ID: "999",
+        CURSOR_MODEL: MODEL,
+        CURSOR_API_KEY: "test-only",
+        GH_TOKEN: "test-only",
+        CURSOR_AGENT_BIN: stub,
+      };
+      await dialogueMain("analyze", env);
+      const record = JSON.parse(
+        readFileSync(join(directory, "output/round.json"), "utf8"),
+      );
+      assert.equal(record.status, "incomplete");
+      assert.equal(record.error, expectedError);
+      assert.equal(record.invocationCount, 1);
+      if (!expectedError) {
+        assert.equal(record.answer.answer, returnedAnswer.answer);
+        assert.equal(record.effectiveSelection.modelId, "grok-4.7");
+        assert.deepEqual(record.usage, { input_tokens: 10, output_tokens: 20 });
+      }
+      assert.ok(record.roundInferenceMs > 0);
+      assert.equal(record.evidence[0].text, undefined);
+      assert.match(
+        readFileSync(join(directory, "output/report.md"), "utf8"),
+        expectedError ? /NARRATIVE&#95;TOO&#95;LONG/u : /FEEDBACK/u,
+      );
+      await assert.rejects(
+        dialogueMain("analyze", env),
+        /DUPLICATE_INVOCATION/u,
+      );
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });

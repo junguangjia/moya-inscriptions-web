@@ -779,6 +779,55 @@ test("agent receives no GitHub/runner credentials and has no shell/write/network
     assert.ok(permissions.deny.includes(rule));
 });
 
+test("legacy reports accept non-English prose while retaining required fields and length limits", () => {
+  const finding = {
+    priority: "P1",
+    path: "src/example.js",
+    line: 1,
+    body: "存在可复现的错误。",
+    fix: "修复已定位的问题。",
+    validation: "运行相关测试。",
+  };
+  const report = {
+    assessment: "findings",
+    summary: "已发现有证据支持的问题。",
+    findings: [finding],
+  };
+  assert.deepEqual(parseReport(JSON.stringify(report), packet), report);
+  for (const value of [undefined, null, 0, "", "   ", "证".repeat(1801)]) {
+    assert.throws(
+      () => parseReport(JSON.stringify({ ...report, summary: value }), packet),
+      /INVALID_REPORT/u,
+    );
+  }
+  for (const field of ["body", "fix", "validation"]) {
+    for (const value of [undefined, null, 0, "", "   ", "证".repeat(2201)]) {
+      assert.throws(
+        () =>
+          parseReport(
+            JSON.stringify({
+              ...report,
+              findings: [{ ...finding, [field]: value }],
+            }),
+            packet,
+          ),
+        /INVALID_FINDING/u,
+      );
+    }
+  }
+  assert.equal(
+    parseReport(
+      JSON.stringify({
+        ...report,
+        summary: "证".repeat(1800),
+        findings: [{ ...finding, body: "证".repeat(2200) }],
+      }),
+      packet,
+    ).assessment,
+    "findings",
+  );
+});
+
 test("reports cannot invent paths, silently pass missing evidence, or contain credentials", () => {
   assert.equal(
     parseReport(JSON.stringify(clean), packet).assessment,

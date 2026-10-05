@@ -348,16 +348,19 @@ GitHub run creation, 10min per job,60KiB transport,120K serialized prompt and24K
 per selected record. Duplicate attempts/rounds, stale identity, errors, no new
 follow-up evidence and budget exhaustion stop incomplete. A follow-up requires
 an exact previous needs_evidence record. No hidden retry, paid fallback or model
-substitution exists. Round JSON, English report and verified cache are retained
-for seven days.
+substitution exists. Round JSON, report and verified cache are retained for
+seven days.
 
-Every active prompt requests English generated narrative; contradictory language
-directives are removed. Validators reject missing English prose and East Asian
-narrative text, including legacy reports. Literal citation.quote may retain its
-original language. This deterministic guard is not a perfect language
-classifier. Every finding cites an exact substring of a supplied original
-record. Exact quote validation does not establish that the model's inference is
-correct.
+English is preferred, not required, in dialogue and legacy reports. No prompt
+requires Chinese. Useful evidence-backed responses are not rejected solely for
+language, and no model call is made just to translate them. Validators still
+require nonempty string fields and the existing length limits; dialogue failures
+distinguish INVALID_NARRATIVE from NARRATIVE_TOO_LONG. Literal citation.quote
+keeps its original form. Every finding cites an exact substring of a supplied
+original record. Exact quote validation does not establish that the model's
+inference is correct. The earlier ENGLISH_REQUIRED evaluation remains
+incomplete; discarded output cannot be reconstructed or retroactively accepted
+by this change.
 
 Codex reads the answer, citations, uncertainty and edit-relevant code. It asks a
 targeted question and selects missing evidence; it should not reread all cached
