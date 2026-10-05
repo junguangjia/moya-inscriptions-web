@@ -432,6 +432,29 @@ test("supplied native observations bind the exact tuple and cannot smuggle extra
     () => parseCIEvidence("malformed", target),
     /INVALID_CI_EVIDENCE/u,
   );
+  for (const delta of [
+    { provenance: "sentinel" },
+    { observations: ["sentinel"] },
+    { extra: { nested: "sentinel" } },
+  ]) {
+    const encoded = JSON.stringify({ ...supplied, ...delta }).replace(
+      "sentinel",
+      "\\u0067" + "hp_" + "A".repeat(36),
+    );
+    assert.notEqual(safeText(encoded), null);
+    assert.throws(
+      () => parseCIEvidence(encoded, target),
+      /INVALID_CI_EVIDENCE/u,
+    );
+  }
+  const controls = parseCIEvidence(
+    JSON.stringify({
+      ...supplied,
+      observations: ["\u001b[31mReported timing\u001b[0m"],
+    }),
+    target,
+  );
+  assert.deepEqual(controls.observations, ["Reported timing"]);
   const inputs = {
     pr: "7",
     operation: "diagnose-ci",

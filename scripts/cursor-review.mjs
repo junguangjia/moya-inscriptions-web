@@ -438,6 +438,16 @@ export function parseCIEvidence(value, target) {
   } catch {
     throw new Error("INVALID_CI_EVIDENCE");
   }
+  // JSON escapes can conceal credentials from a raw-text scan. Check decoded
+  // strings (including discarded fields/keys) before any data is selected.
+  const pending = [evidence];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === "string" && safeText(value) === null)
+      throw new Error("INVALID_CI_EVIDENCE");
+    if (value && typeof value === "object")
+      pending.push(...Object.keys(value), ...Object.values(value));
+  }
   if (
     !evidence ||
     evidence.head !== target.head ||
@@ -463,8 +473,8 @@ export function parseCIEvidence(value, target) {
     head: target.head,
     runId: target.runId,
     attempt: target.attempt,
-    provenance: evidence.provenance,
-    observations: evidence.observations,
+    provenance: safeText(evidence.provenance),
+    observations: evidence.observations.map((value) => safeText(value)),
   };
 }
 
