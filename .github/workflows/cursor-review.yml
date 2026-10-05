@@ -150,8 +150,10 @@ jobs:
         # This exact Owner-requested native diagnosis is retained privately.
         if: >-
           steps.fresh.outputs.ready == 'true' && (inputs.operation != 'dialogue'
-          || fromJSON(inputs.dialogue_request).dialogueId !=
-          '67e0b2cbd0929234627fd35d')
+          || (fromJSON(inputs.dialogue_request).dialogueId !=
+          '67e0b2cbd0929234627fd35d' &&
+          fromJSON(inputs.dialogue_request).dialogueId !=
+          '1a1ab4595cb4f60fa12b3037'))
         env:
           GH_TOKEN: # The agent never receives this publishing credential.
             ${{ github.token }}

@@ -41,7 +41,7 @@ export const BUDGET = Object.freeze({
   rounds: 3,
   callMs: 360000,
   inferenceMs: 900000,
-  wallMs: 1800000,
+  wallMs: 600000,
   transportBytes: 60000,
   packetChars: 120000,
   recordChars: 24000,
@@ -63,8 +63,8 @@ export const RESUMPTION = Object.freeze({
 });
 export const ORIGINALS = Object.freeze({
   preparation:
-    "f1665c7585bad4b5719c3ae50016fb631ddf7b51a65e107f4f2a03df3b96b251",
-  feedback: "8dd3589c40c1525689eb9958b34bb6b82f578c48e926d9622c5fbdd639bfad9e",
+    "830d76610652006fa02a0aec73afb4e35b69763d14458eca68f81e9b80eb784a",
+  feedback: "2a374ca58dbf6b2ac24cf5eb437c4474ee07f9aafb86fbee69c4aec1b26e5d2d",
   execution: "31e0a1d12ca5078631cfaa442215ddcac021a2ecc8588d7c91f9f77cbfe015ba",
 });
 const fail = (code, detail) => {
