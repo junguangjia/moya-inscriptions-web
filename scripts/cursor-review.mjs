@@ -524,7 +524,8 @@ export function parseModelSelection(value) {
   if (!match) throw new Error("INVALID_MODEL");
   const parameters = {};
   for (const entry of match[2]?.split(",") || []) {
-    const [key, setting, extra] = entry.split("=");
+    const [inputKey, setting, extra] = entry.split("=");
+    const key = inputKey === "reasoning_effort" ? "effort" : inputKey;
     const valid = {
       context: /^[1-9][0-9]{0,3}[km]$/u,
       effort: /^(?:none|minimal|low|medium|high|xhigh|max)$/u,

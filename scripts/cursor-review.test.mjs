@@ -681,7 +681,14 @@ process.stdout.write(JSON.stringify(result));
 
 test("parameterized models reject malformed input and unconfirmed or downgraded selections", () => {
   const selection = parseModelSelection(
-    "grok-4.7[context=500k,effort=xhigh,fast=true]",
+    "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]",
+  );
+  assert.deepEqual(
+    parseModelSelection("grok-4.7[context=500k,effort=xhigh,fast=true]"),
+    selection,
+  );
+  assert.throws(() =>
+    parseModelSelection("grok-4.7[effort=high,reasoning_effort=xhigh]"),
   );
   const configuration = {
     selectedModel: {
@@ -937,7 +944,7 @@ test("inference passes exact model and evidence on stdin, rejects hidden paramet
 const fs = require('node:fs');
 const input = fs.readFileSync(0, 'utf8');
 if (!input.includes('${head}') || process.argv.at(-1) !== 'json' || process.env.GH_TOKEN) process.exit(2);
-if (process.argv[process.argv.indexOf('--model') + 1] !== 'grok-4.7[context=500k,effort=xhigh,fast=true]') process.exit(3);
+if (process.argv[process.argv.indexOf('--model') + 1] !== 'grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]') process.exit(3);
 const configPath = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
 const configuration = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 configuration.selectedModel = { modelId: 'grok-4.7', parameters: [{ id: 'context', value: '500k' }, { id: 'reasoning_effort', value: 'xhigh' }, { id: 'fast', value: 'true' }] };
@@ -951,7 +958,7 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
       RUNNER_TEMP: temp,
       CURSOR_AGENT_BIN: stub,
       CURSOR_API_KEY: "test-only",
-      CURSOR_MODEL: "grok-4.7[context=500k,effort=xhigh,fast=true]",
+      CURSOR_MODEL: "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]",
       GH_TOKEN: "test-only",
     };
     const script = resolve(import.meta.dirname, "cursor-review.mjs");

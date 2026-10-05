@@ -100,10 +100,11 @@ included pool/rate; retain disabled on-demand usage. An unavailable model fails
 visibly without a paid fallback.
 
 The Owner's selected configuration is Grok 4.7, 500K context, Extra High effort
-and Fast enabled. Set `CURSOR_MODEL` to the exact CLI selection:
+and Fast enabled. The candidate `CURSOR_MODEL` spelling to verify in the hosted
+CLI is:
 
 ```text
-grok-4.7[context=500k,effort=xhigh,fast=true]
+grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]
 ```
 
 The pinned official CLI supports bracket overrides on `--model`. After each
@@ -112,6 +113,16 @@ against all requested parameters before accepting the response. A missing or
 different selection produces `unavailable`, never an accepted downgraded review.
 The PR summary includes the accepted model selection. This is runtime selection
 verification, not independent proof of the provider's internal computation.
+
+Grok 4.7's cloud model catalog exposes `reasoning_effort`, whereas some CLI
+examples use the generic `effort` spelling. Runtime compatibility still needs
+the exact CLI canary; the two catalogs are not interchangeable. The adapter
+accepts both spellings for comparison but sends the configured selection
+unchanged; it rejects duplicate aliases. The account metadata run
+[37292550895](https://github.com/junguangjia/moya-inscriptions-web/actions/runs/37292550895)
+listed the CLI's Grok 4.7 xhigh/Fast model and the cloud catalog's full
+500K/xhigh/Fast variant. This is compatibility evidence, not a successful
+inference or a billing receipt.
 
 [Cursor's Grok 4.7 guide](https://prod.cursor.com/help/models-and-usage/grok-4-7)
 documents Ultra access through the included Cursor Models pool, the 500K option,
