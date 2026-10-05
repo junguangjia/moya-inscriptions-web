@@ -779,6 +779,55 @@ test("agent receives no GitHub/runner credentials and has no shell/write/network
     assert.ok(permissions.deny.includes(rule));
 });
 
+test("legacy reports accept non-English prose while retaining required fields and length limits", () => {
+  const finding = {
+    priority: "P1",
+    path: "src/example.js",
+    line: 1,
+    body: "存在可复现的错误。",
+    fix: "修复已定位的问题。",
+    validation: "运行相关测试。",
+  };
+  const report = {
+    assessment: "findings",
+    summary: "已发现有证据支持的问题。",
+    findings: [finding],
+  };
+  assert.deepEqual(parseReport(JSON.stringify(report), packet), report);
+  for (const value of [undefined, null, 0, "", "   ", "证".repeat(1801)]) {
+    assert.throws(
+      () => parseReport(JSON.stringify({ ...report, summary: value }), packet),
+      /INVALID_REPORT/u,
+    );
+  }
+  for (const field of ["body", "fix", "validation"]) {
+    for (const value of [undefined, null, 0, "", "   ", "证".repeat(2201)]) {
+      assert.throws(
+        () =>
+          parseReport(
+            JSON.stringify({
+              ...report,
+              findings: [{ ...finding, [field]: value }],
+            }),
+            packet,
+          ),
+        /INVALID_FINDING/u,
+      );
+    }
+  }
+  assert.equal(
+    parseReport(
+      JSON.stringify({
+        ...report,
+        summary: "证".repeat(1800),
+        findings: [{ ...finding, body: "证".repeat(2200) }],
+      }),
+      packet,
+    ).assessment,
+    "findings",
+  );
+});
+
 test("reports cannot invent paths, silently pass missing evidence, or contain credentials", () => {
   assert.equal(
     parseReport(JSON.stringify(clean), packet).assessment,
@@ -932,7 +981,10 @@ test("workflow keeps trusted checkout, pinned CLI, separate credentials and no P
     "utf8",
   );
   assert.match(workflow, /pull_request_target:/u);
-  assert.match(workflow, /ref: main/u);
+  assert.match(
+    workflow,
+    /ref: \$\{\{ inputs.operation == 'dialogue' && github.sha \|\| 'main' \}\}/u,
+  );
   assert.match(workflow, /persist-credentials: false/u);
   assert.match(workflow, /sha256sum --check --status/u);
   assert.match(
@@ -943,7 +995,7 @@ test("workflow keeps trusted checkout, pinned CLI, separate credentials and no P
   assert.match(workflow, /format\('ci-\{0\}',\s+inputs.expected_head\)/u);
   assert.match(
     workflow,
-    /format\('ci-\{0\}', github.event.workflow_run.head_sha\)/u,
+    /format\('ci-\{0\}',\s+github.event.workflow_run.head_sha\)/u,
   );
   assert.match(
     workflow,

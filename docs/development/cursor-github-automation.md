@@ -309,3 +309,109 @@ transport, missing-key/failure handling and fresh-checkout publication with the
 real controlled scanner and mocked GitHub transport. Run the existing
 `verify-task.mjs` entry for cumulative applicable tooling checks. Tests do not
 consume Cursor usage or exercise a live key.
+
+## Bounded evidence dialogue (Draft evaluation only)
+
+The Owner-approved enhancement uses the pinned official CLI with fresh isolated
+invocations and validated prior-round replay. It installs no SDK/ACP and enables
+no automatic review. The manual operation=dialogue route is restricted to branch
+codex/cursor-bounded-dialogue and its exact open Draft candidate PR/SHA. All
+ordinary routes retain trusted-main checks. Do not merge merely to evaluate.
+
+The allowlist in scripts/cursor-dialogue.mjs separates workflow327712419 at
+4d819e1af7c60f13f5ced38cb7868b26b3444817, diagnostic37347927743/attempt1 and
+immutable
+source7a2cba05b8596579fd1fcb6a58ba6ba9c018e8f1/treeb82796ec4f2a7e226ca4bae1eeca9a2d35ee286f.
+Future targets require a reviewed scope change; canonical CI admission is
+unchanged. Media source/tests/CI and remaining repair authority stay with the
+original writer.
+
+The cache command accepts a private JSON map of preparation, feedback and
+execution paths to already-downloaded JSON originals. It verifies pinned SHA-256
+hashes, scans raw and decoded text, checks native identity and stores one
+private originals.json. Subsequent reads use this cache; no original CI
+log/artifact download occurs. The select command takes file/pointer selectors
+with optional start/count (array windows of at most32 elements). It emits
+faithful original JSON values, original hash, selector, content hash and stable
+ID, printing only index metadata. The complete original snapshot is compressed
+for initial transport and reverified by the hosted job. Follow-ups restore it
+from the preceding exact candidate/run artifact, never the original CI. Only
+these JSON formats are admitted; arbitrary URLs, archives, images and automatic
+discovery of other artifacts are unsupported.
+
+The dialogue_request JSON fields are target, candidate, candidatePR, dialogueId
+(24 hex), round, startedAt (epoch milliseconds), previousRun (null for round1),
+question, selectors, optional sourcePaths, and originals (encoded snapshot for
+round1 only). It permits one initial question plus at most two follow-ups: 360s
+per inference,900s aggregate inference,1800s wall time from trusted initial
+GitHub run creation, 10min per job,60KiB transport,120K serialized prompt and24K
+per selected record. Duplicate attempts/rounds, stale identity, errors, no new
+follow-up evidence and budget exhaustion stop incomplete. A follow-up requires
+an exact previous needs_evidence record. No hidden retry, paid fallback or model
+substitution exists. Round JSON, report and verified cache are retained for
+seven days.
+
+English is preferred, not required, in dialogue and legacy reports. No prompt
+requires Chinese. Useful evidence-backed responses are not rejected solely for
+language, and no model call is made just to translate them. Validators still
+require nonempty string fields and the existing length limits; dialogue failures
+distinguish INVALID_NARRATIVE from NARRATIVE_TOO_LONG. Literal citation.quote
+keeps its original form. Every finding cites an exact substring of a supplied
+original record. Exact quote validation does not establish that the model's
+inference is correct. The earlier ENGLISH_REQUIRED evaluation remains
+incomplete; discarded output cannot be reconstructed or retroactively accepted
+by this change.
+
+Codex reads the answer, citations, uncertainty and edit-relevant code. It asks a
+targeted question and selects missing evidence; it should not reread all cached
+phase events or bulk logs to restate the answer. Exact-head status and
+independent review remain metadata/gates. Incomplete/capped capture and
+receive-time intervals must not become native timing, media PASS or authority to
+replay tests.
+
+Measure original reads/downloads, cache transfers, model calls, inference/wall
+time, numeric usage only if exposed, citation spot-checks and actual writer
+adoption. Unrecorded historical baseline counts remain unknown. One case cannot
+establish token savings or general causal accuracy. On-Demand remains off; model
+selection and usage fields do not constitute a per-run billing receipt.
+
+Follow-up novelty is computed from original JSON leaf locations and values.
+Overlapping parent/child selectors or longer requested array windows cannot
+reset coverage. The initial run timestamp is read from GitHub and retained
+unchanged across rounds; caller timestamps cannot extend the wall limit.
+
+## Explicit interruption resumption and response retention (r7)
+
+The Owner resumed this exact task at 2026-10-05 18:39 UTC. The original dialogue
+`ffd4a715a80589390dea6007` started at 18:04:58 UTC; its 1800-second window
+expired and is not relabeled. One narrowly pinned resumption admits round 2 from
+the hash-verified retained record of run 37353258884. That failed round and its
+358385ms/one-call cost remain unchanged. At most two calls and 541615ms
+aggregate inference remain; the per-call limit stays 360000ms.
+
+Requests use `resumption=owner-2026-10-05T18:39Z`, the original `startedAt`,
+round 2, its exact `previousRun`, `originals`, and a gzip/base64 `resumeRecord`
+of the already-downloaded `round.json`. The helper verifies its pinned SHA-256
+and live prior-run metadata. It downloads neither the original CI artifacts nor
+the cached prior record. GitHub's round-2 admission timestamp starts one
+explicit resume interval of at most 900 seconds, capped at 19:39 UTC. The
+interval and old elapsed wall time are recorded separately. Round 3 must carry
+the unchanged `resumeAdmittedAt`, restore its exact predecessor, and supply new
+evidence after `needs_evidence`. Other errors remain terminal; this is not a
+general retry switch, count reset or permission expansion.
+
+Dialogue output is now retained as `model-response.json` before answer
+acceptance. The bounded body is scanned, including decoded values and escaped
+credential forms. A credential-bearing string or key is wholly redacted;
+redacted output cannot pass as an accepted answer. Only the scanned artifact is
+stored/uploaded for seven days, never raw stderr or arbitrary transport fields.
+Malformed but safe responses remain inspectable. Retention limits and scanning
+failure can still prevent retaining unsafe/unbounded content.
+
+Missing body, wrong body type, invalid JSON/schema, missing/empty narrative,
+overlength narrative and unsafe output have separate categories. Narrative
+failures retain only safe field paths, issue categories and lengths. Available
+runtime-selection confirmation and numeric usage are retained independently of
+answer validity. A retained response, model selection or usage value is not
+diagnostic acceptance or a billing receipt. The old discarded answer remains
+unrecoverable. These retention changes apply to the bounded dialogue path.
