@@ -333,6 +333,12 @@ const server = createServer((request, response) => {
   // answering the Development composition's bounded discovery/card reads.
   // Authentication and mutations remain outside this anonymous fixture.
   const communityPath = url.pathname.replace(/^\/paging\//, "/");
+  // This anonymous fixture stands for a Backend in public mode: Web asks before
+  // it renders the product, and every visitor is granted.
+  if (communityPath === "/v1/community/access") {
+    sendJson(response, 200, { mode: "public", access: "granted" });
+    return;
+  }
   const summaries = url.pathname.startsWith("/paging/")
     ? pagingSummaries
     : baseSummaries;

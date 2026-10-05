@@ -1,3 +1,4 @@
+import { readCommunitySessionToken } from "../../../../../../lib/public-api/community-session-cookie";
 import { relayServerLocalCatalogMedia } from "../../../../../../lib/public-api/server";
 export const runtime = "nodejs";
 export const GET = async (
@@ -10,5 +11,9 @@ export const GET = async (
       headers: { "cache-control": "private, no-store" },
     });
   const { catalogId, mediaId } = await context.params;
-  return relayServerLocalCatalogMedia(catalogId, mediaId);
+  return relayServerLocalCatalogMedia(
+    catalogId,
+    mediaId,
+    readCommunitySessionToken(request.headers.get("cookie")),
+  );
 };

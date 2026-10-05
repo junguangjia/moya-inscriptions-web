@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createServerCatalogComment,
+  fetchServerCatalogCommentPage,
   fetchServerCatalogDetail,
   fetchServerCatalogPage,
+  fetchServerCatalogSearchPage,
+  fetchServerProductAccess,
   parsePublicApiBaseUrl,
+  relayServerLocalCatalogMedia,
   relayServerAuthorCommunity,
   relayServerCommunityAuth,
   relayServerLocalEditorialMedia,
@@ -743,3 +748,142 @@ describe.each(["development", "production"] as const)(
     });
   },
 );
+
+/*
+ * closed-beta-access-v1: the Backend decides product access on every request,
+ * so each content read Web makes for a visitor carries that visitor's session,
+ * is never stored, and reports the Backend's refusal as a refusal.
+ */
+describe("Content reads carry the visitor's session to the Backend", () => {
+  const session = "s".repeat(43);
+  const emptyPage = {
+    items: [],
+    total: 0,
+    page: 1,
+    pageSize: 20,
+    totalPages: 0,
+  };
+  const stub = (...responses: Response[]) => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://backend.invalid");
+    const upstream = vi.fn<typeof fetch>();
+    for (const response of responses) upstream.mockResolvedValueOnce(response);
+    vi.stubGlobal("fetch", upstream);
+    return upstream;
+  };
+  const sent = (upstream: ReturnType<typeof stub>, call = 0) => {
+    const [url, init] = upstream.mock.calls[call]!;
+    return { url: String(url), init, headers: new Headers(init?.headers) };
+  };
+
+  it("sends the session and forbids storing the answer on Catalog list, detail and search", async () => {
+    const upstream = stub(
+      Response.json(emptyPage),
+      new Response(null, { status: 404 }),
+      Response.json(emptyPage),
+    );
+    await expect(
+      fetchServerCatalogPage({ kind: "inscription" }, session),
+    ).resolves.toMatchObject({ state: "success" });
+    await expect(
+      fetchServerCatalogDetail("catalog-001", session),
+    ).resolves.toEqual({ state: "not-found" });
+    await expect(
+      fetchServerCatalogSearchPage({ q: "碑" }, undefined, session),
+    ).resolves.toMatchObject({ state: "success" });
+    for (const call of [0, 1, 2]) {
+      expect(sent(upstream, call).headers.get("authorization")).toBe(
+        `Bearer ${session}`,
+      );
+      expect(sent(upstream, call).init?.cache).toBe("no-store");
+    }
+    expect(sent(upstream, 0).url).toBe(
+      "http://backend.invalid/v1/catalog?kind=inscription",
+    );
+  });
+
+  it("sends no credential for a visitor without a session, and still never stores the answer", async () => {
+    const upstream = stub(Response.json(emptyPage));
+    await fetchServerCatalogPage();
+    expect(sent(upstream).headers.has("authorization")).toBe(false);
+    expect(sent(upstream).init?.cache).toBe("no-store");
+  });
+
+  it.each([401, 403] as const)(
+    "reports the Backend's %s as an access refusal on every read",
+    async (status) => {
+      const refused = () => new Response(null, { status });
+      stub(refused(), refused(), refused(), refused());
+      const denied = { state: "access-denied", status };
+      await expect(fetchServerCatalogPage({}, session)).resolves.toEqual(
+        denied,
+      );
+      await expect(
+        fetchServerCatalogDetail("catalog-001", session),
+      ).resolves.toEqual(denied);
+      await expect(
+        fetchServerCatalogSearchPage({ q: "碑" }, undefined, session),
+      ).resolves.toEqual(denied);
+      await expect(
+        fetchServerCatalogCommentPage("catalog-001", {}, undefined, session),
+      ).resolves.toEqual(denied);
+    },
+  );
+
+  it("keeps a write's own missing-session answer and adds only the 403 refusal", async () => {
+    stub(
+      new Response(null, { status: 401 }),
+      new Response(null, { status: 403 }),
+    );
+    await expect(
+      createServerCatalogComment("catalog-001", session, { text: "文" }),
+    ).resolves.toEqual({ state: "unauthenticated" });
+    await expect(
+      createServerCatalogComment("catalog-001", session, { text: "文" }),
+    ).resolves.toEqual({ state: "access-denied", status: 403 });
+  });
+
+  it("asks for product access with the session and treats a missing configuration as unavailable", async () => {
+    const upstream = stub(
+      Response.json({ mode: "closed_beta", access: "granted" }),
+    );
+    await expect(fetchServerProductAccess(session)).resolves.toEqual({
+      state: "success",
+      access: { mode: "closed_beta", access: "granted" },
+    });
+    expect(sent(upstream).url).toBe(
+      "http://backend.invalid/v1/community/access",
+    );
+    expect(sent(upstream).headers.get("authorization")).toBe(
+      `Bearer ${session}`,
+    );
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "");
+    await expect(fetchServerProductAccess(session)).resolves.toEqual({
+      state: "unavailable",
+    });
+  });
+
+  it("refuses the Development Catalog media relay with the Backend's status before reading any file", async () => {
+    const upstream = stub(new Response(null, { status: 403 }));
+    const response = await relayServerLocalCatalogMedia(
+      "catalog-001",
+      "media-001",
+      session,
+    );
+    expect(response.status).toBe(403);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(upstream).toHaveBeenCalledOnce();
+    expect(sent(upstream).headers.get("authorization")).toBe(
+      `Bearer ${session}`,
+    );
+  });
+
+  it("refuses the Development editorial media relay with the Backend's status before reading any file", async () => {
+    const upstream = stub(new Response(null, { status: 401 }));
+    const response = await relayServerLocalEditorialMedia(
+      `article-${"3".repeat(32)}`,
+      `${"e".repeat(64)}-${"f".repeat(64)}.png`,
+    );
+    expect(response.status).toBe(401);
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+});

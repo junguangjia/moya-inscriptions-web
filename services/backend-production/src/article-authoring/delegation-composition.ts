@@ -53,6 +53,8 @@ export const createArticleDelegationRuntime = (options: {
   readonly humanWebOrigin: string;
   readonly clients: ArticleDelegationRuntime["clients"];
   readonly readPublished: ArticleDelegationRuntime["readPublished"];
+  /** The product access policy for the account a grant represents. */
+  readonly admitsAccount?: (userId: string) => boolean;
   readonly now?: () => Date;
   /** Reuse existing read adapters inside this transaction and actor fence. */
   readonly discoverCatalog: (
@@ -110,6 +112,9 @@ export const createArticleDelegationRuntime = (options: {
     ...options.authority,
     authoring: options.authoring,
     humanWebOrigin: options.humanWebOrigin,
+    ...(options.admitsAccount === undefined
+      ? {}
+      : { admitsAccount: options.admitsAccount }),
     admit: (presented) =>
       admitArticleOAuthGrant({
         presented,

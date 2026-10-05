@@ -26,7 +26,9 @@ import {
   fetchCatalogCommentReplyPage,
 } from "./catalog-comments";
 import {
+  accessDenied,
   fetchCurrentUser,
+  fetchProductAccess,
   signInDevelopmentAccount,
   signOutDevelopmentSession,
 } from "./community-session";
@@ -46,9 +48,11 @@ import type {
   CommentSubmissionTransportResult,
 } from "./catalog-comments";
 import type {
+  AccessDeniedTransportResult,
   CurrentUserTransportResult,
   DevelopmentSignInTransportResult,
   DevelopmentSignOutTransportResult,
+  ProductAccessTransportResult,
 } from "./community-session";
 
 const publicApiBaseUrlVariable = "MOYA_PUBLIC_API_BASE_URL" as const;
@@ -82,12 +86,57 @@ export const parsePublicApiBaseUrl = (value: string | undefined): URL => {
   return url;
 };
 
-export const fetchServerCatalogPage = async (
-  query: CatalogListTransportQuery = {},
-): Promise<CatalogPageTransportResult> => {
+/**
+ * The Backend decides product access on every request, so each content read
+ * carries the visitor's session and is never stored. A refusal by that policy
+ * is reported as such instead of as a failed read.
+ */
+const withVisitorSession = async <Result>(
+  token: string | undefined,
+  send: (fetch: typeof globalThis.fetch) => Promise<Result>,
+  // A write already reports a missing session itself; only 403 is new to it.
+  write = false,
+): Promise<Result | AccessDeniedTransportResult> => {
+  let denied: AccessDeniedTransportResult | null = null;
+  const result = await send(async (input, init) => {
+    const headers = new Headers(init?.headers);
+    if (token !== undefined) headers.set("Authorization", `Bearer ${token}`);
+    const response = await globalThis.fetch(input, {
+      ...init,
+      cache: "no-store",
+      headers,
+    });
+    denied =
+      write && response.status !== 403 ? null : accessDenied(response.status);
+    return response;
+  });
+  return denied ?? result;
+};
+
+/** Whether this session may use the product; Web renders nothing protected without it. */
+export const fetchServerProductAccess = async (
+  token: string | undefined,
+): Promise<ProductAccessTransportResult> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await fetchCatalogPage({ baseUrl, fetch: globalThis.fetch }, query);
+    return await fetchProductAccess(
+      { baseUrl, fetch: globalThis.fetch },
+      token,
+    );
+  } catch {
+    return { state: "unavailable" };
+  }
+};
+
+export const fetchServerCatalogPage = async (
+  query: CatalogListTransportQuery = {},
+  token?: string,
+): Promise<CatalogPageTransportResult | AccessDeniedTransportResult> => {
+  try {
+    const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
+    return await withVisitorSession(token, (fetch) =>
+      fetchCatalogPage({ baseUrl, fetch }, query),
+    );
   } catch {
     return { state: "unexpected-error" };
   }
@@ -95,12 +144,12 @@ export const fetchServerCatalogPage = async (
 
 export const fetchServerCatalogDetail = async (
   catalogId: string,
-): Promise<CatalogDetailTransportResult> => {
+  token?: string,
+): Promise<CatalogDetailTransportResult | AccessDeniedTransportResult> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await fetchCatalogDetail(
-      { baseUrl, fetch: globalThis.fetch },
-      catalogId,
+    return await withVisitorSession(token, (fetch) =>
+      fetchCatalogDetail({ baseUrl, fetch }, catalogId),
     );
   } catch {
     return { state: "unexpected-error" };
@@ -110,13 +159,12 @@ export const fetchServerCatalogDetail = async (
 export const fetchServerCatalogSearchPage = async (
   query: CatalogSearchTransportQuery,
   signal?: AbortSignal,
-): Promise<CatalogSearchTransportResult> => {
+  token?: string,
+): Promise<CatalogSearchTransportResult | AccessDeniedTransportResult> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await fetchCatalogSearchPage(
-      { baseUrl, fetch: globalThis.fetch },
-      query,
-      signal,
+    return await withVisitorSession(token, (fetch) =>
+      fetchCatalogSearchPage({ baseUrl, fetch }, query, signal),
     );
   } catch {
     return { state: "unexpected-error" };
@@ -128,15 +176,17 @@ export const fetchServerCatalogCommentPage = async (
   query: CatalogCommentListingTransportQuery = {},
   signal?: AbortSignal,
   token?: string,
-): Promise<CommentPageTransportResult> => {
+): Promise<CommentPageTransportResult | AccessDeniedTransportResult> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await fetchCatalogCommentPage(
-      { baseUrl, fetch: globalThis.fetch },
-      catalogId,
-      query,
-      signal,
-      token,
+    return await withVisitorSession(token, (fetch) =>
+      fetchCatalogCommentPage(
+        { baseUrl, fetch },
+        catalogId,
+        query,
+        signal,
+        token,
+      ),
     );
   } catch (error) {
     if (signal?.aborted === true) throw error;
@@ -150,16 +200,18 @@ export const fetchServerCatalogCommentReplyPage = async (
   query: CatalogCommentTransportQuery = {},
   signal?: AbortSignal,
   token?: string,
-): Promise<CommentReplyPageTransportResult> => {
+): Promise<CommentReplyPageTransportResult | AccessDeniedTransportResult> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await fetchCatalogCommentReplyPage(
-      { baseUrl, fetch: globalThis.fetch },
-      catalogId,
-      commentId,
-      query,
-      signal,
-      token,
+    return await withVisitorSession(token, (fetch) =>
+      fetchCatalogCommentReplyPage(
+        { baseUrl, fetch },
+        catalogId,
+        commentId,
+        query,
+        signal,
+        token,
+      ),
     );
   } catch (error) {
     if (signal?.aborted === true) throw error;
@@ -171,14 +223,16 @@ export const createServerCatalogComment = async (
   catalogId: string,
   token: string,
   body: unknown,
-): Promise<CommentSubmissionTransportResult<CatalogComment>> => {
+): Promise<
+  CommentSubmissionTransportResult<CatalogComment> | AccessDeniedTransportResult
+> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await createCatalogComment(
-      { baseUrl, fetch: globalThis.fetch },
-      catalogId,
+    return await withVisitorSession(
       token,
-      body,
+      (fetch) =>
+        createCatalogComment({ baseUrl, fetch }, catalogId, token, body),
+      true,
     );
   } catch {
     return { state: "unexpected-error" };
@@ -190,15 +244,23 @@ export const createServerCatalogCommentReply = async (
   commentId: string,
   token: string,
   body: unknown,
-): Promise<CommentSubmissionTransportResult<CatalogCommentReply>> => {
+): Promise<
+  | CommentSubmissionTransportResult<CatalogCommentReply>
+  | AccessDeniedTransportResult
+> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await createCatalogCommentReply(
-      { baseUrl, fetch: globalThis.fetch },
-      catalogId,
-      commentId,
+    return await withVisitorSession(
       token,
-      body,
+      (fetch) =>
+        createCatalogCommentReply(
+          { baseUrl, fetch },
+          catalogId,
+          commentId,
+          token,
+          body,
+        ),
+      true,
     );
   } catch {
     return { state: "unexpected-error" };
@@ -467,6 +529,7 @@ const editorialImageSources = (
 export const relayServerLocalEditorialMedia = async (
   owner: string,
   file: string,
+  token?: string,
 ): Promise<Response> => {
   const headers = {
     "cache-control": "private, no-store",
@@ -485,7 +548,10 @@ export const relayServerLocalEditorialMedia = async (
       ),
       {
         method: "GET",
-        headers: { accept: "application/json" },
+        headers: {
+          accept: "application/json",
+          ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
+        },
         cache: "no-store",
         redirect: "error",
         signal: AbortSignal.timeout(15000),
@@ -493,7 +559,10 @@ export const relayServerLocalEditorialMedia = async (
     );
     if (!detail.ok) {
       await detail.body?.cancel().catch(() => undefined);
-      return fail(detail.status === 404 ? 404 : 503);
+      return fail(
+        accessDenied(detail.status)?.status ??
+          (detail.status === 404 ? 404 : 503),
+      );
     }
     const url = editorialImageSources(await detail.json())
       .map((src) => localCatalogFileUrl(src))
@@ -543,6 +612,7 @@ export const relayServerLocalEditorialMedia = async (
 export const relayServerLocalCatalogMedia = async (
   catalogId: string,
   mediaId: string,
+  token?: string,
 ): Promise<Response> => {
   const headers = {
     "cache-control": "private, no-store",
@@ -550,7 +620,8 @@ export const relayServerLocalCatalogMedia = async (
   };
   const fail = (status: number) => new Response(null, { status, headers });
   try {
-    const detail = await fetchServerCatalogDetail(catalogId);
+    const detail = await fetchServerCatalogDetail(catalogId, token);
+    if (detail.state === "access-denied") return fail(detail.status);
     if (detail.state !== "success")
       return fail(detail.state === "not-found" ? 404 : 503);
     const media =

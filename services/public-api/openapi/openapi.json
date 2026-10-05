@@ -15,6 +15,7 @@
                   "INVALID_INPUT",
                   "ITEM_NOT_FOUND",
                   "UNAUTHENTICATED",
+                  "ACCESS_RESTRICTED",
                   "SERVICE_UNAVAILABLE",
                   "INTERNAL_ERROR"
                 ],
@@ -18739,6 +18740,22 @@
         "required": ["requestId", "privacy"],
         "type": "object"
       },
+      "ProductAccess": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "enum": ["granted", "sign_in_required", "restricted"],
+            "type": "string"
+          },
+          "mode": {
+            "enum": ["public", "closed_beta"],
+            "type": "string"
+          }
+        },
+        "required": ["mode", "access"],
+        "type": "object"
+      },
       "ProfileUpdate": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -29449,6 +29466,55 @@
           }
         ],
         "summary": "Reply to one root comment"
+      }
+    },
+    "/v1/community/access": {
+      "get": {
+        "description": "Answers whether the presented session may use the product right now. In `public` mode access is always granted. In `closed_beta` mode only explicitly approved accounts are granted; every other operation except readiness, the current user, this answer and the sign-in and sign-out operations then additionally answers 401 UNAUTHENTICATED without a valid session and 403 ACCESS_RESTRICTED for a valid session whose account is not approved. Carries no content and no account data. Accepts no query parameters.",
+        "operationId": "getProductAccess",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductAccess"
+                }
+              }
+            },
+            "description": "The access mode and this session's standing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query; error code INVALID_QUERY."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error; error code INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service is temporarily unavailable; error code SERVICE_UNAVAILABLE."
+          }
+        },
+        "summary": "Product access for the presented session"
       }
     },
     "/v1/community/article-authoring": {

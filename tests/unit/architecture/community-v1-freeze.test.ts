@@ -59,7 +59,7 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
     expect(openapi).not.toContain("community-operator");
   });
 
-  it("2. keeps ApiErrorCode at the four existing codes plus UNAUTHENTICATED (2A) and INVALID_INPUT (2B)", async () => {
+  it("2. keeps ApiErrorCode at the four existing codes plus UNAUTHENTICATED (2A), INVALID_INPUT (2B) and ACCESS_RESTRICTED (closed-beta-access-v1)", async () => {
     const schemas = await read("packages/contracts/src/schemas.ts");
     const enumBody = /apiErrorCodeSchema = z\.enum\(\[([\s\S]*?)\]\)/u.exec(
       schemas,
@@ -73,6 +73,8 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
       "INVALID_INPUT",
       "ITEM_NOT_FOUND",
       "UNAUTHENTICATED",
+      // Issue #212: a valid session whose account the access policy refuses.
+      "ACCESS_RESTRICTED",
       "SERVICE_UNAVAILABLE",
       "INTERNAL_ERROR",
     ]);

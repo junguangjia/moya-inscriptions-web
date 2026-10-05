@@ -78,6 +78,8 @@ export const GET = async (
     switch (result.state) {
       case "success":
         return jsonResponse(result.page, 200);
+      case "access-denied":
+        return emptyResponse(result.status);
       case "invalid-query":
         return emptyResponse(400);
       case "not-found":
@@ -114,6 +116,8 @@ export const POST = async (
         return jsonResponse(result.item, result.awaitingApproval ? 202 : 201);
       case "unauthenticated":
         return emptyResponse(401);
+      case "access-denied":
+        return emptyResponse(result.status);
       case "not-found":
         return emptyResponse(404);
       case "invalid-input":

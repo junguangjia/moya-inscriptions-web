@@ -17,6 +17,9 @@ const nextConfig: NextConfig = {
     incomingRequests: { ignore: [/^\/api\/catalog-search(?:[/?]|$)/u] },
   },
   ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
+  // No page uses the image optimizer. Left open it would fetch any same-origin
+  // image with the caller's cookie and then serve its cached copy to anyone.
+  images: { localPatterns: [], remotePatterns: [] },
   outputFileTracingRoot: new URL("../../", import.meta.url).pathname,
   outputFileTracingIncludes: {
     "/": [
