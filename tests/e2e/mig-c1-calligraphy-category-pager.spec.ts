@@ -1,6 +1,11 @@
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { devices, expect, test } from "@playwright/test";
 
 import type { CDPSession, Locator, Page } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 type HomeFeed = "discover" | "nearby" | "inscriptions" | "calligraphy";
 
@@ -136,14 +141,16 @@ const waitForInitialFeedScroll = async (
         )!;
         const scroller =
           shell.dataset.platform === "pc" ? document.scrollingElement! : panel;
-        const masonry = panel.querySelector<HTMLElement>(
-          "[data-home-masonry]",
+        const content = panel.querySelector<HTMLElement>(
+          "[data-home-masonry], [data-catalog-presentation]",
         )!;
         let previous = "";
         let stableFrames = 0;
         const sample = () => {
           const ready =
-            masonry.dataset.layoutReady === "true" &&
+            (content.hasAttribute("data-home-masonry")
+              ? content.dataset.layoutReady === "true"
+              : content.dataset.catalogPresentationState === "populated") &&
             [...panel.querySelectorAll("img")].every((image) => {
               // Offscreen lazy images need not load before reading can start.
               const bounds = image.getBoundingClientRect();
@@ -164,7 +171,7 @@ const waitForInitialFeedScroll = async (
             scroller.scrollHeight,
             scroller.clientHeight,
             pager.getBoundingClientRect().height,
-            masonry.getBoundingClientRect().height,
+            content.getBoundingClientRect().height,
           ]);
           stableFrames = ready && geometry === previous ? stableFrames + 1 : 0;
           previous = geometry;
@@ -567,9 +574,13 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
     }
   });
   await expect(home).toHaveAttribute("data-active-home-feed", "discover");
+  await expect(pager).toHaveAttribute(
+    "data-horizontal-pager-scrolling",
+    "true",
+  );
   await expect(
     home.getByRole("tablist", { name: "首页内容范围" }),
-  ).toHaveAttribute("data-progressing", "true");
+  ).toHaveAttribute("data-progress-driven", "true");
   await expect
     .poll(() =>
       indicator.evaluate((node) => {

@@ -256,6 +256,12 @@
   overflow-anchor: none;
 }
 
+/* The QA overlay delegates vertical reading to each pager panel. */
+.root[data-qa-user-interface] .userContent {
+  height: calc(100dvh - var(--profile-header-height));
+  min-height: 0;
+}
+
 .tabs {
   position: sticky;
   z-index: 2;

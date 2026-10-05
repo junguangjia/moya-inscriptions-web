@@ -165,9 +165,9 @@ for (const channel of ["email", "phone"] as const) {
     await settings
       .getByRole("button", { name: "确认换绑", exact: true })
       .click();
-    await expect(settings.getByRole("status")).toContainText(
-      `${label}换绑成功`,
-    );
+    await expect(
+      settings.locator('[aria-label="登录与安全"]').getByRole("status"),
+    ).toContainText(`${label}换绑成功`);
     await expect(settings).toContainText(account[channel].masked);
     expect(purposes).toEqual(["reauthenticate", "replace"]);
     expect(completed).toBe(1);

@@ -216,6 +216,25 @@ describe("CatalogMasonry measurement lifecycle", () => {
     ).toEqual(positions);
   });
 
+  it("retains a measured prefix during append without exposing an unmeasured or different item", () => {
+    const { masonry, render } = renderMasonry();
+    measurable = false;
+    render(["a", "b", "c", "d", "e"]);
+    expect(masonry.style.height).toBe("392px");
+    expect(masonry.children[0]?.getAttribute("style")).toContain(
+      "visibility: visible",
+    );
+    expect(masonry.children[4]?.getAttribute("style")).toContain(
+      "visibility: hidden",
+    );
+    expect(masonry.dataset.layoutReady).toBe("false");
+    render(["e", "b", "c", "d", "a"]);
+    expect(masonry.style.height).toBe("1px");
+    expect(masonry.children[0]?.getAttribute("style")).toContain(
+      "visibility: hidden",
+    );
+  });
+
   it("remeasures changed content after a same-width reveal without a parent rerender", () => {
     const { masonry, render } = renderMasonry();
     measurable = false;

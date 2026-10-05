@@ -504,9 +504,16 @@ for (const width of [320, 390]) {
       expect(
         await glyph.evaluate((node) => node instanceof SVGSVGElement),
       ).toBe(true);
-      await expect(glyph.locator("path")).toHaveAttribute(
-        "stroke",
-        "currentColor",
+      const outline = glyph.locator('path[stroke="currentColor"]');
+      await expect(outline).toHaveCount(1);
+      await expect(outline).toHaveAttribute("fill", "none");
+      // The canonical Calligraphy artwork also includes a filled ink shape.
+      // Check both paint roles without assuming every glyph has one path.
+      await expect(glyph.locator('path[fill="currentColor"]')).toHaveCount(
+        key === "calligraphy" ? 1 : 0,
+      );
+      await expect(glyph.locator("path")).toHaveCount(
+        key === "calligraphy" ? 2 : 1,
       );
       // DOM/CSS consistency alone missed the phone symptom. Also exercise
       // the actual vector paint in both themes; device acceptance stays separate.

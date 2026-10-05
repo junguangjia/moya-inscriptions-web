@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import sharp from "sharp";
 
 import type {
+  ArticlePage,
   ContentCard,
   CatalogDetail,
   CatalogId,
@@ -11,6 +12,7 @@ import type {
   MediaId,
   MediaRendition,
   PublicMedia,
+  ThreadPage,
 } from "@moya/contracts";
 import type { ServerResponse } from "node:http";
 
@@ -406,6 +408,29 @@ const server = createServer((request, response) => {
   // answering the Development composition's bounded discovery/card reads.
   // Authentication and mutations remain outside this anonymous fixture.
   const communityPath = url.pathname.replace(/^\/paging\//, "/");
+  // Anonymous mounted Discussion panels have valid empty lists in this fixture.
+  // Keep authentication and mutations outside this synthetic read-only service.
+  if (communityPath === "/v1/community/editorial/articles") {
+    sendJson(response, 200, {
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 12,
+      totalPages: 0,
+    } satisfies ArticlePage);
+    return;
+  }
+  if (communityPath === "/v1/community/threads") {
+    sendJson(response, 200, {
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 22,
+      totalPages: 0,
+      anchor: "2026-10-05T00:00:00.000Z",
+    } satisfies ThreadPage);
+    return;
+  }
   const summaries = url.pathname.startsWith("/paging/")
     ? pagingSummaries
     : baseSummaries;

@@ -33,6 +33,7 @@ export const useMasonrySlot = (): MediaSlot | null =>
 
 interface RenderedLayout {
   readonly height: number;
+  readonly keys: readonly string[];
   readonly positions: readonly {
     readonly height: number;
     readonly width: number;
@@ -146,6 +147,7 @@ export const CatalogMasonry = <T,>({
       const element = itemRefs.current.get(getKey(item));
       return element?.getBoundingClientRect().height ?? 0;
     });
+    const keys = items.map(getKey);
     const signature = layoutSignature(
       width,
       columns,
@@ -164,7 +166,11 @@ export const CatalogMasonry = <T,>({
       spanAtAlignedRows,
     );
     setRenderedLayout((current) =>
-      current?.signature === signature ? current : { ...result, signature },
+      current?.signature === signature &&
+      current.keys.length === keys.length &&
+      current.keys.every((key, index) => key === keys[index])
+        ? current
+        : { ...result, keys, signature },
     );
   }, [
     columnWidth,
@@ -204,14 +210,19 @@ export const CatalogMasonry = <T,>({
     },
     [],
   );
+  const keys = items.map(getKey);
+  const retainsPrefix =
+    renderedLayout !== null &&
+    renderedLayout.keys.length <= keys.length &&
+    renderedLayout.keys.every((key, index) => key === keys[index]);
   const ready =
     renderedLayout !== null &&
+    retainsPrefix &&
     renderedLayout.positions.length === items.length &&
     renderedLayout.signature.startsWith(`${width}:${columns}:`);
-  const retainedLayout =
-    renderedLayout !== null && renderedLayout.positions.length === items.length
-      ? renderedLayout
-      : null;
+  // Appending a page must not briefly collapse the scroller to one pixel.
+  // Retain only a matching identity prefix while the new items are measured.
+  const retainedLayout = retainsPrefix ? renderedLayout : null;
 
   return (
     <div
@@ -234,7 +245,7 @@ export const CatalogMasonry = <T,>({
         const style = {
           left: position?.x ?? 0,
           top: position?.y ?? 0,
-          visibility: retainedLayout === null ? "hidden" : "visible",
+          visibility: position === undefined ? "hidden" : "visible",
           width: ready ? (position?.width ?? itemWidth) : itemWidth,
         } satisfies CSSProperties;
         return (

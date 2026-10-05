@@ -1,14 +1,10 @@
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { writeFile } from "node:fs/promises";
 import { devices, expect, test } from "@playwright/test";
 import type { CDPSession, Locator, Page } from "@playwright/test";
 
 test.beforeAll(async ({ request }) => {
-  // Compile the routes exercised by this spec before holding browser input.
-  // A dev-server refresh during the gesture correctly cancels its session.
-  for (const path of ["/", "/dev/t02p", "/dev/t02p/qa"]) {
-    const response = await request.get(path);
-    expect(response.status()).toBe(200);
-  }
+  await prepareFormalRoutes(request);
 });
 
 const ready = async (page: Page, path = "/dev/t02p/qa?qaChrome=hidden") => {
@@ -197,6 +193,22 @@ for (const path of [
         ? /^(?:manipulation|pan-x pan-y pinch-zoom)$/u
         : "pan-y pinch-zoom",
     );
+    if (path === "/") {
+      // Formal content cards use real community actions, not the QA harness.
+      await expect(
+        page.locator("[data-t02p-qa-harness], [data-qa-controls]"),
+      ).toHaveCount(0);
+      await expect(page.locator("[data-quick-action-qa-log]")).toHaveCount(0);
+      expect(
+        await page
+          .locator(
+            '[data-content-type="catalog"] [data-quick-actions="enabled"]',
+          )
+          .count(),
+      ).toBeGreaterThan(0);
+      await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
+      return;
+    }
     if (!enabled) {
       await expect(page.locator("[data-quick-actions]")).toHaveCount(0);
       await expect(page.locator("[data-quick-action-feedback]")).toHaveCount(0);
@@ -822,24 +834,48 @@ for (const chrome of ["default", "hidden"] as const) {
       await expect(
         page.getByRole("tab", { name: feed, exact: true }),
       ).toHaveAttribute("aria-selected", "true");
+      const activePanel = page.locator(
+        kind === "nearby"
+          ? '[data-home-feed-panel="nearby"]'
+          : '[data-discussion-surface] [data-horizontal-panel-key="topics"]',
+      );
+      await expect
+        .poll(() =>
+          activePanel.evaluate((panel) => {
+            const frame = panel.closest<HTMLElement>("[data-horizontal-pager]");
+            if (frame === null) throw new Error("Missing QA action pager");
+            return (
+              frame.dataset.horizontalPagerScrolling === "false" &&
+              Math.abs(
+                panel.getBoundingClientRect().left -
+                  frame.getBoundingClientRect().left,
+              ) <= 2
+            );
+          }),
+        )
+        .toBe(true);
       const buttons = page.locator(
         `[data-quick-action-content-kind="${kind}"]`,
       );
-      const exposed = await buttons.evaluateAll((nodes) => {
-        for (const [index, node] of nodes.entries()) {
-          const box = node.getBoundingClientRect();
-          const x = box.x + box.width / 2;
-          for (
-            let y = Math.max(box.top + 12, 24);
-            y < Math.min(box.bottom - 12, innerHeight - 110);
-            y += 20
-          ) {
-            const hit = document.elementFromPoint(x, y);
-            if (hit && node.contains(hit)) return { index, point: { x, y } };
+      const exposedPoint = () =>
+        buttons.evaluateAll((nodes) => {
+          for (const [index, node] of nodes.entries()) {
+            const box = node.getBoundingClientRect();
+            const x = box.x + box.width / 2;
+            for (
+              let y = Math.max(box.top + 12, 24);
+              y < Math.min(box.bottom - 12, innerHeight - 110);
+              y += 20
+            ) {
+              const hit = document.elementFromPoint(x, y);
+              if (hit && node.contains(hit)) return { index, point: { x, y } };
+            }
           }
-        }
-        throw new Error("No exposed QA card");
-      });
+          return null;
+        });
+      await expect.poll(exposedPoint).not.toBeNull();
+      const exposed = await exposedPoint();
+      if (exposed === null) throw new Error("No exposed settled QA card");
       const button = buttons.nth(exposed.index);
       const card = button.locator("..");
       // Compare the same settled hover state; existing desktop cards translate -2px on hover.

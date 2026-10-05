@@ -1,6 +1,11 @@
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
 import type { Locator, Page } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 const pageErrors = new WeakMap<Page, string[]>();
 
@@ -90,11 +95,13 @@ const selectHomeFeed = async (
 
 const activeCatalogCards = (shell: Locator) =>
   shell.locator(
-    '[data-primary-destination="home"]:not([hidden]) [data-home-feed-panel][aria-hidden="false"] [data-catalog-card]',
+    '[data-primary-destination="home"]:not([hidden]) [data-home-feed-panel][aria-hidden="false"] :is([data-catalog-card], [data-content-type="catalog"])',
   );
 
 const catalogSnapshot = async (shell: Locator, settleMedia = true) => {
   const cards = activeCatalogCards(shell);
+  // Formal discovery reads populate after the selected feed commits.
+  await expect.poll(() => cards.count()).toBeGreaterThan(0);
   const count = await cards.count();
   expect(count).toBeGreaterThan(0);
   if (settleMedia) {
@@ -437,12 +444,18 @@ test("Formal and clean Development do not consume the QA chrome parameter", asyn
       ).toHaveCount(0);
       await expect(
         page.locator(
-          "[data-inscription-filter], [data-user-trigger], [data-open-settings]",
+          "[data-inscription-filter]:has([data-filter-trigger]), [data-user-trigger], [data-open-settings]",
         ),
       ).toHaveCount(0);
+      await expect(
+        page.locator("details[data-inscription-filter]"),
+      ).toHaveCount(path === "/" ? 1 : 0);
       await expect(page.locator("[data-search-trigger]")).toHaveCount(
-        path === "/" ? 1 : 0,
+        path === "/" ? 3 : 0,
       );
+      await expect(
+        page.locator('[data-search-trigger-placement="header"]'),
+      ).toHaveCount(path === "/" ? 3 : 0);
       await expect(page.locator("[data-catalog-search]")).toHaveCount(
         path === "/" ? 1 : 0,
       );

@@ -1,6 +1,11 @@
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
 import type { Page } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 const pageErrors = new WeakMap<Page, string[]>();
 
@@ -142,7 +147,7 @@ test("formal compositions render the live comment section over the real client",
   // in the Development runtime the fixture runs; the QA store never reaches
   // them. The fixture serves an empty listing and issues no session, so the
   // truthful states are "no comments yet" and signed out with the
-  // Development sign-in entry.
+  // current sign-in entry.
   for (const path of [
     "/?catalogId=runtime-inscription-no-media",
     "/dev/t02p?catalogId=runtime-inscription-no-media",
@@ -154,7 +159,7 @@ test("formal compositions render the live comment section over the real client",
     await expect(section).toHaveAttribute("data-comment-presentation", "live");
     await expect(section.locator("[data-comment-empty]")).toBeVisible();
     await expect(
-      section.locator("[data-comment-signed-out] a[href='/dev/community']"),
+      section.locator("[data-comment-signed-out] a[href='/login']"),
     ).toBeVisible();
     await expect(section.locator("[data-comment-composer]")).toHaveCount(0);
     await expect(section.locator("[data-comment-sort]")).toHaveCount(0);

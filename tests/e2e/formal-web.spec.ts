@@ -188,6 +188,20 @@ test("Formal root serves only the request-rendered React Product Shell", async (
 });
 
 test("Formal root composes truthful runtime list states", async ({ page }) => {
+  // The shared anonymous fixture normally returns healthy empty lists. Keep
+  // this failure-state journey explicit rather than relying on a missing route.
+  let topicsUnavailable = true;
+  await page.route("**/api/community/editorial/articles?*", async (route) => {
+    if (
+      topicsUnavailable &&
+      new URL(route.request().url()).searchParams.get("presentation") ===
+        "academic"
+    ) {
+      await route.fulfill({ status: 503 });
+    } else {
+      await route.continue();
+    }
+  });
   const { shell } = await openFormalRoot(page);
   const home = shell.locator("[data-home-surface]");
   const multiMediaCard = home.locator(
@@ -233,6 +247,14 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
   await expect(
     discussion.getByRole("tabpanel", { name: "专题" }),
   ).toContainText("专题暂时不可用");
+  topicsUnavailable = false;
+  await discussion
+    .getByRole("tabpanel", { name: "专题" })
+    .getByRole("button", { name: "重试" })
+    .click();
+  await expect(
+    discussion.getByRole("tabpanel", { name: "专题" }),
+  ).toContainText("暂无专题");
 
   // The existing inscription sequence loads when its Home tab becomes active.
   await selectHomeFeed(page, "碑刻", "inscriptions");

@@ -1,6 +1,11 @@
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
 import type { Locator, Page, TestInfo } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 type WindowErrorRecord = {
   message: string;
@@ -229,8 +234,18 @@ const settledMediaSnapshot = async (shell: Locator) => {
   const cards = activePanel(shell).locator("[data-catalog-card]");
   const count = await cards.count();
   for (let index = 0; index < count; index += 1) {
-    // Reveal lazy media through the browser; never change loading or layout CSS.
-    await cards.nth(index).scrollIntoViewIfNeeded();
+    const card = cards.nth(index);
+    const needsReveal = await card.evaluate((node) => {
+      const media = node.querySelector<HTMLElement>(
+        "[data-catalog-media-state]",
+      );
+      if (media?.dataset.catalogMediaState === "missing") return false;
+      const image = media?.querySelector("img");
+      return image?.complete !== true || image.naturalWidth === 0;
+    });
+    // Reveal unloaded lazy media through the browser; loaded snapshots need
+    // no repeated scrolling. Keep the whole-list readiness assertion below.
+    if (needsReveal) await card.scrollIntoViewIfNeeded();
   }
   await expect
     .poll(() =>

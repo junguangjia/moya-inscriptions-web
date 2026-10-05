@@ -235,6 +235,23 @@ const selectHomeFeed = async (
   await expect(home).toHaveAttribute("data-active-home-feed", feed);
   await expect(feedSurface(page, feed)).toHaveAttribute("aria-hidden", "false");
   await expect(feedSurface(page, feed)).not.toHaveAttribute("inert", "");
+  const pager = home.locator("[data-home-feed-pager]");
+  // Business selection commits before the pager finishes restoring panel scroll.
+  // Start a new reading offset only after that existing motion has settled.
+  await expect(pager).toHaveAttribute("data-home-pager-scrolling", "false");
+  await expect
+    .poll(() =>
+      pager.evaluate((node, target) => {
+        const panel = node.querySelector<HTMLElement>(
+          `[data-home-feed-panel="${target}"]`,
+        )!;
+        return Math.abs(
+          panel.getBoundingClientRect().left -
+            node.getBoundingClientRect().left,
+        );
+      }, feed),
+    )
+    .toBeLessThanOrEqual(2);
 };
 
 const settleFeedRestore = (page: Page) =>
@@ -354,19 +371,24 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
 
   await selectHomeFeed(page, "碑刻", "inscriptions");
   const inscriptions = feedSurface(page, "inscriptions");
-  const inscriptionCards = inscriptions.locator("[data-catalog-card]");
-  const inscriptionControl = inscriptions.locator(
-    "[data-catalog-paging-control]",
+  // Inscriptions use the composed discovery feed: 12 rows and an after cursor.
+  const inscriptionCards = inscriptions.locator(
+    '[data-content-type="catalog"]',
   );
-  await expect(inscriptionCards).toHaveCount(24);
-  await expect(inscriptionControl).toHaveText("继续加载");
+  const inscriptionControl = inscriptions.getByRole("button", {
+    exact: true,
+    name: "加载更多",
+  });
+  await expect(inscriptionCards).toHaveCount(12);
+  await expect(inscriptionControl).toBeEnabled();
   await settleFeedRestore(page);
 
   let inscriptionPageTwoRequests = 0;
-  await page.route("**/api/catalog?*", async (route) => {
+  await page.route("**/api/community/discover?*", async (route) => {
     const query = new URL(route.request().url()).searchParams;
-    if (query.get("kind") === "inscription" && query.get("page") === "2") {
+    if (query.get("kind") === "inscription" && query.get("after") === "12") {
       inscriptionPageTwoRequests += 1;
+      expect(query.get("pageSize")).toBe("12");
       await new Promise((resolveWait) => setTimeout(resolveWait, 200));
     }
     await route.continue();
@@ -379,11 +401,54 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
     })
     .toBeGreaterThan(0);
   await activateControlTwice(inscriptionControl);
-  await expect(inscriptionControl).toHaveText("正在加载…");
-  await expect(inscriptionCards).toHaveCount(48);
+  await expect(inscriptionControl).toBeDisabled();
+  await expect(inscriptions.getByRole("status", { name: "" })).toHaveText(
+    "正在加载…",
+  );
+  await expect(inscriptionCards).toHaveCount(24);
   expect(inscriptionPageTwoRequests).toBe(1);
   expect(await readFeedScroll(page, "inscriptions")).toBe(inscriptionTop);
-  await page.unroute("**/api/catalog?*");
+  await page.unroute("**/api/community/discover?*");
+  await selectHomeFeed(page, "发现", "discover");
+  await selectHomeFeed(page, "碑刻", "inscriptions");
+  await expect(inscriptionCards).toHaveCount(24);
+
+  const inscriptionRequestedCursors: string[] = [];
+  let failPageThree = true;
+  await page.route("**/api/community/discover?*", async (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    if (query.get("kind") === "inscription" && query.get("after") === "24") {
+      inscriptionRequestedCursors.push(query.get("after") ?? "");
+      if (failPageThree) {
+        failPageThree = false;
+        await route.fulfill({ status: 503 });
+        return;
+      }
+    }
+    await route.continue();
+  });
+  await inscriptionControl.evaluate((button) =>
+    (button as HTMLButtonElement).click(),
+  );
+  await expect(inscriptions.getByRole("alert")).toBeVisible();
+  await expect(inscriptionCards).toHaveCount(24);
+  await inscriptions
+    .getByRole("button", { exact: true, name: "重试" })
+    .evaluate((button) => (button as HTMLButtonElement).click());
+  await expect(inscriptionCards).toHaveCount(36);
+  expect(inscriptionRequestedCursors).toEqual(["24", "24"]);
+  await page.unroute("**/api/community/discover?*");
+  for (const count of [48, 55]) {
+    await inscriptionControl.evaluate((button) =>
+      (button as HTMLButtonElement).click(),
+    );
+    await expect(inscriptionCards).toHaveCount(count);
+  }
+  await expect(inscriptionControl).toHaveCount(0);
+  const inscriptionIds = await inscriptionCards.evaluateAll((cards) =>
+    cards.map((card) => (card as HTMLElement).dataset.contentId),
+  );
+  expect(new Set(inscriptionIds).size).toBe(55);
 
   const inscriptionOpener = inscriptions.locator(
     '[data-catalog-id="runtime-paging-inscription-22"] [data-open-catalog]',
@@ -397,34 +462,7 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
   expect(await readFeedScroll(page, "inscriptions")).toBe(inscriptionReturnTop);
   await selectHomeFeed(page, "发现", "discover");
   await selectHomeFeed(page, "碑刻", "inscriptions");
-  await expect(inscriptionCards).toHaveCount(48);
-
-  const inscriptionRequestedPages: string[] = [];
-  let failPageThree = true;
-  await page.route("**/api/catalog?*", async (route) => {
-    const query = new URL(route.request().url()).searchParams;
-    if (query.get("kind") === "inscription") {
-      inscriptionRequestedPages.push(query.get("page") ?? "");
-      if (query.get("page") === "3" && failPageThree) {
-        failPageThree = false;
-        await route.fulfill({ status: 503 });
-        return;
-      }
-    }
-    await route.continue();
-  });
-  await inscriptionControl.evaluate((button) =>
-    (button as HTMLButtonElement).click(),
-  );
-  await expect(inscriptionControl).toHaveText("加载失败，重新加载");
-  await expect(inscriptionCards).toHaveCount(48);
-  await inscriptionControl.evaluate((button) =>
-    (button as HTMLButtonElement).click(),
-  );
   await expect(inscriptionCards).toHaveCount(55);
-  await expect(inscriptionControl).toHaveCount(0);
-  expect(inscriptionRequestedPages).toEqual(["3", "3"]);
-  await page.unroute("**/api/catalog?*");
 
   await selectHomeFeed(page, "书帖", "calligraphy");
   const calligraphy = feedSurface(page, "calligraphy");

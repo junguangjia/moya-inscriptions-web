@@ -314,8 +314,10 @@ test("MIG-D2 Detail Carousel accepts trusted diagonal native touch", async ({
     const session = await context.newCDPSession(page);
     const startY = box.y + box.height / 2;
     const endY = startY + 26;
-    const startX = box.x + box.width * 0.7;
-    const endX = box.x + box.width * 0.2;
+    // Native touch slop consumes part of the stroke. Cross the snap midpoint
+    // explicitly, rather than depending on release velocity on a busy runner.
+    const startX = box.x + box.width * 0.85;
+    const endX = box.x + box.width * 0.1;
 
     try {
       await session.send("Input.dispatchTouchEvent", {
@@ -335,6 +337,14 @@ test("MIG-D2 Detail Carousel accepts trusted diagonal native touch", async ({
         await page.waitForTimeout(16);
       }
       await expect(counter).toHaveText("1 / 3");
+      await expect
+        .poll(() =>
+          stage.evaluate((node) => {
+            const frame = node as HTMLElement;
+            return frame.scrollLeft / frame.clientWidth;
+          }),
+        )
+        .toBeGreaterThan(0.5);
       await session.send("Input.dispatchTouchEvent", {
         touchPoints: [],
         type: "touchEnd",

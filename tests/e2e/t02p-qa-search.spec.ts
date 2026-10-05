@@ -1,6 +1,11 @@
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
 import type { Locator, Page } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 type PresentationPlatform = "phone" | "tablet" | "pc";
 
@@ -233,7 +238,7 @@ test("search intents preserve Catalog identity, data and order while close actio
   );
   expect(await visibleCatalogSnapshot(shell, false)).toEqual(initialSnapshot);
 
-  await search.locator("[data-search-clear]").click();
+  await input.fill("");
   await expect(input).toHaveValue("");
   await expect(search.getByText("暂无搜索记录", { exact: true })).toBeVisible();
   await input.fill("龙门");
@@ -301,7 +306,7 @@ test("the seeded empty scenario returns to ordinary suggestions after every user
   await expect(search.getByText("QA 搜索建议", { exact: true })).toBeVisible();
 
   input = await seedEmptyScenario();
-  await search.locator("[data-search-clear]").click();
+  await input.fill("");
   await expect(input).toHaveValue("");
   await expect(search.locator("[data-search-empty]")).toHaveCount(0);
   await expect(search.getByText("暂无搜索记录", { exact: true })).toBeVisible();
@@ -590,7 +595,7 @@ test("Search remains legible through themes and respects reduced motion", async 
     .toBe("none");
 });
 
-test("Search respects composition, trimmed submission, distinct clear and close, and source scroll", async ({
+test("Search respects composition, trimmed submission, editing to empty, close, and source scroll", async ({
   page,
 }) => {
   const { search, shell, surface } = await openQa(page);
@@ -622,12 +627,11 @@ test("Search respects composition, trimmed submission, distinct clear and close,
   await expect(search.locator("[data-search-intent-status]")).toHaveText(
     "已记录搜索意图：龙门",
   );
-  const clear = search.locator("[data-search-clear]");
+  await expect(search.locator("[data-search-clear]")).toHaveCount(0);
   const close = search.locator("[data-search-close]");
-  expect(await clear.getAttribute("aria-label")).not.toBe(
-    await close.getAttribute("aria-label"),
-  );
-  await clear.click();
+  await expect(close).toHaveCount(1);
+  await expect(close).toHaveAttribute("aria-label", "关闭搜索");
+  await input.fill("");
   await expect(input).toHaveValue("");
   await expect(panel).toBeVisible();
   await expect(search.locator("[data-search-no-recent]")).toBeVisible();

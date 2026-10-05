@@ -1,6 +1,11 @@
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
 import type { Locator, Page } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 const destinationAcceptance = {
   home: { label: "首页" },
@@ -186,8 +191,10 @@ const writeHomePanelScroll = async (
   home: Locator,
   feed: HomeFeedName,
   top: number,
-) =>
-  home
+) => {
+  // Only the active panel owns scroll events in the shared Home pager.
+  await touchSettleHomeFeed(home, feed);
+  return home
     .locator(`[data-home-feed-panel="${feed}"]`)
     .evaluate((node, desiredTop) => {
       const panel = node as HTMLElement;
@@ -195,6 +202,7 @@ const writeHomePanelScroll = async (
       panel.dispatchEvent(new Event("scroll"));
       return panel.scrollTop;
     }, top);
+};
 
 const readHomePanelEvidence = async (home: Locator, feed: HomeFeedName) =>
   home.locator(`[data-home-feed-panel="${feed}"]`).evaluate((node) => {
@@ -329,7 +337,9 @@ const waitForStableHomePanelEvidence = async (
         previousSignature = evidence.structuralSignature;
         return stableFrameCount >= 3;
       },
-      { timeout: 15_000 },
+      // Each sample already awaits a real animation frame. Extra polling
+      // backoff turns three frames into seconds on every restoration check.
+      { timeout: 15_000, intervals: [0] },
     )
     .toBe(true);
   return readHomePanelEvidence(home, feed);
@@ -404,21 +414,23 @@ const expectFeedCardGeometry = async ({
 
 const expectAlignedHomeFeatures = async (masonry: Locator) => {
   await expect(masonry).toHaveAttribute("data-layout-ready", "true");
-  const items = await masonry
-    .locator("[data-home-masonry-item]")
-    .evaluateAll((nodes) =>
-      nodes.map((node) => {
-        const box = node.getBoundingClientRect();
+  // Sample the parent and every item in one frame while the pager can move.
+  const { items, box } = await masonry.evaluate((node) => ({
+    box: node.getBoundingClientRect().toJSON(),
+    items: Array.from(
+      node.querySelectorAll("[data-home-masonry-item]"),
+      (item) => {
+        const box = item.getBoundingClientRect();
         return {
-          full: node.getAttribute("data-home-masonry-span") === "full",
+          full: item.getAttribute("data-home-masonry-span") === "full",
           x: box.x,
           y: box.y,
           width: box.width,
           bottom: box.bottom,
         };
-      }),
-    );
-  const box = await requireBoundingBox(masonry);
+      },
+    ),
+  }));
   expect(items.length).toBeGreaterThan(2);
   expect(items[0]!.full).toBe(true);
   let leftBottom = 0,
@@ -546,9 +558,12 @@ const expectActiveDestination = async (
   await expect(
     shell.locator("[data-primary-destination]:not([hidden])"),
   ).toHaveCount(1);
-  await expect(
-    navigation.locator("[data-primary-navigation-bubble]"),
-  ).toBeVisible();
+  const bubble = navigation.locator("[data-primary-navigation-bubble]");
+  if ((await navigation.getAttribute("data-minimized")) === "true") {
+    await expect(bubble).toBeHidden();
+  } else {
+    await expect(bubble).toBeVisible();
+  }
   await expect(
     navigation.getByRole("button", {
       exact: true,
@@ -1502,8 +1517,8 @@ test("Home touch release commits once without post-release programmatic drift", 
 
   const feeds = ["discover", "nearby", "inscriptions", "calligraphy"] as const;
   const expectSettledFeed = async (feed: (typeof feeds)[number]) => {
-    // Confirm the full visual tail before and after the short out-and-back
-    // gesture; the preceding 30 releases intentionally exercise interruption.
+    // Confirm the full visual tail before the short out-and-back gesture;
+    // ordinary repeated releases below can still interrupt a moving tail.
     await expect
       .poll(
         () =>
@@ -1542,6 +1557,28 @@ test("Home touch release commits once without post-release programmatic drift", 
     const targetIndex = currentIndex + direction;
     const targetFeed = feeds[targetIndex];
     if (targetFeed === undefined) throw new Error("Missing Home feed target");
+    // Wait for the committed panel to cross its final quarter-width, while
+    // retaining the animation tail. A reverse gesture must start from the
+    // selected panel's side of the midpoint, not from its previous neighbor.
+    await expect
+      .poll(
+        () =>
+          pager.evaluate((node, sourceIndex) => {
+            const source = node.querySelectorAll("[data-home-feed-panel]")[
+              sourceIndex
+            ];
+            if (source === undefined)
+              throw new Error("Missing current Home panel");
+            return (
+              Math.abs(
+                source.getBoundingClientRect().left -
+                  node.getBoundingClientRect().left,
+              ) / node.clientWidth
+            );
+          }, currentIndex),
+        { intervals: [16] },
+      )
+      .toBeLessThanOrEqual(0.25);
     await pager.evaluate(
       (node, input) => {
         const frame = node as HTMLElement;
@@ -1553,11 +1590,11 @@ test("Home touch release commits once without post-release programmatic drift", 
         if (source === undefined || target === undefined) {
           throw new Error("Missing Home feed panel");
         }
-        // Business selection can precede visual settling. Continue from the
-        // track's actual position instead of assuming it is at the source snap.
+        // Business selection precedes visual settling. Request the adjacent
+        // direction from that selection; a moving target can still be on the
+        // other side of the viewport during a rapid reversal.
         const distance =
-          target.getBoundingClientRect().left -
-          frame.getBoundingClientRect().left;
+          (input.targetIndex - input.sourceIndex) * frame.clientWidth;
         for (const [type, progress] of [
           ["touchstart", 0],
           ["touchmove", 0.25],
@@ -1825,6 +1862,7 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
   expect(saved.discover).toBeGreaterThan(0);
   expect(saved.nearby).toBeGreaterThan(0);
   expect(saved.calligraphy).toBeGreaterThan(0);
+  await touchSettleHomeFeed(home, "discover");
   expect(await pager.evaluate((node) => (node as HTMLElement).scrollLeft)).toBe(
     0,
   );
@@ -2447,6 +2485,7 @@ test("Tablet Double gives Home aligned features and Calligraphy cards stable geo
     "data-masonry-columns",
     "2",
   );
+  await waitForStableHomePanelEvidence(home, "discover");
   await expectAlignedHomeFeatures(activeHomeMasonry(surface));
 
   await setFeedLayoutThroughSettings(surface, "single");
@@ -2726,7 +2765,13 @@ test("R02 keeps one navigation tree and isolates accepted marks from the glass c
   const navigationAssetResponses: { status: number; url: string }[] = [];
   const navigationAssetFailures: string[] = [];
   const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  const guestProbeStatuses: number[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("response", (response) => {
+    if (new URL(response.url()).pathname === "/api/community/me") {
+      guestProbeStatuses.push(response.status());
+    }
     if (
       /\/_next\/static\/media\/(?:home|discussion|user|nav-)/u.test(
         response.url(),
@@ -2924,7 +2969,14 @@ test("R02 keeps one navigation tree and isolates accepted marks from the glass c
   expect(navigationAssetResponses.every(({ status }) => status < 400)).toBe(
     true,
   );
-  expect(consoleErrors).toEqual([]);
+  // Both mounted author providers probe identity as guests. The browser logs
+  // their required 401 responses; retain every error and reject any other one.
+  expect(guestProbeStatuses).toEqual([401, 401]);
+  expect(consoleErrors).toEqual([
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+  ]);
+  expect(pageErrors).toEqual([]);
 });
 
 test("Mobile and Tablet navigation minimize with hysteresis, idle restore, and an expand-only tap", async ({
@@ -3051,7 +3103,7 @@ test("Mouse regression: navigation drag previews only the bubble and commits on 
     '[data-primary-destination="home"]',
   );
   const committedPanelBeforeDrag = await committedHomePanel.boundingBox();
-  const frozenProductState = await page.evaluate(() => {
+  const frozenProductState = await page.evaluate((historyVersion) => {
     const calls = { push: 0, replace: 0 };
     const initialState = window.history.state as {
       destination?: unknown;
@@ -3059,7 +3111,8 @@ test("Mouse regression: navigation drag previews only the bubble and commits on 
       version?: unknown;
     } | null;
     let lastPrimaryDestination =
-      initialState?.version === 1 && initialState.kind === "primary"
+      initialState?.version === historyVersion &&
+      initialState.kind === "primary"
         ? initialState.destination
         : null;
     const originalPushState = window.history.pushState.bind(window.history);
@@ -3068,7 +3121,8 @@ test("Mouse regression: navigation drag previews only the bubble and commits on 
     );
     window.history.pushState = (...args) => {
       const state = args[0] as { kind?: unknown; version?: unknown } | null;
-      if (state?.version === 1 && state.kind === "settings") calls.push += 1;
+      if (state?.version === historyVersion && state.kind === "settings")
+        calls.push += 1;
       return originalPushState(...args);
     };
     window.history.replaceState = (...args) => {
@@ -3077,7 +3131,7 @@ test("Mouse regression: navigation drag previews only the bubble and commits on 
         kind?: unknown;
         version?: unknown;
       } | null;
-      if (state?.version === 1 && state.kind === "primary") {
+      if (state?.version === historyVersion && state.kind === "primary") {
         if (state.destination !== lastPrimaryDestination) {
           calls.replace += 1;
           lastPrimaryDestination = state.destination;
@@ -3102,7 +3156,7 @@ test("Mouse regression: navigation drag previews only the bubble and commits on 
           ?.scrollTop ?? null,
       state: JSON.stringify(window.history.state),
     };
-  });
+  }, 2);
 
   await trackPointerCaptureCalls(homeButton);
 
