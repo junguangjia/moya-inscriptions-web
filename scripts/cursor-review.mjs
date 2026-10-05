@@ -457,7 +457,7 @@ export function cursorFailure(result) {
   )
     return "CURSOR_AUTHENTICATION";
   if (
-    /invalid.*(?:model|parameter|context)|(?:model|parameter|context).*(?:not (?:found|supported|allowed)|unavailable|invalid)|max.mode.*(?:not|unsupported)/iu.test(
+    /cannot use this model|invalid.*(?:model|parameter|context)|(?:model|parameter|context).*(?:not (?:found|supported|allowed)|unavailable|invalid)|max.mode.*(?:not|unsupported)/iu.test(
       diagnostic,
     )
   )

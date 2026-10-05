@@ -659,6 +659,10 @@ test("CLI diagnostics emit only fixed failure categories without raw values", ()
   for (const [stderr, category] of [
     ["Invalid model parameter: context 500k", "CURSOR_MODEL_REJECTED"],
     ["model unavailable for this account", "CURSOR_MODEL_REJECTED"],
+    [
+      "Cannot use this model: grok-4.7. Available models: composer-2.5",
+      "CURSOR_MODEL_REJECTED",
+    ],
     ["You have exceeded your quota", "CURSOR_USAGE_LIMIT"],
     [
       "unauthenticated; private-diagnostic-must-not-escape",
