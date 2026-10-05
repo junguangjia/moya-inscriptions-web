@@ -863,10 +863,6 @@ for (const chrome of ["default", "hidden"] as const) {
   test(`Nearby and Topic QA actions retain layout and activation, chrome ${chrome}`, async ({
     page,
   }) => {
-    await ready(
-      page,
-      chrome === "hidden" ? "/dev/t02p/qa?qaChrome=hidden" : "/dev/t02p/qa",
-    );
     // Nearby retains its Home deep link; topics use their Discussion tab in both QA chrome modes.
     for (const [feed, kind] of [
       ["附近", "nearby"],
