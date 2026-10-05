@@ -1071,10 +1071,13 @@ export async function dialogueMain(stage, env = process.env) {
     if (event.inputs.operation !== "dialogue") fail("INVALID_OPERATION");
     const request = validateRequest(scannedJSON(event.inputs.dialogue_request));
     const admittedAt = validateCandidateRoute(request, env);
+    // Still a raw request here: reject caller-provided admission timestamps.
+    // Assign host-only timestamps after raw/live identity validation; the next
+    // workflow freshness stage validates the complete prepared request.
+    fresh(request);
     if (request.round === 1) request.startedAt = admittedAt;
     if (resumed(request) && request.round === 2)
       request.resumeAdmittedAt = admittedAt;
-    fresh(request);
     mkdirSync(join(directory, "output"), { recursive: true, mode: 0o700 });
     const { prior, cache } = loadPrevious(request, directory);
     request.evidence = request.selectors.map((selector) =>

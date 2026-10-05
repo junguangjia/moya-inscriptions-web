@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   readFileSync,
   mkdtempSync,
@@ -310,6 +311,89 @@ test("one pinned resumption preserves original cost and expired start without re
       now,
     ),
   );
+});
+test("prepare admits the host timestamp before reaching pinned-prior validation", () => {
+  const temp = mkdtempSync(join(tmpdir(), "cursor-resume-prepare-"));
+  try {
+    const now = RESUMPTION.authorizedAt + 1000;
+    const runId = 37359999999;
+    const next = {
+      ...request,
+      dialogueId: RESUMPTION.dialogueId,
+      round: 2,
+      previousRun: RESUMPTION.priorRun,
+      startedAt: RESUMPTION.startedAt,
+      resumption: RESUMPTION.id,
+      resumeRecord: "not-base64",
+    };
+    const previous = {
+      head_sha: RESUMPTION.priorCandidate,
+      event: "workflow_dispatch",
+      path: ".github/workflows/cursor-review.yml",
+      run_attempt: 1,
+      status: "completed",
+      display_title: `cursor-dialogue ${RESUMPTION.dialogueId} round 1`,
+    };
+    const responses = {
+      "actions/workflows/cursor-review.yml/runs?event=workflow_dispatch&per_page=100":
+        {
+          workflow_runs: [
+            {
+              id: runId,
+              created_at: new Date(now).toISOString(),
+              display_title: `cursor-dialogue ${RESUMPTION.dialogueId} round 2`,
+            },
+          ],
+        },
+      [`pulls/${TARGET.pr}`]: media,
+      [`actions/runs/${TARGET.run}`]: diagnostic,
+      [`git/commits/${TARGET.source}`]: {
+        sha: TARGET.source,
+        tree: { sha: TARGET.tree },
+      },
+      "pulls/224": candidate,
+      [`actions/runs/${RESUMPTION.priorRun}`]: previous,
+    };
+    writeFileSync(
+      join(temp, "gh"),
+      `#!${process.execPath}\nconst responses=${JSON.stringify(responses)};\nconst path=process.argv.at(-1).replace(${JSON.stringify(`repos/${TARGET.repository}/`)},'');\nif(!Object.hasOwn(responses,path))process.exit(2);\nprocess.stdout.write(JSON.stringify(responses[path]));\n`,
+      { mode: 0o700 },
+    );
+    writeFileSync(
+      join(temp, "event.json"),
+      JSON.stringify({
+        inputs: {
+          operation: "dialogue",
+          dialogue_request: JSON.stringify(next),
+        },
+      }),
+    );
+    const script = `import { dialogueMain } from ${JSON.stringify(new URL("./cursor-dialogue.mjs", import.meta.url).href)}; Date.now=()=>${now}; try { await dialogueMain('prepare'); process.exitCode=2; } catch(error) { process.stdout.write(error.message); }`;
+    const result = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      {
+        encoding: "utf8",
+        timeout: 10000,
+        env: {
+          PATH: temp + ":" + process.env.PATH,
+          RUNNER_TEMP: temp,
+          GITHUB_OUTPUT: join(temp, "output"),
+          GITHUB_EVENT_PATH: join(temp, "event.json"),
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          GITHUB_REPOSITORY: TARGET.repository,
+          GITHUB_REF: "refs/heads/codex/cursor-bounded-dialogue",
+          GITHUB_SHA: request.candidate,
+          GITHUB_RUN_ATTEMPT: "1",
+          GITHUB_RUN_ID: String(runId),
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "RESUMPTION_PRIOR_MISMATCH");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
 test("evidence hash/id integrity and exact quote citations cannot silently drift", () => {
   validateEvidence([evidence]);
