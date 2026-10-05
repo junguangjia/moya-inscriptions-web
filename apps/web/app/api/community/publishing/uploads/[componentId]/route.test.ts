@@ -587,7 +587,7 @@ describe("work publishing upload relay", () => {
     },
   );
 
-  it.each([200, 401, 404, 409, 413, 422, 503])(
+  it.each([200, 401, 403, 404, 409, 413, 422, 503])(
     "passes a JSON Backend status %i through",
     async (status) => {
       const body = { status };

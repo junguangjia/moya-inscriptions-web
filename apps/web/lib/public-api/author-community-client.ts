@@ -16,6 +16,7 @@ import {
   savedResultSchema,
   deletedResultSchema,
   publicUserProfileSchema,
+  productAccessSchema,
   contentCardSchema,
   discoveryPageSchema,
   contentCollectionPageSchema,
@@ -47,6 +48,11 @@ interface Parser<T> {
 }
 let expectedAccount: string | null = null;
 let accountEpoch = 0;
+/**
+ * Dispatched on `window` when a request is refused with 403. A listener asks
+ * the Backend again before acting: a refusal alone never changes the view.
+ */
+export const PRODUCT_ACCESS_REFUSED_EVENT = "yoyi:product-access-refused";
 export class AuthorRequestError extends Error {
   constructor(
     readonly status: number,
@@ -105,6 +111,8 @@ const request = async <T>(
         : { body: JSON.stringify(options.body) }),
   });
   if (!response.ok) {
+    if (response.status === 403)
+      globalThis.dispatchEvent?.(new Event(PRODUCT_ACCESS_REFUSED_EVENT));
     let message =
       response.status === 401
         ? "请先登录"
@@ -189,6 +197,13 @@ export const authorClient = {
     }),
   me: (signal?: AbortSignal) =>
     request("me", publicUserProfileSchema, { ...(signal ? { signal } : {}) }),
+  /** This session's standing under the Backend's product access policy. */
+  access: async (signal?: AbortSignal) =>
+    (
+      await request("access", productAccessSchema, {
+        ...(signal ? { signal } : {}),
+      })
+    ).access,
   profile: (id: string, signal?: AbortSignal) =>
     request(`authors/${encodeURIComponent(id)}`, authorProfileSchema, {
       ...(signal ? { signal } : {}),

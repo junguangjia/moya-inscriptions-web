@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { authorClient, authorRequest } from "./author-community-client";
+import {
+  authorClient,
+  authorRequest,
+  PRODUCT_ACCESS_REFUSED_EVENT,
+} from "./author-community-client";
 
 afterEach(() => {
   authorClient.setAccount(null);
@@ -54,5 +58,43 @@ describe("shared private author transport", () => {
     authorClient.setAccount("synthetic-owner-a");
     releaseBody({ items: [] });
     await expect(pending).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("reads this session's product access through the existing relay", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ mode: "closed_beta", access: "restricted" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(authorClient.access()).resolves.toBe("restricted");
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/community/access");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ access: "granted" })),
+    );
+    await expect(authorClient.access()).rejects.toThrow();
+  });
+
+  it("announces a 403 so the page can ask the Backend again, and only a 403", async () => {
+    const dispatched = vi.fn();
+    vi.stubGlobal("dispatchEvent", dispatched);
+    for (const status of [401, 404, 500]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(null, { status })),
+      );
+      await expect(authorClient.me()).rejects.toMatchObject({ status });
+    }
+    expect(dispatched).not.toHaveBeenCalled();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 403 })),
+    );
+    await expect(authorClient.me()).rejects.toMatchObject({ status: 403 });
+    expect(dispatched).toHaveBeenCalledOnce();
+    expect((dispatched.mock.calls[0]![0] as Event).type).toBe(
+      PRODUCT_ACCESS_REFUSED_EVENT,
+    );
   });
 });

@@ -38,6 +38,7 @@ import {
   authPasswordResetRequestSchema,
   authPasswordResetResultSchema,
   healthResponseSchema,
+  productAccessSchema,
   mediaIdSchema,
   noQueryTransportSchema,
   publicMediaSchema,
@@ -234,6 +235,7 @@ export const createCatalogCommentReplyRequestJsonSchema = toJsonSchema(
   createCatalogCommentReplyRequestSchema,
 );
 export const healthResponseJsonSchema = toJsonSchema(healthResponseSchema);
+export const productAccessJsonSchema = toJsonSchema(productAccessSchema);
 export const apiErrorCodeJsonSchema = toJsonSchema(apiErrorCodeSchema);
 export const apiErrorJsonSchema = toJsonSchema(apiErrorSchema);
 

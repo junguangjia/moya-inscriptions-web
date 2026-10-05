@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  accessDenied,
   fetchCurrentUser,
+  fetchProductAccess,
   parseDevelopmentSignInHandle,
   parseSessionToken,
   signInDevelopmentAccount,
@@ -138,5 +140,58 @@ describe("community session transport", () => {
     await expect(
       signInDevelopmentAccount({ baseUrl, fetch: failing }, "dev-user-01"),
     ).resolves.toEqual({ state: "unexpected-error" });
+  });
+});
+
+describe("product access transport", () => {
+  const context = (fetchMock: typeof fetch) => ({ baseUrl, fetch: fetchMock });
+
+  it("asks the Backend with the visitor's session and returns its answer unchanged", async () => {
+    const access = { mode: "closed_beta", access: "restricted" };
+    const fetchMock = respond(200, access);
+    await expect(
+      fetchProductAccess(context(fetchMock), opaqueSession),
+    ).resolves.toEqual({ state: "success", access });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("http://backend.invalid/v1/community/access");
+    expect(new Headers(init?.headers).get("authorization")).toBe(
+      `Bearer ${opaqueSession}`,
+    );
+    expect(init?.cache).toBe("no-store");
+  });
+
+  it("asks without a credential when there is no well-formed session", async () => {
+    for (const token of [undefined, "not-a-session"]) {
+      const fetchMock = respond(200, {
+        mode: "closed_beta",
+        access: "sign_in_required",
+      });
+      await fetchProductAccess(context(fetchMock), token);
+      expect(
+        new Headers(fetchMock.mock.calls[0]![1]?.headers).has("authorization"),
+      ).toBe(false);
+    }
+  });
+
+  it("never assumes access: anything but the Backend's well-formed answer is unavailable", async () => {
+    for (const fetchMock of [
+      respond(404),
+      respond(500),
+      respond(503),
+      respond(200, { mode: "public" }),
+      respond(200, { mode: "open", access: "granted" }),
+      respond(200, { mode: "public", access: "granted", extra: true }),
+      vi.fn<typeof fetch>().mockRejectedValue(new Error("offline")),
+    ])
+      await expect(
+        fetchProductAccess(context(fetchMock), opaqueSession),
+      ).resolves.toEqual({ state: "unavailable" });
+  });
+
+  it("recognizes only 401 and 403 as an access refusal", () => {
+    expect(accessDenied(401)).toEqual({ state: "access-denied", status: 401 });
+    expect(accessDenied(403)).toEqual({ state: "access-denied", status: 403 });
+    for (const status of [200, 404, 500, 503])
+      expect(accessDenied(status)).toBeNull();
   });
 });

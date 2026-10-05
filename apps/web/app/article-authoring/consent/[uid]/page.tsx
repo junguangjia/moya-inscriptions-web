@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { parseArticleConsentEntry } from "../../../../lib/public-api/article-agent-entry";
 import { ArticleAgentPage } from "../../../../features/editorial-content/article-authoring/article-agent-page";
+import { ProductAccessNotice } from "../../../../features/product-access/product-access-notice";
+import { readVisitorAccess } from "../../../product-access";
 export default async function ArticleConsentPage({
   params,
 }: {
@@ -8,5 +10,8 @@ export default async function ArticleConsentPage({
 }) {
   const uid = parseArticleConsentEntry((await params).uid);
   if (uid === null) notFound();
+  const access = await readVisitorAccess();
+  if (access.state !== "granted")
+    return <ProductAccessNotice access={access} />;
   return <ArticleAgentPage interactionUid={uid} />;
 }

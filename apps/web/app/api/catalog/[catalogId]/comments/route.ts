@@ -10,11 +10,14 @@ export const runtime = "nodejs";
 const allowedParameters = new Set(["page", "pageSize", "pinned"]);
 const maximumBodyBytes = 4_096;
 
+// The answer depends on who asks, so no cache may keep it for someone else.
+const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
+
 const emptyResponse = (status: number) =>
-  new Response(null, { status, headers: { "Cache-Control": "no-store" } });
+  new Response(null, { status, headers });
 
 const jsonResponse = (body: unknown, status: number) =>
-  Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+  Response.json(body, { status, headers });
 
 /**
  * Bounds the actual stream: a chunked body declares no content-length, so the
@@ -78,6 +81,8 @@ export const GET = async (
     switch (result.state) {
       case "success":
         return jsonResponse(result.page, 200);
+      case "access-denied":
+        return emptyResponse(result.status);
       case "invalid-query":
         return emptyResponse(400);
       case "not-found":
@@ -110,6 +115,8 @@ export const POST = async (
         return jsonResponse(result.item, result.awaitingApproval ? 202 : 201);
       case "unauthenticated":
         return emptyResponse(401);
+      case "access-denied":
+        return emptyResponse(result.status);
       case "not-found":
         return emptyResponse(404);
       case "invalid-input":

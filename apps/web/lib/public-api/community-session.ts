@@ -1,11 +1,12 @@
 import {
   developmentSessionSchema,
   developmentSignInRequestSchema,
+  productAccessSchema,
   publicUserProfileSchema,
   sessionTokenSchema,
 } from "@moya/contracts/schemas";
 
-import type { PublicUserProfile } from "@moya/contracts";
+import type { ProductAccess, PublicUserProfile } from "@moya/contracts";
 
 /** Server-only shape (no root Public DTO): the raw credential must not travel further than this module's callers. */
 export type DevelopmentSession = ReturnType<
@@ -22,6 +23,24 @@ export type CurrentUserTransportResult =
   | {
       readonly state: "unauthenticated" | "unavailable" | "unexpected-error";
     };
+
+/**
+ * The Backend's product access policy refused this caller: 401 without a valid
+ * session, 403 for a signed-in account that is not approved.
+ */
+export interface AccessDeniedTransportResult {
+  readonly state: "access-denied";
+  readonly status: 401 | 403;
+}
+
+export const accessDenied = (
+  status: number,
+): AccessDeniedTransportResult | null =>
+  status === 401 || status === 403 ? { state: "access-denied", status } : null;
+
+export type ProductAccessTransportResult =
+  | { readonly state: "success"; readonly access: ProductAccess }
+  | { readonly state: "unavailable" };
 
 export type DevelopmentSignInTransportResult =
   | { readonly state: "success"; readonly session: DevelopmentSession }
@@ -86,6 +105,34 @@ export const fetchCurrentUser = async (
       : { state: "unexpected-error" };
   } catch {
     return { state: "unexpected-error" };
+  }
+};
+
+/**
+ * Asks the Backend whether this session may use the product. Anything but its
+ * well-formed answer is "unavailable": Web never assumes access.
+ */
+export const fetchProductAccess = async (
+  context: CommunitySessionTransportContext,
+  token: string | undefined,
+): Promise<ProductAccessTransportResult> => {
+  try {
+    const response = await context.fetch(
+      new URL("v1/community/access", context.baseUrl).toString(),
+      requestInit(
+        "GET",
+        token !== undefined && parseSessionToken(token) !== null
+          ? token
+          : undefined,
+      ),
+    );
+    if (response.status !== 200) return { state: "unavailable" };
+    const access = productAccessSchema.safeParse(await response.json());
+    return access.success
+      ? { state: "success", access: access.data }
+      : { state: "unavailable" };
+  } catch {
+    return { state: "unavailable" };
   }
 };
 

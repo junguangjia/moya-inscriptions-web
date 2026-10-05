@@ -41,6 +41,7 @@ describe("contracts package surface", () => {
       "CreateCatalogCommentRequest",
       "HealthResponse",
       "MediaId",
+      "ProductAccess",
       "PublicMedia",
       "PublicSourceCitation",
       "PublicUserId",

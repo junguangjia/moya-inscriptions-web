@@ -38,7 +38,16 @@ describe("GET /api/editorial-media/[owner]/[file]", () => {
         )
       ).status,
     ).toBe(200);
-    expect(relay).toHaveBeenCalledWith(owner, file);
+    expect(relay).toHaveBeenCalledWith(owner, file, undefined);
+    // The visitor's session travels with the lookup the relay makes.
+    const session = "s".repeat(43);
+    await GET(
+      new Request(`http://web.invalid/api/editorial-media/${owner}/${file}`, {
+        headers: { cookie: `yoyi-session=${session}` },
+      }),
+      params,
+    );
+    expect(relay).toHaveBeenLastCalledWith(owner, file, session);
     expect(
       (
         await GET(

@@ -83,7 +83,8 @@ describe("same-origin comment bridge", () => {
     fetchPageMock.mockResolvedValue({ state: "success", page });
     const response = await GET(readRequest("?page=2&pageSize=10"), context);
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBe("Cookie");
     expect(await response.json()).toEqual(page);
     expect(fetchPageMock).toHaveBeenCalledWith(
       catalogId,

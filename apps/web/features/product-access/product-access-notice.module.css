@@ -1,0 +1,91 @@
+/* The same page, brand and type scale as the sign-in flow it leads into. */
+.page {
+  min-height: 100dvh;
+  padding: calc(env(safe-area-inset-top, 0px) + var(--yoyi-space-5))
+    var(--yoyi-space-5)
+    calc(env(safe-area-inset-bottom, 0px) + var(--yoyi-space-9));
+  background: var(--yoyi-color-background-page);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+}
+
+/* Keeps the brand where the sign-in flow shows it, below its 44px navigation row. */
+.panel {
+  width: 100%;
+  max-width: 24rem;
+  margin: calc(44px + var(--yoyi-space-7)) auto 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+  margin-bottom: var(--yoyi-space-6);
+}
+
+.logo {
+  width: 3.5rem;
+  height: auto;
+}
+
+.brandName {
+  font-family: var(--yoyi-font-editorial);
+  font-size: 1rem;
+  letter-spacing: 0.025em;
+}
+
+.panel h1 {
+  margin: 0 0 var(--yoyi-space-4);
+  font-family: var(--yoyi-font-editorial);
+  font-size: 1.75rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.description {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+
+.account {
+  margin: var(--yoyi-space-5) 0 0;
+  padding: var(--yoyi-space-4) var(--yoyi-space-5);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-muted);
+  color: var(--yoyi-color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.account strong {
+  color: var(--yoyi-color-text-primary);
+  font-weight: 600;
+}
+
+.actions {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  margin-top: var(--yoyi-space-7);
+}
+
+.action {
+  width: 100%;
+  min-height: 52px;
+  border-radius: var(--yoyi-radius-full);
+  font-size: 1rem;
+}
+
+.error {
+  margin: 0;
+  color: var(--yoyi-color-error);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.page :focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring) !important;
+  outline-offset: 3px;
+}

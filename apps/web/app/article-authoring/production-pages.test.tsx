@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -12,8 +12,16 @@ vi.mock(
   }),
 );
 
+const { readVisitorAccessMock } = vi.hoisted(() => ({
+  readVisitorAccessMock: vi.fn(),
+}));
+vi.mock("../product-access", () => ({
+  readVisitorAccess: readVisitorAccessMock,
+}));
+
 import ApprovalPage from "./approval/page";
 import ConsentPage from "./consent/[uid]/page";
+import { ProductAccessNotice } from "../../features/product-access/product-access-notice";
 
 const query = {
   connection: `article-connection-${"a".repeat(32)}`,
@@ -21,6 +29,14 @@ const query = {
   version: "7",
   fingerprint: "c".repeat(64),
 };
+beforeEach(() => {
+  readVisitorAccessMock.mockReset();
+  readVisitorAccessMock.mockResolvedValue({
+    state: "granted",
+    closedBeta: false,
+    token: undefined,
+  });
+});
 afterEach(() => vi.unstubAllEnvs());
 
 describe.each(["development", "production"])(
@@ -51,6 +67,25 @@ describe.each(["development", "production"])(
           fingerprint: query.fingerprint,
         },
       });
+    });
+    it("shows the access notice instead of the human entry to a visitor without product access", async () => {
+      vi.stubEnv("NODE_ENV", environment);
+      for (const access of [
+        { state: "sign_in_required" },
+        { state: "restricted", account: null },
+        { state: "unavailable" },
+      ]) {
+        readVisitorAccessMock.mockResolvedValue(access);
+        const consent = await ConsentPage({
+          params: Promise.resolve({ uid: "synthetic-interaction" }),
+        });
+        expect(consent.type).toBe(ProductAccessNotice);
+        expect(consent.props).toEqual({ access });
+        const approval = await ApprovalPage({
+          searchParams: Promise.resolve(query),
+        });
+        expect(approval.type).toBe(ProductAccessNotice);
+      }
     });
     it("retains malformed interaction and candidate rejection", async () => {
       vi.stubEnv("NODE_ENV", environment);

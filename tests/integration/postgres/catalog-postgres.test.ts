@@ -1842,6 +1842,7 @@ describe.sequential("PostgreSQL Catalog HTTP integration", () => {
           HOST: "127.0.0.1",
           NODE_ENV: "production",
           PORT: "3001",
+          PRODUCT_ACCESS_MODE: "public",
         }),
       ).rejects.toThrow("PostgreSQL startup validation failed");
       const ledger = await pool.query("SELECT to_regclass($1) AS relation", [
@@ -1893,6 +1894,7 @@ describe.sequential("PostgreSQL Catalog HTTP integration", () => {
       HOST: "127.0.0.1",
       NODE_ENV: "production",
       PORT: "3001",
+      PRODUCT_ACCESS_MODE: "public",
     });
     const handle = await startBackendProcess({
       closeResources: prepared.closeResources,

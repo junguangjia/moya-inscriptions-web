@@ -2,6 +2,7 @@ import {
   parseCatalogListTransportQuery,
   parseCatalogPage,
 } from "../../../lib/public-api/catalog-list-client";
+import { readCommunitySessionToken } from "../../../lib/public-api/community-session-cookie";
 import { fetchServerCatalogPage } from "../../../lib/public-api/server";
 
 import type { CatalogListTransportQuery } from "@moya/contracts";
@@ -22,25 +23,35 @@ const parseQuery = (request: Request): CatalogListTransportQuery | null => {
   return parseCatalogListTransportQuery(candidate);
 };
 
+// The answer depends on who asks, so no cache may keep it for someone else.
+const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
+const emptyResponse = (status: number) =>
+  new Response(null, { status, headers });
+
 export const GET = async (request: Request): Promise<Response> => {
   const query = parseQuery(request);
-  if (query === null) return new Response(null, { status: 400 });
+  if (query === null) return emptyResponse(400);
 
   try {
-    const result = await fetchServerCatalogPage(query);
+    const result = await fetchServerCatalogPage(
+      query,
+      readCommunitySessionToken(request.headers.get("cookie")),
+    );
     switch (result.state) {
       case "success": {
         const page = parseCatalogPage(result.page);
         return page !== null
-          ? Response.json(page)
-          : new Response(null, { status: 502 });
+          ? Response.json(page, { headers })
+          : emptyResponse(502);
       }
+      case "access-denied":
+        return emptyResponse(result.status);
       case "unavailable":
-        return new Response(null, { status: 503 });
+        return emptyResponse(503);
       case "unexpected-error":
-        return new Response(null, { status: 502 });
+        return emptyResponse(502);
     }
   } catch {
-    return new Response(null, { status: 502 });
+    return emptyResponse(502);
   }
 };
