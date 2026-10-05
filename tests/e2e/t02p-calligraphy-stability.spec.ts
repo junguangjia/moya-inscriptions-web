@@ -96,26 +96,30 @@ const selectFeed = async (
     .locator(`[data-tab-key="${feed}"]`)
     .evaluate((button) => (button as HTMLButtonElement).click());
   await expect(home).toHaveAttribute("data-active-home-feed", feed);
-  await expect(home.locator("[data-home-feed-pager]")).toHaveAttribute(
-    "data-home-pager-scrolling",
-    "false",
-  );
   await expect
-    .poll(() =>
-      home.evaluate((node, target) => {
-        const pager = node.querySelector<HTMLElement>(
-          "[data-home-feed-pager]",
-        )!;
-        const panel = pager.querySelector<HTMLElement>(
-          `[data-home-feed-panel="${target}"]`,
-        )!;
-        return Math.abs(
-          panel.getBoundingClientRect().left -
-            pager.getBoundingClientRect().left,
-        );
-      }, feed),
+    .poll(
+      () =>
+        home.evaluate(async (node, target) => {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+          const pager = node.querySelector<HTMLElement>(
+            "[data-home-feed-pager]",
+          )!;
+          const panel = pager.querySelector<HTMLElement>(
+            `[data-home-feed-panel="${target}"]`,
+          )!;
+          return (
+            pager.dataset.homePagerScrolling === "false" &&
+            Math.abs(
+              panel.getBoundingClientRect().left -
+                pager.getBoundingClientRect().left,
+            ) <= 2
+          );
+        }, feed),
+      { intervals: [0] },
     )
-    .toBeLessThanOrEqual(2);
+    .toBe(true);
 };
 
 const enterCalligraphy = async (page: Page, hidden: boolean) => {
@@ -473,6 +477,13 @@ test("hidden QA all-Calligraphy survives native reading resize and reveal withou
   await page.setViewportSize(changedViewport);
   await expectCalligraphy(shell);
   await observeConvergence(shell, testInfo, "changed-viewport");
+  await testInfo.attach("changed-viewport-scroll-owner", {
+    body: JSON.stringify({
+      desired: read.top,
+      observed: await readScroll(shell),
+    }),
+    contentType: "application/json",
+  });
   await expectScroll(shell, read.top);
   await page.setViewportSize(readingViewport);
   await expectCalligraphy(shell);

@@ -365,6 +365,49 @@ describe("HomeFeedPager category engine integration", () => {
     expect(v.panels.map((p) => p.scrollTop)).toEqual(positions);
     expect([...v.track.children]).toEqual(v.panels);
   });
+  it.each([false, true])(
+    "restores a resize-clamped reading position unless the reader moves (%s)",
+    (readWhileClamped) => {
+      const v = setup();
+      const panel = v.panels[0]!;
+      expect(
+        observers.some((observer) =>
+          observer.observed.has(panel.firstElementChild!),
+        ),
+      ).toBe(true);
+      Object.defineProperty(panel, "clientHeight", {
+        configurable: true,
+        value: 100,
+      });
+      act(() => {
+        panel.scrollTop = 137;
+        panel.dispatchEvent(new Event("scroll"));
+      });
+      heights.discover = 200;
+      act(() => {
+        panel.scrollTop = 100; // Native range clamp precedes resize delivery.
+        panel.dispatchEvent(new Event("scroll"));
+        observers.forEach((observer) => observer.trigger());
+      });
+      expect(panel.scrollTop).toBe(100);
+      if (readWhileClamped)
+        act(() => {
+          panel.scrollTop = 80;
+          panel.dispatchEvent(new Event("scroll"));
+          observers.forEach((observer) => observer.trigger());
+          observers.forEach((observer) => observer.trigger());
+        });
+      heights.discover = 600;
+      act(() => observers.forEach((observer) => observer.trigger()));
+      expect(panel.scrollTop).toBe(readWhileClamped ? 80 : 137);
+      act(() => {
+        observers.forEach((observer) => observer.trigger());
+        observers.forEach((observer) => observer.trigger());
+      });
+      expect(panel.scrollTop).toBe(readWhileClamped ? 80 : 137);
+      expect([...v.track.children]).toEqual(v.panels);
+    },
+  );
   it("supports non-adjacent tab requests and immediate reduced-motion positioning", () => {
     const v = setup();
     act(() => v.handle.current?.scrollToFeed("calligraphy"));

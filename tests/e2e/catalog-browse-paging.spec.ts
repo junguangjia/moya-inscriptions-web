@@ -13,6 +13,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 
 import type { ChildProcess } from "node:child_process";
 import type { Locator, Page } from "@playwright/test";
@@ -238,20 +239,27 @@ const selectHomeFeed = async (
   const pager = home.locator("[data-home-feed-pager]");
   // Business selection commits before the pager finishes restoring panel scroll.
   // Start a new reading offset only after that existing motion has settled.
-  await expect(pager).toHaveAttribute("data-home-pager-scrolling", "false");
   await expect
-    .poll(() =>
-      pager.evaluate((node, target) => {
-        const panel = node.querySelector<HTMLElement>(
-          `[data-home-feed-panel="${target}"]`,
-        )!;
-        return Math.abs(
-          panel.getBoundingClientRect().left -
-            node.getBoundingClientRect().left,
-        );
-      }, feed),
+    .poll(
+      () =>
+        pager.evaluate(async (node, target) => {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+          const panel = node.querySelector<HTMLElement>(
+            `[data-home-feed-panel="${target}"]`,
+          )!;
+          return (
+            (node as HTMLElement).dataset.homePagerScrolling === "false" &&
+            Math.abs(
+              panel.getBoundingClientRect().left -
+                node.getBoundingClientRect().left,
+            ) <= 2
+          );
+        }, feed),
+      { intervals: [0] },
     )
-    .toBeLessThanOrEqual(2);
+    .toBe(true);
 };
 
 const settleFeedRestore = (page: Page) =>
@@ -349,9 +357,16 @@ const openViewerAndReturn = async (
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async ({ browser }, workerInfo) => {
+test.beforeAll(async ({ browser, request }, workerInfo) => {
   void browser;
   await startPagingRuntime(workerInfo.project.name);
+  // This spec owns a separate paging server, so the shared server's route
+  // preparation cannot prevent its cold mounted routes from compiling mid-test.
+  await prepareFormalRoutes(request, pagingRuntime!.baseUrl);
+  const detail = await request.get(
+    `${pagingRuntime!.baseUrl}/api/catalog/runtime-paging-inscription-22`,
+  );
+  expect(detail.status(), "Prepare paging Catalog Detail").toBe(200);
 });
 
 test.afterAll(async () => {

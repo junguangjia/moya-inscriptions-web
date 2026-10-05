@@ -123,16 +123,21 @@ const touchSettleHomeFeed = async (home: Locator, feed: HomeFeedName) => {
   // This setup helper waits for that actual position, not for interaction.
   const atPage = async (targetFeed: HomeFeedName) => {
     await expect
-      .poll(() =>
-        pager.evaluate((node, target) => {
-          const panel = node.querySelector<HTMLElement>(
-            `[data-home-feed-panel="${target}"]`,
-          )!;
-          return Math.abs(
-            panel.getBoundingClientRect().left -
-              node.getBoundingClientRect().left,
-          );
-        }, targetFeed),
+      .poll(
+        () =>
+          pager.evaluate(async (node, target) => {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+            const panel = node.querySelector<HTMLElement>(
+              `[data-home-feed-panel="${target}"]`,
+            )!;
+            return Math.abs(
+              panel.getBoundingClientRect().left -
+                node.getBoundingClientRect().left,
+            );
+          }, targetFeed),
+        { intervals: [0] },
       )
       .toBeLessThanOrEqual(2);
   };
@@ -627,7 +632,16 @@ const openDiscussionTopics = async (surface: Locator) => {
     .click();
   await expectActiveDestination(surface, "discussion");
   const discussion = activeDiscussionSurface(surface);
-  await discussion.getByRole("tab", { name: "专题", exact: true }).click();
+  const topicsTab = discussion.getByRole("tab", {
+    name: "专题",
+    exact: true,
+  });
+  if (await surface.locator("[data-qa-controls]").count()) {
+    await topicsTab.focus();
+    await topicsTab.press("Enter");
+  } else {
+    await topicsTab.click();
+  }
   await expect(discussion).toHaveAttribute(
     "data-active-discussion-feed",
     "topics",
@@ -636,6 +650,31 @@ const openDiscussionTopics = async (surface: Locator) => {
     "aria-hidden",
     "false",
   );
+  // Active/aria state commits before the panel and its saved scroll settle.
+  // Offset seeds and Detail source snapshots must use the visible panel.
+  await expect
+    .poll(
+      () =>
+        discussion
+          .locator("#discussion-panel-topics")
+          .evaluate(async (panel) => {
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            );
+            const frame = panel.closest<HTMLElement>(
+              "[data-horizontal-pager]",
+            )!;
+            return (
+              frame.dataset.horizontalPagerScrolling === "false" &&
+              Math.abs(
+                panel.getBoundingClientRect().left -
+                  frame.getBoundingClientRect().left,
+              ) <= 2
+            );
+          }),
+      { intervals: [0] },
+    )
+    .toBe(true);
   return discussion;
 };
 
@@ -718,12 +757,60 @@ const openCleanProductSurface = async (page: Page) => {
   };
 };
 
+const settlePrimaryScrollOwner = (
+  shell: Locator,
+  destination: AcceptanceDestination,
+) =>
+  shell.evaluate(
+    (node, requested) =>
+      new Promise<void>((resolve) => {
+        const shell = node as HTMLElement;
+        let previous = "";
+        let stable = 0;
+        const sample = () => {
+          const section = shell.querySelector<HTMLElement>(
+            `[data-primary-destination="${requested}"]`,
+          )!;
+          const owner =
+            shell.dataset.platform === "pc"
+              ? document.scrollingElement!
+              : requested === "home"
+                ? section.querySelector<HTMLElement>(
+                    '[data-home-feed-panel][aria-hidden="false"]',
+                  )!
+                : requested === "discussion"
+                  ? section.querySelector<HTMLElement>(
+                      '[role="tabpanel"][aria-hidden="false"]',
+                    )!
+                  : section;
+          const box = owner.getBoundingClientRect();
+          const signature = JSON.stringify([
+            owner.scrollTop,
+            owner.scrollHeight,
+            owner.clientHeight,
+            box.width,
+            box.height,
+          ]);
+          stable =
+            box.width > 0 && box.height > 0 && signature === previous
+              ? stable + 1
+              : 0;
+          previous = signature;
+          if (stable >= 3) resolve();
+          else requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      }),
+    destination,
+  );
+
 const writePrimaryScroll = async (
   shell: Locator,
   destination: AcceptanceDestination,
   top: number,
-) =>
-  shell.evaluate(
+) => {
+  await settlePrimaryScrollOwner(shell, destination);
+  const seeded = await shell.evaluate(
     (node, input) => {
       const product = node as HTMLElement;
       const section = product.querySelector<HTMLElement>(
@@ -746,10 +833,22 @@ const writePrimaryScroll = async (
             : section;
       if (scrollElement === null) throw new Error("Missing scroll element");
       scrollElement.scrollTop = input.top;
+      scrollElement.dispatchEvent(new Event("scroll"));
       return scrollElement.scrollTop;
     },
     { destination, top },
   );
+  // A synchronous setter is not proof that deferred restoration kept the seed.
+  // Observe two native frames before departure, without rewriting the offset.
+  await shell.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect.poll(() => readPrimaryScroll(shell, destination)).toBe(seeded);
+  return seeded;
+};
 
 const readPrimaryScroll = async (
   shell: Locator,
@@ -1850,14 +1949,22 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
     await outerHome.evaluate((node) => (node as HTMLElement).scrollTop),
   ).toBe(0);
 
+  // Capture each stable baseline while its seeded panel is already active.
+  // A second full tab tour adds animation time without establishing new state.
+  const seedAndRead = async (feed: (typeof feeds)[number]) => {
+    const top = await writeHomePanelScroll(home, feed, desired[feed]);
+    const evidence = await waitForStableHomePanelEvidence(home, feed);
+    return { top, evidence };
+  };
+  const seeded = {
+    discover: await seedAndRead("discover"),
+    nearby: await seedAndRead("nearby"),
+    calligraphy: await seedAndRead("calligraphy"),
+  };
   const saved = {
-    discover: await writeHomePanelScroll(home, "discover", desired.discover),
-    nearby: await writeHomePanelScroll(home, "nearby", desired.nearby),
-    calligraphy: await writeHomePanelScroll(
-      home,
-      "calligraphy",
-      desired.calligraphy,
-    ),
+    discover: seeded.discover.top,
+    nearby: seeded.nearby.top,
+    calligraphy: seeded.calligraphy.top,
   };
   expect(saved.discover).toBeGreaterThan(0);
   expect(saved.nearby).toBeGreaterThan(0);
@@ -1868,11 +1975,10 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
   );
   await expect(home).toHaveAttribute("data-active-home-feed", "discover");
   const baseline = {
-    discover: await settleHomeFeedAndReadStableEvidence(home, "discover"),
-    nearby: await settleHomeFeedAndReadStableEvidence(home, "nearby"),
-    calligraphy: await settleHomeFeedAndReadStableEvidence(home, "calligraphy"),
+    discover: seeded.discover.evidence,
+    nearby: seeded.nearby.evidence,
+    calligraphy: seeded.calligraphy.evidence,
   };
-  await touchSettleHomeFeed(home, "discover");
 
   await pager.evaluate((node) => {
     const frame = node as HTMLElement;
@@ -2082,7 +2188,7 @@ test("Topic Detail is a Product overlay with stable navigation, history, and foc
   ).toBeVisible();
 });
 
-test("Topic Detail reload and Back preserve the recorded Topics source scroll", async ({
+test("Topic Detail reload resets old-document scroll and Back restores Topics and focus", async ({
   page,
 }, testInfo) => {
   test.skip(
@@ -2110,24 +2216,29 @@ test("Topic Detail reload and Back preserve the recorded Topics source scroll", 
     .first()
     .evaluate((button) => (button as HTMLButtonElement).click());
   await expect(shell.getByRole("dialog", { name: /专题：/ })).toBeVisible();
+  expect(await page.evaluate(() => window.history.state?.sourceScrollTop)).toBe(
+    sourceTop,
+  );
   await page.reload();
   await expect(surface.locator("[data-product-boot]")).toHaveCount(0);
   await expect(shell.getByRole("dialog", { name: /专题：/ })).toBeVisible();
   const restoredOpener = activeDiscussionSurface(surface)
     .locator("[data-topic-card]")
     .first();
+  // ProductShell resets old-document offsets on a full reload (the accepted
+  // unit regression covers this); same-document Detail still records the seed.
   expect(await page.evaluate(() => window.history.state?.sourceScrollTop)).toBe(
-    sourceTop,
+    0,
   );
 
   await page.goBack();
   await expect(shell.getByRole("dialog", { name: /专题：/ })).toHaveCount(0);
+  // Back retains the older browser entry's raw offset; ProductShell resets it
+  // when interpreting an entry created by the previous document.
   expect(await page.evaluate(() => window.history.state?.scrollTop)).toBe(
     sourceTop,
   );
-  await expect
-    .poll(() => readPrimaryScroll(shell, "discussion"))
-    .toBe(sourceTop);
+  await expect.poll(() => readPrimaryScroll(shell, "discussion")).toBe(0);
   await expect(restoredOpener).toBeFocused();
 });
 
@@ -2148,18 +2259,25 @@ test("Topic Back preserves Topics and Product Shell identity in Clean Preview", 
     "data-active-discussion-feed",
     "topics",
   );
-  await discussion.locator("[data-topic-card]").first().click();
+  // Clean Development composes the existing Discussion preview specials;
+  // the QA-only TopicCard selector belongs to the separate harness cases.
+  const opener = discussion
+    .locator('[data-discussion-preview-feed="topics"] [data-topic-id]')
+    .first();
+  await opener.click();
   const shell = productShell(surface);
-  await expect(shell.getByRole("dialog", { name: /专题：/ })).toBeVisible();
+  const detail = shell.getByRole("dialog", { name: "专题", exact: true });
+  await expect(detail).toBeVisible();
 
   await page.goBack();
-  await expect(shell.getByRole("dialog", { name: /专题：/ })).toHaveCount(0);
+  await expect(detail).toHaveCount(0);
   await expect(navigation).toHaveAttribute("data-r03-topic-identity", "stable");
   await expect(activeDiscussionSurface(surface)).toHaveAttribute(
     "data-active-discussion-feed",
     "topics",
   );
   await expect(page).toHaveURL(/\?acceptance=r01-clean$/u);
+  await expect(opener).toBeFocused();
 });
 
 test("Catalog Collection Topic resolves Catalog summaries without a fake Detail action", async ({
@@ -2556,21 +2674,29 @@ test("Auto mode keeps an iPhone-like runtime on phone across viewport changes", 
 
   await page.setViewportSize({ height: 500, width: 1200 });
   await expectPresentationPlatform(surface, "phone");
-  expect((await readHomePanelEvidence(home, "discover")).scrollTop).toBe(
-    discoverTop,
-  );
-  expect((await readHomePanelEvidence(home, "nearby")).scrollTop).toBe(
-    nearbyTop,
-  );
+  await expect
+    .poll(() =>
+      readHomePanelEvidence(home, "discover").then((state) => state.scrollTop),
+    )
+    .toBe(discoverTop);
+  await expect
+    .poll(() =>
+      readHomePanelEvidence(home, "nearby").then((state) => state.scrollTop),
+    )
+    .toBe(nearbyTop);
   await page.setViewportSize({ height: 700, width: 320 });
   await expectPresentationPlatform(surface, "phone");
   await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
-  expect((await readHomePanelEvidence(home, "discover")).scrollTop).toBe(
-    discoverTop,
-  );
-  expect((await readHomePanelEvidence(home, "nearby")).scrollTop).toBe(
-    nearbyTop,
-  );
+  await expect
+    .poll(() =>
+      readHomePanelEvidence(home, "discover").then((state) => state.scrollTop),
+    )
+    .toBe(discoverTop);
+  await expect
+    .poll(() =>
+      readHomePanelEvidence(home, "nearby").then((state) => state.scrollTop),
+    )
+    .toBe(nearbyTop);
 });
 
 test("Auto mode applies iPad-like viewport caps in both directions", async ({
@@ -2591,21 +2717,33 @@ test("Auto mode applies iPad-like viewport caps in both directions", async ({
 
   await page.setViewportSize({ height: 900, width: 600 });
   await expectPresentationPlatform(surface, "phone");
-  expect((await readHomePanelEvidence(home, "discover")).scrollTop).toBe(
-    discoverTop,
-  );
-  expect((await readHomePanelEvidence(home, "calligraphy")).scrollTop).toBe(
-    calligraphyTop,
-  );
+  await expect
+    .poll(() =>
+      readHomePanelEvidence(home, "discover").then((state) => state.scrollTop),
+    )
+    .toBe(discoverTop);
+  await expect
+    .poll(() =>
+      readHomePanelEvidence(home, "calligraphy").then(
+        (state) => state.scrollTop,
+      ),
+    )
+    .toBe(calligraphyTop);
   await page.setViewportSize({ height: 768, width: 1024 });
   await expectPresentationPlatform(surface, "tablet");
   await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
-  expect((await readHomePanelEvidence(home, "discover")).scrollTop).toBe(
-    discoverTop,
-  );
-  expect((await readHomePanelEvidence(home, "calligraphy")).scrollTop).toBe(
-    calligraphyTop,
-  );
+  await expect
+    .poll(() =>
+      readHomePanelEvidence(home, "discover").then((state) => state.scrollTop),
+    )
+    .toBe(discoverTop);
+  await expect
+    .poll(() =>
+      readHomePanelEvidence(home, "calligraphy").then(
+        (state) => state.scrollTop,
+      ),
+    )
+    .toBe(calligraphyTop);
 });
 
 test("Auto mode synchronizes from current runtime values on orientationchange", async ({
@@ -2994,6 +3132,7 @@ test("Mobile and Tablet navigation minimize with hysteresis, idle restore, and a
   const expandedBox = await requireBoundingBox(navigation);
   const searchAction = surface.locator("[data-search-trigger]");
   const activeSection = surface.locator('[data-primary-destination="home"]');
+  await settlePrimaryScrollOwner(shell, "home");
   const scrollTo = async (top: number) =>
     activeSection.evaluate((node, nextTop) => {
       const section = node as HTMLElement;

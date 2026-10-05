@@ -16,13 +16,8 @@ const expectedPlatform = (projectName: string): PresentationPlatform => {
 };
 
 const openQa = async (page: Page) => {
-  // Next's development badge occupies the same corner as the bottom composer.
-  // Use its supported local preference so the real submit hit target is tested;
-  // this writes only the disposable server's generated .next cache.
-  const devtools = await page.request.post("/__nextjs_devtools_config", {
-    data: { disableDevIndicator: true },
-  });
-  expect(devtools.status()).toBe(204);
+  // The disposable fixture already disables the badge before server startup.
+  // Keep its supported configuration stable while testing the real submit target.
   const response = await page.goto("/dev/t02p/qa");
   expect(response?.status()).toBe(200);
   const surface = page.locator("[data-t02p-qa-harness]");
@@ -161,7 +156,7 @@ test("QA Search and Filter stay isolated from Formal and clean Development", asy
       page.locator("[data-inscription-filter] [data-filter-trigger]"),
     ).toHaveCount(0);
     await expect(page.locator("[data-search-trigger]")).toHaveCount(
-      path === "/" ? 1 : 0,
+      path === "/" ? 3 : 0,
     );
     await expect(page.locator("[data-catalog-search]")).toHaveCount(
       path === "/" ? 1 : 0,

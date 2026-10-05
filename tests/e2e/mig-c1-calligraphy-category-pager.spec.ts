@@ -190,6 +190,7 @@ const trustedHorizontalPointDrag = async (
   pager: Locator,
   point: { readonly x: number; readonly y: number },
   direction: 1 | -1 = 1,
+  requireAdjacentTravel = false,
 ) => {
   const pagerWidth = await pager.evaluate((node) => node.clientWidth);
   const { x, y } = point;
@@ -238,6 +239,17 @@ const trustedHorizontalPointDrag = async (
         ),
       );
     }, initialPanelLeft);
+  }
+  if (requireAdjacentTravel) {
+    const heldDisplacement = await pager.evaluate(
+      (node, initialLeft) =>
+        Math.abs(
+          node.firstElementChild!.firstElementChild!.getBoundingClientRect()
+            .left - initialLeft,
+        ),
+      initialPanelLeft,
+    );
+    expect(heldDisplacement).toBeGreaterThan(pagerWidth / 2);
   }
   await session.send("Input.dispatchTouchEvent", {
     touchPoints: [],
@@ -298,7 +310,8 @@ const shortFeedBlankEvidence = (pager: Locator) =>
       '[data-home-feed-panel="calligraphy"] [data-catalog-card]',
     );
     if (card === null) throw new Error("Missing short Calligraphy feed card");
-    const x = window.innerWidth / 2;
+    // Rightward paging needs more than half a viewport of on-screen travel.
+    const x = frame.getBoundingClientRect().left + frame.clientWidth * 0.2;
     const y = window.innerHeight - 180;
     const hit = document.elementFromPoint(x, y);
     return {
@@ -493,7 +506,7 @@ test("MIG-C1 accepts a trusted horizontal drag from blank space below a short Ca
   expect(blank.belowCard).toBe(true);
   expect(blank.inPager).toBe(true);
 
-  await trustedHorizontalPointDrag(page, session, pager, blank.point, -1);
+  await trustedHorizontalPointDrag(page, session, pager, blank.point, -1, true);
   await expect(homeSurface(surface)).toHaveAttribute(
     "data-active-home-feed",
     "inscriptions",
@@ -884,13 +897,20 @@ for (const chrome of ["default", "hidden"] as const) {
         if (!box) throw new Error("Missing pager");
         const point = await frame.evaluate((node, dragDirection) => {
           const box = node.getBoundingClientRect();
-          const x = box.x + box.width * (dragDirection === 1 ? 0.8 : 0.2);
-          for (
-            let y = Math.min(innerHeight - 120, box.bottom - 24);
-            y > Math.max(box.top + 60, 240);
-            y -= 16
-          ) {
-            if (node.contains(document.elementFromPoint(x, y))) return { x, y };
+          for (const fraction of dragDirection === 1
+            ? [0.92, 0.85, 0.75, 0.65]
+            : [0.08, 0.15, 0.25, 0.35]) {
+            const x = box.x + box.width * fraction;
+            const travel = dragDirection === 1 ? x - 8 : innerWidth - x - 8;
+            if (travel < 240) continue;
+            for (
+              let y = Math.min(innerHeight - 120, box.bottom - 24);
+              y > Math.max(box.top + 60, 24);
+              y -= 16
+            ) {
+              if (node.contains(document.elementFromPoint(x, y)))
+                return { x, y };
+            }
           }
           throw new Error(
             "No exposed pager point beneath the existing QA controls",

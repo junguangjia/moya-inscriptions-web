@@ -19,6 +19,34 @@ const homeFeed = (page: Page, surface: "home" | "calligraphy") =>
 const feedCards = (page: Page, surface: "home" | "calligraphy") =>
   homeFeed(page, surface).locator('[data-quick-actions="enabled"]');
 const homeCard = (page: Page) => feedCards(page, "home").first();
+const settlePanel = async (panel: Locator) => {
+  await expect
+    .poll(
+      () =>
+        panel.evaluate(async (node) => {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+          const frame = node.closest<HTMLElement>("[data-horizontal-pager]");
+          if (frame === null) throw new Error("Missing QA action pager");
+          const layouts = node.querySelectorAll<HTMLElement>(
+            "[data-home-masonry]",
+          );
+          return (
+            frame.dataset.horizontalPagerScrolling === "false" &&
+            Math.abs(
+              node.getBoundingClientRect().left -
+                frame.getBoundingClientRect().left,
+            ) <= 2 &&
+            Array.from(layouts).every(
+              (layout) => layout.dataset.layoutReady === "true",
+            )
+          );
+        }),
+      { intervals: [0] },
+    )
+    .toBe(true);
+};
 const selectCalligraphy = async (page: Page) => {
   const home = page.locator("[data-home-surface]");
   const tab = home.getByRole("tab", { exact: true, name: "书帖" });
@@ -33,6 +61,7 @@ const selectCalligraphy = async (page: Page) => {
     "aria-hidden",
     "false",
   );
+  await settlePanel(homeFeed(page, "calligraphy"));
 };
 const selectDiscussionTopics = async (page: Page) => {
   const shell = page.locator("[data-product-shell]");
@@ -56,6 +85,7 @@ const selectDiscussionTopics = async (page: Page) => {
   await expect(
     discussion.getByRole("tabpanel", { name: "专题" }),
   ).toHaveAttribute("aria-hidden", "false");
+  await settlePanel(discussion.getByRole("tabpanel", { name: "专题" }));
 };
 const anchorFor = async (button: Locator) => {
   const box = await button.boundingBox();
@@ -71,24 +101,28 @@ const nativeCard = async (
   rightColumn = false,
 ) => {
   const cards = feedCards(page, surface);
-  const hit = await cards.evaluateAll((buttons, preferRight) => {
-    for (const [index, button] of buttons.entries()) {
-      const box = button.getBoundingClientRect();
-      const x = Math.round(box.x + box.width / 2);
-      if (
-        x <= (preferRight ? innerWidth / 2 : 24) ||
-        x >= innerWidth - (preferRight ? 24 : 100)
-      )
-        continue;
-      const top = Math.max(24, box.top + 12);
-      const bottom = Math.min(innerHeight - 100, box.bottom - 12);
-      for (let y = top; y <= bottom; y += 24) {
-        if (document.elementFromPoint(x, y) === button)
-          return { index, point: { x, y } };
+  await settlePanel(homeFeed(page, surface));
+  const findHit = () =>
+    cards.evaluateAll((buttons, preferRight) => {
+      for (const [index, button] of buttons.entries()) {
+        const box = button.getBoundingClientRect();
+        const x = Math.round(box.x + box.width * (preferRight ? 0.85 : 0.5));
+        if (
+          x <= (preferRight ? innerWidth / 2 : 24) ||
+          x >= innerWidth - (preferRight ? 24 : 100)
+        )
+          continue;
+        const top = Math.max(24, box.top + 12);
+        const bottom = Math.min(innerHeight - 100, box.bottom - 12);
+        for (let y = top; y <= bottom; y += 24) {
+          if (document.elementFromPoint(x, y) === button)
+            return { index, point: { x, y } };
+        }
       }
-    }
-    return null;
-  }, rightColumn);
+      return null;
+    }, rightColumn);
+  await expect.poll(findHit).not.toBeNull();
+  const hit = await findHit();
   if (hit === null)
     throw new Error(`No unobscured ${surface} card for native input`);
   return { button: cards.nth(hit.index), point: hit.point };
@@ -444,6 +478,19 @@ for (const chrome of ["default", "hidden"] as const) {
             x: surface === "home" ? 5 : page.viewportSize()!.width - 5,
             y: pageStart.y,
           });
+          const held = await scrollOwner.evaluate((panel) => {
+            const frame = panel.closest<HTMLElement>(
+              "[data-horizontal-pager]",
+            )!;
+            return {
+              displacement: Math.abs(
+                panel.getBoundingClientRect().left -
+                  frame.getBoundingClientRect().left,
+              ),
+              width: frame.clientWidth,
+            };
+          });
+          expect(held.displacement).toBeGreaterThan(held.width / 2);
           await touch(session, "touchEnd", []);
           await expect(page.locator("[data-home-feed-pager]")).toHaveAttribute(
             "data-horizontal-pager-active-key",
@@ -482,8 +529,7 @@ for (const surface of ["home", "calligraphy"] as const) {
       const activeCards = () => feedCards(page, surface);
       const scrollOwner = homeFeed(page, surface);
       await activate();
-      const button = activeCards().first();
-      const start = await anchorFor(button);
+      const { point: start } = await nativeCard(page, surface);
       await touch(session, "touchStart", [{ ...start, id: 1 }]);
       await drag(page, session, start, { x: start.x, y: start.y - 110 });
       await touch(session, "touchEnd", []);
@@ -999,22 +1045,29 @@ for (const chrome of ["default", "hidden"] as const) {
           const buttons = page.locator(
             `[data-quick-action-content-kind="${kind}"]`,
           );
-          const hit = await buttons.evaluateAll((nodes) => {
-            for (const [index, node] of nodes.entries()) {
-              const box = node.getBoundingClientRect(),
-                x = box.x + box.width / 2;
-              if (x > innerWidth - 130) continue;
-              for (
-                let y = Math.max(30, box.top + 12);
-                y < Math.min(innerHeight - 110, box.bottom - 12);
-                y += 20
-              ) {
-                const target = document.elementFromPoint(x, y);
-                if (target && node.contains(target)) return { index, x, y };
+          const findHit = () =>
+            buttons.evaluateAll((nodes) => {
+              for (const [index, node] of nodes.entries()) {
+                const box = node.getBoundingClientRect(),
+                  x = box.x + box.width / 2;
+                if (x > innerWidth - 130) continue;
+                for (
+                  let y = Math.max(30, box.top + 12);
+                  y < Math.min(innerHeight - 110, box.bottom - 12);
+                  y += 20
+                ) {
+                  const target = document.elementFromPoint(x, y);
+                  if (target && node.contains(target)) return { index, x, y };
+                }
               }
-            }
-            throw new Error("Missing exposed native card");
-          });
+              return null;
+            });
+          await expect.poll(findHit).not.toBeNull();
+          const hit = await findHit();
+          if (hit === null)
+            throw new Error(
+              `Missing exposed native ${kind} card (${phase}, ${chrome})`,
+            );
           const button = buttons.nth(hit.index);
           const ancestors = await button.evaluate((node) => {
             const result: { tag: string; touchAction: string }[] = [];

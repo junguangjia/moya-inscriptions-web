@@ -52,7 +52,14 @@ const selectHomeFeed = async (
   name: "发现" | "附近" | "碑刻" | "书帖",
   feed: "discover" | "nearby" | "inscriptions" | "calligraphy",
 ) => {
-  await selectPrimaryDestination(page, "首页", "home");
+  // Reading may minimize navigation while Home is already selected. Re-clicking
+  // its hidden label adds no navigation behavior and blocks the actual tab.
+  if (
+    (await productShell(page).getAttribute("data-active-destination")) !==
+    "home"
+  ) {
+    await selectPrimaryDestination(page, "首页", "home");
+  }
   const home = productShell(page).locator("[data-home-surface]");
   await home.getByRole("tab", { exact: true, name }).click();
   await expect(home).toHaveAttribute("data-active-home-feed", feed);

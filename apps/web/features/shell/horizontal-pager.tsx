@@ -695,6 +695,11 @@ function HorizontalPagerImplementation<Key extends string>(
         frameWasUnavailableRef.current = false;
         restorePreservedPanelScrollTops();
       }
+      if (scrollOwner === "panel" && visibleRef.current) {
+        // Reflow can temporarily reduce a panel's range. Keep the reading
+        // intent and apply its bounded value as that range changes again.
+        restorePreservedPanelScrollTops();
+      }
       if (Math.abs(width - frameWidthRef.current) > 0.5) {
         frameWidthRef.current = width;
         invalidateSession();
@@ -716,10 +721,13 @@ function HorizontalPagerImplementation<Key extends string>(
       }
     });
     observer.observe(frame);
-    if (scrollOwner === "document") {
-      for (const feed of keys) {
-        const panel = panelRefs.current[feed];
-        if (panel !== null) observer.observe(panel);
+    for (const feed of keys) {
+      const panel = panelRefs.current[feed];
+      if (panel === null) continue;
+      observer.observe(panel);
+      // A fixed-height panel's border box does not report content reflow.
+      if (scrollOwner === "panel" && panel.firstElementChild !== null) {
+        observer.observe(panel.firstElementChild);
       }
     }
     return () => {
@@ -814,8 +822,19 @@ function HorizontalPagerImplementation<Key extends string>(
                 ) {
                   return;
                 }
-                preservedPanelScrollTopsRef.current[feed] =
-                  event.currentTarget.scrollTop;
+                const panel = event.currentTarget;
+                const maximum = Math.max(
+                  0,
+                  panel.scrollHeight - panel.clientHeight,
+                );
+                // A browser clamp is not a new reading position. Actual
+                // movement away from that boundary replaces the saved intent.
+                if (
+                  preservedPanelScrollTopsRef.current[feed] > maximum &&
+                  Math.abs(panel.scrollTop - maximum) <= 1
+                )
+                  return;
+                preservedPanelScrollTopsRef.current[feed] = panel.scrollTop;
               }}
               role="tabpanel"
               tabIndex={selected ? 0 : -1}
