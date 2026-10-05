@@ -39,6 +39,7 @@ const tooling = new Set([
   // script test runs in the lightweight job.
   "scripts/turbo-cache-prune.mjs",
   "scripts/cursor-review.mjs",
+  "scripts/cursor-dialogue.mjs",
 ]);
 const webRoots = [
   "apps/web/",

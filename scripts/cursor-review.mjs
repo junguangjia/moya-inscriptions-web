@@ -798,15 +798,25 @@ with supplied code; do not treat whole-call time as assertion or product wait.
 Preserve public contracts, migrations, required CI and credential protection.
 Never reproduce credential values. No stylistic nits or repeated findings.
 Return ONLY JSON, without fences or prose, in this shape:
-{"assessment":"findings|no_findings|incomplete","summary":"concise Chinese summary",
+{"assessment":"findings|no_findings|incomplete","summary":"concise English summary",
 "findings":[{"priority":"P1|P2|P3","path":"exact supplied source path","line":1,
-"body":"Chinese: concrete trigger, consequence, supporting evidence",
+"body":"English: concrete trigger, consequence, supporting evidence",
 "fix":"English: minimal actionable repair","validation":"English: relevant verification"}]}
 At most 8 findings. For a CI/runner issue without a code location use path="", line=0.
 no_findings means no supported issue in the supplied scope, never proof of safety.
 incomplete may include supported partial findings; it is never a clean verdict.
 Use findings only with at least one supported finding, and no_findings only with
 an empty findings list. Preserve incomplete coverage even when findings exist.`;
+
+export function englishNarrative(value) {
+  return (
+    typeof value === "string" &&
+    /[A-Za-z]{2}/u.test(value) &&
+    !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+      value,
+    )
+  );
+}
 
 export function agentConfiguration() {
   return {
@@ -876,6 +886,15 @@ export function parseReport(raw, packet) {
     report.assessment = "incomplete";
   if (safeText(report.summary) === null)
     throw new Error("CREDENTIAL_IN_REPORT");
+  if (
+    !englishNarrative(report.summary) ||
+    report.findings.some((finding) =>
+      [finding.body, finding.fix, finding.validation].some(
+        (value) => !englishNarrative(value),
+      ),
+    )
+  )
+    throw new Error("ENGLISH_REQUIRED");
   return {
     assessment: report.assessment,
     summary: report.summary,
@@ -1201,6 +1220,7 @@ function analyze(directory, env) {
       "INVALID_FINDING",
       "INCONSISTENT_REPORT",
       "CREDENTIAL_IN_REPORT",
+      "ENGLISH_REQUIRED",
       "MODEL_SELECTION_NOT_CONFIRMED",
     ]);
     const category = allowed.has(error.message)

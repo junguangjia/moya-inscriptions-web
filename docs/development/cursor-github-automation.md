@@ -309,3 +309,65 @@ transport, missing-key/failure handling and fresh-checkout publication with the
 real controlled scanner and mocked GitHub transport. Run the existing
 `verify-task.mjs` entry for cumulative applicable tooling checks. Tests do not
 consume Cursor usage or exercise a live key.
+
+## Bounded evidence dialogue (Draft evaluation only)
+
+The Owner-approved enhancement uses the pinned official CLI with fresh isolated
+invocations and validated prior-round replay. It installs no SDK/ACP and enables
+no automatic review. The manual operation=dialogue route is restricted to branch
+codex/cursor-bounded-dialogue and its exact open Draft candidate PR/SHA. All
+ordinary routes retain trusted-main checks. Do not merge merely to evaluate.
+
+The allowlist in scripts/cursor-dialogue.mjs separates workflow327712419 at
+4d819e1af7c60f13f5ced38cb7868b26b3444817, diagnostic37347927743/attempt1 and
+immutable
+source7a2cba05b8596579fd1fcb6a58ba6ba9c018e8f1/treeb82796ec4f2a7e226ca4bae1eeca9a2d35ee286f.
+Future targets require a reviewed scope change; canonical CI admission is
+unchanged. Media source/tests/CI and remaining repair authority stay with the
+original writer.
+
+The cache command accepts a private JSON map of preparation, feedback and
+execution paths to already-downloaded JSON originals. It verifies pinned SHA-256
+hashes, scans raw and decoded text, checks native identity and stores one
+private originals.json. Subsequent reads use this cache; no original CI
+log/artifact download occurs. The select command takes file/pointer selectors
+with optional start/count (array windows of at most32 elements). It emits
+faithful original JSON values, original hash, selector, content hash and stable
+ID, printing only index metadata. The complete original snapshot is compressed
+for initial transport and reverified by the hosted job. Follow-ups restore it
+from the preceding exact candidate/run artifact, never the original CI. Only
+these JSON formats are admitted; arbitrary URLs, archives, images and automatic
+discovery of other artifacts are unsupported.
+
+The dialogue_request JSON fields are target, candidate, candidatePR, dialogueId
+(24 hex), round, startedAt (epoch milliseconds), previousRun (null for round1),
+question, selectors, optional sourcePaths, and originals (encoded snapshot for
+round1 only). It permits one initial question plus at most two follow-ups: 360s
+per inference,900s aggregate inference,1800s wall time from initial request,
+10min per job,60KiB transport,120K serialized prompt and24K per selected record.
+Duplicate attempts/rounds, stale identity, errors, no new follow-up evidence and
+budget exhaustion stop incomplete. A follow-up requires an exact previous
+needs_evidence record. No hidden retry, paid fallback or model substitution
+exists. Round JSON, English report and verified cache are retained for seven
+days.
+
+Every active prompt requests English generated narrative; contradictory language
+directives are removed. Validators reject missing English prose and East Asian
+narrative text, including legacy reports. Literal citation.quote may retain its
+original language. This deterministic guard is not a perfect language
+classifier. Every finding cites an exact substring of a supplied original
+record. Exact quote validation does not establish that the model's inference is
+correct.
+
+Codex reads the answer, citations, uncertainty and edit-relevant code. It asks a
+targeted question and selects missing evidence; it should not reread all cached
+phase events or bulk logs to restate the answer. Exact-head status and
+independent review remain metadata/gates. Incomplete/capped capture and
+receive-time intervals must not become native timing, media PASS or authority to
+replay tests.
+
+Measure original reads/downloads, cache transfers, model calls, inference/wall
+time, numeric usage only if exposed, citation spot-checks and actual writer
+adoption. Unrecorded historical baseline counts remain unknown. One case cannot
+establish token savings or general causal accuracy. On-Demand remains off; model
+selection and usage fields do not constitute a per-run billing receipt.

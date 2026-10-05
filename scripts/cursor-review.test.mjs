@@ -932,7 +932,10 @@ test("workflow keeps trusted checkout, pinned CLI, separate credentials and no P
     "utf8",
   );
   assert.match(workflow, /pull_request_target:/u);
-  assert.match(workflow, /ref: main/u);
+  assert.match(
+    workflow,
+    /ref: \$\{\{ inputs.operation == 'dialogue' && github.sha \|\| 'main' \}\}/u,
+  );
   assert.match(workflow, /persist-credentials: false/u);
   assert.match(workflow, /sha256sum --check --status/u);
   assert.match(
@@ -943,7 +946,7 @@ test("workflow keeps trusted checkout, pinned CLI, separate credentials and no P
   assert.match(workflow, /format\('ci-\{0\}',\s+inputs.expected_head\)/u);
   assert.match(
     workflow,
-    /format\('ci-\{0\}', github.event.workflow_run.head_sha\)/u,
+    /format\('ci-\{0\}',\s+github.event.workflow_run.head_sha\)/u,
   );
   assert.match(
     workflow,
