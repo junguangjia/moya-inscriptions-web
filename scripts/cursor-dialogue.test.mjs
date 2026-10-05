@@ -22,6 +22,7 @@ import {
   dialogueMain,
   extractJSON,
   scannedJSON,
+  selectionCoverage,
   validateAdmission,
   validateAnswer,
   validateEvidence,
@@ -45,6 +46,7 @@ const evidence = {
   text,
   sha256: hash(text),
   id: hash(JSON.stringify(selection) + ORIGINALS.feedback + hash(text)),
+  coverage: [hash("original feedback outcome leaf")],
 };
 const question = "What does this result establish, and what remains unknown?";
 const request = {
@@ -261,6 +263,7 @@ test("requests have finite time, size and round bounds", () => {
     { ...request, question: "中文问题" },
     { ...request, question: "q".repeat(2401) },
     { ...request, startedAt: 200000 },
+    { ...request, startedAt: 100002 },
   ])
     assert.throws(() => validateRequest(changed, 100001));
   assert.throws(() =>
@@ -287,16 +290,63 @@ test("follow-ups require validated prior identity and genuinely new evidence", (
     status: "needs_evidence",
     inferenceMs: 50000,
     seenEvidence: [],
+    seenCoverage: [],
   };
   validatePrevious(next, prior, 100001);
   for (const changed of [
-    { ...prior, seenEvidence: [evidence.id] },
+    { ...prior, seenCoverage: evidence.coverage },
     { ...prior, status: "incomplete" },
     { ...prior, inferenceMs: BUDGET.inferenceMs },
     { ...prior, candidate: "c".repeat(40) },
     { ...prior, startedAt: 200000 },
   ])
     assert.throws(() => validatePrevious(next, changed, 100001));
+});
+
+test("overlapping slices and parent/child aliases cannot reset original coverage", () => {
+  const original = { events: [{ phase: "start" }] };
+  const one = { file: "feedback", pointer: "/events", start: 0, count: 1 };
+  const oversized = { ...one, count: 2 };
+  const child = { file: "feedback", pointer: "/events/0/phase" };
+  assert.equal(extractJSON(original, one), extractJSON(original, oversized));
+  assert.deepEqual(
+    selectionCoverage(original, one),
+    selectionCoverage(original, oversized),
+  );
+  assert.deepEqual(
+    selectionCoverage(original, one),
+    selectionCoverage(original, child),
+  );
+  const seen = selectionCoverage(original, one);
+  const next = {
+    ...request,
+    round: 2,
+    previousRun: 42,
+    evidence: [
+      {
+        ...evidence,
+        id: "different selector",
+        coverage: selectionCoverage(original, oversized),
+      },
+    ],
+  };
+  const prior = {
+    version: 1,
+    dialogueId: request.dialogueId,
+    candidate: request.candidate,
+    target: TARGET,
+    round: 1,
+    runId: 42,
+    startedAt: request.startedAt,
+    status: "needs_evidence",
+    inferenceMs: 10,
+    seenEvidence: [evidence.id],
+    seenCoverage: seen,
+  };
+  assert.throws(
+    () => validatePrevious(next, prior, 100001),
+    /NO_NEW_EVIDENCE/u,
+  );
 });
 test("tool, environment, candidate-route and validation profile boundaries remain narrow", () => {
   assert.deepEqual(agentConfiguration().permissions.allow, []);

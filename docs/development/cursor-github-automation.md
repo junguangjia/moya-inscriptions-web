@@ -343,13 +343,13 @@ The dialogue_request JSON fields are target, candidate, candidatePR, dialogueId
 (24 hex), round, startedAt (epoch milliseconds), previousRun (null for round1),
 question, selectors, optional sourcePaths, and originals (encoded snapshot for
 round1 only). It permits one initial question plus at most two follow-ups: 360s
-per inference,900s aggregate inference,1800s wall time from initial request,
-10min per job,60KiB transport,120K serialized prompt and24K per selected record.
-Duplicate attempts/rounds, stale identity, errors, no new follow-up evidence and
-budget exhaustion stop incomplete. A follow-up requires an exact previous
-needs_evidence record. No hidden retry, paid fallback or model substitution
-exists. Round JSON, English report and verified cache are retained for seven
-days.
+per inference,900s aggregate inference,1800s wall time from trusted initial
+GitHub run creation, 10min per job,60KiB transport,120K serialized prompt and24K
+per selected record. Duplicate attempts/rounds, stale identity, errors, no new
+follow-up evidence and budget exhaustion stop incomplete. A follow-up requires
+an exact previous needs_evidence record. No hidden retry, paid fallback or model
+substitution exists. Round JSON, English report and verified cache are retained
+for seven days.
 
 Every active prompt requests English generated narrative; contradictory language
 directives are removed. Validators reject missing English prose and East Asian
@@ -371,3 +371,8 @@ time, numeric usage only if exposed, citation spot-checks and actual writer
 adoption. Unrecorded historical baseline counts remain unknown. One case cannot
 establish token savings or general causal accuracy. On-Demand remains off; model
 selection and usage fields do not constitute a per-run billing receipt.
+
+Follow-up novelty is computed from original JSON leaf locations and values.
+Overlapping parent/child selectors or longer requested array windows cannot
+reset coverage. The initial run timestamp is read from GitHub and retained
+unchanged across rounds; caller timestamps cannot extend the wall limit.
