@@ -19,10 +19,13 @@ import {
   agentEnvironment,
   boundedBody,
   collectFileEvidence,
+  collectFailureSources,
   confirmModelSelection,
   cursorFailure,
   currentRun,
   eligiblePR,
+  excerptJobLogs,
+  failureSourceReferences,
   marker,
   main,
   modelInventory,
@@ -171,6 +174,178 @@ test("job logs support gh ANSI protection without exposing controls or credentia
     ),
     null,
   );
+});
+
+test("bounded log excerpts preserve middle failures ahead of setup and cleanup noise", () => {
+  const steps = [
+    {
+      conclusion: "failure",
+      started_at: "2026-10-05T08:10:00Z",
+      completed_at: "2026-10-05T08:11:00Z",
+    },
+  ];
+  const logs = [
+    ...Array(500).fill("2026-10-05T08:00:00Z setup"),
+    "2026-10-05T08:10:00Z " + "x".repeat(20000),
+    "2026-10-05T08:10:01Z ##[error] AssertionError: expected visible, received hidden",
+    "2026-10-05T08:10:02Z at tests/viewer.spec.ts:41",
+    ...Array(500).fill("2026-10-05T08:10:59Z test output"),
+    ...Array(500).fill(
+      "2026-10-05T08:20:00Z ##[error] irrelevant cleanup noise",
+    ),
+  ].join("\n");
+  const excerpt = excerptJobLogs(logs, steps, 1800);
+  assert.ok(excerpt.length <= 1800);
+  assert.match(excerpt, /AssertionError: expected visible, received hidden/u);
+  assert.match(excerpt, /tests\/viewer.spec.ts:41/u);
+  assert.doesNotMatch(excerpt, /irrelevant cleanup noise/u);
+  assert.match(excerpt, /other lines omitted/u);
+  const missingTimes = excerptJobLogs(logs, [], 1800);
+  assert.match(missingTimes, /AssertionError/u);
+  assert.ok(missingTimes.length <= 1800);
+  assert.equal(excerptJobLogs("short failure", steps, 1800), "short failure");
+});
+
+test("CI source gaps are filled from exact head with scanned failure windows and bounded helpers", () => {
+  const evidence = {
+    ...packet,
+    kind: "ci",
+    files: [],
+    omissions: [],
+    failedJobs: [
+      {
+        logs: "Error: e2e/missing.spec.ts:600:7\nat tests/e2e/missing.spec.ts:400:1\ntests/../../private.ts:1\nscripts/credential.ts:1",
+      },
+    ],
+  };
+  assert.deepEqual(failureSourceReferences(evidence.failedJobs), [
+    { path: "tests/e2e/missing.spec.ts", lines: [600, 400] },
+    { path: "scripts/credential.ts", lines: [1] },
+  ]);
+  const source = Array(700).fill("// surrounding source");
+  source[0] = 'import { ready } from "./helper";';
+  source[599] = "expect(ready()).toBe(true); // actual failing assertion";
+  source[399] = "const observed = false; // earlier reported location";
+  const sources = {
+    "tests/e2e/missing.spec.ts": source.join("\n"),
+    "tests/e2e/helper.ts": "export const ready = () => false;",
+    "scripts/credential.ts": ["ghp_", "A".repeat(36)].join(""),
+  };
+  const reads = [];
+  collectFailureSources(evidence, (path, ref) => {
+    assert.equal(ref, head);
+    reads.push(path);
+    if (!Object.hasOwn(sources, path)) throw new Error("missing");
+    const content = sources[path];
+    return {
+      type: "file",
+      path,
+      sha: base,
+      encoding: "base64",
+      size: Buffer.byteLength(content),
+      content: Buffer.from(content).toString("base64"),
+    };
+  });
+  assert.equal(evidence.relatedSources.length, 2);
+  assert.match(evidence.relatedSources[0].source, /600: expect\(ready\(\)\)/u);
+  assert.match(evidence.relatedSources[0].source, /400: const observed/u);
+  assert.match(evidence.relatedSources[1].source, /ready = \(\) => false/u);
+  assert.ok(
+    evidence.relatedSources.every(
+      (file) => file.ref === head && file.blob === base,
+    ),
+  );
+  assert.ok(
+    evidence.omissions.some((value) => value.includes("Credential finding")),
+  );
+  assert.ok(reads.length <= 24);
+  assert.ok(
+    !JSON.stringify(evidence).includes(sources["scripts/credential.ts"]),
+  );
+  const findings = {
+    assessment: "findings",
+    summary: "Supported cause",
+    findings: [
+      {
+        priority: "P2",
+        path: "tests/e2e/helper.ts",
+        line: 1,
+        body: "Concrete source evidence",
+        fix: "Repair helper",
+        validation: "Run its test",
+      },
+    ],
+  };
+  assert.equal(
+    parseReport(JSON.stringify(findings), evidence).assessment,
+    "findings",
+  );
+  assert.throws(() =>
+    parseReport(JSON.stringify(findings), { ...evidence, kind: "review" }),
+  );
+});
+
+test("source collection rejects wrong-path metadata, oversized files and unrelated file types", () => {
+  assert.deepEqual(
+    failureSourceReferences([
+      {
+        logs: "services/backend/route.ts:12\napps/web/app/(routes)/[id]/page.tsx:34",
+      },
+    ]),
+    [
+      { path: "services/backend/route.ts", lines: [12] },
+      { path: "apps/web/app/(routes)/[id]/page.tsx", lines: [34] },
+    ],
+  );
+  for (const delta of [{ path: "scripts/other.ts" }, { size: 300000 }]) {
+    const evidence = {
+      ...packet,
+      kind: "ci",
+      files: [],
+      omissions: [],
+      failedJobs: [{ logs: "scripts/fail.ts:1\nscripts/private.env:1" }],
+    };
+    collectFailureSources(evidence, (path) => ({
+      type: "file",
+      path,
+      sha: base,
+      size: 1,
+      encoding: "base64",
+      content: "eA==",
+      ...delta,
+    }));
+    assert.deepEqual(evidence.relatedSources, []);
+    assert.equal(evidence.omissions.length, 1);
+  }
+});
+
+test("already supplied full source still contributes its missing direct helper", () => {
+  const evidence = {
+    ...packet,
+    kind: "ci",
+    files: [
+      {
+        path: "tests/failure.ts",
+        source: 'import { helper } from "./helper";',
+      },
+    ],
+    omissions: [],
+    failedJobs: [{ logs: "tests/failure.ts:10" }],
+  };
+  collectFailureSources(evidence, (path, ref) => {
+    assert.equal(path, "tests/helper.ts");
+    assert.equal(ref, head);
+    return {
+      type: "file",
+      path,
+      sha: base,
+      size: 1,
+      encoding: "base64",
+      content: "eA==",
+    };
+  });
+  assert.equal(evidence.relatedSources.length, 1);
+  assert.equal(evidence.relatedSources[0].path, "tests/helper.ts");
 });
 
 test("large prose and generated additions cannot displace executable patch coverage", () => {
@@ -700,7 +875,16 @@ test("parameterized models reject malformed input and unconfirmed or downgraded 
       ],
     },
   };
-  confirmModelSelection(selection, configuration);
+  assert.deepEqual(
+    confirmModelSelection(selection, { ...configuration, maxMode: true }),
+    {
+      modelId: "grok-4.7",
+      context: "500k",
+      reasoning_effort: "xhigh",
+      fast: "true",
+      maxMode: true,
+    },
+  );
   confirmModelSelection(parseModelSelection("composer-2.5"), {});
   assert.throws(() => confirmModelSelection(selection, {}));
   for (const [index, value] of [
@@ -948,6 +1132,7 @@ if (process.argv[process.argv.indexOf('--model') + 1] !== 'grok-4.7[context=500k
 const configPath = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
 const configuration = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 configuration.selectedModel = { modelId: 'grok-4.7', parameters: [{ id: 'context', value: '500k' }, { id: 'reasoning_effort', value: 'xhigh' }, { id: 'fast', value: 'true' }] };
+configuration.maxMode = true;
 fs.writeFileSync(configPath, JSON.stringify(configuration));
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: ${JSON.stringify(JSON.stringify(clean))} }));
 `,
@@ -976,7 +1161,18 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
       readFileSync(join(directory, "report.json"), "utf8"),
     );
     assert.equal(successful.model, env.CURSOR_MODEL);
-    assert.match(renderReport(packet, successful), /Model selection:/u);
+    assert.deepEqual(successful.effectiveSelection, {
+      modelId: "grok-4.7",
+      context: "500k",
+      reasoning_effort: "xhigh",
+      fast: "true",
+      maxMode: true,
+    });
+    assert.match(renderReport(packet, successful), /Configured selection:/u);
+    assert.match(
+      renderReport(packet, successful),
+      /Effective selection \(fresh CLI configuration after inference\):/u,
+    );
     writeFileSync(
       stub,
       readFileSync(stub, "utf8").replace("value: '500k'", "value: '256k'"),
