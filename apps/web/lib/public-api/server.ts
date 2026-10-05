@@ -541,22 +541,33 @@ export const relayServerLocalEditorialMedia = async (
   if (!kind || !match) return fail(404);
   const expected = editorialMediaTypes[match[1]!]!;
   try {
-    const detail = await fetch(
-      new URL(
-        `v1/community/editorial/${kind}s/${owner}`,
-        parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL),
-      ),
-      {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-          ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
+    const lookup = (session: string | undefined) =>
+      fetch(
+        new URL(
+          `v1/community/editorial/${kind}s/${owner}`,
+          parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL),
+        ),
+        {
+          method: "GET",
+          headers: {
+            accept: "application/json",
+            ...(session === undefined
+              ? {}
+              : { Authorization: `Bearer ${session}` }),
+          },
+          cache: "no-store",
+          redirect: "error",
+          signal: AbortSignal.timeout(15000),
         },
-        cache: "no-store",
-        redirect: "error",
-        signal: AbortSignal.timeout(15000),
-      },
-    );
+      );
+    let detail = await lookup(token);
+    // As in the community relay: a Session the Backend refuses must not keep
+    // this browser from a read that needs none. A closed beta refuses the
+    // signed-out read as well, and that answer stands.
+    if (detail.status === 401 && token !== undefined) {
+      await detail.body?.cancel().catch(() => undefined);
+      detail = await lookup(undefined);
+    }
     if (!detail.ok) {
       await detail.body?.cancel().catch(() => undefined);
       return fail(
@@ -695,7 +706,7 @@ const publishingUploadResponseWaitMs = 60_000;
 const publishingMediaResponseWaitMs = 15_000;
 const publishingUploadResponseMaxBytes = 64 * 1024;
 const publishingUploadStatuses: ReadonlySet<number> = new Set([
-  200, 401, 404, 409, 413, 422, 503,
+  200, 401, 403, 404, 409, 413, 422, 503,
 ]);
 const publishingMediaTypes: ReadonlySet<string> = new Set([
   "image/webp",
@@ -1038,7 +1049,7 @@ export const relayServerPublishingMedia = async (
   if (upstream.status !== 200 && upstream.status !== 206) {
     await cancelQuietly(upstream.body);
     return fail(
-      [401, 404, 503].includes(upstream.status) ? upstream.status : 502,
+      [401, 403, 404, 503].includes(upstream.status) ? upstream.status : 502,
     );
   }
   const type = mediaTypeOf(upstream);

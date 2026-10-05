@@ -9,11 +9,14 @@ export const runtime = "nodejs";
 const allowedParameters = new Set(["page", "pageSize"]);
 const maximumBodyBytes = 4_096;
 
+// The answer depends on who asks, so no cache may keep it for someone else.
+const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
+
 const emptyResponse = (status: number) =>
-  new Response(null, { status, headers: { "Cache-Control": "no-store" } });
+  new Response(null, { status, headers });
 
 const jsonResponse = (body: unknown, status: number) =>
-  Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+  Response.json(body, { status, headers });
 
 /**
  * Bounds the actual stream: a chunked body declares no content-length, so the

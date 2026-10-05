@@ -21,7 +21,8 @@ describe("same-origin Catalog Search bridge", () => {
     const input = request("q=测试&kind=inscription&page=2&pageSize=20");
     const response = await GET(input);
     expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Vary")).toBe("Cookie");
     expect(fetchServerCatalogSearchPageMock).toHaveBeenCalledWith(
       { q: "测试", kind: "inscription", page: "2", pageSize: "20" },
       input.signal,
@@ -50,7 +51,8 @@ describe("same-origin Catalog Search bridge", () => {
       });
       const response = await GET(request("q=a"));
       expect(response.status).toBe(status);
-      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      expect(response.headers.get("Vary")).toBe("Cookie");
       expect(await response.text()).toBe("");
     },
   );

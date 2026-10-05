@@ -195,6 +195,11 @@ describe("product access configuration", () => {
     install(file, allowlist([{ id: tester }]));
     now = 5_000;
     expect(policy.admits(tester)).toBe(true);
+    // A clock that steps backwards looks at once instead of waiting to catch up.
+    install(file, allowlist([{ id: other }]));
+    now = 1_000;
+    expect(policy.admits(tester)).toBe(false);
+    expect(policy.admits(other)).toBe(true);
     // Reports carry counts and never an account id.
     const logged = [...info.mock.calls, ...error.mock.calls].flat().join("\n");
     expect(logged).toContain("reloaded (1 accounts)");

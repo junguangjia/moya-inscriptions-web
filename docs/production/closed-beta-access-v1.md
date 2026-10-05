@@ -40,9 +40,15 @@ Production must name its mode: without one the Backend does not start.
   `/docs/prototypes` are served only with access. If the Backend cannot be
   asked, Web shows "temporarily unavailable" rather than the product.
 
-Protected answers are `private, no-store`. Nginx has no cache. The Next.js image
-optimizer is closed for every source: left open it would fetch a same-origin
-image with the caller's cookie and then serve its cached copy to anyone.
+No protected answer may be stored: the Backend answers `no-store`, and every Web
+answer that depends on the visitor's session (pages, relays, prototype
+documents) is `private, no-store` with `Vary: Cookie`. Nginx has no cache. The
+Next.js image optimizer is closed for every source: left open it would fetch a
+same-origin image with the caller's cookie and then serve its cached copy to
+anyone.
+
+In both modes the root page and the prototype documents are rendered only after
+the Backend has answered; without a reachable Backend, Web serves neither.
 
 ## Configuration
 
@@ -69,7 +75,9 @@ the provisioning command prints, never a handle, a display name or an e-mail:
   and is never logged.
 - The file must be a regular file (not a symlink), owned by the Backend service
   user, mode `0600`, at most 64 KiB and 500 accounts, with no other fields and
-  no duplicate ids.
+  no duplicate ids. That user must also be able to reach it: every directory on
+  its path needs search permission for the service user. Running the validation
+  command below as that user proves both.
 - An empty `accounts` list is valid and admits nobody.
 - Real ids belong only in this private file. Do not put them in the repository,
   an Issue, a pull request or a log; the Backend logs counts only.
@@ -99,8 +107,11 @@ A refusal prints `PRODUCT_ACCESS_REFUSED` with the reason and exits non-zero.
    `mv /etc/yoyi/product-access.json.next /etc/yoyi/product-access.json`. A
    rename replaces the file in one step, so the Backend never reads half of it.
 
-No restart or reload is needed. The Backend notices the replaced file within
-about one second and logs `product access allowlist reloaded (N accounts)`.
+No restart or reload is needed. The Backend looks at the file again when it next
+decides a request, at most once per second, so a replacement applies to the
+first protected request that arrives about a second or more after it; it then
+logs `product access allowlist reloaded (N accounts)`. The interval is measured
+on a monotonic clock, so a wall-clock adjustment cannot delay it.
 
 What a removal does, and when:
 
@@ -144,9 +155,11 @@ A rollback must never reopen the ungated site. In order of preference:
    unavailable to all visitors until a gated release is active again.
 
 Do not activate a release from before this policy on the public hostname, and do
-not "recover" by setting `public`. A Web process that cannot get the access
-answer from its Backend — including a Backend from before this policy — shows
-only the unavailable notice.
+not "recover" by setting `public`. In particular, never run a Backend from
+before this policy behind the public hostname, even with a current Web: the
+pages would show only the unavailable notice, because that Backend cannot answer
+the access question, but the Web relays would still pass on whatever an ungated
+Backend serves.
 
 ## Media
 

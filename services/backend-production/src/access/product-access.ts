@@ -132,7 +132,8 @@ class ClosedBetaAccess implements ProductAccessPolicy {
     private readonly path: string,
     options: ProductAccessOptions,
   ) {
-    this.now = options.now ?? Date.now;
+    // Monotonic by default: a wall clock that steps cannot postpone a look.
+    this.now = options.now ?? (() => performance.now());
     this.recheckMs = options.recheckMs ?? defaultRecheckMs;
     // Startup refuses an allowlist it cannot read; nothing is admitted by default.
     this.seen = fingerprint(path);
@@ -152,7 +153,8 @@ class ClosedBetaAccess implements ProductAccessPolicy {
 
   private refresh(): void {
     const now = this.now();
-    if (now - this.checkedAt < this.recheckMs) return;
+    // A clock that went backwards is due at once, never "not yet".
+    if (now >= this.checkedAt && now - this.checkedAt < this.recheckMs) return;
     this.checkedAt = now;
     let current: string;
     try {

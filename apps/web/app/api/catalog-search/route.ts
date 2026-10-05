@@ -7,7 +7,8 @@ import { fetchServerCatalogSearchPage } from "../../../lib/public-api/server";
 
 export const runtime = "nodejs";
 const allowedParameters = new Set(["q", "kind", "page", "pageSize"]);
-const headers = { "Cache-Control": "no-store" };
+// The answer depends on who asks, so no cache may keep it for someone else.
+const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
 const emptyResponse = (status: number) =>
   new Response(null, { status, headers });
 

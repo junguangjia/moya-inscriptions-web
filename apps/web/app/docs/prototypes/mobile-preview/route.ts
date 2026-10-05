@@ -8,12 +8,16 @@ import { isProductAccessGranted } from "../../../product-access";
 export const runtime = "nodejs";
 
 // Prototype documents carry sample records: they follow product access too.
-const notFound = () => new Response(null, { status: 404 });
+// The answer depends on who asks, so no cache may keep it for someone else.
+const answer = async (request: Request, method: "GET" | "HEAD") => {
+  const response = (await isProductAccessGranted(request))
+    ? await readT02Document(method)
+    : new Response(null, { status: 404 });
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("Vary", "Cookie");
+  return response;
+};
 
-export const GET = async (request: Request) =>
-  (await isProductAccessGranted(request)) ? readT02Document("GET") : notFound();
-export const HEAD = async (request: Request) =>
-  (await isProductAccessGranted(request))
-    ? readT02Document("HEAD")
-    : notFound();
+export const GET = (request: Request) => answer(request, "GET");
+export const HEAD = (request: Request) => answer(request, "HEAD");
 export const POST = methodNotAllowed;

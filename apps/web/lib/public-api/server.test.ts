@@ -878,12 +878,41 @@ describe("Content reads carry the visitor's session to the Backend", () => {
   });
 
   it("refuses the Development editorial media relay with the Backend's status before reading any file", async () => {
-    const upstream = stub(new Response(null, { status: 401 }));
+    const owner = `article-${"3".repeat(32)}`;
+    const file = `${"e".repeat(64)}-${"f".repeat(64)}.png`;
+    const anonymous = stub(new Response(null, { status: 401 }));
+    expect((await relayServerLocalEditorialMedia(owner, file)).status).toBe(
+      401,
+    );
+    expect(anonymous).toHaveBeenCalledOnce();
+
+    // A valid session whose account is not approved: refused once, as is.
+    const restricted = stub(new Response(null, { status: 403 }));
+    expect(
+      (await relayServerLocalEditorialMedia(owner, file, session)).status,
+    ).toBe(403);
+    expect(restricted).toHaveBeenCalledOnce();
+    expect(sent(restricted).headers.get("authorization")).toBe(
+      `Bearer ${session}`,
+    );
+  });
+
+  it("reads a Development editorial image as signed out when the Backend no longer accepts the session", async () => {
+    const upstream = stub(
+      new Response(null, { status: 401 }),
+      new Response(null, { status: 404 }),
+    );
     const response = await relayServerLocalEditorialMedia(
       `article-${"3".repeat(32)}`,
       `${"e".repeat(64)}-${"f".repeat(64)}.png`,
+      session,
     );
-    expect(response.status).toBe(401);
-    expect(upstream).toHaveBeenCalledOnce();
+    // Public mode: the signed-out lookup answers for itself (here: not published).
+    expect(response.status).toBe(404);
+    expect(upstream).toHaveBeenCalledTimes(2);
+    expect(sent(upstream, 0).headers.get("authorization")).toBe(
+      `Bearer ${session}`,
+    );
+    expect(sent(upstream, 1).headers.has("authorization")).toBe(false);
   });
 });

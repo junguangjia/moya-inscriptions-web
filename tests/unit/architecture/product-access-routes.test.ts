@@ -78,7 +78,11 @@ const proof: Readonly<Record<string, RegExp>> = {
   // from the server module, each of which does.
   session:
     /\breadCommunitySessionToken\(|\brelay(?:ServerAuthorCommunity|NotificationStream|ServerPublishingMedia|ServerPublishingUpload)\b/u,
-  development: /NODE_ENV\s*!==\s*"development"|notFound\(\)/u,
+  bootstrap:
+    /\brelayServerCommunityAuth\b|\bfetchServerCurrentUser\b|<AuthPage\b/u,
+  operator: /\bfetchServerEditorialPreview\(/u,
+  development: /NODE_ENV\s*!==\s*"development"/u,
+  asset: /kind: "(?:demo-assets|design-tokens|ui-styles|ui-assets)"/u,
   redirect: /Response\.redirect\(/u,
 };
 
@@ -93,8 +97,10 @@ describe("product access covers every Web entry point", () => {
     const missing: string[] = [];
     for (const [route, group] of Object.entries(routes)) {
       const pattern = proof[group];
-      if (pattern === undefined) continue;
-      if (!pattern.test(await readFile(path.join(appRoot, route), "utf8")))
+      if (
+        pattern === undefined ||
+        !pattern.test(await readFile(path.join(appRoot, route), "utf8"))
+      )
         missing.push(`${route} (${group})`);
     }
     expect(missing).toEqual([]);

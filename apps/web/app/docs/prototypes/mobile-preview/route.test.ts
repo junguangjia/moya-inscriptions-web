@@ -27,9 +27,14 @@ beforeEach(() => {
   granted.mockReset();
   readDocument.mockReset();
   serveFile.mockReset();
-  readDocument.mockResolvedValue(new Response("document"));
-  serveFile.mockResolvedValue(new Response("file"));
+  readDocument.mockImplementation(async () => new Response("document"));
+  serveFile.mockImplementation(async () => new Response("file"));
 });
+
+const expectNeverStored = (response: Response) => {
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  expect(response.headers.get("Vary")).toBe("Cookie");
+};
 
 describe("prototype documents follow product access", () => {
   it("serves the document and its files to a visitor with access, as before", async () => {
@@ -49,6 +54,14 @@ describe("prototype documents follow product access", () => {
       "HEAD",
     );
     expect(granted).toHaveBeenCalledWith(request);
+    // Served or refused, the answer depends on the visitor and is never stored.
+    for (const response of [
+      await document.GET(request),
+      await document.HEAD(request),
+      await files.GET(request, context),
+      await files.HEAD(request, context),
+    ])
+      expectNeverStored(response);
   });
 
   it("answers 404 without reading anything for a visitor without access", async () => {
@@ -60,6 +73,7 @@ describe("prototype documents follow product access", () => {
       await files.HEAD(request, context),
     ]) {
       expect(response.status).toBe(404);
+      expectNeverStored(response);
       expect(await response.text()).toBe("");
     }
     expect(readDocument).not.toHaveBeenCalled();
