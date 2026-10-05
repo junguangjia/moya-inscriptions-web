@@ -62,16 +62,18 @@ export function safeText(text, filename = "context.txt") {
     : plain;
 }
 
-export function eligiblePR(pr, repository, expectedHead) {
+export function eligiblePR(pr, repository, expectedHead, target = {}) {
   return (
     pr?.state === "open" &&
-    pr.base?.ref === "main" &&
+    pr.base?.ref === (target.manualCI ? target.baseRef : "main") &&
     pr.base?.repo?.full_name === repository &&
     pr.head?.repo?.full_name === repository &&
     integer(pr.number) &&
     sha(pr.head.sha) &&
     sha(pr.base.sha) &&
-    (!expectedHead || pr.head.sha === expectedHead)
+    (!expectedHead || pr.head.sha === expectedHead) &&
+    (!target.base || pr.base.sha === target.base) &&
+    (!target.headBranch || pr.head.ref === target.headBranch)
   );
 }
 
@@ -113,6 +115,30 @@ export function selectEvent(name, event, repository) {
   }
   if (name === "workflow_dispatch") {
     if (!integer(event.inputs?.pr)) throw new Error("INVALID_PR");
+    if (event.inputs.operation === "diagnose-ci") {
+      const {
+        ci_run: runId,
+        ci_attempt: attempt,
+        expected_head: head,
+        base_ref: baseRef,
+      } = event.inputs;
+      if (
+        !integer(runId) ||
+        !integer(attempt) ||
+        !sha(head) ||
+        !/^[A-Za-z0-9._/-]{1,200}$/u.test(baseRef || "")
+      )
+        throw new Error("INVALID_CI_TARGET");
+      return {
+        kind: "ci",
+        manualCI: true,
+        number: Number(event.inputs.pr),
+        runId: Number(runId),
+        attempt: Number(attempt),
+        head,
+        baseRef,
+      };
+    }
     return { kind: "review", number: Number(event.inputs.pr) };
   }
   return null;
@@ -124,7 +150,17 @@ export function currentRun(run, target) {
     run.run_attempt === target.attempt &&
     run.status === "completed" &&
     ["failure", "timed_out"].includes(run.conclusion) &&
-    run.head_sha === target.head
+    run.head_sha === target.head &&
+    (!target.manualCI ||
+      (run.name === "CI" &&
+        run.path === ".github/workflows/ci.yml" &&
+        ["workflow_dispatch", "pull_request"].includes(run.event) &&
+        run.repository?.full_name === target.repository &&
+        run.head_repository?.full_name === target.repository &&
+        (!target.headBranch || run.head_branch === target.headBranch) &&
+        run.pull_requests?.some(
+          (pr) => pr.number === target.number && pr.head?.sha === target.head,
+        )))
   );
 }
 
@@ -241,29 +277,50 @@ export function collectFileEvidence(packet, files, loadBlob) {
   }
 }
 
+export function readJobLogs(repository, jobId, runCommand = command) {
+  // Recent gh releases refuse ANSI-bearing responses unless explicitly allowed.
+  // Capture only in memory, then strip controls and scan before returning data.
+  // Older runner versions lack the flag and already return the response body.
+  const help = runCommand("gh", ["api", "--help"]);
+  return safeText(
+    runCommand("gh", [
+      "api",
+      `repos/${repository}/actions/jobs/${jobId}/logs`,
+      ...(help.includes("--allow-escape-sequences")
+        ? ["--allow-escape-sequences"]
+        : []),
+    ]),
+  );
+}
+
 function collect(repository, target) {
   let pr;
+  let run;
   if (target.kind === "ci") {
-    const run = api(`repos/${repository}/actions/runs/${target.runId}`);
-    if (!currentRun(run, target)) return null;
+    run = api(`repos/${repository}/actions/runs/${target.runId}`);
+    if (!currentRun(run, { ...target, repository })) return null;
     // GitHub can omit pull_requests on workflow_run; resolve by exact commit.
-    const candidates = api(
-      `repos/${repository}/commits/${target.head}/pulls?per_page=100`,
-    ).filter((candidate) => eligiblePR(candidate, repository, target.head));
-    if (candidates.length !== 1) return null;
-    target.number = candidates[0].number;
+    if (!target.manualCI) {
+      const candidates = api(
+        `repos/${repository}/commits/${target.head}/pulls?per_page=100`,
+      ).filter((candidate) => eligiblePR(candidate, repository, target.head));
+      if (candidates.length !== 1) return null;
+      target.number = candidates[0].number;
+    }
   }
   pr = api(`repos/${repository}/pulls/${target.number}`);
-  if (!eligiblePR(pr, repository, target.head)) return null;
+  if (!eligiblePR(pr, repository, target.head, target)) return null;
   const packet = {
     ...target,
     repository,
     head: pr.head.sha,
     base: pr.base.sha,
+    ...(target.manualCI ? { headBranch: pr.head.ref } : {}),
     files: [],
     omissions: [],
     failedJobs: [],
   };
+  if (run && !currentRun(run, packet)) return null;
   // The collector never checks out or runs PR code, hooks, MCP config or skills.
   const files = api(
     `repos/${repository}/pulls/${target.number}/files?per_page=100`,
@@ -290,11 +347,7 @@ function collect(repository, target) {
         conclusion: job.conclusion,
       };
       try {
-        const logs = command("gh", [
-          "api",
-          `repos/${repository}/actions/jobs/${job.id}/logs`,
-        ]);
-        const safe = safeText(logs);
+        const safe = readJobLogs(repository, job.id);
         // Keep both setup failures and the trailing test failure; disclose truncation.
         if (safe === null)
           packet.omissions.push(
@@ -326,6 +379,7 @@ function collect(repository, target) {
       api(`repos/${repository}/pulls/${target.number}`),
       repository,
       packet.head,
+      packet,
     )
   )
     return null;
@@ -506,6 +560,144 @@ export function confirmModelSelection(selection, configuration) {
     throw new Error("MODEL_SELECTION_NOT_CONFIRMED");
 }
 
+export function modelInventory(cliText, cloudCatalog) {
+  const plain = safeText(cliText);
+  if (plain === null) throw new Error("UNSAFE_MODEL_CATALOG");
+  const cli = plain
+    .split("\n")
+    .flatMap((line) => {
+      const id = line.trim().split(/\s+/u)[0];
+      return /^grok-[a-zA-Z0-9._,=[\]-]{1,150}$/u.test(id) ? [id] : [];
+    })
+    .slice(0, 80);
+  const allowed = {
+    context: /^(?:256k|500k)$/u,
+    reasoning_effort: /^(?:low|medium|high|xhigh)$/u,
+    effort: /^(?:low|medium|high|xhigh)$/u,
+    fast: /^(?:true|false)$/u,
+  };
+  const params = (entries) =>
+    (Array.isArray(entries) ? entries : []).flatMap((entry) =>
+      Object.hasOwn(allowed, entry?.id) &&
+      typeof entry.value === "string" &&
+      allowed[entry.id].test(entry.value)
+        ? [{ id: entry.id, value: entry.value }]
+        : [],
+    );
+  const model = cloudCatalog?.items?.find((item) => item.id === "grok-4.7");
+  return {
+    cliModelIds: [...new Set(cli)],
+    cloudModel: model
+      ? {
+          id: "grok-4.7",
+          parameters: (model.parameters || [])
+            .slice(0, 10)
+            .flatMap((parameter) =>
+              Object.hasOwn(allowed, parameter.id)
+                ? [
+                    {
+                      id: parameter.id,
+                      values: params(
+                        (parameter.values || []).map(({ value }) => ({
+                          id: parameter.id,
+                          value,
+                        })),
+                      ).map(({ value }) => value),
+                    },
+                  ]
+                : [],
+            ),
+          variants: (model.variants || [])
+            .slice(0, 80)
+            .map((variant) => params(variant.params)),
+        }
+      : null,
+  };
+}
+
+export async function boundedBody(response, limit = 1024 * 1024) {
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > limit) {
+        await reader.cancel();
+        throw new Error("CATALOG_TOO_LARGE");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function inspectModels(directory, env) {
+  if (!env.CURSOR_API_KEY) throw new Error("MISSING_CURSOR_KEY");
+  const home = join(directory, "model-home");
+  mkdirSync(join(home, ".cursor"), { recursive: true });
+  save(join(home, ".cursor/cli-config.json"), agentConfiguration());
+  let cliText = "";
+  let cliStatus = "available";
+  try {
+    cliText = command(
+      env.CURSOR_AGENT_BIN,
+      ["--list-models"],
+      {
+        cwd: directory,
+        env: agentEnvironment(env, home),
+        timeout: 60000,
+        maxBuffer: 256 * 1024,
+        killSignal: "SIGKILL",
+      },
+      cursorFailure,
+    );
+  } catch {
+    cliStatus = "unavailable";
+  }
+  let cloudCatalog;
+  let cloudStatus = "available";
+  try {
+    // Metadata lookup only: no cloud agent, run, repository mutation or inference.
+    const response = await globalThis.fetch(
+      "https://api.cursor.com/v1/models",
+      {
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${env.CURSOR_API_KEY}:`).toString("base64")}`,
+        },
+        redirect: "error",
+        signal: globalThis.AbortSignal.timeout(30000),
+      },
+    );
+    if (!response.ok) throw new Error("CATALOG_REQUEST_FAILED");
+    const raw = await boundedBody(response);
+    cloudCatalog = JSON.parse(raw);
+  } catch {
+    cloudStatus = "unavailable";
+  }
+  // Only scoped model IDs and allowlisted parameter values leave this process.
+  const result = {
+    cliStatus,
+    cloudStatus,
+    ...modelInventory(cliText, cloudCatalog),
+  };
+  const body = JSON.stringify(result, null, 2);
+  if (body.length > 24000 || safeText(body) === null)
+    throw new Error("UNSAFE_MODEL_CATALOG");
+  process.stdout.write(`${body}\n`);
+  if (env.GITHUB_STEP_SUMMARY)
+    appendFileSync(
+      env.GITHUB_STEP_SUMMARY,
+      `## Cursor model metadata\n\n\`\`\`json\n${body}\n\`\`\`\n`,
+    );
+  if (cliStatus !== "available" || cloudStatus !== "available")
+    process.exitCode = 1;
+}
+
 function analyze(directory, env) {
   const packet = readJSON(join(directory, "context.json"));
   const unavailable = (reason) =>
@@ -658,7 +850,7 @@ function publish(directory, repository, env) {
   const packet = readJSON(join(directory, "context.json"));
   const report = readJSON(join(directory, "report.json"));
   const pr = api(`repos/${repository}/pulls/${packet.number}`);
-  if (!eligiblePR(pr, repository, packet.head)) return;
+  if (!eligiblePR(pr, repository, packet.head, packet)) return;
   if (
     packet.kind === "ci" &&
     !currentRun(api(`repos/${repository}/actions/runs/${packet.runId}`), packet)
@@ -685,10 +877,16 @@ function publish(directory, repository, env) {
   const existing = ownedComment(comments, packet.kind);
   // Recheck immediately before publication, after pagination and credential scan.
   if (
+    packet.kind === "ci" &&
+    !currentRun(api(`repos/${repository}/actions/runs/${packet.runId}`), packet)
+  )
+    return;
+  if (
     !eligiblePR(
       api(`repos/${repository}/pulls/${packet.number}`),
       repository,
       packet.head,
+      packet,
     )
   )
     return;
@@ -711,19 +909,25 @@ function publish(directory, repository, env) {
     process.exitCode = 1;
 }
 
-export function main(stage, env = process.env) {
+export async function main(stage, env = process.env) {
   const directory = resolve(env.RUNNER_TEMP, "cursor-review");
   const repository = env.GITHUB_REPOSITORY;
   if (stage === "prepare") {
-    const target = selectEvent(
-      env.GITHUB_EVENT_NAME,
-      readJSON(env.GITHUB_EVENT_PATH),
-      repository,
-    );
+    const event = readJSON(env.GITHUB_EVENT_PATH);
+    if (
+      env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+      event.inputs?.operation === "inspect-models"
+    ) {
+      if (env.GITHUB_REF !== "refs/heads/main") return;
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      appendFileSync(env.GITHUB_OUTPUT, "models=true\n");
+      return;
+    }
+    const target = selectEvent(env.GITHUB_EVENT_NAME, event, repository);
     // Dispatch must run trusted default-branch code, never a caller-selected ref.
     if (
       !target ||
-      env.CURSOR_AUTOMATION_ENABLED === "false" ||
+      (env.CURSOR_AUTOMATION_ENABLED === "false" && !target.manualCI) ||
       (env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
         env.GITHUB_REF !== "refs/heads/main")
     )
@@ -740,6 +944,7 @@ export function main(stage, env = process.env) {
         api(`repos/${repository}/pulls/${packet.number}`),
         repository,
         packet.head,
+        packet,
       )
     )
       return;
@@ -752,6 +957,14 @@ export function main(stage, env = process.env) {
     )
       return;
     appendFileSync(env.GITHUB_OUTPUT, "ready=true\n");
+  } else if (stage === "models") {
+    if (
+      env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+      env.GITHUB_REF !== "refs/heads/main" ||
+      readJSON(env.GITHUB_EVENT_PATH).inputs?.operation !== "inspect-models"
+    )
+      return;
+    await inspectModels(directory, env);
   } else if (stage === "analyze") analyze(directory, env);
   else if (stage === "publish") publish(directory, repository, env);
   else throw new Error("INVALID_STAGE");
@@ -762,7 +975,7 @@ if (
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
   try {
-    main(process.argv[2]);
+    await main(process.argv[2]);
   } catch {
     process.stderr.write(
       "Cursor workflow failed before a verified result could be published. No raw diagnostics were exposed.\n",

@@ -111,9 +111,9 @@ precedence over the general amendment permitting routine agent-managed merges.
 
 ## Code Review Rules
 
-Review the assigned task's actual diff and exact HEAD against its scope and
-applicable evidence. A separate session can provide independent review using the
-same or a different tool; tool branding and author self-report do not prove
-independence. Preserve existing required reviews and Owner visual/device gates.
-Do not monitor unrelated PRs or create review/fix loops. New changes require
-review of their impact; changing tools alone does not invalidate valid evidence.
+Use a separate session to review the assigned diff and exact HEAD against scope
+and evidence; tool branding or author claims do not establish independence.
+Preserve required reviews and Owner visual/device gates. For PR/CI work, follow
+[Cursor evidence reuse](docs/development/cursor-github-automation.md#viewing-runs-choosing-models-and-coding-agent-handoff).
+Review new impacts; tool changes do not invalidate evidence. Do not monitor
+unrelated PRs or create review/fix loops.

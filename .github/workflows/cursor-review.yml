@@ -11,24 +11,47 @@ on:
     inputs:
       pr:
         description: Same-repository PR number to review
-        required: true
+        required: false
+        type: string
+      operation:
+        description: Review a PR, or inspect model metadata without inference
+        type: choice
+        default: review
+        options: [review, inspect-models, diagnose-ci]
+      ci_run:
+        description: Failed canonical CI run ID (diagnose-ci only)
+        type: string
+      ci_attempt:
+        description: Exact CI run attempt (diagnose-ci only)
+        type: string
+      expected_head:
+        description: Exact current PR head SHA (diagnose-ci only)
+        type: string
+      base_ref:
+        description: Exact current PR base branch (diagnose-ci only)
         type: string
 
 permissions: {}
 
 concurrency:
   group:
-    cursor-${{ github.event_name == 'workflow_run' && format('ci-{0}',
-    github.event.workflow_run.head_branch) || format('review-{0}',
+    cursor-${{ github.event_name == 'workflow_dispatch' && inputs.operation ==
+    'inspect-models' && 'model-catalog' || github.event_name ==
+    'workflow_dispatch' && inputs.operation == 'diagnose-ci' && format('ci-{0}',
+    inputs.expected_head) || github.event_name == 'workflow_run' &&
+    format('ci-{0}', github.event.workflow_run.head_sha) || format('review-{0}',
     github.event.pull_request.number || inputs.pr) }}
   cancel-in-progress: true
 
 jobs:
   analyze:
     if: >-
-      vars.CURSOR_AUTOMATION_ENABLED != 'false' && (github.event_name !=
-      'workflow_run' || github.event.workflow_run.conclusion == 'failure' ||
-      github.event.workflow_run.conclusion == 'timed_out')
+      (github.event_name == 'workflow_dispatch' && (inputs.operation ==
+      'inspect-models' || inputs.operation == 'diagnose-ci') && github.ref ==
+      'refs/heads/main') || (vars.CURSOR_AUTOMATION_ENABLED != 'false' &&
+      (github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'failure' ||
+      github.event.workflow_run.conclusion == 'timed_out'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -52,7 +75,9 @@ jobs:
           CURSOR_AUTOMATION_ENABLED: ${{ vars.CURSOR_AUTOMATION_ENABLED }}
         run: node scripts/cursor-review.mjs prepare
       - name: Install pinned official Cursor CLI
-        if: steps.context.outputs.ready == 'true'
+        if:
+          steps.context.outputs.ready == 'true' || steps.context.outputs.models
+          == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -71,12 +96,17 @@ jobs:
             ${{ github.token }}
         run: node scripts/cursor-review.mjs fresh
       - name: Analyze with Cursor included usage
-        if: steps.fresh.outputs.ready == 'true'
+        if:
+          steps.fresh.outputs.ready == 'true' || steps.context.outputs.models ==
+          'true'
         env:
           CURSOR_API_KEY: # Resolved by GitHub; never a literal credential.
             ${{ secrets.CURSOR_API_KEY }}
           CURSOR_MODEL: ${{ vars.CURSOR_MODEL || 'composer-2.5' }}
-        run: node scripts/cursor-review.mjs analyze
+          CURSOR_OPERATION:
+            ${{ steps.context.outputs.models == 'true' && 'models' || 'analyze'
+            }}
+        run: node scripts/cursor-review.mjs "$CURSOR_OPERATION"
       - name: Publish concise revision-bound findings
         if: steps.fresh.outputs.ready == 'true'
         env:
