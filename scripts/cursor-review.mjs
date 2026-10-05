@@ -137,6 +137,7 @@ export function selectEvent(name, event, repository) {
         attempt: Number(attempt),
         head,
         baseRef,
+        sourceRequests: parseSourceRequests(event.inputs.source_paths),
       };
     }
     return { kind: "review", number: Number(event.inputs.pr) };
@@ -188,6 +189,16 @@ export function collectFileEvidence(packet, files, loadBlob) {
   );
   const selected = [];
   for (const file of ordered) {
+    if (
+      packet.relatedSources?.some(
+        (source) => source.path === file.filename && source.coverage === "full",
+      )
+    ) {
+      packet.omissions.push(
+        `Patch not included; requested full current source supplied: ${file.filename}`,
+      );
+      continue;
+    }
     if (safeText(file.filename) === null) {
       packet.omissions.push("Credential-bearing filename withheld");
       continue;
@@ -383,6 +394,105 @@ export function failureSourceReferences(jobs) {
   return [...references].map(([path, lines]) => ({ path, lines: [...lines] }));
 }
 
+export function parseSourceRequests(value = "") {
+  if (typeof value !== "string" || value.length > 4096)
+    throw new Error("INVALID_SOURCE_REQUESTS");
+  if (!value.trim()) return [];
+  const entries = value.split(",").map((entry) => entry.trim());
+  if (entries.length > 8) throw new Error("INVALID_SOURCE_REQUESTS");
+  const seen = new Set();
+  return entries.map((entry) => {
+    const match = /^(.*?)(?::([1-9][0-9]{0,5})-([1-9][0-9]{0,5}))?$/u.exec(
+      entry,
+    );
+    const path = match?.[1];
+    const start = match?.[2] ? Number(match[2]) : null;
+    const end = match?.[3] ? Number(match[3]) : null;
+    if (
+      !sourcePath(path || "") ||
+      seen.has(path) ||
+      (start !== null && (end < start || end - start >= 400))
+    )
+      throw new Error("INVALID_SOURCE_REQUESTS");
+    seen.add(path);
+    return { path, start, end };
+  });
+}
+
+function decodeExactSource(file, path) {
+  if (
+    file.type !== "file" ||
+    file.path !== path ||
+    !sha(file.sha) ||
+    file.encoding !== "base64" ||
+    !Number.isInteger(file.size) ||
+    file.size < 0 ||
+    file.size > 256 * 1024
+  )
+    throw new Error("SOURCE_METADATA_INVALID");
+  const bytes = Buffer.from(file.content, "base64");
+  if (bytes.length !== file.size) throw new Error("SOURCE_SIZE_MISMATCH");
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  return { text: safeText(text, path), blob: file.sha };
+}
+
+export function collectRequestedSources(packet, loadSource) {
+  if (!packet.manualCI || packet.kind !== "ci") return;
+  packet.relatedSources ??= [];
+  // Allocate requested causal context before unrelated patches, preserving the
+  // existing 180K total and the reserved failure-log/source allowance.
+  const allowance = LIMITS.packet - LIMITS.logs * 2 - 16000;
+  for (const { path, start, end } of packet.sourceRequests || []) {
+    try {
+      const file = decodeExactSource(loadSource(path, packet.head), path);
+      if (file.text === null) {
+        packet.omissions.push(
+          `Credential finding in requested source; withheld: ${path}`,
+        );
+        continue;
+      }
+      const lines = file.text.split("\n");
+      if (start !== null && (start > lines.length || end > lines.length))
+        throw new Error("SOURCE_RANGE_INVALID");
+      const source =
+        start === null
+          ? file.text
+          : lines
+              .slice(start - 1, end)
+              .map((line, index) => `${start + index}: ${line}`)
+              .join("\n");
+      if (source.length > 32000) {
+        packet.omissions.push(
+          `Requested source exceeds 32K; supply a narrower path:start-end range: ${path}`,
+        );
+        continue;
+      }
+      const record = {
+        path,
+        ref: packet.head,
+        blob: file.blob,
+        source,
+        coverage: start === null ? "full" : `lines ${start}-${end} only`,
+        requested: true,
+      };
+      if (
+        JSON.stringify(packet).length + JSON.stringify(record).length + 1 >
+        allowance
+      )
+        throw new Error("SOURCE_CONTEXT_LIMIT");
+      packet.relatedSources.push(record);
+      if (start !== null)
+        packet.omissions.push(
+          `Requested source range only: ${path}:${start}-${end}`,
+        );
+    } catch {
+      packet.omissions.push(
+        `Requested source unavailable or over budget: ${path}`,
+      );
+    }
+  }
+}
+
 function sourceWindow(content, requestedLines, cap) {
   const lines = content.split("\n");
   const sections = [];
@@ -408,7 +518,7 @@ function sourceWindow(content, requestedLines, cap) {
 }
 
 export function collectFailureSources(packet, loadSource) {
-  packet.relatedSources = [];
+  packet.relatedSources ??= [];
   const references = failureSourceReferences(packet.failedJobs);
   const primary = references.slice(0, 8);
   if (references.length > primary.length)
@@ -423,22 +533,7 @@ export function collectFailureSources(packet, loadSource) {
   const fetchSource = (path) => {
     if (cache.has(path)) return cache.get(path);
     if (++calls > 24) throw new Error("SOURCE_FETCH_LIMIT");
-    const file = loadSource(path, packet.head);
-    if (
-      file.type !== "file" ||
-      file.path !== path ||
-      !sha(file.sha) ||
-      file.encoding !== "base64" ||
-      !Number.isInteger(file.size) ||
-      file.size < 0 ||
-      file.size > 256 * 1024
-    )
-      throw new Error("SOURCE_METADATA_INVALID");
-    const bytes = Buffer.from(file.content, "base64");
-    if (bytes.length !== file.size) throw new Error("SOURCE_SIZE_MISMATCH");
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    const safe = safeText(text, path);
-    const result = { text: safe, blob: file.sha };
+    const result = decodeExactSource(loadSource(path, packet.head), path);
     cache.set(path, result);
     return result;
   };
@@ -461,9 +556,11 @@ export function collectFailureSources(packet, loadSource) {
   };
   const add = (reference, dependency = false) => {
     const { path, lines = [] } = reference;
-    const existing = packet.files.find(
-      (file) => file.path === path && file.source,
-    );
+    const existing =
+      packet.files.find((file) => file.path === path && file.source) ||
+      packet.relatedSources.find(
+        (file) => file.path === path && file.coverage === "full",
+      );
     if (existing) {
       if (!dependency) queueImports(path, existing.source);
       return;
@@ -553,6 +650,11 @@ function collect(repository, target) {
     failedJobs: [],
   };
   if (run && !currentRun(run, packet)) return null;
+  const loadSource = (path, head) =>
+    api(
+      `repos/${repository}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${head}`,
+    );
+  collectRequestedSources(packet, loadSource);
   // The collector never checks out or runs PR code, hooks, MCP config or skills.
   const files = api(
     `repos/${repository}/pulls/${target.number}/files?per_page=100`,
@@ -605,11 +707,7 @@ function collect(repository, target) {
     }
     if (failed.length > 6 || !failed.length)
       packet.omissions.push("Incomplete failed-job coverage");
-    collectFailureSources(packet, (path, head) =>
-      api(
-        `repos/${repository}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${head}`,
-      ),
-    );
+    collectFailureSources(packet, loadSource);
   }
   if (JSON.stringify(packet).length > LIMITS.packet)
     throw new Error("CONTEXT_LIMIT");

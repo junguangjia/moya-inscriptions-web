@@ -20,6 +20,8 @@ import {
   boundedBody,
   collectFileEvidence,
   collectFailureSources,
+  collectRequestedSources,
+  parseSourceRequests,
   confirmModelSelection,
   cursorFailure,
   currentRun,
@@ -283,6 +285,116 @@ test("CI source gaps are filled from exact head with scanned failure windows and
   assert.throws(() =>
     parseReport(JSON.stringify(findings), { ...evidence, kind: "review" }),
   );
+});
+
+test("requested CI source wins over unrelated patches and preserves complete bodies", () => {
+  const evidence = {
+    ...packet,
+    kind: "ci",
+    manualCI: true,
+    files: [],
+    omissions: [],
+    failedJobs: [],
+    sourceRequests: parseSourceRequests(
+      "apps/web/causal.ts,tests/helper.ts:2-3",
+    ),
+  };
+  const sources = {
+    "apps/web/causal.ts":
+      "// context\n".repeat(2000) + "export const actualCause = false;",
+    "tests/helper.ts":
+      "// omitted\nconst ready = false;\nexport { ready };\n// omitted",
+  };
+  collectRequestedSources(evidence, (path, ref) => {
+    assert.equal(ref, head);
+    const text = sources[path];
+    return {
+      type: "file",
+      path,
+      sha: base,
+      encoding: "base64",
+      size: Buffer.byteLength(text),
+      content: Buffer.from(text).toString("base64"),
+    };
+  });
+  collectFileEvidence(
+    evidence,
+    Array.from({ length: 100 }, (_, i) => ({
+      filename: `apps/web/unrelated-${i}.ts`,
+      status: "added",
+      patch: "+" + "x".repeat(12000),
+    })),
+    () => {
+      throw new Error("unexpected read");
+    },
+  );
+  collectFailureSources(evidence, () => {
+    throw new Error("unexpected read");
+  });
+  assert.equal(
+    evidence.relatedSources[0].source,
+    sources["apps/web/causal.ts"],
+  );
+  assert.equal(evidence.relatedSources[0].coverage, "full");
+  assert.equal(
+    evidence.relatedSources[1].source,
+    "2: const ready = false;\n3: export { ready };",
+  );
+  assert.ok(
+    evidence.omissions.some((value) => value.includes("Patch omitted")),
+  );
+  assert.ok(JSON.stringify(evidence).length < 100000);
+});
+
+test("requested source paths, ranges and full-content credential scan remain bounded", () => {
+  for (const value of [
+    "../private.ts",
+    "apps/../private.ts",
+    "scripts/private.env",
+    "https://example.com/a.ts",
+    "apps/a.ts:9-2",
+    "apps/a.ts:1-401",
+    "apps/a.ts,apps/a.ts",
+    "apps/a.ts,",
+    Array(9).fill("apps/a.ts").join(","),
+  ])
+    assert.throws(() => parseSourceRequests(value));
+  const evidence = {
+    ...packet,
+    kind: "ci",
+    manualCI: true,
+    files: [],
+    omissions: [],
+    failedJobs: [],
+    sourceRequests: parseSourceRequests(
+      "apps/unsafe.ts:1-1,apps/large.ts,apps/wrong.ts,apps/range.ts:2-8",
+    ),
+  };
+  collectRequestedSources(evidence, (path) => {
+    const text =
+      path === "apps/unsafe.ts"
+        ? "// safe visible line\n" + ["ghp_", "A".repeat(36)].join("")
+        : path === "apps/large.ts"
+          ? "x".repeat(32001)
+          : "x";
+    return {
+      type: "file",
+      path: path === "apps/wrong.ts" ? "apps/other.ts" : path,
+      sha: base,
+      encoding: "base64",
+      size: Buffer.byteLength(text),
+      content: Buffer.from(text).toString("base64"),
+    };
+  });
+  assert.deepEqual(evidence.relatedSources, []);
+  assert.equal(evidence.omissions.length, 4);
+  assert.match(evidence.omissions[0], /Credential finding/u);
+  assert.match(evidence.omissions[1], /narrower path:start-end/u);
+  const ordinary = { ...evidence, manualCI: false, relatedSources: [] };
+  collectRequestedSources(ordinary, () => {
+    throw new Error("must not read");
+  });
+  assert.deepEqual(ordinary.relatedSources, []);
 });
 
 test("source collection rejects wrong-path metadata, oversized files and unrelated file types", () => {

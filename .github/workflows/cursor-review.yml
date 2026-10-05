@@ -30,6 +30,11 @@ on:
       base_ref:
         description: Exact current PR base branch (diagnose-ci only)
         type: string
+      source_paths:
+        description:
+          Up to 8 comma-separated code paths or path:start-end ranges
+          (diagnose-ci only)
+        type: string
 
 permissions: {}
 

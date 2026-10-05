@@ -192,6 +192,17 @@ This explicit manual operation can run while automatic reviews are paused; it
 preserves the same trusted-main checkout, isolated credentials, model
 constraints and coverage limits.
 
+If a diagnosis identifies missing product code that the failing E2E test does
+not import, a follow-up manual diagnosis can supply `source_paths`: up to eight
+comma-separated repository code paths, optionally `path:start-end` for a range
+of at most 400 lines. The collector reads only that exact PR head, scans each
+complete file before selecting text, and puts this requested context ahead of
+unrelated patches. Full files or exact ranges must fit 32K characters each and
+the existing 180K packet budget; oversized files require a narrower range and
+are disclosed instead of silently reduced to their first lines. Missing source
+or runtime evidence can still produce `incomplete`. This input does not run CI
+or grant the model file, shell or GitHub access.
+
 CI evidence prioritizes GitHub error annotations and assertion/timeout windows
 inside failed steps, followed by the failed-step tail. Setup and post-job
 cleanup cannot crowd failure bodies out of the bounded packet. Excerpts and
