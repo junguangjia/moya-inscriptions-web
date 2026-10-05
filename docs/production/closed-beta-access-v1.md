@@ -40,12 +40,15 @@ Production must name its mode: without one the Backend does not start.
   `/docs/prototypes` are served only with access. If the Backend cannot be
   asked, Web shows "temporarily unavailable" rather than the product.
 
-No protected answer may be stored: the Backend answers `no-store`, and every Web
-answer that depends on the visitor's session (pages, relays, prototype
-documents) is `private, no-store` with `Vary: Cookie`. Nginx has no cache. The
-Next.js image optimizer is closed for every source: left open it would fetch a
-same-origin image with the caller's cookie and then serve its cached copy to
-anyone.
+No protected Production answer may be stored: the Backend answers `no-store`,
+and session-dependent Web pages, relays and prototype documents are
+`private, no-store`. Catalog JSON, search, comment and prototype responses also
+set `Vary: Cookie`; Next pages and RSC responses retain the framework's `Vary`
+headers. `no-store` is the cache barrier, independently of `Vary`. Next
+Development pages instead use its `no-cache, must-revalidate` behavior; their
+access checks still run for each request. Nginx has no cache. The unused Next.js
+image optimizer is closed for every source, so its cookie-blind shared cache
+cannot retain a protected image across a mode or eligibility change.
 
 In both modes the root page and the prototype documents are rendered only after
 the Backend has answered; without a reachable Backend, Web serves neither.
@@ -73,11 +76,12 @@ the provisioning command prints, never a handle, a display name or an e-mail:
 
 - `label` is an optional operator note (up to 80 characters). It decides nothing
   and is never logged.
-- The file must be a regular file (not a symlink), owned by the Backend service
-  user, mode `0600`, at most 64 KiB and 500 accounts, with no other fields and
-  no duplicate ids. That user must also be able to reach it: every directory on
-  its path needs search permission for the service user. Running the validation
-  command below as that user proves both.
+- Install the file owned by the Backend service user, mode `0600`. The loader
+  checks that it is a regular file (not a symlink), has no group/other
+  permission bits, and contains at most 64 KiB and 500 accounts, with no other
+  fields and no duplicate ids. That user must also be able to reach it: every
+  directory on its path needs search permission for the service user. Running
+  the validation command below as that user proves both.
 - An empty `accounts` list is valid and admits nobody.
 - Real ids belong only in this private file. Do not put them in the repository,
   an Issue, a pull request or a log; the Backend logs counts only.
