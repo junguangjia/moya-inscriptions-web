@@ -232,11 +232,13 @@ GitHub documents the privileged-event boundary in its
 
 Review input includes up to 80 changed-file patches and small complete changed
 source files, bounded to about 180,000 characters total. CI diagnosis includes
-up to six failed jobs and 36,000 log characters, retaining the start and end
-when truncated. Binary files, oversized/missing patches and unavailable context
-are reported explicitly. This is advisory change review, not a complete
-repository security audit or a replacement for secret scanning, dependency
-analysis or CI.
+up to six failed jobs and 36,000 log characters, prioritizing error windows
+inside failed steps and the failed-step tail when truncated. Exact-head source
+enrichment allows eight primary files and four direct helpers, 24 lookups, 256
+KiB per file and 36,000 additional serialized characters within the same overall
+packet cap. Binary files, oversized/missing patches and unavailable context are
+reported explicitly. This is advisory change review, not a complete repository
+security audit or a replacement for secret scanning, dependency analysis or CI.
 
 Within the first 100 file entries returned by GitHub, executable source, tests,
 migrations and configuration take priority over prose and generated lockfiles.
