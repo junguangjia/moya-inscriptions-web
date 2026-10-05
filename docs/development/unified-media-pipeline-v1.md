@@ -404,10 +404,12 @@ follow-up for the increment-4 format validation.
 - **Development delivery.** The Development resolver names each rendition on the
   Backend's own loopback listener,
   `http://127.0.0.1:<port>/v1/development/catalog-renditions/<rendition id>`.
-  That route exists only in synthetic Development with local storage and a
-  publishing store, and the resolver names renditions only when it exists;
-  without a publishing store Catalog media keep their approved `src`. The route
-  serves exactly that `GET` target (no query), streams the committed blob of a
+  The Backend listener must use `HOST=127.0.0.1` so it serves that fixed IPv4
+  address; IPv6-only and DNS-resolved listener names are refused. That route
+  exists only in synthetic Development with local storage and a publishing
+  store, and the resolver names renditions only when it exists; without a
+  publishing store Catalog media keep their approved `src`. The route serves
+  exactly that `GET` target (no query), streams the committed blob of a
   rendition the view lists only while the Catalog read connection confirms the
   current published media id and object identity. It uses the recorded type
   (WebP in increment 1) and length, `private, no-store` and `nosniff`, and

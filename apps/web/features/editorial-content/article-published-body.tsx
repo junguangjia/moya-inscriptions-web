@@ -14,6 +14,11 @@ import type {
 import { fetchSameOriginCatalogDetail } from "../../lib/public-api/catalog-detail-client";
 import { ArticleImage } from "./article-authoring/article-image";
 import { ArticleRichBody } from "./article-authoring/article-rich-body";
+import {
+  localCatalogMediaSrc,
+  localCatalogRenditionSrc,
+  localCatalogRenditions,
+} from "../detail/local-catalog-media";
 import type { AcademicChapterView } from "../discussion-preview/academic-reader";
 
 /**
@@ -128,7 +133,25 @@ export const ArticlePublishedBody = ({
           />
         ) : (
           <ArticleImage
-            media={{ ...resolved.media, alt: alt || resolved.media.alt }}
+            media={{
+              ...resolved.media,
+              src:
+                reference.type === "catalog"
+                  ? localCatalogMediaSrc(
+                      resolved.media.src,
+                      reference.catalogId,
+                      resolved.media.id,
+                    )
+                  : localCatalogRenditionSrc(resolved.media.src),
+              ...(resolved.media.renditions === undefined
+                ? {}
+                : {
+                    renditions: localCatalogRenditions(
+                      resolved.media.renditions,
+                    ),
+                  }),
+              alt: alt || resolved.media.alt,
+            }}
             active={active}
             crop={crop}
             share={share}

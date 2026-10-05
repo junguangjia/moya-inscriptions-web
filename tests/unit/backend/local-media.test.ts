@@ -58,8 +58,7 @@ describe("existing local Payload media delivery", () => {
     // The listen configuration names the port; the URL shape stays fixed.
     for (const listen of [
       { HOST: "127.0.0.1", PORT: "4310" },
-      { HOST: "localhost", PORT: "4311" },
-      { HOST: "::1", PORT: "4312" },
+      { HOST: "127.0.0.1", PORT: "4311" },
     ]) {
       const configured = { ...environment, ...listen };
       expect(
@@ -90,18 +89,25 @@ describe("existing local Payload media delivery", () => {
     ).toBe(0);
   });
 
-  it.each(["0.0.0.0", "192.0.2.10", "media.example.invalid"])(
-    "refuses a Backend listener that is not loopback: %s",
+  it.each([
+    "0.0.0.0",
+    "192.0.2.10",
+    "media.example.invalid",
+    "::1",
+    "[::1]",
+    "localhost",
+  ])(
+    "refuses a Backend listener that cannot guarantee the IPv4 rendition URL: %s",
     (host) => {
       expect(() =>
         createLocalStorageUrlResolver({ ...environment, HOST: host }),
-      ).toThrow("Local media requires a loopback Backend listener");
+      ).toThrow("Local media requires an IPv4 loopback Backend listener");
       expect(() =>
         createLocalStorageUrlResolver(
           environment,
           parseRuntimeConfig({ ...environment, HOST: host }),
         ),
-      ).toThrow("Local media requires a loopback Backend listener");
+      ).toThrow("Local media requires an IPv4 loopback Backend listener");
     },
   );
 

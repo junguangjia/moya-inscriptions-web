@@ -1,11 +1,22 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ArticleDetail, ArticleDocument } from "@moya/contracts";
+import type {
+  ArticleDetail,
+  ArticleDocument,
+  CatalogId,
+  MediaId,
+} from "@moya/contracts";
 import { AcademicReader } from "../discussion-preview/academic-reader";
 import {
   ArticlePublishedBody,
   articleRichChapters,
 } from "./article-published-body";
+
+const viewer = vi.hoisted(() => vi.fn<(props: unknown) => null>(() => null));
+vi.mock("../detail/catalog-viewer", () => ({ CatalogViewer: viewer }));
 
 const span = (text: string) => ({ type: "text" as const, text, styles: {} });
 const document: ArticleDocument = {
@@ -272,5 +283,79 @@ describe("Published Article media candidates", () => {
     expect(html).toContain(
       'sizes="(min-width: 760px) 346px, calc(50vw - 20px)"',
     );
+  });
+
+  it("relays Development Catalog anchors and candidates for inline images and Viewer", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const catalogId = `catalog-${"a".repeat(32)}` as CatalogId;
+    const mediaId = `media-${"b".repeat(32)}` as MediaId;
+    const ids = ["1", "2", "3"].map(
+      (hex) => `media-rendition-${hex.repeat(32)}`,
+    );
+    const local = (id: string) =>
+      `http://127.0.0.1:3101/v1/development/catalog-renditions/${id}`;
+    const relay = (id: string) => `/api/development/catalog-renditions/${id}`;
+    const catalogArticle: ArticleDetail = {
+      ...article,
+      document: {
+        ...document,
+        references: {
+          ...document.references,
+          photo: { type: "catalog", catalogId, mediaId },
+        },
+      },
+      resolvedReferences: {
+        ...article.resolvedReferences,
+        photo: {
+          type: "catalog",
+          media: {
+            id: mediaId,
+            kind: "image",
+            src: local(ids[1]!),
+            width: 2048,
+            height: 1536,
+            alt: "合成藏品",
+            renditions: [480, 2048, 4096].map((width, index) => ({
+              src: local(ids[index]!),
+              width,
+              height: (width * 3) / 4,
+              contentType: "image/webp" as const,
+            })),
+          },
+        },
+      },
+    };
+    const container = window.document.createElement("div");
+    window.document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(<ArticlePublishedBody article={catalogArticle} active />),
+      );
+      const image = container.querySelector("img")!;
+      expect(image.getAttribute("src")).toBe(relay(ids[1]!));
+      expect(image.getAttribute("srcset")).toBe(
+        `${relay(ids[0]!)} 480w, ${relay(ids[1]!)} 2048w`,
+      );
+      expect(container.innerHTML).not.toContain("127.0.0.1");
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>('[aria-label="放大查看原图"]')!
+          .click(),
+      );
+      expect(viewer).toHaveBeenCalled();
+      const props = viewer.mock.lastCall?.[0] as
+        { media: { src: string; renditions: { src: string }[] }[] } | undefined;
+      expect(props?.media[0]?.src).toBe(relay(ids[1]!));
+      expect(props?.media[0]?.renditions.map((entry) => entry.src)).toEqual(
+        ids.map(relay),
+      );
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
   });
 });

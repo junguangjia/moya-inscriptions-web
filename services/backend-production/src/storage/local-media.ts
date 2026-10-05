@@ -1,12 +1,6 @@
 import { parseRuntimeConfig } from "@moya/backend-runtime";
 import type { RuntimeConfig, RuntimeEnvironment } from "@moya/backend-runtime";
 
-const loopbackHosts: ReadonlySet<string> = new Set([
-  "127.0.0.1",
-  "localhost",
-  "::1",
-  "[::1]",
-]);
 const renditionId = /^media-rendition-[0-9a-f]{32}$/u;
 
 /**
@@ -46,12 +40,12 @@ export function createLocalStorageUrlResolver(
   const mediaOrigin = origin.origin;
   const backend = listen ?? parseRuntimeConfig(environment);
   if (
-    !loopbackHosts.has(backend.host) ||
+    backend.host !== "127.0.0.1" ||
     !Number.isSafeInteger(backend.port) ||
     backend.port < 1 ||
     backend.port > 65_535
   )
-    throw new Error("Local media requires a loopback Backend listener");
+    throw new Error("Local media requires an IPv4 loopback Backend listener");
   const renditionOrigin = `http://127.0.0.1:${backend.port}`;
   return {
     async resolveMany<MediaIdentity extends string>(
