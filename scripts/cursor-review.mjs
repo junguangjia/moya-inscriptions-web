@@ -6,7 +6,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
@@ -293,6 +293,238 @@ export function readJobLogs(repository, jobId, runCommand = command) {
   );
 }
 
+export function excerptJobLogs(logs, steps, cap) {
+  if (logs.length <= cap) return logs;
+  const lines = logs.split("\n");
+  const ranges = (steps || [])
+    .filter((step) => ["failure", "timed_out"].includes(step.conclusion))
+    .map((step) => [Date.parse(step.started_at), Date.parse(step.completed_at)])
+    .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end));
+  const inFailedStep = lines.map((line) => {
+    const time = Date.parse(line.split(/\s/u, 1)[0]);
+    return ranges.some(
+      ([start, end]) => time >= start - 1000 && time <= end + 1000,
+    );
+  });
+  const preferred = [];
+  const other = [];
+  const hasFailedLines = inFailedStep.some(Boolean);
+  for (let index = 0; index < lines.length; index++) {
+    if (hasFailedLines && !inFailedStep[index]) continue;
+    if (/##\[error\]|(?:Assertion|Timeout)Error:/u.test(lines[index]))
+      preferred.push(index);
+    else if (/\bError:|\bFAIL(?:ED)?\b|[✘×]/u.test(lines[index]))
+      other.push(index);
+  }
+  // GitHub error annotations normally repeat the actual failed assertions near
+  // the end of a long Playwright step; setup/cleanup must not crowd these out.
+  const anchors = [...preferred.slice(0, 4), ...preferred.slice(-2)];
+  for (const index of other) if (new Set(anchors).size < 6) anchors.push(index);
+  const selected = [...new Set(anchors)].slice(0, 6);
+  let excerpt = "";
+  const append = (label, text, budget) => {
+    const prefix = `\n[LOG EXCERPT: ${label}; other lines omitted]\n`;
+    const available = Math.max(
+      0,
+      Math.min(budget, cap - excerpt.length) - prefix.length,
+    );
+    if (available) excerpt += prefix + text.slice(0, available);
+  };
+  const errorBudget = Math.floor((cap * 0.8) / Math.max(1, selected.length));
+  for (const index of selected) {
+    const context = [];
+    for (let at = index; at <= Math.min(lines.length - 1, index + 18); at++) {
+      // Start at the error itself. Preceding huge objects must not consume its
+      // budget; bounded following lines retain assertion/stack/source context.
+      context.push(lines[at].slice(0, 600));
+    }
+    append(`error near line ${index + 1}`, context.join("\n"), errorBudget);
+  }
+  const failedLines = lines.filter((_line, index) => inFailedStep[index]);
+  const remaining = cap - excerpt.length;
+  append(
+    failedLines.length
+      ? "failed-step tail"
+      : "job tail; failed-step range unavailable",
+    (failedLines.length ? failedLines.join("\n") : logs).slice(
+      -Math.max(0, remaining - 110),
+    ),
+    remaining,
+  );
+  return excerpt;
+}
+
+function sourcePath(path) {
+  return (
+    /^(?:apps|packages|scripts|services|tests)\/[A-Za-z0-9_./()[\]-]+\.(?:[cm]?[jt]sx?)$/u.test(
+      path,
+    ) &&
+    !path
+      .split("/")
+      .some((part) => !part || [".", "..", "node_modules"].includes(part))
+  );
+}
+
+export function failureSourceReferences(jobs) {
+  const references = new Map();
+  for (const job of jobs) {
+    for (const match of (job.logs || "").matchAll(
+      /\b((?:apps|packages|scripts|services|tests|e2e)\/[A-Za-z0-9_./()[\]-]+\.[cm]?[jt]sx?):([1-9][0-9]{0,5})(?::[0-9]+)?/gu,
+    )) {
+      // Playwright's testDir is tests/e2e in this repository; its reporter also
+      // prints paths beginning with e2e/. Absolute runner prefixes are ignored.
+      const path = match[1].startsWith("e2e/") ? `tests/${match[1]}` : match[1];
+      if (!sourcePath(path)) continue;
+      const lines = references.get(path) || new Set();
+      if (lines.size < 4) lines.add(Number(match[2]));
+      references.set(path, lines);
+    }
+  }
+  return [...references].map(([path, lines]) => ({ path, lines: [...lines] }));
+}
+
+function sourceWindow(content, requestedLines, cap) {
+  const lines = content.split("\n");
+  const sections = [];
+  // Keep imports plus the reported assertion/helper locations with real lines.
+  const ranges = [
+    [1, Math.min(lines.length, requestedLines.length ? 25 : 80)],
+    ...requestedLines.map((line) => [
+      Math.max(1, line - 3),
+      Math.min(lines.length, line + 18),
+    ]),
+  ];
+  const allowance = Math.floor(cap / ranges.length) - 80;
+  for (const [start, end] of ranges) {
+    const text = lines
+      .slice(start - 1, end)
+      .map((line, index) => `${start + index}: ${line.slice(0, 150)}`)
+      .join("\n");
+    sections.push(
+      `[SOURCE EXCERPT lines ${start}-${end}; other text omitted]\n${text.slice(0, Math.max(0, allowance))}`,
+    );
+  }
+  return sections.join("\n").slice(0, cap);
+}
+
+export function collectFailureSources(packet, loadSource) {
+  packet.relatedSources = [];
+  const references = failureSourceReferences(packet.failedJobs);
+  const primary = references.slice(0, 8);
+  if (references.length > primary.length)
+    packet.omissions.push("Failure source reference list limited to 8 files");
+  const cache = new Map();
+  const imports = [];
+  let calls = 0;
+  let remaining = Math.max(
+    0,
+    Math.min(36000, LIMITS.packet - JSON.stringify(packet).length - 4000),
+  );
+  const fetchSource = (path) => {
+    if (cache.has(path)) return cache.get(path);
+    if (++calls > 24) throw new Error("SOURCE_FETCH_LIMIT");
+    const file = loadSource(path, packet.head);
+    if (
+      file.type !== "file" ||
+      file.path !== path ||
+      !sha(file.sha) ||
+      file.encoding !== "base64" ||
+      !Number.isInteger(file.size) ||
+      file.size < 0 ||
+      file.size > 256 * 1024
+    )
+      throw new Error("SOURCE_METADATA_INVALID");
+    const bytes = Buffer.from(file.content, "base64");
+    if (bytes.length !== file.size) throw new Error("SOURCE_SIZE_MISMATCH");
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const safe = safeText(text, path);
+    const result = { text: safe, blob: file.sha };
+    cache.set(path, result);
+    return result;
+  };
+  const queueImports = (path, text) => {
+    for (const match of text.matchAll(/\bfrom\s+["'](\.[^"'\r\n]+)["']/gu)) {
+      const candidate = posix.normalize(
+        posix.join(posix.dirname(path), match[1]),
+      );
+      const variants = /\.[cm]?[jt]sx?$/u.test(candidate)
+        ? [
+            candidate,
+            ...(candidate.endsWith(".js")
+              ? [candidate.slice(0, -3) + ".ts"]
+              : []),
+          ]
+        : [candidate + ".ts", candidate + ".tsx", candidate + "/index.ts"];
+      const allowed = variants.filter(sourcePath);
+      if (allowed.length) imports.push(allowed);
+    }
+  };
+  const add = (reference, dependency = false) => {
+    const { path, lines = [] } = reference;
+    const existing = packet.files.find(
+      (file) => file.path === path && file.source,
+    );
+    if (existing) {
+      if (!dependency) queueImports(path, existing.source);
+      return;
+    }
+    if (packet.relatedSources.some((file) => file.path === path)) return;
+    try {
+      if (remaining < 900) throw new Error("SOURCE_CONTEXT_LIMIT");
+      const file = fetchSource(path);
+      if (file.text === null) {
+        packet.omissions.push(
+          `Credential finding in failure source; withheld: ${path}`,
+        );
+        return;
+      }
+      const cap = Math.min(dependency ? 2200 : 4800, remaining - 300);
+      const excerpt = sourceWindow(file.text, lines, cap);
+      const record = {
+        path,
+        ref: packet.head,
+        blob: file.blob,
+        referencedLines: lines,
+        source: excerpt,
+        coverage: "excerpts only",
+        dependency,
+      };
+      const size = JSON.stringify(record).length;
+      if (size > remaining) throw new Error("SOURCE_CONTEXT_LIMIT");
+      packet.relatedSources.push(record);
+      remaining -= size;
+      packet.omissions.push(`Failure source excerpts only: ${path}`);
+      if (!dependency) queueImports(path, file.text);
+    } catch {
+      packet.omissions.push(
+        `Failure source unavailable or over budget: ${path}`,
+      );
+    }
+  };
+  for (const reference of primary) add(reference);
+  let helperCount = 0;
+  const tried = new Set(primary.map(({ path }) => path));
+  for (const alternatives of imports) {
+    if (helperCount >= 4 || remaining < 900 || calls >= 24) break;
+    for (const path of alternatives) {
+      if (tried.has(path)) continue;
+      tried.add(path);
+      try {
+        fetchSource(path);
+        add({ path }, true);
+        helperCount++;
+        break;
+      } catch {
+        /* Try only bounded, same-repository source extensions. */
+      }
+    }
+  }
+  if (imports.length > helperCount)
+    packet.omissions.push(
+      "Direct helper-source coverage limited; only bounded relative imports were considered",
+    );
+}
+
 function collect(repository, target) {
   let pr;
   let run;
@@ -345,10 +577,13 @@ function collect(repository, target) {
         id: job.id,
         name: safeText(job.name) ?? "Withheld job name",
         conclusion: job.conclusion,
+        failedSteps: (job.steps || [])
+          .filter((step) => ["failure", "timed_out"].includes(step.conclusion))
+          .map((step) => safeText(step.name) ?? "Withheld step name"),
       };
       try {
         const safe = readJobLogs(repository, job.id);
-        // Keep both setup failures and the trailing test failure; disclose truncation.
+        // Prefer actual failed steps and error windows; always disclose excerpts.
         if (safe === null)
           packet.omissions.push(
             `Credential finding in job ${job.id}; logs withheld`,
@@ -357,12 +592,11 @@ function collect(repository, target) {
           const cap = Math.floor(
             LIMITS.logs / Math.max(1, Math.min(6, failed.length)),
           );
-          entry.logs =
-            safe.length <= cap
-              ? safe
-              : `${safe.slice(0, Math.floor(cap / 3))}\n[LOG EXCERPT GAP]\n${safe.slice(-Math.floor((cap * 2) / 3))}`;
+          entry.logs = excerptJobLogs(safe, job.steps, cap);
           if (safe.length > cap)
-            packet.omissions.push(`Log excerpt only: job ${job.id}`);
+            packet.omissions.push(
+              `Failure-focused log excerpts only: job ${job.id}`,
+            );
         }
       } catch {
         packet.omissions.push(`Logs unavailable: job ${job.id}`);
@@ -371,6 +605,11 @@ function collect(repository, target) {
     }
     if (failed.length > 6 || !failed.length)
       packet.omissions.push("Incomplete failed-job coverage");
+    collectFailureSources(packet, (path, head) =>
+      api(
+        `repos/${repository}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${head}`,
+      ),
+    );
   }
   if (JSON.stringify(packet).length > LIMITS.packet)
     throw new Error("CONTEXT_LIMIT");
@@ -400,7 +639,7 @@ Preserve public contracts, migrations, required CI and credential protection.
 Never reproduce credential values. No stylistic nits or repeated findings.
 Return ONLY JSON, without fences or prose, in this shape:
 {"assessment":"findings|no_findings|incomplete","summary":"concise Chinese summary",
-"findings":[{"priority":"P1|P2|P3","path":"exact changed path","line":1,
+"findings":[{"priority":"P1|P2|P3","path":"exact supplied source path","line":1,
 "body":"Chinese: concrete trigger, consequence, supporting evidence",
 "fix":"English: minimal actionable repair","validation":"English: relevant verification"}]}
 At most 8 findings. For a CI/runner issue without a code location use path="", line=0.
@@ -429,7 +668,12 @@ export function parseReport(raw, packet) {
     report.findings.length > 8
   )
     throw new Error("INVALID_REPORT");
-  const paths = new Set(packet.files.map((file) => file.path));
+  const paths = new Set([
+    ...packet.files.map((file) => file.path),
+    ...(packet.kind === "ci"
+      ? (packet.relatedSources || []).map((file) => file.path)
+      : []),
+  ]);
   for (const finding of report.findings) {
     if (
       !["P1", "P2", "P3"].includes(finding.priority) ||
@@ -559,6 +803,15 @@ export function confirmModelSelection(selection, configuration) {
     )
   )
     throw new Error("MODEL_SELECTION_NOT_CONFIRMED");
+  return {
+    modelId: selected.modelId,
+    context: actual.context,
+    reasoning_effort: actual.effort,
+    fast: actual.fast,
+    // Only scoped metadata from our fresh runtime configuration, never auth data.
+    maxMode:
+      typeof configuration.maxMode === "boolean" ? configuration.maxMode : null,
+  };
 }
 
 export function modelInventory(cliText, cloudCatalog) {
@@ -756,11 +1009,15 @@ function analyze(directory, env) {
     const report = parseCLIResult(raw, packet);
     // Read only our fresh CLI configuration, never any user credentials/config.
     // A successful response must not hide a fallback to different parameters.
-    confirmModelSelection(
+    const effectiveSelection = confirmModelSelection(
       selection,
       readJSON(join(home, ".cursor/cli-config.json")),
     );
-    save(join(directory, "report.json"), { ...report, model });
+    save(join(directory, "report.json"), {
+      ...report,
+      model,
+      effectiveSelection,
+    });
   } catch (error) {
     // Do not print CLI stderr: auth/network diagnostics can contain credentials.
     const allowed = new Set([
@@ -805,7 +1062,13 @@ export function renderReport(packet, report) {
     "",
   ];
   if (report.model)
-    lines.push(`Model selection: ${plainMarkdown(report.model)}`, "");
+    lines.push(`Configured selection: ${plainMarkdown(report.model)}`, "");
+  if (report.effectiveSelection)
+    lines.push(
+      `Effective selection (fresh CLI configuration after inference): ${plainMarkdown(JSON.stringify(report.effectiveSelection))}`,
+      "This verifies the runtime-reported selection, not provider internals or billing.",
+      "",
+    );
   if (packet.runId)
     lines.push(
       `[CI run](https://github.com/${packet.repository}/actions/runs/${packet.runId}/attempts/${packet.attempt})`,

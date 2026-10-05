@@ -100,8 +100,7 @@ included pool/rate; retain disabled on-demand usage. An unavailable model fails
 visibly without a paid fallback.
 
 The Owner's selected configuration is Grok 4.7, 500K context, Extra High effort
-and Fast enabled. The candidate `CURSOR_MODEL` spelling to verify in the hosted
-CLI is:
+and Fast enabled. The verified `CURSOR_MODEL` spelling is:
 
 ```text
 grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]
@@ -115,14 +114,30 @@ The PR summary includes the accepted model selection. This is runtime selection
 verification, not independent proof of the provider's internal computation.
 
 Grok 4.7's cloud model catalog exposes `reasoning_effort`, whereas some CLI
-examples use the generic `effort` spelling. Runtime compatibility still needs
-the exact CLI canary; the two catalogs are not interchangeable. The adapter
-accepts both spellings for comparison but sends the configured selection
-unchanged; it rejects duplicate aliases. The account metadata run
+examples use the generic `effort` spelling. The two catalogs are not
+interchangeable. The adapter accepts both spellings for comparison but sends the
+configured selection unchanged; it rejects duplicate aliases. The account
+metadata run
 [37292550895](https://github.com/junguangjia/moya-inscriptions-web/actions/runs/37292550895)
 listed the CLI's Grok 4.7 xhigh/Fast model and the cloud catalog's full
 500K/xhigh/Fast variant. This is compatibility evidence, not a successful
 inference or a billing receipt.
+
+Actual hosted run
+[37293174827](https://github.com/junguangjia/moya-inscriptions-web/actions/runs/37293174827)
+returned valid inference and passed the exact persisted model/parameter check.
+Its
+[PR214 comment](https://github.com/junguangjia/moya-inscriptions-web/pull/214#issuecomment-5992180782)
+was `incomplete` because the old first/tail log excerpts missed failure bodies;
+the workflow consequently failed after publishing. This was model acceptance,
+not a clean CI diagnosis. New comments distinguish the configured identifier
+from the effective model/parameters read from the fresh CLI configuration after
+inference, including reported Max Mode. This does not prove provider internals,
+exercise a 500K-token input, or establish the charge in Included Usage.
+On-Demand off is Owner-confirmed; this integration cannot independently read
+that switch or the account's per-run billing ledger. Historical rejection runs
+retained only `CURSOR_MODEL_REJECTED`, not exact raw stderr; do not invent a
+more precise historical error from the classification.
 
 [Cursor's Grok 4.7 guide](https://prod.cursor.com/help/models-and-usage/grok-4-7)
 documents Ultra access through the included Cursor Models pool, the 500K option,
@@ -176,6 +191,12 @@ before inference and publication. Changed or mismatched targets are skipped.
 This explicit manual operation can run while automatic reviews are paused; it
 preserves the same trusted-main checkout, isolated credentials, model
 constraints and coverage limits.
+
+CI evidence prioritizes GitHub error annotations and assertion/timeout windows
+inside failed steps, followed by the failed-step tail. Setup and post-job
+cleanup cannot crowd failure bodies out of the bounded packet. Excerpts and
+missing patches remain disclosed; insufficient evidence still produces
+`incomplete`.
 
 - `pull_request_target` triggers on open, reopen, update and ready-for-review;
   Draft PRs are included. Only open, same-repository PRs targeting `main`
