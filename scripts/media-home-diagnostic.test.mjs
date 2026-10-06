@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { readFileSync } from "node:fs";
+import {
+  readFileSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createContext, runInContext } from "node:vm";
 import { createRequire } from "node:module";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
@@ -20,12 +29,13 @@ import {
   ACTION_GROUPS,
   sanitizeActions,
   sanitizeNativeErrors,
+  sanitizeAlignmentPhases,
 } from "./media-home-diagnostic.mjs";
 
 const workflow = "a".repeat(40);
 const env = {
   GITHUB_EVENT_NAME: "workflow_dispatch",
-  GITHUB_REF: "refs/heads/codex/media-home97-hop-diagnostic",
+  GITHUB_REF: "refs/heads/codex/media-home97-raf-phase-diagnostic",
   HOME_WORKFLOW_SHA: workflow,
   GITHUB_SHA: workflow,
   HOME_TASK_KEY: "12345678-1234-1234-1234-123456789abc",
@@ -720,6 +730,18 @@ test("independent touch reservation retains every hop and final unfinished bound
       elapsed_ms: 16,
       aligned: true,
       gap: 0,
+      phases: {
+        schema: 1,
+        elapsed_ticks: 1600,
+        queue_ticks: 1600,
+        continuation_ticks: 0,
+        geometry_ticks: 0,
+        other_ticks: 0,
+        seen: 1,
+        omitted: 0,
+        roles: [1, 1, 1],
+        rows: [[1, 0, 1600, 1600, 1600, 0, 0]],
+      },
     });
     r.touchOpEnd(call, kind);
   };
@@ -759,7 +781,34 @@ test("independent touch reservation retains every hop and final unfinished bound
 });
 
 test("two retries with maximum readiness, touch, action and native-error capacity fit the packet bound", () => {
-  const fields = Array(26).fill(1080000.123456789);
+  const fields = [
+    9007199254740991,
+    1080000.123456789,
+    9,
+    2,
+    3,
+    2,
+    3,
+    true,
+    false,
+    10000,
+    10000,
+    0,
+    0,
+    true,
+    true,
+    0.0000010000000000000002,
+    3,
+    true,
+    8191,
+    true,
+    10000000,
+    10000000,
+    1080000.123456789,
+    1080000.123456789,
+    1080000.123456789,
+    1080000.123456789,
+  ];
   const attempt = {
     readiness: {
       rows: Array.from({ length: 72 }, () => fields),
@@ -782,6 +831,23 @@ test("two retries with maximum readiness, touch, action and native-error capacit
           end_ms: 1080000.123456789,
           completed: true,
           pending_kind: null,
+          phase_records: Array.from({ length: 4 }, (_, hop) => ({
+            hop,
+            schema: 1,
+            elapsed_ticks: 108000000,
+            queue_ticks: 108000000,
+            continuation_ticks: 0,
+            geometry_ticks: 0,
+            other_ticks: 0,
+            seen: 100000,
+            omitted: 99997,
+            roles: [1, 100000, 99999],
+            rows: [
+              [1, 0, 35999999, 35999999, 35999999, 0, 0],
+              [99999, 35999999, 72000000, 72000000, 72000000, 0, 0],
+              [100000, 72000000, 108000000, 108000000, 108000000, 0, 0],
+            ],
+          })),
           rows: Array.from({ length: 4 }, () =>
             Array(14).fill(1080000.123456789),
           ),
@@ -812,4 +878,190 @@ test("two retries with maximum readiness, touch, action and native-error capacit
     JSON.stringify({ attempts: [attempt, attempt] }),
   );
   assert.ok(bytes + 16384 < 131072, `capacity ${bytes} plus 16KiB envelope`);
+});
+
+test("actual observational helper partitions RAF queue, continuation and synchronous geometry without changing original evaluation", async () => {
+  const require = createRequire(
+    new URL("../tests/package.json", import.meta.url),
+  );
+  const ts = require("typescript");
+  const root = mkdtempSync(join(tmpdir(), "home-phase-proof-"));
+  const file = "tests/e2e/support/pager-alignment.ts";
+  try {
+    mkdirSync(join(root, "tests/e2e/support"), { recursive: true });
+    writeFileSync(
+      join(root, file),
+      execFileSync("git", ["show", `${SOURCE}:${file}`]),
+    );
+    const patch = readFileSync(
+      new URL("../tests/e2e/support/home-causal-spec.patch", import.meta.url),
+      "utf8",
+    );
+    const marker = `diff --git a/${file} b/${file}`;
+    assert.equal(patch.split(marker).length, 2);
+    const own = join(root, "alignment.patch");
+    writeFileSync(own, patch.slice(patch.indexOf(marker)));
+    execFileSync("git", ["apply", own], { cwd: root });
+    const code = ts.transpileModule(readFileSync(join(root, file), "utf8"), {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+      },
+    }).outputText;
+    for (const scenario of [
+      { queue: 1100, resume: 0, geometry: 2, frames: 1, hidden: false },
+      { queue: 2, resume: 0, geometry: 1100, frames: 1, hidden: false },
+      { queue: 2, resume: 1100, geometry: 2, frames: 1, hidden: false },
+      { queue: 550, resume: 0, geometry: 550, frames: 1, hidden: false },
+      { queue: 900, resume: 0, geometry: 2, frames: 1, hidden: true },
+      { queue: 2, resume: 0, geometry: 1, frames: 20, hidden: false },
+    ]) {
+      let clock = 0,
+        frames = 0,
+        evaluations = 0,
+        geometryReads = 0,
+        captured;
+      const module = { exports: {} };
+      const context = createContext({
+        module,
+        exports: module.exports,
+        performance: { now: () => clock },
+        document: { visibilityState: scenario.hidden ? "hidden" : "visible" },
+        require: (name) =>
+          name === "@playwright/test"
+            ? require(name)
+            : {
+                beginHomeAlignment: () => ({}),
+                finishHomeAlignment: (_, value) => {
+                  captured = value;
+                },
+              },
+        requestAnimationFrame: (callback) => {
+          frames++;
+          clock += scenario.frames === 20 && frames === 7 ? 50 : scenario.queue;
+          callback();
+          clock += scenario.resume;
+          return frames;
+        },
+      });
+      runInContext(code, context);
+      const node = {
+        querySelector: () => ({
+          getBoundingClientRect: () => {
+            geometryReads++;
+            clock += scenario.geometry;
+            return { left: frames < scenario.frames ? 5 : 0 };
+          },
+        }),
+        getBoundingClientRect: () => ({ left: 0 }),
+        clientWidth: 1024,
+        dataset: { horizontalPagerScrolling: "false" },
+      };
+      await module.exports.expectPanelAlignment(
+        {
+          evaluate: async (fn, input) => {
+            evaluations++;
+            return fn(node, input);
+          },
+        },
+        '[data-home-feed-panel="discover"]',
+      );
+      assert.equal(evaluations, 1);
+      assert.equal(frames, scenario.frames);
+      assert.equal(geometryReads, scenario.frames);
+      const phases = sanitizeAlignmentPhases(
+        JSON.parse(JSON.stringify(captured.phases)),
+        captured.frames,
+        captured.elapsed_ms,
+      );
+      const queueTotal =
+        scenario.frames === 20 ? 88 : scenario.queue * scenario.frames;
+      assert.equal(phases.queue_ticks, queueTotal * 100);
+      assert.equal(
+        phases.continuation_ticks,
+        scenario.resume * scenario.frames * 100,
+      );
+      assert.equal(
+        phases.geometry_ticks,
+        scenario.geometry * scenario.frames * 100,
+      );
+      assert.equal(phases.other_ticks, 0);
+      assert.ok(
+        phases.rows.every(
+          (row) =>
+            row[5] === (scenario.hidden ? 1 : 0) &&
+            row[6] === (scenario.hidden ? 1 : 0),
+        ),
+      );
+      if (scenario.frames === 20) {
+        assert.deepEqual(phases.roles, [1, 20, 7]);
+        assert.equal(phases.rows.length, 3);
+        assert.equal(phases.omitted, 17);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("phase projection rejects unpartitioned or unsafe clocks and nonretained roles", () => {
+  const p = {
+    schema: 1,
+    elapsed_ticks: 1200,
+    queue_ticks: 1000,
+    continuation_ticks: 100,
+    geometry_ticks: 100,
+    other_ticks: 0,
+    seen: 1,
+    omitted: 0,
+    roles: [1, 1, 1],
+    rows: [[1, 0, 1000, 1100, 1200, 0, 0]],
+  };
+  sanitizeAlignmentPhases(p, 1, 12);
+  const empty = {
+    ...p,
+    seen: 0,
+    omitted: 0,
+    roles: [0, 0, 0],
+    rows: [],
+    queue_ticks: 0,
+    continuation_ticks: 0,
+    geometry_ticks: 0,
+    other_ticks: 1200,
+  };
+  sanitizeAlignmentPhases(empty, 0, 12);
+  assert.throws(() =>
+    sanitizeAlignmentPhases(
+      { ...empty, queue_ticks: 100, other_ticks: 1100 },
+      0,
+      12,
+    ),
+  );
+  for (const change of [
+    (q) => {
+      q.geometry_ticks = 200;
+    },
+    (q) => {
+      q.rows[0][2] = -1;
+    },
+    (q) => {
+      q.rows[0][3] = "https://example.invalid/private";
+    },
+    (q) => {
+      q.rows[0][6] = 4;
+    },
+    (q) => {
+      q.roles[0] = 0;
+    },
+    (q) => {
+      q.extra = "token-like-material";
+    },
+    (q) => {
+      q.omitted = 999;
+    },
+  ]) {
+    const q = JSON.parse(JSON.stringify(p));
+    change(q);
+    assert.throws(() => sanitizeAlignmentPhases(q, 1, 12));
+  }
 });

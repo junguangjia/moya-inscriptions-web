@@ -29,12 +29,147 @@ type Slot = {
   evaluationTimes: Scalar[];
   lastEvaluation: [number, number, number | null] | null;
 };
+type PhaseFrame = [number, number, number, number, number, number, number];
+type BrowserPhases = {
+  schema: number;
+  elapsed_ticks: number;
+  queue_ticks: number;
+  continuation_ticks: number;
+  geometry_ticks: number;
+  other_ticks: number;
+  seen: number;
+  omitted: number;
+  roles: [number, number, number];
+  rows: PhaseFrame[];
+};
+function acceptAlignmentPhases(
+  value: unknown,
+  frames: number,
+  elapsedMs: number,
+): BrowserPhases | undefined {
+  try {
+    const p = value as BrowserPhases;
+    const keys = [
+      "schema",
+      "elapsed_ticks",
+      "queue_ticks",
+      "continuation_ticks",
+      "geometry_ticks",
+      "other_ticks",
+      "seen",
+      "omitted",
+      "roles",
+      "rows",
+    ];
+    const tick = (x: unknown) =>
+      typeof x === "number" &&
+      Number.isSafeInteger(x) &&
+      x >= 0 &&
+      x <= 108000000;
+    if (
+      !p ||
+      typeof p !== "object" ||
+      Object.keys(p).sort().join(",") !== keys.sort().join(",") ||
+      p.schema !== 1 ||
+      p.seen !== frames ||
+      !Number.isInteger(p.seen) ||
+      p.seen < 0 ||
+      p.seen > 100000 ||
+      !tick(p.elapsed_ticks) ||
+      Math.abs(p.elapsed_ticks - Math.round(elapsedMs * 100)) > 1 ||
+      ![
+        p.queue_ticks,
+        p.continuation_ticks,
+        p.geometry_ticks,
+        p.other_ticks,
+      ].every(tick) ||
+      p.queue_ticks +
+        p.continuation_ticks +
+        p.geometry_ticks +
+        p.other_ticks !==
+        p.elapsed_ticks ||
+      !Array.isArray(p.rows) ||
+      p.rows.length > 3 ||
+      p.omitted !== p.seen - p.rows.length ||
+      !Array.isArray(p.roles) ||
+      p.roles.length !== 3 ||
+      p.roles.some((x) => !Number.isInteger(x) || x < 0 || x > p.seen)
+    )
+      throw new Error("ALIGNMENT_PHASE_SCHEMA_REJECTED");
+    let previous = 0,
+      previousEnd = 0,
+      queue = 0,
+      continuation = 0,
+      geometry = 0;
+    const rows = p.rows.map((row) => {
+      if (
+        !Array.isArray(row) ||
+        row.length !== 7 ||
+        !Number.isInteger(row[0]) ||
+        row[0] <= previous ||
+        row[0] > p.seen ||
+        !row.slice(1, 5).every(tick) ||
+        row[1] < previousEnd ||
+        row[1] > row[2] ||
+        row[2] > row[3] ||
+        row[3] > row[4] ||
+        row[4] > p.elapsed_ticks ||
+        ![0, 1, 2, 3].includes(row[5]) ||
+        ![0, 1, 2, 3].includes(row[6])
+      )
+        throw new Error("ALIGNMENT_PHASE_FRAME_REJECTED");
+      previous = row[0];
+      previousEnd = row[4];
+      queue += row[2] - row[1];
+      continuation += row[3] - row[2];
+      geometry += row[4] - row[3];
+      return [...row] as PhaseFrame;
+    });
+    if (
+      p.seen === 0 &&
+      p.queue_ticks + p.continuation_ticks + p.geometry_ticks !== 0
+    )
+      throw new Error("ALIGNMENT_PHASE_EMPTY_REJECTED");
+    const roleSet = new Set(p.roles.filter((x) => x !== 0));
+    const slow = rows.find((row) => row[0] === p.roles[2]);
+    if (
+      rows.length !== roleSet.size ||
+      rows.some((row) => !roleSet.has(row[0])) ||
+      (p.seen === 0
+        ? p.roles.some((x) => x !== 0) || rows.length !== 0
+        : p.roles[0] !== 1 ||
+          p.roles[1] !== p.seen ||
+          !slow ||
+          rows.some((row) => row[4] - row[1] > slow[4] - slow[1])) ||
+      queue > p.queue_ticks ||
+      continuation > p.continuation_ticks ||
+      geometry > p.geometry_ticks
+    )
+      throw new Error("ALIGNMENT_PHASE_RETENTION_REJECTED");
+    return {
+      schema: 1,
+      elapsed_ticks: p.elapsed_ticks,
+      queue_ticks: p.queue_ticks,
+      continuation_ticks: p.continuation_ticks,
+      geometry_ticks: p.geometry_ticks,
+      other_ticks: p.other_ticks,
+      seen: p.seen,
+      omitted: p.omitted,
+      roles: [...p.roles],
+      rows,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 type Touch = {
   phase: number;
   feed: number;
   begin: number;
   end: number | null;
   rows: Row[];
+  phaseRecords: ({ hop: number } & BrowserPhases)[];
   pending: { kind: number; row: Row } | null;
 };
 const touchRoutes = [
@@ -117,6 +252,7 @@ export class HomeReadinessRecorder {
       begin: this.stamp(),
       end: null,
       rows: [],
+      phaseRecords: [],
       pending: null,
     });
     return this.touches.length;
@@ -215,6 +351,7 @@ export class HomeReadinessRecorder {
       elapsed_ms?: unknown;
       aligned?: unknown;
       gap?: unknown;
+      phases?: unknown;
     } | null;
     if (
       !row ||
@@ -233,6 +370,19 @@ export class HomeReadinessRecorder {
       this.touchInvalid += 1;
       return;
     }
+    const phases = acceptAlignmentPhases(
+      v.phases,
+      Number(v.frames),
+      Number(v.elapsed_ms),
+    );
+    if (
+      !phases ||
+      touch.phaseRecords.some((entry) => entry.hop === token.hop)
+    ) {
+      this.touchInvalid += 1;
+      return;
+    }
+    touch.phaseRecords.push({ hop: token.hop, ...phases });
     row[10] = Number(v.frames);
     row[11] = Number(v.elapsed_ms);
     row[12] = v.aligned;
@@ -497,6 +647,11 @@ export class HomeReadinessRecorder {
                 ),
           ),
           pending_kind: touch.pending?.kind ?? null,
+          phase_records: touch.phaseRecords.map((entry) => ({
+            ...entry,
+            roles: [...entry.roles],
+            rows: entry.rows.map((row) => [...row]),
+          })),
         })),
         invalid: this.touchInvalid,
         overflow: this.touchOverflow,

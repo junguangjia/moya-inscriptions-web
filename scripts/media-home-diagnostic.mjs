@@ -105,6 +105,121 @@ export const TOUCH_FIELDS = [
 ];
 const elapsed = (x) =>
   typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= 1080000;
+export function sanitizeAlignmentPhases(value, frames, elapsedMs) {
+  const p = value;
+  const keys = [
+    "schema",
+    "elapsed_ticks",
+    "queue_ticks",
+    "continuation_ticks",
+    "geometry_ticks",
+    "other_ticks",
+    "seen",
+    "omitted",
+    "roles",
+    "rows",
+  ];
+  const tick = (x) => Number.isSafeInteger(x) && x >= 0 && x <= 108000000;
+  if (
+    !p ||
+    typeof p !== "object" ||
+    Object.keys(p).sort().join(",") !== keys.sort().join(",") ||
+    p.schema !== 1 ||
+    p.seen !== frames ||
+    !Number.isInteger(p.seen) ||
+    p.seen < 0 ||
+    p.seen > 100000 ||
+    !tick(p.elapsed_ticks) ||
+    Math.abs(p.elapsed_ticks - Math.round(elapsedMs * 100)) > 1 ||
+    ![
+      p.queue_ticks,
+      p.continuation_ticks,
+      p.geometry_ticks,
+      p.other_ticks,
+    ].every(tick) ||
+    p.queue_ticks + p.continuation_ticks + p.geometry_ticks + p.other_ticks !==
+      p.elapsed_ticks ||
+    !Array.isArray(p.rows) ||
+    p.rows.length > 3 ||
+    p.omitted !== p.seen - p.rows.length ||
+    !Array.isArray(p.roles) ||
+    p.roles.length !== 3 ||
+    p.roles.some((x) => !Number.isInteger(x) || x < 0 || x > p.seen)
+  )
+    throw new Error("ALIGNMENT_PHASE_SCHEMA_REJECTED");
+  let previous = 0,
+    previousEnd = 0,
+    queue = 0,
+    continuation = 0,
+    geometry = 0;
+  const rows = p.rows.map((row) => {
+    if (
+      !Array.isArray(row) ||
+      row.length !== 7 ||
+      !Number.isInteger(row[0]) ||
+      row[0] <= previous ||
+      row[0] > p.seen ||
+      !row.slice(1, 5).every(tick) ||
+      row[1] < previousEnd ||
+      row[1] > row[2] ||
+      row[2] > row[3] ||
+      row[3] > row[4] ||
+      row[4] > p.elapsed_ticks ||
+      ![0, 1, 2, 3].includes(row[5]) ||
+      ![0, 1, 2, 3].includes(row[6])
+    )
+      throw new Error("ALIGNMENT_PHASE_FRAME_REJECTED");
+    previous = row[0];
+    previousEnd = row[4];
+    queue += row[2] - row[1];
+    continuation += row[3] - row[2];
+    geometry += row[4] - row[3];
+    return [...row];
+  });
+  if (
+    p.seen === 0 &&
+    p.queue_ticks + p.continuation_ticks + p.geometry_ticks !== 0
+  )
+    throw new Error("ALIGNMENT_PHASE_EMPTY_REJECTED");
+  const roleSet = new Set(p.roles.filter((x) => x !== 0));
+  const slow = rows.find((row) => row[0] === p.roles[2]);
+  if (
+    rows.length !== roleSet.size ||
+    rows.some((row) => !roleSet.has(row[0])) ||
+    (p.seen === 0
+      ? p.roles.some((x) => x !== 0) || rows.length !== 0
+      : p.roles[0] !== 1 ||
+        p.roles[1] !== p.seen ||
+        !slow ||
+        rows.some((row) => row[4] - row[1] > slow[4] - slow[1])) ||
+    queue > p.queue_ticks ||
+    continuation > p.continuation_ticks ||
+    geometry > p.geometry_ticks
+  )
+    throw new Error("ALIGNMENT_PHASE_RETENTION_REJECTED");
+  return {
+    schema: 1,
+    elapsed_ticks: p.elapsed_ticks,
+    queue_ticks: p.queue_ticks,
+    continuation_ticks: p.continuation_ticks,
+    geometry_ticks: p.geometry_ticks,
+    other_ticks: p.other_ticks,
+    seen: p.seen,
+    omitted: p.omitted,
+    roles: [...p.roles],
+    rows,
+  };
+}
+
+export const ALIGNMENT_PHASE_FIELDS = [
+  "frame",
+  "enqueue_ticks",
+  "callback_ticks",
+  "geometry_start_ticks",
+  "geometry_end_ticks",
+  "enqueue_visibility",
+  "callback_visibility",
+];
 export function sanitizeTouches(value) {
   if (
     !value ||
@@ -189,6 +304,21 @@ export function sanitizeTouches(value) {
       target = row[2];
       return [...row];
     });
+    if (!Array.isArray(call.phase_records) || call.phase_records.length > 4)
+      throw new Error("ALIGNMENT_PHASE_CALL_CAPACITY_REJECTED");
+    const seenHops = new Set();
+    const phaseRecords = call.phase_records.map((entry) => {
+      if (!entry || !Number.isInteger(entry.hop) || seenHops.has(entry.hop))
+        throw new Error("ALIGNMENT_PHASE_HOP_REJECTED");
+      const row = rows[entry.hop];
+      if (!row || row[10] === null)
+        throw new Error("ALIGNMENT_PHASE_PARENT_REJECTED");
+      seenHops.add(entry.hop);
+      const { hop, ...phase } = entry;
+      return { hop, ...sanitizeAlignmentPhases(phase, row[10], row[11]) };
+    });
+    if (rows.some((row) => row[10] !== null && !seenHops.has(row[1])))
+      throw new Error("ALIGNMENT_PHASE_COVERAGE_REJECTED");
     const last = rows.at(-1);
     const pending =
       last && last[9] !== 1
@@ -217,6 +347,7 @@ export function sanitizeTouches(value) {
       completed: call.completed,
       rows,
       pending_kind: call.pending_kind,
+      phase_records: phaseRecords,
     };
   });
   return { calls, invalid: value.invalid, overflow: value.overflow };
@@ -617,7 +748,7 @@ const save = (path, value) =>
 export function admit(env, currentSha, currentTree) {
   if (
     env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REF !== "refs/heads/codex/media-home97-hop-diagnostic" ||
+    env.GITHUB_REF !== "refs/heads/codex/media-home97-raf-phase-diagnostic" ||
     !/^[a-f0-9]{40}$/.test(env.HOME_WORKFLOW_SHA ?? "") ||
     env.GITHUB_SHA !== env.HOME_WORKFLOW_SHA ||
     !/^[a-f0-9-]{36}$/.test(env.HOME_TASK_KEY ?? "") ||
@@ -1198,6 +1329,17 @@ async function execute(mode) {
     project: "tablet-webkit",
     readiness_fields: READINESS_FIELDS,
     touch_fields: TOUCH_FIELDS,
+    alignment_phase_frame_fields: ALIGNMENT_PHASE_FIELDS,
+    alignment_phase_tick_unit_ms: 0.01,
+    alignment_phase_retention_roles: ["first", "last", "slowest_total_frame"],
+    alignment_visibility_dictionary: [
+      "visible",
+      "hidden",
+      "prerender",
+      "unknown",
+    ],
+    alignment_phase_limits:
+      "Browser-only monotonic observation timestamps; original deadline unchanged. Queue includes browser work/scheduling; callback-to-geometry-start is continuation/unallocated, not synchronous geometry. Up to3 first/last/slowest frames and full sums per returned alignment; missing in-flight return stays unknown.",
     touch_route_dictionary: TOUCH_ROUTES,
     touch_kind_dictionary: [
       "initial_alignment",

@@ -249,7 +249,7 @@ diff --git a/tests/e2e/support/pager-alignment.ts b/tests/e2e/support/pager-alig
 
  /** Observe the same geometry on animation frames without tracing every poll. */
  export const expectPanelAlignment = async (
-@@ -13,15 +14,19 @@
+@@ -13,17 +14,43 @@
      strict?: boolean;
    } = {},
  ) => {
@@ -259,29 +259,64 @@ diff --git a/tests/e2e/support/pager-alignment.ts b/tests/e2e/support/pager-alig
        const deadline = performance.now() + 10_000;
 +      const __homeAlignmentStarted = performance.now();
 +      let __homeAlignmentFrames = 0;
++      const __homePhaseNow = () => Math.round((performance.now() - __homeAlignmentStarted) * 100);
++      const __homeVisibility = () => { const __homeState: string = document.visibilityState; return __homeState === 'visible' ? 0 : __homeState === 'hidden' ? 1 : __homeState === 'prerender' ? 2 : 3; };
++      let __homeQueueAt = 0, __homeCallbackAt = 0, __homeQueueVisibility = 3, __homeCallbackVisibility = 3;
++      let __homeQueueSum = 0, __homeContinuationSum = 0, __homeGeometrySum = 0;
++      type __homePhaseFrame = [number,number,number,number,number,number,number];
++      let __homeFirst: __homePhaseFrame | null = null, __homeLast: __homePhaseFrame | null = null, __homeSlow: __homePhaseFrame | null = null;
++      const __homeSnapshot = (__homeAligned: boolean) => {
++        const __homeElapsed = performance.now() - __homeAlignmentStarted;
++        const __homeElapsedTicks = Math.round(__homeElapsed * 100);
++        const __homeRows = [...new Map([__homeFirst,__homeLast,__homeSlow].filter((row):row is __homePhaseFrame => row !== null).map(row => [row[0],row])).values()].sort((a,b)=>a[0]-b[0]);
++        return {frames:__homeAlignmentFrames,elapsed_ms:__homeElapsed,aligned:__homeAligned,gap:Number.isFinite(gap)?gap:null,
++          phases:{schema:1,elapsed_ticks:__homeElapsedTicks,queue_ticks:__homeQueueSum,continuation_ticks:__homeContinuationSum,geometry_ticks:__homeGeometrySum,
++            other_ticks:__homeElapsedTicks-__homeQueueSum-__homeContinuationSum-__homeGeometrySum,seen:__homeAlignmentFrames,omitted:__homeAlignmentFrames-__homeRows.length,
++            roles:[__homeFirst?.[0]??0,__homeLast?.[0]??0,__homeSlow?.[0]??0],rows:__homeRows}};
++      };
        let consecutive = 0;
        let gap = Infinity;
        while (performance.now() < deadline) {
-         await new Promise<void>((resolve) =>
-           requestAnimationFrame(() => resolve()),
-         );
+-        await new Promise<void>((resolve) =>
+-          requestAnimationFrame(() => resolve()),
+-        );
++        await new Promise<void>((resolve) => {
++          __homeQueueAt = __homePhaseNow();
++          __homeQueueVisibility = __homeVisibility();
++          requestAnimationFrame(() => {
++            __homeCallbackAt = __homePhaseNow();
++            __homeCallbackVisibility = __homeVisibility();
++            resolve();
++          });
++        });
 +        ++__homeAlignmentFrames;
          const panel = node.querySelector<HTMLElement>(input.selector);
          if (!panel) throw new Error(`Missing pager panel: ${input.selector}`);
++        const __homeGeometryStart = __homePhaseNow();
          gap = Math.abs(
-@@ -34,9 +39,9 @@
+           panel.getBoundingClientRect().left -
+             node.getBoundingClientRect().left,
+@@ -34,9 +61,17 @@
            (!input.idle ||
              (node as HTMLElement).dataset.horizontalPagerScrolling === "false");
          consecutive = aligned ? consecutive + 1 : 0;
 -        if (consecutive >= input.frames) return { aligned: true, gap };
-+        if (consecutive >= input.frames) return { aligned: true, gap, __home_alignment: {frames:__homeAlignmentFrames, elapsed_ms:performance.now()-__homeAlignmentStarted, aligned:true, gap:Number.isFinite(gap)?gap:null} };
++        const __homeGeometryEnd = __homePhaseNow();
++        const __homeFrame: __homePhaseFrame = [__homeAlignmentFrames,__homeQueueAt,__homeCallbackAt,__homeGeometryStart,__homeGeometryEnd,__homeQueueVisibility,__homeCallbackVisibility];
++        __homeQueueSum += __homeCallbackAt - __homeQueueAt;
++        __homeContinuationSum += __homeGeometryStart - __homeCallbackAt;
++        __homeGeometrySum += __homeGeometryEnd - __homeGeometryStart;
++        __homeFirst = __homeFirst ?? __homeFrame;
++        __homeLast = __homeFrame;
++        __homeSlow = !__homeSlow || __homeFrame[4] - __homeFrame[1] > __homeSlow[4] - __homeSlow[1] ? __homeFrame : __homeSlow;
++        if (consecutive >= input.frames) return { aligned: true, gap, __home_alignment: __homeSnapshot(true) };
        }
 -      return { aligned: false, gap };
-+      return { aligned: false, gap, __home_alignment: {frames:__homeAlignmentFrames, elapsed_ms:performance.now()-__homeAlignmentStarted, aligned:false, gap:Number.isFinite(gap)?gap:null} };
++      return { aligned: false, gap, __home_alignment: __homeSnapshot(false) };
      },
      {
        selector,
-@@ -47,6 +52,7 @@
+@@ -47,6 +82,7 @@
        strict: options.strict ?? false,
      },
    );
