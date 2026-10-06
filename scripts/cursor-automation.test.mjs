@@ -16,6 +16,7 @@ import {
   selectUnprocessedCI,
   assertRemoteInput,
   publicText,
+  credentialText,
   coverUnperformedReview,
   sanitizeRemoteProjection,
 } from "./cursor-automation.mjs";
@@ -310,22 +311,26 @@ test("adjacent source and successful CI metadata citations remain identity bound
   );
 });
 
-test("public transport excludes private paths and authorizing URLs without classifying ordinary identifiers as secrets", () => {
-  assert.throws(
-    () => assertRemoteInput({ nested: ["/Users/example/private.json"] }),
-    /NONPUBLIC_REMOTE_INPUT/,
+test("public transport preserves authorized diagnostic paths and masks only authorizing URL values", () => {
+  const paths = [
+    "/Users/example/source.json",
+    "/home/runner/work/project/file.ts",
+    "apps/web/features/home/home-feed.ts",
+    "https://github.com/example/repo/blob/main/apps/web/features/home/home-feed.ts",
+  ];
+  for (const path of paths) {
+    assert.equal(publicText(path), path);
+    assert.doesNotThrow(() => assertRemoteInput({ path }));
+  }
+  const signature = "opaque" + "SignatureValue";
+  const url = `https://storage.example/file?X-Amz-Date=20261006&X-Amz-Signature=${signature}&mode=view`;
+  assert.throws(() => assertRemoteInput({ url }), /NONPUBLIC_REMOTE_INPUT/u);
+  assert.equal(
+    publicText(url),
+    "https://storage.example/file?X-Amz-Date=20261006&X-Amz-Signature=[REDACTED]&mode=view",
   );
-  assert.throws(
-    () =>
-      assertRemoteInput({
-        url: "https://storage.example/file?X-Amz-Signature=synthetic",
-      }),
-    /NONPUBLIC_REMOTE_INPUT/,
-  );
-  assert.equal(publicText("/Users/example/a.json"), "[private path omitted]");
   assert.doesNotThrow(() =>
     assertRemoteInput({
-      path: "tests/e2e/home.spec.ts",
       sha: head,
       url: "https://github.com/example/repo/actions/runs/123",
     }),
@@ -435,28 +440,27 @@ test("decoded-scalar redaction preserves quoted JSON source and exact sanitized 
     files: [
       {
         path: "scripts/sample.mjs",
-        patch: '+const path = "/Users/example/private.json";',
+        patch:
+          '+const path = "/Users/example/source.json"; const password = "' +
+          ["opaque", "Value"].join("") +
+          '";',
       },
     ],
     failedJobs: [],
     omissions: [],
   };
-  assert.throws(
-    () => JSON.parse(publicText(JSON.stringify(packet))),
-    SyntaxError,
-  );
   const clean = sanitizeRemoteProjection(packet);
   assertRemoteInput(clean);
   assert.equal(
     JSON.parse(JSON.stringify(clean)).files[0].patch,
-    '+const path = "[private path omitted]";',
+    '+const path = "/Users/example/source.json"; const password = "REDACTED";',
   );
   const evidence = citationEvidence(clean),
     patch = evidence.find((e) => e.pointer === "/files/0/patch");
   assert.equal(
     validateCitations(
       {
-        citations: [{ id: patch.id, quote: "[private path omitted]" }],
+        citations: [{ id: patch.id, quote: "REDACTED" }],
         findings: [],
       },
       evidence,
@@ -464,4 +468,107 @@ test("decoded-scalar redaction preserves quoted JSON source and exact sanitized 
     true,
   );
   assert.equal(packet.files[0].patch.includes("/Users/example"), true);
+});
+
+test("credential values are masked without erasing mixed technical prose or URL metadata", () => {
+  const value = ["opaque", "CredentialValue"].join("");
+  const token = ["ghp_", "A".repeat(36)].join("");
+  const examples = [
+    [
+      `Before password="${value}"; inspect /home/runner/src.ts:18 after.`,
+      'Before password="REDACTED"; inspect /home/runner/src.ts:18 after.',
+    ],
+    [
+      `See https://example.test/file?token=${value}&page=2#state next.`,
+      "See https://example.test/file?token=[REDACTED]&page=2#state next.",
+    ],
+    [
+      `Connect postgres://reader:${value}@db.example/archive?sslmode=require then inspect error.`,
+      "Connect postgres://reader:REDACTED@db.example/archive?sslmode=require then inspect error.",
+    ],
+    [
+      `Header Authorization: Bearer ${value}\nStack /Users/example/project/file.ts:2`,
+      "Header Authorization: Bearer REDACTED\nStack /Users/example/project/file.ts:2",
+    ],
+    [
+      `Cookie: session=${value}; other=${value}\nnext`,
+      "Cookie: session=REDACTED; other=REDACTED\nnext",
+    ],
+    [
+      `Set-Cookie: session=${value}; Path=/; SameSite=Lax; HttpOnly\nnext`,
+      "Set-Cookie: session=REDACTED; Path=/; SameSite=Lax; HttpOnly\nnext",
+    ],
+    [
+      `Useful statement ${token} still useful.`,
+      "Useful statement REDACTED still useful.",
+    ],
+    [
+      `Before ${token.replaceAll("A", "\\u0041")} after \\u4e2d.`,
+      "Before REDACTED after \\u4e2d.",
+    ],
+  ];
+  for (const [input, expected] of examples) {
+    const safe = credentialText(input);
+    assert.equal(safe.text, expected);
+    assert.ok(safe.redactions > 0);
+    assert.equal(
+      Object.values(safe.redactionCounts).reduce((a, b) => a + b, 0),
+      safe.redactions,
+    );
+    assert.equal(safe.useful, true);
+    assert.equal(credentialText(safe.text).redactions, 0);
+    assert.doesNotThrow(() => assertRemoteInput({ answer: safe.text }));
+  }
+  const begin = ["-----BEGIN", "PRIVATE KEY-----"].join(" ");
+  const end = ["-----END", "PRIVATE KEY-----"].join(" ");
+  assert.equal(
+    publicText(`Before\n${begin}\n${value}\n${end}\nAfter`),
+    "Before\nREDACTED\nAfter",
+  );
+  assert.equal(
+    publicText("Authorization: Bearer " + ["ab", "cd"].join("")),
+    "Authorization: Bearer REDACTED",
+  );
+  assert.equal(
+    publicText(
+      'token=process.env.CURSOR_API_KEY; password="<PASSWORD>"; sha=abcdef',
+    ),
+    'token=process.env.CURSOR_API_KEY; password="<PASSWORD>"; sha=abcdef',
+  );
+});
+
+test("structured credential context handles opaque values while technical fields remain intact", () => {
+  const value = ["short", "Value"].join("");
+  const original = {
+    password: value,
+    access_token: 12345,
+    nested: {
+      Cookie: `session=${value}; Path=/`,
+      Authorization: `Bearer ${value}`,
+    },
+    path: "apps/web/features/home/home-feed.ts",
+    page: 12345,
+  };
+  const clean = sanitizeRemoteProjection(original);
+  assert.deepEqual(clean, {
+    password: "REDACTED",
+    access_token: "REDACTED",
+    nested: {
+      Cookie: "session=REDACTED; Path=/",
+      Authorization: "Bearer REDACTED",
+    },
+    path: original.path,
+    page: 12345,
+  });
+  assert.throws(() => assertRemoteInput(original), /NONPUBLIC_REMOTE_INPUT/u);
+  assert.doesNotThrow(() => assertRemoteInput(clean));
+  assert.equal(credentialText("token=REDACTED").useful, false);
+  assert.equal(credentialText("Authorization: Bearer REDACTED").useful, false);
+  assert.equal(
+    sanitizeRemoteProjection({ ["pass" + "\\u0077ord"]: value })[
+      "pass" + "\\u0077ord"
+    ],
+    "REDACTED",
+  );
+  assert.equal(credentialText("x".repeat(250000)).text.length, 250000);
 });

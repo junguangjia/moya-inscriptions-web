@@ -1,18 +1,29 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { categories } from "./confidentiality-scan.mjs";
-import { publicText, assertRemoteInput } from "./cursor-automation.mjs";
+import { credentialText, assertRemoteInput } from "./cursor-automation.mjs";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const fail = (category) => {
   throw Error(category);
 };
-const scannedJSON = (text) => {
-  if (safeText(text) === null) fail("UNSAFE_MODEL_OUTPUT");
+export function scannedResponseJSON(text) {
   const value = JSON.parse(text);
+  // JSON escaping is representation, not credential content. Scan every decoded
+  // key/value and check field-aware sanitization; otherwise safe source such as
+  // password="REDACTED" is misread as an unquoted backslash credential.
   assertRemoteInput(value);
+  const pending = [value];
+  while (pending.length) {
+    const entry = pending.pop();
+    if (typeof entry === "string" && safeText(entry) === null)
+      fail("UNSAFE_MODEL_OUTPUT");
+    if (entry && typeof entry === "object") {
+      for (const [key, item] of Object.entries(entry)) pending.push(key, item);
+    }
+  }
   return value;
-};
+}
 
 export function safeText(text, filename = "context.txt") {
   // Remove terminal control sequences before scanning. Never send raw diagnostics
@@ -28,55 +39,45 @@ export function safeText(text, filename = "context.txt") {
     : plain;
 }
 
-// Retain only a scanned answer, never stderr, credentials or arbitrary envelope
-// fields. Redact an entire sensitive scalar/key rather than guess secret spans.
+// Retain the useful answer around masked credential values. Raw transport and
+// arbitrary envelope fields remain in memory only.
 export function retainedResponse(raw) {
   let redactions = 0;
   let visited = 0;
-  const text = (value) => {
-    let decoded = value;
-    for (let i = 0; i < 3; i++) {
-      if (safeText(decoded) === null) {
-        redactions++;
-        return "[REDACTED: credential-bearing text]";
-      }
-      decoded = decoded
-        .replace(/\\u([0-9a-f]{4})/giu, (_, hex) =>
-          String.fromCharCode(parseInt(hex, 16)),
-        )
-        .replace(/\\x([0-9a-f]{2})/giu, (_, hex) =>
-          String.fromCharCode(parseInt(hex, 16)),
-        )
-        .replace(/\\[nrt]/gu, " ");
-    }
-    if (safeText(decoded) === null) {
-      redactions++;
-      return "[REDACTED: credential-bearing text]";
-    }
-    if (publicText(decoded) !== decoded) {
-      redactions++;
-      return "[REDACTED: nonpublic output]";
-    }
-    return safeText(value);
+  let useful = false;
+  const redactionCounts = {};
+  const text = (value, field = "", isKey = false) => {
+    const safe = credentialText(value, field);
+    redactions += safe.redactions;
+    for (const [category, count] of Object.entries(safe.redactionCounts))
+      redactionCounts[category] = (redactionCounts[category] ?? 0) + count;
+    if (!isKey) useful ||= safe.useful;
+    return safe.text;
   };
-  const visit = (value, depth = 0) => {
+  const visit = (value, depth = 0, field = "") => {
     if (++visited > 10000 || depth > 32) {
       redactions++;
+      redactionCounts.RETENTION_LIMIT =
+        (redactionCounts.RETENTION_LIMIT ?? 0) + 1;
       return "[REDACTED: retention limit]";
     }
-    if (typeof value === "string") return text(value);
+    if (typeof value === "string") return text(value, field);
     if (Array.isArray(value))
-      return value.map((item) => visit(item, depth + 1));
+      return value.map((item) => visit(item, depth + 1, field));
     if (value && typeof value === "object")
       return Object.fromEntries(
         Object.entries(value).map(([key, item], index) => {
-          const safeKey = text(key);
+          const safeKey = text(key, "", true);
           return [
             safeKey === key ? key : `[redacted-key-${index}]`,
-            visit(item, depth + 1),
+            visit(item, depth + 1, key),
           ];
         }),
       );
+    if (value != null) {
+      const safe = text(String(value), field);
+      if (safe !== String(value)) return safe;
+    }
     return value;
   };
   if (typeof raw !== "string" || Buffer.byteLength(raw) > 256 * 1024)
@@ -108,8 +109,12 @@ export function retainedResponse(raw) {
     accepted: false,
   };
   artifact.redactions = redactions;
-  // Scan the exact artifact representation AND all decoded retained values.
-  scannedJSON(JSON.stringify(artifact));
+  artifact.redactionCounts = Object.entries(redactionCounts).map(
+    ([category, count]) => ({ category, count }),
+  );
+  artifact.usable = useful && artifact.format !== "invalid-transport";
+  // Validate the exact stored JSON with decoded scalar and named-field checks.
+  scannedResponseJSON(JSON.stringify(artifact));
   return { artifact, envelope, body };
 }
 

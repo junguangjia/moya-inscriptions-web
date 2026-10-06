@@ -1,6 +1,6 @@
 # Cursor PR review and CI diagnosis
 
-## Current design (Issue215 r15)
+## Current design (Issue215 r16)
 
 Owner-approved r15 uses the official GitHub MCP server directly from the
 official Cursor CLI. There is no custom MCP proxy, tool filter or replacement
@@ -30,6 +30,25 @@ complete coverage and verified PASS are different fields. Natural replies do not
 create a clean verdict. The ledger can record `answered` to reuse an existing
 reply for unchanged tree/status events; it does not mean complete review or test
 acceptance. Historical rejected calls and proofs are unchanged.
+
+Owner-approved r16 keeps diagnostic source paths (including `/home/` source
+segments), ordinary GitHub URLs, errors, stack traces and technical identifiers.
+Actual password, API/access-token, private-key, authorization-cookie and
+authorizing-URL values are replaced with `REDACTED`, preserving surrounding
+prose and non-authorizing URL parameters. Escaped credentials are matched
+against decoded text and mapped back to the original value spans. A residual
+core-scanner finding uses a conservative affected-line fallback, not
+whole-answer deletion. Only fixed category/count metadata is retained;
+credential values and raw CLI transport are never stored. Unrelated personal
+data is outside this authorization.
+
+A reply with useful remaining text can be an execution-confirmed `PARTIAL` even
+when credential values were masked. Placeholder-only replies remain unavailable;
+masked replies cannot acquire exact structured validation, complete coverage or
+a clean verdict. The core credential scanner, model/account, read-only MCP and
+workflow permissions are unchanged. Run37506596971's original answer was already
+discarded and remains unrecoverable; the demonstrated path false positive does
+not establish that historical run's unretained trigger.
 
 Human collaborators with current write/maintain/admin permission can ask on a
 PR:
@@ -595,11 +614,13 @@ general retry switch, count reset or permission expansion.
 
 Dialogue output is now retained as `model-response.json` before answer
 acceptance. The bounded body is scanned, including decoded values and escaped
-credential forms. A credential-bearing string or key is wholly redacted;
-redacted output cannot pass as an accepted answer. Only the scanned artifact is
-stored/uploaded for seven days, never raw stderr or arbitrary transport fields.
-Malformed but safe responses remain inspectable. Retention limits and scanning
-failure can still prevent retaining unsafe/unbounded content.
+credential forms. R16 masks credential values while preserving safe diagnostic
+context. The legacy typed dialogue still requires unredacted exact validation;
+automatic natural replies use the separate partial-usability rule above. Only
+the scanned artifact is stored/uploaded for seven days, never raw stderr or
+arbitrary transport fields. Malformed but safe responses remain inspectable.
+Retention limits and scanning failure can still prevent retaining
+unsafe/unbounded content.
 
 Missing body, wrong body type, invalid JSON/schema, missing/empty narrative,
 overlength narrative and unsafe output have separate categories. Narrative

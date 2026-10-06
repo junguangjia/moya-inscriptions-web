@@ -1915,6 +1915,27 @@ for (const [label, body, usable] of [
     true,
   ],
   ["unsafe scalar", "token=" + "ghp_" + "A".repeat(36), false],
+  ["cookie-only", "Cookie: session=" + ["opaque", "Value"].join(""), false],
+  [
+    "mixed diagnostic and credential",
+    "Inspect apps/web/features/home/home-feed.ts:18. token=" +
+      "ghp_" +
+      "A".repeat(36) +
+      "\nThe assertion needs investigation.",
+    true,
+  ],
+  [
+    "quoted masked credential with useful prose",
+    'Inspect password="' +
+      ["opaque", "Value"].join("") +
+      '" then await line 18.',
+    true,
+  ],
+  [
+    "source path and GitHub URL",
+    "Inspect apps/web/features/home/home-feed.ts and https://github.com/example/repo/blob/main/apps/web/features/home/home-feed.ts",
+    true,
+  ],
 ])
   test(`official-direct configuration retains ${label} independently of optional schema`, async () => {
     const temp = mkdtempSync(join(tmpdir(), "cursor-natural-"));
@@ -1971,6 +1992,11 @@ console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,resul
       const retained = JSON.parse(
         readFileSync(join(directory, "model-response.json"), "utf8"),
       );
+      await main("transfer", { RUNNER_TEMP: temp });
+      assert.equal(
+        readFileSync(join(directory, "transfer/model-response.json"), "utf8"),
+        readFileSync(join(directory, "model-response.json"), "utf8"),
+      );
       assert.equal(report.transportCompleted, true);
       assert.equal(report.actualInvocations, 1);
       assert.equal(report.effectiveSelection.maxMode, true);
@@ -1986,7 +2012,24 @@ console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,resul
       if (usable) {
         assert.equal(report.answerRetained, true);
         assert.ok(report.answerText.length);
-        assert.equal(retained.redactions, 0);
+        assert.equal(
+          retained.redactions,
+          [
+            "mixed diagnostic and credential",
+            "quoted masked credential with useful prose",
+          ].includes(label)
+            ? 1
+            : 0,
+        );
+        assert.equal(report.answerUsable, true);
+        assert.deepEqual(report.redactionCounts, retained.redactionCounts);
+        if (label === "mixed diagnostic and credential") {
+          assert.match(
+            report.answerText,
+            /Inspect apps\/web\/features\/home\/home-feed.ts:18/u,
+          );
+          assert.ok(!JSON.stringify(report).includes(body));
+        }
       } else {
         if (label === "whitespace only") {
           assert.equal(report.answerRetained, false);

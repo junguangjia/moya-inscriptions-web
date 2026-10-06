@@ -37,6 +37,7 @@ import {
   retainedResponse,
   readableResponse,
   responseValidationError,
+  scannedResponseJSON,
 } from "./cursor-response.mjs";
 export { safeText } from "./cursor-response.mjs";
 
@@ -1774,6 +1775,7 @@ export function automaticResponseState(packet, report) {
     selected.fast === "true" &&
     selected.maxMode === true;
   const structuredAccepted =
+    !report.redactions &&
     !packet.metadataOnly &&
     ["findings", "no_findings", "incomplete"].includes(report.assessment) &&
     selectionConfirmed &&
@@ -1783,7 +1785,9 @@ export function automaticResponseState(packet, report) {
       report.citationValidation.count &&
     report.citationValidation.citations.every((c) => c.exact === true);
   const narrativeAvailable = Boolean(
-    report.answerRetained && report.answerText,
+    report.answerRetained &&
+    report.answerText &&
+    (report.answerUsable ?? !report.redactions),
   );
   const responseAccepted =
     structuredAccepted ||
@@ -1791,8 +1795,7 @@ export function automaticResponseState(packet, report) {
       narrativeAvailable &&
       selectionConfirmed &&
       report.transportCompleted &&
-      !report.selectionError &&
-      !report.redactions,
+      !report.selectionError,
     );
   const coverageComplete =
     !packet.autonomous &&
@@ -2159,7 +2162,9 @@ async function analyze(directory, env) {
       findings: [],
       answerText: readableResponse(captured.artifact),
       answerRetained: Boolean(readableResponse(captured.artifact).trim()),
+      answerUsable: captured.artifact.usable,
       redactions: captured.artifact.redactions,
+      redactionCounts: captured.artifact.redactionCounts,
       model,
       actualInvocations: 1,
       inferenceMs: streamed.progress.elapsedMs,
@@ -2346,7 +2351,7 @@ function publish(directory, repository, env) {
           ? `\n[Previous reply](${packet.priorAnswerURL}); explicit context transfer, not a resumed hidden session.\n`
           : "") +
         `\n${publicText(report.answerText).replace(/<!--/gu, "&lt;!--").replace(/@/gu, "＠").slice(0, 42000)}\n\n` +
-        `Reply retained: ${response.answerAvailable}; execution usable: ${response.responseAccepted}; optional structured validation: ${response.structuredValidation ?? "NOT_APPLICABLE"}. Model claims are not verified PASS.\n[Invocation](https://github.com/${repository}/actions/runs/${env.GITHUB_RUN_ID}). Full scanned reply is retained in its result artifact if this comment is truncated.`;
+        `Credential values masked: ${report.redactions ?? 0}; categories: ${(report.redactionCounts ?? []).map((entry) => entry.category).join(", ") || "none"}. Reply available: ${response.answerAvailable}; execution usable: ${response.responseAccepted}; optional structured validation: ${response.structuredValidation ?? "NOT_APPLICABLE"}. Model claims are not verified PASS.\n[Invocation](https://github.com/${repository}/actions/runs/${env.GITHUB_RUN_ID}). Full scanned reply is retained in its result artifact if this comment is truncated.`;
       answerURL = writeAutomaticComment(
         directory,
         repository,
@@ -2405,6 +2410,8 @@ function publish(directory, repository, env) {
       citationValidation: report.citationValidation ?? null,
       effectiveSelection: report.effectiveSelection ?? null,
       inferenceMs: report.inferenceMs ?? null,
+      redactions: report.redactions ?? 0,
+      redactionCounts: report.redactionCounts ?? [],
       permalink: comment.html_url,
       ...(answerURL ? { answerURL } : {}),
     });
@@ -2506,8 +2513,8 @@ export async function main(stage, env = process.env) {
       const file = join(source, name);
       if (!existsSync(file)) continue;
       const text = readFileSync(file, "utf8");
-      if (safeText(text) === null) throw Error("UNSAFE_REMOTE_RESULT");
-      if (name.endsWith(".json")) assertRemoteInput(JSON.parse(text));
+      if (name.endsWith(".json")) scannedResponseJSON(text);
+      else if (safeText(text) === null) throw Error("UNSAFE_REMOTE_RESULT");
       mkdirSync(resolve(output, name, ".."), { recursive: true, mode: 0o700 });
       writeFileSync(join(output, name), text, { mode: 0o600 });
       copied++;
@@ -2585,8 +2592,7 @@ export async function main(stage, env = process.env) {
     ]) {
       if (!existsSync(join(directory, name))) continue;
       const text = readFileSync(join(directory, name), "utf8");
-      if (safeText(text) === null) throw Error("UNSAFE_REMOTE_RESULT");
-      assertRemoteInput(JSON.parse(text));
+      scannedResponseJSON(text);
       writeFileSync(join(output, name), text, { mode: 0o600 });
     }
     return;
