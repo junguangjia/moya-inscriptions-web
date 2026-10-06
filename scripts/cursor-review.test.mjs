@@ -46,6 +46,7 @@ import {
   LIMITS,
 } from "./cursor-review.mjs";
 import { classifyTask } from "./ci-task-scope.mjs";
+import { claimRecord, finishRecord } from "./cursor-automation.mjs";
 
 const repository = "example/project";
 test("large changed files preserve bounded exact current context instead of no source", () => {
@@ -166,6 +167,44 @@ test("valid partial answer is consumable without clean verdict or complete-revie
   assert.equal(state.coverageComplete, false);
   assert.equal(state.cleanVerdict, false);
   assert.equal(state.ledgerStatus, "incomplete");
+  const findings = automaticResponseState(
+    { omissions: ["missing context"] },
+    {
+      ...report,
+      assessment: "findings",
+      findings: [{ priority: "P1", body: "supported issue" }],
+    },
+  );
+  assert.equal(findings.responseAccepted, true);
+  assert.equal(findings.status, "PARTIAL");
+  assert.equal(findings.ledgerStatus, "incomplete");
+  const review = claimRecord(
+    { records: [] },
+    repository,
+    { number: 7, head: "a".repeat(40), kind: "review" },
+    100,
+  );
+  const rows = finishRecord(
+    { records: review.records },
+    review.key,
+    100,
+    findings.ledgerStatus,
+  );
+  const merged = claimRecord(
+    { records: rows },
+    repository,
+    {
+      number: 7,
+      head: "b".repeat(40),
+      prHead: "a".repeat(40),
+      postMerge: true,
+      kind: "postmerge",
+      runId: 8,
+      attempt: 1,
+    },
+    101,
+  );
+  assert.equal(merged.priorReview, null);
   assert.equal(
     automaticResponseState(
       { omissions: [] },

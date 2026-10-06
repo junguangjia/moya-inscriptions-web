@@ -74,10 +74,12 @@ Automatic collection also supplies bounded numbered current-source excerpts
 beside changed hunks when a complete file exceeds24K, and canonical CI job/step
 conclusions for successful postmerge runs. Excerpts retain exact source/blob
 identity; entire files outside those windows remain missing. Original source is
-limited to1MiB per file and optional retrieval stops after2MiB declared bytes;
-the last response can cross that threshold by at most one bounded file. Existing
-24K selected-source/180K packet/360K duplicate-citation limits remain. Job/step
-success never claims an individual testcase result without that native record.
+eligible for decoding only up to1MiB per file; optional retrieval stops
+after2MiB declared bytes. The last fetched blob can exceed that threshold;
+oversized or size-mismatched content is not decoded. The existing command
+response cap still bounds network output. Existing 24K selected-source/180K
+packet/360K duplicate-citation limits remain. Job/step success never claims an
+individual testcase result without that native record.
 
 A structurally valid, runtime-confirmed, exactly cited partial reply is accepted
 as usable report data with status `PARTIAL`, `coverageComplete=false` and

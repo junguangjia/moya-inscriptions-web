@@ -826,7 +826,11 @@ export function collectFailureSources(packet, loadSource) {
 function collect(repository, target) {
   let pr;
   let run;
-  if (target.runId && ["ci", "postmerge"].includes(target.kind)) {
+  if (
+    target.runId &&
+    (["ci", "postmerge"].includes(target.kind) ||
+      (target.automatic && target.kind === "review"))
+  ) {
     run = api(`repos/${repository}/actions/runs/${target.runId}`);
     if (!currentRun(run, { ...target, repository })) return null;
     // GitHub can omit pull_requests on workflow_run; resolve by exact commit.
@@ -1515,15 +1519,15 @@ export function automaticResponseState(packet, report) {
     status: packet.metadataOnly
       ? "METADATA_ONLY"
       : responseAccepted
-        ? report.assessment === "incomplete"
-          ? "PARTIAL"
-          : "ANSWERED"
+        ? coverageComplete
+          ? "ANSWERED"
+          : "PARTIAL"
         : "INCOMPLETE",
     // A validated partial response remains an incomplete claim. It cannot be
     // reused as an accepted review or trigger an automatic retry.
     ledgerStatus: packet.metadataOnly
       ? "metadata"
-      : responseAccepted && report.assessment !== "incomplete"
+      : coverageComplete
         ? "accepted"
         : "incomplete",
   };
