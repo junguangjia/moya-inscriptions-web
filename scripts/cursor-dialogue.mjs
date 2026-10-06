@@ -776,6 +776,34 @@ Return JSON only: {"status":"answered|needs_evidence|incomplete","answer":"conci
 Each narrative field must be nonempty and at most 2400 characters; prefer fewer than 600 characters per field and a compact response under 8000 characters. No reasoning transcript is requested.
 At most 6 findings, 3 citations per finding, 6 uncertainties, 4 missing-evidence requests and 4 verification items. Use needs_evidence only for a specific new selector that might resolve the question. If originals lack it or the question cannot be resolved, return incomplete and explain the limit; do not prescribe speculative changes. Prior answers are context, not evidence. No automatic retry or paid/model fallback.`;
 export function validateAnswer(answer, records) {
+  const containsOriginalQuote = (source, quote) => {
+    if (source.text.includes(quote)) return true;
+    // The source text is a JSON string in the faithful evidence wrapper. A
+    // literal source quote can contain newlines/quotes that the wrapper escapes.
+    // Accept only that exact decoded source field, never fuzzy/whitespace or
+    // arbitrary JSON-value matching. The same hash-bound evidence ID still applies.
+    if (
+      source.file !== "preparation" ||
+      !/^(?:|\/source\/\d+)$/u.test(source.pointer)
+    )
+      return false;
+    let value;
+    try {
+      value = JSON.parse(source.text);
+    } catch {
+      return false;
+    }
+    const snippets = source.pointer === "" ? value?.source : [value];
+    return (
+      Array.isArray(snippets) &&
+      snippets.some(
+        (snippet) =>
+          typeof snippet?.text === "string" &&
+          snippet.text.includes(quote) &&
+          source.text.includes(JSON.stringify(quote).slice(1, -1)),
+      )
+    );
+  };
   const only = (value, keys) =>
     value &&
     typeof value === "object" &&
@@ -833,7 +861,7 @@ export function validateAnswer(answer, records) {
         typeof citation.quote !== "string" ||
         !citation.quote.length ||
         citation.quote.length > 800 ||
-        !source.text.includes(citation.quote)
+        !containsOriginalQuote(source, citation.quote)
       )
         fail("CITATION_NOT_IN_ORIGINAL");
     }
