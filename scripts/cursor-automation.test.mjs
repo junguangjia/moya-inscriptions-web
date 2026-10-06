@@ -381,7 +381,7 @@ test("decoded-scalar redaction preserves quoted JSON source and exact sanitized 
     files: [
       {
         path: "scripts/sample.mjs",
-        patch: '+const path = \"/Users/example/private.json\";',
+        patch: '+const path = "/Users/example/private.json";',
       },
     ],
     failedJobs: [],
@@ -395,7 +395,7 @@ test("decoded-scalar redaction preserves quoted JSON source and exact sanitized 
   assertRemoteInput(clean);
   assert.equal(
     JSON.parse(JSON.stringify(clean)).files[0].patch,
-    '+const path = \"[private path omitted]\";',
+    '+const path = "[private path omitted]";',
   );
   const evidence = citationEvidence(clean),
     patch = evidence.find((e) => e.pointer === "/files/0/patch");
