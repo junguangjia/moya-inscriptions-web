@@ -70,6 +70,21 @@ comments are concise sanitized summaries; full approved machine results remain
 separate. Workflow success, answer acceptance and citation validation are three
 separate outcomes. No automatic product merge/deployment is implemented.
 
+Automatic collection also supplies bounded numbered current-source excerpts
+beside changed hunks when a complete file exceeds24K, and canonical CI job/step
+conclusions for successful postmerge runs. Excerpts retain exact source/blob
+identity; entire files outside those windows remain missing. Original source is
+limited to1MiB per file and optional retrieval stops after2MiB declared bytes;
+the last response can cross that threshold by at most one bounded file. Existing
+24K selected-source/180K packet/360K duplicate-citation limits remain. Job/step
+success never claims an individual testcase result without that native record.
+
+A structurally valid, runtime-confirmed, exactly cited partial reply is accepted
+as usable report data with status `PARTIAL`, `coverageComplete=false` and
+`cleanVerdict=false`. Its claim stays `incomplete`, so it is neither retried nor
+reused as a complete review. Rejected transport/model/schema/citation responses
+remain unaccepted. Older receipts are not retroactively changed or accepted.
+
 The remaining sections preserve the initial setup and earlier single-case
 experiments as historical context. Their manual/candidate and finite reasoning
 windows are superseded for new authorized r10 operation, not retroactively

@@ -277,6 +277,9 @@ export function citationEvidence(packet) {
   packet.files.forEach((file, i) => {
     add(`/files/${i}/patch`, file.patch);
     add(`/files/${i}/source`, file.source);
+    (file.sourceExcerpts || []).forEach((excerpt, j) =>
+      add(`/files/${i}/sourceExcerpts/${j}`, excerpt),
+    );
   });
   (packet.relatedSources || []).forEach((file, i) =>
     add(`/relatedSources/${i}/source`, file.source),
@@ -286,6 +289,19 @@ export function citationEvidence(packet) {
     add(`/failedJobs/${i}/failedSteps`, job.failedSteps);
   });
   add("/omissions", packet.omissions);
+  add(
+    "/runEvidence/identity",
+    packet.runEvidence && {
+      id: packet.runEvidence.id,
+      attempt: packet.runEvidence.attempt,
+      source: packet.runEvidence.source,
+      event: packet.runEvidence.event,
+      conclusion: packet.runEvidence.conclusion,
+    },
+  );
+  (packet.runEvidence?.jobs || []).forEach((job, i) =>
+    add(`/runEvidence/jobs/${i}`, job),
+  );
   return records;
 }
 
