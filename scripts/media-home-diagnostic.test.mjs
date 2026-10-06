@@ -35,7 +35,7 @@ import {
 const workflow = "a".repeat(40);
 const env = {
   GITHUB_EVENT_NAME: "workflow_dispatch",
-  GITHUB_REF: "refs/heads/codex/media-home97-raf-phase-diagnostic",
+  GITHUB_REF: "refs/heads/codex/media-home97-trace-off-control",
   HOME_WORKFLOW_SHA: workflow,
   GITHUB_SHA: workflow,
   HOME_TASK_KEY: "12345678-1234-1234-1234-123456789abc",

@@ -748,7 +748,7 @@ const save = (path, value) =>
 export function admit(env, currentSha, currentTree) {
   if (
     env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REF !== "refs/heads/codex/media-home97-raf-phase-diagnostic" ||
+    env.GITHUB_REF !== "refs/heads/codex/media-home97-trace-off-control" ||
     !/^[a-f0-9]{40}$/.test(env.HOME_WORKFLOW_SHA ?? "") ||
     env.GITHUB_SHA !== env.HOME_WORKFLOW_SHA ||
     !/^[a-f0-9-]{36}$/.test(env.HOME_TASK_KEY ?? "") ||
@@ -1277,6 +1277,7 @@ async function execute(mode) {
       "--config",
       "e2e/support/home-causal.config.mts",
       "--reporter=json",
+      "--trace=off",
     ];
     const deadline = Date.now() + 300000;
     const list = await bounded(
@@ -1321,6 +1322,14 @@ async function execute(mode) {
   if (mode !== "publish") throw new Error("OPERATION_REJECTED");
   const packet = {
     kind: "SANITIZED_DIAGNOSTIC_ONLY_NOT_ACCEPTANCE",
+    control: {
+      name: "TRACE_OFF_ORIGINAL_HOME",
+      baseline_run: 37449681450,
+      baseline_attempt: 1,
+      trace_configured: "off",
+      video_change: "NONE_DEFAULT_OFF",
+      effective_trace_runtime: "NOT_CAPTURED",
+    },
     identity: c.identity,
     platform: "GitHub Linux hosted runner",
     source_file: SPEC,
