@@ -903,14 +903,22 @@ for (const chrome of ["default", "hidden"] as const) {
         buttons.evaluateAll((nodes) => {
           for (const [index, node] of nodes.entries()) {
             const box = node.getBoundingClientRect();
-            const x = box.x + box.width / 2;
-            for (
-              let y = Math.max(box.top + 12, 24);
-              y < Math.min(box.bottom - 12, innerHeight - 110);
-              y += 20
-            ) {
-              const hit = document.elementFromPoint(x, y);
-              if (hit && node.contains(hit)) return { index, point: { x, y } };
+            // The visible QA controls may cover a card's centre while its
+            // side remains exposed. Hit-test actual points inside that card.
+            for (const x of [
+              box.x + box.width / 2,
+              box.right - 12,
+              box.left + 12,
+            ]) {
+              for (
+                let y = Math.max(box.top + 12, 24);
+                y < Math.min(box.bottom - 12, innerHeight - 110);
+                y += 20
+              ) {
+                const hit = document.elementFromPoint(x, y);
+                if (hit && node.contains(hit))
+                  return { index, point: { x, y } };
+              }
             }
           }
           return null;
@@ -1048,16 +1056,27 @@ for (const chrome of ["default", "hidden"] as const) {
           const findHit = () =>
             buttons.evaluateAll((nodes) => {
               for (const [index, node] of nodes.entries()) {
-                const box = node.getBoundingClientRect(),
-                  x = box.x + box.width / 2;
-                if (x > innerWidth - 130) continue;
-                for (
-                  let y = Math.max(30, box.top + 12);
-                  y < Math.min(innerHeight - 110, box.bottom - 12);
-                  y += 20
-                ) {
-                  const target = document.elementFromPoint(x, y);
-                  if (target && node.contains(target)) return { index, x, y };
+                const box = node.getBoundingClientRect();
+                const left = Math.max(box.left + 12, 36);
+                const right = Math.min(box.right - 12, innerWidth - 201);
+                if (left > right) continue;
+                for (const x of [
+                  Math.max(left, Math.min(right, box.x + box.width / 2)),
+                  right,
+                  left,
+                ]) {
+                  // Keep the existing reserve and the full twelve-step span:
+                  // the first finger moves -36px and the second reaches +200px.
+                  if (x > innerWidth - 130 || x < 36 || x + 200 >= innerWidth)
+                    continue;
+                  for (
+                    let y = Math.max(30, box.top + 12);
+                    y < Math.min(innerHeight - 110, box.bottom - 12);
+                    y += 20
+                  ) {
+                    const target = document.elementFromPoint(x, y);
+                    if (target && node.contains(target)) return { index, x, y };
+                  }
                 }
               }
               return null;
