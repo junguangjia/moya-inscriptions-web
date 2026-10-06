@@ -981,22 +981,11 @@ test("workflow keeps trusted checkout, pinned CLI, separate credentials and no P
     "utf8",
   );
   assert.match(workflow, /pull_request_target:/u);
-  assert.match(
-    workflow,
-    /ref: \$\{\{ inputs.operation == 'dialogue' && github.sha \|\| 'main' \}\}/u,
-  );
+  assert.match(workflow, /ref: \$\{\{ needs.route.outputs.trusted \}\}/u);
   assert.match(workflow, /persist-credentials: false/u);
   assert.match(workflow, /sha256sum --check --status/u);
-  assert.match(
-    workflow,
-    /format\('review-\{0\}',\s+github.event.pull_request.number \|\| inputs.pr\)/u,
-  );
+  assert.match(workflow, /group: cursor-.*-pr-/u);
   assert.match(workflow, /steps.fresh.outputs.ready/u);
-  assert.match(workflow, /format\('ci-\{0\}',\s+inputs.expected_head\)/u);
-  assert.match(
-    workflow,
-    /format\('ci-\{0\}',\s+github.event.workflow_run.head_sha\)/u,
-  );
   assert.match(
     workflow,
     /install-confidentiality-hooks.mjs --confirm-current-identity-approved/u,
@@ -1020,6 +1009,8 @@ test("fresh runner installs the controlled scanner, publishes once, updates once
   try {
     for (const name of [
       "cursor-review.mjs",
+      "cursor-stream.mjs",
+      "cursor-automation.mjs",
       "confidentiality-scan.mjs",
       "install-confidentiality-hooks.mjs",
     ])
@@ -1419,7 +1410,7 @@ test("inference passes exact model and evidence on stdin, rejects hidden paramet
       `#!${process.execPath}
 const fs = require('node:fs');
 const input = fs.readFileSync(0, 'utf8');
-if (!input.includes('${head}') || process.argv.at(-1) !== 'json' || process.env.GH_TOKEN) process.exit(2);
+if (!input.includes('${head}') || !process.argv.includes('stream-json') || !process.argv.includes('--stream-partial-output') || process.env.GH_TOKEN) process.exit(2);
 if (process.argv[process.argv.indexOf('--model') + 1] !== 'grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]') process.exit(3);
 const configPath = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
 const configuration = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -1549,14 +1540,15 @@ test("real stage process collects immutable evidence; missing key produces unava
     const event = join(temp, "event.json");
     writeFileSync(
       event,
-      JSON.stringify({ action: "opened", pull_request: pr }),
+      JSON.stringify({ inputs: { pr: "7", operation: "review" } }),
     );
     const output = join(temp, "output");
     const env = {
       PATH: `${bin}:${process.env.PATH}`,
       RUNNER_TEMP: temp,
       GITHUB_REPOSITORY: repository,
-      GITHUB_EVENT_NAME: "pull_request_target",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REF: "refs/heads/main",
       GITHUB_EVENT_PATH: event,
       GITHUB_OUTPUT: output,
     };
@@ -1566,7 +1558,7 @@ test("real stage process collects immutable evidence; missing key produces unava
       encoding: "utf8",
     });
     assert.equal(prepared.status, 0, prepared.stderr);
-    assert.equal(readFileSync(output, "utf8"), "ready=true\n");
+    assert.equal(readFileSync(output, "utf8"), "ready=true\ninference=true\n");
     const collected = JSON.parse(
       readFileSync(join(temp, "cursor-review/context.json"), "utf8"),
     );

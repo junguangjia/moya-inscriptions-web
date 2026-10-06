@@ -1,5 +1,80 @@
 # Cursor PR review and CI diagnosis
 
+## Current automatic operation (Issue215 r10)
+
+The Owner authorized recurring analysis on 2026-10-06. Enable
+`CURSOR_AUTOMATION_ENABLED=true` after the reviewed workflow is installed on
+`main`. PR opened/reopened/synchronize/ready events cover same-repository PRs,
+including stacked bases. Canonical `CI` completion covers PR, manual-CI and push
+runs; a merge-to-main notification records status and the postmerge CI supplies
+integration evidence. Closing an unmerged PR does not invoke Cursor.
+
+Host scripts resolve the PR, pin installed main, serialize jobs per PR and keep
+one bot-owned durable ledger keyed by repository/PR/source/run/attempt/phase. PR
+event aliases collapse to one source review. A surviving CI event can combine an
+unprocessed review with its new failure evidence in one call; a surviving PR
+alias reconciles the latest completed unprocessed CI from a bounded 20-run list.
+Passing PR CI records status without re-review. Tree-identical postmerge success
+reuses an accepted exact PR review; changed integration evidence receives its
+own analysis. Failed/orphan claims suppress automatic retries, with incomplete
+receipts. The ledger has a disclosed 100-record cap per PR; exhaustion stops
+admission, rather than forgetting old calls. Cursor comments and its own
+workflow are not triggers. GitHub's one-pending-job queue can coalesce events;
+only the current source is eligible, and earlier superseded sources are not
+retrospectively analyzed.
+
+`CURSOR_MODEL` must be
+`grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]`. Each accepted
+inference checks the fresh CLI selection, including `maxMode=true`. English is
+preferred, not an answer-rejection condition. There is no application reasoning
+timeout: NDJSON assistant/tool/result events and connection/process/error state
+are recorded without exposing their text. Silence means activity unconfirmed;
+process alive does not prove thinking. The hosted job has GitHub's 360-minute
+ceiling, including preparation/retention; no unlimited-runtime promise, hidden
+retry, model substitution or paid fallback is made. On-Demand stays off under
+the existing account policy; runtime selection is not a billing/provider
+attestation.
+
+**Public repository Actions artifacts are repository-readable, not private
+handoff storage.** Automatic transport contains only sanitized receipts,
+validated results/citations and progress counters. Raw collected logs/context,
+agent configuration and full private local evidence are excluded. A targeted
+question must set `scope=repository-question-v1` and
+`remoteEvidenceApproved=true`, with exact repository/PR/source/tree/canonical CI
+run/attempt/workflow/base plus the three sanitized wrapper hashes. Only that
+approved sanitized projection enters the compressed 60-KiB transport and
+repository-readable continuation cache. Core credentials and nonpublic local
+paths/authorizing URLs are rejected; full local context remains in existing
+private artifact storage. No source/log content is treated as instructions.
+
+A question runs through `operation=dialogue` on trusted `main`, with `candidate`
+equal to the installed main SHA, a new 24-hex dialogue ID, round1,
+`previousRun=null`, bounded English question, up to24 cache selectors and the
+verified compressed sanitized wrappers. Preparation validates current
+source/tree/CI and claims a question digest in the same per-PR ledger.
+Follow-ups use retained exact structured context, require `needs_evidence` and
+new literal coverage, and stop at three rounds. A genuinely new question gets a
+new identity; old ANSWERED/failed histories are never rewritten or silently
+renewed. Evidence is at most2MiB before compression, each selected record24K,
+final prompt120K. Automatic collection retains the
+existing80-file/36K-log/180K-context limits; literal citation records duplicate
+sanitized subsets under a360K whole-packet cap. No arbitrary shell, native
+observation or production tool is granted.
+
+Local Codex owns source edits, necessary focused checks, submission and precise
+questions. GitHub scripts execute existing CI and perform retrieval/cache/status
+work. Cursor analyzes supplied originals and returns findings, exact excerpts,
+uncertainty and next verification. The original media writer receives that
+validated answer and edit-relevant code; it does not reread bulk logs. Human PR
+comments are concise sanitized summaries; full approved machine results remain
+separate. Workflow success, answer acceptance and citation validation are three
+separate outcomes. No automatic product merge/deployment is implemented.
+
+The remaining sections preserve the initial setup and earlier single-case
+experiments as historical context. Their manual/candidate and finite reasoning
+windows are superseded for new authorized r10 operation, not retroactively
+changed in historical evidence.
+
 Task: [#215](https://github.com/junguangjia/moya-inscriptions-web/issues/215).
 
 The `Cursor review` GitHub Actions workflow runs the official Cursor CLI on a
@@ -285,14 +360,17 @@ prevent a clean verdict. `incomplete` and `unavailable` fail this advisory
 workflow after publishing a concise status; neither changes existing required
 checks. Cursor does not run tests, so a review comment cannot prove CI passed.
 
-The inference deadline is seven minutes and the job ceiling is fifteen minutes.
-Automatic and manual review events share a PR concurrency group. CI diagnosis
-uses the same commit group for manual and automatic requests. A freshness step
-immediately before inference checks the PR head and CI run attempt again after
-installation. Publication rechecks the PR head; the commit is always visible in
-the report. Review and diagnosis have separate comments so one does not
-overwrite the other. Older comments remain visibly bound to their old commit
-until replaced; readers must compare that SHA to the PR's current head.
+The Owner removed arbitrary inference-time cutoffs for future authorized calls.
+The official CLI now emits incremental NDJSON; deterministic scripts retain only
+safe progress metadata and the scanned terminal answer. GitHub-hosted jobs have
+a six-hour platform ceiling including preparation and retention. Automatic and
+manual review events share a PR concurrency group. CI diagnosis uses the same
+commit group for manual and automatic requests. A freshness step immediately
+before inference checks the PR head and CI run attempt again after installation.
+Publication rechecks the PR head; the commit is always visible in the report.
+Review and diagnosis have separate comments so one does not overwrite the other.
+Older comments remain visibly bound to their old commit until replaced; readers
+must compare that SHA to the PR's current head.
 
 To pause automatic reviews, set repository variable
 `CURSOR_AUTOMATION_ENABLED=false`. Explicit metadata inspection and manual CI
@@ -342,9 +420,9 @@ discovery of other artifacts are unsupported.
 The dialogue_request JSON fields are target, candidate, candidatePR, dialogueId
 (24 hex), round, startedAt (epoch milliseconds), previousRun (null for round1),
 question, selectors, optional sourcePaths, and originals (encoded snapshot for
-round1 only). It permits one initial question plus at most two follow-ups: 360s
-per inference,900s aggregate inference,1800s wall time from trusted initial
-GitHub run creation, 10min per job,60KiB transport,120K serialized prompt and24K
+round1 only). It permits one initial question plus at most two follow-ups: no
+fixed model-reasoning cutoff (elapsed time remains recorded), a disclosed
+six-hour GitHub-hosted job ceiling,60KiB transport,120K serialized prompt and24K
 per selected record. Duplicate attempts/rounds, stale identity, errors, no new
 follow-up evidence and budget exhaustion stop incomplete. A follow-up requires
 an exact previous needs_evidence record. No hidden retry, paid fallback or model
@@ -415,3 +493,36 @@ runtime-selection confirmation and numeric usage are retained independently of
 answer validity. A retained response, model selection or usage value is not
 diagnostic acceptance or a billing receipt. The old discarded answer remains
 unrecoverable. These retention changes apply to the bounded dialogue path.
+
+## Prospective waiting policy and exact-run analysis
+
+The new Owner-authorized diagnosis targets CI37394447844/attempt1 at source
+d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618. Earlier answered/timeout records and
+their exhausted three-call experiment remain historical. Each newly authorized
+question has its own explicit invocation ledger; no automatic retry or implicit
+reuse/reset of an old allowance occurs. This diagnosis authorizes one call and
+advice only, not another media repair or required-CI submission.
+
+Official stream-json assistant deltas and permitted tool start/completion events
+are observable activity; init or process-alive alone are not. Additional event
+categories can occur in the pinned CLI; their text is not retained or used to
+verify hidden reasoning. Silence is activity-unconfirmed, not proof of a stall
+and not a reason to abort at an arbitrary elapsed time. Scripts retain terminal
+result/error, output-resource limits, exact model/identity checks and no paid
+fallback. No additional tools are enabled for monitoring. See
+[Cursor output formats](https://cursor.com/docs/cli/reference/output-format) and
+[GitHub Actions limits](https://docs.github.com/en/actions/reference/limits).
+
+Each NDJSON line and retained terminal result is bounded to256KiB; stderr stays
+bounded to64KiB. The complete stream is counted and hashed incrementally rather
+than buffered or capped as one final answer, so prompt echoes and partial-event
+envelopes do not consume the answer allowance. Malformed events or progress
+retention failures stop only the owned child and return a safe terminal category
+with any retention gap disclosed.
+
+Complete questions, scanned answers and native citation/projection identities
+remain private. The public PR shows one concise human summary of observations,
+unknown causes, actual writer adoption and the next authorized action or
+blocker, with public SHA/run links. No raw artifacts, private paths or account
+details are published. Cursor recommendations never authorize repairs or test
+replays.

@@ -115,7 +115,7 @@ const candidate = {
 test("dual workflow/source identity is explicit and rejects stale or foreign candidates", () => {
   validateAdmission(request, media, diagnostic, commit, candidate);
   for (const run of [
-    { ...diagnostic, head_sha: TARGET.source },
+    { ...diagnostic, head_sha: "f".repeat(40) },
     { ...diagnostic, run_attempt: 2 },
     { ...diagnostic, workflow_id: TARGET.workflowId + 1 },
     { ...diagnostic, status: "in_progress" },
@@ -305,11 +305,7 @@ test("one pinned resumption preserves original cost and expired start without re
     validatePrevious(round3, { ...second, status: "incomplete" }, now),
   );
   assert.throws(() =>
-    validatePrevious(
-      round3,
-      { ...second, inferenceMs: BUDGET.inferenceMs },
-      now,
-    ),
+    validatePrevious(round3, { ...second, inferenceMs: NaN }, now),
   );
 });
 test("prepare admits the host timestamp before reaching pinned-prior validation", () => {
@@ -519,12 +515,12 @@ test("requests have finite time, size and round bounds", () => {
     { ...request, startedAt: 100002 },
   ])
     assert.throws(() => validateRequest(changed, 100001));
-  assert.throws(() =>
-    validateRequest(request, request.startedAt + BUDGET.wallMs),
+  assert.doesNotThrow(() =>
+    validateRequest(request, request.startedAt + 8 * 3600000),
   );
   assert.equal(BUDGET.rounds, 3);
-  assert.equal(BUDGET.callMs, 360000);
-  assert.equal(BUDGET.inferenceMs, 900000);
+  assert.equal(BUDGET.callMs, null);
+  assert.equal(BUDGET.inferenceMs, null);
   assert.equal(
     MODEL,
     "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]",
@@ -549,7 +545,7 @@ test("follow-ups require validated prior identity and genuinely new evidence", (
   for (const changed of [
     { ...prior, seenCoverage: evidence.coverage },
     { ...prior, status: "incomplete" },
-    { ...prior, inferenceMs: BUDGET.inferenceMs },
+    { ...prior, inferenceMs: NaN },
     { ...prior, candidate: "c".repeat(40) },
     { ...prior, startedAt: 200000 },
   ])
@@ -621,7 +617,8 @@ test("tool, environment, candidate-route and validation profile boundaries remai
     new URL("../.github/workflows/cursor-review.yml", import.meta.url),
     "utf8",
   );
-  assert.match(workflow, /refs\/heads\/codex\/cursor-bounded-dialogue/u);
+  assert.match(workflow, /needs.route.outputs.trusted/u);
+  assert.match(workflow, /refs\/heads\/main/u);
   assert.match(workflow, /persist-credentials: false/u);
   assert.match(workflow, /actions: read/u);
   assert.doesNotMatch(workflow, /actions: write|contents: write/u);
@@ -742,3 +739,48 @@ process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:fa
       rmSync(temp, { recursive: true, force: true });
     }
   });
+
+test("ordinary question admits only exact live trusted-main identities and explicitly sanitized evidence", () => {
+  const script = `
+import assert from 'node:assert/strict';
+import { configureQuestionScope, TARGET, ORIGINALS, validateAdmission, validatePrevious } from ${JSON.stringify(new URL("./cursor-dialogue.mjs", import.meta.url).href)};
+const t = { ...${JSON.stringify(TARGET)}, pr: 215, source: 'e'.repeat(40), tree: 'f'.repeat(40), workflow: 'e'.repeat(40), run: 321, base: 'main' };
+const hashes = { preparation: '1'.repeat(64), feedback: '2'.repeat(64), execution: '3'.repeat(64) };
+const request = { scope: 'repository-question-v1', remoteEvidenceApproved: true, target: t, originalHashes: hashes, candidate: 'd'.repeat(40) };
+assert.throws(() => configureQuestionScope({ ...request, remoteEvidenceApproved: false }), /INVALID_REPOSITORY/);
+assert.throws(() => configureQuestionScope({ ...request, private: '/Users/example/context.json' }), /NONPUBLIC/);
+assert.throws(() => configureQuestionScope({ ...request, resumption: 'old' }), /INVALID_REPOSITORY/);
+configureQuestionScope(request);
+assert.deepEqual(TARGET,t); assert.deepEqual(ORIGINALS,hashes);
+const media = { state: 'open', head: { sha: t.source, repo: { full_name: t.repository } }, base: { ref: t.base, repo: { full_name: t.repository } } };
+const run = { id:t.run, run_attempt:t.attempt, workflow_id:t.workflowId, head_sha:t.workflow, path:'.github/workflows/ci.yml', event:'pull_request', repository:{full_name:t.repository}, head_repository:{full_name:t.repository}, status:'completed', conclusion:'failure' };
+const commit = { sha:t.source,tree:{sha:t.tree} }, main = { sha:request.candidate };
+validateAdmission(request,media,run,commit,main);
+for (const r of [{ ...run,run_attempt:2 },{ ...run,head_sha:'b'.repeat(40) },{ ...run,workflow_id:1 }]) assert.throws(() => validateAdmission(request,media,r,commit,main));
+assert.throws(() => validateAdmission(request,media,run,commit,{sha:'b'.repeat(40)}));
+assert.throws(() => validatePrevious({ ...request,round:2 },{ status:'answered' }), /NOT_CONTINUABLE/);
+console.log('PASS');`;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "PASS");
+});
+
+test("sanitized remote response retention never uploads a generated private path", () => {
+  const capture = retainedResponse(
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: JSON.stringify({
+        ...answer,
+        answer: "/Users/example/private.json",
+      }),
+    }),
+  );
+  assert.equal(capture.artifact.redactions, 1);
+  assert.doesNotMatch(JSON.stringify(capture.artifact), /\/Users\//u);
+});

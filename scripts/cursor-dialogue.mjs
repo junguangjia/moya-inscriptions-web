@@ -2,6 +2,8 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import console from "node:console";
 import { spawnSync } from "node:child_process";
+import { runCursorStream } from "./cursor-stream.mjs";
+import { assertRemoteInput, publicText } from "./cursor-automation.mjs";
 import {
   appendFileSync,
   existsSync,
@@ -22,26 +24,30 @@ import {
   parseModelSelection,
   parseSourceRequests,
   safeText,
+  claimQuestion,
+  questionClaimFresh,
+  publishQuestion,
 } from "./cursor-review.mjs";
 
 // A single Owner-approved diagnostic, not a generic alternate-workflow bypass.
-export const TARGET = Object.freeze({
+export let TARGET = Object.freeze({
   repository: "junguangjia/moya-inscriptions-web",
   pr: 214,
-  source: "7a2cba05b8596579fd1fcb6a58ba6ba9c018e8f1",
-  tree: "b82796ec4f2a7e226ca4bae1eeca9a2d35ee286f",
-  workflow: "4d819e1af7c60f13f5ced38cb7868b26b3444817",
+  source: "d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618",
+  tree: "7d2336e2685a0cd3545d268530ce66d15ff8b164",
+  workflow: "d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618",
   workflowId: 327712419,
-  run: 37347927743,
+  run: 37394447844,
   attempt: 1,
   base: "claude/unified-media-pipeline-v1",
 });
 export const MODEL = "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]";
 export const BUDGET = Object.freeze({
   rounds: 3,
-  callMs: 360000,
-  inferenceMs: 900000,
-  wallMs: 1800000,
+  // Owner prospective policy: elapsed inference is measured, not aborted.
+  callMs: null,
+  inferenceMs: null,
+  wallMs: null,
   transportBytes: 60000,
   packetChars: 120000,
   recordChars: 24000,
@@ -61,11 +67,11 @@ export const RESUMPTION = Object.freeze({
   expiresAt: Date.parse("2026-10-05T19:39:00Z"),
   wallMs: 900000,
 });
-export const ORIGINALS = Object.freeze({
+export let ORIGINALS = Object.freeze({
   preparation:
-    "a32c7a1d068d25a57f289465dbfd63a68cc4834fc7bf32296da42e4bcc80030d",
-  feedback: "903babcd7757c71dd11714a5b1729d0555fd7551b7c64e61abe31bcc2a1b0b98",
-  execution: "e5f37f5cf14a11048d253a877988502f43d7df350813f0141bc6e5c89340f1fe",
+    "e4fa3ffeb5338040e2625788cefacd31df649240955683d07840cc874cef232c",
+  feedback: "3131f661eb2adc5362984ad139ed292dfe71a1d6a520caa0f99654899d53e310",
+  execution: "b894abf0c97e9aa8385a3388f4f26f6153dc0181145783be0379c50a1151eab6",
 });
 const fail = (code, detail) => {
   const error = new Error(code);
@@ -77,6 +83,37 @@ const read = (path) => JSON.parse(readFileSync(path, "utf8"));
 const save = (path, value) =>
   writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+export function configureQuestionScope(request) {
+  if (request.scope !== "repository-question-v1") return;
+  const t = request.target,
+    hashes = request.originalHashes;
+  if (
+    request.remoteEvidenceApproved !== true ||
+    request.resumption !== undefined ||
+    t?.repository !== "junguangjia/moya-inscriptions-web" ||
+    Object.keys(t).sort().join(",") !==
+      "attempt,base,pr,repository,run,source,tree,workflow,workflowId" ||
+    t.workflow !== t.source ||
+    !Number.isSafeInteger(t.pr) ||
+    t.pr < 1 ||
+    [t.source, t.tree, t.workflow].some(
+      (v) => !/^[a-f0-9]{40}$/u.test(v ?? ""),
+    ) ||
+    t.workflowId !== 327712419 ||
+    !Number.isSafeInteger(t.run) ||
+    t.run < 1 ||
+    !Number.isSafeInteger(t.attempt) ||
+    t.attempt < 1 ||
+    !/^[A-Za-z0-9._/-]{1,200}$/u.test(t.base ?? "") ||
+    !hashes ||
+    Object.keys(hashes).sort().join(",") !== "execution,feedback,preparation" ||
+    Object.values(hashes).some((v) => !/^[a-f0-9]{64}$/u.test(v))
+  )
+    fail("INVALID_REPOSITORY_QUESTION_SCOPE");
+  assertRemoteInput(request);
+  TARGET = Object.freeze({ ...t });
+  ORIGINALS = Object.freeze({ ...hashes });
+}
 function run(bin, args, options = {}) {
   const result = spawnSync(bin, args, {
     encoding: "utf8",
@@ -112,7 +149,7 @@ export function dialogueDeadline(request) {
         RESUMPTION.expiresAt,
         (request.resumeAdmittedAt ?? RESUMPTION.expiresAt) + RESUMPTION.wallMs,
       )
-    : request.startedAt + BUDGET.wallMs;
+    : Infinity;
 }
 export function validateResumePrior(prior) {
   if (
@@ -171,6 +208,10 @@ export function retainedResponse(raw) {
     if (safeText(decoded) === null) {
       redactions++;
       return "[REDACTED: credential-bearing text]";
+    }
+    if (publicText(decoded) !== decoded) {
+      redactions++;
+      return "[REDACTED: nonpublic output]";
     }
     return safeText(value);
   };
@@ -499,8 +540,8 @@ export function validateRequest(request, now = Date.now(), prepared = false) {
     !same(request.target, TARGET) ||
     !/^[a-f0-9]{24}$/u.test(request.dialogueId) ||
     !/^[a-f0-9]{40}$/u.test(request.candidate) ||
-    !Number.isInteger(request.candidatePR) ||
-    request.candidatePR < 1 ||
+    (request.scope !== "repository-question-v1" &&
+      (!Number.isInteger(request.candidatePR) || request.candidatePR < 1)) ||
     !Number.isInteger(request.round) ||
     request.round < 1 ||
     request.round > BUDGET.rounds ||
@@ -553,18 +594,28 @@ export function validateAdmission(
     diagnostic.workflow_id !== TARGET.workflowId ||
     diagnostic.head_sha !== TARGET.workflow ||
     diagnostic.path !== ".github/workflows/ci.yml" ||
-    diagnostic.event !== "workflow_dispatch" ||
+    !(
+      request.scope === "repository-question-v1"
+        ? ["workflow_dispatch", "pull_request", "push"]
+        : ["workflow_dispatch"]
+    ).includes(diagnostic.event) ||
     diagnostic.repository.full_name !== TARGET.repository ||
     diagnostic.head_repository.full_name !== TARGET.repository ||
     diagnostic.status !== "completed" ||
-    !["failure", "timed_out"].includes(diagnostic.conclusion) ||
-    candidate.state !== "open" ||
-    !candidate.draft ||
-    candidate.head.sha !== request.candidate ||
-    candidate.head.ref !== "codex/cursor-bounded-dialogue" ||
-    candidate.base.ref !== "main" ||
-    candidate.head.repo.full_name !== TARGET.repository ||
-    candidate.base.repo.full_name !== TARGET.repository
+    !(
+      request.scope === "repository-question-v1"
+        ? ["success", "failure", "timed_out"]
+        : ["failure", "timed_out"]
+    ).includes(diagnostic.conclusion) ||
+    (request.scope === "repository-question-v1"
+      ? candidate.sha !== request.candidate
+      : candidate.state !== "open" ||
+        !candidate.draft ||
+        candidate.head.sha !== request.candidate ||
+        candidate.head.ref !== "codex/cursor-bounded-dialogue" ||
+        candidate.base.ref !== "main" ||
+        candidate.head.repo.full_name !== TARGET.repository ||
+        candidate.base.repo.full_name !== TARGET.repository)
   )
     fail("STALE_OR_UNAPPROVED_IDENTITY");
 }
@@ -575,8 +626,16 @@ function fresh(request, prepared = false) {
     api(`pulls/${TARGET.pr}`),
     api(`actions/runs/${TARGET.run}`),
     api(`git/commits/${TARGET.source}`),
-    api(`pulls/${request.candidatePR}`),
+    request.scope === "repository-question-v1"
+      ? api("branches/main").commit
+      : api(`pulls/${request.candidatePR}`),
   );
+  if (
+    prepared &&
+    request.scope === "repository-question-v1" &&
+    !questionClaimFresh(request, request.ownerRun)
+  )
+    fail("QUESTION_CLAIM_LOST");
 }
 export function validatePrevious(request, prior, now = Date.now()) {
   const resumeEntry = resumed(request) && request.round === 2;
@@ -587,12 +646,16 @@ export function validatePrevious(request, prior, now = Date.now()) {
     prior.dialogueId !== request.dialogueId ||
     (!resumeEntry && prior.candidate !== request.candidate) ||
     !same(prior.target, TARGET) ||
+    (request.scope === "repository-question-v1" &&
+      (prior.scope !== request.scope ||
+        !same(prior.originalHashes, ORIGINALS) ||
+        prior.remoteEvidenceApproved !== true)) ||
     prior.round + 1 !== request.round ||
     prior.runId !== request.previousRun ||
     prior.startedAt !== request.startedAt ||
     (!resumeEntry && prior.status !== "needs_evidence") ||
     !Number.isFinite(prior.inferenceMs) ||
-    prior.inferenceMs >= BUDGET.inferenceMs ||
+    (BUDGET.inferenceMs !== null && prior.inferenceMs >= BUDGET.inferenceMs) ||
     now >= dialogueDeadline(request) ||
     (!resumeEntry &&
       (prior.resumption !== request.resumption ||
@@ -653,14 +716,25 @@ function loadPrevious(request, directory) {
 const title = (id, round) => `cursor-dialogue ${id} round ${round}`;
 const artifactName = (id, round) => `cursor-dialogue-${id}-${round}`;
 function validateCandidateRoute(request, env) {
-  if (
-    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REPOSITORY !== TARGET.repository ||
-    env.GITHUB_REF !== "refs/heads/codex/cursor-bounded-dialogue" ||
-    env.GITHUB_SHA !== request.candidate ||
-    env.GITHUB_RUN_ATTEMPT !== "1"
-  )
-    fail("CANDIDATE_ROUTE_REFUSED");
+  if (request.scope === "repository-question-v1") {
+    if (
+      env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+      env.GITHUB_REPOSITORY !== TARGET.repository ||
+      env.GITHUB_REF !== "refs/heads/main" ||
+      env.CURSOR_WORKFLOW_SHA !== request.candidate ||
+      env.GITHUB_RUN_ATTEMPT !== "1"
+    )
+      fail("TRUSTED_MAIN_ROUTE_REFUSED");
+  } else {
+    if (
+      env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+      env.GITHUB_REPOSITORY !== TARGET.repository ||
+      env.GITHUB_REF !== "refs/heads/codex/cursor-bounded-dialogue" ||
+      env.GITHUB_SHA !== request.candidate ||
+      env.GITHUB_RUN_ATTEMPT !== "1"
+    )
+      fail("CANDIDATE_ROUTE_REFUSED");
+  }
   const runs = api(
     "actions/workflows/cursor-review.yml/runs?event=workflow_dispatch&per_page=100",
   );
@@ -821,7 +895,7 @@ export function promptFor(request, prior, sources) {
       : null,
     source: sources,
     evidenceLimit:
-      "Only selected original JSON values; unselected events remain unknown. No raw native trace or complete native report was retained in these original artifacts.",
+      "Only selected hash-bound native values and disclosed projections are supplied. Unselected events remain unknown; private native originals are cached by the deterministic collector. No trace, screenshot or raw service log is supplied.",
   };
   if (JSON.stringify(packet).length > BUDGET.packetChars) fail("CONTEXT_LIMIT");
   return `${DIALOGUE_PROMPT}\n\nQUESTION AND UNTRUSTED EVIDENCE JSON:\n${JSON.stringify(packet)}`;
@@ -878,7 +952,7 @@ function render(record) {
   );
   return lines.join("\n\n");
 }
-function analyze(directory, env) {
+async function analyze(directory, env) {
   if (existsSync(join(directory, "output/round.json")))
     fail("DUPLICATE_INVOCATION");
   const { request, prior, sources, collection } = read(
@@ -886,13 +960,7 @@ function analyze(directory, env) {
   );
   validateRequest(request, Date.now(), true);
   const elapsed = prior?.inferenceMs || 0;
-  const timeout = Math.min(
-    BUDGET.callMs,
-    BUDGET.inferenceMs - elapsed,
-    dialogueDeadline(request) - Date.now() - 10000,
-  );
-  if (timeout <= 0 || env.CURSOR_MODEL !== MODEL)
-    fail("MODEL_OR_BUDGET_REFUSED");
+  if (env.CURSOR_MODEL !== MODEL) fail("MODEL_OR_BUDGET_REFUSED");
   const home = join(directory, "isolated-agent");
   mkdirSync(join(home, ".cursor"), { recursive: true, mode: 0o700 });
   mkdirSync(join(directory, ".cursor"), { recursive: true, mode: 0o700 });
@@ -937,12 +1005,19 @@ function analyze(directory, env) {
     omittedSource: sources.omissions,
     usage: null,
     collection: collection || null,
+    ...(request.scope === "repository-question-v1"
+      ? {
+          scope: request.scope,
+          originalHashes: request.originalHashes,
+          remoteEvidenceApproved: true,
+        }
+      : {}),
   };
   // Persistent invocation marker is created before the command; no retry path.
   save(join(directory, "output/round.json"), record);
   try {
     if (!env.CURSOR_API_KEY) fail("MISSING_CURSOR_KEY");
-    const result = spawnSync(
+    const result = await runCursorStream(
       env.CURSOR_AGENT_BIN,
       [
         "--print",
@@ -952,24 +1027,27 @@ function analyze(directory, env) {
         "--model",
         MODEL,
         "--output-format",
-        "json",
+        "stream-json",
+        "--stream-partial-output",
       ],
       {
         cwd: directory,
         input: promptFor(request, prior, sources),
         env: agentEnvironment(env, home),
-        encoding: "utf8",
-        timeout,
-        maxBuffer: 256 * 1024,
-        killSignal: "SIGKILL",
+        progressPath: join(directory, "output/progress.json"),
+        onProgress: (progress) =>
+          console.log(JSON.stringify({ cursorProgress: progress })),
       },
     );
+    record.progress = result.progress;
     // Preserve independent runtime metadata even when answer validation fails.
     try {
       record.effectiveSelection = confirmModelSelection(
         parseModelSelection(MODEL),
         read(join(home, ".cursor/cli-config.json")),
       );
+      if (record.effectiveSelection?.maxMode !== true)
+        fail("MODEL_SELECTION_NOT_CONFIRMED");
     } catch {
       record.selectionError = "MODEL_SELECTION_NOT_CONFIRMED";
     }
@@ -1053,7 +1131,7 @@ function analyze(directory, env) {
   if (resumed(request))
     record.resumeWallMs = Date.now() - request.resumeAdmittedAt;
   if (
-    record.inferenceMs > BUDGET.inferenceMs ||
+    (BUDGET.inferenceMs !== null && record.inferenceMs > BUDGET.inferenceMs) ||
     Date.now() >= dialogueDeadline(request)
   ) {
     record.status = "incomplete";
@@ -1069,7 +1147,9 @@ export async function dialogueMain(stage, env = process.env) {
   if (stage === "prepare") {
     const event = read(env.GITHUB_EVENT_PATH);
     if (event.inputs.operation !== "dialogue") fail("INVALID_OPERATION");
-    const request = validateRequest(scannedJSON(event.inputs.dialogue_request));
+    const raw = scannedJSON(event.inputs.dialogue_request);
+    configureQuestionScope(raw);
+    const request = validateRequest(raw);
     const admittedAt = validateCandidateRoute(request, env);
     // Still a raw request here: reject caller-provided admission timestamps.
     // Assign host-only timestamps after raw/live identity validation; the next
@@ -1080,6 +1160,7 @@ export async function dialogueMain(stage, env = process.env) {
       request.resumeAdmittedAt = admittedAt;
     mkdirSync(join(directory, "output"), { recursive: true, mode: 0o700 });
     const { prior, cache } = loadPrevious(request, directory);
+    if (request.scope === "repository-question-v1") assertRemoteInput(cache);
     request.evidence = request.selectors.map((selector) =>
       selectOriginal(cache, selector),
     );
@@ -1132,20 +1213,28 @@ export async function dialogueMain(stage, env = process.env) {
         0,
       ),
     };
+    if (request.scope === "repository-question-v1") {
+      request.claimKey = claimQuestion(request, directory, env);
+      request.ownerRun = Number(env.GITHUB_RUN_ID);
+    }
     save(join(directory, "prepared.json"), {
       request,
       prior,
       sources,
       collection,
     });
-    appendFileSync(env.GITHUB_OUTPUT, "ready=true\n");
+    appendFileSync(env.GITHUB_OUTPUT, "ready=true\ninference=true\n");
   } else if (stage === "fresh") {
     const { request } = read(join(directory, "prepared.json"));
+    configureQuestionScope(request);
     fresh(request, true);
     appendFileSync(env.GITHUB_OUTPUT, "ready=true\n");
-  } else if (stage === "analyze") analyze(directory, env);
-  else if (stage === "publish") {
+  } else if (stage === "analyze") {
+    configureQuestionScope(read(join(directory, "prepared.json")).request);
+    await analyze(directory, env);
+  } else if (stage === "publish") {
     const { request } = read(join(directory, "prepared.json"));
+    configureQuestionScope(request);
     const record = read(join(directory, "output/round.json"));
     const publicationFresh = () => {
       try {
@@ -1163,6 +1252,16 @@ export async function dialogueMain(stage, env = process.env) {
       }
     };
     if (!publicationFresh()) return;
+    if (request.scope === "repository-question-v1") {
+      const comment = publishQuestion(request, record, directory, env);
+      record.publication = {
+        permalink: comment.html_url,
+        conciseSummary: true,
+        noPrivateRawArtifacts: true,
+      };
+      save(join(directory, "output/round.json"), record);
+      return;
+    }
     const body = readFileSync(join(directory, "output/report.md"), "utf8");
     run(
       process.execPath,
