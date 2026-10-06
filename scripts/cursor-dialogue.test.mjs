@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -35,6 +36,7 @@ import {
   validatePrevious,
   validateResumePrior,
   validateRequest,
+  safeHostCommandFailure,
 } from "./cursor-dialogue.mjs";
 import {
   agentConfiguration,
@@ -67,6 +69,93 @@ const request = {
   originals: "encoded",
   selectors: [selection],
 };
+test("admission projects an oversized run list without losing duplicate or completeness checks", () => {
+  const temp = mkdtempSync(join(tmpdir(), "cursor-admission-list-"));
+  try {
+    const title = `cursor-dialogue ${request.dialogueId} round 1`;
+    const rows = Array.from({ length: 100 }, (_, index) => ({
+      id: 500000 - index,
+      display_title: index === 0 ? title : `other-${index}`,
+      created_at: index === 0 ? "1970-01-01T00:02:00Z" : "1970-01-01T00:00:01Z",
+      repository: { description: "unused provider metadata".repeat(500) },
+    }));
+    assert.ok(
+      Buffer.byteLength(JSON.stringify({ workflow_runs: rows })) > 262144,
+    );
+    writeFileSync(
+      join(temp, "gh"),
+      `#!${process.execPath}\nconst fs=require('node:fs');const rows=JSON.parse(fs.readFileSync(process.env.FIXTURE,'utf8'));const args=process.argv.slice(2);const i=args.indexOf('--jq');if(i<0){process.stdout.write(JSON.stringify({workflow_runs:rows}));}else{if(args[i+1]!==${JSON.stringify("{workflow_runs: [.workflow_runs[] | {id, display_title, created_at}]}")})process.exit(64);process.stdout.write(JSON.stringify({workflow_runs:rows.map(({id,display_title,created_at})=>({id,display_title,created_at}))}));}\n`,
+      { mode: 0o700 },
+    );
+    for (const [kind, expected] of [
+      ["unique", "120000"],
+      ["duplicate", "DUPLICATE_ROUND"],
+      ["incomplete", "RUN_LIST_INCOMPLETE"],
+    ]) {
+      const fixture = rows.map((row) => ({ ...row }));
+      if (kind === "duplicate") fixture[50].display_title = title;
+      if (kind === "incomplete")
+        fixture[99].created_at = "1970-01-01T00:02:00Z";
+      writeFileSync(join(temp, "fixture.json"), JSON.stringify(fixture));
+      const script = `import {validateCandidateRoute} from ${JSON.stringify(new URL("./cursor-dialogue.mjs", import.meta.url).href)};try{process.stdout.write(String(validateCandidateRoute(${JSON.stringify(request)},process.env)));}catch(error){process.stdout.write(error.message);}`;
+      const result = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", script],
+        {
+          encoding: "utf8",
+          timeout: 10000,
+          env: {
+            PATH: temp + ":" + process.env.PATH,
+            FIXTURE: join(temp, "fixture.json"),
+            GITHUB_EVENT_NAME: "workflow_dispatch",
+            GITHUB_REPOSITORY: TARGET.repository,
+            GITHUB_REF: "refs/heads/codex/cursor-bounded-dialogue",
+            GITHUB_SHA: request.candidate,
+            GITHUB_RUN_ATTEMPT: "1",
+            GITHUB_RUN_ID: "500000",
+          },
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, expected);
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+test("host command diagnostics expose bounds and stage without raw arguments or errors", () => {
+  const detail = safeHostCommandFailure(
+    "gh",
+    [
+      "api",
+      "repos/example/repo/actions/workflows/cursor-review.yml/runs?private-value",
+    ],
+    {
+      status: null,
+      signal: "SIGKILL",
+      error: { code: "ENOBUFS", message: "sensitive-error-must-not-escape" },
+      stdout: Buffer.alloc(266230),
+      stderr: "sensitive-stderr-must-not-escape",
+    },
+  );
+  assert.deepEqual(detail, {
+    stage: "admission_run_list",
+    exitCode: null,
+    processError: "ENOBUFS",
+    signal: "SIGKILL",
+    stdoutBytes: 266230,
+    stderrBytes: 32,
+  });
+  assert.doesNotMatch(
+    JSON.stringify(detail),
+    /sensitive|private-value|example/u,
+  );
+  assert.equal(
+    safeHostCommandFailure("other", [], { error: { code: "private-code" } })
+      .processError,
+    "OTHER",
+  );
+});
 const answer = {
   status: "incomplete",
   answer: "The diagnostic exceeded its deadline.",

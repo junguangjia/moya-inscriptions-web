@@ -114,6 +114,36 @@ export function configureQuestionScope(request) {
   TARGET = Object.freeze({ ...t });
   ORIGINALS = Object.freeze({ ...hashes });
 }
+export function safeHostCommandFailure(bin, args, result) {
+  const endpoint = bin === "gh" && args[0] === "api" ? args.at(-1) : "";
+  const stage = /\/actions\/workflows\/cursor-review\.yml\/runs\?/u.test(
+    endpoint,
+  )
+    ? "admission_run_list"
+    : endpoint
+      ? "github_api"
+      : "host_command";
+  return {
+    stage,
+    exitCode: Number.isInteger(result.status) ? result.status : null,
+    processError: [
+      "ENOBUFS",
+      "ETIMEDOUT",
+      "ENOENT",
+      "EACCES",
+      "EPIPE",
+    ].includes(result.error?.code)
+      ? result.error.code
+      : result.error
+        ? "OTHER"
+        : null,
+    signal: ["SIGKILL", "SIGTERM", "SIGINT"].includes(result.signal)
+      ? result.signal
+      : null,
+    stdoutBytes: Buffer.byteLength(result.stdout ?? ""),
+    stderrBytes: Buffer.byteLength(result.stderr ?? ""),
+  };
+}
 function run(bin, args, options = {}) {
   const result = spawnSync(bin, args, {
     encoding: "utf8",
@@ -122,11 +152,18 @@ function run(bin, args, options = {}) {
     killSignal: "SIGKILL",
     ...options,
   });
-  if (result.error || result.status !== 0) fail("HOST_COMMAND_FAILED");
+  if (result.error || result.status !== 0)
+    fail("HOST_COMMAND_FAILED", safeHostCommandFailure(bin, args, result));
   return result.stdout;
 }
-function api(path) {
-  return JSON.parse(run("gh", ["api", `repos/${TARGET.repository}/${path}`]));
+function api(path, projection) {
+  return JSON.parse(
+    run("gh", [
+      "api",
+      ...(projection ? ["--jq", projection] : []),
+      `repos/${TARGET.repository}/${path}`,
+    ]),
+  );
 }
 export function scannedJSON(raw) {
   if (Buffer.byteLength(raw) > BUDGET.originalBytes || safeText(raw) === null)
@@ -715,7 +752,7 @@ function loadPrevious(request, directory) {
 }
 const title = (id, round) => `cursor-dialogue ${id} round ${round}`;
 const artifactName = (id, round) => `cursor-dialogue-${id}-${round}`;
-function validateCandidateRoute(request, env) {
+export function validateCandidateRoute(request, env) {
   if (request.scope === "repository-question-v1") {
     if (
       env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
@@ -737,6 +774,9 @@ function validateCandidateRoute(request, env) {
   }
   const runs = api(
     "actions/workflows/cursor-review.yml/runs?event=workflow_dispatch&per_page=100",
+    // Admission needs the same complete bounded list, not each run's embedded
+    // repository/user objects. Project before gh writes to the bounded pipe.
+    "{workflow_runs: [.workflow_runs[] | {id, display_title, created_at}]}",
   );
   if (
     runs.workflow_runs.length === 100 &&
@@ -1356,6 +1396,8 @@ if (
       ? error.message
       : "DIALOGUE_HOST_FAILURE";
     process.stderr.write(`${category}\n`);
+    if (category === "HOST_COMMAND_FAILED" && error.detail)
+      process.stderr.write(`${JSON.stringify(error.detail)}\n`);
     process.exitCode = 1;
   }
 }
