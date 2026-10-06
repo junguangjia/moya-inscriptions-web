@@ -51,6 +51,7 @@ test("partial assistant and paired tool events retain metadata, never their cont
   `,
   ]);
   assert.equal(result.progress.toolsStarted, 1);
+  assert.deepEqual(result.progress.toolKinds, { readToolCall: 1 });
   assert.equal(result.progress.toolsCompleted, 1);
   assert.equal(result.progress.eventCounts.assistant, 1);
   assert.equal(JSON.stringify(result.progress).includes("private"), false);

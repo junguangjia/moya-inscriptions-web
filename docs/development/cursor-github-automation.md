@@ -1,6 +1,104 @@
 # Cursor PR review and CI diagnosis
 
-## Current automatic operation (Issue215 r10)
+## Current design (Issue215 r15)
+
+Owner-approved r15 uses the official GitHub MCP server directly from the
+official Cursor CLI. There is no custom MCP proxy, tool filter or replacement
+collector. The pinned server runs
+`stdio --read-only --toolsets=repos,issues,pull_requests,actions`. Cursor
+chooses repository files, PR context, jobs and logs itself. The host supplies
+identities and the question, not a mandatory preselected evidence bundle.
+Official Read/search and documentation WebFetch permissions are enabled for this
+path. Source/log/comment text remains untrusted data, never executable
+instructions.
+
+The existing workflow separates admission, analysis and publication. Only
+admission and publication have PR-comment write permissions. The analysis job
+receives an expiring repository installation token with
+contents/actions/issues/PR **read** permissions plus the existing Cursor
+credential. The MCP environment variable is named `GITHUB_PERSONAL_ACCESS_TOKEN`
+by the official server; its value is the analysis job's token, not a new PAT. No
+persistent grant or paid fallback is added. Official read-only mode removes
+write tools. It is not a repository-content sandbox: the task prompt names the
+project and the token limits private access; other public repository reads can
+still be available through GitHub.
+
+Natural prose, Markdown and JSON replies are retained after the existing output
+scan. Optional schema/citation validation is recorded separately and does not
+silently discard useful text. Execution/model confirmation, usable reply,
+complete coverage and verified PASS are different fields. Natural replies do not
+create a clean verdict. The ledger can record `answered` to reuse an existing
+reply for unchanged tree/status events; it does not mean complete review or test
+acceptance. Historical rejected calls and proofs are unchanged.
+
+Human collaborators with current write/maintain/admin permission can ask on a
+PR:
+
+```text
+@cursor Inspect the failing CI and identify the smallest supported correction.
+@cursor reply-to:123456789 Verify the missing caller from your previous reply.
+```
+
+Only newly created human PR comments trigger questions; bot replies cannot loop.
+The comment is rechecked before invocation/publication. Machine clients use
+`workflow_dispatch` on `main`, operation `question`, `pr`, `expected_head`, and
+`question_request` such as
+`{"question":"Check the missing caller","replyTo":123456789}`. `replyTo` is
+optional and must name this bot's answer on the same PR. Optional `ci_run` and
+`ci_attempt` bind canonical CI exactly. GitHub-token-authored comments do not
+reliably trigger another workflow, so machine dispatch is explicit.
+
+Questions share existing durable dedup keyed by repository/PR/head/CI attempt
+and question. A linked previous answer is transferred as up to24K characters of
+explicit context with truncation disclosed; cross-VM hidden-session resumption
+is not assumed. Replies have stable per-question links and a concise mutable
+summary. There is no automatic retry or follow-up model loop.
+
+Same-PR calls follow the existing ledger's append order. An analysis job waits
+for earlier claimed invocations to publish or reach a terminal workflow state,
+then checks its own source/claim again and loads the latest prior answer. It
+waits outside the short admission/publication concurrency group. Completed
+owners with unclosed claims remain recorded as gaps; they are not retried or
+allowed to block forever. A delayed older completion preserves a newer summary.
+Different PRs are independent. This is one continuing PR conversation, not
+parallel question sessions.
+
+The existing workflow uses GitHub's official `queue: max` for those short write
+jobs. It supports up to100 pending jobs and orders them by entry into the
+concurrency wait, not original event time. Platform cancellation, queue overflow
+and outage can still leave an incomplete record; this is not an unlimited
+lossless queue. Workflow reruns do not invoke Cursor again. See
+[GitHub concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+Public Actions artifacts contain only existing sanitized admission/result
+records needed by these jobs, including the shared remaining
+publication-security budget. They are not private storage. Agent
+homes/configuration, raw tool responses and private machine handoffs are
+excluded. Logs/artifact links returned by official MCP retain their actual
+semantics: a signed ZIP URL is not extracted evidence. No custom
+download/extraction layer is added. State an unavailable capability rather than
+claim its contents were inspected.
+
+The official CLI's existing progress counters distinguish tool/assistant/result
+events from process-alive metadata. There is no arbitrary healthy-inference
+abort; the hosted platform ceiling remains360minutes. Model/account settings
+remain Grok4.7/500K/xhigh/Fast/maxMode, with no new paid tier or provider
+fallback.
+
+Configuration and simulated tests are not authenticated runtime proof. Record
+the first hosted independent retrieval and linked follow-up separately before
+image execution resumes. Official references:
+[Cursor MCP](https://cursor.com/docs/cli/mcp),
+[configuration interpolation](https://cursor.com/docs/mcp),
+[GitHub MCP read-only settings](https://github.com/github/github-mcp-server/blob/v1.14.0/docs/server-configuration.md),
+and
+[GitHub job token](https://docs.github.com/en/actions/concepts/security/github_token).
+
+The r10 and older descriptions below are historical. Preselected input remains
+only in the retained legacy `diagnose-ci`/`dialogue` entries. Mandatory
+structured answer acceptance no longer controls reply retention in either route.
+
+## Historical automatic operation (Issue215 r10)
 
 The Owner authorized recurring analysis on 2026-10-06. Enable
 `CURSOR_AUTOMATION_ENABLED=true` after the reviewed workflow is installed on

@@ -40,6 +40,7 @@ export function runCursorStream(bin, args, options = {}) {
       stderrBytes: 0,
       toolsStarted: 0,
       toolsCompleted: 0,
+      toolKinds: {},
       lastObservableAt: null,
       hiddenReasoningVerified: false,
     };
@@ -108,8 +109,14 @@ export function runCursorStream(bin, args, options = {}) {
         state.lastObservableAt = new Date().toISOString();
         state.activity = "observable-event-received";
       }
-      if (type === "tool_call" && event.subtype === "started")
+      if (type === "tool_call" && event.subtype === "started") {
         ++state.toolsStarted;
+        // Official event type names only; never arguments, source or results.
+        for (const kind of Object.keys(event.tool_call ?? {})) {
+          if (/^[A-Za-z]{1,50}ToolCall$/u.test(kind) || kind === "function")
+            state.toolKinds[kind] = (state.toolKinds[kind] || 0) + 1;
+        }
+      }
       if (type === "tool_call" && event.subtype === "completed")
         ++state.toolsCompleted;
       if (type === "result") {
