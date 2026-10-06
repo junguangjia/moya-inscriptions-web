@@ -137,6 +137,100 @@ export function coreCheckCategory(code) {
       : "OUTBOUND_CHECK_EXECUTION_FAILED";
 }
 
+export const ATTRIBUTION_FIELDS = [
+  "seq",
+  "t_ms",
+  "kind",
+  "actor",
+  "edge",
+  "tag",
+  "phase",
+  "iteration",
+  "context_feed",
+  "panel_owner",
+  "active_panel_owner",
+  "active_feed",
+  "expected_arg",
+  "intended_top",
+  "actual_top",
+  "scroll_height",
+  "client_height",
+  "max_scroll_top",
+  "event_is_trusted",
+];
+
+export function sanitizeAttribution(value) {
+  if (value === undefined) return null;
+  if (
+    !value ||
+    value.schema !== 1 ||
+    !Array.isArray(value.rows) ||
+    value.rows.length > 49 ||
+    !Number.isInteger(value.seen) ||
+    value.seen < value.rows.length ||
+    !Number.isInteger(value.invalid) ||
+    value.invalid < 0 ||
+    (value.first900ToZero !== null &&
+      (!Number.isInteger(value.first900ToZero) ||
+        value.first900ToZero < 1 ||
+        value.first900ToZero > value.seen))
+  )
+    throw new Error("ATTRIBUTION_SCHEMA_REJECTED");
+  let previous = 0;
+  for (const row of value.rows) {
+    if (
+      !Array.isArray(row) ||
+      row.length !== ATTRIBUTION_FIELDS.length ||
+      row.some(
+        (x) =>
+          x !== null &&
+          typeof x !== "boolean" &&
+          (typeof x !== "number" || !Number.isFinite(x)),
+      )
+    )
+      throw new Error("ATTRIBUTION_ROW_REJECTED");
+    if (
+      !Number.isInteger(row[0]) ||
+      row[0] <= previous ||
+      row[0] > value.seen ||
+      row[6] !== 1 ||
+      row[7] !== 0 ||
+      row[8] !== 0 ||
+      ![0, 1, 2].includes(row[2]) ||
+      ![0, 1, 2].includes(row[3]) ||
+      ![0, 1, 2].includes(row[4]) ||
+      !Number.isInteger(row[5]) ||
+      row[5] < 0 ||
+      row[5] > 7 ||
+      (row[11] !== null && ![0, 1, 2, 3].includes(row[11])) ||
+      (row[18] !== null && typeof row[18] !== "boolean")
+    )
+      throw new Error("ATTRIBUTION_ROUTE_REJECTED");
+    for (const at of [1, 9, 10, 12, 13, 14, 15, 16, 17])
+      if (row[at] !== null && (typeof row[at] !== "number" || row[at] < 0))
+        throw new Error("ATTRIBUTION_SCALAR_REJECTED");
+    previous = row[0];
+  }
+  if (
+    value.first900ToZero !== null &&
+    (!value.rows.some(
+      (row) => row[0] === value.first900ToZero && row[14] === 0,
+    ) ||
+      !value.rows.some(
+        (row) => row[0] === value.first900ToZero - 1 && row[14] === 900,
+      ))
+  )
+    throw new Error("ATTRIBUTION_FAILURE_RESERVE_REJECTED");
+  return {
+    schema: 1,
+    rows: value.rows,
+    seen: value.seen,
+    invalid: value.invalid,
+    first_900_to_zero: value.first900ToZero,
+    omitted: value.seen - value.rows.length,
+  };
+}
+
 export function sanitizeSnapshot(value) {
   if (
     !value ||
@@ -161,7 +255,7 @@ export function sanitizeSnapshot(value) {
       throw new Error("ROW_SCHEMA_REJECTED");
     for (const [at, maximum] of [
       [2, 14],
-      [3, 5],
+      [3, 7],
       [4, 3],
       [5, 3],
       [6, 3],
@@ -210,6 +304,7 @@ export function sanitizeSnapshot(value) {
     document_label: value.documentLabel,
     rows: value.rows,
     slots,
+    attribution: sanitizeAttribution(value.attribution),
     ...counters,
   };
 }
@@ -482,6 +577,14 @@ async function execute(mode) {
       recorder_sha256: sha(
         readFileSync(join(c.workflow, SUPPORT, "home-causal-recorder.ts")),
       ),
+      runtime_files: [
+        "apps/web/features/shell/horizontal-pager.tsx",
+        "apps/web/features/product-shell/product-shell.tsx",
+      ].map((path) => ({
+        path,
+        instrumented_sha256: sha(readFileSync(join(c.source, path))),
+        original_blob: c.git("rev-parse", `${SOURCE}:${path}`),
+      })),
     });
     const args = [
       "--filter",
@@ -544,6 +647,12 @@ async function execute(mode) {
     row_fields: FIELDS,
     phase_dictionary: PHASES,
     feed_dictionary: FEEDS,
+    attribution_fields: ATTRIBUTION_FIELDS,
+    attribution_kind_dictionary: ["writer", "scroll", "mark"],
+    attribution_actor_dictionary: ["pager.restore", "shell.restore", "none"],
+    attribution_edge_dictionary: ["before", "after", "none"],
+    attribution_coverage:
+      "Discover seed phase only; first12, last12, first observed900-to-zero preceding12/following12; omitted counts explicit, no writer inferred for unattributed browser changes",
     tag_dictionary: [
       "checkpoint",
       "write",
@@ -551,6 +660,8 @@ async function execute(mode) {
       "scroll",
       "active.change",
       "aligned",
+      "eager.before",
+      "eager.after",
     ],
     attempts: [],
     state: "NATIVE_REPORT_MISSING",

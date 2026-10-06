@@ -14,6 +14,7 @@ import {
   sanitizeSnapshot,
   approvedAnonymousIdentity,
   coreCheckCategory,
+  sanitizeAttribution,
 } from "./media-home-diagnostic.mjs";
 
 const workflow = "a".repeat(40);
@@ -134,7 +135,7 @@ function mockRecorder(action) {
     document: globalThis.document,
     MutationObserver: globalThis.MutationObserver,
   };
-  globalThis.window = {};
+  globalThis.window = { addEventListener() {} };
   globalThis.document = { querySelector: () => home, addEventListener() {} };
   globalThis.MutationObserver = class {
     disconnect() {}
@@ -206,14 +207,72 @@ test("all 128 critical slots reserve first, last and first divergence in both re
         }
       }
     }
+    recorder.bind("seed.begin", "discover", 0, 900);
+    for (let n = 0; n < 10000; n++) recorder.writer(0, 0, panels[0], 900);
+    panels[0].scrollTop = 900;
+    recorder.writer(0, 0, panels[0], 0);
+    panels[0].scrollTop = 0;
+    recorder.writer(0, 1, panels[0], 0);
+    for (let n = 0; n < 10000; n++) recorder.writer(0, 1, panels[0], 0);
     const snapshot = sanitizeSnapshot(recorder.snapshot());
     assert.equal(snapshot.slotOverflow, 0);
     assert.equal(snapshot.invalid, 0);
     assert.equal(snapshot.slots.length, 128);
     assert.equal(snapshot.rows.length, 384);
     assert.ok(snapshot.slots.every((s) => s.retained === 3 && s.samples === 3));
+    assert.equal(snapshot.attribution.rows.length, 49);
     const packet = { attempts: [snapshot, snapshot] };
     assert.ok(Buffer.byteLength(JSON.stringify(packet)) < 131072);
+  });
+});
+
+test("late attribution retains the first actual900-to-zero writer and both edges after an early flood", () => {
+  mockRecorder((recorder, panels) => {
+    recorder.bind("seed.begin", "discover", 0, 900);
+    for (let n = 0; n < 10000; n++) recorder.mark(2, panels[0]);
+    panels[0].scrollTop = 900;
+    recorder.mark(1, panels[0], 900);
+    recorder.writer(0, 0, panels[0], 0);
+    panels[0].scrollTop = 0;
+    recorder.writer(0, 1, panels[0], 0);
+    for (let n = 0; n < 10000; n++) recorder.mark(2, panels[0]);
+    recorder.bind("end", "calligraphy", 0, 900);
+    recorder.mark(0, panels[3]);
+    const result = sanitizeSnapshot(recorder.snapshot());
+    const trace = result.attribution;
+    assert.ok(trace.first_900_to_zero > 10000);
+    assert.ok(trace.rows.length <= 49);
+    const after = trace.rows.find((row) => row[0] === trace.first_900_to_zero);
+    const before = trace.rows.find((row) => row[0] === after[0] - 1);
+    assert.deepEqual(before.slice(2, 5), [0, 0, 0]);
+    assert.equal(before[14], 900);
+    assert.deepEqual(after.slice(2, 5), [0, 0, 1]);
+    assert.equal(after[13], 0);
+    assert.equal(after[14], 0);
+    assert.equal(trace.omitted, trace.seen - trace.rows.length);
+    assert.ok(result.rows.some((row) => row[2] === 14));
+    assert.ok(
+      Buffer.byteLength(JSON.stringify({ attempts: [result, result] })) <
+        131072,
+    );
+  });
+});
+
+test("attribution rejects unsafe scalars and reserves only the named seed stage", () => {
+  mockRecorder((recorder, panels) => {
+    recorder.bind("seed.begin", "nearby", 1, 350);
+    recorder.writer(0, 0, panels[1], 350);
+    assert.equal(recorder.snapshot().attribution.seen, 0);
+    recorder.bind("seed.begin", "discover", 0, 900);
+    recorder.writer(1, 0, panels[0], 900);
+    const good = recorder.snapshot().attribution;
+    assert.equal(sanitizeAttribution(good).rows.length, 1);
+    for (const unsafe of ["https://example.invalid/private", {}, Infinity]) {
+      const row = [...good.rows[0]];
+      row[13] = unsafe;
+      assert.throws(() => sanitizeAttribution({ ...good, rows: [row] }));
+    }
+    assert.throws(() => sanitizeAttribution({ ...good, first900ToZero: 1 }));
   });
 });
 

@@ -30,6 +30,13 @@ export type HomeSnapshot = {
   seen: number;
   invalid: number;
   slotOverflow: number;
+  attribution: {
+    schema: 1;
+    rows: (number | boolean | null)[][];
+    seen: number;
+    invalid: number;
+    first900ToZero: number | null;
+  };
 };
 
 type BrowserRecorder = {
@@ -40,6 +47,12 @@ type BrowserRecorder = {
     expected: number | null,
   ) => void;
   mark: (tag: number, node?: HTMLElement, expected?: number) => void;
+  writer: (
+    actor: number,
+    edge: number,
+    node: HTMLElement,
+    intended: number,
+  ) => void;
   snapshot: () => HomeSnapshot;
 };
 declare global {
@@ -116,6 +129,82 @@ export function installHomeRecorder() {
     iteration: 0,
     expected: null as number | null,
   };
+  let attributionSeen = 0;
+  let attributionInvalid = 0;
+  let previousTop: number | null = null;
+  let first900ToZero: number | null = null;
+  const attributionFirst: Row[] = [];
+  const attributionRecent: Row[] = [];
+  const attributionFailure: Row[] = [];
+  let afterFailure = 0;
+  const attribute = (
+    kind: number,
+    actor: number,
+    edge: number,
+    panel: HTMLElement,
+    intended: number | null,
+    tag: number,
+    trusted: boolean | null = null,
+  ) => {
+    // Only the implicated first Discover seed-to-baseline window is eligible.
+    if (context.phase !== 1 || context.feed !== 0 || context.iteration !== 0)
+      return;
+    if (panel.dataset.homeFeedPanel !== "discover") return;
+    const home = panel.closest<HTMLElement>("[data-home-surface]");
+    if (home === null) return;
+    const active = feeds.indexOf(home.dataset.activeHomeFeed ?? "");
+    const activePanel =
+      active < 0
+        ? null
+        : home.querySelector<HTMLElement>(
+            `[data-home-feed-panel="${feeds[active]}"]`,
+          );
+    const row: Row = [
+      attributionSeen + 1,
+      Math.round(performance.now() * 1000) / 1000,
+      kind,
+      actor,
+      edge,
+      tag,
+      context.phase,
+      context.iteration,
+      context.feed,
+      id(panel),
+      id(activePanel),
+      active < 0 ? null : active,
+      context.expected,
+      intended,
+      panel.scrollTop,
+      panel.scrollHeight,
+      panel.clientHeight,
+      Math.max(0, panel.scrollHeight - panel.clientHeight),
+      trusted,
+    ];
+    if (
+      row.some(
+        (value) =>
+          value !== null &&
+          typeof value !== "boolean" &&
+          (typeof value !== "number" || !Number.isFinite(value)),
+      )
+    ) {
+      attributionInvalid += 1;
+      return;
+    }
+    attributionSeen += 1;
+    if (attributionFirst.length < 12) attributionFirst.push(row);
+    if (first900ToZero === null && previousTop === 900 && row[14] === 0) {
+      first900ToZero = attributionSeen;
+      attributionFailure.push(...attributionRecent, row);
+      afterFailure = 12;
+    } else if (afterFailure > 0) {
+      attributionFailure.push(row);
+      afterFailure -= 1;
+    }
+    previousTop = panel.scrollTop;
+    attributionRecent.push(row);
+    if (attributionRecent.length > 12) attributionRecent.shift();
+  };
   let seen = 0;
   let invalid = 0;
   let slotOverflow = 0;
@@ -157,6 +246,7 @@ export function installHomeRecorder() {
             `[data-home-feed-panel="${feeds[active]}"]`,
           );
     for (const panel of panels) {
+      attribute(2, 2, 2, panel, expected ?? context.expected, tag);
       const feed = feeds.indexOf(panel.dataset.homeFeedPanel ?? "");
       if (
         feed < 0 ||
@@ -227,6 +317,17 @@ export function installHomeRecorder() {
       };
     },
     mark,
+    writer: (actor, edge, panel, intended) => {
+      if (
+        ![0, 1].includes(actor) ||
+        ![0, 1].includes(edge) ||
+        !Number.isFinite(intended)
+      ) {
+        attributionInvalid += 1;
+        return;
+      }
+      attribute(0, actor, edge, panel, intended, 0);
+    },
     snapshot: () => {
       const rows: Row[] = [];
       const counts: { key: string; samples: number; retained: number }[] = [];
@@ -246,6 +347,21 @@ export function installHomeRecorder() {
         seen,
         invalid,
         slotOverflow,
+        attribution: {
+          schema: 1,
+          rows: [
+            ...new Map(
+              [
+                ...attributionFirst,
+                ...attributionFailure,
+                ...attributionRecent,
+              ].map((row) => [row[0], row]),
+            ).values(),
+          ].sort((a, b) => Number(a[0]) - Number(b[0])),
+          seen: attributionSeen,
+          invalid: attributionInvalid,
+          first900ToZero,
+        },
       };
     },
   };
@@ -255,11 +371,28 @@ export function installHomeRecorder() {
       if (
         event.target instanceof HTMLElement &&
         event.target.hasAttribute("data-home-feed-panel")
-      )
+      ) {
+        attribute(1, 2, 2, event.target, null, 3, event.isTrusted);
         mark(3, event.target);
+      }
     },
     { capture: true, passive: true },
   );
+  window.addEventListener("__artvennHomeWrite", (event) => {
+    if (
+      !(event instanceof CustomEvent) ||
+      !Array.isArray(event.detail) ||
+      event.detail.length !== 4
+    )
+      return;
+    const [actor, edge, panel, intended] = event.detail;
+    if (
+      !(panel instanceof HTMLElement) ||
+      !panel.hasAttribute("data-home-feed-panel")
+    )
+      return;
+    window.__artvennHomeRecorder?.writer(actor, edge, panel, intended);
+  });
 }
 
 export async function startHomeDiagnostic(page: Page, info: TestInfo) {

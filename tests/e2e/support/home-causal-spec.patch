@@ -1,5 +1,4 @@
 diff --git a/tests/e2e/t02p-development-acceptance.spec.ts b/tests/e2e/t02p-development-acceptance.spec.ts
-index 2ad3d4e9..9be002bc 100644
 --- a/tests/e2e/t02p-development-acceptance.spec.ts
 +++ b/tests/e2e/t02p-development-acceptance.spec.ts
 @@ -1,6 +1,11 @@
@@ -236,7 +235,17 @@ index 2ad3d4e9..9be002bc 100644
  
  const waitForStableHomePanelEvidence = async (
    home: Locator,
-@@ -1876,219 +1905,342 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -291,7 +320,9 @@ const waitForStableHomePanelEvidence = async (
+ ) => {
+   const panel = home.locator(`[data-home-feed-panel="${feed}"]`);
+   await panel.locator("img").evaluateAll((images) => {
++    window.__artvennHomeRecorder?.mark(6);
+     for (const image of images) (image as HTMLImageElement).loading = "eager";
++    window.__artvennHomeRecorder?.mark(7);
+   });
+   let previousSignature: string | null = null;
+   let stableFrameCount = 0;
+@@ -1876,219 +1907,342 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
      expectedInitialAutoPlatform(testInfo.project.name) === "pc",
      "Independent Home panel scrollers belong to Phone and Tablet.",
    );
@@ -782,3 +791,52 @@ index 2ad3d4e9..9be002bc 100644
  });
  
  test("Topic Detail is a Product overlay with stable navigation, history, and focus restoration", async ({
+diff --git a/apps/web/features/shell/horizontal-pager.tsx b/apps/web/features/shell/horizontal-pager.tsx
+--- a/apps/web/features/shell/horizontal-pager.tsx
++++ b/apps/web/features/shell/horizontal-pager.tsx
+@@ -173,10 +173,20 @@ function HorizontalPagerImplementation<Key extends string>(
+     for (const feed of keys) {
+       const panel = panelRefs.current[feed];
+       if (panel === null) continue;
++      window.dispatchEvent(
++        new CustomEvent("__artvennHomeWrite", {
++          detail: [0, 0, panel, preservedPanelScrollTopsRef.current[feed]],
++        }),
++      );
+       panel.scrollTop = Math.min(
+         preservedPanelScrollTopsRef.current[feed],
+         Math.max(0, panel.scrollHeight - panel.clientHeight),
+       );
++      window.dispatchEvent(
++        new CustomEvent("__artvennHomeWrite", {
++          detail: [0, 1, panel, preservedPanelScrollTopsRef.current[feed]],
++        }),
++      );
+     }
+   }, [keys, scrollOwner]);
+ 
+diff --git a/apps/web/features/product-shell/product-shell.tsx b/apps/web/features/product-shell/product-shell.tsx
+--- a/apps/web/features/product-shell/product-shell.tsx
++++ b/apps/web/features/product-shell/product-shell.tsx
+@@ -585,11 +585,21 @@ export const ProductShell = ({
+         }
+         const top = clampScrollTop(element, desired);
+         scrollRestorePendingRef.current = true;
++        window.dispatchEvent(
++          new CustomEvent("__artvennHomeWrite", {
++            detail: [1, 0, element, desired],
++          }),
++        );
+         if (presentationPlatform === "pc") {
+           window.scrollTo({ behavior: "auto", top });
+         } else {
+           (element as HTMLElement).scrollTop = top;
+         }
++        window.dispatchEvent(
++          new CustomEvent("__artvennHomeWrite", {
++            detail: [1, 1, element, desired],
++          }),
++        );
+         restoreFrameRef.current = window.requestAnimationFrame(() => {
+           restoreFrameRef.current = null;
+           const currentElement = scrollElementFor(
