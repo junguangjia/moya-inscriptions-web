@@ -1869,227 +1869,233 @@ test("Home PC feeds keep document scroll restoration without nested scrollers", 
   await expect.poll(() => readPrimaryScroll(shell, "home")).toBe(nearbyTop);
 });
 
-test("Home preserves independent Discover, Nearby, and Calligraphy scroll positions", async ({
-  page,
-}, testInfo) => {
-  test.skip(
-    expectedInitialAutoPlatform(testInfo.project.name) === "pc",
-    "Independent Home panel scrollers belong to Phone and Tablet.",
-  );
-  const { surface } = await openDevelopmentSurface(page);
-  const shell = productShell(surface);
-  const home = activeHomeSurface(surface);
-  const outerHome = shell.locator('[data-primary-destination="home"]');
-  const pager = home.locator("[data-home-feed-pager]");
-  const feeds = ["discover", "nearby", "calligraphy"] as const;
-  const desired = { discover: 900, nearby: 350, calligraphy: 900 } as const;
+test.describe(() => {
+  test.describe.configure({ timeout: 60_000 });
+  test("Home preserves independent Discover, Nearby, and Calligraphy scroll positions", async ({
+    page,
+  }, testInfo) => {
+    test.skip(
+      expectedInitialAutoPlatform(testInfo.project.name) === "pc",
+      "Independent Home panel scrollers belong to Phone and Tablet.",
+    );
+    const { surface } = await openDevelopmentSurface(page);
+    const shell = productShell(surface);
+    const home = activeHomeSurface(surface);
+    const outerHome = shell.locator('[data-primary-destination="home"]');
+    const pager = home.locator("[data-home-feed-pager]");
+    const feeds = ["discover", "nearby", "calligraphy"] as const;
+    const desired = { discover: 900, nearby: 350, calligraphy: 900 } as const;
 
-  for (const feed of feeds) {
-    const panel = home.locator(`[data-home-feed-panel="${feed}"]`);
-    await expect(panel).toHaveCSS("overflow-y", "auto");
-    await panel.evaluate((node, identity) => {
-      (node as HTMLElement).dataset.testScrollIdentity = identity;
-    }, `stable-${feed}`);
-  }
-  await expect(outerHome).toHaveCSS("overflow-y", "hidden");
-  expect(
-    await outerHome.evaluate((node) => (node as HTMLElement).scrollTop),
-  ).toBe(0);
+    for (const feed of feeds) {
+      const panel = home.locator(`[data-home-feed-panel="${feed}"]`);
+      await expect(panel).toHaveCSS("overflow-y", "auto");
+      await panel.evaluate((node, identity) => {
+        (node as HTMLElement).dataset.testScrollIdentity = identity;
+      }, `stable-${feed}`);
+    }
+    await expect(outerHome).toHaveCSS("overflow-y", "hidden");
+    expect(
+      await outerHome.evaluate((node) => (node as HTMLElement).scrollTop),
+    ).toBe(0);
 
-  // Capture each stable baseline while its seeded panel is already active.
-  // A second full tab tour adds animation time without establishing new state.
-  const seedAndRead = async (feed: (typeof feeds)[number]) => {
-    await settleHomeFeedAndReadStableEvidence(home, feed);
-    const top = await writeHomePanelScroll(home, feed, desired[feed]);
-    const evidence = await waitForStableHomePanelEvidence(home, feed);
-    return { top, evidence };
-  };
-  const seeded = {
-    discover: await seedAndRead("discover"),
-    nearby: await seedAndRead("nearby"),
-    calligraphy: await seedAndRead("calligraphy"),
-  };
-  const saved = {
-    discover: seeded.discover.top,
-    nearby: seeded.nearby.top,
-    calligraphy: seeded.calligraphy.top,
-  };
-  expect(saved.discover).toBeGreaterThan(0);
-  expect(saved.nearby).toBeGreaterThan(0);
-  expect(saved.calligraphy).toBeGreaterThan(0);
-  await touchSettleHomeFeed(home, "discover");
-  expect(await pager.evaluate((node) => (node as HTMLElement).scrollLeft)).toBe(
-    0,
-  );
-  await expect(home).toHaveAttribute("data-active-home-feed", "discover");
-  const baseline = {
-    discover: seeded.discover.evidence,
-    nearby: seeded.nearby.evidence,
-    calligraphy: seeded.calligraphy.evidence,
-  };
+    // Capture each stable baseline while its seeded panel is already active.
+    // A second full tab tour adds animation time without establishing new state.
+    const seedAndRead = async (feed: (typeof feeds)[number]) => {
+      await settleHomeFeedAndReadStableEvidence(home, feed);
+      const top = await writeHomePanelScroll(home, feed, desired[feed]);
+      const evidence = await waitForStableHomePanelEvidence(home, feed);
+      return { top, evidence };
+    };
+    const seeded = {
+      discover: await seedAndRead("discover"),
+      nearby: await seedAndRead("nearby"),
+      calligraphy: await seedAndRead("calligraphy"),
+    };
+    const saved = {
+      discover: seeded.discover.top,
+      nearby: seeded.nearby.top,
+      calligraphy: seeded.calligraphy.top,
+    };
+    expect(saved.discover).toBeGreaterThan(0);
+    expect(saved.nearby).toBeGreaterThan(0);
+    expect(saved.calligraphy).toBeGreaterThan(0);
+    await touchSettleHomeFeed(home, "discover");
+    expect(
+      await pager.evaluate((node) => (node as HTMLElement).scrollLeft),
+    ).toBe(0);
+    await expect(home).toHaveAttribute("data-active-home-feed", "discover");
+    const baseline = {
+      discover: seeded.discover.evidence,
+      nearby: seeded.nearby.evidence,
+      calligraphy: seeded.calligraphy.evidence,
+    };
 
-  await pager.evaluate((node) => {
-    const frame = node as HTMLElement;
-    for (const [type, progress] of [
-      ["touchstart", 0],
-      ["touchmove", 0.5],
+    await pager.evaluate((node) => {
+      const frame = node as HTMLElement;
+      for (const [type, progress] of [
+        ["touchstart", 0],
+        ["touchmove", 0.5],
+      ] as const) {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", {
+          value: [
+            {
+              identifier: 1,
+              target: frame,
+              clientX: frame.clientWidth * (0.75 - progress),
+              clientY: 300,
+            },
+          ],
+        });
+        frame.dispatchEvent(event);
+      }
+    });
+    await expect(home).toHaveAttribute("data-active-home-feed", "discover");
+    expect((await readHomePanelEvidence(home, "nearby")).scrollTop).toBe(
+      saved.nearby,
+    );
+    expect(
+      await outerHome.evaluate((node) => (node as HTMLElement).scrollTop),
+    ).toBe(0);
+    await pager.evaluate((node) => {
+      const frame = node as HTMLElement;
+      for (const type of ["touchmove", "touchend"]) {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", {
+          value:
+            type === "touchend"
+              ? []
+              : [
+                  {
+                    identifier: 1,
+                    target: frame,
+                    clientX: -frame.clientWidth * 0.25,
+                    clientY: 300,
+                  },
+                ],
+        });
+        frame.dispatchEvent(event);
+      }
+    });
+    await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+
+    for (const feed of [
+      "calligraphy",
+      "nearby",
+      "discover",
+      "calligraphy",
     ] as const) {
-      const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.defineProperty(event, "touches", {
-        value: [
-          {
-            identifier: 1,
-            target: frame,
-            clientX: frame.clientWidth * (0.75 - progress),
-            clientY: 300,
-          },
-        ],
-      });
-      frame.dispatchEvent(event);
+      await touchSettleHomeFeed(home, feed);
+      await expect
+        .poll(() =>
+          readHomePanelEvidence(home, feed).then((state) => state.scrollTop),
+        )
+        .toBe(saved[feed]);
     }
-  });
-  await expect(home).toHaveAttribute("data-active-home-feed", "discover");
-  expect((await readHomePanelEvidence(home, "nearby")).scrollTop).toBe(
-    saved.nearby,
-  );
-  expect(
-    await outerHome.evaluate((node) => (node as HTMLElement).scrollTop),
-  ).toBe(0);
-  await pager.evaluate((node) => {
-    const frame = node as HTMLElement;
-    for (const type of ["touchmove", "touchend"]) {
-      const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.defineProperty(event, "touches", {
-        value:
-          type === "touchend"
-            ? []
-            : [
-                {
-                  identifier: 1,
-                  target: frame,
-                  clientX: -frame.clientWidth * 0.25,
-                  clientY: 300,
-                },
-              ],
-      });
-      frame.dispatchEvent(event);
-    }
-  });
-  await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
 
-  for (const feed of [
-    "calligraphy",
-    "nearby",
-    "discover",
-    "calligraphy",
-  ] as const) {
-    await touchSettleHomeFeed(home, feed);
+    const beforeRebound = {
+      discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
+      nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
+      calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
+    };
+    await pager.evaluate((node) => {
+      const frame = node as HTMLElement;
+      for (const [type, progress] of [
+        ["touchstart", 0],
+        ["touchmove", 0.15],
+        ["touchmove", 0],
+        ["touchend", 0],
+      ] as const) {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", {
+          value:
+            type === "touchend"
+              ? []
+              : [
+                  {
+                    identifier: 1,
+                    target: frame,
+                    clientX: frame.clientWidth * (0.25 + progress),
+                    clientY: 300,
+                  },
+                ],
+        });
+        frame.dispatchEvent(event);
+      }
+    });
+    await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
+    expect({
+      discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
+      nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
+      calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
+    }).toEqual(beforeRebound);
+
+    const { settings, userPage } =
+      await openSettingsThroughAvailableEntry(surface);
+    await closeSettingsAndUserPage(settings, userPage);
+    await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
+    expect((await readHomePanelEvidence(home, "calligraphy")).scrollTop).toBe(
+      saved.calligraphy,
+    );
+
+    const navigation = surface.getByRole("navigation", { name: "主要内容" });
+    await ensurePrimaryNavigationExpanded(navigation);
+    await navigation.getByRole("button", { name: "讨论", exact: true }).click();
+    await expectActiveDestination(surface, "discussion");
+    await navigation.getByRole("button", { name: "首页", exact: true }).click();
+    await expectActiveDestination(surface, "home");
+    await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
     await expect
       .poll(() =>
-        readHomePanelEvidence(home, feed).then((state) => state.scrollTop),
+        readHomePanelEvidence(home, "calligraphy").then(
+          (state) => state.scrollTop,
+        ),
       )
-      .toBe(saved[feed]);
-  }
+      .toBe(saved.calligraphy);
 
-  const beforeRebound = {
-    discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
-    nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
-    calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
-  };
-  await pager.evaluate((node) => {
-    const frame = node as HTMLElement;
-    for (const [type, progress] of [
-      ["touchstart", 0],
-      ["touchmove", 0.15],
-      ["touchmove", 0],
-      ["touchend", 0],
-    ] as const) {
-      const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.defineProperty(event, "touches", {
-        value:
-          type === "touchend"
-            ? []
-            : [
-                {
-                  identifier: 1,
-                  target: frame,
-                  clientX: frame.clientWidth * (0.25 + progress),
-                  clientY: 300,
-                },
-              ],
-      });
-      frame.dispatchEvent(event);
+    const finalEvidence = {
+      discover: await settleHomeFeedAndReadStableEvidence(home, "discover"),
+      nearby: await settleHomeFeedAndReadStableEvidence(home, "nearby"),
+      calligraphy: await settleHomeFeedAndReadStableEvidence(
+        home,
+        "calligraphy",
+      ),
+    };
+    for (const feed of feeds) {
+      const masonryHeightDelta = Math.abs(
+        (finalEvidence[feed].masonryHeight ?? 0) -
+          (baseline[feed].masonryHeight ?? 0),
+      );
+      expect(
+        Math.abs(finalEvidence[feed].scrollTop - saved[feed]),
+      ).toBeLessThanOrEqual(2);
+      expect(finalEvidence[feed].testIdentity).toBe(`stable-${feed}`);
+      expect(finalEvidence[feed].layoutReady).toBe("true");
+      expect(finalEvidence[feed].masonryColumns).toBe(
+        baseline[feed].masonryColumns,
+      );
+      expect(
+        Math.abs(
+          (finalEvidence[feed].masonryWidth ?? 0) -
+            (baseline[feed].masonryWidth ?? 0),
+        ),
+      ).toBeLessThanOrEqual(2);
+      expect(masonryHeightDelta).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(
+          (finalEvidence[feed].anchorX ?? 0) - (baseline[feed].anchorX ?? 0),
+        ),
+      ).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(
+          (finalEvidence[feed].anchorY ?? 0) - (baseline[feed].anchorY ?? 0),
+        ),
+      ).toBeLessThanOrEqual(2);
     }
+    expect(
+      await outerHome.evaluate((node) => (node as HTMLElement).scrollTop),
+    ).toBe(0);
   });
-  await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
-  expect({
-    discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
-    nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
-    calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
-  }).toEqual(beforeRebound);
-
-  const { settings, userPage } =
-    await openSettingsThroughAvailableEntry(surface);
-  await closeSettingsAndUserPage(settings, userPage);
-  await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
-  expect((await readHomePanelEvidence(home, "calligraphy")).scrollTop).toBe(
-    saved.calligraphy,
-  );
-
-  const navigation = surface.getByRole("navigation", { name: "主要内容" });
-  await ensurePrimaryNavigationExpanded(navigation);
-  await navigation.getByRole("button", { name: "讨论", exact: true }).click();
-  await expectActiveDestination(surface, "discussion");
-  await navigation.getByRole("button", { name: "首页", exact: true }).click();
-  await expectActiveDestination(surface, "home");
-  await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
-  await expect
-    .poll(() =>
-      readHomePanelEvidence(home, "calligraphy").then(
-        (state) => state.scrollTop,
-      ),
-    )
-    .toBe(saved.calligraphy);
-
-  const finalEvidence = {
-    discover: await settleHomeFeedAndReadStableEvidence(home, "discover"),
-    nearby: await settleHomeFeedAndReadStableEvidence(home, "nearby"),
-    calligraphy: await settleHomeFeedAndReadStableEvidence(home, "calligraphy"),
-  };
-  for (const feed of feeds) {
-    const masonryHeightDelta = Math.abs(
-      (finalEvidence[feed].masonryHeight ?? 0) -
-        (baseline[feed].masonryHeight ?? 0),
-    );
-    expect(
-      Math.abs(finalEvidence[feed].scrollTop - saved[feed]),
-    ).toBeLessThanOrEqual(2);
-    expect(finalEvidence[feed].testIdentity).toBe(`stable-${feed}`);
-    expect(finalEvidence[feed].layoutReady).toBe("true");
-    expect(finalEvidence[feed].masonryColumns).toBe(
-      baseline[feed].masonryColumns,
-    );
-    expect(
-      Math.abs(
-        (finalEvidence[feed].masonryWidth ?? 0) -
-          (baseline[feed].masonryWidth ?? 0),
-      ),
-    ).toBeLessThanOrEqual(2);
-    expect(masonryHeightDelta).toBeLessThanOrEqual(2);
-    expect(
-      Math.abs(
-        (finalEvidence[feed].anchorX ?? 0) - (baseline[feed].anchorX ?? 0),
-      ),
-    ).toBeLessThanOrEqual(2);
-    expect(
-      Math.abs(
-        (finalEvidence[feed].anchorY ?? 0) - (baseline[feed].anchorY ?? 0),
-      ),
-    ).toBeLessThanOrEqual(2);
-  }
-  expect(
-    await outerHome.evaluate((node) => (node as HTMLElement).scrollTop),
-  ).toBe(0);
 });
 
 test("Topic Detail is a Product overlay with stable navigation, history, and focus restoration", async ({
