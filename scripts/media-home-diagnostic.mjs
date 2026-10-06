@@ -21,6 +21,8 @@ export const SOURCE = "97c594d7702794b0ba869d9c86a1c9513f4e727b";
 export const TREE = "23fba8310bcab3ab0dd5b9ccc40aa76dbd8446bd";
 export const ORIGINAL_SPEC =
   "4b6b8a3b1fc96061cf3c322fc80b041bcdbae5631026c316ce6dc3969a5a7562";
+export const ORIGINAL_ALIGNMENT =
+  "7ba596d1b511429f04d733fa17bca1f8c3e83959dfa4eb7550186ae6769b59eb";
 export const TITLE =
   "Home preserves independent Discover, Nearby, and Calligraphy scroll positions";
 export const PHASES = [
@@ -64,7 +66,161 @@ export const READINESS_FIELDS = [
   "all_guards_ready",
   "scroll_top",
   "client_height",
+  "raf_await_begin_ms",
+  "raf_await_end_ms",
+  "evidence_await_begin_ms",
+  "evidence_await_end_ms",
 ];
+export const TOUCH_ROUTES = [
+  [0, 0],
+  [1, 0],
+  [0, 1],
+  [1, 1],
+  [0, 3],
+  [1, 3],
+  [1, 0],
+  [1, 3],
+  [1, 1],
+  [1, 0],
+  [1, 3],
+  [2, 0],
+  [2, 1],
+  [2, 3],
+];
+export const TOUCH_FIELDS = [
+  "call",
+  "hop",
+  "target_feed",
+  "gesture_begin_ms",
+  "gesture_end_ms",
+  "active_wait_begin_ms",
+  "active_wait_end_ms",
+  "alignment_begin_ms",
+  "alignment_end_ms",
+  "status",
+  "browser_frames",
+  "browser_elapsed_ms",
+  "browser_aligned",
+  "browser_gap",
+];
+const elapsed = (x) =>
+  typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= 1080000;
+export function sanitizeTouches(value) {
+  if (
+    !value ||
+    !Array.isArray(value.calls) ||
+    value.calls.length > 14 ||
+    !Number.isSafeInteger(value.invalid) ||
+    value.invalid < 0 ||
+    !Number.isSafeInteger(value.overflow) ||
+    value.overflow < 0
+  )
+    throw new Error("TOUCH_SCHEMA_REJECTED");
+  let previousEnd = 0;
+  const calls = value.calls.map((call, index) => {
+    const route = TOUCH_ROUTES[index];
+    if (
+      !call ||
+      call.call !== index + 1 ||
+      call.phase !== route[0] ||
+      call.feed !== route[1] ||
+      !elapsed(call.begin_ms) ||
+      call.begin_ms < previousEnd ||
+      (call.end_ms !== null &&
+        (!elapsed(call.end_ms) || call.end_ms < call.begin_ms)) ||
+      call.completed !== (call.end_ms !== null) ||
+      !Array.isArray(call.rows) ||
+      call.rows.length > 4 ||
+      (call.pending_kind !== null && ![0, 1, 2, 3].includes(call.pending_kind))
+    )
+      throw new Error("TOUCH_CALL_REJECTED");
+    let previous = call.begin_ms,
+      target;
+    const rows = call.rows.map((row, hop) => {
+      if (
+        !Array.isArray(row) ||
+        row.length !== TOUCH_FIELDS.length ||
+        row.some(
+          (x) =>
+            x !== null &&
+            typeof x !== "boolean" &&
+            (typeof x !== "number" || !Number.isFinite(x)),
+        ) ||
+        row[0] !== index + 1 ||
+        row[1] !== hop ||
+        ![0, 1, 2, 3].includes(row[2]) ||
+        ![0, 1, 2, 3].includes(row[9]) ||
+        (row[9] !== 1 && hop !== call.rows.length - 1) ||
+        (hop > 0 &&
+          (Math.abs(row[2] - target) !== 1 ||
+            Math.abs(row[2] - call.feed) >= Math.abs(target - call.feed)))
+      )
+        throw new Error("TOUCH_ROW_REJECTED");
+      const times = row.slice(hop === 0 ? 7 : 3, 9);
+      if (hop === 0 && row.slice(3, 7).some((x) => x !== null))
+        throw new Error("TOUCH_INITIAL_REJECTED");
+      let nullSeen = false;
+      for (const at of times) {
+        if (at === null) nullSeen = true;
+        else if (
+          nullSeen ||
+          !elapsed(at) ||
+          at < previous ||
+          (call.end_ms !== null && at > call.end_ms)
+        )
+          throw new Error("TOUCH_INTERVAL_REJECTED");
+        else previous = at;
+      }
+      if (times[0] === null || (row[9] === 1) !== (row[8] !== null))
+        throw new Error("TOUCH_STATUS_REJECTED");
+      const metrics = row.slice(10);
+      if (
+        metrics.some((x) => x !== null) &&
+        (!Number.isInteger(row[10]) ||
+          row[10] < 0 ||
+          row[10] > 100000 ||
+          !elapsed(row[11]) ||
+          typeof row[12] !== "boolean" ||
+          row[7] === null ||
+          (row[13] !== null &&
+            (typeof row[13] !== "number" || row[13] < 0 || row[13] > 10000000)))
+      )
+        throw new Error("TOUCH_BROWSER_METRICS_REJECTED");
+      target = row[2];
+      return [...row];
+    });
+    const last = rows.at(-1);
+    const pending =
+      last && last[9] !== 1
+        ? last[1] === 0
+          ? 0
+          : last[4] === null
+            ? 1
+            : last[6] === null
+              ? 2
+              : 3
+        : null;
+    if (
+      call.pending_kind !== pending ||
+      (call.completed && (!last || last[9] !== 1 || target !== call.feed))
+    )
+      throw new Error("TOUCH_COMPLETION_REJECTED");
+    if (call.end_ms === null && index !== value.calls.length - 1)
+      throw new Error("TOUCH_ORDER_REJECTED");
+    previousEnd = call.end_ms ?? previous;
+    return {
+      call: call.call,
+      phase: call.phase,
+      feed: call.feed,
+      begin_ms: call.begin_ms,
+      end_ms: call.end_ms,
+      completed: call.completed,
+      rows,
+      pending_kind: call.pending_kind,
+    };
+  });
+  return { calls, invalid: value.invalid, overflow: value.overflow };
+}
 export const READINESS_SIGNATURE_KEYS = [
   "activeFeed",
   "anchorX",
@@ -356,6 +512,14 @@ export function sanitizeReadiness(value) {
         )
           throw new Error("READINESS_GEOMETRY_REJECTED");
     }
+    if (row[5] === 2 && row.slice(22).some((x) => x !== null)) {
+      let at = 0;
+      for (const x of row.slice(22)) {
+        if (!elapsed(x) || x < at || x > row[1])
+          throw new Error("READINESS_AWAIT_INTERVAL_REJECTED");
+        at = x;
+      }
+    }
     previous = row[0];
   }
   const slots = value.slots.map((slot, index) => {
@@ -375,7 +539,19 @@ export function sanitizeReadiness(value) {
       slot.completed !== rows.some((row) => row[5] === 3)
     )
       throw new Error("READINESS_SLOT_REJECTED");
+    const evaluation = slot.last_evaluation;
+    if (
+      evaluation !== null &&
+      (!Array.isArray(evaluation) ||
+        evaluation.length !== 3 ||
+        ![0, 1].includes(evaluation[0]) ||
+        !elapsed(evaluation[1]) ||
+        (evaluation[2] !== null &&
+          (!elapsed(evaluation[2]) || evaluation[2] < evaluation[1])))
+    )
+      throw new Error("READINESS_LAST_EVALUATION_REJECTED");
     return {
+      last_evaluation: evaluation === null ? null : [...evaluation],
       call: slot.call,
       phase: slot.phase,
       feed: slot.feed,
@@ -399,6 +575,7 @@ export function sanitizeReadiness(value) {
     invalid: value.invalid,
     overflow: value.overflow,
     actions: sanitizeActions(value.actions),
+    touches: sanitizeTouches(value.touches),
   };
 }
 export const FIELDS = [
@@ -431,6 +608,7 @@ export const FIELDS = [
 ];
 const SPEC = "tests/e2e/t02p-development-acceptance.spec.ts";
 const SUPPORT = "tests/e2e/support";
+const ALIGNMENT = `${SUPPORT}/pager-alignment.ts`;
 const sha = (body) => createHash("sha256").update(body).digest("hex");
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
 const save = (path, value) =>
@@ -439,7 +617,7 @@ const save = (path, value) =>
 export function admit(env, currentSha, currentTree) {
   if (
     env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REF !== "refs/heads/codex/media-home97-action-diagnostic" ||
+    env.GITHUB_REF !== "refs/heads/codex/media-home97-hop-diagnostic" ||
     !/^[a-f0-9]{40}$/.test(env.HOME_WORKFLOW_SHA ?? "") ||
     env.GITHUB_SHA !== env.HOME_WORKFLOW_SHA ||
     !/^[a-f0-9-]{36}$/.test(env.HOME_TASK_KEY ?? "") ||
@@ -913,10 +1091,21 @@ async function execute(mode) {
       throw new Error("PREPARATION_NOT_COMPLETE");
     if (
       sha(readFileSync(join(c.source, SPEC))) !== ORIGINAL_SPEC ||
+      sha(readFileSync(join(c.source, ALIGNMENT))) !== ORIGINAL_ALIGNMENT ||
       c.git("status", "--porcelain")
     )
       throw new Error("SOURCE_PREIMAGE_REJECTED");
     const patch = join(c.workflow, SUPPORT, "home-causal-spec.patch");
+    const patchPaths = [
+      ...readFileSync(patch, "utf8").matchAll(
+        /^diff --git a\/(\S+) b\/(\S+)$/gm,
+      ),
+    ];
+    if (
+      patchPaths.length !== 2 ||
+      !patchPaths.every(([, a, b], i) => a === [SPEC, ALIGNMENT][i] && b === a)
+    )
+      throw new Error("OVERLAY_PATHS_REJECTED");
     execFileSync("git", ["apply", "--check", patch], {
       cwd: c.source,
       timeout: 5000,
@@ -933,6 +1122,7 @@ async function execute(mode) {
     );
     save(join(c.raw, "overlay.json"), {
       source_file_sha256: sha(readFileSync(join(c.source, SPEC))),
+      alignment_file_sha256: sha(readFileSync(join(c.source, ALIGNMENT))),
       patch_sha256: sha(readFileSync(patch)),
       recorder_sha256: sha(
         readFileSync(join(c.workflow, SUPPORT, "home-readiness-recorder.ts")),
@@ -1007,6 +1197,16 @@ async function execute(mode) {
     case: TITLE,
     project: "tablet-webkit",
     readiness_fields: READINESS_FIELDS,
+    touch_fields: TOUCH_FIELDS,
+    touch_route_dictionary: TOUCH_ROUTES,
+    touch_kind_dictionary: [
+      "initial_alignment",
+      "gesture",
+      "active_feed_wait",
+      "target_alignment",
+    ],
+    clock_limits:
+      "Node intervals share body performance clock. Browser elapsed is a separate interval; differences are unallocated scheduling/serialization/transport overhead, not pure protocol latency. No absolute clock subtraction. Readiness intervals cover existing poll RAF/evidence awaits only, not the final evidence return.",
     readiness_phase_dictionary: ["pre_seed", "post_seed", "final_restore"],
     readiness_event_dictionary: ["begin", "eager_done", "sample", "settled"],
     readiness_signature_keys: READINESS_SIGNATURE_KEYS,
@@ -1126,7 +1326,9 @@ async function execute(mode) {
               readiness.invalid ||
               readiness.overflow ||
               readiness.actions.invalid ||
-              readiness.actions.overflow
+              readiness.actions.overflow ||
+              readiness.touches.invalid ||
+              readiness.touches.overflow
                 ? "READINESS_INVALID_OR_OVERFLOW_RECORDED"
                 : "READINESS_SCALARS_RECORDED",
             original_packet_sha256: sha(bytes),

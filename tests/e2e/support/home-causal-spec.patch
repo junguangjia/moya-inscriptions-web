@@ -1,6 +1,7 @@
+diff --git a/tests/e2e/t02p-development-acceptance.spec.ts b/tests/e2e/t02p-development-acceptance.spec.ts
 --- a/tests/e2e/t02p-development-acceptance.spec.ts
 +++ b/tests/e2e/t02p-development-acceptance.spec.ts
-@@ -1,9 +1,19 @@
+@@ -1,8 +1,18 @@
 +import {
 +  startHomeReadiness,
 +  type HomeReadinessRecorder,
@@ -10,17 +11,59 @@
  import { expect, test } from "@playwright/test";
 
  import type { Locator, Page } from "@playwright/test";
-
++
 +let __homeReadiness: HomeReadinessRecorder | undefined;
 +test.afterEach(({ page }, info) => {
 +  void page;
 +  __homeReadiness?.finish(info);
 +});
-+
+
  test.beforeAll(async ({ request }) => {
    await prepareFormalRoutes(request);
- });
-@@ -289,10 +299,12 @@ const waitForStableHomePanelEvidence = async (
+@@ -119,6 +129,7 @@
+ };
+
+ const touchSettleHomeFeed = async (home: Locator, feed: HomeFeedName) => {
++  const __homeTouchCall = __homeReadiness?.touchBegin(feed);
+   const pager = home.locator("[data-home-feed-pager]");
+   // Each old scrollTo(auto) step was aligned before the next geometry input.
+   // This setup helper waits for that actual position, not for interaction.
+@@ -128,7 +139,9 @@
+   let active = (await home.getAttribute(
+     "data-active-home-feed",
+   )) as HomeFeedName;
++  __homeReadiness?.touchOpBegin(__homeTouchCall, 0, active);
+   await atPage(active);
++  __homeReadiness?.touchOpEnd(__homeTouchCall, 0);
+   while (active !== feed) {
+     const direction = Math.sign(homeFeedIndex[feed] - homeFeedIndex[active]);
+     const targetIndex = homeFeedIndex[active] + direction;
+@@ -136,6 +149,7 @@
+       (candidate) => homeFeedIndex[candidate] === targetIndex,
+     );
+     if (targetFeed === undefined) throw new Error("Missing adjacent Home feed");
++    __homeReadiness?.touchOpBegin(__homeTouchCall, 1, targetFeed);
+     await pager.evaluate(
+       (node, input) => {
+         const frame = node as HTMLElement;
+@@ -170,10 +184,16 @@
+       },
+       { feed: targetFeed, direction },
+     );
++    __homeReadiness?.touchOpEnd(__homeTouchCall, 1);
++    __homeReadiness?.touchOpBegin(__homeTouchCall, 2, targetFeed);
+     await expect(home).toHaveAttribute("data-active-home-feed", targetFeed);
++    __homeReadiness?.touchOpEnd(__homeTouchCall, 2);
++    __homeReadiness?.touchOpBegin(__homeTouchCall, 3, targetFeed);
+     await atPage(targetFeed);
++    __homeReadiness?.touchOpEnd(__homeTouchCall, 3);
+     active = targetFeed;
+   }
++  __homeReadiness?.touchEnd(__homeTouchCall);
+ };
+
+ const writeHomePanelScroll = async (
+@@ -289,25 +309,33 @@
    home: Locator,
    feed: HomeFeedName,
  ) => {
@@ -33,7 +76,19 @@
    let previousSignature: string | null = null;
    let stableFrameCount = 0;
    await expect
-@@ -308,6 +320,8 @@ const waitForStableHomePanelEvidence = async (
+     .poll(
+       async () => {
++        __homeReadiness?.evaluationBegin(__homeReadinessCall, 0);
+         await panel.evaluate(
+           () =>
+             new Promise<void>((resolve) => {
+               requestAnimationFrame(() => resolve());
+             }),
+         );
++        __homeReadiness?.evaluationEnd(__homeReadinessCall, 0);
++        __homeReadiness?.evaluationBegin(__homeReadinessCall, 1);
+         const evidence = await readHomePanelEvidence(home, feed);
++        __homeReadiness?.evaluationEnd(__homeReadinessCall, 1);
          const geometrySettled =
            evidence.masonryHeightMinusMaxItemBottom !== null &&
            Math.abs(evidence.masonryHeightMinusMaxItemBottom) <= 2;
@@ -42,7 +97,7 @@
          if (
            evidence.activeFeed !== feed ||
            evidence.layoutReady !== "true" ||
-@@ -317,6 +331,12 @@ const waitForStableHomePanelEvidence = async (
+@@ -317,6 +345,12 @@
          ) {
            previousSignature = null;
            stableFrameCount = 0;
@@ -55,7 +110,7 @@
            return false;
          }
          stableFrameCount =
-@@ -324,6 +344,12 @@ const waitForStableHomePanelEvidence = async (
+@@ -324,6 +358,12 @@
              ? stableFrameCount + 1
              : 1;
          previousSignature = evidence.structuralSignature;
@@ -68,7 +123,7 @@
          return stableFrameCount >= 3;
        },
        // Each sample already awaits a real animation frame. Extra polling
-@@ -331,6 +357,7 @@ const waitForStableHomePanelEvidence = async (
+@@ -331,6 +371,7 @@
        { timeout: 15_000, intervals: [0] },
      )
      .toBe(true);
@@ -76,7 +131,7 @@
    return readHomePanelEvidence(home, feed);
  };
 
-@@ -338,7 +365,9 @@ const settleHomeFeedAndReadStableEvidence = async (
+@@ -338,7 +379,9 @@
    home: Locator,
    feed: HomeFeedName,
  ) => {
@@ -86,7 +141,7 @@
    return waitForStableHomePanelEvidence(home, feed);
  };
 
-@@ -1876,6 +1905,7 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -1876,6 +1919,7 @@
      expectedInitialAutoPlatform(testInfo.project.name) === "pc",
      "Independent Home panel scrollers belong to Phone and Tablet.",
    );
@@ -94,7 +149,7 @@
    const { surface } = await openDevelopmentSurface(page);
    const shell = productShell(surface);
    const home = activeHomeSurface(surface);
-@@ -1899,7 +1929,9 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -1899,7 +1943,9 @@
    // Capture each stable baseline while its seeded panel is already active.
    // A second full tab tour adds animation time without establishing new state.
    const seedAndRead = async (feed: (typeof feeds)[number]) => {
@@ -104,7 +159,7 @@
      const top = await writeHomePanelScroll(home, feed, desired[feed]);
      const evidence = await waitForStableHomePanelEvidence(home, feed);
      return { top, evidence };
-@@ -1909,6 +1941,7 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -1909,6 +1955,7 @@
      nearby: await seedAndRead("nearby"),
      calligraphy: await seedAndRead("calligraphy"),
    };
@@ -112,7 +167,7 @@
    const saved = {
      discover: seeded.discover.top,
      nearby: seeded.nearby.top,
-@@ -1922,12 +1955,14 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -1922,12 +1969,14 @@
      0,
    );
    await expect(home).toHaveAttribute("data-active-home-feed", "discover");
@@ -127,7 +182,7 @@
    await pager.evaluate((node) => {
      const frame = node as HTMLElement;
      for (const [type, progress] of [
-@@ -1977,6 +2012,8 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -1977,6 +2026,8 @@
    });
    await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
 
@@ -136,7 +191,7 @@
    for (const feed of [
      "calligraphy",
      "nearby",
-@@ -1991,6 +2028,8 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -1991,6 +2042,8 @@
        .toBe(saved[feed]);
    }
 
@@ -145,7 +200,7 @@
    const beforeRebound = {
      discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
      nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
-@@ -2027,21 +2066,29 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -2027,21 +2080,29 @@
      nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
      calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
    }).toEqual(beforeRebound);
@@ -175,7 +230,7 @@
    await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
    await expect
      .poll(() =>
-@@ -2051,6 +2098,8 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
+@@ -2051,6 +2112,8 @@
      )
      .toBe(saved.calligraphy);
 
@@ -184,3 +239,53 @@
    const finalEvidence = {
      discover: await settleHomeFeedAndReadStableEvidence(home, "discover"),
      nearby: await settleHomeFeedAndReadStableEvidence(home, "nearby"),
+diff --git a/tests/e2e/support/pager-alignment.ts b/tests/e2e/support/pager-alignment.ts
+--- a/tests/e2e/support/pager-alignment.ts
++++ b/tests/e2e/support/pager-alignment.ts
+@@ -1,5 +1,6 @@
+ import { expect } from "@playwright/test";
+ import type { Locator } from "@playwright/test";
++import { beginHomeAlignment as __homeBeginAlignment, finishHomeAlignment as __homeFinishAlignment } from "./home-readiness-recorder";
+
+ /** Observe the same geometry on animation frames without tracing every poll. */
+ export const expectPanelAlignment = async (
+@@ -13,15 +14,19 @@
+     strict?: boolean;
+   } = {},
+ ) => {
++  const __homeAlignment = __homeBeginAlignment();
+   const result = await pager.evaluate(
+     async (node, input) => {
+       const deadline = performance.now() + 10_000;
++      const __homeAlignmentStarted = performance.now();
++      let __homeAlignmentFrames = 0;
+       let consecutive = 0;
+       let gap = Infinity;
+       while (performance.now() < deadline) {
+         await new Promise<void>((resolve) =>
+           requestAnimationFrame(() => resolve()),
+         );
++        ++__homeAlignmentFrames;
+         const panel = node.querySelector<HTMLElement>(input.selector);
+         if (!panel) throw new Error(`Missing pager panel: ${input.selector}`);
+         gap = Math.abs(
+@@ -34,9 +39,9 @@
+           (!input.idle ||
+             (node as HTMLElement).dataset.horizontalPagerScrolling === "false");
+         consecutive = aligned ? consecutive + 1 : 0;
+-        if (consecutive >= input.frames) return { aligned: true, gap };
++        if (consecutive >= input.frames) return { aligned: true, gap, __home_alignment: {frames:__homeAlignmentFrames, elapsed_ms:performance.now()-__homeAlignmentStarted, aligned:true, gap:Number.isFinite(gap)?gap:null} };
+       }
+-      return { aligned: false, gap };
++      return { aligned: false, gap, __home_alignment: {frames:__homeAlignmentFrames, elapsed_ms:performance.now()-__homeAlignmentStarted, aligned:false, gap:Number.isFinite(gap)?gap:null} };
+     },
+     {
+       selector,
+@@ -47,6 +52,7 @@
+       strict: options.strict ?? false,
+     },
+   );
++  __homeFinishAlignment(__homeAlignment, result.__home_alignment);
+   expect(result, `Pager alignment for ${selector}`).toMatchObject({
+     aligned: true,
+   });

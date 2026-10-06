@@ -25,7 +25,7 @@ import {
 const workflow = "a".repeat(40);
 const env = {
   GITHUB_EVENT_NAME: "workflow_dispatch",
-  GITHUB_REF: "refs/heads/codex/media-home97-action-diagnostic",
+  GITHUB_REF: "refs/heads/codex/media-home97-hop-diagnostic",
   HOME_WORKFLOW_SHA: workflow,
   GITHUB_SHA: workflow,
   HOME_TASK_KEY: "12345678-1234-1234-1234-123456789abc",
@@ -665,4 +665,151 @@ test("unknown and excess readiness calls remain explicit, never contaminate a la
   r.phase(0);
   assert.equal(r.begin("discover"), 1);
   assert.equal(r.snapshot().slots.length, 1);
+});
+
+test("same-body readiness awaits retain completed and pending phases without another browser call", () => {
+  const r = readinessRecorder();
+  const call = r.begin("discover");
+  r.evaluationBegin(call, 0);
+  r.evaluationEnd(call, 0);
+  r.evaluationBegin(call, 1);
+  r.evaluationEnd(call, 1);
+  r.sample(call, readyEvidence(), 1, false);
+  const out = sanitizeReadiness(r.snapshot());
+  const row = out.rows.find((row) => row[5] === 2);
+  assert.equal(row.length, 26);
+  assert.ok(
+    row.slice(22).every((x, i, a) => x >= (a[i - 1] ?? 0) && x <= row[1]),
+  );
+  r.evaluationBegin(call, 0);
+  const pending = sanitizeReadiness(r.snapshot()).slots[0].last_evaluation;
+  assert.equal(pending[0], 0);
+  assert.equal(pending[2], null);
+  const changed = JSON.parse(JSON.stringify(out));
+  changed.rows.find((row) => row[5] === 2)[24] =
+    "https://example.invalid/private";
+  assert.throws(() => sanitizeReadiness(changed));
+});
+
+test("independent touch reservation retains every hop and final unfinished boundary after early flood", () => {
+  const r = readinessRecorder();
+  const names = ["discover", "nearby", "inscriptions", "calligraphy"];
+  const routes = [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+    [1, 1],
+    [0, 3],
+    [1, 3],
+    [1, 0],
+    [1, 3],
+    [1, 1],
+    [1, 0],
+    [1, 3],
+    [2, 0],
+    [2, 1],
+    [2, 3],
+  ];
+  const ready = r.begin("discover");
+  for (let n = 0; n < 10000; n++) r.sample(ready, readyEvidence(), 1, false);
+  let active = 0;
+  const align = (call, kind, target) => {
+    r.touchOpBegin(call, kind, names[target]);
+    r.alignmentResult(r.alignmentToken(), {
+      frames: 1,
+      elapsed_ms: 16,
+      aligned: true,
+      gap: 0,
+    });
+    r.touchOpEnd(call, kind);
+  };
+  for (const [index, [phase, target]] of routes.entries()) {
+    r.phase(phase);
+    const call = r.touchBegin(names[target]);
+    align(call, 0, active);
+    while (active !== target) {
+      active += Math.sign(target - active);
+      r.touchOpBegin(call, 1, names[active]);
+      if (index === 13) break;
+      r.touchOpEnd(call, 1);
+      r.touchOpBegin(call, 2, names[active]);
+      r.touchOpEnd(call, 2);
+      align(call, 3, active);
+    }
+    if (index < 13) r.touchEnd(call);
+  }
+  const out = sanitizeReadiness(r.snapshot("timedOut", true));
+  assert.equal(out.touches.calls.length, 14);
+  assert.equal(out.touches.invalid, 0);
+  assert.equal(out.touches.overflow, 0);
+  assert.ok(out.touches.calls.slice(0, 13).every((c) => c.completed));
+  const late = out.touches.calls[13];
+  assert.equal(late.pending_kind, 1);
+  assert.equal(late.rows.at(-1)[9], 3);
+  assert.equal(late.rows.at(-1)[4], null);
+  assert.equal(out.rows.length, 4);
+  for (const value of ["https://example.invalid/private", Infinity, {}]) {
+    const changed = JSON.parse(JSON.stringify(out));
+    changed.touches.calls[0].rows[0][11] = value;
+    assert.throws(() => sanitizeReadiness(changed));
+  }
+  const changed = JSON.parse(JSON.stringify(out));
+  changed.touches.calls[13].pending_kind = 3;
+  assert.throws(() => sanitizeReadiness(changed));
+});
+
+test("two retries with maximum readiness, touch, action and native-error capacity fit the packet bound", () => {
+  const fields = Array(26).fill(1080000.123456789);
+  const attempt = {
+    readiness: {
+      rows: Array.from({ length: 72 }, () => fields),
+      slots: Array.from({ length: 9 }, (_, i) => ({
+        call: i + 1,
+        phase: 2,
+        feed: 3,
+        seen: 100000,
+        retained: 8,
+        omitted: 99992,
+        completed: false,
+        last_evaluation: [1, 1080000.123456789, null],
+      })),
+      touches: {
+        calls: Array.from({ length: 14 }, (_, i) => ({
+          call: i + 1,
+          phase: 2,
+          feed: 3,
+          begin_ms: 1080000.123456789,
+          end_ms: 1080000.123456789,
+          completed: true,
+          pending_kind: null,
+          rows: Array.from({ length: 4 }, () =>
+            Array(14).fill(1080000.123456789),
+          ),
+        })),
+        invalid: 0,
+        overflow: 0,
+      },
+      actions: {
+        rows: Array.from({ length: 9 }, () => [
+          8, 1080000.123456789, 1080000.123456789, 3,
+        ]),
+        invalid: 0,
+        overflow: 0,
+      },
+    },
+    native_errors: sanitizeNativeErrors({
+      errors: Array.from({ length: 8 }, () => ({
+        message: "Test timeout of 30000ms exceeded.",
+        location: {
+          file: "tests/e2e/t02p-development-acceptance.spec.ts",
+          line: 100000,
+          column: 10000,
+        },
+      })),
+    }),
+  };
+  const bytes = Buffer.byteLength(
+    JSON.stringify({ attempts: [attempt, attempt] }),
+  );
+  assert.ok(bytes + 16384 < 131072, `capacity ${bytes} plus 16KiB envelope`);
 });
