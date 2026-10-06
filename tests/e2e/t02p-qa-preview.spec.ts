@@ -346,10 +346,7 @@ const qaCatalogs = async (shell: Locator) => {
   return { inscriptions, calligraphy };
 };
 
-test("QA chrome uses only its URL mode and hidden mode survives reload and a copied link", async ({
-  page,
-  context,
-}) => {
+test("QA chrome uses only its URL mode", async ({ page }) => {
   let initialDock:
     { x: number; y: number; width: number; height: number } | undefined;
   for (const [query, mode] of [
@@ -377,7 +374,12 @@ test("QA chrome uses only its URL mode and hidden mode survives reload and a cop
     }
     await expect(shell.locator("[data-open-settings]")).toHaveCount(0);
   }
+});
 
+test("hidden QA chrome survives reload and a copied link", async ({
+  page,
+  context,
+}) => {
   const { surface } = await openQa(page, "?qaChrome=hidden");
   const copiedUrl = page.url();
   expect((await page.reload({ waitUntil: "domcontentloaded" }))?.status()).toBe(
