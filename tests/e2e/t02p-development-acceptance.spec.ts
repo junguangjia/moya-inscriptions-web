@@ -1899,6 +1899,7 @@ test("Home preserves independent Discover, Nearby, and Calligraphy scroll positi
   // Capture each stable baseline while its seeded panel is already active.
   // A second full tab tour adds animation time without establishing new state.
   const seedAndRead = async (feed: (typeof feeds)[number]) => {
+    await settleHomeFeedAndReadStableEvidence(home, feed);
     const top = await writeHomePanelScroll(home, feed, desired[feed]);
     const evidence = await waitForStableHomePanelEvidence(home, feed);
     return { top, evidence };
