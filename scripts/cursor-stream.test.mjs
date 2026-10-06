@@ -145,3 +145,29 @@ process.stdin.on('end',()=>{console.log(JSON.stringify({type:'user',message:{con
   assert.equal(JSON.parse(result.stdout).result, "done");
   assert.ok(result.stdout.length < 1000);
 });
+
+test("JSON-rich admitted prompt accounts for official user-event escaping overhead", async () => {
+  const input = JSON.stringify({
+    records: Array.from({ length: 4500 }, () => ({
+      text: '"native"\n\t\\ row',
+      source: "a".repeat(20),
+    })),
+  });
+  assert.ok(Buffer.byteLength(input) < 360000);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(input)) > Buffer.byteLength(input) + 4096,
+  );
+  const result = await runCursorStream(
+    process.execPath,
+    [
+      "-e",
+      `
+let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+=s);process.stdin.on('end',()=>{console.log(JSON.stringify({type:'user',message:{content:[{text:input}]}}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done'}));});
+`,
+    ],
+    { input },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(JSON.parse(result.stdout).result, "done");
+  assert.equal(result.progress.eventCounts.user, 1);
+});
