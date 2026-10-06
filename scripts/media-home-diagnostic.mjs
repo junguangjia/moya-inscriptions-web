@@ -17,10 +17,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { setTimeout } from "node:timers";
 
-export const SOURCE = "97c594d7702794b0ba869d9c86a1c9513f4e727b";
-export const TREE = "23fba8310bcab3ab0dd5b9ccc40aa76dbd8446bd";
+export const SOURCE = "440faa7ce9e96f162bc28b432b6ff7fe306841ee";
+export const TREE = "d175afcb6b6f204d755ccd63e4110da524fd8183";
 export const ORIGINAL_SPEC =
-  "4b6b8a3b1fc96061cf3c322fc80b041bcdbae5631026c316ce6dc3969a5a7562";
+  "3b837837f09fe2d73022e63acb2f8e6b8c535678d7d4eaad031efca19d31796b";
 export const ORIGINAL_ALIGNMENT =
   "7ba596d1b511429f04d733fa17bca1f8c3e83959dfa4eb7550186ae6769b59eb";
 export const TITLE =
@@ -748,7 +748,7 @@ const save = (path, value) =>
 export function admit(env, currentSha, currentTree) {
   if (
     env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REF !== "refs/heads/codex/media-home97-trace-off-control" ||
+    env.GITHUB_REF !== "refs/heads/codex/media-home60-cold-validation" ||
     !/^[a-f0-9]{40}$/.test(env.HOME_WORKFLOW_SHA ?? "") ||
     env.GITHUB_SHA !== env.HOME_WORKFLOW_SHA ||
     !/^[a-f0-9-]{36}$/.test(env.HOME_TASK_KEY ?? "") ||
@@ -780,7 +780,8 @@ export function selectedTests(native) {
   if (
     found.length !== 1 ||
     found[0].title !== TITLE ||
-    found[0].test.projectName !== "tablet-webkit"
+    found[0].test.projectName !== "tablet-webkit" ||
+    found[0].test.timeout !== 60000
   )
     throw new Error("CASE_SELECTION_REJECTED");
   return found[0].test;
@@ -1277,7 +1278,6 @@ async function execute(mode) {
       "--config",
       "e2e/support/home-causal.config.mts",
       "--reporter=json",
-      "--trace=off",
     ];
     const deadline = Date.now() + 300000;
     const list = await bounded(
@@ -1323,12 +1323,13 @@ async function execute(mode) {
   const packet = {
     kind: "SANITIZED_DIAGNOSTIC_ONLY_NOT_ACCEPTANCE",
     control: {
-      name: "TRACE_OFF_ORIGINAL_HOME",
-      baseline_run: 37449681450,
+      name: "SINGLE_HOME_OVERALL_BUDGET_60S",
+      baseline_run: 37456194333,
       baseline_attempt: 1,
-      trace_configured: "off",
+      trace_configured: "retain-on-failure-and-retries",
       video_change: "NONE_DEFAULT_OFF",
       effective_trace_runtime: "NOT_CAPTURED",
+      test_budget_ms: 60000,
     },
     identity: c.identity,
     platform: "GitHub Linux hosted runner",
@@ -1379,8 +1380,8 @@ async function execute(mode) {
       "NOT_RETAINED; only selected sanitized records are published",
     original_source_ranges: {
       helper: [196, 343],
-      producer: [1899, 1911],
-      final: [2054, 2058],
+      producer: [1901, 1913],
+      final: [2056, 2063],
     },
   };
   packet.identity.workflow_blob = execFileSync(

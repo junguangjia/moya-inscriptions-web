@@ -35,7 +35,7 @@ import {
 const workflow = "a".repeat(40);
 const env = {
   GITHUB_EVENT_NAME: "workflow_dispatch",
-  GITHUB_REF: "refs/heads/codex/media-home97-trace-off-control",
+  GITHUB_REF: "refs/heads/codex/media-home60-cold-validation",
   HOME_WORKFLOW_SHA: workflow,
   GITHUB_SHA: workflow,
   HOME_TASK_KEY: "12345678-1234-1234-1234-123456789abc",
@@ -77,11 +77,25 @@ test("selection rejects no tests and a broadened matrix", () => {
   const spec = {
     title:
       "Home preserves independent Discover, Nearby, and Calligraphy scroll positions",
-    tests: [{ projectName: "tablet-webkit" }],
+    tests: [{ projectName: "tablet-webkit", timeout: 60000 }],
   };
   assert.equal(
     selectedTests({ suites: [{ specs: [spec] }] }).projectName,
     "tablet-webkit",
+  );
+  assert.throws(() =>
+    selectedTests({
+      suites: [
+        {
+          specs: [
+            {
+              ...spec,
+              tests: [{ projectName: "tablet-webkit", timeout: 30000 }],
+            },
+          ],
+        },
+      ],
+    }),
   );
   assert.throws(() => selectedTests({ suites: [] }));
   assert.throws(() => selectedTests({ suites: [{ specs: [spec, spec] }] }));

@@ -9,7 +9,7 @@ diff --git a/tests/e2e/t02p-development-acceptance.spec.ts b/tests/e2e/t02p-deve
  import { expectPanelAlignment } from "./support/pager-alignment";
  import { prepareFormalRoutes } from "./support/prepare-formal-routes";
  import { expect, test } from "@playwright/test";
-
+ 
  import type { Locator, Page } from "@playwright/test";
 +
 +let __homeReadiness: HomeReadinessRecorder | undefined;
@@ -17,12 +17,12 @@ diff --git a/tests/e2e/t02p-development-acceptance.spec.ts b/tests/e2e/t02p-deve
 +  void page;
 +  __homeReadiness?.finish(info);
 +});
-
+ 
  test.beforeAll(async ({ request }) => {
    await prepareFormalRoutes(request);
 @@ -119,6 +129,7 @@
  };
-
+ 
  const touchSettleHomeFeed = async (home: Locator, feed: HomeFeedName) => {
 +  const __homeTouchCall = __homeReadiness?.touchBegin(feed);
    const pager = home.locator("[data-home-feed-pager]");
@@ -61,7 +61,7 @@ diff --git a/tests/e2e/t02p-development-acceptance.spec.ts b/tests/e2e/t02p-deve
    }
 +  __homeReadiness?.touchEnd(__homeTouchCall);
  };
-
+ 
  const writeHomePanelScroll = async (
 @@ -289,25 +309,33 @@
    home: Locator,
@@ -130,7 +130,7 @@ diff --git a/tests/e2e/t02p-development-acceptance.spec.ts b/tests/e2e/t02p-deve
 +  __homeReadiness?.settled(__homeReadinessCall);
    return readHomePanelEvidence(home, feed);
  };
-
+ 
 @@ -338,7 +379,9 @@
    home: Locator,
    feed: HomeFeedName,
@@ -140,105 +140,105 @@ diff --git a/tests/e2e/t02p-development-acceptance.spec.ts b/tests/e2e/t02p-deve
 +  __homeReadiness?.finalSettleEnd(feed);
    return waitForStableHomePanelEvidence(home, feed);
  };
-
-@@ -1876,6 +1919,7 @@
-     expectedInitialAutoPlatform(testInfo.project.name) === "pc",
-     "Independent Home panel scrollers belong to Phone and Tablet.",
-   );
-+  __homeReadiness = startHomeReadiness();
-   const { surface } = await openDevelopmentSurface(page);
-   const shell = productShell(surface);
-   const home = activeHomeSurface(surface);
-@@ -1899,7 +1943,9 @@
-   // Capture each stable baseline while its seeded panel is already active.
-   // A second full tab tour adds animation time without establishing new state.
-   const seedAndRead = async (feed: (typeof feeds)[number]) => {
-+    __homeReadiness?.phase(0);
-     await settleHomeFeedAndReadStableEvidence(home, feed);
-+    __homeReadiness?.phase(1);
-     const top = await writeHomePanelScroll(home, feed, desired[feed]);
-     const evidence = await waitForStableHomePanelEvidence(home, feed);
-     return { top, evidence };
-@@ -1909,6 +1955,7 @@
-     nearby: await seedAndRead("nearby"),
-     calligraphy: await seedAndRead("calligraphy"),
-   };
-+  __homeReadiness?.actionBegin(0);
-   const saved = {
-     discover: seeded.discover.top,
-     nearby: seeded.nearby.top,
-@@ -1922,12 +1969,14 @@
-     0,
-   );
-   await expect(home).toHaveAttribute("data-active-home-feed", "discover");
-+  __homeReadiness?.actionEnd(0);
-   const baseline = {
-     discover: seeded.discover.evidence,
-     nearby: seeded.nearby.evidence,
-     calligraphy: seeded.calligraphy.evidence,
-   };
-
-+  __homeReadiness?.actionBegin(1);
-   await pager.evaluate((node) => {
-     const frame = node as HTMLElement;
-     for (const [type, progress] of [
-@@ -1977,6 +2026,8 @@
-   });
-   await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
-
-+  __homeReadiness?.actionEnd(1);
-+  __homeReadiness?.actionBegin(2);
-   for (const feed of [
-     "calligraphy",
-     "nearby",
-@@ -1991,6 +2042,8 @@
-       .toBe(saved[feed]);
-   }
-
-+  __homeReadiness?.actionEnd(2);
-+  __homeReadiness?.actionBegin(3);
-   const beforeRebound = {
-     discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
-     nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
-@@ -2027,21 +2080,29 @@
-     nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
-     calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
-   }).toEqual(beforeRebound);
-+  __homeReadiness?.actionEnd(3);
-+  __homeReadiness?.actionBegin(4);
-
-   const { settings, userPage } =
-     await openSettingsThroughAvailableEntry(surface);
-   await closeSettingsAndUserPage(settings, userPage);
-+  __homeReadiness?.actionEnd(4);
-+  __homeReadiness?.actionBegin(5);
-   await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
-   expect((await readHomePanelEvidence(home, "calligraphy")).scrollTop).toBe(
-     saved.calligraphy,
-   );
-
-+  __homeReadiness?.actionEnd(5);
-+  __homeReadiness?.actionBegin(6);
-   const navigation = surface.getByRole("navigation", { name: "主要内容" });
-   await ensurePrimaryNavigationExpanded(navigation);
-   await navigation.getByRole("button", { name: "讨论", exact: true }).click();
-   await expectActiveDestination(surface, "discussion");
-   await navigation.getByRole("button", { name: "首页", exact: true }).click();
-   await expectActiveDestination(surface, "home");
-+  __homeReadiness?.actionEnd(6);
-+  __homeReadiness?.actionBegin(7);
-   await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
-   await expect
-     .poll(() =>
-@@ -2051,6 +2112,8 @@
-     )
-     .toBe(saved.calligraphy);
-
-+  __homeReadiness?.actionEnd(7);
-+  __homeReadiness?.phase(2);
-   const finalEvidence = {
-     discover: await settleHomeFeedAndReadStableEvidence(home, "discover"),
-     nearby: await settleHomeFeedAndReadStableEvidence(home, "nearby"),
+ 
+@@ -1878,6 +1921,7 @@
+       expectedInitialAutoPlatform(testInfo.project.name) === "pc",
+       "Independent Home panel scrollers belong to Phone and Tablet.",
+     );
++    __homeReadiness = startHomeReadiness();
+     const { surface } = await openDevelopmentSurface(page);
+     const shell = productShell(surface);
+     const home = activeHomeSurface(surface);
+@@ -1901,7 +1945,9 @@
+     // Capture each stable baseline while its seeded panel is already active.
+     // A second full tab tour adds animation time without establishing new state.
+     const seedAndRead = async (feed: (typeof feeds)[number]) => {
++      __homeReadiness?.phase(0);
+       await settleHomeFeedAndReadStableEvidence(home, feed);
++      __homeReadiness?.phase(1);
+       const top = await writeHomePanelScroll(home, feed, desired[feed]);
+       const evidence = await waitForStableHomePanelEvidence(home, feed);
+       return { top, evidence };
+@@ -1911,6 +1957,7 @@
+       nearby: await seedAndRead("nearby"),
+       calligraphy: await seedAndRead("calligraphy"),
+     };
++    __homeReadiness?.actionBegin(0);
+     const saved = {
+       discover: seeded.discover.top,
+       nearby: seeded.nearby.top,
+@@ -1924,12 +1971,14 @@
+       await pager.evaluate((node) => (node as HTMLElement).scrollLeft),
+     ).toBe(0);
+     await expect(home).toHaveAttribute("data-active-home-feed", "discover");
++    __homeReadiness?.actionEnd(0);
+     const baseline = {
+       discover: seeded.discover.evidence,
+       nearby: seeded.nearby.evidence,
+       calligraphy: seeded.calligraphy.evidence,
+     };
+ 
++    __homeReadiness?.actionBegin(1);
+     await pager.evaluate((node) => {
+       const frame = node as HTMLElement;
+       for (const [type, progress] of [
+@@ -1979,6 +2028,8 @@
+     });
+     await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+ 
++    __homeReadiness?.actionEnd(1);
++    __homeReadiness?.actionBegin(2);
+     for (const feed of [
+       "calligraphy",
+       "nearby",
+@@ -1993,6 +2044,8 @@
+         .toBe(saved[feed]);
+     }
+ 
++    __homeReadiness?.actionEnd(2);
++    __homeReadiness?.actionBegin(3);
+     const beforeRebound = {
+       discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
+       nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
+@@ -2029,21 +2082,29 @@
+       nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
+       calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
+     }).toEqual(beforeRebound);
++    __homeReadiness?.actionEnd(3);
++    __homeReadiness?.actionBegin(4);
+ 
+     const { settings, userPage } =
+       await openSettingsThroughAvailableEntry(surface);
+     await closeSettingsAndUserPage(settings, userPage);
++    __homeReadiness?.actionEnd(4);
++    __homeReadiness?.actionBegin(5);
+     await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
+     expect((await readHomePanelEvidence(home, "calligraphy")).scrollTop).toBe(
+       saved.calligraphy,
+     );
+ 
++    __homeReadiness?.actionEnd(5);
++    __homeReadiness?.actionBegin(6);
+     const navigation = surface.getByRole("navigation", { name: "主要内容" });
+     await ensurePrimaryNavigationExpanded(navigation);
+     await navigation.getByRole("button", { name: "讨论", exact: true }).click();
+     await expectActiveDestination(surface, "discussion");
+     await navigation.getByRole("button", { name: "首页", exact: true }).click();
+     await expectActiveDestination(surface, "home");
++    __homeReadiness?.actionEnd(6);
++    __homeReadiness?.actionBegin(7);
+     await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
+     await expect
+       .poll(() =>
+@@ -2053,6 +2114,8 @@
+       )
+       .toBe(saved.calligraphy);
+ 
++    __homeReadiness?.actionEnd(7);
++    __homeReadiness?.phase(2);
+     const finalEvidence = {
+       discover: await settleHomeFeedAndReadStableEvidence(home, "discover"),
+       nearby: await settleHomeFeedAndReadStableEvidence(home, "nearby"),
 diff --git a/tests/e2e/support/pager-alignment.ts b/tests/e2e/support/pager-alignment.ts
 --- a/tests/e2e/support/pager-alignment.ts
 +++ b/tests/e2e/support/pager-alignment.ts
@@ -246,7 +246,7 @@ diff --git a/tests/e2e/support/pager-alignment.ts b/tests/e2e/support/pager-alig
  import { expect } from "@playwright/test";
  import type { Locator } from "@playwright/test";
 +import { beginHomeAlignment as __homeBeginAlignment, finishHomeAlignment as __homeFinishAlignment } from "./home-readiness-recorder";
-
+ 
  /** Observe the same geometry on animation frames without tracing every poll. */
  export const expectPanelAlignment = async (
 @@ -13,17 +14,43 @@
