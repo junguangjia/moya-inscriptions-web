@@ -15,6 +15,7 @@ import {
   publicText,
   assertRemoteInput,
   coverUnperformedReview,
+  sanitizeRemoteProjection,
 } from "./cursor-automation.mjs";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -1050,7 +1051,7 @@ function prepareAutomatic(directory, repository, target, env) {
     packet = collect(repository, target);
     if (!packet) return null;
     // Sanitize before hashing/citing, preserving the sanitized evidence identity.
-    packet = JSON.parse(publicText(JSON.stringify(packet)));
+    packet = sanitizeRemoteProjection(packet);
     packet.evidence = citationEvidence(packet);
     // Evidence text is a faithful scanned subset; duplication in JSON remains
     // inside a fixed whole-prompt cap, never an unlimited evidence expansion.
@@ -1897,11 +1898,13 @@ export async function main(stage, env = process.env) {
         ...receipt,
         status: stale ? "STALE" : "INCOMPLETE",
         responseAccepted: false,
-        terminalCategory: stale
-          ? "STALE_SOURCE_RUN_OR_CLAIM"
-          : receipt.actualInvocations
-            ? "ANSWER_NOT_ACCEPTED"
-            : "PRE_INFERENCE_FAILURE_OR_STALE",
+        terminalCategory:
+          receipt.preparationError ??
+          (stale
+            ? "STALE_SOURCE_RUN_OR_CLAIM"
+            : receipt.actualInvocations
+              ? "ANSWER_NOT_ACCEPTED"
+              : "PRE_INFERENCE_FAILURE_OR_STALE"),
         workflowStages: {
           prepare: env.CURSOR_PREPARE_OUTCOME ?? null,
           install: env.CURSOR_INSTALL_OUTCOME ?? null,
@@ -2006,9 +2009,34 @@ export async function main(stage, env = process.env) {
     )
       return;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const packet = automatic
-      ? prepareAutomatic(directory, repository, target, env)
-      : collect(repository, target);
+    let packet;
+    try {
+      packet = automatic
+        ? prepareAutomatic(directory, repository, target, env)
+        : collect(repository, target);
+    } catch (error) {
+      if (automatic && existsSync(join(directory, "automatic-receipt.json"))) {
+        const receipt = readJSON(join(directory, "automatic-receipt.json"));
+        const allowed = [
+          "CONTEXT_LIMIT",
+          "COMMAND_FAILED",
+          "SOURCE_METADATA_INVALID",
+          "SOURCE_SIZE_MISMATCH",
+          "PUBLICATION_STALE",
+          "PUBLICATION_SECURITY_BUDGET_EXHAUSTED",
+        ];
+        save(join(directory, "automatic-receipt.json"), {
+          ...receipt,
+          preparationError:
+            error instanceof SyntaxError
+              ? "CONTEXT_SERIALIZATION_FAILED"
+              : allowed.includes(error.message)
+                ? error.message
+                : "PREPARATION_FAILED",
+        });
+      }
+      throw error;
+    }
     if (!packet) return;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     save(join(directory, "context.json"), packet);

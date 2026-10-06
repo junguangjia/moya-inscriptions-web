@@ -369,3 +369,18 @@ export function assertRemoteInput(value) {
       stack.push(...Object.keys(entry), ...Object.values(entry));
   }
 }
+
+export function sanitizeRemoteProjection(value) {
+  // Transform decoded scalars, never serialized JSON: a quoted source string
+  // may contain escaped quotes immediately after a redacted path.
+  if (typeof value === "string") return publicText(value);
+  if (Array.isArray(value)) return value.map(sanitizeRemoteProjection);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        sanitizeRemoteProjection(entry),
+      ]),
+    );
+  return value;
+}

@@ -17,6 +17,7 @@ import {
   assertRemoteInput,
   publicText,
   coverUnperformedReview,
+  sanitizeRemoteProjection,
 } from "./cursor-automation.mjs";
 import { classifyTask } from "./ci-task-scope.mjs";
 const repo = "junguangjia/moya-inscriptions-web";
@@ -370,3 +371,43 @@ for (const conclusion of [
     );
   });
 }
+
+test("decoded-scalar redaction preserves quoted JSON source and exact sanitized citations", () => {
+  const packet = {
+    repository: repo,
+    number: 214,
+    head,
+    kind: "review",
+    files: [
+      {
+        path: "scripts/sample.mjs",
+        patch: '+const path = "/Users/example/private.json";',
+      },
+    ],
+    failedJobs: [],
+    omissions: [],
+  };
+  assert.throws(
+    () => JSON.parse(publicText(JSON.stringify(packet))),
+    SyntaxError,
+  );
+  const clean = sanitizeRemoteProjection(packet);
+  assertRemoteInput(clean);
+  assert.equal(
+    JSON.parse(JSON.stringify(clean)).files[0].patch,
+    '+const path = "[private path omitted]";',
+  );
+  const evidence = citationEvidence(clean),
+    patch = evidence.find((e) => e.pointer === "/files/0/patch");
+  assert.equal(
+    validateCitations(
+      {
+        citations: [{ id: patch.id, quote: "[private path omitted]" }],
+        findings: [],
+      },
+      evidence,
+    )[0].exact,
+    true,
+  );
+  assert.equal(packet.files[0].patch.includes("/Users/example"), true);
+});
