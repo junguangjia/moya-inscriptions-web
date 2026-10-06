@@ -91,6 +91,192 @@ const readinessRoutes = [
   [2, 1],
   [2, 3],
 ];
+export const ACTION_GROUPS = [
+  "saved_state_and_discover_settle",
+  "swipe_assertions",
+  "four_feed_settle_scroll_checks",
+  "rebound",
+  "settings_round_trip",
+  "settings_scroll_check",
+  "discussion_home_round_trip",
+  "return_scroll_assertion",
+  "final_discover_touch_settle",
+];
+export function sanitizeActions(value) {
+  if (
+    !value ||
+    !Array.isArray(value.rows) ||
+    value.rows.length > ACTION_GROUPS.length ||
+    !Number.isSafeInteger(value.invalid) ||
+    value.invalid < 0 ||
+    !Number.isSafeInteger(value.overflow) ||
+    value.overflow < 0
+  )
+    throw new Error("ACTION_SCHEMA_REJECTED");
+  let previousEnd = 0;
+  const rows = value.rows.map((row, index) => {
+    if (
+      !Array.isArray(row) ||
+      row.length !== 4 ||
+      row[0] !== index ||
+      typeof row[1] !== "number" ||
+      !Number.isFinite(row[1]) ||
+      row[1] < previousEnd ||
+      row[1] > 1080000 ||
+      ![0, 1, 2, 3].includes(row[3]) ||
+      (row[2] === null
+        ? row[3] === 1 || index !== value.rows.length - 1
+        : typeof row[2] !== "number" ||
+          !Number.isFinite(row[2]) ||
+          row[2] < row[1] ||
+          row[2] > 1080000 ||
+          row[3] !== 1)
+    )
+      throw new Error("ACTION_ROW_REJECTED");
+    previousEnd = row[2] ?? row[1];
+    return [...row];
+  });
+  return { rows, invalid: value.invalid, overflow: value.overflow };
+}
+export function sanitizeNativeErrors(attempt) {
+  const collectionInvalid =
+    attempt != null &&
+    Object.hasOwn(attempt, "errors") &&
+    !Array.isArray(attempt.errors);
+  const candidate =
+    Array.isArray(attempt?.errors) && attempt.errors.length
+      ? attempt.errors
+      : attempt?.error == null
+        ? []
+        : [attempt.error];
+  const indices = [
+    ...new Set([
+      ...candidate.slice(0, 4).map((_, index) => index),
+      ...candidate
+        .slice(-4)
+        .map((_, index) => Math.max(0, candidate.length - 4) + index),
+    ]),
+  ];
+  const errors = indices.map((index) => {
+    const e = candidate[index];
+    const valid = e !== null && typeof e === "object" && !Array.isArray(e);
+    const oversized =
+      valid &&
+      [e.message, e.stack].some(
+        (x) => typeof x === "string" && Buffer.byteLength(x) > 65536,
+      );
+    const message =
+      valid && !oversized && typeof e.message === "string"
+        ? e.message
+            .split(String.fromCharCode(27))
+            .map((part, index) =>
+              index ? part.replace(/^\[[0-9;]*m/, "") : part,
+            )
+            .join("")
+        : "";
+    const stack =
+      valid && !oversized && typeof e.stack === "string" ? e.stack : "";
+    const flags = {
+      test_timeout:
+        /^(?:Error: )?Test timeout of \d+ms exceeded(?:\.[^\r\n]*)?$/m.test(
+          message,
+        ),
+      poll_timeout:
+        /^(?:TimeoutError: )?Timeout \d+ms exceeded while waiting on the predicate\.?$/m.test(
+          message,
+        ),
+      assertion_to_be:
+        /^(?:Error: )?expect\([^\r\n]*\)\.toBe\([^\r\n]*\)/m.test(message),
+      action_timeout:
+        /^(?:[A-Za-z]+Error: )?[a-zA-Z][\w.]*: Timeout \d+ms exceeded\.?$/m.test(
+          message,
+        ),
+      page_closed:
+        /^(?:Error: )?(?:[\w.]+: )?Target page, context or browser has been closed\.?$/m.test(
+          message,
+        ),
+      timeout_name: valid && e.name === "TimeoutError",
+    };
+    const category = !valid
+      ? "ERROR_FIELD_INVALID"
+      : oversized
+        ? "ERROR_TEXT_OVERSIZED"
+        : flags.test_timeout
+          ? "TEST_TIMEOUT"
+          : flags.poll_timeout
+            ? "POLL_TIMEOUT"
+            : flags.page_closed
+              ? "PAGE_CONTEXT_CLOSED"
+              : flags.assertion_to_be
+                ? "ASSERTION_TO_BE"
+                : flags.action_timeout
+                  ? "ACTION_TIMEOUT"
+                  : flags.timeout_name
+                    ? "TIMEOUT_UNCLASSIFIED"
+                    : "UNKNOWN";
+    let location = null;
+    let location_origin = "NOT_RETAINED";
+    const assigned = (file) =>
+      typeof file === "string" &&
+      !file.includes("://") &&
+      (file.replaceAll("\\", "/") === SPEC ||
+        file.replaceAll("\\", "/").endsWith("/" + SPEC));
+    const coordinates = (line, column) =>
+      Number.isInteger(line) &&
+      line > 0 &&
+      line <= 100000 &&
+      Number.isInteger(column) &&
+      column > 0 &&
+      column <= 10000;
+    if (
+      valid &&
+      assigned(e.location?.file) &&
+      coordinates(e.location.line, e.location.column)
+    ) {
+      location = { line: e.location.line, column: e.location.column };
+      location_origin = "NATIVE_ERROR_LOCATION";
+    } else {
+      const match = stack
+        .split(/\r?\n/)
+        .filter((frame) => !frame.includes("://"))
+        .map((frame) =>
+          frame.match(
+            /(?:^|[/\\])tests[/\\]e2e[/\\]t02p-development-acceptance\.spec\.ts:(\d+):(\d+)(?:\)|\s|$)/,
+          ),
+        )
+        .find((frame) => frame !== null);
+      if (match && coordinates(Number(match[1]), Number(match[2]))) {
+        location = { line: Number(match[1]), column: Number(match[2]) };
+        location_origin = "NATIVE_ERROR_STACK";
+      }
+    }
+    return {
+      index,
+      category,
+      flags,
+      location,
+      location_origin,
+      text_oversized: oversized,
+      error_field_invalid: !valid,
+    };
+  });
+  return {
+    native_result_present: attempt != null,
+    error_fields_present:
+      attempt != null &&
+      (Object.hasOwn(attempt, "error") || Object.hasOwn(attempt, "errors")),
+    error_collection_invalid: collectionInvalid,
+    error_present:
+      candidate.length > 0 ? true : collectionInvalid ? null : false,
+    errors_seen: collectionInvalid ? null : candidate.length,
+    errors_retained: errors.length,
+    errors_omitted: collectionInvalid ? null : candidate.length - errors.length,
+    errors,
+    location_basis: "Instrumented assigned spec; not an original-line mapping",
+    category_basis:
+      "Actual error fields or recognized text only; never duration or native status",
+  };
+}
 export function sanitizeReadiness(value) {
   if (
     !value ||
@@ -212,6 +398,7 @@ export function sanitizeReadiness(value) {
     seen: value.seen,
     invalid: value.invalid,
     overflow: value.overflow,
+    actions: sanitizeActions(value.actions),
   };
 }
 export const FIELDS = [
@@ -252,7 +439,7 @@ const save = (path, value) =>
 export function admit(env, currentSha, currentTree) {
   if (
     env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REF !== "refs/heads/codex/media-home97-readiness-diagnostic" ||
+    env.GITHUB_REF !== "refs/heads/codex/media-home97-action-diagnostic" ||
     !/^[a-f0-9]{40}$/.test(env.HOME_WORKFLOW_SHA ?? "") ||
     env.GITHUB_SHA !== env.HOME_WORKFLOW_SHA ||
     !/^[a-f0-9-]{36}$/.test(env.HOME_TASK_KEY ?? "") ||
@@ -823,6 +1010,14 @@ async function execute(mode) {
     readiness_phase_dictionary: ["pre_seed", "post_seed", "final_restore"],
     readiness_event_dictionary: ["begin", "eager_done", "sample", "settled"],
     readiness_signature_keys: READINESS_SIGNATURE_KEYS,
+    action_group_dictionary: ACTION_GROUPS,
+    action_row_fields: ["group", "body_begin_ms", "body_end_ms", "status"],
+    action_status_dictionary: [
+      "unfinished",
+      "completed",
+      "unfinished_with_native_error",
+      "unfinished_with_native_timeout",
+    ],
     readiness_coverage:
       "At most9 helper invocations/retry; first2/last2 plus first guard failure and signature change with preceding samples; at most8 rows/invocation. Omitted counts explicit.",
     attempts: [],
@@ -900,6 +1095,7 @@ async function execute(mode) {
       retry,
       status: attempt?.status ?? "NATIVE_STATUS_MISSING",
       duration_ms: attempt?.duration ?? null,
+      native_errors: sanitizeNativeErrors(attempt),
       capture_available: false,
       capture_state: "MISSING",
     };
@@ -927,7 +1123,10 @@ async function execute(mode) {
                 : null,
             capture_available: true,
             capture_state:
-              readiness.invalid || readiness.overflow
+              readiness.invalid ||
+              readiness.overflow ||
+              readiness.actions.invalid ||
+              readiness.actions.overflow
                 ? "READINESS_INVALID_OR_OVERFLOW_RECORDED"
                 : "READINESS_SCALARS_RECORDED",
             original_packet_sha256: sha(bytes),

@@ -17,12 +17,15 @@ import {
   sanitizeAttribution,
   sanitizeReadiness,
   READINESS_FIELDS,
+  ACTION_GROUPS,
+  sanitizeActions,
+  sanitizeNativeErrors,
 } from "./media-home-diagnostic.mjs";
 
 const workflow = "a".repeat(40);
 const env = {
   GITHUB_EVENT_NAME: "workflow_dispatch",
-  GITHUB_REF: "refs/heads/codex/media-home97-readiness-diagnostic",
+  GITHUB_REF: "refs/heads/codex/media-home97-action-diagnostic",
   HOME_WORKFLOW_SHA: workflow,
   GITHUB_SHA: workflow,
   HOME_TASK_KEY: "12345678-1234-1234-1234-123456789abc",
@@ -328,6 +331,187 @@ function readinessRecorder() {
   );
   return new module.exports.HomeReadinessRecorder();
 }
+test("fixed action groups preserve every late group and unfinished native error independently of early samples", () => {
+  const r = readinessRecorder();
+  const call = r.begin("discover");
+  for (let n = 0; n < 10000; n++) r.sample(call, readyEvidence(), 2, true);
+  for (let group = 0; group < 8; group++) {
+    r.actionBegin(group);
+    r.actionEnd(group);
+  }
+  r.phase(2);
+  r.finalSettleBegin("nearby");
+  assert.equal(r.snapshot().actions.rows.length, 8);
+  r.finalSettleBegin("discover");
+  const out = sanitizeReadiness(r.snapshot("failed", true));
+  assert.equal(ACTION_GROUPS.length, 9);
+  assert.equal(out.actions.rows.length, 9);
+  assert.deepEqual(
+    out.actions.rows.map((row) => row[0]),
+    [0, 1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  assert.ok(
+    out.actions.rows
+      .slice(0, 8)
+      .every((row) => row[3] === 1 && row[2] >= row[1]),
+  );
+  assert.equal(out.actions.rows[8][2], null);
+  assert.equal(out.actions.rows[8][3], 2);
+  assert.equal(out.actions.invalid, 0);
+  assert.equal(out.actions.overflow, 0);
+  assert.equal(
+    sanitizeActions(r.snapshot("timedOut", true).actions).rows[8][3],
+    3,
+  );
+  r.finalSettleEnd("discover");
+  r.actionBegin(9);
+  const complete = sanitizeActions(r.snapshot().actions);
+  assert.equal(complete.rows[8][3], 1);
+  assert.equal(complete.overflow, 1);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify({ attempts: [out, out] })) < 131072,
+  );
+});
+test("action sanitizer rejects unsafe timestamps, routes and completion flags", () => {
+  const base = {
+    rows: [
+      [0, 1, 2, 1],
+      [1, 3, null, 0],
+    ],
+    invalid: 0,
+    overflow: 0,
+  };
+  sanitizeActions(base);
+  for (const [index, value] of [
+    [0, 5],
+    [1, "private"],
+    [1, Infinity],
+    [2, 0],
+    [3, 3],
+  ]) {
+    const changed = JSON.parse(JSON.stringify(base));
+    changed.rows[0][index] = value;
+    assert.throws(() => sanitizeActions(changed));
+  }
+  assert.throws(() =>
+    sanitizeActions({
+      ...base,
+      rows: [
+        [0, 1, null, 0],
+        [1, 2, 3, 1],
+      ],
+    }),
+  );
+});
+test("native error categories use actual fields or recognized text and never native duration", () => {
+  assert.equal(sanitizeNativeErrors(undefined).native_result_present, false);
+  const unknown = sanitizeNativeErrors({
+    status: "timedOut",
+    duration: 30000,
+    errors: [{ message: "PRIVATE_SENTINEL_NOT_REAL https://example.invalid/" }],
+  });
+  assert.equal(unknown.errors[0].category, "UNKNOWN");
+  assert.ok(!JSON.stringify(unknown).includes("PRIVATE_SENTINEL"));
+  assert.ok(!JSON.stringify(unknown).includes("example.invalid"));
+  for (const [message, category] of [
+    ["Test timeout of 30000ms exceeded.", "TEST_TIMEOUT"],
+    ["Timeout 15000ms exceeded while waiting on the predicate", "POLL_TIMEOUT"],
+    [
+      "Error: expect(received).toBe(expected) // Object.is equality",
+      "ASSERTION_TO_BE",
+    ],
+    ["locator.click: Timeout 5000ms exceeded.", "ACTION_TIMEOUT"],
+    ["Target page, context or browser has been closed", "PAGE_CONTEXT_CLOSED"],
+  ])
+    assert.equal(
+      sanitizeNativeErrors({ error: { message } }).errors[0].category,
+      category,
+    );
+  assert.equal(
+    sanitizeNativeErrors({ error: { name: "TimeoutError" } }).errors[0]
+      .category,
+    "TIMEOUT_UNCLASSIFIED",
+  );
+  const esc = String.fromCharCode(27);
+  assert.equal(
+    sanitizeNativeErrors({
+      error: {
+        message: esc + "[31mTest timeout of 30000ms exceeded." + esc + "[39m",
+      },
+    }).errors[0].category,
+    "TEST_TIMEOUT",
+  );
+  assert.equal(
+    sanitizeNativeErrors({ error: "private" }).errors[0].category,
+    "ERROR_FIELD_INVALID",
+  );
+  assert.equal(
+    sanitizeNativeErrors({ error: { message: "x".repeat(65537) } }).errors[0]
+      .category,
+    "ERROR_TEXT_OVERSIZED",
+  );
+});
+test("native error retention bounds early floods and emits only assigned-spec numeric locations", () => {
+  const malformed = sanitizeNativeErrors({
+    errors: "PRIVATE_SENTINEL_NOT_REAL",
+  });
+  assert.equal(malformed.error_collection_invalid, true);
+  assert.equal(malformed.error_present, null);
+  assert.equal(malformed.errors_seen, null);
+  assert.equal(malformed.errors_omitted, null);
+  const withKnown = sanitizeNativeErrors({
+    errors: {},
+    error: { message: "Test timeout of 30000ms exceeded." },
+  });
+  assert.equal(withKnown.error_present, true);
+  assert.equal(withKnown.errors_seen, null);
+  assert.equal(withKnown.errors[0].category, "TEST_TIMEOUT");
+  assert.equal(
+    sanitizeNativeErrors({
+      error: {
+        stack:
+          " at https://example.invalid/tests/e2e/t02p-development-acceptance.spec.ts:2123:6",
+      },
+    }).errors[0].location,
+    null,
+  );
+  const errors = Array.from({ length: 100 }, () => ({
+    message: "PRIVATE_SENTINEL_NOT_REAL",
+  }));
+  errors[99] = {
+    message: "Test timeout of 30000ms exceeded.",
+    stack:
+      " at /synthetic/tests/e2e/t02p-development-acceptance.spec.ts:2123:6",
+  };
+  errors[0] = {
+    location: {
+      file: "tests/e2e/t02p-development-acceptance.spec.ts",
+      line: 2091,
+      column: 4,
+    },
+  };
+  errors[1] = {
+    location: { file: "unrelated.ts", line: 900, column: 1 },
+    stack: "https://example.invalid/private",
+  };
+  const out = sanitizeNativeErrors({ errors });
+  assert.equal(out.errors_seen, 100);
+  assert.equal(out.errors_retained, 8);
+  assert.equal(out.errors_omitted, 92);
+  assert.deepEqual(out.errors[0].location, { line: 2091, column: 4 });
+  assert.equal(out.errors[1].location, null);
+  assert.equal(out.errors.at(-1).category, "TEST_TIMEOUT");
+  assert.deepEqual(out.errors.at(-1).location, { line: 2123, column: 6 });
+  const body = JSON.stringify(out);
+  for (const text of [
+    "PRIVATE_SENTINEL",
+    "example.invalid",
+    "synthetic",
+    "unrelated.ts",
+    "stack",
+  ])
+    assert.ok(!body.includes(text));
+});
 const readyEvidence = (extra = {}) => ({
   activeFeed: "discover",
   layoutReady: "true",
@@ -406,6 +590,30 @@ test("readiness early flood preserves first failure, its predecessor and every l
   };
   const a = make(),
     b = make();
+  const actions = sanitizeActions({
+    rows: ACTION_GROUPS.map((_, group) => [group, group * 2, group * 2 + 1, 1]),
+    invalid: 0,
+    overflow: 0,
+  });
+  const nativeErrors = sanitizeNativeErrors({
+    errors: Array.from({ length: 8 }, () => ({
+      message: "Test timeout of 30000ms exceeded.",
+      location: {
+        file: "tests/e2e/t02p-development-acceptance.spec.ts",
+        line: 100000,
+        column: 10000,
+      },
+    })),
+  });
+  const fullPacket = {
+    readiness_fields: READINESS_FIELDS,
+    action_group_dictionary: ACTION_GROUPS,
+    attempts: [a, b].map((readiness) => ({
+      readiness: { ...readiness, actions },
+      native_errors: nativeErrors,
+    })),
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(fullPacket)) < 131072);
   assert.equal(a.slots.length, 9);
   assert.equal(a.rows.length, 72);
   assert.equal(a.invalid, 0);

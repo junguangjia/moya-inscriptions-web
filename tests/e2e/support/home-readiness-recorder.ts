@@ -65,6 +65,40 @@ export class HomeReadinessRecorder {
   private seen = 0;
   private invalid = 0;
   private overflow = 0;
+  private actions: [number, number, number | null, number][] = [];
+  private actionInvalid = 0;
+  private actionOverflow = 0;
+
+  actionBegin(group: number) {
+    if (this.actions.length >= 9) {
+      this.actionOverflow += 1;
+      return;
+    }
+    if (
+      !Number.isInteger(group) ||
+      group !== this.actions.length ||
+      (this.actions.length > 0 && this.actions.at(-1)![2] === null)
+    ) {
+      this.actionInvalid += 1;
+      return;
+    }
+    this.actions.push([group, performance.now() - this.started, null, 0]);
+  }
+  actionEnd(group: number) {
+    const row = this.actions.at(-1);
+    if (!row || row[0] !== group || row[2] !== null) {
+      this.actionInvalid += 1;
+      return;
+    }
+    row[2] = performance.now() - this.started;
+    row[3] = 1;
+  }
+  finalSettleBegin(feed: string) {
+    if (this.currentPhase === 2 && feed === "discover") this.actionBegin(8);
+  }
+  finalSettleEnd(feed: string) {
+    if (this.currentPhase === 2 && feed === "discover") this.actionEnd(8);
+  }
 
   phase(value: number) {
     if ([0, 1, 2].includes(value)) this.currentPhase = value;
@@ -204,7 +238,7 @@ export class HomeReadinessRecorder {
       this.invalid += 1;
     }
   }
-  snapshot() {
+  snapshot(nativeStatus?: string, nativeErrorPresent = false) {
     const rows: Row[] = [];
     const slots = this.slots.map((slot, index) => {
       const kept = [
@@ -236,6 +270,20 @@ export class HomeReadinessRecorder {
       seen: this.seen,
       invalid: this.invalid,
       overflow: this.overflow,
+      actions: {
+        rows: this.actions.map((row) =>
+          row[2] !== null
+            ? [...row]
+            : [
+                row[0],
+                row[1],
+                null,
+                nativeStatus === "timedOut" ? 3 : nativeErrorPresent ? 2 : 0,
+              ],
+        ),
+        invalid: this.actionInvalid,
+        overflow: this.actionOverflow,
+      },
     };
   }
   finish(info: TestInfo) {
@@ -246,7 +294,7 @@ export class HomeReadinessRecorder {
         schema: 1,
         project: info.project.name,
         retry: info.retry,
-        readiness: this.snapshot(),
+        readiness: this.snapshot(info.status, info.errors.length > 0),
       });
       if (Buffer.byteLength(body) > 131072) return;
       writeFileSync(resolve(directory, `retry-${info.retry}.json`), body, {
