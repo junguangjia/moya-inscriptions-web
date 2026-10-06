@@ -412,10 +412,13 @@ export function collectFileEvidence(packet, files, loadBlob) {
               item.sourceExcerpts = excerpts;
               item.sourceBlob = file.sha;
               item.sourceHead = packet.head;
-            }
-            packet.omissions.push(
-              `Hunk-adjacent source only; full source outside supplied scope: ${file.filename}`,
-            );
+              packet.omissions.push(
+                `Hunk-adjacent source only; full source outside supplied scope: ${file.filename}`,
+              );
+            } else
+              packet.omissions.push(
+                `Hunk-adjacent source not included by excerpt/context budget; full source omitted: ${file.filename}`,
+              );
           } else if (
             JSON.stringify(packet).length +
               JSON.stringify({ source: safe }).length <=

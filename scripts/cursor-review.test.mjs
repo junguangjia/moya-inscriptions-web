@@ -89,6 +89,55 @@ test("large changed files preserve bounded exact current context instead of no s
   assert.deepEqual(adjacentSource(source, "+unanchored();"), []);
 });
 
+for (const boundary of ["excerpt cap", "packet allowance"]) {
+  test(`large source omissions do not claim absent windows at ${boundary}`, () => {
+    const source =
+      boundary === "excerpt cap"
+        ? `/* ${"padding ".repeat(4000)} */\nconst changed = true;`
+        : Array.from(
+            { length: 1800 },
+            (_, i) => `const line${i + 1} = ${i + 1};`,
+          ).join("\n");
+    const patch =
+      boundary === "excerpt cap"
+        ? "@@ -2 +2 @@\n-old();\n+const changed = true;"
+        : "@@ -899 +899 @@\n-old();\n+const line899 = 899;";
+    const excerpts = adjacentSource(source, patch);
+    assert.equal(excerpts.length === 0, boundary === "excerpt cap");
+    const evidence = { files: [], omissions: [], head: "a".repeat(40) };
+    if (boundary === "packet allowance")
+      evidence.context = "x".repeat(LIMITS.packet - 12000 - 512);
+    collectFileEvidence(
+      evidence,
+      [
+        {
+          filename: "scripts/large.mjs",
+          status: "modified",
+          sha: "b".repeat(40),
+          patch,
+        },
+      ],
+      () => ({
+        encoding: "base64",
+        size: Buffer.byteLength(source),
+        content: Buffer.from(source).toString("base64"),
+      }),
+    );
+    assert.equal(evidence.files.length, 1);
+    assert.equal(evidence.files[0].sourceExcerpts, undefined);
+    assert.ok(
+      evidence.omissions.some((value) =>
+        value.startsWith("Hunk-adjacent source not included"),
+      ),
+    );
+    assert.ok(
+      !evidence.omissions.some((value) =>
+        value.startsWith("Hunk-adjacent source only;"),
+      ),
+    );
+  });
+}
+
 test("successful CI evidence reports exact jobs/steps while missing testcase data remains unclaimed", () => {
   const evidence = { omissions: [] };
   collectRunEvidence(
