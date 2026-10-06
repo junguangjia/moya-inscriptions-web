@@ -15,6 +15,9 @@ import process from "node:process";
 import { URL } from "node:url";
 import test from "node:test";
 import {
+  earlierClaims,
+  waitForPriorAnswer,
+  completionHuman,
   agentConfiguration,
   adjacentSource,
   automaticResponseState,
@@ -43,10 +46,16 @@ import {
   renderReport,
   safeText,
   selectEvent,
+  questionInput,
   LIMITS,
 } from "./cursor-review.mjs";
 import { classifyTask } from "./ci-task-scope.mjs";
-import { claimRecord, finishRecord } from "./cursor-automation.mjs";
+import {
+  claimRecord,
+  finishRecord,
+  ledgerBody,
+  readLedger,
+} from "./cursor-automation.mjs";
 
 const repository = "example/project";
 test("large changed files preserve bounded exact current context instead of no source", () => {
@@ -1248,6 +1257,7 @@ test("fresh runner installs the controlled scanner, publishes once, updates once
   try {
     for (const name of [
       "cursor-review.mjs",
+      "cursor-response.mjs",
       "cursor-stream.mjs",
       "cursor-automation.mjs",
       "confidentiality-scan.mjs",
@@ -1821,6 +1831,655 @@ test("real stage process collects immutable evidence; missing key produces unava
     );
     assert.equal(report.assessment, "unavailable");
     assert.match(report.summary, /not configured/u);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("trusted question syntax separates human comments, machine dispatch, and bot replies", () => {
+  const event = {
+    action: "created",
+    issue: { number: 7, pull_request: {} },
+    sender: { login: "owner" },
+    comment: {
+      id: 8,
+      user: { login: "owner", type: "User" },
+      body: "@cursor reply-to:123 继续核对缺少的调用点。",
+    },
+  };
+  const q = questionInput("issue_comment", event);
+  assert.equal(q.question, "继续核对缺少的调用点。");
+  assert.equal(q.replyTo, 123);
+  assert.equal(q.actor, "owner");
+  assert.equal(q.commentHash.length, 64);
+  assert.equal(
+    questionInput("issue_comment", { ...event, action: "edited" }),
+    null,
+  );
+  assert.equal(
+    questionInput("issue_comment", { ...event, issue: { number: 7 } }),
+    null,
+  );
+  assert.equal(
+    questionInput("issue_comment", {
+      ...event,
+      comment: { ...event.comment, user: { login: "owner", type: "Bot" } },
+    }),
+    null,
+  );
+  assert.equal(
+    questionInput("issue_comment", { ...event, sender: { login: "other" } }),
+    null,
+  );
+  const manual = {
+    inputs: {
+      operation: "question",
+      pr: "7",
+      expected_head: head,
+      question_request: JSON.stringify({
+        question: "Find the missing source independently",
+        replyTo: 123,
+      }),
+    },
+  };
+  assert.equal(questionInput("workflow_dispatch", manual).head, head);
+  assert.equal(questionInput("workflow_dispatch", manual).replyTo, 123);
+  assert.throws(
+    () =>
+      questionInput("workflow_dispatch", {
+        inputs: { ...manual.inputs, expected_head: "" },
+      }),
+    /QUESTION_HEAD_REQUIRED/u,
+  );
+});
+
+for (const [label, body, usable] of [
+  [
+    "natural English",
+    "The source shows a delayed restoration; this is a hypothesis, not a PASS.",
+    true,
+  ],
+  ["natural Chinese", "已读取相关源码。当前证据不能证明运行通过。", true],
+  ["whitespace only", "   \n", false],
+  [
+    "malformed optional JSON",
+    "{ answer: this is a useful unstructured observation",
+    true,
+  ],
+  [
+    "invalid optional citation",
+    JSON.stringify({
+      ...clean,
+      citations: [{ id: "invented", quote: "invented" }],
+    }),
+    true,
+  ],
+  ["unsafe scalar", "token=" + "ghp_" + "A".repeat(36), false],
+])
+  test(`official-direct configuration retains ${label} independently of optional schema`, async () => {
+    const temp = mkdtempSync(join(tmpdir(), "cursor-natural-"));
+    try {
+      const directory = join(temp, "cursor-review");
+      mkdirSync(directory);
+      const target = {
+        ...packet,
+        files: [],
+        automatic: true,
+        autonomous: true,
+      };
+      writeFileSync(join(directory, "context.json"), JSON.stringify(target));
+      writeFileSync(
+        join(directory, "automatic-receipt.json"),
+        JSON.stringify({ target, actualInvocations: 0 }),
+      );
+      const stub = join(temp, "agent");
+      writeFileSync(
+        stub,
+        `#!${process.execPath}
+const fs = require('node:fs');
+const input = fs.readFileSync(0,'utf8');
+if (!input.includes('independently') || process.env.GH_TOKEN || process.env.ACTIONS_RUNTIME_TOKEN || !process.argv.includes('--approve-mcps')) process.exit(2);
+const mcp = JSON.parse(fs.readFileSync('.cursor/mcp.json','utf8')).mcpServers.github;
+if (mcp.command !== '/official/github-mcp-server' || mcp.type !== 'stdio' || mcp.args.join(' ') !== 'stdio --read-only --toolsets=repos,issues,pull_requests,actions') process.exit(3);
+const expectedReference = '$'+'{env:CURSOR_GITHUB_READ_TOKEN}';
+if (mcp.env.GITHUB_PERSONAL_ACCESS_TOKEN !== expectedReference || process.env.CURSOR_GITHUB_READ_TOKEN !== 'synthetic-read-token') process.exit(4);
+const p = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
+const config = JSON.parse(fs.readFileSync(p,'utf8'));
+if (!config.permissions.allow.includes('Mcp(github:*)') || config.permissions.deny.includes('Mcp(*:*)')) process.exit(5);
+config.selectedModel = { modelId:'grok-4.7', parameters:[{id:'context',value:'500k'},{id:'reasoning_effort',value:'xhigh'},{id:'fast',value:'true'}] }; config.maxMode = true;
+fs.writeFileSync(p,JSON.stringify(config));
+console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(body)}}));
+`,
+        { mode: 0o700 },
+      );
+      await main("analyze", {
+        PATH: process.env.PATH,
+        RUNNER_TEMP: temp,
+        GITHUB_RUN_ID: "100",
+        GITHUB_RUN_ATTEMPT: "1",
+        CURSOR_MODEL: "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]",
+        CURSOR_API_KEY: "synthetic-key",
+        GH_TOKEN: "synthetic-publisher-token",
+        CURSOR_AUTONOMOUS: "true",
+        CURSOR_GITHUB_READ_TOKEN: "synthetic-read-token",
+        CURSOR_GITHUB_MCP_BIN: "/official/github-mcp-server",
+        CURSOR_AGENT_BIN: stub,
+      });
+      const report = JSON.parse(
+        readFileSync(join(directory, "report.json"), "utf8"),
+      );
+      const retained = JSON.parse(
+        readFileSync(join(directory, "model-response.json"), "utf8"),
+      );
+      assert.equal(report.transportCompleted, true);
+      assert.equal(report.actualInvocations, 1);
+      assert.equal(report.effectiveSelection.maxMode, true);
+      assert.equal(
+        automaticResponseState(target, report).responseAccepted,
+        usable,
+      );
+      assert.equal(
+        automaticResponseState(target, report).coverageComplete,
+        false,
+      );
+      assert.equal(automaticResponseState(target, report).cleanVerdict, false);
+      if (usable) {
+        assert.equal(report.answerRetained, true);
+        assert.ok(report.answerText.length);
+        assert.equal(retained.redactions, 0);
+      } else {
+        if (label === "whitespace only") {
+          assert.equal(report.answerRetained, false);
+          assert.equal(retained.redactions, 0);
+        } else {
+          assert.ok(retained.redactions > 0);
+          assert.ok(!JSON.stringify(report).includes(body));
+        }
+      }
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+test("workflow separates read-only inference from publication and restores only same-run named records", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/cursor-review.yml", import.meta.url),
+    "utf8",
+  );
+  const analyze = workflow.slice(
+    workflow.indexOf("  analyze:\n"),
+    workflow.indexOf("  publish:\n"),
+  );
+  const publish = workflow.slice(workflow.indexOf("  publish:\n"));
+  assert.equal((workflow.match(/queue: max/gu) ?? []).length, 2);
+  assert.doesNotMatch(analyze, /concurrency:/u);
+  assert.match(analyze, /github.run_attempt == 1/u);
+  assert.match(publish, /if: always\(\) && needs.prepare.outputs.transfer/u);
+  assert.match(analyze, /pull-requests: read/u);
+  assert.doesNotMatch(analyze, /pull-requests: write|issues: write/u);
+  assert.doesNotMatch(
+    publish,
+    /secrets.CURSOR_API_KEY|cursor-review.mjs analyze|CURSOR_GITHUB_READ_TOKEN/u,
+  );
+  assert.match(workflow, /issue_comment:\n {4}types: \[created\]/u);
+  assert.match(workflow, /github-mcp-server_Linux_x86_64/u);
+  assert.doesNotMatch(
+    workflow,
+    /cursor-github-mcp|cursor-investigation|run-id:|repository:/u,
+  );
+  assert.match(
+    publish,
+    /cursor-analysis-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}/u,
+  );
+});
+
+test("autonomous question admission, linked reply, duplicate suppression and edited-comment freshness use existing ledger", () => {
+  const temp = mkdtempSync(join(tmpdir(), "cursor-question-host-"));
+  const project = join(temp, "project"),
+    bin = join(temp, "bin"),
+    runner = join(temp, "runner");
+  mkdirSync(join(project, "scripts"), { recursive: true });
+  mkdirSync(bin);
+  mkdirSync(runner);
+  try {
+    for (const name of [
+      "cursor-review.mjs",
+      "cursor-response.mjs",
+      "cursor-automation.mjs",
+      "cursor-stream.mjs",
+      "confidentiality-scan.mjs",
+      "install-confidentiality-hooks.mjs",
+    ])
+      cpSync(
+        new URL(`./${name}`, import.meta.url),
+        join(project, "scripts", name),
+      );
+    cpSync(
+      new URL("../.githooks", import.meta.url),
+      join(project, ".githooks"),
+      { recursive: true },
+    );
+    const statePath = join(temp, "state.json"),
+      eventPath = join(temp, "event.json");
+    const human = {
+      id: 91,
+      user: { login: "owner", type: "User" },
+      body: "@cursor Find the missing caller independently.",
+      issue_url: `https://api.github.com/repos/${repository}/issues/7`,
+    };
+    writeFileSync(
+      statePath,
+      JSON.stringify({ pr, comments: [human], writes: [], permission: "read" }),
+    );
+    writeFileSync(
+      eventPath,
+      JSON.stringify({
+        action: "created",
+        issue: { number: 7, pull_request: {} },
+        sender: { login: "owner" },
+        comment: human,
+      }),
+    );
+    writeFileSync(
+      join(bin, "gh"),
+      `#!${process.execPath}
+const fs=require('node:fs'), file=${JSON.stringify(statePath)};
+const s=JSON.parse(fs.readFileSync(file,'utf8')), method=process.argv[4], path=process.argv[5]; let result;
+if(method==='GET') {
+ if(path.includes('/collaborators/')) result={permission:s.permission};
+ else if(path.includes('/pulls/')) result=s.pr;
+ else if(path.includes('/issues/comments/')) result=s.comments.find(c=>c.id===Number(path.split('/').at(-1)));
+ else if(path.includes('/issues/7/comments?')) result=s.comments;
+ else process.exit(8);
+} else {
+ const body=JSON.parse(fs.readFileSync(0,'utf8')).body;
+ let c=method==='PATCH'?s.comments.find(c=>c.id===Number(path.split('/').at(-1))):null;
+ if(!c){c={id:100+s.comments.length,user:{login:'github-actions[bot]',type:'Bot'}};s.comments.push(c);}
+ c.body=body;c.html_url='https://github.com/${repository}/pull/7#issuecomment-'+c.id;
+ s.writes.push({method,id:c.id});result=c;fs.writeFileSync(file,JSON.stringify(s));
+}
+if(!result)process.exit(9);process.stdout.write(JSON.stringify(result));
+`,
+      { mode: 0o700 },
+    );
+    const env = {
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: temp,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      RUNNER_TEMP: runner,
+      GITHUB_REPOSITORY: repository,
+      GITHUB_EVENT_NAME: "issue_comment",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_OUTPUT: join(temp, "output"),
+      GITHUB_RUN_ID: "200",
+      GITHUB_RUN_ATTEMPT: "1",
+      CURSOR_AUTOMATION_ENABLED: "true",
+      CURSOR_AUTONOMOUS: "true",
+      CONFIDENTIALITY_BATCH_ID: "synthetic-question",
+    };
+    const run = (args, extra = {}) => {
+      const r = spawnSync(args[0], args.slice(1), {
+        cwd: project,
+        env: { ...env, ...extra },
+        encoding: "utf8",
+      });
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+      return r;
+    };
+    run(["git", "init", "--quiet"]);
+    run(["git", "config", "user.name", "Synthetic reviewer"]);
+    run(["git", "config", "user.email", "synthetic@users.noreply.github.com"]);
+    run(["git", "config", "user.useConfigOnly", "true"]);
+    run([
+      process.execPath,
+      "scripts/install-confidentiality-hooks.mjs",
+      "--confirm-current-identity-approved",
+    ]);
+    run([process.execPath, "scripts/cursor-review.mjs", "prepare"]);
+    let saved = JSON.parse(readFileSync(statePath, "utf8"));
+    assert.equal(saved.writes.length, 0); // Read-only collaborator cannot consume a call.
+    saved.permission = "write";
+    writeFileSync(statePath, JSON.stringify(saved));
+    run([process.execPath, "scripts/cursor-review.mjs", "prepare"]);
+    const directory = join(runner, "cursor-review"),
+      target = JSON.parse(
+        readFileSync(join(directory, "context.json"), "utf8"),
+      );
+    assert.equal(target.autonomous, true);
+    assert.deepEqual(target.files, []);
+    assert.deepEqual(target.failedJobs, []);
+    run([process.execPath, "scripts/cursor-review.mjs", "fresh"]);
+    assert.match(readFileSync(env.GITHUB_OUTPUT, "utf8"), /ready=true/u);
+    const report = {
+      assessment: "incomplete",
+      summary: "Actual safe reply",
+      findings: [],
+      answerText: "I read the helper; the caller remains uncertain.",
+      answerRetained: true,
+      transportCompleted: true,
+      redactions: 0,
+      model: "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]",
+      actualInvocations: 1,
+      effectiveSelection: {
+        modelId: "grok-4.7",
+        context: "500k",
+        reasoning_effort: "xhigh",
+        fast: "true",
+        maxMode: true,
+      },
+      structuredValidation: "RESPONSE_JSON_INVALID",
+    };
+    writeFileSync(join(directory, "report.json"), JSON.stringify(report));
+    run([process.execPath, "scripts/cursor-review.mjs", "publish"]);
+    saved = JSON.parse(readFileSync(statePath, "utf8"));
+    const reply = saved.comments.find((c) =>
+      c.body.startsWith("<!-- cursor-answer:"),
+    );
+    assert.ok(reply.body.includes(report.answerText));
+    assert.ok(reply.body.includes("#issuecomment-91"));
+    assert.ok(
+      saved.comments
+        .find((c) => c.body.startsWith("<!-- cursor-automation-summary:"))
+        .body.includes(reply.html_url),
+    );
+    const priorWrites = saved.writes.length;
+    const duplicate = join(temp, "duplicate");
+    mkdirSync(duplicate);
+    run([process.execPath, "scripts/cursor-review.mjs", "prepare"], {
+      RUNNER_TEMP: duplicate,
+      GITHUB_RUN_ID: "201",
+    });
+    assert.equal(
+      JSON.parse(
+        readFileSync(
+          join(duplicate, "cursor-review/automatic-receipt.json"),
+          "utf8",
+        ),
+      ).status,
+      "DUPLICATE_SUPPRESSED",
+    );
+    assert.equal(
+      JSON.parse(readFileSync(statePath, "utf8")).writes.length,
+      priorWrites,
+    );
+    // Explicit machine follow-up carries this answer, not a hidden session or a fresh first review.
+    writeFileSync(
+      eventPath,
+      JSON.stringify({
+        inputs: {
+          operation: "question",
+          pr: "7",
+          expected_head: head,
+          question_request: JSON.stringify({
+            question: "Read the caller and resolve that uncertainty",
+            replyTo: reply.id,
+          }),
+        },
+      }),
+    );
+    const next = join(temp, "next");
+    mkdirSync(next);
+    run([process.execPath, "scripts/cursor-review.mjs", "prepare"], {
+      RUNNER_TEMP: next,
+      GITHUB_RUN_ID: "202",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+    });
+    const follow = JSON.parse(
+      readFileSync(join(next, "cursor-review/context.json"), "utf8"),
+    );
+    assert.ok(follow.priorAnswer.includes(report.answerText));
+    assert.equal(follow.priorAnswerURL, reply.html_url);
+    assert.notEqual(follow.questionDigest, target.questionDigest);
+    // A changed original comment invalidates its claim before inference/publication.
+    saved = JSON.parse(readFileSync(statePath, "utf8"));
+    saved.comments[0].body += " edited";
+    writeFileSync(statePath, JSON.stringify(saved));
+    writeFileSync(env.GITHUB_OUTPUT, "");
+    run([process.execPath, "scripts/cursor-review.mjs", "fresh"]);
+    assert.equal(readFileSync(env.GITHUB_OUTPUT, "utf8"), "");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+const sequenceRecord = (digit, ownerRun, status = "claimed", extra = {}) => ({
+  key: digit.repeat(64),
+  head: "a".repeat(40),
+  ownerRun,
+  status,
+  ...extra,
+});
+const sequenceComment = (records, human = "Current summary") => ({
+  user: { login: "github-actions[bot]", type: "Bot" },
+  body: ledgerBody(human, records),
+});
+
+test("PR sequence uses append order and excludes every alias of its own invocation", () => {
+  const records = [
+    sequenceRecord("a", 900),
+    sequenceRecord("b", 20),
+    sequenceRecord("c", 900),
+    sequenceRecord("d", 20),
+    sequenceRecord("e", 1),
+  ];
+  assert.deepEqual(
+    earlierClaims(records, { automationKey: "d".repeat(64), ownerRun: 20 }),
+    [900],
+  );
+  assert.throws(
+    () =>
+      earlierClaims(records, { automationKey: "d".repeat(64), ownerRun: 2 }),
+    /CLAIM_LOST/u,
+  );
+  assert.throws(
+    () =>
+      earlierClaims([{ ...records[3], status: "answered" }], {
+        automationKey: "d".repeat(64),
+        ownerRun: 20,
+      }),
+    /CLAIM_LOST/u,
+  );
+});
+
+test("next question waits for publication and then loads its newly published prior answer", async () => {
+  const previous = sequenceRecord("a", 900),
+    own = sequenceRecord("b", 20);
+  let comments = [sequenceComment([previous, own])];
+  let waits = 0,
+    reads = 0;
+  const answer = {
+    user: { login: "github-actions[bot]", type: "Bot" },
+    body: `<!-- cursor-answer:${previous.key} -->\nActual predecessor answer`,
+    html_url: "https://github.com/example/project/pull/7#issuecomment-12",
+  };
+  const result = await waitForPriorAnswer(
+    { automationKey: own.key, ownerRun: own.ownerRun, number: 7 },
+    repository,
+    {
+      loadComments: () => comments,
+      fresh: () => true,
+      loadRun: (id) => {
+        reads++;
+        assert.equal(id, 900);
+        return {
+          id,
+          repository: { full_name: repository },
+          status: "in_progress",
+        };
+      },
+      progress: (id) => assert.equal(id, 900),
+      sleep: async () => {
+        waits++;
+        comments = [
+          sequenceComment([{ ...previous, status: "answered" }, own]),
+          answer,
+        ];
+      },
+    },
+  );
+  assert.equal(result.ready, true);
+  assert.equal(result.prior, answer);
+  assert.deepEqual(result.terminalUnclosed, []);
+  assert.equal(waits, 1);
+  assert.equal(reads, 1);
+});
+
+test("completed orphan is disclosed without modifying its claim or waiting forever", async () => {
+  const previous = sequenceRecord("a", 900),
+    own = sequenceRecord("b", 20);
+  const comments = [sequenceComment([previous, own])];
+  const before = JSON.stringify(comments);
+  const result = await waitForPriorAnswer(
+    { automationKey: own.key, ownerRun: own.ownerRun, number: 7 },
+    repository,
+    {
+      loadComments: () => comments,
+      fresh: () => true,
+      loadRun: (id) => ({
+        id,
+        repository: { full_name: repository },
+        status: "completed",
+      }),
+      sleep: () => assert.fail("terminal owner must not wait"),
+    },
+  );
+  assert.deepEqual(result.terminalUnclosed, [900]);
+  assert.equal(result.ready, true);
+  assert.equal(JSON.stringify(comments), before);
+});
+
+test("answer published during terminal-owner check is loaded at readiness boundary", async () => {
+  const previous = sequenceRecord("a", 900),
+    own = sequenceRecord("b", 20);
+  const answer = {
+    user: { login: "github-actions[bot]", type: "Bot" },
+    body: `<!-- cursor-answer:${previous.key} -->\nLatest`,
+  };
+  let comments = [sequenceComment([previous, own])];
+  const result = await waitForPriorAnswer(
+    { automationKey: own.key, ownerRun: own.ownerRun, number: 7 },
+    repository,
+    {
+      loadComments: () => comments,
+      fresh: () => true,
+      loadRun: (id) => {
+        comments = [
+          sequenceComment([{ ...previous, status: "answered" }, own]),
+          answer,
+        ];
+        return {
+          id,
+          repository: { full_name: repository },
+          status: "completed",
+        };
+      },
+    },
+  );
+  assert.equal(result.prior, answer);
+  assert.deepEqual(result.terminalUnclosed, []);
+});
+
+test("waiting stops when source/comment freshness or claim ownership is lost", async () => {
+  const previous = sequenceRecord("a", 900),
+    own = sequenceRecord("b", 20);
+  let current = true;
+  const options = {
+    loadComments: () => [sequenceComment([previous, own])],
+    fresh: () => current,
+    loadRun: (id) => ({
+      id,
+      repository: { full_name: repository },
+      status: "in_progress",
+    }),
+    progress: () => {},
+    sleep: async () => {
+      current = false;
+    },
+  };
+  const packet = { automationKey: own.key, ownerRun: own.ownerRun, number: 7 };
+  assert.deepEqual(await waitForPriorAnswer(packet, repository, options), {
+    ready: false,
+  });
+  await assert.rejects(
+    waitForPriorAnswer(packet, repository, {
+      ...options,
+      fresh: () => true,
+      loadComments: () => [sequenceComment([previous])],
+    }),
+    /CLAIM_LOST/u,
+  );
+  await assert.rejects(
+    waitForPriorAnswer(packet, repository, {
+      ...options,
+      fresh: () => true,
+      loadRun: (id) => ({
+        id,
+        repository: { full_name: "other/project" },
+        status: "completed",
+      }),
+    }),
+    /PRIOR_INVOCATION_IDENTITY_UNVERIFIED/u,
+  );
+});
+
+test("another PR's conversation does not wait on claims absent from its ledger", async () => {
+  const own = sequenceRecord("c", 30);
+  const result = await waitForPriorAnswer(
+    { automationKey: own.key, ownerRun: own.ownerRun, number: 8 },
+    repository,
+    {
+      loadComments: () => [sequenceComment([own])],
+      fresh: () => true,
+      loadRun: () => assert.fail("unrelated PR must not be loaded"),
+    },
+  );
+  assert.equal(result.ready, true);
+});
+
+for (const status of ["answered", "metadata", "incomplete", "stale"]) {
+  test(`late publication preserves newer ${status} summary and ledger records`, () => {
+    const own = sequenceRecord("a", 900),
+      newer = sequenceRecord("b", 20, status);
+    const state = readLedger([
+      sequenceComment([own, newer], "Newer actual outcome"),
+    ]);
+    assert.equal(
+      completionHuman(state, own.key, "Older outcome"),
+      "Newer actual outcome",
+    );
+    const records = finishRecord(state, own.key, own.ownerRun, "incomplete");
+    assert.deepEqual(records[1], newer);
+    assert.equal(records[0].status, "incomplete");
+    const aliasState = readLedger([
+      sequenceComment([own, { ...newer, coveredBy: own.key }], "Old summary"),
+    ]);
+    assert.equal(
+      completionHuman(aliasState, own.key, "Own terminal outcome"),
+      "Own terminal outcome",
+    );
+  });
+}
+
+test("review analyze refuses workflow reruns before any CLI invocation", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "cursor-rerun-"));
+  try {
+    const directory = join(temp, "cursor-review");
+    mkdirSync(directory);
+    writeFileSync(
+      join(directory, "context.json"),
+      JSON.stringify({ ...packet, automatic: true, autonomous: true }),
+    );
+    await main("analyze", {
+      RUNNER_TEMP: temp,
+      GITHUB_RUN_ATTEMPT: "2",
+      CURSOR_AGENT_BIN: "must-not-run",
+    });
+    const report = JSON.parse(
+      readFileSync(join(directory, "report.json"), "utf8"),
+    );
+    assert.match(report.summary, /does not repeat/u);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }

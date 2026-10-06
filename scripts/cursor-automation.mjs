@@ -146,9 +146,14 @@ export function readLedger(comments) {
         !/^[a-f0-9]{64}$/u.test(r.key) ||
         !sha(r.head) ||
         !id(r.ownerRun) ||
-        !["claimed", "accepted", "metadata", "incomplete", "stale"].includes(
-          r.status,
-        ),
+        ![
+          "claimed",
+          "accepted",
+          "answered",
+          "metadata",
+          "incomplete",
+          "stale",
+        ].includes(r.status),
     )
   )
     throw Error("AUTOMATION_LEDGER_INVALID");
@@ -163,7 +168,7 @@ export function claimRecord(state, repository, target, ownerRun) {
     (r) =>
       r.phase === "review" &&
       r.head === (target.prHead ?? target.head) &&
-      r.status === "accepted",
+      ["accepted", "answered"].includes(r.status),
   );
   const record = {
     key,
@@ -196,7 +201,12 @@ export function ledgerBody(human, records) {
 }
 
 export function coverUnperformedReview(claim, repository, target, ownerRun) {
-  if (!target.runId || target.postMerge || claim.duplicate)
+  if (
+    target.questionDigest ||
+    !target.runId ||
+    target.postMerge ||
+    claim.duplicate
+  )
     return { claim, target };
   const review = claimRecord(
     { records: claim.records },

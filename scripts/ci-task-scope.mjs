@@ -41,6 +41,7 @@ const tooling = new Set([
   "scripts/cursor-review.mjs",
   "scripts/cursor-dialogue.mjs",
   "scripts/cursor-stream.mjs",
+  "scripts/cursor-response.mjs",
   "scripts/cursor-automation.mjs",
 ]);
 const webRoots = [

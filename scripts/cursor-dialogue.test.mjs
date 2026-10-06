@@ -789,6 +789,7 @@ for (const [label, returnedAnswer, expectedError] of [
     "NARRATIVE_TOO_LONG",
   ],
   ["missing-body", undefined, "MODEL_BODY_MISSING"],
+  ["whitespace-body", "   \n", "MODEL_BODY_MISSING"],
   ["missing-narrative", { ...answer, answer: undefined }, "INVALID_NARRATIVE"],
   ["invalid-schema", {}, "INVALID_ANSWER"],
 ])
@@ -823,7 +824,7 @@ const config = JSON.parse(fs.readFileSync(path, 'utf8'));
 if(config.permissions.allow.length || !config.permissions.deny.includes('Read(**)')) process.exit(3);
 config.selectedModel = { modelId: 'grok-4.7', parameters: [{id:'context',value:'500k'},{id:'reasoning_effort',value:'xhigh'},{id:'fast',value:'true'}] };
 config.maxMode = true; fs.writeFileSync(path, JSON.stringify(config));
-process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(JSON.stringify(returnedAnswer))},usage:{input_tokens:10,output_tokens:20,extra:'discard'}}));
+process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(typeof returnedAnswer === "string" ? returnedAnswer : JSON.stringify(returnedAnswer))},usage:{input_tokens:10,output_tokens:20,extra:'discard'}}));
 `,
         { mode: 0o700 },
       );
@@ -841,14 +842,28 @@ process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:fa
         readFileSync(join(directory, "output/round.json"), "utf8"),
       );
       assert.equal(record.status, "incomplete");
-      assert.equal(record.error, expectedError);
+      assert.equal(
+        record.error,
+        ["missing-body", "whitespace-body"].includes(label)
+          ? expectedError
+          : undefined,
+      );
+      if (expectedError && !["missing-body", "whitespace-body"].includes(label))
+        assert.equal(record.structuredValidation, expectedError);
+      assert.equal(
+        record.responseAvailable,
+        !["missing-body", "whitespace-body"].includes(label),
+      );
       assert.equal(record.invocationCount, 1);
       assert.equal(record.effectiveSelection.modelId, "grok-4.7");
       assert.deepEqual(record.usage, { input_tokens: 10, output_tokens: 20 });
       const retained = JSON.parse(
         readFileSync(join(directory, "output/model-response.json"), "utf8"),
       );
-      assert.equal(retained.accepted, !expectedError);
+      assert.equal(
+        retained.accepted,
+        !["missing-body", "whitespace-body"].includes(label),
+      );
       assert.equal(retained.redactions, 0);
       if (label === "overlength") {
         assert.equal(retained.body.answer.length, 2401);
@@ -929,4 +944,26 @@ test("sanitized remote response retention never uploads a generated private path
   );
   assert.equal(capture.artifact.redactions, 1);
   assert.doesNotMatch(JSON.stringify(capture.artifact), /\/Users\//u);
+});
+
+test("legacy analyze refuses rerun-failed-jobs before configuration or invocation", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "cursor-dialogue-rerun-"));
+  try {
+    const directory = join(temp, "cursor-dialogue");
+    mkdirSync(directory);
+    writeFileSync(
+      join(directory, "prepared.json"),
+      JSON.stringify({ request }),
+    );
+    await assert.rejects(
+      dialogueMain("analyze", {
+        RUNNER_TEMP: temp,
+        GITHUB_RUN_ATTEMPT: "2",
+        CURSOR_AGENT_BIN: "must-not-run",
+      }),
+      /WORKFLOW_RETRY_NOT_ADMITTED/u,
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
