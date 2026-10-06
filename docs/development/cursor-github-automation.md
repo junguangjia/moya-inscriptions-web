@@ -429,14 +429,21 @@ reuse/reset of an old allowance occurs. This diagnosis authorizes one call and
 advice only, not another media repair or required-CI submission.
 
 Official stream-json assistant deltas and permitted tool start/completion events
-are observable activity; init or process-alive alone are not. The CLI suppresses
-thinking events in print mode, so hidden reasoning cannot be verified. Silence
-is activity-unconfirmed, not proof of a stall and not a reason to abort at an
-arbitrary elapsed time. Scripts retain terminal result/error, output-resource
-limits, exact model/identity checks and no paid fallback. No additional tools
-are enabled for monitoring. See
+are observable activity; init or process-alive alone are not. Additional event
+categories can occur in the pinned CLI; their text is not retained or used to
+verify hidden reasoning. Silence is activity-unconfirmed, not proof of a stall
+and not a reason to abort at an arbitrary elapsed time. Scripts retain terminal
+result/error, output-resource limits, exact model/identity checks and no paid
+fallback. No additional tools are enabled for monitoring. See
 [Cursor output formats](https://cursor.com/docs/cli/reference/output-format) and
 [GitHub Actions limits](https://docs.github.com/en/actions/reference/limits).
+
+Each NDJSON line and retained terminal result is bounded to256KiB; stderr stays
+bounded to64KiB. The complete stream is counted and hashed incrementally rather
+than buffered or capped as one final answer, so prompt echoes and partial-event
+envelopes do not consume the answer allowance. Malformed events or progress
+retention failures stop only the owned child and return a safe terminal category
+with any retention gap disclosed.
 
 Complete questions, scanned answers and native citation/projection identities
 remain private. The public PR shows one concise human summary of observations,

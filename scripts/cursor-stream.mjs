@@ -40,27 +40,44 @@ export function runCursorStream(bin, args, options = {}) {
     let error;
     let lastHeartbeatActivity = null;
     let resultEvents = 0;
-    const save = () => {
-      if (progressPath)
-        writeFileSync(progressPath, JSON.stringify(state) + "\n", {
-          mode: 0o600,
-        });
+    let retentionFailed = false;
+    let child;
+    const stop = (code) => {
+      error ??= Object.assign(new Error(code), { code });
+      child?.kill("SIGKILL");
     };
-    const child = spawn(bin, args, {
+    const save = () => {
+      if (progressPath && !retentionFailed) {
+        try {
+          writeFileSync(progressPath, JSON.stringify(state) + "\n", {
+            mode: 0o600,
+          });
+        } catch {
+          retentionFailed = true;
+          state.retentionGap = "STREAM_PROGRESS_RETENTION_FAILED";
+          stop("STREAM_PROGRESS_RETENTION_FAILED");
+        }
+      }
+    };
+    child = spawn(bin, args, {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const stop = (code) => {
-      error ??= Object.assign(new Error(code), { code });
-      child.kill("SIGKILL");
-    };
     const consume = (line) => {
       if (!line.trim()) return;
+      if (Buffer.byteLength(line) > maxBytes) {
+        stop("STREAM_OUTPUT_LIMIT");
+        return;
+      }
       let event;
       try {
         event = JSON.parse(line);
       } catch {
+        stop("INVALID_STREAM_EVENT");
+        return;
+      }
+      if (!event || typeof event !== "object" || Array.isArray(event)) {
         stop("INVALID_STREAM_EVENT");
         return;
       }
@@ -83,7 +100,10 @@ export function runCursorStream(bin, args, options = {}) {
       if (type === "tool_call" && event.subtype === "completed")
         ++state.toolsCompleted;
       if (type === "result") {
-        if (++resultEvents !== 1) stop("DUPLICATE_STREAM_RESULT");
+        if (++resultEvents !== 1) {
+          stop("DUPLICATE_STREAM_RESULT");
+          return;
+        }
         terminal = line;
       }
       save();
@@ -96,7 +116,11 @@ export function runCursorStream(bin, args, options = {}) {
           : "unconfirmed";
       lastHeartbeatActivity = state.lastObservableAt;
       save();
-      onProgress?.({ ...state });
+      try {
+        onProgress?.({ ...state });
+      } catch {
+        stop("STREAM_PROGRESS_CALLBACK_FAILED");
+      }
     }, heartbeatMs);
     child.once("spawn", () => {
       state.processStatus = "running";
@@ -106,7 +130,8 @@ export function runCursorStream(bin, args, options = {}) {
     child.stdout.on("data", (chunk) => {
       hash.update(chunk);
       state.stdoutBytes += Buffer.byteLength(chunk);
-      if (state.stdoutBytes > maxBytes) return stop("STREAM_OUTPUT_LIMIT");
+      // Count/hash the whole stream, but bound only retained line/result memory.
+      // Echoed prompts and partial-event overhead must not consume answer space.
       pending += chunk;
       for (;;) {
         const end = pending.indexOf("\n");
@@ -114,6 +139,7 @@ export function runCursorStream(bin, args, options = {}) {
         consume(pending.slice(0, end));
         pending = pending.slice(end + 1);
       }
+      if (Buffer.byteLength(pending) > maxBytes) stop("STREAM_OUTPUT_LIMIT");
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
@@ -159,6 +185,8 @@ export function runCursorStream(bin, args, options = {}) {
             "STREAM_ERROR_OUTPUT_LIMIT",
             "HOST_CANCELLED",
             "STREAM_TERMINAL_MISSING",
+            "STREAM_PROGRESS_RETENTION_FAILED",
+            "STREAM_PROGRESS_CALLBACK_FAILED",
           ].includes(error.code)
           ? error.code
           : "STREAM_TRANSPORT_ERROR"
