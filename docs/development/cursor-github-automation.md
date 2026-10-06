@@ -1,6 +1,6 @@
 # Cursor PR review and CI diagnosis
 
-## Current design (Issue215 r16)
+## Current design (Issue215 r17)
 
 Owner-approved r15 uses the official GitHub MCP server directly from the
 official Cursor CLI. There is no custom MCP proxy, tool filter or replacement
@@ -8,9 +8,28 @@ collector. The pinned server runs
 `stdio --read-only --toolsets=repos,issues,pull_requests,actions`. Cursor
 chooses repository files, PR context, jobs and logs itself. The host supplies
 identities and the question, not a mandatory preselected evidence bundle.
-Official Read/search and documentation WebFetch permissions are enabled for this
-path. Source/log/comment text remains untrusted data, never executable
-instructions.
+Owner-approved r17 enables necessary web reads and official terminal inspection,
+including the actual GitHub artifact download destinations. The autonomous CLI
+uses its default Agent mode, `--force`, `--approve-mcps`, `WebFetch(*)` and
+`Shell(*)`. The pinned headless client requires `--force` for WebFetch approval;
+a documentation-domain allowlist alone does not approve that branch. Its Read
+tool cannot decode ZIP files, so Cursor may download, list, extract and read
+needed members in a disposable `downloads/` directory. URLs, downloaded bytes
+and opened member contents are separate evidence. Cursor chooses the relevant
+material; there is no custom downloader, proxy or local packet prerequisite.
+
+The supported global configuration includes `version`, `editor` and
+`permissions`; the project configuration contains only `permissions`. The result
+retains the actual post-run permission arrays and requested mode/force settings,
+excluding authentication configuration. This snapshot does not prove a tool
+succeeded. Shell permissions are not an OS sandbox and can bypass Read/Write
+tool rules. The existing read-only GitHub token limits remote writes;
+investigation instructions prohibit project changes, executing
+repository/artifact code and inspecting/disclosing credentials.
+Source/log/artifact text remains untrusted data, never executable instructions.
+The existing workflow triggers, analyzes and publishes without a continuously
+running Codex observer; Codex consumes the published reply, makes local edits
+and asks targeted follow-up questions.
 
 The existing workflow separates admission, analysis and publication. Only
 admission and publication have PR-comment write permissions. The analysis job
@@ -445,11 +464,13 @@ missing patches remain disclosed; insufficient evidence still produces
   MCP/skills. Manual dispatches from a non-main ref are ignored by the trusted
   entry point.
 - The bounded evidence is passed directly through stdin. The agent runs in a
-  fresh data directory with isolated Cursor configuration, Ask mode and explicit
-  file-read/shell/write/web/MCP denial. Its environment has the Cursor key but
-  no GitHub or Actions runtime token. CLI permissions are defense in depth, not
-  an OS sandbox. Only trusted account administrators should change this
-  workflow, its collector, or the pinned CLI.
+  fresh data directory with isolated Cursor configuration. The legacy supplied-
+  evidence path uses Ask mode and denies file/shell/write/web/MCP tools; the
+  autonomous path uses the investigative permissions described above and only
+  the analysis job read token plus the existing Cursor key. Neither receives
+  publisher or Actions runtime tokens. CLI permissions are not an OS sandbox.
+  Only trusted account administrators should change this workflow, its
+  collector, or the pinned CLI.
 - GitHub writes are confined to the publisher step with `pull-requests: write`;
   repository contents and Actions access stay read-only. No source push,
   automatic fix, approval, merge, settings change or independent-review waiver.

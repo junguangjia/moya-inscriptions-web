@@ -1659,7 +1659,7 @@ test("inference passes exact model and evidence on stdin, rejects hidden paramet
       `#!${process.execPath}
 const fs = require('node:fs');
 const input = fs.readFileSync(0, 'utf8');
-if (!input.includes('${head}') || !process.argv.includes('stream-json') || !process.argv.includes('--stream-partial-output') || process.env.GH_TOKEN) process.exit(2);
+if (!input.includes('${head}') || !process.argv.includes('stream-json') || !process.argv.includes('--stream-partial-output') || process.env.GH_TOKEN || process.argv.includes('--force') || process.argv.includes('--approve-mcps') || process.argv[process.argv.indexOf('--mode') + 1] !== 'ask') process.exit(2);
 if (process.argv[process.argv.indexOf('--model') + 1] !== 'grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]') process.exit(3);
 const configPath = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
 const configuration = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -1959,14 +1959,16 @@ for (const [label, body, usable] of [
         `#!${process.execPath}
 const fs = require('node:fs');
 const input = fs.readFileSync(0,'utf8');
-if (!input.includes('independently') || process.env.GH_TOKEN || process.env.ACTIONS_RUNTIME_TOKEN || !process.argv.includes('--approve-mcps')) process.exit(2);
+if (!input.includes('independently') || !input.includes('downloads/') || process.env.GH_TOKEN || process.env.ACTIONS_RUNTIME_TOKEN || !process.argv.includes('--approve-mcps') || !process.argv.includes('--force') || process.argv.includes('--mode')) process.exit(2);
 const mcp = JSON.parse(fs.readFileSync('.cursor/mcp.json','utf8')).mcpServers.github;
 if (mcp.command !== '/official/github-mcp-server' || mcp.type !== 'stdio' || mcp.args.join(' ') !== 'stdio --read-only --toolsets=repos,issues,pull_requests,actions') process.exit(3);
 const expectedReference = '$'+'{env:CURSOR_GITHUB_READ_TOKEN}';
 if (mcp.env.GITHUB_PERSONAL_ACCESS_TOKEN !== expectedReference || process.env.CURSOR_GITHUB_READ_TOKEN !== 'synthetic-read-token') process.exit(4);
 const p = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
 const config = JSON.parse(fs.readFileSync(p,'utf8'));
-if (!config.permissions.allow.includes('Mcp(github:*)') || config.permissions.deny.includes('Mcp(*:*)')) process.exit(5);
+const project = JSON.parse(fs.readFileSync('.cursor/cli.json','utf8'));
+if (config.version !== 1 || config.editor.vimMode !== false || Object.keys(project).join() !== 'permissions' || JSON.stringify(project.permissions) !== JSON.stringify(config.permissions)) process.exit(5);
+if (!['Read(**)','Mcp(github:*)','WebFetch(*)','Shell(*)'].every(rule => config.permissions.allow.includes(rule)) || config.permissions.deny.includes('Shell(*)') || !['Write(**)','Read(**/.env*)','Read(**/.cursor/**)','Read(**/.ssh/**)','Read(**/.aws/**)'].every(rule => config.permissions.deny.includes(rule)) || !fs.statSync('downloads').isDirectory()) process.exit(6);
 config.selectedModel = { modelId:'grok-4.7', parameters:[{id:'context',value:'500k'},{id:'reasoning_effort',value:'xhigh'},{id:'fast',value:'true'}] }; config.maxMode = true;
 fs.writeFileSync(p,JSON.stringify(config));
 console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(body)}}));
@@ -2000,6 +2002,25 @@ console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,resul
       assert.equal(report.transportCompleted, true);
       assert.equal(report.actualInvocations, 1);
       assert.equal(report.effectiveSelection.maxMode, true);
+      assert.deepEqual(report.effectiveInvestigation, {
+        requestedMode: "agent",
+        force: true,
+        configurationOnly: true,
+        globalPermissions: agentConfiguration({ autonomous: true }).permissions,
+        projectPermissions: agentConfiguration({ autonomous: true })
+          .permissions,
+      });
+      assert.equal(
+        JSON.stringify(report).includes("synthetic-read-token"),
+        false,
+      );
+      assert.equal(JSON.stringify(report).includes("synthetic-key"), false);
+      assert.deepEqual(
+        JSON.parse(
+          readFileSync(join(directory, "transfer/report.json"), "utf8"),
+        ).effectiveInvestigation,
+        report.effectiveInvestigation,
+      );
       assert.equal(
         automaticResponseState(target, report).responseAccepted,
         usable,
