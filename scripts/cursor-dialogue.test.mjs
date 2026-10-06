@@ -407,6 +407,63 @@ test("evidence hash/id integrity and exact quote citations cannot silently drift
   };
   assert.throws(() => validateAnswer(forged, [evidence]));
 });
+test("literal source citations preserve decoded newlines and quotes in a JSON wrapper", () => {
+  const literal = 'const saved = panel.scrollTop;\nreturn "same owner";';
+  for (const pointer of ["", "/source/1"]) {
+    const original = {
+      ...evidence,
+      file: "preparation",
+      pointer,
+      text: JSON.stringify(
+        pointer === "" ? { source: [{ text: literal }] } : { text: literal },
+        null,
+        2,
+      ),
+    };
+    const quoted = globalThis.structuredClone(answer);
+    quoted.findings[0].citations[0].quote = literal;
+    assert.deepEqual(validateAnswer(quoted, [original]), quoted);
+    assert.equal(quoted.findings[0].citations[0].quote, literal);
+  }
+});
+test("source representation support does not accept invented or unrelated decoded values", () => {
+  const literal = 'const saved = panel.scrollTop;\nreturn "same owner";';
+  const quoted = globalThis.structuredClone(answer);
+  quoted.findings[0].citations[0].quote = literal;
+  const source = {
+    ...evidence,
+    file: "preparation",
+    pointer: "",
+    text: JSON.stringify({ source: [{ text: literal }] }),
+  };
+  for (const changed of [
+    { ...source, file: "feedback" },
+    { ...source, pointer: "/metadata" },
+    { ...source, text: JSON.stringify({ answer: literal }) },
+    { ...source, text: JSON.stringify({ source: [{ other: literal }] }) },
+  ])
+    assert.throws(
+      () => validateAnswer(quoted, [changed]),
+      /CITATION_NOT_IN_ORIGINAL/u,
+    );
+  for (const quote of [
+    literal.replace("panel", "other"),
+    literal.replace("\n", " "),
+  ]) {
+    const changed = globalThis.structuredClone(quoted);
+    changed.findings[0].citations[0].quote = quote;
+    assert.throws(
+      () => validateAnswer(changed, [source]),
+      /CITATION_NOT_IN_ORIGINAL/u,
+    );
+  }
+  const wrongId = globalThis.structuredClone(quoted);
+  wrongId.findings[0].citations[0].id = "unknown";
+  assert.throws(
+    () => validateAnswer(wrongId, [source]),
+    /CITATION_NOT_IN_ORIGINAL/u,
+  );
+});
 test("English is preferred without rejecting other languages or altering evidence", () => {
   for (const prompt of [PROMPT, DIALOGUE_PROMPT]) {
     assert.doesNotMatch(prompt, /Chinese summary|Chinese:|用中文|中文输出/u);
