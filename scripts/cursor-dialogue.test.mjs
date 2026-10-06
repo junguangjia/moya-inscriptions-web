@@ -909,7 +909,7 @@ const t = { ...${JSON.stringify(TARGET)}, pr: 215, source: 'e'.repeat(40), tree:
 const hashes = { preparation: '1'.repeat(64), feedback: '2'.repeat(64), execution: '3'.repeat(64) };
 const request = { scope: 'repository-question-v1', remoteEvidenceApproved: true, target: t, originalHashes: hashes, candidate: 'd'.repeat(40) };
 assert.throws(() => configureQuestionScope({ ...request, remoteEvidenceApproved: false }), /INVALID_REPOSITORY/);
-assert.throws(() => configureQuestionScope({ ...request, private: '/Users/example/context.json' }), /NONPUBLIC/);
+assert.doesNotThrow(() => configureQuestionScope({ ...request, private: '/Users/example/context.json' }));
 assert.throws(() => configureQuestionScope({ ...request, resumption: 'old' }), /INVALID_REPOSITORY/);
 configureQuestionScope(request);
 assert.deepEqual(TARGET,t); assert.deepEqual(ORIGINALS,hashes);
@@ -930,7 +930,7 @@ console.log('PASS');`;
   assert.equal(result.stdout.trim(), "PASS");
 });
 
-test("sanitized remote response retention never uploads a generated private path", () => {
+test("response retention preserves authorized diagnostic source paths", () => {
   const capture = retainedResponse(
     JSON.stringify({
       type: "result",
@@ -942,8 +942,8 @@ test("sanitized remote response retention never uploads a generated private path
       }),
     }),
   );
-  assert.equal(capture.artifact.redactions, 1);
-  assert.doesNotMatch(JSON.stringify(capture.artifact), /\/Users\//u);
+  assert.equal(capture.artifact.redactions, 0);
+  assert.equal(capture.artifact.body.answer, "/Users/example/private.json");
 });
 
 test("legacy analyze refuses rerun-failed-jobs before configuration or invocation", async () => {
@@ -965,5 +965,112 @@ test("legacy analyze refuses rerun-failed-jobs before configuration or invocatio
     );
   } finally {
     rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("retained mixed answers keep safe prose and only fixed redaction metadata", () => {
+  const secret = ["ghp_", "A".repeat(36)].join("");
+  const capture = retainedResponse(
+    JSON.stringify({
+      result: `The failure is at apps/web/features/home/home-feed.ts. token=${secret}\nInspect the await at line 18.`,
+    }),
+  );
+  assert.equal(
+    capture.artifact.body,
+    "The failure is at apps/web/features/home/home-feed.ts. token=[REDACTED]\nInspect the await at line 18.",
+  );
+  assert.equal(capture.artifact.usable, true);
+  assert.equal(capture.artifact.redactions, 1);
+  assert.equal(
+    capture.artifact.redactionCounts.reduce(
+      (total, entry) => total + entry.count,
+      0,
+    ),
+    1,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(capture.artifact),
+    new RegExp(secret, "u"),
+  );
+  const opaque = ["short", "Value"].join("");
+  const only = retainedResponse(
+    JSON.stringify({ result: JSON.stringify({ password: opaque }) }),
+  );
+  assert.equal(only.artifact.body.password, "REDACTED");
+  assert.equal(only.artifact.usable, false);
+  const encodedValue = opaque.replaceAll("o", "\\u006f");
+  const encoded = retainedResponse(
+    JSON.stringify({
+      result: `Before password="${encodedValue}" after.`,
+    }),
+  );
+  assert.equal(encoded.artifact.body, 'Before password="REDACTED" after.');
+  assert.equal(encoded.artifact.usable, true);
+});
+
+test("independent review credential boundary regressions preserve all safe context", () => {
+  const first = ["opaque", "FirstValue"].join("");
+  const second = ["opaque", "SecondValue"].join("");
+  const unicodeQuoteValue = [first, "\\u0022", second].join("");
+  const escapedQuoteValue = [first, '\\"', second].join("");
+  for (const [input, expected] of [
+    [
+      `"authorization": "bearer ${["ab", "cd"].join("")}". Inspect file.ts:18`,
+      '"authorization": "bearer REDACTED". Inspect file.ts:18',
+    ],
+    [
+      `password="${unicodeQuoteValue}" then line 18`,
+      'password="REDACTED" then line 18',
+    ],
+    [
+      `password: true${first}\nthen line 18`,
+      "password: [REDACTED]\nthen line 18",
+    ],
+    [
+      `cookie: session=${first}; other=${second}\nInspect file.ts:18`,
+      "cookie: session=REDACTED; other=REDACTED\nInspect file.ts:18",
+    ],
+    [
+      `"Authorization": "Bearer ${["ab", "cd"].join("")}". Inspect file.ts:18`,
+      '"Authorization": "Bearer REDACTED". Inspect file.ts:18',
+    ],
+    [
+      `password="${escapedQuoteValue}" then line 18`,
+      'password="REDACTED" then line 18',
+    ],
+    [`password: ${first}\nthen line 18`, "password: [REDACTED]\nthen line 18"],
+    [
+      `C:\\Temp\\file.ts password="${first}" then line 18`,
+      'C:\\Temp\\file.ts password="REDACTED" then line 18',
+    ],
+  ]) {
+    const artifact = retainedResponse(
+      JSON.stringify({ result: input }),
+    ).artifact;
+    assert.equal(artifact.body, expected);
+    assert.ok(artifact.redactions > 0);
+    assert.equal(artifact.usable, true);
+    assert.ok(!JSON.stringify(artifact).includes(first));
+    assert.ok(!JSON.stringify(artifact).includes(second));
+  }
+});
+
+test("encoded credential names preserve complete raw value boundaries and cookie-only replies stay unusable", () => {
+  const first = ["opaque", "FirstValue"].join("");
+  const second = ["opaque", "SecondValue"].join("");
+  const artifact = retainedResponse(
+    JSON.stringify({
+      result: `Inspect pass\\u0077ord="${first}\\u0022${second}" then line 18`,
+    }),
+  ).artifact;
+  assert.equal(artifact.body, 'Inspect pass\\u0077ord="REDACTED" then line 18');
+  assert.equal(artifact.usable, true);
+  assert.ok(!JSON.stringify(artifact).includes(second));
+  for (const header of ["Cookie", "cookie", "Set-Cookie"]) {
+    const only = retainedResponse(
+      JSON.stringify({ result: `${header}: session=${first}; Path=/` }),
+    ).artifact;
+    assert.equal(only.body, `${header}: session=REDACTED; Path=/`);
+    assert.equal(only.usable, false);
   }
 });
