@@ -14,6 +14,7 @@ import {
   OWNER_MODEL,
   publicText,
   assertRemoteInput,
+  coverUnperformedReview,
 } from "./cursor-automation.mjs";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -978,31 +979,12 @@ function prepareAutomatic(directory, repository, target, env) {
     });
     return null;
   }
-  if (target.runId && !target.postMerge) {
-    const review = claimRecord(
-      { records: claim.records },
-      repository,
-      {
-        number: target.number,
-        head: target.head,
-        prHead: target.head,
-        kind: "review",
-      },
-      env.GITHUB_RUN_ID,
-    );
-    if (!review.duplicate) {
-      claim.records = review.records.map((r) =>
-        r.key === review.key ? { ...r, coveredBy: claim.key } : r,
-      );
-      target.coversReview = true;
-      // A successful CI arriving before the PR job supplies the combined review,
-      // rather than silently replacing it with a status-only message.
-      if (target.conclusion === "success") {
-        target.kind = "review";
-        target.metadataOnly = false;
-      }
-    }
-  }
+  ({ claim, target } = coverUnperformedReview(
+    claim,
+    repository,
+    target,
+    env.GITHUB_RUN_ID,
+  ));
   // A successful, tree-identical postmerge run reuses the exact reviewed head.
   if (
     target.postMerge &&
@@ -1909,14 +1891,17 @@ export async function main(stage, env = process.env) {
   if (stage === "retain") {
     if (!existsSync(join(directory, "automatic-receipt.json"))) return;
     let receipt = readJSON(join(directory, "automatic-receipt.json"));
-    if (receipt.status === "ADMITTED") {
+    if (["ADMITTED", "STALE"].includes(receipt.status)) {
+      const stale = receipt.status === "STALE";
       receipt = {
         ...receipt,
-        status: "INCOMPLETE",
+        status: stale ? "STALE" : "INCOMPLETE",
         responseAccepted: false,
-        terminalCategory: receipt.actualInvocations
-          ? "ANSWER_NOT_ACCEPTED"
-          : "PRE_INFERENCE_FAILURE_OR_STALE",
+        terminalCategory: stale
+          ? "STALE_SOURCE_RUN_OR_CLAIM"
+          : receipt.actualInvocations
+            ? "ANSWER_NOT_ACCEPTED"
+            : "PRE_INFERENCE_FAILURE_OR_STALE",
         workflowStages: {
           prepare: env.CURSOR_PREPARE_OUTCOME ?? null,
           install: env.CURSOR_INSTALL_OUTCOME ?? null,
@@ -1933,7 +1918,7 @@ export async function main(stage, env = process.env) {
           state,
           receipt.key,
           receipt.target.ownerRun,
-          "incomplete",
+          stale ? "stale" : "incomplete",
           { terminalCategory: receipt.terminalCategory },
         );
         const prior = state.comment.body

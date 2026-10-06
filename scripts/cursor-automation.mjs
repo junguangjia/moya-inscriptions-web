@@ -195,6 +195,38 @@ export function ledgerBody(human, records) {
   return body;
 }
 
+export function coverUnperformedReview(claim, repository, target, ownerRun) {
+  if (!target.runId || target.postMerge || claim.duplicate)
+    return { claim, target };
+  const review = claimRecord(
+    { records: claim.records },
+    repository,
+    {
+      number: target.number,
+      head: target.head,
+      prHead: target.head,
+      kind: "review",
+    },
+    ownerRun,
+  );
+  if (review.duplicate) return { claim, target };
+  return {
+    claim: {
+      ...claim,
+      records: review.records.map((r) =>
+        r.key === review.key ? { ...r, coveredBy: claim.key } : r,
+      ),
+    },
+    target: {
+      ...target,
+      coversReview: true,
+      ...(!["failure", "timed_out"].includes(target.conclusion)
+        ? { kind: "review", metadataOnly: false }
+        : {}),
+    },
+  };
+}
+
 export function finishRecord(state, key, ownerRun, status, details = {}) {
   const record = state.records.find((r) => r.key === key);
   if (

@@ -16,6 +16,7 @@ import {
   selectUnprocessedCI,
   assertRemoteInput,
   publicText,
+  coverUnperformedReview,
 } from "./cursor-automation.mjs";
 import { classifyTask } from "./ci-task-scope.mjs";
 const repo = "junguangjia/moya-inscriptions-web";
@@ -322,3 +323,50 @@ test("combined CI claim closes its covered review alias without another inferenc
     true,
   );
 });
+
+for (const conclusion of [
+  "success",
+  "cancelled",
+  "skipped",
+  "failure",
+  "timed_out",
+]) {
+  test(`CI ${conclusion} arriving first cannot suppress an unperformed PR review`, () => {
+    const target = {
+      ...ci,
+      number: 214,
+      conclusion,
+      metadataOnly: !["failure", "timed_out"].includes(conclusion),
+    };
+    const claimed = claimRecord({ records: [] }, repo, target, 999);
+    const combined = coverUnperformedReview(claimed, repo, target, 999);
+    assert.equal(combined.target.coversReview, true);
+    assert.equal(combined.target.metadataOnly, false);
+    assert.equal(
+      combined.target.kind,
+      ["failure", "timed_out"].includes(conclusion) ? "ci" : "review",
+    );
+    const completed = finishRecord(
+      { records: combined.claim.records },
+      combined.claim.key,
+      999,
+      "accepted",
+    );
+    assert.equal(
+      claimRecord({ records: completed }, repo, event("opened"), 1000)
+        .duplicate,
+      true,
+    );
+    const next = claimRecord(
+      { records: completed },
+      repo,
+      { ...target, attempt: 2 },
+      1000,
+    );
+    assert.equal(
+      coverUnperformedReview(next, repo, { ...target, attempt: 2 }, 1000).target
+        .coversReview,
+      undefined,
+    );
+  });
+}

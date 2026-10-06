@@ -18,6 +18,12 @@ export function runCursorStream(bin, args, options = {}) {
     maxBytes = 256 * 1024,
   } = options;
   return new Promise((resolve) => {
+    // The official user event echoes stdin in one line. Its admitted input may
+    // be larger than the bounded answer; do not confuse echo with answer bytes.
+    const echoBytes = Math.min(
+      2 * 1024 * 1024,
+      Math.max(maxBytes, Buffer.byteLength(input) + 4096),
+    );
     const started = Date.now();
     const hash = createHash("sha256");
     const state = {
@@ -66,7 +72,7 @@ export function runCursorStream(bin, args, options = {}) {
     });
     const consume = (line) => {
       if (!line.trim()) return;
-      if (Buffer.byteLength(line) > maxBytes) {
+      if (Buffer.byteLength(line) > echoBytes) {
         stop("STREAM_OUTPUT_LIMIT");
         return;
       }
@@ -90,6 +96,10 @@ export function runCursorStream(bin, args, options = {}) {
       ].includes(event.type)
         ? event.type
         : "other";
+      if (type !== "user" && Buffer.byteLength(line) > maxBytes) {
+        stop("STREAM_OUTPUT_LIMIT");
+        return;
+      }
       state.eventCounts[type] = (state.eventCounts[type] || 0) + 1;
       if (type === "assistant" || type === "tool_call" || type === "result") {
         state.lastObservableAt = new Date().toISOString();
@@ -139,7 +149,7 @@ export function runCursorStream(bin, args, options = {}) {
         consume(pending.slice(0, end));
         pending = pending.slice(end + 1);
       }
-      if (Buffer.byteLength(pending) > maxBytes) stop("STREAM_OUTPUT_LIMIT");
+      if (Buffer.byteLength(pending) > echoBytes) stop("STREAM_OUTPUT_LIMIT");
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {

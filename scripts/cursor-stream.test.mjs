@@ -125,3 +125,23 @@ test("progress storage failure returns a safe retention gap without escaping cal
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("an admitted 360K prompt echo is bounded separately from the 256KiB final answer", async () => {
+  const input = "x".repeat(360000);
+  const result = await runCursorStream(
+    process.execPath,
+    [
+      "-e",
+      `
+let input=''; process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+=s);
+process.stdin.on('end',()=>{console.log(JSON.stringify({type:'user',message:{content:[{text:input}]}}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done'}));});
+`,
+    ],
+    { input },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.progress.eventCounts.user, 1);
+  assert.equal(result.progress.terminalResultReceived, true);
+  assert.equal(JSON.parse(result.stdout).result, "done");
+  assert.ok(result.stdout.length < 1000);
+});
