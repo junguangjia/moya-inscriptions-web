@@ -1,5 +1,80 @@
 # Cursor PR review and CI diagnosis
 
+## Current automatic operation (Issue215 r10)
+
+The Owner authorized recurring analysis on 2026-10-06. Enable
+`CURSOR_AUTOMATION_ENABLED=true` after the reviewed workflow is installed on
+`main`. PR opened/reopened/synchronize/ready events cover same-repository PRs,
+including stacked bases. Canonical `CI` completion covers PR, manual-CI and push
+runs; a merge-to-main notification records status and the postmerge CI supplies
+integration evidence. Closing an unmerged PR does not invoke Cursor.
+
+Host scripts resolve the PR, pin installed main, serialize jobs per PR and keep
+one bot-owned durable ledger keyed by repository/PR/source/run/attempt/phase. PR
+event aliases collapse to one source review. A surviving CI event can combine an
+unprocessed review with its new failure evidence in one call; a surviving PR
+alias reconciles the latest completed unprocessed CI from a bounded 20-run list.
+Passing PR CI records status without re-review. Tree-identical postmerge success
+reuses an accepted exact PR review; changed integration evidence receives its
+own analysis. Failed/orphan claims suppress automatic retries, with incomplete
+receipts. The ledger has a disclosed 100-record cap per PR; exhaustion stops
+admission, rather than forgetting old calls. Cursor comments and its own
+workflow are not triggers. GitHub's one-pending-job queue can coalesce events;
+only the current source is eligible, and earlier superseded sources are not
+retrospectively analyzed.
+
+`CURSOR_MODEL` must be
+`grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]`. Each accepted
+inference checks the fresh CLI selection, including `maxMode=true`. English is
+preferred, not an answer-rejection condition. There is no application reasoning
+timeout: NDJSON assistant/tool/result events and connection/process/error state
+are recorded without exposing their text. Silence means activity unconfirmed;
+process alive does not prove thinking. The hosted job has GitHub's 360-minute
+ceiling, including preparation/retention; no unlimited-runtime promise, hidden
+retry, model substitution or paid fallback is made. On-Demand stays off under
+the existing account policy; runtime selection is not a billing/provider
+attestation.
+
+**Public repository Actions artifacts are repository-readable, not private
+handoff storage.** Automatic transport contains only sanitized receipts,
+validated results/citations and progress counters. Raw collected logs/context,
+agent configuration and full private local evidence are excluded. A targeted
+question must set `scope=repository-question-v1` and
+`remoteEvidenceApproved=true`, with exact repository/PR/source/tree/canonical CI
+run/attempt/workflow/base plus the three sanitized wrapper hashes. Only that
+approved sanitized projection enters the compressed 60-KiB transport and
+repository-readable continuation cache. Core credentials and nonpublic local
+paths/authorizing URLs are rejected; full local context remains in existing
+private artifact storage. No source/log content is treated as instructions.
+
+A question runs through `operation=dialogue` on trusted `main`, with `candidate`
+equal to the installed main SHA, a new 24-hex dialogue ID, round1,
+`previousRun=null`, bounded English question, up to24 cache selectors and the
+verified compressed sanitized wrappers. Preparation validates current
+source/tree/CI and claims a question digest in the same per-PR ledger.
+Follow-ups use retained exact structured context, require `needs_evidence` and
+new literal coverage, and stop at three rounds. A genuinely new question gets a
+new identity; old ANSWERED/failed histories are never rewritten or silently
+renewed. Evidence is at most2MiB before compression, each selected record24K,
+final prompt120K. Automatic collection retains the
+existing80-file/36K-log/180K-context limits; literal citation records duplicate
+sanitized subsets under a360K whole-packet cap. No arbitrary shell, native
+observation or production tool is granted.
+
+Local Codex owns source edits, necessary focused checks, submission and precise
+questions. GitHub scripts execute existing CI and perform retrieval/cache/status
+work. Cursor analyzes supplied originals and returns findings, exact excerpts,
+uncertainty and next verification. The original media writer receives that
+validated answer and edit-relevant code; it does not reread bulk logs. Human PR
+comments are concise sanitized summaries; full approved machine results remain
+separate. Workflow success, answer acceptance and citation validation are three
+separate outcomes. No automatic product merge/deployment is implemented.
+
+The remaining sections preserve the initial setup and earlier single-case
+experiments as historical context. Their manual/candidate and finite reasoning
+windows are superseded for new authorized r10 operation, not retroactively
+changed in historical evidence.
+
 Task: [#215](https://github.com/junguangjia/moya-inscriptions-web/issues/215).
 
 The `Cursor review` GitHub Actions workflow runs the official Cursor CLI on a

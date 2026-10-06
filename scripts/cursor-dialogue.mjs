@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import console from "node:console";
 import { spawnSync } from "node:child_process";
 import { runCursorStream } from "./cursor-stream.mjs";
+import { assertRemoteInput, publicText } from "./cursor-automation.mjs";
 import {
   appendFileSync,
   existsSync,
@@ -23,10 +24,13 @@ import {
   parseModelSelection,
   parseSourceRequests,
   safeText,
+  claimQuestion,
+  questionClaimFresh,
+  publishQuestion,
 } from "./cursor-review.mjs";
 
 // A single Owner-approved diagnostic, not a generic alternate-workflow bypass.
-export const TARGET = Object.freeze({
+export let TARGET = Object.freeze({
   repository: "junguangjia/moya-inscriptions-web",
   pr: 214,
   source: "d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618",
@@ -63,7 +67,7 @@ export const RESUMPTION = Object.freeze({
   expiresAt: Date.parse("2026-10-05T19:39:00Z"),
   wallMs: 900000,
 });
-export const ORIGINALS = Object.freeze({
+export let ORIGINALS = Object.freeze({
   preparation:
     "e4fa3ffeb5338040e2625788cefacd31df649240955683d07840cc874cef232c",
   feedback: "3131f661eb2adc5362984ad139ed292dfe71a1d6a520caa0f99654899d53e310",
@@ -79,6 +83,37 @@ const read = (path) => JSON.parse(readFileSync(path, "utf8"));
 const save = (path, value) =>
   writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+export function configureQuestionScope(request) {
+  if (request.scope !== "repository-question-v1") return;
+  const t = request.target,
+    hashes = request.originalHashes;
+  if (
+    request.remoteEvidenceApproved !== true ||
+    request.resumption !== undefined ||
+    t?.repository !== "junguangjia/moya-inscriptions-web" ||
+    Object.keys(t).sort().join(",") !==
+      "attempt,base,pr,repository,run,source,tree,workflow,workflowId" ||
+    t.workflow !== t.source ||
+    !Number.isSafeInteger(t.pr) ||
+    t.pr < 1 ||
+    [t.source, t.tree, t.workflow].some(
+      (v) => !/^[a-f0-9]{40}$/u.test(v ?? ""),
+    ) ||
+    t.workflowId !== 327712419 ||
+    !Number.isSafeInteger(t.run) ||
+    t.run < 1 ||
+    !Number.isSafeInteger(t.attempt) ||
+    t.attempt < 1 ||
+    !/^[A-Za-z0-9._/-]{1,200}$/u.test(t.base ?? "") ||
+    !hashes ||
+    Object.keys(hashes).sort().join(",") !== "execution,feedback,preparation" ||
+    Object.values(hashes).some((v) => !/^[a-f0-9]{64}$/u.test(v))
+  )
+    fail("INVALID_REPOSITORY_QUESTION_SCOPE");
+  assertRemoteInput(request);
+  TARGET = Object.freeze({ ...t });
+  ORIGINALS = Object.freeze({ ...hashes });
+}
 function run(bin, args, options = {}) {
   const result = spawnSync(bin, args, {
     encoding: "utf8",
@@ -173,6 +208,10 @@ export function retainedResponse(raw) {
     if (safeText(decoded) === null) {
       redactions++;
       return "[REDACTED: credential-bearing text]";
+    }
+    if (publicText(decoded) !== decoded) {
+      redactions++;
+      return "[REDACTED: nonpublic output]";
     }
     return safeText(value);
   };
@@ -501,8 +540,8 @@ export function validateRequest(request, now = Date.now(), prepared = false) {
     !same(request.target, TARGET) ||
     !/^[a-f0-9]{24}$/u.test(request.dialogueId) ||
     !/^[a-f0-9]{40}$/u.test(request.candidate) ||
-    !Number.isInteger(request.candidatePR) ||
-    request.candidatePR < 1 ||
+    (request.scope !== "repository-question-v1" &&
+      (!Number.isInteger(request.candidatePR) || request.candidatePR < 1)) ||
     !Number.isInteger(request.round) ||
     request.round < 1 ||
     request.round > BUDGET.rounds ||
@@ -555,18 +594,28 @@ export function validateAdmission(
     diagnostic.workflow_id !== TARGET.workflowId ||
     diagnostic.head_sha !== TARGET.workflow ||
     diagnostic.path !== ".github/workflows/ci.yml" ||
-    diagnostic.event !== "workflow_dispatch" ||
+    !(
+      request.scope === "repository-question-v1"
+        ? ["workflow_dispatch", "pull_request", "push"]
+        : ["workflow_dispatch"]
+    ).includes(diagnostic.event) ||
     diagnostic.repository.full_name !== TARGET.repository ||
     diagnostic.head_repository.full_name !== TARGET.repository ||
     diagnostic.status !== "completed" ||
-    !["failure", "timed_out"].includes(diagnostic.conclusion) ||
-    candidate.state !== "open" ||
-    !candidate.draft ||
-    candidate.head.sha !== request.candidate ||
-    candidate.head.ref !== "codex/cursor-bounded-dialogue" ||
-    candidate.base.ref !== "main" ||
-    candidate.head.repo.full_name !== TARGET.repository ||
-    candidate.base.repo.full_name !== TARGET.repository
+    !(
+      request.scope === "repository-question-v1"
+        ? ["success", "failure", "timed_out"]
+        : ["failure", "timed_out"]
+    ).includes(diagnostic.conclusion) ||
+    (request.scope === "repository-question-v1"
+      ? candidate.sha !== request.candidate
+      : candidate.state !== "open" ||
+        !candidate.draft ||
+        candidate.head.sha !== request.candidate ||
+        candidate.head.ref !== "codex/cursor-bounded-dialogue" ||
+        candidate.base.ref !== "main" ||
+        candidate.head.repo.full_name !== TARGET.repository ||
+        candidate.base.repo.full_name !== TARGET.repository)
   )
     fail("STALE_OR_UNAPPROVED_IDENTITY");
 }
@@ -577,8 +626,16 @@ function fresh(request, prepared = false) {
     api(`pulls/${TARGET.pr}`),
     api(`actions/runs/${TARGET.run}`),
     api(`git/commits/${TARGET.source}`),
-    api(`pulls/${request.candidatePR}`),
+    request.scope === "repository-question-v1"
+      ? api("branches/main").commit
+      : api(`pulls/${request.candidatePR}`),
   );
+  if (
+    prepared &&
+    request.scope === "repository-question-v1" &&
+    !questionClaimFresh(request, request.ownerRun)
+  )
+    fail("QUESTION_CLAIM_LOST");
 }
 export function validatePrevious(request, prior, now = Date.now()) {
   const resumeEntry = resumed(request) && request.round === 2;
@@ -589,6 +646,10 @@ export function validatePrevious(request, prior, now = Date.now()) {
     prior.dialogueId !== request.dialogueId ||
     (!resumeEntry && prior.candidate !== request.candidate) ||
     !same(prior.target, TARGET) ||
+    (request.scope === "repository-question-v1" &&
+      (prior.scope !== request.scope ||
+        !same(prior.originalHashes, ORIGINALS) ||
+        prior.remoteEvidenceApproved !== true)) ||
     prior.round + 1 !== request.round ||
     prior.runId !== request.previousRun ||
     prior.startedAt !== request.startedAt ||
@@ -655,14 +716,25 @@ function loadPrevious(request, directory) {
 const title = (id, round) => `cursor-dialogue ${id} round ${round}`;
 const artifactName = (id, round) => `cursor-dialogue-${id}-${round}`;
 function validateCandidateRoute(request, env) {
-  if (
-    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REPOSITORY !== TARGET.repository ||
-    env.GITHUB_REF !== "refs/heads/codex/cursor-bounded-dialogue" ||
-    env.GITHUB_SHA !== request.candidate ||
-    env.GITHUB_RUN_ATTEMPT !== "1"
-  )
-    fail("CANDIDATE_ROUTE_REFUSED");
+  if (request.scope === "repository-question-v1") {
+    if (
+      env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+      env.GITHUB_REPOSITORY !== TARGET.repository ||
+      env.GITHUB_REF !== "refs/heads/main" ||
+      env.CURSOR_WORKFLOW_SHA !== request.candidate ||
+      env.GITHUB_RUN_ATTEMPT !== "1"
+    )
+      fail("TRUSTED_MAIN_ROUTE_REFUSED");
+  } else {
+    if (
+      env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+      env.GITHUB_REPOSITORY !== TARGET.repository ||
+      env.GITHUB_REF !== "refs/heads/codex/cursor-bounded-dialogue" ||
+      env.GITHUB_SHA !== request.candidate ||
+      env.GITHUB_RUN_ATTEMPT !== "1"
+    )
+      fail("CANDIDATE_ROUTE_REFUSED");
+  }
   const runs = api(
     "actions/workflows/cursor-review.yml/runs?event=workflow_dispatch&per_page=100",
   );
@@ -933,6 +1005,13 @@ async function analyze(directory, env) {
     omittedSource: sources.omissions,
     usage: null,
     collection: collection || null,
+    ...(request.scope === "repository-question-v1"
+      ? {
+          scope: request.scope,
+          originalHashes: request.originalHashes,
+          remoteEvidenceApproved: true,
+        }
+      : {}),
   };
   // Persistent invocation marker is created before the command; no retry path.
   save(join(directory, "output/round.json"), record);
@@ -967,6 +1046,8 @@ async function analyze(directory, env) {
         parseModelSelection(MODEL),
         read(join(home, ".cursor/cli-config.json")),
       );
+      if (record.effectiveSelection?.maxMode !== true)
+        fail("MODEL_SELECTION_NOT_CONFIRMED");
     } catch {
       record.selectionError = "MODEL_SELECTION_NOT_CONFIRMED";
     }
@@ -1066,7 +1147,9 @@ export async function dialogueMain(stage, env = process.env) {
   if (stage === "prepare") {
     const event = read(env.GITHUB_EVENT_PATH);
     if (event.inputs.operation !== "dialogue") fail("INVALID_OPERATION");
-    const request = validateRequest(scannedJSON(event.inputs.dialogue_request));
+    const raw = scannedJSON(event.inputs.dialogue_request);
+    configureQuestionScope(raw);
+    const request = validateRequest(raw);
     const admittedAt = validateCandidateRoute(request, env);
     // Still a raw request here: reject caller-provided admission timestamps.
     // Assign host-only timestamps after raw/live identity validation; the next
@@ -1077,6 +1160,7 @@ export async function dialogueMain(stage, env = process.env) {
       request.resumeAdmittedAt = admittedAt;
     mkdirSync(join(directory, "output"), { recursive: true, mode: 0o700 });
     const { prior, cache } = loadPrevious(request, directory);
+    if (request.scope === "repository-question-v1") assertRemoteInput(cache);
     request.evidence = request.selectors.map((selector) =>
       selectOriginal(cache, selector),
     );
@@ -1129,20 +1213,28 @@ export async function dialogueMain(stage, env = process.env) {
         0,
       ),
     };
+    if (request.scope === "repository-question-v1") {
+      request.claimKey = claimQuestion(request, directory, env);
+      request.ownerRun = Number(env.GITHUB_RUN_ID);
+    }
     save(join(directory, "prepared.json"), {
       request,
       prior,
       sources,
       collection,
     });
-    appendFileSync(env.GITHUB_OUTPUT, "ready=true\n");
+    appendFileSync(env.GITHUB_OUTPUT, "ready=true\ninference=true\n");
   } else if (stage === "fresh") {
     const { request } = read(join(directory, "prepared.json"));
+    configureQuestionScope(request);
     fresh(request, true);
     appendFileSync(env.GITHUB_OUTPUT, "ready=true\n");
-  } else if (stage === "analyze") await analyze(directory, env);
-  else if (stage === "publish") {
+  } else if (stage === "analyze") {
+    configureQuestionScope(read(join(directory, "prepared.json")).request);
+    await analyze(directory, env);
+  } else if (stage === "publish") {
     const { request } = read(join(directory, "prepared.json"));
+    configureQuestionScope(request);
     const record = read(join(directory, "output/round.json"));
     const publicationFresh = () => {
       try {
@@ -1160,6 +1252,16 @@ export async function dialogueMain(stage, env = process.env) {
       }
     };
     if (!publicationFresh()) return;
+    if (request.scope === "repository-question-v1") {
+      const comment = publishQuestion(request, record, directory, env);
+      record.publication = {
+        permalink: comment.html_url,
+        conciseSummary: true,
+        noPrivateRawArtifacts: true,
+      };
+      save(join(directory, "output/round.json"), record);
+      return;
+    }
     const body = readFileSync(join(directory, "output/report.md"), "utf8");
     run(
       process.execPath,

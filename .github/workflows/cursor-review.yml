@@ -6,8 +6,7 @@ run-name: >-
 
 on:
   pull_request_target:
-    branches: [main]
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, closed]
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -23,7 +22,8 @@ on:
         default: review
         options: [review, inspect-models, diagnose-ci, dialogue]
       dialogue_request:
-        description: Reviewed candidate dialogue request JSON (60 KiB maximum)
+        description:
+          Sanitized exact-source question and cached evidence (60 KiB)
         type: string
       ci_run:
         description: Failed canonical CI run ID (diagnose-ci only)
@@ -50,45 +50,66 @@ on:
 
 permissions: {}
 
-concurrency:
-  group:
-    cursor-${{ inputs.operation == 'dialogue' &&
-    fromJSON(inputs.dialogue_request).dialogueId || github.event_name ==
-    'workflow_dispatch' && inputs.operation == 'inspect-models' &&
-    'model-catalog' || github.event_name == 'workflow_dispatch' &&
-    inputs.operation == 'diagnose-ci' && format('ci-{0}', inputs.expected_head)
-    || github.event_name == 'workflow_run' && format('ci-{0}',
-    github.event.workflow_run.head_sha) || format('review-{0}',
-    github.event.pull_request.number || inputs.pr) }}
-  cancel-in-progress: ${{ inputs.operation != 'dialogue' }}
-
 jobs:
-  analyze:
+  route:
     if: >-
-      (github.event_name == 'workflow_dispatch' && inputs.operation ==
-      'dialogue' && github.ref == 'refs/heads/codex/cursor-bounded-dialogue') ||
-      (github.event_name == 'workflow_dispatch' && (inputs.operation ==
-      'inspect-models' || inputs.operation == 'diagnose-ci') && github.ref ==
-      'refs/heads/main') || (vars.CURSOR_AUTOMATION_ENABLED != 'false' &&
-      inputs.operation != 'dialogue' && (github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'failure' ||
-      github.event.workflow_run.conclusion == 'timed_out'))
+      (github.event_name == 'workflow_dispatch' && github.ref ==
+      'refs/heads/main') || (github.event_name != 'workflow_dispatch' &&
+      vars.CURSOR_AUTOMATION_ENABLED == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5 # Collection/admission only; no model invocation here.
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      ready: ${{ steps.route.outputs.ready }}
+      pr: ${{ steps.route.outputs.pr }}
+      trusted: ${{ steps.route.outputs.trusted }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+      - id: route
+        env:
+          GH_TOKEN: # Ephemeral host-only token reference, never a literal.
+            ${{ github.token }}
+          CURSOR_AUTOMATION_ENABLED: ${{ vars.CURSOR_AUTOMATION_ENABLED }}
+        run: node scripts/cursor-review.mjs route
+  analyze:
+    needs: route
+    if: needs.route.outputs.ready == 'true'
+    concurrency:
+      group: cursor-${{ github.repository }}-pr-${{ needs.route.outputs.pr }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 360 # GitHub-hosted platform ceiling, not a reasoning timer.
     permissions:
       contents: read
       actions: read
       pull-requests: write
+    env:
+      CURSOR_WORKFLOW_SHA: ${{ needs.route.outputs.trusted }}
     steps:
-      # Normal operations use trusted main. The manual dialogue exception pins
-      # an independently reviewed integration candidate, never media PR code.
+      # Every operation uses installed trusted main. PR source is data only.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.operation == 'dialogue' && github.sha || 'main' }}
+          ref: ${{ needs.route.outputs.trusted }}
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
+      - name: Provision existing core checks once
+        run: |
+          timeout --kill-after=5s 115s bash -euo pipefail -c '
+            git config --local user.name nontwo
+            git config --local user.email 163475477+nontwo@users.noreply.github.com
+            git config --local user.useConfigOnly true
+            node scripts/install-confidentiality-hooks.mjs --confirm-current-identity-approved
+          '
       - name: Collect current PR evidence
         id: context
         env:
@@ -96,6 +117,8 @@ jobs:
             ${{ github.token }}
           CURSOR_AUTOMATION_ENABLED: ${{ vars.CURSOR_AUTOMATION_ENABLED }}
           CURSOR_OPERATION: ${{ inputs.operation }}
+          CONFIDENTIALITY_BATCH_ID:
+            cursor-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           if [ "$CURSOR_OPERATION" = dialogue ]; then
             node scripts/cursor-dialogue.mjs prepare
@@ -103,9 +126,10 @@ jobs:
             node scripts/cursor-review.mjs prepare
           fi
       - name: Install pinned official Cursor CLI
+        id: install
         if:
-          steps.context.outputs.ready == 'true' || steps.context.outputs.models
-          == 'true'
+          steps.context.outputs.inference == 'true' ||
+          steps.context.outputs.models == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -130,13 +154,15 @@ jobs:
             node scripts/cursor-review.mjs fresh
           fi
       - name: Analyze with Cursor included usage
+        id: inference
         if:
-          steps.fresh.outputs.ready == 'true' || steps.context.outputs.models ==
-          'true'
+          (steps.fresh.outputs.ready == 'true' &&
+          steps.context.outputs.inference != 'false') ||
+          steps.context.outputs.models == 'true'
         env:
           CURSOR_API_KEY: # Resolved by GitHub; never a literal credential.
             ${{ secrets.CURSOR_API_KEY }}
-          CURSOR_MODEL: ${{ vars.CURSOR_MODEL || 'composer-2.5' }}
+          CURSOR_MODEL: ${{ vars.CURSOR_MODEL }}
           CURSOR_OPERATION:
             ${{ inputs.operation == 'dialogue' && 'dialogue' ||
             steps.context.outputs.models == 'true' && 'models' || 'analyze' }}
@@ -147,31 +173,47 @@ jobs:
             node scripts/cursor-review.mjs "$CURSOR_OPERATION"
           fi
       - name: Publish concise revision-bound findings
-        # This exact Owner-requested native diagnosis is retained privately.
+        id: publish
         if: >-
-          steps.fresh.outputs.ready == 'true' && inputs.operation != 'dialogue'
+          steps.fresh.outputs.ready == 'true'
         env:
           GH_TOKEN: # The agent never receives this publishing credential.
             ${{ github.token }}
           CONFIDENTIALITY_BATCH_ID:
             cursor-${{ github.run_id }}-${{ github.run_attempt }}
           CURSOR_OPERATION: ${{ inputs.operation }}
-        # Fresh hosted checkout: provision the existing scanner once, preserving
-        # the repository's approved anonymous identity. No commit or push occurs.
-        # Preparation and publication share one real 120-second ceiling.
+        # The existing core ledger shares the remaining allowance with admission.
         run: |
           timeout --kill-after=5s 115s bash -euo pipefail -c '
-            git config --local user.name nontwo
-            git config --local user.email 163475477+nontwo@users.noreply.github.com
-            git config --local user.useConfigOnly true
-            node scripts/install-confidentiality-hooks.mjs --confirm-current-identity-approved
             if [ "$CURSOR_OPERATION" = dialogue ]; then
               node scripts/cursor-dialogue.mjs publish
             else
               node scripts/cursor-review.mjs publish
             fi
           '
-      - name: Retain bounded dialogue records and verified original cache
+      - name: Prepare sanitized automatic transport only
+        if: always() && inputs.operation != 'dialogue'
+        env:
+          GH_TOKEN: # Ephemeral host-only publishing token reference.
+            ${{ github.token }}
+          CONFIDENTIALITY_BATCH_ID:
+            cursor-${{ github.run_id }}-${{ github.run_attempt }}
+          CURSOR_PREPARE_OUTCOME: ${{ steps.context.outcome }}
+          CURSOR_INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          CURSOR_ANALYZE_OUTCOME: ${{ steps.inference.outcome }}
+          CURSOR_PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+        run: node scripts/cursor-review.mjs retain
+      - name: Retain sanitized automatic receipt and answer
+        if: always() && inputs.operation != 'dialogue'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cursor-automatic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cursor-review/remote-output/
+          retention-days: 7
+          if-no-files-found: ignore
+      # These approved sanitized projections/results are repository-readable.
+      # Private full local evidence is never part of this transport.
+      - name: Retain approved sanitized question records and projection cache
         if: always() && inputs.operation == 'dialogue'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
