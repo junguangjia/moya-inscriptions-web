@@ -15,12 +15,14 @@ import {
   approvedAnonymousIdentity,
   coreCheckCategory,
   sanitizeAttribution,
+  sanitizeReadiness,
+  READINESS_FIELDS,
 } from "./media-home-diagnostic.mjs";
 
 const workflow = "a".repeat(40);
 const env = {
   GITHUB_EVENT_NAME: "workflow_dispatch",
-  GITHUB_REF: "refs/heads/codex/media-home-d9-diagnostic",
+  GITHUB_REF: "refs/heads/codex/media-home97-readiness-diagnostic",
   HOME_WORKFLOW_SHA: workflow,
   GITHUB_SHA: workflow,
   HOME_TASK_KEY: "12345678-1234-1234-1234-123456789abc",
@@ -296,4 +298,163 @@ test("default CI is byte-equivalent after removing only diagnostic guards, input
     )
     .split("\n  media-home-diagnostic:")[0];
   assert.ok(withoutDiagnostic.trimEnd() === original.trimEnd());
+});
+
+function readinessRecorder() {
+  const require = createRequire(
+    new URL("../tests/package.json", import.meta.url),
+  );
+  const ts = require("typescript");
+  const code = ts.transpileModule(
+    readFileSync(
+      new URL(
+        "../tests/e2e/support/home-readiness-recorder.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+      },
+    },
+  ).outputText;
+  const module = { exports: {} };
+  new Function("require", "module", "exports", code)(
+    require,
+    module,
+    module.exports,
+  );
+  return new module.exports.HomeReadinessRecorder();
+}
+const readyEvidence = (extra = {}) => ({
+  activeFeed: "discover",
+  layoutReady: "true",
+  layoutRetained: false,
+  mediaTerminal: true,
+  masonryHeightMinusMaxItemBottom: 0,
+  images: [
+    {
+      complete: true,
+      naturalWidth: 320,
+      currentSrc: "https://example.invalid/private",
+    },
+  ],
+  items: [{ top: 0, height: 200 }],
+  scrollTop: 900,
+  clientHeight: 1141,
+  masonryHeight: 200,
+  ...extra,
+});
+test("readiness guards and signature changes emit scalars without raw evidence", () => {
+  const r = readinessRecorder();
+  r.phase(0);
+  const call = r.begin("discover");
+  r.eagerDone(call);
+  r.sample(call, readyEvidence(), 1, false);
+  r.sample(call, readyEvidence({ scrollTop: 0 }), 2, false);
+  r.sample(
+    call,
+    readyEvidence({
+      images: [{ complete: false, naturalWidth: 0 }],
+      mediaTerminal: false,
+    }),
+    0,
+    false,
+  );
+  const out = sanitizeReadiness(r.snapshot());
+  assert.ok(out.rows.every((row) => row.length === READINESS_FIELDS.length));
+  assert.ok(out.rows.some((row) => row[18] === 1 << 12));
+  assert.ok(
+    out.rows.some(
+      (row) => row[11] === 1 && row[13] === false && row[19] === false,
+    ),
+  );
+  assert.ok(!JSON.stringify(out).includes("example.invalid"));
+  assert.ok(!JSON.stringify(out).includes("currentSrc"));
+});
+test("readiness early flood preserves first failure, its predecessor and every late call", () => {
+  const make = () => {
+    const r = readinessRecorder();
+    const routes = [
+      [0, "discover"],
+      [1, "discover"],
+      [0, "nearby"],
+      [1, "nearby"],
+      [0, "calligraphy"],
+      [1, "calligraphy"],
+      [2, "discover"],
+      [2, "nearby"],
+      [2, "calligraphy"],
+    ];
+    for (const [phase, feed] of routes) {
+      r.phase(phase);
+      const call = r.begin(feed);
+      r.eagerDone(call);
+      const v = readyEvidence({ activeFeed: feed });
+      r.sample(call, v, 1, false);
+      const changed = { ...v, masonryHeight: 201 };
+      r.sample(call, changed, 1, false);
+      for (let n = 0; n < 10000; n++) r.sample(call, changed, 2, true);
+      r.sample(call, { ...changed, layoutRetained: true }, 0, false);
+      r.sample(call, changed, 1, false);
+      r.sample(call, changed, 3, true);
+      r.settled(call);
+    }
+    return sanitizeReadiness(r.snapshot());
+  };
+  const a = make(),
+    b = make();
+  assert.equal(a.slots.length, 9);
+  assert.equal(a.rows.length, 72);
+  assert.equal(a.invalid, 0);
+  assert.equal(a.overflow, 0);
+  for (const slot of a.slots) {
+    assert.equal(slot.retained, 8);
+    assert.equal(slot.completed, true);
+    const rows = a.rows.filter((row) => row[2] === slot.call);
+    const failed = rows.find((row) => row[19] === false);
+    assert.ok(failed);
+    assert.ok(rows.some((row) => row[0] === failed[0] - 1));
+    assert.ok(rows.some((row) => row[5] === 3));
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify({ attempts: [a, b] })) < 131072);
+});
+test("readiness sanitizer rejects unsafe values, altered predicates and stage routes", () => {
+  const r = readinessRecorder();
+  const call = r.begin("discover");
+  r.eagerDone(call);
+  r.sample(call, readyEvidence(), 1, false);
+  const value = r.snapshot();
+  sanitizeReadiness(value);
+  for (const unsafe of ["https://example.invalid", Infinity, {}, []]) {
+    const changed = JSON.parse(JSON.stringify(value));
+    changed.rows[2][15] = unsafe;
+    assert.throws(() => sanitizeReadiness(changed));
+  }
+  for (const [at, v] of [
+    [3, 2],
+    [4, 3],
+    [19, false],
+    [10, 999],
+    [16, 4],
+    [18, 8192],
+  ]) {
+    const changed = JSON.parse(JSON.stringify(value));
+    changed.rows[2][at] = v;
+    assert.throws(() => sanitizeReadiness(changed));
+  }
+  const changed = JSON.parse(JSON.stringify(value));
+  changed.slots[0].retained = 99;
+  assert.throws(() => sanitizeReadiness(changed));
+});
+test("unknown and excess readiness calls remain explicit, never contaminate a late stage", () => {
+  const r = readinessRecorder();
+  r.phase(2);
+  assert.equal(r.begin("discover"), undefined);
+  assert.equal(r.snapshot().invalid, 1);
+  r.phase(0);
+  assert.equal(r.begin("discover"), 1);
+  assert.equal(r.snapshot().slots.length, 1);
 });

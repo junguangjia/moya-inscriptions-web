@@ -17,10 +17,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { setTimeout } from "node:timers";
 
-export const SOURCE = "d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618";
-export const TREE = "7d2336e2685a0cd3545d268530ce66d15ff8b164";
+export const SOURCE = "97c594d7702794b0ba869d9c86a1c9513f4e727b";
+export const TREE = "23fba8310bcab3ab0dd5b9ccc40aa76dbd8446bd";
 export const ORIGINAL_SPEC =
-  "bd33a438d2d43db58d2fd6e425616d72de904b095016dfff46989064508f8a03";
+  "4b6b8a3b1fc96061cf3c322fc80b041bcdbae5631026c316ce6dc3969a5a7562";
 export const TITLE =
   "Home preserves independent Discover, Nearby, and Calligraphy scroll positions";
 export const PHASES = [
@@ -41,6 +41,179 @@ export const PHASES = [
   "end",
 ];
 export const FEEDS = ["discover", "nearby", "inscriptions", "calligraphy"];
+export const READINESS_FIELDS = [
+  "seq",
+  "body_elapsed_ms",
+  "call",
+  "phase",
+  "feed",
+  "event",
+  "active_feed",
+  "layout_ready",
+  "layout_retained",
+  "image_total",
+  "image_loaded",
+  "image_pending",
+  "image_failed",
+  "media_terminal",
+  "geometry_ok",
+  "geometry_delta",
+  "stable_frames",
+  "signature_matches_prior_stability_signature",
+  "signature_changed_mask",
+  "all_guards_ready",
+  "scroll_top",
+  "client_height",
+];
+export const READINESS_SIGNATURE_KEYS = [
+  "activeFeed",
+  "anchorX",
+  "anchorY",
+  "images",
+  "items",
+  "layoutReady",
+  "layoutRetained",
+  "masonryColumns",
+  "masonryHeight",
+  "masonryHeightMinusMaxItemBottom",
+  "masonryWidth",
+  "mediaStates",
+  "scrollTop",
+];
+const readinessRoutes = [
+  [0, 0],
+  [1, 0],
+  [0, 1],
+  [1, 1],
+  [0, 3],
+  [1, 3],
+  [2, 0],
+  [2, 1],
+  [2, 3],
+];
+export function sanitizeReadiness(value) {
+  if (
+    !value ||
+    value.schema !== 1 ||
+    !Array.isArray(value.rows) ||
+    value.rows.length > 72 ||
+    !Array.isArray(value.slots) ||
+    value.slots.length > 9 ||
+    !Number.isFinite(value.body_started_epoch_ms) ||
+    value.body_started_epoch_ms < 0
+  )
+    throw new Error("READINESS_SCHEMA_REJECTED");
+  for (const key of ["seen", "invalid", "overflow"])
+    if (!Number.isSafeInteger(value[key]) || value[key] < 0)
+      throw new Error("READINESS_COUNTER_REJECTED");
+  let previous = 0;
+  for (const row of value.rows) {
+    if (
+      !Array.isArray(row) ||
+      row.length !== READINESS_FIELDS.length ||
+      row.some(
+        (x) =>
+          x !== null &&
+          typeof x !== "boolean" &&
+          (typeof x !== "number" || !Number.isFinite(x)),
+      )
+    )
+      throw new Error("READINESS_ROW_REJECTED");
+    const route = readinessRoutes[row[2] - 1];
+    if (
+      !Number.isSafeInteger(row[0]) ||
+      row[0] <= previous ||
+      row[0] > value.seen ||
+      typeof row[1] !== "number" ||
+      row[1] < 0 ||
+      row[1] > 1080000 ||
+      !Number.isInteger(row[2]) ||
+      !route ||
+      row[3] !== route[0] ||
+      row[4] !== route[1] ||
+      ![0, 1, 2, 3].includes(row[5])
+    )
+      throw new Error("READINESS_ROUTE_REJECTED");
+    if (row[5] !== 2) {
+      if (row.slice(6).some((x) => x !== null))
+        throw new Error("READINESS_EVENT_REJECTED");
+    } else {
+      if (row[6] !== null && ![0, 1, 2, 3].includes(row[6]))
+        throw new Error("READINESS_ACTIVE_REJECTED");
+      for (const at of [7, 8, 13, 14, 19])
+        if (typeof row[at] !== "boolean")
+          throw new Error("READINESS_FLAG_REJECTED");
+      for (const at of [9, 10, 11, 12])
+        if (!Number.isInteger(row[at]) || row[at] < 0 || row[at] > 10000)
+          throw new Error("READINESS_IMAGE_COUNT_REJECTED");
+      if (
+        row[9] !== row[10] + row[11] + row[12] ||
+        row[13] !== (row[11] === 0 && row[12] === 0) ||
+        (row[15] !== null &&
+          (typeof row[15] !== "number" || Math.abs(row[15]) > 10000000)) ||
+        row[14] !== (row[15] !== null && Math.abs(row[15]) <= 2) ||
+        !Number.isInteger(row[16]) ||
+        row[16] < 0 ||
+        row[16] > 3 ||
+        (row[17] !== null && typeof row[17] !== "boolean") ||
+        !Number.isInteger(row[18]) ||
+        row[18] < 0 ||
+        row[18] > 8191 ||
+        row[19] !==
+          (row[6] === row[4] && row[7] && !row[8] && row[13] && row[14])
+      )
+        throw new Error("READINESS_PREDICATE_REJECTED");
+      for (const at of [20, 21])
+        if (
+          row[at] !== null &&
+          (typeof row[at] !== "number" || row[at] < 0 || row[at] > 10000000)
+        )
+          throw new Error("READINESS_GEOMETRY_REJECTED");
+    }
+    previous = row[0];
+  }
+  const slots = value.slots.map((slot, index) => {
+    const route = readinessRoutes[index];
+    const rows = value.rows.filter((row) => row[2] === index + 1);
+    if (
+      slot.call !== index + 1 ||
+      slot.phase !== route[0] ||
+      slot.feed !== route[1] ||
+      !Number.isSafeInteger(slot.seen) ||
+      slot.seen < rows.length ||
+      slot.retained !== rows.length ||
+      slot.retained < 1 ||
+      slot.retained > 8 ||
+      slot.omitted !== slot.seen - slot.retained ||
+      typeof slot.completed !== "boolean" ||
+      slot.completed !== rows.some((row) => row[5] === 3)
+    )
+      throw new Error("READINESS_SLOT_REJECTED");
+    return {
+      call: slot.call,
+      phase: slot.phase,
+      feed: slot.feed,
+      seen: slot.seen,
+      retained: slot.retained,
+      omitted: slot.omitted,
+      completed: slot.completed,
+    };
+  });
+  if (
+    value.seen !== slots.reduce((sum, slot) => sum + slot.seen, 0) ||
+    value.rows.some((row) => row[2] > slots.length)
+  )
+    throw new Error("READINESS_COUNTS_REJECTED");
+  return {
+    schema: 1,
+    body_started_epoch_ms: value.body_started_epoch_ms,
+    rows: value.rows,
+    slots,
+    seen: value.seen,
+    invalid: value.invalid,
+    overflow: value.overflow,
+  };
+}
 export const FIELDS = [
   "seq",
   "t_ms",
@@ -79,7 +252,7 @@ const save = (path, value) =>
 export function admit(env, currentSha, currentTree) {
   if (
     env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
-    env.GITHUB_REF !== "refs/heads/codex/media-home-d9-diagnostic" ||
+    env.GITHUB_REF !== "refs/heads/codex/media-home97-readiness-diagnostic" ||
     !/^[a-f0-9]{40}$/.test(env.HOME_WORKFLOW_SHA ?? "") ||
     env.GITHUB_SHA !== env.HOME_WORKFLOW_SHA ||
     !/^[a-f0-9-]{36}$/.test(env.HOME_TASK_KEY ?? "") ||
@@ -563,8 +736,8 @@ async function execute(mode) {
     });
     execFileSync("git", ["apply", patch], { cwd: c.source, timeout: 5000 });
     copyFileSync(
-      join(c.workflow, SUPPORT, "home-causal-recorder.ts"),
-      join(c.source, SUPPORT, "home-causal-recorder.ts"),
+      join(c.workflow, SUPPORT, "home-readiness-recorder.ts"),
+      join(c.source, SUPPORT, "home-readiness-recorder.ts"),
     );
     const config = join(c.source, SUPPORT, "home-causal.config.mts");
     writeFileSync(
@@ -575,14 +748,15 @@ async function execute(mode) {
       source_file_sha256: sha(readFileSync(join(c.source, SPEC))),
       patch_sha256: sha(readFileSync(patch)),
       recorder_sha256: sha(
-        readFileSync(join(c.workflow, SUPPORT, "home-causal-recorder.ts")),
+        readFileSync(join(c.workflow, SUPPORT, "home-readiness-recorder.ts")),
       ),
       runtime_files: [
         "apps/web/features/shell/horizontal-pager.tsx",
         "apps/web/features/product-shell/product-shell.tsx",
       ].map((path) => ({
         path,
-        instrumented_sha256: sha(readFileSync(join(c.source, path))),
+        observed_sha256: sha(readFileSync(join(c.source, path))),
+        untouched: true,
         original_blob: c.git("rev-parse", `${SOURCE}:${path}`),
       })),
     });
@@ -610,6 +784,7 @@ async function execute(mode) {
     const planned = json(join(c.raw, "selected.json"));
     selectedTests(planned);
     if (
+      planned.config.failOnFlakyTests !== true ||
       planned.config.workers !== 1 ||
       planned.config.globalTimeout !== 1080000 ||
       planned.config.projects[0].timeout !== 30000 ||
@@ -644,25 +819,12 @@ async function execute(mode) {
     source_file_sha256: ORIGINAL_SPEC,
     case: TITLE,
     project: "tablet-webkit",
-    row_fields: FIELDS,
-    phase_dictionary: PHASES,
-    feed_dictionary: FEEDS,
-    attribution_fields: ATTRIBUTION_FIELDS,
-    attribution_kind_dictionary: ["writer", "scroll", "mark"],
-    attribution_actor_dictionary: ["pager.restore", "shell.restore", "none"],
-    attribution_edge_dictionary: ["before", "after", "none"],
-    attribution_coverage:
-      "Discover seed phase only; first12, last12, first observed900-to-zero preceding12/following12; omitted counts explicit, no writer inferred for unattributed browser changes",
-    tag_dictionary: [
-      "checkpoint",
-      "write",
-      "read",
-      "scroll",
-      "active.change",
-      "aligned",
-      "eager.before",
-      "eager.after",
-    ],
+    readiness_fields: READINESS_FIELDS,
+    readiness_phase_dictionary: ["pre_seed", "post_seed", "final_restore"],
+    readiness_event_dictionary: ["begin", "eager_done", "sample", "settled"],
+    readiness_signature_keys: READINESS_SIGNATURE_KEYS,
+    readiness_coverage:
+      "At most9 helper invocations/retry; first2/last2 plus first guard failure and signature change with preceding samples; at most8 rows/invocation. Omitted counts explicit.",
     attempts: [],
     state: "NATIVE_REPORT_MISSING",
     acceptance_pass: false,
@@ -670,9 +832,9 @@ async function execute(mode) {
     raw_originals_after_runner_disposal:
       "NOT_RETAINED; only selected sanitized records are published",
     original_source_ranges: {
-      helper: [121, 286],
-      producer: [1898, 1918],
-      matcher: [1979, 1991],
+      helper: [196, 343],
+      producer: [1899, 1911],
+      final: [2054, 2058],
     },
   };
   packet.identity.workflow_blob = execFileSync(
@@ -681,9 +843,9 @@ async function execute(mode) {
     { cwd: c.workflow, encoding: "utf8", timeout: 5000 },
   ).trim();
   packet.row_clock =
-    "browser performance.now within document_label, not hosted wall-clock or another attempt";
+    "Node performance.now relative to this testcase body entry; native startTime versus body Date.now derived separately within this same retry";
   packet.owner_scope =
-    "non-authorizing document_label plus per-document WeakMap owner";
+    "Fixed source helper invocation/phase/feed enums, not browser identities or URLs";
   if (existsSync(join(c.raw, "overlay.json")))
     packet.overlay = json(join(c.raw, "overlay.json"));
   if (existsSync(join(c.raw, "execution.json")))
@@ -747,53 +909,30 @@ async function execute(mode) {
         try {
           const bytes = readFileSync(path);
           const value = JSON.parse(bytes);
-          if (
-            value.project !== "tablet-webkit" ||
-            value.retry !== retry ||
-            typeof value.finalSnapshot !== "boolean"
-          )
+          if (value.project !== "tablet-webkit" || value.retry !== retry)
             throw new Error("RETRY_PACKET_REJECTED");
-          if (
-            !Array.isArray(value.writeReturns) ||
-            value.writeReturns.length > 3 ||
-            value.writeReturns.some(
-              (r) =>
-                !Array.isArray(r) ||
-                r.length !== 4 ||
-                ![0, 1, 3].includes(r[0]) ||
-                !Number.isFinite(r[1]) ||
-                r
-                  .slice(2)
-                  .some((n) => !Number.isInteger(n) || n < 0 || n > 4294967295),
-            )
-          )
-            throw new Error("WRITE_RETURN_REJECTED");
-          if (
-            !Number.isInteger(value.documentChanges) ||
-            value.documentChanges < 0
-          )
-            throw new Error("DOCUMENT_CHANGE_REJECTED");
-          const snapshot =
-            value.snapshot === null ? null : sanitizeSnapshot(value.snapshot);
+          const readiness = sanitizeReadiness(value.readiness);
+          const nativeStart =
+            typeof attempt?.startTime === "string"
+              ? Date.parse(attempt.startTime)
+              : NaN;
+          const bodyDelay = readiness.body_started_epoch_ms - nativeStart;
           Object.assign(entry, {
-            write_return_fields: [
-              "feed",
-              "test_helper_returned_top",
-              "document_label_0",
-              "document_label_1",
-            ],
-            write_returns: value.writeReturns,
-            snapshot,
-            final_snapshot: value.finalSnapshot,
-            document_changes: value.documentChanges,
-            capture_available: snapshot !== null,
+            readiness,
+            body_entered_after_native_start_ms:
+              Number.isFinite(bodyDelay) &&
+              bodyDelay >= 0 &&
+              bodyDelay <= 1080000
+                ? bodyDelay
+                : null,
+            capture_available: true,
             capture_state:
-              snapshot === null
-                ? "NO_SNAPSHOT"
-                : "RECORDED_FIRST_LAST_AND_FIRST_DIVERGENCE",
+              readiness.invalid || readiness.overflow
+                ? "READINESS_INVALID_OR_OVERFLOW_RECORDED"
+                : "READINESS_SCALARS_RECORDED",
             original_packet_sha256: sha(bytes),
             original_file: `retry-${retry}.json`,
-            original_rows_pointer: "/snapshot/rows",
+            original_rows_pointer: "/readiness/rows",
           });
         } catch {
           entry.capture_state = "INVALID";
