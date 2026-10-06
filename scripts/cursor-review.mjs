@@ -1,3 +1,5 @@
+import console from "node:console";
+import { runCursorStream } from "./cursor-stream.mjs";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import {
@@ -1125,7 +1127,7 @@ async function inspectModels(directory, env) {
     process.exitCode = 1;
 }
 
-function analyze(directory, env) {
+async function analyze(directory, env) {
   const packet = readJSON(join(directory, "context.json"));
   const unavailable = (reason) =>
     save(join(directory, "report.json"), {
@@ -1155,7 +1157,7 @@ function analyze(directory, env) {
   save(join(home, ".cursor/cli-config.json"), agentConfiguration());
   save(join(directory, ".cursor/cli.json"), agentConfiguration());
   try {
-    const raw = command(
+    const streamed = await runCursorStream(
       env.CURSOR_AGENT_BIN,
       [
         "--print",
@@ -1165,7 +1167,8 @@ function analyze(directory, env) {
         "--model",
         model,
         "--output-format",
-        "json",
+        "stream-json",
+        "--stream-partial-output",
       ],
       {
         cwd: directory,
@@ -1173,13 +1176,14 @@ function analyze(directory, env) {
         // This avoids OS argv limits and model file-read truncation/preambles.
         input: `${PROMPT}\n\nUNTRUSTED EVIDENCE JSON:\n${JSON.stringify(packet)}`,
         env: agentEnvironment(env, home),
-        timeout: 420000,
-        maxBuffer: 256 * 1024,
-        killSignal: "SIGKILL",
+        progressPath: join(directory, "progress.json"),
+        onProgress: (progress) =>
+          console.log(JSON.stringify({ cursorProgress: progress })),
       },
-      cursorFailure,
     );
-    const report = parseCLIResult(raw, packet);
+    if (streamed.error || streamed.status !== 0)
+      throw new Error(cursorFailure(streamed));
+    const report = parseCLIResult(streamed.stdout, packet);
     // Read only our fresh CLI configuration, never any user credentials/config.
     // A successful response must not hide a fallback to different parameters.
     const effectiveSelection = confirmModelSelection(
@@ -1403,7 +1407,7 @@ export async function main(stage, env = process.env) {
     )
       return;
     await inspectModels(directory, env);
-  } else if (stage === "analyze") analyze(directory, env);
+  } else if (stage === "analyze") await analyze(directory, env);
   else if (stage === "publish") publish(directory, repository, env);
   else throw new Error("INVALID_STAGE");
 }

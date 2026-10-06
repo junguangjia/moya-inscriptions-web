@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import console from "node:console";
 import { spawnSync } from "node:child_process";
+import { runCursorStream } from "./cursor-stream.mjs";
 import {
   appendFileSync,
   existsSync,
@@ -28,20 +29,21 @@ import {
 export const TARGET = Object.freeze({
   repository: "junguangjia/moya-inscriptions-web",
   pr: 214,
-  source: "defaea4fc58e6c0a3c3cccfcda29714561a6045c",
-  tree: "02f304ce9f96b11e7a1955d21af48bdb536661de",
-  workflow: "defaea4fc58e6c0a3c3cccfcda29714561a6045c",
+  source: "d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618",
+  tree: "7d2336e2685a0cd3545d268530ce66d15ff8b164",
+  workflow: "d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618",
   workflowId: 327712419,
-  run: 37377833576,
+  run: 37394447844,
   attempt: 1,
   base: "claude/unified-media-pipeline-v1",
 });
 export const MODEL = "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]";
 export const BUDGET = Object.freeze({
   rounds: 3,
-  callMs: 360000,
-  inferenceMs: 900000,
-  wallMs: 600000,
+  // Owner prospective policy: elapsed inference is measured, not aborted.
+  callMs: null,
+  inferenceMs: null,
+  wallMs: null,
   transportBytes: 60000,
   packetChars: 120000,
   recordChars: 24000,
@@ -63,9 +65,9 @@ export const RESUMPTION = Object.freeze({
 });
 export const ORIGINALS = Object.freeze({
   preparation:
-    "830d76610652006fa02a0aec73afb4e35b69763d14458eca68f81e9b80eb784a",
-  feedback: "2a374ca58dbf6b2ac24cf5eb437c4474ee07f9aafb86fbee69c4aec1b26e5d2d",
-  execution: "31e0a1d12ca5078631cfaa442215ddcac021a2ecc8588d7c91f9f77cbfe015ba",
+    "e4fa3ffeb5338040e2625788cefacd31df649240955683d07840cc874cef232c",
+  feedback: "3131f661eb2adc5362984ad139ed292dfe71a1d6a520caa0f99654899d53e310",
+  execution: "b894abf0c97e9aa8385a3388f4f26f6153dc0181145783be0379c50a1151eab6",
 });
 const fail = (code, detail) => {
   const error = new Error(code);
@@ -112,7 +114,7 @@ export function dialogueDeadline(request) {
         RESUMPTION.expiresAt,
         (request.resumeAdmittedAt ?? RESUMPTION.expiresAt) + RESUMPTION.wallMs,
       )
-    : request.startedAt + BUDGET.wallMs;
+    : Infinity;
 }
 export function validateResumePrior(prior) {
   if (
@@ -592,7 +594,7 @@ export function validatePrevious(request, prior, now = Date.now()) {
     prior.startedAt !== request.startedAt ||
     (!resumeEntry && prior.status !== "needs_evidence") ||
     !Number.isFinite(prior.inferenceMs) ||
-    prior.inferenceMs >= BUDGET.inferenceMs ||
+    (BUDGET.inferenceMs !== null && prior.inferenceMs >= BUDGET.inferenceMs) ||
     now >= dialogueDeadline(request) ||
     (!resumeEntry &&
       (prior.resumption !== request.resumption ||
@@ -821,7 +823,7 @@ export function promptFor(request, prior, sources) {
       : null,
     source: sources,
     evidenceLimit:
-      "Only selected original JSON values; unselected events remain unknown. No raw native trace or complete native report was retained in these original artifacts.",
+      "Only selected hash-bound native values and disclosed projections are supplied. Unselected events remain unknown; private native originals are cached by the deterministic collector. No trace, screenshot or raw service log is supplied.",
   };
   if (JSON.stringify(packet).length > BUDGET.packetChars) fail("CONTEXT_LIMIT");
   return `${DIALOGUE_PROMPT}\n\nQUESTION AND UNTRUSTED EVIDENCE JSON:\n${JSON.stringify(packet)}`;
@@ -878,7 +880,7 @@ function render(record) {
   );
   return lines.join("\n\n");
 }
-function analyze(directory, env) {
+async function analyze(directory, env) {
   if (existsSync(join(directory, "output/round.json")))
     fail("DUPLICATE_INVOCATION");
   const { request, prior, sources, collection } = read(
@@ -886,13 +888,7 @@ function analyze(directory, env) {
   );
   validateRequest(request, Date.now(), true);
   const elapsed = prior?.inferenceMs || 0;
-  const timeout = Math.min(
-    BUDGET.callMs,
-    BUDGET.inferenceMs - elapsed,
-    dialogueDeadline(request) - Date.now() - 10000,
-  );
-  if (timeout <= 0 || env.CURSOR_MODEL !== MODEL)
-    fail("MODEL_OR_BUDGET_REFUSED");
+  if (env.CURSOR_MODEL !== MODEL) fail("MODEL_OR_BUDGET_REFUSED");
   const home = join(directory, "isolated-agent");
   mkdirSync(join(home, ".cursor"), { recursive: true, mode: 0o700 });
   mkdirSync(join(directory, ".cursor"), { recursive: true, mode: 0o700 });
@@ -942,7 +938,7 @@ function analyze(directory, env) {
   save(join(directory, "output/round.json"), record);
   try {
     if (!env.CURSOR_API_KEY) fail("MISSING_CURSOR_KEY");
-    const result = spawnSync(
+    const result = await runCursorStream(
       env.CURSOR_AGENT_BIN,
       [
         "--print",
@@ -952,18 +948,19 @@ function analyze(directory, env) {
         "--model",
         MODEL,
         "--output-format",
-        "json",
+        "stream-json",
+        "--stream-partial-output",
       ],
       {
         cwd: directory,
         input: promptFor(request, prior, sources),
         env: agentEnvironment(env, home),
-        encoding: "utf8",
-        timeout,
-        maxBuffer: 256 * 1024,
-        killSignal: "SIGKILL",
+        progressPath: join(directory, "output/progress.json"),
+        onProgress: (progress) =>
+          console.log(JSON.stringify({ cursorProgress: progress })),
       },
     );
+    record.progress = result.progress;
     // Preserve independent runtime metadata even when answer validation fails.
     try {
       record.effectiveSelection = confirmModelSelection(
@@ -1053,7 +1050,7 @@ function analyze(directory, env) {
   if (resumed(request))
     record.resumeWallMs = Date.now() - request.resumeAdmittedAt;
   if (
-    record.inferenceMs > BUDGET.inferenceMs ||
+    (BUDGET.inferenceMs !== null && record.inferenceMs > BUDGET.inferenceMs) ||
     Date.now() >= dialogueDeadline(request)
   ) {
     record.status = "incomplete";
@@ -1143,7 +1140,7 @@ export async function dialogueMain(stage, env = process.env) {
     const { request } = read(join(directory, "prepared.json"));
     fresh(request, true);
     appendFileSync(env.GITHUB_OUTPUT, "ready=true\n");
-  } else if (stage === "analyze") analyze(directory, env);
+  } else if (stage === "analyze") await analyze(directory, env);
   else if (stage === "publish") {
     const { request } = read(join(directory, "prepared.json"));
     const record = read(join(directory, "output/round.json"));

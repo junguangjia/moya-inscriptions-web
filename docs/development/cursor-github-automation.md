@@ -285,14 +285,17 @@ prevent a clean verdict. `incomplete` and `unavailable` fail this advisory
 workflow after publishing a concise status; neither changes existing required
 checks. Cursor does not run tests, so a review comment cannot prove CI passed.
 
-The inference deadline is seven minutes and the job ceiling is fifteen minutes.
-Automatic and manual review events share a PR concurrency group. CI diagnosis
-uses the same commit group for manual and automatic requests. A freshness step
-immediately before inference checks the PR head and CI run attempt again after
-installation. Publication rechecks the PR head; the commit is always visible in
-the report. Review and diagnosis have separate comments so one does not
-overwrite the other. Older comments remain visibly bound to their old commit
-until replaced; readers must compare that SHA to the PR's current head.
+The Owner removed arbitrary inference-time cutoffs for future authorized calls.
+The official CLI now emits incremental NDJSON; deterministic scripts retain only
+safe progress metadata and the scanned terminal answer. GitHub-hosted jobs have
+a six-hour platform ceiling including preparation and retention. Automatic and
+manual review events share a PR concurrency group. CI diagnosis uses the same
+commit group for manual and automatic requests. A freshness step immediately
+before inference checks the PR head and CI run attempt again after installation.
+Publication rechecks the PR head; the commit is always visible in the report.
+Review and diagnosis have separate comments so one does not overwrite the other.
+Older comments remain visibly bound to their old commit until replaced; readers
+must compare that SHA to the PR's current head.
 
 To pause automatic reviews, set repository variable
 `CURSOR_AUTOMATION_ENABLED=false`. Explicit metadata inspection and manual CI
@@ -342,9 +345,9 @@ discovery of other artifacts are unsupported.
 The dialogue_request JSON fields are target, candidate, candidatePR, dialogueId
 (24 hex), round, startedAt (epoch milliseconds), previousRun (null for round1),
 question, selectors, optional sourcePaths, and originals (encoded snapshot for
-round1 only). It permits one initial question plus at most two follow-ups: 360s
-per inference,900s aggregate inference,1800s wall time from trusted initial
-GitHub run creation, 10min per job,60KiB transport,120K serialized prompt and24K
+round1 only). It permits one initial question plus at most two follow-ups: no
+fixed model-reasoning cutoff (elapsed time remains recorded), a disclosed
+six-hour GitHub-hosted job ceiling,60KiB transport,120K serialized prompt and24K
 per selected record. Duplicate attempts/rounds, stale identity, errors, no new
 follow-up evidence and budget exhaustion stop incomplete. A follow-up requires
 an exact previous needs_evidence record. No hidden retry, paid fallback or model
@@ -415,3 +418,29 @@ runtime-selection confirmation and numeric usage are retained independently of
 answer validity. A retained response, model selection or usage value is not
 diagnostic acceptance or a billing receipt. The old discarded answer remains
 unrecoverable. These retention changes apply to the bounded dialogue path.
+
+## Prospective waiting policy and exact-run analysis
+
+The new Owner-authorized diagnosis targets CI37394447844/attempt1 at source
+d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618. Earlier answered/timeout records and
+their exhausted three-call experiment remain historical. Each newly authorized
+question has its own explicit invocation ledger; no automatic retry or implicit
+reuse/reset of an old allowance occurs. This diagnosis authorizes one call and
+advice only, not another media repair or required-CI submission.
+
+Official stream-json assistant deltas and permitted tool start/completion events
+are observable activity; init or process-alive alone are not. The CLI suppresses
+thinking events in print mode, so hidden reasoning cannot be verified. Silence
+is activity-unconfirmed, not proof of a stall and not a reason to abort at an
+arbitrary elapsed time. Scripts retain terminal result/error, output-resource
+limits, exact model/identity checks and no paid fallback. No additional tools
+are enabled for monitoring. See
+[Cursor output formats](https://cursor.com/docs/cli/reference/output-format) and
+[GitHub Actions limits](https://docs.github.com/en/actions/reference/limits).
+
+Complete questions, scanned answers and native citation/projection identities
+remain private. The public PR shows one concise human summary of observations,
+unknown causes, actual writer adoption and the next authorized action or
+blocker, with public SHA/run links. No raw artifacts, private paths or account
+details are published. Cursor recommendations never authorize repairs or test
+replays.

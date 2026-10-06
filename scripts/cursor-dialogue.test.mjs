@@ -305,11 +305,7 @@ test("one pinned resumption preserves original cost and expired start without re
     validatePrevious(round3, { ...second, status: "incomplete" }, now),
   );
   assert.throws(() =>
-    validatePrevious(
-      round3,
-      { ...second, inferenceMs: BUDGET.inferenceMs },
-      now,
-    ),
+    validatePrevious(round3, { ...second, inferenceMs: NaN }, now),
   );
 });
 test("prepare admits the host timestamp before reaching pinned-prior validation", () => {
@@ -519,12 +515,12 @@ test("requests have finite time, size and round bounds", () => {
     { ...request, startedAt: 100002 },
   ])
     assert.throws(() => validateRequest(changed, 100001));
-  assert.throws(() =>
-    validateRequest(request, request.startedAt + BUDGET.wallMs),
+  assert.doesNotThrow(() =>
+    validateRequest(request, request.startedAt + 8 * 3600000),
   );
   assert.equal(BUDGET.rounds, 3);
-  assert.equal(BUDGET.callMs, 360000);
-  assert.equal(BUDGET.inferenceMs, 900000);
+  assert.equal(BUDGET.callMs, null);
+  assert.equal(BUDGET.inferenceMs, null);
   assert.equal(
     MODEL,
     "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]",
@@ -549,7 +545,7 @@ test("follow-ups require validated prior identity and genuinely new evidence", (
   for (const changed of [
     { ...prior, seenCoverage: evidence.coverage },
     { ...prior, status: "incomplete" },
-    { ...prior, inferenceMs: BUDGET.inferenceMs },
+    { ...prior, inferenceMs: NaN },
     { ...prior, candidate: "c".repeat(40) },
     { ...prior, startedAt: 200000 },
   ])

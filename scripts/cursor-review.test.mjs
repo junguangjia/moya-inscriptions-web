@@ -1020,6 +1020,7 @@ test("fresh runner installs the controlled scanner, publishes once, updates once
   try {
     for (const name of [
       "cursor-review.mjs",
+      "cursor-stream.mjs",
       "confidentiality-scan.mjs",
       "install-confidentiality-hooks.mjs",
     ])
@@ -1419,7 +1420,7 @@ test("inference passes exact model and evidence on stdin, rejects hidden paramet
       `#!${process.execPath}
 const fs = require('node:fs');
 const input = fs.readFileSync(0, 'utf8');
-if (!input.includes('${head}') || process.argv.at(-1) !== 'json' || process.env.GH_TOKEN) process.exit(2);
+if (!input.includes('${head}') || !process.argv.includes('stream-json') || !process.argv.includes('--stream-partial-output') || process.env.GH_TOKEN) process.exit(2);
 if (process.argv[process.argv.indexOf('--model') + 1] !== 'grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]') process.exit(3);
 const configPath = process.env.CURSOR_CONFIG_DIR + '/cli-config.json';
 const configuration = JSON.parse(fs.readFileSync(configPath, 'utf8'));

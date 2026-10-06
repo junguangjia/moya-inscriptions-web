@@ -40,6 +40,7 @@ const tooling = new Set([
   "scripts/turbo-cache-prune.mjs",
   "scripts/cursor-review.mjs",
   "scripts/cursor-dialogue.mjs",
+  "scripts/cursor-stream.mjs",
 ]);
 const webRoots = [
   "apps/web/",
