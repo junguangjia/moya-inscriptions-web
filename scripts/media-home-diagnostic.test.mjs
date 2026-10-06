@@ -12,6 +12,8 @@ import {
   FIELDS,
   selectedTests,
   sanitizeSnapshot,
+  approvedAnonymousIdentity,
+  coreCheckCategory,
 } from "./media-home-diagnostic.mjs";
 
 const workflow = "a".repeat(40);
@@ -24,6 +26,26 @@ const env = {
   GITHUB_RUN_ID: "123",
   GITHUB_RUN_ATTEMPT: "1",
 };
+test("fresh-clone identity reuses only a valid anonymous controlled-commit author", () => {
+  assert.deepEqual(
+    approvedAnonymousIdentity(
+      "Synthetic Agent\0fixture@users.noreply.github.com\n",
+    ),
+    { name: "Synthetic Agent", email: "fixture@users.noreply.github.com" },
+  );
+  for (const input of [
+    "Synthetic Agent\0personal@example.invalid",
+    "\0fixture@users.noreply.github.com",
+    "Bad\nName\0fixture@users.noreply.github.com",
+    "Synthetic Agent\0fixture@users.noreply.github.com\0other",
+  ])
+    assert.throws(() => approvedAnonymousIdentity(input));
+});
+test("checker incomplete, blocked and execution failures remain distinct", () => {
+  assert.equal(coreCheckCategory(2), "OUTBOUND_CHECK_INCOMPLETE");
+  assert.equal(coreCheckCategory(1), "OUTBOUND_CHECK_BLOCKED");
+  assert.equal(coreCheckCategory(null), "OUTBOUND_CHECK_EXECUTION_FAILED");
+});
 test("admission rejects wrong source, workflow, event and replay attempts", () => {
   assert.equal(admit(env, SOURCE, TREE).source_sha, SOURCE);
   for (const [key, value] of [

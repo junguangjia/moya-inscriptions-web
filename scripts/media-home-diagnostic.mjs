@@ -117,6 +117,26 @@ export function selectedTests(native) {
   return found[0].test;
 }
 
+export function approvedAnonymousIdentity(commitAuthor) {
+  const [name, email, ...extra] = commitAuthor.trim().split("\0");
+  if (
+    extra.length ||
+    !name ||
+    /[\r\n<>]/.test(name) ||
+    !/^[A-Za-z0-9+._-]+@users\.noreply\.github\.com$/.test(email ?? "")
+  )
+    throw new Error("APPROVED_COMMIT_IDENTITY_REJECTED");
+  return { name, email };
+}
+
+export function coreCheckCategory(code) {
+  return code === 2
+    ? "OUTBOUND_CHECK_INCOMPLETE"
+    : code === 1
+      ? "OUTBOUND_CHECK_BLOCKED"
+      : "OUTBOUND_CHECK_EXECUTION_FAILED";
+}
+
 export function sanitizeSnapshot(value) {
   if (
     !value ||
@@ -346,6 +366,59 @@ async function execute(mode) {
     if (!Number.isFinite(deadline) || deadline > Date.now() + 600000)
       throw new Error("PREPARATION_DEADLINE_REJECTED");
     save(join(c.raw, "identity.json"), c.identity);
+    // A fresh disposable source clone reuses the author of this controlled,
+    // reviewed commit. It does not choose an identity or change global config.
+    const author = approvedAnonymousIdentity(
+      execFileSync(
+        "git",
+        ["show", "-s", "--format=%an%x00%ae", c.identity.workflow_sha],
+        { cwd: c.workflow, encoding: "utf8", timeout: 5000 },
+      ),
+    );
+    c.git("config", "--local", "user.name", author.name);
+    c.git("config", "--local", "user.email", author.email);
+    c.git("config", "--local", "user.useConfigOnly", "true");
+    const installed = await bounded(
+      "node",
+      [
+        "scripts/install-confidentiality-hooks.mjs",
+        "--confirm-current-identity-approved",
+      ],
+      c.source,
+      c.env,
+      c.raw,
+      "core-install",
+      Math.min(deadline, Date.now() + 40000),
+    );
+    save(join(c.raw, "core-install-result.json"), installed);
+    if (installed.code !== 0 || installed.remaining_owned_processes)
+      throw new Error("CONTROLLED_CHECKER_PROVISION_FAILED");
+    const probePath = join(c.raw, "synthetic-outbound-probe.json");
+    save(probePath, {
+      kind: "SYNTHETIC_TOOLING_PREFLIGHT_ONLY",
+      acceptance_pass: false,
+    });
+    const probe = await bounded(
+      "node",
+      ["scripts/confidentiality-scan.mjs", "outbound", probePath],
+      c.source,
+      {
+        ...c.env,
+        CONFIDENTIALITY_BATCH_ID: `home-diagnostic-${c.identity.run}-1`,
+      },
+      c.raw,
+      "core-probe",
+      Math.min(deadline, Date.now() + 30000),
+    );
+    save(join(c.raw, "core-probe-result.json"), probe);
+    if (probe.code !== 0 || probe.remaining_owned_processes)
+      throw new Error(coreCheckCategory(probe.code));
+    console.log(
+      JSON.stringify({
+        state: "CHECKED_SYNTHETIC_PREFLIGHT_PASSED",
+        acceptance_pass: false,
+      }),
+    );
     for (const [name, args] of [
       ["install", ["install", "--frozen-lockfile"]],
       [
@@ -450,6 +523,13 @@ async function execute(mode) {
       deadline,
     );
     save(join(c.raw, "execution.json"), outcome);
+    console.log(
+      JSON.stringify({
+        state: "NATIVE_WRAPPER_TERMINAL",
+        execution: outcome,
+        acceptance_pass: false,
+      }),
+    );
     return outcome.code || (outcome.remaining_owned_processes ? 1 : 0);
   }
   if (mode !== "publish") throw new Error("OPERATION_REJECTED");
@@ -632,7 +712,7 @@ async function execute(mode) {
   if (scan.code !== 0) {
     const { unlinkSync } = await import("node:fs");
     unlinkSync(staged);
-    throw new Error("OUTBOUND_CHECK_INCOMPLETE_OR_BLOCKED");
+    throw new Error(coreCheckCategory(scan.code));
   }
   renameSync(staged, destination);
   console.log(
