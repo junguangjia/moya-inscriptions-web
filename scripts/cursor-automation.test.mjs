@@ -256,6 +256,60 @@ test("citations bind literal original evidence and exact source/run/attempt; inv
     /INVALID_CITATION/,
   );
 });
+test("adjacent source and successful CI metadata citations remain identity bound", () => {
+  const packet = {
+    repository: repo,
+    number: 214,
+    head,
+    runId: 123,
+    attempt: 1,
+    files: [
+      {
+        sourceExcerpts: [
+          { start: 10, end: 11, source: "10: return panel.scrollTop;" },
+        ],
+      },
+    ],
+    failedJobs: [],
+    omissions: [],
+    runEvidence: {
+      id: 123,
+      attempt: 1,
+      source: head,
+      event: "push",
+      conclusion: "success",
+      jobs: [
+        {
+          id: 8,
+          name: "lightweight",
+          conclusion: "success",
+          steps: [
+            { number: 5, name: "Run scoped checks", conclusion: "success" },
+          ],
+        },
+      ],
+    },
+  };
+  const evidence = citationEvidence(packet);
+  const source = evidence.find(
+    (e) => e.pointer === "/files/0/sourceExcerpts/0",
+  );
+  const job = evidence.find((e) => e.pointer === "/runEvidence/jobs/0");
+  const report = {
+    findings: [],
+    citations: [
+      { id: source.id, quote: "return panel.scrollTop;" },
+      { id: job.id, quote: "Run scoped checks" },
+    ],
+  };
+  assert.equal(validateCitations(report, evidence).length, 2);
+  assert.throws(
+    () =>
+      validateCitations(report, citationEvidence({ ...packet, attempt: 2 })),
+    /NOT_IN_ORIGINAL/,
+  );
+});
+
 test("public transport excludes private paths and authorizing URLs without classifying ordinary identifiers as secrets", () => {
   assert.throws(
     () => assertRemoteInput({ nested: ["/Users/example/private.json"] }),

@@ -16,6 +16,9 @@ import { URL } from "node:url";
 import test from "node:test";
 import {
   agentConfiguration,
+  adjacentSource,
+  automaticResponseState,
+  collectRunEvidence,
   agentEnvironment,
   boundedBody,
   collectFileEvidence,
@@ -43,8 +46,195 @@ import {
   LIMITS,
 } from "./cursor-review.mjs";
 import { classifyTask } from "./ci-task-scope.mjs";
+import { claimRecord, finishRecord } from "./cursor-automation.mjs";
 
 const repository = "example/project";
+test("large changed files preserve bounded exact current context instead of no source", () => {
+  const source = Array.from(
+    { length: 1800 },
+    (_, i) => `const line${i + 1} = ${i + 1};`,
+  ).join("\n");
+  const patch =
+    "@@ -898,3 +898,3 @@\n const line898 = 898;\n-old();\n+const line899 = 899;\n const line900 = 900;";
+  const excerpts = adjacentSource(source, patch);
+  assert.ok(
+    excerpts.some((e) => e.source.includes("899: const line899 = 899;")),
+  );
+  assert.ok(!excerpts.some((e) => e.source.includes("1: const line1 = 1;")));
+  assert.ok(JSON.stringify(excerpts).length <= LIMITS.source);
+  const evidence = { files: [], omissions: [], head: "a".repeat(40) };
+  collectFileEvidence(
+    evidence,
+    [
+      {
+        filename: "scripts/large.mjs",
+        status: "modified",
+        sha: "b".repeat(40),
+        patch,
+      },
+    ],
+    () => ({
+      encoding: "base64",
+      size: Buffer.byteLength(source),
+      content: Buffer.from(source).toString("base64"),
+    }),
+  );
+  assert.deepEqual(evidence.files[0].sourceExcerpts, excerpts);
+  assert.equal(evidence.files[0].sourceBlob, "b".repeat(40));
+  assert.ok(
+    evidence.omissions.some((x) =>
+      x.includes("full source outside supplied scope"),
+    ),
+  );
+  assert.deepEqual(adjacentSource(source, "+unanchored();"), []);
+});
+
+test("successful CI evidence reports exact jobs/steps while missing testcase data remains unclaimed", () => {
+  const evidence = { omissions: [] };
+  collectRunEvidence(
+    evidence,
+    {
+      id: 12,
+      run_attempt: 1,
+      head_sha: "a".repeat(40),
+      event: "push",
+      conclusion: "success",
+    },
+    {
+      total_count: 2,
+      jobs: [
+        {
+          id: 13,
+          name: "lightweight",
+          conclusion: "success",
+          steps: [
+            {
+              number: 4,
+              name: "Run shared tooling checks",
+              conclusion: "success",
+            },
+          ],
+        },
+        { id: 14, name: "e2e-shards", conclusion: "skipped", steps: [] },
+      ],
+    },
+  );
+  assert.equal(evidence.runEvidence.jobs[0].steps[0].conclusion, "success");
+  assert.equal(evidence.runEvidence.jobs[1].conclusion, "skipped");
+  assert.equal(evidence.runEvidence.source, "a".repeat(40));
+  assert.equal(evidence.runEvidence.testcases, undefined);
+  const bounded = { omissions: [] };
+  collectRunEvidence(
+    bounded,
+    { id: 12 },
+    {
+      total_count: 101,
+      jobs: Array.from({ length: 101 }, (_, i) => ({
+        id: i + 1,
+        name: "n".repeat(600),
+        steps: [],
+      })),
+    },
+  );
+  assert.ok(JSON.stringify(bounded.runEvidence).length <= 12000);
+  assert.ok(bounded.omissions.length > 0);
+});
+
+test("valid partial answer is consumable without clean verdict or complete-review reuse", () => {
+  const report = {
+    assessment: "incomplete",
+    actualInvocations: 1,
+    model: "grok-4.7[context=500k,reasoning_effort=xhigh,fast=true]",
+    effectiveSelection: {
+      modelId: "grok-4.7",
+      context: "500k",
+      reasoning_effort: "xhigh",
+      fast: "true",
+      maxMode: true,
+    },
+    citationValidation: {
+      status: "PASS",
+      count: 1,
+      citations: [{ exact: true }],
+    },
+  };
+  const state = automaticResponseState(
+    { omissions: ["missing context"] },
+    report,
+  );
+  assert.equal(state.status, "PARTIAL");
+  assert.equal(state.responseAccepted, true);
+  assert.equal(state.coverageComplete, false);
+  assert.equal(state.cleanVerdict, false);
+  assert.equal(state.ledgerStatus, "incomplete");
+  const findings = automaticResponseState(
+    { omissions: ["missing context"] },
+    {
+      ...report,
+      assessment: "findings",
+      findings: [{ priority: "P1", body: "supported issue" }],
+    },
+  );
+  assert.equal(findings.responseAccepted, true);
+  assert.equal(findings.status, "PARTIAL");
+  assert.equal(findings.ledgerStatus, "incomplete");
+  const review = claimRecord(
+    { records: [] },
+    repository,
+    { number: 7, head: "a".repeat(40), kind: "review" },
+    100,
+  );
+  const rows = finishRecord(
+    { records: review.records },
+    review.key,
+    100,
+    findings.ledgerStatus,
+  );
+  const merged = claimRecord(
+    { records: rows },
+    repository,
+    {
+      number: 7,
+      head: "b".repeat(40),
+      prHead: "a".repeat(40),
+      postMerge: true,
+      kind: "postmerge",
+      runId: 8,
+      attempt: 1,
+    },
+    101,
+  );
+  assert.equal(merged.priorReview, null);
+  assert.equal(
+    automaticResponseState(
+      { omissions: [] },
+      { ...report, assessment: "no_findings" },
+    ).cleanVerdict,
+    true,
+  );
+  for (const delta of [
+    { assessment: "unavailable" },
+    { actualInvocations: 0 },
+    { effectiveSelection: { ...report.effectiveSelection, maxMode: false } },
+    {
+      citationValidation: {
+        status: "PASS",
+        count: 1,
+        citations: [{ exact: false }],
+      },
+    },
+  ])
+    assert.equal(
+      automaticResponseState({ omissions: [] }, { ...report, ...delta })
+        .responseAccepted,
+      false,
+    );
+  assert.equal(
+    automaticResponseState({ omissions: [], metadataOnly: true }, report)
+      .responseAccepted,
+    false,
+  );
+});
 const head = "a".repeat(40);
 const base = "b".repeat(40);
 const pr = {
