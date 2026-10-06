@@ -22,7 +22,7 @@ export function runCursorStream(bin, args, options = {}) {
     // be larger than the bounded answer; do not confuse echo with answer bytes.
     const echoBytes = Math.min(
       2 * 1024 * 1024,
-      Math.max(maxBytes, Buffer.byteLength(input) + 4096),
+      Math.max(maxBytes, input ? Buffer.byteLength(input) + 4096 : 0),
     );
     const started = Date.now();
     const hash = createHash("sha256");
