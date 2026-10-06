@@ -2,6 +2,20 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      media_home_diagnostic:
+        description: Run the isolated pinned Home diagnostic only
+        type: boolean
+        default: false
+      diagnostic_workflow_sha:
+        description:
+          Exact diagnostic branch commit, required for diagnostic mode
+        type: string
+        default: ""
+      diagnostic_task:
+        description: Unique diagnostic task UUID, required for diagnostic mode
+        type: string
+        default: ""
   pull_request:
     branches:
       - main
@@ -21,6 +35,7 @@ permissions:
 jobs:
   classify_e2e:
     name: classify-task
+    if: ${{ !inputs.media_home_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -506,7 +521,7 @@ jobs:
   # Browser validation retains its native report and exact collection gates.
   browser_gate:
     name: browser-gate
-    if: ${{ always() }}
+    if: ${{ always() && !inputs.media_home_diagnostic }}
     needs: [classify_e2e, e2e_smoke, e2e-shards]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -571,7 +586,7 @@ jobs:
 
   # Preserve the stable required context while enforcing every selected task job.
   e2e:
-    if: ${{ always() }}
+    if: ${{ always() && !inputs.media_home_diagnostic }}
     needs:
       - classify_e2e
       - lightweight
@@ -595,3 +610,68 @@ jobs:
           PLAN: ${{ needs.classify_e2e.outputs.plan }}
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: node scripts/ci-task-gate.mjs >>"$GITHUB_STEP_SUMMARY"
+
+  media-home-diagnostic:
+    if:
+      ${{ github.event_name == 'workflow_dispatch' &&
+      inputs.media_home_diagnostic }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HOME_WORKFLOW_SHA: ${{ inputs.diagnostic_workflow_sha }}
+      HOME_TASK_KEY: ${{ inputs.diagnostic_task }}
+    steps:
+      - name: Start the shared preparation deadline
+        timeout-minutes: 1
+        run:
+          node -e 'require("node:fs").appendFileSync(process.env.GITHUB_ENV,
+          "HOME_PREP_DEADLINE_MS=" + (Date.now() + 600000) + "\n")'
+      - name: Check out the diagnostic implementation
+        uses: actions/checkout@v6
+        timeout-minutes: 1
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic
+          persist-credentials: false
+      - name: Check out the immutable application source
+        uses: actions/checkout@v6
+        timeout-minutes: 1
+        with:
+          ref: d9d9b5756a92feb5d446c4c84fd7f77f3a5d2618
+          path: source
+          persist-credentials: false
+      - name: Set up the pinned package manager
+        uses: pnpm/action-setup@v4
+        timeout-minutes: 1
+        with:
+          package_json_file: source/package.json
+      - name: Set up pinned Node
+        uses: actions/setup-node@v6
+        timeout-minutes: 1
+        with:
+          node-version-file: source/.nvmrc
+          cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
+      - name: Prepare dependencies and WebKit within the shared deadline
+        timeout-minutes: 10
+        run: node diagnostic/scripts/media-home-diagnostic.mjs prepare
+      - name: Run the single original Home case
+        timeout-minutes: 6
+        run: node diagnostic/scripts/media-home-diagnostic.mjs run
+      - name: Project and check only approved diagnostic scalars
+        id: checked_packet
+        if: ${{ always() }}
+        timeout-minutes: 1
+        run: node diagnostic/scripts/media-home-diagnostic.mjs publish
+      - name: Retain only the checked sanitized packet
+        if: ${{ always() && steps.checked_packet.outcome == 'success' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@v4
+        with:
+          name:
+            media-home-scalars-${{ github.run_id }}-${{ github.run_attempt }}
+          path:
+            source/.local/media-home/${{ inputs.diagnostic_task
+            }}/sanitized/packet.json
+          if-no-files-found: ignore
+          retention-days: 2
