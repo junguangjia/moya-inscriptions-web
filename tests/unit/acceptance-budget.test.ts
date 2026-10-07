@@ -85,7 +85,8 @@ it("keeps routine budgets fixed and permits only the explicit complete CI test m
         verificationBudgetMs(mode, ["--ci-milestone"], ci),
       ).toThrow();
   }
-  expect(verificationBudgetMs("test", ["--ci-milestone"], ci)).toBe(300_000);
+  // The hosted milestone runs to completion inside the job containment.
+  expect(verificationBudgetMs("test", ["--ci-milestone"], ci)).toBe(900_000);
   expect(() => verificationBudgetMs("test", ["--ci-milestone"], {})).toThrow();
   expect(() =>
     verificationBudgetMs("test", ["--ci-milestone"], {
