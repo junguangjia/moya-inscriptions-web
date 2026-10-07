@@ -575,6 +575,45 @@ describe("relayServerDevelopmentCatalogRendition (Development)", () => {
     ).toBe(503);
     expect(upstream).not.toHaveBeenCalled();
   });
+
+  it("hands the visitor's session to the access gate and retries a refused session once without it", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3521");
+    const current = "C".repeat(43);
+    const stale = "S".repeat(43);
+    const upstream = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(image("image/webp"))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(image("image/jpeg"))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", upstream);
+    const authorization = (call: number) =>
+      new Headers(upstream.mock.calls[call]![1]?.headers).get("authorization");
+
+    expect(
+      (await relayServerDevelopmentCatalogRendition(renditionId, current))
+        .status,
+    ).toBe(200);
+    expect(authorization(0)).toBe(`Bearer ${current}`);
+
+    // A session the Backend refuses must not block a read that needs none.
+    const retried = await relayServerDevelopmentCatalogRendition(
+      renditionId,
+      stale,
+    );
+    expect(retried.status).toBe(200);
+    expect(retried.headers.get("content-type")).toBe("image/jpeg");
+    expect(authorization(1)).toBe(`Bearer ${stale}`);
+    expect(authorization(2)).toBeNull();
+
+    // A closed beta refuses the signed-out read as well; that answer stands
+    // and is reported as the gate's 401, not hidden as unavailable.
+    expect(
+      (await relayServerDevelopmentCatalogRendition(renditionId, stale)).status,
+    ).toBe(401);
+    expect(upstream).toHaveBeenCalledTimes(5);
+  });
 });
 
 describe("Article authoring relay preserves existing Work boundaries", () => {

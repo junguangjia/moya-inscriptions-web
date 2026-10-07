@@ -27,9 +27,22 @@ describe("GET /api/development/catalog-renditions/[renditionId]", () => {
     vi.stubEnv("NODE_ENV", "development");
     relay.mockResolvedValue(new Response(null, { status: 200 }));
     expect((await GET(new Request(url), params)).status).toBe(200);
-    expect(relay).toHaveBeenCalledWith(renditionId);
+    expect(relay).toHaveBeenCalledWith(renditionId, undefined);
     relay.mockClear();
     expect((await GET(new Request(`${url}?x=1`), params)).status).toBe(404);
     expect(relay).not.toHaveBeenCalled();
+  });
+
+  it("hands the visitor's session on so the Backend's access gate decides", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    relay.mockResolvedValue(new Response(null, { status: 200 }));
+    const session = "s".repeat(43);
+    await GET(
+      new Request(url, {
+        headers: { cookie: `theme=dark; yoyi-session=${session}` },
+      }),
+      params,
+    );
+    expect(relay).toHaveBeenCalledWith(renditionId, session);
   });
 });

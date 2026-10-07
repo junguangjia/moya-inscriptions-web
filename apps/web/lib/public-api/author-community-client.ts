@@ -55,6 +55,11 @@ let accountEpoch = 0;
 export const PRODUCT_ACCESS_REFUSED_EVENT = "yoyi:product-access-refused";
 
 const documentReads = new WeakMap<Window, AbortController>();
+// Whether the last pagehide put the document into the back/forward cache, so
+// that it can come back and read again.
+const restorableDocuments = new WeakMap<Window, boolean>();
+const documentVisible = () =>
+  typeof document !== "undefined" && document.visibilityState === "visible";
 const documentReadSignal = () => {
   if (typeof window === "undefined") return undefined;
   const owner = window;
@@ -62,13 +67,28 @@ const documentReadSignal = () => {
   if (!controller) {
     controller = new AbortController();
     documentReads.set(owner, controller);
-    owner.addEventListener("pagehide", () => documentReads.get(owner)?.abort());
+    owner.addEventListener("pagehide", (event) => {
+      restorableDocuments.set(owner, event.persisted === true);
+      documentReads.get(owner)?.abort();
+    });
     owner.addEventListener("pageshow", () => {
       // A restored back/forward-cache document may read again. Merely losing
       // focus does not cancel reads or any author command/upload.
       if (documentReads.get(owner)?.signal.aborted)
         documentReads.set(owner, new AbortController());
     });
+  } else if (
+    controller.signal.aborted &&
+    restorableDocuments.get(owner) === true &&
+    documentVisible()
+  ) {
+    // A restore makes the document visible before pageshow, and a listener
+    // added earlier than the reset above (the product access watcher) reads
+    // on visibilitychange or pageshow first. A document that came back from
+    // the back/forward cache and is showing reads live; one that was unloaded
+    // never reads again.
+    controller = new AbortController();
+    documentReads.set(owner, controller);
   }
   return controller.signal;
 };

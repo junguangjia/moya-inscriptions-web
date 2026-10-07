@@ -688,11 +688,14 @@ const developmentCatalogRenditionTypes: ReadonlySet<string> = new Set([
  * Development-only caller (unified-media-pipeline-v1): one Catalog rendition
  * for a phone on the LAN acceptance origin. The Backend's Development route
  * serves only a ready rendition of a ready, published asset; this relay
- * names nothing but the opaque rendition id, reads anonymously and passes
- * only a still image type.
+ * names nothing but the opaque rendition id and passes only a still image
+ * type. It hands on the visitor's session like the other Development media
+ * relays, so the Backend's product access gate decides; a session the
+ * Backend refuses is retried once without it.
  */
 export const relayServerDevelopmentCatalogRendition = async (
   renditionId: string,
+  token?: string,
 ): Promise<Response> => {
   const headers = {
     "cache-control": "private, no-store",
@@ -701,23 +704,38 @@ export const relayServerDevelopmentCatalogRendition = async (
   const fail = (status: number) => new Response(null, { status, headers });
   if (!developmentCatalogRenditionPattern.test(renditionId)) return fail(404);
   try {
-    const response = await fetch(
-      new URL(
-        `v1/development/catalog-renditions/${renditionId}`,
-        parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL),
-      ),
-      {
-        method: "GET",
-        headers: { accept: "image/webp,image/jpeg" },
-        cache: "no-store",
-        redirect: "error",
-        signal: AbortSignal.timeout(15000),
-      },
-    );
+    const read = (session: string | undefined) =>
+      fetch(
+        new URL(
+          `v1/development/catalog-renditions/${renditionId}`,
+          parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL),
+        ),
+        {
+          method: "GET",
+          headers: {
+            accept: "image/webp,image/jpeg",
+            ...(session === undefined
+              ? {}
+              : { Authorization: `Bearer ${session}` }),
+          },
+          cache: "no-store",
+          redirect: "error",
+          signal: AbortSignal.timeout(15000),
+        },
+      );
+    let response = await read(token);
+    if (response.status === 401 && token !== undefined) {
+      await response.body?.cancel().catch(() => undefined);
+      response = await read(undefined);
+    }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       return fail(
-        response.status === 404 || response.status === 403 ? 404 : 503,
+        response.status === 401
+          ? 401
+          : response.status === 404 || response.status === 403
+            ? 404
+            : 503,
       );
     }
     const type = mediaTypeOf(response);

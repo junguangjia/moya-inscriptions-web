@@ -1,3 +1,4 @@
+import { readCommunitySessionToken } from "../../../../../lib/public-api/community-session-cookie";
 import { relayServerDevelopmentCatalogRendition } from "../../../../../lib/public-api/server";
 export const runtime = "nodejs";
 /** Development only: Catalog rendition images for a phone on the LAN acceptance origin. */
@@ -11,5 +12,8 @@ export const GET = async (
       headers: { "cache-control": "private, no-store" },
     });
   const { renditionId } = await context.params;
-  return relayServerDevelopmentCatalogRendition(renditionId);
+  return relayServerDevelopmentCatalogRendition(
+    renditionId,
+    readCommunitySessionToken(request.headers.get("cookie")),
+  );
 };

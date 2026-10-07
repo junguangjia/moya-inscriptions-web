@@ -39,6 +39,71 @@ describe("shared private author transport", () => {
     expect(fetch.mock.calls[1]![1].signal!.aborted).toBe(false);
   });
 
+  it("reads live from a back/forward-cache document as soon as it is visible again, before pageshow", async () => {
+    const owner = new EventTarget();
+    const visibility = {
+      visibilityState: "visible" as DocumentVisibilityState,
+    };
+    vi.stubGlobal("window", owner);
+    vi.stubGlobal("document", visibility);
+    const fetch = vi.fn(
+      (_url: string, options: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          options.signal!.addEventListener("abort", () =>
+            reject(options.signal!.reason),
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const pending = authorRequest("access", { parse: (value) => value });
+    // Entering the back/forward cache: hidden, then a persisted pagehide.
+    visibility.visibilityState = "hidden";
+    owner.dispatchEvent(
+      Object.assign(new Event("pagehide"), { persisted: true }),
+    );
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      authorRequest("access", { parse: (value) => value }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // Restored: the document is visible again before any pageshow listener
+    // runs, and an earlier listener (the access watcher) reads at once.
+    visibility.visibilityState = "visible";
+    fetch.mockResolvedValue(
+      new Response('{"mode":"closed_beta","access":"sign_in_required"}', {
+        status: 200,
+      }),
+    );
+    await expect(
+      authorRequest("access", { parse: (value) => value }),
+    ).resolves.toEqual({ mode: "closed_beta", access: "sign_in_required" });
+    expect(fetch.mock.calls[1]![1].signal!.aborted).toBe(false);
+  });
+
+  it("never reads again from an unloaded document, even if it still reports visible", async () => {
+    const owner = new EventTarget();
+    vi.stubGlobal("window", owner);
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    const fetch = vi.fn(
+      (_url: string, options: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          options.signal!.addEventListener("abort", () =>
+            reject(options.signal!.reason),
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const pending = authorRequest("threads", { parse: (value) => value });
+    owner.dispatchEvent(
+      Object.assign(new Event("pagehide"), { persisted: false }),
+    );
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      authorRequest("threads", { parse: (value) => value }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps commands active and does not retire reads merely on focus loss", async () => {
     authorClient.setAccount("synthetic-owner");
     const document = new EventTarget();
