@@ -546,6 +546,11 @@ export async function probeSandboxOutputs(result: SandboxRunResult) {
       }
     } catch (error) {
       if (error instanceof SandboxProtocolError) throw error;
+      // A host read fault (EIO, EMFILE) on the file just received is the
+      // coordinator's infrastructure and is retried; anything else the probe
+      // refuses is the sandbox's output.
+      const code = systemErrorCode(error);
+      if (code !== null) throw new MediaProcessingUnavailableError(code);
       throw violation("output_invalid");
     } finally {
       await reader.close();
