@@ -1,20 +1,30 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { getPayload, createLocalReq } from "payload";
 import config from "../payload.config";
 if (process.env.CMS_ENVIRONMENT !== "synthetic")
   throw new Error("SYNTHETIC_ENVIRONMENT_REQUIRED");
+// The synthetic Owner is the one bootstrap-synthetic.ts handed over for this
+// session; its address is namespaced per session, never a fixed value.
+const handoff = process.env.CMS_QA_HANDOFF_FILE;
+if (!handoff) throw new Error("SYNTHETIC_HANDOFF_REQUIRED");
+const settings = JSON.parse(await readFile(handoff, "utf8")) as {
+  ownerEmail: string;
+  ownerId: number;
+};
 const payload = await getPayload({ config });
 const started = performance.now();
 const prefix = `catalog-scale-${randomUUID()}`;
 const owner = (
   await payload.find({
     collection: "users",
-    where: { email: { equals: "owner@editorial.example.invalid" } },
+    where: { email: { equals: settings.ownerEmail } },
     limit: 1,
   })
 ).docs[0];
-if (!owner) throw new Error("SYNTHETIC_BOOTSTRAP_REQUIRED");
+if (!owner || owner.id !== settings.ownerId)
+  throw new Error("SYNTHETIC_BOOTSTRAP_REQUIRED");
 let created = 0;
 try {
   const before = await payload.db.pool.query<{ bytes: string }>(

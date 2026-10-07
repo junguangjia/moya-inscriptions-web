@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import {
   boundedChildLimit,
+  bootstrapFailureCategory,
   createVerificationSession,
   resolveCmsBudget,
   syntheticDatabase,
@@ -219,10 +220,12 @@ const waitForSilence = async (session, url, limitMs) => {
 
 async function main() {
   const budget = resolveCmsBudget(process.argv.slice(2));
-  // The harness owns a database of its own rather than sharing the cms job's.
-  // Sharing it would leave a synthetic Owner behind, and the production
-  // browser harness that runs afterwards bootstraps one itself and refuses
-  // when it already exists.
+  // The harness owns a database of its own rather than sharing the cms job's:
+  // it creates and drops SQL roles and applies the community migrations,
+  // none of which belongs in the database the other CMS checks share. (A
+  // leftover synthetic Owner no longer forces this on its own: the bootstrap
+  // namespaces its identities per session, so the production browser harness
+  // that runs afterwards never refuses on an earlier run's rows.)
   const parent = new URL(syntheticDatabase(process.env.CMS_TEST_DATABASE_URL));
   const owned = `${parent.pathname.slice(1)}_agent_conn_${randomBytes(4).toString("hex")}`;
   // Built from an operator environment variable, so it is CHECKED rather than
@@ -433,6 +436,7 @@ async function main() {
       adminRoot,
       "bootstrap",
       { ...session.env, CMS_QA_HANDOFF_FILE: handoff },
+      { categorize: bootstrapFailureCategory },
     );
     console.log("Agent connections bootstrap: PASS");
 

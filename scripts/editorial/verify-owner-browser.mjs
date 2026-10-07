@@ -4,8 +4,10 @@ import { cp, readFile, writeFile, access, stat, rm } from "node:fs/promises";
 import path from "node:path";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import {
   boundedChildLimit,
+  bootstrapFailureCategory,
   createVerificationSession,
   resolveCmsBudget,
   syntheticDatabase,
@@ -17,7 +19,7 @@ import {
 // remaining time so it can never outlive the session.
 const NATIVE_SERVER_START_MS = 45_000;
 
-const expectedStages = [
+export const expectedStages = [
   "login",
   "native-create-renders-before-empty-write",
   "native-incomplete-draft-save",
@@ -29,6 +31,10 @@ const expectedStages = [
   "native-withdrawal-confirmation-and-revision-conflict",
   "native-withdrawal-preserves-latest-draft",
 ];
+
+// The orchestration stage a failure is reported against: fixed words only,
+// so an operator learns which step refused without any child diagnostics.
+let stage = "configuration";
 
 async function main() {
   const budget = resolveCmsBudget(process.argv.slice(2));
@@ -52,6 +58,7 @@ async function main() {
     };
     const admin = path.join(root, "apps/admin");
     const standalone = path.join(admin, ".next/standalone/apps/admin");
+    stage = "prepare";
     await access(path.join(standalone, "server.js"));
     await cp(
       path.join(admin, ".next/static"),
@@ -59,12 +66,18 @@ async function main() {
       { recursive: true },
     );
     session.assertActive();
+    // The bootstrap namespaces its identities per session, so this stage is
+    // repeatable on a disposable database that still holds earlier runs; a
+    // refusal is reported by the bootstrap's own bare category.
+    stage = "bootstrap";
     await session.run(
       ["node_modules/payload/bin.js", "run", "scripts/bootstrap-synthetic.ts"],
       admin,
       "bootstrap",
       env,
+      { categorize: bootstrapFailureCategory },
     );
+    stage = "native-server";
     const port = await new Promise((resolve, reject) => {
       const socket = createServer();
       socket.once("error", reject);
@@ -121,6 +134,7 @@ async function main() {
         throw new Error("NATIVE_SERVER_START_FAILED");
       await delay(200, undefined, { signal: session.signal });
     }
+    stage = "browser";
     const browser = session.start(["tests/cms/owner-browser.mjs"], root, env);
     const browserCode = await browser.closed;
     const frames = browser
@@ -206,11 +220,17 @@ async function main() {
     }),
   );
 }
-main().catch((error) => {
-  const category =
-    error instanceof Error && /^[A-Z_]+$/.test(error.message)
-      ? error.message
-      : "SYNTHETIC_BROWSER_CHECK_FAILED";
-  console.log(JSON.stringify({ syntheticOwnerBrowser: "FAIL", category }));
-  process.exitCode = timeCategories.has(category) ? 124 : 1;
-});
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+)
+  main().catch((error) => {
+    const category =
+      error instanceof Error && /^[A-Z_]+$/.test(error.message)
+        ? error.message
+        : "SYNTHETIC_BROWSER_CHECK_FAILED";
+    console.log(
+      JSON.stringify({ syntheticOwnerBrowser: "FAIL", category, stage }),
+    );
+    process.exitCode = timeCategories.has(category) ? 124 : 1;
+  });

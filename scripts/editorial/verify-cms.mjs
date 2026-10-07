@@ -97,6 +97,40 @@ export const timeCategories = new Set([
   "TIME_BUDGET_EXCEEDED",
   "INSUFFICIENT_REMAINING_TIME",
 ]);
+
+/** One bare category a child named for itself, or nothing; never a value. */
+export const childCategory = (value) =>
+  typeof value === "string" && /^[A-Z][A-Z_]{2,63}$/u.test(value)
+    ? value
+    : undefined;
+
+// The synthetic bootstrap (apps/admin/scripts/bootstrap-synthetic.ts) names
+// its own refusal with one of these on a fixed line; the harnesses that run
+// it read that line and nothing else of its output.
+export const BOOTSTRAP_FAILURE_CATEGORIES = Object.freeze([
+  "SYNTHETIC_ENVIRONMENT_REQUIRED",
+  "SYNTHETIC_HANDOFF_REQUIRED",
+  "SYNTHETIC_OWNER_ALREADY_EXISTS",
+  "SYNTHETIC_BOOTSTRAP_FAILED",
+]);
+
+/** The bootstrap's own category from its fixed FAIL line, or nothing. */
+export function bootstrapFailureCategory(output) {
+  for (const line of String(output ?? "").split("\n")) {
+    let frame;
+    try {
+      frame = JSON.parse(line.trim());
+    } catch {
+      continue;
+    }
+    if (
+      frame?.syntheticBootstrap === "FAIL" &&
+      BOOTSTRAP_FAILURE_CATEGORIES.includes(frame.category)
+    )
+      return frame.category;
+  }
+  return undefined;
+}
 const remoteSettingNames = [
   "MOYA_CONTENT_SOURCE",
   "CMS_ENVIRONMENT",
@@ -473,11 +507,17 @@ export async function createVerificationSession(
     processes.add(managed);
     return managed;
   };
-  const run = async (args, cwd, label, childEnv = env) => {
+  const run = async (args, cwd, label, childEnv = env, { categorize } = {}) => {
     const managed = start(args, cwd, childEnv);
     const code = await managed.closed;
     const output = managed.output();
     const lines = summaryLines(output);
+    // A failed child may name its own refusal: the caller's `categorize`
+    // reads one bare category from the child's fixed vocabulary, and the
+    // shape is enforced here again so nothing but an identifier can pass. A
+    // session failure (budget, interruption) still wins over it.
+    const named =
+      code !== 0 && !failure ? childCategory(categorize?.(output)) : undefined;
     // Child diagnostics can contain credentials, URLs or response objects.
     // Persist only fixed status/count projections; never retain raw output.
     await writeFile(
@@ -485,13 +525,13 @@ export async function createVerificationSession(
       JSON.stringify({
         stage: label,
         exitCode: code,
-        category: failure ?? (code ? "CHILD_FAILED" : "PASS"),
+        category: failure ?? (code ? (named ?? "CHILD_FAILED") : "PASS"),
         summaries: lines,
       }) + "\n",
       { mode: 0o600 },
     );
     assertActive();
-    if (code !== 0) throw new Error("VERIFICATION_CHILD_FAILED");
+    if (code !== 0) throw new Error(named ?? "VERIFICATION_CHILD_FAILED");
     return { output, lines };
   };
   const dispose = async () => {

@@ -1,15 +1,43 @@
 import { randomBytes } from "node:crypto";
 import { writeFile, chmod } from "node:fs/promises";
-import { getPayload } from "payload";
+import { getPayload, type Payload } from "payload";
 import config from "../payload.config";
+
+/**
+ * One synthetic Owner, one scoped automation identity and one MCP key for a
+ * verification session, handed over through the session's mode-restricted
+ * file.
+ *
+ * The disposable CMS database this runs against is created once per task and
+ * never reset, and the verification session that runs this script stops only
+ * its child processes: the rows of an earlier session stay. The identities
+ * therefore carry a per-session namespace instead of fixed addresses, so a
+ * repeated cumulative validation on the same database never meets its own
+ * leftovers. Every consumer reads the actual addresses from the handoff file;
+ * nothing hardcodes them.
+ *
+ * A failure prints one fixed line carrying a bare category and nothing else.
+ * The orchestrator keeps that category and never forwards raw child output.
+ */
+const FAILURE_CATEGORY = /^[A-Z][A-Z_]{2,63}$/u;
+const report = (category: string): void => {
+  console.log(JSON.stringify({ syntheticBootstrap: "FAIL", category }));
+};
+function refuse(category: string): never {
+  report(category);
+  throw new Error(category);
+}
+
 if (process.env.CMS_ENVIRONMENT !== "synthetic")
-  throw new Error("SYNTHETIC_ENVIRONMENT_REQUIRED");
+  refuse("SYNTHETIC_ENVIRONMENT_REQUIRED");
 const destination = process.env.CMS_QA_HANDOFF_FILE;
-if (!destination) throw new Error("SYNTHETIC_HANDOFF_REQUIRED");
-const payload = await getPayload({ config });
+if (!destination) refuse("SYNTHETIC_HANDOFF_REQUIRED");
+let payload: Payload | undefined;
 try {
-  const ownerEmail = "owner@editorial.example.invalid";
-  const automationEmail = "automation@editorial.example.invalid";
+  payload = await getPayload({ config });
+  const namespace = randomBytes(6).toString("hex");
+  const ownerEmail = `owner-${namespace}@editorial.example.invalid`;
+  const automationEmail = `automation-${namespace}@editorial.example.invalid`;
   const ownerPassword = randomBytes(24).toString("hex");
   const automationPassword = randomBytes(24).toString("hex");
   const existing = await payload.find({
@@ -17,7 +45,7 @@ try {
     where: { email: { equals: ownerEmail } },
     limit: 1,
   });
-  if (existing.totalDocs) throw new Error("SYNTHETIC_OWNER_ALREADY_EXISTS");
+  if (existing.totalDocs) refuse("SYNTHETIC_OWNER_ALREADY_EXISTS");
   const owner = await payload.create({
     collection: "users",
     overrideAccess: true,
@@ -85,6 +113,12 @@ try {
       mcpKey: "scoped",
     }),
   );
+} catch (error) {
+  // Own refusals were reported above; anything else collapses to one bare
+  // category, so a driver or validation message never reaches stdout.
+  if (!(error instanceof Error && FAILURE_CATEGORY.test(error.message)))
+    report("SYNTHETIC_BOOTSTRAP_FAILED");
+  throw error;
 } finally {
-  await payload.destroy();
+  await payload?.destroy();
 }
