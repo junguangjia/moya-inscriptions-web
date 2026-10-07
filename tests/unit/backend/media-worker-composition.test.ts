@@ -178,6 +178,8 @@ describe("media worker composition", () => {
       ],
       [{ ...production, APP_DATABASE_URL: undefined }, /APP_DATABASE_URL/],
       [{ ...production, COS_SECRET_KEY: undefined }, /COS_SECRET_KEY/],
+      [{ ...production, COS_BUCKET: "Invalid_Bucket" }, /COS_BUCKET/],
+      [{ ...production, COS_REGION: "AP-Guangzhou" }, /COS_REGION/],
       [
         { ...production, WORK_MEDIA_STORE_DIR: "/srv/store" },
         /WORK_MEDIA_STORE_DIR/,

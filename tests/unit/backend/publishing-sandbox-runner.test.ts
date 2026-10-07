@@ -444,6 +444,30 @@ describe("media sandbox runner", () => {
     }
   });
 
+  it("retries a host failure while receiving outputs instead of rejecting the item", async () => {
+    const sandbox = inProcessSandbox();
+    const runner = await runnerWith(sandbox.spawn);
+    const job = await runner.createJob();
+    const request = await stillJob(job);
+    // The coordinator cannot open the first received output: a host fault,
+    // not anything the sandbox sent.
+    await rm(job.outputDirectory, { recursive: true, force: true });
+    await writeFile(job.outputDirectory, "", { mode: 0o600 });
+    let caught: unknown = null;
+    try {
+      await runner.run(job, request, { timeoutMs: 30_000 });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).not.toBeInstanceOf(SandboxProtocolError);
+    expect(caught).toMatchObject({
+      name: "MediaProcessingUnavailableError",
+      systemCode: "ENOTDIR",
+    });
+    expect(sandbox.calls.some((call) => call.args[0] === "kill")).toBe(true);
+    await job.dispose();
+  });
+
   it("kills the container on abort and on timeout, then removes it twice", async () => {
     const controller = new AbortController();
     const aborting = inProcessSandbox({

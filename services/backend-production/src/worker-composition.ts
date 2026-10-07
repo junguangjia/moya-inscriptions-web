@@ -30,6 +30,7 @@ import {
 import { PublishingWorker } from "./publishing/worker.js";
 import {
   LocalCatalogSourceReader,
+  assertCatalogCosTarget,
   openCosCatalogSourceReader,
   parseCatalogSourceConfig,
 } from "./storage/catalog-source.js";
@@ -105,6 +106,17 @@ const configError = (error: unknown): never => {
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
+/**
+ * The Production Catalog read configuration, its COS target format included:
+ * a malformed bucket or region is a configuration problem (exit 78), found
+ * before the media runtime or any pool opens.
+ */
+const productionCatalogSource = (environment: Environment) => {
+  const config = parseCatalogSourceConfig(environment);
+  if (config !== null) assertCatalogCosTarget(config);
+  return config;
+};
+
 const parseWorkerConfiguration = (environment: Environment) => {
   const nodeEnv = environment.NODE_ENV;
   if (nodeEnv !== "production" && nodeEnv !== "development") {
@@ -130,7 +142,7 @@ const parseWorkerConfiguration = (environment: Environment) => {
   const community = parseCommunityPostgresConfig(environment);
   const catalogSource =
     nodeEnv === "production"
-      ? parseCatalogSourceConfig(environment)
+      ? productionCatalogSource(environment)
       : environment.CMS_MEDIA_DIR
         ? path.resolve(environment.CMS_MEDIA_DIR)
         : null;
