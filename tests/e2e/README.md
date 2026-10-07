@@ -48,10 +48,24 @@ installation and artifact upload are reported separately and cannot be given a
 
 `pnpm test:e2e` retains the complete five-project local suite. GitHub's **CI →
 Run workflow** explicitly runs all five projects in the existing three native
-shards. Select the intended branch when dispatching. The original
-18/22/30-minute suite/step/job budgets, one worker, retry policy, strict flaky
-rejection and native report aggregation remain unchanged for this full
-regression.
+shards. Select the intended branch when dispatching. The original three-shard
+distribution, one worker, retry policy, strict flaky rejection and native report
+aggregation remain unchanged. Owner-directed full acceptance disables Playwright
+test/hook and suite execution deadlines (`timeout: 0`, `globalTimeout: 0`) and
+removes shorter browser execution/report job and step limits. GitHub-hosted jobs
+still stop at the unavoidable 360-minute platform cap; this is not unlimited
+hosted execution. A hang or incomplete report fails the existing complete-result
+gate and is never PASS.
+
+Correctness assertions, their retry windows, native inputs and
+alignment/readiness criteria remain unchanged. These assertion windows report a
+failed condition; they do not impose a whole-suite cutoff. Fixture route
+preparation uses unlimited HTTP waits when there is no explicit parent deadline.
+Playwright 1.62.1 does not disable web-server availability waiting with zero, so
+full startup uses the same six-hour platform ceiling. The smoke entry still
+supplies its existing finite startup and suite budgets, and owned service
+shutdown keeps its cleanup bound. Product HTTP, upload, database, lease and TTL
+limits are unchanged.
 
 Full regression is no longer automatically repeated on each frontend edit or
 main push. Run it for a requested cross-browser investigation or a release

@@ -65,7 +65,7 @@ async function command(directory, name, args, environment = nativeEnvironment) {
         line.includes("WebServer available")
       ) {
         servicesAvailable += 1;
-        if (servicesAvailable === 2) servicesReadyMs = Date.now() - start;
+        if (servicesAvailable === 3) servicesReadyMs = Date.now() - start;
       }
     }
   };

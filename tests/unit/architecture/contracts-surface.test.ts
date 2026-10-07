@@ -41,6 +41,8 @@ describe("contracts package surface", () => {
       "CreateCatalogCommentRequest",
       "HealthResponse",
       "MediaId",
+      // unified-media-pipeline-v1: one rendition candidate of an image.
+      "MediaRendition",
       "ProductAccess",
       "PublicMedia",
       "PublicSourceCitation",

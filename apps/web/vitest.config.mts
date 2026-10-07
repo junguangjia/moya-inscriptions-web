@@ -20,6 +20,10 @@ export default defineConfig({
     },
   },
   test: {
+    // Stylesheets stay unprocessed (CSS modules resolve to class-name
+    // proxies); only an explicit `?raw` import keeps the file's own text, so
+    // a test can guard CSS rules without a file-system import.
+    css: { include: [/\.css\?raw$/u] },
     environment: "node",
   },
 });

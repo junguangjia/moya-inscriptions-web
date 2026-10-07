@@ -123,7 +123,10 @@ export const operatorWorkSubmissionQuerySchema = z.strictObject({
  * media proxy. `editKey` addresses the display, full and motion variants (the
  * item edit alone). `coverEditKey` addresses the thumb and cover variants of
  * the revision's cover item (its edit and the revision cover crop); it is null
- * for every other item, whose thumb and cover use `editKey`.
+ * for every other item, whose thumb and cover use `editKey`. `variants` names
+ * the five moderation derivatives only: the optional `viewer` zoom still
+ * (unified media pipeline) is a reader candidate, never listed here or
+ * requested through the Admin media proxy.
  */
 export const operatorSubmissionMediaSchema = z.strictObject({
   position: z.number().int().min(1).max(WORK_ITEMS_HARD_MAXIMUM),
@@ -136,7 +139,7 @@ export const operatorSubmissionMediaSchema = z.strictObject({
   coverEditKey: mediaEditKeySchema.nullable(),
   presentation: mediaPresentationSchema.nullable(),
   variants: z
-    .array(mediaVariantSchema)
+    .array(mediaVariantSchema.exclude(["viewer"]))
     .max(5)
     .refine((variants) => new Set(variants).size === variants.length, {
       message: "variants must be unique",
@@ -257,6 +260,11 @@ export const publishingJobIdSchema = z
 /** Media blob ids are operator-visible job subjects only; never public. */
 export const mediaBlobIdSchema = z.string().regex(/^media-blob-[0-9a-f]{32}$/u);
 
+/**
+ * Every durable job kind: the one definition. The PostgreSQL CHECK
+ * `publishing_jobs_kind_valid` restates this list in each migration that
+ * changes it, and an integration test compares both.
+ */
 export const publishingJobKindSchema = z.enum([
   "process_item",
   "derive_edit",
@@ -266,6 +274,7 @@ export const publishingJobKindSchema = z.enum([
   "purge_trashed_work",
   "sweep_staging",
   "reconcile_capacity",
+  "catalog_render",
 ]);
 
 export const publishingJobStateSchema = z.enum([

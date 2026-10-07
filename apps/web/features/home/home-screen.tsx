@@ -17,6 +17,7 @@ import { HomeContentCard } from "./home-content-card";
 import { HomeFeedPager } from "./home-feed-pager";
 import { homeFeeds, parseHomeFeed } from "./home-feed";
 import styles from "./home-screen.module.css";
+import { listMediaPriority } from "../media/responsive-media";
 import { useProductShell } from "../product-shell/product-shell";
 import { AnimatedCategoryIcon } from "@moya/ui";
 import { AnimatedTopTabs } from "../shell/animated-top-tabs";
@@ -230,12 +231,17 @@ export const HomeScreen = ({
             spanAtAlignedRows
             items={items}
             platform={platform}
-            renderItem={(item, onMediaSettled) => (
+            renderItem={(item, onMediaSettled, index) => (
               <CatalogCard
                 item={item}
                 onMediaSettled={onMediaSettled}
                 onOpenCatalog={(catalog, opener) =>
                   openCatalog(catalog.id, opener)
+                }
+                priority={
+                  activeFeed === "discover" && activeDestination === "home"
+                    ? listMediaPriority(index)
+                    : undefined
                 }
                 variant="feed"
               />

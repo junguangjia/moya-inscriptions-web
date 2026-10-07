@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  VIEWER_UPGRADE_SETTLE_MS,
+  viewerInitialRendition,
+  viewerRenditions,
+  viewerUpgradeRendition,
+} from "../media/responsive-media";
 import { LivePhotoFrame } from "../publishing/ui/live/live-photo";
 import styles from "./catalog-detail.module.css";
 
@@ -12,6 +18,7 @@ import type {
   WheelEvent as ReactWheelEvent,
 } from "react";
 import type { DetailMediaPresentation } from "./catalog-detail-presentation";
+import type { RenditionCandidate } from "../media/responsive-media";
 import type { PresentationPlatform } from "../shell/device-platform";
 
 export const VIEWER_AXIS_LOCK_PX = 10;
@@ -75,6 +82,38 @@ type ViewerTrackStyle = CSSProperties & {
   readonly "--viewer-carousel-x": string;
 };
 
+/** The stage as last measured while the Viewer was open. */
+interface ViewerStageSize {
+  readonly height: number;
+  readonly pixelRatio: number;
+  readonly width: number;
+}
+
+/**
+ * The candidate the current item shows: its fit candidate once it became
+ * current, then each decoded upgrade. It never shrinks while the item stays
+ * current; a peer shows its fit candidate again.
+ */
+interface ViewerHeldRendition {
+  readonly key: string;
+  readonly rendition: RenditionCandidate;
+  readonly upgraded: boolean;
+}
+
+/** The one off-DOM upgrade load the Viewer runs at a time. */
+interface ViewerUpgradeLoad {
+  readonly image: HTMLImageElement;
+  readonly key: string;
+  settled: boolean;
+}
+
+/** What one slide's image shows; `rendition` is absent for legacy media. */
+interface ViewerSlideImage {
+  readonly rendition: RenditionCandidate | undefined;
+  readonly src: string;
+  readonly upgraded: boolean;
+}
+
 const FIT_TRANSFORM: ViewerTransform = { scale: 1, x: 0, y: 0 };
 
 export const resolveViewerAxis = (
@@ -113,11 +152,17 @@ export const shouldCommitViewerSwipe = (
     Math.max(VIEWER_SWIPE_DISTANCE_PX, width * 0.18) ||
     Math.abs(velocity) >= VIEWER_FLING_PX_PER_MS);
 
+/**
+ * Contains the media in the stage. `detailWidth` is the widest image the
+ * Viewer can show for it (its widest rendition candidate, else the media
+ * itself) and sets the zoom ceiling: from 4x up to 8x.
+ */
 export const viewerFit = (
   mediaWidth: number,
   mediaHeight: number,
   stageWidth: number,
   stageHeight: number,
+  detailWidth = mediaWidth,
 ): ViewerFit => {
   const safeMediaWidth = Math.max(1, mediaWidth);
   const safeMediaHeight = Math.max(1, mediaHeight);
@@ -131,7 +176,7 @@ export const viewerFit = (
   const height = safeMediaHeight * ratio;
   return {
     height,
-    maxScale: Math.min(8, Math.max(4, safeMediaWidth / width)),
+    maxScale: Math.min(8, Math.max(4, Math.max(1, detailWidth) / width)),
     stageHeight: safeStageHeight,
     stageWidth: safeStageWidth,
     width,
@@ -166,12 +211,57 @@ export interface CatalogViewerProps {
   readonly platform: PresentationPlatform;
 }
 
-/** The Viewer shows the `full` derivative when the work carries one, else display. */
+/**
+ * Media without rendition candidates: the Viewer shows the `full`
+ * derivative when the work carries one, else display.
+ */
 const viewerSrc = (item: DetailMediaPresentation): string =>
   item.fullSrc ?? item.src;
 
+const viewerMediaKey = (id: string, src: string): string =>
+  JSON.stringify([id, src]);
+
+/** One media item's identity: stable while the Viewer changes candidates. */
 const viewerResourceKey = (item: DetailMediaPresentation): string =>
-  JSON.stringify([item.id, viewerSrc(item)]);
+  viewerMediaKey(item.id, viewerSrc(item));
+
+/** Every source the Viewer may show for an item, as failure keys. */
+const viewerMediaKeys = (item: DetailMediaPresentation): string[] => [
+  viewerResourceKey(item),
+  ...viewerRenditions(item).map((entry) => viewerMediaKey(item.id, entry.src)),
+];
+
+/**
+ * unified-media-pipeline-v1 (CW14): the candidate an item opens on, sized to
+ * its fitted width at the device pixel ratio on the measured open stage. A
+ * closed or not yet measured Viewer names the anchor but leaves its image
+ * source unset: Detail's carousel picks its own
+ * candidate from a srcset, so a hidden Viewer requests neither the anchor nor
+ * a zoom level. Undefined for media without usable candidates, which keep
+ * `fullSrc ?? src`.
+ */
+const viewerFitRendition = (
+  item: DetailMediaPresentation,
+  stage: ViewerStageSize | null,
+): RenditionCandidate | undefined => {
+  if (stage === null)
+    return viewerRenditions(item).find((entry) => entry.src === item.src);
+  const fit = viewerFit(item.width, item.height, stage.width, stage.height);
+  return viewerInitialRendition(item, fit.width * stage.pixelRatio);
+};
+
+/** The widest image the Viewer can show for an item: its zoom ceiling. */
+const viewerDetailWidth = (item: DetailMediaPresentation): number =>
+  viewerRenditions(item).at(-1)?.width ?? item.width;
+
+/** Settles once the off-DOM image is decoded (or loaded, without `decode`). */
+const decodeViewerImage = (image: HTMLImageElement): Promise<void> =>
+  typeof image.decode === "function"
+    ? image.decode()
+    : new Promise((resolve, reject) => {
+        image.addEventListener("load", () => resolve(), { once: true });
+        image.addEventListener("error", reject, { once: true });
+      });
 
 export const CatalogViewer = ({
   index,
@@ -202,11 +292,45 @@ export const CatalogViewer = ({
   const [pagerVisible, setPagerVisible] = useState(false);
   const [settling, setSettling] = useState(false);
   const [transform, setTransform] = useState<ViewerTransform>(FIT_TRANSFORM);
+  const [stageSize, setStageSize] = useState<ViewerStageSize | null>(null);
+  const [held, setHeld] = useState<ViewerHeldRendition | null>(null);
+  const [upgrading, setUpgrading] = useState(false);
+  const [currentImageLoads, setCurrentImageLoads] = useState(0);
+  const upgradeLoadRef = useRef<ViewerUpgradeLoad | null>(null);
+  // Candidates that failed to load or decode are not requested again.
+  const refusedRenditionsRef = useRef(new Set<string>());
   const active = media[index];
+  const openStage = open ? stageSize : null;
 
   const updateTransform = useCallback((next: ViewerTransform) => {
     transformRef.current = next;
     setTransform(next);
+  }, []);
+
+  const measureStage = useCallback(() => {
+    const stage = stageRef.current;
+    if (stage === null) return;
+    const rectangle = stage.getBoundingClientRect();
+    const width = stage.clientWidth || rectangle.width;
+    const height = stage.clientHeight || rectangle.height;
+    // A closed dialog has no box: keep the last open measurement.
+    if (!(width > 0 && height > 0)) return;
+    const pixelRatio =
+      window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    setStageSize((present) =>
+      present?.width === width &&
+      present.height === height &&
+      present.pixelRatio === pixelRatio
+        ? present
+        : { height, pixelRatio, width },
+    );
+  }, []);
+
+  /** Drops the upgrade load; one still in flight is aborted. */
+  const releaseUpgradeLoad = useCallback(() => {
+    const load = upgradeLoadRef.current;
+    upgradeLoadRef.current = null;
+    if (load !== null && !load.settled) load.image.removeAttribute("src");
   }, []);
 
   const clearPagerTimer = useCallback(() => {
@@ -254,6 +378,7 @@ export const CatalogViewer = ({
       active.height,
       stage.clientWidth || rectangle.width,
       stage.clientHeight || rectangle.height,
+      viewerDetailWidth(active),
     );
   }, [active]);
 
@@ -359,34 +484,79 @@ export const CatalogViewer = ({
     }
   }, [open]);
 
+  // After the dialog opens, so the stage has its box. Closing forgets it: a
+  // reopened Viewer must not start from a stage measured before.
+  useEffect(() => {
+    if (open) measureStage();
+    else setStageSize(null);
+  }, [measureStage, open]);
+
   useEffect(() => {
     resetTransform();
     resetCarousel();
     setPagerVisible(false);
   }, [active?.id, open, resetCarousel, resetTransform]);
 
+  // The current item holds its fit candidate from the moment it is current
+  // on a measured open stage; a stage change keeps it (never a downgrade).
+  // Another item, closing or reopening start over and release the upgrade.
   useEffect(() => {
-    const currentKeys = new Set(media.map(viewerResourceKey));
+    const key = active === undefined ? null : viewerResourceKey(active);
+    const fit =
+      active === undefined || !open || stageSize === null
+        ? undefined
+        : viewerFitRendition(active, stageSize);
+    if (
+      upgradeLoadRef.current !== null &&
+      (fit === undefined || upgradeLoadRef.current.key !== key)
+    ) {
+      releaseUpgradeLoad();
+      setUpgrading(false);
+    }
+    setHeld((present) =>
+      key === null || fit === undefined
+        ? null
+        : present?.key === key
+          ? present
+          : { key, rendition: fit, upgraded: false },
+    );
+  }, [active, open, releaseUpgradeLoad, stageSize]);
+
+  useEffect(() => {
+    const currentKeys = new Set(media.flatMap(viewerMediaKeys));
     setFailedMediaKeys((present) => {
       if ([...present].every((key) => currentKeys.has(key))) return present;
       return new Set([...present].filter((key) => currentKeys.has(key)));
     });
   }, [media]);
 
+  // Neighbours preload what they show as peers: legacy media their source,
+  // rendition media their fit candidate once the stage is measured (never a
+  // zoom level). Keyed by the sources, so an unrelated render or a stage
+  // change that keeps them does not request them again.
+  const preloadSources = open
+    ? [media[index - 1], media[index + 1]].flatMap((item) => {
+        if (item === undefined) return [];
+        if (viewerRenditions(item).length === 0) return [viewerSrc(item)];
+        const fit =
+          openStage === null ? undefined : viewerFitRendition(item, openStage);
+        return fit === undefined ? [] : [fit.src];
+      })
+    : [];
+  const preloadKey = JSON.stringify(preloadSources);
   useEffect(() => {
-    if (!open) return;
-    for (const candidate of [media[index - 1], media[index + 1]]) {
-      if (candidate === undefined) continue;
+    for (const source of JSON.parse(preloadKey) as readonly string[]) {
       const preload = new Image();
-      preload.src = viewerSrc(candidate);
+      preload.src = source;
     }
-  }, [index, media, open]);
+  }, [preloadKey]);
 
   useEffect(() => {
     if (!open) return;
     const handleResize = () => {
       resetTransform();
       resetCarousel();
+      measureStage();
     };
     window.addEventListener("orientationchange", handleResize);
     window.addEventListener("resize", handleResize);
@@ -394,16 +564,161 @@ export const CatalogViewer = ({
       window.removeEventListener("orientationchange", handleResize);
       window.removeEventListener("resize", handleResize);
     };
-  }, [open, resetCarousel, resetTransform]);
+  }, [measureStage, open, resetCarousel, resetTransform]);
 
   useEffect(
     () => () => {
       clearPagerTimer();
       clearSettleTimer();
       clearWheelTimer();
+      releaseUpgradeLoad();
     },
-    [clearPagerTimer, clearSettleTimer, clearWheelTimer],
+    [clearPagerTimer, clearSettleTimer, clearWheelTimer, releaseUpgradeLoad],
   );
+
+  /**
+   * The current item shows what it holds (its fit candidate, then each
+   * decoded upgrade); a peer shows its fit candidate; legacy media show
+   * `fullSrc ?? src`.
+   */
+  const slideImage = (
+    item: DetailMediaPresentation,
+    current: boolean,
+  ): ViewerSlideImage => {
+    const fit = viewerFitRendition(item, openStage);
+    if (fit === undefined)
+      return { rendition: undefined, src: viewerSrc(item), upgraded: false };
+    const kept =
+      current &&
+      held !== null &&
+      held.key === viewerResourceKey(item) &&
+      viewerRenditions(item).some(({ src }) => src === held.rendition.src)
+        ? held
+        : null;
+    const rendition = kept?.rendition ?? fit;
+    return { rendition, src: rendition.src, upgraded: kept?.upgraded ?? false };
+  };
+
+  /** Only the source an item opens on can fail it; an upgrade never does. */
+  const slideFailed = (
+    item: DetailMediaPresentation,
+    image: ViewerSlideImage,
+  ): boolean =>
+    !image.upgraded && failedMediaKeys.has(viewerMediaKey(item.id, image.src));
+
+  const activeImage = active === undefined ? null : slideImage(active, true);
+  const activeRendition = activeImage?.rendition;
+  const activeFailed =
+    active === undefined ||
+    activeImage === null ||
+    slideFailed(active, activeImage);
+
+  /**
+   * A decoded upgrade that breaks on screen is dropped without a failed
+   * state: the item shows its fit candidate again.
+   */
+  const dropBrokenUpgrade = (
+    item: DetailMediaPresentation,
+    broken: RenditionCandidate,
+  ) => {
+    refusedRenditionsRef.current.add(broken.src);
+    const fit = viewerFitRendition(item, openStage);
+    setHeld((present) =>
+      present === null || present.rendition !== broken
+        ? present
+        : fit === undefined
+          ? null
+          : { key: present.key, rendition: fit, upgraded: false },
+    );
+  };
+
+  /** Loads `next` off-DOM and swaps it in only once it is decoded. */
+  const startUpgrade = (key: string, next: RenditionCandidate) => {
+    releaseUpgradeLoad();
+    const image = new Image();
+    const load: ViewerUpgradeLoad = { image, key, settled: false };
+    upgradeLoadRef.current = load;
+    setUpgrading(true);
+    const settle = (decoded: boolean) => {
+      load.settled = true;
+      // Released meanwhile: the item stopped being current or the Viewer closed.
+      if (upgradeLoadRef.current !== load) return;
+      if (decoded) {
+        // The decoded image stays referenced until the next release.
+        setHeld((present) =>
+          present !== null &&
+          present.key === key &&
+          present.rendition.width >= next.width
+            ? present
+            : { key, rendition: next, upgraded: true },
+        );
+      } else {
+        // The current image stays; this candidate is not requested again.
+        refusedRenditionsRef.current.add(next.src);
+        upgradeLoadRef.current = null;
+      }
+      setUpgrading(false);
+    };
+    image.src = next.src;
+    decodeViewerImage(image).then(
+      () => settle(true),
+      () => settle(false),
+    );
+  };
+
+  // Once the transform rests, a current item whose loaded image is narrower
+  // than the zoom demands (by the headroom) upgrades to the next candidate.
+  // Zooming out, a reset or a resize never shrinks what it shows.
+  useEffect(() => {
+    if (
+      !open ||
+      stageSize === null ||
+      active === undefined ||
+      activeRendition === undefined ||
+      activeFailed ||
+      upgrading
+    ) {
+      return;
+    }
+    const key = viewerResourceKey(active);
+    const timer = window.setTimeout(() => {
+      const image = stageRef.current?.querySelector<HTMLImageElement>(
+        "[data-detail-viewer-image]",
+      );
+      if (
+        image === null ||
+        image === undefined ||
+        image.getAttribute("src") !== activeRendition.src ||
+        !image.complete ||
+        image.naturalWidth === 0
+      ) {
+        return;
+      }
+      const fit = viewerFit(
+        active.width,
+        active.height,
+        stageSize.width,
+        stageSize.height,
+      );
+      const next = viewerUpgradeRendition(
+        active,
+        activeRendition,
+        fit.width * stageSize.pixelRatio * transform.scale,
+        refusedRenditionsRef.current,
+      );
+      if (next !== undefined) startUpgrade(key, next);
+    }, VIEWER_UPGRADE_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    active,
+    activeFailed,
+    activeRendition,
+    currentImageLoads,
+    open,
+    stageSize,
+    transform,
+    upgrading,
+  ]);
 
   const pointerDistance = () => {
     const [first, second] = [...pointersRef.current.values()];
@@ -746,33 +1061,55 @@ export const CatalogViewer = ({
         >
           {peers.map((item, peerIndex) => {
             const current = peerIndex === 1;
+            const shown = item === undefined ? null : slideImage(item, current);
             const failed =
-              item === undefined ||
-              failedMediaKeys.has(viewerResourceKey(item));
+              item === undefined || shown === null || slideFailed(item, shown);
             const still =
-              item === undefined || failed ? null : (
+              item === undefined || shown === null || failed ? null : (
                 <img
                   alt={item.alt}
                   className={
                     current ? styles.viewerImage : styles.viewerPeerImage
                   }
                   data-detail-viewer-image={current ? "" : undefined}
+                  data-detail-viewer-rendition-width={
+                    current ? shown.rendition?.width : undefined
+                  }
                   draggable={false}
                   height={item.height}
                   key={viewerResourceKey(item)}
+                  // Wait for the open stage's fit candidate before fetching.
+                  loading={
+                    shown.rendition !== undefined && openStage === null
+                      ? "lazy"
+                      : undefined
+                  }
                   onError={(event) => {
                     const image = event.currentTarget;
                     if (
                       !image.isConnected ||
-                      image.getAttribute("src") !== viewerSrc(item)
+                      image.getAttribute("src") !== shown.src
                     )
                       return;
-                    const key = viewerResourceKey(item);
+                    if (shown.upgraded && shown.rendition !== undefined) {
+                      dropBrokenUpgrade(item, shown.rendition);
+                      return;
+                    }
+                    const key = viewerMediaKey(item.id, shown.src);
                     setFailedMediaKeys((present) =>
                       present.has(key) ? present : new Set(present).add(key),
                     );
                   }}
-                  src={viewerSrc(item)}
+                  onLoad={
+                    current && shown.rendition !== undefined
+                      ? () => setCurrentImageLoads((count) => count + 1)
+                      : undefined
+                  }
+                  src={
+                    shown.rendition !== undefined && openStage === null
+                      ? undefined
+                      : shown.src
+                  }
                   style={current ? imageStyle : undefined}
                   width={item.width}
                 />

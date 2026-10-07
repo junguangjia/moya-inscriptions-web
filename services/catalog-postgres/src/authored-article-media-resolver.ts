@@ -1,6 +1,9 @@
-import { CatalogMediaResolutionError } from "@moya/api";
-import { publicMediaSchema } from "@moya/contracts/schemas";
-import type { StorageUrlResolver, StorageMediaLocator } from "@moya/api";
+import { CatalogMediaResolutionError, mapCatalogPublicMedia } from "@moya/api";
+import type {
+  CatalogRenditionUrls,
+  StorageUrlResolver,
+  StorageMediaLocator,
+} from "@moya/api";
 import type {
   ArticleMediaReference,
   MediaId,
@@ -8,6 +11,8 @@ import type {
 } from "@moya/contracts";
 import type { Pool } from "pg";
 import { asPostgresOperationError } from "./availability.js";
+import { catalogMediaDeliveryJoinSql } from "./catalog-media-delivery.js";
+import type { CatalogReaderOptions } from "./catalog-media-delivery.js";
 import { mapCatalogMediaRow } from "./row-mapper.js";
 import type { CatalogMediaRow } from "./row-mapper.js";
 
@@ -17,12 +22,29 @@ export const authoredArticleCatalogPairKey = (
   mediaId: string,
 ): string => JSON.stringify([catalogId, mediaId]);
 
-/** Exact published Catalog pairs; shares the existing object-key URL boundary. */
+const pairSql = (renditions: boolean) => `
+        SELECT cm.media_id,cm.catalog_id,cm.position,cm.is_representative,cm.kind,
+          cm.alt_text,cm.width,cm.height,cm.object_key${renditions ? ",delivery.renditions,delivery.placeholder_color" : ""}
+        FROM jsonb_to_recordset($1::jsonb) AS pair("catalogId" text,"mediaId" text)
+        JOIN public.catalog_entries ce ON ce.catalog_id=pair."catalogId"
+        JOIN public.catalog_media cm ON cm.catalog_id=ce.catalog_id AND cm.media_id=pair."mediaId"${renditions ? catalogMediaDeliveryJoinSql("cm") : ""}
+        ORDER BY cm.catalog_id,cm.media_id`;
+
+/**
+ * Exact published Catalog pairs; shares the existing object-key URL boundary.
+ * References answer in the detail context; with `renditions` they carry
+ * every candidate the URL resolver delivers (a summary narrows its cover).
+ */
 export class PostgresAuthoredArticleCatalogMediaResolver {
+  private readonly sql: string;
+
   constructor(
     private readonly pool: Pool,
     private readonly storage: StorageUrlResolver,
-  ) {}
+    options: CatalogReaderOptions = {},
+  ) {
+    this.sql = pairSql(options.renditions === true);
+  }
   async resolveCatalog(
     pairs: readonly Pair[],
   ): Promise<ReadonlyMap<string, PublicMedia>> {
@@ -43,16 +65,9 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
         "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );
       rows = (
-        await db.query<CatalogMediaRow>(
-          `
-        SELECT cm.media_id,cm.catalog_id,cm.position,cm.is_representative,cm.kind,
-          cm.alt_text,cm.width,cm.height,cm.object_key
-        FROM jsonb_to_recordset($1::jsonb) AS pair("catalogId" text,"mediaId" text)
-        JOIN public.catalog_entries ce ON ce.catalog_id=pair."catalogId"
-        JOIN public.catalog_media cm ON cm.catalog_id=ce.catalog_id AND cm.media_id=pair."mediaId"
-        ORDER BY cm.catalog_id,cm.media_id`,
-          [JSON.stringify([...wanted.values()])],
-        )
+        await db.query<CatalogMediaRow>(this.sql, [
+          JSON.stringify([...wanted.values()]),
+        ])
       ).rows;
       await db.query("COMMIT");
     } catch (error) {
@@ -87,10 +102,21 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
       }
       locatorGroup.set(JSON.stringify([media.id, media.objectKey]), group);
     }
+    // The detail context lists every delivered level of each image.
+    const renditionKeys = [
+      ...new Set(
+        projections.flatMap(({ media }) =>
+          (media.renditions ?? []).map(({ key }) => key),
+        ),
+      ),
+    ];
     const urls: ReadonlyMap<MediaId, string>[] = [];
+    let renditionUrls: CatalogRenditionUrls = new Map();
     try {
       for (const group of groups)
         urls.push(await this.storage.resolveMany(group));
+      if (renditionKeys.length > 0 && this.storage.resolveKeys !== undefined)
+        renditionUrls = await this.storage.resolveKeys(renditionKeys);
     } catch (error) {
       throw error instanceof CatalogMediaResolutionError
         ? error
@@ -101,24 +127,14 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
       const group = locatorGroup.get(
         JSON.stringify([media.id, media.objectKey]),
       );
-      const src = group === undefined ? undefined : urls[group]?.get(media.id);
-      if (src === undefined)
+      const resolved = group === undefined ? undefined : urls[group];
+      if (resolved === undefined || resolved.get(media.id) === undefined)
         throw new CatalogMediaResolutionError({
           cause: new Error("Article Catalog URL unavailable"),
         });
-      const parsed = publicMediaSchema.safeParse({
-        id: media.id,
-        kind: "image",
-        src,
-        alt: media.alt,
-        width: media.width,
-        height: media.height,
-      });
-      if (!parsed.success)
-        throw new CatalogMediaResolutionError({ cause: parsed.error });
       result.set(
         authoredArticleCatalogPairKey(catalogId, media.id),
-        parsed.data,
+        mapCatalogPublicMedia(media, resolved, renditionUrls, "detail"),
       );
     }
     return result;

@@ -108,6 +108,9 @@ describe("@moya/api server-only surface", () => {
       "mapAliyunSendSmsVerifyCode",
       "mapCatalogDetail",
       "mapCatalogPage",
+      // unified-media-pipeline-v1 (PR 1b): one Catalog image mapping shared
+      // with the Article Catalog reference resolver.
+      "mapCatalogPublicMedia",
       "mapCatalogSummary",
       "mapPublicUserProfile",
       "mapTencentSendEmail",

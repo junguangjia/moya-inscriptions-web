@@ -1,6 +1,12 @@
 "use client";
-import { editorialMediaSrc } from "./editorial-media";
+import { editorialImage } from "./editorial-media";
 import type { ArticleSummary } from "@moya/contracts";
+import {
+  MEDIA_SIZES,
+  placeholderStyle,
+  responsiveImage,
+} from "../media/responsive-media";
+import type { RenditionCandidate } from "../media/responsive-media";
 import { useProductShell } from "../product-shell/product-shell";
 import styles from "../discussion-preview/discussion-preview.module.css";
 import homeStyles from "../home/home-screen.module.css";
@@ -8,22 +14,49 @@ import { formatEditorialTime } from "./format-time";
 import { useArticles } from "./use-editorial-content";
 import type { EditorialListState } from "./use-editorial-content";
 
+interface CoverMedia {
+  readonly src: string;
+  readonly width: number;
+  readonly height: number;
+  readonly renditions?: readonly RenditionCandidate[] | undefined;
+  readonly placeholderColor?: string | undefined;
+}
+
+/**
+ * A feed card cover: the square, 16:10 and special boxes are all covered by
+ * the image, so an opaque asset's colour shows until it paints. `owner` names
+ * the Article of a Catalog cover for the Development relays; a managed cover
+ * is already a same-origin path.
+ */
 const Picture = ({
-  src,
+  media,
   alt,
   owner,
+  sizes,
 }: {
-  src: string;
+  media: CoverMedia;
   alt: string;
-  owner: string;
-}) => (
-  <img
-    src={editorialMediaSrc(src, owner)}
-    alt={alt}
-    loading="lazy"
-    decoding="async"
-  />
-);
+  owner: string | null;
+  sizes: (media: CoverMedia) => string;
+}) => {
+  const image =
+    owner === null
+      ? responsiveImage(media, sizes(media))
+      : editorialImage(media, owner, sizes(media));
+  return (
+    <img
+      src={image.src}
+      srcSet={image.srcSet}
+      sizes={image.sizes}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+      width={media.width}
+      height={media.height}
+      style={placeholderStyle(media.placeholderColor)}
+    />
+  );
+};
 
 const EmptyState = ({
   state,
@@ -80,54 +113,60 @@ export function EditorialNewsFeed() {
   return (
     <div className={styles.feed} data-editorial-feed="news">
       <div className={styles.newsList}>
-        {state.items.map((item: ArticleSummary, index) => (
-          <button
-            type="button"
-            key={item.id}
-            data-topic-id={item.id}
-            data-news-layout={index % 3 === 0 ? "large" : "compact"}
-            className={styles.newsCard}
-            onClick={(event) =>
-              shell.openTopic(
-                item.id,
-                event.currentTarget,
-                shell.readActiveScrollTop(),
-              )
-            }
-          >
-            {item.managedCover ? (
-              <img
-                src={item.managedCover.src}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                width={item.managedCover.width}
-                height={item.managedCover.height}
-              />
-            ) : item.cover ? (
-              <Picture
-                owner={item.id}
-                src={item.cover.src}
-                alt={item.cover.alt}
-              />
-            ) : (
-              <span className={styles.imageFallback} aria-hidden="true" />
-            )}
-            <span className={styles.newsCopy}>
-              {item.section && (
-                <span className={styles.eyebrow}>{item.section}</span>
+        {state.items.map((item: ArticleSummary, index) => {
+          const layout = index % 3 === 0 ? "large" : "compact";
+          const sizes =
+            layout === "large"
+              ? MEDIA_SIZES.editorialLarge
+              : MEDIA_SIZES.editorialCompact;
+          return (
+            <button
+              type="button"
+              key={item.id}
+              data-topic-id={item.id}
+              data-news-layout={layout}
+              className={styles.newsCard}
+              onClick={(event) =>
+                shell.openTopic(
+                  item.id,
+                  event.currentTarget,
+                  shell.readActiveScrollTop(),
+                )
+              }
+            >
+              {item.managedCover ? (
+                <Picture
+                  media={item.managedCover}
+                  alt=""
+                  owner={null}
+                  sizes={sizes}
+                />
+              ) : item.cover ? (
+                <Picture
+                  media={item.cover}
+                  alt={item.cover.alt}
+                  owner={item.id}
+                  sizes={sizes}
+                />
+              ) : (
+                <span className={styles.imageFallback} aria-hidden="true" />
               )}
-              <strong>{item.title}</strong>
-              {item.summary && (
-                <span className={styles.summary}>{item.summary}</span>
-              )}
-              <span className={styles.meta}>
-                {item.byline}
-                <span>{formatEditorialTime(item.publishedAt)}</span>
+              <span className={styles.newsCopy}>
+                {item.section && (
+                  <span className={styles.eyebrow}>{item.section}</span>
+                )}
+                <strong>{item.title}</strong>
+                {item.summary && (
+                  <span className={styles.summary}>{item.summary}</span>
+                )}
+                <span className={styles.meta}>
+                  {item.byline}
+                  <span>{formatEditorialTime(item.publishedAt)}</span>
+                </span>
               </span>
-            </span>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
       <LoadMore hasMore={state.hasMore} busy={busy} onLoadMore={loadMore} />
     </div>
@@ -162,16 +201,19 @@ export function EditorialTopicsFeed() {
             }
           >
             {item.managedCover ? (
-              <img
-                src={item.managedCover.src}
+              <Picture
+                media={item.managedCover}
                 alt=""
-                loading="lazy"
-                decoding="async"
-                width={item.managedCover.width}
-                height={item.managedCover.height}
+                owner={null}
+                sizes={MEDIA_SIZES.editorialSpecial}
               />
             ) : item.cover ? (
-              <Picture owner={item.id} src={item.cover.src} alt="" />
+              <Picture
+                media={item.cover}
+                alt=""
+                owner={item.id}
+                sizes={MEDIA_SIZES.editorialSpecial}
+              />
             ) : (
               <span className={styles.imageFallback} aria-hidden="true" />
             )}

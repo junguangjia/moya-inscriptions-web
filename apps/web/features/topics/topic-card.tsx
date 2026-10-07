@@ -3,6 +3,12 @@
 import { useState } from "react";
 
 import { Icon } from "@moya/ui";
+import { useMasonrySlot } from "../home/catalog-masonry";
+import {
+  MEDIA_SIZES,
+  placeholderStyle,
+  responsiveImage,
+} from "../media/responsive-media";
 import { useContentQuickActions } from "../quick-actions/content-quick-actions";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 
@@ -22,7 +28,14 @@ export const TopicCard = ({
 }) => {
   const quickActions = useContentQuickActions();
   const [failed, setFailed] = useState(false);
+  const slot = useMasonrySlot();
   const cover = topic.cover;
+  // The card image keeps its own aspect, so the asset colour fills exactly
+  // the box it will cover.
+  const image =
+    cover === undefined
+      ? undefined
+      : responsiveImage(cover, MEDIA_SIZES.topicCard(slot));
 
   const body = (
     <>
@@ -57,7 +70,10 @@ export const TopicCard = ({
             onMediaSettled?.();
           }}
           onLoad={onMediaSettled}
-          src={cover.src}
+          sizes={image?.sizes}
+          src={image?.src ?? cover.src}
+          srcSet={image?.srcSet}
+          style={placeholderStyle(cover.placeholderColor)}
           width={cover.width}
         />
       )}

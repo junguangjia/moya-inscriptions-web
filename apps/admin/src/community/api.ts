@@ -326,6 +326,7 @@ export const jobKindLabels: Record<PublishingJobKind, string> = {
   purge_trashed_work: "清除回收站作品",
   sweep_staging: "清理上传暂存",
   reconcile_capacity: "核对账号容量",
+  catalog_render: "生成图录衍生图",
 };
 
 export const jobStateLabels: Record<PublishingJobState, string> = {

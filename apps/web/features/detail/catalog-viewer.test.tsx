@@ -4,6 +4,7 @@ import { act, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { VIEWER_UPGRADE_SETTLE_MS } from "../media/responsive-media";
 import {
   CatalogViewer,
   clampViewerTransform,
@@ -108,6 +109,157 @@ const renderViewer = (properties?: ViewerTestProperties) => {
   };
 };
 
+/*
+ * unified-media-pipeline-v1 (CW14): a 1600 × 900 image whose anchor (`src`)
+ * is its 1600 candidate, with smaller card levels and a 3200 zoom level, as
+ * in the e2e fixture. On the 400 × 600 test stage it fits 400 CSS pixels
+ * wide, so at a pixel ratio of 2 it opens on the 1080 candidate.
+ */
+const candidateSizes = [
+  [480, 270],
+  [1080, 608],
+  [1600, 900],
+  [3200, 1800],
+] as const;
+const candidateSrc = (index: number, width: number, height: number) =>
+  `https://media.example.invalid/${index}/${width}x${height}.webp`;
+const renditionMedia = (
+  index: number,
+  sizes: readonly (readonly [number, number])[] = candidateSizes,
+): PublicMedia => ({
+  alt: `渐进图像 ${index}`,
+  height: 900,
+  id: `rendition-media-${index}` as MediaId,
+  kind: "image",
+  renditions: sizes.map(([width, height]) => ({
+    contentType: "image/webp",
+    height,
+    src: candidateSrc(index, width, height),
+    width,
+  })),
+  src: candidateSrc(index, 1600, 900),
+  width: 1600,
+});
+
+interface PendingDecode {
+  readonly image: HTMLImageElement;
+  readonly reject: (reason: unknown) => void;
+  readonly resolve: () => void;
+}
+
+/** `decode()` of every image waits until the test settles it. */
+const mockDecode = (): PendingDecode[] => {
+  const decodes: PendingDecode[] = [];
+  Object.defineProperty(HTMLImageElement.prototype, "decode", {
+    configurable: true,
+    value(this: HTMLImageElement) {
+      return new Promise<void>((resolve, reject) => {
+        decodes.push({ image: this, reject, resolve });
+      });
+    },
+  });
+  return decodes;
+};
+
+const pixelRatioDescriptor = Object.getOwnPropertyDescriptor(
+  window,
+  "devicePixelRatio",
+);
+const setPixelRatio = (value: number) =>
+  Object.defineProperty(window, "devicePixelRatio", {
+    configurable: true,
+    value,
+  });
+
+const setStageSize = (stage: HTMLElement, width: number, height: number) =>
+  Object.defineProperties(stage, {
+    clientHeight: { configurable: true, value: height },
+    clientWidth: { configurable: true, value: width },
+    getBoundingClientRect: {
+      configurable: true,
+      value: () => ({
+        bottom: height,
+        height,
+        left: 0,
+        right: width,
+        top: 0,
+        width,
+        x: 0,
+        y: 0,
+      }),
+    },
+  });
+
+const currentImage = (container: HTMLElement) =>
+  container.querySelector<HTMLImageElement>("[data-detail-viewer-image]");
+
+/** The Viewer opens the way Detail opens it: mounted closed, then opened. */
+const openProgressive = ({
+  index = 0,
+  pixelRatio = 2,
+  selectedMedia,
+}: {
+  readonly index?: number;
+  readonly pixelRatio?: number;
+  readonly selectedMedia: readonly PublicMedia[];
+}) => {
+  setPixelRatio(pixelRatio);
+  const value = renderViewer({ index, open: false, selectedMedia });
+  const closedImage = currentImage(value.container);
+  const closedSrc = closedImage?.getAttribute("src");
+  const closedLoading = closedImage?.getAttribute("loading");
+  value.rerender({ index, selectedMedia });
+  return { ...value, closedLoading, closedSrc };
+};
+
+/** jsdom loads no image: report the shown one as decoded and painted. */
+const markLoaded = (image: HTMLImageElement) => {
+  Object.defineProperties(image, {
+    complete: { configurable: true, value: true },
+    naturalWidth: { configurable: true, value: 1 },
+  });
+  act(() => image.dispatchEvent(new Event("load")));
+};
+
+/** Two touch pointers `from` px apart, the second moved until `to` px apart. */
+const pinch = (stage: HTMLElement, from: number, to: number) =>
+  act(() => {
+    stage.dispatchEvent(
+      pointerEvent("pointerdown", {
+        clientX: 100,
+        clientY: 300,
+        pointerId: 21,
+      }),
+    );
+    stage.dispatchEvent(
+      pointerEvent("pointerdown", {
+        clientX: 100 + from,
+        clientY: 300,
+        pointerId: 22,
+      }),
+    );
+    stage.dispatchEvent(
+      pointerEvent("pointermove", {
+        clientX: 100 + to,
+        clientY: 300,
+        pointerId: 22,
+      }),
+    );
+    stage.dispatchEvent(
+      pointerEvent("pointerup", {
+        clientX: 100 + to,
+        clientY: 300,
+        pointerId: 22,
+      }),
+    );
+    stage.dispatchEvent(
+      pointerEvent("pointerup", { clientX: 100, clientY: 300, pointerId: 21 }),
+    );
+  });
+
+const settleUpgradeTimer = () =>
+  act(() => vi.advanceTimersByTime(VIEWER_UPGRADE_SETTLE_MS));
+
 beforeEach(() => {
   vi.useFakeTimers();
   Object.defineProperty(window, "matchMedia", {
@@ -122,6 +274,10 @@ afterEach(() => {
   vi.runOnlyPendingTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  Reflect.deleteProperty(HTMLImageElement.prototype, "decode");
+  if (pixelRatioDescriptor === undefined)
+    Reflect.deleteProperty(window, "devicePixelRatio");
+  else Object.defineProperty(window, "devicePixelRatio", pixelRatioDescriptor);
 });
 
 describe("CatalogViewer geometry", () => {
@@ -182,6 +338,19 @@ describe("CatalogViewer geometry", () => {
       scale: 4,
       x: 300,
       y: -900,
+    });
+  });
+
+  it("sets the zoom ceiling from the widest candidate, between 4x and 8x", () => {
+    // A 1600 × 900 image fits 400 CSS pixels wide on a 400 × 600 stage.
+    expect(viewerFit(1600, 900, 400, 600).maxScale).toBe(4);
+    expect(viewerFit(1600, 900, 400, 600, 1600).maxScale).toBe(4);
+    expect(viewerFit(1600, 900, 400, 600, 2400).maxScale).toBe(6);
+    expect(viewerFit(1600, 900, 400, 600, 3200).maxScale).toBe(8);
+    expect(viewerFit(1600, 900, 400, 600, 12_800).maxScale).toBe(8);
+    expect(viewerFit(1600, 900, 400, 600, 3200)).toMatchObject({
+      height: 225,
+      width: 400,
     });
   });
 });
@@ -586,5 +755,297 @@ describe("CatalogViewer", () => {
       );
     });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+});
+
+describe("CatalogViewer progressive renditions", () => {
+  const trackSources = (container: HTMLElement) =>
+    [
+      ...container.querySelectorAll<HTMLImageElement>(
+        "[data-detail-viewer-track] img",
+      ),
+    ].map((image) => image.getAttribute("src"));
+
+  it("opens on the measured fit candidate without fetching while closed", () => {
+    const item = renditionMedia(1);
+    const v = openProgressive({ selectedMedia: [item] });
+    // A hidden Viewer leaves the image source unset and defers it:
+    // the carousel picks its own candidate, so a hidden eager anchor would
+    // download every image twice.
+    expect(v.closedSrc).toBeNull();
+    expect(v.closedLoading).toBe("lazy");
+    const image = currentImage(v.container)!;
+    expect(image.getAttribute("alt")).toBe(item.alt);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 1080, 608));
+    expect(image.hasAttribute("loading")).toBe(false);
+    expect(image.getAttribute("data-detail-viewer-rendition-width")).toBe(
+      "1080",
+    );
+
+    // Reopened at a pixel ratio of 3: 400 × 3 = 1200 → the 1600 anchor.
+    v.rerender({ open: false, selectedMedia: [item] });
+    expect(image.getAttribute("src")).toBeNull();
+    expect(image.getAttribute("loading")).toBe("lazy");
+    setPixelRatio(3);
+    v.rerender({ selectedMedia: [item] });
+    expect(currentImage(v.container)).toBe(image);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 1600, 900));
+    expect(image.hasAttribute("loading")).toBe(false);
+    expect(image.getAttribute("data-detail-viewer-rendition-width")).toBe(
+      "1600",
+    );
+    v.unmount();
+
+    // The initial image stays within 4096² pixels: 6400 × 3600 is a zoom level only.
+    const bounded = openProgressive({
+      pixelRatio: 10,
+      selectedMedia: [renditionMedia(2, [...candidateSizes, [6400, 3600]])],
+    });
+    expect(currentImage(bounded.container)?.getAttribute("src")).toBe(
+      candidateSrc(2, 3200, 1800),
+    );
+    bounded.unmount();
+
+    // Media without candidates keep their source, its loading and no width.
+    const legacy = openProgressive({ selectedMedia: media.slice(0, 1) });
+    expect(legacy.closedLoading).toBeNull();
+    const legacyImage = currentImage(legacy.container)!;
+    expect(legacyImage.getAttribute("src")).toBe(media[0]!.src);
+    expect(legacyImage.hasAttribute("loading")).toBe(false);
+    expect(legacyImage.hasAttribute("data-detail-viewer-rendition-width")).toBe(
+      false,
+    );
+  });
+
+  it("upgrades once the transform rests and swaps only after the decode resolves", async () => {
+    const decodes = mockDecode();
+    const v = openProgressive({ selectedMedia: [renditionMedia(1)] });
+    const image = currentImage(v.container)!;
+    markLoaded(image);
+
+    // 2x: 400 × 2 × 2 = 1600 demanded > 1080 × 1.15 → the 1600 candidate.
+    pinch(v.stage, 100, 200);
+    expect(v.stage.dataset.viewerScale).toBe("zoomed");
+    act(() => vi.advanceTimersByTime(VIEWER_UPGRADE_SETTLE_MS - 20));
+    // Moving again (a 1% zoom-out, 1584 demanded) restarts the rest period.
+    pinch(v.stage, 101, 100);
+    act(() => vi.advanceTimersByTime(VIEWER_UPGRADE_SETTLE_MS - 1));
+    expect(decodes).toHaveLength(0);
+    act(() => vi.advanceTimersByTime(1));
+    expect(decodes).toHaveLength(1);
+    const [first] = decodes;
+    expect(first!.image.isConnected).toBe(false);
+    expect(first!.image.getAttribute("src")).toBe(candidateSrc(1, 1600, 900));
+    // Loading and decoding happen off-DOM: the shown image is untouched.
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(decodes).toHaveLength(1);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 1080, 608));
+    expect(image.getAttribute("data-detail-viewer-rendition-width")).toBe(
+      "1080",
+    );
+
+    await act(async () => first!.resolve());
+    // The same element takes the decoded source: no remount, no blank frame.
+    expect(currentImage(v.container)).toBe(image);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 1600, 900));
+    expect(image.getAttribute("data-detail-viewer-rendition-width")).toBe(
+      "1600",
+    );
+
+    // 4x: 3200 demanded > 1600 × 1.15 → the 3200 zoom level.
+    pinch(v.stage, 100, 200);
+    settleUpgradeTimer();
+    expect(decodes).toHaveLength(2);
+    expect(decodes[1]!.image.getAttribute("src")).toBe(
+      candidateSrc(1, 3200, 1800),
+    );
+    await act(async () => decodes[1]!.resolve());
+    expect(currentImage(v.container)).toBe(image);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 3200, 1800));
+    expect(image.getAttribute("data-detail-viewer-rendition-width")).toBe(
+      "3200",
+    );
+    expect(
+      v.container.querySelector("[data-detail-viewer-media-state='failed']"),
+    ).toBeNull();
+  });
+
+  it("never shrinks the current image on zoom-out, reset or resize", async () => {
+    const decodes = mockDecode();
+    const v = openProgressive({ selectedMedia: [renditionMedia(1)] });
+    const image = currentImage(v.container)!;
+    markLoaded(image);
+    pinch(v.stage, 100, 400);
+    settleUpgradeTimer();
+    expect(decodes).toHaveLength(1);
+    await act(async () => decodes[0]!.resolve());
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 3200, 1800));
+
+    pinch(v.stage, 400, 100);
+    expect(v.stage.dataset.viewerScale).toBe("fit");
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 3200, 1800));
+
+    // A smaller stage resets the transform; its fit (480) would be narrower.
+    setStageSize(v.stage, 200, 300);
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(currentImage(v.container)).toBe(image);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 3200, 1800));
+    expect(image.getAttribute("data-detail-viewer-rendition-width")).toBe(
+      "3200",
+    );
+    expect(decodes).toHaveLength(1);
+  });
+
+  it("keeps peers and the neighbour preload on their fit candidate and drops an upgrade when its item becomes a peer", async () => {
+    const decodes = mockDecode();
+    const preloaded: string[] = [];
+    // Off-DOM images (preloads and upgrade loads) record what they request.
+    vi.spyOn(HTMLImageElement.prototype, "src", "set").mockImplementation(
+      function (this: HTMLImageElement, value: string) {
+        if (!this.isConnected) preloaded.push(value);
+        this.setAttribute("src", value);
+      },
+    );
+    const selectedMedia = [1, 2, 3].map((index) => renditionMedia(index));
+    const v = openProgressive({ index: 1, selectedMedia });
+    expect(trackSources(v.container)).toEqual([
+      candidateSrc(1, 1080, 608),
+      candidateSrc(2, 1080, 608),
+      candidateSrc(3, 1080, 608),
+    ]);
+    expect(preloaded).toEqual([
+      candidateSrc(1, 1080, 608),
+      candidateSrc(3, 1080, 608),
+    ]);
+    expect(
+      v.container.querySelectorAll("[data-detail-viewer-rendition-width]"),
+    ).toHaveLength(1);
+
+    markLoaded(currentImage(v.container)!);
+    pinch(v.stage, 100, 400);
+    settleUpgradeTimer();
+    await act(async () => decodes[0]!.resolve());
+    expect(trackSources(v.container)).toEqual([
+      candidateSrc(1, 1080, 608),
+      candidateSrc(2, 3200, 1800),
+      candidateSrc(3, 1080, 608),
+    ]);
+    // Only the current item's upgrade asked for a zoom level.
+    expect(preloaded).toEqual([
+      candidateSrc(1, 1080, 608),
+      candidateSrc(3, 1080, 608),
+      candidateSrc(2, 3200, 1800),
+    ]);
+
+    pinch(v.stage, 400, 100);
+    act(() => {
+      v.viewer.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }),
+      );
+      vi.advanceTimersByTime(220);
+    });
+    expect(v.onIndexChange).toHaveBeenCalledWith(2);
+    v.rerender({ index: 2, selectedMedia });
+    // The paged-away item is a peer at its fit: one upgraded bitmap at most.
+    expect(trackSources(v.container)).toEqual([
+      candidateSrc(2, 1080, 608),
+      candidateSrc(3, 1080, 608),
+    ]);
+    expect(currentImage(v.container)?.getAttribute("src")).toBe(
+      candidateSrc(3, 1080, 608),
+    );
+
+    // Back on it, the item opens on its fit candidate again.
+    v.rerender({ index: 1, selectedMedia });
+    expect(currentImage(v.container)?.getAttribute("src")).toBe(
+      candidateSrc(2, 1080, 608),
+    );
+    expect(
+      currentImage(v.container)?.getAttribute(
+        "data-detail-viewer-rendition-width",
+      ),
+    ).toBe("1080");
+    expect(decodes).toHaveLength(1);
+  });
+
+  it("keeps the current image without a failure when an upgrade fails and never requests that candidate again", async () => {
+    const decodes = mockDecode();
+    const v = openProgressive({ selectedMedia: [renditionMedia(1)] });
+    const image = currentImage(v.container)!;
+    markLoaded(image);
+    const failedState = () =>
+      v.container.querySelector("[data-detail-viewer-media-state='failed']");
+
+    // 4x: 3200 demanded; its decode fails.
+    pinch(v.stage, 100, 400);
+    settleUpgradeTimer();
+    expect(decodes[0]!.image.getAttribute("src")).toBe(
+      candidateSrc(1, 3200, 1800),
+    );
+    await act(async () => decodes[0]!.reject(new Error("decode")));
+    expect(currentImage(v.container)).toBe(image);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 1080, 608));
+    expect(failedState()).toBeNull();
+
+    // The next wider candidate still serves part of the demand.
+    settleUpgradeTimer();
+    expect(decodes).toHaveLength(2);
+    expect(decodes[1]!.image.getAttribute("src")).toBe(
+      candidateSrc(1, 1600, 900),
+    );
+    await act(async () => decodes[1]!.resolve());
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 1600, 900));
+
+    // More zoom never asks for the refused candidate again.
+    pinch(v.stage, 100, 400);
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(decodes).toHaveLength(2);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 1600, 900));
+
+    // A decoded upgrade that breaks on screen falls back to the fit candidate.
+    act(() => image.dispatchEvent(new Event("error")));
+    expect(currentImage(v.container)).toBe(image);
+    expect(image.getAttribute("src")).toBe(candidateSrc(1, 1080, 608));
+    expect(failedState()).toBeNull();
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(decodes).toHaveLength(2);
+  });
+
+  it("reports a failure of the initial candidate truthfully", () => {
+    const v = openProgressive({ selectedMedia: [renditionMedia(1)] });
+    act(() => currentImage(v.container)!.dispatchEvent(new Event("error")));
+    expect(currentImage(v.container)).toBeNull();
+    expect(
+      v.container.querySelector("[data-detail-viewer-media-state='failed']")
+        ?.textContent,
+    ).toBe("图像无法加载");
+  });
+
+  it("zooms up to the widest candidate's detail", () => {
+    const zoomedScale = (selected: PublicMedia) => {
+      const v = openProgressive({ selectedMedia: [selected] });
+      pinch(v.stage, 10, 400);
+      const scale = currentImage(v.container)!.style.getPropertyValue(
+        "--viewer-scale",
+      );
+      v.unmount();
+      return scale;
+    };
+    // 3200 / 400 fitted pixels → 8x; without candidates 1600 / 400 → 4x.
+    expect(zoomedScale(renditionMedia(1))).toBe("8");
+    expect(
+      zoomedScale({
+        alt: "无候选图像",
+        height: 900,
+        id: "legacy-media" as MediaId,
+        kind: "image",
+        src: "https://media.example.invalid/legacy/1600x900.webp",
+        width: 1600,
+      }),
+    ).toBe("4");
   });
 });

@@ -17,7 +17,11 @@ import type { AuthoredArticleReadProjector } from "./postgres-composite-editoria
 
 type Managed = Extract<ArticleMediaReference, { type: "managed" }>;
 type Catalog = Extract<ArticleMediaReference, { type: "catalog" }>;
-/** Existing media bridge supplies owner-scoped ready derivatives, never masters. */
+/**
+ * Existing media bridge supplies owner-scoped ready derivatives, never
+ * masters; rendition candidates in the detail context (`summary()` narrows
+ * its cover to the card context).
+ */
 export interface AuthoredArticleMediaResolver {
   resolveManaged(
     owner: PublicUserId,
@@ -31,6 +35,57 @@ export const articleCatalogMediaKey = (
   catalogId: string,
   mediaId: string,
 ): string => JSON.stringify([catalogId, mediaId]);
+
+/**
+ * The candidates up to the anchor (`src`) of a detail-context list, or
+ * undefined when there is no list or no anchor in it.
+ */
+const candidatesUpToAnchor = <
+  Entry extends {
+    readonly src: string;
+    readonly width: number;
+    readonly height: number;
+  },
+>(
+  src: string,
+  renditions: readonly Entry[] | undefined,
+): Entry[] | undefined => {
+  const anchor = renditions?.find((entry) => entry.src === src);
+  return renditions === undefined || anchor === undefined
+    ? undefined
+    : renditions.filter(
+        (entry) => entry.width <= anchor.width && entry.height <= anchor.height,
+      );
+};
+
+/**
+ * A summary is a card context (unified media pipeline CW4): its cover keeps
+ * only the candidates up to its anchor, never zoom levels. Resolvers answer
+ * in the detail context, so detail reads keep every candidate.
+ */
+const cardCover = (
+  cover: ArticleResolvedReference | undefined,
+): ArticleResolvedReference | undefined => {
+  if (cover?.type === "managed") {
+    const renditions = candidatesUpToAnchor(
+      cover.media.src,
+      cover.media.renditions,
+    );
+    return renditions === undefined
+      ? cover
+      : { type: "managed", media: { ...cover.media, renditions } };
+  }
+  if (cover?.type === "catalog") {
+    const renditions = candidatesUpToAnchor(
+      cover.media.src,
+      cover.media.renditions,
+    );
+    return renditions === undefined
+      ? cover
+      : { type: "catalog", media: { ...cover.media, renditions } };
+  }
+  return cover;
+};
 
 /** Canonical document stays unchanged; URL availability is a typed read overlay. */
 export class CanonicalAuthoredArticleProjector implements AuthoredArticleReadProjector {
@@ -115,7 +170,9 @@ export class CanonicalAuthoredArticleProjector implements AuthoredArticleReadPro
     const resolved = await this.references(value.ownerId, entries);
     return this.record(
       value,
-      value.coverRefId === null ? undefined : resolved[value.coverRefId],
+      cardCover(
+        value.coverRefId === null ? undefined : resolved[value.coverRefId],
+      ),
     );
   }
   async detail(value: PublishedAuthoredArticle): Promise<ArticleDetailRecord> {

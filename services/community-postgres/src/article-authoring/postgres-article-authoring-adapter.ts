@@ -442,8 +442,8 @@ export class PostgresArticleAuthoringAdapter
             motion_ready: boolean;
           }>(
             `SELECT i.id,i.state,i.legacy_media_id,i.kind,
-        EXISTS (SELECT 1 FROM community.media_derivatives d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed' WHERE d.item_id=i.id AND d.variant='display' AND d.edit_key='base') AS display_ready,
-        EXISTS (SELECT 1 FROM community.media_derivatives d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed' WHERE d.item_id=i.id AND d.variant='motion' AND d.edit_key='base') AS motion_ready
+        EXISTS (SELECT 1 FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed' WHERE d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready') AS display_ready,
+        EXISTS (SELECT 1 FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed' WHERE d.item_id=i.id AND d.role='motion' AND d.edit_key='base' AND d.state='ready') AS motion_ready
        FROM community.media_items i WHERE i.id=ANY($1::text[]) AND i.owner_id=$2 ORDER BY i.id FOR SHARE OF i`,
             [refs.itemIds, draft.ownerId],
           )

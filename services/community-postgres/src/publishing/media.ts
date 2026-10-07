@@ -35,6 +35,7 @@ import type {
   PublishingNormalizedCrop,
   PublishingProcessedOutcome,
   PublishingProcessingInput,
+  PublishingRenditionRole,
 } from "@moya/api";
 import type { Pool } from "pg";
 
@@ -54,6 +55,11 @@ import {
   type PublishingDb,
 } from "./db.js";
 import { adjustCapacity, insertJob, releaseReservations } from "./jobs.js";
+import {
+  recordRenditionRows,
+  unrecordedKeys,
+  type RenditionRecordInput,
+} from "./renditions.js";
 
 /*
  * Settings and capacity reads, media items (registration with reservation and
@@ -121,7 +127,7 @@ interface ItemDtoRow {
 const itemDtoSelect = `SELECT i.id,i.kind,i.quality_mode,i.state,i.failure_code,i.presentation,i.legacy_media_id,
   COALESCE((SELECT jsonb_agg(jsonb_build_object('id',c.id,'role',c.role,'state',c.state,'byteSize',c.declared_bytes,'receivedBytes',c.received_bytes))
     FROM community.media_components c WHERE c.item_id=i.id), '[]'::jsonb) AS components,
-  EXISTS (SELECT 1 FROM community.media_derivatives d WHERE d.item_id=i.id AND d.variant='full' AND d.edit_key='base') AS has_full
+  EXISTS (SELECT 1 FROM community.media_renditions d WHERE d.item_id=i.id AND d.role='full' AND d.edit_key='base' AND d.state='ready') AS has_full
   FROM community.media_items i`;
 
 /** The public presentation fields only (private facts never leave the row). */
@@ -146,10 +152,10 @@ const publicPresentation = (
   };
 };
 
-/** The same-origin derivative path of one item, variant and edit key. */
+/** The same-origin derivative path of one item, rendition role and edit key. */
 export const publishingMediaSrc = (
   itemId: string,
-  variant: PublishingDerivativeVariant,
+  variant: PublishingRenditionRole,
   editKey: string,
 ): string => `${PUBLISHING_MEDIA_PATH_PREFIX}${itemId}/${variant}/${editKey}`;
 
@@ -527,8 +533,8 @@ export const ensureContentDerivatives = async (
          COALESCE((SELECT array_agg(rd.variant || '@' || rd.edit_key)
                    FROM community.media_required_derivatives(i.kind, e.edit, e.is_cover, e.cover_crop) rd
                    WHERE ${legacyNeedsSql("i", "rd")} AND NOT EXISTS (
-                     SELECT 1 FROM community.media_derivatives d
-                     WHERE d.item_id=i.id AND d.variant=rd.variant AND d.edit_key=rd.edit_key)), '{}'::text[]) AS missing,
+                     SELECT 1 FROM community.media_renditions d
+                     WHERE d.item_id=i.id AND d.role=rd.variant AND d.edit_key=rd.edit_key AND d.state='ready')), '{}'::text[]) AS missing,
          COALESCE((SELECT jsonb_agg(jsonb_build_object('editKey', j.payload->>'editKey', 'state', j.state, 'variants', j.payload->'variants') ORDER BY j.created_at, j.id)
                    FROM community.publishing_jobs j
                    WHERE j.kind='derive_edit' AND j.subject_id=i.id AND j.state <> 'succeeded'
@@ -1278,93 +1284,49 @@ export const readLegacyMediaBytes = async (
         );
   });
 
-/** Storage keys of the records that no `media_blobs` row names (safe to remove). */
-const unrecordedKeys = async (
-  db: PublishingDb,
+const PLACEHOLDER_COLOR = /^#[0-9a-f]{6}$/u;
+
+/** Processor records as rendition inputs (the variant is the role). */
+const renditionInputs = (
   records: readonly PublishingDerivativeRecord[],
-): Promise<string[]> => {
-  const keys = records.map((record) => record.storageKey);
-  if (keys.length === 0) return [];
-  const known = new Set(
-    (
-      await db.query<{ storage_key: string }>(
-        "SELECT storage_key FROM community.media_blobs WHERE storage_key=ANY($1::text[])",
-        [keys],
-      )
-    ).rows.map((row) => row.storage_key),
-  );
-  return keys.filter((key) => !known.has(key));
+): RenditionRecordInput[] =>
+  records.map((record) => ({
+    storageKey: record.storageKey,
+    byteSize: record.byteSize,
+    sha256: record.sha256,
+    role: record.variant,
+    editKey: record.editKey,
+    contentType: record.contentType,
+    width: record.width,
+    height: record.height,
+    durationMs: record.durationMs,
+    recipeVersion: record.recipeVersion,
+    recipeDigest: record.recipeDigest,
+  }));
+
+/** A placeholder colour to store: `undefined` keeps the stored value. */
+const placeholderOf = (
+  value: string | null | undefined,
+): string | null | undefined => {
+  if (value === undefined || value === null) return value;
+  if (!PLACEHOLDER_COLOR.test(value))
+    throw new TypeError("A placeholder colour is #rrggbb in lowercase hex");
+  return value;
 };
 
-/**
- * Records derivative blobs and rows for a locked item. A record whose storage
- * key is already recorded (a replayed result) is skipped; one whose (variant,
- * edit key) already exists with another blob is not recorded and its key is
- * returned for removal. Committed bytes grow by what was recorded.
- */
-const recordDerivativeRows = async (
+/** Records rendition blobs and rows of a locked item (see `recordRenditionRows`). */
+const recordItemRenditions = (
   db: PublishingDb,
   item: { readonly id: string; readonly ownerId: string },
   records: readonly PublishingDerivativeRecord[],
   now: Date,
-): Promise<{
-  readonly recordedBytes: number;
-  readonly duplicates: string[];
-}> => {
-  const at = nowParam(now);
-  const fresh = new Set(await unrecordedKeys(db, records));
-  const existing = new Set(
-    (
-      await db.query<{ variant: string; edit_key: string }>(
-        "SELECT variant,edit_key FROM community.media_derivatives WHERE item_id=$1",
-        [item.id],
-      )
-    ).rows.map((row) => `${row.variant}@${row.edit_key}`),
+) =>
+  recordRenditionRows(
+    db,
+    { kind: "item", id: item.id, ownerId: item.ownerId },
+    renditionInputs(records),
+    now,
   );
-  const duplicates: string[] = [];
-  let recordedBytes = 0;
-  for (const record of records) {
-    if (!fresh.has(record.storageKey)) continue;
-    fresh.delete(record.storageKey);
-    const slot = `${record.variant}@${record.editKey}`;
-    if (existing.has(slot)) {
-      duplicates.push(record.storageKey);
-      continue;
-    }
-    existing.add(slot);
-    const blobId = opaqueId("media-blob");
-    await db.query(
-      `INSERT INTO community.media_blobs(id,owner_id,purpose,storage_key,byte_size,sha256,content_type,state,created_at)
-       VALUES($1,$2,'derivative',$3,$4,$5,$6,'committed',$7::timestamptz)`,
-      [
-        blobId,
-        item.ownerId,
-        record.storageKey,
-        record.byteSize,
-        record.sha256,
-        record.contentType,
-        at,
-      ],
-    );
-    await db.query(
-      `INSERT INTO community.media_derivatives(item_id,variant,edit_key,blob_id,width,height,duration_ms,content_type,created_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz)`,
-      [
-        item.id,
-        record.variant,
-        record.editKey,
-        blobId,
-        record.width,
-        record.height,
-        record.durationMs,
-        record.contentType,
-        at,
-      ],
-    );
-    recordedBytes += record.byteSize;
-  }
-  return { recordedBytes, duplicates };
-};
 
 /** Ensures derivative jobs for the edits of every active draft that holds the item. */
 const ensureHolderDerivatives = async (
@@ -1451,7 +1413,8 @@ export const markItemReady = async (
     const item = await lockItemForWorker(db, itemId);
     if (item === undefined || item.state !== "processing")
       return discardedUnlessReplayed(db, item, "ready", outcome.derivatives);
-    const { recordedBytes, duplicates } = await recordDerivativeRows(
+    const placeholder = placeholderOf(outcome.placeholderColor);
+    const { recordedBytes, duplicates } = await recordItemRenditions(
       db,
       { id: item.id, ownerId: item.owner_id },
       outcome.derivatives,
@@ -1485,7 +1448,8 @@ export const markItemReady = async (
       `UPDATE community.media_items
        SET state='ready', failure_code=NULL, ready_at=$2::timestamptz, updated_at=$2::timestamptz, version=version+1,
            presentation=$3::jsonb, pairing=$4::jsonb,
-           private_metadata=COALESCE(private_metadata,'{}'::jsonb) || jsonb_build_object('server', $5::jsonb)
+           private_metadata=COALESCE(private_metadata,'{}'::jsonb) || jsonb_build_object('server', $5::jsonb),
+           placeholder_color=CASE WHEN $6::boolean THEN $7::text ELSE placeholder_color END
        WHERE id=$1`,
       [
         item.id,
@@ -1493,6 +1457,8 @@ export const markItemReady = async (
         JSON.stringify(publicFacts),
         outcome.pairing === null ? null : JSON.stringify(outcome.pairing),
         JSON.stringify(serverFacts),
+        placeholder !== undefined,
+        placeholder ?? null,
       ],
     );
     await releaseReservations(db, [item.id], now);
@@ -1512,15 +1478,26 @@ export const recordDerivatives = async (
   now: Date,
 ): Promise<PublishingDerivativeCommit> =>
   writeTransaction(pool, async (db) => {
+    const placeholder = placeholderOf(outcome.placeholderColor);
+    if (
+      placeholder !== undefined &&
+      outcome.derivatives.some((record) => record.editKey !== "base")
+    )
+      throw new TypeError("A placeholder colour comes from the base edit only");
     const item = await lockItemForWorker(db, itemId);
     if (item === undefined || item.state !== "ready")
       return discardedUnlessReplayed(db, item, null, outcome.derivatives);
-    const { recordedBytes, duplicates } = await recordDerivativeRows(
+    const { recordedBytes, duplicates } = await recordItemRenditions(
       db,
       { id: item.id, ownerId: item.owner_id },
       outcome.derivatives,
       now,
     );
+    if (placeholder !== undefined)
+      await db.query(
+        "UPDATE community.media_items SET placeholder_color=$2 WHERE id=$1",
+        [item.id, placeholder],
+      );
     await adjustCapacity(db, item.owner_id, { committed: recordedBytes }, now);
     return duplicates.length === 0
       ? { status: "recorded" }

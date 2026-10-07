@@ -1,14 +1,11 @@
+import { setTimeout as pause } from "node:timers/promises";
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { writeFile } from "node:fs/promises";
 import { devices, expect, test } from "@playwright/test";
 import type { CDPSession, Locator, Page } from "@playwright/test";
 
 test.beforeAll(async ({ request }) => {
-  // Compile the routes exercised by this spec before holding browser input.
-  // A dev-server refresh during the gesture correctly cancels its session.
-  for (const path of ["/", "/dev/t02p", "/dev/t02p/qa"]) {
-    const response = await request.get(path);
-    expect(response.status()).toBe(200);
-  }
+  await prepareFormalRoutes(request);
 });
 
 const ready = async (page: Page, path = "/dev/t02p/qa?qaChrome=hidden") => {
@@ -23,6 +20,34 @@ const homeFeed = (page: Page, surface: "home" | "calligraphy") =>
 const feedCards = (page: Page, surface: "home" | "calligraphy") =>
   homeFeed(page, surface).locator('[data-quick-actions="enabled"]');
 const homeCard = (page: Page) => feedCards(page, "home").first();
+const settlePanel = async (panel: Locator) => {
+  await expect
+    .poll(
+      () =>
+        panel.evaluate(async (node) => {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+          const frame = node.closest<HTMLElement>("[data-horizontal-pager]");
+          if (frame === null) throw new Error("Missing QA action pager");
+          const layouts = node.querySelectorAll<HTMLElement>(
+            "[data-home-masonry]",
+          );
+          return (
+            frame.dataset.horizontalPagerScrolling === "false" &&
+            Math.abs(
+              node.getBoundingClientRect().left -
+                frame.getBoundingClientRect().left,
+            ) <= 2 &&
+            Array.from(layouts).every(
+              (layout) => layout.dataset.layoutReady === "true",
+            )
+          );
+        }),
+      { intervals: [0] },
+    )
+    .toBe(true);
+};
 const selectCalligraphy = async (page: Page) => {
   const home = page.locator("[data-home-surface]");
   const tab = home.getByRole("tab", { exact: true, name: "书帖" });
@@ -37,6 +62,7 @@ const selectCalligraphy = async (page: Page) => {
     "aria-hidden",
     "false",
   );
+  await settlePanel(homeFeed(page, "calligraphy"));
 };
 const selectDiscussionTopics = async (page: Page) => {
   const shell = page.locator("[data-product-shell]");
@@ -60,6 +86,7 @@ const selectDiscussionTopics = async (page: Page) => {
   await expect(
     discussion.getByRole("tabpanel", { name: "专题" }),
   ).toHaveAttribute("aria-hidden", "false");
+  await settlePanel(discussion.getByRole("tabpanel", { name: "专题" }));
 };
 const anchorFor = async (button: Locator) => {
   const box = await button.boundingBox();
@@ -75,24 +102,28 @@ const nativeCard = async (
   rightColumn = false,
 ) => {
   const cards = feedCards(page, surface);
-  const hit = await cards.evaluateAll((buttons, preferRight) => {
-    for (const [index, button] of buttons.entries()) {
-      const box = button.getBoundingClientRect();
-      const x = Math.round(box.x + box.width / 2);
-      if (
-        x <= (preferRight ? innerWidth / 2 : 24) ||
-        x >= innerWidth - (preferRight ? 24 : 100)
-      )
-        continue;
-      const top = Math.max(24, box.top + 12);
-      const bottom = Math.min(innerHeight - 100, box.bottom - 12);
-      for (let y = top; y <= bottom; y += 24) {
-        if (document.elementFromPoint(x, y) === button)
-          return { index, point: { x, y } };
+  await settlePanel(homeFeed(page, surface));
+  const findHit = () =>
+    cards.evaluateAll((buttons, preferRight) => {
+      for (const [index, button] of buttons.entries()) {
+        const box = button.getBoundingClientRect();
+        const x = Math.round(box.x + box.width * (preferRight ? 0.85 : 0.5));
+        if (
+          x <= (preferRight ? innerWidth / 2 : 24) ||
+          x >= innerWidth - (preferRight ? 24 : 100)
+        )
+          continue;
+        const top = Math.max(24, box.top + 12);
+        const bottom = Math.min(innerHeight - 100, box.bottom - 12);
+        for (let y = top; y <= bottom; y += 24) {
+          if (document.elementFromPoint(x, y) === button)
+            return { index, point: { x, y } };
+        }
       }
-    }
-    return null;
-  }, rightColumn);
+      return null;
+    }, rightColumn);
+  await expect.poll(findHit).not.toBeNull();
+  const hit = await findHit();
   if (hit === null)
     throw new Error(`No unobscured ${surface} card for native input`);
   return { button: cards.nth(hit.index), point: hit.point };
@@ -110,7 +141,6 @@ const touch = (
   points: { x: number; y: number; id: number }[],
 ) => session.send("Input.dispatchTouchEvent", { type, touchPoints: points });
 const drag = async (
-  page: Page,
   session: CDPSession,
   from: { x: number; y: number },
   to: { x: number; y: number },
@@ -123,7 +153,7 @@ const drag = async (
         y: from.y + ((to.y - from.y) * step) / 10,
       },
     ]);
-    await page.waitForTimeout(16);
+    await pause(16);
   }
 };
 
@@ -197,6 +227,22 @@ for (const path of [
         ? /^(?:manipulation|pan-x pan-y pinch-zoom)$/u
         : "pan-y pinch-zoom",
     );
+    if (path === "/") {
+      // Formal content cards use real community actions, not the QA harness.
+      await expect(
+        page.locator("[data-t02p-qa-harness], [data-qa-controls]"),
+      ).toHaveCount(0);
+      await expect(page.locator("[data-quick-action-qa-log]")).toHaveCount(0);
+      expect(
+        await page
+          .locator(
+            '[data-content-type="catalog"] [data-quick-actions="enabled"]',
+          )
+          .count(),
+      ).toBeGreaterThan(0);
+      await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
+      return;
+    }
     if (!enabled) {
       await expect(page.locator("[data-quick-actions]")).toHaveCount(0);
       await expect(page.locator("[data-quick-action-feedback]")).toHaveCount(0);
@@ -296,7 +342,7 @@ for (const chrome of ["default", "hidden"] as const) {
             ).toBeVisible();
           if (phase === "sliding") {
             const target = await targetFor(page, "favorite");
-            await drag(page, session, first, target);
+            await drag(session, first, target);
             first = { ...target, id: 1 };
             await expect(
               page.locator('[data-quick-action="favorite"]'),
@@ -328,7 +374,7 @@ for (const chrome of ["default", "hidden"] as const) {
               { id: 1, x: first.x - (40 * step) / 12, y: first.y },
               { id: 2, x: first.x + 80 + (120 * step) / 12, y: first.y },
             ]);
-            await page.waitForTimeout(30);
+            await pause(30);
           }
           // A cancelled menu is insufficient: assert actual compositor zoom before lifting either finger.
           await expect
@@ -379,7 +425,7 @@ for (const chrome of ["default", "hidden"] as const) {
               { id: 1, x: 60 + (125 * step) / 12, y: 300 },
               { id: 2, x: 330 - (125 * step) / 12, y: 300 },
             ]);
-            await page.waitForTimeout(30);
+            await pause(30);
           }
           await touch(session, "touchEnd", []);
           await expect
@@ -412,7 +458,7 @@ for (const chrome of ["default", "hidden"] as const) {
           );
           const { point: scrollStart } = await nativeCard(page, surface);
           await touch(session, "touchStart", [{ ...scrollStart, id: 1 }]);
-          await drag(page, session, scrollStart, {
+          await drag(session, scrollStart, {
             x: scrollStart.x,
             y: scrollStart.y - 110,
           });
@@ -428,10 +474,23 @@ for (const chrome of ["default", "hidden"] as const) {
           await touch(session, "touchStart", [{ ...pageStart, id: 1 }]);
           // Discover advances to Nearby; the last Home tab, Calligraphy, returns
           // to Inscriptions with a rightward swipe instead of a removed category.
-          await drag(page, session, pageStart, {
+          await drag(session, pageStart, {
             x: surface === "home" ? 5 : page.viewportSize()!.width - 5,
             y: pageStart.y,
           });
+          const held = await scrollOwner.evaluate((panel) => {
+            const frame = panel.closest<HTMLElement>(
+              "[data-horizontal-pager]",
+            )!;
+            return {
+              displacement: Math.abs(
+                panel.getBoundingClientRect().left -
+                  frame.getBoundingClientRect().left,
+              ),
+              width: frame.clientWidth,
+            };
+          });
+          expect(held.displacement).toBeGreaterThan(held.width / 2);
           await touch(session, "touchEnd", []);
           await expect(page.locator("[data-home-feed-pager]")).toHaveAttribute(
             "data-horizontal-pager-active-key",
@@ -470,10 +529,9 @@ for (const surface of ["home", "calligraphy"] as const) {
       const activeCards = () => feedCards(page, surface);
       const scrollOwner = homeFeed(page, surface);
       await activate();
-      const button = activeCards().first();
-      const start = await anchorFor(button);
+      const { point: start } = await nativeCard(page, surface);
       await touch(session, "touchStart", [{ ...start, id: 1 }]);
-      await drag(page, session, start, { x: start.x, y: start.y - 110 });
+      await drag(session, start, { x: start.x, y: start.y - 110 });
       await touch(session, "touchEnd", []);
       await expect
         .poll(() => scrollOwner.evaluate((node) => node.scrollTop))
@@ -488,7 +546,7 @@ for (const surface of ["home", "calligraphy"] as const) {
         surface === "home",
       );
       await touch(session, "touchStart", [{ ...origin, id: 1 }]);
-      await drag(page, session, origin, {
+      await drag(session, origin, {
         x: surface === "home" ? 5 : page.viewportSize()!.width - 5,
         y: origin.y,
       });
@@ -506,7 +564,7 @@ for (const surface of ["home", "calligraphy"] as const) {
       await touch(session, "touchStart", [{ ...hold, id: 1 }]);
       await expect(page.locator("[data-quick-action-menu]")).toBeVisible();
       const destination = await targetFor(page, "favorite");
-      await drag(page, session, hold, destination);
+      await drag(session, hold, destination);
       await expect(
         page.locator('[data-quick-action="favorite"]'),
       ).toHaveAttribute("data-candidate", "true");
@@ -516,7 +574,7 @@ for (const surface of ["home", "calligraphy"] as const) {
       await expect(
         page.locator('[data-quick-action="favorite"]'),
       ).toHaveAttribute("data-state-active", "true");
-      await drag(page, session, hold, await targetFor(page, "favorite"));
+      await drag(session, hold, await targetFor(page, "favorite"));
       await touch(session, "touchEnd", []);
       await touch(session, "touchStart", [{ ...hold, id: 1 }]);
       await expect(
@@ -646,7 +704,7 @@ for (const surface of ["home", "calligraphy"] as const) {
           { x: point.x - (40 * step) / 12, y: point.y, id: 1 },
           { x: point.x + 80 + (120 * step) / 12, y: point.y, id: 2 },
         ]);
-        await page.waitForTimeout(30);
+        await pause(30);
       }
       await touch(session, "touchEnd", []);
       await expect
@@ -658,7 +716,7 @@ for (const surface of ["home", "calligraphy"] as const) {
         y: window.visualViewport!.height * 0.8,
       }));
       await touch(session, "touchStart", [{ ...pan, id: 1 }]);
-      await drag(page, session, pan, { x: pan.x, y: pan.y / 4 });
+      await drag(session, pan, { x: pan.x, y: pan.y / 4 });
       await touch(session, "touchEnd", []);
       // Let native fling finish before starting a fresh press. Input used to
       // stop an active fling is noncancelable in Chromium.
@@ -762,7 +820,7 @@ for (const surface of ["home", "calligraphy"] as const) {
         expect(box.width * viewport.scale).toBeCloseTo(64, 1);
       }
       const target = bounds.find((box) => box.action === "share")!;
-      await drag(page, session, input, {
+      await drag(session, input, {
         x: target.x + target.width / 2 - viewport.left,
         y: target.y + target.height / 2 - viewport.top,
       });
@@ -805,10 +863,6 @@ for (const chrome of ["default", "hidden"] as const) {
   test(`Nearby and Topic QA actions retain layout and activation, chrome ${chrome}`, async ({
     page,
   }) => {
-    await ready(
-      page,
-      chrome === "hidden" ? "/dev/t02p/qa?qaChrome=hidden" : "/dev/t02p/qa",
-    );
     // Nearby retains its Home deep link; topics use their Discussion tab in both QA chrome modes.
     for (const [feed, kind] of [
       ["附近", "nearby"],
@@ -822,24 +876,56 @@ for (const chrome of ["default", "hidden"] as const) {
       await expect(
         page.getByRole("tab", { name: feed, exact: true }),
       ).toHaveAttribute("aria-selected", "true");
+      const activePanel = page.locator(
+        kind === "nearby"
+          ? '[data-home-feed-panel="nearby"]'
+          : '[data-discussion-surface] [data-horizontal-panel-key="topics"]',
+      );
+      await expect
+        .poll(() =>
+          activePanel.evaluate((panel) => {
+            const frame = panel.closest<HTMLElement>("[data-horizontal-pager]");
+            if (frame === null) throw new Error("Missing QA action pager");
+            return (
+              frame.dataset.horizontalPagerScrolling === "false" &&
+              Math.abs(
+                panel.getBoundingClientRect().left -
+                  frame.getBoundingClientRect().left,
+              ) <= 2
+            );
+          }),
+        )
+        .toBe(true);
       const buttons = page.locator(
         `[data-quick-action-content-kind="${kind}"]`,
       );
-      const exposed = await buttons.evaluateAll((nodes) => {
-        for (const [index, node] of nodes.entries()) {
-          const box = node.getBoundingClientRect();
-          const x = box.x + box.width / 2;
-          for (
-            let y = Math.max(box.top + 12, 24);
-            y < Math.min(box.bottom - 12, innerHeight - 110);
-            y += 20
-          ) {
-            const hit = document.elementFromPoint(x, y);
-            if (hit && node.contains(hit)) return { index, point: { x, y } };
+      const exposedPoint = () =>
+        buttons.evaluateAll((nodes) => {
+          for (const [index, node] of nodes.entries()) {
+            const box = node.getBoundingClientRect();
+            // The visible QA controls may cover a card's centre while its
+            // side remains exposed. Hit-test actual points inside that card.
+            for (const x of [
+              box.x + box.width / 2,
+              box.right - 12,
+              box.left + 12,
+            ]) {
+              for (
+                let y = Math.max(box.top + 12, 24);
+                y < Math.min(box.bottom - 12, innerHeight - 110);
+                y += 20
+              ) {
+                const hit = document.elementFromPoint(x, y);
+                if (hit && node.contains(hit))
+                  return { index, point: { x, y } };
+              }
+            }
           }
-        }
-        throw new Error("No exposed QA card");
-      });
+          return null;
+        });
+      await expect.poll(exposedPoint).not.toBeNull();
+      const exposed = await exposedPoint();
+      if (exposed === null) throw new Error("No exposed settled QA card");
       const button = buttons.nth(exposed.index);
       const card = button.locator("..");
       // Compare the same settled hover state; existing desktop cards translate -2px on hover.
@@ -963,22 +1049,61 @@ for (const chrome of ["default", "hidden"] as const) {
           const buttons = page.locator(
             `[data-quick-action-content-kind="${kind}"]`,
           );
-          const hit = await buttons.evaluateAll((nodes) => {
-            for (const [index, node] of nodes.entries()) {
-              const box = node.getBoundingClientRect(),
-                x = box.x + box.width / 2;
-              if (x > innerWidth - 130) continue;
-              for (
-                let y = Math.max(30, box.top + 12);
-                y < Math.min(innerHeight - 110, box.bottom - 12);
-                y += 20
-              ) {
-                const target = document.elementFromPoint(x, y);
-                if (target && node.contains(target)) return { index, x, y };
+          // The visible QA aside covers the first Topic cards. Reveal later
+          // real content through its existing scroll owner before hit testing.
+          if (chrome === "default" && kind === "topic")
+            await buttons.last().scrollIntoViewIfNeeded();
+          const findHit = () =>
+            buttons.evaluateAll((nodes) => {
+              for (const [index, node] of nodes.entries()) {
+                const box = node.getBoundingClientRect();
+                const left = Math.max(box.left + 12, 36);
+                const right = Math.min(box.right - 12, innerWidth - 201);
+                if (left > right) continue;
+                for (const x of [
+                  Math.max(left, Math.min(right, box.x + box.width / 2)),
+                  right,
+                  left,
+                ]) {
+                  // Keep the existing reserve and the full twelve-step span:
+                  // the first finger moves -36px and the second reaches +200px.
+                  if (x > innerWidth - 130 || x < 36 || x + 200 >= innerWidth)
+                    continue;
+                  for (
+                    let y = Math.max(30, box.top + 12);
+                    y < Math.min(innerHeight - 110, box.bottom - 12);
+                    y += 20
+                  ) {
+                    const target = document.elementFromPoint(x, y);
+                    if (target && node.contains(target)) return { index, x, y };
+                  }
+                }
               }
-            }
-            throw new Error("Missing exposed native card");
-          });
+              return null;
+            });
+          await expect
+            .poll(async () => {
+              const hit = await findHit();
+              if (hit === null && chrome === "default" && kind === "topic") {
+                // The last visible card can leave the panel at its scroll end.
+                // Shift the real card sampling grid into the narrow exposed
+                // band while retaining the full native pinch span and hit test.
+                await page
+                  .locator(
+                    '[data-discussion-surface] [data-horizontal-pager-scroll-owner="panel"] [data-horizontal-panel-key="topics"]',
+                  )
+                  .evaluate((panel) => {
+                    panel.scrollTop = Math.max(0, panel.scrollTop - 4);
+                  });
+              }
+              return hit;
+            })
+            .not.toBeNull();
+          const hit = await findHit();
+          if (hit === null)
+            throw new Error(
+              `Missing exposed native ${kind} card (${phase}, ${chrome})`,
+            );
           const button = buttons.nth(hit.index);
           const ancestors = await button.evaluate((node) => {
             const result: { tag: string; touchAction: string }[] = [];
@@ -1023,7 +1148,7 @@ for (const chrome of ["default", "hidden"] as const) {
               { id: 1, x: first.x - step * 3, y: first.y },
               { id: 2, x: first.x + 80 + step * 10, y: first.y },
             ]);
-            await page.waitForTimeout(30);
+            await pause(30);
           }
           await expect
             .poll(() => page.evaluate(() => visualViewport!.scale))
@@ -1039,7 +1164,7 @@ for (const chrome of ["default", "hidden"] as const) {
               { id: 1, x: 60 + (125 * step) / 12, y: 300 },
               { id: 2, x: 330 - (125 * step) / 12, y: 300 },
             ]);
-            await page.waitForTimeout(30);
+            await pause(30);
           }
           await touch(session, "touchEnd", []);
           await expect

@@ -35,11 +35,12 @@ export const workCardExcerpt = (body: string): string => {
  * to the cover entry's display image; `null` is the account saying this
  * revision has no presentable cover, and then the card is its text. The
  * entry named by `coverMediaId` (else the first media) still supplies the
- * card's identity, the LIVE indicator and the measurements — those are the
- * display image's, not the cover crop's, so the box reserved before the
- * image loads can still differ from Home's until a work record carries the
- * cover's own size. The body's opening rides along so an untitled card
- * shows real text instead of nothing (C07).
+ * card's identity, the LIVE indicator and the placeholder colour. When the
+ * work carries `coverRenditions`, the candidate that is `coverSrc` gives the
+ * cover's own size, so the box reserved before the image loads matches
+ * Home's; without them the measurements stay the display image's. The
+ * body's opening rides along so an untitled card shows real text instead of
+ * nothing (C07).
  */
 export const workCard = (work: UserWork): Card => {
   const cover =
@@ -48,6 +49,10 @@ export const workCard = (work: UserWork): Card => {
     null;
   const src =
     work.coverSrc === undefined ? (cover?.src ?? null) : work.coverSrc;
+  const anchor =
+    src === null
+      ? undefined
+      : work.coverRenditions?.find((entry) => entry.src === src);
   const excerpt = workCardExcerpt(work.text);
   return {
     target: { type: "work", id: work.id },
@@ -64,8 +69,14 @@ export const workCard = (work: UserWork): Card => {
         : {
             id: cover.id,
             src,
-            width: cover.width,
-            height: cover.height,
+            width: anchor?.width ?? cover.width,
+            height: anchor?.height ?? cover.height,
+            ...(anchor === undefined || work.coverRenditions === undefined
+              ? {}
+              : { renditions: work.coverRenditions }),
+            ...(cover.placeholderColor === undefined
+              ? {}
+              : { placeholderColor: cover.placeholderColor }),
           },
   };
 };

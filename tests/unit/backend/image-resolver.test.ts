@@ -35,4 +35,25 @@ describe("backend Storage URL resolver implementations", () => {
 
     expect(resolved.size).toBe(0);
   });
+
+  it("resolves only mapped rendition delivery keys; the placeholder resolves none", async () => {
+    const delivered = `media-rendition-${"1".repeat(32)}`;
+    const unmapped = `media-rendition-${"2".repeat(32)}`;
+    const mapped = new MappedStorageUrlResolver(
+      new Map(),
+      new Map([[delivered, "https://media.example.invalid/delivered.webp"]]),
+    );
+    expect([...(await mapped.resolveKeys([delivered, unmapped]))]).toEqual([
+      [delivered, "https://media.example.invalid/delivered.webp"],
+    ]);
+    // Without a delivery map no key resolves (rendition delivery off).
+    expect(
+      (await new MappedStorageUrlResolver(new Map()).resolveKeys([delivered]))
+        .size,
+    ).toBe(0);
+    expect(
+      (await new UnconfiguredStorageUrlResolver().resolveKeys([delivered]))
+        .size,
+    ).toBe(0);
+  });
 });

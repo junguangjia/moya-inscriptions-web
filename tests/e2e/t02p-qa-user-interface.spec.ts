@@ -1,6 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
+import { devices, expect, test } from "@playwright/test";
 
 import type { Locator, Page } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 type PresentationPlatform = "phone" | "tablet" | "pc";
 
@@ -64,7 +69,7 @@ test("QA user UI is isolated from clean Development and formal routes", async ({
     await expect(page.locator("[data-qa-user-interface]")).toHaveCount(0);
     await expect(page.locator("[data-open-settings]")).toHaveCount(0);
     await expect(page.locator("[data-search-trigger]")).toHaveCount(
-      path === "/" ? 1 : 0,
+      path === "/" ? 3 : 0,
     );
     await expect(page.locator("[data-catalog-search]")).toHaveCount(
       path === "/" ? 1 : 0,
@@ -542,22 +547,34 @@ test("User content follows trusted horizontal input and vertical reading never c
   // Mobile WebKit does not expose wheel or touch-drag injection in Playwright.
   // Chromium covers native Phone touch. WebKit covers the distinct PC wheel
   // path; separate mobile matrices retain their mobile context and tap paths.
+  // A context created here inherits the project's device options, so the
+  // mobile and tablet WebKit projects must spread the desktop descriptor:
+  // otherwise the iPhone or iPad user agent keeps the shell on phone or
+  // tablet in auto mode, and the PC presentation would rest solely on the QA
+  // harness select having taken effect before the shell is asserted.
   const inputPlatform = browserName === "chromium" ? "phone" : "pc";
   const viewport = {
     width: inputPlatform === "phone" ? 390 : 1512,
     height: 600,
   };
-  const wheelContext =
-    browserName === "webkit" && testInfo.project.use.isMobile === true
+  const inputContext =
+    browserName === "chromium"
       ? await browser.newContext({
+          ...devices["iPhone 15"],
           baseURL: testInfo.project.use.baseURL as string,
-          isMobile: false,
-          hasTouch: false,
           viewport,
         })
-      : null;
-  const context = wheelContext ?? projectContext;
-  const page = wheelContext === null ? projectPage : await context.newPage();
+      : testInfo.project.use.isMobile === true
+        ? await browser.newContext({
+            ...devices["Desktop Safari"],
+            baseURL: testInfo.project.use.baseURL as string,
+            isMobile: false,
+            hasTouch: false,
+            viewport,
+          })
+        : null;
+  const context = inputContext ?? projectContext;
+  const page = inputContext === null ? projectPage : await context.newPage();
   testInfo.annotations.push({
     type: "input-evidence",
     description:
@@ -565,219 +582,244 @@ test("User content follows trusted horizontal input and vertical reading never c
         ? "Chromium trusted CDP touch injection; no physical iPhone evidence"
         : "Desktop WebKit trusted wheel input on PC presentation; mobile WebKit touch and physical iPhone touch NOT RUN",
   });
-  await page.setViewportSize(viewport);
-  const { shell, surface, trigger } = await openQa(page);
-  await surface
-    .getByRole("combobox", { name: "QA presentation platform" })
-    .selectOption(inputPlatform);
-  await expect(shell).toHaveAttribute("data-platform", inputPlatform);
-  const userPage = await openUser(shell, trigger);
-  const pager = userPage.locator("[data-user-pager]");
-  await expect(pager).toHaveAttribute(
-    "data-horizontal-pager-platform",
-    inputPlatform,
-  );
-  await expect(pager).toHaveAttribute(
-    "data-horizontal-pager-scroll-owner",
-    "panel",
-  );
-  await pager.evaluate((node) => {
-    const frame = node as HTMLElement;
-    frame.dataset.testProgressSamples = "[]";
-    frame.dataset.testCommitSamples = "[]";
-    frame.dataset.testTrustedInputs = "0";
-    for (const type of ["wheel", "touchmove"]) {
-      frame.addEventListener(
-        type,
-        (event) => {
-          if (event.isTrusted)
-            frame.dataset.testTrustedInputs = String(
-              Number(frame.dataset.testTrustedInputs ?? "0") + 1,
-            );
-        },
-        { capture: true },
-      );
-    }
-    new MutationObserver((records) => {
-      for (const record of records) {
-        if (record.attributeName === "data-horizontal-pager-progress") {
-          const samples = JSON.parse(
-            frame.dataset.testProgressSamples ?? "[]",
-          ) as number[];
-          samples.push(Number(frame.dataset.horizontalPagerProgress));
-          frame.dataset.testProgressSamples = JSON.stringify(samples);
-        }
-        if (record.attributeName === "data-horizontal-pager-active-key") {
-          const samples = JSON.parse(
-            frame.dataset.testCommitSamples ?? "[]",
-          ) as string[];
-          samples.push(frame.dataset.horizontalPagerActiveKey ?? "");
-          frame.dataset.testCommitSamples = JSON.stringify(samples);
-        }
-      }
-    }).observe(frame, {
-      attributes: true,
-      attributeFilter: [
-        "data-horizontal-pager-progress",
-        "data-horizontal-pager-active-key",
-      ],
-    });
-  });
-  const box = await pager.boundingBox();
-  if (box === null) throw new Error("Missing User pager geometry");
-  const x = box.x + box.width * 0.8;
-  const y = box.y + Math.min(box.height * 0.5, 120);
-  await page.mouse.move(x, y);
-  await page.mouse.wheel(0, 120);
-  const published = userPage.locator('[data-user-panel="published"]');
-  await expect
-    .poll(() => published.evaluate((node) => node.scrollTop))
-    .toBeGreaterThan(0);
-  await expect(pager).toHaveAttribute(
-    "data-horizontal-pager-active-key",
-    "published",
-  );
-  expect(
-    await pager.evaluate((node) =>
-      JSON.parse((node as HTMLElement).dataset.testCommitSamples ?? "[]"),
-    ),
-  ).toEqual([]);
-
-  if (browserName === "chromium") {
-    const session = await context.newCDPSession(page);
-    await session.send("Emulation.setTouchEmulationEnabled", {
-      enabled: true,
-      maxTouchPoints: 1,
-    });
-    await session.send("Input.dispatchTouchEvent", {
-      type: "touchStart",
-      touchPoints: [{ x, y }],
-    });
-    for (let step = 1; step <= 12; step += 1) {
-      await session.send("Input.dispatchTouchEvent", {
-        type: "touchMove",
-        touchPoints: [{ x: x - (box.width * 0.66 * step) / 12, y }],
-      });
-      // Frame-by-frame input samples preserve the continuous browser gesture path.
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          ),
-      );
-    }
-    const dragging = await pager.evaluate((node) => {
+  try {
+    await page.setViewportSize(viewport);
+    const { shell, surface, trigger } = await openQa(page);
+    await surface
+      .getByRole("combobox", { name: "QA presentation platform" })
+      .selectOption(inputPlatform);
+    await expect(shell).toHaveAttribute("data-platform", inputPlatform);
+    const userPage = await openUser(shell, trigger);
+    const pager = userPage.locator("[data-user-pager]");
+    await expect(pager).toHaveAttribute(
+      "data-horizontal-pager-platform",
+      inputPlatform,
+    );
+    await expect(pager).toHaveAttribute(
+      "data-horizontal-pager-scroll-owner",
+      "panel",
+    );
+    await pager.evaluate((node) => {
       const frame = node as HTMLElement;
+      frame.dataset.testProgressSamples = "[]";
+      frame.dataset.testCommitSamples = "[]";
+      frame.dataset.testTrustedInputs = "0";
+      for (const type of ["wheel", "touchmove"]) {
+        frame.addEventListener(
+          type,
+          (event) => {
+            if (event.isTrusted)
+              frame.dataset.testTrustedInputs = String(
+                Number(frame.dataset.testTrustedInputs ?? "0") + 1,
+              );
+          },
+          { capture: true },
+        );
+      }
+      new MutationObserver((records) => {
+        for (const record of records) {
+          if (record.attributeName === "data-horizontal-pager-progress") {
+            const samples = JSON.parse(
+              frame.dataset.testProgressSamples ?? "[]",
+            ) as number[];
+            samples.push(Number(frame.dataset.horizontalPagerProgress));
+            frame.dataset.testProgressSamples = JSON.stringify(samples);
+          }
+          if (record.attributeName === "data-horizontal-pager-active-key") {
+            const samples = JSON.parse(
+              frame.dataset.testCommitSamples ?? "[]",
+            ) as string[];
+            samples.push(frame.dataset.horizontalPagerActiveKey ?? "");
+            frame.dataset.testCommitSamples = JSON.stringify(samples);
+          }
+        }
+      }).observe(frame, {
+        attributes: true,
+        attributeFilter: [
+          "data-horizontal-pager-progress",
+          "data-horizontal-pager-active-key",
+        ],
+      });
+    });
+    const box = await pager.boundingBox();
+    if (box === null) throw new Error("Missing User pager geometry");
+    const { x, y } = await pager.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const x = box.x + box.width * 0.8;
+      // QA chrome stays visible. Deliver native input to exposed product content
+      // rather than to an overlay or a point below the viewport.
+      for (
+        let y = Math.min(innerHeight - 40, box.bottom - 24);
+        y > box.top + 20;
+        y -= 16
+      ) {
+        if (node.contains(document.elementFromPoint(x, y))) return { x, y };
+      }
+      throw new Error("No exposed User pager point for native input");
+    });
+    await page.mouse.move(x, y);
+    await page.mouse.wheel(0, 120);
+    const published = userPage.locator('[data-user-panel="published"]');
+    await expect
+      .poll(() => published.evaluate((node) => node.scrollTop))
+      .toBeGreaterThan(0);
+    await expect(pager).toHaveAttribute(
+      "data-horizontal-pager-active-key",
+      "published",
+    );
+    expect(
+      await pager.evaluate((node) =>
+        JSON.parse((node as HTMLElement).dataset.testCommitSamples ?? "[]"),
+      ),
+    ).toEqual([]);
+
+    if (browserName === "chromium") {
+      const session = await context.newCDPSession(page);
+      await session.send("Emulation.setTouchEmulationEnabled", {
+        enabled: true,
+        maxTouchPoints: 1,
+      });
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x, y }],
+      });
+      for (let step = 1; step <= 12; step += 1) {
+        await session.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: x - (box.width * 0.66 * step) / 12, y }],
+        });
+        // Frame-by-frame input samples preserve the continuous browser gesture path.
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            ),
+        );
+      }
+      const dragging = await pager.evaluate((node) => {
+        const frame = node as HTMLElement;
+        return {
+          activeKey: frame.dataset.horizontalPagerActiveKey,
+          commits: JSON.parse(frame.dataset.testCommitSamples ?? "[]"),
+          progress: JSON.parse(
+            frame.dataset.testProgressSamples ?? "[]",
+          ) as number[],
+        };
+      });
+      expect(dragging.activeKey).toBe("published");
+      expect(dragging.commits).toEqual([]);
+      expect(dragging.progress.some((value) => value > 0 && value < 1)).toBe(
+        true,
+      );
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchEnd",
+        touchPoints: [],
+      });
+      await session.detach();
+    } else {
+      // The PC handler must consume a large explicit horizontal wheel as one
+      // adjacent-category request, not let native overflow cross several panels.
+      await page.mouse.wheel(box.width * 0.8, 0);
+    }
+    await expect(pager).toHaveAttribute(
+      "data-horizontal-pager-active-key",
+      "saved",
+    );
+    await expect(pager).toHaveAttribute("data-user-pager-scrolling", "false");
+    await expect(userPage.getByRole("tab", { name: "收藏" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // Complete another genuine vertical-reading input after the horizontal
+    // settle, then sample key, selected tab, geometry and commit history together.
+    // A transient saved state followed by a second commit must not pass.
+    const saved = userPage.locator('[data-user-panel="saved"]');
+    await expect(saved).toHaveAttribute("aria-hidden", "false");
+    await expect(saved.locator("[data-user-content-list]")).toHaveAttribute(
+      "data-user-layout-ready",
+      "true",
+    );
+    await expect
+      .poll(() =>
+        saved.evaluate((node) => node.scrollHeight - node.clientHeight),
+      )
+      .toBeGreaterThan(0);
+    const readingPoint = await saved.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const x = box.x + box.width * 0.8;
+      for (
+        let y = Math.min(innerHeight - 40, box.bottom - 24);
+        y > box.top + 20;
+        y -= 16
+      ) {
+        if (node.contains(document.elementFromPoint(x, y))) return { x, y };
+      }
+      throw new Error("No exposed saved panel point for native reading input");
+    });
+    await page.mouse.move(readingPoint.x, readingPoint.y);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          ({ x, y }) =>
+            document
+              .elementFromPoint(x, y)
+              ?.closest<HTMLElement>("[data-user-panel]")?.dataset.userPanel,
+          readingPoint,
+        ),
+      )
+      .toBe("saved");
+    const savedScrollBefore = await saved.evaluate((node) => node.scrollTop);
+    await page.mouse.wheel(0, 120);
+    await expect
+      .poll(() => saved.evaluate((node) => node.scrollTop))
+      .toBeGreaterThan(savedScrollBefore);
+    const evidence = await userPage.evaluate((node) => {
+      const frame = node.querySelector<HTMLElement>("[data-user-pager]");
+      const savedPanel = node.querySelector<HTMLElement>(
+        '[data-user-panel="saved"]',
+      );
+      if (frame === null || savedPanel === null)
+        throw new Error("Missing User pager or saved panel");
       return {
         activeKey: frame.dataset.horizontalPagerActiveKey,
-        commits: JSON.parse(frame.dataset.testCommitSamples ?? "[]"),
+        commits: JSON.parse(
+          frame.dataset.testCommitSamples ?? "[]",
+        ) as string[],
         progress: JSON.parse(
           frame.dataset.testProgressSamples ?? "[]",
         ) as number[],
+        currentProgress: Number(frame.dataset.horizontalPagerProgress),
+        panelAlignment:
+          savedPanel.getBoundingClientRect().left -
+          frame.getBoundingClientRect().left,
+        scrolling: frame.dataset.userPagerScrolling,
+        selectedTabs: Array.from(
+          node.querySelectorAll<HTMLElement>(
+            '[data-user-tab][aria-selected="true"]',
+          ),
+          (tab) => tab.dataset.userTab,
+        ),
+        trustedInputs: Number(frame.dataset.testTrustedInputs ?? "0"),
       };
     });
-    expect(dragging.activeKey).toBe("published");
-    expect(dragging.commits).toEqual([]);
-    expect(dragging.progress.some((value) => value > 0 && value < 1)).toBe(
-      true,
-    );
-    await session.send("Input.dispatchTouchEvent", {
-      type: "touchEnd",
-      touchPoints: [],
-    });
-    await session.detach();
-  } else {
-    // The PC handler must consume a large explicit horizontal wheel as one
-    // adjacent-category request, not let native overflow cross several panels.
-    await page.mouse.wheel(box.width * 0.8, 0);
+    expect(evidence.activeKey).toBe("saved");
+    expect(evidence.selectedTabs).toEqual(["saved"]);
+    expect(evidence.scrolling).toBe("false");
+    expect(evidence.currentProgress).toBeCloseTo(1, 2);
+    expect(Math.abs(evidence.panelAlignment)).toBeLessThanOrEqual(2);
+    expect(evidence.commits).toEqual(["saved"]);
+    expect(evidence.trustedInputs).toBeGreaterThan(0);
+    if (browserName === "chromium") {
+      expect(evidence.progress.some((value) => value > 0 && value < 1)).toBe(
+        true,
+      );
+    }
+    await expect(
+      userPage.locator("[data-user-intent-status]"),
+    ).not.toContainText("内容打开");
+    await expect(page).toHaveURL(/\/dev\/t02p\/qa$/u);
+    await expect(shell).toHaveAttribute("data-active-destination", "home");
+  } finally {
+    await inputContext?.close();
   }
-  await expect(pager).toHaveAttribute(
-    "data-horizontal-pager-active-key",
-    "saved",
-  );
-  await expect(pager).toHaveAttribute("data-user-pager-scrolling", "false");
-  await expect(userPage.getByRole("tab", { name: "收藏" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  // Complete another genuine vertical-reading input after the horizontal
-  // settle, then sample key, selected tab, geometry and commit history together.
-  // A transient saved state followed by a second commit must not pass.
-  const saved = userPage.locator('[data-user-panel="saved"]');
-  await expect(saved).toHaveAttribute("aria-hidden", "false");
-  await expect(saved.locator("[data-user-content-list]")).toHaveAttribute(
-    "data-user-layout-ready",
-    "true",
-  );
-  await expect
-    .poll(() => saved.evaluate((node) => node.scrollHeight - node.clientHeight))
-    .toBeGreaterThan(0);
-  const savedBox = await saved.boundingBox();
-  if (savedBox === null) throw new Error("Missing saved panel geometry");
-  const readingPoint = {
-    x: savedBox.x + savedBox.width * 0.5,
-    y: savedBox.y + savedBox.height * 0.5,
-  };
-  await page.mouse.move(readingPoint.x, readingPoint.y);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        ({ x, y }) =>
-          document
-            .elementFromPoint(x, y)
-            ?.closest<HTMLElement>("[data-user-panel]")?.dataset.userPanel,
-        readingPoint,
-      ),
-    )
-    .toBe("saved");
-  const savedScrollBefore = await saved.evaluate((node) => node.scrollTop);
-  await page.mouse.wheel(0, 120);
-  await expect
-    .poll(() => saved.evaluate((node) => node.scrollTop))
-    .toBeGreaterThan(savedScrollBefore);
-  const evidence = await userPage.evaluate((node) => {
-    const frame = node.querySelector<HTMLElement>("[data-user-pager]");
-    const savedPanel = node.querySelector<HTMLElement>(
-      '[data-user-panel="saved"]',
-    );
-    if (frame === null || savedPanel === null)
-      throw new Error("Missing User pager or saved panel");
-    return {
-      activeKey: frame.dataset.horizontalPagerActiveKey,
-      commits: JSON.parse(frame.dataset.testCommitSamples ?? "[]") as string[],
-      progress: JSON.parse(
-        frame.dataset.testProgressSamples ?? "[]",
-      ) as number[],
-      currentProgress: Number(frame.dataset.horizontalPagerProgress),
-      panelAlignment:
-        savedPanel.getBoundingClientRect().left -
-        frame.getBoundingClientRect().left,
-      scrolling: frame.dataset.userPagerScrolling,
-      selectedTabs: Array.from(
-        node.querySelectorAll<HTMLElement>(
-          '[data-user-tab][aria-selected="true"]',
-        ),
-        (tab) => tab.dataset.userTab,
-      ),
-      trustedInputs: Number(frame.dataset.testTrustedInputs ?? "0"),
-    };
-  });
-  expect(evidence.activeKey).toBe("saved");
-  expect(evidence.selectedTabs).toEqual(["saved"]);
-  expect(evidence.scrolling).toBe("false");
-  expect(evidence.currentProgress).toBeCloseTo(1, 2);
-  expect(Math.abs(evidence.panelAlignment)).toBeLessThanOrEqual(2);
-  expect(evidence.commits).toEqual(["saved"]);
-  expect(evidence.trustedInputs).toBeGreaterThan(0);
-  if (browserName === "chromium") {
-    expect(evidence.progress.some((value) => value > 0 && value < 1)).toBe(
-      true,
-    );
-  }
-  await expect(userPage.locator("[data-user-intent-status]")).not.toContainText(
-    "内容打开",
-  );
-  await expect(page).toHaveURL(/\/dev\/t02p\/qa$/u);
-  await expect(shell).toHaveAttribute("data-active-destination", "home");
-  await wheelContext?.close();
 });

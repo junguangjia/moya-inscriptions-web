@@ -1,4 +1,9 @@
 import { CommunityNotFoundError } from "../errors/community-request-errors.js";
+import {
+  catalogMediaDelivery,
+  catalogMediaRenditionKeys,
+} from "../../../catalog/application/mappers/catalog-public-contract-mapper.js";
+import type { CatalogRenditionUrls } from "../../../catalog/application/mappers/catalog-public-contract-mapper.js";
 import type { AuthorCommunityPort } from "../ports/author-community-port.js";
 import type { CatalogPublicationPort } from "../ports/catalog-publication-port.js";
 import type {
@@ -23,6 +28,8 @@ import type {
   DiscussionTarget,
 } from "@moya/contracts";
 
+const noRenditionUrls: CatalogRenditionUrls = new Map();
+
 /** Public application boundary; the adapter enforces transactional ownership. */
 export class AuthorCommunityService {
   constructor(
@@ -41,23 +48,68 @@ export class AuthorCommunityService {
   private async cards(
     items: readonly DiscoveryCardRecord[],
   ): Promise<ContentCard[]> {
-    const locators = items.flatMap((item) =>
-      item.media?.type === "catalog"
-        ? [{ mediaId: item.media.id, objectKey: item.media.objectKey }]
-        : [],
+    const catalogMedia = items.flatMap((item) =>
+      item.media?.type === "catalog" ? [item.media] : [],
     );
+    const locators = catalogMedia.map((media) => ({
+      mediaId: media.id,
+      objectKey: media.objectKey,
+    }));
+    // Catalog cards are a card context: candidates up to the anchor.
+    const renditionKeys = [
+      ...new Set(
+        catalogMedia.flatMap((media) =>
+          catalogMediaRenditionKeys(media, "card"),
+        ),
+      ),
+    ];
     if (locators.length && !this.mediaResolver)
       throw new CommunityNotFoundError("Media unavailable");
-    const urls = await this.mediaResolver?.resolveMany(locators);
+    const [urls, renditionUrls] = await Promise.all([
+      this.mediaResolver?.resolveMany(locators),
+      renditionKeys.length === 0 ||
+      this.mediaResolver?.resolveKeys === undefined
+        ? noRenditionUrls
+        : this.mediaResolver.resolveKeys(renditionKeys),
+    ]);
     return items.map((item) => {
       const m = item.media;
       if (!m) return { ...item, media: null };
-      // Work cards carry the path the adapter resolved for the viewer's revision.
-      const src = m.type === "work" ? m.src : urls?.get(m.id);
+      // Work cards carry the path and the cover candidates the adapter
+      // resolved for the viewer's revision.
+      if (m.type === "work")
+        return {
+          ...item,
+          media: {
+            id: m.id,
+            width: m.width,
+            height: m.height,
+            src: m.src,
+            ...(m.renditions === undefined
+              ? {}
+              : { renditions: [...m.renditions] }),
+            ...(m.placeholderColor === undefined
+              ? {}
+              : { placeholderColor: m.placeholderColor }),
+          },
+        };
+      const src = urls?.get(m.id);
       if (!src) throw new CommunityNotFoundError("Media unavailable");
+      const delivery = catalogMediaDelivery(m, src, renditionUrls, "card");
       return {
         ...item,
-        media: { id: m.id, width: m.width, height: m.height, src },
+        media: {
+          id: m.id,
+          width: delivery.width,
+          height: delivery.height,
+          src: delivery.src,
+          ...(delivery.renditions === undefined
+            ? {}
+            : { renditions: delivery.renditions }),
+          ...(delivery.placeholderColor === undefined
+            ? {}
+            : { placeholderColor: delivery.placeholderColor }),
+        },
       };
     });
   }

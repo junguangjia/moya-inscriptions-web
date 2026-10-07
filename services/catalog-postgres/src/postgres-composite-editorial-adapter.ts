@@ -25,6 +25,11 @@ import type {
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import { asPostgresOperationError } from "./availability.js";
 import { parseCatalogCount } from "./adapter.js";
+import {
+  catalogMediaDeliveryJoinSql,
+  mapCatalogMediaDelivery,
+} from "./catalog-media-delivery.js";
+import type { CatalogReaderOptions } from "./catalog-media-delivery.js";
 
 /** The resolver uses only effective references and owner-authorized derivatives. */
 export interface AuthoredArticleReadProjector {
@@ -57,6 +62,9 @@ interface IndexRow extends QueryResultRow {
   alt: string | null;
   width: number | null;
   height: number | null;
+  /** Staff cover delivery facts; present only with renditions. */
+  renditions?: unknown;
+  placeholder_color?: unknown;
 }
 interface AuthoredDetailRow extends QueryResultRow {
   article_id: string;
@@ -73,20 +81,22 @@ interface AuthoredDetailRow extends QueryResultRow {
 }
 
 // Both sources are ordered and paged together. No full body is selected here.
-const indexSql = `
+// With renditions, a staff cover also carries its rendition delivery facts.
+const indexSqlOf = (renditions: boolean) => `
 SELECT 'staff'::text AS source,a.article_id,a.presentation,a.title,a.subtitle,
   a.summary,a.section,a.issue,a.byline,a.first_published_at,a.published_at,a.updated_at,
   NULL::text AS owner_id,NULL::integer AS version,NULL::text AS cover_ref_id,
   NULL::jsonb AS cover_reference,NULL::text AS fingerprint,
-  cm.media_id,cm.object_key,CASE WHEN BTRIM(a.cover_alt)<>'' THEN a.cover_alt ELSE cm.alt_text END AS alt,cm.width,cm.height
+  cm.media_id,cm.object_key,CASE WHEN BTRIM(a.cover_alt)<>'' THEN a.cover_alt ELSE cm.alt_text END AS alt,cm.width,cm.height${renditions ? ",delivery.renditions,delivery.placeholder_color" : ""}
 FROM public.article_entries a
-LEFT JOIN public.catalog_media cm ON cm.catalog_id=a.cover_catalog_id AND cm.is_representative
+LEFT JOIN public.catalog_media cm ON cm.catalog_id=a.cover_catalog_id AND cm.is_representative${renditions ? catalogMediaDeliveryJoinSql("cm") : ""}
 UNION ALL
 SELECT 'authored'::text,a.article_id,'academic'::text,a.title,NULL::text,
   NULL::text,NULL::text,NULL::text,a.byline,a.first_published_at,a.published_at,a.updated_at,
   a.owner_id,a.version,a.cover_ref_id,a.cover_reference,a.fingerprint,
-  NULL::text,NULL::text,NULL::text,NULL::integer,NULL::integer
+  NULL::text,NULL::text,NULL::text,NULL::integer,NULL::integer${renditions ? ",NULL::jsonb,NULL::text" : ""}
 FROM community.published_authored_articles a`;
+const indexSql = indexSqlOf(false);
 const nullText = (value: string | null): string | null =>
   value?.trim() ? value : null;
 
@@ -128,6 +138,7 @@ const staffSummary = (row: IndexRow): ArticleSummaryRecord => {
       alt: row.alt ?? "",
       width: row.width,
       height: row.height,
+      ...mapCatalogMediaDelivery(row.renditions, row.placeholder_color),
     };
   return {
     id: row.article_id as ArticleId,
@@ -149,13 +160,21 @@ const staffSummary = (row: IndexRow): ArticleSummaryRecord => {
   };
 };
 
-/** Same Article read port: staff CMS and authored immutable snapshots compose. */
+/**
+ * Same Article read port: staff CMS and authored immutable snapshots compose.
+ * With `renditions`, staff covers carry their rendition delivery facts.
+ */
 export class PostgresCompositeEditorialAdapter implements EditorialContentReadPort {
+  private readonly pageSql: string;
+
   constructor(
     private readonly pool: Pool,
     private readonly staff: EditorialContentReadPort,
     private readonly authored: AuthoredArticleReadProjector,
-  ) {}
+    options: CatalogReaderOptions = {},
+  ) {
+    this.pageSql = options.renditions === true ? indexSqlOf(true) : indexSql;
+  }
 
   private async read<T>(run: (db: PoolClient) => Promise<T>): Promise<T> {
     const db = await this.pool.connect().catch((error) => {
@@ -186,7 +205,7 @@ export class PostgresCompositeEditorialAdapter implements EditorialContentReadPo
         [filter],
       );
       const rows = await db.query<IndexRow>(
-        `SELECT * FROM (${indexSql}) a WHERE ($1::text IS NULL OR a.presentation=$1) ORDER BY a.published_at DESC,a.article_id DESC LIMIT $2::integer OFFSET $3::bigint`,
+        `SELECT * FROM (${this.pageSql}) a WHERE ($1::text IS NULL OR a.presentation=$1) ORDER BY a.published_at DESC,a.article_id DESC LIMIT $2::integer OFFSET $3::bigint`,
         [filter, query.pageSize, (query.page - 1) * query.pageSize],
       );
       return {

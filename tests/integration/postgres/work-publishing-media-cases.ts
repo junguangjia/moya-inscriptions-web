@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { currentRecipe } from "@moya/backend-production/internal/publishing-processing";
 import {
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
@@ -167,6 +168,8 @@ const derivativesOf = (
     width: 480,
     height: 360,
     durationMs: variant === "motion" ? 3000 : null,
+    recipeVersion: currentRecipe(variant).version,
+    recipeDigest: currentRecipe(variant).digest,
   }));
 
 const processedOutcome = (
@@ -257,7 +260,7 @@ export const registerWorkPublishingMediaTests = (
         "DELETE FROM community.work_revision_items WHERE revision_id IN (SELECT id FROM community.work_revisions WHERE author_id=ANY($1::text[]))",
         "DELETE FROM community.work_revisions WHERE author_id=ANY($1::text[])",
         "DELETE FROM community.works WHERE author_id=ANY($1::text[])",
-        "DELETE FROM community.media_derivatives WHERE item_id IN (SELECT id FROM community.media_items WHERE owner_id=ANY($1::text[]))",
+        "DELETE FROM community.media_renditions WHERE item_id IN (SELECT id FROM community.media_items WHERE owner_id=ANY($1::text[]))",
         "DELETE FROM community.media_components WHERE owner_id=ANY($1::text[])",
         "DELETE FROM community.media_blobs WHERE owner_id=ANY($1::text[])",
         "DELETE FROM community.media_items WHERE owner_id=ANY($1::text[])",
@@ -2759,7 +2762,7 @@ export const registerWorkPublishingMediaTests = (
       const derivativeKeys = async () =>
         (
           await pool.query<{ edit_key: string; count: string }>(
-            "SELECT edit_key, count(*)::text AS count FROM community.media_derivatives WHERE item_id=$1 GROUP BY edit_key ORDER BY edit_key",
+            "SELECT edit_key, count(*)::text AS count FROM community.media_renditions WHERE item_id=$1 AND state='ready' GROUP BY edit_key ORDER BY edit_key",
             [item.id],
           )
         ).rows;
@@ -2776,7 +2779,7 @@ export const registerWorkPublishingMediaTests = (
       const released = await pool.query<{ id: string }>(
         `SELECT b.id FROM community.media_blobs b
          WHERE b.owner_id=$1 AND b.purpose='derivative'
-           AND NOT EXISTS (SELECT 1 FROM community.media_derivatives d WHERE d.blob_id=b.id)`,
+           AND NOT EXISTS (SELECT 1 FROM community.media_renditions d WHERE d.blob_id=b.id AND d.state<>'released')`,
         [a],
       );
       expect(released.rows).toHaveLength(3);

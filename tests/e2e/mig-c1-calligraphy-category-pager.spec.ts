@@ -1,6 +1,13 @@
+import { setTimeout as pause } from "node:timers/promises";
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
+import { expectPanelAlignment } from "./support/pager-alignment";
 import { devices, expect, test } from "@playwright/test";
 
 import type { CDPSession, Locator, Page } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 type HomeFeed = "discover" | "nearby" | "inscriptions" | "calligraphy";
 
@@ -136,14 +143,16 @@ const waitForInitialFeedScroll = async (
         )!;
         const scroller =
           shell.dataset.platform === "pc" ? document.scrollingElement! : panel;
-        const masonry = panel.querySelector<HTMLElement>(
-          "[data-home-masonry]",
+        const content = panel.querySelector<HTMLElement>(
+          "[data-home-masonry], [data-catalog-presentation]",
         )!;
         let previous = "";
         let stableFrames = 0;
         const sample = () => {
           const ready =
-            masonry.dataset.layoutReady === "true" &&
+            (content.hasAttribute("data-home-masonry")
+              ? content.dataset.layoutReady === "true"
+              : content.dataset.catalogPresentationState === "populated") &&
             [...panel.querySelectorAll("img")].every((image) => {
               // Offscreen lazy images need not load before reading can start.
               const bounds = image.getBoundingClientRect();
@@ -164,7 +173,7 @@ const waitForInitialFeedScroll = async (
             scroller.scrollHeight,
             scroller.clientHeight,
             pager.getBoundingClientRect().height,
-            masonry.getBoundingClientRect().height,
+            content.getBoundingClientRect().height,
           ]);
           stableFrames = ready && geometry === previous ? stableFrames + 1 : 0;
           previous = geometry;
@@ -183,6 +192,7 @@ const trustedHorizontalPointDrag = async (
   pager: Locator,
   point: { readonly x: number; readonly y: number },
   direction: 1 | -1 = 1,
+  requireAdjacentTravel = false,
 ) => {
   const pagerWidth = await pager.evaluate((node) => node.clientWidth);
   const { x, y } = point;
@@ -232,6 +242,17 @@ const trustedHorizontalPointDrag = async (
       );
     }, initialPanelLeft);
   }
+  if (requireAdjacentTravel) {
+    const heldDisplacement = await pager.evaluate(
+      (node, initialLeft) =>
+        Math.abs(
+          node.firstElementChild!.firstElementChild!.getBoundingClientRect()
+            .left - initialLeft,
+        ),
+      initialPanelLeft,
+    );
+    expect(heldDisplacement).toBeGreaterThan(pagerWidth / 2);
+  }
   await session.send("Input.dispatchTouchEvent", {
     touchPoints: [],
     type: "touchEnd",
@@ -255,6 +276,10 @@ const trustedHorizontalCardDrag = async (
       for (const yFactor of [0.4, 0.25, 0.6]) {
         const x = rect.left + rect.width * xFactor;
         const y = rect.top + Math.min(rect.height * yFactor, 120);
+        const pager = node.closest<HTMLElement>("[data-home-feed-pager]");
+        if (!pager) throw new Error("Missing card pager");
+        const available = dragDirection === 1 ? x - 8 : innerWidth - x - 8;
+        if (available <= pager.clientWidth / 2) continue;
         const hit = document.elementFromPoint(x, y);
         if (node.contains(hit)) return { hits, point: { x, y } };
         hits.push(
@@ -270,7 +295,14 @@ const trustedHorizontalCardDrag = async (
     );
   }
   const { x, y } = startEvidence.point;
-  await trustedHorizontalPointDrag(page, session, pager, { x, y }, direction);
+  await trustedHorizontalPointDrag(
+    page,
+    session,
+    pager,
+    { x, y },
+    direction,
+    true,
+  );
 };
 
 const trustedDragEvidence = (pager: Locator) =>
@@ -291,7 +323,8 @@ const shortFeedBlankEvidence = (pager: Locator) =>
       '[data-home-feed-panel="calligraphy"] [data-catalog-card]',
     );
     if (card === null) throw new Error("Missing short Calligraphy feed card");
-    const x = window.innerWidth / 2;
+    // Rightward paging needs more than half a viewport of on-screen travel.
+    const x = frame.getBoundingClientRect().left + frame.clientWidth * 0.2;
     const y = window.innerHeight - 180;
     const hit = document.elementFromPoint(x, y);
     return {
@@ -388,7 +421,9 @@ test("MIG-C1 card actions preserve trusted touch paging with local horizontal co
   );
   const homeCard = homePager
     .locator('[data-home-feed-panel="discover"] [data-open-catalog]')
-    .nth(1);
+    // The second card is in the left column: its on-screen leftward travel
+    // cannot cross half the pager. Use the fixture's right-column card.
+    .nth(2);
   await expect(homeCard).toBeVisible();
   await expect(homeCard).toHaveCSS(
     "touch-action",
@@ -409,7 +444,9 @@ test("MIG-C1 card actions preserve trusted touch paging with local horizontal co
   );
   const calligraphyCard = calligraphyPager
     .locator('[data-home-feed-panel="calligraphy"] [data-open-catalog]')
-    .nth(1);
+    // A rightward drag starts on the left-column card; the helper also
+    // verifies its actual available distance before injecting touch input.
+    .first();
   await expect(calligraphyCard).toBeVisible();
   await expect(calligraphyCard).toHaveCSS(
     "touch-action",
@@ -486,7 +523,7 @@ test("MIG-C1 accepts a trusted horizontal drag from blank space below a short Ca
   expect(blank.belowCard).toBe(true);
   expect(blank.inPager).toBe(true);
 
-  await trustedHorizontalPointDrag(page, session, pager, blank.point, -1);
+  await trustedHorizontalPointDrag(page, session, pager, blank.point, -1, true);
   await expect(homeSurface(surface)).toHaveAttribute(
     "data-active-home-feed",
     "inscriptions",
@@ -567,9 +604,13 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
     }
   });
   await expect(home).toHaveAttribute("data-active-home-feed", "discover");
+  await expect(pager).toHaveAttribute(
+    "data-horizontal-pager-scrolling",
+    "true",
+  );
   await expect(
     home.getByRole("tablist", { name: "首页内容范围" }),
-  ).toHaveAttribute("data-progressing", "true");
+  ).toHaveAttribute("data-progress-driven", "true");
   await expect
     .poll(() =>
       indicator.evaluate((node) => {
@@ -838,20 +879,35 @@ for (const chrome of ["default", "hidden"] as const) {
         await touch("touchMove", [
           { id: 1, x: from.x + (dx * step) / 10, y: from.y + (dy * step) / 10 },
         ]);
-        await page.waitForTimeout(16);
+        await pause(16);
       }
     };
     try {
+      const response = await page.goto(
+        chrome === "hidden" ? "/dev/t02p/qa?qaChrome=hidden" : "/dev/t02p/qa",
+        { waitUntil: "domcontentloaded" },
+      );
+      expect(response?.status()).toBe(200);
+      await expect(page.locator("[data-product-boot]")).toHaveCount(0);
       for (const surface of [
         "discover",
         "inscriptions",
         "calligraphy",
         "user",
       ] as const) {
-        await page.goto(
-          chrome === "hidden" ? "/dev/t02p/qa?qaChrome=hidden" : "/dev/t02p/qa",
-        );
-        await expect(page.locator("[data-product-boot]")).toHaveCount(0);
+        // Reload used to reset the previous pinch, not to prove navigation.
+        // Reset only setup scale here; each native pinch below still needs its
+        // own trusted input and measured visualViewport scale increase.
+        await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+        await expect
+          .poll(() => page.evaluate(() => visualViewport!.scale))
+          .toBe(1);
+        await page.evaluate(async () => {
+          window.scrollTo(0, 0);
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+        });
         const home = page.locator("[data-home-surface]");
         if (surface === "user")
           await page.locator("[data-user-trigger]").click();
@@ -869,22 +925,47 @@ for (const chrome of ["default", "hidden"] as const) {
         const scroller = panels.nth(startIndex);
         await expect(frame).toHaveCSS("touch-action", "pan-y pinch-zoom");
         if (surface !== "user") await waitForInitialFeedScroll(home, surface);
-        const box = await frame.boundingBox();
-        if (!box) throw new Error("Missing pager");
-        const point = await frame.evaluate((node, dragDirection) => {
-          const box = node.getBoundingClientRect();
-          const x = box.x + box.width * (dragDirection === 1 ? 0.8 : 0.2);
-          for (
-            let y = Math.min(innerHeight - 120, box.bottom - 24);
-            y > Math.max(box.top + 60, 240);
-            y -= 16
-          ) {
-            if (node.contains(document.elementFromPoint(x, y))) return { x, y };
-          }
-          throw new Error(
-            "No exposed pager point beneath the existing QA controls",
+        await expectPanelAlignment(
+          frame,
+          `${panelSelector}:nth-child(${startIndex + 1})`,
+          { idle: true },
+        );
+        await scroller.evaluate((node) => {
+          node.scrollTop = 0;
+          node.dispatchEvent(new Event("scroll"));
+        });
+        await expect
+          .poll(() => scroller.evaluate((node) => node.scrollTop))
+          .toBe(0);
+        const exposedPoint = (dragDirection: number, distance: number) =>
+          frame.evaluate(
+            (node, input) => {
+              const box = node.getBoundingClientRect();
+              for (const fraction of input.dragDirection === 1
+                ? [0.92, 0.85, 0.75, 0.65]
+                : [0.08, 0.15, 0.25, 0.35]) {
+                const x = box.x + box.width * fraction;
+                const travel =
+                  input.dragDirection === 1 ? x - 8 : innerWidth - x - 8;
+                if (travel < input.distance) continue;
+                for (
+                  // Reserve the expanded Phone dock (60px, 12px bottom gap,
+                  // 16px clearance), even while its idle expansion is in flight.
+                  let y = Math.min(innerHeight - 88, box.bottom - 24);
+                  y > Math.max(box.top + 60, 24);
+                  y -= 16
+                ) {
+                  if (node.contains(document.elementFromPoint(x, y)))
+                    return { x, y };
+                }
+              }
+              throw new Error(
+                "No exposed pager point beneath the existing QA controls",
+              );
+            },
+            { dragDirection, distance },
           );
-        }, direction);
+        const point = await exposedPoint(direction, 240);
         await expect(frame).toHaveAttribute(
           "data-category-pager-engine",
           "embla",
@@ -896,6 +977,8 @@ for (const chrome of ["default", "hidden"] as const) {
               n.firstElementChild!.firstElementChild!.getBoundingClientRect()
                 .left,
           );
+        const surfaceEvidence: Record<string, unknown> = { surface, chrome };
+        evidence.push(surfaceEvidence);
         const initialOffset = await horizontalOffset();
         const beforeY = await scroller.evaluate((n) => n.scrollTop);
         await touch("touchStart", [{ id: 1, ...point }]);
@@ -925,8 +1008,40 @@ for (const chrome of ["default", "hidden"] as const) {
               maximum: 0,
               commitCount: 0,
               remainingAtCommit: 0,
+              events: [] as unknown[],
             };
+            const diagnostics = new AbortController();
             Object.assign(f, { controlledEvidence: data });
+            for (const type of [
+              "touchstart",
+              "touchmove",
+              "touchend",
+              "touchcancel",
+            ] as const) {
+              window.addEventListener(
+                type,
+                (event) => {
+                  const target = event.target as Element;
+                  data.events.push({
+                    type,
+                    cancelable: event.cancelable,
+                    trusted: event.isTrusted,
+                    target: target.tagName,
+                    quickAction: target
+                      .closest("[data-quick-actions]")
+                      ?.getAttribute("data-quick-action-phase"),
+                    contained: f.contains(target),
+                    progress: f.dataset.horizontalPagerProgress,
+                    active: f.dataset.horizontalPagerActiveKey,
+                    touches: Array.from(event.touches, (point) => ({
+                      x: point.clientX,
+                      y: point.clientY,
+                    })),
+                  });
+                },
+                { capture: true, passive: true, signal: diagnostics.signal },
+              );
+            }
             f.addEventListener(
               "pointermove",
               (e) => {
@@ -941,14 +1056,14 @@ for (const chrome of ["default", "hidden"] as const) {
                   ),
                 );
               },
-              true,
+              { capture: true, signal: diagnostics.signal },
             );
             f.addEventListener(
-              "pointerup",
+              "touchend",
               () => {
-                data.released = performance.now();
+                if (!data.released) data.released = performance.now();
               },
-              true,
+              { capture: true, signal: diagnostics.signal },
             );
             const observer = new MutationObserver(() => {
               const target = f.querySelectorAll<HTMLElement>(input.selector)[
@@ -973,11 +1088,18 @@ for (const chrome of ["default", "hidden"] as const) {
               attributes: true,
               attributeFilter: ["inert", "aria-hidden"],
             });
+            Object.assign(f, {
+              controlledPagerCleanup: () => {
+                diagnostics.abort();
+                observer.disconnect();
+              },
+            });
           },
           { selector: panelSelector, targetIndex, initialOffset },
         );
-        await touch("touchStart", [{ id: 1, ...point }]);
-        await move(point, -direction * 240, 4);
+        const forward = await exposedPoint(direction, 240);
+        await touch("touchStart", [{ id: 1, ...forward }]);
+        await move(forward, -direction * 240, 4);
         expect(
           Math.abs((await horizontalOffset()) - initialOffset),
         ).toBeGreaterThan(100);
@@ -1008,20 +1130,46 @@ for (const chrome of ["default", "hidden"] as const) {
         expect(timing.trusted).toBeGreaterThan(0);
         expect(timing.maximum).toBeGreaterThan(100);
         expect(timing.commitCount).toBe(1);
+        expect(timing.released).toBeGreaterThan(0);
         expect(timing.committed - timing.released).toBeGreaterThanOrEqual(0);
         // The Home pager hands interaction over before its visual tail ends.
         expect(timing.remainingAtCommit).toBeGreaterThan(2);
+        surfaceEvidence.timing = timing;
         // A new opposite input during the next settle supersedes that animation.
-        const reverse = {
-          x: box.x + box.width * (direction === 1 ? 0.25 : 0.75),
-          y: point.y,
-        };
+        const reverse = await exposedPoint(-direction, 220);
+        const beforeReverse = await horizontalOffset();
         await touch("touchStart", [{ id: 1, ...reverse }]);
         await move(reverse, direction * 220, 0);
+        // Prove that the reverse reached the pager, before sending another
+        // forward input. A covered start cannot satisfy this precondition.
+        const afterReverse = await horizontalOffset();
+        surfaceEvidence.reverse = {
+          beforeReverse,
+          afterReverse,
+          point: reverse,
+        };
+        expect((beforeReverse - afterReverse) * direction).toBeGreaterThan(100);
         await touch("touchEnd", []);
-        await touch("touchStart", [{ id: 1, ...point }]);
-        await move(point, -direction * 240, 0);
+        surfaceEvidence.afterReverseRelease = await frame.evaluate((node) => ({
+          active: node.getAttribute("data-horizontal-pager-active-key"),
+          progress: node.getAttribute("data-horizontal-pager-progress"),
+          panels: Array.from(node.querySelectorAll("[aria-hidden]"), (n) => ({
+            key: n.getAttribute("data-horizontal-panel-key"),
+            hidden: n.getAttribute("aria-hidden"),
+          })),
+        }));
+        const resumed = await exposedPoint(direction, 240);
+        await touch("touchStart", [{ id: 1, ...resumed }]);
+        await move(resumed, -direction * 240, 0);
         await touch("touchEnd", []);
+        surfaceEvidence.events = await frame.evaluate(
+          (node) =>
+            (
+              node as HTMLElement & {
+                controlledEvidence: { events: unknown[] };
+              }
+            ).controlledEvidence.events,
+        );
         await expect(panels.nth(targetIndex)).toHaveAttribute(
           "aria-hidden",
           "false",
@@ -1030,12 +1178,30 @@ for (const chrome of ["default", "hidden"] as const) {
           .nth(targetIndex)
           .evaluate((n) => (n as HTMLElement).offsetLeft);
         // Second finger joins an already controlled horizontal drag. Neither finger lifts before scale proof.
-        await touch("touchStart", [{ id: 1, x: 150, y: point.y }]);
-        await touch("touchMove", [{ id: 1, x: 120, y: point.y }]);
+        const pinchY = await frame.evaluate((node) => {
+          const box = node.getBoundingClientRect();
+          for (
+            let y = Math.min(innerHeight - 88, box.bottom - 24);
+            y > Math.max(box.top + 60, 24);
+            y -= 16
+          ) {
+            if (
+              [120, 150, 210].every((x) =>
+                node.contains(document.elementFromPoint(x, y)),
+              )
+            )
+              return y;
+          }
+          throw new Error(
+            "No exposed two-finger pager start beneath QA controls",
+          );
+        });
+        await touch("touchStart", [{ id: 1, x: 150, y: pinchY }]);
+        await touch("touchMove", [{ id: 1, x: 120, y: pinchY }]);
         const initialScale = await page.evaluate(() => visualViewport!.scale);
         await touch("touchStart", [
-          { id: 1, x: 120, y: point.y },
-          { id: 2, x: 210, y: point.y },
+          { id: 1, x: 120, y: pinchY },
+          { id: 2, x: 210, y: pinchY },
         ]);
         await expect(frame).toHaveAttribute(
           "data-horizontal-pager-scrolling",
@@ -1043,10 +1209,10 @@ for (const chrome of ["default", "hidden"] as const) {
         );
         for (let step = 1; step <= 12; step++) {
           await touch("touchMove", [
-            { id: 1, x: 120 - step * 4, y: point.y },
-            { id: 2, x: 210 + step * 10, y: point.y },
+            { id: 1, x: 120 - step * 4, y: pinchY },
+            { id: 2, x: 210 + step * 10, y: pinchY },
           ]);
-          await page.waitForTimeout(30);
+          await pause(30);
         }
         await expect
           .poll(() => page.evaluate(() => visualViewport!.scale))
@@ -1061,9 +1227,25 @@ for (const chrome of ["default", "hidden"] as const) {
           Math.abs((await horizontalOffset()) - committedLeft),
         ).toBeLessThanOrEqual(2);
         await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
-        evidence.push({ surface, chrome, timing, initialScale, afterScale });
+        Object.assign(surfaceEvidence, { initialScale, afterScale });
+        await frame.evaluate((node) => {
+          (
+            node as HTMLElement & { controlledPagerCleanup: () => void }
+          ).controlledPagerCleanup();
+        });
       }
     } finally {
+      // Also dispose unfinished diagnostics after a failed assertion. Reusing
+      // a document must not accumulate the old surface's capture listeners.
+      await page
+        .locator("[data-home-feed-pager], [data-user-pager]")
+        .evaluateAll((frames) => {
+          for (const frame of frames)
+            (
+              frame as HTMLElement & { controlledPagerCleanup?: () => void }
+            ).controlledPagerCleanup?.();
+        })
+        .catch(() => {});
       await testInfo.attach("controlled-pager-input", {
         body: JSON.stringify(evidence, null, 2),
         contentType: "application/json",

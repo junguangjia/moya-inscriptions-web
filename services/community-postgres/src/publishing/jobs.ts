@@ -22,6 +22,13 @@ import {
   writeTransaction,
   type PublishingDb,
 } from "./db.js";
+import {
+  USER_PURGE_HOLDS_PRE_TASK_BLOBS,
+  blobInUseSql,
+  preTaskBlobSql,
+  renditionNeededSql,
+  retentionHoldSql,
+} from "./renditions.js";
 
 /*
  * The durable job queue (claim, lease renewal, completion, failure with
@@ -511,71 +518,33 @@ const scheduleKind = async (
 };
 
 /**
- * SQL (for a derivative row `d` of item `i`) that is true when a holder still
- * needs that variant and edit key: the content of an active draft or
- * unresolved conflict copy, a snapshot, or a revision holding a ref to the
- * item, each through `community.media_required_derivatives`.
+ * Releases edit renditions nothing wants any more (L12, A05): ready rows of
+ * ready items with an edit key other than `base`, recorded more than an hour
+ * ago, whose item no active session holds (a session's content lives only on
+ * the client) and whose role and key no draft, conflict copy, snapshot or
+ * revision holding the item wants. Items are locked (skipping busy ones) and
+ * the need is checked again after the lock, so a submission that holds the
+ * item waits or wins. Rows become `released` (never deleted); their blobs
+ * become unused and a later `purge_blob` job removes them. Superseded rows
+ * are never selected.
  */
-const derivativeNeededSql = `(
-  EXISTS (
-    SELECT 1 FROM community.media_item_refs r
-    JOIN community.work_drafts w ON w.id=r.holder_id AND w.state='active' AND w.resolved_at IS NULL
-    CROSS JOIN LATERAL jsonb_array_elements(w.content->'items') e(item)
-    CROSS JOIN LATERAL community.media_required_derivatives(
-      i.kind, e.item->'edit',
-      COALESCE(e.item->>'key' = w.content->>'coverKey', FALSE),
-      CASE WHEN e.item->>'key' = w.content->>'coverKey' THEN w.content->'coverCrop' END) rd
-    WHERE r.item_id=i.id AND r.holder_kind='draft' AND e.item->>'itemId'=i.id
-      AND rd.variant=d.variant AND rd.edit_key=d.edit_key)
-  OR EXISTS (
-    SELECT 1 FROM community.media_item_refs r
-    JOIN community.work_draft_snapshots w ON w.id=r.holder_id
-    CROSS JOIN LATERAL jsonb_array_elements(w.content->'items') e(item)
-    CROSS JOIN LATERAL community.media_required_derivatives(
-      i.kind, e.item->'edit',
-      COALESCE(e.item->>'key' = w.content->>'coverKey', FALSE),
-      CASE WHEN e.item->>'key' = w.content->>'coverKey' THEN w.content->'coverCrop' END) rd
-    WHERE r.item_id=i.id AND r.holder_kind='snapshot' AND e.item->>'itemId'=i.id
-      AND rd.variant=d.variant AND rd.edit_key=d.edit_key)
-  OR EXISTS (
-    SELECT 1 FROM community.media_item_refs r
-    JOIN community.work_revisions rv ON rv.id=r.holder_id
-    JOIN community.work_revision_items ri ON ri.revision_id=rv.id AND ri.item_id=i.id
-    CROSS JOIN LATERAL community.media_required_derivatives(
-      i.kind, ri.edit,
-      COALESCE(rv.cover_item_id = ri.item_id, FALSE),
-      CASE WHEN rv.cover_item_id = ri.item_id THEN rv.cover_crop END) rd
-    WHERE r.item_id=i.id AND r.holder_kind='revision'
-      AND rd.variant=d.variant AND rd.edit_key=d.edit_key)
-)`;
-
-/**
- * Releases edit derivatives nothing needs any more (L12, A05): rows of ready
- * items with an edit key other than `base`, recorded more than an hour ago,
- * whose item no active session holds (a session's content lives only on the
- * client) and whose variant and key no draft, conflict copy, snapshot or
- * revision holding the item requires. Items are locked (skipping busy ones)
- * and the need is checked again after the lock, so a submission that holds
- * the item waits or wins. The released blobs become unused and a later
- * `purge_blob` job removes them.
- */
-const releaseUnusedDerivatives = async (
+const releaseUnusedRenditions = async (
   pool: Pool,
   now: Date,
   limit: number,
 ): Promise<void> => {
   const at = nowParam(now);
   const unused = (itemFilter: string) =>
-    `SELECT d.item_id, d.variant, d.edit_key FROM community.media_derivatives d
+    `SELECT d.id, d.item_id FROM community.media_renditions d
      JOIN community.media_items i ON i.id=d.item_id
-     WHERE d.edit_key <> 'base' AND i.state='ready'
+     WHERE d.state='ready' AND d.edit_key <> 'base' AND i.state='ready'
        AND d.created_at < $1::timestamptz - ${BLOB_PURGE_DELAY_SQL}
        ${itemFilter}
        AND NOT EXISTS (
          SELECT 1 FROM community.media_item_refs r
          JOIN community.publishing_sessions s ON s.id=r.holder_id AND s.state='active'
          WHERE r.item_id=i.id AND r.holder_kind='session')
-       AND NOT ${derivativeNeededSql}`;
+       AND NOT ${renditionNeededSql}`;
   await writeTransaction(pool, async (db) => {
     const candidates = (
       await db.query<{ item_id: string }>(
@@ -593,9 +562,10 @@ const releaseUnusedDerivatives = async (
     ).rows.map((row) => row.id);
     if (locked.length === 0) return;
     await db.query(
-      `DELETE FROM community.media_derivatives t
-       USING (${unused("AND d.item_id=ANY($2::text[])")}) gone
-       WHERE t.item_id=gone.item_id AND t.variant=gone.variant AND t.edit_key=gone.edit_key`,
+      `UPDATE community.media_renditions t
+       SET state='released', released_at=$1::timestamptz
+       FROM (${unused("AND d.item_id=ANY($2::text[])")}) gone
+       WHERE t.id=gone.id AND t.state='ready'`,
       [at, locked],
     );
   });
@@ -611,7 +581,7 @@ export const scheduleCleanup = async (
     throw new TypeError("A positive scheduling limit is required");
   const at = nowParam(now);
   // Its own transaction first: item locks never meet this pass's job inserts.
-  await releaseUnusedDerivatives(pool, now, limit);
+  await releaseUnusedRenditions(pool, now, limit);
   return writeTransaction(pool, async (db) => {
     const expireSession = await scheduleKind(
       db,
@@ -653,20 +623,35 @@ export const scheduleCleanup = async (
       at,
       limit,
     );
+    // D7 safety net: an unused pre-task blob that a task-initiated change
+    // freed is held (kept committed and recorded) instead of being scheduled;
+    // the recording rule already holds what it supersedes, so this matters
+    // only while USER_PURGE_HOLDS_PRE_TASK_BLOBS holds user deletions too.
+    // The recorded follow-up deletes held blobs. Rows a busy transaction
+    // holds are left for a later pass.
+    await db.query(
+      `UPDATE community.media_blobs b SET retention_hold='d7_pre_task'
+       FROM (
+         SELECT b.id FROM community.media_blobs b
+         WHERE b.state='committed' AND b.retention_hold IS NULL
+           AND b.created_at < $1::timestamptz - ${BLOB_PURGE_DELAY_SQL}
+           AND NOT ${blobInUseSql("b.id")} AND ${retentionHoldSql("b")}
+         ORDER BY b.created_at, b.id
+         FOR UPDATE OF b SKIP LOCKED
+         LIMIT $2
+       ) held
+       WHERE b.id=held.id`,
+      [at, limit],
+    );
     const purgeBlob = await scheduleKind(
       db,
       "purge_blob",
       `SELECT b.id AS subject_id FROM community.media_blobs b
-       WHERE (
+       WHERE b.retention_hold IS NULL AND (
            (b.state='tombstoned' AND b.tombstoned_at < $1::timestamptz - ${BLOB_PURGE_DELAY_SQL})
            OR (
              b.state='committed' AND b.created_at < $1::timestamptz - ${BLOB_PURGE_DELAY_SQL}
-             AND NOT EXISTS (
-               SELECT 1 FROM community.media_components c JOIN community.media_items i ON i.id=c.item_id
-               WHERE c.blob_id=b.id AND i.state <> 'purged')
-             AND NOT EXISTS (
-               SELECT 1 FROM community.media_derivatives d JOIN community.media_items i ON i.id=d.item_id
-               WHERE d.blob_id=b.id AND i.state <> 'purged')
+             AND NOT ${blobInUseSql("b.id")} AND NOT ${retentionHoldSql("b")}
            )
          )
          AND ${openOrUnresolvedJob("purge_blob", "b.id")}
@@ -751,18 +736,31 @@ export const purgeItem = async (
       [itemId, at],
     );
     if ((kept.rowCount ?? 0) > 0) return { status: "referenced" };
-    const blobs = await db.query<{ id: string; storage_key: string }>(
-      `WITH used AS (
+    // Every blob of the item's components and renditions (any state) is
+    // tombstoned. An item purge is its author's own lifecycle (Owner answer
+    // to Q4): pre-task bytes go as before this task, including a blob this
+    // task held when it superseded the rendition, unless
+    // USER_PURGE_HOLDS_PRE_TASK_BLOBS holds them instead.
+    const used = `WITH used AS (
          SELECT blob_id FROM community.media_components WHERE item_id=$1 AND blob_id IS NOT NULL
          UNION
-         SELECT blob_id FROM community.media_derivatives WHERE item_id=$1
+         SELECT blob_id FROM community.media_renditions WHERE item_id=$1
        ), locked AS (
          SELECT b.id FROM community.media_blobs b JOIN used ON used.blob_id=b.id
-         WHERE b.state IN ('committed','tombstoned')
+         WHERE b.state IN ('committed','tombstoned')${USER_PURGE_HOLDS_PRE_TASK_BLOBS ? " AND b.retention_hold IS NULL" : ""}
          ORDER BY b.id FOR UPDATE OF b
-       )
+       )`;
+    if (USER_PURGE_HOLDS_PRE_TASK_BLOBS)
+      await db.query(
+        `${used}
+         UPDATE community.media_blobs b SET retention_hold='d7_pre_task'
+         FROM locked WHERE b.id=locked.id AND b.state='committed' AND ${preTaskBlobSql("b")}`,
+        [itemId],
+      );
+    const blobs = await db.query<{ id: string; storage_key: string }>(
+      `${used}
        UPDATE community.media_blobs b
-       SET state='tombstoned', tombstoned_at=COALESCE(b.tombstoned_at,$2::timestamptz)
+       SET state='tombstoned', tombstoned_at=COALESCE(b.tombstoned_at,$2::timestamptz), retention_hold=NULL
        FROM locked WHERE b.id=locked.id
        RETURNING b.id, b.storage_key`,
       [itemId, at],
@@ -789,24 +787,35 @@ export const purgeBlob = async (
   const at = nowParam(now);
   return writeTransaction(pool, async (db) => {
     const blob = (
-      await db.query<{ id: string; state: string; storage_key: string }>(
-        "SELECT id,state,storage_key FROM community.media_blobs WHERE id=$1 FOR UPDATE",
+      await db.query<{
+        id: string;
+        state: string;
+        storage_key: string;
+        retention_hold: string | null;
+      }>(
+        "SELECT id,state,storage_key,retention_hold FROM community.media_blobs WHERE id=$1 FOR UPDATE",
         [blobId],
       )
     ).rows[0];
     if (blob === undefined || blob.state === "purged")
       return { status: "missing" };
+    // A held blob (D7) is kept until the recorded follow-up; only its
+    // author's own item purge (purgeItem) releases it earlier.
+    if (blob.retention_hold !== null) return { status: "referenced" };
     if (blob.state === "committed") {
-      const used = await db.query(
-        `SELECT 1 FROM community.media_components c JOIN community.media_items i ON i.id=c.item_id
-         WHERE c.blob_id=$1 AND i.state <> 'purged'
-         UNION ALL
-         SELECT 1 FROM community.media_derivatives d JOIN community.media_items i ON i.id=d.item_id
-         WHERE d.blob_id=$1 AND i.state <> 'purged'
-         LIMIT 1`,
+      const used = await db.query<{ in_use: boolean; hold: boolean }>(
+        `SELECT ${blobInUseSql("b.id")} AS in_use, ${retentionHoldSql("b")} AS hold
+         FROM community.media_blobs b WHERE b.id=$1`,
         [blobId],
       );
-      if ((used.rowCount ?? 0) > 0) return { status: "referenced" };
+      if (used.rows[0]?.in_use !== false) return { status: "referenced" };
+      if (used.rows[0].hold) {
+        await db.query(
+          "UPDATE community.media_blobs SET retention_hold='d7_pre_task' WHERE id=$1",
+          [blobId],
+        );
+        return { status: "referenced" };
+      }
       await db.query(
         "UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2::timestamptz WHERE id=$1",
         [blobId, at],
@@ -830,7 +839,7 @@ export const confirmPurged = async (
   await writeTransaction(pool, async (db) => {
     const tombstoned = await db.query<{
       id: string;
-      owner_id: string;
+      owner_id: string | null;
       byte_size: string;
     }>(
       "SELECT id,owner_id,byte_size FROM community.media_blobs WHERE id=ANY($1::text[]) AND state='tombstoned' ORDER BY id FOR UPDATE",
@@ -841,12 +850,14 @@ export const confirmPurged = async (
       "UPDATE community.media_blobs SET state='purged', purged_at=$2::timestamptz WHERE id=ANY($1::text[])",
       [tombstoned.rows.map((row) => row.id), at],
     );
+    // Owner-less Catalog blobs count toward no capacity.
     const perOwner = new Map<string, number>();
     for (const row of tombstoned.rows)
-      perOwner.set(
-        row.owner_id,
-        (perOwner.get(row.owner_id) ?? 0) + safeInteger(row.byte_size),
-      );
+      if (row.owner_id !== null)
+        perOwner.set(
+          row.owner_id,
+          (perOwner.get(row.owner_id) ?? 0) + safeInteger(row.byte_size),
+        );
     for (const owner of [...perOwner.keys()].sort())
       await adjustCapacity(
         db,

@@ -63,3 +63,42 @@ completeness校验；内部来源身份与metadata仍不可公开。
 既有字段不重命名、不合并、不改变限制：`summary`是标题下只展示一次的短lead，
 `periodLabel`是与kind一起展示的标题年代；`dynasty`/`dateText`保留为结构化事实，后续T09-F1不在基本资料重复该年代。`province`/`prefecture`/`county`仍是独立Contract字段，后续展示合成一行“地区”；`currentLocation`为“现址”，
 `currentCustodian`为“现藏单位”，`description`为“简介”。这些是后续展示约束，不改变当前Web实现或现有API响应。
+
+## Media delivery (unified-media-pipeline-v1)
+
+`src/media-delivery.ts` depends only on Zod and defines resolved URL forms,
+finite rendition lists and placeholder colours. `@moya/contracts/schemas`
+re-exports its runtime schemas; the root exports the `MediaRendition` type. The
+additive fields are optional. Web parses strict schemas, so Web and Backend ship
+together in one release.
+
+| Field              | Location                                        | Public meaning                                                                           |
+| ------------------ | ----------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `renditions`       | `PublicMedia`, `WorkMedia`, `ContentCard.media` | One framing, 1–8 finite candidates with the parent `src` as an anchor                    |
+| `coverRenditions`  | `UserWork`                                      | Card candidates of the cover framing, including any cover crop; `coverSrc` is the anchor |
+| `placeholderColor` | `PublicMedia`, `WorkMedia`, `ContentCard.media` | Lowercase `#rrggbb`, omitted for transparency                                            |
+
+Candidates expose only `src`, actual `width` and `height` (at most 65,535), and
+`contentType` (`image/webp` or `image/jpeg`). Lists ascend strictly by size,
+contain no duplicate size, and share one framing within pixel rounding. A list
+uses one delivery form; relay paths name one item and edit key. The parent
+source is a listed candidate. Card contexts stop at that anchor; larger
+candidates are Viewer levels. Cover crops and complete images have separate
+lists.
+
+Catalog and editorial URLs use `resolvedMediaUrlSchema`, preserving existing
+short-lived authorized URLs. `publishedMediaUrlSchema` requires absolute HTTPS
+with a path and no userinfo, query, fragment or backslash. Authorized still
+relay paths use `mediaRenditionPathSchema`. Work media, motion, cover sources
+and work-card anchors use authorized paths or unsigned published URLs even when
+no candidate list is present. Live Photo still and motion switch delivery forms
+together. Phase 4 PNG entries retain their user-media path and have no motion or
+candidates.
+
+`mediaVariantSchema` includes `viewer` for the authorized relay. Owner/MCP
+shapes (`publishingMediaSrcSchema`, `PublishingMediaItem`,
+`PublishingMediaSources`) and `AuthorMedia` remain unchanged; operator queues
+retain their five review variants without `viewer`.
+
+URLs arrive resolved by the Backend. Clients do not compose or sign them.
+Delivery schemas carry no `.describe()` or `.meta()` text.

@@ -7,6 +7,10 @@ import {
 } from "@moya/api";
 import type { CatalogPublicationPort } from "@moya/api";
 import {
+  RECIPE_DIGESTS_V1,
+  currentRecipe,
+} from "@moya/backend-production/internal/publishing-processing";
+import {
   createPostgresPool,
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
@@ -17,6 +21,7 @@ import {
   PostgresCommunityDiscoveryAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
+  isRenditionRole,
 } from "@moya/community-postgres";
 import {
   contentCardSchema,
@@ -102,7 +107,7 @@ export const cleanupPublishingData = async (
     "DELETE FROM community.work_revisions WHERE author_id=ANY($1::text[])",
   );
   await run(
-    "DELETE FROM community.media_derivatives d USING community.media_items i WHERE d.item_id=i.id AND i.owner_id=ANY($1::text[])",
+    "DELETE FROM community.media_renditions d USING community.media_items i WHERE d.item_id=i.id AND i.owner_id=ANY($1::text[])",
   );
   await run(
     "DELETE FROM community.media_components WHERE owner_id=ANY($1::text[])",
@@ -300,6 +305,33 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       return { blobId, storageKey };
     };
 
+    /** A ready version 1 rendition row, as the worker records one. */
+    const insertRendition = async (
+      itemId: string,
+      role: string,
+      editKey: string,
+      blobId: string,
+      width: number,
+      height: number,
+      contentType: string,
+    ) => {
+      if (!isRenditionRole(role)) throw new Error("Unknown rendition role");
+      await pool.query(
+        "INSERT INTO community.media_renditions(id,item_id,edit_key,role,recipe_version,recipe_digest,blob_id,width,height,content_type) VALUES($1,$2,$3,$4,1,$5,$6,$7,$8,$9)",
+        [
+          id("media-rendition"),
+          itemId,
+          editKey,
+          role,
+          RECIPE_DIGESTS_V1[role],
+          blobId,
+          width,
+          height,
+          contentType,
+        ],
+      );
+    };
+
     /** Records the derivatives one edit needs, as a finished derive job would; returns their keys. */
     const derive = async (
       itemId: string,
@@ -324,16 +356,21 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       for (const row of required) {
         keys[row.variant] = row.edit_key;
         const existing = await pool.query(
-          "SELECT 1 FROM community.media_derivatives WHERE item_id=$1 AND variant=$2 AND edit_key=$3",
+          "SELECT 1 FROM community.media_renditions WHERE item_id=$1 AND role=$2 AND edit_key=$3 AND state='ready'",
           [itemId, row.variant, row.edit_key],
         );
         if (existing.rowCount !== 0) continue;
         const contentType =
           row.variant === "motion" ? "video/mp4" : "image/webp";
         const stored = await blob(owner, "derivative", contentType);
-        await pool.query(
-          "INSERT INTO community.media_derivatives(item_id,variant,edit_key,blob_id,width,height,content_type) VALUES($1,$2,$3,$4,640,480,$5)",
-          [itemId, row.variant, row.edit_key, stored.blobId, contentType],
+        await insertRendition(
+          itemId,
+          row.variant,
+          row.edit_key,
+          stored.blobId,
+          640,
+          480,
+          contentType,
         );
       }
       return keys;
@@ -615,6 +652,8 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         now,
       );
       const mediaView = await authors.readWork(media.workId, null);
+      // Every recorded rendition has the display's size: one candidate, the
+      // display itself (the anchor).
       expect(mediaView.media).toEqual([
         {
           id: itemId,
@@ -622,6 +661,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           width: 640,
           height: 480,
           kind: "static",
+          renditions: [
+            {
+              src: `/api/community/publishing/media/${itemId}/display/base`,
+              width: 640,
+              height: 480,
+              contentType: "image/webp",
+            },
+          ],
         },
       ]);
       expect(mediaView.authorship).toEqual({
@@ -639,6 +686,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         width: 640,
         height: 480,
         src: `/api/community/publishing/media/${itemId}/cover/base`,
+        renditions: [
+          {
+            src: `/api/community/publishing/media/${itemId}/cover/base`,
+            width: 640,
+            height: 480,
+            contentType: "image/webp",
+          },
+        ],
       });
       expect(
         (
@@ -2207,7 +2262,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       expect(submission.coverCrop).toEqual(crop);
       const croppedThumb = (
         await pool.query<{ storage_key: string }>(
-          "SELECT b.storage_key FROM community.media_derivatives d JOIN community.media_blobs b ON b.id=d.blob_id WHERE d.item_id=$1 AND d.variant='thumb' AND d.edit_key=$2",
+          "SELECT b.storage_key FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id WHERE d.item_id=$1 AND d.role='thumb' AND d.edit_key=$2 AND d.state='ready'",
           [cover.itemId, coverEditKey],
         )
       ).rows[0]!.storage_key;
@@ -2234,7 +2289,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       ).toMatchObject([{ itemId: live.itemId, coverEditKey: "base" }]);
       const croppedCover = (
         await pool.query<{ storage_key: string }>(
-          "SELECT b.storage_key FROM community.media_derivatives d JOIN community.media_blobs b ON b.id=d.blob_id WHERE d.item_id=$1 AND d.variant='cover' AND d.edit_key=$2",
+          "SELECT b.storage_key FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id WHERE d.item_id=$1 AND d.role='cover' AND d.edit_key=$2 AND d.state='ready'",
           [cover.itemId, keys.cover],
         )
       ).rows[0]!.storage_key;
@@ -2586,6 +2641,8 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
                 storageKey: `blobs/${digest.slice(0, 2)}/${digest.slice(2, 4)}/${digest}`,
                 byteSize: 512,
                 sha256: digest + digest,
+                recipeVersion: currentRecipe(variant).version,
+                recipeDigest: currentRecipe(variant).digest,
               };
             }),
           },
@@ -2609,6 +2666,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           width: 60,
           height: 50,
           kind: "static",
+          renditions: [
+            {
+              src: `/api/community/publishing/media/${firstItem.itemId}/display/${rotatedKey}`,
+              width: 60,
+              height: 50,
+              contentType: "image/webp",
+            },
+          ],
         },
       ]);
       expect(await discovery.card({ type: "work", id: work }, b)).toMatchObject(
@@ -2692,7 +2757,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       ).toBe(0);
 
       // A legacy item purged with its earlier work is revived (ready, stale
-      // derivative rows gone) when a new direct insert names its PNG again.
+      // renditions released) when a new direct insert names its PNG again.
       const reused = id("user-media");
       await pool.query(
         "INSERT INTO community.user_media(id,owner_id,mime_type,width,height,sha256,bytes) VALUES($1,$2,'image/png',20,10,$3,$4)",
@@ -2710,14 +2775,24 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         )
       ).rows[0]!.id;
       const stale = await blob(a, "derivative", "image/webp");
-      await pool.query(
-        "INSERT INTO community.media_derivatives(item_id,variant,edit_key,blob_id,width,height,content_type) VALUES($1,'display',$2,$3,20,10,'image/webp')",
-        [reusedItem, rotatedKey, stale.blobId],
+      await insertRendition(
+        reusedItem,
+        "display",
+        rotatedKey,
+        stale.blobId,
+        20,
+        10,
+        "image/webp",
       );
       const kept = await blob(a, "derivative", "image/webp");
-      await pool.query(
-        "INSERT INTO community.media_derivatives(item_id,variant,edit_key,blob_id,width,height,content_type) VALUES($1,'thumb',$2,$3,20,10,'image/webp')",
-        [reusedItem, rotatedKey, kept.blobId],
+      await insertRendition(
+        reusedItem,
+        "thumb",
+        rotatedKey,
+        kept.blobId,
+        20,
+        10,
+        "image/webp",
       );
       // What the retention purge and purge_item leave behind.
       await pool.query(
@@ -2752,11 +2827,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       expect(
         (
           await pool.query(
-            "SELECT variant FROM community.media_derivatives WHERE item_id=$1 ORDER BY variant",
+            "SELECT role,state FROM community.media_renditions WHERE item_id=$1 ORDER BY role",
             [reusedItem],
           )
         ).rows,
-      ).toEqual([{ variant: "thumb" }]);
+      ).toEqual([
+        { role: "display", state: "released" },
+        { role: "thumb", state: "ready" },
+      ]);
       expect(
         (
           await pool.query(
@@ -4074,6 +4152,9 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         src: coverSrc,
         width: 640,
         height: 480,
+        renditions: [
+          { src: coverSrc, width: 640, height: 480, contentType: "image/webp" },
+        ],
       });
       const feed = await service().browse(b, discoveryQuerySchema.parse({}));
       expect(

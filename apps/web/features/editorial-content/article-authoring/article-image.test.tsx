@@ -149,3 +149,87 @@ describe("Article image source and body crop presentation", () => {
     expect(live).not.toBeNull();
   });
 });
+
+/*
+ * unified-media-pipeline-v1 (CW13): every candidate shows the same framing,
+ * so candidates up to the anchor leave the crop geometry exactly as it is;
+ * `sizes` accounts for the crop, and the box (exact crop aspect) carries the
+ * asset colour.
+ */
+describe("Article image candidates", () => {
+  const candidate = (width: number, height: number) => ({
+    src: `/synthetic/${width}`,
+    width,
+    height,
+  });
+  const responsive: DetailMediaPresentation = {
+    ...media,
+    src: "/synthetic/400",
+    placeholderColor: "#6b5d50",
+    renditions: [candidate(200, 150), candidate(400, 300), candidate(800, 600)],
+  };
+
+  it("keeps the crop geometry and offers candidates up to the anchor", async () => {
+    await act(async () =>
+      root.render(
+        <>
+          <ArticleImage media={responsive} active={false} crop={crop} />
+          <ArticleImage media={responsive} active={false} />
+        </>,
+      ),
+    );
+    const [cropped, full] = container.querySelectorAll("img");
+    expect(cropped?.style.width).toBe("200%");
+    expect(cropped?.style.left).toBe("-50%");
+    expect(cropped?.style.height).toBe("200%");
+    expect(cropped?.style.top).toBe("-50%");
+    expect(cropped?.style.objectFit).toBe("fill");
+    expect(full?.style.width).toBe("100%");
+    expect(cropped?.getAttribute("src")).toBe("/synthetic/400");
+    expect(cropped?.getAttribute("srcset")).toBe(
+      "/synthetic/200 200w, /synthetic/400 400w",
+    );
+    // A crop of half the width draws the image twice as wide as its box.
+    expect(cropped?.getAttribute("sizes")).toBe(
+      "(min-width: 760px) 1384px, calc(200vw - 80px)",
+    );
+    expect(full?.getAttribute("sizes")).toBe(
+      "(min-width: 760px) 692px, calc(100vw - 40px)",
+    );
+    const boxes = [...container.querySelectorAll("img")].map(
+      (image) => image.parentElement as HTMLElement,
+    );
+    expect(boxes[0]?.style.aspectRatio).toBe("1.3333333333333333 / 1");
+    for (const box of boxes) {
+      expect(box.className).toContain("bodyImage");
+      expect(box.style.backgroundColor).toBe("rgb(107, 93, 80)");
+    }
+    // The image paints it as well, over any figure rule's own background
+    // (news managed covers and image blocks); geometry is unchanged.
+    for (const image of [cropped, full])
+      expect(image?.style.backgroundColor).toBe("rgb(107, 93, 80)");
+    expect(cropped?.style.objectFit).toBe("fill");
+  });
+
+  it("narrows sizes to a resized block's display share", async () => {
+    await act(async () =>
+      root.render(
+        <ArticleImage media={responsive} active={false} share={0.5} />,
+      ),
+    );
+    expect(container.querySelector("img")?.getAttribute("sizes")).toBe(
+      "(min-width: 760px) 346px, calc(50vw - 20px)",
+    );
+  });
+
+  it("keeps a legacy image without candidates or colour", async () => {
+    await act(async () =>
+      root.render(<ArticleImage media={media} active={false} crop={crop} />),
+    );
+    const image = container.querySelector("img")!;
+    expect(image.hasAttribute("srcset")).toBe(false);
+    expect(image.hasAttribute("sizes")).toBe(false);
+    expect(image.parentElement?.style.backgroundColor).toBe("");
+    expect(image.style.backgroundColor).toBe("");
+  });
+});

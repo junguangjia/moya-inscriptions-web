@@ -73,7 +73,10 @@ async function fixture(page: Page, delayed = false, cover = false) {
             id: `work-${String(index + 1).padStart(32, "0")}`,
             authorId: ownerId,
             authorName: identity.displayName,
-            title: `滚动测试作品 ${index + 1}`,
+            title:
+              index === 11
+                ? "滚动测试作品 12"
+                : `滚动测试作品 ${index + 1}：用于检查收藏和喜欢切换后保留长正文阅读位置`,
             text: "保留正文阅读位置。".repeat(28),
             media: [],
             firstPublishedAt: "2026-09-20T00:00:00.000Z",
@@ -470,6 +473,12 @@ for (const surface of ["home", "discussion"] as const) {
         "data-category-pager-engine",
         "embla",
       );
+      // The engine name is present in SSR; its first published progress proves
+      // that the client engine has attached before the input sequence starts.
+      await expect(pager).toHaveAttribute(
+        "data-horizontal-pager-progress",
+        /^-?\d+(?:\.\d+)?$/u,
+      );
       const samples = await pager.evaluate(async (element, incomingKey) => {
         const frame = element as HTMLElement;
         const home = frame.closest(
@@ -702,9 +711,16 @@ for (const width of [320, 390]) {
       expect(
         await glyph.evaluate((node) => node instanceof SVGSVGElement),
       ).toBe(true);
-      await expect(glyph.locator("path")).toHaveAttribute(
-        "stroke",
-        "currentColor",
+      const outline = glyph.locator('path[stroke="currentColor"]');
+      await expect(outline).toHaveCount(1);
+      await expect(outline).toHaveAttribute("fill", "none");
+      // The canonical Calligraphy artwork also includes a filled ink shape.
+      // Check both paint roles without assuming every glyph has one path.
+      await expect(glyph.locator('path[fill="currentColor"]')).toHaveCount(
+        key === "calligraphy" ? 1 : 0,
+      );
+      await expect(glyph.locator("path")).toHaveCount(
+        key === "calligraphy" ? 2 : 1,
       );
       // DOM/CSS consistency alone missed the phone symptom. Also exercise
       // the actual vector paint in both themes; device acceptance stays separate.

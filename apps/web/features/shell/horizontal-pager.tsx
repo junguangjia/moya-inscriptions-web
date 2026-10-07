@@ -49,6 +49,7 @@ export interface HorizontalPagerProps<Key extends string> {
   readonly keys: readonly Key[];
   readonly activeKey: Key;
   readonly onCommit: (key: Key) => void;
+  readonly onBeforeCommit?: (key: Key) => void;
   readonly onProgress?: (progress: number) => void;
   readonly visible?: boolean;
   readonly canStartGesture?: () => boolean;
@@ -77,6 +78,7 @@ function HorizontalPagerImplementation<Key extends string>(
     keys,
     activeKey,
     onCommit,
+    onBeforeCommit,
     onProgress,
     canStartGesture,
     panels,
@@ -106,6 +108,7 @@ function HorizontalPagerImplementation<Key extends string>(
   const activeIndexRef = useRef(activeIndex);
   const visibleRef = useRef(visible);
   const onCommitRef = useRef(onCommit);
+  const onBeforeCommitRef = useRef(onBeforeCommit);
   const onProgressRef = useRef(onProgress);
   const gestureGuardRef = useRef(canStartGesture);
   const sessionRef = useRef<ScrollSession | null>(null);
@@ -127,6 +130,7 @@ function HorizontalPagerImplementation<Key extends string>(
   activeIndexRef.current = activeIndex;
   visibleRef.current = visible;
   onCommitRef.current = onCommit;
+  onBeforeCommitRef.current = onBeforeCommit;
   onProgressRef.current = onProgress;
   gestureGuardRef.current = canStartGesture;
 
@@ -280,9 +284,11 @@ function HorizontalPagerImplementation<Key extends string>(
       sessionRef.current = null;
       touchStartScrollLeftRef.current = null;
       setScrolling(false);
+      const targetFeed = keys[targetIndex];
+      if (targetFeed !== undefined && targetIndex !== activeIndexRef.current)
+        onBeforeCommitRef.current?.(targetFeed);
       if (scrollOwner === "document") applyPanelHeight(targetIndex);
       publishProgress(true);
-      const targetFeed = keys[targetIndex];
       if (targetFeed !== undefined && targetIndex !== activeIndexRef.current) {
         internalCommitIndexRef.current = targetIndex;
         onCommitRef.current(targetFeed);
@@ -566,6 +572,7 @@ function HorizontalPagerImplementation<Key extends string>(
         const key = keys[index];
         if (key === undefined) return;
         internalCommitIndexRef.current = index;
+        if (index !== activeIndexRef.current) onBeforeCommitRef.current?.(key);
         if (scrollOwner === "document") applyPanelHeight(index);
         flushSync(() => onCommitRef.current(key));
       },
@@ -695,6 +702,11 @@ function HorizontalPagerImplementation<Key extends string>(
         frameWasUnavailableRef.current = false;
         restorePreservedPanelScrollTops();
       }
+      if (scrollOwner === "panel" && visibleRef.current) {
+        // Reflow can temporarily reduce a panel's range. Keep the reading
+        // intent and apply its bounded value as that range changes again.
+        restorePreservedPanelScrollTops();
+      }
       if (Math.abs(width - frameWidthRef.current) > 0.5) {
         frameWidthRef.current = width;
         invalidateSession();
@@ -716,10 +728,13 @@ function HorizontalPagerImplementation<Key extends string>(
       }
     });
     observer.observe(frame);
-    if (scrollOwner === "document") {
-      for (const feed of keys) {
-        const panel = panelRefs.current[feed];
-        if (panel !== null) observer.observe(panel);
+    for (const feed of keys) {
+      const panel = panelRefs.current[feed];
+      if (panel === null) continue;
+      observer.observe(panel);
+      // A fixed-height panel's border box does not report content reflow.
+      if (scrollOwner === "panel" && panel.firstElementChild !== null) {
+        observer.observe(panel.firstElementChild);
       }
     }
     return () => {
@@ -814,8 +829,19 @@ function HorizontalPagerImplementation<Key extends string>(
                 ) {
                   return;
                 }
-                preservedPanelScrollTopsRef.current[feed] =
-                  event.currentTarget.scrollTop;
+                const panel = event.currentTarget;
+                const maximum = Math.max(
+                  0,
+                  panel.scrollHeight - panel.clientHeight,
+                );
+                // A browser clamp is not a new reading position. Actual
+                // movement away from that boundary replaces the saved intent.
+                if (
+                  preservedPanelScrollTopsRef.current[feed] > maximum &&
+                  Math.abs(panel.scrollTop - maximum) <= 1
+                )
+                  return;
+                preservedPanelScrollTopsRef.current[feed] = panel.scrollTop;
               }}
               role="tabpanel"
               tabIndex={selected ? 0 : -1}

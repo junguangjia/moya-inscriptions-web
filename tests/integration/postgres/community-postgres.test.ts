@@ -5,6 +5,7 @@ import { registerWorkPublishingContentTests } from "./work-publishing-content-ca
 import { registerThreadTests } from "./thread-cases.js";
 import { registerDirectMessageTests } from "./direct-message-cases.js";
 import { registerWorkPublishingMediaTests } from "./work-publishing-media-cases.js";
+import { registerMediaDeliveryTests } from "./media-delivery-cases.js";
 import { registerAgentAdministrationTests } from "./agent-administration-cases.js";
 import { registerAgentAuthorizationFlowTests } from "./agent-authorization-flow-cases.js";
 import { registerAgentConnectionConsentTests } from "./agent-connection-consent-cases.js";
@@ -1150,5 +1151,6 @@ registerAgentConnectionConsentTests(pool);
 registerAgentAuthorizationFlowTests(pool);
 
 registerWorkPublishingContentTests(pool);
+registerMediaDeliveryTests(pool);
 registerThreadTests(pool);
 registerDirectMessageTests(pool);

@@ -3,7 +3,6 @@ import {
   articleCollectionPageSchema,
   articleDetailSchema,
   articlePageSchema,
-  publicMediaSchema,
 } from "@moya/contracts/schemas";
 
 import type {
@@ -27,5 +26,3 @@ export const parseArticleCollectionPage = (
 export const parseArticleCollectionDetail = (
   value: unknown,
 ): ArticleCollectionDetail => articleCollectionDetailSchema.parse(value);
-export const safeParsePublicMedia = (value: unknown) =>
-  publicMediaSchema.safeParse(value);

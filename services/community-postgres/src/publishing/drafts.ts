@@ -229,7 +229,7 @@ const draftCovers = async (
        FROM jsonb_to_recordset($1::jsonb) AS e(draft_id text, rank integer, item_id text, edit jsonb, cover_crop jsonb)
      )
      SELECT DISTINCT ON (e.draft_id) e.draft_id, i.id AS item_id, i.legacy_media_id, e.edit_key,
-       EXISTS (SELECT 1 FROM community.media_derivatives d WHERE d.item_id=i.id AND d.variant='thumb' AND d.edit_key=e.edit_key) AS keyed
+       EXISTS (SELECT 1 FROM community.media_renditions d WHERE d.item_id=i.id AND d.role='thumb' AND d.edit_key=e.edit_key AND d.state='ready') AS keyed
      FROM input e
      JOIN community.media_items i ON i.id=e.item_id AND i.owner_id=$2 AND i.state='ready'
      ORDER BY e.draft_id, e.rank`,

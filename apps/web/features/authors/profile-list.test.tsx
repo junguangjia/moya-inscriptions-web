@@ -241,6 +241,49 @@ describe("Profile works cards", () => {
     });
   });
 
+  // unified-media-pipeline-v1 (CW4): the cover framing's own candidates give
+  // the Works-tab card the same reservation and candidates as Home's card.
+  it("reserves the cover crop's own size from its candidates", () => {
+    const candidate = (variant: "thumb" | "cover", width: number) => ({
+      src: `/api/community/publishing/media/${itemId(2)}/${variant}/${"3".repeat(32)}`,
+      width,
+      height: width,
+      contentType: "image/webp" as const,
+    });
+    const coverRenditions = [candidate("thumb", 480), candidate("cover", 1080)];
+    const card = workCard(
+      work(1, {
+        media: [still(1), { ...still(2), placeholderColor: "#4a4038" }],
+        coverMediaId: itemId(2),
+        coverSrc: croppedCover(2),
+        coverRenditions,
+      }),
+    );
+    expect(card.media).toEqual({
+      id: itemId(2),
+      src: croppedCover(2),
+      width: 1080,
+      height: 1080,
+      renditions: coverRenditions,
+      placeholderColor: "#4a4038",
+    });
+    // Candidates that do not contain `coverSrc` describe another image.
+    const unrelated = workCard(
+      work(1, {
+        media: [still(1), still(2)],
+        coverMediaId: itemId(2),
+        coverSrc: still(2).src,
+        coverRenditions,
+      }),
+    );
+    expect(unrelated.media).toEqual({
+      id: itemId(2),
+      src: still(2).src,
+      width: still(2).width,
+      height: still(2).height,
+    });
+  });
+
   it("shows the work's text when the account reports no presentable cover", () => {
     const card = workCard(
       work(1, {

@@ -10,7 +10,13 @@ export type {
 export {
   mapCatalogDetail,
   mapCatalogPage,
+  mapCatalogPublicMedia,
   mapCatalogSummary,
+} from "./modules/catalog/application/mappers/catalog-public-contract-mapper.js";
+export type {
+  CatalogImageProjection,
+  CatalogMediaContext,
+  CatalogRenditionUrls,
 } from "./modules/catalog/application/mappers/catalog-public-contract-mapper.js";
 export {
   CatalogMediaResolutionError,
@@ -162,6 +168,8 @@ export type {
   CatalogListItemProjection,
   CatalogListPageProjection,
   CatalogMediaProjection,
+  CatalogMediaRenditionLevel,
+  CatalogMediaRenditionProjection,
   CatalogSourceCitationProjection,
   CatalogStatefulTextProjection,
 } from "./modules/catalog/application/catalog-read-projections.js";
@@ -202,6 +210,7 @@ export type {
   PublishingComponentRole,
   PublishingDerivativeRecord,
   PublishingDerivativeVariant,
+  PublishingRenditionRole,
   PublishingMediaEdit,
   PublishingMediaFailureCode,
   PublishingMediaKind,
@@ -216,6 +225,18 @@ export type {
   PublishingProcessorComponent,
   PublishingQualityMode,
 } from "./modules/community/application/ports/publishing-media-processor-port.js";
+export type {
+  CatalogAssetSyncCounts,
+  CatalogAssetSyncOptions,
+  CatalogMediaAssetPort,
+  CatalogMediaSource,
+  CatalogReadyRendition,
+  CatalogRenderOutcome,
+  CatalogRenderPlan,
+  CatalogRenditionIdentity,
+  CatalogRenditionRecord,
+  CatalogRenditionRole,
+} from "./modules/community/application/ports/catalog-media-asset-port.js";
 export type {
   PublishingBlobUnlink,
   PublishingCleanupCounts,

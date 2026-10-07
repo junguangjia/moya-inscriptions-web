@@ -1,6 +1,12 @@
+import { expectPanelAlignment } from "./support/pager-alignment";
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
 import type { Locator, Page, TestInfo } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 type WindowErrorRecord = {
   message: string;
@@ -91,26 +97,11 @@ const selectFeed = async (
     .locator(`[data-tab-key="${feed}"]`)
     .evaluate((button) => (button as HTMLButtonElement).click());
   await expect(home).toHaveAttribute("data-active-home-feed", feed);
-  await expect(home.locator("[data-home-feed-pager]")).toHaveAttribute(
-    "data-home-pager-scrolling",
-    "false",
+  await expectPanelAlignment(
+    home.locator("[data-home-feed-pager]"),
+    `[data-home-feed-panel="${feed}"]`,
+    { idle: true },
   );
-  await expect
-    .poll(() =>
-      home.evaluate((node, target) => {
-        const pager = node.querySelector<HTMLElement>(
-          "[data-home-feed-pager]",
-        )!;
-        const panel = pager.querySelector<HTMLElement>(
-          `[data-home-feed-panel="${target}"]`,
-        )!;
-        return Math.abs(
-          panel.getBoundingClientRect().left -
-            pager.getBoundingClientRect().left,
-        );
-      }, feed),
-    )
-    .toBeLessThanOrEqual(2);
 };
 
 const enterCalligraphy = async (page: Page, hidden: boolean) => {
@@ -229,8 +220,18 @@ const settledMediaSnapshot = async (shell: Locator) => {
   const cards = activePanel(shell).locator("[data-catalog-card]");
   const count = await cards.count();
   for (let index = 0; index < count; index += 1) {
-    // Reveal lazy media through the browser; never change loading or layout CSS.
-    await cards.nth(index).scrollIntoViewIfNeeded();
+    const card = cards.nth(index);
+    const needsReveal = await card.evaluate((node) => {
+      const media = node.querySelector<HTMLElement>(
+        "[data-catalog-media-state]",
+      );
+      if (media?.dataset.catalogMediaState === "missing") return false;
+      const image = media?.querySelector("img");
+      return image?.complete !== true || image.naturalWidth === 0;
+    });
+    // Reveal unloaded lazy media through the browser; loaded snapshots need
+    // no repeated scrolling. Keep the whole-list readiness assertion below.
+    if (needsReveal) await card.scrollIntoViewIfNeeded();
   }
   await expect
     .poll(() =>
@@ -458,6 +459,13 @@ test("hidden QA all-Calligraphy survives native reading resize and reveal withou
   await page.setViewportSize(changedViewport);
   await expectCalligraphy(shell);
   await observeConvergence(shell, testInfo, "changed-viewport");
+  await testInfo.attach("changed-viewport-scroll-owner", {
+    body: JSON.stringify({
+      desired: read.top,
+      observed: await readScroll(shell),
+    }),
+    contentType: "application/json",
+  });
   await expectScroll(shell, read.top);
   await page.setViewportSize(readingViewport);
   await expectCalligraphy(shell);

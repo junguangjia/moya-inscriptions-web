@@ -203,11 +203,12 @@ const submissionDtos = async (
             AND m.mime_type='image/png')) AS legacy_display,
         CASE WHEN ri.item_id=r.cover_item_id THEN community.media_edit_key(ri.edit,r.cover_crop) END AS cover_edit_key,
         ARRAY(
-          SELECT d.variant FROM community.media_derivatives d
+          SELECT d.role FROM community.media_renditions d
           JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
-          WHERE d.item_id=ri.item_id
-            AND d.edit_key=${variantEditKeySql("d.variant", "ri", "r")}
-          ORDER BY array_position(ARRAY['thumb','display','full','cover','motion']::text[],d.variant)
+          WHERE d.item_id=ri.item_id AND d.state='ready'
+            AND d.role=ANY(ARRAY['thumb','display','full','cover','motion']::text[])
+            AND d.edit_key=${variantEditKeySql("d.role", "ri", "r")}
+          ORDER BY array_position(ARRAY['thumb','display','full','cover','motion']::text[],d.role)
         ) AS variants
       FROM community.work_revision_items ri
       JOIN community.work_revisions r ON r.id=ri.revision_id
@@ -419,8 +420,8 @@ export const resolveMediaRead = async (
           JOIN community.works w ON w.id=r.work_id
           JOIN community.work_revision_items ri ON ri.revision_id=r.id AND ri.item_id=$1
           JOIN community.media_items i ON i.id=ri.item_id AND i.state<>'purged'
-          JOIN community.media_derivatives d ON d.item_id=i.id AND d.variant=$2
-            AND d.edit_key=${variantEditKeySql("d.variant", "ri", "r")}
+          JOIN community.media_renditions d ON d.item_id=i.id AND d.role=$2 AND d.state='ready'
+            AND d.edit_key=${variantEditKeySql("d.role", "ri", "r")}
           JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
           WHERE r.id=$4 AND r.disposition<>'not_required' AND w.deleted_at IS NULL
             AND $3::text IN (d.edit_key,community.media_edit_key(ri.edit,NULL))`,
