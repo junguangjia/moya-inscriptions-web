@@ -27,6 +27,7 @@ export type {
   HealthResponse,
   MediaId,
   MediaRendition,
+  ProductAccess,
   PublicMedia,
   PublicSourceCitation,
   PublicUserId,

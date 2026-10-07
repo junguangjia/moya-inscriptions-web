@@ -4,11 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   loadProductionProductStatesMock,
   readFormalRequestContextMock,
+  readVisitorAccessMock,
   productApplicationMock,
 } = vi.hoisted(() => ({
   loadProductionProductStatesMock: vi.fn(),
   readFormalRequestContextMock: vi.fn(),
+  readVisitorAccessMock: vi.fn(),
   productApplicationMock: vi.fn(),
+}));
+
+vi.mock("./product-access", () => ({
+  readVisitorAccess: readVisitorAccessMock,
 }));
 
 vi.mock(
@@ -37,6 +43,13 @@ beforeEach(() => {
   loadProductionProductStatesMock.mockReset();
   readFormalRequestContextMock.mockReset();
   productApplicationMock.mockReset();
+  readVisitorAccessMock.mockReset();
+  // Public mode: the Backend grants every visitor, with or without a session.
+  readVisitorAccessMock.mockResolvedValue({
+    state: "granted",
+    closedBeta: false,
+    token: undefined,
+  });
   loadProductionProductStatesMock.mockResolvedValue(states);
   readFormalRequestContextMock.mockResolvedValue({
     initialPlatform: "tablet",
@@ -55,6 +68,8 @@ describe("FormalPage", () => {
     );
     expect(readFormalRequestContextMock).toHaveBeenCalledOnce();
     expect(loadProductionProductStatesMock).toHaveBeenCalledOnce();
+    expect(loadProductionProductStatesMock).toHaveBeenCalledWith(undefined);
+    expect(markup).not.toContain("data-product-access");
     // Outside the Development runtime no comment section is composed.
     expect(productApplicationMock.mock.calls[0]?.[0]).toEqual({
       comments: null,
@@ -165,5 +180,80 @@ describe("FormalPage", () => {
       productUtility: expect.objectContaining({ type: CatalogSearch }),
       states,
     });
+  });
+
+  it.each([
+    [{ state: "sign_in_required" }, "网站施工中", "登录"],
+    [
+      {
+        state: "restricted",
+        account: { displayName: "访碑者", handle: "member-04" },
+      },
+      "网站施工中",
+      "退出登录",
+    ],
+    [{ state: "unavailable" }, "暂时无法访问", "重试"],
+  ] as const)(
+    "renders only the notice for $0.state and loads no product data",
+    async (access, title, action) => {
+      readVisitorAccessMock.mockResolvedValue(access);
+
+      const markup = renderToStaticMarkup(
+        await FormalPage({
+          searchParams: Promise.resolve({ catalogId: "catalog-one" }),
+        }),
+      );
+
+      expect(markup).toContain(`data-product-access="${access.state}"`);
+      expect(markup).toContain(title);
+      expect(markup).toContain(action);
+      expect(markup).toContain('content="noindex"');
+      expect(markup).not.toContain("data-formal-product-application");
+      expect(loadProductionProductStatesMock).not.toHaveBeenCalled();
+      expect(readFormalRequestContextMock).not.toHaveBeenCalled();
+      expect(productApplicationMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("names the refused account to its owner and nothing else", async () => {
+    readVisitorAccessMock.mockResolvedValue({
+      state: "restricted",
+      account: { displayName: "访碑者", handle: "member-04" },
+    });
+    const named = renderToStaticMarkup(await FormalPage({}));
+    expect(named).toContain("访碑者");
+    expect(named).toContain("member-04");
+
+    readVisitorAccessMock.mockResolvedValue({
+      state: "restricted",
+      account: null,
+    });
+    expect(renderToStaticMarkup(await FormalPage({}))).not.toContain(
+      "当前账号：",
+    );
+  });
+
+  it("offers sign-in through the existing login page with a return destination", async () => {
+    readVisitorAccessMock.mockResolvedValue({ state: "sign_in_required" });
+    const markup = renderToStaticMarkup(await FormalPage({}));
+    expect(markup).toContain('action="/login"');
+    expect(markup).toContain('name="return"');
+  });
+
+  it("loads the product with the approved visitor's session in a closed beta", async () => {
+    // A synthetic stand-in with the opaque session shape; not a credential.
+    const visitorSession = "s".repeat(43);
+    readVisitorAccessMock.mockResolvedValue({
+      state: "granted",
+      closedBeta: true,
+      token: visitorSession,
+    });
+
+    const markup = renderToStaticMarkup(await FormalPage({}));
+
+    expect(markup).toContain("data-formal-product-application");
+    expect(loadProductionProductStatesMock).toHaveBeenCalledWith(
+      visitorSession,
+    );
   });
 });

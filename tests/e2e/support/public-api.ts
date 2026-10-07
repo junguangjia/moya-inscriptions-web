@@ -408,6 +408,12 @@ const server = createServer((request, response) => {
   // answering the Development composition's bounded discovery/card reads.
   // Authentication and mutations remain outside this anonymous fixture.
   const communityPath = url.pathname.replace(/^\/paging\//, "/");
+  // This anonymous fixture stands for a Backend in public mode: Web asks before
+  // it renders the product, and every visitor is granted.
+  if (communityPath === "/v1/community/access") {
+    sendJson(response, 200, { mode: "public", access: "granted" });
+    return;
+  }
   // Anonymous mounted Discussion panels have valid empty lists in this fixture.
   // Keep authentication and mutations outside this synthetic read-only service.
   if (communityPath === "/v1/community/editorial/articles") {

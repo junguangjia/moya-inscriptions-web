@@ -28,6 +28,7 @@ import type {
   catalogSearchPageSchema,
   healthResponseSchema,
   mediaIdSchema,
+  productAccessSchema,
   publicMediaSchema,
   publicSourceCitationSchema,
   publicUserIdSchema,
@@ -82,6 +83,7 @@ export type CreateCatalogCommentReplyRequest = z.infer<
 >;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;
+export type ProductAccess = z.infer<typeof productAccessSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
 
 export type { MentionReference } from "./mention-references.js";

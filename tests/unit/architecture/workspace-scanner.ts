@@ -246,6 +246,12 @@ const webT02StaticFilesFile = path.join(webRoot, "lib", "t02-static-files.ts");
 // Community V1 (Mission 2A): each file may import exactly these names from the
 // Web Public API server module; nothing else under app/ reaches it.
 const webCommunityServerImports: ReadonlyMap<string, string> = new Map([
+  // closed-beta-access-v1: the one place a page or a content-serving route
+  // asks the Backend whether the visitor may see the product.
+  [
+    path.join(webRoot, "app", "product-access.ts"),
+    "{fetchServerCurrentUser,fetchServerProductAccess,}",
+  ],
   [
     path.join(
       webRoot,

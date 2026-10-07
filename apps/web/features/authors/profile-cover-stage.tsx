@@ -42,31 +42,52 @@ const box = (rect: CoverRect): CSSProperties => ({
 });
 
 /**
- * The owner's header drawn over a region of the master or of a replica: the
- * live cover fade, the avatar and name where the header places them, and the
- * owner-only pencil. Positions are fractions of the header box.
+ * The owner's header drawn over a region of the master or of a replica, as
+ * the photo stage shows it: the identity panel's dark fade, the avatar and
+ * name (in the dark theme) where the header places them, and the round
+ * controls over the cover (top-bar icons, the owner-only pencil). Positions
+ * are fractions of the header box.
  */
 export const HeaderGhost = ({
   header,
   identity,
-  fade = true,
 }: {
   header: HeaderBox;
   identity: CoverIdentity;
-  /** A replica with the live `.profileCover` already fades its image. */
-  fade?: boolean;
 }) => {
   const guides = guidesFor(header);
+  // One header pixel in the ghost's container (`.window`, `.preview`).
+  const px = (value: number) => `${(value / header.width) * 100}cqw`;
   return (
     <>
-      {fade && <span className={`${styles.fade} ${presentation.coverFade}`} />}
-      <span className={styles.ghostPencil} style={box(guides.pencil)} />
+      <span
+        className={`${styles.panel} ${presentation.coverPanel}`}
+        style={
+          {
+            top: `${guides.panelTop * 100}%`,
+            "--cover-px": px(1),
+            // The editor draws the neutral dark shade, not the saved photo's
+            // tone from the page beneath the dialog.
+            "--cover-shade-photo": "var(--yoyi-color-paper-dark)",
+          } as CSSProperties
+        }
+      />
+      {guides.controls.map((rect, index) => (
+        <span
+          key={index}
+          className={styles.ghostControl}
+          data-theme="dark"
+          style={box(rect)}
+        />
+      ))}
       <span
         className={styles.ghostAvatar}
+        data-theme="dark"
         style={{
-          top: `${guides.avatarTop * 100}%`,
-          width: `${guides.avatarSize * 100}cqw`,
-          fontSize: `${guides.avatarSize * 45}cqw`,
+          left: `${guides.avatar.x * 100}%`,
+          top: `${guides.avatar.y * 100}%`,
+          width: `${guides.avatar.width * 100}cqw`,
+          fontSize: `${guides.avatar.width * 45}cqw`,
         }}
       >
         {identity.avatarSrc ? (
@@ -77,21 +98,23 @@ export const HeaderGhost = ({
       </span>
       <span
         className={styles.ghostName}
+        data-theme="dark"
         style={{
-          top: `${guides.nameTop * 100}%`,
-          fontSize: `${guides.nameSize * 100}cqw`,
+          left: `${guides.name.x * 100}%`,
+          top: `${guides.name.y * 100}%`,
+          fontSize: `${guides.name.size * 100}cqw`,
         }}
       >
         {identity.name}
         {identity.studioName && (
           <span
             className={styles.ghostStudio}
-            style={
-              {
-                fontSize: `${((Number.parseFloat(typography.caption.mobileSize) * 0.9) / header.width) * 100}cqw`,
-                marginTop: `${(Number.parseFloat(spacing[2]) / header.width) * 100}cqw`,
-              } as CSSProperties
-            }
+            style={{
+              fontSize: px(
+                Number.parseFloat(typography.caption.mobileSize) * 0.9,
+              ),
+              marginTop: px(Number.parseFloat(spacing[1])),
+            }}
           >
             <StudioName value={identity.studioName} prominent />
           </span>
@@ -255,7 +278,7 @@ export const ProfileCoverStage = ({
           <EditorSwitch
             name="cover-guides"
             label="参考线"
-            description={`亮处为${DEVICE_LABELS[device]}显示范围，虚线为${DEVICE_LABELS[other]}显示范围；重要内容请放在顶部小框内。`}
+            description={`亮处为${DEVICE_LABELS[device]}显示范围，虚线为${DEVICE_LABELS[other]}显示范围；重要内容请放在小框内。`}
             checked={guides}
             onChange={setGuides}
           />

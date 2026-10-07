@@ -47,6 +47,7 @@ import {
   verifyCatalogDeliveryReadable,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
+import { loadProductAccess } from "./access/product-access.js";
 import { loadPilotConfiguration, openPilotPool } from "./pilot-config.js";
 import { articleBackendConfigurationFrom } from "./article-authoring/runtime-config.js";
 import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
@@ -190,6 +191,8 @@ export const prepareProductionBackend = async (
       "NODE_ENV must be production or development for this backend",
     );
   }
+  // Who may reach product content is decided before anything is opened.
+  const productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv);
   const authConfiguration =
     runtimeConfig.nodeEnv === "production"
       ? await loadProductionAuthConfiguration(environment)
@@ -485,6 +488,7 @@ export const prepareProductionBackend = async (
           humanWebOrigin: articleConfiguration.authorization.consentBaseUrl,
           clients: articleConfiguration.authorization.clients,
           readPublished: (id) => articleAdapter.readPublished(id),
+          admitsAccount: (userId) => productAccess.admits(userId),
           discoverCatalog: (_db, _actor, query) =>
             catalogReads.discoverCatalog(query),
           readCatalog: (_db, _actor, id) => catalogReads.readCatalog(id),
@@ -498,6 +502,7 @@ export const prepareProductionBackend = async (
     readinessCheck,
     requestListener: createBackendApplication({
       nodeEnv: runtimeConfig.nodeEnv,
+      productAccess,
       catalogQueryPort,
       catalogSearchQueryPort: catalogQueryPort,
       storageUrlResolver: catalogUrlResolver,

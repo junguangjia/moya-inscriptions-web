@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
 import { ProfileCoverPreview } from "./profile-cover-preview";
+import { REFERENCE_HEADERS } from "./profile-cover";
 import presentation from "../user/user-presentation.module.css";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -18,7 +19,7 @@ const render = async (src: string | null) => {
     root!.render(
       <ProfileCoverPreview
         src={src}
-        header={{ width: 390, height: 544, identityTop: 330 }}
+        header={{ ...REFERENCE_HEADERS.phone, height: 544, panelTop: 333.6 }}
         device="phone"
         identity={{ name: "作者", avatarSrc: "/avatar.png" }}
       />,
@@ -41,11 +42,16 @@ it("renders the image through the live cover class at the header's shape", async
   expect(cover.querySelector("img")!.getAttribute("src")).toBe(
     "/api/community/media/cover",
   );
-  // The live class already fades the image; no second fade is drawn.
-  expect(preview.querySelector(`.${presentation.coverFade}`)).toBeNull();
-  expect(preview.querySelectorAll("img")[1]!.getAttribute("src")).toBe(
-    "/avatar.png",
-  );
+  // The identity panel fades in where the header measured it, as live.
+  const panel = preview.querySelector<HTMLElement>(
+    `.${presentation.coverPanel}`,
+  )!;
+  expect(panel.style.top).toBe(`${(333.6 / 544) * 100}%`);
+  expect(panel.style.getPropertyValue("--cover-px")).toBe(`${100 / 390}cqw`);
+  // One photo, as on the profile: no second (blurred) copy.
+  expect(cover.querySelectorAll("img")).toHaveLength(1);
+  expect(preview.style.getPropertyValue("--cover-px")).toBe(`${100 / 390}cqw`);
+  expect(preview.querySelector('img[src="/avatar.png"]')).not.toBeNull();
   expect(preview.textContent).toContain("作者");
 });
 

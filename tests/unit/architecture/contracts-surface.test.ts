@@ -43,6 +43,7 @@ describe("contracts package surface", () => {
       "MediaId",
       // unified-media-pipeline-v1: one rendition candidate of an image.
       "MediaRendition",
+      "ProductAccess",
       "PublicMedia",
       "PublicSourceCitation",
       "PublicUserId",

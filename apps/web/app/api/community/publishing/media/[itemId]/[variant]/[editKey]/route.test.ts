@@ -285,9 +285,10 @@ describe("work publishing media relay", () => {
 
   it.each([
     [401, 401],
+    // The product access policy's refusal for a signed-in account.
+    [403, 403],
     [404, 404],
     [503, 503],
-    [403, 502],
     [500, 502],
     [302, 502],
   ])(

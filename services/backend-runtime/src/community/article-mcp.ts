@@ -104,6 +104,11 @@ export interface ArticleMcpDependencies {
   admit(presented: string): Promise<DelegatedActor>;
   /** Enforces current grant/active account for tools/list and resources too. */
   assertCurrent(actor: DelegatedActor): Promise<void>;
+  /**
+   * The product access policy for the account a grant represents, asked at
+   * admission and again before every operation. Absent admits every account.
+   */
+  readonly admitsAccount?: (userId: string) => boolean;
   readApproval(
     actor: DelegatedActor,
     candidate: Omit<ArticleApprovalCandidate, "connectionId">,
@@ -460,6 +465,13 @@ export const createArticleMcpHandler =
       response.end();
       return;
     }
+    // A current grant for an account the product does not admit: signing in
+    // again cannot help, so this is not an authentication challenge.
+    if (dependencies.admitsAccount?.(actor.userId) === false) {
+      response.writeHead(403, { "cache-control": "private, no-store" });
+      response.end();
+      return;
+    }
     let body: unknown;
     try {
       if (request.method === "POST")
@@ -487,6 +499,8 @@ export const createArticleMcpHandler =
           ErrorCode.InvalidRequest,
           "Authorization has expired",
         );
+      if (dependencies.admitsAccount?.(actor.userId) === false)
+        throw new McpError(ErrorCode.InvalidRequest, "Access is restricted");
       await dependencies.assertCurrent(actor);
     };
     server.setRequestHandler(ListToolsRequestSchema, async () => {

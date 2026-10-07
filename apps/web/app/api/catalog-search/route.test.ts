@@ -21,13 +21,41 @@ describe("same-origin Catalog Search bridge", () => {
     const input = request("q=测试&kind=inscription&page=2&pageSize=20");
     const response = await GET(input);
     expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Vary")).toBe("Cookie");
     expect(fetchServerCatalogSearchPageMock).toHaveBeenCalledWith(
       { q: "测试", kind: "inscription", page: "2", pageSize: "20" },
       input.signal,
+      undefined,
     );
     expect(await response.json()).toEqual(page);
   });
+  it("hands the visitor's session to the Backend", async () => {
+    const session = "s".repeat(43);
+    const input = new Request("http://localhost/api/catalog-search?q=a", {
+      headers: { cookie: `yoyi-session=${session}` },
+    });
+    expect((await GET(input)).status).toBe(200);
+    expect(fetchServerCatalogSearchPageMock).toHaveBeenCalledWith(
+      { q: "a" },
+      input.signal,
+      session,
+    );
+  });
+  it.each([401, 403] as const)(
+    "answers the Backend's access refusal as %s without a body",
+    async (status) => {
+      fetchServerCatalogSearchPageMock.mockResolvedValue({
+        state: "access-denied",
+        status,
+      });
+      const response = await GET(request("q=a"));
+      expect(response.status).toBe(status);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      expect(response.headers.get("Vary")).toBe("Cookie");
+      expect(await response.text()).toBe("");
+    },
+  );
   it.each([
     "",
     "q=",

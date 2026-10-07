@@ -78,6 +78,10 @@
       "types": "./src/auth/index.ts",
       "import": "./dist/auth/index.js"
     },
+    "./internal/product-access": {
+      "types": "./src/access/product-access.ts",
+      "import": "./dist/access/product-access.js"
+    },
     "./internal/auth-signing": {
       "types": "./src/auth/signing.ts",
       "import": "./dist/auth/signing.js"

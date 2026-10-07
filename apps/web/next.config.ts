@@ -17,6 +17,9 @@ const nextConfig: NextConfig = {
     incomingRequests: { ignore: [/^\/api\/catalog-search(?:[/?]|$)/u] },
   },
   ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
+  // No page uses the image optimizer. Its cookie-blind shared cache must not
+  // retain a protected image across a mode or eligibility change.
+  images: { localPatterns: [], remotePatterns: [] },
   outputFileTracingRoot: new URL("../../", import.meta.url).pathname,
   outputFileTracingIncludes: {
     "/": [

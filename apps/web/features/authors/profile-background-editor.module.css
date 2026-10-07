@@ -35,11 +35,18 @@
   box-shadow: 0 0 0 1px var(--yoyi-color-border-subtle);
   container-type: size;
 }
+/* A tall phone cover: the replica is sized by height, its width follows. */
 .preview[data-device="phone"] {
-  width: min(100%, 240px);
+  width: auto;
+  max-width: 100%;
+  /* Keeps the overview's actions in view on 360×640 without scrolling. */
+  height: min(320px, 41svh);
 }
+/* Sized by height too: a full-height cover can be portrait on tablets. */
 .preview[data-device="desktop"] {
-  width: 100%;
+  width: auto;
+  max-width: 100%;
+  height: min(400px, 41svh);
 }
 .previewTitle {
   font-size: var(--yoyi-type-caption-size);
@@ -104,18 +111,19 @@
   outline-offset: -1px;
   container-type: size;
 }
-.fade {
+.panel {
   position: absolute;
-  inset: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
 }
 .ghostAvatar {
   position: absolute;
-  left: 50%;
   display: grid;
+  box-sizing: border-box;
   aspect-ratio: 1;
   overflow: hidden;
   place-items: center;
-  transform: translateX(-50%);
   color: var(--yoyi-color-text-inverse);
   background: var(--yoyi-color-seal-red);
   border: 2px solid var(--yoyi-color-background-page);
@@ -130,17 +138,17 @@
 }
 .ghostName {
   position: absolute;
-  inset-inline: 4%;
+  right: 4%;
   overflow: hidden;
   color: var(--yoyi-color-text-primary);
   font-family: var(--yoyi-font-editorial);
   font-weight: 650;
   line-height: 1.2;
-  text-align: center;
+  text-align: start;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ghostPencil {
+.ghostControl {
   position: absolute;
   border-radius: var(--yoyi-radius-full);
   background: color-mix(

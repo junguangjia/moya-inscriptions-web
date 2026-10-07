@@ -6,6 +6,8 @@ import type { AuthorProfile } from "@moya/contracts";
 import type { Root } from "react-dom/client";
 const {
   profileRead,
+  command,
+  directEntry,
   comments,
   openContent,
   navigatePrimary,
@@ -23,6 +25,10 @@ const {
     completions: 0,
   },
   comments: vi.fn(),
+  command: vi.fn(),
+  directEntry: {
+    value: null as { openWith: ReturnType<typeof vi.fn> } | null,
+  },
   openContent: vi.fn(),
   navigatePrimary: vi.fn(),
   openTopic: vi.fn(),
@@ -46,7 +52,10 @@ const {
 }));
 vi.mock("./author-data", async (original) => ({
   ...(await original<typeof import("./author-data")>()),
-  authorClient: { profile: profileRead, comments, command: vi.fn() },
+  authorClient: { profile: profileRead, comments, command },
+}));
+vi.mock("../messages/direct-message-entry", () => ({
+  useDirectMessageEntry: () => directEntry.value,
 }));
 vi.mock("./author-context", () => ({ useAuthors: () => author }));
 vi.mock("../product-shell/product-shell", () => ({
@@ -161,11 +170,13 @@ vi.mock("next/navigation", () => ({
   usePathname: () => window.location.pathname,
 }));
 import { AuthReturnProvider, useAuthReturn } from "../auth/auth-return";
+import media from "../publishing/ui/media/media.module.css";
 import {
   AuthorProfileOverlay,
   AuthorProfilePage,
   MyComments,
 } from "./author-profile";
+import presentation from "../user/user-presentation.module.css";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -189,10 +200,13 @@ const profile = (isOwner: boolean): AuthorProfile => ({
   nextAvatarChangeAt: null,
 });
 let root: Root | null = null;
-const overlay = (tab: "works" | "comments" = "works") => (
+const overlay = (
+  tab: "works" | "comments" = "works",
+  onClose: () => void = vi.fn(),
+) => (
   <AuthorProfileOverlay
     backButtonRef={createRef()}
-    onClose={vi.fn()}
+    onClose={onClose}
     onViewChange={onViewChange}
     state={{
       kind: "profile",
@@ -231,6 +245,8 @@ beforeEach(() => {
   author.sessionError = false;
   profileRead.mockResolvedValue(profile(true));
   comments.mockResolvedValue({ items: [], page: 1, total: 0 });
+  command.mockResolvedValue({});
+  directEntry.value = null;
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -293,6 +309,464 @@ describe("Owner profile controls", () => {
     await act(async () => root!.render(overlay()));
     expect(node.querySelector("[data-profile-editor]")).toBeNull();
     expect(button(node, "编辑信息")).toBeUndefined();
+  });
+});
+
+describe("Visitor profile actions", () => {
+  const visit = async (following = false) => {
+    author.viewer = { id: VISITOR };
+    profileRead.mockResolvedValue({
+      ...profile(false),
+      studioName: "听涛",
+      following,
+    });
+    const close = vi.fn();
+    const node = await render(overlay("works", close));
+    return { node, close };
+  };
+
+  it("shows follow as the seal-red pill and keeps block behind More", async () => {
+    const { node } = await visit();
+    const follow = button(node, "关注")!;
+    expect(follow.getAttribute("aria-pressed")).toBe("false");
+    expect(follow.classList.contains(media.primaryButton!)).toBe(true);
+    expect(button(node, "屏蔽")).toBeUndefined();
+    expect(button(node, "更多操作")!.getAttribute("aria-haspopup")).toBe(
+      "menu",
+    );
+    await act(async () => follow.click());
+    expect(command).toHaveBeenCalledWith(
+      "relationships/follow",
+      expect.objectContaining({ targetId: OWNER, enabled: true }),
+    );
+    expect(author.mutate).toHaveBeenCalled();
+  });
+
+  it("turns a followed author's toggle into the quiet pill", async () => {
+    const { node } = await visit(true);
+    const unfollow = button(node, "取消关注")!;
+    expect(unfollow.getAttribute("aria-pressed")).toBe("true");
+    expect(unfollow.classList.contains(media.secondaryButton!)).toBe(true);
+  });
+
+  it("opens the More menu, closes it with Escape and confirms before blocking", async () => {
+    const { node, close } = await visit();
+    const more = button(node, "更多操作")!;
+    await act(async () => more.click());
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    const menu = node.querySelector<HTMLElement>('[role="menu"]')!;
+    expect(more.getAttribute("aria-controls")).toBe(menu.id);
+    const block = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
+    expect(block.textContent).toBe("屏蔽");
+    expect(document.activeElement).toBe(block);
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    expect(node.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(more);
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await act(async () => more.click());
+    await act(async () =>
+      node.querySelector<HTMLElement>('[role="menuitem"]')!.click(),
+    );
+    expect(confirm).toHaveBeenCalledWith("屏蔽 作者？双方的关注将移除。");
+    expect(command).not.toHaveBeenCalled();
+    expect(node.querySelector('[role="menu"]')).toBeNull();
+    // A cancelled confirmation leaves focus on ⋯, not on the page.
+    expect(document.activeElement).toBe(more);
+
+    confirm.mockReturnValue(true);
+    await act(async () => more.click());
+    await act(async () =>
+      node.querySelector<HTMLElement>('[role="menuitem"]')!.click(),
+    );
+    expect(command).toHaveBeenCalledWith(
+      "relationships/block",
+      expect.objectContaining({ targetId: OWNER, enabled: true }),
+    );
+    expect(author.mutate).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  it("closes the More menu when focus moves away, leaving Escape to others", async () => {
+    const { node } = await visit();
+    const more = button(node, "更多操作")!;
+    await act(async () => more.click());
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    await act(async () => outside.focus());
+    expect(node.querySelector('[role="menu"]')).toBeNull();
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+    });
+    document.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("closes the More menu on an outside press", async () => {
+    const { node } = await visit();
+    await act(async () => button(node, "更多操作")!.click());
+    await act(async () =>
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })),
+    );
+    expect(node.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("opens a direct message without sending and closes the profile", async () => {
+    directEntry.value = { openWith: vi.fn() };
+    const { node, close } = await visit();
+    const message = node.querySelector<HTMLElement>(
+      "[data-profile-direct-message]",
+    )!;
+    expect(message.textContent).toBe("私信");
+    expect(message.getAttribute("aria-label")).toBe("给 作者 发私信");
+    expect(message.classList.contains(media.secondaryButton!)).toBe(true);
+    await act(async () => message.click());
+    expect(directEntry.value.openWith).toHaveBeenCalledWith(
+      OWNER,
+      "作者",
+      "听涛",
+    );
+    expect(command).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("offers a signed-out visitor the sign-in pill instead of actions", async () => {
+    author.viewer = null;
+    profileRead.mockResolvedValue(profile(false));
+    const node = await render();
+    const link = node.querySelector("a")!;
+    expect(link.textContent).toBe("登录后关注");
+    expect(link.classList.contains(media.primaryButton!)).toBe(true);
+    expect(button(node, "更多操作")).toBeUndefined();
+  });
+});
+/**
+ * An overlay profile whose own root scrolls: a measured cover (jsdom has no
+ * layout), the identity resting 532 px down (500 + 96 − 52 − 12).
+ */
+const coverScene = async (
+  options: { coverHeight?: number; photo?: boolean } = {},
+) => {
+  const { coverHeight = 700, photo = true } = options;
+  author.viewer = { id: VISITOR };
+  profileRead.mockResolvedValue({
+    ...profile(false),
+    ...(photo
+      ? {
+          background: {
+            id: `user-media-${"a".repeat(32)}`,
+            src: `/api/community/media/user-media-${"a".repeat(32)}`,
+            width: 1600,
+            height: 1200,
+          },
+        }
+      : {}),
+  });
+  const measure = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      const height =
+        this.getAttribute("aria-label") === "用户资料" ? coverHeight : 0;
+      return { height, width: 390, top: 0, left: 0 } as DOMRect;
+    });
+  const node = await render();
+  const owner = node.querySelector<HTMLElement>("[data-author-profile]")!;
+  const bar = owner.querySelector<HTMLElement>(":scope > header")!;
+  const panel = owner.querySelector<HTMLElement>(
+    `.${presentation.coverIdentity}`,
+  )!;
+  const head = owner.querySelector<HTMLElement>(`.${presentation.coverHead}`)!;
+  const names = owner.querySelector<HTMLElement>(
+    `.${presentation.coverNames}`,
+  )!;
+  const fixed = (element: HTMLElement, key: string, value: number) =>
+    Object.defineProperty(element, key, { configurable: true, value });
+  fixed(bar, "offsetHeight", 52);
+  fixed(panel, "offsetTop", 500);
+  fixed(head, "offsetTop", 96);
+  fixed(owner, "clientHeight", 800);
+  let top = 0;
+  Object.defineProperty(owner, "scrollTop", {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => {
+      top = value;
+    },
+  });
+  const scrollTo = vi.fn();
+  owner.scrollTo = scrollTo as typeof owner.scrollTo;
+  const scrollBy = async (next: number, input?: Event) => {
+    if (input) owner.dispatchEvent(input);
+    top = next;
+    owner.dispatchEvent(new Event("scroll"));
+  };
+  await act(async () => scrollBy(0));
+  return { node, owner, bar, panel, names, scrollTo, scrollBy, measure };
+};
+
+describe("Cover stages", () => {
+  let restore: (() => void) | null = null;
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+  const hint = (node: HTMLElement) =>
+    node.querySelector<HTMLButtonElement>(`.${presentation.scrollHint}`);
+
+  it("keeps the identity on the photo in the dark theme through both stages", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    expect(scene.owner.getAttribute("data-profile-stage")).toBe("cover");
+    expect(scene.names.getAttribute("data-theme")).toBe("dark");
+    expect(scene.bar.getAttribute("data-theme")).toBe("dark");
+    // The avatar (and the avatar editor that opens inside it) keeps the
+    // reader's own theme.
+    expect(
+      scene.node.querySelector('[role="img"]')!.closest("[data-theme]"),
+    ).toBeNull();
+    expect(scene.owner.style.getPropertyValue("--cover-progress")).toBe(
+      "0.000",
+    );
+    expect(hint(scene.node)!.hasAttribute("inert")).toBe(false);
+    // Past halfway the collections stage: the compact cover keeps the
+    // photo, frosted, behind the identity, so it stays dark; the hint leaves.
+    await act(async () => scene.scrollBy(300));
+    expect(scene.owner.getAttribute("data-profile-stage")).toBe("content");
+    expect(scene.names.getAttribute("data-theme")).toBe("dark");
+    expect(scene.bar.getAttribute("data-theme")).toBe("dark");
+    expect(hint(scene.node)!.hasAttribute("inert")).toBe(true);
+    expect(hint(scene.node)!.hasAttribute("data-theme")).toBe(false);
+    await act(async () => scene.scrollBy(532));
+    expect(scene.owner.style.getPropertyValue("--cover-progress")).toBe(
+      "1.000",
+    );
+    // Back on the photo, the scroll hint returns.
+    await act(async () => scene.scrollBy(0));
+    expect(scene.owner.getAttribute("data-profile-stage")).toBe("cover");
+    expect(hint(scene.node)!.hasAttribute("inert")).toBe(false);
+  });
+
+  it("pins the compact cover, identity and tabs, sharing the resting place across tabs", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    expect(scene.owner.hasAttribute("data-cover-free")).toBe(false);
+    expect(scene.owner.style.getPropertyValue("--cover-rest")).toBe("532px");
+    expect(scene.owner.style.getPropertyValue("--cover-pinned")).toBe("168px");
+    expect(scene.owner.style.getPropertyValue("--cover-height")).toBe("700px");
+    // The glass card waits where the identity rests: 10 px around it, from
+    // under the top bar to just above the tabs.
+    expect(scene.owner.style.getPropertyValue("--cover-card-top")).toBe("54px");
+    expect(scene.owner.style.getPropertyValue("--cover-card-height")).toBe(
+      "108px",
+    );
+    await act(async () => scene.scrollBy(500));
+    // The photo's box follows the scroll; the bar stays clear over it.
+    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("500px");
+    expect(scene.bar.hasAttribute("data-cover-passed")).toBe(false);
+    // Among the collections the compact cover stays put.
+    await act(async () => scene.scrollBy(900));
+    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("532px");
+    onViewChange.mockClear();
+    await act(async () => button(scene.node, "收藏")!.click());
+    expect(onViewChange).toHaveBeenLastCalledWith("favorites", 532);
+  });
+
+  it("takes the status-bar tint and the shade from the photo itself", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    // The top edge reads one colour, the lower part a brighter one.
+    let lastY = 0;
+    const context = {
+      imageSmoothingQuality: "low",
+      fillStyle: "",
+      fillRect: vi.fn(),
+      drawImage: (...args: number[]) => {
+        lastY = args[2]!;
+      },
+      getImageData: () => {
+        const [red, green, blue] =
+          lastY === 0 ? [120, 140, 130] : [200, 180, 160];
+        const data = new Uint8ClampedArray(32 * 8 * 4);
+        for (let index = 0; index < data.length; index += 4)
+          data.set([red, green, blue, 255], index);
+        return { data };
+      },
+    };
+    const canvas = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    const image = scene.node.querySelector<HTMLImageElement>(
+      '[aria-label="主页背景"] img',
+    )!;
+    Object.defineProperty(image, "naturalWidth", { value: 1600 });
+    Object.defineProperty(image, "naturalHeight", { value: 1200 });
+    await act(async () => {
+      image.dispatchEvent(new Event("load"));
+      // Sampling waits for the image to decode.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    canvas.mockRestore();
+    expect(scene.owner.style.getPropertyValue("--cover-tint")).toBe(
+      "rgb(120 140 130)",
+    );
+    const shade = scene.owner.style
+      .getPropertyValue("--cover-shade-photo")
+      .match(/\d+/gu)!
+      .map(Number);
+    // Same hue family as the lower photo (red ≥ green ≥ blue), and dark
+    // enough for the dark theme's seal-red counts at 4.5:1.
+    expect(shade[0]).toBeGreaterThanOrEqual(shade[1]!);
+    expect(shade[1]).toBeGreaterThanOrEqual(shade[2]!);
+    const luminance = (channels: number[]) => {
+      const [red, green, blue] = channels.map((value) => {
+        const unit = value / 255;
+        return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
+    };
+    expect(luminance(shade)).toBeLessThanOrEqual(0.016);
+  });
+
+  it("glides to the identity at the top when the scroll hint is tapped", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    const button = hint(scene.node)!;
+    expect(button.getAttribute("aria-label")).toBe("向下查看作品");
+    await act(async () => button.click());
+    expect(scene.scrollTo).toHaveBeenCalledWith(
+      expect.objectContaining({ top: 532 }),
+    );
+    expect(document.activeElement?.getAttribute("role")).toBe("tab");
+  });
+
+  it("keeps the page theme and no hint without a photo", async () => {
+    const scene = await coverScene({ photo: false });
+    restore = () => scene.measure.mockRestore();
+    expect(scene.owner.getAttribute("data-profile-stage")).toBe("content");
+    expect(scene.names.hasAttribute("data-theme")).toBe(false);
+    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("0px");
+    expect(hint(scene.node)).toBeNull();
+  });
+});
+
+describe("Cover glide", () => {
+  let restore: (() => void) | null = null;
+  const wheel = (deltaY = 40) =>
+    new WheelEvent("wheel", { deltaY, bubbles: true });
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "performance", "Date"],
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    restore?.();
+    restore = null;
+  });
+
+  it("glides on to the identity at the top after a wheel turn settles", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    await act(async () => scene.scrollBy(80, wheel()));
+    await act(async () => vi.advanceTimersByTime(120));
+    expect(scene.scrollTo).toHaveBeenLastCalledWith(
+      expect.objectContaining({ top: 532 }),
+    );
+  });
+
+  it("settles again when new input interrupts a glide", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    await act(async () => scene.scrollBy(80, wheel()));
+    await act(async () => vi.advanceTimersByTime(120));
+    expect(scene.scrollTo).toHaveBeenCalledTimes(1);
+    // A second notch cuts the glide short, back up over the photo.
+    await act(async () => scene.scrollBy(50, wheel(-40)));
+    await act(async () => vi.advanceTimersByTime(120));
+    expect(scene.scrollTo).toHaveBeenCalledTimes(2);
+    expect(scene.scrollTo).toHaveBeenLastCalledWith(
+      expect.objectContaining({ top: 0 }),
+    );
+  });
+
+  it("finishes a glide that a tap cut short", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    await act(async () => scene.scrollBy(80, wheel()));
+    await act(async () => vi.advanceTimersByTime(120));
+    expect(scene.scrollTo).toHaveBeenCalledTimes(1);
+    // A tap mid-glide stops the scroll about halfway.
+    const touch = (type: string) => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperty(event, "touches", {
+        value: type === "touchend" ? [] : [{ clientX: 200, clientY: 400 }],
+      });
+      return event;
+    };
+    await act(async () => scene.scrollBy(260, touch("touchstart")));
+    await act(async () => {
+      scene.owner.dispatchEvent(touch("touchend"));
+    });
+    await act(async () => vi.advanceTimersByTime(120));
+    expect(scene.scrollTo).toHaveBeenCalledTimes(2);
+    expect(scene.scrollTo).toHaveBeenLastCalledWith(
+      expect.objectContaining({ top: 532 }),
+    );
+  });
+
+  it("settles a glide cut short by a scroll write once, not forever", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    await act(async () => scene.scrollBy(80, wheel()));
+    await act(async () => vi.advanceTimersByTime(120));
+    // The glide never arrives (a write keeps the page mid-way).
+    await act(async () => scene.scrollBy(300));
+    await act(async () => vi.advanceTimersByTime(900));
+    expect(scene.scrollTo).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTime(3000));
+    expect(scene.scrollTo).toHaveBeenCalledTimes(2);
+  });
+
+  it("scrolls freely among the collections and ignores keys typed into a field", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    // Below the second resting place the collections scroll freely.
+    await act(async () => scene.scrollBy(620, wheel()));
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(scene.scrollTo).not.toHaveBeenCalled();
+    const field = document.createElement("input");
+    scene.owner.append(field);
+    field.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+    );
+    await act(async () => scene.scrollBy(200));
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(scene.scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("lets an identity too tall to pin scroll freely", async () => {
+    // 1200 − 532 + 160 > 800: pinned, it would leave no room for the
+    // collections.
+    const scene = await coverScene({ coverHeight: 1200 });
+    restore = () => scene.measure.mockRestore();
+    await act(async () => scene.scrollBy(80, wheel()));
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(scene.scrollTo).not.toHaveBeenCalled();
+    expect(scene.owner.hasAttribute("data-cover-free")).toBe(true);
+    // Past the identity the cover scrolls away whole, and the bar turns
+    // solid in the reader's own theme.
+    await act(async () => scene.scrollBy(700));
+    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("532px");
+    expect(scene.bar.hasAttribute("data-cover-passed")).toBe(true);
+    expect(scene.bar.hasAttribute("data-theme")).toBe(false);
+    await act(async () => scene.scrollBy(0));
+    expect(scene.bar.getAttribute("data-theme")).toBe("dark");
   });
 });
 

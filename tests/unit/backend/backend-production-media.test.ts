@@ -155,6 +155,7 @@ const environment = {
   HOST: "127.0.0.1",
   NODE_ENV: "production",
   PORT: "3001",
+  PRODUCT_ACCESS_MODE: "public",
   MOYA_CONTENT_SOURCE: "payload",
   DATABASE_URL:
     "postgresql://synthetic-runtime@127.0.0.1:1/synthetic_published",

@@ -91,6 +91,20 @@ provisioning, not a password reset or public-user privilege promotion.
 These instructions describe the operator boundary. Local synthetic checks do not
 establish that a release was deployed or that real acceptance passed.
 
+## Product access (closed beta)
+
+`PRODUCT_ACCESS_MODE` in the private Backend environment is `closed-beta` or
+`public`; the Backend refuses to start without one of them. In `closed-beta`
+only the accounts named in `PRODUCT_ACCESS_ALLOWLIST_FILE` reach product content
+and commands; everyone else can only open the sign-in flow. The file is private
+JSON owned by `yoyi-backend` with mode `0600`. Replacing it adds or removes a
+tester without a restart, and a missing or invalid file denies every account.
+Validate a candidate before installing it with
+`node services/backend-production/dist/access/check.js --file <candidate>`. The
+full procedure — adding and removing testers, opening the product later, and a
+rollback that keeps access restricted — is in
+[`docs/production/closed-beta-access-v1.md`](../../docs/production/closed-beta-access-v1.md).
+
 ## Existing processes behind Nginx
 
 | Process        | Unix identity                | Listener         | EnvironmentFile                       |

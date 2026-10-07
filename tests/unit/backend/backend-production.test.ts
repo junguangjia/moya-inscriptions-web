@@ -10,6 +10,8 @@ const productionEnvironment = {
   HOST: "127.0.0.1",
   NODE_ENV: "production",
   PORT: "3001",
+  // Production names its product access mode; these cases are about the rest.
+  PRODUCT_ACCESS_MODE: "public",
 } as const;
 
 describe("production backend composition", () => {
@@ -30,6 +32,38 @@ describe("production backend composition", () => {
         NODE_ENV: "test",
       }),
     ).rejects.toThrow("NODE_ENV must be production");
+  });
+
+  it("refuses to start without an explicit, valid product access mode, before anything else is configured", async () => {
+    const unnamed = {
+      HOST: productionEnvironment.HOST,
+      NODE_ENV: productionEnvironment.NODE_ENV,
+      PORT: productionEnvironment.PORT,
+    };
+    for (const environment of [
+      unnamed,
+      { ...unnamed, PRODUCT_ACCESS_MODE: "" },
+      { ...unnamed, PRODUCT_ACCESS_MODE: "open" },
+    ])
+      await expect(prepareProductionBackend(environment)).rejects.toThrow(
+        "PRODUCT_ACCESS_MODE: must be closed-beta or public",
+      );
+    // A closed beta without its allowlist is refused too: nobody is admitted by default.
+    await expect(
+      prepareProductionBackend({
+        ...unnamed,
+        PRODUCT_ACCESS_MODE: "closed-beta",
+      }),
+    ).rejects.toThrow("PRODUCT_ACCESS_ALLOWLIST_FILE");
+    await expect(
+      prepareProductionBackend({
+        ...unnamed,
+        PRODUCT_ACCESS_MODE: "closed-beta",
+        PRODUCT_ACCESS_ALLOWLIST_FILE: "/nonexistent/product-access.json",
+      }),
+    ).rejects.toThrow(
+      "PRODUCT_ACCESS_ALLOWLIST_FILE: invalid protected allowlist",
+    );
   });
 
   it("fails safely when DATABASE_URL is missing or invalid", async () => {

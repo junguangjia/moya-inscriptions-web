@@ -23,15 +23,15 @@ const close = (a: number, b: number) => expect(a).toBeCloseTo(b, 3);
 
 describe("cover geometry", () => {
   it("shows a centred full-height strip on portrait phones", () => {
-    const window = coverWindow(390 / 569);
-    close(window.width, 390 / 569 / COVER_ASPECT);
+    const window = coverWindow(390 / 844);
+    close(window.width, 390 / 844 / COVER_ASPECT);
     close(window.x, (1 - window.width) / 2);
     expect(window).toMatchObject({ y: 0, height: 1 });
   });
 
   it("shows the full width from the top on wide desktops", () => {
-    const window = coverWindow(960 / 556);
-    close(window.height, COVER_ASPECT / (960 / 556));
+    const window = coverWindow(1366 / 657);
+    close(window.height, COVER_ASPECT / (1366 / 657));
     expect(window).toMatchObject({ x: 0, y: 0, width: 1 });
     expect(coverWindow(COVER_ASPECT)).toEqual({
       x: 0,
@@ -41,32 +41,277 @@ describe("cover geometry", () => {
     });
   });
 
-  it("keeps the safe area inside every supported window and above the fade", () => {
-    // Measured header aspects: portrait phones up to three bio lines,
-    // tablets, and desktop windows from 1366×657 with an empty bio.
-    for (const aspect of [
-      0.63, 0.639, 0.657, 0.678, 0.717, 0.815, 0.871, 1.107, 1.194, 1.43, 1.651,
-      1.807, 1.954, 2.087,
-    ]) {
-      const window = coverWindow(aspect);
-      const safe = COVER_SAFE_RECT;
+  it("keeps the safe area visible, clear of every control and above the identity panel", () => {
+    // Measured covers [width, height, panel top, controls] (the owner's own
+    // profile, profile-hero-layout-v1): portrait phones from 360 px and
+    // tablets with empty, one- and three-line bios; desktop windows from
+    // 1024×768 and 1366×657 with empty and one-line bios.
+    const measured: readonly (readonly [
+      number,
+      number,
+      number,
+      readonly (readonly [number, number, number, number])[],
+    ])[] = [
+      [
+        360,
+        640,
+        304,
+        [
+          [12, 4, 44, 44],
+          [304, 4, 44, 44],
+          [304, 56, 44, 44],
+        ],
+      ],
+      [
+        360,
+        648.8,
+        282.4,
+        [
+          [12, 4, 44, 44],
+          [304, 4, 44, 44],
+          [304, 56, 44, 44],
+        ],
+      ],
+      [
+        360,
+        716,
+        282.4,
+        [
+          [12, 4, 44, 44],
+          [304, 4, 44, 44],
+          [304, 56, 44, 44],
+        ],
+      ],
+      [
+        375,
+        667,
+        331,
+        [
+          [12, 4, 44, 44],
+          [319, 4, 44, 44],
+          [319, 56, 44, 44],
+        ],
+      ],
+      [
+        375,
+        667,
+        300.6,
+        [
+          [12, 4, 44, 44],
+          [319, 4, 44, 44],
+          [319, 56, 44, 44],
+        ],
+      ],
+      [
+        375,
+        725.7,
+        292.1,
+        [
+          [12, 4, 44, 44],
+          [319, 4, 44, 44],
+          [319, 56, 44, 44],
+        ],
+      ],
+      [
+        390,
+        844,
+        508,
+        [
+          [12, 4, 44, 44],
+          [334, 4, 44, 44],
+          [334, 56, 44, 44],
+        ],
+      ],
+      [
+        390,
+        844,
+        477.6,
+        [
+          [12, 4, 44, 44],
+          [334, 4, 44, 44],
+          [334, 56, 44, 44],
+        ],
+      ],
+      [
+        390,
+        844,
+        410.4,
+        [
+          [12, 4, 44, 44],
+          [334, 4, 44, 44],
+          [334, 56, 44, 44],
+        ],
+      ],
+      [
+        393,
+        852,
+        516,
+        [
+          [12, 4, 44, 44],
+          [337, 4, 44, 44],
+          [337, 56, 44, 44],
+        ],
+      ],
+      [
+        393,
+        852,
+        485.6,
+        [
+          [12, 4, 44, 44],
+          [337, 4, 44, 44],
+          [337, 56, 44, 44],
+        ],
+      ],
+      [
+        393,
+        852,
+        418.4,
+        [
+          [12, 4, 44, 44],
+          [337, 4, 44, 44],
+          [337, 56, 44, 44],
+        ],
+      ],
+      [
+        430,
+        932,
+        596,
+        [
+          [12, 4, 44, 44],
+          [374, 4, 44, 44],
+          [374, 56, 44, 44],
+        ],
+      ],
+      [
+        430,
+        932,
+        565.6,
+        [
+          [12, 4, 44, 44],
+          [374, 4, 44, 44],
+          [374, 56, 44, 44],
+        ],
+      ],
+      [
+        430,
+        932,
+        498.4,
+        [
+          [12, 4, 44, 44],
+          [374, 4, 44, 44],
+          [374, 56, 44, 44],
+        ],
+      ],
+      [
+        768,
+        1024,
+        688,
+        [
+          [12, 4, 44, 44],
+          [712, 4, 44, 44],
+          [712, 56, 44, 44],
+        ],
+      ],
+      [
+        768,
+        1024,
+        657.6,
+        [
+          [12, 4, 44, 44],
+          [712, 4, 44, 44],
+          [712, 56, 44, 44],
+        ],
+      ],
+      [
+        768,
+        1024,
+        612.8,
+        [
+          [12, 4, 44, 44],
+          [712, 4, 44, 44],
+          [712, 56, 44, 44],
+        ],
+      ],
+      [
+        960,
+        768,
+        432,
+        [
+          [-20, 4, 44, 44],
+          [936, 4, 44, 44],
+          [904, 56, 44, 44],
+        ],
+      ],
+      [
+        960,
+        768,
+        401.6,
+        [
+          [-20, 4, 44, 44],
+          [936, 4, 44, 44],
+          [904, 56, 44, 44],
+        ],
+      ],
+      [960, 800, 464, [[904, 56, 44, 44]]],
+      [960, 800, 433.6, [[904, 56, 44, 44]]],
+      [960, 657, 321, [[904, 56, 44, 44]]],
+      [960, 657, 290.6, [[904, 56, 44, 44]]],
+      [960, 900, 564, [[904, 56, 44, 44]]],
+      [960, 900, 533.6, [[904, 56, 44, 44]]],
+      [960, 1080, 744, [[904, 56, 44, 44]]],
+      [960, 1080, 713.6, [[904, 56, 44, 44]]],
+    ];
+    const safe = COVER_SAFE_RECT;
+    for (const [width, height, panelTop, controls] of measured) {
+      const guides = guidesFor({
+        ...REFERENCE_HEADERS.phone,
+        width,
+        height,
+        panelTop,
+        controls: controls.map(([x, y, w, h]) => ({
+          x,
+          y,
+          width: w,
+          height: h,
+        })),
+      });
+      const { window } = guides;
       expect(safe.x).toBeGreaterThanOrEqual(window.x);
       expect(safe.x + safe.width).toBeLessThanOrEqual(window.x + window.width);
       expect(safe.y + safe.height).toBeLessThanOrEqual(
-        window.y + 0.35 * window.height,
+        window.y + guides.panelTop * window.height,
       );
+      for (const control of guides.controls) {
+        // The control in master fractions.
+        const left = window.x + control.x * window.width,
+          top = window.y + control.y * window.height,
+          right = left + control.width * window.width,
+          bottom = top + control.height * window.height;
+        expect(
+          right <= safe.x ||
+            left >= safe.x + safe.width ||
+            bottom <= safe.y ||
+            top >= safe.y + safe.height,
+        ).toBe(true);
+      }
     }
   });
 
-  it("places the identity like the header CSS", () => {
+  it("reports the measured header as fractions of itself", () => {
     const phone = guidesFor(REFERENCE_HEADERS.phone);
-    close(phone.avatarTop, 330 / 569);
-    close(phone.avatarSize, 80 / 390);
-    close(phone.nameTop, 414 / 569);
-    close(phone.nameSize, 24 / 390);
-    close(phone.pencil.x, (390 - 56) / 390);
+    close(phone.panelTop, 477.6 / 844);
+    close(phone.avatar.x, 16 / 390);
+    close(phone.avatar.y, 573.6 / 844);
+    close(phone.avatar.width, 80 / 390);
+    close(phone.avatar.height, 80 / 844);
+    close(phone.name.x, 108 / 390);
+    close(phone.name.y, 587.7 / 844);
+    close(phone.name.size, 24 / 390);
+    expect(phone.controls).toHaveLength(3);
+    close(phone.controls[2]!.x, 334 / 390);
+    close(phone.controls[2]!.y, 56 / 844);
     const desktop = guidesFor(REFERENCE_HEADERS.desktop);
-    close(desktop.nameSize, 32 / 960);
+    close(desktop.name.size, 32 / 960);
     expect(deviceForWidth(390)).toBe("phone");
     expect(deviceForWidth(768)).toBe("desktop");
   });

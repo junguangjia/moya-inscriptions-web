@@ -9,6 +9,11 @@ import {
   createDevelopmentCatalogFixtureSearchPort,
   developmentMediaUrlsByObjectKey,
 } from "./catalog/development-catalog-fixture.js";
+import {
+  admittedSessions,
+  createProductAccessGate,
+  publicProductAccess,
+} from "./http/product-access-gate.js";
 import { createRouter } from "./http/router.js";
 
 import {
@@ -61,10 +66,16 @@ import type { DevelopmentCatalogRenditions } from "./community/development-catal
 import type { createArticleMcpHandler } from "./community/article-mcp.js";
 import type { HealthReadinessCheck } from "./health/health-handler.js";
 import type { AuthRequestSource } from "./community/auth-request-source.js";
+import type { ProductAccessPolicy } from "./http/product-access-gate.js";
 import type { CommunityRouterDependencies } from "./http/router.js";
 import type { RequestListener } from "node:http";
 
 export interface BackendApplicationOptions {
+  /**
+   * Who may reach product content and commands. Absent means `public`; the
+   * production composition root always supplies an explicit policy.
+   */
+  readonly productAccess?: ProductAccessPolicy;
   readonly notificationPort?: NotificationPort;
   readonly notificationWorkerPort?: NotificationWorkerPort;
   readonly notificationSignals?: NotificationSignals;
@@ -224,6 +235,7 @@ const resolveCommunity = (
   catalogPublicationPort: CatalogPublicationPort,
   storageUrlResolver: StorageUrlResolver,
   catalogReadService: CatalogReadService,
+  productAccess: ProductAccessPolicy,
 ): CommunityRouterDependencies | undefined => {
   const { nodeEnv, communityIdentityPort, communityCommentPort } = options;
   if (communityIdentityPort === undefined) return undefined;
@@ -300,8 +312,10 @@ const resolveCommunity = (
           notificationService: new NotificationService(
             options.notificationPort,
           ),
+          // The heartbeat re-identifies each stream, so one that is no longer
+          // admitted ends there.
           notificationStreams: new NotificationStreams(
-            sessionService,
+            admittedSessions(sessionService, productAccess),
             options.notificationSignals ?? new NotificationSignals(),
           ),
         }
@@ -387,6 +401,7 @@ const resolveCommunity = (
 export const createBackendApplication = (
   options: BackendApplicationOptions,
 ): RequestListener => {
+  const productAccess = options.productAccess ?? publicProductAccess;
   const catalogQueryPort = resolveCatalogQueryPort(options);
   const storageUrlResolver = resolveStorageUrlResolver(options);
   const catalogReadService = new CatalogReadService(
@@ -410,11 +425,27 @@ export const createBackendApplication = (
     },
     storageUrlResolver,
     catalogReadService,
+    productAccess,
   );
-  return createRouter({
-    catalogReadService,
-    healthReadinessCheck:
-      options.healthReadinessCheck ?? (async (): Promise<void> => undefined),
-    ...(community === undefined ? {} : { community }),
-  });
+  const delegatedPaths = new Set<string>();
+  if (community?.articleDelegation !== undefined) {
+    const resource = new URL(community.articleDelegation.resource).pathname;
+    delegatedPaths.add(resource);
+    delegatedPaths.add(`/.well-known/oauth-protected-resource${resource}`);
+  }
+  return createProductAccessGate(
+    {
+      policy: productAccess,
+      sessions: community?.sessionService,
+      delegatedPaths,
+      refusalReadMs:
+        community?.publishingService?.transferPolicy.refusalReadMs ?? 5_000,
+    },
+    createRouter({
+      catalogReadService,
+      healthReadinessCheck:
+        options.healthReadinessCheck ?? (async (): Promise<void> => undefined),
+      ...(community === undefined ? {} : { community }),
+    }),
+  );
 };
