@@ -4448,6 +4448,15 @@ describe("mobile application preview", () => {
       ".app-detail__media-stage",
     );
     if (!stage) throw new Error("media stage missing");
+    // The carousel's post-commit wheel lock compares performance.now() with a
+    // deadline captured when the previous gesture committed. Control that
+    // clock inside this window so the locked wheel below is judged against
+    // the product's fixed window rather than against wall-clock timer slack.
+    let trackpadNow = pc.window.performance.now();
+    Object.defineProperty(pc.window.performance, "now", {
+      configurable: true,
+      value: () => trackpadNow,
+    });
     dispatchWheel(pc.window, stage, { deltaX: 0, deltaY: 160 });
     expect(
       pcDocument.querySelector("[data-detail-media-index]")?.textContent,
@@ -4465,9 +4474,13 @@ describe("mobile application preview", () => {
     expect(
       pcDocument.querySelector("[data-detail-media-index]")?.textContent,
     ).toBe("2/5");
-    await new Promise<void>((resolve) => {
-      pc.window.setTimeout(() => resolve(), 220);
-    });
+    // A wheel the lock swallowed arms no gesture, so the index must still be
+    // unchanged after the idle settlement window has had a chance to fire.
+    await waitMs(pc.window, 60);
+    expect(
+      pcDocument.querySelector("[data-detail-media-index]")?.textContent,
+    ).toBe("2/5");
+    trackpadNow += 220;
     dispatchWheel(pc.window, stage, { deltaX: 600, deltaY: 0 });
     await new Promise<void>((resolve) => {
       pc.window.setTimeout(() => resolve(), 60);
