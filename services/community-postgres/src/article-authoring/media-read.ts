@@ -24,13 +24,13 @@ export const articleReadyMediaSql = (item: string): string => `
       WHERE legacy.id=${item}.legacy_media_id AND legacy.owner_id=${item}.owner_id
         AND legacy.deleted_at IS NULL AND octet_length(legacy.bytes)>0
     )) OR (${item}.legacy_media_id IS NULL AND EXISTS (
-      SELECT 1 FROM community.media_derivatives d JOIN community.media_blobs b
+      SELECT 1 FROM community.media_renditions d JOIN community.media_blobs b
         ON b.id=d.blob_id AND b.state='committed'
-      WHERE d.item_id=${item}.id AND d.variant='display' AND d.edit_key='base'
+      WHERE d.item_id=${item}.id AND d.role='display' AND d.edit_key='base' AND d.state='ready'
     ) AND (${item}.kind<>'live' OR EXISTS (
-      SELECT 1 FROM community.media_derivatives d JOIN community.media_blobs b
+      SELECT 1 FROM community.media_renditions d JOIN community.media_blobs b
         ON b.id=d.blob_id AND b.state='committed'
-      WHERE d.item_id=${item}.id AND d.variant='motion' AND d.edit_key='base'
+      WHERE d.item_id=${item}.id AND d.role='motion' AND d.edit_key='base' AND d.state='ready'
     )))
   )`;
 

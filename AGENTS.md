@@ -46,6 +46,7 @@ The active amendments are:
   credential check at 120 s per genuine publication cycle, and records finite
   repair authority. Historical failures remain unchanged.
 - [`2026-09-22 content, Threads and direct messages (three-track Community scope)`](docs/governance/amendments/2026-09-22-content-community-completion-scope.md)
+- [`2026-10-04 unified media pipeline`](docs/governance/amendments/2026-10-04-unified-media-pipeline.md)
 
 No lower-level prompt, Plan, implementation decision, PR description, inferred
 best practice, or code comment may relax or override a higher authority.

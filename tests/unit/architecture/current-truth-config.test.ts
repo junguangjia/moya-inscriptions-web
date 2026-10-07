@@ -319,10 +319,57 @@ describe("current repository truth and local configuration", () => {
       ),
       "utf8",
     );
-    expect(unit).toContain(
-      "ReadWritePaths=/var/lib/yoyi-backend/publishing-work",
-    );
+    // Media processing and its job workspace belong to the media worker.
+    expect(unit).not.toContain("ReadWritePaths");
     expect(unit).toContain("ProtectSystem=strict");
+    const worker = await readFile(
+      path.join(
+        repositoryRoot,
+        "infra/production/systemd/yoyi-media-worker.service",
+      ),
+      "utf8",
+    );
+    // A dedicated user: the Backend user cannot reach the worker's container
+    // daemon socket or its job workspace.
+    for (const setting of [
+      "User=yoyi-media",
+      "Group=yoyi-media",
+      "EnvironmentFile=/etc/yoyi/media-worker.env",
+      "services/backend-production/dist/worker-main.js",
+      "TimeoutStopSec=90",
+      "MemoryMax=512M",
+      "TasksMax=64",
+      "RestartPreventExitStatus=78",
+      "NoNewPrivileges=true",
+      "ProtectSystem=strict",
+      "ProtectHome=true",
+      "ReadWritePaths=/var/lib/yoyi-media/publishing-work",
+      "CapabilityBoundingSet=",
+      "StartLimitIntervalSec=0",
+      "Requires=REPLACE_ME_CONTAINER_DAEMON_READY.service REPLACE_ME_METADATA_GUARD.service",
+    ])
+      expect(worker).toContain(setting);
+    expect(worker).not.toContain("yoyi-backend");
+    expect(worker).not.toMatch(/\/run\/user\/\d|migrate|HOST=|PORT=/);
+    const mediaWorker = parseEnv(
+      await readFile(
+        path.join(
+          repositoryRoot,
+          "infra/production/env/media-worker.env.example",
+        ),
+        "utf8",
+      ),
+    );
+    expect(mediaWorker).toMatchObject({
+      NODE_ENV: "production",
+      DATABASE_POOL_MAX: "3",
+      WORK_MEDIA_WORKER_CONCURRENCY: "1",
+      WORK_MEDIA_WORK_DIR: "/var/lib/yoyi-media/publishing-work",
+    });
+    expect(mediaWorker.WORK_MEDIA_STORE_DIR).toBeUndefined();
+    for (const [name, value] of Object.entries(mediaWorker))
+      if (/SECRET|PASSWORD|_URL$|BUCKET|IMAGE|DOCKER_HOST/.test(name))
+        expect(value, name).toMatch(/REPLACE_ME|example\.invalid/);
     const backend = parseEnv(
       await readFile(
         path.join(repositoryRoot, "infra/production/env/backend.env.example"),
@@ -345,6 +392,13 @@ describe("current repository truth and local configuration", () => {
     expect(issuer.CMS_DATABASE_URL).toBeUndefined();
     expect(backend.AUTH_PHONE_PROVIDER).toBe("disabled");
     expect(backend.WORK_MEDIA_STORE_DIR).toBeUndefined();
+    expect(backend.WORK_MEDIA_WORKER).toBe("external");
+    // Rollback-retained for the previous release, ignored by this one.
+    expect(backend.WORK_MEDIA_WORK_DIR).toBe(
+      "/var/lib/yoyi-backend/publishing-work",
+    );
+    expect(backend.WORK_MEDIA_TOOLS_IMAGE).toMatch(/REPLACE_ME/);
+    expect(backend.WORK_MEDIA_WORKER_CONCURRENCY).toBe("1");
     for (const name of [
       "ARTICLE_AUTHORING_ISSUER",
       "ARTICLE_AUTHORING_RESOURCE",

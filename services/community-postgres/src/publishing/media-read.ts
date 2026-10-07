@@ -56,12 +56,12 @@ export const revisionCoverJoin = (revision: string, alias: string): string =>
     JOIN community.media_items cm ON cm.id=ci.item_id
     LEFT JOIN community.user_media um ON um.id=cm.legacy_media_id AND um.owner_id=cm.owner_id
     LEFT JOIN LATERAL (
-      SELECT d.variant, d.edit_key, d.width, d.height FROM community.media_derivatives d
-      WHERE d.item_id=cm.id AND (
-        (d.variant='cover' AND d.edit_key=${variantEditKeySql("'cover'", "ci", revision)})
-        OR (d.variant='display' AND d.edit_key=community.media_edit_key(ci.edit, NULL))
+      SELECT d.role AS variant, d.edit_key, d.width, d.height FROM community.media_renditions d
+      WHERE d.item_id=cm.id AND d.state='ready' AND (
+        (d.role='cover' AND d.edit_key=${variantEditKeySql("'cover'", "ci", revision)})
+        OR (d.role='display' AND d.edit_key=community.media_edit_key(ci.edit, NULL))
       )
-      ORDER BY d.variant='cover' DESC
+      ORDER BY d.role='cover' DESC
       LIMIT 1
     ) cd ON TRUE
     WHERE ci.revision_id=${revision}.id
@@ -224,7 +224,7 @@ export const revisionsMedia = async (
       JOIN community.media_items i ON i.id=ri.item_id
       CROSS JOIN LATERAL (SELECT community.media_edit_key(ri.edit,NULL) AS display_key) k
       LEFT JOIN community.user_media um ON um.id=i.legacy_media_id AND um.owner_id=i.owner_id
-      LEFT JOIN community.media_derivatives d ON d.item_id=i.id AND d.variant='display' AND d.edit_key=k.display_key
+      LEFT JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key=k.display_key AND d.state='ready'
       WHERE ri.revision_id=ANY($1::text[])
       ORDER BY ri.revision_id,ri.position`,
       [[...revisionIds]],
@@ -316,15 +316,16 @@ export const mediaReadTarget = (
 };
 
 /**
- * SQL (placeholders $1 item, $2 variant, $3 edit key) selecting the committed
- * derivative blob of an item that is not cancelled or purged, as `d` (derivative) and `i`
- * (item). Callers append their authorization predicate with AND.
+ * SQL (placeholders $1 item, $2 role, $3 edit key) selecting the committed
+ * blob of the ready rendition of an item that is not cancelled or purged, as
+ * `d` (rendition), `b` (blob) and `i` (item). Callers append their
+ * authorization predicate with AND.
  */
 export const derivativeReadSql = `SELECT b.storage_key,d.content_type,b.byte_size,b.sha256
-  FROM community.media_derivatives d
+  FROM community.media_renditions d
   JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
   JOIN community.media_items i ON i.id=d.item_id AND i.state NOT IN ('cancelled','purged')
-  WHERE d.item_id=$1 AND d.variant=$2 AND d.edit_key=$3`;
+  WHERE d.item_id=$1 AND d.role=$2 AND d.edit_key=$3 AND d.state='ready'`;
 
 /** WorkPublishingPort.resolveMediaRead */
 export const resolveMediaRead = async (
@@ -347,7 +348,7 @@ export const resolveMediaRead = async (
               JOIN community.public_users u ON u.id=w.author_id
               WHERE ri.item_id=d.item_id AND community.work_is_public(w) AND u.status='active'
                 AND community.accounts_can_interact($4::text,w.author_id)
-                AND d.edit_key=${variantEditKeySql("d.variant", "ri", "r")}
+                AND d.edit_key=${variantEditKeySql("d.role", "ri", "r")}
             )
             OR (i.state='ready' AND d.edit_key='base'
               AND ${publishedArticleItemSql("d.item_id", "$4::text")})

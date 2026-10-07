@@ -1,14 +1,24 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { chmod, mkdtemp, realpath, rm, utimes } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  realpath,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { LocalCatalogSourceReader } from "@moya/backend-production/internal/catalog-source";
+import { createCatalogRenderer } from "@moya/backend-production/internal/publishing-catalog";
 import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
 import {
   cosFixture,
   cosOptions,
 } from "../../unit/backend/publishing-cos-fixture.js";
+import { inProcessSandbox } from "../../unit/backend/publishing-sandbox-fixture.js";
 
 import {
   CosPublishingMediaStore,
@@ -16,9 +26,12 @@ import {
 } from "@moya/backend-production/internal/publishing-media-store";
 import {
   MediaToolError,
-  createMediaToolsRunner,
   createPublishingMediaProcessor,
 } from "@moya/backend-production/internal/publishing-processing";
+import {
+  createSandboxRunner,
+  defaultSandboxAppDist,
+} from "@moya/backend-production/internal/publishing-sandbox";
 import { PublishingWorker } from "@moya/backend-production/internal/publishing-worker";
 import {
   createPostgresPool,
@@ -80,6 +93,7 @@ const hex = () => randomBytes(16).toString("hex");
 
 const suiteJobIds = new Set<string>();
 const suiteUsers: string[] = [];
+const suiteAssets: string[] = [];
 let base: string;
 let workBase: string;
 let store: FilesystemPublishingMediaStore | CosPublishingMediaStore;
@@ -239,6 +253,8 @@ const storeProcessor = (gate: Promise<void> = Promise.resolve()) => {
           width: 400,
           height: 300,
           durationMs: null,
+          recipeVersion: 1,
+          recipeDigest: "0".repeat(16),
         });
       }
       await gate;
@@ -248,6 +264,7 @@ const storeProcessor = (gate: Promise<void> = Promise.resolve()) => {
         presentation: { width: 4000, height: 3000 },
         pairing: null,
         stillExifOrientation: null,
+        placeholderColor: null,
         derivatives,
       };
     }),
@@ -372,6 +389,17 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     await pool.query(
+      `WITH removed AS (
+         DELETE FROM community.media_renditions WHERE catalog_asset_id = ANY($1::text[])
+         RETURNING blob_id)
+       DELETE FROM community.media_blobs WHERE id IN (SELECT blob_id FROM removed)`,
+      [suiteAssets],
+    );
+    await pool.query(
+      "DELETE FROM community.catalog_media_assets WHERE id = ANY($1::text[])",
+      [suiteAssets],
+    );
+    await pool.query(
       `DELETE FROM community.publishing_jobs WHERE id = ANY($2::text[]) OR subject_id IN (
          SELECT id FROM community.media_items WHERE owner_id = ANY($1::text[])
          UNION SELECT id FROM community.media_blobs WHERE owner_id = ANY($1::text[]))`,
@@ -382,7 +410,7 @@ afterAll(async () => {
       "DELETE FROM community.publishing_sessions WHERE owner_id = ANY($1::text[])",
       "DELETE FROM community.work_draft_snapshots WHERE owner_id = ANY($1::text[])",
       "DELETE FROM community.work_drafts WHERE owner_id = ANY($1::text[])",
-      "DELETE FROM community.media_derivatives WHERE item_id IN (SELECT id FROM community.media_items WHERE owner_id = ANY($1::text[]))",
+      "DELETE FROM community.media_renditions WHERE item_id IN (SELECT id FROM community.media_items WHERE owner_id = ANY($1::text[]))",
       "DELETE FROM community.media_components WHERE owner_id = ANY($1::text[])",
       "DELETE FROM community.media_blobs WHERE owner_id = ANY($1::text[])",
       "DELETE FROM community.media_items WHERE owner_id = ANY($1::text[])",
@@ -670,15 +698,21 @@ const workerCases = () => {
 
       const port = suitePort();
       const readBytes = vi.spyOn(port, "readLegacyMediaBytes");
-      const runner = await createMediaToolsRunner({
-        image: "yoyi-work-publishing-media-tools:v1",
+      // The real renderer runs in-process in place of the sandbox container
+      // (real sharp, the real framed stream); a PNG edit runs no media tool.
+      const sandbox = inProcessSandbox();
+      const runner = await createSandboxRunner({
+        image: "yoyi-work-publishing-media-tools:v2",
         workDirectory: workBase,
+        appDist: defaultSandboxAppDist().appDist,
         temporaryRoots: [],
-        spawn: () => {
-          throw new Error("a PNG edit never starts a media tool");
-        },
+        spawn: sandbox.spawn,
       });
-      const processor = createPublishingMediaProcessor({ store, runner });
+      const processor = createPublishingMediaProcessor({
+        store,
+        sandbox: runner,
+        logger: silent,
+      });
       const process = vi.spyOn(processor, "process");
       const worker = newWorker(
         port,
@@ -719,9 +753,9 @@ const workerCases = () => {
         purpose: string;
         storage_key: string;
       }>(
-        `SELECT d.variant, d.width, d.height, d.content_type, b.purpose, b.storage_key
-         FROM community.media_derivatives d JOIN community.media_blobs b ON b.id = d.blob_id
-         WHERE d.item_id = $1 AND d.edit_key = $2 ORDER BY d.variant`,
+        `SELECT d.role AS variant, d.width, d.height, d.content_type, b.purpose, b.storage_key
+         FROM community.media_renditions d JOIN community.media_blobs b ON b.id = d.blob_id
+         WHERE d.item_id = $1 AND d.edit_key = $2 AND d.state = 'ready' ORDER BY d.role`,
         [itemId, editKey],
       );
       expect(
@@ -759,6 +793,135 @@ const workerCases = () => {
         [legacyMediaId],
       );
       expect(media).toEqual([{ sha: pngSha256, state: "ready" }]);
+    },
+  );
+
+  it(
+    "renders a Catalog asset in the sandbox and records owner-less renditions and facts",
+    { timeout: 30_000 },
+    async () => {
+      const media = await realpath(
+        await mkdtemp(path.join(tmpdir(), "publishing-worker-it-media-")),
+      );
+      try {
+        const bytes = await sharp({
+          create: {
+            width: 2400,
+            height: 1600,
+            channels: 3,
+            background: { r: randomBytes(1)[0]!, g: 120, b: 60 },
+          },
+        })
+          .jpeg({ quality: 80 })
+          .toBuffer();
+        const sourceSha = createHash("sha256").update(bytes).digest("hex");
+        const name = `${hex()}${hex()}-${sourceSha}.jpg`;
+        const key = `editorial/${hex()}${hex()}/${name}`;
+        await writeFile(path.join(media, name), bytes);
+        const mediaId = `media-it-${hex()}`;
+        const assetId = `catalog-asset-${createHash("md5").update(`${mediaId}:${key}`).digest("hex")}`;
+        const at = clock();
+        await pool.query(
+          `INSERT INTO community.catalog_media_assets(id, media_id, source_object_key, source_sha256,
+             source_content_type, state, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'image/jpeg', 'pending', $5, $5)`,
+          [assetId, mediaId, key, sourceSha, at.toISOString()],
+        );
+        suiteAssets.push(assetId);
+        const jobId = await enqueue("catalog_render", assetId);
+        const sandbox = inProcessSandbox();
+        const runner = await createSandboxRunner({
+          image: "yoyi-work-publishing-media-tools:v2",
+          workDirectory: workBase,
+          appDist: defaultSandboxAppDist().appDist,
+          temporaryRoots: [],
+          spawn: sandbox.spawn,
+        });
+        const port = suitePort();
+        const worker = newWorker(
+          port,
+          createPublishingJobHandlers({
+            port,
+            store,
+            catalog: {
+              port: adapter,
+              renderer: createCatalogRenderer({
+                store,
+                sandbox: runner,
+                source: new LocalCatalogSourceReader(media),
+                logger: silent,
+              }),
+            },
+            clock,
+            logger: silent,
+          }),
+          { kinds: ["catalog_render"] },
+        );
+        worker.start();
+        await settled(jobId, "succeeded", 25_000);
+        await worker.stop();
+
+        const { rows } = await pool.query<{
+          role: string;
+          width: number;
+          height: number;
+          recipe_version: number;
+          state: string;
+          owner_id: string | null;
+          purpose: string;
+          storage_key: string;
+        }>(
+          `SELECT r.role, r.width, r.height, r.recipe_version, r.state, b.owner_id, b.purpose, b.storage_key
+           FROM community.media_renditions r JOIN community.media_blobs b ON b.id = r.blob_id
+           WHERE r.catalog_asset_id = $1 ORDER BY r.role`,
+          [assetId],
+        );
+        expect(
+          rows.map((row) => [
+            row.role,
+            row.width,
+            row.height,
+            row.recipe_version,
+            row.state,
+            row.owner_id,
+            row.purpose,
+          ]),
+        ).toEqual([
+          ["cover", 1080, 720, 1, "ready", null, "catalog_derivative"],
+          ["display", 2048, 1365, 1, "ready", null, "catalog_derivative"],
+          ["thumb", 480, 320, 1, "ready", null, "catalog_derivative"],
+          ["viewer", 2400, 1600, 1, "ready", null, "catalog_derivative"],
+        ]);
+        for (const row of rows)
+          expect(await storeHas(row.storage_key)).toBe(true);
+        const asset = (
+          await pool.query<{
+            state: string;
+            master_sha256: string;
+            master_width: number;
+            master_height: number;
+            placeholder_color: string;
+          }>(
+            "SELECT state, master_sha256, master_width, master_height, placeholder_color FROM community.catalog_media_assets WHERE id = $1",
+            [assetId],
+          )
+        ).rows[0]!;
+        expect(asset).toMatchObject({
+          state: "ready",
+          master_sha256: sourceSha,
+          master_width: 2400,
+          master_height: 1600,
+        });
+        expect(asset.placeholder_color).toMatch(/^#[0-9a-f]{6}$/);
+        // Recorded: store reconciliation keeps them.
+        expect(
+          await adapter.unrecordedStorageKeys(
+            rows.map((row) => row.storage_key),
+          ),
+        ).toEqual([]);
+      } finally {
+        await rm(media, { recursive: true, force: true });
+      }
     },
   );
 

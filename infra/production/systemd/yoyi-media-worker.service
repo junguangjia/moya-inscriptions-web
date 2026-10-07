@@ -1,0 +1,51 @@
+[Unit]
+Description=Yoyi production media worker
+# The two REPLACE_ME units are host-local (not in this repository): the
+# readiness gate of the yoyi-media user's rootless container daemon and the
+# host metadata guard. Install the unit with their real names; it does not
+# start while a placeholder remains.
+Requires=REPLACE_ME_CONTAINER_DAEMON_READY.service REPLACE_ME_METADATA_GUARD.service
+After=network-online.target REPLACE_ME_CONTAINER_DAEMON_READY.service REPLACE_ME_METADATA_GUARD.service
+Wants=network-online.target
+# No start-rate limit: exit 75 (container daemon or image unavailable) is
+# retried every RestartSec until it clears; exit 78 never restarts.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# A dedicated user, separate from the Backend's: only it owns the rootless
+# container daemon socket and the job workspace, so the request-serving
+# Backend can neither reach the daemon nor touch staged inputs or outputs.
+User=yoyi-media
+Group=yoyi-media
+WorkingDirectory=/srv/yoyi/current
+EnvironmentFile=/etc/yoyi/media-worker.env
+# No listener: the worker only leases jobs from the community database.
+ExecStart=/usr/bin/env NODE_ENV=production node --max-old-space-size=256 services/backend-production/dist/worker-main.js
+Restart=on-failure
+RestartSec=30
+# 78: configuration or sandbox isolation mismatch; fix it, do not loop.
+RestartPreventExitStatus=78
+TimeoutStopSec=90
+KillSignal=SIGTERM
+KillMode=mixed
+MemoryMax=512M
+TasksMax=64
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+# ProtectHome also hides /run/user: a host-local drop-in binds only the
+# yoyi-media daemon socket read-only, named by DOCKER_HOST in the env file.
+ProtectHome=true
+ProtectSystem=strict
+# Only the private sandbox job workspace is writable.
+ReadWritePaths=/var/lib/yoyi-media/publishing-work
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

@@ -525,8 +525,11 @@ class ControlledProcessor {
       presentation: { width: 4, height: 3 },
       pairing: null,
       stillExifOrientation: null,
+      placeholderColor: null,
       derivatives: (["thumb", "display"] as const).map((variant, index) => ({
         variant,
+        recipeVersion: 1,
+        recipeDigest: "0".repeat(16),
         editKey: "base",
         storageKey: blobKey(seed * 10 + index),
         byteSize: 5,
@@ -956,6 +959,8 @@ describe("publishing worker legacy edits", () => {
     status: "derived",
     derivatives: payload.variants.map((variant, index) => ({
       variant,
+      recipeVersion: 1,
+      recipeDigest: "0".repeat(16),
       editKey: payload.editKey,
       storageKey: blobKey(70 + index),
       byteSize: 5,
@@ -1976,7 +1981,7 @@ describe("publishing media configuration", () => {
       await rm(base, { recursive: true, force: true });
     });
 
-    it("opens the store, tools runner and processor without any Docker call", async () => {
+    it("opens the store, sandbox runner and processor without any Docker call", async () => {
       const config = {
         storeDirectory: await privateDirectory("store"),
         workDirectory: await privateDirectory("work"),
@@ -1989,7 +1994,7 @@ describe("publishing media configuration", () => {
       });
       expect(media.store).toBeInstanceOf(FilesystemPublishingMediaStore);
       expect(typeof media.processor.process).toBe("function");
-      expect(typeof media.runner.sweepJobs).toBe("function");
+      expect(typeof media.sandbox.sweepJobs).toBe("function");
       await expect(media.store.listBlobs({ limit: 10 })).resolves.toEqual({
         entries: [],
         nextAfter: null,

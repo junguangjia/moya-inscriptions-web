@@ -13,8 +13,7 @@ import {
 
 import type { MediaEdit } from "./edits.js";
 import type {
-  MediaToolJob,
-  MediaToolsRunner,
+  MediaToolRunner,
   MotionColor,
   MotionSource,
 } from "./media-tools.js";
@@ -224,16 +223,15 @@ function rejectToolFailure(
   throw error;
 }
 
-/** Probes and validates a motion component copied into the job input. */
+/** Probes and validates a motion component of the job. */
 export async function probeMotionInput(
-  runner: MediaToolsRunner,
-  job: MediaToolJob,
-  inputName: string,
+  tools: MediaToolRunner,
+  inputPath: string,
   signal?: AbortSignal,
 ): Promise<MotionProbe> {
   let json: unknown;
   try {
-    json = await ffprobeJson(runner, job, inputName, signal);
+    json = await ffprobeJson(tools, inputPath, signal);
   } catch (error) {
     rejectToolFailure(error, "decode_failed");
   }
@@ -249,16 +247,15 @@ export interface MotionDerivativeFile {
 }
 
 /**
- * Produces the motion MP4 for an edit and re-probes the accepted output: it
+ * Produces the motion MP4 for an edit and re-probes the written output: it
  * must be H.264 in 8-bit yuv420p tagged BT.709 limited range, upright
  * (rotation baked), keep AAC audio when the source had audio and keep the
  * source duration within {@link MOTION_DURATION_TOLERANCE_MS}.
  */
 export async function renderMotionDerivative(
-  runner: MediaToolsRunner,
-  job: MediaToolJob,
-  inputName: string,
-  outputName: string,
+  tools: MediaToolRunner,
+  inputPath: string,
+  outputPath: string,
   source: MotionProbe,
   edit: MediaEdit,
   signal?: AbortSignal,
@@ -267,15 +264,14 @@ export async function renderMotionDerivative(
   let json: unknown;
   try {
     file = await ffmpegMotionDerivative(
-      runner,
-      job,
-      inputName,
-      outputName,
+      tools,
+      inputPath,
+      outputPath,
       edit,
       source,
       signal,
     );
-    json = await ffprobeJson(runner, job, outputName, signal);
+    json = await ffprobeJson(tools, outputPath, signal);
   } catch (error) {
     rejectToolFailure(error, "processing_failed");
   }

@@ -202,6 +202,7 @@ export type {
   PublishingComponentRole,
   PublishingDerivativeRecord,
   PublishingDerivativeVariant,
+  PublishingRenditionRole,
   PublishingMediaEdit,
   PublishingMediaFailureCode,
   PublishingMediaKind,
@@ -216,6 +217,18 @@ export type {
   PublishingProcessorComponent,
   PublishingQualityMode,
 } from "./modules/community/application/ports/publishing-media-processor-port.js";
+export type {
+  CatalogAssetSyncCounts,
+  CatalogAssetSyncOptions,
+  CatalogMediaAssetPort,
+  CatalogMediaSource,
+  CatalogReadyRendition,
+  CatalogRenderOutcome,
+  CatalogRenderPlan,
+  CatalogRenditionIdentity,
+  CatalogRenditionRecord,
+  CatalogRenditionRole,
+} from "./modules/community/application/ports/catalog-media-asset-port.js";
 export type {
   PublishingBlobUnlink,
   PublishingCleanupCounts,

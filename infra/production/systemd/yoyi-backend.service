@@ -21,8 +21,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-# Only the dedicated private processing workspace is writable.
-ReadWritePaths=/var/lib/yoyi-backend/publishing-work
+# No writable path: media processing and its job workspace belong to
+# yoyi-media-worker.service.
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

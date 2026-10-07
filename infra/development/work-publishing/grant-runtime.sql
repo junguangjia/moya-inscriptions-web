@@ -366,3 +366,30 @@ BEGIN
   END IF;
 END $$;
 GRANT SELECT ON TABLE community.operator_password_accounts TO :"app_role";
+
+-- unified-media-pipeline-v1 (increment 1): one rendition table for media
+-- items and Catalog assets, written by the Backend and the media worker
+-- (same role). Rendition rows are never deleted: state moves to superseded
+-- or released. Catalog assets keep only content-free facts. A blob's
+-- retention hold (D7) is set by the purge paths, and placeholder colour is
+-- an asset fact. community.media_derivatives keeps its earlier grant
+-- unchanged (no code reads or writes it any more). Convergence as above:
+-- no table-level UPDATE on the new tables.
+REVOKE UPDATE ON TABLE
+  community.media_renditions,
+  community.catalog_media_assets
+FROM :"app_role";
+GRANT SELECT, INSERT ON TABLE
+  community.media_renditions, community.catalog_media_assets
+TO :"app_role";
+GRANT UPDATE (state, superseded_at, released_at)
+ON TABLE community.media_renditions TO :"app_role";
+GRANT UPDATE (
+  master_sha256, master_width, master_height, placeholder_color, state,
+  failure_code, unreferenced_since, updated_at
+) ON TABLE community.catalog_media_assets TO :"app_role";
+GRANT UPDATE (placeholder_color) ON TABLE community.media_items TO :"app_role";
+GRANT UPDATE (retention_hold) ON TABLE community.media_blobs TO :"app_role";
+GRANT EXECUTE ON FUNCTION
+  community.media_wanted_renditions(TEXT, JSONB, BOOLEAN, JSONB)
+TO :"app_role";

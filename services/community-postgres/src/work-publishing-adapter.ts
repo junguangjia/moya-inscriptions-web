@@ -30,6 +30,12 @@ import type {
   WorkPublishingSettings,
 } from "@moya/contracts/internal/community-operator";
 import type {
+  CatalogAssetSyncCounts,
+  CatalogAssetSyncOptions,
+  CatalogMediaAssetPort,
+  CatalogMediaSource,
+  CatalogRenderOutcome,
+  CatalogRenderPlan,
   PublishingCleanupCounts,
   PublishingCommandIdentity,
   PublishingDerivativeCommit,
@@ -69,12 +75,16 @@ import * as jobs from "./publishing/jobs.js";
 import * as submissions from "./publishing/submissions.js";
 import * as works from "./publishing/works.js";
 import * as mediaRead from "./publishing/media-read.js";
+import * as catalogAssets from "./publishing/catalog-assets.js";
 
 /**
- * Work publishing persistence on PostgreSQL. Every method delegates to its
+ * Work publishing persistence on PostgreSQL, plus the Catalog media asset
+ * state the same worker drives. Every method delegates to its
  * publishing/<area>.ts function with this adapter's pool.
  */
-export class PostgresWorkPublishingAdapter implements WorkPublishingPort {
+export class PostgresWorkPublishingAdapter
+  implements WorkPublishingPort, CatalogMediaAssetPort
+{
   constructor(private readonly pool: Pool) {}
 
   createSession(
@@ -383,5 +393,34 @@ export class PostgresWorkPublishingAdapter implements WorkPublishingPort {
       variant,
       editKey,
     );
+  }
+  syncCatalogAssets(
+    sources: readonly CatalogMediaSource[],
+    now: Date,
+    options: CatalogAssetSyncOptions,
+  ): Promise<CatalogAssetSyncCounts> {
+    return catalogAssets.syncCatalogAssets(this.pool, sources, now, options);
+  }
+  readCatalogRenderPlan(assetId: string): Promise<CatalogRenderPlan | null> {
+    return catalogAssets.readCatalogRenderPlan(this.pool, assetId);
+  }
+  recordCatalogRenditions(
+    assetId: string,
+    outcome: CatalogRenderOutcome,
+    now: Date,
+  ): Promise<PublishingDerivativeCommit> {
+    return catalogAssets.recordCatalogRenditions(
+      this.pool,
+      assetId,
+      outcome,
+      now,
+    );
+  }
+  failCatalogAsset(
+    assetId: string,
+    failureCode: string,
+    now: Date,
+  ): Promise<void> {
+    return catalogAssets.failCatalogAsset(this.pool, assetId, failureCode, now);
   }
 }

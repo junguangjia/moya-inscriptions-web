@@ -58,6 +58,22 @@
       "types": "./src/publishing/worker.ts",
       "import": "./dist/publishing/worker.js"
     },
+    "./internal/publishing-sandbox": {
+      "types": "./src/publishing/sandbox/index.ts",
+      "import": "./dist/publishing/sandbox/index.js"
+    },
+    "./internal/publishing-catalog": {
+      "types": "./src/publishing/catalog.ts",
+      "import": "./dist/publishing/catalog.js"
+    },
+    "./internal/catalog-source": {
+      "types": "./src/storage/catalog-source.ts",
+      "import": "./dist/storage/catalog-source.js"
+    },
+    "./internal/media-worker": {
+      "types": "./src/worker-composition.ts",
+      "import": "./dist/worker-composition.js"
+    },
     "./internal/auth": {
       "types": "./src/auth/index.ts",
       "import": "./dist/auth/index.js"
@@ -79,9 +95,11 @@
     "build": "tsc -p tsconfig.json",
     "lint": "eslint .",
     "start": "node dist/main.js",
+    "worker": "node dist/worker-main.js",
     "pilot": "node dist/pilot-cli.js",
     "typecheck": "tsc --noEmit",
-    "dev": "tsx src/main.ts"
+    "dev": "tsx src/main.ts",
+    "dev:worker": "tsx src/worker-main.ts"
   },
   "dependencies": {
     "@moya/agent-authorization": "workspace:*",

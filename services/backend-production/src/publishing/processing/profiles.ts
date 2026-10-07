@@ -1,60 +1,11 @@
 /**
- * Server derivative profiles for work publishing (design §3.5–3.6, §8). Numbers
- * here are the single documented source. `media_items.processing_profile`
- * records the browser Standard profile, never these.
+ * Server processing profiles for work publishing (design §3.5–3.6, §8) and
+ * the media sandbox bounds (unified media pipeline, increment 1). Still
+ * rendition recipes and their geometry live in `recipes.ts`; motion, tool and
+ * sandbox numbers here are the single documented source.
+ * `media_items.processing_profile` records the browser Standard profile,
+ * never these.
  */
-
-/** sharp input safety: pixel ceiling, strict decoding, first page only. */
-export const STATIC_INPUT_LIMITS = {
-  limitInputPixels: 120_000_000,
-  failOn: "error",
-  pages: 1,
-} as const;
-
-export type StaticDerivativeVariant = "thumb" | "display" | "full" | "cover";
-
-/** Card derivatives shaped by the independent cover crop (design §8.3, L10). */
-export const COVER_CROPPED_VARIANTS: ReadonlySet<StaticDerivativeVariant> =
-  new Set(["thumb", "cover"]);
-
-export interface StaticDerivativeProfile {
-  /** WebP quality 1..100. */
-  readonly quality: number;
-  /** Maximum long edge in pixels; never upscaled. */
-  readonly maxLongEdge: number;
-}
-
-/** WebP derivatives; all metadata stripped, sRGB output, no upscaling. */
-export const STATIC_DERIVATIVES: Readonly<
-  Record<StaticDerivativeVariant, StaticDerivativeProfile>
-> = {
-  thumb: { quality: 80, maxLongEdge: 480 },
-  display: { quality: 86, maxLongEdge: 2048 },
-  full: { quality: 90, maxLongEdge: 8192 },
-  cover: { quality: 86, maxLongEdge: 1080 },
-};
-
-/**
- * Tall or wide images (long edge more than 2.5 × the short edge, the same
- * threshold as the browser Standard profile) are treated as long scrolls.
- */
-export const LONG_SCROLL_ASPECT_RATIO = 2.5;
-
-/** Long scroll `full`: long edge ≤ 16,000 and ≤ 40 MP (design §3.6). */
-export const LONG_SCROLL_FULL = {
-  maxLongEdge: 16_000,
-  maxPixels: 40_000_000,
-} as const;
-
-/**
- * Long scroll `display` is bounded by its short edge so text stays readable:
- * fits 1280 × 16,000 and ≤ 20 MP (feasibility decision 3).
- */
-export const LONG_SCROLL_DISPLAY = {
-  maxShortEdge: 1280,
-  maxLongEdge: 16_000,
-  maxPixels: 20_000_000,
-} as const;
 
 /**
  * ffprobe validation bounds for motion components: one video stream, at most
@@ -140,7 +91,7 @@ export const MOTION_COLOR = {
   ranges: ["tv", "pc"],
 } as const;
 
-/** Hard wall-clock limits per tool invocation (container killed after). */
+/** Hard wall-clock limits per tool invocation inside the sandbox (killed after). */
 export const MEDIA_TOOL_TIMEOUTS_MS = {
   heifDecode: 60_000,
   ffprobe: 20_000,
@@ -148,8 +99,9 @@ export const MEDIA_TOOL_TIMEOUTS_MS = {
 } as const;
 
 /**
- * The container also runs its tool under `timeout --signal=KILL` for the host
- * limit plus this grace, so it ends even if the host lost track of it.
+ * The sandbox container also runs under `timeout --signal=KILL` for the
+ * coordinator's limit plus this grace, so it ends even if the coordinator
+ * lost track of it.
  */
 export const MEDIA_TOOL_CONTAINER_TIMEOUT_GRACE_MS = 10_000;
 
@@ -160,17 +112,70 @@ export const MEDIA_TOOL_OUTPUT_LIMITS = {
   stderrBytes: 64 * 1024,
 } as const;
 
-/** Largest tool output file accepted back from the sandbox. */
+/** Largest file a tool may write inside the sandbox work directory. */
 export const MEDIA_TOOL_MAX_OUTPUT_FILE_BYTES = 1024 * 1024 * 1024;
 
-/** Docker sandbox resource flags for the media tools container. */
-export const MEDIA_TOOL_SANDBOX = {
-  tmpfs: "/tmp:rw,size=512m",
+/** Exact sharp version of the sandbox runtime (the workspace pin). */
+export const SANDBOX_SHARP_VERSION = "0.35.4";
+/** Node major of the sandbox runtime (the image pins 24.21.0). */
+export const SANDBOX_NODE_MAJOR = 24;
+
+/**
+ * Docker flags of the one sandbox container a job runs in. Memory equals
+ * memory plus swap (no swap); one CPU leaves the other for request serving;
+ * core dumps are off; the sandbox is the host's preferred OOM victim. Every
+ * writable path is a size-capped tmpfs owned by the sandbox user.
+ */
+export const SANDBOX_LIMITS = {
   memory: "1536m",
-  cpus: "2",
+  memorySwap: "1536m",
+  cpus: "1",
   pidsLimit: "256",
   user: "10001:10001",
+  nofile: "nofile=1024:1024",
+  core: "core=0",
+  oomScoreAdj: "1000",
+  tmpTmpfs: "/tmp:rw,nosuid,nodev,noexec,size=64m",
+  workTmpfs:
+    "/job/work:rw,nosuid,nodev,noexec,size=768m,uid=10001,gid=10001,mode=0700",
+  outputTmpfs:
+    "/job/out:rw,nosuid,nodev,noexec,size=256m,uid=10001,gid=10001,mode=0700",
+  /** V8 heap of the renderer; pixel buffers are off-heap. */
+  nodeOldSpaceMb: 384,
 } as const;
+
+/** Input bounds: staged bytes per job and decoded pixels and bytes per still. */
+export const SANDBOX_INPUT_LIMITS = {
+  maxInputBytes: 512 * 1024 * 1024,
+  maxPixels: 120_000_000,
+  /** width × height × channels × bytes per sample, before any pixel decode. */
+  maxDecodedBytes: 512 * 1024 * 1024,
+} as const;
+
+/** Bounds of the framed stdout stream the coordinator accepts. */
+export const SANDBOX_OUTPUT_LIMITS = {
+  manifestBytes: 256 * 1024,
+  frameHeaderBytes: 1024,
+  fileBytes: 128 * 1024 * 1024,
+  totalBytes: 256 * 1024 * 1024,
+  files: 32,
+  stderrBytes: 64 * 1024,
+  jobFileBytes: 64 * 1024,
+} as const;
+
+/**
+ * Container wall clock per job kind (killed after, by the coordinator and by
+ * the in-container `timeout` with the grace below), and per still rendition.
+ */
+export const SANDBOX_TIMEOUTS_MS = {
+  static: 300_000,
+  live: 600_000,
+  selfCheck: 30_000,
+  rendition: 120_000,
+} as const;
+
+/** Largest Catalog source object read into a job. */
+export const CATALOG_SOURCE_MAX_BYTES = 128 * 1024 * 1024;
 
 /** Leading bytes read for Exif/XMP scanning of JPEG stills and packages. */
 export const METADATA_HEAD_BYTES = 4 * 1024 * 1024;

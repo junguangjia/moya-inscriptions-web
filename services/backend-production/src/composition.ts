@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { PostgresNotificationAdapter } from "@moya/community-postgres";
 import { NotificationSignals } from "@moya/backend-runtime";
 import { NotificationWorker } from "./notifications/worker.js";
@@ -46,19 +48,34 @@ import {
 import { loadProductAccess } from "./access/product-access.js";
 import { loadPilotConfiguration, openPilotPool } from "./pilot-config.js";
 import { articleBackendConfigurationFrom } from "./article-authoring/runtime-config.js";
+import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
   createArticleDelegationPersistence,
   createArticleDelegationRuntime,
 } from "./article-authoring/delegation-composition.js";
 import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
+  CATALOG_SYNC_INTERVAL_MS,
+  createCatalogRenderer,
+  createCatalogSync,
+  listPublishedCatalogSources,
+} from "./publishing/catalog.js";
+import {
   openPublishingMedia,
+  openPublishingStore,
+  openProductionPublishingStore,
+  parseMediaWorkerMode,
   parsePublishingMediaConfig,
-  openProductionPublishingMedia,
-  parseProductionPublishingMediaConfig,
+  parsePublishingStoreDirectory,
+  parseProductionPublishingStoreConfig,
 } from "./publishing/config.js";
-import { createPublishingJobHandlers } from "./publishing/job-handlers.js";
+import { externalPublishingProcessor } from "./publishing/external-processor.js";
+import {
+  UPLOAD_COUPLED_JOB_KINDS,
+  createPublishingJobHandlers,
+} from "./publishing/job-handlers.js";
 import { PublishingWorker } from "./publishing/worker.js";
+import { LocalCatalogSourceReader } from "./storage/catalog-source.js";
 import { createLocalStorageUrlResolver } from "./storage/local-media.js";
 import {
   ProductionCosStorageUrlResolver,
@@ -70,7 +87,7 @@ import type {
   RuntimeConfig,
   RuntimeEnvironment,
 } from "@moya/backend-runtime";
-import type { PostgresConfig } from "@moya/catalog-postgres";
+import type { PublishingMediaStoreRuntime } from "./publishing/config.js";
 import type { PublishingCosTransport } from "./storage/publishing-cos-transport.js";
 import type { RequestListener } from "node:http";
 
@@ -131,30 +148,6 @@ const assertLocalDevelopmentDatabase = (
     throw new Error(
       "Local Backend, Admin and App roles must use the same loopback yoyi_dev database with different users",
     );
-};
-
-/** The Community App role is read at runtime only here and is DML-only. */
-const parseCommunityPostgresConfig = (
-  environment: RuntimeEnvironment,
-): PostgresConfig => {
-  const url = environment.APP_DATABASE_URL;
-  if (url === undefined || url === "")
-    throw new Error("APP_DATABASE_URL is required");
-  try {
-    return parsePostgresConfig({
-      DATABASE_URL: url,
-      DATABASE_SSL_CA_FILE: environment.APP_DATABASE_SSL_CA_FILE,
-      DATABASE_POOL_MAX: environment.DATABASE_POOL_MAX,
-      DATABASE_IDLE_TIMEOUT_MS: environment.DATABASE_IDLE_TIMEOUT_MS,
-    });
-  } catch (error) {
-    throw new Error(
-      error instanceof Error
-        ? error.message.replace(/\bDATABASE_URL\b/g, "APP_DATABASE_URL")
-        : "APP_DATABASE_URL is invalid",
-      { cause: error },
-    );
-  }
 };
 
 /**
@@ -240,32 +233,53 @@ export const prepareProductionBackend = async (
     : runtimeConfig.nodeEnv === "development"
       ? createLocalStorageUrlResolver(environment)
       : new ProductionCosStorageUrlResolver(productionCosOptions(environment));
-  // Production requires B's COS factory; Development retains its explicit local
-  // configuration. Both branches open exactly one store/processor/runner before
-  // pools, shared by HTTP, Article thumbnails and the worker.
-  const { config: publishingMediaConfig, media: publishingMedia } =
-    await (async () => {
-      if (runtimeConfig.nodeEnv === "production") {
-        const config = parseProductionPublishingMediaConfig(environment);
-        const media = await openProductionPublishingMedia(config, {
-          foreignDirectories: [environment.CMS_MEDIA_DIR],
-          ...(dependencies.publishingCosTransport === undefined
-            ? {}
-            : { transport: dependencies.publishingCosTransport }),
-        });
-        return { config, media };
-      }
-      const config = parsePublishingMediaConfig(environment);
+  // Where media processing runs (W2): Production always leaves it to the
+  // separate media worker and opens only the COS store; Development hosts it
+  // in this process by default (`embedded`) with the same sandbox runner.
+  const mediaWorkerMode = parseMediaWorkerMode(
+    environment,
+    runtimeConfig.nodeEnv,
+  );
+  const publishing = await (async (): Promise<{
+    readonly store: PublishingMediaStoreRuntime;
+    readonly media?: Awaited<ReturnType<typeof openPublishingMedia>>;
+    readonly concurrency: number;
+  } | null> => {
+    if (runtimeConfig.nodeEnv === "production") {
+      const config = parseProductionPublishingStoreConfig(environment);
       return {
-        config,
-        media:
-          config === null
-            ? undefined
-            : await openPublishingMedia(config, {
-                foreignDirectories: [environment.CMS_MEDIA_DIR],
-              }),
+        store: openProductionPublishingStore(
+          config,
+          dependencies.publishingCosTransport === undefined
+            ? {}
+            : { transport: dependencies.publishingCosTransport },
+        ),
+        concurrency: 1,
       };
-    })();
+    }
+    if (mediaWorkerMode === "external") {
+      const directory = parsePublishingStoreDirectory(environment);
+      return directory === null
+        ? null
+        : {
+            store: await openPublishingStore(directory, {
+              foreignDirectories: [environment.CMS_MEDIA_DIR],
+            }),
+            concurrency: 1,
+          };
+    }
+    const config = parsePublishingMediaConfig(environment);
+    if (config === null) return null;
+    const media = await openPublishingMedia(config, {
+      foreignDirectories: [environment.CMS_MEDIA_DIR],
+    });
+    return {
+      store: media.store,
+      media,
+      concurrency: config.workerConcurrency,
+    };
+  })();
+  const publishingMedia = publishing?.media;
   const onUnexpectedIdleError = () => {
     console.error("[backend-production] unexpected PostgreSQL pool error");
   };
@@ -297,24 +311,70 @@ export const prepareProductionBackend = async (
   const publishingTransfers = workPublishingPort
     ? createPublishingTransferRegistry()
     : undefined;
+  const onUploadsCancelled = (componentIds: readonly string[]) => {
+    publishingTransfers?.stop(componentIds);
+  };
+  // Development embedded mode also renders published Catalog media from the
+  // local Payload media directory, like the media worker does in Production.
+  const catalogSources =
+    publishingMedia && environment.CMS_MEDIA_DIR
+      ? new LocalCatalogSourceReader(path.resolve(environment.CMS_MEDIA_DIR))
+      : undefined;
   const publishingWorker =
-    workPublishingPort &&
-    publishingTransfers &&
-    publishingMedia &&
-    publishingMediaConfig
-      ? new PublishingWorker({
-          port: workPublishingPort,
-          concurrency: publishingMediaConfig.workerConcurrency,
-          handlers: createPublishingJobHandlers({
+    workPublishingPort && publishingTransfers && publishing
+      ? publishingMedia
+        ? new PublishingWorker({
             port: workPublishingPort,
-            store: publishingMedia.store,
-            processor: publishingMedia.processor,
-            toolJobs: publishingMedia.runner,
-            onUploadsCancelled: (componentIds) => {
-              publishingTransfers.stop(componentIds);
-            },
-          }),
-        })
+            concurrency: publishing.concurrency,
+            ...(catalogSources
+              ? {
+                  extraMaintenance: [
+                    {
+                      label: "catalog sync",
+                      intervalMs: CATALOG_SYNC_INTERVAL_MS,
+                      run: createCatalogSync({
+                        listSources: () => listPublishedCatalogSources(pool),
+                        port: workPublishingPort,
+                      }).run,
+                    },
+                  ],
+                }
+              : {}),
+            handlers: createPublishingJobHandlers({
+              port: workPublishingPort,
+              store: publishingMedia.store,
+              processor: publishingMedia.processor,
+              toolJobs: publishingMedia.sandbox,
+              ...(catalogSources
+                ? {
+                    catalog: {
+                      port: workPublishingPort,
+                      renderer: createCatalogRenderer({
+                        store: publishingMedia.store,
+                        sandbox: publishingMedia.sandbox,
+                        source: catalogSources,
+                      }),
+                    },
+                  }
+                : {}),
+              onUploadsCancelled,
+            }),
+          })
+        : // The media worker processes media; this loop keeps the two kinds
+          // coupled to this process's uploads, with the maintenance that
+          // schedules them, so sessions expire while the worker is down.
+          new PublishingWorker({
+            port: workPublishingPort,
+            concurrency: 1,
+            pollIntervalMs: 5_000,
+            kinds: UPLOAD_COUPLED_JOB_KINDS,
+            maintenance: { requeue: true, cleanup: true, sweep: true },
+            handlers: createPublishingJobHandlers({
+              port: workPublishingPort,
+              store: publishing.store,
+              onUploadsCancelled,
+            }),
+          })
       : undefined;
   const notificationSignals = new NotificationSignals();
   const notificationPort = new PostgresNotificationAdapter(communityPool);
@@ -404,7 +464,7 @@ export const prepareProductionBackend = async (
             catalogReads.discoverCatalog(query),
           readCatalog: (_db, _actor, id) => catalogReads.readCatalog(id),
           inspectThumbnail: (db, actor, id) =>
-            readBoundedArticleThumbnail(publishingMedia?.store, () =>
+            readBoundedArticleThumbnail(publishing?.store, () =>
               selectOwnArticleThumbnail(db, actor.userId, id),
             ),
         });
@@ -475,10 +535,11 @@ export const prepareProductionBackend = async (
               ),
             }
           : {}),
-        ...(publishingMedia
+        ...(publishing
           ? {
-              publishingMediaStore: publishingMedia.store,
-              publishingMediaProcessor: publishingMedia.processor,
+              publishingMediaStore: publishing.store,
+              publishingMediaProcessor:
+                publishingMedia?.processor ?? externalPublishingProcessor,
             }
           : {}),
       },

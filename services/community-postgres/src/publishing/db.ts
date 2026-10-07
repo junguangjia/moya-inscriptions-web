@@ -32,6 +32,7 @@ export const publishingIdPrefixes = [
   "media-blob",
   "media-component",
   "media-item",
+  "media-rendition",
   "publishing-job",
   "publishing-session",
   "work",

@@ -7,6 +7,13 @@ deployment. `full-release-runtime-v1` owns composition, application routing, Web
 relays, Nginx and systemd. `full-release-database-v1` owns migrations and
 grants.
 
+> Clauses marked "Superseded by unified-media-pipeline-v1" are replaced as
+> recorded in the
+> [2026-10-04 unified media pipeline amendment](../governance/amendments/2026-10-04-unified-media-pipeline.md)
+> and [its design record](unified-media-pipeline-v1.md). A clause marked for a
+> later increment applies until that increment is deployed. The rest of this
+> record is unchanged.
+
 ## Scope and behavior
 
 | Scenario                                 | Development                                                         | Production integration                                                    | Must preserve                                                                                   |
@@ -17,6 +24,11 @@ grants.
 | Catalog and Article Catalog references   | Existing local development resolver                                 | Existing Catalog COS URL resolver                                         | Published-only projection and provider details kept out of DTOs                                 |
 | Payload/Admin media                      | Existing CMS namespace                                              | Existing CMS namespace                                                    | No publishing reconciliation or deletion authority                                              |
 | Missing or malformed media configuration | Existing all-or-nothing optional filesystem configuration           | Production parser requires complete, valid configuration                  | No silent filesystem fallback or anonymous cloud access                                         |
+
+> **Superseded by unified-media-pipeline-v1 (increment 3)** for the "Avatar and
+> profile background" row, once that increment is deployed: profile imagery
+> moves into the publishing pipeline, and existing `user_media` bytes stay
+> unchanged until the recorded retention follow-up (amendment entry 6).
 
 The source boundaries are the
 [publishing port](../../services/api/src/modules/community/application/ports/publishing-media-store-port.ts),
@@ -44,6 +56,11 @@ pass the same `store` to the existing upload/read service and job handlers,
 registry shared by HTTP uploads and worker cancellation callbacks. Start the
 worker after listening, and stop it before closing its database pool.
 
+> **Superseded by unified-media-pipeline-v1 (increment 1)** for Production
+> composition: with `WORK_MEDIA_WORKER=external` the Backend opens only the
+> store and runs session expiry and staging sweeps; the processor, sandbox
+> runner and processing worker belong to the separate media worker process.
+
 Parsing and opening perform local validation; neither makes a COS request or
 runs Docker. Successful startup validation therefore does not establish bucket,
 credential, policy, Docker or media-tool availability. Production must not call
@@ -64,6 +81,11 @@ the Development parser as fallback. Development keeps
 | `WORK_MEDIA_WORK_DIR`                  | Required private local processing directory, separate from code and retained media                                                                                                                 |
 | `WORK_MEDIA_WORKER_CONCURRENCY`        | Optional integer 1–4, default 1                                                                                                                                                                    |
 | `WORK_MEDIA_STORE_DIR`                 | Must be absent or empty in Production COS configuration; retained filesystem storage remains Development-only                                                                                      |
+
+> **Superseded by unified-media-pipeline-v1 (increment 1)** for
+> `WORK_MEDIA_TOOLS_IMAGE`, `WORK_MEDIA_WORK_DIR` and
+> `WORK_MEDIA_WORKER_CONCURRENCY`: the media worker reads them; the Production
+> Backend (`WORK_MEDIA_WORKER=external`) ignores them.
 
 Keep these values in protected runtime configuration. UGC credentials are
 separate from Catalog's `COS_*` credentials and Payload identity. Do not expose
@@ -93,6 +115,12 @@ service. Do not deploy overlapping replicas against this prefix; in-flight
 protection is process-local, and a slow active producer need not have a recent
 completed part. Development/test/Production installations must not share a
 namespace, even if a separately approved bucket is shared.
+
+> **Superseded by unified-media-pipeline-v1 (increment 1)** for "needs no extra
+> worker service": a separately supervised media worker also writes this
+> namespace. Exactly one process, the Backend, claims staging sweeps; every
+> other writer completes its multipart uploads well within the sweep age
+> (amendment entry 2).
 
 The target must be private and unversioned. The adapter checks the versioning
 response before writes and deletes and refuses Enabled, Suspended, malformed or
@@ -166,6 +194,12 @@ session-cookie-to-Bearer relay and browser-disconnect cancellation. The existing
 handler rejects transfer encoding and mismatched registered sizes. Do not add
 direct browser-to-COS uploads or a multipart form protocol.
 
+> **Superseded by unified-media-pipeline-v1 (increment 3)** for the
+> direct-upload exclusion, once that increment is deployed: the browser uploads
+> to one staging object under Backend-issued short-lived authority, switched by
+> configuration; this relay remains for legacy migration, import and rollback
+> (amendment entry 7).
+
 The [Web relay](../../apps/web/lib/public-api/server.ts) has an 8 GiB sanity
 ceiling. Both publishing stores retain the existing 4 GiB per-blob sanity bound.
 The saved Backend business settings remain authoritative: fresh defaults are 128
@@ -220,6 +254,12 @@ derivative-header wait is 15 s; its body has no total timeout. COS's per-read
 deadline still bounds a stalled storage operation. Do not replace a failed read
 with an original or another user's object.
 
+> **Superseded by unified-media-pipeline-v1 (increment 2)** for published
+> renditions, once that increment is deployed: their public reads use unsigned,
+> versioned published URLs on the EdgeOne-served media hostname; these routes
+> keep `private, no-store` for unpublished reads and remain the fallback
+> (amendment entries 1 and 5).
+
 ## Processing directory, tools and service requirements
 
 `WORK_MEDIA_WORK_DIR` must already exist as an absolute, normalized, non-symlink
@@ -241,6 +281,11 @@ Retain `UMask=0077` and the existing backend identity. Confirm the chosen daemon
 access model as part of runtime integration; do not silently remove service
 hardening or install another worker service.
 
+> **Superseded by unified-media-pipeline-v1 (increment 1).** The media worker is
+> a separately supervised service running as its own user, the only process with
+> container-daemon access and the processing directory; in Production the
+> Backend needs neither (amendment entry 2).
+
 Reuse sharp 0.35.4 and the capabilities of the pinned existing
 [media-tools image](../../infra/development/work-publishing/media-tools/Dockerfile):
 FFmpeg 7.1.5, libheif 1.19.8, libde265 1.0.15, libx264, AAC, zscale/tonemap and
@@ -248,6 +293,11 @@ coreutils timeout. That Dockerfile is explicitly Development-only; Production
 must prepare and validate a local pinned image with the same required
 capabilities. This task neither upgrades dependencies nor certifies an image on
 the real host. The runner uses `--pull never`.
+
+> **Superseded by unified-media-pipeline-v1 (increment 1).** The same pinned
+> image, extended with pinned Node 24.21.0 and sharp 0.35.4 equal to the
+> workspace lockfile, is the media sandbox image for Development and Production
+> (amendment entry 3).
 
 Each tool container runs without network, with a read-only root, all
 capabilities dropped, no-new-privileges and uid/gid 10001. Its existing limits
@@ -258,6 +308,11 @@ conversion, with a 10 s independent container timeout margin. The output-file
 bound remains 1 GiB. See the authoritative
 [profiles](../../services/backend-production/src/publishing/processing/profiles.ts).
 
+> **Superseded by unified-media-pipeline-v1 (increment 1).** One sandbox
+> container per job runs all untrusted parsing, decoding and rendering within
+> the [sandbox bounds](unified-media-pipeline-v1.md#bounds); outputs return over
+> a bounded stream and no host mount is writable (amendment entry 3).
+
 Worker concurrency 1–4 bounds simultaneous tool containers. Provision at least
 the configured concurrent sandbox memory allowance plus measured backend, sharp,
 OS and other-service headroom. Sharp's JPEG/PNG/WebP processing runs in the
@@ -267,6 +322,10 @@ output copies; one active job may contain more than one component/output. Do not
 treat the 8 MiB upload part buffer as a complete host-memory or disk
 requirement. Host capacity measurements with representative synthetic workloads
 remain part of runtime acceptance.
+
+> **Superseded by unified-media-pipeline-v1 (increment 1).** sharp no longer
+> runs in the Backend or the worker process; all decoding runs inside the
+> sandbox's memory limit, one job at a time (amendment entry 2).
 
 ## Existing worker and database obligations
 
@@ -280,6 +339,12 @@ check processing cancellation every 10 s, sweep leftovers older than 6 h, and
 reconcile at most 20 pages of 1000 objects per run. Unrecorded committed objects
 require the greater of the saved orphan grace and one day; the fresh setting is
 7 days. Referenced media remains retained.
+
+> **Superseded by unified-media-pipeline-v1 (increment 1).** The worker runs in
+> the separate media worker process with these defaults, and the shutdown bounds
+> below apply to that service; the Backend claims only session expiry and
+> staging sweeps and runs the shared lease requeue and cleanup scheduling
+> (amendment entry 2).
 
 Shutdown can use 30 s to finish jobs and up to three additional 5 s
 abort/release waits. Set the backend systemd `TimeoutStopSec` to at least 60 s,
@@ -299,6 +364,13 @@ sessions and their existing functions. Use the exact current
 the source, retaining column-level updates, immutable identities/manifests, no
 DDL from startup and separate `APP_DATABASE_URL` authority. Do not reset saved
 limits/publication policy or rewrite retained `user_media` rows.
+
+> **Superseded by unified-media-pipeline-v1** in part: increment 1 replaces the
+> derivatives table with `community.media_renditions` for every reader and
+> writer and keeps the old table unchanged
+> ([design record](unified-media-pipeline-v1.md)); increment 3, once deployed,
+> relocates avatar and background bytes and keeps existing `user_media` bytes
+> until the recorded retention follow-up (amendment entry 6).
 
 ## Evidence boundary and outstanding live acceptance
 

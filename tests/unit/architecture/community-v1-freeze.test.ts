@@ -140,8 +140,13 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
     for (const file of files) {
       if ((await read(file)).includes("APP_DATABASE_URL")) offenders.push(file);
     }
+    // Still the one composition-root workspace: the App role parser that the
+    // Backend and the media worker compositions share has its own module so
+    // the worker does not load the Backend composition (unified media
+    // pipeline; sandbox-import-boundary.test.ts pins its only importers).
     expect(offenders).toEqual([
       "services/backend-production/src/article-authoring/runtime-config.ts",
+      "services/backend-production/src/community-postgres-config.ts",
       "services/backend-production/src/composition.ts",
     ]);
   });

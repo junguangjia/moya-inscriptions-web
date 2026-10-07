@@ -929,16 +929,19 @@ export interface PublishingJobOperations {
   ): Promise<PublishingJobEnqueued>;
   /**
    * One bounded scheduling pass (at most `limit` rows per step). First, in
-   * its own transaction, edit derivatives (never `base`) of ready items that
-   * were recorded more than an hour ago, whose item no active session holds
-   * and that no draft, conflict copy, snapshot or revision holding the item
-   * needs are released (their blobs become unused). Then: `expire_session`
+   * its own transaction, ready edit renditions (never `base`) of ready items
+   * that were recorded more than an hour ago, whose item no active session
+   * holds and that no draft, conflict copy, snapshot or revision holding the
+   * item wants (the required set plus `viewer`) become `released` (their
+   * blobs become unused; rows are never deleted). Then: `expire_session`
    * for active sessions whose lease passed; `purge_trashed_work` for trashed
    * works past `trash_purge_after`; `purge_item` for items without refs that
    * are cancelled, or whose last change (a released ref counts) is older than
    * `orphan_grace_days`; `purge_blob` for blobs tombstoned more than one hour
-   * ago and committed blobs no live component or derivative has used for an
-   * hour. A subject whose job of that kind failed or was abandoned is skipped
+   * ago and committed blobs no live component or unreleased rendition has
+   * used for an hour; a blob under the D7 retention hold (a pre-task blob
+   * this task replaced) is never scheduled.
+   * A subject whose job of that kind failed or was abandoned is skipped
    * (the operator decides). Finally `succeeded` job rows finished more than 7
    * days ago are deleted. `sweep_staging` and `reconcile_capacity` are
    * enqueued by the worker on its own cadence.
@@ -949,19 +952,25 @@ export interface PublishingJobOperations {
    * item (see `PublishingPurgePlan`: refs, revisions of works that are not
    * purged, live draft or snapshot content, and the orphan grace unless the
    * item is cancelled); then the item becomes `purged` (open reservations
-   * released) and every blob of its components and derivatives is
-   * tombstoned. Never touches user media, Catalog or avatar data.
+   * released) and every blob of its components and renditions (any state)
+   * is tombstoned. This is the author's own lifecycle, so a blob under the
+   * D7 retention hold is tombstoned too and its hold cleared, as before this
+   * task (Owner decision: only task-initiated deletions are held). Never
+   * touches user media, Catalog or avatar data.
    */
   purgeItem(itemId: string, now: Date): Promise<PublishingPurgePlan>;
   /**
    * Job `purge_blob`. A tombstoned blob, or a committed blob no live component
-   * or derivative uses, is (re)tombstoned and returned for unlinking.
+   * or unreleased rendition uses, is (re)tombstoned and returned for
+   * unlinking. A held blob (D7), or a pre-task blob a task-initiated change
+   * freed (it is held now), reads as `referenced`.
    */
   purgeBlob(blobId: string, now: Date): Promise<PublishingPurgePlan>;
   /**
    * After the store removed their keys: tombstoned blobs become `purged` and
-   * each owner's committed bytes drop by their size exactly once. Blobs in
-   * any other state are ignored.
+   * each owner's committed bytes drop by their size exactly once (owner-less
+   * Catalog blobs count toward no capacity). Blobs in any other state are
+   * ignored.
    */
   confirmPurged(blobIds: readonly string[], now: Date): Promise<void>;
 }
