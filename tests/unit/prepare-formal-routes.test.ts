@@ -14,9 +14,10 @@ const { readPagingWebPort } = await import("../e2e/support/e2e-ports");
 
 describe("owned Formal route preparation", () => {
   it("reuses only successful compilation and checks the anonymous identity on every call", async () => {
-    const get = vi.fn(async (url: string) => ({
-      status: () => (url.endsWith("/me") ? 401 : 200),
-    }));
+    const get = vi.fn(async (url: string, options: { timeout: number }) => {
+      expect(options).toEqual({ timeout: 0 });
+      return { status: () => (url.endsWith("/me") ? 401 : 200) };
+    });
     const request = { get } as unknown as APIRequestContext;
     await prepareFormalRoutes(request, "http://127.0.0.1:39801");
     expect(get).toHaveBeenCalledTimes(8);

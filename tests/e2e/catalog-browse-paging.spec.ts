@@ -163,19 +163,15 @@ const openViewerAndReturn = async (
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async ({ request }, testInfo) => {
-  // Keep the existing hook limit, including owned-child cleanup. Inner waits
-  // and HTTP preparation must not silently claim a separate 120-second budget.
-  const deadline = Date.now() + testInfo.timeout - 5_000;
+test.beforeAll(async ({ request }) => {
+  // Full acceptance has no procedural hook deadline. Route compilation must
+  // not inherit a separate HTTP timeout or turn timeout 0 into an expired date.
   // This spec owns a separate paging server, so the shared server's route
   // preparation cannot prevent its cold mounted routes from compiling mid-test.
-  await prepareFormalRoutes(request, pagingRuntime.baseUrl, deadline);
-  const remaining = deadline - Date.now();
-  if (remaining <= 0)
-    throw new Error("Paging preparation deadline expired before Detail");
+  await prepareFormalRoutes(request, pagingRuntime.baseUrl);
   const detail = await request.get(
     `${pagingRuntime!.baseUrl}/api/catalog/runtime-paging-inscription-22`,
-    { timeout: remaining },
+    { timeout: 0 },
   );
   expect(detail.status(), "Prepare paging Catalog Detail").toBe(200);
 });

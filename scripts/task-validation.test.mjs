@@ -1393,8 +1393,8 @@ describe("the real CI wiring preserves required-check closure", () => {
     ])
       assert.match(jobs.get(job), new RegExp(`outputs\\.scope == '${scope}'`));
     assert.match(jobs.get("e2e-shards"), /shard: \[1, 2, 3\]/);
-    assert.match(jobs.get("e2e-shards"), /timeout-minutes: 30/);
-    assert.match(jobs.get("e2e-shards"), /timeout-minutes: 22/);
+    for (const job of ["e2e-shards", "browser_gate", "e2e"])
+      assert.doesNotMatch(jobs.get(job), /timeout-minutes:/);
     for (const mode of ["prepare", "run"])
       assert.ok(
         jobs
@@ -3144,10 +3144,7 @@ describe("explicit validation profiles and nested deadlines", () => {
     const config = read("tests/e2e/playwright.config.ts");
     assert.match(config, /process\.env\.MOYA_E2E_WEBSERVER_TIMEOUT_MS/u);
     assert.match(config, /timeout: webServerTimeoutMs,/u);
-    assert.match(
-      config,
-      /globalTimeout: process\.env\.CI \? 18 \* 60 \* 1000 : 0,/u,
-    );
+    assert.match(config, /globalTimeout: 0,/u);
   });
 
   it("gives CMS integration and native browser validation explicit complete profiles whose children receive the session's remaining time", () => {

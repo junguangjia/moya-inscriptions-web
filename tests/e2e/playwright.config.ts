@@ -25,10 +25,15 @@ const artifactRoot = resolve(
 // The daily smoke (scripts/ci-e2e-smoke.mjs) passes the fixture startup
 // timeout it derived from its BROWSER SMOKE ceiling and the parent's remaining
 // time, so no server timeout can outlive the run. The explicitly selected
-// full cross-browser regression keeps the existing 120 s default.
+// full cross-browser regression has no test/suite execution deadline.
+// Playwright 1.62.1 treats webServer timeout 0 as its 60 s default; its
+// availability wait therefore uses the unavoidable hosted-job ceiling.
+const hostedJobCeilingMs = 6 * 60 * 60 * 1000;
 const webServerTimeoutMs = (() => {
   const value = process.env.MOYA_E2E_WEBSERVER_TIMEOUT_MS;
-  return value && /^[1-9]\d*$/u.test(value) ? Number(value) : 120_000;
+  return value && /^[1-9]\d*$/u.test(value)
+    ? Number(value)
+    : hostedJobCeilingMs;
 })();
 
 export default defineConfig({
@@ -37,7 +42,7 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   failOnFlakyTests: Boolean(process.env.CI),
   fullyParallel: false,
-  globalTimeout: process.env.CI ? 18 * 60 * 1000 : 0,
+  globalTimeout: 0,
   metadata: {
     moyaCI: {
       sourceHead: process.env.MOYA_E2E_SOURCE_HEAD,
@@ -85,7 +90,7 @@ export default defineConfig({
   testDir: e2eRoot,
   testIgnore: ["support/**"],
   testMatch: "*.spec.ts",
-  timeout: 30_000,
+  timeout: 0,
   use: {
     baseURL: webBaseUrl,
     screenshot: "only-on-failure",
@@ -98,7 +103,7 @@ export default defineConfig({
       stdout: "pipe",
       stderr: "pipe",
       cwd: repositoryRoot,
-      timeout: Math.min(30_000, webServerTimeoutMs),
+      timeout: webServerTimeoutMs,
       url: `${publicApiBaseUrl}/health`,
     },
     {
@@ -120,8 +125,8 @@ export default defineConfig({
       url: webBaseUrl,
     },
     {
-      // Cold process/library preparation belongs to the existing bounded
-      // service phase, before a 30-second paging hook starts. The immutable
+      // Cold process/library preparation belongs to service startup before
+      // the paging hook. The immutable
       // paging dataset is shared; each test still owns its browser and faults.
       command: "node tests/e2e/support/start-formal-web.ts",
       name: "Paging Web fixture",

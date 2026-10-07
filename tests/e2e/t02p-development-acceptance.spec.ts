@@ -1870,7 +1870,6 @@ test("Home PC feeds keep document scroll restoration without nested scrollers", 
 });
 
 test.describe(() => {
-  test.describe.configure({ timeout: 60_000 });
   test("Home preserves independent Discover, Nearby, and Calligraphy scroll positions", async ({
     page,
   }, testInfo) => {

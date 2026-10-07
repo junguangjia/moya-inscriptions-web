@@ -12,7 +12,7 @@ export const prepareFormalRoutes = async (
   deadline?: number,
 ) => {
   const timeout = () => {
-    if (deadline === undefined) return {};
+    if (deadline === undefined) return { timeout: 0 };
     const remaining = deadline - Date.now();
     if (remaining <= 0)
       throw new Error("Formal route preparation deadline expired");
