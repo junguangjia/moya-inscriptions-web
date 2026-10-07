@@ -652,12 +652,23 @@ export const healthResponseSchema = z.strictObject({
   status: z.literal("ok"),
 });
 
+/**
+ * The Backend's answer to "may this session use the product right now".
+ * `closed_beta` admits only explicitly approved accounts; `public` adds no
+ * restriction. It carries no content and no account data.
+ */
+export const productAccessSchema = z.strictObject({
+  mode: z.enum(["public", "closed_beta"]),
+  access: z.enum(["granted", "sign_in_required", "restricted"]),
+});
+
 export const apiErrorCodeSchema = z.enum([
   "CONFLICT",
   "INVALID_QUERY",
   "INVALID_INPUT",
   "ITEM_NOT_FOUND",
   "UNAUTHENTICATED",
+  "ACCESS_RESTRICTED",
   "SERVICE_UNAVAILABLE",
   "INTERNAL_ERROR",
 ]);

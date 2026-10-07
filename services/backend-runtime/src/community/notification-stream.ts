@@ -27,7 +27,7 @@ export class NotificationStreams {
   private timer: ReturnType<typeof setInterval> | undefined;
   private unsubscribe: (() => void) | undefined;
   constructor(
-    private readonly sessions: CommunitySessionService,
+    private readonly sessions: Pick<CommunitySessionService, "identify">,
     private readonly signals: NotificationSignals,
   ) {}
   changed(owner: string): void {

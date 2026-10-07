@@ -35,6 +35,7 @@ import {
   catalogSearchPageJsonSchema,
   healthResponseJsonSchema,
   mediaIdJsonSchema,
+  productAccessJsonSchema,
   publicMediaJsonSchema,
   publicSourceCitationJsonSchema,
   publicUserIdJsonSchema,
@@ -383,6 +384,26 @@ export const openApiDocument: JsonObject = {
         },
       },
     },
+    "/v1/community/access": {
+      get: {
+        operationId: "getProductAccess",
+        summary: "Product access for the presented session",
+        description:
+          "Answers whether the presented session may use the product right now. In `public` mode access is always granted. In `closed_beta` mode only explicitly approved accounts are granted; every other operation except readiness, the current user, this answer and the sign-in and sign-out operations then additionally answers 401 UNAUTHENTICATED without a valid session and 403 ACCESS_RESTRICTED for a valid session whose account is not approved. Carries no content and no account data. Accepts no query parameters.",
+        responses: {
+          "200": jsonResponse(
+            "The access mode and this session's standing.",
+            "ProductAccess",
+          ),
+          "400": apiErrorResponse("Invalid query", "INVALID_QUERY"),
+          "500": apiErrorResponse("Internal service error", "INTERNAL_ERROR"),
+          "503": apiErrorResponse(
+            "Service is temporarily unavailable",
+            "SERVICE_UNAVAILABLE",
+          ),
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -424,6 +445,7 @@ export const openApiDocument: JsonObject = {
       CreateCatalogCommentReplyRequest:
         createCatalogCommentReplyRequestJsonSchema,
       HealthResponse: healthResponseJsonSchema,
+      ProductAccess: productAccessJsonSchema,
       ApiError: apiErrorJsonSchema,
     },
   },

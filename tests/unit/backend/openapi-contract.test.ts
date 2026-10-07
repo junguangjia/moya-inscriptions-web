@@ -29,6 +29,7 @@ import {
   catalogSearchItemJsonSchema,
   catalogSearchPageJsonSchema,
   healthResponseJsonSchema,
+  productAccessJsonSchema,
   mediaIdJsonSchema,
   publicMediaJsonSchema,
   publicSourceCitationJsonSchema,
@@ -122,6 +123,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/catalog/{catalogId}/comments/{commentId}/replies",
         "/v1/catalog-search",
         "/v1/me",
+        "/v1/community/access",
         "/v1/community/discover",
         "/v1/community/filter-options",
         "/v1/community/content/{type}/{id}/card",
@@ -304,6 +306,22 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     expect(getOperation("/v1/me").operationId).toBe("getCurrentUser");
     expect(getOperation("/v1/me").security).toEqual([{ session: [] }]);
     expect(parametersFor("/v1/me")).toEqual([]);
+    // closed-beta-access-v1: the access answer is how a caller without a
+    // session learns that one is required, so it declares no requirement.
+    const access = getOperation("/v1/community/access");
+    expect(Object.keys(asObject(access.responses)).sort()).toEqual([
+      "200",
+      "400",
+      "500",
+      "503",
+    ]);
+    expect(access.operationId).toBe("getProductAccess");
+    expect(access).not.toHaveProperty("security");
+    expect(String(access.description)).toContain("ACCESS_RESTRICTED");
+    expect(schemas.ProductAccess).toMatchObject({
+      additionalProperties: false,
+      required: ["mode", "access"],
+    });
     expect(
       asObject(asObject(openApiDocument.components).securitySchemes),
     ).toEqual({
@@ -536,6 +554,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       CreateCatalogCommentReplyRequest:
         createCatalogCommentReplyRequestJsonSchema,
       HealthResponse: healthResponseJsonSchema,
+      ProductAccess: productAccessJsonSchema,
       ApiError: apiErrorJsonSchema,
     });
     expect(schemas.PublicUserProfile).toMatchObject({
@@ -1011,6 +1030,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "INVALID_INPUT",
         "ITEM_NOT_FOUND",
         "UNAUTHENTICATED",
+        "ACCESS_RESTRICTED",
         "SERVICE_UNAVAILABLE",
         "INTERNAL_ERROR",
       ],

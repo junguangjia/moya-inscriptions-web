@@ -10,8 +10,11 @@ vi.mock("../../../lib/public-api/server", () => ({
 
 import { GET } from "./route";
 
-const request = (query = "") =>
-  new Request(`http://localhost/api/catalog${query}`);
+const request = (query = "", cookie?: string) =>
+  new Request(`http://localhost/api/catalog${query}`, {
+    headers: cookie === undefined ? {} : { cookie },
+  });
+const session = "s".repeat(43);
 
 const emptyPage = {
   items: [],
@@ -44,9 +47,42 @@ describe("same-origin Catalog list bridge", () => {
 
     expect(response.status).toBe(200);
     expect(fetchServerCatalogPageMock).toHaveBeenCalledOnce();
-    expect(fetchServerCatalogPageMock).toHaveBeenCalledWith(expected);
+    expect(fetchServerCatalogPageMock).toHaveBeenCalledWith(
+      expected,
+      undefined,
+    );
     expect(await response.json()).toEqual(emptyPage);
   });
+
+  it("hands the visitor's session to the Backend and keeps the answer out of every cache", async () => {
+    const response = await GET(
+      request("?kind=inscription", `theme=dark; yoyi-session=${session}`),
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchServerCatalogPageMock).toHaveBeenCalledWith(
+      { kind: "inscription" },
+      session,
+    );
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Vary")).toBe("Cookie");
+  });
+
+  it.each([401, 403] as const)(
+    "answers the Backend's access refusal as %s, never as a page or a failure",
+    async (status) => {
+      fetchServerCatalogPageMock.mockResolvedValue({
+        state: "access-denied",
+        status,
+      });
+
+      const response = await GET(request());
+
+      expect(response.status).toBe(status);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      expect(await response.text()).toBe("");
+    },
+  );
 
   it.each([
     "?page=",

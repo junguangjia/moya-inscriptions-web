@@ -38,6 +38,11 @@ const tooling = new Set([
   // Dependency-free maintenance for the shared local Turbo cache; its own
   // script test runs in the lightweight job.
   "scripts/turbo-cache-prune.mjs",
+  "scripts/cursor-review.mjs",
+  "scripts/cursor-dialogue.mjs",
+  "scripts/cursor-stream.mjs",
+  "scripts/cursor-response.mjs",
+  "scripts/cursor-automation.mjs",
 ]);
 const webRoots = [
   "apps/web/",

@@ -585,6 +585,7 @@ describe.skipIf(!enabled)(
         NODE_ENV: "production",
         HOST: "127.0.0.1",
         PORT: "3001",
+        PRODUCT_ACCESS_MODE: "public",
         DATABASE_URL: isolated.toString(),
         APP_DATABASE_URL: isolated.toString(),
         MOYA_PILOT_SCOPE_FILE: scopeFile,

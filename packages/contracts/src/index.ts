@@ -26,6 +26,7 @@ export type {
   CreateCatalogCommentRequest,
   HealthResponse,
   MediaId,
+  ProductAccess,
   PublicMedia,
   PublicSourceCitation,
   PublicUserId,

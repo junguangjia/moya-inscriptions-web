@@ -20,6 +20,13 @@ vi.mock("../features/home/load-home-catalog", () => ({
 vi.mock("./formal-request-context", () => ({
   readFormalRequestContext: async () => ({ initialPlatform: "phone" }),
 }));
+vi.mock("./product-access", () => ({
+  readVisitorAccess: async () => ({
+    state: "granted",
+    closedBeta: false,
+    token: undefined,
+  }),
+}));
 
 import FormalPage from "./page";
 

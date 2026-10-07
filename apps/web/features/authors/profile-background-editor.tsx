@@ -65,6 +65,73 @@ interface Intent {
   mediaId?: string | null;
 }
 
+const sameBox = (a: HeaderBox, b: HeaderBox) =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The owning header as laid out with a photo, measured beneath the dialog. A
+ * header without one is compact, so it is measured for that one synchronous
+ * read with the cover geometry flag (nothing paints in between).
+ */
+const readHeaderBox = (element: HTMLElement): HeaderBox | null => {
+  const bare = !element.querySelector(`.${presentation.profileCover} img`);
+  if (bare) element.setAttribute("data-cover-measure", "");
+  try {
+    const rect = element.getBoundingClientRect();
+    const avatar = element.querySelector(`.${presentation.avatar}`),
+      panel = element.querySelector(`.${presentation.coverIdentity}`),
+      name = element.querySelector("h1");
+    if (!(rect.width > 0 && rect.height > 0) || !avatar || !panel || !name)
+      return null;
+    const at = (box: DOMRect) => ({
+      x: box.left - rect.left,
+      y: box.top - rect.top,
+      width: box.width,
+      height: box.height,
+    });
+    const face = at(avatar.getBoundingClientRect()),
+      line = at(name.getBoundingClientRect());
+    // The top bar overlaps the cover's top edge at rest; measure its icons
+    // against the bar so a scrolled page reports the same place.
+    const bar = element.parentElement?.querySelector(":scope > header");
+    const barTop = bar?.getBoundingClientRect().top ?? rect.top;
+    const controls = [
+      ...[...(bar?.querySelectorAll("button") ?? [])].map((button) => {
+        const box = button.getBoundingClientRect();
+        return {
+          x: box.left - rect.left,
+          y: box.top - barTop,
+          width: box.width,
+          height: box.height,
+        };
+      }),
+      ...[...element.querySelectorAll(`.${presentation.backgroundEdit}`)].map(
+        (button) => at(button.getBoundingClientRect()),
+      ),
+    ].filter(
+      (box) =>
+        box.width > 0 &&
+        box.x < rect.width &&
+        box.x + box.width > 0 &&
+        box.y < rect.height,
+    );
+    return {
+      width: rect.width,
+      height: rect.height,
+      panelTop: panel.getBoundingClientRect().top - rect.top,
+      avatar: { x: face.x, y: face.y, size: face.width },
+      name: {
+        x: line.x,
+        y: line.y,
+        size: Number.parseFloat(getComputedStyle(name).fontSize) || 24,
+      },
+      controls,
+    };
+  } finally {
+    if (bare) element.removeAttribute("data-cover-measure");
+  }
+};
+
 /** The owning header's box, measured while it is laid out beneath the dialog. */
 const useHeaderBox = (
   header: RefObject<HTMLElement | null> | undefined,
@@ -74,23 +141,24 @@ const useHeaderBox = (
     const element = header?.current;
     if (!element) return;
     const read = () => {
-      const rect = element.getBoundingClientRect();
-      const avatar = element.querySelector(`.${presentation.avatar}`);
-      if (!(rect.width > 0 && rect.height > 0) || !avatar) return;
-      const identityTop = avatar.getBoundingClientRect().top - rect.top;
-      setBox((old) =>
-        old?.width === rect.width &&
-        old.height === rect.height &&
-        old.identityTop === identityTop
-          ? old
-          : { width: rect.width, height: rect.height, identityTop },
-      );
+      const next = readHeaderBox(element);
+      if (next) setBox((old) => (old && sameBox(old, next) ? old : next));
     };
     read();
-    if (typeof ResizeObserver !== "function") return;
+    // The photo geometry follows the viewport even while a compact header
+    // does not, and the top-bar icons move against a width-capped cover.
+    window.addEventListener("resize", read);
+    if (typeof ResizeObserver !== "function")
+      return () => window.removeEventListener("resize", read);
+    // The cover keeps its height while the identity grows inside it.
     const observer = new ResizeObserver(read);
-    observer.observe(element);
-    return () => observer.disconnect();
+    observer.observe(element, { box: "border-box" });
+    const panel = element.querySelector(`.${presentation.coverIdentity}`);
+    if (panel) observer.observe(panel);
+    return () => {
+      window.removeEventListener("resize", read);
+      observer.disconnect();
+    };
   }, [header]);
   return box;
 };
@@ -592,7 +660,7 @@ export const ProfileBackgroundEditor = ({
             </div>
             {step === "overview" && (
               <p className={media.dialogNote}>
-                建议选择横向照片，重要内容放在画面中上部；不同机型显示范围略有差异。
+                建议选择横向照片，重要内容放在画面中部偏上；不同机型显示范围略有差异。
               </p>
             )}
             {opening}

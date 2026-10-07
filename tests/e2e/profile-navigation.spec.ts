@@ -23,7 +23,8 @@ const profile = {
   totals: { works: 12, following: 0, followers: 0, favorites: 0, likes: 0 },
   nextAvatarChangeAt: null,
 };
-async function fixture(page: Page, delayed = false) {
+const coverId = `user-media-${"9".repeat(32)}`;
+async function fixture(page: Page, delayed = false, cover = false) {
   let resolveProfile = () => {};
   const ready = new Promise<void>((resolve) => {
     resolveProfile = resolve;
@@ -35,9 +36,36 @@ async function fixture(page: Page, delayed = false) {
     if (path === `/api/community/authors/${ownerId}`) {
       await ready;
       return route.fulfill({
-        json: { ...profile, bio: delayed ? profile.bio : "滚动回归合成资料。" },
+        json: {
+          ...profile,
+          bio: delayed ? profile.bio : "滚动回归合成资料。",
+          ...(cover
+            ? {
+                background: {
+                  id: coverId,
+                  src: `/api/community/media/${coverId}`,
+                  width: 1600,
+                  height: 1200,
+                },
+              }
+            : {}),
+        },
       });
     }
+    if (path === `/api/community/media/${coverId}`)
+      return route.fulfill({
+        contentType: "image/png",
+        body: await sharp({
+          create: {
+            width: 1600,
+            height: 1200,
+            channels: 3,
+            background: { r: 84, g: 96, b: 90 },
+          },
+        })
+          .png()
+          .toBuffer(),
+      });
     if (path === `/api/community/authors/${ownerId}/works`)
       return route.fulfill({
         json: {
@@ -108,9 +136,13 @@ async function geometry(page: Page) {
         .getBoundingClientRect().top,
       headerBottom: profile.querySelector("header")!.getBoundingClientRect()
         .bottom,
-      collapse: profile
-        .querySelector('[aria-label="用户资料"]')!
-        .getBoundingClientRect().height,
+      // The cover runs up under the top bar, so the tabs pin after scrolling
+      // the cover's height less the bar's.
+      collapse:
+        profile
+          .querySelector('[aria-label="用户资料"]')!
+          .getBoundingClientRect().height -
+        profile.querySelector("header")!.offsetHeight,
     };
   });
 }
@@ -158,6 +190,10 @@ async function pinned(page: Page) {
       return Math.abs(g.tabsTop - g.headerBottom);
     })
     .toBeLessThanOrEqual(1);
+  // Pinned tabs sit under a solid top bar (profile-hero-layout-v1).
+  await expect(
+    page.locator("[data-author-profile] > header").first(),
+  ).toHaveAttribute("data-cover-passed", "");
 }
 
 test("Profile empty collections share collapse and preserve long body offsets", async ({
@@ -167,6 +203,13 @@ test("Profile empty collections share collapse and preserve long body offsets", 
   await expect(
     page.getByRole("button", { name: "打开滚动测试作品 12", exact: true }),
   ).toBeAttached();
+  // Without a photo there is no glass: the header stays on the page colour.
+  expect(
+    await page
+      .locator('[data-author-profile] [aria-label="主页背景"]')
+      .first()
+      .evaluate((cover) => getComputedStyle(cover, "::after").content),
+  ).toBe("none");
   const initial = await geometry(page);
   const longTop = initial.collapse + 420;
   await expect
@@ -231,6 +274,161 @@ test("Profile empty collections share collapse and preserve long body offsets", 
   await pinned(page);
   const g = await geometry(page);
   expect(Math.abs(g.top - g.collapse)).toBeLessThanOrEqual(1);
+});
+
+/** A user scroll: a wheel turn (user intent) that moves the profile to `top`. */
+async function userScroll(page: Page, top: number) {
+  await page.evaluate((value) => {
+    const pc =
+      document
+        .querySelector("[data-product-shell]")
+        ?.getAttribute("data-platform") === "pc";
+    const target = pc
+      ? document.documentElement
+      : document.querySelector<HTMLElement>(
+          '[data-primary-destination="user"]',
+        )!;
+    const events = pc ? window : target;
+    events.dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
+    target.scrollTop = value;
+    events.dispatchEvent(new Event("scroll"));
+  }, top);
+}
+
+/** Where the identity rests, where it is, and the stage shown. */
+async function stage(page: Page) {
+  return page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>("[data-author-profile]")!;
+    const bar = root.querySelector<HTMLElement>(":scope > header")!;
+    const name = root.querySelector<HTMLElement>("h1")!;
+    const names = name.closest("div")!;
+    // The owner's avatar is followed by its hidden file input.
+    const avatar = names.parentElement!.firstElementChild!;
+    const cover = root.querySelector<HTMLElement>('[aria-label="主页背景"]')!;
+    const photo = cover.getBoundingClientRect();
+    const [frost, glassCard] = [...cover.querySelectorAll(":scope > span")];
+    const glass = getComputedStyle(frost!);
+    const card = glassCard!.getBoundingClientRect();
+    const tabs = root
+      .querySelector<HTMLElement>('[role="tablist"]')!
+      .getBoundingClientRect();
+    // What a tap just below the tabs reaches.
+    const below = document.elementFromPoint(
+      tabs.left + tabs.width / 2,
+      tabs.bottom + 12,
+    );
+    const counts = root
+      .querySelector<HTMLElement>("h1")!
+      .closest("div")!
+      .parentElement!.parentElement!.lastElementChild!.getBoundingClientRect();
+    return {
+      rest: Number.parseFloat(root.style.getPropertyValue("--cover-rest")),
+      barBottom: bar.getBoundingClientRect().bottom,
+      avatarTop: avatar.getBoundingClientRect().top,
+      photoTop: photo.top,
+      photoHeight: photo.height,
+      glass: glass.opacity,
+      frosted: glass.filter,
+      cardTop: card.top,
+      cardBottom: card.bottom,
+      rowBottom: counts.bottom,
+      tabsTop: tabs.top,
+      belowTabs: below
+        ? below.closest('[aria-label="用户资料"]')
+          ? "cover"
+          : "collections"
+        : null,
+      nameTop: name.getBoundingClientRect().top,
+      stage: root.getAttribute("data-profile-stage"),
+      theme: names.getAttribute("data-theme"),
+    };
+  });
+}
+
+test("A photo profile rests on the photo or on the collections", async ({
+  page,
+}) => {
+  await fixture(page, false, true);
+  // The photo, its frost and its glass card are in place, and measured.
+  await expect(
+    page.locator('[data-author-profile] [aria-label="主页背景"] > span'),
+  ).toHaveCount(2);
+  await expect.poll(async () => (await stage(page)).rest).toBeGreaterThan(60);
+  const { rest } = await stage(page);
+  const resting = () =>
+    page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>(
+        "[data-author-profile]",
+      )!;
+      return Number.parseFloat(root.style.getPropertyValue("--cover-rest"));
+    });
+  expect(await stage(page)).toMatchObject({
+    stage: "cover",
+    theme: "dark",
+    glass: "0",
+  });
+  const hint = page.getByRole("button", { name: "向下查看作品" });
+  await expect(hint).toHaveCSS("opacity", "1");
+  await expect(hint).not.toHaveAttribute("inert");
+  // Down a little from the photo: the photo shrinks to a compact cover,
+  // frosted, behind the identity (still dark) and the collections fill the
+  // page below it.
+  await userScroll(page, 30);
+  // It rests once the tabs have slid up under the identity's actions.
+  await expect
+    .poll(async () => {
+      const at = await stage(page);
+      return Math.abs(at.tabsTop - at.rowBottom);
+    })
+    .toBeLessThanOrEqual(24);
+  // …and the glide has come to rest.
+  await expect
+    .poll(async () => {
+      const before = (await geometry(page)).top;
+      await page.waitForTimeout(150);
+      return (await geometry(page)).top - before;
+    })
+    .toBe(0);
+  const rested = await stage(page);
+  expect(rested).toMatchObject({
+    stage: "content",
+    theme: "dark",
+    glass: "1",
+    belowTabs: "collections",
+  });
+  expect(rested.frosted).toMatch(/blur/u);
+  // The identity rests just under the top bar, on a glass card that ends
+  // just above the tabs.
+  expect(rested.avatarTop - rested.barBottom).toBeGreaterThanOrEqual(8);
+  expect(rested.avatarTop - rested.barBottom).toBeLessThanOrEqual(16);
+  expect(rested.avatarTop - rested.cardTop).toBeCloseTo(10, 0);
+  expect(rested.tabsTop - rested.cardBottom).toBeGreaterThan(2);
+  expect(rested.tabsTop - rested.cardBottom).toBeLessThanOrEqual(10);
+  // The photo stays at the top and now ends where the pinned tabs begin.
+  expect(Math.abs(rested.photoTop)).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(rested.photoTop + rested.photoHeight - rested.tabsTop),
+  ).toBeLessThanOrEqual(2);
+  expect(await resting()).toBe(rest);
+  await expect(hint).toHaveAttribute("inert", "");
+  await expect(hint).toHaveCSS("opacity", "0");
+  // Further down only the collections move: the identity stays in place.
+  await scrollTo(page, 100000);
+  await page.waitForTimeout(300);
+  expect(Math.abs((await stage(page)).nameTop - rested.nameTop)).toBeLessThan(
+    1,
+  );
+  // Back up, then up a little more: the whole photo returns, with the hint.
+  await scrollTo(page, rest);
+  await userScroll(page, rest - 30);
+  await expect.poll(async () => (await geometry(page)).top).toBe(0);
+  expect(await stage(page)).toMatchObject({ stage: "cover", theme: "dark" });
+  await expect(hint).toHaveCSS("opacity", "1");
+  await expect(hint).not.toHaveAttribute("inert");
+  // Restoring a position is not a gesture and never glides.
+  await scrollTo(page, 40);
+  await page.waitForTimeout(400);
+  expect((await geometry(page)).top).toBe(40);
 });
 
 test("Profile remains pinned after delayed identity and bio load", async ({

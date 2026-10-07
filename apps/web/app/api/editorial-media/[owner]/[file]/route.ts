@@ -1,3 +1,4 @@
+import { readCommunitySessionToken } from "../../../../../lib/public-api/community-session-cookie";
 import { relayServerLocalEditorialMedia } from "../../../../../lib/public-api/server";
 export const runtime = "nodejs";
 /** Development only: editorial images for a phone on the LAN acceptance origin. */
@@ -11,5 +12,9 @@ export const GET = async (
       headers: { "cache-control": "private, no-store" },
     });
   const { owner, file } = await context.params;
-  return relayServerLocalEditorialMedia(owner, file);
+  return relayServerLocalEditorialMedia(
+    owner,
+    file,
+    readCommunitySessionToken(request.headers.get("cookie")),
+  );
 };

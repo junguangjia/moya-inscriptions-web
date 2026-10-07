@@ -1490,6 +1490,7 @@ describe.sequential("catalog-import/v1 PostgreSQL apply", () => {
         HOST: "127.0.0.1",
         NODE_ENV: "production",
         PORT: "3001",
+        PRODUCT_ACCESS_MODE: "public",
       });
       const backend = await startBackendProcess({
         closeResources: prepared.closeResources,
@@ -2154,6 +2155,7 @@ describe.sequential("catalog-import/v2 PostgreSQL apply", () => {
       HOST: "127.0.0.1",
       NODE_ENV: "production",
       PORT: "3001",
+      PRODUCT_ACCESS_MODE: "public",
     });
     const backend = await startBackendProcess({
       closeResources: prepared.closeResources,

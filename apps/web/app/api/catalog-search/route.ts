@@ -2,15 +2,15 @@ import {
   parseCatalogSearchQuery,
   parseCatalogSearchPage,
 } from "../../../lib/public-api/catalog-search-client";
+import { readCommunitySessionToken } from "../../../lib/public-api/community-session-cookie";
 import { fetchServerCatalogSearchPage } from "../../../lib/public-api/server";
 
 export const runtime = "nodejs";
 const allowedParameters = new Set(["q", "kind", "page", "pageSize"]);
+// The answer depends on who asks, so no cache may keep it for someone else.
+const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
 const emptyResponse = (status: number) =>
-  new Response(null, {
-    status,
-    headers: { "Cache-Control": "no-store" },
-  });
+  new Response(null, { status, headers });
 
 export const GET = async (request: Request): Promise<Response> => {
   const parameters = new URL(request.url).searchParams;
@@ -23,14 +23,20 @@ export const GET = async (request: Request): Promise<Response> => {
   );
   if (query === null) return emptyResponse(400);
   try {
-    const result = await fetchServerCatalogSearchPage(query, request.signal);
+    const result = await fetchServerCatalogSearchPage(
+      query,
+      request.signal,
+      readCommunitySessionToken(request.headers.get("cookie")),
+    );
     switch (result.state) {
       case "success": {
         const page = parseCatalogSearchPage(result.page);
         return page === null
           ? emptyResponse(502)
-          : Response.json(page, { headers: { "Cache-Control": "no-store" } });
+          : Response.json(page, { headers });
       }
+      case "access-denied":
+        return emptyResponse(result.status);
       case "invalid-query":
         return emptyResponse(400);
       case "unavailable":

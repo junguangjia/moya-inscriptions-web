@@ -29,7 +29,7 @@ const failureCodes: ReadonlySet<string> = new Set(
   workPublishingFailureCodeSchema.options,
 );
 
-export type TransferRefusalStatus = 401 | 404 | 409 | 413 | 422 | 503;
+export type TransferRefusalStatus = 401 | 403 | 404 | 409 | 413 | 422 | 503;
 
 /**
  * An error answer for a transfer whose body may still be arriving.
