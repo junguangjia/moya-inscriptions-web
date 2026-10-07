@@ -88,6 +88,9 @@ psql -X -v ON_ERROR_STOP=1 --single-transaction \
 psql -X -v ON_ERROR_STOP=1 --single-transaction \
   -v public_read_role="$PUBLIC_READ_ROLE" \
   -f infra/development/article-authoring/grant-public-read.sql
+psql -X -v ON_ERROR_STOP=1 --single-transaction \
+  -v public_read_role="$PUBLIC_READ_ROLE" \
+  -f infra/development/catalog-media/grant-public-read.sql
 ```
 
 `grant-public-read.sql` preserves the existing `yoyi_dev_public` default for the
@@ -95,6 +98,16 @@ Development caller. Native authored Article reading is a separate **post-
 Community** phase; the early Payload read grant does not grant that view. The
 consolidated App grant already replaces the older Community baseline grant; keep
 its named columns, receipt privileges and function permissions intact.
+
+Catalog rendition delivery (unified-media-pipeline-v1, PR 1b) is a second
+post-Community public read phase: after community migration `20261004020000`,
+`infra/development/catalog-media/grant-public-read.sql` grants the public read
+role `USAGE` on schema `community` and `SELECT` on the published-only
+`security_barrier` view `community.catalog_media_delivery`, and nothing else
+(amendment entry 8). `grant-runtime.sql` grants the same view to the App role
+for discovery cards. Apply both before starting a Backend of that release: its
+Catalog readers and discovery cards join the view, and startup stops when the
+public read connection or the App connection cannot read it.
 
 CMS grants name current native tables, child/version tables, sequences and
 published views. They permit native child replacement and version retention,

@@ -308,6 +308,7 @@ const ScopedAuthorProfile = ({
     positions: { ...positions.current },
   };
   const scrollTab = viewTab;
+  const departingTab = useRef<string | null>(null);
   const hasPhoto = () =>
     !!profileHeader.current?.querySelector(`.${styles.profileCover} img`);
   // The second resting place: a compact cover (the photo, frosted, behind the
@@ -621,10 +622,14 @@ const ScopedAuthorProfile = ({
         : state.profileScrollTop || positions.current[scrollTab]) ??
       0;
     pendingScrollTop.current = null;
+    departingTab.current = null;
     positions.current[scrollTab] = node.scrollTop;
     markCover(node.scrollTop);
     const target = embedded && shell.platform === "pc" ? window : node;
     const scroll = () => {
+      // Resizing for the next collection may clamp the document before its
+      // commit. Preserve the position captured before that height write.
+      if (departingTab.current === scrollTab) return;
       positions.current[scrollTab] = node.scrollTop;
       markCover(node.scrollTop, false);
       if (!isPreview)
@@ -1265,6 +1270,11 @@ const ScopedAuthorProfile = ({
           keys={visibleTabs}
           activeKey={viewTab as (typeof tabs)[number]}
           onCommit={changeTab}
+          onBeforeCommit={() => {
+            positions.current[viewTab] =
+              scrollElement()?.scrollTop ?? positions.current[viewTab] ?? 0;
+            departingTab.current = viewTab;
+          }}
           onProgress={setProgress}
           panels={panels}
           platform={shell.platform}

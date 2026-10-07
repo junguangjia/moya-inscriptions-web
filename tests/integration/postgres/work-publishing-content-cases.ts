@@ -652,6 +652,8 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         now,
       );
       const mediaView = await authors.readWork(media.workId, null);
+      // Every recorded rendition has the display's size: one candidate, the
+      // display itself (the anchor).
       expect(mediaView.media).toEqual([
         {
           id: itemId,
@@ -659,6 +661,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           width: 640,
           height: 480,
           kind: "static",
+          renditions: [
+            {
+              src: `/api/community/publishing/media/${itemId}/display/base`,
+              width: 640,
+              height: 480,
+              contentType: "image/webp",
+            },
+          ],
         },
       ]);
       expect(mediaView.authorship).toEqual({
@@ -676,6 +686,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         width: 640,
         height: 480,
         src: `/api/community/publishing/media/${itemId}/cover/base`,
+        renditions: [
+          {
+            src: `/api/community/publishing/media/${itemId}/cover/base`,
+            width: 640,
+            height: 480,
+            contentType: "image/webp",
+          },
+        ],
       });
       expect(
         (
@@ -2648,6 +2666,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           width: 60,
           height: 50,
           kind: "static",
+          renditions: [
+            {
+              src: `/api/community/publishing/media/${firstItem.itemId}/display/${rotatedKey}`,
+              width: 60,
+              height: 50,
+              contentType: "image/webp",
+            },
+          ],
         },
       ]);
       expect(await discovery.card({ type: "work", id: work }, b)).toMatchObject(
@@ -4126,6 +4152,9 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         src: coverSrc,
         width: 640,
         height: 480,
+        renditions: [
+          { src: coverSrc, width: 640, height: 480, contentType: "image/webp" },
+        ],
       });
       const feed = await service().browse(b, discoveryQuerySchema.parse({}));
       expect(

@@ -220,6 +220,14 @@ export class PilotCosStorage {
         }
         return result;
       },
+      // The Pilot delivers its manifest objects only; no Catalog rendition
+      // key ever resolves (unified media pipeline, increment 1).
+      resolveKeys: async (
+        keys: readonly string[],
+      ): Promise<ReadonlyMap<string, string>> => {
+        void keys;
+        return new Map<string, string>();
+      },
     };
   }
 }

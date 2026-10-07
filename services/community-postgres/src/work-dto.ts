@@ -97,6 +97,7 @@ const workDtoFrom = (
     : mediaViews.get(revisionId!)) ?? { media: [], coverMediaId: null };
   const authorship =
     revision === undefined ? null : revisionAuthorship(revision);
+  const cover = revision === undefined ? null : revisionCover(revision);
   return workSchema.parse({
     id: row.id,
     authorId: row.author_id,
@@ -106,8 +107,12 @@ const workDtoFrom = (
     text: revision?.body ?? row.text,
     media,
     coverMediaId,
-    coverSrc:
-      revision === undefined ? null : (revisionCover(revision)?.src ?? null),
+    coverSrc: cover?.src ?? null,
+    // The cover's card candidates in its own framing (never the full-frame
+    // lists of `media`), `coverSrc` as the anchor.
+    ...(cover?.renditions === undefined
+      ? {}
+      : { coverRenditions: cover.renditions }),
     firstPublishedAt: row.first_published_at?.toISOString() ?? null,
     version: row.version,
     canEdit: owner,

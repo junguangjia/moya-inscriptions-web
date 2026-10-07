@@ -1,5 +1,5 @@
 "use client";
-import { editorialMediaSrc } from "./editorial-media";
+import { editorialImage, editorialMediaSrc } from "./editorial-media";
 import {
   useCallback,
   useEffect,
@@ -14,7 +14,9 @@ import type {
   ArticleDetail,
   ArticlePresentation,
   ArticleSummary,
+  PublicMedia,
 } from "@moya/contracts";
+import { MEDIA_SIZES } from "../media/responsive-media";
 import { useProductShell } from "../product-shell/product-shell";
 import {
   ArticlePublishedBody,
@@ -35,22 +37,34 @@ import {
   useCollection,
 } from "./use-editorial-content";
 
+/**
+ * A news reader figure (.article figure img: the column, at most 350px tall,
+ * contain fit, so no placeholder colour): rendition candidates and the size
+ * reservation of the anchor.
+ */
 const Picture = ({
-  src,
+  media,
   alt,
   owner,
 }: {
-  src: string;
+  media: PublicMedia;
   alt: string;
   owner: string;
-}) => (
-  <img
-    src={editorialMediaSrc(src, owner)}
-    alt={alt}
-    loading="lazy"
-    decoding="async"
-  />
-);
+}) => {
+  const image = editorialImage(media, owner, MEDIA_SIZES.newsFigure(media));
+  return (
+    <img
+      src={image.src}
+      srcSet={image.srcSet}
+      sizes={image.sizes}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+      width={media.width}
+      height={media.height}
+    />
+  );
+};
 
 const DetailState = ({
   state,
@@ -109,7 +123,11 @@ export const academicViewFromArticle = (
       ? [
           {
             afterParagraph: 0,
-            src: editorialMediaSrc(section.image.src, article.id),
+            ...editorialImage(
+              section.image,
+              article.id,
+              MEDIA_SIZES.academicFigure(section.image),
+            ),
             alt: section.image.alt,
             caption: section.imageCaption ?? section.image.alt,
           },
@@ -158,7 +176,7 @@ function NewsArticleContent({
           <figure>
             <Picture
               owner={article.id}
-              src={article.cover.src}
+              media={article.cover}
               alt={article.cover.alt}
             />
           </figure>
@@ -175,7 +193,7 @@ function NewsArticleContent({
               <figure>
                 <Picture
                   owner={article.id}
-                  src={section.image.src}
+                  media={section.image}
                   alt={section.image.alt}
                 />
                 {section.imageCaption && (
@@ -365,10 +383,13 @@ function CollectionPage({
         )}
         {collection.cover && (
           <figure>
-            <Picture
-              owner={collection.id}
-              src={collection.cover.src}
+            {/* No CSS rule sizes this image, so it keeps only its source:
+                srcset or width and height would change its rendered size. */}
+            <img
+              src={editorialMediaSrc(collection.cover.src, collection.id)}
               alt={collection.cover.alt}
+              loading="lazy"
+              decoding="async"
             />
           </figure>
         )}

@@ -1,4 +1,8 @@
-import { localCatalogMediaSrc } from "./local-catalog-media";
+import {
+  localCatalogMediaSrc,
+  localCatalogRenditions,
+} from "./local-catalog-media";
+import type { RenditionCandidate } from "../media/responsive-media";
 import type {
   CatalogCitationScope,
   CatalogDetail,
@@ -59,6 +63,13 @@ export interface DetailMediaPresentation {
   readonly alt: string;
   readonly width: number;
   readonly height: number;
+  /**
+   * Candidates of this image's framing, ascending, with `src` as the anchor:
+   * inline surfaces load up to it, the Viewer also the wider zoom levels.
+   */
+  readonly renditions?: readonly RenditionCandidate[] | undefined;
+  /** The opaque asset's colour, for boxes the image covers exactly. */
+  readonly placeholderColor?: string | undefined;
   /** Present only for a Live Photo; the still stays the presented image. */
   readonly live?: DetailLiveMotionPresentation;
 }
@@ -138,6 +149,10 @@ export const toWorkMediaPresentation = (
   alt,
   width: media.width,
   height: media.height,
+  ...(media.renditions === undefined ? {} : { renditions: media.renditions }),
+  ...(media.placeholderColor === undefined
+    ? {}
+    : { placeholderColor: media.placeholderColor }),
   ...(media.kind === "live" && media.motionSrc !== undefined
     ? {
         live: {
@@ -242,6 +257,9 @@ export const toCatalogDetailPresentation = (
     media: media.map((item) => ({
       ...item,
       src: localCatalogMediaSrc(item.src, detail.id, item.id),
+      ...(item.renditions === undefined
+        ? {}
+        : { renditions: localCatalogRenditions(item.renditions) }),
     })),
     ...(detail.periodLabel === undefined
       ? {}

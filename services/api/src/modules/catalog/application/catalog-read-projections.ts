@@ -14,6 +14,25 @@ export interface CatalogStatefulTextProjection {
   readonly value?: string;
 }
 
+/**
+ * The context class of a Catalog rendition (unified media pipeline, CW4):
+ * `card` (thumb, cover), `display` (the anchor) or `zoom` (viewer, full).
+ */
+export type CatalogMediaRenditionLevel = "card" | "display" | "zoom";
+
+/**
+ * One ready rendition of a published Catalog image, named by its opaque
+ * delivery key (never a storage key); the URL resolver turns the key into
+ * a delivery URL.
+ */
+export interface CatalogMediaRenditionProjection {
+  readonly key: string;
+  readonly width: number;
+  readonly height: number;
+  readonly contentType: "image/webp" | "image/jpeg";
+  readonly level: CatalogMediaRenditionLevel;
+}
+
 export interface CatalogMediaProjection {
   readonly id: MediaId;
   readonly position: number;
@@ -23,6 +42,13 @@ export interface CatalogMediaProjection {
   readonly width: number;
   readonly height: number;
   readonly objectKey: string;
+  /**
+   * Ready renditions of the image's Catalog asset, ascending by size; absent
+   * when the reader has no delivery facts for it.
+   */
+  readonly renditions?: readonly CatalogMediaRenditionProjection[];
+  /** Loading colour of an opaque image whose Catalog asset is ready. */
+  readonly placeholderColor?: string;
 }
 
 export interface CatalogListItemProjection {

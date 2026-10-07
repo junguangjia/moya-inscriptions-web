@@ -14,19 +14,29 @@ import type {
 import { fetchSameOriginCatalogDetail } from "../../lib/public-api/catalog-detail-client";
 import { ArticleImage } from "./article-authoring/article-image";
 import { ArticleRichBody } from "./article-authoring/article-rich-body";
+import {
+  localCatalogMediaSrc,
+  localCatalogRenditionSrc,
+  localCatalogRenditions,
+} from "../detail/local-catalog-media";
 import type { AcademicChapterView } from "../discussion-preview/academic-reader";
 
-/** Resolved public DTOs only: never read private owner-media endpoints. */
+/**
+ * Resolved public DTOs only: never read private owner-media endpoints. The
+ * media's rendition candidates and placeholder colour pass through as given.
+ */
 export const ArticlePublishedMedia = ({
   media,
   alt,
   active,
   crop = null,
+  share = 1,
 }: {
   readonly media: WorkMedia;
   readonly alt: string;
   readonly active: boolean;
   readonly crop?: MediaCrop | null;
+  readonly share?: number;
 }) => {
   return (
     <ArticleImage
@@ -44,6 +54,7 @@ export const ArticlePublishedMedia = ({
       }}
       active={active}
       crop={crop}
+      share={share}
     />
   );
 };
@@ -108,7 +119,7 @@ export const ArticlePublishedBody = ({
   return (
     <ArticleRichBody
       document={document}
-      renderMedia={(reference, alt, crop) => {
+      renderMedia={(reference, alt, crop, share) => {
         const resolved = resolutions.get(reference);
         if (resolved === undefined || resolved.type === "unavailable")
           return <p role="status">图片已不可用。</p>;
@@ -118,12 +129,32 @@ export const ArticlePublishedBody = ({
             alt={alt}
             active={active}
             crop={crop}
+            share={share}
           />
         ) : (
           <ArticleImage
-            media={{ ...resolved.media, alt: alt || resolved.media.alt }}
+            media={{
+              ...resolved.media,
+              src:
+                reference.type === "catalog"
+                  ? localCatalogMediaSrc(
+                      resolved.media.src,
+                      reference.catalogId,
+                      resolved.media.id,
+                    )
+                  : localCatalogRenditionSrc(resolved.media.src),
+              ...(resolved.media.renditions === undefined
+                ? {}
+                : {
+                    renditions: localCatalogRenditions(
+                      resolved.media.renditions,
+                    ),
+                  }),
+              alt: alt || resolved.media.alt,
+            }}
             active={active}
             crop={crop}
+            share={share}
           />
         );
       }}

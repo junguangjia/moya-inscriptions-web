@@ -143,6 +143,7 @@ describe("login lookup-key rotation and lifecycle", () => {
       "20261002020000",
       "20261003010000",
       "20261004010000",
+      "20261004020000",
     ]);
     expect((await ledger()).slice(0, originalLedger.length)).toEqual(
       originalLedger,

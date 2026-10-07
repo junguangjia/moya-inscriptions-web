@@ -30,3 +30,17 @@ export const readE2ePorts = (
     throw new Error("E2E Web and Public API ports must differ");
   return { web, publicApi };
 };
+
+export const readPagingWebPort = (
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+) => {
+  const port = readPort(
+    environment.MOYA_E2E_PAGING_WEB_PORT,
+    3210,
+    "MOYA_E2E_PAGING_WEB_PORT",
+  );
+  const { web, publicApi } = readE2ePorts(environment);
+  if (port === web || port === publicApi)
+    throw new Error("Paging Web must have a separate test-service port");
+  return port;
+};

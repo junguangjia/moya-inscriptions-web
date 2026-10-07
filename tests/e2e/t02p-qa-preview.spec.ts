@@ -1,19 +1,167 @@
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
 import { expect, test } from "@playwright/test";
 
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, Request } from "@playwright/test";
+
+test.beforeAll(async ({ request }) => {
+  await prepareFormalRoutes(request);
+});
 
 const pageErrors = new WeakMap<Page, string[]>();
+const lifecycle = new WeakMap<string[], unknown[]>();
 
-const observePageErrors = (page: Page, errors: string[]) => {
+let observedPages = 0;
+const observePageErrors = async (page: Page, errors: string[]) => {
+  const events = lifecycle.get(errors) ?? [];
+  lifecycle.set(errors, events);
+  const pageId = `page-${++observedPages}`;
+  let documentId: string | null = null;
+  let documents = 0;
+  let requests = 0;
+  const requestOrigins = new WeakMap<
+    Request,
+    { requestId: string; originDocumentId: string | null }
+  >();
+  const location = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      const query = new URLSearchParams();
+      for (const key of [
+        "qaChrome",
+        "scenario",
+        "feed",
+        "page",
+        "pageSize",
+        "presentation",
+      ])
+        for (const value of parsed.searchParams.getAll(key))
+          query.append(key, value);
+      return `${parsed.pathname}${query.size ? `?${query}` : ""}${parsed.hash}`;
+    } catch {
+      return url;
+    }
+  };
+  const record = (kind: string, detail: object) =>
+    events.push({
+      at: Date.now(),
+      kind,
+      pageId,
+      documentId,
+      location: location(page.url()),
+      ...detail,
+    });
+  const origin = (request: Request) => {
+    let identity = requestOrigins.get(request);
+    if (!identity) {
+      identity = {
+        requestId: `${pageId}:request-${++requests}`,
+        originDocumentId: documentId,
+      };
+      requestOrigins.set(request, identity);
+    }
+    return identity;
+  };
+  // A main-frame navigation event can be same-document pushState. A fresh
+  // realm's init script, rather than framenavigated, establishes document IDs.
+  await page.exposeBinding(
+    "__moyaQAObserveDocument",
+    ({ frame }, timeOrigin: number) => {
+      if (frame !== page.mainFrame()) return;
+      documentId = `${pageId}:document-${++documents}`;
+      record("document-created", { timeOrigin });
+    },
+  );
+  await page.exposeBinding("__moyaQAObserveReadLifecycle", (_source, detail) =>
+    record("document-read-lifecycle", detail),
+  );
+  await page.addInitScript(() => {
+    const observe = (
+      window as unknown as Window & {
+        __moyaQAObserveDocument: (timeOrigin: number) => Promise<void>;
+      }
+    ).__moyaQAObserveDocument;
+    // Only this diagnostic binding can reject during owned page shutdown.
+    // Application pageerrors and rejected fetches remain unfiltered below.
+    void observe(performance.timeOrigin).catch(() => {});
+    const observeReads = (
+      window as unknown as Window & {
+        __moyaQAObserveReadLifecycle: (detail: object) => Promise<void>;
+      }
+    ).__moyaQAObserveReadLifecycle;
+    const recordRead = (kind: string, detail: object = {}) => {
+      void observeReads({
+        kind,
+        browserAt: performance.timeOrigin + performance.now(),
+        timeOrigin: performance.timeOrigin,
+        ...detail,
+      }).catch(() => {});
+    };
+    for (const kind of ["beforeunload", "pagehide", "pageshow"])
+      window.addEventListener(kind, () => recordRead(kind));
+    const fetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = new URL(
+        input instanceof Request ? input.url : String(input),
+        window.location.href,
+      );
+      if (url.pathname.startsWith("/api/community/")) {
+        const signal =
+          init?.signal ?? (input instanceof Request ? input.signal : null);
+        // Only the public path and timing are recorded, never credentials,
+        // bodies, headers or authorizing query parameters.
+        recordRead("fetch-call", {
+          path: url.pathname,
+          aborted: signal?.aborted ?? false,
+        });
+        signal?.addEventListener(
+          "abort",
+          () => recordRead("read-abort", { path: url.pathname }),
+          { once: true },
+        );
+      }
+      return fetch(input, init);
+    };
+  });
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) record("frame-navigation", {});
+  });
+  page.on("request", (request) => {
+    const identity = origin(request);
+    if (
+      request.isNavigationRequest() ||
+      new URL(request.url()).pathname.startsWith("/api/")
+    )
+      record("request", {
+        ...identity,
+        location: location(request.url()),
+        navigation: request.isNavigationRequest(),
+      });
+  });
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname.startsWith("/api/"))
+      record("response", {
+        ...origin(response.request()),
+        location: location(response.url()),
+        status: response.status(),
+      });
+  });
+  page.on("requestfailed", (request) =>
+    record("request-failed", {
+      ...origin(request),
+      location: location(request.url()),
+      error: request.failure()?.errorText,
+    }),
+  );
   page.on("pageerror", (error) => {
     errors.push(`${page.url()}\n${error.stack ?? error.message}`);
+    record("pageerror", { error: error.stack ?? error.message });
   });
 };
 
 test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
   pageErrors.set(page, errors);
-  observePageErrors(page, errors);
+  await observePageErrors(page, errors);
 });
 
 test.afterEach(async ({ page }, testInfo) => {
@@ -22,21 +170,53 @@ test.afterEach(async ({ page }, testInfo) => {
     body: JSON.stringify(errors, null, 2),
     contentType: "application/json",
   });
+  await testInfo.attach("navigation-request-lifecycle", {
+    body: JSON.stringify(lifecycle.get(errors) ?? [], null, 2),
+    contentType: "application/json",
+  });
   expect(errors, "Every pageerror, including ResizeObserver errors").toEqual(
     [],
   );
 });
 
-const openQa = async (page: Page, query = "") => {
-  const response = await page.goto(`/dev/t02p/qa${query}`);
-  expect(response?.status()).toBe(200);
+const expectQaReady = async (page: Page) => {
   const surface = page.locator("[data-t02p-qa-harness]");
   const shell = surface.locator("[data-product-shell]");
   await expect(surface).toHaveCount(1);
   await expect(shell).toHaveCount(1);
-  await expect(shell.locator("[data-search-trigger]")).toBeVisible();
-  await expect(shell.locator("[data-user-trigger]")).toBeVisible();
+  // SSR controls alone are not an interactive document. The boot component
+  // disappears only after ProductShell's client effect commits; the HTML boot
+  // attribute has an independent failsafe and is insufficient here.
+  await expect(surface.locator("[data-product-boot]")).toHaveCount(0);
+  const destination =
+    (await shell.getAttribute("data-active-destination")) === "discussion"
+      ? "discussion"
+      : "home";
+  const pager = shell.locator(
+    `[data-${destination}-surface] [data-horizontal-pager]`,
+  );
+  if ((await shell.getAttribute("data-platform")) === "pc")
+    await expect(pager).toHaveAttribute(
+      `data-${destination}-pager-settle-mode`,
+      /^(scrollend|stable-frames)$/u,
+    );
+  else
+    await expect(pager).toHaveAttribute(
+      "data-horizontal-pager-progress",
+      /^-?\d+(?:\.\d+)?$/u,
+    );
   return { surface, shell };
+};
+
+const openQa = async (page: Page, query = "") => {
+  const response = await page.goto(`/dev/t02p/qa${query}`, {
+    waitUntil: "domcontentloaded",
+  });
+  expect(response?.status()).toBe(200);
+  const ready = await expectQaReady(page);
+  await expect(ready.shell.locator("[data-search-trigger]")).toBeVisible();
+  await expect(ready.shell.locator("[data-user-trigger]")).toBeVisible();
+  return ready;
 };
 
 const expectChrome = async (surface: Locator, mode: "visible" | "hidden") => {
@@ -90,16 +270,30 @@ const selectHomeFeed = async (
 
 const activeCatalogCards = (shell: Locator) =>
   shell.locator(
-    '[data-primary-destination="home"]:not([hidden]) [data-home-feed-panel][aria-hidden="false"] [data-catalog-card]',
+    '[data-primary-destination="home"]:not([hidden]) [data-home-feed-panel][aria-hidden="false"] :is([data-catalog-card], [data-content-type="catalog"])',
   );
 
 const catalogSnapshot = async (shell: Locator, settleMedia = true) => {
   const cards = activeCatalogCards(shell);
+  // Formal discovery reads populate after the selected feed commits.
+  await expect.poll(() => cards.count()).toBeGreaterThan(0);
   const count = await cards.count();
   expect(count).toBeGreaterThan(0);
   if (settleMedia) {
     for (let index = 0; index < count; index += 1) {
-      await cards.nth(index).scrollIntoViewIfNeeded();
+      const card = cards.nth(index);
+      const needsReveal = await card.evaluate((node) => {
+        const media = node.querySelector<HTMLElement>(
+          "[data-catalog-media-state]",
+        );
+        if (
+          ["failed", "missing"].includes(media?.dataset.catalogMediaState ?? "")
+        )
+          return false;
+        const image = media?.querySelector("img");
+        return image?.complete !== true || image.naturalWidth === 0;
+      });
+      if (needsReveal) await card.scrollIntoViewIfNeeded();
     }
     const media = cards.locator("[data-catalog-media-state]");
     await expect(media).toHaveCount(count);
@@ -152,10 +346,7 @@ const qaCatalogs = async (shell: Locator) => {
   return { inscriptions, calligraphy };
 };
 
-test("QA chrome uses only its URL mode and hidden mode survives reload and a copied link", async ({
-  page,
-  context,
-}) => {
+test("QA chrome uses only its URL mode", async ({ page }) => {
   let initialDock:
     { x: number; y: number; width: number; height: number } | undefined;
   for (const [query, mode] of [
@@ -183,15 +374,28 @@ test("QA chrome uses only its URL mode and hidden mode survives reload and a cop
     }
     await expect(shell.locator("[data-open-settings]")).toHaveCount(0);
   }
+});
 
+test("hidden QA chrome survives reload and a copied link", async ({
+  page,
+  context,
+}) => {
   const { surface } = await openQa(page, "?qaChrome=hidden");
   const copiedUrl = page.url();
-  expect((await page.reload())?.status()).toBe(200);
+  expect((await page.reload({ waitUntil: "domcontentloaded" }))?.status()).toBe(
+    200,
+  );
+  await expectQaReady(page);
   await expectChrome(surface, "hidden");
   const copiedPage = await context.newPage();
-  observePageErrors(copiedPage, pageErrors.get(page)!);
+  await observePageErrors(copiedPage, pageErrors.get(page)!);
   try {
-    expect((await copiedPage.goto(copiedUrl))?.status()).toBe(200);
+    expect(
+      (
+        await copiedPage.goto(copiedUrl, { waitUntil: "domcontentloaded" })
+      )?.status(),
+    ).toBe(200);
+    await expectQaReady(copiedPage);
     await expectChrome(copiedPage.locator("[data-t02p-qa-harness]"), "hidden");
     const ordinary = await openQa(copiedPage);
     await expectChrome(ordinary.surface, "visible");
@@ -327,7 +531,10 @@ test("hidden QA preserves existing scenario feed and topic entry parameters", as
     "data-active-home-feed",
     "nearby",
   );
-  expect((await page.reload())?.status()).toBe(200);
+  expect((await page.reload({ waitUntil: "domcontentloaded" }))?.status()).toBe(
+    200,
+  );
+  await expectQaReady(page);
   await expectChrome(surface, "hidden");
   await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
     "data-active-home-feed",
@@ -338,8 +545,10 @@ test("hidden QA preserves existing scenario feed and topic entry parameters", as
   for (const mode of ["visible", "hidden"] as const) {
     const response = await page.goto(
       `/dev/t02p/qa?${mode === "hidden" ? "qaChrome=hidden&" : ""}scenario=topics-editorial&feed=topics&topic=topic-cliff-paths`,
+      { waitUntil: "domcontentloaded" },
     );
     expect(response?.status()).toBe(200);
+    await expectQaReady(page);
     await expectChrome(surface, mode);
     await expect(surface).toHaveAttribute(
       "data-home-scenario",
@@ -437,12 +646,18 @@ test("Formal and clean Development do not consume the QA chrome parameter", asyn
       ).toHaveCount(0);
       await expect(
         page.locator(
-          "[data-inscription-filter], [data-user-trigger], [data-open-settings]",
+          "[data-inscription-filter]:has([data-filter-trigger]), [data-user-trigger], [data-open-settings]",
         ),
       ).toHaveCount(0);
+      await expect(
+        page.locator("details[data-inscription-filter]"),
+      ).toHaveCount(path === "/" ? 1 : 0);
       await expect(page.locator("[data-search-trigger]")).toHaveCount(
-        path === "/" ? 1 : 0,
+        path === "/" ? 3 : 0,
       );
+      await expect(
+        page.locator('[data-search-trigger-placement="header"]'),
+      ).toHaveCount(path === "/" ? 3 : 0);
       await expect(page.locator("[data-catalog-search]")).toHaveCount(
         path === "/" ? 1 : 0,
       );

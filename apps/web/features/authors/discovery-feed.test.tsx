@@ -41,8 +41,16 @@ vi.mock("./author-data", () => ({
   AuthorRequestError: mocks.AuthorRequestError,
 }));
 vi.mock("./content-card", () => ({
-  ContentCard: ({ item }: { item: { title: string } }) => (
-    <article data-card="">{item.title}</article>
+  ContentCard: ({
+    item,
+    priority,
+  }: {
+    item: { title: string };
+    priority?: string;
+  }) => (
+    <article data-card="" data-priority={priority}>
+      {item.title}
+    </article>
   ),
 }));
 vi.mock("../home/catalog-masonry", () => ({
@@ -53,11 +61,15 @@ vi.mock("../home/catalog-masonry", () => ({
   }: {
     items: readonly T[];
     getKey: (item: T) => string;
-    renderItem: (item: T, onSettled: () => void) => React.ReactNode;
+    renderItem: (
+      item: T,
+      onSettled: () => void,
+      index: number,
+    ) => React.ReactNode;
   }) => (
     <div data-masonry="">
-      {items.map((item) => (
-        <div key={getKey(item)}>{renderItem(item, () => undefined)}</div>
+      {items.map((item, index) => (
+        <div key={getKey(item)}>{renderItem(item, () => undefined, index)}</div>
       ))}
     </div>
   ),
@@ -197,4 +209,41 @@ describe("Discovery feed footer (D9)", () => {
     expect(button()).toBeNull();
     expect(container.querySelectorAll("[data-card]")).toHaveLength(6);
   });
+});
+
+// unified-media-pipeline-v1: the visible feed's first cards are its likely
+// Largest Contentful Paint, so they load first; nothing else is prioritized.
+describe("Discovery feed media priority", () => {
+  const priorities = () =>
+    [...container.querySelectorAll("[data-card]")].map(
+      (node) => node.getAttribute("data-priority") ?? "",
+    );
+
+  it.each(["all", "inscription"] as const)(
+    "prioritizes the first two %s cards only while the feed is visible",
+    async (kind) => {
+      mocks.client.discovery.mockResolvedValue({
+        ...page(1, false),
+        items: [card(1), card(2), card(3)],
+      });
+      mocks.client.filters.mockResolvedValue(
+        Object.fromEntries(
+          [
+            "dynasty",
+            "textAuthor",
+            "calligrapher",
+            "originalRegion",
+            "script",
+          ].map((key) => [key, { values: [], unknown: 0, unsupplied: 0 }]),
+        ),
+      );
+      await act(async () => root.render(<DiscoveryFeed active kind={kind} />));
+      await flush();
+      expect(priorities()).toEqual(["high", "eager", ""]);
+      await act(async () =>
+        root.render(<DiscoveryFeed active={false} kind={kind} />),
+      );
+      expect(priorities()).toEqual(["", "", ""]);
+    },
+  );
 });

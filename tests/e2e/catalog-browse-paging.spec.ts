@@ -1,189 +1,11 @@
-import { spawn } from "node:child_process";
-import {
-  closeSync,
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  openSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { expect, test } from "@playwright/test";
-
-import type { ChildProcess } from "node:child_process";
+import { expectPanelAlignment } from "./support/pager-alignment";
+import { prepareFormalRoutes } from "./support/prepare-formal-routes";
+import { readPagingWebPort } from "./support/e2e-ports";
 import type { Locator, Page } from "@playwright/test";
 
 type HomeFeed = "calligraphy" | "discover" | "inscriptions";
-
-const e2eRoot = dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = resolve(e2eRoot, "../..");
-const sourceWebRoot = join(repositoryRoot, "apps/web");
-const projectPorts = {
-  "desktop-chromium": 3210,
-  "desktop-webkit": 3211,
-  "mobile-webkit": 3212,
-  "tablet-landscape-webkit": 3214,
-  "tablet-webkit": 3213,
-} as const;
-const projectApiPorts = {
-  "desktop-chromium": 3220,
-  "desktop-webkit": 3221,
-  "mobile-webkit": 3222,
-  "tablet-landscape-webkit": 3224,
-  "tablet-webkit": 3223,
-} as const;
-
-const excludedWebEntries = new Set([
-  ".next",
-  ".turbo",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "node_modules",
-  "tsconfig.tsbuildinfo",
-]);
-
-let pagingRuntime:
-  | {
-      readonly baseUrl: string;
-      readonly children: readonly ChildProcess[];
-      readonly logDescriptor: number;
-      readonly temporaryRoot: string;
-    }
-  | undefined;
-
-const waitForRuntime = async (baseUrl: string, child: ChildProcess) => {
-  const deadline = Date.now() + 120_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Paging Formal runtime exited with ${child.exitCode}`);
-    }
-    try {
-      const response = await fetch(baseUrl);
-      if (response.status === 200) return;
-    } catch {
-      // The disposable server is still starting.
-    }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
-  }
-  throw new Error("Timed out starting the paging Formal runtime");
-};
-
-const startPagingRuntime = async (projectName: string) => {
-  const port = projectPorts[projectName as keyof typeof projectPorts];
-  const apiPort = projectApiPorts[projectName as keyof typeof projectApiPorts];
-  if (port === undefined || apiPort === undefined) {
-    throw new Error(`Unknown E2E project ${projectName}`);
-  }
-  const temporaryRoot = mkdtempSync(join(tmpdir(), "moya-catalog-paging-"));
-  const temporaryWebRoot = join(temporaryRoot, "apps/web");
-  mkdirSync(join(temporaryRoot, "apps"), { recursive: true });
-  cpSync(
-    join(repositoryRoot, "tsconfig.base.json"),
-    join(temporaryRoot, "tsconfig.base.json"),
-  );
-  cpSync(sourceWebRoot, temporaryWebRoot, {
-    filter: (source) => {
-      const pathFromWebRoot = relative(sourceWebRoot, source);
-      const topLevelEntry = pathFromWebRoot.split(sep)[0] ?? "";
-      return !excludedWebEntries.has(topLevelEntry);
-    },
-    recursive: true,
-  });
-  symlinkSync(join(repositoryRoot, "docs"), join(temporaryRoot, "docs"), "dir");
-  symlinkSync(
-    join(repositoryRoot, "packages"),
-    join(temporaryRoot, "packages"),
-    "dir",
-  );
-  symlinkSync(
-    join(sourceWebRoot, "node_modules"),
-    join(temporaryWebRoot, "node_modules"),
-    "dir",
-  );
-
-  const logPath = join(tmpdir(), `moya-catalog-paging-${projectName}.log`);
-  const logDescriptor = openSync(logPath, "w");
-  const publicApiScript = join(e2eRoot, "support/public-api.ts");
-  const apiChild = spawn(process.execPath, [publicApiScript], {
-    cwd: repositoryRoot,
-    env: {
-      ...process.env,
-      MOYA_E2E_PUBLIC_API_PORT: String(apiPort),
-    },
-    stdio: ["ignore", logDescriptor, logDescriptor],
-  });
-  const publicApiOrigin = `http://127.0.0.1:${apiPort}`;
-  try {
-    await waitForRuntime(`${publicApiOrigin}/health`, apiChild);
-  } catch (error) {
-    apiChild.kill("SIGTERM");
-    closeSync(logDescriptor);
-    rmSync(temporaryRoot, { force: true, recursive: true });
-    throw error;
-  }
-  const nextCli = join(sourceWebRoot, "node_modules/next/dist/bin/next");
-  const webChild = spawn(
-    process.execPath,
-    [
-      nextCli,
-      "dev",
-      "--webpack",
-      "--hostname",
-      "127.0.0.1",
-      "--port",
-      String(port),
-    ],
-    {
-      cwd: temporaryWebRoot,
-      env: {
-        ...process.env,
-        MOYA_PUBLIC_API_BASE_URL: `${publicApiOrigin}/paging/`,
-      },
-      stdio: ["ignore", logDescriptor, logDescriptor],
-    },
-  );
-  const baseUrl = `http://127.0.0.1:${port}`;
-  try {
-    await waitForRuntime(baseUrl, webChild);
-  } catch (error) {
-    webChild.kill("SIGTERM");
-    apiChild.kill("SIGTERM");
-    closeSync(logDescriptor);
-    rmSync(temporaryRoot, { force: true, recursive: true });
-    throw error;
-  }
-  pagingRuntime = {
-    baseUrl,
-    children: [webChild, apiChild],
-    logDescriptor,
-    temporaryRoot,
-  };
-};
-
-const stopPagingRuntime = async () => {
-  const runtime = pagingRuntime;
-  pagingRuntime = undefined;
-  if (runtime === undefined) return;
-  await Promise.all(
-    runtime.children.map(async (child) => {
-      if (child.exitCode !== null) return;
-      await new Promise<void>((resolveExit) => {
-        const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
-        child.once("exit", () => {
-          clearTimeout(timeout);
-          resolveExit();
-        });
-        child.kill("SIGTERM");
-      });
-    }),
-  );
-  closeSync(runtime.logDescriptor);
-  rmSync(runtime.temporaryRoot, { force: true, recursive: true });
-};
+const pagingRuntime = { baseUrl: `http://127.0.0.1:${readPagingWebPort()}` };
 
 const formalSurface = (page: Page) =>
   page.locator("[data-clean-product-preview]");
@@ -228,13 +50,22 @@ const selectHomeFeed = async (
   await home
     .getByRole("tab", { exact: true, name })
     .evaluate((button) => (button as HTMLButtonElement).click());
-  await expect(productShell(page)).toHaveAttribute(
-    "data-active-destination",
-    "home",
-  );
-  await expect(home).toHaveAttribute("data-active-home-feed", feed);
-  await expect(feedSurface(page, feed)).toHaveAttribute("aria-hidden", "false");
-  await expect(feedSurface(page, feed)).not.toHaveAttribute("inert", "");
+  const pager = home.locator("[data-home-feed-pager]");
+  // Business selection commits before the pager finishes restoring panel scroll.
+  // Observe independent state and geometry conditions together, then start the
+  // next reading offset only after all original conditions have settled.
+  await Promise.all([
+    expect(productShell(page)).toHaveAttribute(
+      "data-active-destination",
+      "home",
+    ),
+    expect(home).toHaveAttribute("data-active-home-feed", feed),
+    expect(feedSurface(page, feed)).toHaveAttribute("aria-hidden", "false"),
+    expect(feedSurface(page, feed)).not.toHaveAttribute("inert", ""),
+    expectPanelAlignment(pager, `[data-home-feed-panel="${feed}"]`, {
+      idle: true,
+    }),
+  ]);
 };
 
 const settleFeedRestore = (page: Page) =>
@@ -332,13 +163,17 @@ const openViewerAndReturn = async (
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async ({ browser }, workerInfo) => {
-  void browser;
-  await startPagingRuntime(workerInfo.project.name);
-});
-
-test.afterAll(async () => {
-  await stopPagingRuntime();
+test.beforeAll(async ({ request }) => {
+  // Full acceptance has no procedural hook deadline. Route compilation must
+  // not inherit a separate HTTP timeout or turn timeout 0 into an expired date.
+  // This spec owns a separate paging server, so the shared server's route
+  // preparation cannot prevent its cold mounted routes from compiling mid-test.
+  await prepareFormalRoutes(request, pagingRuntime.baseUrl);
+  const detail = await request.get(
+    `${pagingRuntime!.baseUrl}/api/catalog/runtime-paging-inscription-22`,
+    { timeout: 0 },
+  );
+  expect(detail.status(), "Prepare paging Catalog Detail").toBe(200);
 });
 
 test("Formal Home catalog feeds progressively load and retain later pages", async ({
@@ -354,19 +189,24 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
 
   await selectHomeFeed(page, "碑刻", "inscriptions");
   const inscriptions = feedSurface(page, "inscriptions");
-  const inscriptionCards = inscriptions.locator("[data-catalog-card]");
-  const inscriptionControl = inscriptions.locator(
-    "[data-catalog-paging-control]",
+  // Inscriptions use the composed discovery feed: 12 rows and an after cursor.
+  const inscriptionCards = inscriptions.locator(
+    '[data-content-type="catalog"]',
   );
-  await expect(inscriptionCards).toHaveCount(24);
-  await expect(inscriptionControl).toHaveText("继续加载");
+  const inscriptionControl = inscriptions.getByRole("button", {
+    exact: true,
+    name: "加载更多",
+  });
+  await expect(inscriptionCards).toHaveCount(12);
+  await expect(inscriptionControl).toBeEnabled();
   await settleFeedRestore(page);
 
   let inscriptionPageTwoRequests = 0;
-  await page.route("**/api/catalog?*", async (route) => {
+  await page.route("**/api/community/discover?*", async (route) => {
     const query = new URL(route.request().url()).searchParams;
-    if (query.get("kind") === "inscription" && query.get("page") === "2") {
+    if (query.get("kind") === "inscription" && query.get("after") === "12") {
       inscriptionPageTwoRequests += 1;
+      expect(query.get("pageSize")).toBe("12");
       await new Promise((resolveWait) => setTimeout(resolveWait, 200));
     }
     await route.continue();
@@ -379,11 +219,54 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
     })
     .toBeGreaterThan(0);
   await activateControlTwice(inscriptionControl);
-  await expect(inscriptionControl).toHaveText("正在加载…");
-  await expect(inscriptionCards).toHaveCount(48);
+  await expect(inscriptionControl).toBeDisabled();
+  await expect(inscriptions.getByRole("status", { name: "" })).toHaveText(
+    "正在加载…",
+  );
+  await expect(inscriptionCards).toHaveCount(24);
   expect(inscriptionPageTwoRequests).toBe(1);
   expect(await readFeedScroll(page, "inscriptions")).toBe(inscriptionTop);
-  await page.unroute("**/api/catalog?*");
+  await page.unroute("**/api/community/discover?*");
+  await selectHomeFeed(page, "发现", "discover");
+  await selectHomeFeed(page, "碑刻", "inscriptions");
+  await expect(inscriptionCards).toHaveCount(24);
+
+  const inscriptionRequestedCursors: string[] = [];
+  let failPageThree = true;
+  await page.route("**/api/community/discover?*", async (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    if (query.get("kind") === "inscription" && query.get("after") === "24") {
+      inscriptionRequestedCursors.push(query.get("after") ?? "");
+      if (failPageThree) {
+        failPageThree = false;
+        await route.fulfill({ status: 503 });
+        return;
+      }
+    }
+    await route.continue();
+  });
+  await inscriptionControl.evaluate((button) =>
+    (button as HTMLButtonElement).click(),
+  );
+  await expect(inscriptions.getByRole("alert")).toBeVisible();
+  await expect(inscriptionCards).toHaveCount(24);
+  await inscriptions
+    .getByRole("button", { exact: true, name: "重试" })
+    .evaluate((button) => (button as HTMLButtonElement).click());
+  await expect(inscriptionCards).toHaveCount(36);
+  expect(inscriptionRequestedCursors).toEqual(["24", "24"]);
+  await page.unroute("**/api/community/discover?*");
+  for (const count of [48, 55]) {
+    await inscriptionControl.evaluate((button) =>
+      (button as HTMLButtonElement).click(),
+    );
+    await expect(inscriptionCards).toHaveCount(count);
+  }
+  await expect(inscriptionControl).toHaveCount(0);
+  const inscriptionIds = await inscriptionCards.evaluateAll((cards) =>
+    cards.map((card) => (card as HTMLElement).dataset.contentId),
+  );
+  expect(new Set(inscriptionIds).size).toBe(55);
 
   const inscriptionOpener = inscriptions.locator(
     '[data-catalog-id="runtime-paging-inscription-22"] [data-open-catalog]',
@@ -397,34 +280,7 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
   expect(await readFeedScroll(page, "inscriptions")).toBe(inscriptionReturnTop);
   await selectHomeFeed(page, "发现", "discover");
   await selectHomeFeed(page, "碑刻", "inscriptions");
-  await expect(inscriptionCards).toHaveCount(48);
-
-  const inscriptionRequestedPages: string[] = [];
-  let failPageThree = true;
-  await page.route("**/api/catalog?*", async (route) => {
-    const query = new URL(route.request().url()).searchParams;
-    if (query.get("kind") === "inscription") {
-      inscriptionRequestedPages.push(query.get("page") ?? "");
-      if (query.get("page") === "3" && failPageThree) {
-        failPageThree = false;
-        await route.fulfill({ status: 503 });
-        return;
-      }
-    }
-    await route.continue();
-  });
-  await inscriptionControl.evaluate((button) =>
-    (button as HTMLButtonElement).click(),
-  );
-  await expect(inscriptionControl).toHaveText("加载失败，重新加载");
-  await expect(inscriptionCards).toHaveCount(48);
-  await inscriptionControl.evaluate((button) =>
-    (button as HTMLButtonElement).click(),
-  );
   await expect(inscriptionCards).toHaveCount(55);
-  await expect(inscriptionControl).toHaveCount(0);
-  expect(inscriptionRequestedPages).toEqual(["3", "3"]);
-  await page.unroute("**/api/catalog?*");
 
   await selectHomeFeed(page, "书帖", "calligraphy");
   const calligraphy = feedSurface(page, "calligraphy");

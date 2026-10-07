@@ -1,13 +1,18 @@
 import { createServer } from "node:http";
 
+import sharp from "sharp";
+
 import type {
+  ArticlePage,
   ContentCard,
   CatalogDetail,
   CatalogId,
   CatalogPage,
   CatalogSummary,
   MediaId,
+  MediaRendition,
   PublicMedia,
+  ThreadPage,
 } from "@moya/contracts";
 import type { ServerResponse } from "node:http";
 
@@ -33,6 +38,33 @@ const publicMedia = (
   width,
 });
 
+/*
+ * unified-media-pipeline-v1: two images carry real rendition candidates, each
+ * a solid-colour WebP generated at its declared size (truthful MIME). In the
+ * detail list the 1600 × 900 candidate is the anchor (`src`) and 3200 × 1800
+ * a Viewer zoom level. Every other fixture stays on the legacy path without
+ * candidates.
+ */
+const renditionFiles = new Map<
+  string,
+  { color: string; height: number; width: number }
+>();
+const renditions = (
+  name: string,
+  color: string,
+  sizes: readonly (readonly [width: number, height: number])[],
+): MediaRendition[] =>
+  sizes.map(([width, height]) => {
+    const path = `/media/renditions/${name}-${width}x${height}.webp`;
+    renditionFiles.set(path, { color, height, width });
+    return {
+      src: `${baseUrl}${path}`,
+      width,
+      height,
+      contentType: "image/webp",
+    };
+  });
+
 const inscriptionFront = publicMedia(
   "runtime-inscription-front",
   "inscription-front.svg",
@@ -40,12 +72,37 @@ const inscriptionFront = publicMedia(
   1200,
   1600,
 );
-const inscriptionDetail = publicMedia(
-  "runtime-inscription-detail",
-  "inscription-detail.svg",
-  "运行时多图碑刻局部",
-  1600,
-  900,
+const inscriptionDetailRenditions = renditions(
+  "inscription-detail",
+  "#8b735f",
+  [
+    [480, 270],
+    [1080, 608],
+    [1600, 900],
+    [3200, 1800],
+  ],
+);
+const inscriptionDetail: PublicMedia = {
+  ...publicMedia(
+    "runtime-inscription-detail",
+    "inscription-detail.svg",
+    "运行时多图碑刻局部",
+    1600,
+    900,
+  ),
+  src: inscriptionDetailRenditions[2]!.src,
+  renditions: inscriptionDetailRenditions,
+  placeholderColor: "#8b735f",
+};
+/** The Discover card of the multi-media record: card candidates of its front. */
+const multiMediaCardRenditions = renditions(
+  "inscription-front-card",
+  "#655044",
+  [
+    [360, 480],
+    [810, 1080],
+    [1200, 1600],
+  ],
 );
 const calligraphyLeaf = publicMedia(
   "runtime-calligraphy-leaf",
@@ -281,6 +338,24 @@ const mediaAssets = new Map([
   ["/media/calligraphy-leaf.svg", "#5f6f58"],
 ]);
 
+// Rendered once before the fixture listens, so its health check also means
+// every candidate file exists.
+const renditionAssets = new Map(
+  await Promise.all(
+    [...renditionFiles].map(
+      async ([path, { color, height, width }]) =>
+        [
+          path,
+          await sharp({
+            create: { background: color, channels: 3, height, width },
+          })
+            .webp()
+            .toBuffer(),
+        ] as const,
+    ),
+  ),
+);
+
 const sendJson = (response: ServerResponse, status: number, body: unknown) => {
   response.writeHead(status, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
@@ -339,6 +414,29 @@ const server = createServer((request, response) => {
     sendJson(response, 200, { mode: "public", access: "granted" });
     return;
   }
+  // Anonymous mounted Discussion panels have valid empty lists in this fixture.
+  // Keep authentication and mutations outside this synthetic read-only service.
+  if (communityPath === "/v1/community/editorial/articles") {
+    sendJson(response, 200, {
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 12,
+      totalPages: 0,
+    } satisfies ArticlePage);
+    return;
+  }
+  if (communityPath === "/v1/community/threads") {
+    sendJson(response, 200, {
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 22,
+      totalPages: 0,
+      anchor: "2026-10-05T00:00:00.000Z",
+    } satisfies ThreadPage);
+    return;
+  }
   const summaries = url.pathname.startsWith("/paging/")
     ? pagingSummaries
     : baseSummaries;
@@ -349,14 +447,23 @@ const server = createServer((request, response) => {
     kind: item.kind,
     authorId: null,
     firstPublishedAt: null,
-    media: item.representativeMedia
-      ? {
-          id: item.representativeMedia.id,
-          src: item.representativeMedia.src,
-          width: item.representativeMedia.width,
-          height: item.representativeMedia.height,
-        }
-      : null,
+    media: !item.representativeMedia
+      ? null
+      : item.id === "runtime-inscription-multi-media"
+        ? {
+            id: item.representativeMedia.id,
+            src: multiMediaCardRenditions[2]!.src,
+            width: 1200,
+            height: 1600,
+            renditions: multiMediaCardRenditions,
+            placeholderColor: "#655044",
+          }
+        : {
+            id: item.representativeMedia.id,
+            src: item.representativeMedia.src,
+            width: item.representativeMedia.width,
+            height: item.representativeMedia.height,
+          },
   });
   if (communityPath === "/v1/community/discover") {
     const kind = url.searchParams.get("kind") ?? "all";
@@ -485,6 +592,16 @@ const server = createServer((request, response) => {
   const color = mediaAssets.get(url.pathname);
   if (color) {
     sendSvg(response, color);
+    return;
+  }
+
+  const rendition = renditionAssets.get(url.pathname);
+  if (rendition) {
+    response.writeHead(200, {
+      "Content-Length": rendition.byteLength,
+      "Content-Type": "image/webp",
+    });
+    response.end(rendition);
     return;
   }
 

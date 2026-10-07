@@ -52,7 +52,14 @@ const selectHomeFeed = async (
   name: "发现" | "附近" | "碑刻" | "书帖",
   feed: "discover" | "nearby" | "inscriptions" | "calligraphy",
 ) => {
-  await selectPrimaryDestination(page, "首页", "home");
+  // Reading may minimize navigation while Home is already selected. Re-clicking
+  // its hidden label adds no navigation behavior and blocks the actual tab.
+  if (
+    (await productShell(page).getAttribute("data-active-destination")) !==
+    "home"
+  ) {
+    await selectPrimaryDestination(page, "首页", "home");
+  }
   const home = productShell(page).locator("[data-home-surface]");
   await home.getByRole("tab", { exact: true, name }).click();
   await expect(home).toHaveAttribute("data-active-home-feed", feed);
@@ -188,13 +195,52 @@ test("Formal root serves only the request-rendered React Product Shell", async (
 });
 
 test("Formal root composes truthful runtime list states", async ({ page }) => {
+  // The shared anonymous fixture normally returns healthy empty lists. Keep
+  // this failure-state journey explicit rather than relying on a missing route.
+  let topicsUnavailable = true;
+  await page.route("**/api/community/editorial/articles?*", async (route) => {
+    if (
+      topicsUnavailable &&
+      new URL(route.request().url()).searchParams.get("presentation") ===
+        "academic"
+    ) {
+      await route.fulfill({ status: 503 });
+    } else {
+      await route.continue();
+    }
+  });
   const { shell } = await openFormalRoot(page);
   const home = shell.locator("[data-home-surface]");
-  await expect(
-    home.locator(
-      `[data-home-feed-panel="discover"] [data-catalog-id="${runtimeIds.multiMedia}"]`,
-    ),
-  ).toContainText("运行时多图碑刻");
+  const multiMediaCard = home.locator(
+    `[data-home-feed-panel="discover"] [data-catalog-id="${runtimeIds.multiMedia}"]`,
+  );
+  await expect(multiMediaCard).toContainText("运行时多图碑刻");
+  // unified-media-pipeline-v1: the card offers its candidates up to the
+  // anchor, which stays its src, and the browser loads a real WebP from them.
+  const cardImage = multiMediaCard.locator("img");
+  await expect(cardImage).toHaveAttribute("srcset", /1200w$/u);
+  const [src, srcset] = await Promise.all([
+    cardImage.getAttribute("src"),
+    cardImage.getAttribute("srcset"),
+  ]);
+  expect(src).toMatch(
+    /\/media\/renditions\/inscription-front-card-1200x1600\.webp$/u,
+  );
+  expect(srcset?.split(", ").map((entry) => entry.split(" ")[1])).toEqual([
+    "360w",
+    "810w",
+    "1200w",
+  ]);
+  expect(srcset).toContain(`${src} 1200w`);
+  await expect
+    .poll(() =>
+      cardImage.evaluate(
+        (image) =>
+          (image as HTMLImageElement).complete &&
+          (image as HTMLImageElement).naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
   await expect(home.locator('[data-home-feed-panel="nearby"]')).toContainText(
     "附近内容尚未接入",
   );
@@ -208,6 +254,14 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
   await expect(
     discussion.getByRole("tabpanel", { name: "专题" }),
   ).toContainText("专题暂时不可用");
+  topicsUnavailable = false;
+  await discussion
+    .getByRole("tabpanel", { name: "专题" })
+    .getByRole("button", { name: "重试" })
+    .click();
+  await expect(
+    discussion.getByRole("tabpanel", { name: "专题" }),
+  ).toContainText("暂无专题");
 
   // The existing inscription sequence loads when its Home tab becomes active.
   await selectHomeFeed(page, "碑刻", "inscriptions");
@@ -313,6 +367,13 @@ test("Formal query Detail and Viewer preserve Back, Forward, and reload", async 
   await expect(detail.locator("[data-detail-title]")).toHaveText(
     "运行时多图碑刻",
   );
+  // Rendition peers stay mounted for Viewer paging, but a closed Viewer must
+  // not compete with the carousel by downloading their display anchors.
+  await expect(
+    productShell(page)
+      .getByRole("dialog", { name: "图像查看", includeHidden: true })
+      .locator('img[alt="运行时多图碑刻局部"]'),
+  ).not.toHaveAttribute("src");
 
   await detail.locator("[data-detail-main-image]").click();
   await expect(viewer).toBeVisible();
@@ -334,9 +395,33 @@ test("Formal query Detail and Viewer preserve Back, Forward, and reload", async 
     `/?catalogId=${runtimeIds.multiMedia}&image=runtime-inscription-detail`,
   );
   await expect(viewerDialog(page)).toBeVisible();
-  await expect(
-    viewerDialog(page).locator("[data-detail-viewer-image]"),
-  ).toHaveAttribute("alt", "运行时多图碑刻局部");
+  const viewerImage = viewerDialog(page).locator("[data-detail-viewer-image]");
+  await expect(viewerImage).toHaveAttribute("alt", "运行时多图碑刻局部");
+  // unified-media-pipeline-v1 (CW14): the Viewer opens on the fixture
+  // candidate covering its fitted width, names its width, and the browser
+  // shows exactly that WebP.
+  await expect(viewerImage).toHaveAttribute(
+    "data-detail-viewer-rendition-width",
+    /^(?:480|1080|1600|3200)$/u,
+  );
+  await expect
+    .poll(() =>
+      viewerImage.evaluate((node) => {
+        const image = node as HTMLImageElement;
+        const width = Number(
+          image.getAttribute("data-detail-viewer-rendition-width"),
+        );
+        return (
+          image.complete &&
+          image.naturalWidth === width &&
+          new RegExp(
+            `/media/renditions/inscription-detail-${width}x\\d+\\.webp$`,
+            "u",
+          ).test(image.currentSrc)
+        );
+      }),
+    )
+    .toBe(true);
 });
 
 test("Catalog redirect remains 307 and Formal Detail failures stay truthful", async ({

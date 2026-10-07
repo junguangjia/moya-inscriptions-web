@@ -13,6 +13,7 @@ import { ContentCard } from "./content-card";
 import { useProductShell } from "../product-shell/product-shell";
 import { CatalogMasonry } from "../home/catalog-masonry";
 import homeStyles from "../home/home-screen.module.css";
+import { listMediaPriority } from "../media/responsive-media";
 const emptyFilters: InscriptionFilters = {
   dynasty: [],
   textAuthor: [],
@@ -387,11 +388,16 @@ const ScopedDiscoveryFeed = ({
           </form>
         </details>
       )}
+      {/* The visible feed's first cards load first (likely the page's LCP). */}
       {kind === "inscription" ? (
         <ul className={homeStyles.inscriptionList} data-inscription-list="">
-          {snapshot.items.map((item) => (
+          {snapshot.items.map((item, index) => (
             <li key={`${item.target.type}:${item.target.id}`}>
-              <ContentCard item={item} variant="inscription" />
+              <ContentCard
+                item={item}
+                priority={active ? listMediaPriority(index) : undefined}
+                variant="inscription"
+              />
             </li>
           ))}
         </ul>
@@ -402,8 +408,12 @@ const ScopedDiscoveryFeed = ({
           spanAtAlignedRows
           feedLayout={shell.feedLayout}
           platform={shell.platform}
-          renderItem={(item, onMediaSettled) => (
-            <ContentCard item={item} onMediaSettled={onMediaSettled} />
+          renderItem={(item, onMediaSettled, index) => (
+            <ContentCard
+              item={item}
+              onMediaSettled={onMediaSettled}
+              priority={active ? listMediaPriority(index) : undefined}
+            />
           )}
         />
       )}

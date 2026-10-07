@@ -95,8 +95,10 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
       "/v1/community/mentions",
       "/v1/community/notifications",
     ]);
-    // One Catalog detail route plus the two comment routes of Mission 2B.
-    expect(router.match(/\.exec\(pathname\)/gu)).toHaveLength(3);
+    // One Catalog detail route plus the two comment routes of Mission 2B,
+    // and (unified-media-pipeline-v1, PR 1b) the Development-only Catalog
+    // rendition route GET /v1/development/catalog-renditions/<rendition id>.
+    expect(router.match(/\.exec\(\s*pathname,?\s*\)/gu)).toHaveLength(4);
     expect(router).toContain("/^\\/v1\\/catalog\\/([^/]+)$/");
     expect(router).toContain("/^\\/v1\\/catalog\\/([^/]+)\\/comments$/");
     expect(router).toContain(
@@ -104,6 +106,21 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
     );
     // The Development entry is composed only behind the explicit flag.
     expect(router).toContain("community?.developmentEntry === true");
+    // The Development Catalog rendition route lives inside that entry, after
+    // the session lifecycle, and serves only rendition ids.
+    const developmentEntry = router.indexOf(
+      "community?.developmentEntry === true",
+    );
+    const renditionRoute = router.indexOf(
+      "/^\\/v1\\/development\\/catalog-renditions\\/(media-rendition-[0-9a-f]{32})$/",
+    );
+    expect(renditionRoute).toBeGreaterThan(
+      router.indexOf('pathname === "/v1/development/sign-out"'),
+    );
+    expect(renditionRoute).toBeGreaterThan(developmentEntry);
+    expect(renditionRoute).toBeLessThan(
+      router.indexOf("community?.authService !== undefined"),
+    );
     // The operator boundary is an internal subpath, never a /v1 Public API path.
     expect(router).toContain('pathname.startsWith("/internal/community/")');
     expect(router).not.toMatch(/"\/v1\/[^"]*(?:moderation|operator|internal)/u);

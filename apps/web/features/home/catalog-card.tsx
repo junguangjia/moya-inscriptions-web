@@ -4,13 +4,27 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import { Icon } from "@moya/ui";
 
-import { localCatalogMediaSrc } from "../detail/local-catalog-media";
+import {
+  localCatalogMediaSrc,
+  localCatalogRenditions,
+} from "../detail/local-catalog-media";
+import {
+  MEDIA_SIZES,
+  mediaLoading,
+  placeholderStyle,
+  responsiveImage,
+} from "../media/responsive-media";
 import styles from "./home-screen.module.css";
+import { useMasonrySlot } from "./catalog-masonry";
 import { useContentQuickActions } from "../quick-actions/content-quick-actions";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 
 import type { ComponentType, CSSProperties, ReactNode } from "react";
 import type { CatalogSummary, PublicMedia } from "@moya/contracts";
+import type {
+  MediaPriority,
+  RenditionCandidate,
+} from "../media/responsive-media";
 
 export type CatalogCardVariant = "feed" | "inscription";
 
@@ -21,6 +35,8 @@ export interface CatalogCardProps {
     item: CatalogSummary,
     opener: HTMLButtonElement,
   ) => void;
+  /** Set by the list for the first cards of the first visible page only. */
+  readonly priority?: MediaPriority | undefined;
   readonly variant: CatalogCardVariant;
 }
 
@@ -103,23 +119,35 @@ export const CatalogCardLiveBadge = () => (
   </span>
 );
 
+/** The card image: its anchor `src` and size, plus card candidates up to it. */
+export type CatalogCardMediaSource = Pick<
+  PublicMedia,
+  "src" | "alt" | "width" | "height"
+> & {
+  readonly renditions?: readonly RenditionCandidate[] | undefined;
+  /** The opaque asset's colour, painted behind the covered box while it loads. */
+  readonly placeholderColor?: string | undefined;
+};
+
 export const CatalogCardMedia = ({
   live = false,
   media,
   onMediaSettled,
+  priority,
   title,
   variant,
 }: {
   /** Shows the LIVE badge on a valid cover; never plays anything. */
   readonly live?: boolean;
-  readonly media:
-    Pick<PublicMedia, "src" | "alt" | "width" | "height"> | undefined;
+  readonly media: CatalogCardMediaSource | undefined;
   readonly onMediaSettled?: () => void;
+  readonly priority?: MediaPriority | undefined;
   readonly title: string;
   readonly variant: CatalogCardVariant;
 }) => {
   const [failed, setFailed] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
+  const slot = useMasonrySlot();
 
   useEffect(() => {
     const image = imageRef.current;
@@ -144,6 +172,12 @@ export const CatalogCardMedia = ({
     );
   }
 
+  const image = responsiveImage(
+    media,
+    variant === "inscription"
+      ? MEDIA_SIZES.inscriptionCard(media)
+      : MEDIA_SIZES.feedCard(media, slot),
+  );
   return (
     <div
       className={`${styles.media} ${
@@ -158,18 +192,24 @@ export const CatalogCardMedia = ({
           : undefined
       }
     >
+      {/* The image covers its own box (object-fit: cover), so the asset
+          colour behind it shows only until it paints; an inscription card's
+          box can grow taller than its image and keeps its own background. */}
       <img
         ref={imageRef}
         alt={media.alt}
         decoding="async"
         height={media.height}
-        loading="lazy"
+        {...mediaLoading(priority)}
         onError={() => {
           setFailed(true);
           onMediaSettled?.();
         }}
         onLoad={onMediaSettled}
-        src={media.src}
+        sizes={image.sizes}
+        src={image.src}
+        srcSet={image.srcSet}
+        style={placeholderStyle(media.placeholderColor)}
         width={media.width}
       />
       {live ? <CatalogCardLiveBadge /> : null}
@@ -181,6 +221,7 @@ export const CatalogCardPresentation = ({
   item,
   onMediaSettled,
   onOpenCatalog,
+  priority,
   variant,
 }: CatalogCardProps) => {
   const quickActions = useContentQuickActions();
@@ -216,10 +257,14 @@ export const CatalogCardPresentation = ({
                   item.id,
                   item.representativeMedia.id,
                 ),
+                renditions: localCatalogRenditions(
+                  item.representativeMedia.renditions,
+                ),
               }
             : undefined
         }
         {...(onMediaSettled === undefined ? {} : { onMediaSettled })}
+        priority={priority}
         title={item.title}
         variant={variant}
       />

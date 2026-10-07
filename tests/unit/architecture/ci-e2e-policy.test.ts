@@ -437,8 +437,17 @@ describe("stable e2e result gate", () => {
     );
     expect(workflow).toContain("needs: [classify_e2e, e2e_smoke, e2e-shards]");
     expect(workflow).toContain("shard: [1, 2, 3]");
-    expect(workflow).toContain("timeout-minutes: 30");
-    expect(workflow).toContain("timeout-minutes: 22");
+    for (const [job, next] of [
+      ["e2e-shards", "e2e_smoke"],
+      ["browser_gate", "e2e"],
+    ]) {
+      const block = workflow
+        .split(`\n  ${job}:\n`)[1]
+        ?.split(`\n  ${next}:\n`)[0];
+      expect(block).toBeDefined();
+      expect(block).not.toContain("timeout-minutes:");
+    }
+    expect(workflow.split("\n  e2e:\n")[1]).not.toContain("timeout-minutes:");
     for (const mode of ["prepare", "run", "merge"])
       expect(workflow).toContain("node tests/e2e/support/e2e-ci.mjs " + mode);
     expect(workflow).toContain("workflow_dispatch:");

@@ -87,6 +87,7 @@ export type ProductAccess = z.infer<typeof productAccessSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
 
 export type { MentionReference } from "./mention-references.js";
+export type { MediaRendition } from "./media-delivery.js";
 
 export type NotificationItem = z.infer<
   typeof import("./schemas.js").notificationItemSchema

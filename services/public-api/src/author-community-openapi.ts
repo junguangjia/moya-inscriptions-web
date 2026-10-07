@@ -43,10 +43,11 @@ const pathSchema = (name: string) => {
   if (name === "requestId") return { type: "string", format: "uuid" };
   if (name === "role")
     return { type: "string", enum: ["still", "motion", "package"] };
+  // The relay serves every media variant, the `viewer` zoom still included.
   if (name === "variant")
     return {
       type: "string",
-      enum: ["thumb", "display", "full", "motion", "cover"],
+      enum: ["thumb", "display", "full", "motion", "cover", "viewer"],
     };
   if (name === "editKey")
     return { type: "string", pattern: "^(?:base|[0-9a-f]{32})$" };

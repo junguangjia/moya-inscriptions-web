@@ -1,3 +1,5 @@
+import { catalogMediaDeliveryJoinSql } from "./catalog-media-delivery.js";
+
 export const countCatalogEntriesSql = `
   SELECT COUNT(*)::text AS total
   FROM catalog_entries
@@ -80,4 +82,23 @@ export const listCatalogMediaSql = `
   FROM catalog_media
   WHERE catalog_id = $1
   ORDER BY position ASC
+`;
+
+// The same media rows with their rendition delivery facts, for readers
+// composed with renditions (the community schema and its read grant exist).
+const catalogMediaDeliveryColumns = `
+  SELECT cm.media_id, cm.catalog_id, cm.position, cm.is_representative, cm.kind,
+         cm.alt_text, cm.width, cm.height, cm.object_key,
+         delivery.renditions, delivery.placeholder_color
+  FROM catalog_media cm${catalogMediaDeliveryJoinSql("cm")}`;
+
+export const listRepresentativeCatalogMediaDeliverySql = `${catalogMediaDeliveryColumns}
+  WHERE cm.catalog_id = ANY($1::text[])
+    AND cm.is_representative
+  ORDER BY cm.catalog_id ASC
+`;
+
+export const listCatalogMediaDeliverySql = `${catalogMediaDeliveryColumns}
+  WHERE cm.catalog_id = $1
+  ORDER BY cm.position ASC
 `;

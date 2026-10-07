@@ -6,8 +6,14 @@ import { Icon } from "@moya/ui";
 import { useContentQuickActions } from "../quick-actions/content-quick-actions";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 
+import {
+  MEDIA_SIZES,
+  placeholderStyle,
+  responsiveImage,
+} from "../media/responsive-media";
 import styles from "./home-screen.module.css";
 import { feedMediaAspectRatio } from "./catalog-card";
+import { useMasonrySlot } from "./catalog-masonry";
 
 import type { NearbyCard } from "./home-feed";
 import type { CSSProperties } from "react";
@@ -21,7 +27,12 @@ export const HomeContentCard = ({
 }) => {
   const quickActions = useContentQuickActions();
   const [failed, setFailed] = useState(false);
+  const slot = useMasonrySlot();
   const media = item.media;
+  const image =
+    media === undefined
+      ? undefined
+      : responsiveImage(media, MEDIA_SIZES.feedCard(media, slot));
 
   return (
     <article
@@ -58,6 +69,7 @@ export const HomeContentCard = ({
             } as CSSProperties
           }
         >
+          {/* The image covers its box, so the asset colour shows only until it paints. */}
           <img
             alt={media.alt}
             decoding="async"
@@ -68,7 +80,10 @@ export const HomeContentCard = ({
               onMediaSettled?.();
             }}
             onLoad={onMediaSettled}
-            src={media.src}
+            sizes={image?.sizes}
+            src={image?.src ?? media.src}
+            srcSet={image?.srcSet}
+            style={placeholderStyle(media.placeholderColor)}
             width={media.width}
           />
         </div>

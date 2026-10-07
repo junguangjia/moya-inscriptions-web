@@ -72,6 +72,7 @@ vi.mock("../shell/horizontal-pager", async () => {
     HorizontalPager: ({
       ref,
       onCommit,
+      onBeforeCommit,
       activeKey,
       scrollOwner,
       panels,
@@ -79,6 +80,7 @@ vi.mock("../shell/horizontal-pager", async () => {
     }: {
       ref: import("react").Ref<{ scrollToKey: (tab: string) => void }>;
       onCommit: (tab: string) => void;
+      onBeforeCommit?: (tab: string) => void;
       activeKey: string;
       scrollOwner: string;
       panels: Record<string, import("react").ReactNode>;
@@ -86,6 +88,7 @@ vi.mock("../shell/horizontal-pager", async () => {
     }) => {
       useImperativeHandle(ref, () => ({
         scrollToKey: (tab: string) => {
+          onBeforeCommit?.(tab);
           beforeCommit(tab);
           onCommit(tab);
         },
@@ -795,6 +798,9 @@ describe("Primary user profile", () => {
       beforeCommit.mockImplementation((tab: string) => {
         currentLimit = tab === "works" ? 1800 : 600;
         top = Math.min(top, currentLimit);
+        // A browser can report the clamped offset before the selected-tab
+        // commit. That report must not replace the departing reading position.
+        (platform === "pc" ? window : owner).dispatchEvent(new Event("scroll"));
       });
       // Model a browser's clamping when the new panel is shorter than its
       // scroll owner. Assertions observe the rendered scroll position only.

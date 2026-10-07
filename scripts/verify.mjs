@@ -335,7 +335,10 @@ export function verificationPlan(mode, flags = [], env = {}, root) {
     selection: selected,
     milestone,
     ...(workspaces === undefined ? {} : { workspaces }),
-    ...effectiveCeiling(stage[selected], options.remainingMs),
+    ...effectiveCeiling(
+      milestone ? VALIDATION_PROFILES.ciTestMilestone : stage[selected],
+      options.remainingMs,
+    ),
   };
 }
 

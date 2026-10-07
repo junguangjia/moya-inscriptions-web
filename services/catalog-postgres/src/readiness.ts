@@ -1,4 +1,5 @@
 import { asPostgresOperationError } from "./availability.js";
+import type { CatalogReaderOptions } from "./catalog-media-delivery.js";
 import { verifyRequiredMigrationLedger } from "./migrations/runner.js";
 import { catalogSearchReadySql } from "./search-queries.js";
 import { SEARCH_NORMALIZATION_VERSION } from "@moya/search";
@@ -44,9 +45,16 @@ export const checkPostgresReadiness = async (pool: Pool): Promise<void> => {
   }
 };
 
+/**
+ * Read-only startup validation of the published read connection. Readers
+ * composed with `renditions` also require the Catalog rendition delivery
+ * view and its SELECT grant (the post-Community public read phase), so a
+ * missing grant stops startup instead of failing Catalog reads.
+ */
 export const assertPostgresStartupReady = async (
   pool: Pool,
   source: "legacy" | "payload" = "legacy",
+  options: CatalogReaderOptions = {},
 ): Promise<void> => {
   try {
     const client = await acquireClient(pool);
@@ -109,6 +117,22 @@ export const assertPostgresStartupReady = async (
         throw new PostgresStartupError(
           "Payload published search is not migration-ready",
         );
+    }
+    if (options.renditions === true) {
+      try {
+        await pool.query(
+          "SELECT 1 FROM community.catalog_media_delivery LIMIT 0",
+        );
+      } catch (error) {
+        // Missing schema or view, or no SELECT grant for this role.
+        const code = (error as { readonly code?: unknown } | null)?.code;
+        if (code === "3F000" || code === "42P01" || code === "42501")
+          throw new PostgresStartupError(
+            "Catalog rendition delivery view is not readable",
+            error,
+          );
+        throw error;
+      }
     }
   } catch (error) {
     if (error instanceof PostgresStartupError) throw error;

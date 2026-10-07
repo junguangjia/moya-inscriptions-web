@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET, POST, PUT } from "./[...path]/route";
 import { GET as authGet, POST as authPost } from "./auth/[...path]/route";
 import { GET as stream } from "./notifications/stream/route";
+import { GET as catalogRendition } from "../development/catalog-renditions/[renditionId]/route";
 
 const ingress =
   crypto.randomUUID().replaceAll("-", "") +
@@ -222,6 +223,25 @@ describe("Production notification stream", () => {
     const incoming = request("notifications/stream");
     incoming.headers.delete("cookie");
     expect((await stream(incoming)).status).toBe(401);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+// unified-media-pipeline-v1: the Development Catalog rendition relay does not
+// exist in Production, whatever it is asked for.
+describe("Production Development-only media routes", () => {
+  it("answers 404 for a Catalog rendition without reading anything", async () => {
+    const upstream = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", upstream);
+    const renditionId = `media-rendition-${"e".repeat(32)}`;
+    const response = await catalogRendition(
+      new Request(
+        `${origin}/api/development/catalog-renditions/${renditionId}`,
+      ),
+      { params: Promise.resolve({ renditionId }) },
+    );
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(upstream).not.toHaveBeenCalled();
   });
 });

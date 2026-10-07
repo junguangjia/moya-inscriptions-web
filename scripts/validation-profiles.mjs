@@ -17,6 +17,15 @@ export const VALIDATION_PROFILES = Object.freeze({
   cmsQuick: Object.freeze({ name: "cms-quick", totalMs: 120_000 }),
   // WEB COMPLETE CHECKS: one complete lint, typecheck, test or build run.
   webComplete: Object.freeze({ name: "web-complete", totalMs: 300_000 }),
+  // CI TEST MILESTONE: the complete test run inside the hosted CI test job.
+  // Owner, 2026-10-07: CI checks run to completion and are analysed
+  // afterwards; the hosted job limit (`timeout-minutes: 20`) remains the
+  // containment. This ceiling only stops a hung run inside that job and leaves
+  // room for the PostgreSQL 16 step. Every local profile here is unchanged.
+  ciTestMilestone: Object.freeze({
+    name: "ci-test-milestone",
+    totalMs: 900_000,
+  }),
   // CMS COMPLETE CHECKS: integration or native Admin browser validation.
   cmsComplete: Object.freeze({ name: "cms-complete", totalMs: 300_000 }),
   // BROWSER SMOKE: warm prepared feedback path and cold complete smoke.

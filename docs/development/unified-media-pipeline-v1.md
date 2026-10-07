@@ -348,7 +348,75 @@ follow-up for the increment-4 format validation.
   identity, whose key identifier would then appear in public URLs. Catalog
   responses keep the legacy `src` until increment 2 serves the renditions
   through published delivery. Development serves Catalog candidates through the
-  Development resolver so the complete design can be inspected.
+  Development resolver so the complete design can be inspected. See
+  [Delivery (PR 1b)](#delivery-pr-1b).
+
+## Delivery (PR 1b)
+
+- **Rendition lists.** Public media objects carry an optional `renditions` list
+  of `{ src, width, height, contentType }` candidates of one framing, ascending
+  by size, and an optional `placeholderColor`. The list depends on the context
+  of the field, never on a role name:
+  - Card contexts (Catalog list, search and content cards, Article and
+    Collection summaries, a work's `coverRenditions`) list the candidates up to
+    the display-level anchor: `thumb`, `cover`, `display`.
+  - Detail contexts (the Catalog detail gallery, an Article page, `WorkMedia`)
+    add the zoom levels `viewer` and, within the bound below, `full`.
+  - The parent `src`, `width` and `height` are the anchor whenever a list is
+    present. A Catalog image falls back to its approved object without a list
+    when one of its candidates does not resolve or the list breaks a contract
+    rule, with one content-free log line; an empty resolution means delivery is
+    off and is not logged. A work item whose list breaks a contract rule around
+    a present anchor keeps its `src` without a list, also with one content-free
+    log line. A failed resolution batch still fails the read as before.
+    `placeholderColor` is the loading colour of an opaque image and is emitted
+    whenever its asset is ready, whatever the delivery.
+- **Public resolution bound (D3).** Anyone but the owner receives a `full`
+  rendition only with a long edge of at most 8,192 px, or, for a long scroll
+  (long edge more than 2.5 times the short edge), at most 16,000 px and 40 MP:
+  today's `full@1` long-scroll geometry. The bound applies to the scaled frame,
+  whose sides the recipe rounds to the nearest pixel, so the long-scroll aspect
+  and the pixel cap allow half a pixel per side (a 2504 × 15993 frame renders
+  2503 × 15984, 40,007,952 px). The DTO builders and the authorized relay apply
+  one predicate, so every listed candidate is also readable through the relay by
+  that reader; owners keep their own full-resolution reads.
+- **Catalog delivery view.** Community migration `20261004020000` creates
+  `community.catalog_media_delivery`, a `security_barrier` view with one row per
+  ready rendition, on a committed blob, of a ready Catalog asset that the
+  published projection named at the media worker's last Catalog sync (every five
+  minutes while the worker runs), within the bound above. Readers join it to the
+  published projection itself, so a withdrawn image leaves their answers at
+  once. The registry view may retain it until the next sync; the Development
+  byte route also checks the current published projection before serving it.
+  Later consumers must keep that check rather than authorize by delivery key
+  alone. Its delivery key is the opaque rendition id, never a storage key; its
+  level is `card`, `display` or `zoom`. The post-Community grant phase
+  [`infra/development/catalog-media/grant-public-read.sql`](../../infra/development/catalog-media/grant-public-read.sql)
+  gives the public read role `SELECT` on this view only; the App role gets the
+  same view in `grant-runtime.sql` for discovery cards. Catalog readers on the
+  public read connection join the view in every runtime except the Pilot;
+  discovery cards join it through the App role in every runtime. The Backend
+  refuses to start when either role cannot read the view.
+- **Production.** Catalog rendition delivery stays off in increment 1: the
+  Production resolver resolves no delivery key, so Catalog responses keep the
+  approved image's signed `src` and gain only the placeholder colour. Increment
+  2 resolves the keys to published URLs by configuration.
+- **Development delivery.** The Development resolver names each rendition on the
+  Backend's own loopback listener,
+  `http://127.0.0.1:<port>/v1/development/catalog-renditions/<rendition id>`.
+  The Backend listener must use `HOST=127.0.0.1` so it serves that fixed IPv4
+  address; IPv6-only and DNS-resolved listener names are refused. That route
+  exists only in synthetic Development with local storage and a publishing
+  store, and the resolver names renditions only when it exists; without a
+  publishing store Catalog media keep their approved `src`. The route serves
+  exactly that `GET` target (no query), streams the committed blob of a
+  rendition the view lists only while the Catalog read connection confirms the
+  current published media id and object identity. It uses the recorded type
+  (WebP in increment 1) and length, `private, no-store` and `nosniff`, and
+  answers `404` otherwise. The Web rewrites those URLs to a same-origin
+  Development relay, so LAN phones see the same candidates. `pnpm dev:migrate`
+  applies the post-Community public read phase after the community migrations,
+  as the setup role with `public_read_role=yoyi_dev_public`.
 
 ## Retention hold
 

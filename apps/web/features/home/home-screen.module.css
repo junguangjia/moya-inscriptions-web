@@ -636,7 +636,8 @@
   box-shadow: inset 0 0 0 1px var(--yoyi-color-border-strong);
 }
 
-.homeHeader[data-author-bar] {
+.homeHeader[data-author-bar],
+:global([data-primary-shell][data-platform="pc"]) .homeHeader[data-author-bar] {
   grid-template-columns: 44px minmax(0, 1fr) 44px;
   align-items: center;
   gap: 0;

@@ -62,6 +62,7 @@ import type {
 import type { ArticleAuthoringGrant } from "@moya/contracts";
 import type { NodeEnvironment } from "./config.js";
 import type { ArticleDelegationRuntime } from "./community/article-delegation-handler.js";
+import type { DevelopmentCatalogRenditions } from "./community/development-catalog-rendition-handler.js";
 import type { createArticleMcpHandler } from "./community/article-mcp.js";
 import type { HealthReadinessCheck } from "./health/health-handler.js";
 import type { AuthRequestSource } from "./community/auth-request-source.js";
@@ -141,6 +142,12 @@ export interface BackendApplicationOptions {
   readonly publishingClock?: () => Date;
   /** Upload idle timeout and refusal read window; defaults 120 s and 5 s. */
   readonly publishingTransferPolicy?: Partial<PublishingTransferPolicy>;
+  /**
+   * Catalog rendition bytes behind the Development delivery URLs (unified
+   * media pipeline, PR 1b). Only composed under NODE_ENV=development, for
+   * synthetic Development with local storage; ignored otherwise.
+   */
+  readonly developmentCatalogRenditions?: DevelopmentCatalogRenditions;
 }
 
 /**
@@ -337,6 +344,10 @@ const resolveCommunity = (
     // Publishing reuses the existing services and their access checks.
     ...publishing,
     developmentEntry: nodeEnv === "development",
+    ...(nodeEnv === "development" &&
+    options.developmentCatalogRenditions !== undefined
+      ? { developmentCatalogRenditions: options.developmentCatalogRenditions }
+      : {}),
     contentOperatorPort: options.contentOperatorPort,
     discussionPort: options.discussionPort,
     // Comments and moderation need their own port; identity works without it.

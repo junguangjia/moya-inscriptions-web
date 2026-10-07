@@ -13,6 +13,10 @@ import type {
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import {
+  mapCatalogMediaDelivery,
+  catalogMediaDeliveryJoinSql,
+} from "./publishing/catalog-delivery.js";
+import {
   revisionCover,
   revisionCoverColumns,
   revisionCoverJoin,
@@ -132,6 +136,8 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
       works = rows
         .filter((r) => r.content_type === "work")
         .map((r) => r.content_id);
+    // Catalog cards carry the rendition delivery facts of their image (the
+    // published-only community view); the service resolves card candidates.
     const cm = (
       await db.query<{
         catalog_id: string;
@@ -139,8 +145,12 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
         object_key: string;
         width: number;
         height: number;
+        renditions: unknown;
+        placeholder_color: unknown;
       }>(
-        "SELECT catalog_id,media_id,object_key,width,height FROM catalog_media WHERE catalog_id=ANY($1::text[]) AND is_representative",
+        `SELECT cm.catalog_id,cm.media_id,cm.object_key,cm.width,cm.height,delivery.renditions,delivery.placeholder_color
+        FROM catalog_media cm${catalogMediaDeliveryJoinSql("cm")}
+        WHERE cm.catalog_id=ANY($1::text[]) AND cm.is_representative`,
         [catalogs],
       )
     ).rows;
@@ -155,7 +165,7 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
     // Cards read the viewer's revision (the author revision for the work's
     // author, else the public revision): its excerpt and its cover (the chosen
     // cover item under its cover crop, else the first item), static even for
-    // a Live Photo.
+    // a Live Photo, with the card candidates of the cover's own framing.
     const wm = (
       await db.query<WorkCardRow>(
         `SELECT w.id AS work_id,r.body,${revisionCoverColumns("cov")}
@@ -190,6 +200,7 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
                 objectKey: c.object_key,
                 width: c.width,
                 height: c.height,
+                ...mapCatalogMediaDelivery(c.renditions, c.placeholder_color),
               }
             : null,
         };
@@ -205,6 +216,12 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
             src: cover.src,
             width: cover.width,
             height: cover.height,
+            ...(cover.renditions === undefined
+              ? {}
+              : { renditions: cover.renditions }),
+            ...(cover.placeholderColor === undefined
+              ? {}
+              : { placeholderColor: cover.placeholderColor }),
           }
         : null;
       return {

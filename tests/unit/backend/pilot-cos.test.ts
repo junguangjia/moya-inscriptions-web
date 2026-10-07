@@ -39,6 +39,7 @@ const digest = createHash("sha256").update(content).digest("hex");
 const mediaId = `media_${"a".repeat(32)}`;
 const objectKey = `display/v1/${mediaId}/${digest}.webp`;
 const now = 1_788_820_000_000;
+// Synthetic credentials for the local HTTP signing fixture.
 const options = (): PilotCosOptions => ({
   bucket: "pilot-example-1250000000",
   region: "ap-guangzhou",
@@ -46,7 +47,7 @@ const options = (): PilotCosOptions => ({
   objects: [{ mediaId, objectKey, sha256: digest, sizeBytes: content.length }],
   credentials: async () => ({
     secretId: "unit-only-id",
-    secretKey: "unit-only-secret",
+    secretKey: "synthetic-cos-secret-1",
   }),
 });
 const response = (
@@ -179,11 +180,11 @@ describe("COS XML signing", () => {
       signCosRequest({
         ...officialDownload,
         secretId: "unit-only-id",
-        secretKey: "unit-only-secret",
+        secretKey: "synthetic-cos-secret-1",
         startsAt: 1557989753,
         expiresAt: 1557996953,
       }),
-    ).toContain("q-signature=d09793bd538553f0e97bca0a307a4d18e9a206ad");
+    ).toContain("q-signature=79a47ba978758cfb62e73013c8c55b4614aff4d2");
     expect(() =>
       canonicalCosRequest({
         ...officialDownload,
@@ -194,7 +195,7 @@ describe("COS XML signing", () => {
       signCosRequest({
         ...officialDownload,
         secretId: "id",
-        secretKey: "key",
+        secretKey: "synthetic-cos-secret-2",
         startsAt: 20,
         expiresAt: 20,
       }),
@@ -303,8 +304,8 @@ describe("bounded Pilot COS operations", () => {
         ...options(),
         credentials: async () => ({
           secretId: "unit-only-id",
-          secretKey: "unit-only-secret",
-          securityToken: "unit-token+/=",
+          secretKey: "synthetic-cos-secret-1",
+          securityToken: "synthetic-cos-token-3",
           expiresAt: now / 1000 + 90,
         }),
       },
@@ -313,7 +314,8 @@ describe("bounded Pilot COS operations", () => {
     await storage.ensureObject(objectKey, content);
     expect(
       queue.calls.every(
-        (call) => call.headers["x-cos-security-token"] === "unit-token+/=",
+        (call) =>
+          call.headers["x-cos-security-token"] === "synthetic-cos-token-3",
       ),
     ).toBe(true);
     expect(
@@ -547,6 +549,19 @@ describe("short-lived backend URL resolver", () => {
     );
   });
 
+  it("delivers no Catalog rendition key", async () => {
+    const storage = new PilotCosStorage(options(), { now: () => now });
+    const resolver = storage.createStorageUrlResolver();
+    expect(
+      (
+        await resolver.resolveKeys([
+          `media-rendition-${"1".repeat(32)}`,
+          objectKey,
+        ])
+      ).size,
+    ).toBe(0);
+  });
+
   it("bounds temporary credential lifetime and never emits expired URLs", async () => {
     let time = now;
     const storage = new PilotCosStorage(
@@ -554,8 +569,8 @@ describe("short-lived backend URL resolver", () => {
         ...options(),
         credentials: async () => ({
           secretId: "unit-only-id",
-          secretKey: "unit-only-secret",
-          securityToken: "unit-token+/=",
+          secretKey: "synthetic-cos-secret-1",
+          securityToken: "synthetic-cos-token-3",
           expiresAt: now / 1000 + 90,
         }),
       },
@@ -568,7 +583,9 @@ describe("short-lived backend URL resolver", () => {
     expect(url.searchParams.get("q-sign-time")).toBe(
       `${now / 1000};${now / 1000 + 90}`,
     );
-    expect(url.searchParams.get("x-cos-security-token")).toBe("unit-token+/=");
+    expect(url.searchParams.get("x-cos-security-token")).toBe(
+      "synthetic-cos-token-3",
+    );
     expect(url.searchParams.get("q-url-param-list")).toContain(
       "x-cos-security-token",
     );
@@ -579,12 +596,15 @@ describe("short-lived backend URL resolver", () => {
   });
 
   it.each([
-    { securityToken: "token" },
-    { securityToken: "token", expiresAt: now / 1000 + 20 },
-    { securityToken: "token", expiresAt: Infinity },
-    { securityToken: "token", expiresAt: NaN },
+    { securityToken: "synthetic-cos-token-4" },
+    { securityToken: "synthetic-cos-token-4", expiresAt: now / 1000 + 20 },
+    { securityToken: "synthetic-cos-token-4", expiresAt: Infinity },
+    { securityToken: "synthetic-cos-token-4", expiresAt: NaN },
     { securityToken: "", expiresAt: now / 1000 + 90 },
-    { securityToken: "token\r\nsecret", expiresAt: now / 1000 + 90 },
+    {
+      securityToken: "synthetic-cos-token" + "\r\ninvalid-header",
+      expiresAt: now / 1000 + 90,
+    },
   ])(
     "fails closed for invalid temporary credentials without returning a URL",
     async (temporary) => {
@@ -593,7 +613,7 @@ describe("short-lived backend URL resolver", () => {
           ...options(),
           credentials: async () => ({
             secretId: "unit-only-id",
-            secretKey: "unit-only-secret",
+            secretKey: "synthetic-cos-secret-1",
             ...temporary,
           }),
         },
@@ -611,7 +631,7 @@ describe("short-lived backend URL resolver", () => {
 
   it.each([
     "http://media.example.invalid",
-    "https://u:p@media.example.invalid",
+    "https://u:synthetic@media.example.invalid",
     "https://media.example.invalid/path",
     "https://media.example.invalid/?signed=1",
     "https://127.0.0.1",

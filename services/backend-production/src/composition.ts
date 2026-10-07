@@ -43,6 +43,8 @@ import {
   PostgresDirectMessageAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
+  resolveCatalogRenditionRead,
+  verifyCatalogDeliveryReadable,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { loadProductAccess } from "./access/product-access.js";
@@ -103,6 +105,11 @@ export interface PreparedProductionBackend {
    */
   readonly startBackgroundWork: () => void;
 }
+
+/** The Catalog media URL port the public application reads through. */
+type StorageUrlResolver = NonNullable<
+  Parameters<typeof createBackendApplication>[0]["storageUrlResolver"]
+>;
 
 const loopback = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
@@ -228,11 +235,20 @@ export const prepareProductionBackend = async (
     : undefined;
   // Resolver configuration fails before opening the database pool. Only
   // published database projections can supply keys to the public read service.
+  // Development names Catalog renditions on this Backend's own listener.
   const storageUrlResolver = pilot
     ? pilot.storage.createStorageUrlResolver()
     : runtimeConfig.nodeEnv === "development"
-      ? createLocalStorageUrlResolver(environment)
+      ? createLocalStorageUrlResolver(environment, runtimeConfig)
       : new ProductionCosStorageUrlResolver(productionCosOptions(environment));
+  // Catalog readers on the published read connection join the community
+  // rendition delivery view (unified media pipeline, PR 1b) wherever the
+  // post-Community public read grant exists: every runtime except the Pilot,
+  // whose dedicated database and resolver deliver no rendition. Discovery
+  // cards join the view through the App role in every runtime, the Pilot
+  // included. Startup verifies both grants, so a missing grant stops startup
+  // instead of failing Catalog or discovery reads.
+  const catalogReaders = { renditions: pilot === undefined };
   // Where media processing runs (W2): Production always leaves it to the
   // separate media worker and opens only the COS store; Development hosts it
   // in this process by default (`embedded`) with the same sandbox runner.
@@ -280,6 +296,14 @@ export const prepareProductionBackend = async (
     };
   })();
   const publishingMedia = publishing?.media;
+  // Development names Catalog renditions only where its delivery route is
+  // composed (with a local publishing store, below); without one, Catalog
+  // media keep the approved image's src rather than a URL that answers 404.
+  const resolver: StorageUrlResolver = storageUrlResolver;
+  const catalogUrlResolver: StorageUrlResolver =
+    runtimeConfig.nodeEnv === "development" && publishing === null
+      ? { resolveMany: (locators) => resolver.resolveMany(locators) }
+      : resolver;
   const onUnexpectedIdleError = () => {
     console.error("[backend-production] unexpected PostgreSQL pool error");
   };
@@ -288,7 +312,7 @@ export const prepareProductionBackend = async (
     : createPostgresPool(postgresConfig, { onUnexpectedIdleError });
 
   try {
-    await assertPostgresStartupReady(pool, contentSource);
+    await assertPostgresStartupReady(pool, contentSource, catalogReaders);
   } catch (error) {
     await closePostgresPool(pool);
     throw error;
@@ -397,12 +421,17 @@ export const prepareProductionBackend = async (
   };
   try {
     await verifyCommunityMigrationLedger(communityPool);
+    // Discovery cards join the Catalog rendition delivery view (PR 1b).
+    await verifyCatalogDeliveryReadable(communityPool);
   } catch (error) {
     await closeResources();
     throw error;
   }
 
-  const catalogQueryPort = new PostgresCatalogQueryAdapter(pool);
+  const catalogQueryPort = new PostgresCatalogQueryAdapter(
+    pool,
+    catalogReaders,
+  );
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,
     { requireProductionSession: runtimeConfig.nodeEnv === "production" },
@@ -434,7 +463,7 @@ export const prepareProductionBackend = async (
       : undefined;
   const catalogReads = createArticleCatalogReadCallbacks(
     catalogQueryPort,
-    storageUrlResolver,
+    catalogUrlResolver,
   );
   const articleDelegation =
     articleConfiguration === null ||
@@ -476,7 +505,7 @@ export const prepareProductionBackend = async (
       productAccess,
       catalogQueryPort,
       catalogSearchQueryPort: catalogQueryPort,
-      storageUrlResolver,
+      storageUrlResolver: catalogUrlResolver,
       healthReadinessCheck: readinessCheck,
       communityIdentityPort,
       ...(() => {
@@ -517,7 +546,8 @@ export const prepareProductionBackend = async (
         editorialContentPort: createArticleReadPort(
           pool,
           communityPool,
-          storageUrlResolver,
+          catalogUrlResolver,
+          catalogReaders,
         ),
         threadPort: new PostgresThreadAdapter(communityPool),
         directMessagePort: new PostgresDirectMessageAdapter(communityPool),
@@ -540,6 +570,20 @@ export const prepareProductionBackend = async (
               publishingMediaStore: publishing.store,
               publishingMediaProcessor:
                 publishingMedia?.processor ?? externalPublishingProcessor,
+            }
+          : {}),
+        // Development delivery of Catalog renditions: the local store's
+        // committed blob of a rendition the delivery view lists, behind the
+        // URLs the Development resolver names. Development here is already
+        // synthetic with local storage (the local resolver refuses anything
+        // else at startup); Production never composes it.
+        ...(runtimeConfig.nodeEnv === "development" && publishing
+          ? {
+              developmentCatalogRenditions: {
+                resolve: (renditionId: string) =>
+                  resolveCatalogRenditionRead(communityPool, renditionId, pool),
+                store: publishing.store,
+              },
             }
           : {}),
       },

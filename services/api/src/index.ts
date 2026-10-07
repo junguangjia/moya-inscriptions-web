@@ -10,7 +10,13 @@ export type {
 export {
   mapCatalogDetail,
   mapCatalogPage,
+  mapCatalogPublicMedia,
   mapCatalogSummary,
+} from "./modules/catalog/application/mappers/catalog-public-contract-mapper.js";
+export type {
+  CatalogImageProjection,
+  CatalogMediaContext,
+  CatalogRenditionUrls,
 } from "./modules/catalog/application/mappers/catalog-public-contract-mapper.js";
 export {
   CatalogMediaResolutionError,
@@ -162,6 +168,8 @@ export type {
   CatalogListItemProjection,
   CatalogListPageProjection,
   CatalogMediaProjection,
+  CatalogMediaRenditionLevel,
+  CatalogMediaRenditionProjection,
   CatalogSourceCitationProjection,
   CatalogStatefulTextProjection,
 } from "./modules/catalog/application/catalog-read-projections.js";

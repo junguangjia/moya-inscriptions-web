@@ -57,6 +57,7 @@ const routes: Readonly<Record<string, string>> = {
   "api/catalog/[catalogId]/media/[mediaId]/route.ts": "development",
   "api/community/development/sign-in/route.ts": "development",
   "api/community/development/sign-out/route.ts": "development",
+  "api/development/catalog-renditions/[renditionId]/route.ts": "development",
   "api/editorial-media/[owner]/[file]/route.ts": "development",
   "dev/community/page.tsx": "development",
   "dev/community/preview/page.tsx": "development",

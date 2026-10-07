@@ -202,3 +202,116 @@ describe("ContentCard for works", () => {
     );
   });
 });
+
+/*
+ * unified-media-pipeline-v1 (CW4): a work card carries the candidates of its
+ * cover framing with `src` (the cover still) as the anchor; a Catalog card
+ * carries Catalog card candidates.
+ */
+describe("ContentCard responsive media", () => {
+  const coverPath = (variant: string) =>
+    `/api/community/publishing/media/${itemId}/${variant}/${"3".repeat(32)}`;
+  const coverCandidates = [
+    {
+      src: coverPath("thumb"),
+      width: 480,
+      height: 640,
+      contentType: "image/webp" as const,
+    },
+    {
+      src: coverPath("cover"),
+      width: 810,
+      height: 1080,
+      contentType: "image/webp" as const,
+    },
+  ];
+  const coverMedia = {
+    id: itemId,
+    src: coverPath("cover"),
+    width: 810,
+    height: 1080,
+    renditions: coverCandidates,
+    placeholderColor: "#3c3a35",
+  };
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("uses the cover candidates while src stays the cover still", () => {
+    const view = render(card({ media: coverMedia }));
+    const image = view.querySelector("img")!;
+    expect(image.getAttribute("src")).toBe(coverPath("cover"));
+    expect(image.getAttribute("srcset")).toBe(
+      `${coverPath("thumb")} 480w, ${coverPath("cover")} 810w`,
+    );
+    expect(image.getAttribute("sizes")).not.toBeNull();
+    expect(image.getAttribute("width")).toBe("810");
+    expect(image.getAttribute("height")).toBe("1080");
+    expect(image.style.backgroundColor).toBe("rgb(60, 58, 53)");
+    // The inscription list keeps its thumbnail sizes.
+    expect(
+      render(card({ media: coverMedia }), "inscription")
+        .querySelector("img")
+        ?.getAttribute("sizes"),
+    ).toContain("88px");
+  });
+
+  it("passes the list's priority to the first visible cards only", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() =>
+      root.render(
+        <>
+          <ContentCard item={card({ media: coverMedia })} priority="high" />
+          <ContentCard item={card({ media: coverMedia })} />
+        </>,
+      ),
+    );
+    const [first, later] = container.querySelectorAll("img");
+    expect(first?.getAttribute("fetchpriority")).toBe("high");
+    expect(first?.getAttribute("loading")).toBe("eager");
+    expect(later?.getAttribute("loading")).toBe("lazy");
+  });
+
+  it("serves Development Catalog card candidates through the Web origin, never a work's", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const rendition = (hex: string) =>
+      `http://127.0.0.1:3411/v1/development/catalog-renditions/media-rendition-${hex.repeat(32)}`;
+    const catalogMedia = {
+      id: "media-catalog",
+      src: rendition("b"),
+      width: 1200,
+      height: 900,
+      renditions: [
+        {
+          src: rendition("a"),
+          width: 480,
+          height: 360,
+          contentType: "image/webp" as const,
+        },
+        {
+          src: rendition("b"),
+          width: 1200,
+          height: 900,
+          contentType: "image/webp" as const,
+        },
+      ],
+    };
+    const catalog = render(
+      card({
+        target: { type: "catalog", id: "catalog-renditions" } as Card["target"],
+        kind: "inscription",
+        authorId: null,
+        media: catalogMedia,
+      }),
+    ).querySelector("img")!;
+    expect(catalog.getAttribute("src")).toBe(
+      `/api/development/catalog-renditions/media-rendition-${"b".repeat(32)}`,
+    );
+    expect(catalog.getAttribute("srcset")).toContain(
+      `/api/development/catalog-renditions/media-rendition-${"a".repeat(32)} 480w`,
+    );
+    const work = render(card({ media: coverMedia })).querySelector("img")!;
+    expect(work.getAttribute("src")).toBe(coverPath("cover"));
+  });
+});

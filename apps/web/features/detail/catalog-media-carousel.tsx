@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Icon } from "@moya/ui";
 
+import { MEDIA_SIZES, responsiveImage } from "../media/responsive-media";
 import { LivePhotoFrame } from "../publishing/ui/live/live-photo";
 import styles from "./catalog-detail.module.css";
 
@@ -594,6 +595,12 @@ export const CatalogMediaCarousel = ({
           {media.map((item, index) => {
             const failed = failedMediaIds.has(item.id);
             const active = index === activeIndex;
+            // Candidates up to the display anchor; the stage letterboxes
+            // (contain), so no placeholder colour is painted behind it.
+            const image = responsiveImage(
+              item,
+              MEDIA_SIZES.detailCarousel(item, platform),
+            );
             const imageButton = (
               <button
                 aria-label={failed ? "图像无法加载" : `查看图像：${item.alt}`}
@@ -629,7 +636,9 @@ export const CatalogMediaCarousel = ({
                         new Set(current).add(item.id),
                       );
                     }}
-                    src={item.src}
+                    sizes={image.sizes}
+                    src={image.src}
+                    srcSet={image.srcSet}
                     width={item.width}
                   />
                 )}

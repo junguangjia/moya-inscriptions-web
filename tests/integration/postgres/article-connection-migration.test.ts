@@ -78,6 +78,7 @@ it("upgrades the Development-only connection constraint without relabelling rows
     forward,
     "20261003010000",
     "20261004010000",
+    "20261004020000",
   ]);
   expect(await rows()).toEqual(original);
   expect((await ledger()).slice(0, originalLedger.length)).toEqual(

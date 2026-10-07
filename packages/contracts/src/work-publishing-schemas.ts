@@ -1,5 +1,11 @@
 import { z } from "zod";
 import {
+  addMediaRenditionAnchorIssues,
+  mediaRenditionListSchema,
+  placeholderColorSchema,
+  publishedMediaUrlSchema,
+} from "./media-delivery.ts";
+import {
   mentionReferencesSchema,
   validMentionReferences,
 } from "./mention-references.ts";
@@ -139,12 +145,14 @@ export const mediaPairingMethodSchema = z.enum([
   "motion-photo-container",
   "none",
 ]);
+/** `viewer` is an optional zoom still between `display` and `full`. */
 export const mediaVariantSchema = z.enum([
   "thumb",
   "display",
   "full",
   "motion",
   "cover",
+  "viewer",
 ]);
 /** `base` for the unedited derivative, otherwise the 32-hex key of one edit. */
 export const mediaEditKeySchema = z.string().regex(/^(?:base|[0-9a-f]{32})$/u);
@@ -525,8 +533,18 @@ const stillSrcSchema = z.union([
   legacyMediaSrcSchema,
 ]);
 
-/** A work's card cover still: a still derivative path or a Phase 4 PNG, never motion. */
-export const workCoverSrcSchema = stillSrcSchema.refine(
+/**
+ * A still a reader receives: a still path, or the unsigned published URL of
+ * a published rendition. Owner and MCP shapes keep `stillSrcSchema`.
+ */
+const deliveredStillSrcSchema = z.union([
+  publishingMediaSrcSchema,
+  legacyMediaSrcSchema,
+  publishedMediaUrlSchema,
+]);
+
+/** A work's card cover still: a still derivative path, a Phase 4 PNG or a published still, never motion. */
+export const workCoverSrcSchema = deliveredStillSrcSchema.refine(
   (src) => publishingMediaSrcParts(src)?.variant !== "motion",
   { message: "a cover is a still image" },
 );
@@ -681,28 +699,41 @@ export const publishingMediaItemSchema = z
       });
   });
 
+/** Same-origin paths start with a slash; a published URL is absolute. */
+const isPublishedSrc = (src: string): boolean => !src.startsWith("/");
+
 /**
  * One ordered media entry of a work as its viewers see it: a Phase 4 PNG
  * (`user-media-…`, unchanged), a legacy item wrapping that PNG, or a ready
- * work publishing item. Avatars keep `authorMediaSchema`.
+ * work publishing item. Avatars keep `authorMediaSchema`. `src`, `width` and
+ * `height` are the display image of the item's edit; `renditions` are the
+ * candidates of that framing with `src` as their anchor. A published `src` or
+ * `motionSrc` names no item, so only paths are matched to the id; a Phase 4
+ * PNG keeps its user media path and has no motion or renditions.
  */
 export const workMediaSchema = z
   .strictObject({
     id: workMediaIdSchema,
-    src: stillSrcSchema,
+    src: deliveredStillSrcSchema,
     width: dimensionSchema,
     height: dimensionSchema,
     kind: mediaItemKindSchema.optional(),
-    motionSrc: publishingMediaSrcSchema.optional(),
+    motionSrc: z
+      .union([publishingMediaSrcSchema, publishedMediaUrlSchema])
+      .optional(),
     hasAudio: z.boolean().optional(),
+    renditions: mediaRenditionListSchema.optional(),
+    placeholderColor: placeholderColorSchema.optional(),
   })
   .superRefine((media, context) => {
+    const phase4 = media.id.startsWith("user-media-");
     const parts = publishingMediaSrcParts(media.src);
-    const srcMatchesId = media.id.startsWith("user-media-")
+    const srcMatchesId = phase4
       ? media.src === `/api/community/media/${media.id}`
-      : parts === null
-        ? media.kind !== "live"
-        : parts.itemId === media.id && parts.variant !== "motion";
+      : isPublishedSrc(media.src) ||
+        (parts === null
+          ? media.kind !== "live"
+          : parts.itemId === media.id && parts.variant !== "motion");
     if (!srcMatchesId)
       context.addIssue({
         code: "custom",
@@ -714,11 +745,15 @@ export const workMediaSchema = z
       media.motionSrc === undefined
         ? null
         : publishingMediaSrcParts(media.motionSrc);
+    const ownMotion =
+      media.motionSrc !== undefined &&
+      (isPublishedSrc(media.motionSrc) ||
+        (motion !== null &&
+          motion.itemId === media.id &&
+          motion.variant === "motion"));
     if (
       live
-        ? motion === null ||
-          motion.itemId !== media.id ||
-          motion.variant !== "motion"
+        ? phase4 || !ownMotion
         : media.motionSrc !== undefined || media.hasAudio !== undefined
     )
       context.addIssue({
@@ -727,6 +762,20 @@ export const workMediaSchema = z
         message:
           "a Live Photo has its own motion path and only a Live Photo has motion or audio",
       });
+    // A Live Photo switches as one group: its still (with the still's list)
+    // and its motion are both published or both on the authorized path.
+    if (
+      live &&
+      media.motionSrc !== undefined &&
+      isPublishedSrc(media.src) !== isPublishedSrc(media.motionSrc)
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["motionSrc"],
+        message: "a Live Photo still and motion share one delivery form",
+      });
+    if (media.renditions !== undefined)
+      addMediaRenditionAnchorIssues(media, media.renditions, context);
   });
 
 /**

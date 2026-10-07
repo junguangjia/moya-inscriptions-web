@@ -10,9 +10,12 @@ import {
   shouldCommitCarouselSwipe,
 } from "./catalog-media-carousel";
 
+import { MEDIA_SIZES } from "../media/responsive-media";
+
 import type { Root } from "react-dom/client";
 import type { MediaId, PublicMedia } from "@moya/contracts";
 import type { CatalogMediaCarouselProps } from "./catalog-media-carousel";
+import type { DetailMediaPresentation } from "./catalog-detail-presentation";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -754,5 +757,78 @@ describe("CatalogMediaCarousel", () => {
     expect(
       container.querySelector('[data-detail-media-state="failed"]'),
     ).not.toBeNull();
+  });
+});
+
+/*
+ * unified-media-pipeline-v1 (CW4/CW13): the carousel loads candidates up to
+ * the display anchor only; zoom levels stay for the Viewer. The stage
+ * letterboxes, so no placeholder colour is painted.
+ */
+describe("CatalogMediaCarousel responsive media", () => {
+  const origin = "https://media.example.invalid/detail";
+  const candidate = (width: number, height: number) => ({
+    src: `${origin}/${width}.webp`,
+    width,
+    height,
+    contentType: "image/webp" as const,
+  });
+  const responsive: DetailMediaPresentation = {
+    id: "media-responsive",
+    alt: "局部",
+    src: candidate(1600, 900).src,
+    width: 1600,
+    height: 900,
+    placeholderColor: "#8b735f",
+    renditions: [
+      candidate(480, 270),
+      candidate(1080, 608),
+      candidate(1600, 900),
+      candidate(3200, 1800),
+    ],
+  };
+  const render = (platform: "phone" | "tablet" | "pc") => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() =>
+      root.render(
+        <CatalogMediaCarousel
+          activeIndex={0}
+          media={[responsive, media[1]!]}
+          onActiveIndexChange={vi.fn()}
+          onOpenViewer={vi.fn()}
+          platform={platform}
+        />,
+      ),
+    );
+    return container;
+  };
+
+  it("offers candidates up to the anchor with sizes for the platform's stage", () => {
+    for (const platform of ["phone", "tablet", "pc"] as const) {
+      const [active, legacy] = render(platform).querySelectorAll("img");
+      expect(active?.getAttribute("src")).toBe(responsive.src);
+      expect(active?.getAttribute("srcset")).toBe(
+        `${origin}/480.webp 480w, ${origin}/1080.webp 1080w, ${origin}/1600.webp 1600w`,
+      );
+      expect(active?.getAttribute("sizes")).toBe(
+        MEDIA_SIZES.detailCarousel(responsive, platform),
+      );
+      expect(active?.getAttribute("fetchpriority")).toBe("high");
+      expect(active?.getAttribute("loading")).toBe("eager");
+      expect(active?.getAttribute("width")).toBe("1600");
+      expect(legacy?.hasAttribute("srcset")).toBe(false);
+      expect(legacy?.getAttribute("loading")).toBe("lazy");
+    }
+  });
+
+  it("never tints the letterboxed stage", () => {
+    const container = render("phone");
+    for (const node of container.querySelectorAll<HTMLElement>(
+      "[data-detail-main-stage], [data-media-id], img, button",
+    ))
+      expect(node.style.backgroundColor).toBe("");
   });
 });

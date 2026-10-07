@@ -14,6 +14,7 @@ import type {
   CatalogStatefulTextProjection,
 } from "@moya/api";
 import { deriveCatalogPeriodLabel } from "@moya/api";
+import { mapCatalogMediaDelivery } from "./catalog-media-delivery.js";
 import type {
   CatalogCitationScope,
   CatalogContributorRole,
@@ -88,6 +89,9 @@ export interface CatalogMediaRow extends QueryResultRow {
   readonly width: unknown;
   readonly height: unknown;
   readonly object_key: unknown;
+  /** Joined rendition delivery facts; absent unless the reader joins them. */
+  readonly renditions?: unknown;
+  readonly placeholder_color?: unknown;
 }
 
 const requiredString = (value: unknown, field: string): string => {
@@ -218,6 +222,7 @@ export const mapCatalogMediaRow = (
     width: positiveInteger(row.width, "width"),
     height: positiveInteger(row.height, "height"),
     objectKey: requiredString(row.object_key, "Media object key"),
+    ...mapCatalogMediaDelivery(row.renditions, row.placeholder_color),
   };
 };
 

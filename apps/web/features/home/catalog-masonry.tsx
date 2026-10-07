@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import styles from "./home-screen.module.css";
 import {
@@ -9,11 +17,23 @@ import {
 } from "./catalog-masonry-layout";
 
 import type { CSSProperties, ReactNode } from "react";
+import type { MediaSlot } from "../media/responsive-media";
 import type { FeedLayoutPreference } from "../product-shell/preferences";
 import type { PresentationPlatform } from "../shell/device-platform";
 
+/**
+ * The slot of the item being rendered, so its image can name the width it is
+ * drawn at (`sizes`) without each list passing layout facts down.
+ */
+const MasonrySlotContext = createContext<MediaSlot | null>(null);
+
+/** The masonry slot of the nearest enclosing item, or null outside a masonry list. */
+export const useMasonrySlot = (): MediaSlot | null =>
+  useContext(MasonrySlotContext);
+
 interface RenderedLayout {
   readonly height: number;
+  readonly keys: readonly string[];
   readonly positions: readonly {
     readonly height: number;
     readonly width: number;
@@ -30,7 +50,12 @@ export interface CatalogMasonryProps<T> {
   readonly spanAtAlignedRows?: boolean;
   readonly items: readonly T[];
   readonly platform: PresentationPlatform;
-  readonly renderItem: (item: T, onMediaSettled: () => void) => ReactNode;
+  /** `index` is the item's list position (the first visible cards load first). */
+  readonly renderItem: (
+    item: T,
+    onMediaSettled: () => void,
+    index: number,
+  ) => ReactNode;
 }
 
 const layoutSignature = (
@@ -122,6 +147,7 @@ export const CatalogMasonry = <T,>({
       const element = itemRefs.current.get(getKey(item));
       return element?.getBoundingClientRect().height ?? 0;
     });
+    const keys = items.map(getKey);
     const signature = layoutSignature(
       width,
       columns,
@@ -140,7 +166,11 @@ export const CatalogMasonry = <T,>({
       spanAtAlignedRows,
     );
     setRenderedLayout((current) =>
-      current?.signature === signature ? current : { ...result, signature },
+      current?.signature === signature &&
+      current.keys.length === keys.length &&
+      current.keys.every((key, index) => key === keys[index])
+        ? current
+        : { ...result, keys, signature },
     );
   }, [
     columnWidth,
@@ -180,14 +210,19 @@ export const CatalogMasonry = <T,>({
     },
     [],
   );
+  const keys = items.map(getKey);
+  const retainsPrefix =
+    renderedLayout !== null &&
+    renderedLayout.keys.length <= keys.length &&
+    renderedLayout.keys.every((key, index) => key === keys[index]);
   const ready =
     renderedLayout !== null &&
+    retainsPrefix &&
     renderedLayout.positions.length === items.length &&
     renderedLayout.signature.startsWith(`${width}:${columns}:`);
-  const retainedLayout =
-    renderedLayout !== null && renderedLayout.positions.length === items.length
-      ? renderedLayout
-      : null;
+  // Appending a page must not briefly collapse the scroller to one pixel.
+  // Retain only a matching identity prefix while the new items are measured.
+  const retainedLayout = retainsPrefix ? renderedLayout : null;
 
   return (
     <div
@@ -206,10 +241,11 @@ export const CatalogMasonry = <T,>({
         const position = retainedLayout?.positions[index];
         const startsFull = spanAtAlignedRows && columns === 2 && index === 0;
         const itemWidth = startsFull || spans[index] ? width : columnWidth;
+        const spansAll = position?.width === width && columns > 1;
         const style = {
           left: position?.x ?? 0,
           top: position?.y ?? 0,
-          visibility: retainedLayout === null ? "hidden" : "visible",
+          visibility: position === undefined ? "hidden" : "visible",
           width: ready ? (position?.width ?? itemWidth) : itemWidth,
         } satisfies CSSProperties;
         return (
@@ -221,13 +257,19 @@ export const CatalogMasonry = <T,>({
             }}
             className={styles.masonryItem}
             data-home-masonry-item=""
-            data-home-masonry-span={
-              position?.width === width && columns > 1 ? "full" : undefined
-            }
+            data-home-masonry-span={spansAll ? "full" : undefined}
             role="presentation"
             style={style}
           >
-            {renderItem(item, onMediaSettled)}
+            <MasonrySlotContext.Provider
+              value={{
+                platform,
+                columns,
+                span: startsFull || spans[index] === true || spansAll,
+              }}
+            >
+              {renderItem(item, onMediaSettled, index)}
+            </MasonrySlotContext.Provider>
           </div>
         );
       })}

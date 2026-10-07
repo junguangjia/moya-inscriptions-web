@@ -47,6 +47,27 @@ describe("production COS signing without Pilot policy", () => {
     expect(resolver).not.toHaveProperty("ensureObject");
   });
 
+  it("resolves no Catalog rendition key in increment 1 and signs nothing for one", async () => {
+    const network = vi.fn(() => {
+      throw new Error("unexpected network");
+    });
+    const credentials = vi.fn(options().credentials);
+    const resolver = new ProductionCosStorageUrlResolver(
+      { ...options(), credentials },
+      { now: () => now, nativeRequest: network },
+    );
+    const resolved = await resolver.resolveKeys([
+      `media-rendition-${"1".repeat(32)}`,
+      `blobs/aa/bb/${"2".repeat(32)}`,
+      locator.objectKey,
+    ]);
+    // Production Catalog rendition delivery stays off: the approved image
+    // keeps its signed src, and no identity signs a rendition read.
+    expect(resolved.size).toBe(0);
+    expect(credentials).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
+  });
+
   it("preserves approved keys and refreshes short signatures on every read", async () => {
     let time = now;
     const resolver = new ProductionCosStorageUrlResolver(options(), {

@@ -12,7 +12,11 @@ import type {
 import type { Pool } from "pg";
 import { readTransaction } from "../publishing/db.js";
 import type { PublishingDb } from "../publishing/db.js";
-import { selectMediaItems } from "../publishing/media.js";
+import { publishingMediaSrc, selectMediaItems } from "../publishing/media.js";
+import {
+  itemRenditionsSql,
+  toMediaRenditions,
+} from "../publishing/rendition-read.js";
 import { publishedArticleItemSql } from "./published-media.js";
 
 /** Internal aliases only; source/master bytes and private metadata are never selected. */
@@ -129,7 +133,14 @@ export const listArticleOwnMedia = async (
   });
 };
 
-/** Public reader only: exact current published refs and immutable owner, no item DTO metadata. */
+/**
+ * Public reader only: exact current published refs and immutable owner, no
+ * item DTO metadata. An entry carries the detail candidates of the unedited
+ * framing (the only edit key the relay serves for Article items) with its
+ * display as anchor, and the item's loading colour; a summary narrows the
+ * candidates to its card context. An entry whose candidates break the
+ * contract is kept without them.
+ */
 export const resolvePublishedArticleManagedMedia = async (
   pool: Pool,
   owner: PublicUserId,
@@ -144,8 +155,12 @@ export const resolvePublishedArticleManagedMedia = async (
   if (ids.length === 0) return new Map();
   return readTransaction(pool, async (db) => {
     const rows = (
-      await db.query<{ id: string }>(
-        `SELECT i.id FROM community.media_items i
+      await db.query<{
+        id: string;
+        placeholder_color?: string | null;
+        renditions?: unknown;
+      }>(
+        `SELECT i.id,i.placeholder_color,${itemRenditionsSql("i.id", "'base'")} AS renditions FROM community.media_items i
       WHERE i.owner_id=$1 AND i.id=ANY($2::text[]) AND ${articleReadyMediaSql("i")}
       AND ${publishedArticleItemSql("i.id", "NULL::text")}
       ORDER BY i.id`,
@@ -162,7 +177,7 @@ export const resolvePublishedArticleManagedMedia = async (
       const item = items.get(row.id);
       if (!item?.media || !item.presentation || item.state !== "ready")
         continue;
-      const media = workMediaSchema.safeParse({
+      const entry = {
         id: item.id,
         kind: item.kind,
         src: item.media.displaySrc,
@@ -176,7 +191,23 @@ export const resolvePublishedArticleManagedMedia = async (
                 : {}),
             }
           : {}),
-      });
+        ...(typeof row.placeholder_color === "string"
+          ? { placeholderColor: row.placeholder_color }
+          : {}),
+      };
+      const renditions = toMediaRenditions(
+        row.renditions,
+        entry,
+        "detail",
+        (role) => publishingMediaSrc(item.id, role, "base"),
+      );
+      const withRenditions =
+        renditions === undefined
+          ? undefined
+          : workMediaSchema.safeParse({ ...entry, renditions });
+      const media = withRenditions?.success
+        ? withRenditions
+        : workMediaSchema.safeParse(entry);
       if (media.success) result.set(row.id, media.data);
     }
     return result;

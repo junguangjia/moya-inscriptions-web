@@ -69,6 +69,13 @@ describe("current repository truth and local configuration", () => {
     expect(scripts["dev:migrate"]).toMatch(
       /migrate\.mjs --development.*migrate-community\.mjs --development.*grant-community-app\.sql -f \/opt\/yoyi\/grant-runtime\.sql -f \/opt\/yoyi\/community-development-accounts\.sql/,
     );
+    // unified-media-pipeline-v1 (PR 1b): the post-Community public read phase
+    // of the Catalog rendition delivery view comes last, after the community
+    // migrations that create the view, in one transaction for the local
+    // public role; the Backend refuses to start without it.
+    expect(scripts["dev:migrate"]).toMatch(
+      /migrate-community\.mjs --development.*&& docker compose -f compose\.dev\.yml exec -T postgres psql -v ON_ERROR_STOP=1 --single-transaction -U yoyi_dev_owner -d yoyi_dev -v public_read_role=yoyi_dev_public -f - < infra\/development\/catalog-media\/grant-public-read\.sql$/,
+    );
     expect(scripts["db:migrate:community"]).toBe(
       "node scripts/migrate-community.mjs",
     );

@@ -12,10 +12,15 @@ import { getArticleImageCrop } from "./article-image-layout";
 
 interface ReaderProps {
   readonly document: ArticleDocument;
+  /**
+   * `share` is the figure's width as a share of the body column (a resized
+   * image's display width; 1 otherwise), so a reader can size the image.
+   */
   readonly renderMedia: (
     reference: ArticleMediaReference,
     alt: string,
     crop: MediaCrop | null,
+    share: number,
   ) => ReactNode;
   readonly renderCatalog: (id: CatalogId) => ReactNode;
 }
@@ -100,6 +105,7 @@ export const ArticleRichBody = ({
     id: string,
     alt: string,
     crop: MediaCrop | null = null,
+    share = 1,
   ): ReactNode => {
     const value = Object.hasOwn(document.references, id)
       ? document.references[id]
@@ -107,7 +113,7 @@ export const ArticleRichBody = ({
     return value === undefined ? (
       <p role="status">图片引用不可用。</p>
     ) : (
-      renderMedia(value, alt, crop)
+      renderMedia(value, alt, crop, share)
     );
   };
   const render = (block: ArticleBlock): ReactNode => {
@@ -152,6 +158,7 @@ export const ArticleRichBody = ({
               block.props.refId,
               block.props.alt,
               getArticleImageCrop(block.props),
+              block.props.displayWidth ?? 1,
             )}
             {block.props.caption ? (
               <figcaption>{block.props.caption}</figcaption>

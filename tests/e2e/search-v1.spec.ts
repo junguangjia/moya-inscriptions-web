@@ -83,7 +83,8 @@ test("Formal Search preserves server paging order and Detail/Viewer return state
     .poll(() => content.evaluate((node) => node.scrollTop))
     .toBeCloseTo(scrollTop, 0);
   expect(requests).toBe(2);
-  await search.getByRole("button", { name: "清空搜索", exact: true }).click();
+  // The current Search composer clears through its native search input.
+  await search.getByRole("searchbox").fill("");
   await expect(search.getByRole("searchbox")).toHaveValue("");
   await expect(search.locator("[data-search-result]")).toHaveCount(0);
   expect(requests).toBe(2);

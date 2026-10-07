@@ -42,6 +42,12 @@ export type {
   RenditionRole,
 } from "./publishing/recipe-identity.js";
 export { USER_PURGE_HOLDS_PRE_TASK_BLOBS } from "./publishing/renditions.js";
+// PR 1b: the Development delivery route reads a listed Catalog rendition;
+// startup verifies the App role's read of the delivery view.
+export {
+  resolveCatalogRenditionRead,
+  verifyCatalogDeliveryReadable,
+} from "./publishing/catalog-delivery.js";
 export { PostgresPublishingOperatorAdapter } from "./publishing-operator-adapter.js";
 export { PostgresAgentAdministrationAdapter } from "./agent-administration-adapter.js";
 export {
