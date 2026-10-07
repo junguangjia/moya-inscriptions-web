@@ -1081,7 +1081,24 @@ for (const chrome of ["default", "hidden"] as const) {
               }
               return null;
             });
-          await expect.poll(findHit).not.toBeNull();
+          await expect
+            .poll(async () => {
+              const hit = await findHit();
+              if (hit === null && chrome === "default" && kind === "topic") {
+                // The last visible card can leave the panel at its scroll end.
+                // Shift the real card sampling grid into the narrow exposed
+                // band while retaining the full native pinch span and hit test.
+                await page
+                  .locator(
+                    '[data-discussion-surface] [data-horizontal-pager-scroll-owner="panel"] [data-horizontal-panel-key="topics"]',
+                  )
+                  .evaluate((panel) => {
+                    panel.scrollTop = Math.max(0, panel.scrollTop - 4);
+                  });
+              }
+              return hit;
+            })
+            .not.toBeNull();
           const hit = await findHit();
           if (hit === null)
             throw new Error(

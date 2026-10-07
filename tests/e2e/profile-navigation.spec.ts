@@ -45,7 +45,10 @@ async function fixture(page: Page, delayed = false) {
             id: `work-${String(index + 1).padStart(32, "0")}`,
             authorId: ownerId,
             authorName: identity.displayName,
-            title: `滚动测试作品 ${index + 1}`,
+            title:
+              index === 11
+                ? "滚动测试作品 12"
+                : `滚动测试作品 ${index + 1}：用于检查收藏和喜欢切换后保留长正文阅读位置`,
             text: "保留正文阅读位置。".repeat(28),
             media: [],
             firstPublishedAt: "2026-09-20T00:00:00.000Z",
