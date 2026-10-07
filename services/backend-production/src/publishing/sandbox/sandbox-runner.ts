@@ -19,6 +19,7 @@ import { assertPrivateMediaDirectory } from "../../storage/publishing-media-stor
 import {
   MediaProcessingInputError,
   MediaProcessingUnavailableError,
+  systemErrorCode,
 } from "../processing/errors.js";
 import { MediaToolError } from "../processing/media-tools.js";
 import {
@@ -766,6 +767,12 @@ export async function createSandboxRunner(
       violation ??= code;
       stop("protocol");
     };
+    // Only the sandbox's stream can break the protocol. A host failure while
+    // writing a received output (a full disk, EIO, EMFILE) is the coordinator's
+    // own infrastructure and is retried, never a final rejection of the item.
+    // Assigned inside the decoding task; the cast keeps TypeScript from
+    // narrowing it to its initial null.
+    let hostFailure = null as { readonly error: unknown } | null;
     const timer = setTimeout(() => stop("timeout"), runOptions.timeoutMs);
     const onAbort = () => stop("aborted");
     runOptions.signal?.addEventListener("abort", onAbort, { once: true });
@@ -794,11 +801,11 @@ export async function createSandboxRunner(
           await decoder.push(chunk as Buffer);
         }
       } catch (error) {
-        violate(
-          error instanceof SandboxProtocolError
-            ? error.violation
-            : "frame_invalid",
-        );
+        if (error instanceof SandboxProtocolError) violate(error.violation);
+        else {
+          hostFailure ??= { error };
+          stop("protocol");
+        }
         stdout.resume();
       } finally {
         await decoder.close();
@@ -818,6 +825,10 @@ export async function createSandboxRunner(
     }
     if (stopped === "aborted") throw new MediaToolError("aborted");
     if (stopped === "timeout") throw new MediaToolError("timeout");
+    if (hostFailure !== null)
+      throw new MediaProcessingUnavailableError(
+        systemErrorCode(hostFailure.error),
+      );
     if (violation !== null) throw new SandboxProtocolError(violation);
     if (spawnFailed) throw new MediaToolError("spawn_failed");
     if (code === 125 || code === 126 || code === 127) {

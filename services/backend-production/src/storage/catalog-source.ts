@@ -123,6 +123,23 @@ async function copyInto(
 const statusOf = (error: unknown): number | null =>
   error instanceof PublishingCosResponseError ? error.statusCode : null;
 
+const COS_BUCKET_PATTERN = /^[a-z0-9][a-z0-9-]{1,49}-[0-9]{5,20}$/;
+const COS_REGION_PATTERN = /^[a-z]{2}-[a-z]+(?:-[a-z]+)?$/;
+
+/**
+ * Checks the Catalog COS bucket and region format before anything opens, so a
+ * malformed value is a configuration error. Names the key, never the value.
+ */
+export function assertCatalogCosTarget(config: {
+  readonly bucket: string;
+  readonly region: string;
+}): void {
+  if (!COS_BUCKET_PATTERN.test(config.bucket))
+    throw new Error("Catalog source configuration invalid: COS_BUCKET");
+  if (!COS_REGION_PATTERN.test(config.region))
+    throw new Error("Catalog source configuration invalid: COS_REGION");
+}
+
 /** Production reader: the Catalog read identity over the COS API endpoint. */
 export class CosCatalogSourceReader implements CatalogSourceReader {
   constructor(
@@ -133,8 +150,8 @@ export class CosCatalogSourceReader implements CatalogSourceReader {
     private readonly transport: PublishingCosTransport,
   ) {
     if (
-      !/^[a-z0-9][a-z0-9-]{1,49}-[0-9]{5,20}$/.test(options.bucket) ||
-      !/^[a-z]{2}-[a-z]+(?:-[a-z]+)?$/.test(options.region)
+      !COS_BUCKET_PATTERN.test(options.bucket) ||
+      !COS_REGION_PATTERN.test(options.region)
     )
       throw new Error("COS bucket or region invalid");
   }
