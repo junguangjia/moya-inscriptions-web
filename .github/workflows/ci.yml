@@ -243,8 +243,10 @@ jobs:
           <infra/test/disposable-test-target.sql
 
       # Persistent opt-in for full PR and merged-main test runs only.
-      # Preparation, all tests and cleanup share one 300-second deadline.
-      - name: Complete CI test milestone within 300 seconds
+      # Preparation, all tests and cleanup run to completion (Owner,
+      # 2026-10-07); the job's timeout-minutes is the containment and the
+      # milestone's own ceiling only stops a hung run inside it.
+      - name: Complete CI test milestone
         run: node scripts/verify.mjs test --ci-milestone
 
       - name: Mark the CI PostgreSQL 16 service as a disposable test target

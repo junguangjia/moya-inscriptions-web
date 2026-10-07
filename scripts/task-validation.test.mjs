@@ -2640,6 +2640,8 @@ describe("explicit validation profiles and nested deadlines", () => {
     assert.equal(VALIDATION_PROFILES.webQuick.name, "web-quick");
     assert.equal(VALIDATION_PROFILES.cmsQuick.name, "cms-quick");
     assert.equal(VALIDATION_PROFILES.webComplete.totalMs, 300000);
+    assert.equal(VALIDATION_PROFILES.ciTestMilestone.name, "ci-test-milestone");
+    assert.equal(VALIDATION_PROFILES.ciTestMilestone.totalMs, 900000);
     assert.equal(VALIDATION_PROFILES.cmsComplete.totalMs, 300000);
     assert.equal(VALIDATION_PROFILES.browserSmokeWarm.totalMs, 120000);
     assert.equal(VALIDATION_PROFILES.browserSmokeCold.totalMs, 300000);
@@ -2734,8 +2736,9 @@ describe("explicit validation profiles and nested deadlines", () => {
     const milestone = verificationPlan("test", ["--ci-milestone"], ci);
     assert.equal(milestone.milestone, true);
     assert.equal(milestone.selection, "complete");
-    assert.equal(milestone.profile, "web-complete");
-    assert.equal(milestone.ceilingMs, 300000);
+    // The hosted milestone runs to completion inside the job's containment.
+    assert.equal(milestone.profile, "ci-test-milestone");
+    assert.equal(milestone.ceilingMs, 900000);
     assert.throws(() => verificationPlan("test", ["--ci-milestone"], {}));
     assert.throws(() =>
       verificationPlan("test", ["--ci-milestone"], { GITHUB_ACTIONS: "true" }),
