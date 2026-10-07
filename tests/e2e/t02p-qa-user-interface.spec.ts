@@ -547,6 +547,11 @@ test("User content follows trusted horizontal input and vertical reading never c
   // Mobile WebKit does not expose wheel or touch-drag injection in Playwright.
   // Chromium covers native Phone touch. WebKit covers the distinct PC wheel
   // path; separate mobile matrices retain their mobile context and tap paths.
+  // A context created here inherits the project's device options, so the
+  // mobile and tablet WebKit projects must spread the desktop descriptor:
+  // otherwise the iPhone or iPad user agent keeps the shell on phone or
+  // tablet in auto mode, and the PC presentation would rest solely on the QA
+  // harness select having taken effect before the shell is asserted.
   const inputPlatform = browserName === "chromium" ? "phone" : "pc";
   const viewport = {
     width: inputPlatform === "phone" ? 390 : 1512,
@@ -561,6 +566,7 @@ test("User content follows trusted horizontal input and vertical reading never c
         })
       : testInfo.project.use.isMobile === true
         ? await browser.newContext({
+            ...devices["Desktop Safari"],
             baseURL: testInfo.project.use.baseURL as string,
             isMobile: false,
             hasTouch: false,
