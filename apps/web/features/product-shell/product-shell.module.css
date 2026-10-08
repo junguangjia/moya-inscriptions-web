@@ -44,6 +44,18 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* The profile with a pinned photo snaps between its two resting places and
+   does not bounce at the top (#237; user-presentation.module.css). */
+.productShell[data-platform="phone"]
+  .primaryLayer
+  :global([data-primary-destination="user"]:has([data-cover-snap])),
+.productShell[data-platform="tablet"]
+  .primaryLayer
+  :global([data-primary-destination="user"]:has([data-cover-snap])) {
+  scroll-snap-type: y mandatory;
+  overscroll-behavior-y: none;
+}
+
 .productShell[data-platform="phone"]
   .primaryLayer
   :global(

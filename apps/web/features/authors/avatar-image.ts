@@ -1,106 +1,95 @@
 import type { Area } from "react-easy-crop";
+import { CoverError, readProfileCoverImage } from "./profile-cover";
+import type { CoverErrorCode } from "./profile-cover";
+import { PROFILE_PNG_MAX_BYTES, normalizeAvatarPng } from "./profile-png";
 
-const MAX_BYTES = 4 * 1024 * 1024;
-export type AvatarImage = { image: HTMLImageElement; url: string };
+export { normalizeAvatarPng } from "./profile-png";
 
-/** Avatar-only decoding; the work editor retains its existing strict PNG input. */
+/**
+ * A chosen avatar photo: bounded, oriented pixels the 512 px export draws
+ * from, and a small display copy for the cropper (`url`). Any photo the
+ * browser can open is accepted (Issue #237); only the 512 px PNG is stored.
+ */
+export type AvatarImage = {
+  readonly pixels: CanvasImageSource & {
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly url: string;
+  release(): void;
+};
+
+const SOURCE_MESSAGES: Record<CoverErrorCode, string> = {
+  heic: "当前浏览器无法打开这张 HEIC 照片，请在相册中导出为 JPG 后再选择",
+  pixels: "照片像素超出当前设备可处理的范围，请换一张",
+  decode: "当前浏览器无法打开这张照片，请换一张",
+  blank: "当前设备无法处理这张照片，请换一张",
+  export: "当前浏览器无法打开这张照片，请换一张",
+};
+
+/** The same bounded reader as the background editor: no type, byte or pixel gate. */
 export const readAvatarImage = async (file: File): Promise<AvatarImage> => {
-  if (
-    !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
-    file.size === 0 ||
-    file.size > MAX_BYTES
-  )
-    throw Error("请选择不超过 4 MiB 的 JPG、PNG 或 WebP 图像");
-  const url = URL.createObjectURL(file);
   try {
-    const image = new Image();
-    image.src = url;
-    await image.decode();
-    const { naturalWidth: width, naturalHeight: height } = image;
-    if (
-      !width ||
-      !height ||
-      width > 8192 ||
-      height > 8192 ||
-      width * height > 16 * 1024 * 1024
-    )
-      throw Error("图像宽高不能超过 8192 像素，总像素不能超过 16 Mi");
-    return { image, url };
+    const source = await readProfileCoverImage(file);
+    return {
+      pixels: source.pixels,
+      url: source.display.url,
+      release: () => source.release(),
+    };
   } catch (error) {
-    URL.revokeObjectURL(url);
-    throw error;
+    throw new Error(
+      error instanceof CoverError
+        ? SOURCE_MESSAGES[error.code]
+        : SOURCE_MESSAGES.decode,
+      { cause: error },
+    );
   }
 };
 
-/** The cropper reports natural-image pixels, including browser-applied orientation. */
+/**
+ * The crop as the cropper reports it, in percent of the displayed photo,
+ * mapped onto the bounded pixels (the display copy has the same shape).
+ */
 const avatarCanvas = (
-  image: HTMLImageElement,
+  pixels: AvatarImage["pixels"],
   area: Area,
 ): HTMLCanvasElement => {
-  const { x, y, width, height } = area;
+  const { width: sourceWidth, height: sourceHeight } = pixels;
+  const values = [area.x, area.y, area.width, area.height];
   if (
-    ![x, y, width, height].every(Number.isFinite) ||
-    x < 0 ||
-    y < 0 ||
-    width <= 0 ||
-    height <= 0 ||
-    x + width > image.naturalWidth ||
-    y + height > image.naturalHeight ||
-    Math.abs(width - height) > 1
+    !values.every(Number.isFinite) ||
+    !(sourceWidth > 0 && sourceHeight > 0) ||
+    area.width <= 0 ||
+    area.height <= 0
+  )
+    throw Error("裁剪区域尚未就绪，请重试");
+  const x = Math.max(0, (area.x / 100) * sourceWidth),
+    y = Math.max(0, (area.y / 100) * sourceHeight),
+    width = Math.min(sourceWidth - x, (area.width / 100) * sourceWidth),
+    height = Math.min(sourceHeight - y, (area.height / 100) * sourceHeight);
+  // A square crop; percentages round, so allow a pixel and a percent.
+  if (
+    !(width >= 1 && height >= 1) ||
+    Math.abs(width - height) > 1 + Math.max(width, height) * 0.01
   )
     throw Error("裁剪区域尚未就绪，请重试");
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = 512;
   const context = canvas.getContext("2d", { colorSpace: "srgb" });
   if (!context) throw Error("当前浏览器无法导出图像");
-  context.drawImage(image, x, y, width, height, 0, 0, 512, 512);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(pixels, x, y, width, height, 0, 0, 512, 512);
   return canvas;
-};
-
-/** Safari adds eXIf even to an sRGB canvas. Keep only the Backend's accepted
- * chunks; their original bytes/CRCs and compressed pixels remain unchanged. */
-export const normalizeAvatarPng = (bytes: Uint8Array): Uint8Array => {
-  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
-  if (bytes.length > MAX_BYTES || !signature.every((b, i) => bytes[i] === b))
-    throw Error("图像导出失败，请重试");
-  const chunks = [bytes.subarray(0, 8)];
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let offset = 8,
-    ended = false;
-  while (offset + 12 <= bytes.length) {
-    const size = view.getUint32(offset),
-      end = offset + size + 12;
-    if (end > bytes.length) throw Error("图像导出失败，请重试");
-    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
-    if (["IHDR", "IDAT", "IEND", "sRGB", "gAMA", "pHYs", "cHRM"].includes(type))
-      chunks.push(bytes.subarray(offset, end));
-    else if (type[0] === type[0]?.toUpperCase())
-      throw Error("当前浏览器导出的图像格式不支持");
-    offset = end;
-    if (type === "IEND") {
-      ended = true;
-      break;
-    }
-  }
-  if (!ended || offset !== bytes.length) throw Error("图像导出失败，请重试");
-  const output = new Uint8Array(
-    chunks.reduce((n, chunk) => n + chunk.length, 0),
-  );
-  let index = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, index);
-    index += chunk.length;
-  }
-  return output;
 };
 
 /** Synchronous, bounded512px snapshot: Save can durably record intent in the
  * same click handler, before any navigation/unload can interrupt an await. */
 export const exportAvatarSnapshot = (
-  image: HTMLImageElement,
+  pixels: AvatarImage["pixels"],
   area: Area,
 ): string => {
-  const data = avatarCanvas(image, area).toDataURL("image/png");
+  const data = avatarCanvas(pixels, area).toDataURL("image/png");
   if (!data.startsWith("data:image/png;base64,"))
     throw Error("图像导出失败，请重试");
   const raw = atob(data.slice("data:image/png;base64,".length));
@@ -114,10 +103,10 @@ export const exportAvatarSnapshot = (
 };
 
 export const exportAvatar = async (
-  image: HTMLImageElement,
+  pixels: AvatarImage["pixels"],
   area: Area,
 ): Promise<Blob> => {
-  const canvas = avatarCanvas(image, area);
+  const canvas = avatarCanvas(pixels, area);
   const blob = await new Promise<Blob>((resolve, reject) =>
     canvas.toBlob(
       (value) =>
@@ -125,7 +114,7 @@ export const exportAvatar = async (
       "image/png",
     ),
   );
-  if (blob.type !== "image/png" || blob.size > MAX_BYTES)
+  if (blob.type !== "image/png" || blob.size > PROFILE_PNG_MAX_BYTES)
     throw Error("图像导出失败，请重试");
   return new Blob(
     [

@@ -371,55 +371,62 @@ const codeOf = async (promise: Promise<unknown>) => {
 };
 
 describe("readProfileCoverImage", () => {
-  it("refuses HEIC, other types, empty and oversized files before decoding", async () => {
-    const env = environment({ width: 10, height: 10 });
-    expect(await codeOf(readProfileCoverImage(file("a.HEIC", ""), env))).toBe(
-      "heic",
-    );
-    expect(
-      await codeOf(readProfileCoverImage(file("a", "image/heif"), env)),
-    ).toBe("heic");
-    expect(
-      await codeOf(readProfileCoverImage(file("a.gif", "image/gif"), env)),
-    ).toBe("type");
-    expect(
-      await codeOf(readProfileCoverImage(file("a.png", "image/png", 0), env)),
-    ).toBe("decode");
+  it("accepts any type and size the browser opens: no gate on the chosen file (#237)", async () => {
+    for (const chosen of [
+      file("a.HEIC", "image/heic"),
+      file("a", "image/heif"),
+      file("a.gif", "image/gif"),
+      file("photo", ""),
+    ]) {
+      const env = environment({ width: 4032, height: 3024 });
+      expect(await codeOf(readProfileCoverImage(chosen, env))).toBe("resolved");
+      expect(env.measure).toHaveBeenCalledWith(chosen);
+    }
+    // 48 MB, as a 200 MP camera can produce: decoded bounded, not refused.
     const big = file("a.jpg", "image/jpeg");
-    Object.defineProperty(big, "size", { value: 25 * 1024 * 1024 + 1 });
-    expect(await codeOf(readProfileCoverImage(big, env))).toBe("bytes");
-    expect(env.measure).not.toHaveBeenCalled();
+    Object.defineProperty(big, "size", { value: 48 * 1024 * 1024 });
+    const env = environment({ width: 16320, height: 12240 });
+    expect(await codeOf(readProfileCoverImage(big, env))).toBe("resolved");
+    const [, options] = vi.mocked(env.decode).mock.calls[0]!;
+    expect(options.resizeWidth).toBeLessThan(16320);
   });
 
-  it("admits 50 MP camera modes, refuses larger and undecodable files", async () => {
-    // 8192×6144 = 50,331,648 px: a common "5000 万像素" phone mode.
+  it("refuses only what the browser cannot open, or beyond the crash guard", async () => {
+    const unreadable = { measure: () => Promise.reject(Error("x")) };
     expect(
       await codeOf(
         readProfileCoverImage(
           file("a.jpg", "image/jpeg"),
-          environment({ width: 8192, height: 6144 }),
+          environment({ width: 10, height: 10 }, unreadable),
         ),
       ),
-    ).toBe("resolved");
+    ).toBe("decode");
+    // An HEIC this browser cannot open names the way out.
+    expect(
+      await codeOf(
+        readProfileCoverImage(
+          file("IMG.HEIC", ""),
+          environment({ width: 10, height: 10 }, unreadable),
+        ),
+      ),
+    ).toBe("heic");
+    expect(
+      await codeOf(
+        readProfileCoverImage(
+          file("a.png", "image/png", 0),
+          environment({ width: 10, height: 10 }),
+        ),
+      ),
+    ).toBe("decode");
+    // Beyond any phone camera (256 Mi px): a crash guard, not a size limit.
     expect(
       await codeOf(
         readProfileCoverImage(
           file("a.jpg", "image/jpeg"),
-          environment({ width: 10000, height: 5300 }),
+          environment({ width: 20000, height: 14000 }),
         ),
       ),
     ).toBe("pixels");
-    expect(
-      await codeOf(
-        readProfileCoverImage(
-          file("a.jpg", "image/jpeg"),
-          environment(
-            { width: 10, height: 10 },
-            { measure: () => Promise.reject(Error("x")) },
-          ),
-        ),
-      ),
-    ).toBe("decode");
   });
 
   it("accepts a 24 MP photo with a bounded export source and display copy", async () => {
@@ -712,7 +719,10 @@ describe("exportProfileCover", () => {
           exportDeps({ sizeFor: () => COVER_HARD_BYTES + 1 }).deps,
         ),
       ),
-    ).toBe("too-large");
+      // Unreachable in practice (a 1024 × 768 PNG fits even uncompressed); if
+      // an encoder ever overshoots, the save fails as an export error, with no
+      // "photo too detailed" refusal (#237).
+    ).toBe("export");
   });
 
   it("refuses a silently blank canvas, but keeps a transparent PNG's alpha", async () => {
