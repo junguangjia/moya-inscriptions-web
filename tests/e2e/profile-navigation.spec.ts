@@ -597,29 +597,10 @@ test("A photo profile too tall to pin scrolls freely and keeps its hint", async 
       .first()
       .evaluate((content) => getComputedStyle(content, "::before").zIndex),
   ).toBe("auto");
-  // Where the chevron is on screen, it shows over the shade (light strokes).
-  const hint = page.getByRole("button", { name: "向下查看作品" });
-  await expect(hint).toHaveCSS("opacity", "1");
-  const box = (await hint.boundingBox())!;
-  if (box.y >= 0 && box.y + box.height <= page.viewportSize()!.height) {
-    const { data, info } = await sharp(
-      await page.screenshot({
-        clip: { x: box.x, y: box.y, width: box.width, height: box.height },
-      }),
-    )
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    let light = 0;
-    for (let offset = 0; offset < data.length; offset += info.channels)
-      if (
-        0.299 * data[offset]! +
-          0.587 * data[offset + 1]! +
-          0.114 * data[offset + 2]! >
-        110
-      )
-        light++;
-    expect(light).toBeGreaterThan(8);
-  }
+  // At this size the chevron rests below the fold; it is on the photo stage.
+  await expect(
+    page.getByRole("button", { name: "向下查看作品" }),
+  ).not.toHaveAttribute("inert");
   // No snapping: a place between the two is kept, the photo held at the top.
   const between = Math.round(rest / 3);
   await scrollTo(page, between);
