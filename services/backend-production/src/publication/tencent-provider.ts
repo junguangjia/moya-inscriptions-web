@@ -25,9 +25,12 @@ import {
   createTencentPublicationApi,
 } from "./tencent-api.js";
 
-import type COS from "cos-nodejs-sdk-v5";
 import type { CosCredentials } from "../storage/cos-read.js";
-import type { PublishingCosTransport } from "../storage/publishing-cos-transport.js";
+import type {
+  PublishingCosTransport,
+  PublishingCosResult,
+  PublishingCosPutResult,
+} from "../storage/publishing-cos-transport.js";
 import type { PublicationConfig } from "./config.js";
 import type {
   PublicationProvider,
@@ -47,7 +50,7 @@ export interface TencentPublicationProviderDependencies {
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const header = (
-  response: COS.GeneralResult,
+  response: PublishingCosResult,
   name: string,
 ): string | undefined => {
   const headers: unknown = response.headers;
@@ -61,7 +64,7 @@ const etag = (value: string | undefined): string | undefined =>
   value && /^"?[0-9a-f]{32}"?$/iu.test(value)
     ? value.replaceAll('"', "").toLowerCase()
     : undefined;
-const evidence = (response: COS.GeneralResult): PublishedObjectEvidence => {
+const evidence = (response: PublishingCosResult): PublishedObjectEvidence => {
   const size = header(response, "content-length");
   const byteSize =
     size && /^[1-9][0-9]{0,15}$/u.test(size) ? Number(size) : NaN;
@@ -194,7 +197,7 @@ export function createTencentPublicationProvider(
           streamError = error;
         });
         try {
-          const uploaded = await transport.request<COS.PutObjectResult>(
+          const uploaded = await transport.request<PublishingCosPutResult>(
             "putObject",
             {
               ...parameters,

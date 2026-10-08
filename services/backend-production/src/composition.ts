@@ -352,21 +352,25 @@ export const prepareProductionBackend = async (
       publicationPort.lookupPublishedItems(ids, now),
   };
   const existingCatalogResolver = catalogUrlResolver;
-  catalogUrlResolver = {
-    resolveMany: (locators) => existingCatalogResolver.resolveMany(locators),
-    async resolveKeys(keys) {
-      if (!allowsEdgeDelivery(publicationConfig))
-        return existingCatalogResolver.resolveKeys?.(keys) ?? new Map();
-      const published = await publicationPort.lookupPublishedCatalog(
-        keys,
-        new Date(),
-      );
-      const urls = new Map<string, string>();
-      for (const [key, objectKey] of published)
-        urls.set(key, publishedObjectUrl(publicationConfig.origin!, objectKey));
-      return urls;
-    },
-  };
+  if (allowsEdgeDelivery(publicationConfig))
+    catalogUrlResolver = {
+      resolveMany: (locators) => existingCatalogResolver.resolveMany(locators),
+      async resolveKeys(keys) {
+        if (!allowsEdgeDelivery(publicationConfig))
+          return existingCatalogResolver.resolveKeys?.(keys) ?? new Map();
+        const published = await publicationPort.lookupPublishedCatalog(
+          keys,
+          new Date(),
+        );
+        const urls = new Map<string, string>();
+        for (const [key, objectKey] of published)
+          urls.set(
+            key,
+            publishedObjectUrl(publicationConfig.origin!, objectKey),
+          );
+        return urls;
+      },
+    };
   const articleControlPool =
     articleConfiguration === null
       ? undefined
@@ -473,9 +477,11 @@ export const prepareProductionBackend = async (
     : undefined;
   const closeResources = async (): Promise<void> => {
     // Running jobs finish or give their leases back before the pools close.
-    await notificationWorker?.stop();
-    await publishingWorker?.stop();
-    await Promise.all(publicationWorkers.map((lane) => lane.stop()));
+    await Promise.all([
+      notificationWorker?.stop(),
+      publishingWorker?.stop(),
+      ...publicationWorkers.map((lane) => lane.stop()),
+    ]);
     await Promise.all([
       closePostgresPool(pool),
       closePostgresPool(communityPool),

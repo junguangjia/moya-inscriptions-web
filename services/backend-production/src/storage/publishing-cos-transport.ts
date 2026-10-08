@@ -20,6 +20,9 @@ export type PublishingCosMethod =
   | "multipartList"
   | "multipartListPart";
 
+export type PublishingCosResult = COS.GeneralResult;
+export type PublishingCosPutResult = COS.PutObjectResult;
+
 /** Server-only deterministic I/O seam. Never selected from environment. */
 export interface PublishingCosTransport {
   request<T extends COS.GeneralResult>(

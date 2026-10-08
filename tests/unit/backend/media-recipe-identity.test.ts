@@ -38,6 +38,13 @@ const migration = await readFile(
   ),
   "utf8",
 );
+const publicationMigration = await readFile(
+  new URL(
+    "../../../database/community-migrations/20261008010000_media_publication.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 describe("rendition recipe identity, version 1", () => {
   it("records the registry's roles and identity form only", () => {
@@ -139,14 +146,28 @@ describe("rendition recipe identity, version 1", () => {
         ADOPTED_DERIVATIVE_ROLES.map((role) => [role, RECIPE_DIGESTS_V1[role]]),
       ),
     );
-    const listed = (constraint: string): string[] => {
-      const start = migration.indexOf(`CONSTRAINT ${constraint} CHECK`);
+    const listed = (constraint: string, source = migration): string[] => {
+      const start = source.indexOf(`CONSTRAINT ${constraint} CHECK`);
       expect(start, constraint).toBeGreaterThan(-1);
-      const body = migration.slice(start, migration.indexOf(")\n", start));
-      return [...body.matchAll(/'([a-z_]+)'/gu)].map((match) => match[1]!);
+      const body = /CHECK\s*\(\s*(?:role|kind)\s+IN\s*\(([^)]*)\)/u.exec(
+        source.slice(start),
+      )?.[1];
+      expect(body, constraint).toBeDefined();
+      return [...body!.matchAll(/'([a-z_]+)'/gu)].map((match) => match[1]!);
     };
     expect(listed("media_renditions_role_valid")).toEqual([...RENDITION_ROLES]);
-    expect(listed("publishing_jobs_kind_valid")).toEqual(
+    expect(listed("publishing_jobs_kind_valid")).toEqual([
+      "process_item",
+      "derive_edit",
+      "purge_item",
+      "purge_blob",
+      "expire_session",
+      "purge_trashed_work",
+      "sweep_staging",
+      "reconcile_capacity",
+      "catalog_render",
+    ]);
+    expect(listed("publishing_jobs_kind_valid", publicationMigration)).toEqual(
       publishingJobKindSchema.options,
     );
   });
