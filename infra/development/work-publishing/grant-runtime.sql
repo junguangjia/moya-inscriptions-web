@@ -396,3 +396,14 @@ TO :"app_role";
 -- PR 1b: discovery cards read the published-only Catalog rendition delivery
 -- view (migration 20261004020000) next to the published Catalog projection.
 GRANT SELECT ON community.catalog_media_delivery TO :"app_role";
+
+-- Increment 2: Backend/worker-only state. Public/CMS roles receive no grant.
+GRANT SELECT, INSERT ON community.media_public_assets, community.media_publications,
+  community.media_item_holds, community.media_request_usage TO :"app_role";
+GRANT UPDATE (next_generation,desired_seq,synced_seq,desired_at,lease_job_id,lease_job_owner,
+  lease_sequence,lease_expires_at,updated_at) ON community.media_public_assets TO :"app_role";
+GRANT UPDATE (state,version,published_at,withdraw_requested_at,origin_deleted_at,purge_task_ids,
+  purge_attempts,purge_submitted_at,verified_at,fallback_ttl_seconds,last_error_code,
+  swept_at,sweep_started_at,sweep_task_ids,sweep_attempts) ON community.media_publications TO :"app_role";
+GRANT UPDATE (created_at,released_at) ON community.media_item_holds TO :"app_role";
+GRANT UPDATE (month_start,period_end,requests,warning,observed_at) ON community.media_request_usage TO :"app_role";

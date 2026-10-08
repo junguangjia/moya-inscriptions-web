@@ -275,6 +275,11 @@ export const publishingJobKindSchema = z.enum([
   "sweep_staging",
   "reconcile_capacity",
   "catalog_render",
+  "publish_media",
+  "withdraw_media",
+  "verify_withdrawal",
+  "reconcile_publication",
+  "sweep_published",
 ]);
 
 export const publishingJobStateSchema = z.enum([

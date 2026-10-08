@@ -491,6 +491,9 @@ const coverScene = async (
   fixed(panel, "offsetTop", 500);
   fixed(head, "offsetTop", 96);
   fixed(owner, "clientHeight", 800);
+  // Geometry is measured on layout changes, not on scroll (#237): measure
+  // again now that the layout above is in place.
+  await act(async () => window.dispatchEvent(new Event("resize")));
   let top = 0;
   Object.defineProperty(owner, "scrollTop", {
     configurable: true,
@@ -565,13 +568,34 @@ describe("Cover stages", () => {
     expect(scene.owner.style.getPropertyValue("--cover-card-height")).toBe(
       "108px",
     );
+    // The photo is a sticky layer of the page (#237), and the pinned photo
+    // snaps natively between the two resting places.
+    expect(
+      scene.owner.querySelector(`:scope > .${presentation.profileCover} img`),
+    ).not.toBeNull();
+    expect(scene.owner.hasAttribute("data-cover-snap")).toBe(true);
+    // The compact cover follows it: the photo again, over the collections,
+    // with the frost and the glass card.
+    const compact = scene.owner.querySelector(
+      `:scope > .${presentation.profileCover} + .${presentation.coverCompact}`,
+    );
+    expect(compact?.querySelector("img")?.getAttribute("src")).toBe(
+      scene.owner
+        .querySelector(`:scope > .${presentation.profileCover} img`)
+        ?.getAttribute("src"),
+    );
+    expect(
+      compact?.querySelectorAll(
+        `:scope > :is(.${presentation.coverGlass}, .${presentation.coverCard})`,
+      ),
+    ).toHaveLength(2);
     await act(async () => scene.scrollBy(500));
-    // The photo's box follows the scroll; the bar stays clear over it.
-    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("500px");
+    // Scrolling writes no geometry: the compositor moves the photo, so it
+    // cannot lag; the bar stays clear over it.
+    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("");
     expect(scene.bar.hasAttribute("data-cover-passed")).toBe(false);
-    // Among the collections the compact cover stays put.
     await act(async () => scene.scrollBy(900));
-    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("532px");
+    expect(scene.owner.style.getPropertyValue("--cover-rest")).toBe("532px");
     onViewChange.mockClear();
     await act(async () => button(scene.node, "收藏")!.click());
     expect(onViewChange).toHaveBeenLastCalledWith("favorites", 532);
@@ -650,12 +674,16 @@ describe("Cover stages", () => {
     restore = () => scene.measure.mockRestore();
     expect(scene.owner.getAttribute("data-profile-stage")).toBe("content");
     expect(scene.names.hasAttribute("data-theme")).toBe(false);
-    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("0px");
+    expect(scene.owner.hasAttribute("data-cover-photo")).toBe(false);
+    expect(scene.owner.hasAttribute("data-cover-snap")).toBe(false);
+    expect(
+      scene.owner.querySelector(`.${presentation.coverCompact}`),
+    ).toBeNull();
     expect(hint(scene.node)).toBeNull();
   });
 });
 
-describe("Cover glide", () => {
+describe("Cover snapping", () => {
   let restore: (() => void) | null = null;
   const wheel = (deltaY = 40) =>
     new WheelEvent("wheel", { deltaY, bubbles: true });
@@ -670,38 +698,13 @@ describe("Cover glide", () => {
     restore = null;
   });
 
-  it("glides on to the identity at the top after a wheel turn settles", async () => {
+  // The two resting places are native snap positions (#237): the browser
+  // settles a released gesture in one motion, so input never scrolls the
+  // page from script and nothing waits for momentum to end.
+  it("never scrolls from script after wheel, touch or keys between the stages", async () => {
     const scene = await coverScene();
     restore = () => scene.measure.mockRestore();
-    await act(async () => scene.scrollBy(80, wheel()));
-    await act(async () => vi.advanceTimersByTime(120));
-    expect(scene.scrollTo).toHaveBeenLastCalledWith(
-      expect.objectContaining({ top: 532 }),
-    );
-  });
-
-  it("settles again when new input interrupts a glide", async () => {
-    const scene = await coverScene();
-    restore = () => scene.measure.mockRestore();
-    await act(async () => scene.scrollBy(80, wheel()));
-    await act(async () => vi.advanceTimersByTime(120));
-    expect(scene.scrollTo).toHaveBeenCalledTimes(1);
-    // A second notch cuts the glide short, back up over the photo.
-    await act(async () => scene.scrollBy(50, wheel(-40)));
-    await act(async () => vi.advanceTimersByTime(120));
-    expect(scene.scrollTo).toHaveBeenCalledTimes(2);
-    expect(scene.scrollTo).toHaveBeenLastCalledWith(
-      expect.objectContaining({ top: 0 }),
-    );
-  });
-
-  it("finishes a glide that a tap cut short", async () => {
-    const scene = await coverScene();
-    restore = () => scene.measure.mockRestore();
-    await act(async () => scene.scrollBy(80, wheel()));
-    await act(async () => vi.advanceTimersByTime(120));
-    expect(scene.scrollTo).toHaveBeenCalledTimes(1);
-    // A tap mid-glide stops the scroll about halfway.
+    expect(scene.owner.hasAttribute("data-cover-snap")).toBe(true);
     const touch = (type: string) => {
       const event = new Event(type, { bubbles: true });
       Object.defineProperty(event, "touches", {
@@ -709,28 +712,33 @@ describe("Cover glide", () => {
       });
       return event;
     };
+    await act(async () => scene.scrollBy(80, wheel()));
     await act(async () => scene.scrollBy(260, touch("touchstart")));
     await act(async () => {
       scene.owner.dispatchEvent(touch("touchend"));
+      scene.owner.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }),
+      );
     });
-    await act(async () => vi.advanceTimersByTime(120));
-    expect(scene.scrollTo).toHaveBeenCalledTimes(2);
-    expect(scene.scrollTo).toHaveBeenLastCalledWith(
-      expect.objectContaining({ top: 532 }),
-    );
+    await act(async () => vi.advanceTimersByTime(3000));
+    expect(scene.scrollTo).not.toHaveBeenCalled();
   });
 
-  it("settles a glide cut short by a scroll write once, not forever", async () => {
+  it("writes only paint values on scroll; geometry follows layout changes", async () => {
     const scene = await coverScene();
     restore = () => scene.measure.mockRestore();
-    await act(async () => scene.scrollBy(80, wheel()));
-    await act(async () => vi.advanceTimersByTime(120));
-    // The glide never arrives (a write keeps the page mid-way).
+    const written: string[] = [];
+    const set = scene.owner.style.setProperty.bind(scene.owner.style);
+    const spy = vi
+      .spyOn(scene.owner.style, "setProperty")
+      .mockImplementation((name: string, value: string | null) => {
+        written.push(name);
+        set(name, value);
+      });
     await act(async () => scene.scrollBy(300));
-    await act(async () => vi.advanceTimersByTime(900));
-    expect(scene.scrollTo).toHaveBeenCalledTimes(2);
-    await act(async () => vi.advanceTimersByTime(3000));
-    expect(scene.scrollTo).toHaveBeenCalledTimes(2);
+    await act(async () => scene.scrollBy(700));
+    spy.mockRestore();
+    expect([...new Set(written)]).toEqual(["--cover-progress"]);
   });
 
   it("scrolls freely among the collections and ignores keys typed into a field", async () => {
@@ -761,8 +769,9 @@ describe("Cover glide", () => {
     expect(scene.owner.hasAttribute("data-cover-free")).toBe(true);
     // Past the identity the cover scrolls away whole, and the bar turns
     // solid in the reader's own theme.
+    // A free cover does not snap.
+    expect(scene.owner.hasAttribute("data-cover-snap")).toBe(false);
     await act(async () => scene.scrollBy(700));
-    expect(scene.owner.style.getPropertyValue("--cover-scroll")).toBe("532px");
     expect(scene.bar.hasAttribute("data-cover-passed")).toBe(true);
     expect(scene.bar.hasAttribute("data-theme")).toBe(false);
     await act(async () => scene.scrollBy(0));

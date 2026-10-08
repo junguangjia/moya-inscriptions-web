@@ -1,3 +1,4 @@
+import type { PublicationSyncOptions } from "./publishing/publication-sync.js";
 import type { MediaVariant } from "@moya/contracts";
 import type {
   ModerateWorkSubmissionCommand,
@@ -26,7 +27,12 @@ import * as operations from "./publishing/operator.js";
  * to publishing/operator.ts with this adapter's pool.
  */
 export class PostgresPublishingOperatorAdapter implements PublishingOperatorPort {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly options: {
+      readonly publication?: PublicationSyncOptions;
+    } = {},
+  ) {}
 
   readSettings(): Promise<WorkPublishingSettings> {
     return operations.readSettings(this.pool);
@@ -58,6 +64,7 @@ export class PostgresPublishingOperatorAdapter implements PublishingOperatorPort
       operator,
       command,
       now,
+      this.options.publication,
     );
   }
   resolveMediaRead(

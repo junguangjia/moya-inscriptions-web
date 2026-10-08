@@ -1,3 +1,7 @@
+import {
+  beginArticlePublicationSync,
+  type PublicationSyncOptions,
+} from "../publishing/publication-sync.js";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -69,6 +73,7 @@ import { listArticleOwnMedia } from "./media-read.js";
 
 type Operation = "read" | "draft-write" | "publish";
 export interface PostgresArticleAuthoringOptions {
+  readonly publication?: PublicationSyncOptions;
   /** Persisted connection/generation/scope admission, under this SAME transaction. */
   readonly assertDelegatedActor?: (
     db: PoolClient,
@@ -883,6 +888,11 @@ export class PostgresArticleAuthoringAdapter
         SELECT id,'article_revision',$3 FROM community.media_items WHERE owner_id=$1 AND id=ANY($2::text[]) ON CONFLICT DO NOTHING`,
             [actor.userId, ids, revisionHolder(id, draft.version)],
           );
+        const publicationSync = await beginArticlePublicationSync(
+          db,
+          id,
+          this.options.publication,
+        );
         const direct = settings.policy === "DIRECT_PUBLICATION";
         const row = (
           await db.query<DraftRow>(
@@ -904,6 +914,7 @@ export class PostgresArticleAuthoringAdapter
             ],
           )
         ).rows[0]!;
+        await publicationSync.finish(now);
         return draftOf(row);
       },
     );
@@ -924,12 +935,18 @@ export class PostgresArticleAuthoringAdapter
       async (db) => {
         const draft = await this.owned(db, actor, id, "update");
         assertVersion(draft, command.expectedVersion, command.fingerprint);
+        const publicationSync = await beginArticlePublicationSync(
+          db,
+          id,
+          this.options.publication,
+        );
         const row = (
           await db.query<DraftRow>(
             `UPDATE community.article_documents SET version=version+1,status='withdrawn',published_version=NULL,pending_version=NULL,updated_at=$3::timestamptz WHERE id=$1 AND owner_id=$2 RETURNING ${columns}`,
             [id, actor.userId, now.toISOString()],
           )
         ).rows[0]!;
+        await publicationSync.finish(now);
         // Withdrawal changes public visibility, never the underlying asset or
         // immutable historical snapshots and their retention refs.
         return draftOf(row);
@@ -1038,6 +1055,11 @@ export class PostgresArticleAuthoringAdapter
           if (!validation.valid)
             throw new ArticleReferencesUnavailableError(validation.issues);
         }
+        const publicationSync = await beginArticlePublicationSync(
+          db,
+          id,
+          this.options.publication,
+        );
         const approve = command.action === "approve";
         const changed = (
           await db.query<{ version: number; published_version: number | null }>(
@@ -1058,6 +1080,7 @@ export class PostgresArticleAuthoringAdapter
             ],
           )
         ).rows[0]!;
+        await publicationSync.finish(now);
         return articleModerationResultSchema.parse({
           articleId: id,
           candidateVersion: candidate.candidateVersion,

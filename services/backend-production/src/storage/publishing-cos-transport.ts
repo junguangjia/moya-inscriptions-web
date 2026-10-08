@@ -9,6 +9,7 @@ import type { CosSdkDependencies } from "./cos-sdk.js";
 export type PublishingCosMethod =
   | "getBucketVersioning"
   | "headObject"
+  | "putObject"
   | "getObject"
   | "deleteObject"
   | "getBucket"

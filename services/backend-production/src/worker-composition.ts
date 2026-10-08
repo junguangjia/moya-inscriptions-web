@@ -7,6 +7,7 @@ import {
 } from "@moya/catalog-postgres";
 import {
   PostgresWorkPublishingAdapter,
+  PostgresMediaPublicationAdapter,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 
@@ -28,6 +29,11 @@ import {
   createPublishingJobHandlers,
 } from "./publishing/job-handlers.js";
 import { PublishingWorker } from "./publishing/worker.js";
+import {
+  parsePublicationConfig,
+  allowsPublication,
+} from "./publication/config.js";
+import { createPublicationWorkers } from "./publication/runtime.js";
 import {
   LocalCatalogSourceReader,
   assertCatalogCosTarget,
@@ -148,7 +154,15 @@ const parseWorkerConfiguration = (environment: Environment) => {
         : null;
   const catalogDatabase =
     catalogSource === null ? null : parsePostgresConfig(environment);
-  return { nodeEnv, media, community, catalogSource, catalogDatabase };
+  const publication = parsePublicationConfig(environment, nodeEnv);
+  return {
+    nodeEnv,
+    media,
+    community,
+    catalogSource,
+    catalogDatabase,
+    publication,
+  };
 };
 
 /**
@@ -241,7 +255,31 @@ export async function prepareMediaWorker(
     await closePools();
     throw error;
   }
-  const port = new PostgresWorkPublishingAdapter(communityPool);
+  const allowPublish = () => allowsPublication(configuration.publication);
+  const isPublic = () => configuration.publication.productMode === "public";
+  const port = new PostgresWorkPublishingAdapter(communityPool, {
+    publication: { allowPublish, isPublic },
+  });
+  const publicationPort = new PostgresMediaPublicationAdapter(communityPool, {
+    allowPublish,
+    isPublic,
+  });
+  let publicationWorkers: ReturnType<typeof createPublicationWorkers>;
+  try {
+    publicationWorkers = createPublicationWorkers({
+      config: configuration.publication,
+      port: publicationPort,
+      queue: port,
+      source: media.store,
+      ...(mediaConfig.production
+        ? { ugcCredentials: mediaConfig.config.credentials }
+        : {}),
+      logger,
+    });
+  } catch (error) {
+    await closePools();
+    return configError(error);
+  }
   const catalog =
     catalogSource !== null && catalogPool !== null
       ? {
@@ -298,9 +336,15 @@ export async function prepareMediaWorker(
     concurrency: mediaConfig.config.workerConcurrency,
     runtime: check.runtime,
     catalog: catalog !== null,
-    start: () => worker.start(),
+    start: () => {
+      worker.start();
+      publicationWorkers.forEach((lane) => lane.start());
+    },
     stop: () => {
-      stopping ??= worker.stop().then(closePools);
+      stopping ??= Promise.all([
+        worker.stop(),
+        ...publicationWorkers.map((lane) => lane.stop()),
+      ]).then(closePools);
       return stopping;
     },
   };

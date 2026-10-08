@@ -62,7 +62,7 @@ export const AvatarEntry = ({
         ref={input}
         hidden
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
         aria-label="选择头像照片"
         onChange={(event) => {
           const selected = event.target.files?.[0];
@@ -113,7 +113,7 @@ export const AvatarEditor = ({
     mounted.current = true;
     return () => {
       mounted.current = false;
-      if (ownedSource.current) URL.revokeObjectURL(ownedSource.current.url);
+      ownedSource.current?.release();
     };
   }, []);
   const author = useAuthors();
@@ -138,10 +138,10 @@ export const AvatarEditor = ({
     void readAvatarImage(file)
       .then((value) => {
         if (!active) {
-          URL.revokeObjectURL(value.url);
+          value.release();
           return;
         }
-        if (ownedSource.current) URL.revokeObjectURL(ownedSource.current.url);
+        ownedSource.current?.release();
         ownedSource.current = value;
         cropArea.current = null;
         setReady(false);
@@ -174,7 +174,7 @@ export const AvatarEditor = ({
     setError("");
     try {
       // No await before the durable intent: Back/reload cannot discard this save.
-      const snapshot = exportAvatarSnapshot(source.image, {
+      const snapshot = exportAvatarSnapshot(source.pixels, {
         ...cropArea.current,
       });
       author.saveAvatar(snapshot);
@@ -218,10 +218,12 @@ export const AvatarEditor = ({
                 "aria-describedby": hintId,
               }}
               mediaProps={{ alt: "待裁剪的头像照片", draggable: false }}
-              onCropAreaChange={(percent, area) => {
+              onCropAreaChange={(percent) => {
                 gestures.reportArea(percent);
                 if (saving.current) return;
-                cropArea.current = area;
+                // In percent of the photo: the cropper shows a bounded copy,
+                // and the export maps it onto the bounded pixels (#237).
+                cropArea.current = percent;
                 setReady(true);
               }}
             />
@@ -249,7 +251,7 @@ export const AvatarEditor = ({
           hidden
           ref={input}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/*"
           aria-label="重新选择头像照片"
           disabled={busy || limited}
           onChange={(event) => {

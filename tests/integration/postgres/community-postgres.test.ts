@@ -1,3 +1,4 @@
+import { registerMediaPublicationTests } from "./media-publication-cases.js";
 import { registerPhase4DiscoveryTests } from "./phase4-discovery-cases.js";
 import { registerPhase4AuthorTests } from "./phase4-author-cases.js";
 import { registerProfileBackgroundTests } from "./profile-background-cases.js";
@@ -1154,3 +1155,5 @@ registerWorkPublishingContentTests(pool);
 registerMediaDeliveryTests(pool);
 registerThreadTests(pool);
 registerDirectMessageTests(pool);
+
+registerMediaPublicationTests(pool);

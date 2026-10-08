@@ -74,7 +74,10 @@ const sameBox = (a: HeaderBox, b: HeaderBox) =>
  * read with the cover geometry flag (nothing paints in between).
  */
 const readHeaderBox = (element: HTMLElement): HeaderBox | null => {
-  const bare = !element.querySelector(`.${presentation.profileCover} img`);
+  // The photo is a layer of the profile root beside this header (#237).
+  const bare = !(element.parentElement ?? element).querySelector(
+    `:scope > .${presentation.profileCover} img`,
+  );
   if (bare) element.setAttribute("data-cover-measure", "");
   try {
     const rect = element.getBoundingClientRect();
@@ -485,9 +488,10 @@ export const ProfileBackgroundEditor = ({
       go("done");
       author.notify(shownId ? "主页背景已更新" : "主页背景已移除");
     };
-    const image = header?.current?.querySelector<HTMLImageElement>(
-      `.${presentation.profileCover} img`,
-    );
+    const image =
+      header?.current?.parentElement?.querySelector<HTMLImageElement>(
+        `:scope > .${presentation.profileCover} img`,
+      );
     if (
       !shownSrc ||
       !image ||
@@ -721,7 +725,7 @@ export const ProfileBackgroundEditor = ({
           ref={input}
           hidden
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/*"
           aria-label="选择主页背景照片"
           onChange={(event) => {
             const file = event.target.files?.[0];

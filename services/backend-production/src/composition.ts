@@ -43,11 +43,21 @@ import {
   PostgresDirectMessageAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
+  PostgresMediaPublicationAdapter,
   resolveCatalogRenditionRead,
   verifyCatalogDeliveryReadable,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { loadProductAccess } from "./access/product-access.js";
+import {
+  parsePublicationConfig,
+  allowsPublication,
+  allowsEdgeDelivery,
+} from "./publication/config.js";
+import { publishedObjectUrl } from "./publication/keys.js";
+import { withPublishedReads } from "./publication/delivery.js";
+import { createPublicationWorkers } from "./publication/runtime.js";
+import { createLocalPublicationReadHandler } from "./publication/local-read.js";
 import { loadPilotConfiguration, openPilotPool } from "./pilot-config.js";
 import { articleBackendConfigurationFrom } from "./article-authoring/runtime-config.js";
 import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
@@ -74,6 +84,7 @@ import {
 import { externalPublishingProcessor } from "./publishing/external-processor.js";
 import {
   UPLOAD_COUPLED_JOB_KINDS,
+  MEDIA_WORKER_JOB_KINDS,
   createPublishingJobHandlers,
 } from "./publishing/job-handlers.js";
 import { PublishingWorker } from "./publishing/worker.js";
@@ -193,6 +204,13 @@ export const prepareProductionBackend = async (
   }
   // Who may reach product content is decided before anything is opened.
   const productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv);
+  const publicationConfig = parsePublicationConfig(
+    environment,
+    runtimeConfig.nodeEnv,
+    productAccess.mode === "public" ? "public" : "closed-beta",
+  );
+  const allowPublish = () => allowsPublication(publicationConfig);
+  const isPublic = () => productAccess.mode === "public";
   const authConfiguration =
     runtimeConfig.nodeEnv === "production"
       ? await loadProductionAuthConfiguration(environment)
@@ -300,7 +318,7 @@ export const prepareProductionBackend = async (
   // composed (with a local publishing store, below); without one, Catalog
   // media keep the approved image's src rather than a URL that answers 404.
   const resolver: StorageUrlResolver = storageUrlResolver;
-  const catalogUrlResolver: StorageUrlResolver =
+  let catalogUrlResolver: StorageUrlResolver =
     runtimeConfig.nodeEnv === "development" && publishing === null
       ? { resolveMany: (locators) => resolver.resolveMany(locators) }
       : resolver;
@@ -323,13 +341,41 @@ export const prepareProductionBackend = async (
   const communityPool = createPostgresPool(communityPostgresConfig, {
     onUnexpectedIdleError,
   });
+  const publicationPort = new PostgresMediaPublicationAdapter(communityPool, {
+    allowPublish,
+    isPublic,
+  });
+  const deliveryOptions = {
+    enabled: () => allowsEdgeDelivery(publicationConfig),
+    ...(publicationConfig.origin ? { origin: publicationConfig.origin } : {}),
+    lookup: (ids: readonly string[], now: Date) =>
+      publicationPort.lookupPublishedItems(ids, now),
+  };
+  const existingCatalogResolver = catalogUrlResolver;
+  catalogUrlResolver = {
+    resolveMany: (locators) => existingCatalogResolver.resolveMany(locators),
+    async resolveKeys(keys) {
+      if (!allowsEdgeDelivery(publicationConfig))
+        return existingCatalogResolver.resolveKeys?.(keys) ?? new Map();
+      const published = await publicationPort.lookupPublishedCatalog(
+        keys,
+        new Date(),
+      );
+      const urls = new Map<string, string>();
+      for (const [key, objectKey] of published)
+        urls.set(key, publishedObjectUrl(publicationConfig.origin!, objectKey));
+      return urls;
+    },
+  };
   const articleControlPool =
     articleConfiguration === null
       ? undefined
       : createPostgresPool(articleConfiguration.controlPostgres, {
           onUnexpectedIdleError,
         });
-  const workPublishingPort = new PostgresWorkPublishingAdapter(communityPool);
+  const workPublishingPort = new PostgresWorkPublishingAdapter(communityPool, {
+    publication: { allowPublish, isPublic },
+  });
   // One upload registry shared by the HTTP upload route and the worker: a
   // session the worker expires stops its transfers still streaming here.
   const publishingTransfers = workPublishingPort
@@ -349,6 +395,7 @@ export const prepareProductionBackend = async (
       ? publishingMedia
         ? new PublishingWorker({
             port: workPublishingPort,
+            kinds: [...UPLOAD_COUPLED_JOB_KINDS, ...MEDIA_WORKER_JOB_KINDS],
             concurrency: publishing.concurrency,
             ...(catalogSources
               ? {
@@ -400,6 +447,23 @@ export const prepareProductionBackend = async (
             }),
           })
       : undefined;
+  let publicationWorkers: ReturnType<typeof createPublicationWorkers> = [];
+  try {
+    if (publishingMedia)
+      publicationWorkers = createPublicationWorkers({
+        config: publicationConfig,
+        port: publicationPort,
+        queue: workPublishingPort,
+        source: publishingMedia.store,
+      });
+  } catch (error) {
+    await Promise.all([
+      closePostgresPool(pool),
+      closePostgresPool(communityPool),
+      ...(articleControlPool ? [closePostgresPool(articleControlPool)] : []),
+    ]);
+    throw error;
+  }
   const notificationSignals = new NotificationSignals();
   const notificationPort = new PostgresNotificationAdapter(communityPool);
   const notificationWorker = notificationPort
@@ -411,6 +475,7 @@ export const prepareProductionBackend = async (
     // Running jobs finish or give their leases back before the pools close.
     await notificationWorker?.stop();
     await publishingWorker?.stop();
+    await Promise.all(publicationWorkers.map((lane) => lane.stop()));
     await Promise.all([
       closePostgresPool(pool),
       closePostgresPool(communityPool),
@@ -434,7 +499,10 @@ export const prepareProductionBackend = async (
   );
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,
-    { requireProductionSession: runtimeConfig.nodeEnv === "production" },
+    {
+      requireProductionSession: runtimeConfig.nodeEnv === "production",
+      publication: { allowPublish, isPublic },
+    },
   );
   const communityCommentPort = new PostgresCommunityCommentAdapter(
     communityPool,
@@ -453,10 +521,10 @@ export const prepareProductionBackend = async (
           articleConfiguration.authorization,
           { readPool: communityPool },
         );
-  const articleAdapter = new PostgresArticleAuthoringAdapter(
-    communityPool,
-    articlePersistence?.adapterOptions,
-  );
+  const articleAdapter = new PostgresArticleAuthoringAdapter(communityPool, {
+    ...articlePersistence?.adapterOptions,
+    publication: { allowPublish, isPublic },
+  });
   const articleService =
     articleConfiguration !== null && articleAdapter !== undefined
       ? createArticleAuthoringService(articleAdapter)
@@ -500,120 +568,157 @@ export const prepareProductionBackend = async (
   return {
     runtimeConfig,
     readinessCheck,
-    requestListener: createBackendApplication({
-      nodeEnv: runtimeConfig.nodeEnv,
-      productAccess,
-      catalogQueryPort,
-      catalogSearchQueryPort: catalogQueryPort,
-      storageUrlResolver: catalogUrlResolver,
-      healthReadinessCheck: readinessCheck,
-      communityIdentityPort,
-      ...(() => {
-        const adapter = new PostgresCommunityAuthAdapter(communityPool);
-        const authService =
-          runtimeConfig.nodeEnv === "production"
-            ? authConfiguration === null
-              ? null
-              : createConfiguredProductionAuthService(
-                  adapter,
-                  authConfiguration,
-                  dependencies.authProvider,
-                )
-            : createDevelopmentAuthService(adapter, environment);
-        return authService === null
-          ? {}
-          : {
-              authService,
-              ...(authRequestSource === undefined ? {} : { authRequestSource }),
-            };
-      })(),
-      communityCommentPort,
-      ...(notificationPort ? { notificationPort, notificationSignals } : {}),
-      ...{
-        ...(articleAdapter === undefined
-          ? {}
-          : {
-              articleAuthoringPort: articleAdapter,
-              ...(articleDelegation === undefined ? {} : { articleDelegation }),
-              articlePublicationOperatorPort: articleAdapter,
-            }),
-        discussionPort: communityCommentPort,
-        contentOperatorPort: new PostgresCommunityContentOperatorAdapter(
-          communityPool,
-        ),
-        discoveryPort: new PostgresCommunityDiscoveryAdapter(communityPool),
-        // Published editorial views through the public read role.
-        editorialContentPort: createArticleReadPort(
-          pool,
-          communityPool,
-          catalogUrlResolver,
-          catalogReaders,
-        ),
-        threadPort: new PostgresThreadAdapter(communityPool),
-        directMessagePort: new PostgresDirectMessageAdapter(communityPool),
-        authorCommunityPort: new PostgresAuthorCommunityAdapter(communityPool),
-        ...(workPublishingPort && publishingTransfers
-          ? { workPublishingPort, publishingTransfers }
-          : {}),
-        publishingOperatorPort: new PostgresPublishingOperatorAdapter(
-          communityPool,
-        ),
-        ...(runtimeConfig.nodeEnv === "development"
-          ? {
-              agentAdministrationPort: new PostgresAgentAdministrationAdapter(
-                communityPool,
-              ),
-            }
-          : {}),
-        ...(publishing
-          ? {
-              publishingMediaStore: publishing.store,
-              publishingMediaProcessor:
-                publishingMedia?.processor ?? externalPublishingProcessor,
-            }
-          : {}),
-        // Development delivery of Catalog renditions: the local store's
-        // committed blob of a rendition the delivery view lists, behind the
-        // URLs the Development resolver names. Development here is already
-        // synthetic with local storage (the local resolver refuses anything
-        // else at startup); Production never composes it.
-        ...(runtimeConfig.nodeEnv === "development" && publishing
-          ? {
-              developmentCatalogRenditions: {
-                resolve: (renditionId: string) =>
-                  resolveCatalogRenditionRead(communityPool, renditionId, pool),
-                store: publishing.store,
-              },
-            }
-          : {}),
-      },
-      // A comment attaches only to a currently published Catalog record; the
-      // published read role answers that, so the App role needs no Catalog grant.
-      catalogPublicationPort: {
-        isPublished: async (catalogId) =>
-          (await catalogQueryPort.getById(catalogId)) !== null,
-        // One statement over the same published projection getById reads.
-        publishedIds: async (ids) => {
-          try {
-            const result = await pool.query<{ catalog_id: string }>(
-              "SELECT catalog_id FROM catalog_entries WHERE catalog_id = ANY($1::text[])",
-              [[...ids]],
-            );
-            return new Set(
-              result.rows.map((row) => row.catalog_id as (typeof ids)[number]),
-            );
-          } catch (error) {
-            throw asPostgresOperationError(error, "query");
-          }
+    requestListener: createLocalPublicationReadHandler(
+      publicationConfig,
+      createBackendApplication({
+        nodeEnv: runtimeConfig.nodeEnv,
+        productAccess,
+        catalogQueryPort,
+        catalogSearchQueryPort: catalogQueryPort,
+        storageUrlResolver: catalogUrlResolver,
+        healthReadinessCheck: readinessCheck,
+        communityIdentityPort,
+        ...(() => {
+          const adapter = new PostgresCommunityAuthAdapter(communityPool);
+          const authService =
+            runtimeConfig.nodeEnv === "production"
+              ? authConfiguration === null
+                ? null
+                : createConfiguredProductionAuthService(
+                    adapter,
+                    authConfiguration,
+                    dependencies.authProvider,
+                  )
+              : createDevelopmentAuthService(adapter, environment);
+          return authService === null
+            ? {}
+            : {
+                authService,
+                ...(authRequestSource === undefined
+                  ? {}
+                  : { authRequestSource }),
+              };
+        })(),
+        communityCommentPort,
+        ...(notificationPort ? { notificationPort, notificationSignals } : {}),
+        ...{
+          ...(articleAdapter === undefined
+            ? {}
+            : {
+                articleAuthoringPort: articleAdapter,
+                ...(articleDelegation === undefined
+                  ? {}
+                  : { articleDelegation }),
+                articlePublicationOperatorPort: articleAdapter,
+              }),
+          discussionPort: communityCommentPort,
+          contentOperatorPort: new PostgresCommunityContentOperatorAdapter(
+            communityPool,
+            { publication: { allowPublish, isPublic } },
+          ),
+          discoveryPort: withPublishedReads(
+            new PostgresCommunityDiscoveryAdapter(communityPool),
+            ["browse", "collection", "card"],
+            deliveryOptions,
+          ),
+          // Published editorial views through the public read role.
+          editorialContentPort: withPublishedReads(
+            createArticleReadPort(
+              pool,
+              communityPool,
+              catalogUrlResolver,
+              catalogReaders,
+            ),
+            [
+              "listArticles",
+              "findArticle",
+              "listCollections",
+              "findCollection",
+            ],
+            deliveryOptions,
+          ),
+          threadPort: withPublishedReads(
+            new PostgresThreadAdapter(communityPool),
+            ["listThreadPosts"],
+            deliveryOptions,
+          ),
+          directMessagePort: new PostgresDirectMessageAdapter(communityPool),
+          authorCommunityPort: withPublishedReads(
+            new PostgresAuthorCommunityAdapter(communityPool),
+            ["readWork", "listWorks"],
+            deliveryOptions,
+          ),
+          ...(workPublishingPort && publishingTransfers
+            ? { workPublishingPort, publishingTransfers }
+            : {}),
+          publishingOperatorPort: new PostgresPublishingOperatorAdapter(
+            communityPool,
+            { publication: { allowPublish, isPublic } },
+          ),
+          ...(runtimeConfig.nodeEnv === "development"
+            ? {
+                agentAdministrationPort: new PostgresAgentAdministrationAdapter(
+                  communityPool,
+                ),
+              }
+            : {}),
+          ...(publishing
+            ? {
+                publishingMediaStore: publishing.store,
+                publishingMediaProcessor:
+                  publishingMedia?.processor ?? externalPublishingProcessor,
+              }
+            : {}),
+          // Development delivery of Catalog renditions: the local store's
+          // committed blob of a rendition the delivery view lists, behind the
+          // URLs the Development resolver names. Development here is already
+          // synthetic with local storage (the local resolver refuses anything
+          // else at startup); Production never composes it.
+          ...(runtimeConfig.nodeEnv === "development" && publishing
+            ? {
+                developmentCatalogRenditions: {
+                  resolve: (renditionId: string) =>
+                    resolveCatalogRenditionRead(
+                      communityPool,
+                      renditionId,
+                      pool,
+                    ),
+                  store: publishing.store,
+                },
+              }
+            : {}),
         },
-        readTitle: async (catalogId) =>
-          (await catalogQueryPort.getById(catalogId))?.title ?? null,
-      },
-      communityOperatorCredential: parseOperatorCredential(environment),
-    }),
+        // A comment attaches only to a currently published Catalog record; the
+        // published read role answers that, so the App role needs no Catalog grant.
+        catalogPublicationPort: {
+          isPublished: async (catalogId) =>
+            (await catalogQueryPort.getById(catalogId)) !== null,
+          // One statement over the same published projection getById reads.
+          publishedIds: async (ids) => {
+            try {
+              const result = await pool.query<{ catalog_id: string }>(
+                "SELECT catalog_id FROM catalog_entries WHERE catalog_id = ANY($1::text[])",
+                [[...ids]],
+              );
+              return new Set(
+                result.rows.map(
+                  (row) => row.catalog_id as (typeof ids)[number],
+                ),
+              );
+            } catch (error) {
+              throw asPostgresOperationError(error, "query");
+            }
+          },
+          readTitle: async (catalogId) =>
+            (await catalogQueryPort.getById(catalogId))?.title ?? null,
+        },
+        communityOperatorCredential: parseOperatorCredential(environment),
+      }),
+    ),
     closeResources,
     startBackgroundWork: () => {
       publishingWorker?.start();
+      publicationWorkers.forEach((lane) => lane.start());
       notificationWorker?.start();
     },
   };

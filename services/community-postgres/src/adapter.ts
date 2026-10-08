@@ -1,3 +1,7 @@
+import {
+  requestOwnerPublicationSync,
+  type PublicationSyncOptions,
+} from "./publishing/publication-sync.js";
 import { asCommunityOperationError } from "./availability.js";
 import {
   insertModerationEventSql,
@@ -28,6 +32,7 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
     private readonly pool: Pool,
     private readonly options: {
       readonly requireProductionSession?: boolean;
+      readonly publication?: PublicationSyncOptions;
     } = {},
   ) {}
 
@@ -117,6 +122,14 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
         status === "suspended"
           ? await client.query(revokeUserSessionsSql, [id, at])
           : undefined;
+      if (row.changed === true)
+        await requestOwnerPublicationSync(
+          client,
+          id,
+          status === "active" ? "publish" : "withdraw",
+          at,
+          this.options.publication,
+        );
       await client.query("COMMIT");
       return { user, revokedSessions: revoked?.rowCount ?? 0 };
     } catch (error) {

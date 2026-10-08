@@ -18,7 +18,8 @@ vi.mock("../shell/horizontal-pager", () => ({ HorizontalPager: () => null }));
 vi.mock("../authors/profile-list", () => ({ ProfileList: () => null }));
 vi.mock("../authors/avatar-image", () => ({
   readAvatarImage: async () => ({
-    image: {},
+    pixels: {},
+    release: () => undefined,
     url: "blob:synthetic-onboarding-avatar",
   }),
   exportAvatarSnapshot: () => "data:image/png;base64,c3ludGhldGlj",

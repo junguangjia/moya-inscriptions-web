@@ -40,7 +40,12 @@ export type PublishingWorkerJobKind =
   | "purge_trashed_work"
   | "sweep_staging"
   | "reconcile_capacity"
-  | "catalog_render";
+  | "catalog_render"
+  | "publish_media"
+  | "withdraw_media"
+  | "verify_withdrawal"
+  | "reconcile_publication"
+  | "sweep_published";
 
 /**
  * Job kinds coupled to the Backend's own upload state (W3): staging sweeps
@@ -184,6 +189,11 @@ export interface PublishingWorkerPort {
    * kept; false when the lease was lost (nothing changes then).
    */
   releaseJob(lease: PublishingWorkerJobLease, now: Date): Promise<boolean>;
+  deferJob?(
+    lease: PublishingWorkerJobLease,
+    delayMs: number,
+    now: Date,
+  ): Promise<boolean>;
   failJob(
     lease: PublishingWorkerJobLease,
     errorCode: string,
@@ -292,6 +302,7 @@ export interface PublishingWorkerLogger {
 /** What the worker records for one handled job. */
 export type PublishingJobResult =
   | { readonly status: "completed" }
+  | { readonly status: "deferred"; readonly delayMs: number }
   | {
       readonly status: "failed";
       /** Content-free `^[a-z][a-z0-9_]{0,63}$`. */

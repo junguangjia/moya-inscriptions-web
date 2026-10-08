@@ -11,6 +11,7 @@ import {
 import { createPostgresPool } from "@moya/catalog-postgres";
 import {
   PostgresWorkPublishingAdapter,
+  PostgresMediaPublicationAdapter,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -117,6 +118,10 @@ const development = {
 const silent = { info: vi.fn(), error: vi.fn() };
 
 const quietQueue = () => {
+  vi.spyOn(
+    PostgresMediaPublicationAdapter.prototype,
+    "hasRegisteredPublications",
+  ).mockResolvedValue(false);
   const prototype = PostgresWorkPublishingAdapter.prototype;
   return {
     claim: vi.spyOn(prototype, "claimJobs").mockResolvedValue([]),

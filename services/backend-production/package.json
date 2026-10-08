@@ -66,6 +66,18 @@
       "types": "./src/publishing/catalog.ts",
       "import": "./dist/publishing/catalog.js"
     },
+    "./internal/publication": {
+      "types": "./src/publication/index.ts",
+      "import": "./dist/publication/index.js"
+    },
+    "./internal/media-publication-worker": {
+      "types": "./src/publication/worker.ts",
+      "import": "./dist/publication/worker.js"
+    },
+    "./internal/media-publication-provider": {
+      "types": "./src/publication/provider.ts",
+      "import": "./dist/publication/provider.js"
+    },
     "./internal/catalog-source": {
       "types": "./src/storage/catalog-source.ts",
       "import": "./dist/storage/catalog-source.js"

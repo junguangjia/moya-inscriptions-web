@@ -899,6 +899,12 @@ export interface PublishingJobOperations {
    * kept. False when the lease was lost; nothing changes then.
    */
   releaseJob(lease: PublishingJobLease, now: Date): Promise<boolean>;
+  /** Give a busy publication claim back with a durable delay, without spending an attempt. */
+  deferJob?(
+    lease: PublishingJobLease,
+    delayMs: number,
+    now: Date,
+  ): Promise<boolean>;
   /**
    * Records a content-free error code (`^[a-z][a-z0-9_]{0,63}$`). Retryable
    * with attempts below the maximum: queued again at `now` +

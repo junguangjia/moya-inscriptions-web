@@ -426,3 +426,10 @@ export {
   normalizeStudioName,
   normalizeStudioNameInput,
 } from "./modules/community/domain/auth-profile-policy.js";
+
+export type {
+  MediaPublicationFence,
+  MediaPublicationPlan,
+  MediaPublicationPort,
+  MediaPublicationUnit,
+} from "./modules/community/application/ports/media-publication-port.js";

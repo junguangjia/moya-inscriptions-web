@@ -162,6 +162,11 @@ export const classifyPublishingJobError = (
       return { errorCode: "processing_unavailable", retryable: true };
     case "PublishingJobSystemError":
       return { errorCode: code ?? "system_failure", retryable: true };
+    case "MediaPublicationJobError":
+      return {
+        errorCode: code ? `publication_${code}` : "publication_failure",
+        retryable: code !== "integrity",
+      };
     case "CommunityStoreUnavailableError":
       return { errorCode: "database_unavailable", retryable: true };
     case "CommunityConflictError":
@@ -728,6 +733,16 @@ export class PublishingWorker {
     try {
       if (result.status === "completed") {
         await this.port.completeJob(this.lease(claim), this.clock());
+        return;
+      }
+      if (result.status === "deferred") {
+        if (!this.port.deferJob)
+          throw new Error("Publication deferral is unavailable");
+        await this.port.deferJob(
+          this.lease(claim),
+          result.delayMs,
+          this.clock(),
+        );
         return;
       }
       const errorCode = ERROR_CODE_PATTERN.test(result.errorCode)
