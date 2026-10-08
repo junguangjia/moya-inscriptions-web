@@ -14,6 +14,7 @@ export {
 } from "./config.js";
 export { createLocalPublicationProvider } from "./local-provider.js";
 export { createTencentPublicationProvider } from "./tencent-provider.js";
+export { publicationPutTotalTimeoutMs } from "./upload-policy.js";
 export {
   publishedObjectUrl,
   validatePublishedKey,

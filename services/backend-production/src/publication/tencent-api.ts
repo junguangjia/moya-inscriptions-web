@@ -248,6 +248,9 @@ export function createPublisherRoleCredentials(options: {
   let acquiring: Promise<CosCredentials> | undefined;
   return async () => {
     const now = Math.floor((options.now ?? Date.now)() / 1000);
+    // Publication PUT hard total <=240 s, plus30 s validity margin. Refresh
+    // before entering that window; never repeatedly hand a caller a token
+    // that is still live but too short for the bounded publication request.
     if (cached?.expiresAt !== undefined && cached.expiresAt > now + 300)
       return cached;
     if (acquiring) return acquiring;

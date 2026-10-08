@@ -20,6 +20,7 @@ import {
   createPublisherRoleCredentials,
   createTencentPublicationApi,
   createTencentPublicationProvider,
+  publicationPutTotalTimeoutMs,
 } from "@moya/backend-production/internal/publication";
 import { PublishingCosResponseError } from "@moya/backend-production/internal/publishing-media-store";
 
@@ -589,7 +590,7 @@ describe("bounded Tencent API and edge verification (loopback fixtures)", () => 
   });
   it("refreshes the keyless publisher role lazily, caches briefly and never widens its request", async () => {
     let calls = 0;
-    const now = Date.parse("2026-10-08T00:00:00Z");
+    let now = Date.parse("2026-10-08T00:00:00Z");
     const api: TencentPublicationApi = {
       async call(action, input, acquire) {
         calls++;
@@ -620,9 +621,18 @@ describe("bounded Tencent API and edge verification (loopback fixtures)", () => 
     await acquire();
     await acquire();
     expect(calls).toBe(1);
+    now += 3_330_000; // The cached token has 270 seconds left.
+    await Promise.all([acquire(), acquire()]);
+    expect(calls).toBe(2);
+  });
+  it("contains publication PUT budgets for current outputs and rejects invalid sizes", () => {
+    expect(publicationPutTotalTimeoutMs(128 * 1024 ** 2)).toBe(218_000);
+    expect(publicationPutTotalTimeoutMs(5 * 1024 ** 3)).toBe(240_000);
+    for (const size of [0, -1, NaN, Infinity, 1.5, 5 * 1024 ** 3 + 1])
+      expect(() => publicationPutTotalTimeoutMs(size)).toThrow(RangeError);
   });
   it.each([403, 404, 200, 206])(
-    "checks %s with fixed origin TLS identity and one-byte range",
+    "checks %s with fixed origin TLS identity and Range plus ordinary GET denial",
     async (status) => {
       const f = await loopback((_incoming, response) => {
         response.statusCode = status;
@@ -633,7 +643,20 @@ describe("bounded Tencent API and edge verification (loopback fixtures)", () => 
         { nativeRequest: f.nativeRequest },
       );
       expect(await verify(target)).toBe(status === 403 || status === 404);
-      expect(f.seen).toHaveLength(1);
+      expect(f.seen).toHaveLength(status === 403 || status === 404 ? 2 : 1);
+      if (status === 403 || status === 404) {
+        expect(f.seen[1]).toMatchObject({
+          hostname: "edge.synthetic.test",
+          servername: "media.synthetic.test",
+          rejectUnauthorized: true,
+          method: "GET",
+          headers: {
+            Host: "media.synthetic.test",
+            "Accept-Encoding": "identity",
+          },
+        });
+        expect(f.seen[1]!.headers).not.toHaveProperty("Range");
+      }
       expect(f.seen[0]).toMatchObject({
         hostname: "edge.synthetic.test",
         servername: "media.synthetic.test",
@@ -646,6 +669,54 @@ describe("bounded Tencent API and edge verification (loopback fixtures)", () => 
       });
     },
   );
+  it.each([200, 206])(
+    "does not accept Range denial while ordinary GET returns %s",
+    async (status) => {
+      const f = await loopback((incoming, response) => {
+        response.statusCode = incoming.headers.range ? 403 : status;
+        response.end("x".repeat(65_536));
+      });
+      const verify = createEdgeWithdrawalVerifier(
+        { origin, timeoutMs: 500 },
+        { nativeRequest: f.nativeRequest },
+      );
+      expect(await verify(target)).toBe(false);
+      expect(f.seen).toHaveLength(2);
+      expect(f.seen[0]!.headers).toHaveProperty("Range", "bytes=0-0");
+      expect(f.seen[1]!.headers).not.toHaveProperty("Range");
+    },
+  );
+  it.each([302, 304, 416, 500])(
+    "does not accept Range denial when ordinary GET verification returns %s",
+    async (status) => {
+      const f = await loopback((incoming, response) => {
+        response.statusCode = incoming.headers.range ? 404 : status;
+        response.end();
+      });
+      await expect(
+        createEdgeWithdrawalVerifier(
+          { origin, timeoutMs: 500 },
+          { nativeRequest: f.nativeRequest },
+        )(target),
+      ).rejects.toMatchObject({ code: "unavailable" });
+      expect(f.seen).toHaveLength(2);
+    },
+  );
+  it("bounds stalled headers after the Range probe succeeds", async () => {
+    const f = await loopback((incoming, response) => {
+      if (incoming.headers.range) {
+        response.statusCode = 403;
+        response.end();
+      }
+    });
+    await expect(
+      createEdgeWithdrawalVerifier(
+        { origin, timeoutMs: 100 },
+        { nativeRequest: f.nativeRequest },
+      )(target),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    expect(f.seen).toHaveLength(2);
+  });
   it("refuses redirects, bounds stalled headers and cancels a pending verification", async () => {
     const redirect = await loopback((_incoming, response) => {
       response.statusCode = 302;

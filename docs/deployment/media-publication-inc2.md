@@ -1,6 +1,6 @@
 # Media publication Increment 2 — public-mode preparation
 
-Issue #206 r15 records the Owner's choice A. Prepare the publication pipeline
+Issue #206 r16 preserves the Owner's choice A. Prepare the publication pipeline
 with `MEDIA_PUBLICATION=off` and `MEDIA_PUBLIC_DELIVERY=relay` in Closed Beta.
 An intentional public-mode transition is a separate activation step.
 
@@ -68,17 +68,26 @@ publisher role into the dedicated private bucket. Single PUT forbids overwrite,
 sets the rendition MIME and
 `Cache-Control: public, max-age=300, must-revalidate`, and sets no ACL. Source
 SHA-256 and destination HEAD length/MD5 ETag are checked before publication.
-Readers switch a parent and all its candidates/motion together; incomplete
-groups retain their current path.
+Publication PUT has a size-derived hard total capped at 240 seconds (218 seconds
+for a 128 MiB output). Control calls, credential acquisition, setup, socket
+inactivity and response completion retain at-most-30-second bounds. Only this
+publication PUT opts in; private PUT/multipart behavior is unchanged. Token and
+signature validity must cover the whole total plus a 30-second margin before
+source consumption. This is a finite planning bound, not measured throughput or
+a guarantee for large historical objects. Readers switch a parent and all its
+candidates/motion together; incomplete groups retain their current path.
 
 Withdrawal deletes registered origin objects, submits guarded EdgeOne file
 purges, persists task identifiers, waits for completion, and verifies denial
-using a bounded GET with `Range: bytes=0-0`. A pre-DNS connect host changes only
-the TCP destination: Host, SNI and certificate validation use the configured
-published origin. Redirects and unsupported responses fail verification. Only
-verified denial marks a generation withdrawn. Three bounded purge attempts
-precede an explicit failure record and content-free alert; the one-hour edge TTL
-is the documented fallback, not a ten-minute success.
+using both `Range: bytes=0-0` GET and ordinary GET under one shared deadline.
+Both must return 403/404; their bodies are cancelled at headers. A
+range-specific denial alone cannot mark a generation withdrawn. A pre-DNS
+connect host changes only the TCP destination: Host, SNI and certificate
+validation use the configured published origin. Redirects and unsupported
+responses fail verification. Only verified denial marks a generation withdrawn.
+Three bounded purge attempts precede an explicit failure record and content-free
+alert; the one-hour edge TTL is the documented fallback, not a ten-minute
+success.
 
 The sweep operates on registered historical generations with Head/Delete. The
 approved role cannot list a bucket, so it cannot inventory foreign, unregistered

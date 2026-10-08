@@ -331,6 +331,7 @@ describe("media_renditions migration on a dedicated synthetic database", () => {
       expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([
         RENDITIONS_MIGRATION,
         DELIVERY_MIGRATION,
+        "20261008010000",
       ]);
       // The retained table is byte-identical.
       expect(await checksum()).toBe(before);

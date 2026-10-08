@@ -24,6 +24,7 @@ import {
   createPublisherRoleCredentials,
   createTencentPublicationApi,
 } from "./tencent-api.js";
+import { publicationPutTotalTimeoutMs } from "./upload-policy.js";
 
 import type { CosCredentials } from "../storage/cos-read.js";
 import type {
@@ -101,7 +102,7 @@ export function createTencentPublicationProvider(
   )
     throw new PublicationProviderError("invalid");
   const origin = validatePublishedOrigin(config.origin);
-  const timeoutMs = options.timeoutMs ?? 30_000;
+  const timeoutMs = Math.min(options.timeoutMs ?? 30_000, 30_000);
   const now = options.now ?? Date.now;
   const api =
     dependencies.api ??
@@ -197,7 +198,16 @@ export function createTencentPublicationProvider(
           streamError = error;
         });
         try {
-          const uploaded = await transport.request<PublishingCosPutResult>(
+          const putTransport =
+            dependencies.cosTransport ??
+            createPublishingCosTransport({
+              credentials: publisherCredentials,
+              requestTimeoutMs: timeoutMs,
+              streamingPutTotalTimeoutMs: publicationPutTotalTimeoutMs(
+                unit.byteSize,
+              ),
+            });
+          const uploaded = await putTransport.request<PublishingCosPutResult>(
             "putObject",
             {
               ...parameters,

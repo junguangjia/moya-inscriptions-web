@@ -13,11 +13,20 @@ import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { TLSSocket } from "node:tls";
 
 import { createPublishingCosTransport } from "@moya/backend-production/internal/publishing-media-store";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { cosOptions } from "./publishing-cos-fixture.js";
 import type { ClientRequest } from "node:http";
@@ -151,6 +160,7 @@ afterAll(async () => {
 
 type Mode =
   | "success"
+  | "stall"
   | "progress"
   | "body-trickle"
   | "delayed-headers"
@@ -171,7 +181,11 @@ interface Trace {
   closed: ReturnType<typeof deferred<void>>;
 }
 
-async function fixture(mode: Mode) {
+async function fixture(
+  mode: Mode,
+  publicationPut: boolean | "legacy-put" = false,
+  totalMs = 1_800,
+) {
   const firstData = deferred<void>();
   const responseSeen = deferred<void>();
   const peerClosed = deferred<void>();
@@ -250,7 +264,7 @@ async function fixture(mode: Mode) {
       if (early) {
         trickle();
       }
-      incoming.resume();
+      if (mode !== "stall") incoming.resume();
     },
   );
   server.on("connection", (socket) => {
@@ -318,12 +332,25 @@ async function fixture(mode: Mode) {
     return request;
   }) as typeof secureRequest;
   const transport = createPublishingCosTransport(
-    { credentials, requestTimeoutMs: TIMEOUT_MS },
+    {
+      credentials: publicationPut
+        ? async () => ({
+            ...(await credentials()),
+            securityToken: "synthetic-unit-token",
+            expiresAt: Math.floor(Date.now() / 1_000) + 3_600,
+          })
+        : credentials,
+      requestTimeoutMs: TIMEOUT_MS,
+      ...(publicationPut === true
+        ? { streamingPutTotalTimeoutMs: totalMs }
+        : {}),
+    },
     { nativeRequest },
   );
   return {
     traces,
     transport,
+    publicationPut,
     firstData: firstData.promise,
     responseSeen: responseSeen.promise,
     received: () => received,
@@ -355,7 +382,14 @@ function startUpload(
 ) {
   let settled = false;
   const outcome = f.transport
-    .request("multipartUpload", PART, signal, maxBytes)
+    .request(
+      f.publicationPut ? "putObject" : "multipartUpload",
+      f.publicationPut
+        ? { ...BUCKET, Key: PART.Key, ContentLength: BODY.length, Body: BODY }
+        : PART,
+      signal,
+      maxBytes,
+    )
     .then(
       (result) => {
         settled = true;
@@ -379,6 +413,148 @@ function expectFailure(
 }
 
 describe("official COS verified TLS request phases", () => {
+  it("keeps non-opted-in PUTs under their original total deadline", async () => {
+    const f = await fixture("progress", "legacy-put");
+    const pending = startUpload(f);
+    await within(f.firstData);
+    expectFailure(await within(pending.outcome));
+    expect(f.traces[0]!.request.destroyed).toBe(true);
+    expect(f.uploadCalls()).toBe(1);
+    await f.waitClosed(f.traces[0]!);
+  });
+
+  it.each([false, true])(
+    "allows a progressing single publication PUT beyond the control deadline (reused=%s)",
+    async (reused) => {
+      const f = await fixture("progress", true);
+      if (reused) await f.warm();
+      const pending = startUpload(f);
+      await within(f.firstData);
+      await delay(TIMEOUT_MS / 2);
+      const before = f.received();
+      await delay(TIMEOUT_MS);
+      const trace = f.traces.at(-1)!;
+      expect(f.received()).toBeGreaterThan(before);
+      expect(trace.request.writableFinished).toBe(false);
+      expect(pending.settled()).toBe(false);
+      expect(trace.socket?.authorized).toBe(true);
+      expect(trace.reusedOnAssignment).toBe(reused);
+      f.release();
+      expect((await within(pending.outcome)).status).toBe("success");
+      expect(f.received()).toBe(BODY.length);
+      expect(f.uploadCalls()).toBe(1);
+    },
+  );
+
+  it("ends a progressing single PUT at its non-renewing hard total", async () => {
+    const totalMs = 600;
+    const f = await fixture("progress", true, totalMs);
+    const started = performance.now();
+    const pending = startUpload(f);
+    await within(f.firstData);
+    await delay(TIMEOUT_MS / 2);
+    const before = f.received();
+    const outcome = await within(pending.outcome);
+    expectFailure(outcome);
+    expect(f.received()).toBeGreaterThan(before);
+    expect(f.received()).toBeLessThan(BODY.length);
+    expect(outcome.at - started).toBeGreaterThanOrEqual(totalMs - 50);
+    expect(outcome.at - started).toBeLessThan(totalMs + 200);
+    expect(f.traces[0]!.request.destroyed).toBe(true);
+    expect(f.uploadCalls()).toBe(1);
+    await f.waitClosed(f.traces[0]!);
+  });
+
+  it.each(["stall", "body-trickle", "delayed-headers"] as const)(
+    "retains bounded single-PUT inactivity/response completion for %s",
+    async (mode) => {
+      const f = await fixture(mode, true);
+      const outcome = await within(startUpload(f).outcome);
+      expectFailure(outcome);
+      expect(f.traces[0]!.socket?.authorized).toBe(true);
+      expect(f.traces[0]!.request.destroyed).toBe(true);
+      expect(f.uploadCalls()).toBe(1);
+      await f.waitClosed(f.traces[0]!);
+    },
+  );
+
+  it("cancels a progressing publication PUT without a retry", async () => {
+    const f = await fixture("progress", true);
+    const controller = new AbortController();
+    const pending = startUpload(f, controller.signal);
+    await within(f.firstData);
+    controller.abort();
+    expectFailure(await within(pending.outcome), "aborted");
+    expect(f.traces[0]!.request.destroyed).toBe(true);
+    expect(f.uploadCalls()).toBe(1);
+    await f.waitClosed(f.traces[0]!);
+  });
+
+  it.each([60, 269])(
+    "refuses a %s-second token before SDK invocation or source consumption",
+    async (validitySeconds) => {
+      let consumed = false;
+      const body = Readable.from(
+        (async function* () {
+          consumed = true;
+          yield Buffer.from("x");
+        })(),
+      );
+      const sdkFactory = vi.fn(() => {
+        throw new Error("Unexpected SDK invocation");
+      });
+      const transport = createPublishingCosTransport(
+        {
+          credentials: async () => ({
+            ...(await credentials()),
+            securityToken: "synthetic-unit-token",
+            expiresAt: Math.floor(Date.now() / 1_000) + validitySeconds,
+          }),
+          requestTimeoutMs: 30_000,
+          streamingPutTotalTimeoutMs: 240_000,
+        },
+        { sdkFactory },
+      );
+      try {
+        await expect(
+          transport.request("putObject", {
+            ...BUCKET,
+            Key: PART.Key,
+            ContentLength: 1,
+            Body: body,
+          }),
+        ).rejects.toMatchObject({ code: "unavailable" });
+        expect(sdkFactory).not.toHaveBeenCalled();
+        expect(consumed).toBe(false);
+      } finally {
+        body.destroy();
+      }
+    },
+  );
+
+  it("bounds stalled PUT credentials before invoking the SDK", async () => {
+    const sdkFactory = vi.fn(() => {
+      throw new Error("Unexpected SDK invocation");
+    });
+    const transport = createPublishingCosTransport(
+      {
+        credentials: () => new Promise(() => {}),
+        requestTimeoutMs: 50,
+        streamingPutTotalTimeoutMs: 500,
+      },
+      { sdkFactory },
+    );
+    await expect(
+      transport.request("putObject", {
+        ...BUCKET,
+        Key: PART.Key,
+        ContentLength: 1,
+        Body: Buffer.from("x"),
+      }),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    expect(sdkFactory).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "allows a progressing actual 8 MiB upload over TLS (reused=%s)",
     async (reused) => {
