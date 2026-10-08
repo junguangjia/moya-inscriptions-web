@@ -327,6 +327,11 @@ export const jobKindLabels: Record<PublishingJobKind, string> = {
   sweep_staging: "清理上传暂存",
   reconcile_capacity: "核对账号容量",
   catalog_render: "生成图录衍生图",
+  publish_media: "发布媒体",
+  withdraw_media: "撤回公开媒体",
+  verify_withdrawal: "核验媒体撤回",
+  reconcile_publication: "核对公开媒体",
+  sweep_published: "清理历史公开媒体",
 };
 
 export const jobStateLabels: Record<PublishingJobState, string> = {

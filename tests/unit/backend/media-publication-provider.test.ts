@@ -24,6 +24,7 @@ import {
 import { PublishingCosResponseError } from "@moya/backend-production/internal/publishing-media-store";
 
 import type { RequestOptions, request as httpsRequest } from "node:https";
+import type { IncomingMessage, RequestListener } from "node:http";
 import type {
   PublicationConfig,
   TencentPublicationApi,
@@ -69,7 +70,10 @@ const fixture = (
 ) => {
   const calls: { method: string; parameters: Record<string, unknown> }[] = [];
   const transport: PublishingCosTransport = {
-    async request<T>(method, parameters) {
+    async request<T>(
+      method: Parameters<PublishingCosTransport["request"]>[0],
+      parameters: Record<string, unknown>,
+    ) {
       calls.push({ method, parameters });
       if (method === "headObject" && settings.headStatus)
         throw new PublishingCosResponseError(settings.headStatus);
@@ -481,7 +485,7 @@ describe("local publication and rollback drain", () => {
   });
 });
 
-const loopback = async (handler: Parameters<typeof createServer>[0]) => {
+const loopback = async (handler: RequestListener) => {
   const server = createServer(handler);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -497,7 +501,7 @@ const loopback = async (handler: Parameters<typeof createServer>[0]) => {
   const seen: RequestOptions[] = [];
   const nativeRequest = ((
     options: RequestOptions,
-    callback: Parameters<typeof httpRequest>[1],
+    callback: (response: IncomingMessage) => void,
   ) => {
     seen.push(options);
     return httpRequest(

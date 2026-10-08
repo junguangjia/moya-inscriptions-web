@@ -74,7 +74,9 @@ function fixture(bytes = BYTES) {
     existsAtEdge: false,
     taskState: "pending" as "pending" | "succeeded" | "failed",
     sourceChunks: [bytes] as readonly Uint8Array[],
-    beforeChunk: (_n: number) => {},
+    beforeChunk: (index: number) => {
+      void index;
+    },
   };
   const fence = (intent: "publish" | "withdraw"): PublicationFence => ({
     assetId: state.units[0]?.assetId ?? `media-public-asset-${HEX(1)}`,
