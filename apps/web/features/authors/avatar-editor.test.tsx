@@ -116,7 +116,11 @@ beforeEach(() => {
   state.avatar.mockResolvedValue({ nextChangeAt: "2099-01-01T05:00:00Z" });
   state.export.mockReturnValue(snapshot);
   state.save.mockImplementation(() => undefined);
-  state.read.mockResolvedValue({ image: {}, url: "blob:synthetic-avatar" });
+  state.read.mockResolvedValue({
+    pixels: {},
+    url: "blob:synthetic-avatar",
+    release: () => undefined,
+  });
   Object.defineProperty(URL, "revokeObjectURL", {
     configurable: true,
     value: vi.fn(),
@@ -227,15 +231,17 @@ it("commits the exact crop synchronously, closes and never treats accepted Save 
   await render();
   await act(async () => {
     state.crop!.onCropChange({ x: 32, y: 21 });
+    // The editor keeps the percent area: the cropper shows a bounded display
+    // copy, so pixel coordinates would not match the exported pixels (#237).
     state.crop!.onCropAreaChange(
-      {},
+      { x: 12.3, y: 4, width: 40, height: 53.3 },
       { x: 123, y: 40, width: 400, height: 400 },
     );
   });
   await click();
   expect(state.export).toHaveBeenCalledWith(
     {},
-    { x: 123, y: 40, width: 400, height: 400 },
+    { x: 12.3, y: 4, width: 40, height: 53.3 },
   );
   expect(state.save).toHaveBeenCalledWith(snapshot);
   expect(close).toHaveBeenCalledOnce();

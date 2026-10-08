@@ -264,7 +264,7 @@
  * viewport, which in Safari ends at its bottom bar); the collections wait
  * below. The editor measures it with the flag.
  */
-.profile.coverProfile:has(.profileCover img),
+.coverRoot[data-cover-photo] > .profile.coverProfile,
 .profile.coverProfile[data-cover-measure] {
   min-height: 100svh;
   padding-top: calc(var(--profile-header-height) + 36svh);
@@ -298,25 +298,88 @@
   background: var(--cover-paper);
 }
 /*
- * The photo stays at the top of the screen while the identity rises over it:
- * its box is the part of the cover still on screen above the tabs
- * (--cover-scroll), down to the compact cover behind the identity. The image
- * keeps its full-cover size, so the compact cover shows the photo's top part
- * rather than a zoomed-out copy. Transparent parts of a photo show the dark
- * paper in either theme.
+ * The photo is a sticky layer of the page (#237): the compositor holds it at
+ * the top of the screen while the identity and the collections rise over it,
+ * so nothing written on scroll can lag behind it and open a gap above it. It
+ * keeps the full cover's size (the cover's own width: 960 px at most,
+ * centred). Transparent parts of a photo show the dark paper in either theme.
  */
-.coverProfile > .profileCover {
+.coverRoot > .profileCover {
+  position: sticky;
+  z-index: 0;
+  top: 0;
+  width: min(100%, 960px);
+  height: var(--cover-height, 100svh);
+  margin: 0 auto calc(-1 * var(--cover-height, 100svh));
+  /* Not a scroll container: a free cover's photo sticks inside it. */
+  overflow: visible;
+  background: none;
   /* Its layers (the glass card among them) stay under the identity. */
   isolation: isolate;
-  top: min(var(--cover-scroll, 0px), var(--cover-rest, 0px));
-  bottom: auto;
-  height: calc(100% - var(--cover-scroll, 0px));
 }
-.coverProfile > .profileCover:has(img) {
+/*
+ * A free cover holds the photo only until the identity rests under the bar,
+ * then lets it scroll away with the identity: its box runs that much longer
+ * and the photo sticks inside it.
+ */
+.coverRoot[data-cover-free] > .profileCover {
+  position: relative;
+  top: auto;
+  height: calc(var(--cover-rest, 0px) + var(--cover-height, 100svh));
+  margin-bottom: calc(
+    -1 * (var(--cover-rest, 0px) + var(--cover-height, 100svh))
+  );
+}
+.coverRoot:not([data-cover-photo]) > .profileCover {
+  display: none;
+}
+.coverPhoto {
+  position: relative;
+  height: var(--cover-height, 100svh);
+  overflow: hidden;
   background: var(--yoyi-color-paper-dark);
 }
-.coverProfile > .profileCover img {
+.coverRoot[data-cover-free] .coverPhoto {
+  position: sticky;
+  top: 0;
+}
+.coverRoot > .profileCover img {
   height: var(--cover-height, 100%);
+}
+/* A pinned cover's identity rests over the compact cover, which carries the
+   frost and the glass card. */
+.coverRoot:not([data-cover-free]) .coverPhoto > :is(.coverGlass, .coverCard) {
+  display: none;
+}
+/*
+ * The compact cover is the photo's top part again, as tall as the compact
+ * cover and sticky at the top above the collections (under the identity and
+ * the bar): once the tabs pin, the collections pass under it rather than
+ * over the photo. The photo below is identical there, so the two never show
+ * a seam. It takes the taps that would otherwise reach the collections hidden
+ * under it.
+ */
+.coverCompact {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  width: min(100%, 960px);
+  height: var(--cover-pinned, 0px);
+  margin: 0 auto calc(-1 * var(--cover-pinned, 0px));
+  overflow: hidden;
+  background: var(--yoyi-color-paper-dark);
+  isolation: isolate;
+}
+/* A free cover scrolls away whole: its collections run up to the bar. */
+.coverRoot[data-cover-free] > .coverCompact {
+  display: none;
+}
+.coverCompact img {
+  display: block;
+  width: 100%;
+  height: var(--cover-height, 100svh);
+  object-fit: cover;
+  object-position: 50% 0;
 }
 /*
  * In the collections stage the identity sits on a card of frosted glass made
@@ -411,18 +474,65 @@
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
-/* A fine bevel (a dark line over a light one) closes the photo above the
-   tabs. */
-.coverProfile > .profileCover:has(img)::after {
+/*
+ * Two resting places, snapped natively (#237): the page's top (the whole
+ * photo) and the collections stage (the identity under the bar, the tabs
+ * pinned right below it). The collections' snap area starts at that stage and
+ * runs to their end, taller than the screen, so inside them the page scrolls
+ * freely; a gesture released between the two settles on one in a single
+ * motion, and a hard flick from the photo stops at the collections. Only a
+ * pinned photo snaps (data-cover-snap); the scrollers turn it on: the phone
+ * and tablet destination (product-shell.module.css), the PC document and an
+ * overlay profile (below).
+ */
+.coverSnapTop {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.coverRoot[data-cover-snap] > .coverSnapTop {
+  scroll-snap-align: start;
+}
+.coverRoot[data-cover-snap] > .userContent {
+  scroll-snap-align: start;
+  scroll-margin-top: var(--cover-pinned, 0px);
+  /* The area runs on past the page's end, so the end lies inside it: Safari
+     pulls a scroll that ends exactly at an area's end back to its start. */
+  scroll-margin-bottom: 100vh;
+  scroll-snap-stop: always;
+}
+.overlay.coverRoot[data-cover-snap],
+:global(html):has(
+  :global([data-primary-destination="user"]:not([hidden]))
+    .coverRoot[data-cover-snap]
+) {
+  scroll-snap-type: y mandatory;
+  /* No bounce at the top edge: it would show the page behind the photo. */
+  overscroll-behavior-y: none;
+}
+/* The collections cover the photo layer with the page colour. */
+.coverRoot[data-cover-photo] > .userContent {
+  position: relative;
+  background: var(--cover-paper);
+}
+/*
+ * Their skirt: the identity's bottom padding's shade, carried just above
+ * their top edge, so it moves with them and never lies over them (#237).
+ * Under the identity and the compact cover.
+ */
+.coverRoot[data-cover-photo] > .userContent::before {
+  position: absolute;
+  z-index: 1;
+  bottom: 100%;
+  left: 50%;
+  width: min(100%, 960px);
+  height: calc(var(--cover-bottom-inset, 0px) + var(--yoyi-space-9));
   content: "";
-  box-shadow:
-    inset 0 -1px 0
-      color-mix(in srgb, var(--yoyi-color-paper-light) 22%, transparent),
-    inset 0 -2px 0
-      color-mix(in srgb, var(--yoyi-color-ink-black) 28%, transparent);
-  opacity: var(--cover-frost, 0);
+  background: var(--cover-identity-shade);
+  transform: translateX(-50%);
   pointer-events: none;
 }
 /* Reduced transparency and more contrast get a solid card instead. */
@@ -440,33 +550,50 @@
  * scroll. The identity's bottom padding then lies, empty and clear, over the
  * collections below the tabs: only the cover's controls take input.
  */
-.coverRoot:not([data-cover-free]) .profile.coverProfile:has(.profileCover img) {
+.coverRoot[data-cover-photo]:not([data-cover-free]) > .profile.coverProfile {
   position: sticky;
   z-index: 2;
   top: calc(-1 * var(--cover-rest, 0px));
 }
-.coverRoot:not([data-cover-free])
-  .profile.coverProfile:has(.profileCover img)
+.coverRoot[data-cover-photo]:not([data-cover-free])
+  > .profile.coverProfile
   > .coverIdentity,
-.coverRoot:not([data-cover-free]) .profile.coverProfile:has(.profileCover img) {
+.coverRoot[data-cover-photo]:not([data-cover-free]) > .profile.coverProfile {
   pointer-events: none;
 }
-.coverRoot:not([data-cover-free])
-  .profile.coverProfile:has(.profileCover img)
-  > :is(.profileCover, .backgroundEdit, .scrollHint),
-.coverRoot:not([data-cover-free])
-  .profile.coverProfile:has(.profileCover img)
+.coverRoot[data-cover-photo]:not([data-cover-free])
+  > .profile.coverProfile
+  > :is(.backgroundEdit, .scrollHint),
+.coverRoot[data-cover-photo]:not([data-cover-free])
+  > .profile.coverProfile
   > .coverIdentity
   > * {
   pointer-events: auto;
 }
-.coverRoot:not([data-cover-free]):has(.coverProfile .profileCover img) .tabs {
+.coverRoot[data-cover-photo]:not([data-cover-free]) .tabs {
   top: var(--cover-pinned, var(--profile-header-height));
 }
-/* The tabs' page colour runs edge to edge, closing the compact cover. */
-.coverRoot:has(.coverProfile .profileCover img) .tabs {
-  box-shadow: 0 0 0 100vmax var(--cover-paper);
-  clip-path: inset(0 -100vmax);
+/*
+ * The tabs' page colour runs edge to edge, closing the compact cover, and a
+ * fine bevel just above them (a dark line over a light one) closes the photo
+ * as the frost arrives.
+ */
+.coverRoot[data-cover-photo] .tabs {
+  box-shadow:
+    0 100vmax 0 100vmax var(--cover-paper),
+    0 calc(100vmax - 1px) 0 100vmax
+      color-mix(
+        in srgb,
+        var(--yoyi-color-paper-light) calc(22% * var(--cover-frost, 0)),
+        transparent
+      ),
+    0 calc(100vmax - 2px) 0 100vmax
+      color-mix(
+        in srgb,
+        var(--yoyi-color-ink-black) calc(28% * var(--cover-frost, 0)),
+        transparent
+      );
+  clip-path: inset(-2px -100vmax 0);
 }
 /*
  * Safari 26 tints the strip under its bottom bar from a fixed element at the
@@ -516,7 +643,7 @@
   transition: none;
 }
 /* The photo's top edge melts into the status-bar tint above it. */
-.coverProfile > .profileCover::before {
+:is(.coverPhoto, .coverCompact)::before {
   position: absolute;
   z-index: 1;
   top: 0;
@@ -563,8 +690,9 @@
     var(--cover-shade) calc(var(--cover-px, 1px) * 176)
   );
 }
-.coverIdentity {
-  --cover-shade: color-mix(
+.coverRoot {
+  /* The identity's shade as it hands over to the glass card. */
+  --cover-identity-shade: color-mix(
     in srgb,
     var(--cover-shade-photo, var(--yoyi-color-paper-dark))
       calc(clamp(0, (1 - var(--cover-progress, 0)) * 12.5, 1) * 100%),
@@ -572,10 +700,21 @@
   );
 }
 /*
+ * The identity's bottom padding (clear of the dock) is shaded by the
+ * collections' skirt instead (below): pinned, it lies over the collections
+ * under the tabs, where a shade written on scroll would flash (#237).
+ */
+.coverIdentity {
+  --cover-shade: var(--cover-identity-shade);
+  background-repeat: no-repeat;
+  background-size: 100%
+    calc(100% - var(--cover-bottom-inset, 0px) - var(--yoyi-space-9));
+}
+/*
  * The identity sits above the scroll hint and, on the primary page, above
  * the floating dock (--cover-bottom-inset).
  */
-.page > .coverProfile {
+.page > :is(.coverProfile, .userContent) {
   --cover-bottom-inset: calc(
     60px + max(var(--yoyi-space-3), env(safe-area-inset-bottom))
   );
@@ -589,7 +728,8 @@
     calc(var(--cover-bottom-inset, 0px) + var(--yoyi-space-9))
     max(var(--yoyi-space-5), env(safe-area-inset-left));
 }
-.coverProfile:not(:has(.profileCover img)):not([data-cover-measure])
+.coverRoot:not([data-cover-photo])
+  > .coverProfile:not([data-cover-measure])
   > .coverIdentity {
   padding-top: var(--yoyi-space-4);
   padding-bottom: var(--yoyi-space-5);
@@ -598,7 +738,7 @@
 /*
  * A quiet chevron at the foot of the cover: more lies below. It fades in,
  * floats a few times and goes for good once the collections have been
- * reached; tapping it makes the same glide.
+ * reached; tapping it scrolls to the collections stage.
  */
 .scrollHint {
   position: absolute;
@@ -664,9 +804,8 @@
   }
 }
 /* Without a photo the owner's pencil sits beside the name row. */
-.coverProfile:has(> .backgroundEdit):not(:has(.profileCover img)):not(
-    [data-cover-measure]
-  )
+.coverRoot:not([data-cover-photo])
+  > .coverProfile:has(> .backgroundEdit):not([data-cover-measure])
   .coverHead {
   padding-inline-end: calc(44px + var(--yoyi-space-2));
 }
@@ -682,7 +821,10 @@
   border-radius: var(--yoyi-radius-full);
 }
 /* Over a photo the avatar floats off it, ringed in the photo's shade. */
-.coverProfile:is(:has(.profileCover img), [data-cover-measure])
+:is(
+    .coverRoot[data-cover-photo] > .coverProfile,
+    .coverProfile[data-cover-measure]
+  )
   .coverHead
   > .avatar {
   border-color: var(--cover-shade-photo, var(--yoyi-color-paper-dark));
@@ -753,21 +895,21 @@
  * texture: the glass card's tint keeps it at 4.5:1 or more while letting the
  * photo show.
  */
-.coverRoot[data-profile-stage="content"]
-  .coverProfile:has(.profileCover img)
+.coverRoot[data-cover-photo][data-profile-stage="content"]
+  > .coverProfile
   .coverIdentity
   :is(h1, p, .coverCount) {
   text-shadow: 0 1px 2px
     color-mix(in srgb, var(--yoyi-color-ink-black) 45%, transparent);
 }
-.coverRoot[data-profile-stage="content"]
-  .coverProfile:has(.profileCover img)
+.coverRoot[data-cover-photo][data-profile-stage="content"]
+  > .coverProfile
   .coverIdentity
   [data-theme="dark"] {
   --yoyi-color-text-secondary: var(--yoyi-color-text-primary);
 }
-.coverRoot[data-profile-stage="content"]
-  .coverProfile:has(.profileCover img)
+.coverRoot[data-cover-photo][data-profile-stage="content"]
+  > .coverProfile
   .coverCount
   strong {
   color: var(--yoyi-color-text-primary);

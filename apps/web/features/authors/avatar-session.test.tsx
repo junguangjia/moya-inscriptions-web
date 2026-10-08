@@ -18,7 +18,11 @@ vi.mock("../product-shell/product-shell", () => ({
 vi.mock("../shell/horizontal-pager", () => ({ HorizontalPager: () => null }));
 vi.mock("./profile-list", () => ({ ProfileList: () => null }));
 vi.mock("./avatar-image", () => ({
-  readAvatarImage: async () => ({ image: {}, url: "blob:synthetic-avatar" }),
+  readAvatarImage: async () => ({
+    pixels: {},
+    url: "blob:synthetic-avatar",
+    release: () => undefined,
+  }),
   exportAvatarSnapshot: () => "data:image/png;base64,c3ludGhldGlj",
 }));
 vi.mock("react-easy-crop", async () => {

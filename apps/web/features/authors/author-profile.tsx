@@ -226,6 +226,7 @@ const ScopedAuthorProfile = ({
     cardSampled = useRef(""),
     pendingScrollTop = useRef<number | null>(null),
     collapseHeight = useRef(0),
+    coverLayout = useRef({ photo: false, free: false, rest: 0, passedAt: 0 }),
     pager = useRef<HorizontalPagerHandle<(typeof tabs)[number]>>(null),
     tabId = useId(),
     currentTab = state.tab === "comments" ? "works" : state.tab;
@@ -309,8 +310,10 @@ const ScopedAuthorProfile = ({
   };
   const scrollTab = viewTab;
   const departingTab = useRef<string | null>(null);
+  // The photo is its own sticky layer at the root (#237), not inside the
+  // identity section, so the compositor keeps it at the top while scrolling.
   const hasPhoto = () =>
-    !!profileHeader.current?.querySelector(`.${styles.profileCover} img`);
+    !!root.current?.querySelector(`:scope > .${styles.profileCover} img`);
   // The second resting place: a compact cover (the photo, frosted, behind the
   // identity right under the top bar) with the collections below it (the
   // first is the whole photo, at 0).
@@ -435,8 +438,8 @@ const ScopedAuthorProfile = ({
   // draw nothing in WebKit); the stylesheet's default tint holds until then.
   // Only the latest request counts, and a layout already sampled is skipped.
   const sampleCard = () => {
-    const image = profileHeader.current?.querySelector<HTMLImageElement>(
-      `.${styles.profileCover} img`,
+    const image = root.current?.querySelector<HTMLImageElement>(
+      `:scope > .${styles.profileCover} img`,
     );
     if (!image) return;
     const src = image.getAttribute("src") ?? "";
@@ -480,13 +483,55 @@ const ScopedAuthorProfile = ({
           (profileHeader.current?.getBoundingClientRect().height ?? 0) -
             (topBar.current?.offsetHeight ?? 0),
         );
-  // Scroll-linked, written to the DOM (not state: it runs on every frame).
+  // Layout-dependent cover geometry, measured when the layout changes (load,
+  // resize, a bio, a tab's height) and never on scroll (#237): while
+  // scrolling, only the compositor moves the photo, the identity and the
+  // tabs (all sticky), so nothing can lag behind the finger. A pinned photo
+  // also turns on native snapping between the two resting places.
+  const layoutCover = () => {
+    const bar = topBar.current,
+      panel = identityPanel.current,
+      page = root.current;
+    if (!bar || !panel || !page) return;
+    const photo = hasPhoto(),
+      free = photo && coverFree();
+    page.toggleAttribute("data-cover-free", free);
+    page.toggleAttribute("data-cover-snap", photo && !free);
+    const rest = restTop(),
+      shift = pinShift();
+    const cover = profileHeader.current?.getBoundingClientRect().height ?? 0;
+    page.style.setProperty("--cover-rest", `${rest}px`);
+    page.style.setProperty(
+      "--cover-pinned",
+      `${Math.max(0, cover - rest - shift)}px`,
+    );
+    // The photo layer keeps the full cover's size: the compact cover shows
+    // its top part, and the tabs and collections cover the rest.
+    page.style.setProperty("--cover-height", `${cover}px`);
+    // The glass card waits where the identity rests; it does not move with
+    // the scroll.
+    const card = cardBox(rest, shift);
+    if (card)
+      for (const [name, value] of [
+        ["top", card.y],
+        ["left", card.x],
+        ["right", card.right],
+        ["height", card.height],
+      ] as const)
+        page.style.setProperty(`--cover-card-${name}`, `${value}px`);
+    coverLayout.current = {
+      photo,
+      free,
+      rest,
+      passedAt: panel.offsetTop - bar.offsetHeight - 1,
+    };
+  };
+  // Scroll-linked paint values only (no layout reads or geometry writes):
   // --cover-progress (0 photo → 1 collections) frosts the photo and turns its
-  // dark shade into the page colour behind the collections. --cover-scroll
-  // keeps the photo's box on screen down to the tabs, so the photo stays put
-  // while the identity rises over it. The top bar wears the dark theme over
-  // the photo; without a pinned photo it turns solid, in the page theme, once
-  // the identity panel reaches it.
+  // dark shade into the page colour behind the collections, and the stage
+  // sets the themes. The top bar wears the dark theme over the photo; without
+  // a pinned photo it turns solid, in the page theme, once the identity panel
+  // reaches it.
   const markCover = (top: number, instant = true) => {
     const bar = topBar.current,
       panel = identityPanel.current,
@@ -500,41 +545,10 @@ const ScopedAuthorProfile = ({
         requestAnimationFrame(() => page.removeAttribute("data-cover-instant")),
       );
     }
-    const photo = hasPhoto(),
-      free = photo && coverFree(),
+    const { photo, free, rest, passedAt } = coverLayout.current,
       // Over a pinned photo the bar stays clear: the photo is always behind it.
-      passed =
-        (!photo || free) && top >= panel.offsetTop - bar.offsetHeight - 1;
-    page.toggleAttribute("data-cover-free", free);
+      passed = (!photo || free) && top >= passedAt;
     bar.toggleAttribute("data-cover-passed", passed);
-    const rest = restTop(),
-      shift = pinShift();
-    const cover = profileHeader.current?.getBoundingClientRect().height ?? 0;
-    page.style.setProperty("--cover-rest", `${rest}px`);
-    page.style.setProperty(
-      "--cover-pinned",
-      `${Math.max(0, cover - rest - shift)}px`,
-    );
-    // The photo keeps its full-cover size while its box shrinks, so the
-    // compact cover shows its top part.
-    page.style.setProperty("--cover-height", `${cover}px`);
-    // The glass card waits where the identity rests; it does not move with
-    // the scroll.
-    const card = cardBox(rest, shift);
-    if (card)
-      for (const [name, value] of [
-        ["top", card.y],
-        ["left", card.x],
-        ["right", card.right],
-        ["height", card.height],
-      ] as const)
-        page.style.setProperty(`--cover-card-${name}`, `${value}px`);
-    // A pinned cover stops scrolling at its second resting place; a free one
-    // scrolls away whole after the first.
-    page.style.setProperty(
-      "--cover-scroll",
-      `${photo ? Math.max(0, Math.min(top, free ? rest : rest + shift)) : 0}px`,
-    );
     const progress = !photo
       ? 1
       : rest > 0
@@ -582,7 +596,7 @@ const ScopedAuthorProfile = ({
         ?.focus({ preventScroll: true });
     hint?.toggleAttribute("inert", !onPhoto);
     // A pinned cover scrolls the owner's pencil off the top: out of reach
-    // there, so focus cannot land on it and leave the page mid-glide.
+    // there, so focus cannot land on it and leave the page mid-scroll.
     profileHeader.current
       ?.querySelector(`.${styles.backgroundEdit}`)
       ?.toggleAttribute("inert", photo && !free && !onPhoto);
@@ -624,6 +638,7 @@ const ScopedAuthorProfile = ({
     pendingScrollTop.current = null;
     departingTab.current = null;
     positions.current[scrollTab] = node.scrollTop;
+    layoutCover();
     markCover(node.scrollTop);
     const target = embedded && shell.platform === "pc" ? window : node;
     const scroll = () => {
@@ -647,159 +662,13 @@ const ScopedAuthorProfile = ({
     shell.activeDestination,
     shell.platform,
   ]);
-  // The cover and the collections are two resting places: a gesture that
-  // settles between them glides on in the direction it was going, so the
-  // collections rise to fill the page and the cover returns whole. Only a
-  // vertical user scroll (drag, wheel, keys) glides: taps, horizontal pager
-  // swipes, restored positions and the pager's own height changes never do.
-  useEffect(() => {
-    if (embedded && shell.activeDestination !== "user") return;
-    const node = scrollElement();
-    if (!node) return;
-    const target = embedded && shell.platform === "pc" ? window : node;
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    const keys = [
-      "ArrowDown",
-      "ArrowUp",
-      "PageDown",
-      "PageUp",
-      "Home",
-      "End",
-      " ",
-    ];
-    // A nested dialog scrolls itself; keys typed into a field or pressed on a
-    // button are not a page scroll either.
-    const foreign = (event: Event, selector = "dialog") =>
-      event.target instanceof Element && !!event.target.closest(selector);
-    let touching = false,
-      intent = Number.NEGATIVE_INFINITY,
-      glideDirection = 0,
-      interrupted = false,
-      retries = 0,
-      origin: { x: number; y: number } | null = null,
-      direction = 0,
-      last = node.scrollTop,
-      glide: number | null = null,
-      settle = 0,
-      release = 0;
-    const done = () => {
-      glide = null;
-      window.clearTimeout(release);
-    };
-    const intended = () => performance.now() - intent < 1500;
-    const snap = () => {
-      const rest = restStage(),
-        top = node.scrollTop;
-      if (touching || glide !== null || !intended()) return;
-      intent = Number.NEGATIVE_INFINITY;
-      if (rest <= 0 || top <= 0 || top >= rest - 1 || !direction) return;
-      // An identity too tall to pin (a long bio) scrolls freely, so its lower
-      // part and the collections can rest in view.
-      if (!pinned()) return;
-      glide = direction > 0 ? rest : 0;
-      glideDirection = direction;
-      node.scrollTo({
-        top: glide,
-        behavior: reduce?.matches ? "auto" : "smooth",
-      });
-      // A glide cut short (a tap, a sideways swipe, a scroll write) settles
-      // on in its own direction, once.
-      release = window.setTimeout(() => {
-        done();
-        if (retries < 1) resettle();
-      }, 700);
-    };
-    function resettle() {
-      retries += 1;
-      intent = performance.now();
-      direction = glideDirection;
-      window.clearTimeout(settle);
-      settle = window.setTimeout(snap, 90);
-    }
-    const scroll = () => {
-      const top = node.scrollTop;
-      if (top !== last) direction = top > last ? 1 : -1;
-      last = top;
-      // Momentum after a gesture keeps the gesture's intent alive.
-      if (glide === null && intended()) intent = performance.now();
-      if (glide !== null) {
-        if (Math.abs(top - glide) < 2) done();
-        return;
-      }
-      window.clearTimeout(settle);
-      settle = window.setTimeout(snap, 90);
-    };
-    const start = (event: Event) => {
-      const touch = (event as TouchEvent).touches?.[0];
-      if (foreign(event)) return;
-      touching = true;
-      intent = Number.NEGATIVE_INFINITY;
-      origin = touch ? { x: touch.clientX, y: touch.clientY } : null;
-      interrupted = glide !== null;
-      retries = 0;
-      done();
-    };
-    const move = (event: Event) => {
-      const touch = (event as TouchEvent).touches?.[0];
-      if (!origin || !touch) return;
-      const dx = Math.abs(touch.clientX - origin.x),
-        dy = Math.abs(touch.clientY - origin.y);
-      if (dy > 8 && dy > dx) {
-        intent = performance.now();
-        interrupted = false;
-      }
-    };
-    const end = () => {
-      touching = false;
-      origin = null;
-      if (interrupted) {
-        interrupted = false;
-        resettle();
-        return;
-      }
-      window.clearTimeout(settle);
-      settle = window.setTimeout(snap, 90);
-    };
-    // New input takes over from a glide in progress.
-    const wheel = (event: Event) => {
-      const { deltaX, deltaY } = event as WheelEvent;
-      if (foreign(event) || Math.abs(deltaY) <= Math.abs(deltaX)) return;
-      intent = performance.now();
-      retries = 0;
-      done();
-    };
-    const key = (event: Event) => {
-      if (
-        foreign(
-          event,
-          'input, textarea, select, button, [contenteditable="true"], dialog',
-        ) ||
-        !keys.includes((event as KeyboardEvent).key)
-      )
-        return;
-      intent = performance.now();
-      retries = 0;
-      done();
-    };
-    target.addEventListener("scroll", scroll, { passive: true });
-    target.addEventListener("touchstart", start, { passive: true });
-    target.addEventListener("touchmove", move, { passive: true });
-    target.addEventListener("touchend", end, { passive: true });
-    target.addEventListener("touchcancel", end, { passive: true });
-    target.addEventListener("wheel", wheel, { passive: true });
-    target.addEventListener("keydown", key);
-    return () => {
-      window.clearTimeout(settle);
-      window.clearTimeout(release);
-      target.removeEventListener("scroll", scroll);
-      target.removeEventListener("touchstart", start);
-      target.removeEventListener("touchmove", move);
-      target.removeEventListener("touchend", end);
-      target.removeEventListener("touchcancel", end);
-      target.removeEventListener("wheel", wheel);
-      target.removeEventListener("keydown", key);
-    };
-  }, [embedded, shell.activeDestination, shell.platform]);
+  // The cover and the collections are two resting places. The scroller snaps
+  // between them natively (scroll-snap-type: y mandatory on the profile with
+  // a pinned photo, user-presentation.module.css): a released gesture settles
+  // on one of them in a single motion, a hard flick from the photo stops at
+  // the collections, and inside the collections the page scrolls freely
+  // (their snap area is taller than the screen). This replaced a JavaScript
+  // glide that waited for momentum to end and could rest in between (#237).
   useLayoutEffect(() => {
     if (embedded && shell.activeDestination !== "user") return;
     const header = profileHeader.current;
@@ -809,6 +678,7 @@ const ScopedAuthorProfile = ({
       const height = coverCollapse();
       const previous = collapseHeight.current;
       collapseHeight.current = height;
+      layoutCover();
       markCover(node.scrollTop);
       // The card's tint is sampled again once the layout settles.
       window.clearTimeout(cardTimer.current);
@@ -840,7 +710,12 @@ const ScopedAuthorProfile = ({
     // border box; the identity can also move inside an unchanged cover.
     observer?.observe(header, { box: "border-box" });
     if (identityPanel.current) observer?.observe(identityPanel.current);
-    return () => observer?.disconnect();
+    // The snap positions follow the viewport too (svh/dvh, rotation).
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
   }, [
     embedded,
     isPreview,
@@ -882,6 +757,20 @@ const ScopedAuthorProfile = ({
   // theme. The avatar does not: the avatar editor opens inside it, in the
   // reader's own theme.
   const coverTheme = profile?.background ? "dark" : undefined;
+  // The frost and the glass card, drawn in whichever photo layer the identity
+  // rests over: the compact cover when pinned, the photo when free.
+  const coverGlassCard = profile?.background && (
+    <>
+      <span
+        aria-hidden="true"
+        className={styles.coverGlass}
+        style={{
+          backgroundImage: `url(${JSON.stringify(profile.background.src)})`,
+        }}
+      />
+      <span aria-hidden="true" className={styles.coverCard} />
+    </>
+  );
   return (
     <section
       ref={root}
@@ -903,7 +792,49 @@ const ScopedAuthorProfile = ({
         } as CSSProperties
       }
       data-author-profile={id ?? "guest"}
+      data-cover-photo={profile?.background ? "" : undefined}
     >
+      {profile?.background && (
+        // The first resting place for native snapping: the page's top (#237).
+        <span aria-hidden="true" className={styles.coverSnapTop} />
+      )}
+      {/* The photo: a sticky layer behind the identity, the tabs and the
+          collections, so the compositor holds it at the top (#237). */}
+      <div className={styles.profileCover} aria-label="主页背景">
+        {profile?.background && (
+          <div className={styles.coverPhoto}>
+            <img
+              src={profile.background.src}
+              alt=""
+              onLoad={(event) => {
+                const image = event.currentTarget;
+                const src = image.getAttribute("src") ?? "";
+                void decoded(image).then(() => {
+                  // A newer photo may have replaced this one meanwhile.
+                  if (image.getAttribute("src") !== src) return;
+                  const colors = coverColors(image);
+                  setTint(
+                    colors
+                      ? { src, color: colors.tint, shade: colors.shade }
+                      : null,
+                  );
+                  sampleCard();
+                });
+              }}
+            />
+            {coverGlassCard}
+          </div>
+        )}
+      </div>
+      {profile?.background && (
+        // The compact cover: the photo's top part again, sticky over the
+        // collections, so they pass under it rather than over the photo. A
+        // pinned cover's frost and glass card are here.
+        <div aria-hidden="true" className={styles.coverCompact}>
+          <img src={profile.background.src} alt="" />
+          {coverGlassCard}
+        </div>
+      )}
       <header ref={topBar} className={`${styles.header} ${styles.coverHeader}`}>
         {embedded && headerStart ? (
           headerStart
@@ -940,41 +871,6 @@ const ScopedAuthorProfile = ({
         aria-label="用户资料"
         data-profile-background-slot=""
       >
-        <div className={styles.profileCover} aria-label="主页背景">
-          {profile?.background && (
-            <img
-              src={profile.background.src}
-              alt=""
-              onLoad={(event) => {
-                const image = event.currentTarget;
-                const src = image.getAttribute("src") ?? "";
-                void decoded(image).then(() => {
-                  // A newer photo may have replaced this one meanwhile.
-                  if (image.getAttribute("src") !== src) return;
-                  const colors = coverColors(image);
-                  setTint(
-                    colors
-                      ? { src, color: colors.tint, shade: colors.shade }
-                      : null,
-                  );
-                  sampleCard();
-                });
-              }}
-            />
-          )}
-          {profile?.background && (
-            <span
-              aria-hidden="true"
-              className={styles.coverGlass}
-              style={{
-                backgroundImage: `url(${JSON.stringify(profile.background.src)})`,
-              }}
-            />
-          )}
-          {profile?.background && (
-            <span aria-hidden="true" className={styles.coverCard} />
-          )}
-        </div>
         {ownProfile && (
           <button
             type="button"

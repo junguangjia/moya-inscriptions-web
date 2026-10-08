@@ -5,7 +5,7 @@ import {
   canvasLooksBlank,
 } from "../publishing/preprocess/static-image";
 import type { Drawable2dContext } from "../publishing/preprocess/static-image";
-import { normalizeAvatarPng } from "./avatar-image";
+import { normalizeAvatarPng } from "./profile-png";
 import { AuthorRequestError, authorClient } from "./author-data";
 
 /**
@@ -28,10 +28,14 @@ export const COVER_SOFT_BYTES = 3 * 1024 * 1024;
 export const COVER_HARD_BYTES = 4 * 1024 * 1024;
 /** Below this many source pixels across, a wide screen upscales the cover. */
 export const COVER_LOW_RESOLUTION_WIDTH = 1024;
-/** Background-only source limits (Owner decision, #171 r2). */
-export const COVER_SOURCE_BYTES = 25 * 1024 * 1024;
-/** 50 Mi px: admits 50 MP camera modes (8192×6144, 8160×6144). */
-export const COVER_SOURCE_PIXELS = 50 * 1024 * 1024;
+/**
+ * Any photo the browser can open is accepted, whatever its type, bytes or
+ * pixels (Owner instruction 2026-10-07, Issue #237, replacing #171 r2's source
+ * limits): only the compressed output is stored, and it keeps its own bounds.
+ * This guard only keeps a decode from exhausting a phone's memory; it lies far
+ * beyond any phone camera (the largest are 200 MP).
+ */
+export const CROP_SOURCE_GUARD_PIXELS = 256 * 1024 * 1024;
 /** Decoded export source bound (the previous source limit). */
 const EXPORT_SOURCE_PIXELS = 16 * 1024 * 1024;
 
@@ -181,15 +185,7 @@ export const sameCoverArea = (
   Math.abs(a.y - b.y) * size.height <= 100 &&
   Math.abs(a.height - b.height) * size.height <= 100;
 
-export type CoverErrorCode =
-  | "type"
-  | "heic"
-  | "bytes"
-  | "pixels"
-  | "decode"
-  | "blank"
-  | "too-large"
-  | "export";
+export type CoverErrorCode = "heic" | "pixels" | "decode" | "blank" | "export";
 
 export class CoverError extends Error {
   constructor(readonly code: CoverErrorCode) {
@@ -198,13 +194,10 @@ export class CoverError extends Error {
 }
 
 const SOURCE_MESSAGES: Record<CoverErrorCode, string> = {
-  type: "仅支持 JPG、PNG 或 WebP 照片",
-  heic: "暂不支持 HEIC 照片，请在相册中导出为 JPG 后再选择",
-  bytes: "照片超过 25 MiB，请选择较小的照片",
-  pixels: "照片像素过高，请选择较小的照片",
-  decode: "这张照片无法打开，请换一张",
-  blank: "当前设备无法处理这张照片，请换一张较小的照片",
-  "too-large": "照片细节过多，无法压缩到 4 MiB 以内，请换一张",
+  heic: "当前浏览器无法打开这张 HEIC 照片，请在相册中导出为 JPG 后再选择",
+  pixels: "照片像素超出当前设备可处理的范围，请换一张",
+  decode: "当前浏览器无法打开这张照片，请换一张",
+  blank: "当前设备无法处理这张照片，请换一张",
   export: "图像处理失败，背景尚未更改，请重试",
 };
 
@@ -332,7 +325,11 @@ export const browserCoverEnvironment = (): CoverReadEnvironment => ({
 });
 
 const HEIC = /\.(heic|heif)$/iu;
-const ACCEPTED = ["image/jpeg", "image/png", "image/webp"];
+/** Only used to word a refusal: an HEIC the browser could not open. */
+const looksHeic = (file: File) =>
+  file.type === "image/heic" ||
+  file.type === "image/heif" ||
+  HEIC.test(file.name);
 
 const decodeBounded = async (
   environment: CoverReadEnvironment,
@@ -380,35 +377,33 @@ const decodeBounded = async (
   }
 };
 
-/** Background-only source policy; the avatar and the Backend keep their own limits. */
+/**
+ * The photo source for both profile editors (background and avatar): any file
+ * the browser can open, decoded once to at most 16 Mi px, plus a small display
+ * copy for the cropper. No type, byte or pixel limit applies to the chosen
+ * file (Issue #237); the exports keep the stored output's bounds.
+ */
 export const readProfileCoverImage = async (
   file: File,
   environment: CoverReadEnvironment = browserCoverEnvironment(),
 ): Promise<CoverSource> => {
-  if (
-    file.type === "image/heic" ||
-    file.type === "image/heif" ||
-    HEIC.test(file.name)
-  )
-    throw new CoverError("heic");
-  if (!ACCEPTED.includes(file.type)) throw new CoverError("type");
-  if (file.size === 0) throw new CoverError("decode");
-  if (file.size > COVER_SOURCE_BYTES) throw new CoverError("bytes");
+  const unreadable = () => new CoverError(looksHeic(file) ? "heic" : "decode");
+  if (file.size === 0) throw unreadable();
   let size: { width: number; height: number };
   try {
     size = await environment.measure(file);
   } catch {
-    throw new CoverError("decode");
+    throw unreadable();
   }
-  if (!(size.width > 0 && size.height > 0)) throw new CoverError("decode");
-  if (size.width * size.height > COVER_SOURCE_PIXELS)
+  if (!(size.width > 0 && size.height > 0)) throw unreadable();
+  if (size.width * size.height > CROP_SOURCE_GUARD_PIXELS)
     throw new CoverError("pixels");
   const opaque = file.type === "image/jpeg";
   let bitmap: ImageBitmap;
   try {
     bitmap = await decodeBounded(environment, file, size);
   } catch {
-    throw new CoverError("decode");
+    throw unreadable();
   }
   // One decode of the photo: the display copy is drawn from the bounded pixels.
   let display: Awaited<ReturnType<CoverReadEnvironment["display"]>>;
@@ -554,8 +549,10 @@ export const exportProfileCover = async (
       release(flat);
     }
   }
+  // Unreachable in practice: a 1024 × 768 PNG is under the hard bound even
+  // uncompressed, and a smaller area only yields smaller rungs.
   if (fallback) return finalize(fallback);
-  throw new CoverError("too-large");
+  throw new CoverError("export");
 };
 
 const finalize = async (result: CoverExport): Promise<CoverExport> => {

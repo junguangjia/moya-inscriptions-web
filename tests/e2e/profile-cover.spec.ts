@@ -439,28 +439,40 @@ test("Uploads keep orientation, never upscale and step down under 4 MiB", async 
   expect(pngInfo(stepped.bytes).width).toBeLessThan(1600);
 });
 
-test("A 24 MP phone photo is accepted; unsupported files explain why", async ({
+test("Any photo the browser opens is accepted; only an unreadable one explains why", async ({
   page,
 }) => {
   const state = await fixture(page);
   await openProfile(page);
   await openEditor(page);
+  // Not a decodable HEIC in this browser: refused with the way out (#237).
   await choose(page, {
     name: "IMG_0001.HEIC",
     buffer: Buffer.from("heic"),
     mimeType: "image/heic",
   });
   await expect(page.locator("[data-cover-editor] [role=alert]")).toContainText(
-    "暂不支持 HEIC",
+    "无法打开这张 HEIC 照片",
   );
+  // A type outside JPG/PNG/WebP is no longer refused when the browser opens it.
+  const gif = await sharp({
+    create: {
+      width: 640,
+      height: 480,
+      channels: 3,
+      background: { r: 120, g: 90, b: 60 },
+    },
+  })
+    .gif()
+    .toBuffer();
   await choose(page, {
     name: "moving.gif",
-    buffer: Buffer.from("GIF89a"),
+    buffer: gif,
     mimeType: "image/gif",
   });
-  await expect(page.locator("[data-cover-editor] [role=alert]")).toContainText(
-    "仅支持 JPG、PNG 或 WebP",
-  );
+  await expect(page.locator("[data-cover-stage]")).toBeVisible({
+    timeout: 20_000,
+  });
   const large = await sharp({
     create: {
       width: 5712,

@@ -24,6 +24,12 @@ Revision 4 follows the Owner's comparison in the simulator (2026-10-04):
 Revision 5 (Owner, same day): the compact cover shrinks further, and its
 background becomes frosted glass made from the reader's upload.
 
+Revision 7 (Owner, #237, 2026-10-07): the background flashed during scrolling,
+and the page did not feel like two stages the reader can stop on. The photo is
+now held by the compositor, and the scroller snaps natively between the two
+resting places; the JavaScript glide and the scroll-written photo box are gone.
+The bullets below describe revision 7 where they differ.
+
 Revision 6 (Owner, on a real iPhone): the full-cover frost "loses the texture
 completely". Four texture-preserving treatments were prototyped on the live page
 in a WebKit lab, against six covers (the Owner's stone, a carved stele, a stone
@@ -66,10 +72,11 @@ sits on a card of frosted glass.
      resting 12 px under the top bar on a glass card made from the photo (see
      below). The tabs follow 16 px under the actions, edge to edge in the page
      colour, below a fine bevel.
-  - The photo cover is `position: sticky` with a negative top (`--cover-rest`).
-    At the second resting place the compact cover, identity and tabs (sticky at
-    `--cover-pinned`) stay where they are, and only the collections scroll. The
-    identity cannot be scrolled away.
+  - The identity's section is `position: sticky` with a negative top
+    (`--cover-rest`). At the second resting place the compact cover, identity
+    and tabs (sticky at `--cover-pinned`) stay where they are, and only the
+    collections scroll, under the compact cover. The identity cannot be scrolled
+    away.
   - The identity's bottom padding keeps the photo stage clear of the dock and
     the scroll hint. In the second stage the tabs slide up over it, so the
     resting place sits that much further down. That padding then lies over the
@@ -78,20 +85,42 @@ sits on a card of frosted glass.
   - An identity too tall to pin while leaving 160 px of collections (a long bio,
     a landscape phone) scrolls freely instead (`data-cover-free`). Its bar then
     turns solid as before, in the reader's own theme.
-  - A vertical drag, wheel turn or scrolling key that settles between the two
-    places glides on in its direction.
-  - A glide cut short (a tap, a sideways swipe, a scroll write) settles on in
-    its direction, once.
-  - Taps, horizontal pager swipes, keys typed into fields or pressed on buttons,
-    input inside nested dialogs and restored positions never start a glide. With
-    reduced motion the jump is instant.
+  - Native snapping (#237): a pinned photo (`data-cover-snap`) turns on
+    `scroll-snap-type: y mandatory` on its scroller (the phone and tablet
+    destination, the PC document, an overlay profile). The page's top is one
+    snap position; the collections are the other, a snap area that starts at the
+    second resting place (`scroll-margin-top: --cover-pinned`) and runs to their
+    end. Inside the collections the page scrolls freely; anything released
+    between the two places settles on the nearer one in a single motion, and
+    `scroll-snap-stop: always` stops a hard flick from either side at the
+    collections. `overscroll-behavior-y: none` keeps the top edge from bouncing
+    the page behind the photo into view. No script moves the scroll.
+  - The collections' snap area runs on past the page's end
+    (`scroll-margin-bottom: 100vh`): Safari pulls a scroll that ends exactly at
+    an area's end back to its start. On a Mac, Safari's End key and a scroll
+    requested past the end still stop at the collections' start, and Home stops
+    there before the photo; the wheel, the trackpad, Page Down and the arrow
+    keys reach the end.
 - **A scroll-linked transition.**
-  - `--cover-progress` (0 photo, 1 collections) and `--cover-scroll` are written
-    to the DOM on scroll.
-  - The photo stays put while the identity rises over it: its box is the part of
-    the cover still on screen above the tabs (`--cover-scroll`), down to the
-    compact cover. The image keeps its full-cover size (`--cover-height`), so
-    the photo crops to its top part instead of zooming out.
+  - Only paint values are written on scroll: `--cover-progress` (0 photo, 1
+    collections), the stage and the themes. Geometry (`--cover-rest`,
+    `--cover-pinned`, `--cover-height`, the card box) is measured when the
+    layout changes, never on scroll.
+  - Two sticky layers hold the photo, positioned by the compositor (#237), so
+    nothing written on scroll can lag behind the finger and flash the page
+    behind the photo:
+    - the photo itself, at the top of the page at full-cover size
+      (`--cover-height`), under the identity, the tabs and the collections,
+      which rise over it;
+    - the compact cover: the photo's top part again, `--cover-pinned` tall,
+      above the collections and under the identity and the bar. Once the tabs
+      pin, the collections pass under it rather than over the photo, and its
+      taps never reach a work hidden under it. It carries the frost and the
+      glass card.
+  - A free cover has no compact cover. Its photo is held at the top only until
+    the identity rests under the bar, then scrolls away with the identity, as
+    before: the photo's box runs `--cover-rest` longer and the photo sticks
+    inside it, carrying the frost and the glass card.
   - In the last 8% of the way, as the identity lands, its shade hands over to
     the glass card, which fades in where the identity rests. The card never
     moves; only its opacity follows the scroll.
@@ -110,7 +139,8 @@ sits on a card of frosted glass.
     (`filter`, no `backdrop-filter`) and clipped to the card.
   - On top sit a tint in the card's own darkened colour, a faint top sheen, a
     rim catching the light from the top left, an inner highlight and a soft
-    shadow. A fine bevel closes the photo above the tabs.
+    shadow. A fine bevel just above the tabs (a dark line over a light one,
+    drawn by the tabs, edge to edge) closes the photo as the frost arrives.
   - The tint's opacity (`--cover-card-alpha`) is sampled per photo, after the
     image decodes, once the layout settles and once web fonts are ready. The
     photo under the card is frosted as the CSS frosts it: a slightly sharper
@@ -127,7 +157,7 @@ sits on a card of frosted glass.
   - Measured in the lab on seven covers (the six above plus white carved strokes
     on grey), at the brightest point behind each line: name 4.87–9.27:1, smaller
     text 4.72–8.87:1.
-  - The photo box isolates its layers, so the card stays under the identity.
+  - The compact cover isolates its layers, so the card stays under the identity.
   - Reduced transparency and increased contrast get a solid card instead.
   - This is an Owner-requested treatment of the reader's own upload. It is not
     the Functional Glass material of ADR 0007: no shared glass class or
@@ -135,8 +165,8 @@ sits on a card of frosted glass.
 - **Scroll hint.**
   - A small chevron at the foot of the photo fades in and floats three times,
     every time the reader is back on the photo.
-  - Tapping it makes the same glide and moves focus to the active collection
-    tab. Its name follows that tab.
+  - Tapping it scrolls to the collections stage and moves focus to the active
+    collection tab. Its name follows that tab.
   - Its hit area is 44 px. It is `inert` while the collections show, and hands
     focus on first.
 - **Safari's bars continue the photo** (iOS 26, verified in the iOS 26.5
@@ -155,7 +185,7 @@ sits on a card of frosted glass.
   - `theme-color` is ignored by Safari 26.
 - **No photo, compact header.** Without a photo the header keeps the same
   left-aligned identity just under a solid bar, in the page theme. It reserves
-  no cover area and does not glide; its tabs pin under the bar as before.
+  no cover area and does not snap; its tabs pin under the bar as before.
 - **Owner pencil.** 编辑主页背景 sits below the bar, in the same column as
   the 设置 icon.
 
@@ -226,18 +256,18 @@ says 「重要内容请放在小框内」and 「重要内容放在画面中部�
 Production keeps no Community exposure (`/api/community/*` returns 404), so the
 profile page is unchanged there in every scenario.
 
-| Scenario                                       | Development                                                                                                                                                                      | Production | Must preserve                                                         |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------- |
-| Profile with a photo, at the top               | The photo fills the first screen; the identity sits bottom-left on its own dark shade; a chevron hint floats at the foot                                                         | Unchanged  | Profile data, follow / message / block behaviour, navigation and Back |
-| Glide to the collections                       | A drag, wheel turn or key glides to the second resting place: the sharp photo with the identity on a frosted glass card, tabs pinned below; the identity cannot be scrolled away | Unchanged  | Per-tab scroll offsets, tab switching, pager swipes                   |
-| Identity too tall to pin (long bio, landscape) | The cover scrolls away freely; the bar turns solid in the reader's theme                                                                                                         | Unchanged  | Collections stay reachable                                            |
-| No photo                                       | Compact left-aligned header in the page theme; no cover, hint, card or glide                                                                                                     | Unchanged  | Existing profiles without a background                                |
-| Own profile                                    | 设置 in the bar, the background pencil below it, the avatar opens its editor in the reader's theme                                                                               | Unchanged  | Avatar and background editors, their save and limits                  |
-| Visitor actions                                | 关注 / 取消关注 and 私信 as compact pills; 屏蔽 behind ⋯ 更多操作 with the same confirmation                                                                                     | Unchanged  | The same commands, confirmations and copy                             |
-| Signed out                                     | 登录后关注 pill to the same sign-in destination                                                                                                                                  | Unchanged  | Sign-in return                                                        |
-| Background editor                              | Overview and crop window measure the live header; safe area x 0.34–0.66, y 0.16–0.39                                                                                             | Unchanged  | 4:3 master, top anchor, upload limits, save flow                      |
-| Reduced motion / transparency, more contrast   | Instant jumps; a solid card instead of glass                                                                                                                                     | Unchanged  | Readable text everywhere                                              |
-| iOS Safari bars                                | Status bar and bottom strip continue the photo, then the page                                                                                                                    | Unchanged  | Other browsers keep their own bar colours                             |
+| Scenario                                       | Development                                                                                                                                                          | Production | Must preserve                                                         |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------- |
+| Profile with a photo, at the top               | The photo fills the first screen; the identity sits bottom-left on its own dark shade; a chevron hint floats at the foot                                             | Unchanged  | Profile data, follow / message / block behaviour, navigation and Back |
+| Settle on the collections                      | A released drag, wheel turn or key settles natively on the nearer resting place: the sharp photo with the identity on a frosted glass card, tabs pinned below (#237) | Unchanged  | Per-tab scroll offsets, tab switching, pager swipes                   |
+| Identity too tall to pin (long bio, landscape) | The cover scrolls away freely; the bar turns solid in the reader's theme                                                                                             | Unchanged  | Collections stay reachable                                            |
+| No photo                                       | Compact left-aligned header in the page theme; no cover, hint, card or snapping                                                                                      | Unchanged  | Existing profiles without a background                                |
+| Own profile                                    | 设置 in the bar, the background pencil below it, the avatar opens its editor in the reader's theme                                                                   | Unchanged  | Avatar and background editors, their save and limits                  |
+| Visitor actions                                | 关注 / 取消关注 and 私信 as compact pills; 屏蔽 behind ⋯ 更多操作 with the same confirmation                                                                         | Unchanged  | The same commands, confirmations and copy                             |
+| Signed out                                     | 登录后关注 pill to the same sign-in destination                                                                                                                      | Unchanged  | Sign-in return                                                        |
+| Background editor                              | Overview and crop window measure the live header; safe area x 0.34–0.66, y 0.16–0.39                                                                                 | Unchanged  | 4:3 master, top anchor, stored-output bound, save flow                |
+| Reduced motion / transparency, more contrast   | Instant jumps; a solid card instead of glass                                                                                                                         | Unchanged  | Readable text everywhere                                              |
+| iOS Safari bars                                | Status bar and bottom strip continue the photo, then the page                                                                                                        | Unchanged  | Other browsers keep their own bar colours                             |
 
 ## Known trade-offs
 

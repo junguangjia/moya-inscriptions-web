@@ -464,7 +464,7 @@ it("keeps the current photo and crop when a reselected photo cannot be used", as
   const { CoverError } = await import("./profile-cover");
   readImage.mockRejectedValueOnce(new CoverError("heic"));
   await choose("IMG_1.HEIC");
-  expect(alert()).toContain("暂不支持 HEIC");
+  expect(alert()).toContain("无法打开这张 HEIC 照片");
   expect(document.querySelector("[data-cover-stage]")).not.toBeNull();
   expect(find("保存")!.disabled).toBe(false);
 });
