@@ -646,6 +646,7 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     itemIds: readonly string[],
     _now: Date,
   ): Promise<ReadonlyMap<string, string>> {
+    void _now; // Eligibility is the current database projection.
     if (!this.options.isPublic() || !itemIds.length) return new Map();
     return readTransaction(this.pool, async (db) => {
       const rows = (
@@ -673,6 +674,7 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     renditionIds: readonly string[],
     _now: Date,
   ): Promise<ReadonlyMap<string, string>> {
+    void _now;
     if (!this.options.isPublic() || !renditionIds.length) return new Map();
     return readTransaction(this.pool, async (db) => {
       const rows = (
