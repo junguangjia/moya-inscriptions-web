@@ -62,7 +62,7 @@ export const AvatarEntry = ({
         ref={input}
         hidden
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
         aria-label="选择头像照片"
         onChange={(event) => {
           const selected = event.target.files?.[0];
@@ -251,7 +251,7 @@ export const AvatarEditor = ({
           hidden
           ref={input}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/*"
           aria-label="重新选择头像照片"
           disabled={busy || limited}
           onChange={(event) => {

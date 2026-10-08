@@ -526,7 +526,8 @@ const ScopedAuthorProfile = ({
       passedAt: panel.offsetTop - bar.offsetHeight - 1,
     };
   };
-  // Scroll-linked paint values only (no layout reads or geometry writes):
+  // Scroll-linked paint values only (no geometry writes; a pinned cover reads
+  // no layout either):
   // --cover-progress (0 photo → 1 collections) frosts the photo and turns its
   // dark shade into the page colour behind the collections, and the stage
   // sets the themes. The top bar wears the dark theme over the photo; without
@@ -564,7 +565,8 @@ const ScopedAuthorProfile = ({
     // colour changes mid-scroll: once scrolling rests, a fresh chin carries
     // the colour at the bottom edge, the identity's while it covers the edge.
     if (photo) {
-      const port = scrollElement(),
+      // Only a free cover reads the layout here.
+      const port = free ? scrollElement() : null,
         edge =
           !port || port === document.documentElement
             ? window.innerHeight
@@ -693,7 +695,12 @@ const ScopedAuthorProfile = ({
           positions.current[tab] = Math.max(height, saved + height - previous);
       }
       if (top >= previous - 1) {
-        node.scrollTop = Math.max(height, top + height - previous);
+        // Never past the end: Safari snaps a write past it back to the
+        // collections' start.
+        node.scrollTop = Math.min(
+          Math.max(height, top + height - previous),
+          Math.max(height, node.scrollHeight - node.clientHeight),
+        );
         positions.current[scrollTab] = node.scrollTop;
         markCover(node.scrollTop);
         if (!embedded) onViewChange(scrollTab, node.scrollTop);

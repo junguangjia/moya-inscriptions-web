@@ -725,7 +725,7 @@ export const ProfileBackgroundEditor = ({
           ref={input}
           hidden
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/*"
           aria-label="选择主页背景照片"
           onChange={(event) => {
             const file = event.target.files?.[0];

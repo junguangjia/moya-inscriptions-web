@@ -298,7 +298,10 @@ async function headerWindow(page: Page) {
     const section = document.querySelector<HTMLElement>(
       "[data-author-profile] [data-profile-background-slot]",
     )!;
-    const bare = !section.querySelector("img");
+    // The photo is the page's own sticky layer (#237), outside the section.
+    const bare = !document.querySelector(
+      '[data-author-profile] > [aria-label="主页背景"] img',
+    );
     if (bare) section.setAttribute("data-cover-measure", "");
     const { width, height } = section.getBoundingClientRect();
     if (bare) section.removeAttribute("data-cover-measure");
@@ -575,8 +578,12 @@ test("Removing the background needs an explicit confirmation", async ({
   expect(state.saves).toEqual([
     { requestId: expect.any(String), mediaId: null },
   ]);
+  // Neither the photo nor the compact cover remains.
   await expect(
-    page.locator("[data-author-profile] [data-profile-background-slot] img"),
+    page.locator('[data-author-profile] > [aria-label="主页背景"] img'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-author-profile] > [aria-label="主页背景"] + div'),
   ).toHaveCount(0);
 });
 

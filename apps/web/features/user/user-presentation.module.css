@@ -307,7 +307,7 @@
 .coverRoot > .profileCover {
   position: sticky;
   z-index: 0;
-  top: 0;
+  inset: 0 auto auto;
   width: min(100%, 960px);
   height: var(--cover-height, 100svh);
   margin: 0 auto calc(-1 * var(--cover-height, 100svh));
@@ -506,7 +506,7 @@
 }
 .overlay.coverRoot[data-cover-snap],
 :global(html):has(
-  :global([data-primary-destination="user"]:not([hidden]))
+  :global([data-platform="pc"] [data-primary-destination="user"]:not([hidden]))
     .coverRoot[data-cover-snap]
 ) {
   scroll-snap-type: y mandatory;
@@ -521,11 +521,11 @@
 /*
  * Their skirt: the identity's bottom padding's shade, carried just above
  * their top edge, so it moves with them and never lies over them (#237).
- * Under the identity and the compact cover.
+ * Over the photo by document order; under the identity, its scroll hint and
+ * the compact cover.
  */
 .coverRoot[data-cover-photo] > .userContent::before {
   position: absolute;
-  z-index: 1;
   bottom: 100%;
   left: 50%;
   width: min(100%, 960px);
@@ -576,18 +576,19 @@
 /*
  * The tabs' page colour runs edge to edge, closing the compact cover, and a
  * fine bevel just above them (a dark line over a light one) closes the photo
- * as the frost arrives.
+ * as the frost arrives. The bevel spans the photo's width: the tabs' own and
+ * their 16 px inset on either side.
  */
 .coverRoot[data-cover-photo] .tabs {
   box-shadow:
     0 100vmax 0 100vmax var(--cover-paper),
-    0 calc(100vmax - 1px) 0 100vmax
+    0 15px 0 16px
       color-mix(
         in srgb,
         var(--yoyi-color-paper-light) calc(22% * var(--cover-frost, 0)),
         transparent
       ),
-    0 calc(100vmax - 2px) 0 100vmax
+    0 14px 0 16px
       color-mix(
         in srgb,
         var(--yoyi-color-ink-black) calc(28% * var(--cover-frost, 0)),

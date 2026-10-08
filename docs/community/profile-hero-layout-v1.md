@@ -24,12 +24,6 @@ Revision 4 follows the Owner's comparison in the simulator (2026-10-04):
 Revision 5 (Owner, same day): the compact cover shrinks further, and its
 background becomes frosted glass made from the reader's upload.
 
-Revision 7 (Owner, #237, 2026-10-07): the background flashed during scrolling,
-and the page did not feel like two stages the reader can stop on. The photo is
-now held by the compositor, and the scroller snaps natively between the two
-resting places; the JavaScript glide and the scroll-written photo box are gone.
-The bullets below describe revision 7 where they differ.
-
 Revision 6 (Owner, on a real iPhone): the full-cover frost "loses the texture
 completely". Four texture-preserving treatments were prototyped on the live page
 in a WebKit lab, against six covers (the Owner's stone, a carved stele, a stone
@@ -44,6 +38,12 @@ sits on a card of frosted glass.
 | Etched (high-pass)  | 0.48 / 0.46 / 0.63                   | partly         |
 | Progressive frost   | 0.74 / 0.74 / 0.73                   | partly         |
 | Glass card (chosen) | 0.84 / 0.84 / 0.84                   | yes            |
+
+Revision 7 (Owner, #237, 2026-10-07): the background flashed during scrolling,
+and the page did not feel like two stages the reader can stop on. The photo is
+now held by the compositor, and the scroller snaps natively between the two
+resting places; the JavaScript glide and the scroll-written photo box are gone.
+The bullets below describe revision 7 where they differ.
 
 - **The whole first screen is the photo.**
   - With a photo, the cover (`[data-profile-background-slot]`) is at least
@@ -140,7 +140,8 @@ sits on a card of frosted glass.
   - On top sit a tint in the card's own darkened colour, a faint top sheen, a
     rim catching the light from the top left, an inner highlight and a soft
     shadow. A fine bevel just above the tabs (a dark line over a light one,
-    drawn by the tabs, edge to edge) closes the photo as the frost arrives.
+    drawn by the tabs across the photo's width) closes the photo as the frost
+    arrives.
   - The tint's opacity (`--cover-card-alpha`) is sampled per photo, after the
     image decodes, once the layout settles and once web fonts are ready. The
     photo under the card is frosted as the CSS frosts it: a slightly sharper

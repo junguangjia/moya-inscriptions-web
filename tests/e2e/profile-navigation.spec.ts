@@ -96,6 +96,8 @@ async function fixture(page: Page, delayed = false, cover = false) {
     return route.continue();
   });
   await page.goto("/");
+  // A tap before the shell has booted is lost.
+  await expect(page.locator("[data-product-boot]")).toHaveCount(0);
   await page
     .getByRole("navigation", { name: "主要内容" })
     .getByRole("button", { name: "用户", exact: true })
@@ -206,13 +208,17 @@ test("Profile empty collections share collapse and preserve long body offsets", 
   await expect(
     page.getByRole("button", { name: "打开滚动测试作品 12", exact: true }),
   ).toBeAttached();
-  // Without a photo there is no glass: the header stays on the page colour.
-  expect(
-    await page
-      .locator('[data-author-profile] [aria-label="主页背景"]')
-      .first()
-      .evaluate((cover) => getComputedStyle(cover, "::after").content),
-  ).toBe("none");
+  // Without a photo there is no photo layer, compact cover or snapping: the
+  // header stays on the page colour and the page scrolls freely.
+  const bare = page.locator("[data-author-profile]").first();
+  await expect(bare.locator(':scope > [aria-label="主页背景"]')).toHaveCSS(
+    "display",
+    "none",
+  );
+  await expect(
+    bare.locator(':scope > [aria-label="主页背景"] + div'),
+  ).toHaveCount(0);
+  await expect(bare).not.toHaveAttribute("data-cover-snap");
   const initial = await geometry(page);
   const longTop = initial.collapse + 420;
   await expect
@@ -478,6 +484,159 @@ test("A photo profile rests on the photo or on the collections", async ({
   expect(await stage(page)).toMatchObject({ stage: "cover", theme: "dark" });
   await expect(hint).toHaveCSS("opacity", "1");
   await expect(hint).not.toHaveAttribute("inert");
+});
+
+/** The photo layer's top edge on screen (the page's own sticky layer). */
+async function photoTop(page: Page) {
+  return page
+    .locator('[data-author-profile] > [aria-label="主页背景"] > div')
+    .first()
+    .evaluate((photo) => photo.getBoundingClientRect().top);
+}
+
+test("A photo profile keeps each collection's place under the compact cover", async ({
+  page,
+}) => {
+  await fixture(page, false, true);
+  await expect.poll(async () => (await stage(page)).rest).toBeGreaterThan(60);
+  const { second } = await stage(page);
+  // The photo stays at the top on the photo and at the collections stage.
+  for (const top of [0, second]) {
+    await scrollTo(page, top);
+    await expect
+      .poll(async () => Math.abs((await geometry(page)).top - top))
+      .toBeLessThanOrEqual(1);
+    expect(Math.abs(await photoTop(page))).toBeLessThanOrEqual(1);
+  }
+  // Inside the collections the page rests where it is left, under the
+  // compact cover, and the photo stays put.
+  const { max } = await geometry(page);
+  expect(max).toBeGreaterThan(second + 40);
+  const inside = Math.min(max - 1, second + 160);
+  await scrollTo(page, inside);
+  await page.waitForTimeout(400);
+  expect(Math.abs((await geometry(page)).top - inside)).toBeLessThanOrEqual(1);
+  expect(Math.abs(await photoTop(page))).toBeLessThanOrEqual(1);
+  expect(await stage(page)).toMatchObject({
+    stage: "content",
+    aboveTabs: "cover",
+  });
+  // An empty collection rests at the collections stage; each collection
+  // keeps its own place.
+  await tab(page, "收藏");
+  await expect(
+    page.getByRole("tabpanel", { name: "收藏", exact: true }),
+  ).toContainText("暂无可显示的内容");
+  await expect
+    .poll(async () => Math.abs((await geometry(page)).top - second))
+    .toBeLessThanOrEqual(1);
+  expect(await stage(page)).toMatchObject({ stage: "content" });
+  await tab(page, "作品");
+  await expect
+    .poll(async () => Math.abs((await geometry(page)).top - inside))
+    .toBeLessThanOrEqual(1);
+  await tab(page, "喜欢");
+  await expect
+    .poll(async () => Math.abs((await geometry(page)).top - second))
+    .toBeLessThanOrEqual(1);
+});
+
+test("A photo profile keeps its stage when the viewport changes", async ({
+  page,
+}) => {
+  await fixture(page, false, true);
+  await expect.poll(async () => (await stage(page)).rest).toBeGreaterThan(60);
+  const viewport = page.viewportSize()!;
+  const { second } = await stage(page);
+  await scrollTo(page, second);
+  await expect
+    .poll(async () => Math.abs((await geometry(page)).top - second))
+    .toBeLessThanOrEqual(1);
+  // A shorter screen re-measures both stages: the page stays on the
+  // collections, never back on the photo or pulled past their end.
+  await page.setViewportSize({
+    width: viewport.width,
+    height: viewport.height - 60,
+  });
+  await expect
+    .poll(async () => {
+      const [at, now] = [await stage(page), await geometry(page)];
+      return Math.abs(now.top - at.second);
+    })
+    .toBeLessThanOrEqual(1);
+  expect(await stage(page)).toMatchObject({
+    stage: "content",
+    aboveTabs: "cover",
+  });
+  await page.setViewportSize(viewport);
+  await expect
+    .poll(async () => {
+      const [at, now] = [await stage(page), await geometry(page)];
+      return Math.abs(now.top - at.second);
+    })
+    .toBeLessThanOrEqual(1);
+  expect(Math.abs(await photoTop(page))).toBeLessThanOrEqual(1);
+});
+
+test("A photo profile too tall to pin scrolls freely and keeps its hint", async ({
+  page,
+}) => {
+  // A landscape phone leaves too little room to pin the identity.
+  await page.setViewportSize({ width: 844, height: 360 });
+  await fixture(page, false, true);
+  const root = page.locator("[data-author-profile]").first();
+  await expect(root).toHaveAttribute("data-cover-free", "");
+  await expect(root).not.toHaveAttribute("data-cover-snap");
+  await expect.poll(async () => (await stage(page)).rest).toBeGreaterThan(20);
+  const { rest } = await stage(page);
+  // The collections' skirt (the identity's bottom shade) stays in the
+  // page's own layer, under the scroll hint (#237 review).
+  expect(
+    await page
+      .locator('[data-author-profile] > [aria-label="用户内容"]')
+      .first()
+      .evaluate((content) => getComputedStyle(content, "::before").zIndex),
+  ).toBe("auto");
+  // Where the chevron is on screen, it shows over the shade (light strokes).
+  const hint = page.getByRole("button", { name: "向下查看作品" });
+  await expect(hint).toHaveCSS("opacity", "1");
+  const box = (await hint.boundingBox())!;
+  if (box.y >= 0 && box.y + box.height <= page.viewportSize()!.height) {
+    const { data, info } = await sharp(
+      await page.screenshot({
+        clip: { x: box.x, y: box.y, width: box.width, height: box.height },
+      }),
+    )
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    let light = 0;
+    for (let offset = 0; offset < data.length; offset += info.channels)
+      if (
+        0.299 * data[offset]! +
+          0.587 * data[offset + 1]! +
+          0.114 * data[offset + 2]! >
+        110
+      )
+        light++;
+    expect(light).toBeGreaterThan(8);
+  }
+  // No snapping: a place between the two is kept, the photo held at the top.
+  const between = Math.round(rest / 3);
+  await scrollTo(page, between);
+  await page.waitForTimeout(400);
+  expect(Math.abs((await geometry(page)).top - between)).toBeLessThanOrEqual(1);
+  expect(Math.abs(await photoTop(page))).toBeLessThanOrEqual(1);
+  // Past the identity's resting place the photo scrolls away with it.
+  await scrollTo(page, Math.round(rest) + 100);
+  await page.waitForTimeout(400);
+  const top = (await geometry(page)).top;
+  expect(Math.abs((await photoTop(page)) - (rest - top))).toBeLessThanOrEqual(
+    2,
+  );
+  // There is no compact cover to hold the photo's top part.
+  await expect(
+    page.locator('[data-author-profile] > [aria-label="主页背景"] + div'),
+  ).toHaveCSS("display", "none");
 });
 
 test("Profile remains pinned after delayed identity and bio load", async ({
