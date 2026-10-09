@@ -404,13 +404,13 @@ describe("purge authority and request accounting", () => {
       TotalCount: 1,
     });
     const result = await f.provider.monthlyRequests(
-      new Date("2026-10-08T00:00:00Z"),
+      new Date("2026-10-08T00:00:00.005Z"),
     );
     expect(result).toMatchObject({ requests: 2_000_000, warning: true });
     expect(f.apiCalls[0]!.input).toEqual({
       ZoneIds: ["zone-synthetic"],
-      StartTime: "2026-10-03T16:00:00.000Z",
-      EndTime: "2026-10-08T00:00:00.000Z",
+      StartTime: "2026-10-03T16:00:00Z",
+      EndTime: "2026-10-08T00:00:00Z",
       Interval: "day",
       MetricNames: ["l7Flow_request"],
       Filters: [
