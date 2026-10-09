@@ -5,6 +5,10 @@ import {
 } from "@moya/backend-production/internal/publishing-job-handlers";
 import { PublishingWorker } from "@moya/backend-production/internal/publishing-worker";
 import { publishingJobKindSchema } from "@moya/contracts/internal/community-operator";
+import {
+  PUBLICATION_PUBLISH_JOB_KINDS,
+  PUBLICATION_WITHDRAW_JOB_KINDS,
+} from "@moya/backend-production/internal/media-publication-worker";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -131,7 +135,12 @@ const claim = (
 describe("publishing queue split between the Backend and the media worker", () => {
   it("partitions every job kind exactly once", () => {
     const all = publishingJobKindSchema.options;
-    const split = [...UPLOAD_COUPLED_JOB_KINDS, ...MEDIA_WORKER_JOB_KINDS];
+    const split = [
+      ...UPLOAD_COUPLED_JOB_KINDS,
+      ...MEDIA_WORKER_JOB_KINDS,
+      ...PUBLICATION_PUBLISH_JOB_KINDS,
+      ...PUBLICATION_WITHDRAW_JOB_KINDS,
+    ];
     expect(new Set(split).size).toBe(split.length);
     expect([...split].sort()).toEqual([...all].sort());
     expect(UPLOAD_COUPLED_JOB_KINDS).toEqual([

@@ -1,4 +1,8 @@
 import {
+  beginWorkPublicationSync,
+  type PublicationSyncOptions,
+} from "./publication-sync.js";
+import {
   enqueueNotification,
   validateMentionUsers,
 } from "../notifications/source.js";
@@ -650,6 +654,7 @@ const submitInTransaction = async (
   actorId: string,
   command: WorkSubmissionCommand,
   now: Date,
+  publication?: PublicationSyncOptions,
 ): Promise<WorkSubmissionResult> => {
   const normalized = normalizeSubmission(command.content);
   const settings = await selectSettings(db, "share");
@@ -721,6 +726,11 @@ const submitInTransaction = async (
   if (pending.length > 0) return { state: "not_ready", itemKeys: pending };
 
   const workId = work?.id ?? opaqueId("work");
+  const publicationSync = await beginWorkPublicationSync(
+    db,
+    workId,
+    publication,
+  );
   const visibility = normalized.content.visibility;
   if (work === null) {
     await countNewWork(db, actorId, settings, now);
@@ -820,6 +830,7 @@ const submitInTransaction = async (
   if (work !== null) await touchWork(db, workId, now);
 
   await transferHolder(db, actorId, holder, workId, normalized, settings, now);
+  await publicationSync.finish(now);
   return workSubmissionReceiptSchema.parse({
     state: "confirmed",
     requestId: command.requestId,
@@ -841,6 +852,7 @@ export const submit = async (
   actorId: string,
   command: WorkSubmissionCommand,
   now: Date,
+  publication?: PublicationSyncOptions,
 ): Promise<WorkSubmissionResult> =>
   authorCommand(
     pool,
@@ -852,7 +864,7 @@ export const submit = async (
       input: command,
       now,
     },
-    (db) => submitInTransaction(db, actorId, command, now),
+    (db) => submitInTransaction(db, actorId, command, now, publication),
     {
       record: (result) => result.state === "confirmed",
       auditSubject: (result) =>

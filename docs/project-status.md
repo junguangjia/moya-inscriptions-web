@@ -7,6 +7,24 @@
 
 # 当前项目状态
 
+## Media pipeline Increment 2 checkpoint — 2026-10-08
+
+Issue
+[#206 r15](https://github.com/junguangjia/moya-inscriptions-web/issues/206)
+records the Owner's choice A: prepare publication and EdgeOne delivery now;
+activate unsigned direct delivery only during an intentional public-mode
+transition. Closed Beta retains the existing relays and Catalog's short-lived
+bearer URLs. Code preparation defaults to publication off and relay delivery.
+
+The 2026-10-08 16:41 UTC read-only Production checkpoint found Web/current at
+`db63dadf426773a0fa5d205709da0dc41dea3a23`, four other service bindings at
+`466b6bf74b87efa6526f19dd782f932e16f74abe`, and all five services active with
+Closed Beta enabled. These are timestamped observations, not Increment 2
+deployment acceptance. Increment 2 still requires exact-candidate validation,
+independent review, required CI and release/deployment gates. Public CDN
+activation and real CDN acceptance remain deferred. See the
+[Increment 2 runbook](deployment/media-publication-inc2.md).
+
 能力基线审计：2026-09-04；本轮有限事实更新：2026-09-17
 
 本文件是 current project status、active Phase 2 work、Production

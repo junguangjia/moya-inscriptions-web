@@ -162,3 +162,6 @@ export {
   encodeArticleOwnMediaCursor,
   listArticleOwnMedia,
 } from "./article-authoring/media-read.js";
+
+export { PostgresMediaPublicationAdapter } from "./publishing/publication.js";
+export type { PublicationSyncOptions } from "./publishing/publication-sync.js";

@@ -1,4 +1,9 @@
 import {
+  beginWorkPublicationSync,
+  syncWorkHolds,
+  type PublicationSyncOptions,
+} from "./publishing/publication-sync.js";
+import {
   effectiveFeatured,
   INHERITED_FEATURED_POSITION,
 } from "./featured-content.js";
@@ -87,7 +92,12 @@ const commandFingerprint = (
     .digest("hex");
 
 export class PostgresCommunityContentOperatorAdapter implements CommunityContentOperatorPort {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly options: {
+      readonly publication?: PublicationSyncOptions;
+    } = {},
+  ) {}
   private async transaction<T>(
     run: (db: PoolClient) => Promise<T>,
     read = false,
@@ -322,9 +332,28 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
           unchanged();
           return workDto(before);
         }
+        const at = (
+          await db.query<{ at: Date }>("SELECT statement_timestamp() AS at")
+        ).rows[0]!.at;
+        const publicationSync = await beginWorkPublicationSync(
+          db,
+          id,
+          this.options.publication,
+        );
+        const heldItems = await syncWorkHolds(
+          db,
+          id,
+          input.state === "removed",
+          at,
+        );
         await db.query(
           "UPDATE community.works SET operator_state=$2,version=version+1,updated_at=statement_timestamp() WHERE id=$1",
           [id, input.state],
+        );
+        await publicationSync.finish(
+          at,
+          heldItems,
+          input.state === "removed" ? "withdraw" : "publish",
         );
         return workDto(
           (await db.query<WorkRow>(`${workProjection} WHERE w.id=$1`, [id]))

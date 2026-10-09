@@ -34,6 +34,7 @@ import {
   requireSyntheticTestDatabaseUrl,
 } from "./synthetic-test-database.js";
 import { registerArticleDelegationSdkCases } from "./article-delegation-sdk-cases.js";
+import { registerArticleMediaPublicationCases } from "./article-media-publication-cases.js";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const target = requireSyntheticTestDatabaseUrl(),
@@ -99,6 +100,11 @@ const seedMedia = async (ownerId: PublicUserId) => {
   );
   return item;
 };
+
+registerArticleMediaPublicationCases({
+  setup: () => setup!,
+  app: () => app!,
+});
 
 beforeAll(async () => {
   const probe = await administration.query(guard.disposableTestTargetProbeSql);

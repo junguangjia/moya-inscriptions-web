@@ -44,7 +44,7 @@ export const createCosSdk = (
     readonly startsAt: number;
     readonly expiresAt: number;
     readonly timeoutMs: number;
-    /** Only publishing multipart body uploads may progress beyond a total deadline. */
+    /** Publishing multipart bodies and explicitly bounded publication PUTs use upload inactivity bounds. */
     readonly timeoutMode?: "upload-idle";
   },
   dependencies: CosSdkDependencies = {},

@@ -353,6 +353,34 @@ export const releaseJob = async (
   return released.rowCount === 1;
 };
 
+/** Busy asset claims must not exhaust attempts or spin on the oldest queue entry. */
+export const deferJob = async (
+  pool: Pool,
+  lease: PublishingJobLease,
+  delayMs: number,
+  now: Date,
+): Promise<boolean> => {
+  if (!Number.isSafeInteger(delayMs) || delayMs < 1 || delayMs > 300_000)
+    throw new TypeError("Job deferral must be within 1..300000 milliseconds");
+  const at = nowParam(now);
+  const deferred = await writeTransaction(pool, (db) =>
+    db.query(
+      `UPDATE community.publishing_jobs
+     SET state='queued', attempts=GREATEST(attempts-1,0),
+         run_after=$4::timestamptz, lease_owner=NULL, lease_expires_at=NULL,
+         updated_at=$3::timestamptz
+     WHERE id=$1 AND state='running' AND lease_owner=$2 AND lease_expires_at>$3::timestamptz`,
+      [
+        lease.id,
+        lease.leaseOwner,
+        at,
+        nowParam(new Date(now.getTime() + delayMs)),
+      ],
+    ),
+  );
+  return deferred.rowCount === 1;
+};
+
 /** WorkPublishingPort.failJob */
 export const failJob = async (
   pool: Pool,

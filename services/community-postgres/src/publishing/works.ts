@@ -1,3 +1,7 @@
+import {
+  beginWorkPublicationSync,
+  type PublicationSyncOptions,
+} from "./publication-sync.js";
 import type { MentionReference } from "@moya/contracts";
 import {
   CommunityConflictError,
@@ -219,6 +223,7 @@ export const setVisibility = async (
   workId: string,
   command: WorkVisibilityCommand,
   now: Date,
+  publication?: PublicationSyncOptions,
 ): Promise<WorkVisibilityResult> =>
   authorCommand(
     pool,
@@ -235,6 +240,11 @@ export const setVisibility = async (
       if (work.trashed_at !== null || work.operator_state === "removed")
         workUnavailable();
       const result = { workId, visibility: command.visibility };
+      const publicationSync = await beginWorkPublicationSync(
+        db,
+        workId,
+        publication,
+      );
       if (command.visibility === "self") {
         // Third-party access ends with this commit; public intent is withdrawn.
         await closePendingRevisions(db, workId, "withdrawn");
@@ -245,6 +255,7 @@ export const setVisibility = async (
           );
           await touchWork(db, workId, now);
         }
+        await publicationSync.finish(now);
         return result;
       }
       if (work.visibility === "public") return result;
@@ -297,6 +308,7 @@ export const setVisibility = async (
         );
       }
       await touchWork(db, workId, now);
+      await publicationSync.finish(now);
       return result;
     },
   );
@@ -312,6 +324,7 @@ export const deleteWork = async (
   workId: string,
   command: PublishingCommandIdentity,
   now: Date,
+  publication?: PublicationSyncOptions,
 ): Promise<{ readonly deleted: true }> =>
   authorCommand(
     pool,
@@ -337,6 +350,11 @@ export const deleteWork = async (
         )
       ).rows.map((row) => row.id);
       await lockOwnWork(db, actorId, workId);
+      const publicationSync = await beginWorkPublicationSync(
+        db,
+        workId,
+        publication,
+      );
       // Finished legacy drafts were never backfilled into media_items. Capture
       // their native media IDs before erasing the only remaining content rows.
       const legacyMediaIds = (
@@ -436,6 +454,7 @@ export const deleteWork = async (
         "DELETE FROM community.publishing_jobs WHERE kind='purge_trashed_work' AND subject_id=$1 AND state='queued'",
         [workId],
       );
+      await publicationSync.finish(now);
       return { deleted: true } as const;
     },
   );
@@ -445,6 +464,7 @@ export const purgeTrashedWork = async (
   pool: Pool,
   workId: string,
   now: Date,
+  publication?: PublicationSyncOptions,
 ): Promise<PublishingTrashPurge> =>
   writeTransaction(pool, async (db) => {
     const at = nowParam(now);
@@ -471,6 +491,11 @@ export const purgeTrashedWork = async (
     ).rows[0];
     if (work === undefined || work.deleted) return "missing";
     if (!work.trashed || work.due !== true) return "not_due";
+    const publicationSync = await beginWorkPublicationSync(
+      db,
+      workId,
+      publication,
+    );
     await db.query(
       "UPDATE community.works SET deleted_at=$2::timestamptz,updated_at=$2::timestamptz,version=version+1 WHERE id=$1",
       [workId, at],
@@ -567,5 +592,6 @@ export const purgeTrashedWork = async (
           },
           now,
         );
+    await publicationSync.finish(now);
     return "purged";
   });

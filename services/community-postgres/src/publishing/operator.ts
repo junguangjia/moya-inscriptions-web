@@ -1,4 +1,8 @@
 import {
+  beginWorkPublicationSync,
+  type PublicationSyncOptions,
+} from "./publication-sync.js";
+import {
   CommunityConflictError,
   CommunityInputError,
   CommunityNotFoundError,
@@ -333,6 +337,7 @@ export const moderateSubmission = async (
   operator: string,
   command: ModerateWorkSubmissionCommand,
   now: Date,
+  publication?: PublicationSyncOptions,
 ): Promise<WorkSubmissionModerationResult> =>
   operatorCommand(
     pool,
@@ -377,6 +382,11 @@ export const moderateSubmission = async (
         throw new CommunityConflictError(
           "The submission is no longer the pending latest submission",
         );
+      const publicationSync = await beginWorkPublicationSync(
+        db,
+        workId,
+        publication,
+      );
       const disposition =
         command.action === "approve" ? "approved" : "rejected";
       const version = (
@@ -389,6 +399,7 @@ export const moderateSubmission = async (
         await applyPublicRevision(db, row.work_id, revisionId, now);
         await touchWork(db, row.work_id, now);
       }
+      await publicationSync.finish(now);
       return workSubmissionModerationResultSchema.parse({
         revisionId,
         workId: row.work_id,

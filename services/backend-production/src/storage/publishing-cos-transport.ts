@@ -9,6 +9,7 @@ import type { CosSdkDependencies } from "./cos-sdk.js";
 export type PublishingCosMethod =
   | "getBucketVersioning"
   | "headObject"
+  | "putObject"
   | "getObject"
   | "deleteObject"
   | "getBucket"
@@ -18,6 +19,9 @@ export type PublishingCosMethod =
   | "multipartAbort"
   | "multipartList"
   | "multipartListPart";
+
+export type PublishingCosResult = COS.GeneralResult;
+export type PublishingCosPutResult = COS.PutObjectResult;
 
 /** Server-only deterministic I/O seam. Never selected from environment. */
 export interface PublishingCosTransport {
@@ -43,9 +47,22 @@ export function createPublishingCosTransport(
   options: {
     readonly credentials: () => Promise<CosCredentials>;
     readonly requestTimeoutMs: number;
+    /** Explicit publication PUT opt-in. Setup/socket idle/response retain
+     * requestTimeoutMs; this separate hard total cannot be renewed by progress. */
+    readonly streamingPutTotalTimeoutMs?: number;
   },
   dependencies: CosSdkDependencies = {},
 ): PublishingCosTransport {
+  if (
+    options.streamingPutTotalTimeoutMs !== undefined &&
+    (!Number.isSafeInteger(options.requestTimeoutMs) ||
+      options.requestTimeoutMs < 1 ||
+      !Number.isSafeInteger(options.streamingPutTotalTimeoutMs) ||
+      options.streamingPutTotalTimeoutMs < options.requestTimeoutMs ||
+      options.streamingPutTotalTimeoutMs > 240_000 ||
+      options.requestTimeoutMs > 30_000)
+  )
+    throw new PublishingMediaStoreError("invalid_argument");
   return {
     async request<T extends COS.GeneralResult>(
       method: PublishingCosMethod,
@@ -53,11 +70,21 @@ export function createPublishingCosTransport(
       signal?: AbortSignal,
       maxResponseBytes = 2 * 1024 * 1024,
     ) {
+      const putTotalMs =
+        method === "putObject" ? options.streamingPutTotalTimeoutMs : undefined;
+      if (
+        putTotalMs !== undefined &&
+        (!Number.isSafeInteger(parameters.ContentLength) ||
+          Number(parameters.ContentLength) < 1 ||
+          Number(parameters.ContentLength) > 5 * 1024 ** 3)
+      )
+        throw new PublishingMediaStoreError("invalid_argument");
       const controller = new AbortController();
       const abort = () => controller.abort();
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) controller.abort();
       const deadline = setTimeout(abort, options.requestTimeoutMs);
+      let putDeadline: ReturnType<typeof setTimeout> | undefined;
       try {
         const credentials = await new Promise<CosCredentials>(
           (resolve, reject) => {
@@ -96,6 +123,20 @@ export function createPublishingCosTransport(
               credentials.expiresAt === undefined))
         )
           throw new PublishingMediaStoreError("unavailable");
+        if (putTotalMs !== undefined) {
+          // The publication identity is temporary. Do not start the SDK or
+          // consume the source unless both token and signature cover the
+          // complete hard request budget plus a finite safety margin.
+          if (
+            !credentials.securityToken ||
+            credentials.expiresAt === undefined ||
+            credentials.expiresAt * 1_000 - Date.now() < putTotalMs + 30_000 ||
+            expiresAt * 1_000 - Date.now() < putTotalMs + 30_000
+          )
+            throw new PublishingMediaStoreError("unavailable");
+          clearTimeout(deadline);
+          putDeadline = setTimeout(abort, putTotalMs);
+        }
         const sdk = createCosSdk(
           {
             secretId: credentials.secretId,
@@ -103,7 +144,7 @@ export function createPublishingCosTransport(
             startsAt: now,
             expiresAt,
             timeoutMs: options.requestTimeoutMs,
-            ...(method === "multipartUpload"
+            ...(method === "multipartUpload" || putTotalMs !== undefined
               ? { timeoutMode: "upload-idle" as const }
               : {}),
           },
@@ -156,6 +197,7 @@ export function createPublishingCosTransport(
         throw new PublishingMediaStoreError("unavailable");
       } finally {
         clearTimeout(deadline);
+        clearTimeout(putDeadline);
         signal?.removeEventListener("abort", abort);
       }
     },

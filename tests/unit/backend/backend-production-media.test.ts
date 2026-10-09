@@ -17,6 +17,7 @@ import {
 import {
   PostgresWorkPublishingAdapter,
   PostgresNotificationAdapter,
+  PostgresMediaPublicationAdapter,
 } from "@moya/community-postgres";
 import {
   catalogDetailSchema,
@@ -495,6 +496,10 @@ describe("Work publishing composition", () => {
   const pause = (ms: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, ms));
   const quietQueue = () => {
+    vi.spyOn(
+      PostgresMediaPublicationAdapter.prototype,
+      "hasRegisteredPublications",
+    ).mockResolvedValue(false);
     const prototype = PostgresWorkPublishingAdapter.prototype;
     return {
       notificationClaim: vi
@@ -670,12 +675,12 @@ describe("Work publishing composition", () => {
 
       // Hold the worker inside its next claim: closing must wait for it before
       // any pool ends.
-      let releaseClaim: (claims: []) => void = () => undefined;
+      const releaseClaims: ((claims: []) => void)[] = [];
       const polled = queue.claim.mock.calls.length;
       queue.claim.mockImplementation(
         () =>
           new Promise<[]>((resolve) => {
-            releaseClaim = resolve;
+            releaseClaims.push(resolve);
           }),
       );
       await vi.waitFor(
@@ -689,7 +694,7 @@ describe("Work publishing composition", () => {
       await pause(50);
       expect(closed).toBe(false);
       expect(database.end).not.toHaveBeenCalled();
-      releaseClaim([]);
+      for (const release of releaseClaims) release([]);
       await closing;
       expect(database.end).toHaveBeenCalledTimes(2);
       const claims = queue.claim.mock.calls.length;

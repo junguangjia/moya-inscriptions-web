@@ -1,3 +1,4 @@
+import type { PublicationSyncOptions } from "./publishing/publication-sync.js";
 import type {
   CreatePublishingDraftCommand,
   CreatePublishingSessionCommand,
@@ -85,7 +86,12 @@ import * as catalogAssets from "./publishing/catalog-assets.js";
 export class PostgresWorkPublishingAdapter
   implements WorkPublishingPort, CatalogMediaAssetPort
 {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly options: {
+      readonly publication?: PublicationSyncOptions;
+    } = {},
+  ) {}
 
   createSession(
     actorId: string,
@@ -316,6 +322,13 @@ export class PostgresWorkPublishingAdapter
   releaseJob(lease: PublishingJobLease, now: Date): Promise<boolean> {
     return jobs.releaseJob(this.pool, lease, now);
   }
+  deferJob(
+    lease: PublishingJobLease,
+    delayMs: number,
+    now: Date,
+  ): Promise<boolean> {
+    return jobs.deferJob(this.pool, lease, delayMs, now);
+  }
   failJob(
     lease: PublishingJobLease,
     errorCode: string,
@@ -350,7 +363,13 @@ export class PostgresWorkPublishingAdapter
     command: WorkSubmissionCommand,
     now: Date,
   ): Promise<WorkSubmissionResult> {
-    return submissions.submit(this.pool, actorId, command, now);
+    return submissions.submit(
+      this.pool,
+      actorId,
+      command,
+      now,
+      this.options.publication,
+    );
   }
   readSubmissionReceipt(
     actorId: string,
@@ -367,7 +386,14 @@ export class PostgresWorkPublishingAdapter
     command: WorkVisibilityCommand,
     now: Date,
   ): Promise<WorkVisibilityResult> {
-    return works.setVisibility(this.pool, actorId, workId, command, now);
+    return works.setVisibility(
+      this.pool,
+      actorId,
+      workId,
+      command,
+      now,
+      this.options.publication,
+    );
   }
   deleteWork(
     actorId: string,
@@ -375,10 +401,22 @@ export class PostgresWorkPublishingAdapter
     command: PublishingCommandIdentity,
     now: Date,
   ): Promise<{ readonly deleted: true }> {
-    return works.deleteWork(this.pool, actorId, workId, command, now);
+    return works.deleteWork(
+      this.pool,
+      actorId,
+      workId,
+      command,
+      now,
+      this.options.publication,
+    );
   }
   purgeTrashedWork(workId: string, now: Date): Promise<PublishingTrashPurge> {
-    return works.purgeTrashedWork(this.pool, workId, now);
+    return works.purgeTrashedWork(
+      this.pool,
+      workId,
+      now,
+      this.options.publication,
+    );
   }
   resolveMediaRead(
     viewerId: string | null,
