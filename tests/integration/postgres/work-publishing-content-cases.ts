@@ -24,6 +24,7 @@ import {
   isRenditionRole,
 } from "@moya/community-postgres";
 import {
+  CARD_GALLERY_MAXIMUM,
   contentCardSchema,
   discoveryQuerySchema,
   workSubmissionCommandSchema,
@@ -204,7 +205,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
     beforeAll(async () => {
       await pool.query(`CREATE SCHEMA ${schema}`);
       await pool.query(
-        `CREATE TABLE ${schema}.catalog_entries(catalog_id text PRIMARY KEY,province text,province_state text);CREATE TABLE ${schema}.catalog_discovery(catalog_id text PRIMARY KEY,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb);CREATE TABLE ${schema}.catalog_media(catalog_id text,media_id text,object_key text,width integer,height integer,is_representative boolean)`,
+        `CREATE TABLE ${schema}.catalog_entries(catalog_id text PRIMARY KEY,province text,province_state text);CREATE TABLE ${schema}.catalog_discovery(catalog_id text PRIMARY KEY,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb);CREATE TABLE ${schema}.catalog_media(catalog_id text,media_id text,object_key text,width integer,height integer,is_representative boolean,position integer NOT NULL DEFAULT 0)`,
       );
     });
     afterAll(async () => {
@@ -854,6 +855,21 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       expect((card.media as { src?: string } | null)?.src).toMatch(
         new RegExp(`/${live.itemId}/cover/[0-9a-f]{32}$`, "u"),
       );
+      // The card lists every shown image in order, each as its display still
+      // in its edit's framing: the Live item flagged, never its motion.
+      expect(card.mediaCount).toBe(4);
+      expect(
+        card.gallery?.map((image) => [image.id, image.live === true]),
+      ).toEqual([
+        [ready.itemId, false],
+        [processing.itemId, false],
+        [rotated.itemId, false],
+        [live.itemId, true],
+      ]);
+      expect(
+        card.gallery?.map((image) => (image.type === "work" ? image.src : "")),
+      ).toEqual(view.media.map((image) => image.src));
+      expect(JSON.stringify(card.gallery)).not.toContain("/motion/");
 
       const foreign = await mediaItem(b);
       await expectRejection(
@@ -867,6 +883,34 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         ),
         CommunityNotFoundError,
       );
+    });
+
+    it("caps a card's gallery at its maximum and keeps the item total", async () => {
+      const now = at("2026-06-02T14:00:00.000Z");
+      const items: string[] = [];
+      for (let index = 0; index <= CARD_GALLERY_MAXIMUM; index++)
+        items.push((await mediaItem(a)).itemId);
+      const sessionId = await holdSession(a, null, items);
+      const done = confirmed(
+        await adapter.submit(
+          a,
+          command(
+            { sessionId },
+            { title: "十一图", items: items.map((itemId) => entry(itemId)) },
+          ),
+          now,
+        ),
+      );
+      for (const viewer of [b, a, null]) {
+        const card = await discovery.card(
+          { type: "work", id: done.workId },
+          viewer,
+        );
+        expect(card.mediaCount).toBe(CARD_GALLERY_MAXIMUM + 1);
+        expect(card.gallery?.map((image) => image.id)).toEqual(
+          items.slice(0, CARD_GALLERY_MAXIMUM),
+        );
+      }
     });
 
     it("is idempotent by request id, answers lost responses from the receipt and refuses a reused id with other content", async () => {

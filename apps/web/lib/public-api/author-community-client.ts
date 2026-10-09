@@ -36,6 +36,8 @@ import {
   directMessageSchema,
   directMessageUnreadSchema,
 } from "@moya/contracts/schemas";
+/** The most gallery entries one card carries (`ContentCard.gallery`). */
+export { CARD_GALLERY_MAXIMUM } from "@moya/contracts/schemas";
 import type {
   ArticleListQuery,
   ContentIdentity,
