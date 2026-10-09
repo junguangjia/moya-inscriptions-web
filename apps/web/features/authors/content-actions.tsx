@@ -88,7 +88,11 @@ export const useContentActions = (
     author.guestFavorites,
     includeGuestCounts,
   ]);
-  const execute: ContentQuickActionEnvironment["onAction"] = async (action) => {
+  // `explicit` sets a value instead of toggling (a double tap only likes).
+  const apply = async (
+    action: QuickActionName,
+    explicit?: boolean,
+  ): Promise<boolean> => {
     if (inFlight.current) return false;
     if (action !== "share" && !state.known) {
       author.notify("内容状态尚未确认，请稍后重试");
@@ -107,7 +111,7 @@ export const useContentActions = (
         return result !== "cancelled";
       }
       const field = action === "favorite" ? "favorite" : "liked",
-        value = !state[field];
+        value = explicit ?? !state[field];
       const saved = await (action === "favorite"
         ? author.favorite(target, value)
         : author.like(target, value));
@@ -148,6 +152,11 @@ export const useContentActions = (
       setPendingAction(null);
     }
   };
+  const execute: ContentQuickActionEnvironment["onAction"] = (action) =>
+    apply(action);
+  /** Likes the content unless it already is; never un-likes. */
+  const ensureLiked = (): Promise<boolean> =>
+    state.liked ? Promise.resolve(true) : apply("like", true);
   const actionKey = quickActionContentKey({
     kind: target.type,
     id: target.id,
@@ -158,10 +167,17 @@ export const useContentActions = (
     busy,
     pendingAction,
     execute,
+    ensureLiked,
+    /** A signed-in reader whose state is confirmed and no toggle is running. */
+    canLike: author.viewer !== null && state.known && !busy && !author.checking,
     environment: {
       onAction: execute,
       likedIds: state.liked ? [actionKey] : [],
       favoriteIds: state.favorite ? [actionKey] : [],
+      likeCount: state.likeCount,
+      favoriteCount: state.favoriteCount,
+      commentCount: state.commentCount,
+      ready: state.known && !busy && !author.checking,
     } satisfies ContentQuickActionEnvironment,
   };
 };

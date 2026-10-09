@@ -9,6 +9,15 @@ test.beforeAll(async ({ request }) => {
 });
 
 const ready = async (page: Page, path = "/dev/t02p/qa?qaChrome=hidden") => {
+  // These journeys exercise the two-column long-press layer; phone opens the
+  // single-column post feed unless the reader chose Double.
+  await page.addInitScript(() => {
+    try {
+      window.localStorage.setItem("yoyi.home-feed-layout", "double");
+    } catch {
+      // Storage may be unavailable; the layout then follows the platform.
+    }
+  });
   const response = await page.goto(path);
   expect(response?.status()).toBe(200);
   await expect(page.locator("[data-product-boot]")).toHaveCount(0);
@@ -96,21 +105,33 @@ const anchorFor = async (button: Locator) => {
     y: Math.round(box.y + Math.min(80, box.height / 2)),
   };
 };
+/**
+ * An unobscured card point. A paging drag starts on the side away from its
+ * direction ("right" for a leftward swipe, "left" for a rightward one) so it
+ * can travel more than half the pager in single- and two-column feeds alike.
+ */
 const nativeCard = async (
   page: Page,
   surface: "home" | "calligraphy",
-  rightColumn = false,
+  side: "center" | "left" | "right" = "center",
 ) => {
   const cards = feedCards(page, surface);
   await settlePanel(homeFeed(page, surface));
   const findHit = () =>
-    cards.evaluateAll((buttons, preferRight) => {
+    cards.evaluateAll((buttons, side) => {
       for (const [index, button] of buttons.entries()) {
         const box = button.getBoundingClientRect();
-        const x = Math.round(box.x + box.width * (preferRight ? 0.85 : 0.5));
+        const x = Math.round(
+          box.x +
+            box.width *
+              (side === "right" ? 0.85 : side === "left" ? 0.15 : 0.5),
+        );
         if (
-          x <= (preferRight ? innerWidth / 2 : 24) ||
-          x >= innerWidth - (preferRight ? 24 : 100)
+          x <= (side === "right" ? innerWidth / 2 : 24) ||
+          x >=
+            (side === "left"
+              ? innerWidth / 2
+              : innerWidth - (side === "right" ? 24 : 100))
         )
           continue;
         const top = Math.max(24, box.top + 12);
@@ -121,7 +142,7 @@ const nativeCard = async (
         }
       }
       return null;
-    }, rightColumn);
+    }, side);
   await expect.poll(findHit).not.toBeNull();
   const hit = await findHit();
   if (hit === null)
@@ -221,9 +242,15 @@ for (const path of [
     await ready(page, path);
     const enabled = path.startsWith("/dev/t02p/qa");
     const pager = page.locator("[data-home-surface] [data-home-feed-pager]");
+    const shell = page.locator("[data-product-shell]");
+    // The phone single-column feed lets a post's image stage pan locally.
+    const phoneSingle =
+      (await shell.getAttribute("data-platform")) === "phone" &&
+      (await shell.getAttribute("data-feed-layout")) === "single";
     await expect(pager).toHaveCSS(
       "touch-action",
-      (await pager.getAttribute("data-home-pager-platform")) === "pc"
+      (await pager.getAttribute("data-home-pager-platform")) === "pc" ||
+        phoneSingle
         ? /^(?:manipulation|pan-x pan-y pinch-zoom)$/u
         : "pan-y pinch-zoom",
     );
@@ -469,7 +496,7 @@ for (const chrome of ["default", "hidden"] as const) {
           const { point: pageStart } = await nativeCard(
             page,
             surface,
-            surface === "home",
+            surface === "home" ? "right" : "left",
           );
           await touch(session, "touchStart", [{ ...pageStart, id: 1 }]);
           // Discover advances to Nearby; the last Home tab, Calligraphy, returns
@@ -543,7 +570,7 @@ for (const surface of ["home", "calligraphy"] as const) {
       const { point: origin } = await nativeCard(
         page,
         surface,
-        surface === "home",
+        surface === "home" ? "right" : "left",
       );
       await touch(session, "touchStart", [{ ...origin, id: 1 }]);
       await drag(session, origin, {

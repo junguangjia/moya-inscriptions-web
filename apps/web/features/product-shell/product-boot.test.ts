@@ -59,4 +59,31 @@ describe("Product Shell pre-hydration boot", () => {
     expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
     expect(document.documentElement.dataset.homeLayout).toBe("double");
   });
+
+  it.each([
+    ["no choice on a phone", null, "phone", "single"],
+    ["no choice on a desktop", null, "desktop", "double"],
+    ["an explicit double on a phone", "double", "phone", "double"],
+    ["an explicit single on a desktop", "single", "desktop", "single"],
+  ] as const)(
+    "lays out the home feed for %s",
+    (_label, stored, device, expected) => {
+      vi.useFakeTimers();
+      if (stored !== null)
+        window.localStorage.setItem("yoyi.home-feed-layout", stored);
+      const userAgent = vi.spyOn(window.navigator, "userAgent", "get");
+      if (device === "phone")
+        userAgent.mockReturnValue(
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148",
+        );
+
+      window.eval(PRODUCT_BOOT_SCRIPT);
+
+      expect(document.documentElement.dataset.platform).toBe(
+        device === "phone" ? "phone" : "pc",
+      );
+      expect(document.documentElement.dataset.homeLayout).toBe(expected);
+      userAgent.mockRestore();
+    },
+  );
 });

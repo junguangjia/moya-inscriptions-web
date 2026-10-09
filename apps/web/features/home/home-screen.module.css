@@ -102,6 +102,10 @@
 }
 
 .feedPanel {
+  /* The inline gutter a phone single-column post bleeds across (.post). */
+  --feed-bleed-start: var(--yoyi-space-3);
+  --feed-bleed-end: var(--yoyi-space-3);
+
   padding: var(--yoyi-space-4) var(--yoyi-space-3)
     calc(96px + env(safe-area-inset-bottom));
 }
@@ -338,6 +342,473 @@
 
 .inscriptionCard[data-card-text-only] {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/*
+ * Phone single-column feed: each card is a full-bleed post. The image spans
+ * its scroll panel edge to edge without frame, radius or shadow; author,
+ * title, actions and date sit on the page background. The panel names its
+ * own inline gutter (--feed-bleed-*), so a classic scrollbar never makes the
+ * post wider than the panel; without one the post stays inside the gutter.
+ */
+.post {
+  width: calc(100% + var(--feed-bleed-start, 0px) + var(--feed-bleed-end, 0px));
+  max-width: none;
+  margin-inline: calc(-1 * var(--feed-bleed-start, 0px))
+    calc(-1 * var(--feed-bleed-end, 0px));
+  padding-bottom: var(--yoyi-space-4);
+  overflow: visible;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.post:focus-within {
+  outline: none;
+}
+
+/*
+ * The stage keeps one box for the whole post: never shorter than a square,
+ * never taller than 4:5 (--feed-stage-aspect, from the first image).
+ */
+.postStage {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: var(--feed-stage-aspect, 1 / 1);
+  overflow: hidden;
+  background: var(--yoyi-color-background-page);
+}
+
+.postStage .mediaFallback {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+
+/*
+ * A right-to-left native scroll-snap strip: the first image is at the right
+ * edge, a rightward swipe brings the next one in from the left. Every child
+ * restores left-to-right so its own content never mirrors.
+ */
+.postStrip {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  direction: rtl;
+  overscroll-behavior-x: none;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.postStrip::-webkit-scrollbar {
+  display: none;
+}
+
+.postStripPart {
+  display: contents;
+}
+
+.postSlide {
+  position: relative;
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  direction: ltr;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.postSlideButton {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: zoom-in;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.postSlideButton:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* A shorter image sits centred with blank above and below; a taller one is
+   centre-cropped. The viewer always shows the whole image. */
+.postSlideButton img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.postSlide[data-fit="cover"] .postSlideButton img {
+  object-fit: cover;
+}
+
+/* Until the colophon comments land, the region names the thread. */
+.postComments {
+  display: flex;
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-6);
+  padding: var(--yoyi-space-6);
+  direction: ltr;
+  background: var(--yoyi-color-background-surface);
+  border-inline-start: 1px solid var(--yoyi-color-border-subtle);
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.postCommentsTitle {
+  margin: 0;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-editorial);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  writing-mode: vertical-rl;
+}
+
+.postCommentsCount {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+
+.postCommentsOpen {
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 1px solid var(--yoyi-color-border-strong);
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  cursor: pointer;
+}
+
+.postCommentsOpen:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.postComments > div {
+  display: grid;
+  justify-items: center;
+  gap: var(--yoyi-space-3);
+}
+
+/* The double-tap heart, over the stage and never in the way of a tap. */
+.postBurst {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.postBurst svg {
+  width: 96px;
+  height: 96px;
+  fill: var(--yoyi-color-seal-red);
+  filter: drop-shadow(0 4px 12px rgb(0 0 0 / 0.24));
+  animation: post-burst 720ms var(--yoyi-easing-emphasized) forwards;
+}
+
+@keyframes post-burst {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+  32% {
+    transform: scale(0.96);
+  }
+  46% {
+    transform: scale(1);
+  }
+  78% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-6px) scale(1);
+  }
+}
+
+@keyframes post-burst-still {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* The dot row mirrors the strip: image 1 on the right, the comments seal on
+   the left; edge dots of a longer post are smaller to say more follow. */
+.postDots {
+  display: flex;
+  min-height: 24px;
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: center;
+  padding-top: var(--yoyi-space-2);
+}
+
+.postDotTarget,
+.postDotSeal {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.postDotTarget > span {
+  width: var(--media-dot-size, 6px);
+  height: var(--media-dot-size, 6px);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-text-primary) var(--media-dot-weight, 0%),
+    var(--yoyi-color-border-strong)
+  );
+  border-radius: var(--yoyi-radius-full);
+  transition:
+    width var(--yoyi-duration-fast) var(--yoyi-easing-standard),
+    height var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.postDotSeal > span {
+  width: var(--media-dot-size, 8px);
+  height: var(--media-dot-size, 8px);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-seal-red) var(--media-dot-weight, 0%),
+    var(--yoyi-color-border-strong)
+  );
+  border-radius: 2px;
+  transition:
+    width var(--yoyi-duration-fast) var(--yoyi-easing-standard),
+    height var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.postDotTarget:focus-visible,
+.postDotSeal:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--yoyi-radius-full);
+}
+
+.postTitle,
+.postSummary {
+  margin: 0;
+  padding: var(--yoyi-space-2) var(--yoyi-space-4) 0;
+  color: var(--yoyi-color-text-primary);
+  font-size: var(--yoyi-type-body-size);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.postTitle {
+  font-weight: 600;
+}
+
+/* A collapsed title or opening line stays within two lines. */
+.postTitleText,
+.postSummary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.postSummary {
+  cursor: pointer;
+}
+
+.post[data-feed-post-expanded="true"] .postTitleText {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.postTitleButton {
+  display: block;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.postTitleButton:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.postBody {
+  padding: var(--yoyi-space-2) var(--yoyi-space-4) 0;
+}
+
+.postBodyText {
+  margin: 0;
+  color: var(--yoyi-color-text-primary);
+  font-size: var(--yoyi-type-body-size);
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.postBodyStatus {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+
+.postBodyRetry {
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-2);
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .postBurst svg {
+    animation: post-burst-still 600ms linear forwards;
+  }
+
+  .postDotTarget > span,
+  .postDotSeal > span {
+    transition-duration: 1ms;
+  }
+}
+
+.postHeader {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-2) var(--yoyi-space-4);
+}
+
+.postAuthor {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  padding: 0;
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+/* The studio name sits under the nickname in a post header. */
+.postAuthor > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.postAuthor:focus-visible,
+.postFollow:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.postAvatar {
+  display: grid;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  overflow: hidden;
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-muted);
+  border-radius: 50%;
+  font-size: var(--yoyi-type-metadata-size);
+}
+
+.postAvatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.postFollow {
+  flex: 0 0 auto;
+  min-width: 72px;
+  min-height: 36px;
+  padding: 0 var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-muted);
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.postFollow[data-following="true"] {
+  color: var(--yoyi-color-text-secondary);
+  font-weight: 400;
+}
+
+.postFollow:disabled {
+  cursor: default;
+}
+
+.postDate {
+  margin: 0;
+  padding: 0 var(--yoyi-space-4);
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.5;
 }
 
 .stateMessage {

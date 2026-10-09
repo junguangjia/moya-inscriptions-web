@@ -24,7 +24,7 @@ vi.mock("./author-context", () => ({
   shareContent: vi.fn(async () => "shared"),
 }));
 vi.mock("./author-data", () => ({ authorClient: { state } }));
-import { ContentActions } from "./content-actions";
+import { ContentActions, useContentActions } from "./content-actions";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -103,5 +103,155 @@ describe("Detail reaction totals", () => {
     await act(async () => button("收藏").click());
     expect(count("favorite")).toBe("4");
     expect(button("收藏").getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("useContentActions like helpers", () => {
+  type Actions = ReturnType<typeof useContentActions>;
+  let hook: Actions;
+  // A distinct target keeps the module-level comment-count bus apart from the view tests.
+  const hookTarget = { type: "catalog", id: "catalog-hook" } as const;
+  const Probe = () => {
+    hook = useContentActions(hookTarget, "测试");
+    return null;
+  };
+  const mountHook = async () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => root.render(<Probe />));
+  };
+  const deferred = <T,>() => {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  };
+  beforeEach(() => {
+    author.checking = false;
+  });
+  afterEach(() => {
+    author.checking = false;
+  });
+
+  it("ensureLiked likes an unliked item once with an explicit true", async () => {
+    await mountHook();
+    expect(hook.state.liked).toBe(false);
+    state.mockResolvedValue(snapshot({ liked: true, likeCount: 1 }));
+    let result: boolean | undefined;
+    await act(async () => {
+      result = await hook.ensureLiked();
+    });
+    expect(result).toBe(true);
+    expect(author.like).toHaveBeenCalledTimes(1);
+    expect(author.like).toHaveBeenCalledWith(hookTarget, true);
+    expect(author.favorite).not.toHaveBeenCalled();
+    expect(hook.state.liked).toBe(true);
+    expect(hook.environment.likeCount).toBe(1);
+
+    // A second double tap on the now-liked item sends nothing.
+    await act(async () => {
+      result = await hook.ensureLiked();
+    });
+    expect(result).toBe(true);
+    expect(author.like).toHaveBeenCalledTimes(1);
+  });
+
+  it("ensureLiked never un-likes a liked item and sends nothing", async () => {
+    state.mockResolvedValue(snapshot({ liked: true, likeCount: 5 }));
+    await mountHook();
+    expect(hook.state.liked).toBe(true);
+    const reads = state.mock.calls.length;
+    let result: boolean | undefined;
+    await act(async () => {
+      result = await hook.ensureLiked();
+    });
+    expect(result).toBe(true);
+    expect(author.like).not.toHaveBeenCalled();
+    expect(state.mock.calls.length).toBe(reads);
+    expect(hook.state.liked).toBe(true);
+    expect(hook.busy).toBe(false);
+  });
+
+  it("ensureLiked for a guest ends at the sign-in notice without a read-back", async () => {
+    author.viewer = null;
+    // Mirrors the author context's guest guard in `like` (author-context.tsx).
+    author.like.mockImplementation(async () => {
+      author.notify("登录后可以喜欢内容");
+      return false;
+    });
+    await mountHook();
+    expect(hook.canLike).toBe(false);
+    let result: boolean | undefined;
+    await act(async () => {
+      result = await hook.ensureLiked();
+    });
+    expect(result).toBe(false);
+    expect(author.like).toHaveBeenCalledTimes(1);
+    expect(author.like).toHaveBeenCalledWith(hookTarget, true);
+    expect(author.notify).toHaveBeenCalledWith("登录后可以喜欢内容");
+    // A guest without guest counts reads no state, before or after the attempt.
+    expect(state).not.toHaveBeenCalled();
+    expect(hook.state.liked).toBe(false);
+  });
+
+  it("canLike is false for a guest even with a known state", async () => {
+    author.viewer = null;
+    await mountHook();
+    expect(hook.state.known).toBe(true);
+    expect(hook.canLike).toBe(false);
+  });
+
+  it("canLike waits for the signed-in state to be known", async () => {
+    const pending = deferred<ContentState>();
+    state.mockReturnValueOnce(pending.promise);
+    await mountHook();
+    expect(hook.state.known).toBe(false);
+    expect(hook.canLike).toBe(false);
+    expect(hook.environment.ready).toBe(false);
+    await act(async () => pending.resolve(snapshot()));
+    expect(hook.state.known).toBe(true);
+    expect(hook.canLike).toBe(true);
+    expect(hook.environment.ready).toBe(true);
+  });
+
+  it("canLike is false while the session is still being checked", async () => {
+    author.checking = true;
+    await mountHook();
+    expect(hook.canLike).toBe(false);
+    expect(state).not.toHaveBeenCalled();
+  });
+
+  it("canLike is false while a like is in flight", async () => {
+    await mountHook();
+    expect(hook.canLike).toBe(true);
+    const saving = deferred<boolean>();
+    author.like.mockReturnValueOnce(saving.promise);
+    let done: Promise<boolean> | undefined;
+    await act(async () => {
+      done = hook.ensureLiked();
+    });
+    expect(hook.busy).toBe(true);
+    expect(hook.canLike).toBe(false);
+    expect(hook.environment.ready).toBe(false);
+    await act(async () => {
+      saving.resolve(true);
+      await done;
+    });
+    expect(hook.busy).toBe(false);
+    expect(hook.canLike).toBe(true);
+  });
+
+  it("exposes the state's aggregates, including the comment total, on the environment", async () => {
+    state.mockResolvedValue(
+      snapshot({ commentCount: 7, likeCount: 3, favoriteCount: 2 }),
+    );
+    await mountHook();
+    expect(hook.state.commentCount).toBe(7);
+    expect(hook.environment.commentCount).toBe(7);
+    expect(hook.environment.likeCount).toBe(3);
+    expect(hook.environment.favoriteCount).toBe(2);
+    expect(hook.environment.ready).toBe(true);
   });
 });
