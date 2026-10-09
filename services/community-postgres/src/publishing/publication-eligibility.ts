@@ -31,7 +31,7 @@ export const desiredRenditionsSql = (catalogAvailable = true): string => `
           WHERE ri.item_id=i.id AND i.owner_id=w.author_id AND community.work_is_public(w)
             AND r.role IN ('thumb','cover','display','viewer','full','motion')
             AND r.edit_key=${variantEditKeySql("r.role", "ri", "rv")}
-        ) OR (r.edit_key='base' AND r.role IN ('thumb','cover','display','viewer','motion')
+        ) OR (r.edit_key='base' AND r.role IN ('thumb','cover','display','viewer','full','motion')
           AND ${publishedArticleItemSql("i.id", "NULL::text", "i.owner_id")})
       ))
       OR (ca.state='ready' AND ca.unreferenced_since IS NULL AND r.edit_key='base'
