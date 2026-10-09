@@ -342,8 +342,8 @@ export function createTencentPublicationProvider(
           "DescribeTimingL7AnalysisData",
           {
             ZoneIds: [config.zoneId],
-            StartTime: start.toISOString(),
-            EndTime: at.toISOString(),
+            StartTime: start.toISOString().replace(/\.\d{3}Z$/u, "Z"),
+            EndTime: at.toISOString().replace(/\.\d{3}Z$/u, "Z"),
             Interval: "day",
             MetricNames: ["l7Flow_request"],
             Filters: [
