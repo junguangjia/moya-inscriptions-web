@@ -25,6 +25,7 @@ import {
   useUnreadConversationCount,
   type DirectMessageTitle,
 } from "../messages";
+import type { DirectMessageOpenRequest } from "../messages/direct-message-entry";
 const sections = ["direct", "likes", "favorites", "comments"] as const;
 type Section = (typeof sections)[number];
 const labels = {
@@ -50,26 +51,20 @@ const LiveDirectMessages = ({
   readonly onTitleChange: (title: DirectMessageTitle | null) => void;
 }) => {
   const directEntry = useDirectMessageEntry();
-  const [openWith, setOpenWith] = useState<{
-    userId: string;
-    displayName: string;
-    studioName?: string | undefined;
-  } | null>(null);
+  const [openWith, setOpenWith] = useState<DirectMessageOpenRequest | null>(
+    directEntry?.request ?? null,
+  );
   const consumedEntry = useRef<number | null>(null);
   useEffect(() => {
     const request = directEntry?.request;
     if (!request || consumedEntry.current === request.token) return;
     consumedEntry.current = request.token;
     directEntry.consume(request.token);
-    setOpenWith({
-      userId: request.userId,
-      displayName: request.displayName,
-      studioName: request.studioName,
-    });
+    setOpenWith(request);
   }, [directEntry]);
   return (
     <DirectMessagePanel
-      openWith={openWith}
+      openWith={directEntry?.request ?? openWith}
       onOpenProfile={(userId) => {
         onOpenProfile(userId);
       }}
@@ -182,11 +177,7 @@ function ScopedMessageTrigger({
     if (host && host.dataset.active !== "true") return;
     consumedEntry.current = request.token;
     directEntry.consume(request.token);
-    setDirectOpenWith({
-      userId: request.userId,
-      displayName: request.displayName,
-      studioName: request.studioName,
-    });
+    setDirectOpenWith(request);
     setActive("direct");
     setCloseRequested(false);
     setPreviewCommentTab(null);

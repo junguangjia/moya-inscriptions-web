@@ -1,4 +1,5 @@
-.page {
+/* The shared phase4 dialog rule loads later; this page owns its safe-area layout. */
+.page.page {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;

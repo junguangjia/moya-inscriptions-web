@@ -131,6 +131,9 @@ export const useConversations = (enabled: boolean) => {
     items.current = [];
     setState({ state: "loading" });
     void refresh();
+    return () => {
+      epoch.current += 1;
+    };
   }, [enabled, author.viewer?.id, refresh]);
   useForegroundPoll(refresh, enabled && author.viewer !== null);
   /** Optimistic local replacement after a participant command. */
@@ -181,6 +184,8 @@ export const useConversation = (id: string | null, enabled: boolean) => {
   const messages = useRef<DirectMessage[]>([]);
   const oldest = useRef<number | null>(null);
   const epoch = useRef(0);
+  const lifecycle = useRef(0);
+  const controller = useRef<AbortController | null>(null);
   const apply = (
     page: DirectMessagePage,
     mode: "reset" | "older" | "newer",
@@ -212,7 +217,11 @@ export const useConversation = (id: string | null, enabled: boolean) => {
     if (!id) return;
     const current = ++epoch.current;
     try {
-      const page = await authorClient.messages.history(id, { pageSize: 30 });
+      const page = await authorClient.messages.history(
+        id,
+        { pageSize: 30 },
+        controller.current?.signal,
+      );
       if (current !== epoch.current) return;
       apply(page, "reset");
     } catch (error) {
@@ -223,17 +232,31 @@ export const useConversation = (id: string | null, enabled: boolean) => {
   }, [id]);
   const poll = useCallback(async () => {
     if (!id) return;
+    const current = lifecycle.current;
     // The newest window (not only `after` the latest sequence) so removals of
     // already-loaded messages are reflected within one interval.
-    const page = await authorClient.messages.history(id, { pageSize: 30 });
+    const page = await authorClient.messages.history(
+      id,
+      { pageSize: 30 },
+      controller.current?.signal,
+    );
+    if (current !== lifecycle.current) return;
     apply(page, "newer");
   }, [id]);
   useEffect(() => {
     if (!enabled || !id || !author.viewer) return;
+    controller.current = new AbortController();
+    lifecycle.current += 1;
+    marked.current = 0;
     messages.current = [];
     oldest.current = null;
     setState({ state: "loading" });
     void load().catch(() => undefined);
+    return () => {
+      controller.current?.abort();
+      lifecycle.current += 1;
+      epoch.current += 1;
+    };
   }, [enabled, id, author.viewer?.id, load]);
   useForegroundPoll(poll, enabled && id !== null && author.viewer !== null);
   // Mark the latest visible message as observed whenever the view shows it.
@@ -244,21 +267,29 @@ export const useConversation = (id: string | null, enabled: boolean) => {
     if (latest <= marked.current || latest <= state.conversation.readSequence)
       return;
     marked.current = latest;
+    const current = lifecycle.current;
     void authorClient.messages
       .read(id, latest, requestIdentity())
-      .then((conversation) =>
+      .then((conversation) => {
+        if (current !== lifecycle.current) return;
         setState((old) =>
           old.state === "populated" ? { ...old, conversation } : old,
-        ),
-      )
+        );
+      })
       .catch(() => undefined);
   }, [id, state]);
   const loadOlder = useCallback(async () => {
     if (!id || oldest.current === null) return;
-    const page = await authorClient.messages.history(id, {
-      before: oldest.current,
-      pageSize: 30,
-    });
+    const current = lifecycle.current;
+    const page = await authorClient.messages.history(
+      id,
+      {
+        before: oldest.current,
+        pageSize: 30,
+      },
+      controller.current?.signal,
+    );
+    if (current !== lifecycle.current) return;
     apply(page, "older");
   }, [id]);
   const send = useCallback(
@@ -333,7 +364,7 @@ export const startConversationWith = async (
   }
 };
 
-export const findConversationWith = (userId: string) =>
-  authorClient.messages.with(userId).then((r) => r.conversation);
+export const findConversationWith = (userId: string, signal?: AbortSignal) =>
+  authorClient.messages.with(userId, signal).then((r) => r.conversation);
 
 export { describeFailure as describeDirectMessageFailure };

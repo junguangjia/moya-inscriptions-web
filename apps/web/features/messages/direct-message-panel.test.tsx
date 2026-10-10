@@ -65,6 +65,7 @@ let state: "requested" | "active" = "requested";
 let offline = false;
 /** When set, the server refuses a send with this 422 reason. */
 let refuseSendWith: string | null = null;
+const delayed = new Map<string, Promise<Response>>();
 const respond = (url: string, method: string, body: unknown) => {
   if (url.endsWith("/api/community/messages/unread"))
     return { unreadConversations: 0 };
@@ -145,6 +146,7 @@ beforeEach(() => {
   state = "requested";
   offline = false;
   refuseSendWith = null;
+  delayed.clear();
   author.viewer = null;
   author.checking = false;
   author.sessionError = false;
@@ -154,6 +156,8 @@ beforeEach(() => {
       const method = init?.method ?? "GET";
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       calls.push({ method, url: input, body });
+      const pending = [...delayed].find(([path]) => input.includes(path));
+      if (pending) return pending[1];
       if (offline) throw new TypeError("Failed to fetch");
       const answer = respond(input, method, body) as {
         status?: number;
@@ -661,7 +665,7 @@ describe("DirectMessagePanel rows, notices and header (C3 repair)", () => {
     offline = true;
     await openFirstConversation();
     const failed = node.querySelector('[data-dm-view-state="unavailable"]');
-    expect(failed?.getAttribute("role")).toBe("alert");
+    expect(failed?.querySelector('[role="alert"]')).not.toBeNull();
     const retry = [...failed!.querySelectorAll("button")].find(
       (b) => b.textContent === "重试",
     )!;
@@ -825,5 +829,241 @@ describe("DirectMessagePanel rows, notices and header (C3 repair)", () => {
     );
     expect(node.textContent).toContain("账户暂时不可用");
     author.sessionError = false;
+  });
+});
+
+describe("targeted entry loading", () => {
+  const target = { userId: other, displayName: "书法学徒", token: 1 };
+  const hold = (path: string) => {
+    let resolve!: (response: Response) => void;
+    delayed.set(
+      path,
+      new Promise<Response>((done) => {
+        resolve = done;
+      }),
+    );
+    return async (payload: unknown, status = 200) => {
+      delayed.delete(path);
+      await act(async () =>
+        resolve(
+          new Response(JSON.stringify(payload), {
+            status,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      );
+      await flush();
+    };
+  };
+  const typeDraft = async (input: HTMLTextAreaElement) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(input, "加载时的草稿");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+  };
+  const render = async (openWith = target, backRequested = 0) => {
+    await act(async () =>
+      root.render(
+        <DirectMessagePanel
+          openWith={openWith}
+          backRequested={backRequested}
+          onOpenProfile={vi.fn()}
+        />,
+      ),
+    );
+  };
+  beforeEach(() => {
+    author.viewer = { id: me };
+    authorClient.setAccount(me);
+    state = "active";
+  });
+
+  for (const existing of [false, true]) {
+    it(`preserves the first composer and draft through delayed ${existing ? "pair and history" : "new pair"} resolution without loading the list`, async () => {
+      const pair = hold(`/messages/with/${other}`);
+      const history = existing ? hold(`/messages/${conversationId}?`) : null;
+      await render();
+      expect(node.querySelector("[data-dm-list]")).toBeNull();
+      expect(
+        node.querySelector('[data-dm-view="pending"]')?.textContent,
+      ).toContain("书法学徒");
+      const input = node.querySelector("textarea")!;
+      await typeDraft(input);
+      expect(node.querySelector('button[type="submit"]')).toHaveProperty(
+        "disabled",
+        true,
+      );
+      await act(async () => input.closest("form")!.requestSubmit());
+      expect(calls.some((call) => call.method === "POST")).toBe(false);
+      await pair({
+        conversation: existing
+          ? conversation({ state: "active", canSend: true, sendRefusal: null })
+          : null,
+      });
+      if (history) {
+        expect(node.querySelector("textarea")).toBe(input);
+        expect(node.querySelector('button[type="submit"]')).toHaveProperty(
+          "disabled",
+          true,
+        );
+        await history({
+          conversation: conversation({
+            state: "active",
+            canSend: true,
+            sendRefusal: null,
+          }),
+          items: [],
+          nextBefore: null,
+        });
+      }
+      expect(node.querySelector("textarea")).toBe(input);
+      expect(input.value).toBe("加载时的草稿");
+      expect(document.activeElement).toBe(input);
+      expect(node.querySelector('button[type="submit"]')).toHaveProperty(
+        "disabled",
+        false,
+      );
+      expect(node.querySelector("[data-dm-list]")).toBeNull();
+      expect(calls.some((call) => call.url.includes("/messages?"))).toBe(false);
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "POST" &&
+            call.url.endsWith("/api/community/messages"),
+        ),
+      ).toBe(false);
+    });
+  }
+
+  for (const stage of ["pair", "history"] as const) {
+    it(`keeps the draft and send guard after a ${stage} failure, then retries the authoritative read`, async () => {
+      const pair = hold(`/messages/with/${other}`);
+      const history =
+        stage === "history" ? hold(`/messages/${conversationId}?`) : null;
+      await render();
+      const input = node.querySelector("textarea")!;
+      await typeDraft(input);
+      if (history) {
+        await pair({
+          conversation: conversation({
+            state: "active",
+            canSend: true,
+            sendRefusal: null,
+          }),
+        });
+        await history({ error: {} }, 503);
+      } else await pair({ error: {} }, 503);
+      expect(
+        node.querySelector('[data-dm-view-state="unavailable"]'),
+      ).not.toBeNull();
+      expect(node.querySelector('[data-dm-view="start"]')).toBeNull();
+      expect(node.querySelector("textarea")).toBe(input);
+      expect(input.value).toBe("加载时的草稿");
+      expect(node.querySelector('button[type="submit"]')).toHaveProperty(
+        "disabled",
+        true,
+      );
+      await act(async () =>
+        (
+          node.querySelector('[role="alert"] button') as HTMLButtonElement
+        ).click(),
+      );
+      await flush();
+      expect(node.querySelector("textarea")).toBe(input);
+      expect(node.querySelector('button[type="submit"]')).toHaveProperty(
+        "disabled",
+        false,
+      );
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "POST" &&
+            call.url.endsWith("/api/community/messages"),
+        ),
+      ).toBe(false);
+    });
+  }
+
+  it("ignores a superseded pair response when a later participant is selected", async () => {
+    const pair = hold(`/messages/with/${other}`);
+    await render();
+    const next = {
+      userId: `user-${"3".repeat(32)}`,
+      displayName: "另一位作者",
+      token: 2,
+    };
+    await render(next);
+    await flush();
+    await pair({ conversation: conversation() });
+    expect(node.textContent).not.toContain("书法学徒");
+    expect(
+      node.querySelector("[data-dm-start]")?.getAttribute("data-dm-start"),
+    ).toBe(next.userId);
+    expect(
+      calls.some((call) => call.url.includes(`/messages/${conversationId}?`)),
+    ).toBe(false);
+  });
+
+  it("ignores a superseded history response and allows the same profile to reopen after Back", async () => {
+    const pair = hold(`/messages/with/${other}`);
+    const history = hold(`/messages/${conversationId}?`);
+    await render();
+    await pair({
+      conversation: conversation({
+        state: "active",
+        canSend: true,
+        sendRefusal: null,
+      }),
+    });
+    const next = {
+      userId: `user-${"3".repeat(32)}`,
+      displayName: "另一位作者",
+      token: 2,
+    };
+    const nextPair = hold(`/messages/with/${next.userId}`);
+    await render(next);
+    expect(node.textContent).toContain("另一位作者");
+    await history({
+      conversation: conversation(),
+      items: [],
+      nextBefore: null,
+    });
+    expect(node.textContent).not.toContain("书法学徒");
+    await render(next, 1);
+    expect(node.querySelector("[data-dm-list]")).not.toBeNull();
+    await nextPair({ conversation: null });
+    expect(node.querySelector("[data-dm-list]")).not.toBeNull();
+    await render({ ...next, token: 3 }, 1);
+    await flush();
+    expect(
+      node.querySelector("[data-dm-start]")?.getAttribute("data-dm-start"),
+    ).toBe(next.userId);
+    expect(
+      calls.filter((call) =>
+        call.url.includes(`/messages/with/${next.userId}`),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("drops the pending draft across unknown and different accounts", async () => {
+    const pair = hold(`/messages/with/${other}`);
+    await render();
+    await typeDraft(node.querySelector("textarea")!);
+    author.viewer = null;
+    author.checking = true;
+    await render();
+    expect(node.querySelector("textarea")).toBeNull();
+    await pair({ conversation: null });
+    expect(node.querySelector("textarea")).toBeNull();
+    author.viewer = { id: `user-${"9".repeat(32)}` };
+    authorClient.setAccount(author.viewer.id);
+    author.checking = false;
+    await render();
+    await flush();
+    expect(node.querySelector("textarea")!.value).toBe("");
   });
 });
