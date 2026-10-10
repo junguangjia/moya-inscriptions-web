@@ -52,7 +52,7 @@ export const registerPhase4DiscoveryTests = (
         `CREATE TABLE ${schema}.catalog_entries(catalog_id text PRIMARY KEY,province text,province_state text)`,
       );
       await pool.query(
-        `CREATE TABLE ${schema}.catalog_discovery(catalog_id text PRIMARY KEY,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb);CREATE TABLE ${schema}.catalog_media(catalog_id text,media_id text,object_key text,width integer,height integer,is_representative boolean)`,
+        `CREATE TABLE ${schema}.catalog_discovery(catalog_id text PRIMARY KEY,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb);CREATE TABLE ${schema}.catalog_media(catalog_id text,media_id text,object_key text,width integer,height integer,is_representative boolean,position integer NOT NULL DEFAULT 0)`,
       );
     });
     afterAll(async () => {
@@ -173,6 +173,7 @@ export const registerPhase4DiscoveryTests = (
         liked: false,
         favoriteCount: 0,
         likeCount: 0,
+        commentCount: 0,
       });
       const requestId = randomUUID();
       await authors.changeRelation(author, "favorite", {
@@ -200,12 +201,14 @@ export const registerPhase4DiscoveryTests = (
         liked: false,
         favoriteCount: 2,
         likeCount: 1,
+        commentCount: 0,
       });
       expect(await discovery.state(target, visitor)).toEqual({
         favorite: true,
         liked: true,
         favoriteCount: 2,
         likeCount: 1,
+        commentCount: 0,
       });
       await authors.changeRelation(visitor, "like", {
         target,
@@ -217,12 +220,42 @@ export const registerPhase4DiscoveryTests = (
         liked: false,
         favoriteCount: 2,
         likeCount: 0,
+        commentCount: 0,
       });
       await pool.query(
         "UPDATE community.public_users SET status='suspended' WHERE id=$1",
         [author],
       );
       expect((await discovery.state(target, null)).favoriteCount).toBe(1);
+    });
+    it("counts the comments a reader may see exactly as the discussion's visible total", async () => {
+      const target = { type: "work" as const, id: work };
+      const visible = async (reader: string | null) =>
+        (
+          await comments.readDiscussion(target, reader, {
+            page: 1,
+            pageSize: 10,
+          })
+        ).visibleTotal;
+      const expectCount = async (expected: number) => {
+        for (const reader of [null, author, visitor]) {
+          const state = await discovery.state(target, reader);
+          expect(state.commentCount).toBe(expected);
+          expect(state.commentCount).toBe(await visible(reader));
+        }
+      };
+      await expectCount(0);
+      const root = await comments.submitDiscussion(
+        target,
+        author,
+        "合成根评论",
+      );
+      await comments.submitDiscussion(target, visitor, "合成回复", root.id);
+      await comments.submitDiscussion(target, visitor, "合成第二条根评论");
+      await expectCount(3);
+      // A deleted body is not counted; replies under a once-public root stay.
+      await comments.operatorDeleteBody(operator, root.id, randomUUID());
+      await expectCount(2);
     });
     it("projects an authoritative province only for official Catalog cards", async () => {
       expect(

@@ -14,6 +14,17 @@ type HomeFeed = "discover" | "nearby" | "inscriptions" | "calligraphy";
 const productShell = (surface: Locator) =>
   surface.locator("[data-product-shell]");
 
+/**
+ * The touch-action of the phone and tablet Home pager: a phone single-column
+ * shell also allows horizontal pans, which its post image stages own
+ * (Chromium serializes that value as its equivalent `manipulation`).
+ */
+const homePagerTouchAction = async (shell: Locator) =>
+  (await shell.getAttribute("data-platform")) === "phone" &&
+  (await shell.getAttribute("data-feed-layout")) === "single"
+    ? /^(?:pan-x pan-y pinch-zoom|manipulation)$/u
+    : "pan-y pinch-zoom";
+
 const homeSurface = (surface: Locator) =>
   surface.locator('[data-primary-destination="home"] [data-home-surface]');
 
@@ -405,6 +416,11 @@ test("MIG-C1 card actions preserve trusted touch paging with local horizontal co
     ...devices["iPhone 15"],
     baseURL,
   });
+  // The card geometry below is the two-column feed's: phone now opens
+  // single-column unless the viewer chose Double.
+  await context.addInitScript(() =>
+    window.localStorage.setItem("yoyi.home-feed-layout", "double"),
+  );
   const page = await context.newPage();
   const session = await context.newCDPSession(page);
   const response = await gotoWithRetry(page, "/dev/t02p/qa");
@@ -556,7 +572,9 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
   );
   await expect(pager).toHaveCSS(
     "touch-action",
-    pc ? /^(?:pan-x pan-y pinch-zoom|manipulation)$/u : "pan-y pinch-zoom",
+    pc
+      ? /^(?:pan-x pan-y pinch-zoom|manipulation)$/u
+      : await homePagerTouchAction(productShell(surface)),
   );
 
   if (testInfo.project.name.startsWith("desktop")) {
@@ -792,7 +810,10 @@ test("MIG-C1 restores all-Calligraphy scroll and exact opener focus after Detail
   await expect(calligraphy.locator("[data-catalog-card]")).toHaveCount(12);
 
   const shell = productShell(surface);
-  if ((await shell.getAttribute("data-platform")) === "pc") return;
+  const platform = await shell.getAttribute("data-platform");
+  if (platform === "pc") return;
+  // Phone opens single-column and tablet double; the toggle flips either.
+  const toggledLayout = platform === "phone" ? "double" : "single";
   await shell.locator("[data-user-trigger]").click();
   const userPage = shell.getByRole("dialog", { name: "用户页" });
   await expect(userPage).toBeVisible();
@@ -800,13 +821,14 @@ test("MIG-C1 restores all-Calligraphy scroll and exact opener focus after Detail
   const settings = shell.getByRole("dialog", { name: "设置" });
   await expect(settings).toBeVisible();
   await settings.locator("[data-feed-layout-toggle]").click();
-  await expect(shell).toHaveAttribute("data-feed-layout", "single");
+  await expect(shell).toHaveAttribute("data-feed-layout", toggledLayout);
   await settings.getByRole("button", { name: "返回" }).click();
   await userPage.getByRole("button", { name: "关闭用户页" }).click();
   await expect(userPage).toHaveCount(0);
+  // The 书帖 tab stays two-column on phone and tablet whatever the setting.
   await expect(calligraphy.locator("[data-home-masonry]")).toHaveAttribute(
     "data-masonry-columns",
-    "1",
+    "2",
   );
 });
 
@@ -923,7 +945,12 @@ for (const chrome of ["default", "hidden"] as const) {
         const direction = surface === "calligraphy" ? -1 : 1;
         const targetIndex = startIndex + direction;
         const scroller = panels.nth(startIndex);
-        await expect(frame).toHaveCSS("touch-action", "pan-y pinch-zoom");
+        await expect(frame).toHaveCSS(
+          "touch-action",
+          surface === "user"
+            ? "pan-y pinch-zoom"
+            : await homePagerTouchAction(page.locator("[data-product-shell]")),
+        );
         if (surface !== "user") await waitForInitialFeedScroll(home, surface);
         await expectPanelAlignment(
           frame,
@@ -955,7 +982,22 @@ for (const chrome of ["default", "hidden"] as const) {
                   y > Math.max(box.top + 60, 24);
                   y -= 16
                 ) {
-                  if (node.contains(document.elementFromPoint(x, y)))
+                  // A post's image stage owns its own horizontal swipes, so
+                  // keep clear of one: the vertical-intent swipe above leaves
+                  // a short native fling that lifts the next stage towards
+                  // the point, and the later inputs land while the pager is
+                  // still sliding sideways.
+                  if (
+                    node.contains(document.elementFromPoint(x, y)) &&
+                    [x - 40, x, x + 40].every((sampleX) =>
+                      [y, y + 48].every(
+                        (sampleY) =>
+                          document
+                            .elementFromPoint(sampleX, sampleY)
+                            ?.closest("[data-local-horizontal]") == null,
+                      ),
+                    )
+                  )
                     return { x, y };
                 }
               }
@@ -1186,9 +1228,14 @@ for (const chrome of ["default", "hidden"] as const) {
             y -= 16
           ) {
             if (
-              [120, 150, 210].every((x) =>
-                node.contains(document.elementFromPoint(x, y)),
-              )
+              [120, 150, 210].every((x) => {
+                const hit = document.elementFromPoint(x, y);
+                // A post's image stage owns its own horizontal swipes.
+                return (
+                  node.contains(hit) &&
+                  hit?.closest("[data-local-horizontal]") == null
+                );
+              })
             )
               return y;
           }

@@ -189,6 +189,7 @@ export type {
 } from "./modules/community/application/ports/discussion-port.js";
 export type {
   CommunityDiscoveryPort,
+  DiscoveryCardMediaRecord,
   DiscoveryCardRecord,
   DiscoveryPageRecord,
 } from "./modules/community/application/ports/community-discovery-port.js";

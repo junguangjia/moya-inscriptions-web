@@ -15,6 +15,12 @@ export interface CategoryPagerEngine {
   readonly destroy: () => void;
 }
 
+// A card-level horizontal scroller owns every single-finger gesture that
+// starts inside it; the pager stays idle for that whole touch.
+const isLocalHorizontal = (target: EventTarget | null) =>
+  target instanceof Element &&
+  target.closest("[data-local-horizontal]") !== null;
+
 // Only the category pager hosts use this adapter. Embla owns direction,
 // velocity, track movement and interruption; the hosts retain business state.
 export function createCategoryPagerEngine(
@@ -70,6 +76,11 @@ export function createCategoryPagerEngine(
     reset();
   };
   const start = (event: TouchEvent) => {
+    if (contacts === 0 && isLocalHorizontal(event.target)) {
+      // A previous drag's tail click has already been delivered by now.
+      suppressClick = false;
+      return;
+    }
     if (contacts === 0 && callbacks.canStartGesture?.() === false) return;
     if (!frame.contains(event.target as Node) && contacts === 0) return;
     if (event.touches.length > 1) {
@@ -122,7 +133,7 @@ export function createCategoryPagerEngine(
     blocked = false;
   };
   const momentumHandoff = (event: TouchEvent) => {
-    if (!touching || blocked) return;
+    if (!touching || blocked || isLocalHorizontal(event.target)) return;
     // Safari can deliver a few sub-drag pixels before native scrolling starts.
     // Do not let floating-point axis differences in that initial noise latch
     // Embla's direction. Once the existing drag threshold is crossed, the core
@@ -184,7 +195,8 @@ export function createCategoryPagerEngine(
       "touches" in event &&
       event.touches.length === 1 &&
       !blocked &&
-      !menuOpen(),
+      !menuOpen() &&
+      !isLocalHorizontal(event.target),
   });
   const commit = (explicit = false) => {
     if (disposed || resetting || (blocked && !explicit)) return;

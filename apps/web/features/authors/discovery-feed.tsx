@@ -12,8 +12,10 @@ import { useAuthors } from "./author-context";
 import { ContentCard } from "./content-card";
 import { useProductShell } from "../product-shell/product-shell";
 import { CatalogMasonry } from "../home/catalog-masonry";
-import homeStyles from "../home/home-screen.module.css";
+import { isUltraWideCatalogMedia } from "../home/catalog-card";
 import { listMediaPriority } from "../media/responsive-media";
+// Owner decision 2026-10-09: the inscription filter is hidden, not removed.
+const INSCRIPTION_FILTER_ENABLED = false;
 const emptyFilters: InscriptionFilters = {
   dynasty: [],
   textAuthor: [],
@@ -21,6 +23,15 @@ const emptyFilters: InscriptionFilters = {
   originalRegion: [],
   script: [],
 };
+/** A hidden filter must never stay applied, so restored filters are dropped. */
+const restoredFilters = (filters: InscriptionFilters | undefined) =>
+  INSCRIPTION_FILTER_ENABLED ? (filters ?? emptyFilters) : emptyFilters;
+// The title search lives in the same hidden form, so it is dropped too.
+const restoredSearch = (search: string | undefined) =>
+  INSCRIPTION_FILTER_ENABLED ? (search ?? "") : "";
+const isUltraWideCard = (item: Card) =>
+  isUltraWideCatalogMedia(item.media ?? undefined);
+const neverFullSpan = () => false;
 interface Snapshot {
   items: Card[];
   cursor: DiscoveryPage | null;
@@ -60,8 +71,8 @@ const ScopedDiscoveryFeed = ({
         (author.cache.get(key) as Snapshot | undefined) ?? {
           items: [],
           cursor: null,
-          filters: authReturnView?.filters ?? emptyFilters,
-          search: authReturnView?.search ?? "",
+          filters: restoredFilters(authReturnView?.filters),
+          search: restoredSearch(authReturnView?.search),
         },
     ),
     [draftFilters, setDraftFilters] = useState(snapshot.filters),
@@ -131,8 +142,8 @@ const ScopedDiscoveryFeed = ({
       (author.cache.get(key) as Snapshot | undefined) ?? {
         items: [],
         cursor: null,
-        filters: authReturnView?.filters ?? emptyFilters,
-        search: authReturnView?.search ?? "",
+        filters: restoredFilters(authReturnView?.filters),
+        search: restoredSearch(authReturnView?.search),
       },
     );
     return () => {
@@ -187,7 +198,8 @@ const ScopedDiscoveryFeed = ({
       })
       .catch(() => setOptionsError(true));
   useEffect(() => {
-    if (kind === "inscription") void readFilters();
+    if (INSCRIPTION_FILTER_ENABLED && kind === "inscription")
+      void readFilters();
   }, [kind]);
   useEffect(() => {
     if (
@@ -286,7 +298,7 @@ const ScopedDiscoveryFeed = ({
   } as const;
   return (
     <section aria-label={kind === "all" ? "发现内容" : "碑刻筛选结果"}>
-      {kind === "inscription" && (
+      {INSCRIPTION_FILTER_ENABLED && kind === "inscription" && (
         <details data-inscription-filter="">
           <summary className="phase4-button">筛选碑刻</summary>
           {optionsError && (
@@ -388,35 +400,30 @@ const ScopedDiscoveryFeed = ({
           </form>
         </details>
       )}
-      {/* The visible feed's first cards load first (likely the page's LCP). */}
-      {kind === "inscription" ? (
-        <ul className={homeStyles.inscriptionList} data-inscription-list="">
-          {snapshot.items.map((item, index) => (
-            <li key={`${item.target.type}:${item.target.id}`}>
-              <ContentCard
-                item={item}
-                priority={active ? listMediaPriority(index) : undefined}
-                variant="inscription"
-              />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <CatalogMasonry
-          items={snapshot.items}
-          getKey={(i) => `${i.target.type}:${i.target.id}`}
-          spanAtAlignedRows
-          feedLayout={shell.feedLayout}
-          platform={shell.platform}
-          renderItem={(item, onMediaSettled, index) => (
-            <ContentCard
-              item={item}
-              onMediaSettled={onMediaSettled}
-              priority={active ? listMediaPriority(index) : undefined}
-            />
-          )}
-        />
-      )}
+      {/*
+        The visible feed's first cards load first (likely the page's LCP).
+        The inscription tab stays two-column on phone and tablet whatever the
+        single-column setting says.
+      */}
+      <CatalogMasonry
+        items={snapshot.items}
+        getKey={(i) => `${i.target.type}:${i.target.id}`}
+        spanAtAlignedRows={kind === "all"}
+        isFullSpan={kind === "inscription" ? isUltraWideCard : neverFullSpan}
+        feedLayout={
+          kind === "all" || shell.platform === "pc"
+            ? shell.feedLayout
+            : "double"
+        }
+        platform={shell.platform}
+        renderItem={(item, onMediaSettled, index) => (
+          <ContentCard
+            item={item}
+            onMediaSettled={onMediaSettled}
+            priority={active ? listMediaPriority(index) : undefined}
+          />
+        )}
+      />
       {!busy && !error && snapshot.cursor && !snapshot.items.length && (
         <p role="status">没有符合条件的内容</p>
       )}

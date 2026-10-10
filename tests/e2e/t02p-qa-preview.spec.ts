@@ -649,9 +649,10 @@ test("Formal and clean Development do not consume the QA chrome parameter", asyn
           "[data-inscription-filter]:has([data-filter-trigger]), [data-user-trigger], [data-open-settings]",
         ),
       ).toHaveCount(0);
+      // The live 碑刻 filter is hidden (Owner decision 2026-10-09).
       await expect(
         page.locator("details[data-inscription-filter]"),
-      ).toHaveCount(path === "/" ? 1 : 0);
+      ).toHaveCount(0);
       await expect(page.locator("[data-search-trigger]")).toHaveCount(
         path === "/" ? 3 : 0,
       );

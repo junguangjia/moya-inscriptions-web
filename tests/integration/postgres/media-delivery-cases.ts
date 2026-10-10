@@ -120,7 +120,7 @@ export const registerMediaDeliveryTests = (pool: Pool) => {
       // Discovery reads the published Catalog projections next to works.
       await pool.query(`CREATE SCHEMA ${schema}`);
       await pool.query(
-        `CREATE TABLE ${schema}.catalog_entries(catalog_id text PRIMARY KEY,province text,province_state text);CREATE TABLE ${schema}.catalog_discovery(catalog_id text PRIMARY KEY,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb);CREATE TABLE ${schema}.catalog_media(catalog_id text,media_id text,object_key text,width integer,height integer,is_representative boolean)`,
+        `CREATE TABLE ${schema}.catalog_entries(catalog_id text PRIMARY KEY,province text,province_state text);CREATE TABLE ${schema}.catalog_discovery(catalog_id text PRIMARY KEY,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb);CREATE TABLE ${schema}.catalog_media(catalog_id text,media_id text,object_key text,width integer,height integer,is_representative boolean,position integer NOT NULL DEFAULT 0)`,
       );
     });
     afterAll(async () => {
@@ -446,6 +446,35 @@ export const registerMediaDeliveryTests = (pool: Pool) => {
         renditions: coverRenditions,
         placeholderColor: "#a1b2c3",
       });
+      // The gallery lists each item's display still in its full framing with
+      // card candidates up to it: the cover crop never joins it.
+      expect(publicCard.mediaCount).toBe(2);
+      expect(publicCard.gallery).toEqual([
+        {
+          id: cover,
+          src: path(cover, "display", "base"),
+          width: 2048,
+          height: 1365,
+          renditions: [candidate(cover, "display", "base", 2048, 1365)],
+          placeholderColor: "#a1b2c3",
+        },
+        {
+          id: other,
+          src: path(other, "display", "base"),
+          width: 1536,
+          height: 2048,
+          renditions: [
+            candidate(other, "thumb", "base", 360, 480),
+            candidate(other, "cover", "base", 810, 1080),
+            candidate(other, "display", "base", 1536, 2048),
+          ],
+        },
+      ]);
+      // Every gallery candidate is one the relay serves to every reader.
+      for (const image of publicCard.gallery ?? [])
+        for (const listedCandidate of image.renditions ?? [])
+          for (const viewer of [visitor, null])
+            expect(await read(viewer, listedCandidate.src)).not.toBeNull();
     });
 
     it("anchors the first-item cover on the derivative its src names, with only smaller card candidates of that framing", async () => {

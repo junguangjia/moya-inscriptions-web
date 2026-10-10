@@ -78,6 +78,53 @@ describe("public publication DTO delivery", () => {
     });
     expect(mapped).toEqual(work);
   });
+  it("switches every card gallery entry with its own candidates", async () => {
+    const other = `media-item-${"4".repeat(32)}`;
+    const otherSrc = (role: string) =>
+      `/api/community/publishing/media/${other}/${role}/base`;
+    const still = (id: string, at: (role: string) => string) => ({
+      id,
+      src: at("display"),
+      renditions: [{ src: at("thumb") }, { src: at("display") }],
+    });
+    const card = {
+      target: { type: "work", id: `work-${"5".repeat(32)}` },
+      media: {
+        id: item,
+        src: src("cover"),
+        renditions: [{ src: src("cover") }],
+      },
+      gallery: [still(item, src), still(other, otherSrc)],
+      mediaCount: 2,
+    };
+    const read = vi.fn(
+      async () =>
+        new Map([
+          ...["cover", "display", "thumb"].map(
+            (role) => [src(role), key(role)] as const,
+          ),
+          // The second item's thumb is not published yet.
+          [otherSrc("display"), key("other-display")] as const,
+        ]),
+    );
+    const mapped = await mapPublishedMedia(card, {
+      enabled: () => true,
+      origin,
+      lookup: read,
+    });
+    expect(mapped.media.src).toBe(`${origin}/${key("cover")}`);
+    expect(mapped.gallery[0]).toEqual({
+      id: item,
+      src: `${origin}/${key("display")}`,
+      renditions: [
+        { src: `${origin}/${key("thumb")}` },
+        { src: `${origin}/${key("display")}` },
+      ],
+    });
+    // A gallery entry with a missing candidate stays wholly on the relay.
+    expect(mapped.gallery[1]).toEqual(still(other, otherSrc));
+    expect(mapped.mediaCount).toBe(2);
+  });
   it("refuses a key outside the immutable published namespace", async () => {
     const read = lookup(["display", "motion", "thumb"]);
     read.mockResolvedValueOnce(

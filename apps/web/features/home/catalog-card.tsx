@@ -2,8 +2,6 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
-import { Icon } from "@moya/ui";
-
 import {
   localCatalogMediaSrc,
   localCatalogRenditions,
@@ -15,7 +13,13 @@ import {
   responsiveImage,
 } from "../media/responsive-media";
 import styles from "./home-screen.module.css";
-import { useMasonrySlot } from "./catalog-masonry";
+import {
+  CatalogCardLiveBadge,
+  CatalogProvinceBadge,
+  MediaFallback,
+} from "./card-media-parts";
+import { useFeedPostSlot, useMasonrySlot } from "./catalog-masonry";
+import { CatalogFeedPost } from "./catalog-feed-post";
 import { useContentQuickActions } from "../quick-actions/content-quick-actions";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 
@@ -64,60 +68,16 @@ export const feedMediaAspectRatio = (media: CatalogMediaDimensions): number => {
     : 4 / 3;
 };
 
-export const CatalogProvinceBadge = ({
-  province,
-}: {
-  province: string | undefined;
-}) => {
-  const label = province?.trim();
-  return label ? (
-    <span className={styles.provinceBadge} data-catalog-province="">
-      {label}
-    </span>
-  ) : null;
-};
+export {
+  CatalogCardLiveBadge,
+  CatalogProvinceBadge,
+  MediaFallback,
+} from "./card-media-parts";
 
 const catalogKindLabels = {
   calligraphy: "书帖",
   inscription: "碑刻",
 } as const satisfies Record<CatalogSummary["kind"], string>;
-
-const MediaFallback = ({
-  aspectRatio,
-  label,
-  state,
-}: {
-  readonly aspectRatio?: string;
-  readonly label: string;
-  readonly state: "failed" | "missing";
-}) => (
-  <div
-    aria-label={label}
-    className={styles.mediaFallback}
-    data-catalog-media-state={state}
-    role="img"
-    style={
-      aspectRatio === undefined
-        ? undefined
-        : ({ "--feed-media-ratio": aspectRatio } as CSSProperties)
-    }
-  >
-    <Icon aria-hidden="true" name={state === "failed" ? "error" : "image"} />
-    <span>{state === "failed" ? "图像无法加载" : "暂无公开图像"}</span>
-  </div>
-);
-
-/** A Live Photo cover stays a still; the badge only says motion exists. */
-export const CatalogCardLiveBadge = () => (
-  <span
-    aria-label="实况照片"
-    className={styles.liveBadge}
-    data-card-live-badge=""
-    role="img"
-  >
-    LIVE
-  </span>
-);
 
 /** The card image: its anchor `src` and size, plus card candidates up to it. */
 export type CatalogCardMediaSource = Pick<
@@ -234,7 +194,20 @@ export const CatalogCardPresentation = ({
   const metadata = [catalogKindLabels[item.kind], item.periodLabel]
     .filter((value) => value !== undefined)
     .join(" · ");
+  const post = useFeedPostSlot() && variant === "feed";
 
+  if (post)
+    return (
+      <CatalogFeedPost
+        feedSpan={feedSpan}
+        item={item}
+        metadata={metadata}
+        onOpenCatalog={onOpenCatalog}
+        onMediaSettled={onMediaSettled}
+        priority={priority}
+        quickActions={quickActions}
+      />
+    );
   return (
     <article
       className={`${styles.card} ${

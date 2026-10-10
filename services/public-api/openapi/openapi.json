@@ -14571,6 +14571,129 @@
               }
             ]
           },
+          "gallery": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "live": {
+                  "type": "boolean"
+                },
+                "placeholderColor": {
+                  "pattern": "^#[0-9a-f]{6}$",
+                  "type": "string"
+                },
+                "renditions": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "contentType": {
+                            "enum": ["image/webp", "image/jpeg"],
+                            "type": "string"
+                          },
+                          "height": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 65535,
+                            "type": "integer"
+                          },
+                          "src": {
+                            "allOf": [
+                              {
+                                "format": "uri",
+                                "type": "string"
+                              },
+                              {
+                                "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:\\/\\/",
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          "width": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 65535,
+                            "type": "integer"
+                          }
+                        },
+                        "required": ["src", "width", "height", "contentType"],
+                        "type": "object"
+                      },
+                      "maxItems": 8,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "contentType": {
+                            "enum": ["image/webp", "image/jpeg"],
+                            "type": "string"
+                          },
+                          "height": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 65535,
+                            "type": "integer"
+                          },
+                          "src": {
+                            "anyOf": [
+                              {
+                                "allOf": [
+                                  {
+                                    "format": "uri",
+                                    "type": "string"
+                                  },
+                                  {
+                                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^\\s/\\\\?#@]+\\/[^\\s\\\\?#]*$",
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              {
+                                "pattern": "^\\/api\\/community\\/publishing\\/media\\/(media-item-[0-9a-f]{32})\\/(thumb|cover|display|viewer|full)\\/(base|[0-9a-f]{32})$",
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          "width": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 65535,
+                            "type": "integer"
+                          }
+                        },
+                        "required": ["src", "width", "height", "contentType"],
+                        "type": "object"
+                      },
+                      "maxItems": 8,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  ]
+                },
+                "src": {
+                  "type": "string"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": ["id", "src", "width", "height"],
+              "type": "object"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "type": "array"
+          },
           "kind": {
             "anyOf": [
               {
@@ -14707,6 +14830,11 @@
               }
             ]
           },
+          "mediaCount": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
           "province": {
             "maxLength": 500,
             "minLength": 1,
@@ -14806,6 +14934,139 @@
                       "type": "null"
                     }
                   ]
+                },
+                "gallery": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "live": {
+                        "type": "boolean"
+                      },
+                      "placeholderColor": {
+                        "pattern": "^#[0-9a-f]{6}$",
+                        "type": "string"
+                      },
+                      "renditions": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "contentType": {
+                                  "enum": ["image/webp", "image/jpeg"],
+                                  "type": "string"
+                                },
+                                "height": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 65535,
+                                  "type": "integer"
+                                },
+                                "src": {
+                                  "allOf": [
+                                    {
+                                      "format": "uri",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:\\/\\/",
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                "width": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 65535,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "src",
+                                "width",
+                                "height",
+                                "contentType"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "contentType": {
+                                  "enum": ["image/webp", "image/jpeg"],
+                                  "type": "string"
+                                },
+                                "height": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 65535,
+                                  "type": "integer"
+                                },
+                                "src": {
+                                  "anyOf": [
+                                    {
+                                      "allOf": [
+                                        {
+                                          "format": "uri",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "pattern": "^[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^\\s/\\\\?#@]+\\/[^\\s\\\\?#]*$",
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "pattern": "^\\/api\\/community\\/publishing\\/media\\/(media-item-[0-9a-f]{32})\\/(thumb|cover|display|viewer|full)\\/(base|[0-9a-f]{32})$",
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                "width": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 65535,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "src",
+                                "width",
+                                "height",
+                                "contentType"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        ]
+                      },
+                      "src": {
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": ["id", "src", "width", "height"],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "minItems": 1,
+                  "type": "array"
                 },
                 "kind": {
                   "anyOf": [
@@ -14952,6 +15213,11 @@
                       "type": "null"
                     }
                   ]
+                },
+                "mediaCount": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
                 },
                 "province": {
                   "maxLength": 500,
@@ -15125,6 +15391,11 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "commentCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "favorite": {
             "type": "boolean"
           },
@@ -15142,7 +15413,13 @@
             "type": "boolean"
           }
         },
-        "required": ["favorite", "liked", "favoriteCount", "likeCount"],
+        "required": [
+          "favorite",
+          "liked",
+          "favoriteCount",
+          "likeCount",
+          "commentCount"
+        ],
         "type": "object"
       },
       "CreateArticleAuthoringGrantCommand": {
@@ -17273,6 +17550,139 @@
                     }
                   ]
                 },
+                "gallery": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "live": {
+                        "type": "boolean"
+                      },
+                      "placeholderColor": {
+                        "pattern": "^#[0-9a-f]{6}$",
+                        "type": "string"
+                      },
+                      "renditions": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "contentType": {
+                                  "enum": ["image/webp", "image/jpeg"],
+                                  "type": "string"
+                                },
+                                "height": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 65535,
+                                  "type": "integer"
+                                },
+                                "src": {
+                                  "allOf": [
+                                    {
+                                      "format": "uri",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:\\/\\/",
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                "width": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 65535,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "src",
+                                "width",
+                                "height",
+                                "contentType"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "contentType": {
+                                  "enum": ["image/webp", "image/jpeg"],
+                                  "type": "string"
+                                },
+                                "height": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 65535,
+                                  "type": "integer"
+                                },
+                                "src": {
+                                  "anyOf": [
+                                    {
+                                      "allOf": [
+                                        {
+                                          "format": "uri",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "pattern": "^[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^\\s/\\\\?#@]+\\/[^\\s\\\\?#]*$",
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "pattern": "^\\/api\\/community\\/publishing\\/media\\/(media-item-[0-9a-f]{32})\\/(thumb|cover|display|viewer|full)\\/(base|[0-9a-f]{32})$",
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                "width": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 65535,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "src",
+                                "width",
+                                "height",
+                                "contentType"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        ]
+                      },
+                      "src": {
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": ["id", "src", "width", "height"],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "minItems": 1,
+                  "type": "array"
+                },
                 "kind": {
                   "anyOf": [
                     {
@@ -17418,6 +17828,11 @@
                       "type": "null"
                     }
                   ]
+                },
+                "mediaCount": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
                 },
                 "province": {
                   "maxLength": 500,

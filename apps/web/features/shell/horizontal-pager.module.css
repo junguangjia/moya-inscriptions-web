@@ -64,3 +64,49 @@
   scroll-snap-align: none;
   scroll-snap-stop: normal;
 }
+
+/* The phone single-column feed hosts posts whose image stage scrolls
+   horizontally, in the Home feed and the profile tabs only. WebKit intersects
+   touch-action along the ancestor chain, so those pagers must not veto that
+   nested pan; the engine stays idle for touches that start inside a local
+   horizontal scroller. Every other pager keeps its own value. */
+:global([data-product-shell][data-platform="phone"][data-feed-layout="single"])
+  .frame:is([data-home-feed-pager], [data-profile-tab-pager]):not(
+    [data-horizontal-pager-platform="pc"]
+  ),
+:global([data-product-shell][data-platform="phone"][data-feed-layout="single"])
+  .frame:is([data-home-feed-pager], [data-profile-tab-pager]):not(
+    [data-horizontal-pager-platform="pc"]
+  )
+  > .track,
+:global([data-product-shell][data-platform="phone"][data-feed-layout="single"])
+  .frame:is([data-home-feed-pager], [data-profile-tab-pager]):not(
+    [data-horizontal-pager-platform="pc"]
+  )
+  > .track
+  > .panel {
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+/* Only the path down to such a scroller needs pan-x. Every branch beside it
+   keeps the pager's own pan-y (its descendants intersect with it): a touch
+   that may pan horizontally stays uncancelable in Chromium when it lands on
+   a vertical fling, and the engine never takes uncancelable horizontal
+   input, so a tab swipe from post chrome right after a fling would not page. */
+:global([data-product-shell][data-platform="phone"][data-feed-layout="single"])
+  .frame:is([data-home-feed-pager], [data-profile-tab-pager]):not(
+    [data-horizontal-pager-platform="pc"]
+  )
+  > .track
+  > .panel
+  > :not(:has([data-local-horizontal])),
+:global([data-product-shell][data-platform="phone"][data-feed-layout="single"])
+  .frame:is([data-home-feed-pager], [data-profile-tab-pager]):not(
+    [data-horizontal-pager-platform="pc"]
+  )
+  > .track
+  > .panel
+  :has([data-local-horizontal])
+  > :not([data-local-horizontal], :has([data-local-horizontal])) {
+  touch-action: pan-y pinch-zoom;
+}
