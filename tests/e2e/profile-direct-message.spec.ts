@@ -42,7 +42,15 @@ const conversation = {
   createdAt: "2026-10-10T00:00:00.000Z",
 };
 
-async function fixture(page: Page, existing = false) {
+async function fixture(
+  page: Page,
+  existing = false,
+  delay?: {
+    pair: Promise<void>;
+    history: Promise<void>;
+    reads: string[];
+  },
+) {
   const sends: string[] = [];
   await page.route("**/api/community/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace(
@@ -53,6 +61,7 @@ async function fixture(page: Page, existing = false) {
       sends.push(path);
       return route.fulfill({ status: 400, json: { error: {} } });
     }
+    delay?.reads.push(path);
     if (path === "me") return route.fulfill({ json: viewer });
     if (path === `authors/${participant.id}`)
       return route.fulfill({
@@ -105,18 +114,22 @@ async function fixture(page: Page, existing = false) {
       });
     if (path === "messages/unread")
       return route.fulfill({ json: { unreadConversations: 0 } });
-    if (path === `messages/with/${participant.id}`)
+    if (path === `messages/with/${participant.id}`) {
+      await delay?.pair;
       return route.fulfill({
         json: { conversation: existing ? conversation : null },
       });
+    }
     if (path === "messages")
       return route.fulfill({
         json: { items: existing ? [conversation] : [], nextCursor: null },
       });
-    if (path === `messages/${conversation.id}`)
+    if (path === `messages/${conversation.id}`) {
+      await delay?.history;
       return route.fulfill({
         json: { conversation, items: [], nextBefore: null },
       });
+    }
     if (path.endsWith("/comments"))
       return route.fulfill({
         json: {
@@ -205,4 +218,115 @@ for (const source of [
       ).toBeVisible();
     });
   }
+}
+
+for (const existing of [false, true]) {
+  test(`slow ${existing ? "existing" : "new"} entry preserves its frame, draft and safe-area composer`, async ({
+    page,
+  }, testInfo) => {
+    let resolvePair!: () => void;
+    let resolveHistory!: () => void;
+    const reads: string[] = [];
+    const sends = await fixture(page, existing, {
+      reads,
+      pair: new Promise<void>((resolve) => {
+        resolvePair = resolve;
+      }),
+      history: new Promise<void>((resolve) => {
+        resolveHistory = resolve;
+      }),
+    });
+    await page.goto(`/?authorId=${participant.id}#profile`);
+    await expect(page.locator("[data-product-boot]")).toHaveCount(0);
+    await page.evaluate(() => {
+      const observations: boolean[] = [];
+      Object.assign(window, { dmListFrames: observations });
+      const frame = () => {
+        const list = document.querySelector("dialog[open] [data-dm-list]");
+        observations.push(Boolean(list?.getClientRects().length));
+        requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    });
+    try {
+      await page
+        .getByRole("button", { name: `给 ${participant.displayName} 发私信` })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: participant.displayName,
+        exact: true,
+      });
+      const input = dialog.getByRole("textbox", { name: "私信内容" });
+      await expect(dialog.locator('[data-dm-view="pending"]')).toBeVisible();
+      await expect(input).toBeEditable();
+      await input.fill("加载期间的草稿");
+      await expect(
+        dialog.getByRole("button", { name: "发送", exact: true }),
+      ).toBeDisabled();
+      const original = await input.elementHandle();
+      expect(reads.filter((path) => path === "messages")).toEqual([]);
+      resolvePair();
+      if (existing) {
+        await expect
+          .poll(() => reads.includes(`messages/${conversation.id}`))
+          .toBe(true);
+        await expect(dialog.locator('[data-dm-view="pending"]')).toBeVisible();
+        await expect(input).toHaveValue("加载期间的草稿");
+        await expect(
+          dialog.getByRole("button", { name: "发送", exact: true }),
+        ).toBeDisabled();
+      }
+      resolveHistory();
+      await expect(
+        dialog.locator(
+          `[data-dm-view="${existing ? "conversation" : "start"}"]`,
+        ),
+      ).toBeVisible();
+      await expect(input).toHaveValue("加载期间的草稿");
+      expect(
+        await input.evaluate((current, first) => current === first, original),
+      ).toBe(true);
+      await expect(input).toBeFocused();
+      await expect(
+        dialog.getByRole("button", { name: "发送", exact: true }),
+      ).toBeEnabled();
+      const layout = await dialog.evaluate((element) => {
+        const composer = element.querySelector("[data-message-composer]")!;
+        const textarea = composer.querySelector("textarea")!;
+        const stream = element.querySelector("[data-dm-stream]")!;
+        const safeArea = document.createElement("div");
+        safeArea.style.paddingBottom = "env(safe-area-inset-bottom)";
+        document.body.append(safeArea);
+        const inset = parseFloat(getComputedStyle(safeArea).paddingBottom);
+        safeArea.remove();
+        return {
+          padding: parseFloat(getComputedStyle(element).paddingBottom),
+          bottomGap:
+            element.getBoundingClientRect().bottom -
+            composer.getBoundingClientRect().bottom,
+          inputHeight: textarea.getBoundingClientRect().height,
+          streamOverlap:
+            stream.getBoundingClientRect().bottom -
+            composer.getBoundingClientRect().top,
+          inset,
+          listFrames: (window as unknown as { dmListFrames: boolean[] })
+            .dmListFrames,
+        };
+      });
+      expect(layout.padding).toBe(layout.inset);
+      expect(Math.abs(layout.bottomGap - layout.inset)).toBeLessThanOrEqual(2);
+      expect(layout.inputHeight).toBe(44);
+      expect(layout.streamOverlap).toBeLessThanOrEqual(1);
+      expect(layout.listFrames.some(Boolean)).toBe(false);
+      expect(sends).toEqual([]);
+      await page.screenshot({ path: testInfo.outputPath("stable-chat.png") });
+      await dialog.getByRole("button", { name: "返回", exact: true }).click();
+      await expect(
+        page.getByRole("dialog", { name: "消息", exact: true }),
+      ).toBeVisible();
+    } finally {
+      resolvePair();
+      resolveHistory();
+    }
+  });
 }
