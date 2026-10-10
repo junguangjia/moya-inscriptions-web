@@ -11,6 +11,7 @@ import { CommentSection } from "../comments/comment-section";
 import type { CommentItem, CommentReply } from "../comments/comment-types";
 import { useProductShell } from "../product-shell/product-shell";
 import { authorClient, AuthorRequestError } from "./author-data";
+import { publishCommentCount } from "./content-state-bus";
 import { useAuthors, contentKey } from "./author-context";
 import { useDiscussionAvatars } from "./discussion-avatars";
 import { useOwnWorkAudience } from "./own-work-audience";
@@ -134,6 +135,12 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
       setPage(next);
       setTotalPages(result.totalPages);
       setVisibleTotal(result.visibleTotal);
+      // Cards and Detail of this content show the same total without a re-read.
+      publishCommentCount(
+        author.viewer?.id ?? null,
+        target,
+        result.visibleTotal,
+      );
       setUnavailable(false);
     } catch (e) {
       if (run === epoch.current && listRun === listEpoch.current) {

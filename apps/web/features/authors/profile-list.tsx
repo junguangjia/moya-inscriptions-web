@@ -1,7 +1,11 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ContentCard as Card, UserWork } from "@moya/contracts";
-import { authorClient, AuthorRequestError } from "./author-data";
+import {
+  authorClient,
+  AuthorRequestError,
+  CARD_GALLERY_MAXIMUM,
+} from "./author-data";
 import { useAuthors } from "./author-context";
 import { readLocalHistory } from "./local-library";
 import { resolveLocalContent } from "./local-content-list";
@@ -54,6 +58,28 @@ export const workCard = (work: UserWork): Card => {
       ? undefined
       : work.coverRenditions?.find((entry) => entry.src === src);
   const excerpt = workCardExcerpt(work.text);
+  // The same shown images a feed card lists: the work's display stills in
+  // order, the Live flag instead of motion, capped like the Backend's cards.
+  const gallery = work.media.slice(0, CARD_GALLERY_MAXIMUM).map((entry) => {
+    // Card candidates stop at the still itself, like the Backend's cards.
+    const renditions = entry.renditions?.filter(
+      (candidate) =>
+        candidate.width <= entry.width && candidate.height <= entry.height,
+    );
+    return {
+      id: entry.id,
+      src: entry.src,
+      width: entry.width,
+      height: entry.height,
+      ...(entry.kind === "live" ? { live: true } : {}),
+      ...(renditions === undefined || renditions.length === 0
+        ? {}
+        : { renditions }),
+      ...(entry.placeholderColor === undefined
+        ? {}
+        : { placeholderColor: entry.placeholderColor }),
+    };
+  });
   return {
     target: { type: "work", id: work.id },
     title: work.title,
@@ -78,6 +104,9 @@ export const workCard = (work: UserWork): Card => {
               ? {}
               : { placeholderColor: cover.placeholderColor }),
           },
+    ...(cover === null || src === null || gallery.length === 0
+      ? {}
+      : { gallery, mediaCount: work.media.length }),
   };
 };
 interface ListState {

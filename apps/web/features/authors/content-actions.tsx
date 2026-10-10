@@ -6,6 +6,10 @@ import type { ContentQuickActionEnvironment } from "../quick-actions/quick-actio
 import { quickActionContentKey } from "../quick-actions/quick-action-types";
 import { useAuthors, shareContent, contentKey } from "./author-context";
 import { authorClient } from "./author-data";
+import {
+  publishCommentCount,
+  usePublishedCommentCount,
+} from "./content-state-bus";
 import { QuickActionIcon } from "../quick-actions/quick-action-card-action";
 import type { QuickActionName } from "../quick-actions/quick-action-types";
 import styles from "./content-actions.module.css";
@@ -17,6 +21,7 @@ const unknownState = (key: string) => ({
   known: false,
   favoriteCount: null as number | null,
   likeCount: null as number | null,
+  commentCount: null as number | null,
 });
 export const useContentActions = (
   target: ContentIdentity,
@@ -32,7 +37,15 @@ export const useContentActions = (
     inFlight = useRef(false),
     readEpoch = useRef(0);
   scope.current = key;
-  const state = snapshot.key === key ? snapshot : unknownState(key);
+  const viewerId = author.viewer?.id ?? null;
+  // The newest comment total this reader received, from a state read or a
+  // discussion read of the same content.
+  const publishedComments = usePublishedCommentCount(viewerId, target);
+  const known = snapshot.key === key ? snapshot : unknownState(key);
+  const state = {
+    ...known,
+    commentCount: publishedComments ?? known.commentCount,
+  };
   useEffect(() => {
     let current = true;
     if (author.checking) return;
@@ -52,13 +65,15 @@ export const useContentActions = (
     void authorClient
       .state(target)
       .then((value) => {
-        if (current && scope.current === key && read === readEpoch.current)
+        if (current && scope.current === key && read === readEpoch.current) {
           setSnapshot({
             key,
             ...value,
             favorite: author.viewer ? value.favorite : guestFavorite,
             known: true,
           });
+          publishCommentCount(viewerId, target, value.commentCount);
+        }
       })
       .catch(() => {
         /* Same-scope failures preserve known state; another account starts unknown. */
@@ -104,8 +119,10 @@ export const useContentActions = (
         const read = ++readEpoch.current;
         try {
           const confirmed = await authorClient.state(target);
-          if (scope.current === run && read === readEpoch.current)
+          if (scope.current === run && read === readEpoch.current) {
             setSnapshot({ key: run, ...confirmed, known: true });
+            publishCommentCount(viewerId, target, confirmed.commentCount);
+          }
         } catch {
           // The toggle is committed, but an unknown aggregate is not a guessed +1.
           if (scope.current === run && read === readEpoch.current)

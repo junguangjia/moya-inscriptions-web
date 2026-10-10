@@ -36,6 +36,7 @@ const snapshot = (change: Partial<ContentState> = {}): ContentState => ({
   liked: false,
   favoriteCount: 0,
   likeCount: 0,
+  commentCount: 0,
   ...change,
 });
 const mount = async () => {
