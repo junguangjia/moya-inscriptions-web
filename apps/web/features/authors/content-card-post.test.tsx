@@ -7,6 +7,7 @@ const {
   shell,
   actions,
   work: readWork,
+  colophons,
 } = vi.hoisted(() => ({
   shell: {
     openContent: vi.fn(),
@@ -27,6 +28,7 @@ const {
     ensureLiked: vi.fn(() => Promise.resolve(true)),
   },
   work: vi.fn(),
+  colophons: [] as Array<Record<string, unknown>>,
 }));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => shell,
@@ -42,6 +44,19 @@ vi.mock("../home/catalog-masonry", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../home/catalog-masonry")>()),
   useFeedPostSlot: () => true,
 }));
+// The colophons have their own tests; here only what the post hands them.
+vi.mock("./feed-colophon", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./feed-colophon")>();
+  const { useContext } = await import("react");
+  return {
+    ...actual,
+    FeedColophon: (props: Record<string, unknown>) => {
+      const outlet = useContext(actual.FeedColophonOutletContext);
+      colophons.push({ ...props, outlet });
+      return <section data-feed-colophon="" />;
+    },
+  };
+});
 vi.mock("./feed-post-author", () => ({
   FeedPostAuthor: ({ authorId }: { authorId: string }) => (
     <div data-feed-post-author={authorId} />
@@ -126,6 +141,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
+  colophons.length = 0;
   document.body.replaceChildren();
   vi.clearAllMocks();
   vi.useRealTimers();
@@ -209,41 +225,61 @@ describe("ContentCard as a phone single-column post", () => {
     expect(shell.openFeedViewer).not.toHaveBeenCalled();
   });
 
-  it("opens Detail on its comments from the comment button and the comments region", () => {
-    const post = render(work());
-    const comment = button(post, "评论")!;
-    act(() => comment.click());
-    expect(shell.openContent).toHaveBeenCalledWith(
-      { type: "work", id: workId },
-      comment,
-    );
-    expect(detailCommentsRequested(workId)).toBe(true);
-    clearDetailCommentsRequest();
-    // The region left of the last image names the thread and leads there too.
-    const comments = post.querySelector("[data-feed-post-comments]")!;
-    expect(comments.textContent).toContain("12 则评论");
-    const open = comments.querySelector<HTMLButtonElement>(
-      "[data-feed-post-comments-open]",
-    )!;
-    act(() => open.click());
-    expect(shell.openContent).toHaveBeenLastCalledWith(
-      { type: "work", id: workId },
-      open,
-    );
-    expect(detailCommentsRequested(workId)).toBe(true);
-    clearDetailCommentsRequest();
+  it("continues the stage into the colophons, with the composer outlet outside the strip", () => {
+    const post = render(work({ gallery: [still("e"), still("a")] }));
+    const colophon = post.querySelector("[data-feed-colophon]")!;
+    expect(colophon.closest("[data-feed-stage-comments]")).not.toBeNull();
+    // Outside the strip, the post and the pager: fixed to the viewport.
+    const outlet = document.querySelector("[data-colophon-composer-outlet]")!;
+    expect(outlet.parentElement).toBe(document.body);
+    expect(colophons.at(-1)).toEqual({
+      target: { type: "work", id: workId },
+      title: "春日临帖",
+      fallbackCount: 12,
+      outlet,
+    });
+    // The seal leads there.
+    expect(post.querySelector("[data-feed-post-dot-comments]")).not.toBeNull();
   });
 
-  it("opens a text-only work's content from the comment button", () => {
+  it("scrolls the stage to the colophons from the comment button, never to Detail", () => {
+    const post = render(work({ gallery: [still("e"), still("a")] }));
+    const strip = post.querySelector<HTMLElement>("[data-feed-stage]")!;
+    const scrollTo = vi.fn();
+    Object.defineProperties(strip, {
+      clientWidth: { configurable: true, get: () => 390 },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    const comment = button(post, "评论")!;
+    act(() => comment.click());
+    expect(scrollTo).toHaveBeenCalledOnce();
+    const [[options]] = scrollTo.mock.calls as [[ScrollToOptions]];
+    expect(Math.abs(options.left ?? 0)).toBe(780);
+    expect(options.behavior).toBe("smooth");
+    expect(shell.openContent).not.toHaveBeenCalled();
+    expect(detailCommentsRequested(workId)).toBe(false);
+    // No composer opens by itself.
+    expect(
+      document.querySelector("[data-colophon-composer-outlet]")?.children,
+    ).toHaveLength(0);
+  });
+
+  it("opens a text-only work's Detail comments from the comment button", () => {
     const post = render(work({ media: null, excerpt: "只有文字" }));
     expect(post.querySelector("[data-feed-stage-frame]")).toBeNull();
     expect(post.querySelector("[data-feed-post-dots]")).toBeNull();
+    expect(post.querySelector("[data-feed-colophon]")).toBeNull();
+    expect(
+      document.querySelector("[data-colophon-composer-outlet]"),
+    ).toBeNull();
     const comment = button(post, "评论")!;
     act(() => comment.click());
     expect(shell.openContent).toHaveBeenCalledWith(
       { type: "work", id: workId },
       comment,
     );
+    expect(detailCommentsRequested(workId)).toBe(true);
+    clearDetailCommentsRequest();
   });
 
   it("expands a work's body in place from its title or the trailing action", async () => {

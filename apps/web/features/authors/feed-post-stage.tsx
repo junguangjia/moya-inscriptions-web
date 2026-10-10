@@ -5,6 +5,7 @@ import {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -20,12 +21,20 @@ import type { MediaPriority } from "../media/responsive-media";
 import { QUICK_ACTION_LIKE_PATH } from "../quick-actions/quick-action-card-action";
 import type { DetailMediaPresentation } from "../detail/catalog-detail-presentation";
 import { FeedPostDots } from "./feed-post-dots";
+import { FeedStageContext } from "./feed-post-stage-context";
+import type { FeedStageApi, FeedStageSettle } from "./feed-post-stage-context";
 import {
+  commentsStartOffset,
+  elementStartOffset,
+  FEED_POST_CARRY_WATCH_MS,
   FEED_POST_CLICK_SUPPRESSION_MS,
   FEED_POST_DOUBLE_TAP_MS,
+  FEED_POST_INPUT_DIRECTION_MS,
   FEED_POST_SETTLE_MS,
   FEED_POST_TAP_TOLERANCE_PX,
+  isCarriedStep,
   isLegacyRtlScroll,
+  nextSnapOffset,
   readStripOffset,
   resolveStageAspect,
   slideFit,
@@ -36,10 +45,29 @@ import {
 } from "./feed-post-strip-geometry";
 import styles from "../home/home-screen.module.css";
 
+/** A comment row the comments region renders (a root or a reply). */
+const COMMENT_ROW = "[data-colophon-anchor]";
+
+/**
+ * Whether a mutation batch committed comment rows: a fetched page or replies.
+ * An expanded fold or a selected comment's actions also widen the region,
+ * but come from the reader's own tap, not a commit racing a scroll.
+ */
+const committedRows = (records: readonly MutationRecord[]): boolean =>
+  records.some((record) =>
+    [...record.addedNodes].some(
+      (node) =>
+        node instanceof Element &&
+        (node.matches(COMMENT_ROW) || node.querySelector(COMMENT_ROW) !== null),
+    ),
+  );
+
 export interface FeedPostStageHandle {
   readonly scrollToIndex: (index: number) => void;
   /** Brings the comments region in; false when the post has none. */
   readonly scrollToComments: () => boolean;
+  /** Brings one comment in by its anchor id; false when it is not rendered. */
+  readonly scrollToComment: (id: string) => boolean;
 }
 
 export interface FeedPostStageProps {
@@ -63,6 +91,55 @@ export interface FeedPostStageProps {
   readonly viewerOpen: boolean;
   readonly onRegionChange?: (region: "media" | "comments") => void;
 }
+
+/**
+ * Events from a portal rendered inside the strip (the colophon composer)
+ * bubble through it in React; only the strip's own DOM counts here.
+ */
+const fromStrip = (event: { currentTarget: Element; target: EventTarget }) =>
+  event.currentTarget.contains(event.target as Node);
+
+/** Keys that scroll the strip when focus is inside it. */
+const SCROLL_KEYS = new Set([
+  "ArrowLeft",
+  "ArrowRight",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);
+
+/** The way a scroll key moves the strip: +1 towards its end, -1 back. */
+const KEY_DIRECTION: Readonly<Record<string, number>> = {
+  ArrowLeft: 1,
+  ArrowRight: -1,
+  End: 1,
+  Home: -1,
+};
+
+/** Every snap position in the strip, as offsets from its start. */
+const snapOffsets = (strip: HTMLElement, offset: number): number[] => {
+  const right = strip.getBoundingClientRect().right;
+  const offsets: number[] = [];
+  for (const element of strip.querySelectorAll<HTMLElement>("*")) {
+    const style = getComputedStyle(element);
+    if (style.scrollSnapAlign === "" || style.scrollSnapAlign === "none")
+      continue;
+    const gutter = Number.parseFloat(style.scrollMarginRight) || 0;
+    offsets.push(
+      Math.max(
+        0,
+        elementStartOffset(
+          right,
+          element.getBoundingClientRect().right,
+          offset,
+        ) - gutter,
+      ),
+    );
+  }
+  return offsets;
+};
 
 const reducedMotion = () =>
   typeof window.matchMedia === "function" &&
@@ -101,7 +178,39 @@ export const FeedPostStage = forwardRef<
   const count = media.length;
   const hasComments = comments !== undefined && comments !== null;
   const ratio = resolveStageAspect(media[0]);
-  const stripRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  // State as well as a ref: the comments region binds observers to the strip.
+  const [stripNode, setStripNode] = useState<HTMLDivElement | null>(null);
+  const bindStrip = useCallback((element: HTMLDivElement | null) => {
+    stripRef.current = element;
+    setStripNode(element);
+  }, []);
+  const anchorRef = useRef<(() => number | null) | null>(null);
+  // Where a smooth programmatic scroll is heading, until the strip settles.
+  const aimRef = useRef<number | null>(null);
+  const settleListenersRef = useRef(
+    new Set<(settle: FeedStageSettle) => void>(),
+  );
+  // The pending settle follows a resize re-pin, not the reader's scroll.
+  const resizedRef = useRef(false);
+  // The comments region grew while nothing of ours scrolled: a scroll that
+  // was already running (a wheel, a key, assistive or a script's scroll) is
+  // watched for being carried on by the added width.
+  const growthRef = useRef<{
+    added: number;
+    origin: number;
+    last: number;
+    step: number;
+    until: number;
+  } | null>(null);
+  const stripWidthRef = useRef(0);
+  // Which way the reader's own input last moved the strip (+1 towards its
+  // end, -1 back), and when: a carry is never undone against it.
+  const inputDirectionRef = useRef({ direction: 0, at: 0 });
+  const noteInputDirection = (direction: number) => {
+    if (direction !== 0)
+      inputDirectionRef.current = { direction, at: performance.now() };
+  };
   const legacyRef = useRef(false);
   const touchRef = useRef<{ active: boolean; startOffset: number }>({
     active: false,
@@ -138,6 +247,9 @@ export const FeedPostStage = forwardRef<
 
   const settle = useCallback(() => {
     settleTimerRef.current = null;
+    aimRef.current = null;
+    const resized = resizedRef.current;
+    resizedRef.current = false;
     const current = measure();
     const nextRegion = stripRegion(current.progress, count, hasComments);
     if (nextRegion !== regionRef.current) {
@@ -152,23 +264,135 @@ export const FeedPostStage = forwardRef<
         setActiveIndex(index);
       }
     }
+    for (const listener of [...settleListenersRef.current])
+      listener({ resized });
   }, [count, hasComments, measure, onRegionChange]);
+  const settleRef = useRef(settle);
+  settleRef.current = settle;
 
-  const scheduleSettle = () => {
+  const scheduleSettle = useCallback(() => {
     if (settleTimerRef.current !== null)
       window.clearTimeout(settleTimerRef.current);
-    settleTimerRef.current = window.setTimeout(settle, FEED_POST_SETTLE_MS);
+    settleTimerRef.current = window.setTimeout(
+      () => settleRef.current(),
+      FEED_POST_SETTLE_MS,
+    );
+  }, []);
+
+  const scrollToOffset = useCallback(
+    (offset: number, requested: ScrollBehavior = "smooth") => {
+      const strip = stripRef.current;
+      if (strip === null) return;
+      const left = stripScrollLeft(strip, offset, legacyRef.current);
+      if (requested === "instant" || typeof strip.scrollTo !== "function") {
+        aimRef.current = null;
+        strip.scrollLeft = left;
+        // A position written here is never taken for a carried scroll.
+        if (growthRef.current !== null) growthRef.current.last = offset;
+        return;
+      }
+      const behavior = reducedMotion() ? "auto" : requested;
+      aimRef.current = behavior === "smooth" ? offset : null;
+      strip.scrollTo({ left, behavior });
+      // A scroll that goes nowhere sends no scroll event: settle anyway, so
+      // nothing waits on it.
+      scheduleSettle();
+    },
+    [scheduleSettle],
+  );
+
+  const scrollToElement = useCallback(
+    (element: Element, behavior?: ScrollBehavior) => {
+      const strip = stripRef.current;
+      if (strip === null) return;
+      // Its snap gutter too, so the scroll ends on its snap position rather
+      // than one the snapping might trade for a neighbour's.
+      const gutter =
+        Number.parseFloat(getComputedStyle(element).scrollMarginRight) || 0;
+      const offset = elementStartOffset(
+        strip.getBoundingClientRect().right,
+        element.getBoundingClientRect().right,
+        readStripOffset(strip, legacyRef.current),
+      );
+      scrollToOffset(Math.max(0, offset - gutter), behavior);
+    },
+    [scrollToOffset],
+  );
+
+  // WebKit keeps a running smooth scroll measured from the strip's left
+  // edge: when rows are committed in the frame or two before such a scroll
+  // reports itself, the region's instant restore does not stop it, and a
+  // frame later it jumps on by the added width. That jump is undone where
+  // the scroll really is, and the scroll goes on to the snap position it
+  // was heading for.
+  const watchCarry = (offset: number) => {
+    const growth = growthRef.current;
+    const strip = stripRef.current;
+    if (growth === null || strip === null) return;
+    if (
+      touchRef.current.active ||
+      aimRef.current !== null ||
+      resizedRef.current ||
+      performance.now() > growth.until
+    ) {
+      growthRef.current = null;
+      return;
+    }
+    const step = offset - growth.last;
+    const input = inputDirectionRef.current;
+    const direction =
+      performance.now() - input.at <= FEED_POST_INPUT_DIRECTION_MS
+        ? input.direction
+        : 0;
+    if (!isCarriedStep(step, growth.step, growth.added, direction)) {
+      growth.last = offset;
+      growth.step = step;
+      return;
+    }
+    growthRef.current = null;
+    const actual = offset - growth.added;
+    const target = nextSnapOffset(
+      snapOffsets(strip, offset),
+      actual,
+      Math.sign(actual - growth.origin),
+    );
+    strip.scrollLeft = stripScrollLeft(strip, actual, legacyRef.current);
+    scrollToOffset(target);
   };
 
-  const scrollToOffset = (offset: number) => {
-    const strip = stripRef.current;
-    if (strip === null) return;
-    const left = stripScrollLeft(strip, offset, legacyRef.current);
-    const behavior = reducedMotion() ? "auto" : "smooth";
-    if (typeof strip.scrollTo === "function")
-      strip.scrollTo({ left, behavior });
-    else strip.scrollLeft = left;
-  };
+  const stage = useMemo<FeedStageApi>(
+    () => ({
+      strip: stripNode,
+      count,
+      region,
+      readOffset: () => measure().offset,
+      scrollToOffset,
+      scrollToElement,
+      setCommentsAnchor: (get) => {
+        anchorRef.current = get;
+      },
+      subscribeSettle: (listener) => {
+        settleListenersRef.current.add(listener);
+        return () => {
+          settleListenersRef.current.delete(listener);
+        };
+      },
+      isSettled: () =>
+        !touchRef.current.active &&
+        settleTimerRef.current === null &&
+        aimRef.current === null,
+      viewerOpen,
+    }),
+    [
+      stripNode,
+      count,
+      region,
+      measure,
+      scrollToOffset,
+      scrollToElement,
+      viewerOpen,
+    ],
+  );
 
   useImperativeHandle(ref, () => ({
     scrollToIndex: (index) => {
@@ -181,7 +405,15 @@ export const FeedPostStage = forwardRef<
     scrollToComments: () => {
       const strip = stripRef.current;
       if (strip === null || !hasComments) return false;
-      scrollToOffset(count * strip.clientWidth);
+      scrollToOffset(commentsStartOffset(count, strip.clientWidth));
+      return true;
+    },
+    scrollToComment: (id) => {
+      const anchor = [
+        ...(stripRef.current?.querySelectorAll<HTMLElement>(COMMENT_ROW) ?? []),
+      ].find((element) => element.dataset.colophonAnchor === id);
+      if (anchor === undefined) return false;
+      scrollToElement(anchor);
       return true;
     },
   }));
@@ -191,25 +423,118 @@ export const FeedPostStage = forwardRef<
     if (strip !== null) legacyRef.current = isLegacyRtlScroll(strip);
   }, []);
 
-  // A width change (rotation, resize) keeps the shown image in place.
+  // A width change (rotation, resize) keeps the shown image in place, and
+  // in the comments region the comment being read (its registered anchor).
   useEffect(() => {
     const strip = stripRef.current;
     if (strip === null || typeof ResizeObserver !== "function")
       return undefined;
     const observer = new ResizeObserver(() => {
       if (touchRef.current.active) return;
-      const target =
-        regionRef.current === "comments" ? count : indexRef.current;
-      const left = stripScrollLeft(
-        strip,
-        target * strip.clientWidth,
-        legacyRef.current,
-      );
-      if (Math.abs(strip.scrollLeft - left) > 1) strip.scrollLeft = left;
+      const width = strip.clientWidth;
+      const anchored =
+        regionRef.current === "comments" ? anchorRef.current?.() : null;
+      const offset =
+        typeof anchored === "number" && Number.isFinite(anchored)
+          ? Math.max(0, anchored)
+          : regionRef.current === "comments"
+            ? commentsStartOffset(count, width)
+            : indexRef.current * width;
+      const left = stripScrollLeft(strip, offset, legacyRef.current);
+      if (Math.abs(strip.scrollLeft - left) > 1) {
+        // Its settle must not move the reading position it restored.
+        resizedRef.current = true;
+        strip.scrollLeft = left;
+      }
     });
     observer.observe(strip);
     return () => observer.disconnect();
   }, [count]);
+
+  // Comments that grow while a smooth scroll runs (the first page arriving
+  // as the seal or the comment button scrolls there) extend the strip on its
+  // left; browsers keep animating towards the old left-based position, which
+  // would land far into the comments. Re-aim at the same offset instead.
+  useEffect(() => {
+    const part = stripNode?.querySelector("[data-feed-stage-comments]");
+    if (
+      part === null ||
+      part === undefined ||
+      typeof ResizeObserver !== "function"
+    )
+      return undefined;
+    const observer = new ResizeObserver(() => {
+      const aim = aimRef.current;
+      const strip = stripRef.current;
+      if (aim === null || strip === null || touchRef.current.active) return;
+      // Stop the running animation where it is, then aim again.
+      const offset = readStripOffset(strip, legacyRef.current);
+      strip.scrollLeft = stripScrollLeft(strip, offset, legacyRef.current);
+      scrollToOffset(aim);
+    });
+    const observeChildren = () => {
+      observer.disconnect();
+      for (const child of part.children) observer.observe(child);
+    };
+    observeChildren();
+    const children = new MutationObserver(observeChildren);
+    children.observe(part, { childList: true });
+    return () => {
+      children.disconnect();
+      observer.disconnect();
+    };
+  }, [hasComments, scrollToOffset, stripNode]);
+
+  // Rows the comments region commits while nothing of ours scrolls grow the
+  // strip on its left, and the region restores the reading position as it
+  // commits. A scroll it could not see coming (a wheel or a key in the same
+  // frame, assistive or a script's scroll) may still carry the view on by
+  // the added width a frame or two later: it is watched from the commit on
+  // (a mutation is reported before the next frame's scroll events).
+  useEffect(() => {
+    const part = stripNode?.querySelector("[data-feed-stage-comments]");
+    const strip = stripRef.current;
+    if (
+      part === null ||
+      part === undefined ||
+      strip === null ||
+      typeof MutationObserver !== "function"
+    )
+      return undefined;
+    stripWidthRef.current = strip.scrollWidth;
+    const observer = new MutationObserver((records) => {
+      const width = strip.scrollWidth;
+      const added = width - stripWidthRef.current;
+      stripWidthRef.current = width;
+      if (added <= 0 || touchRef.current.active || aimRef.current !== null)
+        return;
+      // Only committed rows arm the watch: a key or a wheel step right after
+      // 全文 or a selection could match their growth, and be undone.
+      if (!committedRows(records)) {
+        growthRef.current = null;
+        return;
+      }
+      const offset = readStripOffset(strip, legacyRef.current);
+      const now = performance.now();
+      const pending = growthRef.current;
+      // Commits within one frame add up until the scroll reports.
+      const unreported =
+        pending !== null && pending.last === offset && now <= pending.until;
+      growthRef.current = {
+        added: (unreported ? pending.added : 0) + added,
+        origin: offset,
+        last: offset,
+        step: unreported ? pending.step : 0,
+        until: now + FEED_POST_CARRY_WATCH_MS,
+      };
+    });
+    observer.observe(part, {
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    return () => observer.disconnect();
+  }, [hasComments, stripNode]);
 
   useEffect(
     () => () => {
@@ -268,14 +593,14 @@ export const FeedPostStage = forwardRef<
   };
 
   return (
-    <>
+    <FeedStageContext.Provider value={stage}>
       <div
         className={styles.postStage}
         data-feed-stage-frame=""
         style={{ "--feed-stage-aspect": `1 / ${ratio}` } as CSSProperties}
       >
         <div
-          ref={stripRef}
+          ref={bindStrip}
           aria-label="作品图像"
           aria-roledescription="carousel"
           className={styles.postStrip}
@@ -286,6 +611,7 @@ export const FeedPostStage = forwardRef<
           data-local-horizontal=""
           onClickCapture={(event) => {
             if (
+              fromStrip(event) &&
               event.detail !== 0 &&
               performance.now() < suppressUntilRef.current
             ) {
@@ -293,8 +619,23 @@ export const FeedPostStage = forwardRef<
               event.stopPropagation();
             }
           }}
+          onKeyDownCapture={(event) => {
+            // Keyboard scrolling sends its first scroll event a frame later:
+            // the strip counts as moving from the key on.
+            if (
+              fromStrip(event) &&
+              SCROLL_KEYS.has(event.key) &&
+              !(event.target as Element).matches(
+                "input, textarea, select, [contenteditable]",
+              )
+            ) {
+              noteInputDirection(KEY_DIRECTION[event.key] ?? 0);
+              scheduleSettle();
+            }
+          }}
           onScroll={() => {
             const current = measure();
+            watchCarry(current.offset);
             if (
               touchRef.current.active &&
               Math.abs(current.offset - touchRef.current.startOffset) >=
@@ -311,20 +652,38 @@ export const FeedPostStage = forwardRef<
               });
             if (!touchRef.current.active) scheduleSettle();
           }}
-          onTouchCancelCapture={() => {
+          onWheelCapture={(event) => {
+            // So does a wheel or trackpad: moving from its first event.
+            if (fromStrip(event) && (event.deltaX !== 0 || event.shiftKey)) {
+              // The strip runs right to left: a leftward wheel moves on.
+              const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
+              noteInputDirection(-Math.sign(delta));
+              scheduleSettle();
+            }
+          }}
+          onTouchCancelCapture={(event) => {
+            if (!fromStrip(event)) return;
             touchRef.current.active = false;
             scheduleSettle();
           }}
-          onTouchEndCapture={() => {
+          onTouchEndCapture={(event) => {
+            if (!fromStrip(event)) return;
+            // The momentum after the finger lifts runs the way it moved.
+            noteInputDirection(
+              Math.sign(measure().offset - touchRef.current.startOffset),
+            );
             touchRef.current.active = false;
             scheduleSettle();
           }}
           onTouchStartCapture={(event) => {
-            if (event.touches.length !== 1) return;
+            if (!fromStrip(event) || event.touches.length !== 1) return;
             touchRef.current = {
               active: true,
               startOffset: measure().offset,
             };
+            aimRef.current = null;
+            resizedRef.current = false;
+            growthRef.current = null;
             if (settleTimerRef.current !== null) {
               window.clearTimeout(settleTimerRef.current);
               settleTimerRef.current = null;
@@ -438,11 +797,12 @@ export const FeedPostStage = forwardRef<
         }}
         onSelectComments={() => {
           const strip = stripRef.current;
-          if (strip !== null) scrollToOffset(count * strip.clientWidth);
+          if (strip !== null)
+            scrollToOffset(commentsStartOffset(count, strip.clientWidth));
         }}
         progress={progress}
         region={region}
       />
-    </>
+    </FeedStageContext.Provider>
   );
 });

@@ -174,13 +174,13 @@ test("a rightward swipe on the stage pages the post, not the Home tabs", async (
     feed.post.locator('[data-feed-post-dot][aria-current="true"]'),
   ).toHaveAttribute("aria-label", /^第 2 张/u);
 
-  // Past the last image the strip continues into the comments, and back.
+  // Past the last image the strip continues into the colophons, and back.
   await trustedDrag(feed.page, session, start, box.width * 0.6);
   await expect(feed.strip).toHaveAttribute(
     "data-feed-stage-region",
     "comments",
   );
-  await expect(feed.post.locator("[data-feed-post-comments]")).toBeVisible();
+  await expect(feed.post.locator("[data-feed-colophon]")).toBeVisible();
   await expect(feed.home).toHaveAttribute("data-active-home-feed", "discover");
   const back = { x: box.x + box.width * 0.8, y: start.y };
   await trustedDrag(feed.page, session, back, -box.width * 0.6);
@@ -249,31 +249,42 @@ test("a double tap likes instead of opening the viewer; a guest is asked to sign
   await feed.context?.close();
 });
 
-test("the seal dot brings in the comments region; the comment button opens Detail on its comments", async ({
+test("the seal dot brings in the colophons; the comment button scrolls there instead of opening Detail", async ({
   browser,
   page,
 }, testInfo) => {
   skipUnlessPhone(testInfo);
   const feed = await openPhoneFeed(browser, page, testInfo);
+  const colophon = feed.post.locator("[data-feed-colophon]");
   await feed.post.locator("[data-feed-post-dot-comments]").click();
   await expect(feed.strip).toHaveAttribute(
     "data-feed-stage-region",
     "comments",
   );
+  await expect(colophon).toBeVisible();
   await expect(
     feed.post.locator('[data-feed-post-dot-comments][aria-current="true"]'),
   ).toHaveCount(1);
   await expect(feed.home).toHaveAttribute("data-active-home-feed", "discover");
 
-  // Until the colophon comments land, comments are read on Detail's page.
+  // Back to the first image, then the comment button returns to the colophons.
+  await feed.post.locator("[data-feed-post-dot]").first().click();
+  await expect(feed.strip).toHaveAttribute("data-feed-stage-region", "media");
+  await expect(feed.strip).toHaveAttribute("data-feed-stage-index", "0");
   await feed.post.locator("[data-feed-post-comment]").click();
-  await expect(feed.shell).toHaveAttribute("data-detail-open", "true");
-  await expect(
-    feed.page.locator("[data-detail-content-pager]"),
-  ).toHaveAttribute("data-detail-content-active-page", "comments");
-
-  await feed.page.goBack();
+  await expect(feed.strip).toHaveAttribute(
+    "data-feed-stage-region",
+    "comments",
+  );
+  await expect(colophon).toBeVisible();
   await expect(feed.shell).toHaveAttribute("data-detail-open", "false");
+  await expect(feed.home).toHaveAttribute("data-active-home-feed", "discover");
+  // Scrolling never opens the composer by itself.
+  await expect(
+    feed.page.locator('[data-colophon-composer-outlet] [data-open="true"]'),
+  ).toHaveCount(0);
+
+  // The title still opens Detail on its information.
   await feed.post.getByRole("button", { name: "打开运行时多图碑刻" }).click();
   await expect(feed.shell).toHaveAttribute("data-detail-open", "true");
   await expect(

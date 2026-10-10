@@ -1,5 +1,6 @@
 "use client";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ContentCard as Card } from "@moya/contracts";
 import { requestDetailComments } from "../detail/detail-comments-request";
 import { CatalogProvinceBadge, MediaFallback } from "../home/card-media-parts";
@@ -8,13 +9,14 @@ import { FeedPostActions } from "../quick-actions/feed-post-actions";
 import type { FeedPostTrailingAction } from "../quick-actions/feed-post-actions";
 import { useProductShell } from "../product-shell/product-shell";
 import type { useContentActions } from "./content-actions";
+import { FeedColophon, FeedColophonOutletContext } from "./feed-colophon";
 import { FeedPostAuthor } from "./feed-post-author";
 import { FeedPostBody } from "./feed-post-body";
 import { feedPostMedia } from "./feed-post-media";
 import { FeedPostStage } from "./feed-post-stage";
+import type { FeedPostStageHandle } from "./feed-post-stage";
 import styles from "../home/home-screen.module.css";
 
-const countFormat = new Intl.NumberFormat("zh-CN");
 const postDay = new Intl.DateTimeFormat("zh-CN", {
   month: "long",
   day: "numeric",
@@ -38,51 +40,10 @@ const PostDate = ({ value }: { value: string | null }) => {
 };
 
 /**
- * The comments region left of the last image. Until the colophon comments
- * land it names the thread and opens Detail, where comments are read and
- * written today.
- */
-const FeedPostComments = ({
-  count,
-  title,
-  onOpen,
-}: {
-  readonly count: number | null | undefined;
-  readonly title: string;
-  readonly onOpen: (opener: HTMLButtonElement) => void;
-}) => (
-  <section
-    aria-label={`${title}的评论`}
-    className={styles.postComments}
-    data-feed-post-comments=""
-  >
-    <h4 className={styles.postCommentsTitle}>题跋</h4>
-    <div>
-      <p className={styles.postCommentsCount}>
-        {count === null || count === undefined
-          ? "评论"
-          : count > 0
-            ? `${countFormat.format(count)} 则评论`
-            : "尚无评论"}
-      </p>
-      <button
-        className={styles.postCommentsOpen}
-        data-feed-post-comments-open=""
-        onClick={(event) => onOpen(event.currentTarget)}
-        type="button"
-      >
-        {count !== null && count !== undefined && count > 0
-          ? "查看评论"
-          : "写评论"}
-      </button>
-    </div>
-  </section>
-);
-
-/**
  * A phone single-column post: author, the right-to-left image stage with its
- * dots, the title (a work's expands its body in place, official content's
- * opens Detail), the action row and the publication day.
+ * dots and its colophons past the last image, the title (a work's expands
+ * its body in place, official content's opens Detail), the action row and
+ * the publication day.
  */
 export const FeedPost = ({
   item,
@@ -105,13 +66,22 @@ export const FeedPost = ({
   const [expanded, setExpanded] = useState(false);
   const bodyId = useId();
   const media = useMemo(() => feedPostMedia(item, label), [item, label]);
+  const stageRef = useRef<FeedPostStageHandle>(null);
+  // The colophon composer and its status render in an outlet outside the
+  // strip and outside the Home pager: its track is transformed, which would
+  // fix them to the track and keep them under the dock.
+  const [outlet, setOutlet] = useState<HTMLDivElement | null>(null);
+  const [outletHost, setOutletHost] = useState<HTMLElement | null>(null);
+  useEffect(() => setOutletHost(document.body), []);
   const work = item.target.type === "work";
   // Only a work with text has a body to expand; any other post opens Detail.
   const expandable = work && (item.title !== "" || excerpt !== "");
   const openContent = (opener: HTMLElement) =>
     shell.openContent(item.target, opener);
-  // Until the colophon comments land, comments are read in Detail.
+  // A post with a stage reads its comments as colophons; one without opens
+  // Detail on its comments.
   const openComments = (opener: HTMLElement) => {
+    if (stageRef.current?.scrollToComments() === true) return;
     requestDetailComments(item.target.id);
     openContent(opener);
   };
@@ -142,12 +112,13 @@ export const FeedPost = ({
   const stage =
     media.length > 0 ? (
       <FeedPostStage
+        ref={stageRef}
         badge={badge}
         burstEnabled={actions.canLike}
         comments={
-          <FeedPostComments
-            count={actions.environment.commentCount}
-            onOpen={openComments}
+          <FeedColophon
+            fallbackCount={actions.environment.commentCount}
+            target={item.target}
             title={label}
           />
         }
@@ -230,7 +201,9 @@ export const FeedPost = ({
         {work && item.authorId !== null ? (
           <FeedPostAuthor authorId={item.authorId} />
         ) : null}
-        {stage}
+        <FeedColophonOutletContext.Provider value={outlet}>
+          {stage}
+        </FeedColophonOutletContext.Provider>
         {heading}
         {expandable ? (
           <FeedPostBody
@@ -247,6 +220,12 @@ export const FeedPost = ({
           trailing={trailing}
         />
         <PostDate value={item.firstPublishedAt} />
+        {media.length > 0 && outletHost !== null
+          ? createPortal(
+              <div data-colophon-composer-outlet="" ref={setOutlet} />,
+              outletHost,
+            )
+          : null}
       </article>
     </div>
   );

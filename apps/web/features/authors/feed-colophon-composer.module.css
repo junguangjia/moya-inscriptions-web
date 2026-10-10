@@ -1,0 +1,61 @@
+/* The colophons' composer: horizontal even though the colophons are vertical,
+   pinned to the bottom of the visual viewport over the dock while open. The
+   inner box, send button and reply bar reuse the comment composer classes. */
+.bar {
+  writing-mode: horizontal-tb;
+  direction: ltr;
+}
+
+/* Hidden while closed but still mounted, so its draft survives. */
+.bar[data-open="false"] {
+  display: none;
+}
+
+.bar[data-open="true"] {
+  position: fixed;
+  z-index: calc(var(--yoyi-z-index-navigation) + 1);
+  right: 0;
+  bottom: var(--yoyi-bottom-nav-viewport-inset, 0px);
+  left: 0;
+  box-sizing: border-box;
+  padding: var(--yoyi-space-3)
+    max(var(--yoyi-space-4), env(safe-area-inset-right))
+    calc(
+      var(--yoyi-space-3) +
+        var(--colophon-safe-bottom, env(safe-area-inset-bottom))
+    )
+    max(var(--yoyi-space-4), env(safe-area-inset-left));
+  font-family: var(--yoyi-font-interface);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-page);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+
+.bar [data-colophon-composer-head] {
+  border-radius: var(--yoyi-radius-md);
+}
+
+.bar [data-colophon-composer-head] b {
+  font-weight: 650;
+}
+
+.bar [data-colophon-composer-head] button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* The reply bar's 取消 keeps a full touch target. */
+.bar [data-colophon-composer-head] button {
+  min-block-size: 44px;
+}
+
+/* Tells a screen reader where the text is previewed. */
+.hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

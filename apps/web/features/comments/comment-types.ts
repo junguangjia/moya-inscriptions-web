@@ -15,6 +15,8 @@ export interface CommentMediaPresentation {
 export interface CommentReply {
   readonly deleted?: boolean;
   readonly createdAtLabel: string;
+  /** The raw ISO time, for renderers that format it themselves. */
+  readonly createdAt?: string;
   readonly id: string;
   readonly likeCount: number;
   readonly liked: boolean;
@@ -29,6 +31,8 @@ export interface CommentItem {
   readonly replyPageTotal?: number;
   readonly replyRemaining?: number;
   readonly createdAtLabel: string;
+  /** The raw ISO time, for renderers that format it themselves. */
+  readonly createdAt?: string;
   readonly id: string;
   readonly isQaGenerated: boolean;
   readonly likeCount: number;

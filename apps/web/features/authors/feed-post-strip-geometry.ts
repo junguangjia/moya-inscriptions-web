@@ -15,6 +15,24 @@ export const FEED_POST_CLICK_SUPPRESSION_MS = 500;
 export const FEED_POST_TAP_TOLERANCE_PX = 10;
 /** A second tap within this window is a double tap. */
 export const FEED_POST_DOUBLE_TAP_MS = 300;
+/**
+ * After the comments region grows, a scroll already running is watched this
+ * long for being carried on by the added width.
+ */
+export const FEED_POST_CARRY_WATCH_MS = 600;
+/** Growth under this many pixels is not watched. */
+export const FEED_POST_CARRY_MIN_PX = 48;
+/** How far a carried step may differ from the added width. */
+export const FEED_POST_CARRY_TOLERANCE_PX = 24;
+/**
+ * The scroll's own motion a carried first step may also hold, when no step
+ * was reported between commit and carry: a frame of a running animation,
+ * kept under one wheel notch or key step (40 px and more), so that a step
+ * of the reader's own is never taken for a small batch's carry.
+ */
+export const FEED_POST_CARRY_OWN_STEP_PX = 32;
+/** How long the reader's last wheel, key or swipe direction holds. */
+export const FEED_POST_INPUT_DIRECTION_MS = 1000;
 
 interface MediaSize {
   readonly width: number;
@@ -86,3 +104,80 @@ export const stripRegion = (
 /** The image index a settled progress rests on. */
 export const stripIndex = (progress: number, count: number): number =>
   Math.min(Math.max(0, count - 1), Math.max(0, Math.round(progress)));
+
+/** Offset of the comments start from the strip start. */
+export const commentsStartOffset = (count: number, width: number): number =>
+  count * width;
+
+/** Pixels left to scroll before the strip's end (its left edge). */
+export const stripRemaining = (
+  element: StripElement,
+  legacy: boolean,
+): number =>
+  Math.max(
+    0,
+    element.scrollWidth -
+      element.clientWidth -
+      readStripOffset(element, legacy),
+  );
+
+/**
+ * The strip offset that puts an element's right edge on the strip's right
+ * edge, from both rectangles' current `right` and the current offset. An
+ * element left of the view needs a larger offset, one right of it a smaller.
+ */
+export const elementStartOffset = (
+  stripRight: number,
+  elementRight: number,
+  currentOffset: number,
+): number => currentOffset + (stripRight - elementRight);
+
+/**
+ * Whether one scroll step jumped by about `added` beyond the step before it:
+ * a running scroll animation that the engine carried on by the width added
+ * on the strip's left, rather than the reader's own motion. The first step
+ * after the commit (`previousStep` 0) may hold the scroll's own first motion
+ * too, up to a quarter of the added width.
+ *
+ * `direction` is the way the reader's own input last moved the strip (+1
+ * towards its end, -1 back, 0 unknown). Undoing a carry leaves the scroll's
+ * own motion (`step - added`); a step whose own motion would then run
+ * against the reader's input is the reader's, never a carry.
+ */
+export const isCarriedStep = (
+  step: number,
+  previousStep: number,
+  added: number,
+  direction = 0,
+): boolean =>
+  added >= FEED_POST_CARRY_MIN_PX &&
+  !(direction !== 0 && (step - added) * Math.sign(direction) < -2) &&
+  Math.abs(step - previousStep - added) <=
+    Math.max(FEED_POST_CARRY_TOLERANCE_PX, added * 0.1) +
+      (previousStep === 0
+        ? Math.min(FEED_POST_CARRY_OWN_STEP_PX, added * 0.25)
+        : 0);
+
+/**
+ * The snap offset a scroll moving in `direction` (+1 towards the strip's end,
+ * -1 back towards its start, 0 at rest) comes to from `offset`: the next one
+ * on its way, else the last one it passed; the nearest one at rest.
+ */
+export const nextSnapOffset = (
+  snaps: readonly number[],
+  offset: number,
+  direction: number,
+): number => {
+  if (snaps.length === 0) return offset;
+  const sorted = [...snaps].sort((a, b) => a - b);
+  const ahead =
+    direction > 0
+      ? sorted.find((snap) => snap >= offset - 1)
+      : direction < 0
+        ? sorted.findLast((snap) => snap <= offset + 1)
+        : undefined;
+  if (ahead !== undefined) return ahead;
+  return sorted.reduce((best, snap) =>
+    Math.abs(snap - offset) < Math.abs(best - offset) ? snap : best,
+  );
+};

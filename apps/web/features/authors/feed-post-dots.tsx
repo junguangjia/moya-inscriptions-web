@@ -34,7 +34,8 @@ export const FeedPostDots = ({
     Math.max(0, count - 1),
     Math.max(0, Math.round(progress)),
   );
-  const seal = nearness(progress, count);
+  // The colophons run on past the comments start: the seal stays lit.
+  const seal = progress >= count ? 1 : nearness(progress, count);
   if (count < 2 && !hasComments) return null;
   return (
     <div

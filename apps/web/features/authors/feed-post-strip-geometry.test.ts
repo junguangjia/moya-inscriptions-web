@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  commentsStartOffset,
+  elementStartOffset,
   FEED_STAGE_MAX_RATIO,
   FEED_STAGE_MIN_RATIO,
+  FEED_POST_CARRY_OWN_STEP_PX,
+  isCarriedStep,
   isLegacyRtlScroll,
+  nextSnapOffset,
   readStripOffset,
   resolveStageAspect,
   slideFit,
   stripIndex,
   stripProgress,
   stripRegion,
+  stripRemaining,
   stripScrollLeft,
 } from "./feed-post-strip-geometry";
 
@@ -156,5 +162,113 @@ describe("stripIndex", () => {
   it("stays at 0 for an empty or single-image strip", () => {
     expect(stripIndex(2, 1)).toBe(0);
     expect(stripIndex(2, 0)).toBe(0);
+  });
+});
+
+describe("commentsStartOffset", () => {
+  it("starts the comments one width past the last image", () => {
+    expect(commentsStartOffset(3, 300)).toBe(900);
+    expect(commentsStartOffset(1, 390)).toBe(390);
+  });
+});
+
+describe("stripRemaining", () => {
+  it("measures what is left before the strip's left end", () => {
+    // 1200 wide, 300 shown: 900 to scroll in all.
+    expect(stripRemaining(strip(0), false)).toBe(900);
+    expect(stripRemaining(strip(-600), false)).toBe(300);
+    expect(stripRemaining(strip(-900), false)).toBe(0);
+  });
+  it("measures the legacy engine from its maximum", () => {
+    expect(stripRemaining(strip(900), true)).toBe(900);
+    expect(stripRemaining(strip(300), true)).toBe(300);
+    expect(stripRemaining(strip(0), true)).toBe(0);
+  });
+  it("never goes negative past the end", () => {
+    expect(stripRemaining(strip(-950), false)).toBe(0);
+  });
+});
+
+describe("elementStartOffset", () => {
+  it("scrolls further for an element left of the view", () => {
+    expect(elementStartOffset(300, -150, 900)).toBe(1350);
+  });
+  it("scrolls back for an element right of the view", () => {
+    expect(elementStartOffset(300, 420, 900)).toBe(780);
+  });
+  it("keeps an element already at the right edge", () => {
+    expect(elementStartOffset(300, 300, 600)).toBe(600);
+  });
+  it("lands the same offset in both engines", () => {
+    const offset = elementStartOffset(300, -150, 600);
+    for (const legacy of [false, true]) {
+      const scrollLeft = stripScrollLeft(strip(0), offset, legacy);
+      expect(readStripOffset(strip(scrollLeft), legacy)).toBe(offset);
+    }
+  });
+});
+
+describe("isCarriedStep", () => {
+  it("takes a step that jumped by about the added width for a carry", () => {
+    // Moving ~70px a frame, then on by the 2096px a page added.
+    expect(isCarriedStep(2166, 74, 2096)).toBe(true);
+    expect(isCarriedStep(2096, 0, 2096)).toBe(true);
+    expect(isCarriedStep(2096 + 200, 0, 2096)).toBe(true);
+    // A wheel notch whose first step was itself carried by a 622px page.
+    expect(isCarriedStep(622 + 70, 0, 622)).toBe(true);
+  });
+
+  it("allows the scroll's own motion only in the first step after the commit", () => {
+    expect(isCarriedStep(622 + 70 + 74, 74, 622)).toBe(false);
+    // Nor for a small growth, where it would match a reader's wheel notch.
+    expect(isCarriedStep(60 + 70, 0, 60)).toBe(false);
+    expect(isCarriedStep(622 + 200, 0, 622)).toBe(false);
+  });
+
+  it("never takes the reader's own steps for one", () => {
+    expect(isCarriedStep(74, 70, 2096)).toBe(false);
+    expect(isCarriedStep(140, 70, 600)).toBe(false);
+    expect(isCarriedStep(-600, 0, 600)).toBe(false);
+  });
+
+  it("ignores growth too small to tell from a step", () => {
+    expect(isCarriedStep(30, 0, 30)).toBe(false);
+  });
+
+  it("never undoes a step against the reader's own input", () => {
+    // 余3则回复 added 118 px, then a forward wheel step of 70 px: undoing it
+    // would move the reader back by 48 px.
+    expect(isCarriedStep(70, 0, 118, 1)).toBe(false);
+    // A real carry leaves the scroll's own motion the reader's way.
+    expect(isCarriedStep(622 + 70, 0, 622, 1)).toBe(true);
+    expect(isCarriedStep(622 - 60, 0, 622, -1)).toBe(true);
+    expect(isCarriedStep(622 - 60, 0, 622, 1)).toBe(false);
+    expect(isCarriedStep(2166, 74, 2096, 1)).toBe(true);
+  });
+
+  it("holds less of the scroll's own motion than a wheel or key step", () => {
+    expect(FEED_POST_CARRY_OWN_STEP_PX).toBeLessThan(40);
+    // A whole 100 px wheel notch on a 300 px batch is the reader's.
+    expect(isCarriedStep(300 + 100, 0, 300)).toBe(false);
+  });
+});
+
+describe("nextSnapOffset", () => {
+  const snaps = [0, 393, 786, 1179, 1572, 1700, 1900];
+
+  it("goes on to the next snap position in the direction of travel", () => {
+    expect(nextSnapOffset(snaps, 1318, 1)).toBe(1572);
+    expect(nextSnapOffset(snaps, 1318, -1)).toBe(1179);
+    expect(nextSnapOffset(snaps, 1572, 1)).toBe(1572);
+  });
+
+  it("takes the nearest at rest or past the last one", () => {
+    expect(nextSnapOffset(snaps, 1250, 0)).toBe(1179);
+    expect(nextSnapOffset(snaps, 2400, 1)).toBe(1900);
+    expect(nextSnapOffset(snaps, -10, -1)).toBe(0);
+  });
+
+  it("keeps the offset without snap positions", () => {
+    expect(nextSnapOffset([], 512, 1)).toBe(512);
   });
 });
