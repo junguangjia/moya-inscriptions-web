@@ -3,7 +3,14 @@ import { act, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const { inbox, author, client } = vi.hoisted(() => ({
+const { inbox, author, client, shell } = vi.hoisted(() => ({
+  shell: {
+    activeContent: null as { type: "work"; id: string } | null,
+    activeProfile: null as { entryId: string } | null,
+    activeTopicId: null as string | null,
+    activeDestination: "home",
+    navigatePrimary: vi.fn(),
+  },
   inbox: {
     page: {
       observation: "synthetic-inbox-observation",
@@ -73,7 +80,7 @@ vi.mock("../authors/author-dialog", () => ({
   ),
 }));
 vi.mock("../product-shell/product-shell", () => ({
-  useProductShell: () => ({ activeContent: null, activeProfile: null }),
+  useProductShell: () => shell,
 }));
 import { LiveMessageTrigger } from "./live-message-center";
 import type { DirectMessagePanelAdapter } from "./live-message-center";
@@ -92,6 +99,10 @@ const button = (name: string) =>
 const click = async (element: HTMLElement) => act(async () => element.click());
 beforeEach(async () => {
   vi.clearAllMocks();
+  shell.activeContent = null;
+  shell.activeProfile = null;
+  shell.activeTopicId = null;
+  shell.activeDestination = "home";
   window.history.replaceState({}, "", "/");
   item.reason = "comment";
   author.checking = false;
@@ -235,6 +246,106 @@ describe("Owner notification reading interactions", () => {
       root.render(<LiveMessageTrigger directMessages={entryAdapter(null)} />),
     );
     expect(node.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it.each(["detail", "topic", "profile"])(
+    "waits for profile closure and closes the restored %s once before opening only the active host",
+    async (overlay) => {
+      await act(async () => root.render(null));
+      const back = vi
+        .spyOn(window.history, "back")
+        .mockImplementation(() => {});
+      const adapter = entryAdapter(11);
+      shell.activeProfile = { entryId: "profile-entry" };
+      const tree = () => (
+        <div data-overlay-backdrop="" inert>
+          <section data-primary-destination="home" data-active="true">
+            <LiveMessageTrigger directMessages={adapter} />
+          </section>
+          <section
+            data-primary-destination="discussion"
+            data-active="false"
+            hidden
+          >
+            <LiveMessageTrigger directMessages={adapter} />
+          </section>
+        </div>
+      );
+      await act(async () => root.render(tree()));
+      expect(back).not.toHaveBeenCalled();
+      shell.activeProfile = null;
+      if (overlay === "detail")
+        shell.activeContent = { type: "work", id: "work-example" };
+      else if (overlay === "topic") shell.activeTopicId = "article-example";
+      else shell.activeProfile = { entryId: "earlier-profile-entry" };
+      await act(async () => root.render(tree()));
+      expect(back).toHaveBeenCalledOnce();
+      expect(node.querySelector('[role="dialog"]')).toBeNull();
+      await act(async () => root.render(tree()));
+      expect(back).toHaveBeenCalledOnce();
+      shell.activeContent = null;
+      shell.activeTopicId = null;
+      shell.activeProfile = null;
+      await act(async () => {
+        root.render(tree());
+      });
+      await act(async () => {
+        node.querySelector("[data-overlay-backdrop]")!.removeAttribute("inert");
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      });
+      expect(node.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+      expect(node.querySelector('section[hidden] [role="dialog"]')).toBeNull();
+      back.mockRestore();
+    },
+  );
+  it("keeps the issuing profile while account confirmation spans its Back transition", async () => {
+    await act(async () => root.render(null));
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const adapter = entryAdapter(13);
+    author.checking = true;
+    shell.activeProfile = { entryId: "issuing-profile-entry" };
+    const tree = () => (
+      <div data-overlay-backdrop="" inert>
+        <section data-primary-destination="home" data-active="true">
+          <LiveMessageTrigger directMessages={adapter} />
+        </section>
+      </div>
+    );
+    await act(async () => root.render(tree()));
+    shell.activeProfile = { entryId: "earlier-profile-entry" };
+    await act(async () => root.render(tree()));
+    expect(back).not.toHaveBeenCalled();
+    expect(node.querySelector('[role="dialog"]')).toBeNull();
+    author.checking = false;
+    await act(async () => root.render(tree()));
+    expect(back).toHaveBeenCalledOnce();
+    shell.activeProfile = null;
+    await act(async () => root.render(tree()));
+    await act(async () => {
+      node.querySelector("[data-overlay-backdrop]")!.removeAttribute("inert");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+    expect(node.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    back.mockRestore();
+  });
+  it("retains the request when profile isolation lasts longer than thirty frames", async () => {
+    await act(async () => root.render(null));
+    const adapter = entryAdapter(12);
+    await act(async () =>
+      root.render(
+        <div data-overlay-backdrop="" inert>
+          <LiveMessageTrigger directMessages={adapter} />
+        </div>,
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    });
+    expect(node.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => {
+      node.querySelector("[data-overlay-backdrop]")!.removeAttribute("inert");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+    expect(node.querySelectorAll('[role="dialog"]')).toHaveLength(1);
   });
   it("ignores an unknown category and retains ordinary message navigation", async () => {
     await act(async () => root.render(null));
