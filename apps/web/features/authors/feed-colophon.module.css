@@ -54,8 +54,8 @@
 /* An unfolded colophon runs on past the stage's left edge: its 落款 is a
    snap point of its own, at the left, clear of the input column there,
    that a swipe stops at rather than throwing on to the next colophon. */
-.root[data-expanded] > .signature,
-.replyBody[data-expanded] > .signature {
+.root[data-expanded] > .seal,
+.replyBody[data-expanded] > .seal {
   scroll-snap-align: end;
   scroll-snap-stop: always;
   scroll-margin-left: calc(var(--colophon-input-clear) + var(--yoyi-space-6));
@@ -133,12 +133,15 @@
   margin-block-end: var(--yoyi-space-7);
 }
 
-/* Text on the right, the signature column on its left (落款): roots and
-   replies take the column's full height, the time at the top of the
-   signature and the author at its foot. */
+/* Text on the right, the signature at the foot of the column on its left
+   (落款): roots and replies take the column's full height, so every
+   signature ends at the same bottom line however short the text. */
 .root,
 .replyBody {
   position: relative;
+  /* Keeps the avatar's raised layer inside the colophon, below the input
+     column. */
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -186,6 +189,90 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The author leads the first column: the avatar sits on top of it (outside
+   the text, which is a button of its own), the text indented past it. */
+.root > .text,
+.replyBody > .text {
+  /* The avatar (1.25em) and the gap after it, in the text's own size. */
+  text-indent: 1.6em;
+}
+
+.author {
+  position: absolute;
+  /* Above the text, which a cut-short fade (mask) lifts into a layer of
+     its own over the avatar. */
+  z-index: calc(var(--yoyi-z-index-content) + 1);
+  top: 0;
+  right: 0;
+  display: grid;
+  box-sizing: border-box;
+  /* One column wide, the avatar tall. */
+  width: calc(1em * var(--yoyi-type-article-line-height-normal));
+  height: 1.25em;
+  padding: 0;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  font-size: var(--yoyi-type-body-size);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reply .author {
+  font-size: var(--yoyi-type-body-small-size);
+}
+
+/* A 44 px target around the small face. */
+.author::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+/* 1.25em of the text's size, the initial a little smaller. */
+.face {
+  display: grid;
+  box-sizing: border-box;
+  width: calc(1.25em / 0.75);
+  height: calc(1.25em / 0.75);
+  overflow: hidden;
+  place-items: center;
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-muted);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-full);
+  font-family: var(--yoyi-font-interface);
+  font-size: 0.75em;
+  line-height: 1;
+  writing-mode: horizontal-tb;
+}
+
+.face img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The nickname: a step smaller than the text, set apart by weight, tone
+   and a full character's space (听松　第三张…), so even a long one, or a
+   Latin one before Latin text, reads as a name before the words. */
+.name {
+  margin-inline-end: 1em;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.reply .name {
+  font-size: var(--yoyi-type-caption-size);
+}
+
 .text[aria-pressed="true"] {
   background: var(--yoyi-color-background-muted);
 }
@@ -200,7 +287,7 @@
 }
 
 .fold,
-.signature {
+.seal {
   flex-shrink: 0;
 }
 
@@ -233,117 +320,28 @@
   color: var(--yoyi-color-text-tertiary);
 }
 
-/* 落款: the column left of the text, as tall as the colophon. The time
-   sits at its top, small and quiet; at its foot the nickname and the plaque
-   side by side, the avatar beneath them, so every signature ends at the same
-   bottom line however short the text. */
-.signature {
+/* 落款: the studio plaque, then the time, at the foot of the column left
+   of the text. */
+.seal {
   display: flex;
   flex-direction: row;
   align-items: center;
-  align-self: stretch;
-  justify-content: flex-end;
-  gap: var(--yoyi-space-3);
-  margin-block-start: var(--yoyi-space-3);
-}
-
-.sigTime {
-  flex: none;
-  margin-inline-end: auto;
-  color: var(--yoyi-color-text-tertiary);
-  font-size: var(--yoyi-type-metadata-size);
-  line-height: var(--yoyi-type-article-line-height-compact);
-  white-space: nowrap;
-}
-
-.sigFoot {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
+  align-self: flex-end;
   gap: var(--yoyi-space-1);
-  /* Where the column runs short (a narrow phone, a long name, an old date),
-     the nickname gives way, never the time above it. */
-  min-inline-size: 0;
-}
-
-/* Read right to left: the nickname, then its plaque, both ending at the
-   bottom above the avatar. */
-.sigNames {
-  display: flex;
-  min-inline-size: 0;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--yoyi-space-1);
+  margin-block-start: var(--yoyi-space-2);
   font-size: var(--yoyi-type-caption-size);
   line-height: var(--yoyi-type-article-line-height-compact);
 }
 
-.reply .sigNames {
+.sealTime {
+  color: var(--yoyi-color-text-tertiary);
   font-size: var(--yoyi-type-metadata-size);
+  white-space: nowrap;
 }
 
 /* A reply's plaque stands smaller than a root's. */
-.reply .sigNames [data-studio-name] {
+.reply .seal [data-studio-name] {
   font-size: calc(var(--yoyi-type-caption-size) * 0.7);
-}
-
-/* Cut short with … where the column runs short. WebKit sets a vertical
-   ellipsis past the content's end: the end padding keeps it unclipped, the
-   negative margin keeps the name's foot where it was, and the padding is
-   left out of the cap. */
-.sigName {
-  box-sizing: border-box;
-  max-inline-size: calc(100% + 0.5em);
-  overflow: hidden;
-  margin-inline-end: -0.5em;
-  padding-inline-end: 0.5em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A 44 px target around the small face, kept however short the column. */
-.sigAvatar {
-  display: grid;
-  flex: none;
-  box-sizing: border-box;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  place-items: center;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.sigFace {
-  display: grid;
-  box-sizing: border-box;
-  width: 28px;
-  height: 28px;
-  overflow: hidden;
-  place-items: center;
-  color: var(--yoyi-color-text-secondary);
-  background: var(--yoyi-color-background-muted);
-  border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-full);
-  font-family: var(--yoyi-font-interface);
-  font-size: var(--yoyi-type-caption-size);
-  line-height: 1;
-  writing-mode: horizontal-tb;
-}
-
-.sigFace img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.reply .sigFace {
-  width: 20px;
-  height: 20px;
-  font-size: var(--yoyi-type-metadata-size);
 }
 
 /* 低格夹注: smaller, lighter, two characters lower, each reply (and the
@@ -414,7 +412,7 @@
 .fold:focus-visible,
 .moreReplies:focus-visible,
 .actions button:focus-visible,
-.sigAvatar:focus-visible {
+.author:focus-visible {
   outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: 2px;
 }

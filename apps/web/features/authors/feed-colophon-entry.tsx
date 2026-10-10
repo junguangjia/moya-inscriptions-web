@@ -39,12 +39,13 @@ export const foldColophonText = (text: string): string | null => {
 export const COLOPHON_DELETED_TEXT = "该正文已删除";
 
 /**
- * The nickname in a colophon's signature shows at most this many characters
+ * The nickname at a colophon's head shows at most this many characters
  * (code points); a longer one (display names run to 40) is cut with …, the
- * full name staying in the avatar's label and the text's description.
+ * full name staying in the avatar's label and the text's description. 「回复
+ * X：」 cuts X the same way, the full name read by assistive technology.
  */
 export const COLOPHON_NAME_CHARS = 12;
-export const colophonSignatureName = (name: string): string => {
+export const colophonHeadName = (name: string): string => {
   const characters = [...name];
   return characters.length > COLOPHON_NAME_CHARS
     ? `${characters.slice(0, COLOPHON_NAME_CHARS - 1).join("")}…`
@@ -85,98 +86,38 @@ const firstCharacter = (name: string) => [...name.trim()][0] ?? "访";
  * A nickname as a colophon shows it: cut with … past `COLOPHON_NAME_CHARS`,
  * the full name kept for assistive technology.
  */
-const ColophonName = ({
-  name,
-  className,
-  marker,
-}: {
-  readonly name: string;
-  readonly className?: string | undefined;
-  /** Marks the shown name (`data-colophon-name`) in the signature. */
-  readonly marker?: boolean;
-}) => {
-  const shown = colophonSignatureName(name);
-  const data = marker === true ? { "data-colophon-name": "" } : {};
-  if (shown === name)
-    return (
-      <span className={className} {...data}>
-        {name}
-      </span>
-    );
+const ColophonName = ({ name }: { readonly name: string }) => {
+  const shown = colophonHeadName(name);
+  if (shown === name) return <span>{name}</span>;
   return (
     <>
-      <span aria-hidden="true" className={className} {...data}>
-        {shown}
-      </span>
+      <span aria-hidden="true">{shown}</span>
       <span className={styles.srOnly}>{name}</span>
     </>
   );
 };
 
-/**
- * 落款, the column left of the text: the time at its top, small and quiet;
- * at its foot the nickname and the studio plaque side by side (read right to
- * left), the avatar beneath them. The text is described by `namesId` and
- * `timeId`.
- */
-const ColophonSignature = ({
+/** The author's small round face, or the first character of the name. */
+const ColophonFace = ({
   user,
-  createdAt,
-  now,
-  variant,
-  namesId,
-  timeId,
-  onOpenAuthor,
+  className,
 }: {
   readonly user: CommentUserPresentation;
-  readonly createdAt: string | undefined;
-  readonly now: Date;
-  readonly variant: "root" | "reply";
-  readonly namesId: string;
-  readonly timeId: string;
-  readonly onOpenAuthor: (id: string, opener: HTMLElement) => void;
-}) => {
-  return (
-    <footer className={styles.signature} data-colophon-signature={variant}>
-      {createdAt === undefined ? null : (
-        <time
-          className={styles.sigTime}
-          data-colophon-time=""
-          dateTime={createdAt}
-          id={timeId}
-        >
-          <VerticalDigits text={formatColophonTime(createdAt, now)} />
-        </time>
-      )}
-      <span className={styles.sigFoot}>
-        <span className={styles.sigNames} id={namesId}>
-          <ColophonName className={styles.sigName} marker name={user.name} />
-          <StudioName orientation="vertical" value={user.studioName} />
-        </span>
-        <button
-          aria-label={`打开${user.name}的主页`}
-          className={styles.sigAvatar}
-          data-colophon-author=""
-          onClick={(event) => onOpenAuthor(user.id, event.currentTarget)}
-          type="button"
-        >
-          <span
-            aria-label={`${user.name}的头像`}
-            className={styles.sigFace}
-            data-comment-avatar=""
-            role="img"
-          >
-            {user.avatarSrc === undefined || user.avatarSrc === null ? (
-              firstCharacter(user.name)
-            ) : (
-              <img alt="" loading="lazy" src={user.avatarSrc} />
-            )}
-          </span>
-        </button>
-      </span>
-    </footer>
-  );
-};
+  readonly className: string | undefined;
+}) => (
+  <span
+    aria-label={`${user.name}的头像`}
+    className={className}
+    data-comment-avatar=""
+    role="img"
+  >
+    {user.avatarSrc === undefined || user.avatarSrc === null ? (
+      firstCharacter(user.name)
+    ) : (
+      <img alt="" loading="lazy" src={user.avatarSrc} />
+    )}
+  </span>
+);
 
 type ActionKey = "reply" | "like" | "delete";
 
@@ -286,9 +227,11 @@ const ColophonActions = ({
 };
 
 /**
- * A root's or a reply's text, fold control, signature and actions. The text
- * starts with the words themselves (a reply's with 「回复 X：」); the author
- * signs in the column on its left (落款), the time at that column's top.
+ * A root's or a reply's text, fold control, seal and actions. The author
+ * leads the text: the avatar at the top of the first column, the nickname
+ * after it, the text running on in the same flow (a reply's 「回复 X：」
+ * after the nickname). The studio plaque and the time sit at the foot of
+ * the last column (落款, bottom left).
  */
 const ColophonBody = ({
   item,
@@ -300,12 +243,12 @@ const ColophonBody = ({
   readonly item: CommentItem | CommentReply;
   readonly rootId: string;
   readonly replyId: string | undefined;
-  /** A reply's relation, shown as 「回复 X：」 leading its text. */
+  /** A reply's relation, shown as 「回复 X：」 after the nickname. */
   readonly replyTo?: string | undefined;
   readonly interactions: ColophonInteractions;
 }) => {
-  const namesId = useId();
-  const timeId = useId();
+  const nameId = useId();
+  const sealId = useId();
   const textRef = useRef<HTMLDivElement>(null);
   const selected = interactions.selectedId === item.id;
   const folded = foldColophonText(item.text);
@@ -325,16 +268,30 @@ const ColophonBody = ({
   }, [expanded, item.text]);
   const foldable = folded !== null || overflows;
   const toggle = () => interactions.select(selected ? null : item.id);
+  const studioName = item.user.studioName;
+  const headName = colophonHeadName(item.user.name);
+  const hasSeal =
+    item.createdAt !== undefined ||
+    (studioName !== undefined && studioName !== null && studioName !== "");
   return (
     <>
       <div
         className={replyId === undefined ? styles.root : styles.replyBody}
         data-expanded={expanded ? "true" : undefined}
       >
-        <div
-          aria-describedby={
-            item.createdAt === undefined ? namesId : `${namesId} ${timeId}`
+        <button
+          aria-label={`打开${item.user.name}的主页`}
+          className={styles.author}
+          data-colophon-author=""
+          onClick={(event) =>
+            interactions.openAuthor(item.user.id, event.currentTarget)
           }
+          type="button"
+        >
+          <ColophonFace className={styles.face} user={item.user} />
+        </button>
+        <div
+          aria-describedby={hasSeal ? `${nameId} ${sealId}` : nameId}
           aria-pressed={selected}
           className={styles.text}
           data-colophon-text=""
@@ -361,12 +318,21 @@ const ColophonBody = ({
           role="button"
           tabIndex={0}
         >
+          {/* Read once, as the text's description, not as part of it; a
+              cut name is described whole (by the hidden one below). */}
+          <span
+            aria-hidden="true"
+            className={styles.name}
+            data-colophon-name=""
+            id={headName === item.user.name ? nameId : undefined}
+          >
+            {headName}
+          </span>
           {replyTo === undefined ? null : (
             <span className={styles.replyLead} data-colophon-reply-lead="">
               回复 <ColophonName name={replyTo} />：
             </span>
           )}
-          {/* The words alone, after any 「回复 X：」. */}
           <span data-colophon-words="">
             {item.deleted === true && item.text.trim() === "" ? (
               <span className={styles.deleted} data-colophon-deleted="">
@@ -378,6 +344,11 @@ const ColophonBody = ({
               />
             )}
           </span>
+          {headName === item.user.name ? null : (
+            <span hidden id={nameId}>
+              {item.user.name}
+            </span>
+          )}
         </div>
         {!foldable ? null : (
           <button
@@ -390,15 +361,22 @@ const ColophonBody = ({
             {expanded ? "收起" : "全文"}
           </button>
         )}
-        <ColophonSignature
-          createdAt={item.createdAt}
-          namesId={namesId}
-          now={interactions.now}
-          onOpenAuthor={interactions.openAuthor}
-          timeId={timeId}
-          user={item.user}
-          variant={replyId === undefined ? "root" : "reply"}
-        />
+        {hasSeal ? (
+          <footer
+            className={styles.seal}
+            data-colophon-signature={replyId === undefined ? "root" : "reply"}
+            id={sealId}
+          >
+            <StudioName orientation="vertical" value={studioName} />
+            {item.createdAt === undefined ? null : (
+              <time className={styles.sealTime} dateTime={item.createdAt}>
+                <VerticalDigits
+                  text={formatColophonTime(item.createdAt, interactions.now)}
+                />
+              </time>
+            )}
+          </footer>
+        ) : null}
       </div>
       {selected ? (
         <ColophonActions
@@ -414,9 +392,9 @@ const ColophonBody = ({
 };
 
 /**
- * One colophon: the root text signed at its left (落款), then its replies as
- * small annotations (低格夹注) further left, each led by 「回复 X：」 and
- * signed the same way.
+ * One colophon: the root text led by its author and sealed at its bottom
+ * left, then its replies as small annotations (低格夹注) further left, each
+ * led by its author and 「回复 X：」.
  */
 export const ColophonEntry = ({
   comment,

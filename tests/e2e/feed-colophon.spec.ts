@@ -363,56 +363,57 @@ const expectFirstColophonInView = async (feed: PhoneFeed) => {
   expect(geometry.textLeft).toBeGreaterThanOrEqual(geometry.columnRight - 1);
 };
 
-const SIGNED_AT_LEFT = {
-  startsWithFirst: true,
-  leftOfText: true,
-  timeAtTop: true,
-  timeAboveName: true,
-  nameAboveAvatar: true,
-  avatarAtFoot: true,
+const LED_AND_SEALED = {
+  avatarOnTop: true,
+  nameAfterAvatar: true,
+  nameInFirstColumn: true,
+  thenFirst: true,
+  sealLeftOfText: true,
+  sealAtFoot: true,
+  plaqueAboveTime: true,
 };
 
 /**
- * A root's or reply's own text and 落款 (`row` an entry or a reply): the
- * text's first part, and the signature's geometry against the text.
+ * A root's or reply's own text, head and 落款 (`row` an entry or a reply):
+ * the avatar on top of the first column, the nickname after it leading the
+ * text, then `first`; the seal (plaque, then time) at the foot of the column
+ * left of the text.
  */
-const signatureLayout = (row: Locator, first: string) =>
+const headAndSealLayout = (row: Locator, first: string) =>
   row.evaluate((node, firstPart) => {
     const body = node.querySelector(
       ":scope > div:has(> [data-colophon-text])",
     )!;
+    const textNode = body.querySelector(":scope > [data-colophon-text]")!;
     const box = (selector: string) =>
       body.querySelector(`:scope > ${selector}`)!.getBoundingClientRect();
-    const inSignature = (selector: string) =>
+    const inSeal = (selector: string) =>
       body
-        .querySelector(`:scope > [data-colophon-signature] ${selector}`)!
-        .getBoundingClientRect();
+        .querySelector(`:scope > [data-colophon-signature] ${selector}`)
+        ?.getBoundingClientRect();
+    const own = body.getBoundingClientRect();
     const text = box("[data-colophon-text]");
-    const signature = box("[data-colophon-signature]");
-    const time = inSignature("time");
-    const name = inSignature("[data-colophon-name]");
-    // The name's own foot: its end padding (room for WebKit's ellipsis)
-    // hangs past it.
-    const nameFoot =
-      name.bottom -
-      Number.parseFloat(
-        getComputedStyle(
-          body.querySelector(
-            ":scope > [data-colophon-signature] [data-colophon-name]",
-          )!,
-        ).paddingBottom,
-      );
-    const avatar = inSignature("[data-colophon-author]");
+    const avatar = box("[data-colophon-author]");
+    const nameNode = textNode.firstElementChild!;
+    const name = nameNode.getBoundingClientRect();
+    const seal = box("[data-colophon-signature]");
+    const plaque = inSeal("[data-studio-name]");
+    const time = inSeal("time")!;
     return {
-      startsWithFirst:
-        body
-          .querySelector(":scope > [data-colophon-text]")!
-          .firstElementChild?.matches(firstPart) === true,
-      leftOfText: signature.right <= text.left + 1,
-      timeAtTop: Math.abs(time.top - text.top) <= 8,
-      timeAboveName: time.bottom < name.top,
-      nameAboveAvatar: nameFoot <= avatar.top + 1,
-      avatarAtFoot: Math.abs(avatar.bottom - signature.bottom) <= 1,
+      avatarOnTop:
+        Math.abs(avatar.top - text.top) <= 1 &&
+        Math.abs(avatar.right - text.right) <= 1,
+      nameAfterAvatar:
+        nameNode.matches("[data-colophon-name]") &&
+        name.top >= avatar.bottom - 1 &&
+        name.top - avatar.bottom <= 12,
+      nameInFirstColumn:
+        name.left >= avatar.left - 1 && name.right <= avatar.right + 1,
+      thenFirst: nameNode.nextElementSibling?.matches(firstPart) === true,
+      sealLeftOfText: seal.right <= text.left + 1,
+      sealAtFoot: Math.abs(seal.bottom - own.bottom) <= 1,
+      // Not every author has a studio name.
+      plaqueAboveTime: plaque === undefined || plaque.bottom <= time.top + 1,
     };
   }, first);
 
@@ -461,16 +462,17 @@ test("the colophons continue right after the last image, vertical, hot then late
       '[data-comment-reply="reply-1"] [data-colophon-reply-lead]',
     ),
   ).toHaveText(/回复\s*读者1：/u);
-  // 落款: the text starts with its words (a reply's with 「回复 X：」); the
-  // signature column on its left holds the time at the top, the nickname
-  // above the avatar at the foot. Replies, with the least room, too.
+  // The author leads the text: the avatar on top of the first column, the
+  // nickname after it, then the words (a reply's 「回复 X：」); the plaque
+  // and the time seal it at the foot of the last column (落款). Replies,
+  // with the least room, too.
   for (const [selector, first] of [
     ["[data-colophon-entry]", "[data-colophon-words]"],
     ['[data-comment-reply="reply-1"]', "[data-colophon-reply-lead]"],
   ] as const)
     expect(
-      await signatureLayout(feed.post.locator(selector).first(), first),
-    ).toEqual(SIGNED_AT_LEFT);
+      await headAndSealLayout(feed.post.locator(selector).first(), first),
+    ).toEqual(LED_AND_SEALED);
   // A guest reads and is invited to sign in to write, in the input column.
   await expect(
     feed.post.locator("[data-colophon-input] [data-colophon-sign-in]"),
@@ -586,6 +588,24 @@ test("全文 on a colophon longer than a view keeps its start, and a swipe on st
   const feed = await openWithLong(browser, page, testInfo, 480);
   const { entry, fold } = await readLongFromStart(feed);
   const folded = await longEdges(entry);
+  // Cut short and faded, the text still leaves its avatar on top, to tap.
+  expect(
+    await entry.evaluate((node) => {
+      const avatar = node
+        .querySelector(":scope > div > [data-colophon-author]")!
+        .getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        avatar.left + avatar.width / 2,
+        avatar.top + avatar.height / 2,
+      );
+      return {
+        overflow: node
+          .querySelector(":scope > div > [data-colophon-text]")!
+          .getAttribute("data-overflow"),
+        author: hit?.closest("[data-colophon-author]") != null,
+      };
+    }),
+  ).toEqual({ overflow: "true", author: true });
   await fold.click();
   await expect(fold).toHaveText("收起");
   const unfolded = await restingEdges(feed, entry);
@@ -602,7 +622,7 @@ test("全文 on a colophon longer than a view keeps its start, and a swipe on st
   await feed.context?.close();
 });
 
-test("on a narrow phone a long name gives way in the 落款, the time staying at its top", async ({
+test("on a narrow phone a long name is cut at the head, the 落款 staying whole", async ({
   browser,
   page,
 }, testInfo) => {
@@ -614,8 +634,7 @@ test("on a narrow phone a long name gives way in the 落款, the time staying at
   };
   const old = "2024-12-31T03:00:00.000Z";
   const feed = await openPhoneFeed(browser, page, testInfo, 0, {
-    // A fold phone's cover screen: on the fixture's 4:5 stage the 落款 runs
-    // short there, as it does on a square stage from 375 down.
+    // A fold phone's cover screen: the fixture's 4:5 stage at its least.
     viewport: { width: 280, height: 653 },
     adjust: (answer) => {
       const hot = answer.hot[0];
@@ -631,10 +650,26 @@ test("on a narrow phone a long name gives way in the 落款, the time staying at
     ['[data-colophon-entry][data-comment-id="hot-1"]', "[data-colophon-words]"],
     ['[data-comment-reply="reply-1"]', "[data-colophon-reply-lead]"],
   ] as const)
-    expect(await signatureLayout(feed.post.locator(selector), first)).toEqual(
-      SIGNED_AT_LEFT,
+    expect(await headAndSealLayout(feed.post.locator(selector), first)).toEqual(
+      LED_AND_SEALED,
     );
-  // The avatar still names the author in full.
+  // Cut at the head; the avatar still names the author in full.
+  await expect(
+    feed.post.locator(
+      '[data-comment-reply="reply-1"] [data-colophon-text] > [data-colophon-name]',
+    ),
+  ).toHaveText(`${[...author.displayName].slice(0, 11).join("")}…`);
+  // The whole 落款 inside the stage.
+  const sealInStage = await feed.post
+    .locator('[data-colophon-entry][data-comment-id="hot-1"]')
+    .evaluate((node) => {
+      const stage = node.closest("[data-feed-stage]")!.getBoundingClientRect();
+      const seal = node
+        .querySelector(":scope > div > [data-colophon-signature]")!
+        .getBoundingClientRect();
+      return seal.top >= stage.top && seal.bottom <= stage.bottom;
+    });
+  expect(sealInStage).toBe(true);
   await expect(
     feed.post.locator('[data-comment-reply="reply-1"] [data-colophon-author]'),
   ).toHaveAttribute("aria-label", `打开${author.displayName}的主页`);

@@ -188,23 +188,7 @@ const $ = <T extends Element = HTMLElement>(selector: string) =>
 const $$ = (selector: string) => [
   ...host.querySelectorAll<HTMLElement>(selector),
 ];
-/** A signature's parts in document order: time, name, plaque, avatar. */
-const signatureOrder = (signature: Element | null | undefined) =>
-  [
-    ...(signature?.querySelectorAll(
-      "time,[data-colophon-name],[data-studio-name],[data-colophon-author]",
-    ) ?? []),
-  ].map((part) =>
-    part.matches("time")
-      ? "time"
-      : part.matches("[data-colophon-author]")
-        ? "avatar"
-        : part.matches("[data-colophon-name]")
-          ? "name"
-          : "plaque",
-  );
-
-/** A colophon's own words, without the 「回复 X：」 leading a reply's. */
+/** A colophon's own words, without the nickname or 「回复 X：」 leading them. */
 const words = (text: Element | null | undefined) =>
   text?.querySelector("[data-colophon-words]")?.textContent;
 const click = (node: Element | null) =>
@@ -374,42 +358,15 @@ describe("FeedColophon", () => {
     expect($$("[data-colophon-skeleton]")).toHaveLength(0);
   });
 
-  it("starts each colophon with its words and signs it at the left, the time on top", () => {
+  it("leads each colophon with its author and seals it with plaque and time", () => {
     h.thread = makeThread({
       items: [comment("c1", { ...writer, studioName: "听雨轩" })],
     });
     render();
-    const text = $("[data-colophon-text]");
-    // The text starts with the words themselves: no avatar or nickname.
-    expect(text?.parentElement?.firstElementChild).toBe(text);
-    expect(text?.querySelector("[data-colophon-name]")).toBeNull();
-    expect(text?.textContent).toBe("c1 的题跋");
-    expect(words(text)).toBe("c1 的题跋");
-    // 落款, after the text: the time first (at the column's top), then the
-    // nickname and the plaque, then the avatar at the foot.
-    const signature = $("[data-colophon-signature=root]");
-    expect(signature?.tagName).toBe("FOOTER");
-    expect(signature?.previousElementSibling).toBe(text);
-    const time = signature?.firstElementChild as HTMLElement | null;
-    expect(time?.tagName).toBe("TIME");
-    expect(time?.getAttribute("dateTime")).toBe("2026-10-09T11:57:00.000Z");
-    const name = signature?.querySelector<HTMLElement>("[data-colophon-name]");
-    expect(name?.textContent).toBe("甲");
-    expect(
-      signature
-        ?.querySelector("[data-studio-name]")
-        ?.getAttribute("aria-label"),
-    ).toBe("斋号：听雨轩");
-    expect(signatureOrder(signature)).toEqual([
-      "time",
-      "name",
-      "plaque",
-      "avatar",
-    ]);
-    const avatar = signature?.querySelector<HTMLButtonElement>(
-      "[data-colophon-author]",
-    );
-    expect(avatar?.tagName).toBe("BUTTON");
+    const body = $("[data-colophon-text]")?.parentElement;
+    // The avatar first, a button of its own (not inside the text button).
+    const avatar = body?.firstElementChild as HTMLButtonElement | null;
+    expect(avatar?.matches("[data-colophon-author]")).toBe(true);
     expect(avatar?.getAttribute("aria-label")).toBe("打开甲的主页");
     expect(
       avatar
@@ -417,59 +374,72 @@ describe("FeedColophon", () => {
         ?.getAttribute("aria-label"),
     ).toBe("甲的头像");
     expect(avatar?.textContent).toBe("甲");
-    click(avatar!);
+    expect(avatar?.closest("[data-colophon-text]")).toBeNull();
+    click(avatar);
     expect(h.openProfile).toHaveBeenCalledWith("writer", avatar);
-    // The text is described by its author (with the plaque) and the time.
-    const [namesId, timeId] = (
-      text?.getAttribute("aria-describedby") ?? ""
-    ).split(" ");
-    expect(document.getElementById(namesId!)?.contains(name!)).toBe(true);
+    // Then the nickname, leading the text in the same flow.
+    const text = $("[data-colophon-text]");
+    const name = text?.firstElementChild as HTMLElement | null;
+    expect(name?.dataset.colophonName).toBe("");
+    expect(name?.textContent).toBe("甲");
+    expect(name?.getAttribute("aria-hidden")).toBe("true");
+    expect(words(text)).toBe("c1 的题跋");
+    // 落款: the plaque and the time, after the text.
+    const seal = $("[data-colophon-signature=root]");
+    expect(seal?.previousElementSibling).toBe(text);
     expect(
-      document.getElementById(namesId!)?.querySelector("[data-studio-name]"),
-    ).not.toBeNull();
-    expect(document.getElementById(timeId!)).toBe(time);
+      seal?.querySelector("[data-studio-name]")?.getAttribute("aria-label"),
+    ).toBe("斋号：听雨轩");
+    expect(seal?.querySelector("time")?.getAttribute("dateTime")).toBe(
+      "2026-10-09T11:57:00.000Z",
+    );
+    expect(seal?.querySelector("button,[data-comment-avatar]")).toBeNull();
+    // The text is described by its author, plaque and time.
+    expect(text?.getAttribute("aria-describedby")).toBe(
+      `${name?.id} ${seal?.id}`,
+    );
   });
 
-  it("describes a colophon without a time by its author alone", () => {
+  it("describes a colophon without plaque or time by its author alone", () => {
     const undated: { -readonly [K in keyof CommentItem]?: CommentItem[K] } =
       comment("c1", writer);
     delete undated.createdAt;
     h.thread = makeThread({ items: [undated as CommentItem] });
     render();
-    const signature = $("[data-colophon-signature]");
-    expect(signature?.querySelector("time")).toBeNull();
-    expect(signature?.querySelector("[data-colophon-author]")).not.toBeNull();
+    expect($("[data-colophon-signature]")).toBeNull();
     const text = $("[data-colophon-text]");
-    const described = text?.getAttribute("aria-describedby") ?? "";
-    expect(described.split(" ")).toHaveLength(1);
-    expect(document.getElementById(described)?.textContent).toBe("甲");
+    expect(text?.getAttribute("aria-describedby")).toBe(
+      text?.querySelector("[data-colophon-name]")?.id,
+    );
   });
 
-  it("cuts a long nickname in the signature, the avatar and description keeping it whole", () => {
+  it("cuts a long nickname at the head, the avatar and description keeping it whole", () => {
     const long = { ...writer, name: "长".repeat(40) };
     h.thread = makeThread({ items: [comment("c1", long)] });
     render();
-    const name = $("[data-colophon-signature] [data-colophon-name]");
-    expect(name?.textContent).toBe(`${"长".repeat(11)}…`);
-    expect(name?.getAttribute("aria-hidden")).toBe("true");
+    const text = $("[data-colophon-text]");
+    expect(text?.querySelector("[data-colophon-name]")?.textContent).toBe(
+      `${"长".repeat(11)}…`,
+    );
     expect($("[data-colophon-author]")?.getAttribute("aria-label")).toBe(
       `打开${"长".repeat(40)}的主页`,
     );
-    const [namesId] = (
-      $("[data-colophon-text]")?.getAttribute("aria-describedby") ?? ""
-    ).split(" ");
-    const names = document.getElementById(namesId!);
-    // Read whole: the cut name is hidden, the full one is there for the
-    // description.
+    // Described whole: not by the cut name but by a hidden full one, past
+    // the words; the name still leads them.
     expect(
-      [...(names?.children ?? [])]
-        .filter((part) => part.getAttribute("aria-hidden") !== "true")
-        .map((part) => part.textContent)
-        .join(""),
-    ).toBe("长".repeat(40));
+      text
+        ?.querySelector("[data-colophon-name]")
+        ?.nextElementSibling?.matches("[data-colophon-words]"),
+    ).toBe(true);
+    const [nameId] = (text?.getAttribute("aria-describedby") ?? "").split(" ");
+    const described = document.getElementById(nameId!);
+    expect(described?.hasAttribute("data-colophon-name")).toBe(false);
+    expect(described?.hidden).toBe(true);
+    expect(described?.textContent).toBe("长".repeat(40));
+    expect(words(text)).toBe("c1 的题跋");
   });
 
-  it("cuts a long nickname in 「回复 X：」 as in the signature, read whole", () => {
+  it("cuts a long nickname in 「回复 X：」 as at the head, read whole", () => {
     const long = { ...other, name: "长".repeat(17) };
     h.thread = makeThread({
       items: [comment("c1", long, { replies: [reply("r1", writer)] })],
@@ -599,7 +569,7 @@ describe("FeedColophon", () => {
       items: [
         comment("c1", writer, {
           replies: [
-            reply("r1", { ...other, studioName: "洗砚斋" }),
+            reply("r1", other),
             reply("r2", writer, { replyToUser: other }),
           ],
           replyTotal: 6,
@@ -612,29 +582,22 @@ describe("FeedColophon", () => {
     expect(
       $$("[data-colophon-reply-lead]").map((lead) => lead.textContent),
     ).toEqual(["回复 甲：", "回复 乙："]);
-    // Each reply starts with the relation, then its words: 回复 甲：…
+    // Each reply is led by its own author, then the relation: 乙 回复 甲：…
     const replyText = $('[data-comment-reply="r1"] [data-colophon-text]');
     expect(
       [...(replyText?.children ?? [])].map(
         (part) => (part as HTMLElement).textContent,
       ),
-    ).toEqual(["回复 甲：", "r1 的回复"]);
+    ).toEqual(["乙", "回复 甲：", "r1 的回复"]);
     expect(
       $('[data-comment-reply="r1"] [data-colophon-author]')?.getAttribute(
         "aria-label",
       ),
     ).toBe("打开乙的主页");
-    const replySignature = $(
-      '[data-comment-reply="r1"] [data-colophon-signature]',
-    );
-    expect(replySignature?.dataset.colophonSignature).toBe("reply");
-    // Signed like a root: the time on top, the avatar at the foot.
-    expect(signatureOrder(replySignature)).toEqual([
-      "time",
-      "name",
-      "plaque",
-      "avatar",
-    ]);
+    expect(
+      $('[data-comment-reply="r1"] [data-colophon-signature]')?.dataset
+        .colophonSignature,
+    ).toBe("reply");
     expect(
       $$("[data-comment-reply]").map((node) => node.dataset.colophonAnchor),
     ).toEqual(["r1", "r2"]);
@@ -645,7 +608,7 @@ describe("FeedColophon", () => {
     expect(h.thread.loadReplies).toHaveBeenCalledWith("c1");
   });
 
-  it("keeps a deleted root's signature and says its text was deleted", () => {
+  it("keeps a deleted root's author and says its text was deleted", () => {
     h.thread = makeThread({
       items: [
         comment("c1", writer, {
@@ -657,11 +620,7 @@ describe("FeedColophon", () => {
     });
     render();
     const text = $('[data-comment-id="c1"] [data-colophon-text]');
-    expect(
-      $(
-        '[data-comment-id="c1"] [data-colophon-signature=root] [data-colophon-name]',
-      )?.textContent,
-    ).toBe("甲");
+    expect(text?.querySelector("[data-colophon-name]")?.textContent).toBe("甲");
     expect(words(text)).toBe("该正文已删除");
     expect(text?.querySelector("[data-colophon-deleted]")).not.toBeNull();
     expect(
