@@ -164,53 +164,103 @@ function AccountMessages({
   const useOpenRequest = directMessages.useOpenRequest ?? noOpenRequest;
   const openRequest = useOpenRequest();
   const handledOpenRequest = useRef<number | null>(null);
+  const closingEntry = useRef<string | null>(null);
+  const requestSource = useRef<{
+    token: number;
+    profileEntryId: string | null;
+  } | null>(null);
   useEffect(() => {
     if (openRequest === null || handledOpenRequest.current === openRequest)
       return;
+    if (requestSource.current?.token !== openRequest)
+      requestSource.current = {
+        token: openRequest,
+        profileEntryId: shell.activeProfile?.entryId ?? null,
+      };
     if (!confirmed) return;
-    let frame = 0,
-      attempts = 0,
-      hostless = false;
+    let frame = 0;
+    let navigationAttempts = 0;
     const tryOpen = () => {
       frame = 0;
+      if (handledOpenRequest.current === openRequest) return;
+      const trigger = opener.current;
+      if (!trigger) return;
+      const host = trigger.closest<HTMLElement>("[data-primary-destination]");
+      const activeHasHost = document.querySelector(
+        '[data-primary-destination][data-active="true"] [data-live-message-trigger]',
+      );
+      const hostless =
+        host?.dataset.primaryDestination === "home" && !activeHasHost;
+      if (host && host.dataset.active !== "true" && !hostless) return;
+      // The profile already requested Back. Wait for that transition before
+      // closing the Detail/Topic it restores; only this destination's host
+      // owns the request, so retained headers cannot advance history twice.
       if (
-        !opener.current ||
-        opener.current.closest('[inert], [hidden], [aria-hidden="true"]')
-      ) {
-        // The request arrives in the same commit that closes the profile that
-        // issued it, while the page behind that profile is still inert. The
-        // active host becomes reachable a frame or two later; hosts of other
-        // destinations stay hidden and give up after a bounded wait.
-        // The user destination has no message host at all: there the home
-        // host brings the home destination forward, then opens as usual. The
-        // shell refuses to switch while the closing profile is still
-        // registered, so the (idempotent) switch is retried each frame.
-        const destination = opener.current
-          ?.closest("[data-primary-destination]")
-          ?.getAttribute("data-primary-destination");
-        const activeHasHost = document.querySelector(
-          '[data-primary-destination][data-active="true"] [data-live-message-trigger]',
-        );
-        if (destination === "home" && !activeHasHost) {
-          hostless = true;
-          shell.navigatePrimary("home");
+        shell.activeProfile &&
+        shell.activeProfile.entryId === requestSource.current?.profileEntryId
+      )
+        return;
+      const overlay = shell.activeProfile
+        ? `profile:${shell.activeProfile.entryId}`
+        : shell.activeContent
+          ? `${shell.activeContent.type}:${shell.activeContent.id}`
+          : shell.activeTopicId
+            ? `topic:${shell.activeTopicId}`
+            : null;
+      if (overlay) {
+        const entry = `${openRequest}:${overlay}`;
+        if (closingEntry.current !== entry) {
+          closingEntry.current = entry;
+          window.history.back();
         }
-        attempts += 1;
-        if (attempts < (hostless ? 120 : 30))
-          frame = requestAnimationFrame(tryOpen);
+        return;
+      }
+      if (hostless) {
+        shell.navigatePrimary("home");
+        if (++navigationAttempts < 120) frame = requestAnimationFrame(tryOpen);
+        return;
+      }
+      if (trigger.closest('[inert], [hidden], [aria-hidden="true"]')) {
         return;
       }
       handledOpenRequest.current = openRequest;
+      observer.disconnect();
+      returning.current = null;
       setView("home");
       setNotice("");
       setCloseRequested(false);
       setOpen(true);
     };
+    // Observe actual isolation changes instead of giving up after a fixed
+    // number of frames while a history transition is still pending.
+    const observer = new MutationObserver(() => {
+      if (!frame) frame = requestAnimationFrame(tryOpen);
+    });
+    for (
+      let ancestor: HTMLElement | null = opener.current;
+      ancestor;
+      ancestor = ancestor.parentElement
+    ) {
+      observer.observe(ancestor, {
+        attributes: true,
+        attributeFilter: ["inert", "hidden", "aria-hidden", "data-active"],
+      });
+    }
     tryOpen();
     return () => {
+      observer.disconnect();
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [openRequest, confirmed]);
+  }, [
+    openRequest,
+    confirmed,
+    shell.activeProfile,
+    shell.activeContent?.type,
+    shell.activeContent?.id,
+    shell.activeTopicId,
+    shell.activeDestination,
+    shell.navigatePrimary,
+  ]);
   const entryOpened = useRef(false);
   useEffect(() => {
     if (entryOpened.current || author.checking) return;
