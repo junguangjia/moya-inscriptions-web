@@ -1,13 +1,13 @@
 "use client";
-import { memo, useId, useLayoutEffect, useRef, useState } from "react";
-import type { KeyboardEvent, ReactNode, RefObject } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
+import type { KeyboardEvent, RefObject } from "react";
 import type {
   CommentItem,
   CommentReply,
   CommentReplyTarget,
   CommentUserPresentation,
 } from "../comments/comment-types";
-import { UserIdentity } from "./user-identity";
+import { StudioName } from "./user-identity";
 import {
   formatColophonTime,
   VerticalDigits,
@@ -38,6 +38,19 @@ export const foldColophonText = (text: string): string | null => {
 /** Shown where a deleted root's text was, while its replies remain. */
 export const COLOPHON_DELETED_TEXT = "该正文已删除";
 
+/**
+ * The nickname in a colophon's signature shows at most this many characters
+ * (code points); a longer one (display names run to 40) is cut with …, the
+ * full name staying in the avatar's label and the text's description.
+ */
+export const COLOPHON_NAME_CHARS = 12;
+export const colophonSignatureName = (name: string): string => {
+  const characters = [...name];
+  return characters.length > COLOPHON_NAME_CHARS
+    ? `${characters.slice(0, COLOPHON_NAME_CHARS - 1).join("")}…`
+    : name;
+};
+
 /** What every colophon row shares with the colophons around it. */
 export interface ColophonInteractions {
   /** The reader's id; never matches a row for a guest. */
@@ -47,9 +60,11 @@ export interface ColophonInteractions {
   readonly selectedId: string | null;
   /** The row briefly marked after it was sent. */
   readonly flashId: string | null;
+  /** The row the input answers, marked while it does. */
+  readonly replyTargetId?: string | null;
   readonly expanded: ReadonlySet<string>;
   readonly repliesLoading: ReadonlySet<string>;
-  /** Whether 回复 is offered (signed in or out, composer not closed). */
+  /** Whether 回复 is offered (signed in or out, the thread not closed). */
   readonly canReply: boolean;
   readonly select: (id: string | null) => void;
   readonly toggleFold: (id: string) => void;
@@ -67,83 +82,101 @@ export interface ColophonInteractions {
 const firstCharacter = (name: string) => [...name.trim()][0] ?? "访";
 
 /**
- * Bottom-left signature: the time, then the nickname with its studio plaque
- * (read right to left in that order), the avatar beneath them. A draft's
- * signature is `presentational` (inside the draft's own button: spans only,
- * no avatar button) and shows its `mark` where the time would be.
+ * A nickname as a colophon shows it: cut with … past `COLOPHON_NAME_CHARS`,
+ * the full name kept for assistive technology.
  */
-export const ColophonSignature = memo(function ColophonSignature({
-  id,
+const ColophonName = ({
+  name,
+  className,
+  marker,
+}: {
+  readonly name: string;
+  readonly className?: string | undefined;
+  /** Marks the shown name (`data-colophon-name`) in the signature. */
+  readonly marker?: boolean;
+}) => {
+  const shown = colophonSignatureName(name);
+  const data = marker === true ? { "data-colophon-name": "" } : {};
+  if (shown === name)
+    return (
+      <span className={className} {...data}>
+        {name}
+      </span>
+    );
+  return (
+    <>
+      <span aria-hidden="true" className={className} {...data}>
+        {shown}
+      </span>
+      <span className={styles.srOnly}>{name}</span>
+    </>
+  );
+};
+
+/**
+ * 落款, the column left of the text: the time at its top, small and quiet;
+ * at its foot the nickname and the studio plaque side by side (read right to
+ * left), the avatar beneath them. The text is described by `namesId` and
+ * `timeId`.
+ */
+const ColophonSignature = ({
   user,
   createdAt,
   now,
   variant,
+  namesId,
+  timeId,
   onOpenAuthor,
-  presentational = false,
-  mark,
 }: {
-  readonly id?: string | undefined;
   readonly user: CommentUserPresentation;
   readonly createdAt: string | undefined;
   readonly now: Date;
   readonly variant: "root" | "reply";
-  readonly onOpenAuthor?:
-    ((id: string, opener: HTMLElement) => void) | undefined;
-  readonly presentational?: boolean;
-  readonly mark?: ReactNode;
-}) {
-  const face = (
-    <span
-      aria-label={presentational ? undefined : `${user.name}的头像`}
-      className={styles.sigFace}
-      data-comment-avatar=""
-      role={presentational ? undefined : "img"}
-    >
-      {user.avatarSrc === undefined || user.avatarSrc === null ? (
-        firstCharacter(user.name)
-      ) : (
-        <img alt="" loading="lazy" src={user.avatarSrc} />
-      )}
-    </span>
-  );
-  const className = `${styles.signature} ${variant === "reply" ? styles.replySignature : ""}`;
-  const meta = (
-    <span className={styles.sigMeta}>
-      {createdAt === undefined ? (
-        (mark ?? null)
-      ) : (
-        <time className={styles.sigTime} dateTime={createdAt}>
+  readonly namesId: string;
+  readonly timeId: string;
+  readonly onOpenAuthor: (id: string, opener: HTMLElement) => void;
+}) => {
+  return (
+    <footer className={styles.signature} data-colophon-signature={variant}>
+      {createdAt === undefined ? null : (
+        <time
+          className={styles.sigTime}
+          data-colophon-time=""
+          dateTime={createdAt}
+          id={timeId}
+        >
           <VerticalDigits text={formatColophonTime(createdAt, now)} />
         </time>
       )}
-      <UserIdentity
-        name={user.name}
-        orientation="vertical"
-        studioName={user.studioName}
-      />
-    </span>
-  );
-  if (presentational)
-    return (
-      <span className={className} data-colophon-signature={variant} id={id}>
-        {meta}
-        <span className={styles.sigAvatar}>{face}</span>
+      <span className={styles.sigFoot}>
+        <span className={styles.sigNames} id={namesId}>
+          <ColophonName className={styles.sigName} marker name={user.name} />
+          <StudioName orientation="vertical" value={user.studioName} />
+        </span>
+        <button
+          aria-label={`打开${user.name}的主页`}
+          className={styles.sigAvatar}
+          data-colophon-author=""
+          onClick={(event) => onOpenAuthor(user.id, event.currentTarget)}
+          type="button"
+        >
+          <span
+            aria-label={`${user.name}的头像`}
+            className={styles.sigFace}
+            data-comment-avatar=""
+            role="img"
+          >
+            {user.avatarSrc === undefined || user.avatarSrc === null ? (
+              firstCharacter(user.name)
+            ) : (
+              <img alt="" loading="lazy" src={user.avatarSrc} />
+            )}
+          </span>
+        </button>
       </span>
-    );
-  return (
-    <footer className={className} data-colophon-signature={variant} id={id}>
-      {meta}
-      <button
-        aria-label={`打开${user.name}的主页`}
-        className={styles.sigAvatar}
-        onClick={(event) => onOpenAuthor?.(user.id, event.currentTarget)}
-        type="button"
-      >
-        {face}
-      </button>
     </footer>
   );
-});
+};
 
 type ActionKey = "reply" | "like" | "delete";
 
@@ -252,21 +285,27 @@ const ColophonActions = ({
   );
 };
 
-/** A root's or a reply's text, fold control, signature and actions. */
+/**
+ * A root's or a reply's text, fold control, signature and actions. The text
+ * starts with the words themselves (a reply's with 「回复 X：」); the author
+ * signs in the column on its left (落款), the time at that column's top.
+ */
 const ColophonBody = ({
   item,
   rootId,
   replyId,
-  lead,
+  replyTo,
   interactions,
 }: {
   readonly item: CommentItem | CommentReply;
   readonly rootId: string;
   readonly replyId: string | undefined;
-  readonly lead?: ReactNode;
+  /** A reply's relation, shown as 「回复 X：」 leading its text. */
+  readonly replyTo?: string | undefined;
   readonly interactions: ColophonInteractions;
 }) => {
-  const signatureId = useId();
+  const namesId = useId();
+  const timeId = useId();
   const textRef = useRef<HTMLDivElement>(null);
   const selected = interactions.selectedId === item.id;
   const folded = foldColophonText(item.text);
@@ -293,12 +332,22 @@ const ColophonBody = ({
         data-expanded={expanded ? "true" : undefined}
       >
         <div
-          aria-describedby={signatureId}
+          aria-describedby={
+            item.createdAt === undefined ? namesId : `${namesId} ${timeId}`
+          }
           aria-pressed={selected}
           className={styles.text}
           data-colophon-text=""
           data-folded={foldable ? String(!expanded) : undefined}
           data-overflow={overflows && !expanded ? "true" : undefined}
+          onMouseDown={(event) => {
+            // While a colophon is being written, choosing another one to
+            // answer keeps the keyboard up: the text never takes the focus.
+            if (
+              document.activeElement?.closest("[data-colophon-input]") != null
+            )
+              event.preventDefault();
+          }}
           onClick={() => {
             // Selecting text never changes the selected colophon.
             if (window.getSelection()?.isCollapsed !== false) toggle();
@@ -312,16 +361,23 @@ const ColophonBody = ({
           role="button"
           tabIndex={0}
         >
-          {lead}
-          {item.deleted === true && item.text.trim() === "" ? (
-            <span className={styles.deleted} data-colophon-deleted="">
-              {COLOPHON_DELETED_TEXT}
+          {replyTo === undefined ? null : (
+            <span className={styles.replyLead} data-colophon-reply-lead="">
+              回复 <ColophonName name={replyTo} />：
             </span>
-          ) : (
-            <VerticalText
-              text={folded !== null && !expanded ? folded : item.text}
-            />
           )}
+          {/* The words alone, after any 「回复 X：」. */}
+          <span data-colophon-words="">
+            {item.deleted === true && item.text.trim() === "" ? (
+              <span className={styles.deleted} data-colophon-deleted="">
+                {COLOPHON_DELETED_TEXT}
+              </span>
+            ) : (
+              <VerticalText
+                text={folded !== null && !expanded ? folded : item.text}
+              />
+            )}
+          </span>
         </div>
         {!foldable ? null : (
           <button
@@ -336,9 +392,10 @@ const ColophonBody = ({
         )}
         <ColophonSignature
           createdAt={item.createdAt}
-          id={signatureId}
+          namesId={namesId}
           now={interactions.now}
           onOpenAuthor={interactions.openAuthor}
+          timeId={timeId}
           user={item.user}
           variant={replyId === undefined ? "root" : "reply"}
         />
@@ -357,18 +414,16 @@ const ColophonBody = ({
 };
 
 /**
- * One colophon: the root text signed at its bottom left, then its replies as
- * small annotations (低格夹注) further left, each led by 「回复 X：」.
+ * One colophon: the root text signed at its left (落款), then its replies as
+ * small annotations (低格夹注) further left, each led by 「回复 X：」 and
+ * signed the same way.
  */
 export const ColophonEntry = ({
   comment,
   interactions,
-  draft,
 }: {
   readonly comment: CommentItem;
   readonly interactions: ColophonInteractions;
-  /** A reply being written to this colophon: its last annotation. */
-  readonly draft?: ReactNode;
 }) => {
   const remaining =
     comment.replyRemaining ??
@@ -379,12 +434,15 @@ export const ColophonEntry = ({
     );
   const highlight = (id: string) =>
     interactions.flashId === id ? "true" : undefined;
+  const replyTarget = (id: string) =>
+    interactions.replyTargetId === id ? "" : undefined;
   return (
     <li
       className={styles.entry}
       data-colophon-anchor={comment.id}
       data-colophon-entry=""
       data-colophon-highlight={highlight(comment.id)}
+      data-colophon-reply-target={replyTarget(comment.id)}
       data-comment-id={comment.id}
       data-selected={
         interactions.selectedId === comment.id ? "true" : undefined
@@ -403,21 +461,15 @@ export const ColophonEntry = ({
               className={styles.reply}
               data-colophon-anchor={reply.id}
               data-colophon-highlight={highlight(reply.id)}
+              data-colophon-reply-target={replyTarget(reply.id)}
               data-comment-reply={reply.id}
               key={reply.id}
             >
               <ColophonBody
                 interactions={interactions}
                 item={reply}
-                lead={
-                  <span
-                    className={styles.replyLead}
-                    data-colophon-reply-lead=""
-                  >
-                    回复 {(reply.replyToUser ?? comment.user).name}：
-                  </span>
-                }
                 replyId={reply.id}
+                replyTo={(reply.replyToUser ?? comment.user).name}
                 rootId={comment.id}
               />
             </li>
@@ -435,7 +487,6 @@ export const ColophonEntry = ({
           <VerticalDigits text={`余${remaining}则回复`} />
         </button>
       ) : null}
-      {draft}
     </li>
   );
 };

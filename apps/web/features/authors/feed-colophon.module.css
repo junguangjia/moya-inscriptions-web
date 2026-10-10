@@ -14,10 +14,12 @@
      against the viewport height when the height is a percentage. */
   height: 100cqh;
   margin: 0;
-  padding-block: var(--yoyi-space-6);
+  /* No padding at the left end: the end column's own keeps the last
+     colophons clear of the input column held at the stage's left edge. */
+  padding-block: var(--yoyi-space-6) 0;
   /* The foot keeps clear of the dock, which overlaps the stage's bottom
      while the post rests at the top of the feed. */
-  padding-inline: var(--yoyi-space-6) var(--yoyi-space-8);
+  padding-inline: var(--colophon-top) var(--yoyi-space-8);
   color: var(--yoyi-color-text-primary);
   background: transparent;
   font-family: var(--yoyi-font-editorial);
@@ -26,10 +28,15 @@
   text-orientation: mixed;
   line-break: strict;
   overflow-wrap: anywhere;
-  /* One stage view less the snap gutter on the right and as much on the
-     left: a folded colophon and its signature fit inside it. The strip is
-     the size container. */
-  --colophon-view: calc(100cqw - 2 * var(--yoyi-space-6));
+  --colophon-top: var(--yoyi-space-6);
+  /* The input column's idle width (feed-colophon-input.module.css). */
+  --colophon-input-clear: var(--yoyi-space-10);
+  /* One stage view less the snap gutter on the right and as much left of
+     the input column: a folded colophon and its 落款 fit inside it, clear
+     of the column. The strip is the size container. */
+  --colophon-view: calc(
+    100cqw - 2 * var(--yoyi-space-6) - var(--colophon-input-clear)
+  );
   /* A selected text's action column: its 44 px buttons and their margins. */
   --colophon-actions: calc(44px + 2 * var(--yoyi-space-2));
 }
@@ -42,6 +49,16 @@
 .end {
   scroll-snap-align: start;
   scroll-margin-right: var(--yoyi-space-6);
+}
+
+/* An unfolded colophon runs on past the stage's left edge: its 落款 is a
+   snap point of its own, at the left, clear of the input column there,
+   that a swipe stops at rather than throwing on to the next colophon. */
+.root[data-expanded] > .signature,
+.replyBody[data-expanded] > .signature {
+  scroll-snap-align: end;
+  scroll-snap-stop: always;
+  scroll-margin-left: calc(var(--colophon-input-clear) + var(--yoyi-space-6));
 }
 
 .head {
@@ -60,14 +77,14 @@
   letter-spacing: 0.3em;
 }
 
-.headCount,
-.headNote {
+.headCount {
   margin: 0;
   color: var(--yoyi-color-text-secondary);
   font-size: var(--yoyi-type-body-small-size);
 }
 
-.write {
+/* 重试 after a read error. */
+.retry {
   display: inline-flex;
   box-sizing: border-box;
   min-width: 44px;
@@ -86,239 +103,6 @@
   text-decoration: none;
   writing-mode: vertical-rl;
   cursor: pointer;
-}
-
-/* The invite slip: the head's last column, full height, saying one can
-   write here. Its width is the same in every state, so the strip never
-   moves as the session is confirmed. The prompt and pen at the top, the
-   reader's own avatar at the foot. */
-.invite {
-  display: flex;
-  flex-direction: row;
-  box-sizing: border-box;
-  align-self: stretch;
-  align-items: center;
-  justify-content: space-between;
-  min-block-size: 44px;
-  margin: 0;
-  padding: var(--yoyi-space-3) var(--yoyi-space-2);
-  color: var(--yoyi-color-text-secondary);
-  background: transparent;
-  border: 1px dashed var(--yoyi-color-border-strong);
-  border-radius: var(--yoyi-radius-sm);
-  font: inherit;
-  font-size: var(--yoyi-type-label-size);
-  text-decoration: none;
-  writing-mode: vertical-rl;
-  cursor: text;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.invitePrompt {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: var(--yoyi-space-2);
-  color: var(--yoyi-color-text-secondary);
-  font-size: var(--yoyi-type-label-size);
-  letter-spacing: 0.3em;
-}
-
-/* A pen resting where the writing would start. */
-.invitePen {
-  display: inline-block;
-  inline-size: 2px;
-  block-size: 1em;
-  background: var(--yoyi-color-seal-red);
-}
-
-.inviteFace {
-  display: grid;
-  flex: none;
-  box-sizing: border-box;
-  width: 28px;
-  height: 28px;
-  overflow: hidden;
-  place-items: center;
-  color: var(--yoyi-color-text-secondary);
-  background: var(--yoyi-color-background-muted);
-  border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-full);
-  font-family: var(--yoyi-font-interface);
-  font-size: var(--yoyi-type-caption-size);
-  letter-spacing: normal;
-  writing-mode: horizontal-tb;
-}
-
-.inviteFace img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.invite[data-colophon-invite="signed-out"] {
-  cursor: pointer;
-}
-
-.invite[data-colophon-invite="signed-out"] .invitePrompt {
-  color: var(--yoyi-color-text-primary);
-}
-
-.invite[data-colophon-invite="signed-out"] .inviteFace {
-  background: transparent;
-  border-style: dashed;
-  border-color: var(--yoyi-color-border-strong);
-}
-
-.invite[data-colophon-invite="closed"],
-.invite[data-colophon-invite="unavailable"] {
-  justify-content: flex-start;
-  border-style: solid;
-  border-color: var(--yoyi-color-border-subtle);
-  letter-spacing: 0.15em;
-  cursor: default;
-}
-
-/* Long enough to be noticed as the strip comes to rest, as a published
-   colophon's mark is. */
-.invite[data-colophon-invite-cue] {
-  animation: colophon-ink
-    var(--colophon-highlight-ms, var(--yoyi-duration-slow))
-    var(--yoyi-easing-standard) 1;
-}
-
-/* While a new colophon is written in the head or the end column, it takes
-   one view; the draft sheet fills what its title leaves. */
-.head[data-colophon-drafting],
-.end[data-colophon-drafting] {
-  block-size: var(--colophon-view);
-}
-
-/* The slip (or the end pill) as the draft sheet: the same button. */
-.sheet {
-  display: flex;
-  flex: 1 1 0;
-  box-sizing: border-box;
-  align-self: stretch;
-  min-block-size: 0;
-  margin: 0;
-  padding: 0;
-  color: var(--yoyi-color-text-primary);
-  background: transparent;
-  border: 0;
-  font: inherit;
-  letter-spacing: normal;
-  text-align: start;
-  writing-mode: vertical-rl;
-  cursor: text;
-  -webkit-tap-highlight-color: transparent;
-}
-
-/* A draft looks like the colophon it will be, framed and marked as one. */
-.draftSheet {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  box-sizing: border-box;
-  inline-size: 100%;
-  block-size: 100%;
-  contain: strict;
-  padding: var(--yoyi-space-3);
-  border: 1px dashed var(--yoyi-color-seal-red-muted);
-  border-radius: var(--yoyi-radius-sm);
-  animation: colophon-draft-in var(--yoyi-duration-fast)
-    var(--yoyi-easing-standard);
-}
-
-.draftSheet > .root,
-.draftReply > .replyBody {
-  min-block-size: 0;
-  max-block-size: 100%;
-  max-inline-size: var(--colophon-draft-band, 100%);
-}
-
-/* The end of the text stays in view; a long draft clips its start. */
-.draftText {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  overflow: hidden;
-  color: var(--yoyi-color-text-secondary);
-  cursor: inherit;
-  user-select: none;
-  transition: color var(--yoyi-duration-slow) var(--yoyi-easing-standard);
-}
-
-[data-draft-state="sending"] .draftText {
-  color: var(--yoyi-color-text-primary);
-}
-
-.text.draftText[data-overflow="true"] {
-  mask-image: linear-gradient(
-    to left,
-    transparent,
-    var(--yoyi-color-ink-black) var(--yoyi-space-8)
-  );
-}
-
-.draftInk {
-  flex: none;
-}
-
-.draftPlaceholder {
-  color: var(--yoyi-color-text-tertiary);
-}
-
-/* The pen after the last character, blinking while the box has focus. */
-.draftPen {
-  display: inline-block;
-  inline-size: 2px;
-  block-size: 1em;
-  margin-inline-start: 0.15em;
-  vertical-align: middle;
-  background: var(--yoyi-color-seal-red);
-}
-
-.draftPen[data-focused] {
-  animation: colophon-pen 1s infinite;
-}
-
-.draftMark {
-  display: inline-block;
-  padding: var(--yoyi-space-1) 0;
-  color: var(--yoyi-color-seal-red);
-  border: 1px solid var(--yoyi-color-seal-red-muted);
-  border-radius: var(--yoyi-radius-xs);
-  font-family: var(--yoyi-font-interface);
-  font-size: var(--yoyi-type-metadata-size);
-  letter-spacing: 0.15em;
-  white-space: nowrap;
-}
-
-[data-draft-state="sending"] .draftMark {
-  color: var(--yoyi-color-text-inverse);
-  background: var(--yoyi-color-seal-red);
-  border-color: var(--yoyi-color-seal-red);
-}
-
-/* A reply being written: the replied colophon's last annotation. Its text
-   starts where the sent reply's will (two characters down, behind the
-   annotation rule), the dashed frame drawn around it. */
-.reply.draftReply {
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  block-size: calc(var(--colophon-view) / 2);
-  contain: strict;
-  margin-inline-start: calc(2em - var(--yoyi-space-3) - 1px);
-  padding: var(--yoyi-space-3);
-  border: 1px dashed var(--yoyi-color-seal-red-muted);
-  border-block-start: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-sm);
-  cursor: text;
-  animation: colophon-draft-in var(--yoyi-duration-fast)
-    var(--yoyi-easing-standard);
 }
 
 .groupLabel {
@@ -349,11 +133,12 @@
   margin-block-end: var(--yoyi-space-7);
 }
 
-/* Text on the right, the signature at the foot of the column on its left
-   (落款): roots and replies take the column's full height, so every
-   signature ends at the same bottom line however short the text. */
+/* Text on the right, the signature column on its left (落款): roots and
+   replies take the column's full height, the time at the top of the
+   signature and the author at its foot. */
 .root,
 .replyBody {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -448,42 +233,78 @@
   color: var(--yoyi-color-text-tertiary);
 }
 
-/* Signature: time and names side by side, the avatar beneath them. */
+/* 落款: the column left of the text, as tall as the colophon. The time
+   sits at its top, small and quiet; at its foot the nickname and the plaque
+   side by side, the avatar beneath them, so every signature ends at the same
+   bottom line however short the text. */
 .signature {
   display: flex;
   flex-direction: row;
   align-items: center;
-  align-self: flex-end;
-  gap: var(--yoyi-space-1);
+  align-self: stretch;
+  justify-content: flex-end;
+  gap: var(--yoyi-space-3);
   margin-block-start: var(--yoyi-space-3);
 }
 
-/* Read right to left: the time, then the nickname and its plaque. */
-.sigMeta {
+.sigTime {
+  flex: none;
+  margin-inline-end: auto;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: var(--yoyi-type-article-line-height-compact);
+  white-space: nowrap;
+}
+
+.sigFoot {
   display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--yoyi-space-1);
+  /* Where the column runs short (a narrow phone, a long name, an old date),
+     the nickname gives way, never the time above it. */
+  min-inline-size: 0;
+}
+
+/* Read right to left: the nickname, then its plaque, both ending at the
+   bottom above the avatar. */
+.sigNames {
+  display: flex;
+  min-inline-size: 0;
   flex-direction: column;
   align-items: flex-end;
   gap: var(--yoyi-space-1);
   font-size: var(--yoyi-type-caption-size);
+  line-height: var(--yoyi-type-article-line-height-compact);
 }
 
-.replySignature .sigMeta {
+.reply .sigNames {
   font-size: var(--yoyi-type-metadata-size);
 }
 
 /* A reply's plaque stands smaller than a root's. */
-.replySignature [data-studio-name] {
+.reply .sigNames [data-studio-name] {
   font-size: calc(var(--yoyi-type-caption-size) * 0.7);
 }
 
-.sigTime {
-  color: var(--yoyi-color-text-tertiary);
-  font-size: var(--yoyi-type-metadata-size);
+/* Cut short with … where the column runs short. WebKit sets a vertical
+   ellipsis past the content's end: the end padding keeps it unclipped, the
+   negative margin keeps the name's foot where it was, and the padding is
+   left out of the cap. */
+.sigName {
+  box-sizing: border-box;
+  max-inline-size: calc(100% + 0.5em);
+  overflow: hidden;
+  margin-inline-end: -0.5em;
+  padding-inline-end: 0.5em;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* A 44 px target around the small face, kept however short the column. */
 .sigAvatar {
   display: grid;
+  flex: none;
   box-sizing: border-box;
   width: 44px;
   height: 44px;
@@ -492,6 +313,7 @@
   background: transparent;
   border: 0;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .sigFace {
@@ -507,6 +329,7 @@
   border-radius: var(--yoyi-radius-full);
   font-family: var(--yoyi-font-interface);
   font-size: var(--yoyi-type-caption-size);
+  line-height: 1;
   writing-mode: horizontal-tb;
 }
 
@@ -517,9 +340,10 @@
   object-fit: cover;
 }
 
-.replySignature .sigFace {
+.reply .sigFace {
   width: 20px;
   height: 20px;
+  font-size: var(--yoyi-type-metadata-size);
 }
 
 /* 低格夹注: smaller, lighter, two characters lower, each reply (and the
@@ -586,9 +410,7 @@
 }
 
 .text:focus-visible,
-.write:focus-visible,
-.invite:focus-visible,
-.sheet:focus-visible,
+.retry:focus-visible,
 .fold:focus-visible,
 .moreReplies:focus-visible,
 .actions button:focus-visible,
@@ -601,6 +423,53 @@
   /* The length is the component's own highlight time, set on the region. */
   animation: colophon-ink var(--colophon-highlight-ms)
     var(--yoyi-easing-standard);
+}
+
+/* The input's anchor: zero wide, first in the colophons (at their right),
+   and sticky a whole stage width from the strip's right edge, which holds
+   it at the stage's left edge while any colophon shows. The column hangs
+   from it (feed-colophon-input.module.css) from the stage's top. */
+.inputAnchor {
+  position: sticky;
+  z-index: calc(var(--yoyi-z-index-content) + 1);
+  right: 100cqw;
+  block-size: 0;
+  margin: 0;
+  --colophon-input-top: calc(-1 * var(--colophon-top));
+}
+
+/* Written in, the colophons recede (the input's edge no longer cuts
+   through readable text); the one it answers stays. */
+.head,
+.groupLabel,
+.root,
+.reply,
+.entry > .moreReplies,
+.end {
+  transition: opacity var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+.colophon[data-colophon-writing]
+  :is(.head, .groupLabel, .root, .reply, .entry > .moreReplies, .end) {
+  opacity: 0.4;
+}
+
+.colophon[data-colophon-writing] .entry[data-colophon-reply-target] > .root,
+.colophon[data-colophon-writing] .reply[data-colophon-reply-target] {
+  opacity: 1;
+}
+
+/* The answered colophon carries a seal-red rule on its right. */
+.entry[data-colophon-reply-target] > .root::after,
+.reply[data-colophon-reply-target] > .replyBody::after {
+  position: absolute;
+  top: 0;
+  right: calc(-1 * var(--yoyi-space-3));
+  bottom: 0;
+  width: 2px;
+  content: "";
+  background: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
 }
 
 .skeleton {
@@ -629,6 +498,8 @@
   align-items: flex-start;
   gap: var(--yoyi-space-3);
   margin: 0;
+  /* The strip's left end scrolls clear of the input column. */
+  padding-block-end: calc(var(--yoyi-space-6) + var(--colophon-input-clear));
   color: var(--yoyi-color-text-tertiary);
   font-size: var(--yoyi-type-body-small-size);
   letter-spacing: 0.15em;
@@ -636,36 +507,6 @@
 
 .end p {
   margin: 0;
-}
-
-/* The status after an action, above the bottom inset and the dock, or
-   above the open composer (its height set inline while open). */
-.notice {
-  position: fixed;
-  z-index: calc(var(--yoyi-z-index-navigation) + 1);
-  bottom: calc(
-    var(--yoyi-bottom-nav-viewport-inset, 0px) +
-      max(
-        env(safe-area-inset-bottom) + var(--yoyi-space-12) + var(--yoyi-space-3),
-        var(--colophon-composer-block-size, 0px) + var(--yoyi-space-2)
-      )
-  );
-  left: 50%;
-  max-width: calc(100vw - 2 * var(--yoyi-space-4));
-  margin: 0;
-  padding: var(--yoyi-space-2) var(--yoyi-space-4);
-  color: var(--yoyi-color-text-inverse);
-  background: var(--yoyi-color-background-inverse);
-  border-radius: var(--yoyi-radius-full);
-  font-family: var(--yoyi-font-interface);
-  font-size: var(--yoyi-type-body-small-size);
-  transform: translateX(-50%);
-  pointer-events: none;
-  writing-mode: horizontal-tb;
-}
-
-.notice:empty {
-  display: none;
 }
 
 .tcy {
@@ -683,36 +524,17 @@
   white-space: nowrap;
 }
 
+/* Held, then faded: a tint and a seal-red rule on the right. */
 @keyframes colophon-ink {
-  from {
-    background-color: var(--yoyi-color-seal-red-muted);
-  }
-
-  to {
-    background-color: transparent;
-  }
-}
-
-@keyframes colophon-draft-in {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
-
-/* On for the first half, off for the second: a caret's blink. */
-@keyframes colophon-pen {
   0%,
-  49.9% {
-    opacity: 1;
+  45% {
+    background-color: var(--yoyi-color-seal-red-muted);
+    box-shadow: inset -2px 0 0 var(--yoyi-color-seal-red);
   }
 
-  50%,
   100% {
-    opacity: 0;
+    background-color: transparent;
+    box-shadow: inset -2px 0 0 transparent;
   }
 }
 
@@ -727,6 +549,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .head,
+  .groupLabel,
+  .root,
+  .reply,
+  .entry > .moreReplies,
+  .end {
+    transition: none;
+  }
+
   .colophon [data-colophon-highlight="true"] {
     animation: none;
     outline: 2px solid var(--yoyi-color-seal-red-muted);
@@ -734,17 +565,5 @@
 
   .skeleton {
     animation: none;
-  }
-
-  .invite[data-colophon-invite-cue],
-  .draftSheet,
-  .reply.draftReply,
-  .draftPen,
-  .draftPen[data-focused] {
-    animation: none;
-  }
-
-  .draftText {
-    transition: none;
   }
 }

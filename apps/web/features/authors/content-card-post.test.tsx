@@ -47,12 +47,12 @@ vi.mock("../home/catalog-masonry", async (importOriginal) => ({
 // The colophons have their own tests; here only what the post hands them.
 vi.mock("./feed-colophon", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./feed-colophon")>();
-  const { useContext } = await import("react");
+  const { useFeedStage } = await import("./feed-post-stage-context");
   return {
     ...actual,
     FeedColophon: (props: Record<string, unknown>) => {
-      const outlet = useContext(actual.FeedColophonOutletContext);
-      colophons.push({ ...props, outlet });
+      const strip = useFeedStage()?.strip ?? null;
+      colophons.push({ ...props, strip });
       return <section data-feed-colophon="" />;
     },
   };
@@ -225,19 +225,23 @@ describe("ContentCard as a phone single-column post", () => {
     expect(shell.openFeedViewer).not.toHaveBeenCalled();
   });
 
-  it("continues the stage into the colophons, with the composer outlet outside the strip", () => {
+  it("continues the stage into the colophons, which hold their input in the strip", () => {
     const post = render(work({ gallery: [still("e"), still("a")] }));
     const colophon = post.querySelector("[data-feed-colophon]")!;
     expect(colophon.closest("[data-feed-stage-comments]")).not.toBeNull();
-    // Outside the strip, the post and the pager: fixed to the viewport.
-    const outlet = document.querySelector("[data-colophon-composer-outlet]")!;
-    expect(outlet.parentElement).toBe(document.body);
+    // The strip the colophons continue, where their input is held.
+    const strip = post.querySelector("[data-feed-stage]")!;
+    expect(strip.contains(colophon)).toBe(true);
     expect(colophons.at(-1)).toEqual({
       target: { type: "work", id: workId },
       title: "春日临帖",
       fallbackCount: 12,
-      outlet,
+      strip,
     });
+    // No composer outside the post any more.
+    expect(
+      document.querySelector("[data-colophon-composer-outlet]"),
+    ).toBeNull();
     // The seal leads there.
     expect(post.querySelector("[data-feed-post-dot-comments]")).not.toBeNull();
   });
@@ -258,10 +262,8 @@ describe("ContentCard as a phone single-column post", () => {
     expect(options.behavior).toBe("smooth");
     expect(shell.openContent).not.toHaveBeenCalled();
     expect(detailCommentsRequested(workId)).toBe(false);
-    // No composer opens by itself.
-    expect(
-      document.querySelector("[data-colophon-composer-outlet]")?.children,
-    ).toHaveLength(0);
+    // Nothing opens by itself.
+    expect(document.querySelector("[data-colophon-composer]")).toBeNull();
   });
 
   it("opens a text-only work's Detail comments from the comment button", () => {
@@ -269,9 +271,6 @@ describe("ContentCard as a phone single-column post", () => {
     expect(post.querySelector("[data-feed-stage-frame]")).toBeNull();
     expect(post.querySelector("[data-feed-post-dots]")).toBeNull();
     expect(post.querySelector("[data-feed-colophon]")).toBeNull();
-    expect(
-      document.querySelector("[data-colophon-composer-outlet]"),
-    ).toBeNull();
     const comment = button(post, "评论")!;
     act(() => comment.click());
     expect(shell.openContent).toHaveBeenCalledWith(

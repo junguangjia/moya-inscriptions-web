@@ -38,6 +38,7 @@ import {
   readStripOffset,
   resolveStageAspect,
   slideFit,
+  snapAreaOffset,
   stripIndex,
   stripProgress,
   stripRegion,
@@ -120,23 +121,23 @@ const KEY_DIRECTION: Readonly<Record<string, number>> = {
 
 /** Every snap position in the strip, as offsets from its start. */
 const snapOffsets = (strip: HTMLElement, offset: number): number[] => {
-  const right = strip.getBoundingClientRect().right;
+  const box = strip.getBoundingClientRect();
   const offsets: number[] = [];
   for (const element of strip.querySelectorAll<HTMLElement>("*")) {
     const style = getComputedStyle(element);
     if (style.scrollSnapAlign === "" || style.scrollSnapAlign === "none")
       continue;
-    const gutter = Number.parseFloat(style.scrollMarginRight) || 0;
-    offsets.push(
-      Math.max(
-        0,
-        elementStartOffset(
-          right,
-          element.getBoundingClientRect().right,
-          offset,
-        ) - gutter,
-      ),
+    const snap = snapAreaOffset(
+      style.scrollSnapAlign,
+      box,
+      element.getBoundingClientRect(),
+      {
+        left: Number.parseFloat(style.scrollMarginLeft) || 0,
+        right: Number.parseFloat(style.scrollMarginRight) || 0,
+      },
+      offset,
     );
+    if (snap !== null) offsets.push(snap);
   }
   return offsets;
 };

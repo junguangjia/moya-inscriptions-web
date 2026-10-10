@@ -279,10 +279,10 @@ test("the seal dot brings in the colophons; the comment button scrolls there ins
   await expect(colophon).toBeVisible();
   await expect(feed.shell).toHaveAttribute("data-detail-open", "false");
   await expect(feed.home).toHaveAttribute("data-active-home-feed", "discover");
-  // Scrolling never opens the composer by itself.
-  await expect(
-    feed.page.locator('[data-colophon-composer-outlet] [data-open="true"]'),
-  ).toHaveCount(0);
+  // Scrolling never focuses the colophons' input by itself, and there is no
+  // horizontal composer.
+  await expect(feed.page.locator("textarea:focus")).toHaveCount(0);
+  await expect(feed.page.locator("[data-colophon-composer]")).toHaveCount(0);
 
   // The title still opens Detail on its information.
   await feed.post.getByRole("button", { name: "打开运行时多图碑刻" }).click();

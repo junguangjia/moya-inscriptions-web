@@ -132,6 +132,51 @@ export const elementStartOffset = (
   currentOffset: number,
 ): number => currentOffset + (stripRight - elementRight);
 
+/** A horizontal extent: a rectangle's or its scroll margins' left and right. */
+interface HorizontalEdges {
+  readonly left: number;
+  readonly right: number;
+}
+
+/**
+ * The strip offset of an element's snap position, from its computed
+ * `scroll-snap-align` (the strip runs right to left: `start` is the right
+ * edge, `end` the left), its scroll margins and both rectangles; null when
+ * it is no snap area. Never before the strip's start.
+ */
+export const snapAreaOffset = (
+  align: string,
+  stripBox: HorizontalEdges,
+  elementBox: HorizontalEdges,
+  margin: HorizontalEdges,
+  currentOffset: number,
+): number | null => {
+  const values = align.trim().split(/\s+/u);
+  // One value serves both axes; of two, the second is the strip's (inline).
+  const inline = values[1] ?? values[0];
+  const offset =
+    inline === "start"
+      ? elementStartOffset(
+          stripBox.right - margin.right,
+          elementBox.right,
+          currentOffset,
+        )
+      : inline === "end"
+        ? elementStartOffset(
+            stripBox.left + margin.left,
+            elementBox.left,
+            currentOffset,
+          )
+        : inline === "center"
+          ? elementStartOffset(
+              (stripBox.left + stripBox.right) / 2,
+              (elementBox.left + elementBox.right) / 2,
+              currentOffset,
+            )
+          : null;
+  return offset === null ? null : Math.max(0, offset);
+};
+
 /**
  * Whether one scroll step jumped by about `added` beyond the step before it:
  * a running scroll animation that the engine carried on by the width added

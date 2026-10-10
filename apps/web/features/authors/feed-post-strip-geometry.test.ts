@@ -11,6 +11,7 @@ import {
   readStripOffset,
   resolveStageAspect,
   slideFit,
+  snapAreaOffset,
   stripIndex,
   stripProgress,
   stripRegion,
@@ -186,6 +187,49 @@ describe("stripRemaining", () => {
   });
   it("never goes negative past the end", () => {
     expect(stripRemaining(strip(-950), false)).toBe(0);
+  });
+});
+
+describe("snapAreaOffset", () => {
+  const stripBox = { left: 0, right: 300 };
+  const margin = { left: 64, right: 24 };
+  it("puts a start-aligned area's right edge at the right gutter", () => {
+    expect(
+      snapAreaOffset(
+        "start",
+        stripBox,
+        { left: -400, right: -100 },
+        margin,
+        900,
+      ),
+    ).toBe(1276);
+  });
+  it("puts an end-aligned area's left edge clear of the left margin", () => {
+    expect(
+      snapAreaOffset("end", stripBox, { left: -40, right: 4 }, margin, 900),
+    ).toBe(1004);
+    expect(
+      snapAreaOffset("end end", stripBox, { left: -40, right: 4 }, margin, 900),
+    ).toBe(1004);
+  });
+  it("reads the inline (horizontal) value of two", () => {
+    expect(
+      snapAreaOffset(
+        "start end",
+        stripBox,
+        { left: 0, right: 50 },
+        margin,
+        100,
+      ),
+    ).toBe(164);
+  });
+  it("never goes before the strip's start, and skips other values", () => {
+    expect(
+      snapAreaOffset("start", stripBox, { left: 400, right: 700 }, margin, 100),
+    ).toBe(0);
+    expect(
+      snapAreaOffset("none", stripBox, { left: 0, right: 50 }, margin, 100),
+    ).toBeNull();
   });
 });
 

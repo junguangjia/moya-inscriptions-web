@@ -1,6 +1,5 @@
 "use client";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useId, useMemo, useRef, useState } from "react";
 import type { ContentCard as Card } from "@moya/contracts";
 import { requestDetailComments } from "../detail/detail-comments-request";
 import { CatalogProvinceBadge, MediaFallback } from "../home/card-media-parts";
@@ -9,7 +8,7 @@ import { FeedPostActions } from "../quick-actions/feed-post-actions";
 import type { FeedPostTrailingAction } from "../quick-actions/feed-post-actions";
 import { useProductShell } from "../product-shell/product-shell";
 import type { useContentActions } from "./content-actions";
-import { FeedColophon, FeedColophonOutletContext } from "./feed-colophon";
+import { FeedColophon } from "./feed-colophon";
 import { FeedPostAuthor } from "./feed-post-author";
 import { FeedPostBody } from "./feed-post-body";
 import { feedPostMedia } from "./feed-post-media";
@@ -67,12 +66,6 @@ export const FeedPost = ({
   const bodyId = useId();
   const media = useMemo(() => feedPostMedia(item, label), [item, label]);
   const stageRef = useRef<FeedPostStageHandle>(null);
-  // The colophon composer and its status render in an outlet outside the
-  // strip and outside the Home pager: its track is transformed, which would
-  // fix them to the track and keep them under the dock.
-  const [outlet, setOutlet] = useState<HTMLDivElement | null>(null);
-  const [outletHost, setOutletHost] = useState<HTMLElement | null>(null);
-  useEffect(() => setOutletHost(document.body), []);
   const work = item.target.type === "work";
   // Only a work with text has a body to expand; any other post opens Detail.
   const expandable = work && (item.title !== "" || excerpt !== "");
@@ -201,9 +194,7 @@ export const FeedPost = ({
         {work && item.authorId !== null ? (
           <FeedPostAuthor authorId={item.authorId} />
         ) : null}
-        <FeedColophonOutletContext.Provider value={outlet}>
-          {stage}
-        </FeedColophonOutletContext.Provider>
+        {stage}
         {heading}
         {expandable ? (
           <FeedPostBody
@@ -220,12 +211,6 @@ export const FeedPost = ({
           trailing={trailing}
         />
         <PostDate value={item.firstPublishedAt} />
-        {media.length > 0 && outletHost !== null
-          ? createPortal(
-              <div data-colophon-composer-outlet="" ref={setOutlet} />,
-              outletHost,
-            )
-          : null}
       </article>
     </div>
   );

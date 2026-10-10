@@ -99,6 +99,10 @@ interface PhoneFeedOptions {
   readonly signedIn?: boolean;
   readonly submit?: SubmitStub;
   readonly reducedMotion?: boolean;
+  /** Changes each read's answer, e.g. a longer colophon or a longer name. */
+  readonly adjust?: (answer: ReturnType<typeof discussionPage>) => void;
+  /** A phone other than the iPhone 15's 393 × 852. */
+  readonly viewport?: { readonly width: number; readonly height: number };
 }
 
 const submitStub = (): SubmitStub => ({
@@ -142,12 +146,20 @@ const openPhoneFeed = async (
   if (testInfo.project.name === "desktop-chromium") {
     const baseURL = testInfo.project.use.baseURL;
     if (typeof baseURL !== "string") throw new Error("Missing E2E base URL");
-    context = await browser.newContext({ ...devices["iPhone 15"], baseURL });
+    context = await browser.newContext({
+      ...devices["iPhone 15"],
+      baseURL,
+      ...(options.viewport === undefined
+        ? {}
+        : { viewport: options.viewport, screen: options.viewport }),
+    });
     target = await context.newPage();
     session = await context.newCDPSession(target);
   }
   if (options.reducedMotion)
     await target.emulateMedia({ reducedMotion: "reduce" });
+  if (options.viewport !== undefined && context === null)
+    await target.setViewportSize(options.viewport);
   if (options.signedIn)
     await target.route(
       (url) => url.pathname === "/api/community/me",
@@ -210,6 +222,7 @@ const openPhoneFeed = async (
       if (readDelayMs > 0)
         await new Promise((resolve) => setTimeout(resolve, readDelayMs));
       const answer = discussionPage(requested);
+      options.adjust?.(answer);
       const posted = requested === 1 ? (submit?.posted ?? []) : [];
       await route.fulfill({
         json: {
@@ -326,7 +339,9 @@ const expectFirstColophonInView = async (feed: PhoneFeed) => {
     const last = rect('[data-feed-slide="1"]');
     const first = rect("[data-colophon-entry]");
     const text = rect("[data-colophon-entry] [data-colophon-text]");
+    const column = rect("[data-colophon-input]");
     return {
+      columnRight: column.right,
       stripLeft: strip.left,
       stripRight: strip.right,
       stripWidth: strip.width,
@@ -344,7 +359,62 @@ const expectFirstColophonInView = async (feed: PhoneFeed) => {
   // (its replies may run on past the stage's left edge).
   expect(geometry.firstRight).toBeLessThanOrEqual(geometry.stripRight + 1);
   expect(geometry.textLeft).toBeGreaterThanOrEqual(geometry.stripLeft - 1);
+  // Clear of the input column pinned over the stage's left edge.
+  expect(geometry.textLeft).toBeGreaterThanOrEqual(geometry.columnRight - 1);
 };
+
+const SIGNED_AT_LEFT = {
+  startsWithFirst: true,
+  leftOfText: true,
+  timeAtTop: true,
+  timeAboveName: true,
+  nameAboveAvatar: true,
+  avatarAtFoot: true,
+};
+
+/**
+ * A root's or reply's own text and 落款 (`row` an entry or a reply): the
+ * text's first part, and the signature's geometry against the text.
+ */
+const signatureLayout = (row: Locator, first: string) =>
+  row.evaluate((node, firstPart) => {
+    const body = node.querySelector(
+      ":scope > div:has(> [data-colophon-text])",
+    )!;
+    const box = (selector: string) =>
+      body.querySelector(`:scope > ${selector}`)!.getBoundingClientRect();
+    const inSignature = (selector: string) =>
+      body
+        .querySelector(`:scope > [data-colophon-signature] ${selector}`)!
+        .getBoundingClientRect();
+    const text = box("[data-colophon-text]");
+    const signature = box("[data-colophon-signature]");
+    const time = inSignature("time");
+    const name = inSignature("[data-colophon-name]");
+    // The name's own foot: its end padding (room for WebKit's ellipsis)
+    // hangs past it.
+    const nameFoot =
+      name.bottom -
+      Number.parseFloat(
+        getComputedStyle(
+          body.querySelector(
+            ":scope > [data-colophon-signature] [data-colophon-name]",
+          )!,
+        ).paddingBottom,
+      );
+    const avatar = inSignature("[data-colophon-author]");
+    return {
+      startsWithFirst:
+        body
+          .querySelector(":scope > [data-colophon-text]")!
+          .firstElementChild?.matches(firstPart) === true,
+      leftOfText: signature.right <= text.left + 1,
+      timeAtTop: Math.abs(time.top - text.top) <= 8,
+      timeAboveName: time.bottom < name.top,
+      nameAboveAvatar: nameFoot <= avatar.top + 1,
+      avatarAtFoot: Math.abs(avatar.bottom - signature.bottom) <= 1,
+    };
+  }, first);
 
 const skipUnlessPhone = (testInfo: TestInfo) =>
   test.skip(
@@ -391,14 +461,183 @@ test("the colophons continue right after the last image, vertical, hot then late
       '[data-comment-reply="reply-1"] [data-colophon-reply-lead]',
     ),
   ).toHaveText(/回复\s*读者1：/u);
-
-  // A guest reads and is invited to sign in to write.
+  // 落款: the text starts with its words (a reply's with 「回复 X：」); the
+  // signature column on its left holds the time at the top, the nickname
+  // above the avatar at the foot. Replies, with the least room, too.
+  for (const [selector, first] of [
+    ["[data-colophon-entry]", "[data-colophon-words]"],
+    ['[data-comment-reply="reply-1"]', "[data-colophon-reply-lead]"],
+  ] as const)
+    expect(
+      await signatureLayout(feed.post.locator(selector).first(), first),
+    ).toEqual(SIGNED_AT_LEFT);
+  // A guest reads and is invited to sign in to write, in the input column.
   await expect(
-    colophon.locator("[data-colophon-head] [data-colophon-sign-in]"),
+    feed.post.locator("[data-colophon-input] [data-colophon-sign-in]"),
   ).toHaveText("登录后题跋");
-  await expect(colophon.locator("[data-colophon-head]")).toContainText("题跋");
+  await expect(colophon.locator("[data-colophon-head]")).toHaveText(
+    /^题跋\s*\d+\s*则$/u,
+  );
   await expect(feed.home).toHaveAttribute("data-active-home-feed", "discover");
   await expect(feed.shell).toHaveAttribute("data-detail-open", "false");
+  await feed.context?.close();
+});
+
+/** Opens the feed with latest-1 lengthened to `length` characters. */
+const openWithLong = (
+  browser: Browser,
+  page: Page,
+  testInfo: TestInfo,
+  length: number,
+) =>
+  openPhoneFeed(browser, page, testInfo, 0, {
+    adjust: (answer) => {
+      const long = answer.items.find((item) => item.id === "latest-1");
+      if (long !== undefined)
+        long.text = `latest-1：${passage.repeat(5)}`.slice(0, length);
+    },
+  });
+
+/** latest-1 brought to the right gutter, read from its start. */
+const readLongFromStart = async (feed: PhoneFeed) => {
+  await enterColophons(feed);
+  await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
+  await feed.strip.evaluate((strip) => {
+    const node = strip.querySelector<HTMLElement>(
+      '[data-colophon-entry][data-comment-id="latest-1"]',
+    )!;
+    strip.scrollBy({
+      left:
+        node.getBoundingClientRect().right -
+        (strip.getBoundingClientRect().right - 24),
+      behavior: "instant",
+    });
+  });
+  await feed.page.waitForTimeout(600);
+  const entry = feed.post.locator(
+    '[data-colophon-entry][data-comment-id="latest-1"]',
+  );
+  const fold = entry.locator(":scope > div > [data-colophon-fold]");
+  await expect(fold).toHaveText("全文");
+  return { entry, fold };
+};
+
+/** latest-1's edges against the stage and the input column. */
+const longEdges = (entry: Locator) =>
+  entry.evaluate((node) => {
+    const post = node.closest("[data-feed-post]")!;
+    const strip = post
+      .querySelector("[data-feed-stage]")!
+      .getBoundingClientRect();
+    const column = post
+      .querySelector("[data-colophon-input]")!
+      .getBoundingClientRect();
+    const part = (selector: string) =>
+      node.querySelector(`:scope > div > ${selector}`)!.getBoundingClientRect();
+    return {
+      entryRight: Math.round(node.getBoundingClientRect().right),
+      textLeft: Math.round(part("[data-colophon-text]").left),
+      signatureLeft: Math.round(part("[data-colophon-signature]").left),
+      signatureRight: Math.round(part("[data-colophon-signature]").right),
+      columnRight: Math.round(column.right),
+      stripRight: Math.round(strip.right),
+    };
+  });
+
+/** Where the strip comes to rest (a passing frame may show anything). */
+const restingEdges = async (feed: PhoneFeed, entry: Locator) => {
+  let rest = await longEdges(entry);
+  for (let check = 0; check < 20; check += 1) {
+    await feed.page.waitForTimeout(250);
+    const next = await longEdges(entry);
+    if (next.entryRight === rest.entryRight) return next;
+    rest = next;
+  }
+  return rest;
+};
+
+test("全文 brings the rest of a long colophon and its 落款 into view, clear of the input column", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const feed = await openWithLong(browser, page, testInfo, 240);
+  const { entry, fold } = await readLongFromStart(feed);
+  const folded = await longEdges(entry);
+  await fold.click();
+  await expect(fold).toHaveText("收起");
+  const rest = await restingEdges(feed, entry);
+  // The 落款 clear of the input column and inside the stage...
+  expect(rest.signatureLeft).toBeGreaterThanOrEqual(rest.columnRight);
+  expect(rest.signatureRight).toBeLessThanOrEqual(rest.stripRight);
+  // ...the fold, where reading goes on, still in view: the start moved on
+  // by less than the folded text's width.
+  const moved = rest.entryRight - folded.entryRight;
+  expect(moved).toBeGreaterThan(0);
+  expect(folded.textLeft + moved).toBeLessThan(rest.stripRight);
+  await feed.context?.close();
+});
+
+test("全文 on a colophon longer than a view keeps its start, and a swipe on stops at its 落款", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const feed = await openWithLong(browser, page, testInfo, 480);
+  const { entry, fold } = await readLongFromStart(feed);
+  const folded = await longEdges(entry);
+  await fold.click();
+  await expect(fold).toHaveText("收起");
+  const unfolded = await restingEdges(feed, entry);
+  // Unfolded where it was: its start stays at the gutter, its 落款 beyond
+  // the stage's left edge.
+  expect(Math.abs(unfolded.entryRight - folded.entryRight)).toBeLessThanOrEqual(
+    1,
+  );
+  expect(unfolded.signatureRight).toBeLessThan(unfolded.columnRight);
+  await swipeOn(feed);
+  const rest = await restingEdges(feed, entry);
+  expect(rest.signatureLeft).toBeGreaterThanOrEqual(rest.columnRight);
+  expect(rest.signatureRight).toBeLessThanOrEqual(rest.stripRight);
+  await feed.context?.close();
+});
+
+test("on a narrow phone a long name gives way in the 落款, the time staying at its top", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const author = {
+    id: "user-colophon-long",
+    displayName: "临池不辍的松风阁主人与他的两方闲章",
+    studioName: "松风水月轩主人",
+  };
+  const old = "2024-12-31T03:00:00.000Z";
+  const feed = await openPhoneFeed(browser, page, testInfo, 0, {
+    // A fold phone's cover screen: on the fixture's 4:5 stage the 落款 runs
+    // short there, as it does on a square stage from 375 down.
+    viewport: { width: 280, height: 653 },
+    adjust: (answer) => {
+      const hot = answer.hot[0];
+      if (hot === undefined) return;
+      Object.assign(hot, { author, createdAt: old });
+      for (const each of hot.replies)
+        Object.assign(each, { author, createdAt: old });
+    },
+  });
+  await enterColophons(feed);
+  await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
+  for (const [selector, first] of [
+    ['[data-colophon-entry][data-comment-id="hot-1"]', "[data-colophon-words]"],
+    ['[data-comment-reply="reply-1"]', "[data-colophon-reply-lead]"],
+  ] as const)
+    expect(await signatureLayout(feed.post.locator(selector), first)).toEqual(
+      SIGNED_AT_LEFT,
+    );
+  // The avatar still names the author in full.
+  await expect(
+    feed.post.locator('[data-comment-reply="reply-1"] [data-colophon-author]'),
+  ).toHaveAttribute("aria-label", `打开${author.displayName}的主页`);
   await feed.context?.close();
 });
 
@@ -493,37 +732,57 @@ test("the comment button scrolls the stage to the first colophon", async ({
   );
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
   await expectFirstColophonInView(feed);
-  // Never Detail, and no composer opens by itself.
+  // Never Detail, and nothing takes focus by itself.
   await expect(feed.shell).toHaveAttribute("data-detail-open", "false");
   expect(new URL(feed.page.url()).hash).toBe("");
-  await expect(
-    feed.page.locator('[data-colophon-composer-outlet] [data-open="true"]'),
-  ).toHaveCount(0);
+  await expect(feed.page.locator("textarea:focus")).toHaveCount(0);
   await expect(feed.home).toHaveAttribute("data-active-home-feed", "discover");
   await feed.context?.close();
 });
 
-// Writing a colophon: the invite slip in the head and the vertical draft.
+// Writing a colophon: the vertical input pinned at the stage's left edge.
 
-const slipOf = (feed: PhoneFeed) =>
-  feed.post.locator("[data-colophon-head] [data-colophon-invite]");
-const sheetOf = (feed: PhoneFeed, slot = "head") =>
-  feed.post.locator(`[data-colophon-draft="${slot}"]`);
-const openComposer = (feed: PhoneFeed) =>
-  feed.page.locator('[data-colophon-composer][data-open="true"]');
+const inputOf = (feed: PhoneFeed) => feed.post.locator("[data-colophon-input]");
+const boxOf = (feed: PhoneFeed) =>
+  feed.post.locator("[data-colophon-input] textarea");
+const sendOf = (feed: PhoneFeed) =>
+  feed.post.locator("[data-colophon-input-send]");
+const noticeOf = (feed: PhoneFeed) =>
+  feed.post.locator("[data-colophon-input] [data-colophon-notice]");
 
-/** A tap on the slip, as the reader's own gesture inside the Home pager. */
-const tapSlip = async (feed: PhoneFeed) => {
-  await feed.post
-    .locator("[data-colophon-head] [data-colophon-write]")
-    .evaluate((node) => (node as HTMLElement).click());
-  await expect(openComposer(feed)).toHaveCount(1);
+/** Focuses the input, as the reader's tap on it does. */
+const focusInput = async (feed: PhoneFeed) => {
+  await boxOf(feed).focus();
+  await expect(boxOf(feed)).toBeFocused();
 };
+
+/** A tap on 发送, as the reader's own gesture inside the Home pager. */
+const tapSend = (feed: PhoneFeed) =>
+  sendOf(feed).evaluate((node) => (node as HTMLElement).click());
 
 const stripOffset = (feed: PhoneFeed) =>
   feed.strip.evaluate((node) => Math.abs(node.scrollLeft));
 
-test("entering the colophons, a guest sees where to sign in and write", async ({
+/** No writing UI anywhere but the vertical column. */
+const expectNoHorizontalComposer = async (feed: PhoneFeed) => {
+  for (const selector of [
+    "[data-colophon-composer]",
+    "[data-colophon-composer-outlet]",
+    "[data-colophon-invite]",
+    "[data-colophon-draft]",
+    "[data-colophon-write]",
+  ])
+    await expect(feed.page.locator(selector)).toHaveCount(0);
+  // Every text field in the post writes vertically.
+  const modes = await feed.post
+    .locator("textarea, input[type='text']")
+    .evaluateAll((nodes) =>
+      nodes.map((node) => getComputedStyle(node).writingMode),
+    );
+  for (const mode of modes) expect(mode).toBe("vertical-rl");
+};
+
+test("entering the colophons, a guest finds 登录后题跋 in the column at the stage's left", async ({
   browser,
   page,
 }, testInfo) => {
@@ -531,18 +790,46 @@ test("entering the colophons, a guest sees where to sign in and write", async ({
   const feed = await openPhoneFeed(browser, page, testInfo);
   await enterColophons(feed);
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
-  const slip = slipOf(feed);
-  await expect(slip).toHaveAttribute("data-colophon-invite", "signed-out");
-  await expect(slip).toHaveText("登录后题跋");
-  await expect(slip).toHaveAttribute("href", /.+/u);
-  await expect(slip).toBeInViewport({ ratio: 1 });
+  const column = inputOf(feed);
+  await expect(column).toHaveAttribute("data-colophon-input", "guest");
+  const signIn = column.locator("[data-colophon-sign-in]");
+  await expect(signIn).toHaveText("登录后题跋");
+  await expect(signIn).toHaveAttribute("href", /.+/u);
+  await expect(signIn).toHaveCSS("writing-mode", "vertical-rl");
+  // Whole, at the stage's left. (Measured: WebKit's IntersectionObserver
+  // misses the sticky offset of the column's anchor in the strip.)
+  const placed = await feed.post.evaluate((post) => {
+    const stage = post
+      .querySelector("[data-feed-stage-frame]")!
+      .getBoundingClientRect();
+    const link = post
+      .querySelector("[data-colophon-sign-in]")!
+      .getBoundingClientRect();
+    return {
+      inside:
+        link.left >= stage.left - 1 &&
+        link.right <= stage.left + 56 &&
+        link.top >= stage.top - 1 &&
+        link.bottom <= Math.min(stage.bottom, window.innerHeight) + 1,
+      hit:
+        document
+          .elementFromPoint(
+            (link.left + link.right) / 2,
+            (link.top + link.bottom) / 2,
+          )
+          ?.closest("[data-colophon-sign-in]") != null,
+    };
+  });
+  expect(placed).toEqual({ inside: true, hit: true });
+  await expect(boxOf(feed)).toHaveCount(0);
   await expectFirstColophonInView(feed);
+  await expectNoHorizontalComposer(feed);
   await expect(feed.home).toHaveAttribute("data-active-home-feed", "discover");
   await expect(feed.shell).toHaveAttribute("data-detail-open", "false");
   await feed.context?.close();
 });
 
-test("entering the colophons, a reader is invited to write with their own avatar", async ({
+test("entering the colophons shows the vertical input pinned at the stage's left, and nothing horizontal", async ({
   browser,
   page,
 }, testInfo) => {
@@ -552,21 +839,82 @@ test("entering the colophons, a reader is invited to write with their own avatar
   });
   await feed.page.waitForTimeout(800);
   expect(feed.discussionReads).toHaveLength(0);
+  // On the images the column is not there to see or reach.
+  await expect(inputOf(feed)).toBeHidden();
   await enterColophons(feed);
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
-  const slip = slipOf(feed);
-  await expect(slip).toHaveAttribute("data-colophon-invite", "signed-in");
-  await expect(slip).toHaveAccessibleName("在此写题跋");
-  await expect(slip.locator("[data-colophon-invite-face]")).toHaveText("题");
-  await expect(slip).toBeInViewport({ ratio: 1 });
+  const column = inputOf(feed);
+  await expect(column).toBeVisible();
+  await expect(column).toHaveAttribute("data-colophon-input", "write");
+  const box = boxOf(feed);
+  await expect(box).toHaveAttribute("placeholder", "写题跋…");
+  await expect(box).toHaveCSS("writing-mode", "vertical-rl");
+  await expect(sendOf(feed)).toHaveText("发送");
+  await expect(sendOf(feed)).toBeDisabled();
+  await expect(sendOf(feed)).toHaveCSS("writing-mode", "vertical-rl");
+  const geometry = await feed.post.evaluate((post) => {
+    const frame = post
+      .querySelector("[data-feed-stage-frame]")!
+      .getBoundingClientRect();
+    const input = post
+      .querySelector("[data-colophon-input]")!
+      .getBoundingClientRect();
+    const list = post.querySelector("[data-colophon-list]")!;
+    return {
+      frame: [frame.left, frame.top, frame.bottom],
+      input: [input.left, input.top, input.bottom, input.width],
+      inStrip:
+        post
+          .querySelector("[data-colophon-input]")!
+          .closest("[data-feed-stage]") !== null,
+      // The column leaves the strip's own pans alone: nothing marks it
+      // apart from the strip, so the pager keeps every colophon pannable
+      // both ways.
+      marked:
+        post.querySelector("[data-colophon-input] [data-local-horizontal]") !==
+          null ||
+        post
+          .querySelector("[data-colophon-input]")!
+          .hasAttribute("data-local-horizontal"),
+      listTouch: getComputedStyle(list).touchAction,
+    };
+  });
+  // At the frame's left edge, its full height, narrow, held in the strip
+  // (sticky), so a swipe that starts on it moves the strip.
+  expect(Math.abs(geometry.input[0]! - geometry.frame[0]!)).toBeLessThanOrEqual(
+    1,
+  );
+  expect(Math.abs(geometry.input[1]! - geometry.frame[1]!)).toBeLessThanOrEqual(
+    1,
+  );
+  expect(Math.abs(geometry.input[2]! - geometry.frame[2]!)).toBeLessThanOrEqual(
+    1,
+  );
+  expect(geometry.input[3]!).toBeLessThanOrEqual(56);
+  expect(geometry.inStrip).toBe(true);
+  expect(geometry.marked).toBe(false);
+  expect(geometry.listTouch).not.toMatch(/^pan-y/u);
+  await expect(feed.post.locator("[data-colophon-head]")).toHaveText(
+    /^题跋\s*\d+\s*则$/u,
+  );
   await expectFirstColophonInView(feed);
-  await expect(feed.home).toHaveAttribute("data-active-home-feed", "discover");
-  await expect(feed.shell).toHaveAttribute("data-detail-open", "false");
+  // Held at the left edge while the strip moves on through the colophons.
+  await feed.strip.evaluate((node) =>
+    node.scrollBy({ left: -node.clientWidth, behavior: "instant" }),
+  );
+  await feed.page.waitForTimeout(400);
+  const moved = await feed.post.evaluate((post) => [
+    post.querySelector("[data-feed-stage-frame]")!.getBoundingClientRect().left,
+    post.querySelector("[data-colophon-input]")!.getBoundingClientRect().left,
+  ]);
+  expect(Math.abs(moved[1]! - moved[0]!)).toBeLessThanOrEqual(1);
+  await expectNoHorizontalComposer(feed);
+  await expect(box).not.toBeFocused();
   expect(new URL(feed.page.url()).hash).toBe("");
   await feed.context?.close();
 });
 
-test("the slip turns into a vertical draft that follows the typing while the strip stays still", async ({
+test("typing writes vertically in the input, which widens over the colophons while the strip stays still", async ({
   browser,
   page,
 }, testInfo) => {
@@ -576,13 +924,6 @@ test("the slip turns into a vertical draft that follows the typing while the str
   });
   await enterColophons(feed);
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
-  await feed.page.waitForTimeout(400);
-  await tapSlip(feed);
-  const sheet = sheetOf(feed);
-  await expect(sheet).toBeVisible();
-  await expect(
-    feed.post.locator("[data-colophon-head] [data-colophon-write]"),
-  ).toHaveAttribute("aria-expanded", "true");
   await feed.page.waitForTimeout(400);
   const before = await stripOffset(feed);
   await feed.post.evaluate((post) => {
@@ -619,66 +960,72 @@ test("the slip turns into a vertical draft that follows the typing while the str
           };
       }),
   );
-  const draft = "题跋测试 10月9日";
+  await focusInput(feed);
+  const box = boxOf(feed);
+  const draft = "题跋测试十月九日";
   await feed.page.keyboard.type(draft);
-  await expect(sheet).toContainText(draft);
-  await expect(sheet).toHaveCSS("writing-mode", "vertical-rl");
-  await expect(sheet.locator("[data-colophon-draft-status]")).toHaveText(
-    "草稿",
-  );
-  await expect(sheet).toContainText(READER.displayName);
-  expect(Math.abs((await stripOffset(feed)) - before)).toBeLessThanOrEqual(1);
+  await expect(box).toHaveValue(draft);
+  await expect(box).toHaveCSS("writing-mode", "vertical-rl");
+  await expect(sendOf(feed)).toBeEnabled();
+  // Vertical: the second character sits below the first, in one column.
+  const flow = await box.evaluate((node) => {
+    const element = node as HTMLTextAreaElement;
+    return {
+      width: element.offsetWidth,
+      scrollWidth: element.scrollWidth,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+    };
+  });
+  expect(flow.scrollHeight).toBeLessThanOrEqual(flow.clientHeight + 1);
+  expect(flow.scrollWidth).toBeLessThanOrEqual(flow.width + 1);
 
-  await feed.page.keyboard.type("长".repeat(300));
-  await expect(sheet.locator("[data-colophon-draft-text]")).toHaveAttribute(
-    "data-overflow",
-    "true",
-  );
+  // The column widens with the text, up to 60% of the stage, and the newest
+  // (left-most) column stays in view.
+  await feed.page.keyboard.insertText("长".repeat(120));
+  await feed.page.waitForTimeout(100);
+  const grown = await feed.post.evaluate((post) => {
+    const element = post.querySelector<HTMLTextAreaElement>(
+      "[data-colophon-input] textarea",
+    )!;
+    return {
+      width: element.offsetWidth,
+      overflow: element.scrollWidth - element.clientWidth,
+      scrollLeft: element.scrollLeft,
+    };
+  });
+  expect(grown.width).toBeGreaterThan(flow.width);
+  await feed.page.keyboard.insertText("长".repeat(400));
+  await feed.page.waitForTimeout(100);
+  const capped = await feed.post.evaluate((post) => {
+    const element = post.querySelector<HTMLTextAreaElement>(
+      "[data-colophon-input] textarea",
+    )!;
+    const stage = post.querySelector("[data-feed-stage-frame]")!;
+    return {
+      width: element.offsetWidth,
+      stage: stage.clientWidth,
+      overflow: element.scrollWidth - element.clientWidth,
+      scrollLeft: element.scrollLeft,
+    };
+  });
+  expect(capped.width).toBeLessThanOrEqual(capped.stage * 0.6 + 1);
+  expect(capped.width).toBeGreaterThan(capped.stage * 0.4);
+  expect(capped.overflow).toBeGreaterThan(0);
+  // vertical-rl scrolls to negative offsets: the end is the most negative.
+  expect(capped.scrollLeft).toBeLessThanOrEqual(-capped.overflow + 2);
   if (testInfo.project.name === "desktop-chromium") {
     await feed.page.evaluate(() =>
       (window as unknown as { __stopLongTasks: () => void }).__stopLongTasks(),
     );
     expect(await longTasks).toBeLessThanOrEqual(50);
   }
-  // The box grew to three whole lines and shows where the writing goes on.
-  const field = await openComposer(feed)
-    .locator("textarea")
-    .evaluate((node) => {
-      const box = node as HTMLTextAreaElement;
-      const line = Number.parseFloat(getComputedStyle(box).lineHeight);
-      return {
-        height: box.offsetHeight,
-        line,
-        end: box.scrollTop + box.clientHeight >= box.scrollHeight - 1,
-      };
-    });
-  expect(field.height).toBeGreaterThan(2 * field.line);
-  expect(field.height).toBeLessThan(4 * field.line + 24);
-  expect(field.end).toBe(true);
-  const geometry = await feed.post.evaluate((post) => {
-    const stage = post
-      .querySelector("[data-feed-stage]")!
-      .getBoundingClientRect();
-    const pen = post
-      .querySelector("[data-colophon-draft-pen]")!
-      .getBoundingClientRect();
-    const column = post
-      .querySelector('[data-colophon-draft="head"] > span')!
-      .getBoundingClientRect();
-    const form = document
-      .querySelector('[data-colophon-composer][data-open="true"]')!
-      .getBoundingClientRect();
-    return {
-      stage: [stage.left, stage.right],
-      pen: [pen.left, pen.right],
-      columnBottom: column.bottom,
-      formTop: form.top,
-    };
-  });
-  expect(geometry.pen[0]!).toBeGreaterThanOrEqual(geometry.stage[0]! - 1);
-  expect(geometry.pen[1]!).toBeLessThanOrEqual(geometry.stage[1]! + 1);
-  expect(geometry.columnBottom).toBeLessThanOrEqual(geometry.formTop + 1);
+  // The strip never moved and the colophons never changed.
   expect(Math.abs((await stripOffset(feed)) - before)).toBeLessThanOrEqual(1);
+  await expect(feed.strip).toHaveAttribute(
+    "data-feed-stage-region",
+    "comments",
+  );
   expect(
     await feed.page.evaluate(
       () =>
@@ -686,25 +1033,142 @@ test("the slip turns into a vertical draft that follows the typing while the str
           .__colophonMutations,
     ),
   ).toBe(0);
-  // The preview is for the eyes: the box is the text, and says so.
-  const box = openComposer(feed).locator("textarea");
-  await expect(box).toHaveAccessibleDescription(
-    "输入内容会在上方题跋中竖排预览",
-  );
-  expect(
-    await feed.post.locator("[data-feed-colophon]").ariaSnapshot(),
-  ).not.toContain("题跋测试");
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
+  await expectNoHorizontalComposer(feed);
   await feed.context?.close();
 });
 
-test("a reply is drafted as the replied colophon's last annotation", async ({
+test("with the keyboard up, the column ends above it and the caret's column stays in view", async ({
   browser,
   page,
 }, testInfo) => {
   skipUnlessPhone(testInfo);
   const feed = await openPhoneFeed(browser, page, testInfo, 0, {
     signedIn: true,
+  });
+  await enterColophons(feed);
+  await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
+  // The stage low on the screen, under more of the feed.
+  await feed.post.evaluate((post) => {
+    let scroller = post.parentElement;
+    while (
+      scroller !== null &&
+      !(
+        scroller.scrollHeight > scroller.clientHeight + 2 &&
+        /auto|scroll/u.test(getComputedStyle(scroller).overflowY)
+      )
+    )
+      scroller = scroller.parentElement;
+    const stage = post.querySelector("[data-feed-stage-frame]")!;
+    scroller!.scrollTop += stage.getBoundingClientRect().top - 260;
+  });
+  await feed.page.waitForTimeout(300);
+  const before = await stripOffset(feed);
+  await focusInput(feed);
+  // Focusing brings the stage's top up under the header.
+  const top = await feed.post.evaluate((post) => {
+    let scroller = post.parentElement;
+    while (
+      scroller !== null &&
+      !(
+        scroller.scrollHeight > scroller.clientHeight + 2 &&
+        /auto|scroll/u.test(getComputedStyle(scroller).overflowY)
+      )
+    )
+      scroller = scroller.parentElement;
+    return {
+      stage: post
+        .querySelector("[data-feed-stage-frame]")!
+        .getBoundingClientRect().top,
+      scroller: scroller!.getBoundingClientRect().top,
+    };
+  });
+  expect(Math.abs(top.stage - top.scroller)).toBeLessThanOrEqual(2);
+  // The keyboard, as iOS reports it: the visual viewport loses its foot.
+  const visible = 380;
+  await feed.page.evaluate((height) => {
+    const viewport = window.visualViewport!;
+    Object.defineProperty(viewport, "height", {
+      configurable: true,
+      get: () => height,
+    });
+    viewport.dispatchEvent(new Event("resize"));
+  }, visible);
+  await feed.page.keyboard.type("键盘起");
+  await feed.page.keyboard.insertText("长".repeat(400));
+  const measure = () =>
+    feed.post.evaluate((post) => {
+      const column = post
+        .querySelector("[data-colophon-input]")!
+        .getBoundingClientRect();
+      const send = post
+        .querySelector("[data-colophon-input-send]")!
+        .getBoundingClientRect();
+      const dockNode = document.querySelector("[data-primary-navigation-dock]");
+      const box = post.querySelector<HTMLTextAreaElement>(
+        "[data-colophon-input] textarea",
+      )!;
+      return {
+        columnBottom: column.bottom,
+        columnHeight: column.height,
+        sendBottom: send.bottom,
+        dockShown:
+          dockNode !== null &&
+          getComputedStyle(dockNode).visibility !== "hidden",
+        atEnd: box.scrollLeft <= -(box.scrollWidth - box.clientWidth) + 2,
+      };
+    });
+  // The dock and its action make way while the input is written in: the
+  // column runs down to the keyboard, with nothing over its foot.
+  await expect
+    .poll(async () => {
+      const now = await measure();
+      return Math.abs(now.columnBottom - visible) <= 1;
+    })
+    .toBe(true);
+  const fitted = await measure();
+  expect(fitted.dockShown).toBe(false);
+  expect(fitted.sendBottom).toBeLessThanOrEqual(visible + 1);
+  expect(fitted.columnHeight).toBeGreaterThanOrEqual(160);
+  expect(fitted.atEnd).toBe(true);
+  // An edit near the start brings the caret's column back in.
+  await boxOf(feed).evaluate((node) =>
+    (node as HTMLTextAreaElement).setSelectionRange(2, 2),
+  );
+  await feed.page.keyboard.insertText("插");
+  await feed.page.waitForTimeout(100);
+  const caret = await boxOf(feed).evaluate((node) => {
+    const element = node as HTMLTextAreaElement;
+    return { scrollLeft: element.scrollLeft, width: element.clientWidth };
+  });
+  // Near the start (the right), within one view of it.
+  expect(-caret.scrollLeft).toBeLessThan(caret.width);
+  await expect(boxOf(feed)).toHaveValue(/^键盘插起/u);
+  expect(Math.abs((await stripOffset(feed)) - before)).toBeLessThanOrEqual(1);
+  // Left, the dock comes back.
+  await boxOf(feed).evaluate((node) => (node as HTMLElement).blur());
+  await expect
+    .poll(() =>
+      feed.page.evaluate(
+        () =>
+          getComputedStyle(
+            document.querySelector("[data-primary-navigation-dock]")!,
+          ).visibility,
+      ),
+    )
+    .toBe("visible");
+  await feed.context?.close();
+});
+
+test("回复 leads the input with 「回复 X：」, focused, and sends a reply", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const submit = submitStub();
+  const feed = await openPhoneFeed(browser, page, testInfo, 0, {
+    signedIn: true,
+    submit,
   });
   await enterColophons(feed);
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
@@ -715,34 +1179,64 @@ test("a reply is drafted as the replied colophon's last annotation", async ({
     .locator("[data-colophon-text]")
     .first()
     .evaluate((node) => (node as HTMLElement).click());
+  // The toolbar is never left under the input column: 回复 takes a tap.
+  await expect
+    .poll(() =>
+      root.locator("[data-colophon-reply]").evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+        );
+        return hit !== null && node.contains(hit);
+      }),
+    )
+    .toBe(true);
   await root
     .locator("[data-colophon-reply]")
     .evaluate((node) => (node as HTMLElement).click());
-  await expect(openComposer(feed)).toHaveCount(1);
+  const lead = feed.post.locator("[data-colophon-input-reply]");
+  await expect(lead).toContainText("回复 读者3：");
+  await expect(lead).toHaveCSS("writing-mode", "vertical-rl");
+  // The lead is the text's right-most column, beside it, not above it: the
+  // text keeps the column's height.
+  const [leadBox, textBox] = await Promise.all([
+    lead.boundingBox(),
+    boxOf(feed).boundingBox(),
+  ]);
+  expect(leadBox).not.toBeNull();
+  expect(textBox).not.toBeNull();
+  expect(leadBox!.x).toBeGreaterThanOrEqual(textBox!.x + textBox!.width - 1);
+  expect(Math.abs(leadBox!.y - textBox!.y)).toBeLessThanOrEqual(1);
+  await expect(boxOf(feed)).toBeFocused();
+  await expect(feed.post.locator("[data-colophon-actions]")).toHaveCount(0);
+  // × drops the reply target and keeps the text.
+  await feed.page.keyboard.type("先写");
+  await feed.post
+    .locator("[data-colophon-input-unreply]")
+    .evaluate((node) => (node as HTMLElement).click());
+  await expect(lead).toHaveCount(0);
+  await expect(boxOf(feed)).toHaveValue("先写");
+  await boxOf(feed).fill("");
+  // Aimed again, and sent as a reply.
+  await root
+    .locator("[data-colophon-text]")
+    .first()
+    .evaluate((node) => (node as HTMLElement).click());
+  await root
+    .locator("[data-colophon-reply]")
+    .evaluate((node) => (node as HTMLElement).click());
   await feed.page.keyboard.type("同感，碑阴尤佳");
-  const sheet = root.locator('[data-colophon-draft="reply"]');
-  await expect(sheet).toContainText("回复 读者3：同感，碑阴尤佳");
-  expect(
-    await root.evaluate((node) =>
-      node.lastElementChild?.matches("[data-colophon-draft-replies]"),
-    ),
-  ).toBe(true);
-  await expect(feed.post.locator("[data-colophon-draft]")).toHaveCount(1);
-  await feed.page.waitForTimeout(600);
-  const inView = await feed.post.evaluate((post) => {
-    const stage = post
-      .querySelector("[data-feed-stage]")!
-      .getBoundingClientRect();
-    const node = post
-      .querySelector('[data-colophon-draft="reply"]')!
-      .getBoundingClientRect();
-    return node.left >= stage.left - 1 && node.right <= stage.right + 1;
-  });
-  expect(inView).toBe(true);
+  await tapSend(feed);
+  await expect(noticeOf(feed)).toHaveText("已发送");
+  expect(submit.bodies).toHaveLength(1);
+  expect(submit.bodies[0]).toMatchObject({ text: "同感，碑阴尤佳" });
+  await expect(boxOf(feed)).toHaveValue("");
+  await expect(lead).toHaveCount(0);
   await feed.context?.close();
 });
 
-test("sending: 发送中, then the sheet leaves and the new colophon is marked in 最新", async ({
+test("sending: 发送中, then the new colophon is marked in 最新 and the input empties", async ({
   browser,
   page,
 }, testInfo) => {
@@ -755,17 +1249,11 @@ test("sending: 发送中, then the sheet leaves and the new colophon is marked i
   });
   await enterColophons(feed);
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
-  await tapSlip(feed);
+  await focusInput(feed);
   await feed.page.keyboard.type("新题一则");
-  await openComposer(feed)
-    .locator("[data-colophon-composer-send]")
-    .evaluate((node) => (node as HTMLElement).click());
-  const sheet = sheetOf(feed);
-  await expect(sheet).toHaveAttribute("data-draft-state", "sending");
-  await expect(sheet.locator("[data-colophon-draft-status]")).toHaveText(
-    "发送中",
-  );
-  await expect(sheet).toHaveCount(0);
+  await tapSend(feed);
+  await expect(sendOf(feed)).toHaveText("发送中");
+  await expect(sendOf(feed)).toBeDisabled();
   const posted = feed.post.locator('[data-comment-id="posted-1"]');
   await expect(posted).toHaveCount(1);
   await expect(posted).toHaveAttribute("data-colophon-highlight", "true");
@@ -786,15 +1274,16 @@ test("sending: 发送中, then the sheet leaves and the new colophon is marked i
   });
   expect(shown).toBe(true);
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(13);
-  await expect(
-    feed.page.locator("[data-colophon-notice]", { hasText: "已发送" }),
-  ).toHaveCount(1);
-  await expect(openComposer(feed)).toHaveCount(0);
+  await expect(noticeOf(feed)).toHaveText("已发送");
+  await expect(noticeOf(feed)).toHaveCSS("writing-mode", "vertical-rl");
+  await expect(boxOf(feed)).toHaveValue("");
+  await expect(boxOf(feed)).not.toBeFocused();
   expect(submit.bodies).toEqual([{ text: "新题一则", mentions: [] }]);
+  await expectNoHorizontalComposer(feed);
   await feed.context?.close();
 });
 
-test("awaiting approval the sheet leaves with nothing inserted; a failure keeps it, 未发出", async ({
+test("awaiting approval nothing is inserted; a failure keeps the text and says so", async ({
   browser,
   page,
 }, testInfo) => {
@@ -807,45 +1296,30 @@ test("awaiting approval the sheet leaves with nothing inserted; a failure keeps 
   });
   await enterColophons(feed);
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
-  await tapSlip(feed);
   await feed.page.waitForTimeout(400);
-  const head = () =>
-    feed.post
-      .locator("[data-colophon-head]")
-      .evaluate((node) => Math.round(node.getBoundingClientRect().right));
-  const headRight = await head();
+  const before = await stripOffset(feed);
+  await focusInput(feed);
   await feed.page.keyboard.type("待审之题");
-  await openComposer(feed)
-    .locator("[data-colophon-composer-send]")
-    .evaluate((node) => (node as HTMLElement).click());
-  await expect(sheetOf(feed)).toHaveCount(0);
-  await expect(openComposer(feed)).toHaveCount(0);
-  await expect(
-    feed.page.locator("[data-colophon-notice]", { hasText: "已发送" }),
-  ).toHaveCount(1);
+  await tapSend(feed);
+  await expect(noticeOf(feed)).toHaveText("已发送");
+  await expect(boxOf(feed)).toHaveValue("");
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
   await feed.page.waitForTimeout(400);
-  expect(Math.abs((await head()) - headRight)).toBeLessThanOrEqual(1);
+  expect(Math.abs((await stripOffset(feed)) - before)).toBeLessThanOrEqual(1);
+  await expect(feed.post).not.toContainText(/审核|待发布|等待/u);
 
   submit.mode = "fail";
-  await tapSlip(feed);
+  await focusInput(feed);
   await feed.page.keyboard.type("发不出的题");
-  await openComposer(feed)
-    .locator("[data-colophon-composer-send]")
-    .evaluate((node) => (node as HTMLElement).click());
-  const sheet = sheetOf(feed);
-  await expect(sheet.locator("[data-colophon-draft-status]")).toHaveText(
-    "未发出",
-  );
-  await expect(sheet).toContainText("发不出的题");
-  await expect(openComposer(feed)).toHaveCount(1);
-  await expect(openComposer(feed).locator("textarea")).toHaveValue(
-    "发不出的题",
-  );
+  await tapSend(feed);
+  await expect(noticeOf(feed)).not.toHaveText(/^(已发送)?$/u);
+  await expect(boxOf(feed)).toHaveValue("发不出的题");
+  await expect(sendOf(feed)).toBeEnabled();
+  await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
   await feed.context?.close();
 });
 
-test("取消 puts the slip back as 续写题跋, and the draft returns with it", async ({
+test("the draft stays while the reader goes back to the images and returns", async ({
   browser,
   page,
 }, testInfo) => {
@@ -855,157 +1329,19 @@ test("取消 puts the slip back as 续写题跋, and the draft returns with it",
   });
   await enterColophons(feed);
   await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
-  await tapSlip(feed);
+  await focusInput(feed);
   await feed.page.keyboard.type("未竟之题");
-  await openComposer(feed)
-    .locator("[data-colophon-composer-cancel]")
-    .evaluate((node) => (node as HTMLElement).click());
-  await expect(openComposer(feed)).toHaveCount(0);
-  await expect(sheetOf(feed)).toHaveCount(0);
-  const slip = slipOf(feed);
-  await expect(slip).toContainText("续写题跋");
-  await expect(slip).toBeFocused();
-  await tapSlip(feed);
-  await expect(sheetOf(feed)).toContainText("未竟之题");
-  await feed.context?.close();
-});
-
-test("opened low on the screen, the draft's column still ends above the composer", async ({
-  browser,
-  page,
-}, testInfo) => {
-  skipUnlessPhone(testInfo);
-  const feed = await openPhoneFeed(browser, page, testInfo, 0, {
-    signedIn: true,
-  });
-  await enterColophons(feed);
-  await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
-  // The stage's top near the screen's foot: the bar will cover most of it.
-  await feed.post.evaluate((post) => {
-    let scroller = post.parentElement;
-    while (
-      scroller !== null &&
-      !(
-        scroller.scrollHeight > scroller.clientHeight + 2 &&
-        /auto|scroll/u.test(getComputedStyle(scroller).overflowY)
-      )
-    )
-      scroller = scroller.parentElement;
-    const stage = post.querySelector("[data-feed-stage]")!;
-    scroller!.scrollTop +=
-      stage.getBoundingClientRect().top - (window.innerHeight - 230);
-  });
-  await feed.page.waitForTimeout(300);
-  await tapSlip(feed);
-  await feed.page.keyboard.type("低处起笔");
-  await feed.page.waitForTimeout(1500);
-  const band = await feed.post.evaluate((post) => {
-    const column = post.querySelector<HTMLElement>(
-      '[data-colophon-draft="head"] > span',
-    )!;
-    const form = document
-      .querySelector('[data-colophon-composer][data-open="true"]')!
-      .getBoundingClientRect();
-    const rect = column.getBoundingClientRect();
-    return {
-      height: rect.height,
-      bottom: rect.bottom,
-      formTop: form.top,
-      sixEm: 6 * Number.parseFloat(getComputedStyle(column).fontSize),
-    };
-  });
-  expect(band.height).toBeGreaterThanOrEqual(band.sixEm - 1);
-  expect(band.bottom).toBeLessThanOrEqual(band.formTop + 1);
-  await expect(openComposer(feed)).toHaveCount(1);
-  await expect(sheetOf(feed)).toContainText("低处起笔");
-  await feed.context?.close();
-});
-
-test("the keyboard lifting the bar over a post low on the screen never closes the composer", async ({
-  browser,
-  page,
-}, testInfo) => {
-  skipUnlessPhone(testInfo);
-  const feed = await openPhoneFeed(browser, page, testInfo, 0, {
-    signedIn: true,
-  });
-  await enterColophons(feed);
-  await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
-  // The post's top at 330 px: above the bar as it opens, under it once the
-  // keyboard has lifted the bar.
-  await feed.post.evaluate((post) => {
-    let scroller = post.parentElement;
-    while (
-      scroller !== null &&
-      !(
-        scroller.scrollHeight > scroller.clientHeight + 2 &&
-        /auto|scroll/u.test(getComputedStyle(scroller).overflowY)
-      )
-    )
-      scroller = scroller.parentElement;
-    scroller!.scrollTop += post.getBoundingClientRect().top - 330;
-  });
-  await feed.page.waitForTimeout(300);
-  await tapSlip(feed);
-  await feed.page.keyboard.type("键盘起");
-  const size = feed.page.viewportSize();
-  if (size === null) throw new Error("Missing viewport");
-  // The keyboard, as the layout sees it: the viewport loses its foot.
-  await feed.page.setViewportSize({
-    width: size.width,
-    height: size.height - 290,
-  });
-  await feed.page.waitForTimeout(1500);
-  await expect(openComposer(feed)).toHaveCount(1);
-  await expect(openComposer(feed).locator("textarea")).toBeFocused();
-  await expect(sheetOf(feed)).toContainText("键盘起");
-  const placed = await feed.post.evaluate((post) => {
-    const form = document
-      .querySelector('[data-colophon-composer][data-open="true"]')!
-      .getBoundingClientRect();
-    const column = post
-      .querySelector('[data-colophon-draft="head"] > span')!
-      .getBoundingClientRect();
-    return {
-      postTop: post.getBoundingClientRect().top,
-      formTop: form.top,
-      columnHeight: column.height,
-      sixEm:
-        6 *
-        Number.parseFloat(
-          getComputedStyle(
-            post.querySelector('[data-colophon-draft="head"] > span')!,
-          ).fontSize,
-        ),
-    };
-  });
-  // The one-time nudge brought the post back above the bar.
-  expect(placed.postTop).toBeLessThan(placed.formTop);
-  expect(placed.columnHeight).toBeGreaterThanOrEqual(placed.sixEm - 1);
-  await feed.page.setViewportSize(size);
-  await feed.page.waitForTimeout(600);
-  await expect(openComposer(feed)).toHaveCount(1);
-  await feed.context?.close();
-});
-
-test("under reduced motion the slip, the sheet and the pen stay still", async ({
-  browser,
-  page,
-}, testInfo) => {
-  skipUnlessPhone(testInfo);
-  const feed = await openPhoneFeed(browser, page, testInfo, 0, {
-    signedIn: true,
-    reducedMotion: true,
-  });
-  await enterColophons(feed);
-  const slip = slipOf(feed);
-  // Without motion the entry cue is skipped altogether: no mark, no ink.
-  await expect(slip).not.toHaveAttribute("data-colophon-invite-cue");
-  await expect(slip).toHaveCSS("animation-name", "none");
-  await tapSlip(feed);
-  await expect(sheetOf(feed)).toHaveCSS("animation-name", "none");
-  const pen = sheetOf(feed).locator("[data-colophon-draft-pen]");
-  await expect(pen).toHaveAttribute("data-focused", "");
-  await expect(pen).toHaveCSS("animation-name", "none");
+  await feed.post.locator("[data-feed-post-dot]").first().click();
+  await expect(feed.strip).toHaveAttribute("data-feed-stage-region", "media");
+  // Hidden on the images, and it let go of focus (and the keyboard).
+  await expect(inputOf(feed)).toBeHidden();
+  await expect(boxOf(feed)).not.toBeFocused();
+  await feed.post.locator("[data-feed-post-dot-comments]").click();
+  await expect(feed.strip).toHaveAttribute(
+    "data-feed-stage-region",
+    "comments",
+  );
+  await expect(inputOf(feed)).toBeVisible();
+  await expect(boxOf(feed)).toHaveValue("未竟之题");
   await feed.context?.close();
 });

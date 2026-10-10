@@ -14,9 +14,6 @@ const h = vi.hoisted(() => ({
   thread: null as unknown as DiscussionThread,
   options: [] as Array<Record<string, unknown>>,
   stage: null as Record<string, unknown> | null,
-  composer: null as unknown as Record<string, unknown>,
-  composerProps: [] as Array<Record<string, unknown>>,
-  composerOptions: null as Record<string, unknown> | null,
   enterAuth: vi.fn(),
   openProfile: vi.fn(),
   authors: { viewer: { id: "reader", displayName: "读者" } as unknown },
@@ -41,18 +38,6 @@ vi.mock("./use-discussion-thread", () => ({
 vi.mock("./feed-post-stage-context", () => ({
   useFeedStage: () => h.stage,
 }));
-vi.mock("./feed-colophon-composer", () => ({
-  colophonComposerScene: (shell: Record<string, unknown>) =>
-    `scene:${String(shell.activeDestination)}`,
-  FeedColophonComposer: (props: Record<string, unknown>) => {
-    h.composerProps.push(props);
-    return <form data-colophon-composer="" data-open={String(props.open)} />;
-  },
-  useColophonComposer: (_key: string, options: Record<string, unknown>) => {
-    h.composerOptions = options;
-    return h.composer;
-  },
-}));
 vi.mock("./author-context", () => ({
   useAuthors: () => h.authors,
   contentKey: (target: { type: string; id: string }) =>
@@ -60,6 +45,7 @@ vi.mock("./author-context", () => ({
 }));
 vi.mock("../auth/auth-return", () => ({
   useAuthEntry: () => h.enterAuth,
+  useAuthReturn: () => null,
 }));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => ({
@@ -67,7 +53,8 @@ vi.mock("../product-shell/product-shell", () => ({
     activeDestination: "home",
   }),
 }));
-import { FeedColophon, FeedColophonOutletContext } from "./feed-colophon";
+import { FeedColophon } from "./feed-colophon";
+import { COLOPHON_INPUT_BLUR_MS } from "./feed-colophon-input";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -187,16 +174,13 @@ const target = { type: "work", id: "w1" } as const;
 const writer = user("writer", "甲");
 const other = user("other", "乙");
 let host: HTMLDivElement;
-let outlet: HTMLDivElement;
 let strip: HTMLDivElement;
 let root: Root;
 
-const render = (withOutlet = true) =>
+const render = () =>
   act(() => {
     root.render(
-      <FeedColophonOutletContext.Provider value={withOutlet ? outlet : null}>
-        <FeedColophon fallbackCount={7} target={target} title="寒山诗" />
-      </FeedColophonOutletContext.Provider>,
+      <FeedColophon fallbackCount={7} target={target} title="寒山诗" />,
     );
   });
 const $ = <T extends Element = HTMLElement>(selector: string) =>
@@ -204,6 +188,25 @@ const $ = <T extends Element = HTMLElement>(selector: string) =>
 const $$ = (selector: string) => [
   ...host.querySelectorAll<HTMLElement>(selector),
 ];
+/** A signature's parts in document order: time, name, plaque, avatar. */
+const signatureOrder = (signature: Element | null | undefined) =>
+  [
+    ...(signature?.querySelectorAll(
+      "time,[data-colophon-name],[data-studio-name],[data-colophon-author]",
+    ) ?? []),
+  ].map((part) =>
+    part.matches("time")
+      ? "time"
+      : part.matches("[data-colophon-author]")
+        ? "avatar"
+        : part.matches("[data-colophon-name]")
+          ? "name"
+          : "plaque",
+  );
+
+/** A colophon's own words, without the 「回复 X：」 leading a reply's. */
+const words = (text: Element | null | undefined) =>
+  text?.querySelector("[data-colophon-words]")?.textContent;
 const click = (node: Element | null) =>
   act(() => {
     node?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
@@ -213,7 +216,6 @@ beforeEach(() => {
   FakeObserver.instances = [];
   vi.stubGlobal("IntersectionObserver", FakeObserver);
   h.options = [];
-  h.composerProps = [];
   h.enterAuth.mockReset();
   h.openProfile.mockReset();
   h.authors = { viewer: { id: "reader", displayName: "读者" } };
@@ -229,25 +231,15 @@ beforeEach(() => {
     subscribeSettle: vi.fn(() => () => undefined),
     isSettled: () => true,
   };
-  h.composer = {
-    open: false,
-    replyTarget: null,
-    textareaRef: { current: null },
-    openComposer: vi.fn(),
-    close: vi.fn(),
-    setReplyTarget: vi.fn(),
-  };
   h.thread = makeThread();
   host = document.createElement("div");
-  outlet = document.createElement("div");
-  document.body.append(host, outlet);
+  document.body.append(host);
   root = createRoot(host);
 });
 
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
-  outlet.remove();
   vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -339,6 +331,7 @@ describe("FeedColophon", () => {
     const order = [...(section?.children ?? [])].map(
       (node) =>
         [
+          "data-colophon-input-anchor",
           "data-colophon-head",
           "data-colophon-group",
           "data-colophon-list",
@@ -351,6 +344,9 @@ describe("FeedColophon", () => {
           .join("") || node.tagName,
     );
     expect(order).toEqual([
+      // The input's anchor, first so its sticky column is held at the
+      // strip's left edge however little the colophons fill.
+      "data-colophon-input-anchor=",
       "data-colophon-head=",
       "data-colophon-group=hot",
       "data-colophon-list=hot",
@@ -378,29 +374,150 @@ describe("FeedColophon", () => {
     expect($$("[data-colophon-skeleton]")).toHaveLength(0);
   });
 
-  it("signs each colophon with avatar, names and a short time", () => {
+  it("starts each colophon with its words and signs it at the left, the time on top", () => {
     h.thread = makeThread({
       items: [comment("c1", { ...writer, studioName: "听雨轩" })],
     });
     render();
+    const text = $("[data-colophon-text]");
+    // The text starts with the words themselves: no avatar or nickname.
+    expect(text?.parentElement?.firstElementChild).toBe(text);
+    expect(text?.querySelector("[data-colophon-name]")).toBeNull();
+    expect(text?.textContent).toBe("c1 的题跋");
+    expect(words(text)).toBe("c1 的题跋");
+    // 落款, after the text: the time first (at the column's top), then the
+    // nickname and the plaque, then the avatar at the foot.
     const signature = $("[data-colophon-signature=root]");
+    expect(signature?.tagName).toBe("FOOTER");
+    expect(signature?.previousElementSibling).toBe(text);
+    const time = signature?.firstElementChild as HTMLElement | null;
+    expect(time?.tagName).toBe("TIME");
+    expect(time?.getAttribute("dateTime")).toBe("2026-10-09T11:57:00.000Z");
+    const name = signature?.querySelector<HTMLElement>("[data-colophon-name]");
+    expect(name?.textContent).toBe("甲");
     expect(
       signature
         ?.querySelector("[data-studio-name]")
         ?.getAttribute("aria-label"),
     ).toBe("斋号：听雨轩");
-    expect(signature?.querySelector("time")?.getAttribute("dateTime")).toBe(
-      "2026-10-09T11:57:00.000Z",
-    );
+    expect(signatureOrder(signature)).toEqual([
+      "time",
+      "name",
+      "plaque",
+      "avatar",
+    ]);
     const avatar = signature?.querySelector<HTMLButtonElement>(
-      'button[aria-label="打开甲的主页"]',
+      "[data-colophon-author]",
     );
+    expect(avatar?.tagName).toBe("BUTTON");
+    expect(avatar?.getAttribute("aria-label")).toBe("打开甲的主页");
+    expect(
+      avatar
+        ?.querySelector("[data-comment-avatar]")
+        ?.getAttribute("aria-label"),
+    ).toBe("甲的头像");
     expect(avatar?.textContent).toBe("甲");
-    click(avatar ?? null);
+    click(avatar!);
     expect(h.openProfile).toHaveBeenCalledWith("writer", avatar);
-    expect($("[data-colophon-text]")?.getAttribute("aria-describedby")).toBe(
-      signature?.id,
+    // The text is described by its author (with the plaque) and the time.
+    const [namesId, timeId] = (
+      text?.getAttribute("aria-describedby") ?? ""
+    ).split(" ");
+    expect(document.getElementById(namesId!)?.contains(name!)).toBe(true);
+    expect(
+      document.getElementById(namesId!)?.querySelector("[data-studio-name]"),
+    ).not.toBeNull();
+    expect(document.getElementById(timeId!)).toBe(time);
+  });
+
+  it("describes a colophon without a time by its author alone", () => {
+    const undated: { -readonly [K in keyof CommentItem]?: CommentItem[K] } =
+      comment("c1", writer);
+    delete undated.createdAt;
+    h.thread = makeThread({ items: [undated as CommentItem] });
+    render();
+    const signature = $("[data-colophon-signature]");
+    expect(signature?.querySelector("time")).toBeNull();
+    expect(signature?.querySelector("[data-colophon-author]")).not.toBeNull();
+    const text = $("[data-colophon-text]");
+    const described = text?.getAttribute("aria-describedby") ?? "";
+    expect(described.split(" ")).toHaveLength(1);
+    expect(document.getElementById(described)?.textContent).toBe("甲");
+  });
+
+  it("cuts a long nickname in the signature, the avatar and description keeping it whole", () => {
+    const long = { ...writer, name: "长".repeat(40) };
+    h.thread = makeThread({ items: [comment("c1", long)] });
+    render();
+    const name = $("[data-colophon-signature] [data-colophon-name]");
+    expect(name?.textContent).toBe(`${"长".repeat(11)}…`);
+    expect(name?.getAttribute("aria-hidden")).toBe("true");
+    expect($("[data-colophon-author]")?.getAttribute("aria-label")).toBe(
+      `打开${"长".repeat(40)}的主页`,
     );
+    const [namesId] = (
+      $("[data-colophon-text]")?.getAttribute("aria-describedby") ?? ""
+    ).split(" ");
+    const names = document.getElementById(namesId!);
+    // Read whole: the cut name is hidden, the full one is there for the
+    // description.
+    expect(
+      [...(names?.children ?? [])]
+        .filter((part) => part.getAttribute("aria-hidden") !== "true")
+        .map((part) => part.textContent)
+        .join(""),
+    ).toBe("长".repeat(40));
+  });
+
+  it("cuts a long nickname in 「回复 X：」 as in the signature, read whole", () => {
+    const long = { ...other, name: "长".repeat(17) };
+    h.thread = makeThread({
+      items: [comment("c1", long, { replies: [reply("r1", writer)] })],
+    });
+    render();
+    const lead = $("[data-colophon-reply-lead]");
+    // The cut name is shown and hidden from assistive technology; the full
+    // one is read in its place.
+    const read = (hidden: boolean) =>
+      [...(lead?.childNodes ?? [])]
+        .filter(
+          (part) =>
+            !(part instanceof HTMLElement) ||
+            (part.getAttribute("aria-hidden") === "true") === hidden,
+        )
+        .map((part) => part.textContent)
+        .join("");
+    expect(read(true)).toBe(`回复 ${"长".repeat(11)}…：`);
+    expect(read(false)).toBe(`回复 ${"长".repeat(17)}：`);
+  });
+
+  it("keeps the writer's focus when another colophon is pressed while writing", () => {
+    h.thread = makeThread({ items: [comment("c1", writer)] });
+    render();
+    const writing = document.createElement("textarea");
+    const column = document.createElement("div");
+    column.setAttribute("data-colophon-input", "idle");
+    column.append(writing);
+    document.body.append(column);
+    try {
+      writing.focus();
+      const text = $("[data-colophon-text]")!;
+      const press = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      });
+      text.dispatchEvent(press);
+      expect(press.defaultPrevented).toBe(true);
+      writing.blur();
+      const idle = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      });
+      text.dispatchEvent(idle);
+      expect(idle.defaultPrevented).toBe(false);
+    } finally {
+      column.remove();
+    }
   });
 
   it("folds a colophon past 200 characters even where it would fit, and 全文 expands it", () => {
@@ -414,17 +531,17 @@ describe("FeedColophon", () => {
     });
     render();
     const [first, second, third] = $$("[data-colophon-text]");
-    expect(first?.textContent).toBe(`${"永".repeat(200)}…`);
+    expect(words(first)).toBe(`${"永".repeat(200)}…`);
     expect(first?.dataset.folded).toBe("true");
     // Exactly 200 is shown whole where it fits; one more always folds.
-    expect(second?.textContent).toBe("和".repeat(200));
+    expect(words(second)).toBe("和".repeat(200));
     expect(third?.dataset.folded).toBe("true");
     expect($$("[data-colophon-fold]")).toHaveLength(2);
     const fold = $("[data-colophon-fold]");
     expect(fold?.textContent).toBe("全文");
     expect(fold?.getAttribute("aria-expanded")).toBe("false");
     click(fold);
-    expect($("[data-colophon-text]")?.textContent).toBe(long);
+    expect(words($("[data-colophon-text]"))).toBe(long);
     expect(fold?.textContent).toBe("收起");
     expect(fold?.getAttribute("aria-expanded")).toBe("true");
   });
@@ -452,7 +569,7 @@ describe("FeedColophon", () => {
       render();
       const [long, short, , replyText] = $$("[data-colophon-text]");
       // Whole, but cut by the view: folded with a fade and 全文.
-      expect(long?.textContent).toBe("长".repeat(150));
+      expect(words(long)).toBe("长".repeat(150));
       expect(long?.dataset.folded).toBe("true");
       expect(long?.dataset.overflow).toBe("true");
       expect(short?.dataset.folded).toBeUndefined();
@@ -482,7 +599,7 @@ describe("FeedColophon", () => {
       items: [
         comment("c1", writer, {
           replies: [
-            reply("r1", other),
+            reply("r1", { ...other, studioName: "洗砚斋" }),
             reply("r2", writer, { replyToUser: other }),
           ],
           replyTotal: 6,
@@ -495,6 +612,29 @@ describe("FeedColophon", () => {
     expect(
       $$("[data-colophon-reply-lead]").map((lead) => lead.textContent),
     ).toEqual(["回复 甲：", "回复 乙："]);
+    // Each reply starts with the relation, then its words: 回复 甲：…
+    const replyText = $('[data-comment-reply="r1"] [data-colophon-text]');
+    expect(
+      [...(replyText?.children ?? [])].map(
+        (part) => (part as HTMLElement).textContent,
+      ),
+    ).toEqual(["回复 甲：", "r1 的回复"]);
+    expect(
+      $('[data-comment-reply="r1"] [data-colophon-author]')?.getAttribute(
+        "aria-label",
+      ),
+    ).toBe("打开乙的主页");
+    const replySignature = $(
+      '[data-comment-reply="r1"] [data-colophon-signature]',
+    );
+    expect(replySignature?.dataset.colophonSignature).toBe("reply");
+    // Signed like a root: the time on top, the avatar at the foot.
+    expect(signatureOrder(replySignature)).toEqual([
+      "time",
+      "name",
+      "plaque",
+      "avatar",
+    ]);
     expect(
       $$("[data-comment-reply]").map((node) => node.dataset.colophonAnchor),
     ).toEqual(["r1", "r2"]);
@@ -503,6 +643,30 @@ describe("FeedColophon", () => {
     expect(more?.getAttribute("aria-busy")).toBe("true");
     click(more);
     expect(h.thread.loadReplies).toHaveBeenCalledWith("c1");
+  });
+
+  it("keeps a deleted root's signature and says its text was deleted", () => {
+    h.thread = makeThread({
+      items: [
+        comment("c1", writer, {
+          deleted: true,
+          text: "",
+          replies: [reply("r1", other)],
+        }),
+      ],
+    });
+    render();
+    const text = $('[data-comment-id="c1"] [data-colophon-text]');
+    expect(
+      $(
+        '[data-comment-id="c1"] [data-colophon-signature=root] [data-colophon-name]',
+      )?.textContent,
+    ).toBe("甲");
+    expect(words(text)).toBe("该正文已删除");
+    expect(text?.querySelector("[data-colophon-deleted]")).not.toBeNull();
+    expect(
+      $$("[data-colophon-reply-lead]").map((lead) => lead.textContent),
+    ).toEqual(["回复 甲："]);
   });
 
   it("selecting a colophon reveals its actions; 删除 only on one's own", () => {
@@ -590,7 +754,7 @@ describe("FeedColophon", () => {
     expect($("[data-colophon-actions]")).not.toBeNull();
   });
 
-  it("sends a guest to sign in from the head, 回复 and 赞, returning focus to the opener", () => {
+  it("sends a guest to sign in from the input column, 回复 and 赞, returning focus to the opener", () => {
     h.authors = { viewer: null };
     h.thread = makeThread({
       currentUser: { id: "guest", name: "访客" },
@@ -598,52 +762,98 @@ describe("FeedColophon", () => {
       items: [comment("c1", writer)],
     });
     render();
-    const signIn = $<HTMLAnchorElement>("[data-colophon-sign-in]");
+    const signIn = host.querySelector<HTMLAnchorElement>(
+      "[data-colophon-sign-in]",
+    );
     expect(signIn?.textContent).toBe("登录后题跋");
     expect(signIn?.getAttribute("href")).toBe("/login?x=1");
-    expect($("[data-colophon-write]")).toBeNull();
+    // Nothing to write in for a guest, and nothing in the head.
+    expect(host.querySelector("textarea")).toBeNull();
+    expect($("[data-colophon-head] a, [data-colophon-head] button")).toBeNull();
     click($("[data-colophon-text]"));
     const replyButton = $("[data-colophon-reply]");
     click(replyButton);
     expect(h.enterAuth).toHaveBeenCalledWith("/login?x=1", replyButton);
-    expect(h.composer.openComposer).not.toHaveBeenCalled();
     const like = $("[data-colophon-like]");
     click(like);
     expect(h.thread.toggleLike).toHaveBeenCalledWith("c1", undefined, like);
-    // A guest never gets a composer.
-    expect(outlet.querySelector("[data-colophon-composer]")).toBeNull();
   });
 
-  it("opens the composer from 写题跋 and 回复, sending through the thread", async () => {
+  it("holds the input column in the strip, at its left edge, shown only on the colophons", () => {
+    h.thread = makeThread({ items: [comment("c1", writer)], visibleTotal: 1 });
+    render();
+    const column = $("[data-colophon-input]");
+    expect(column?.dataset.colophonInput).toBe("write");
+    // In a sticky anchor, first in the colophons.
+    const anchor = column?.parentElement;
+    expect(anchor?.hasAttribute("data-colophon-input-anchor")).toBe(true);
+    expect(anchor?.parentElement?.firstElementChild).toBe(anchor);
+    expect(anchor?.parentElement?.hasAttribute("data-feed-colophon")).toBe(
+      true,
+    );
+    // On the images it is hidden and inert.
+    expect(column?.hasAttribute("data-colophon-input-shown")).toBe(false);
+    expect(column?.hasAttribute("inert")).toBe(true);
+    h.stage = { ...h.stage, region: "comments" };
+    render();
+    expect(column?.hasAttribute("data-colophon-input-shown")).toBe(true);
+    expect(column?.hasAttribute("inert")).toBe(false);
+    // The head keeps only 题跋 and the count: no write entry anywhere in
+    // the strip, and no horizontal composer.
+    expect($("[data-colophon-head]")?.textContent).toBe("题跋1则");
+    expect($("[data-colophon-end] button, [data-colophon-end] a")).toBeNull();
+    expect(document.querySelector("[data-colophon-composer]")).toBeNull();
+  });
+
+  it("replies from 回复 in the input, focused in the same tap, and sends through the thread", async () => {
+    h.stage = { ...h.stage, region: "comments" };
     h.thread = makeThread({ items: [comment("c1", writer)] });
     render();
-    const write = $("[data-colophon-write]");
-    click(write);
-    expect(h.composer.openComposer).toHaveBeenCalledWith(null, write);
-    const text = $("[data-colophon-text]");
-    click(text);
+    const box = host.querySelector("textarea")!;
+    click($("[data-colophon-text]"));
     click($("[data-colophon-reply]"));
-    // Focus returns to the text replied to: the toolbar is gone by then.
-    expect(h.composer.openComposer).toHaveBeenLastCalledWith(
-      { rootCommentId: "c1", user: writer },
-      text,
-    );
+    // The toolbar closes; the input takes focus, led by 「回复 甲：」.
     expect($("[data-colophon-actions]")).toBeNull();
-    expect(outlet.querySelector("[data-colophon-composer]")).not.toBeNull();
-    const props = h.composerProps.at(-1) as {
-      contentKey: string;
-      actorId: string | null;
-      onSubmit: (t: string, m: [], target: unknown) => Promise<boolean>;
-      onCancel: unknown;
-    };
-    expect(props.contentKey).toBe("work:w1");
-    expect(props.actorId).toBe("reader");
-    expect(props.onCancel).toBe(h.composer.close);
-    await props.onSubmit("新题", [], null);
-    expect(h.thread.sendComment).toHaveBeenCalledWith("新题", []);
-    const replyTarget = { rootCommentId: "c1", user: writer };
-    await props.onSubmit("答", [], replyTarget);
-    expect(h.thread.sendReply).toHaveBeenCalledWith(replyTarget, "答", []);
+    expect(document.activeElement).toBe(box);
+    expect(
+      host.querySelector("[data-colophon-input-reply]")?.textContent,
+    ).toContain("回复 甲：");
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(box, "  答  ");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      host
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        );
+    });
+    expect(h.thread.sendReply).toHaveBeenCalledWith(
+      { rootCommentId: "c1", user: writer },
+      "答",
+    );
+    // Accepted: the text and the reply lead are gone.
+    expect(box.value).toBe("");
+    expect(host.querySelector("[data-colophon-input-reply]")).toBeNull();
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(box, "新题");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      host
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        );
+    });
+    expect(h.thread.sendComment).toHaveBeenCalledWith("新题");
   });
 
   it("asks for the next page once per page as the end comes near", () => {
@@ -714,35 +924,6 @@ describe("FeedColophon", () => {
     expect(loadMore).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the composer open while the post is on screen and its status above it", () => {
-    const article = document.createElement("article");
-    article.append(outlet);
-    document.body.append(article);
-    h.thread = makeThread({ items: [comment("c1", writer)] });
-    render();
-    expect(h.composerOptions?.observe).toBe(article);
-    // It also closes when the shell's destination or layers change.
-    expect(h.composerOptions?.scene).toBe("scene:home");
-    const fallback = h.composerOptions?.fallbackFocus as () => unknown;
-    expect(fallback()).toBe($("[data-colophon-write]"));
-
-    const form = document.createElement("form");
-    const box = document.createElement("textarea");
-    form.append(box);
-    h.composer = { ...h.composer, open: true, textareaRef: { current: box } };
-    render();
-    const notice = outlet.querySelector<HTMLElement>("[data-colophon-notice]");
-    expect(
-      notice?.style.getPropertyValue("--colophon-composer-block-size"),
-    ).toBe("0px");
-    h.composer = { ...h.composer, open: false };
-    render();
-    expect(
-      notice?.style.getPropertyValue("--colophon-composer-block-size"),
-    ).toBe("");
-    article.remove();
-  });
-
   it("shows 正在展开… while a page loads and a retry after a read error", () => {
     h.thread = makeThread({
       items: [comment("c1", writer)],
@@ -789,6 +970,123 @@ describe("FeedColophon", () => {
     expect(entry?.hasAttribute("data-colophon-highlight")).toBe(false);
   });
 
+  it("moves focus on from the input to the reader's own published colophon", () => {
+    h.stage = { ...h.stage, region: "comments" };
+    h.thread = makeThread({
+      items: [comment("c1", writer), comment("c2", writer)],
+    });
+    render();
+    // The input let go of focus once the send was accepted.
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    h.thread = makeThread({
+      items: [comment("c1", writer), comment("c2", writer)],
+      highlightId: "c2",
+      lastSubmit: { id: "c2", rootId: "c2", awaitingApproval: false },
+    });
+    render();
+    expect(document.activeElement).toBe(
+      $('[data-comment-id="c2"] [data-colophon-text]'),
+    );
+  });
+
+  /** Places the input column, the strip and the colophons for a test. */
+  const layout = (place: (node: Element) => [left: number, width: number]) =>
+    vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const [left, width] = place(this);
+        return {
+          x: left,
+          y: 0,
+          left,
+          right: left + width,
+          top: 0,
+          bottom: 500,
+          width,
+          height: 500,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+
+  it("brings a selected colophon whose actions sit under the input column to its snap position", () => {
+    h.stage = { ...h.stage, region: "comments" };
+    h.thread = makeThread({
+      items: [comment("c1", writer), comment("c2", other)],
+    });
+    let actionsLeft = 10;
+    layout((node) =>
+      node === strip
+        ? [0, 393]
+        : node.matches("[data-colophon-input]")
+          ? [0, 49]
+          : node.matches("[data-colophon-actions]")
+            ? [actionsLeft, 52]
+            : [200, 40],
+    );
+    render();
+    click($('[data-comment-id="c2"] [data-colophon-text]'));
+    expect(h.stage?.scrollToElement).toHaveBeenCalledWith(
+      $('[data-comment-id="c2"]'),
+    );
+    // Clear of the column: the strip stays where it is.
+    click($('[data-comment-id="c2"] [data-colophon-text]'));
+    actionsLeft = 120;
+    click($('[data-comment-id="c1"] [data-colophon-text]'));
+    expect(h.stage?.scrollToElement).toHaveBeenCalledTimes(1);
+  });
+
+  it("brings the colophon a reply answers clear of where the input can grow", () => {
+    h.stage = { ...h.stage, region: "comments" };
+    h.thread = makeThread({
+      items: [comment("c1", writer), comment("c2", other)],
+    });
+    // The input grows to 60% of 393 px: c1 sits within that, c2 beyond it.
+    layout((node) => {
+      if (node === strip) return [0, 393];
+      if (node.matches("[data-colophon-input]")) return [0, 49];
+      if (node.matches("[data-colophon-actions]")) return [300, 52];
+      const entry = node.closest("[data-comment-id]");
+      return entry?.getAttribute("data-comment-id") === "c1"
+        ? [150, 60]
+        : [300, 60];
+    });
+    render();
+    click($('[data-comment-id="c2"] [data-colophon-text]'));
+    click($("[data-colophon-reply]"));
+    expect(h.stage?.scrollToElement).not.toHaveBeenCalled();
+    click($('[data-comment-id="c1"] [data-colophon-text]'));
+    click($("[data-colophon-reply]"));
+    expect(h.stage?.scrollToElement).toHaveBeenCalledWith(
+      $('[data-comment-id="c1"]'),
+    );
+    expect(h.stage?.scrollToElement).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the colophons recede while the input is written in, all but the one it answers", () => {
+    vi.useFakeTimers();
+    h.stage = { ...h.stage, region: "comments" };
+    h.thread = makeThread({
+      items: [comment("c1", writer), comment("c2", other)],
+    });
+    render();
+    const section = $("[data-feed-colophon]")!;
+    expect(section.hasAttribute("data-colophon-writing")).toBe(false);
+    click($('[data-comment-id="c1"] [data-colophon-text]'));
+    click($("[data-colophon-reply]"));
+    expect(section.hasAttribute("data-colophon-writing")).toBe(true);
+    expect(
+      $('[data-comment-id="c1"]')?.hasAttribute("data-colophon-reply-target"),
+    ).toBe(true);
+    expect($("[data-colophon-reply-target]")).toBe($('[data-comment-id="c1"]'));
+    act(() => $("textarea")!.blur());
+    act(() => vi.advanceTimersByTime(COLOPHON_INPUT_BLUR_MS));
+    expect(section.hasAttribute("data-colophon-writing")).toBe(false);
+    // Still answering it: still marked.
+    expect(
+      $('[data-comment-id="c1"]')?.hasAttribute("data-colophon-reply-target"),
+    ).toBe(true);
+  });
+
   it("brings the first colophon of a group in with the group's label", () => {
     h.thread = makeThread({
       hot: [comment("h1", other)],
@@ -830,11 +1128,12 @@ describe("FeedColophon", () => {
     expect(h.thread.loadReplies).toHaveBeenCalledWith("c1", 2);
   });
 
-  it("says 已发送 for a few seconds whether published or awaiting approval", () => {
+  it("says 已发送 in the input column for a few seconds whether published or awaiting approval", () => {
     vi.useFakeTimers();
     render();
-    const notice = outlet.querySelector("[data-colophon-notice]");
+    const notice = host.querySelector("[data-colophon-notice]");
     expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.closest("[data-colophon-input]")).not.toBeNull();
     expect(notice?.textContent).toBe("");
     h.thread = makeThread({
       notice: "已发送",
@@ -861,12 +1160,14 @@ describe("FeedColophon", () => {
     expect(notice?.textContent).toBe("操作未完成");
   });
 
-  it("keeps the notice inside the colophons without an outlet", () => {
-    render(false);
-    expect($("[data-colophon-notice]")).not.toBeNull();
+  it("renders no input before the stage strip is there", () => {
+    h.stage = { ...h.stage, strip: null };
+    render();
+    expect(document.querySelector("[data-colophon-input]")).toBeNull();
+    expect($("[data-colophon-head]")).not.toBeNull();
   });
 
-  it("closed: a truthful note, no write entry, no reply, no review wording", () => {
+  it("closed: a truthful note in the column, no input, no reply, no review wording", () => {
     h.thread = makeThread({
       composerClosed: true,
       closedNote: "此作品当前仅你可见，暂时无法发表评论。",
@@ -876,24 +1177,28 @@ describe("FeedColophon", () => {
       notice: "",
     });
     render();
-    expect($("[data-colophon-closed]")?.textContent).toBe(
+    expect(host.querySelector("[data-colophon-closed]")?.textContent).toBe(
       "此作品当前仅你可见，暂时无法发表评论。",
     );
-    expect($("[data-colophon-write]")).toBeNull();
-    expect($("[data-colophon-sign-in]")).toBeNull();
+    expect(host.querySelector("textarea")).toBeNull();
+    expect(host.querySelector("[data-colophon-sign-in]")).toBeNull();
     click($("[data-colophon-text]"));
     expect($("[data-colophon-reply]")).toBeNull();
     expect(host.textContent).not.toMatch(/审核|待发布|等待/);
-    expect(outlet.textContent).not.toMatch(/审核|待发布|等待/);
+    expect(host.textContent).not.toMatch(/审核|待发布|等待/);
   });
 
-  it("says when the discussion is not open here", () => {
+  it("says when the discussion is not open here, with nothing to write in", () => {
     h.thread = makeThread({ page: 0, totalPages: 0, unavailable: true });
     render();
     expect($("[data-colophon-unavailable]")?.textContent).toBe(
       "此处暂不开放题跋",
     );
-    expect($("[data-colophon-write]")).toBeNull();
+    expect(
+      host.querySelector<HTMLElement>("[data-colophon-input]")?.dataset
+        .colophonInput,
+    ).toBe("none");
+    expect(host.querySelector("textarea")).toBeNull();
   });
 
   it("registers its reading anchor with the stage and listens for settles", () => {
@@ -970,7 +1275,9 @@ describe("FeedColophon", () => {
     });
     render();
     const text = $("[data-colophon-text]");
-    expect(text?.querySelector("span")?.textContent).toBe("10");
+    expect(text?.querySelector("[data-colophon-words] span")?.textContent).toBe(
+      "10",
+    );
     const range = document.createRange();
     range.selectNodeContents(text!);
     const selection = window.getSelection()!;
@@ -982,6 +1289,7 @@ describe("FeedColophon", () => {
     act(() => {
       text?.dispatchEvent(event);
     });
+    // The nickname leading the text is not part of the copy.
     expect(setData).toHaveBeenCalledWith("text/plain", "临了10遍");
     expect(event.defaultPrevented).toBe(true);
     selection.removeAllRanges();
@@ -996,469 +1304,5 @@ describe("FeedColophon", () => {
     h.stage = { ...h.stage, region: "media" };
     render();
     expect($("[data-colophon-actions]")).toBeNull();
-  });
-});
-
-describe("FeedColophon writing", () => {
-  const reader = { ...user("reader", "读者"), avatarSrc: "/a/reader.png" };
-  let form: HTMLFormElement;
-  let box: HTMLTextAreaElement;
-  beforeEach(() => {
-    h.entryRenders = 0;
-    form = document.createElement("form");
-    box = document.createElement("textarea");
-    form.append(box);
-    outlet.append(form);
-    h.thread = makeThread({ currentUser: reader });
-  });
-  const composerProps = () =>
-    h.composerProps.at(-1) as {
-      onDraftChange: (draft: string) => void;
-      formId: string;
-    };
-  const typeDraft = (draft: string) =>
-    act(() => composerProps().onDraftChange(draft));
-  const setOpen = (
-    open: boolean,
-    replyTarget: Record<string, unknown> | null = null,
-  ) => {
-    h.composer = {
-      ...h.composer,
-      open,
-      replyTarget,
-      textareaRef: { current: box },
-    };
-    render();
-  };
-  const slip = () => $("[data-colophon-head] [data-colophon-invite]");
-
-  it("invites the reader to write in the head, with their own avatar", () => {
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer)],
-      visibleTotal: 1,
-    });
-    render();
-    const write = $("[data-colophon-head] [data-colophon-write]");
-    expect(write).toBe(slip());
-    expect(write?.dataset.colophonInvite).toBe("signed-in");
-    // Named by its visible prompt (the pen and the avatar are hidden).
-    expect(write?.hasAttribute("aria-label")).toBe(false);
-    expect(write?.getAttribute("aria-expanded")).toBe("false");
-    expect(write?.getAttribute("aria-controls")).toBe(composerProps().formId);
-    expect(write?.textContent).toContain("在此写题跋");
-    expect(write?.querySelector("img")?.getAttribute("src")).toBe(
-      "/a/reader.png",
-    );
-    // The head reads 题跋, the count, then the slip.
-    expect([...($("[data-colophon-head]")?.children ?? [])].at(-1)).toBe(write);
-  });
-
-  it("asks for the first colophon of an empty thread and to go on with a kept draft", () => {
-    h.thread = makeThread({ currentUser: reader, visibleTotal: 0 });
-    render();
-    expect(slip()?.textContent).toContain("写第一则题跋");
-    typeDraft("x");
-    expect(slip()?.textContent).toContain("续写题跋");
-    typeDraft("");
-    expect(slip()?.textContent).toContain("写第一则题跋");
-  });
-
-  it("holds the slip's place while the session is confirmed, and says when it cannot be", () => {
-    render();
-    const signedIn = slip();
-    h.thread = makeThread({ viewerState: { state: "checking" } });
-    render();
-    const checking = slip();
-    expect(checking?.dataset.colophonInvite).toBe("checking");
-    expect(checking?.tagName).toBe("SPAN");
-    expect(checking?.className).toBe(signedIn?.className);
-    expect(checking?.getAttribute("aria-hidden")).toBe("true");
-    expect(checking?.textContent).toBe("");
-    h.thread = makeThread({ viewerState: { state: "unavailable" } });
-    render();
-    expect(slip()?.dataset.colophonInvite).toBe("unavailable");
-    expect(slip()?.textContent).toBe("暂时无法确认登录状态");
-    expect(slip()?.className).toBe(signedIn?.className);
-  });
-
-  it("turns the slip itself into the draft sheet and previews the typing alone", () => {
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer), comment("c2", other)],
-      visibleTotal: 2,
-    });
-    render();
-    const write = $("[data-colophon-head] [data-colophon-write]");
-    click(write);
-    expect(h.composer.openComposer).toHaveBeenCalledWith(null, write);
-    setOpen(true);
-    const head = $("[data-colophon-head]");
-    expect(head?.hasAttribute("data-colophon-drafting")).toBe(true);
-    expect($("[data-colophon-head] [data-colophon-write]")).toBe(write);
-    expect(write?.getAttribute("aria-expanded")).toBe("true");
-    // The sheet's ink is hidden: the button keeps a name of its own.
-    expect(write?.getAttribute("aria-label")).toBe("写题跋");
-    const sheet = write?.querySelector<HTMLElement>(
-      '[data-colophon-draft="head"]',
-    );
-    expect(sheet).not.toBeNull();
-    expect(
-      sheet?.querySelector("[data-colophon-draft-status]")?.textContent,
-    ).toBe("草稿");
-    const renders = h.entryRenders;
-    typeDraft("寒山 10月");
-    expect(sheet?.textContent).toContain("寒山 10月");
-    for (let index = 0; index < 20; index += 1) typeDraft(`寒山${index}`);
-    expect(h.entryRenders).toBe(renders);
-    // A tap on the sheet brings the keyboard back.
-    click(sheet ?? null);
-    expect(h.composer.openComposer).toHaveBeenLastCalledWith(null, write);
-    // The preview is no colophon: the rows stay two.
-    expect($$("[data-colophon-entry]")).toHaveLength(2);
-    setOpen(false);
-    expect(head?.hasAttribute("data-colophon-drafting")).toBe(false);
-    expect($("[data-colophon-draft]")).toBeNull();
-    expect(slip()?.textContent).toContain("续写题跋");
-  });
-
-  it("writes in the end column when opened there, and in the head otherwise", () => {
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer)],
-      visibleTotal: 1,
-    });
-    render();
-    const pill = $("[data-colophon-end] [data-colophon-write]");
-    expect(pill?.textContent).toBe("写题跋");
-    click(pill);
-    setOpen(true);
-    expect(
-      $("[data-colophon-end]")?.hasAttribute("data-colophon-drafting"),
-    ).toBe(true);
-    expect(pill?.querySelector('[data-colophon-draft="end"]')).not.toBeNull();
-    expect($("[data-colophon-head] [data-colophon-draft]")).toBeNull();
-    // More to read: the end column is no longer the end, the head takes it.
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer)],
-      visibleTotal: 3,
-      totalPages: 2,
-      hasMore: true,
-    });
-    render();
-    expect(
-      $('[data-colophon-head] [data-colophon-draft="head"]'),
-    ).not.toBeNull();
-    expect($("[data-colophon-end] [data-colophon-draft]")).toBeNull();
-  });
-
-  it("drafts a reply as its colophon's last annotation, only in the list it came from", () => {
-    const root = comment("c1", writer, {
-      replies: [reply("r1", other)],
-      replyTotal: 4,
-      replyPageTotal: 4,
-    });
-    h.thread = makeThread({
-      currentUser: reader,
-      hot: [root],
-      items: [root],
-      visibleTotal: 4,
-    });
-    render();
-    const latest = $('[data-colophon-list="latest"]');
-    const text = latest?.querySelector("[data-colophon-text]") ?? null;
-    click(text);
-    click(latest?.querySelector("[data-colophon-reply]") ?? null);
-    const target = { rootCommentId: "c1", user: writer };
-    expect(h.composer.openComposer).toHaveBeenLastCalledWith(target, text);
-    setOpen(true, target);
-    const entry = latest?.querySelector('[data-comment-id="c1"]');
-    const last = entry?.lastElementChild as HTMLElement | null;
-    expect(last?.matches("[data-colophon-draft-replies]")).toBe(true);
-    expect(last?.getAttribute("aria-hidden")).toBe("true");
-    expect(
-      last?.previousElementSibling?.matches("[data-colophon-more-replies]"),
-    ).toBe(true);
-    expect(last?.textContent).toContain("回复 甲：");
-    expect($$("[data-colophon-draft]")).toHaveLength(1);
-    expect($('[data-colophon-list="hot"] [data-colophon-draft]')).toBeNull();
-    expect($("[data-colophon-head] [data-colophon-draft]")).toBeNull();
-    typeDraft("同感");
-    expect(last?.textContent).toContain("回复 甲：同感");
-  });
-
-  it("continues a kept reply from the slip, bringing its sheet back into view", () => {
-    const root = comment("c1", writer);
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c0", other), root],
-      visibleTotal: 2,
-    });
-    render();
-    const target = { rootCommentId: "c1", user: writer };
-    setOpen(true, target);
-    typeDraft("同感");
-    expect(slip()?.textContent).toContain("续写回复");
-    const sheet = $('[data-colophon-draft="reply"]')!;
-    vi.spyOn(strip, "getBoundingClientRect").mockReturnValue({
-      left: 0,
-      right: 300,
-      width: 300,
-    } as DOMRect);
-    // The reader swiped back to the head: the reply is off to the left.
-    vi.spyOn(sheet, "getBoundingClientRect").mockReturnValue({
-      left: -500,
-      right: -350,
-    } as DOMRect);
-    const scrollTo = h.stage?.scrollToElement as ReturnType<typeof vi.fn>;
-    const scrolls = scrollTo.mock.calls.length;
-    click($("[data-colophon-head] [data-colophon-write]"));
-    expect(h.composer.openComposer).toHaveBeenLastCalledWith(
-      null,
-      $("[data-colophon-head] [data-colophon-write]"),
-    );
-    expect(scrollTo.mock.calls.length).toBe(scrolls + 1);
-    expect(scrollTo.mock.calls.at(-1)?.[0]).toBe(sheet);
-    // Closed (the post left the screen), the kept reply still reads so,
-    // on the end pill as well.
-    setOpen(false, target);
-    expect(slip()?.textContent).toContain("续写回复");
-    expect($("[data-colophon-end] [data-colophon-write]")?.textContent).toBe(
-      "续写回复",
-    );
-    // 取消 drops the reply: the text would go on as a new colophon.
-    setOpen(false, null);
-    expect(slip()?.textContent).toContain("续写题跋");
-  });
-
-  it("never previews for a guest, a closed or unavailable thread, or a root not shown", () => {
-    const open = (
-      thread: Partial<DiscussionThread>,
-      target = null as never,
-    ) => {
-      h.thread = makeThread({ items: [comment("c1", writer)], ...thread });
-      setOpen(true, target);
-      expect($("[data-colophon-draft]")).toBeNull();
-    };
-    open({ viewerState: { state: "signed-out", signInHref: "/login" } });
-    open({
-      composerClosed: true,
-      closedNote: "暂时无法发表评论。",
-      viewerState: { state: "checking" },
-    });
-    open({ unavailable: true, page: 0 });
-    open({}, { rootCommentId: "gone", user: writer } as never);
-    // The composer's own bar still names the reply's target.
-  });
-
-  it("removes the sheet in the commit that marks the published colophon", () => {
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer)],
-      visibleTotal: 1,
-    });
-    render();
-    setOpen(true);
-    expect($('[data-colophon-draft="head"]')).not.toBeNull();
-    const seen: Array<{ target: Element; sheet: boolean }> = [];
-    h.stage = {
-      ...h.stage,
-      scrollToElement: vi.fn((target: Element) =>
-        seen.push({ target, sheet: $("[data-colophon-draft]") !== null }),
-      ),
-    };
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("n1", reader), comment("c1", writer)],
-      visibleTotal: 2,
-      highlightId: "n1",
-      lastSubmit: { id: "n1", rootId: "n1", awaitingApproval: false },
-      notice: "已发送",
-    });
-    render();
-    expect($("[data-colophon-draft]")).toBeNull();
-    expect(seen).toEqual([
-      { target: $('[data-comment-id="n1"]'), sheet: false },
-    ]);
-    expect(
-      $("[data-colophon-head]")?.hasAttribute("data-colophon-drafting"),
-    ).toBe(false);
-  });
-
-  it("removes the sheet once awaiting approval, with nothing to bring in", () => {
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer)],
-    });
-    render();
-    setOpen(true);
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer)],
-      lastSubmit: { id: "p1", rootId: "p1", awaitingApproval: true },
-      notice: "已发送",
-    });
-    render();
-    expect($("[data-colophon-draft]")).toBeNull();
-    expect(h.stage?.scrollToElement).not.toHaveBeenCalled();
-    expect(outlet.textContent).toContain("已发送");
-  });
-
-  it("darkens while sending and keeps the sheet, 未发出, after a failure", () => {
-    render();
-    setOpen(true);
-    h.thread = makeThread({ currentUser: reader, submitting: true });
-    render();
-    const sheet = $('[data-colophon-draft="head"]');
-    expect(sheet?.dataset.draftState).toBe("sending");
-    expect(
-      sheet?.querySelector("[data-colophon-draft-status]")?.textContent,
-    ).toBe("发送中");
-    h.thread = makeThread({
-      currentUser: reader,
-      actionError: { id: null, message: "发送失败，输入仍保留" },
-    });
-    render();
-    expect($('[data-colophon-draft="head"]')).toBe(sheet);
-    expect(sheet?.dataset.draftState).toBe("failed");
-    expect(
-      sheet?.querySelector("[data-colophon-draft-status]")?.textContent,
-    ).toBe("未发出");
-    // A failed like is not a failed send.
-    h.thread = makeThread({
-      currentUser: reader,
-      actionError: { id: "c1", message: "操作未完成" },
-    });
-    render();
-    expect(sheet?.dataset.draftState).toBe("draft");
-  });
-
-  it("drops 未发出 once the composer closes on the failed text", () => {
-    render();
-    setOpen(true);
-    typeDraft("发不出");
-    h.thread = makeThread({
-      currentUser: reader,
-      actionError: { id: null, message: "发送失败，输入仍保留" },
-    });
-    render();
-    expect(
-      $('[data-colophon-draft="head"] [data-colophon-draft-status]')
-        ?.textContent,
-    ).toBe("未发出");
-    setOpen(false);
-    setOpen(true);
-    expect(
-      $('[data-colophon-draft="head"] [data-colophon-draft-status]')
-        ?.textContent,
-    ).toBe("草稿");
-  });
-
-  it("restores the strip once on open and close, and never while typing", () => {
-    // WebKit throws the view on by the width the head gains or loses.
-    h.stage = {
-      ...h.stage,
-      readOffset: () =>
-        $("[data-colophon-head]")?.hasAttribute("data-colophon-drafting")
-          ? 160
-          : 100,
-    };
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer)],
-    });
-    render();
-    const scrollToOffset = h.stage?.scrollToOffset as ReturnType<typeof vi.fn>;
-    setOpen(true);
-    expect(scrollToOffset.mock.calls).toEqual([[100, "instant"]]);
-    for (let index = 0; index < 5; index += 1) typeDraft(`字${index}`);
-    render();
-    expect(scrollToOffset).toHaveBeenCalledTimes(1);
-    setOpen(false);
-    expect(scrollToOffset.mock.calls).toEqual([
-      [100, "instant"],
-      [160, "instant"],
-    ]);
-  });
-
-  it("brings a clipped head in once as the sheet opens", () => {
-    h.thread = makeThread({
-      currentUser: reader,
-      items: [comment("c1", writer)],
-    });
-    render();
-    const head = $("[data-colophon-head]")!;
-    vi.spyOn(strip, "getBoundingClientRect").mockReturnValue({
-      left: 0,
-      right: 300,
-    } as DOMRect);
-    const headRect = vi
-      .spyOn(head, "getBoundingClientRect")
-      .mockReturnValue({ left: 20, right: 280 } as DOMRect);
-    setOpen(true);
-    expect(h.stage?.scrollToElement).not.toHaveBeenCalled();
-    setOpen(false);
-    headRect.mockReturnValue({ left: 200, right: 460 } as DOMRect);
-    setOpen(true);
-    expect(h.stage?.scrollToElement).toHaveBeenCalledTimes(1);
-    expect(h.stage?.scrollToElement).toHaveBeenCalledWith(head);
-    typeDraft("字");
-    render();
-    expect(h.stage?.scrollToElement).toHaveBeenCalledTimes(1);
-  });
-
-  it("inks the slip once, the first time the reader comes to the colophons", () => {
-    render();
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(false);
-    h.stage = { ...h.stage, region: "comments" };
-    render();
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(true);
-    act(() => {
-      // jsdom has no AnimationEvent: React listens for the prefixed name.
-      for (const name of ["animationend", "webkitAnimationEnd"])
-        slip()?.dispatchEvent(new Event(name, { bubbles: true }));
-    });
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(false);
-    h.stage = { ...h.stage, region: "media" };
-    render();
-    h.stage = { ...h.stage, region: "comments" };
-    render();
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(false);
-  });
-
-  it("skips the cue without motion, so it never stays pending", () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn((query: string) => ({
-        matches: query === "(prefers-reduced-motion: reduce)",
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      })),
-    );
-    h.stage = { ...h.stage, region: "comments" };
-    render();
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(false);
-    vi.unstubAllGlobals();
-  });
-
-  it("ends the cue for good when its ink is cut short or the slip is opened", () => {
-    h.stage = { ...h.stage, region: "comments" };
-    render();
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(true);
-    act(() => {
-      slip()?.dispatchEvent(new Event("animationcancel", { bubbles: true }));
-    });
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(false);
-  });
-
-  it("does not ink the slip again after it was opened mid-cue", () => {
-    h.stage = { ...h.stage, region: "comments" };
-    render();
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(true);
-    click($("[data-colophon-head] [data-colophon-write]"));
-    setOpen(true);
-    setOpen(false);
-    expect(slip()?.hasAttribute("data-colophon-invite-cue")).toBe(false);
   });
 });
