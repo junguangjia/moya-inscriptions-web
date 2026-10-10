@@ -1,0 +1,353 @@
+/*
+ * The colophons' input: a column held at the stage's left edge, over the
+ * colophons, while they are shown. Its anchor in the strip is sticky (see
+ * feed-colophon.module.css); the column hangs from it at the stage's top,
+ * the strip's full height. The column itself is laid out top to bottom
+ * (the field, the status, 发送); the field holds the text and, on its
+ * right, a reply's lead. Everything written in it is vertical-rl, like the
+ * colophons.
+ */
+.column {
+  position: absolute;
+  z-index: calc(var(--yoyi-z-index-content) + 1);
+  top: var(--colophon-input-top, 0);
+  left: 0;
+  /* The strip is the size container. */
+  height: 100cqh;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  box-sizing: border-box;
+  min-width: var(--yoyi-space-10);
+  /* The anchor is zero wide: the strip is the size container. */
+  max-width: 100cqw;
+  margin: 0;
+  /* The foot keeps clear of the dock, as the colophons' own foot does. */
+  padding: var(--yoyi-space-4) 0 var(--yoyi-space-8);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-page);
+  border-right: 1px solid var(--yoyi-color-border-subtle);
+  font-family: var(--yoyi-font-editorial);
+  direction: ltr;
+  writing-mode: horizontal-tb;
+  /* The fade past its edge (read by the colophons, too). */
+  --colophon-input-edge: var(--yoyi-space-5);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--yoyi-duration-normal) var(--yoyi-easing-standard),
+    visibility 0s linear var(--yoyi-duration-normal);
+}
+
+.column[data-colophon-input-shown] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+/* The colophons fade in at the column's edge rather than being cut by it. */
+.column::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(100% + 1px);
+  width: var(--colophon-input-edge);
+  content: "";
+  background: linear-gradient(
+    to right,
+    var(--yoyi-color-background-page),
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* Nothing to write and nothing to say: only a status may show. */
+.column[data-colophon-input="none"] {
+  background: transparent;
+  border-right-color: transparent;
+  pointer-events: none;
+}
+
+.column[data-colophon-input="none"]::after {
+  content: none;
+}
+
+.column[data-colophon-input="none"] .status:not(:empty) {
+  background: var(--yoyi-color-background-page);
+}
+
+/* Writing: above the keyboard the column's height is set inline. */
+.column[data-colophon-input-focused] {
+  padding-bottom: var(--yoyi-space-3);
+  border-right-color: var(--yoyi-color-focus-ring);
+}
+
+/* While the input is written in, the dock and its action make way: the
+   column runs down to the keyboard, with nothing over its foot. */
+:global(html):has(.column[data-colophon-input-focused])
+  :global([data-primary-navigation-dock]) {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The text and, right of it, the reply lead: both the column's full height
+   less 发送, however long the name answered. */
+.field {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: row-reverse;
+  align-items: stretch;
+  min-height: 0;
+}
+
+/* The text is written vertically in the input itself, which widens with it
+   (its width set inline, up to its share of the stage) and then scrolls. */
+.box {
+  flex: none;
+  box-sizing: border-box;
+  width: var(--yoyi-space-10);
+  min-height: 0;
+  margin: 0;
+  padding: var(--yoyi-space-3);
+  --colophon-input-fade: var(--yoyi-space-6);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  font: inherit;
+  /* 16 px or more, or iOS zooms the page on focus. */
+  font-size: var(--yoyi-type-input-size);
+  line-height: var(--yoyi-type-article-line-height-compact);
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+  text-orientation: mixed;
+  line-break: strict;
+  overflow-wrap: anywhere;
+  caret-color: var(--yoyi-color-seal-red);
+  resize: none;
+  scrollbar-width: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Idle, only the first column shows (nothing spills into the padding),
+   and a pan on it moves the strip, not the text. */
+.column:not([data-colophon-input-focused]) .box {
+  overflow: hidden;
+  overscroll-behavior: auto;
+  clip-path: inset(0 0 0 calc(100% - var(--yoyi-space-3) - 1lh));
+}
+
+/* A draft running on past that column fades at its foot. */
+.box[data-cut] {
+  mask-image: linear-gradient(
+    to top,
+    transparent var(--yoyi-space-3),
+    var(--yoyi-color-ink-black) calc(var(--yoyi-space-3) + 2em)
+  );
+}
+
+/* Scrolled, the edge hiding text fades: earlier text to the right, later
+   text to the left. */
+.box[data-more-before] {
+  mask-image: linear-gradient(
+    to left,
+    transparent,
+    var(--yoyi-color-ink-black) var(--colophon-input-fade)
+  );
+}
+
+.box[data-more-after] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    var(--yoyi-color-ink-black) var(--colophon-input-fade)
+  );
+}
+
+.box[data-more-before][data-more-after] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    var(--yoyi-color-ink-black) var(--colophon-input-fade),
+    var(--yoyi-color-ink-black) calc(100% - var(--colophon-input-fade)),
+    transparent
+  );
+}
+
+.box::-webkit-scrollbar {
+  display: none;
+}
+
+.box::placeholder {
+  color: var(--yoyi-color-text-tertiary);
+  opacity: 1;
+}
+
+/* 「回复 X：」 heads the text as its right-most column, from the text's own
+   top line; × follows it. One column at most: a name too long for it is
+   cut (it is already cut short in characters), never × or the text. */
+.lead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  min-inline-size: 0;
+  margin: 0;
+  /* From the text's top line, a little in from the column's edge. */
+  padding: var(--yoyi-space-3) var(--yoyi-space-2) var(--yoyi-space-3) 0;
+  color: var(--yoyi-color-seal-red);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: var(--yoyi-type-article-line-height-compact);
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.leadText {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.lead b {
+  font-weight: 650;
+}
+
+.unreply {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  padding: 0;
+  color: var(--yoyi-color-text-tertiary);
+  background: transparent;
+  border: 0;
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-body-size);
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* A 44 px target around the small mark. */
+.unreply::before,
+.send::before,
+.signIn::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  min-width: 44px;
+  min-height: 44px;
+  width: 100%;
+  height: 100%;
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.status {
+  flex: none;
+  align-self: center;
+  max-height: 50%;
+  margin: var(--yoyi-space-3) 0 0;
+  padding: var(--yoyi-space-2) 0;
+  overflow: hidden;
+  color: var(--yoyi-color-text-secondary);
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: var(--yoyi-type-article-line-height-compact);
+  letter-spacing: 0.1em;
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+}
+
+/* Empty, the status stays in the accessibility tree (a live region that
+   appears with its text may not be announced), out of sight. */
+.status:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* 发送: a small seal at the foot, as tall as 发送中, so it never moves. */
+.send {
+  position: relative;
+  flex: none;
+  align-self: center;
+  box-sizing: content-box;
+  min-height: 3.6em;
+  margin-top: var(--yoyi-space-3);
+  padding: var(--yoyi-space-3) var(--yoyi-space-2);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-seal-red);
+  border: 0;
+  border-radius: var(--yoyi-radius-sm);
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 1;
+  letter-spacing: 0.2em;
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.send:disabled {
+  color: var(--yoyi-color-text-disabled);
+  background: var(--yoyi-color-background-muted);
+  cursor: default;
+}
+
+.signIn,
+.note {
+  flex: none;
+  align-self: center;
+  margin: 0;
+  padding: var(--yoyi-space-3) 0;
+  font-family: var(--yoyi-font-interface);
+  line-height: var(--yoyi-type-article-line-height-compact);
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+}
+
+.signIn {
+  position: relative;
+  color: var(--yoyi-color-seal-red);
+  font-size: var(--yoyi-type-body-small-size);
+  letter-spacing: 0.2em;
+  text-decoration: none;
+}
+
+.note {
+  max-height: 100%;
+  overflow: hidden;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  letter-spacing: 0.1em;
+}
+
+.unreply:focus-visible,
+.send:focus-visible,
+.signIn:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .column,
+  .column[data-colophon-input-shown] {
+    transition: none;
+  }
+}

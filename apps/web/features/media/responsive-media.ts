@@ -324,14 +324,17 @@ const masonrySizes = (slot: MediaSlot, factor: number): string => {
       px(320 * factor),
     );
   const full = slot.columns < 2 || slot.span;
+  // Phone single-column posts bleed to both viewport edges.
   const width: Linear =
     slot.platform === "tablet"
       ? full
         ? { vw: 100, px: -32 }
         : { vw: 50, px: -26 }
-      : full
-        ? { vw: 100, px: -16 }
-        : { vw: 50, px: -14 };
+      : slot.columns < 2
+        ? { vw: 100, px: 0 }
+        : full
+          ? { vw: 100, px: -16 }
+          : { vw: 50, px: -14 };
   return linear(scale(width, factor));
 };
 
@@ -389,6 +392,12 @@ export const MEDIA_SIZES = {
       box(88, 104),
     );
   },
+  /**
+   * Phone single-column post stage (home-screen.module.css .postStage): full
+   * bleed, and both fits (a shorter image contained, a taller one covered)
+   * draw the image at the stage width.
+   */
+  feedPostStage: (): string => linear({ vw: 100, px: 0 }),
   /** Topic cards draw their image at the card width in its own aspect. */
   topicCard: (slot?: MediaSlot | null): string =>
     slot ? masonrySizes(slot, 1) : columnFeedSizes(1),

@@ -8,23 +8,34 @@ import styles from "./user-identity.module.css";
 export const StudioName = ({
   value,
   prominent = false,
+  orientation = "horizontal",
 }: {
   value?: string | undefined;
   prominent?: boolean;
+  /** Vertical stacks upright characters in a standing plaque, for vertical text. */
+  orientation?: "horizontal" | "vertical";
 }) => {
   const id = `studio-${useId().replaceAll(":", "")}`;
   if (!value) return null;
+  const vertical = orientation === "vertical";
+  const characters = [...value];
   // SVG coordinates are scaled as one unit, including in the cover crop preview.
   const unit = Number.parseFloat(typography.body.mobileSize);
-  const width = [...value].length * unit + unit * 1.25;
-  const height = unit * 1.5;
+  const length = characters.length * unit + unit * 1.25;
+  const width = vertical ? unit * 1.5 : length;
+  const height = vertical ? length : unit * 1.5;
   return (
     <span
       className={`${styles.studio} ${prominent ? styles.prominent : ""}`}
-      style={{ width: `${width / unit}em` }}
+      style={
+        vertical
+          ? { height: `${height / unit}em`, width: "1.5em" }
+          : { width: `${width / unit}em` }
+      }
       role="img"
       aria-label={`斋号：${value}`}
       data-studio-name=""
+      data-orientation={vertical ? "vertical" : undefined}
     >
       <svg
         viewBox={`0 0 ${width} ${height}`}
@@ -32,7 +43,13 @@ export const StudioName = ({
         focusable="false"
       >
         <defs>
-          <linearGradient id={`${id}-wood`} x1="0" y1="0" x2="0.2" y2="1">
+          <linearGradient
+            id={`${id}-wood`}
+            x1="0"
+            y1="0"
+            x2={vertical ? "1" : "0.2"}
+            y2={vertical ? "0.2" : "1"}
+          >
             <stop offset="0" stopColor="var(--yoyi-color-studio-wood-light)" />
             <stop offset="0.5" stopColor="var(--yoyi-color-studio-wood-base)" />
             <stop offset="1" stopColor="var(--yoyi-color-studio-wood-light)" />
@@ -40,8 +57,9 @@ export const StudioName = ({
           <pattern
             id={`${id}-grain`}
             width="80"
-            height={height}
+            height={vertical ? width : height}
             patternUnits="userSpaceOnUse"
+            patternTransform={vertical ? "rotate(90)" : undefined}
           >
             <path
               d="M-10 7Q20 2 50 7T100 7M-10 19Q25 13 55 19T100 19"
@@ -52,7 +70,11 @@ export const StudioName = ({
             />
           </pattern>
           <clipPath id={`${id}-shape`}>
-            <rect width={width} height={height} rx={height / 2} />
+            <rect
+              width={width}
+              height={height}
+              rx={(vertical ? width : height) / 2}
+            />
           </clipPath>
           <filter
             id={`${id}-engraved`}
@@ -118,19 +140,40 @@ export const StudioName = ({
         <g clipPath={`url(#${id}-shape)`}>
           <rect width={width} height={height} fill={`url(#${id}-wood)`} />
           <rect width={width} height={height} fill={`url(#${id}-grain)`} />
-          <text
-            x={width / 2}
-            y={height / 2}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fontFamily={fontFamily.editorial}
-            fontSize={unit}
-            fontWeight={typography.label.weight}
-            fill="var(--yoyi-color-studio-wood-ink)"
-            filter={`url(#${id}-engraved)`}
-          >
-            {value}
-          </text>
+          {vertical ? (
+            // One upright glyph per character, never rotated Latin or emoji.
+            <g filter={`url(#${id}-engraved)`}>
+              {characters.map((character, index) => (
+                <text
+                  key={index}
+                  x={width / 2}
+                  y={unit * 0.625 + (index + 0.5) * unit}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontFamily={fontFamily.editorial}
+                  fontSize={unit}
+                  fontWeight={typography.label.weight}
+                  fill="var(--yoyi-color-studio-wood-ink)"
+                >
+                  {character}
+                </text>
+              ))}
+            </g>
+          ) : (
+            <text
+              x={width / 2}
+              y={height / 2}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontFamily={fontFamily.editorial}
+              fontSize={unit}
+              fontWeight={typography.label.weight}
+              fill="var(--yoyi-color-studio-wood-ink)"
+              filter={`url(#${id}-engraved)`}
+            >
+              {value}
+            </text>
+          )}
         </g>
       </svg>
     </span>
@@ -140,12 +183,21 @@ export const StudioName = ({
 export const UserIdentity = ({
   name,
   studioName,
+  orientation = "horizontal",
 }: {
   name: string;
   studioName?: string | undefined;
-}) => (
-  <span className={styles.identity}>
-    <span className={styles.name}>{name}</span>
-    <StudioName value={studioName} />
-  </span>
-);
+  /** Vertical sets the nickname column right of a standing plaque. */
+  orientation?: "horizontal" | "vertical";
+}) =>
+  orientation === "vertical" ? (
+    <span className={`${styles.identity} ${styles.vertical}`}>
+      <span className={styles.name}>{name}</span>
+      <StudioName value={studioName} orientation="vertical" />
+    </span>
+  ) : (
+    <span className={styles.identity}>
+      <span className={styles.name}>{name}</span>
+      <StudioName value={studioName} />
+    </span>
+  );

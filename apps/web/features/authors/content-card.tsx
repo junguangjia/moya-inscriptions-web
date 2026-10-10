@@ -6,10 +6,12 @@ import {
 import type { ContentCard as Card } from "@moya/contracts";
 import { CatalogCardMedia, CatalogProvinceBadge } from "../home/catalog-card";
 import type { CatalogCardVariant } from "../home/catalog-card";
+import { useFeedPostSlot } from "../home/catalog-masonry";
 import type { MediaPriority } from "../media/responsive-media";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 import { useProductShell } from "../product-shell/product-shell";
 import { useContentActions } from "./content-actions";
+import { FeedPost } from "./feed-post";
 import styles from "../home/home-screen.module.css";
 
 /**
@@ -38,6 +40,7 @@ export const ContentCard = ({
   const label = contentLabel(item);
   const shell = useProductShell(),
     actions = useContentActions(item.target, label);
+  const post = useFeedPostSlot() && variant === "feed";
   const excerpt = item.excerpt?.trim() ?? "";
   // A work without media is its text: no placeholder cover is invented (C07).
   const textOnly =
@@ -45,6 +48,18 @@ export const ContentCard = ({
     item.media === null &&
     (item.title !== "" || excerpt !== "");
   const metadata = variant === "inscription" && item.kind === "inscription";
+  if (post)
+    return (
+      <FeedPost
+        actions={actions}
+        excerpt={excerpt}
+        item={item}
+        label={label}
+        priority={priority}
+        textOnly={textOnly}
+        {...(onMediaSettled ? { onMediaSettled } : {})}
+      />
+    );
   return (
     <div>
       <article

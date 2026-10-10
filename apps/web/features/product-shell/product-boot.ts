@@ -14,6 +14,7 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
   root.dataset.yoyiBoot = "pending";
   root.dataset.yoyiBootStarted = String(started);
 
+  let layout = null;
   try {
     const theme = localStorage.getItem(themeKey);
     const preference = theme === "light" || theme === "dark" ? theme : "system";
@@ -21,12 +22,11 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
     if (preference === "system") root.removeAttribute("data-theme");
     else root.dataset.theme = preference;
 
-    const layout = localStorage.getItem(layoutKey);
-    root.dataset.homeLayout = layout === "single" ? "single" : "double";
+    const stored = localStorage.getItem(layoutKey);
+    if (stored === "single" || stored === "double") layout = stored;
   } catch {
     root.dataset.themePreference = "system";
     root.removeAttribute("data-theme");
-    root.dataset.homeLayout = "double";
   }
 
   const synchronizePlatform = () => {
@@ -64,6 +64,9 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
   };
 
   synchronizePlatform();
+  // Without an explicit choice, phone opens single-column and tablet/PC double.
+  root.dataset.homeLayout =
+    layout ?? (root.dataset.platform === "phone" ? "single" : "double");
   window.YOYI_PRODUCT_BOOT = Object.freeze({ synchronizePlatform });
   window.setTimeout(() => {
     if (root.dataset.yoyiBoot === "pending") root.dataset.yoyiBoot = "ready";

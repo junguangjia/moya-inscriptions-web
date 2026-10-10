@@ -5,6 +5,7 @@ import {
   authorMediaSchema,
   authorPersonSchema,
   authorProfileSchema,
+  CARD_GALLERY_MAXIMUM,
   contentCardSchema,
   createPublishingDraftCommandSchema,
   editableWorkSchema,
@@ -2085,6 +2086,136 @@ describe("media delivery on work reads (unified-media-pipeline-v1)", () => {
       contentCardSchema.safeParse({ ...catalogCard, media: card.media })
         .success,
     ).toBe(false);
+  });
+
+  it("lets a card list its item's images in the card's own delivery form", () => {
+    const card = {
+      aliases: [],
+      target: { type: "work", id: `work-${hex("d")}` },
+      title: "",
+      kind: null,
+      authorId: `user-${hex("1")}`,
+      firstPublishedAt: null,
+      media: {
+        id: itemId,
+        src: path("cover", coverKey),
+        width: 1_080,
+        height: 1_080,
+        renditions: coverList,
+      },
+    };
+    // Each entry is the item's display still with card candidates up to it.
+    const still = (id: string) => ({
+      id,
+      src: path("display", editKey, id),
+      width: 2_048,
+      height: 1_365,
+      renditions: [
+        rendition(path("thumb", editKey, id), 480, 320),
+        rendition(path("cover", editKey, id), 1_080, 720),
+        rendition(path("display", editKey, id), 2_048, 1_365),
+      ],
+    });
+    const gallery = [still(itemId), { ...still(otherItem), live: true }];
+    const catalogSrc = (name: string) =>
+      `https://media.example.invalid/${name}.webp?sign=${hex("4")}`;
+    const catalogImage = (id: string) => ({
+      id,
+      src: catalogSrc(`${id}-display`),
+      width: 1_600,
+      height: 900,
+      renditions: [
+        rendition(catalogSrc(`${id}-thumb`), 480, 270),
+        rendition(catalogSrc(`${id}-display`), 1_600, 900),
+      ],
+    });
+    const catalogCard = {
+      ...card,
+      target: { type: "catalog", id: "catalog-example-001" },
+      kind: "inscription",
+      authorId: null,
+      media: catalogImage("media-example-001"),
+    };
+    const many = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        still(`media-item-${String(index).padStart(32, "0")}`),
+      );
+    for (const valid of [
+      { ...card, gallery, mediaCount: 2 },
+      // The gallery may stop short of the item's total.
+      { ...card, gallery: many(CARD_GALLERY_MAXIMUM), mediaCount: 14 },
+      {
+        ...card,
+        gallery: [
+          {
+            ...still(itemId),
+            // The anchor is the published display candidate.
+            src: published("r2"),
+            renditions: asPublished(still(itemId).renditions),
+          },
+        ],
+        mediaCount: 1,
+      },
+      {
+        ...catalogCard,
+        gallery: [
+          catalogImage("media-example-001"),
+          catalogImage("media-example-002"),
+        ],
+        mediaCount: 2,
+      },
+    ])
+      expect(
+        contentCardSchema.safeParse(valid).success,
+        JSON.stringify(valid),
+      ).toBe(true);
+    for (const invalid of [
+      // The two fields travel together, and only with a card image.
+      { ...card, gallery },
+      { ...card, mediaCount: 2 },
+      { ...card, media: null, gallery, mediaCount: 2 },
+      { ...card, gallery: [], mediaCount: 1 },
+      { ...card, gallery, mediaCount: 1 },
+      { ...card, gallery: [still(itemId), still(itemId)], mediaCount: 2 },
+      {
+        ...card,
+        gallery: many(CARD_GALLERY_MAXIMUM + 1),
+        mediaCount: CARD_GALLERY_MAXIMUM + 1,
+      },
+      // A work entry is a still in the community form, never motion or a
+      // signed URL, anchored in its own candidates.
+      {
+        ...card,
+        gallery: [{ ...still(itemId), src: path("motion") }],
+        mediaCount: 1,
+      },
+      {
+        ...card,
+        gallery: [{ ...still(itemId), src: signed, renditions: undefined }],
+        mediaCount: 1,
+      },
+      {
+        ...card,
+        gallery: [{ ...still(itemId), width: 1_080, height: 1_080 }],
+        mediaCount: 1,
+      },
+      {
+        ...card,
+        gallery: [catalogImage("media-example-001")],
+        mediaCount: 1,
+      },
+      // A Catalog card lists only resolved Catalog media.
+      { ...catalogCard, gallery: [still(itemId)], mediaCount: 1 },
+      {
+        ...card,
+        gallery: [{ ...still(itemId), motionSrc: path("motion") }],
+        mediaCount: 1,
+      },
+    ])
+      expect(
+        contentCardSchema.safeParse(invalid).success,
+        JSON.stringify(invalid),
+      ).toBe(false);
   });
 });
 

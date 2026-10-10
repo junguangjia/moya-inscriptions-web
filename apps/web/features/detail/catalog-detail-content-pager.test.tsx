@@ -4,6 +4,10 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CatalogDetailContentPager } from "./catalog-detail-content-pager";
 import { CatalogDetailScrollContext } from "./catalog-detail-scroll";
+import {
+  detailCommentsRequested,
+  requestDetailComments,
+} from "./detail-comments-request";
 import { useCommentLocationReveal } from "../comments/comment-composer-portal";
 import { usePublishCommentCount } from "../comments/comment-count";
 import type { Root } from "react-dom/client";
@@ -76,6 +80,45 @@ describe("Detail content pages", () => {
         ?.textContent,
     ).toBe("评论");
     expect(container.textContent).toContain("located");
+  });
+
+  it("opens on comments once when a feed post asked for them", () => {
+    const render = (detailId: string) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      root = createRoot(container);
+      act(() =>
+        root.render(
+          <CatalogDetailContentPager
+            comments={<p>评论</p>}
+            detailId={detailId}
+            information={<p>资料</p>}
+            platform="phone"
+          />,
+        ),
+      );
+      return container;
+    };
+    const selected = (container: HTMLElement) =>
+      container.querySelector('[role="tab"][aria-selected="true"]')
+        ?.textContent;
+    requestDetailComments("work-asked");
+    const asked = render("work-asked");
+    expect(selected(asked)).toBe("评论");
+    expect(
+      asked
+        .querySelector("[data-detail-content-pager]")
+        ?.getAttribute("data-detail-content-active-page"),
+    ).toBe("comments");
+    // The request is spent: the same Detail opens on information next time.
+    expect(detailCommentsRequested("work-asked")).toBe(false);
+    act(() => root.unmount());
+    expect(selected(render("work-asked"))).toBe("资料");
+    act(() => root.unmount());
+    // A request for other content never redirects this Detail.
+    requestDetailComments("work-other");
+    expect(selected(render("work-asked"))).toBe("资料");
+    expect(detailCommentsRequested("work-other")).toBe(false);
   });
 
   it("restores independent information and comment positions through tab commits", () => {

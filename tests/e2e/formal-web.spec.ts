@@ -217,7 +217,9 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
   await expect(multiMediaCard).toContainText("运行时多图碑刻");
   // unified-media-pipeline-v1: the card offers its candidates up to the
   // anchor, which stays its src, and the browser loads a real WebP from them.
-  const cardImage = multiMediaCard.locator("img");
+  // A phone single-column post shows its whole gallery; the first image is
+  // the card image.
+  const cardImage = multiMediaCard.locator("img").first();
   await expect(cardImage).toHaveAttribute("srcset", /1200w$/u);
   const [src, srcset] = await Promise.all([
     cardImage.getAttribute("src"),

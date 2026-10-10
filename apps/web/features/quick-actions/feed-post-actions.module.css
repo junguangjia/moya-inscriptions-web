@@ -1,0 +1,85 @@
+.actions {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--yoyi-space-1);
+  padding: 0 var(--yoyi-space-2);
+}
+
+.action {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 var(--yoyi-space-2);
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.action:disabled {
+  cursor: default;
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.action[data-active="true"] {
+  color: var(--yoyi-color-seal-red);
+}
+
+/* Every glyph is one 24px outline box, so the row shares one baseline. */
+.action svg {
+  display: block;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.action svg[data-filled="true"] {
+  fill: currentColor;
+}
+
+.trailing {
+  margin-inline-start: auto;
+}
+
+.trailing[data-feed-post-trailing="expand"] svg {
+  transition: transform var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.trailing[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.count {
+  color: var(--yoyi-color-text-primary);
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trailing[data-feed-post-trailing="expand"] svg {
+    transition: none;
+  }
+}

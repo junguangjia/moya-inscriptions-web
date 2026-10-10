@@ -35,3 +35,29 @@
 .prominent {
   font-size: calc(var(--yoyi-type-caption-size) * 0.9);
 }
+
+/* Vertical text: nickname column on the right, plaque column on its left,
+   both ending at the bottom of the line. */
+.vertical {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  line-height: var(--yoyi-type-article-line-height-compact);
+  writing-mode: vertical-rl;
+}
+
+/* Long nicknames wrap into a second column at most. */
+.vertical .name {
+  max-block-size: calc(2em * var(--yoyi-type-article-line-height-compact));
+  max-inline-size: 8em;
+  overflow: hidden;
+}
+
+.studio[data-orientation="vertical"] {
+  max-width: none;
+}
+
+.studio[data-orientation="vertical"] svg {
+  width: auto;
+  height: 100%;
+}

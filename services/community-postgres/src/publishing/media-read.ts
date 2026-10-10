@@ -360,6 +360,124 @@ const revisionMediaView = (
   return { media, coverMediaId: chosenCover ?? media[0]?.id ?? null };
 };
 
+/** One card gallery entry: a shown image in its full framing, never motion. */
+export interface RevisionGalleryEntry {
+  /** The media item id, or the user media id of an unedited legacy PNG. */
+  readonly id: string;
+  readonly src: string;
+  readonly width: number;
+  readonly height: number;
+  readonly live: boolean;
+  /** Card candidates up to the display still, `src` as the anchor. */
+  readonly renditions?: MediaRendition[];
+  readonly placeholderColor?: string;
+}
+
+/** A revision's first gallery entries and the number of its media items. */
+export interface RevisionGalleryView {
+  readonly entries: readonly RevisionGalleryEntry[];
+  /** Every item of the revision; `entries` may stop short of it. */
+  readonly total: number;
+}
+
+/**
+ * The card gallery of several revisions in one statement (a page of cards):
+ * the first `maximum` items of each revision by position, shown exactly as
+ * `revisionMedia` shows them (the unedited legacy PNG, else the display
+ * derivative of the revision edit) but with the card candidates of that
+ * framing and the Live flag instead of motion, plus each revision's item
+ * total. The window runs over revision items only, so candidates are read
+ * for at most `maximum` rows per revision. A revision without shown media is
+ * absent from the map.
+ */
+export const revisionsGallery = async (
+  db: PublishingDb,
+  revisionIds: readonly string[],
+  maximum: number,
+): Promise<ReadonlyMap<string, RevisionGalleryView>> => {
+  const views = new Map<string, RevisionGalleryView>();
+  if (revisionIds.length === 0) return views;
+  const rows = (
+    await db.query<RevisionMediaRow & { revision_id: string; total: string }>(
+      `SELECT ri.revision_id,ri.item_id,ri.total,i.kind,i.state,i.legacy_media_id,um.width AS legacy_width,um.height AS legacy_height,
+        i.presentation,k.display_key,d.width AS display_width,d.height AS display_height,
+        ri.item_id IS NOT DISTINCT FROM r.cover_item_id AS is_cover,i.placeholder_color,
+        ${revisionItemRenditionsSql("ri", "r", "k.display_key")} AS renditions
+      FROM (
+        SELECT x.* FROM (
+          SELECT ri.*,
+            row_number() OVER (PARTITION BY ri.revision_id ORDER BY ri.position) AS rn,
+            count(*) OVER (PARTITION BY ri.revision_id) AS total
+          FROM community.work_revision_items ri
+          WHERE ri.revision_id=ANY($1::text[])
+        ) x WHERE x.rn<=$2
+      ) ri
+      JOIN community.work_revisions r ON r.id=ri.revision_id
+      JOIN community.media_items i ON i.id=ri.item_id
+      CROSS JOIN LATERAL (SELECT community.media_edit_key(ri.edit,NULL) AS display_key) k
+      LEFT JOIN community.user_media um ON um.id=i.legacy_media_id AND um.owner_id=i.owner_id
+      LEFT JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key=k.display_key AND d.state='ready'
+      ORDER BY ri.revision_id,ri.position`,
+      [[...revisionIds], maximum],
+    )
+  ).rows;
+  const grouped = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const list = grouped.get(row.revision_id);
+    if (list === undefined) grouped.set(row.revision_id, [row]);
+    else list.push(row);
+  }
+  for (const [revisionId, list] of grouped) {
+    const entries = list.flatMap((row) => {
+      const entry = revisionGalleryEntry(row);
+      return entry === null ? [] : [entry];
+    });
+    if (entries.length > 0)
+      views.set(revisionId, { entries, total: Number(list[0]!.total) });
+  }
+  return views;
+};
+
+const revisionGalleryEntry = (
+  row: RevisionMediaRow,
+): RevisionGalleryEntry | null => {
+  if (row.legacy_media_id !== null && row.display_key === "base") {
+    const width = dimension(row.legacy_width);
+    const height = dimension(row.legacy_height);
+    return width === null || height === null
+      ? null
+      : {
+          id: row.legacy_media_id,
+          src: legacyMediaSrc(row.legacy_media_id),
+          width,
+          height,
+          live: false,
+        };
+  }
+  if (row.state !== "ready") return null;
+  const width =
+    dimension(row.display_width) ?? dimension(row.presentation?.width);
+  const height =
+    dimension(row.display_height) ?? dimension(row.presentation?.height);
+  if (width === null || height === null) return null;
+  const src = publishingMediaSrc(row.item_id, "display", row.display_key);
+  const renditions = toMediaRenditions(
+    row.renditions,
+    { src, width, height },
+    "card",
+    (role) => publishingMediaSrc(row.item_id, role, row.display_key),
+  );
+  return {
+    id: row.item_id,
+    src,
+    width,
+    height,
+    live: row.kind === "live",
+    ...(renditions === undefined ? {} : { renditions }),
+    ...placeholderOf(row.placeholder_color),
+  };
+};
+
 export interface MediaReadTargetRow extends QueryResultRow {
   storage_key: string;
   content_type: string;

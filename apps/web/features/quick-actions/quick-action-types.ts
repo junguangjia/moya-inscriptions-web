@@ -18,4 +18,10 @@ export interface ContentQuickActionEnvironment {
     action: QuickActionName,
     content: QuickActionContent,
   ) => void | Promise<boolean>;
+  /** Aggregates for the visible single-column action row; null while unknown. */
+  readonly likeCount?: number | null;
+  readonly favoriteCount?: number | null;
+  readonly commentCount?: number | null;
+  /** False while the viewer's state is unconfirmed or a toggle is in flight. */
+  readonly ready?: boolean;
 }

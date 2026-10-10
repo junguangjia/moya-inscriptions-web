@@ -6,6 +6,10 @@ import type { ContentQuickActionEnvironment } from "../quick-actions/quick-actio
 import { quickActionContentKey } from "../quick-actions/quick-action-types";
 import { useAuthors, shareContent, contentKey } from "./author-context";
 import { authorClient } from "./author-data";
+import {
+  publishCommentCount,
+  usePublishedCommentCount,
+} from "./content-state-bus";
 import { QuickActionIcon } from "../quick-actions/quick-action-card-action";
 import type { QuickActionName } from "../quick-actions/quick-action-types";
 import styles from "./content-actions.module.css";
@@ -17,6 +21,7 @@ const unknownState = (key: string) => ({
   known: false,
   favoriteCount: null as number | null,
   likeCount: null as number | null,
+  commentCount: null as number | null,
 });
 export const useContentActions = (
   target: ContentIdentity,
@@ -32,7 +37,15 @@ export const useContentActions = (
     inFlight = useRef(false),
     readEpoch = useRef(0);
   scope.current = key;
-  const state = snapshot.key === key ? snapshot : unknownState(key);
+  const viewerId = author.viewer?.id ?? null;
+  // The newest comment total this reader received, from a state read or a
+  // discussion read of the same content.
+  const publishedComments = usePublishedCommentCount(viewerId, target);
+  const known = snapshot.key === key ? snapshot : unknownState(key);
+  const state = {
+    ...known,
+    commentCount: publishedComments ?? known.commentCount,
+  };
   useEffect(() => {
     let current = true;
     if (author.checking) return;
@@ -52,13 +65,15 @@ export const useContentActions = (
     void authorClient
       .state(target)
       .then((value) => {
-        if (current && scope.current === key && read === readEpoch.current)
+        if (current && scope.current === key && read === readEpoch.current) {
           setSnapshot({
             key,
             ...value,
             favorite: author.viewer ? value.favorite : guestFavorite,
             known: true,
           });
+          publishCommentCount(viewerId, target, value.commentCount);
+        }
       })
       .catch(() => {
         /* Same-scope failures preserve known state; another account starts unknown. */
@@ -73,7 +88,11 @@ export const useContentActions = (
     author.guestFavorites,
     includeGuestCounts,
   ]);
-  const execute: ContentQuickActionEnvironment["onAction"] = async (action) => {
+  // `explicit` sets a value instead of toggling (a double tap only likes).
+  const apply = async (
+    action: QuickActionName,
+    explicit?: boolean,
+  ): Promise<boolean> => {
     if (inFlight.current) return false;
     if (action !== "share" && !state.known) {
       author.notify("内容状态尚未确认，请稍后重试");
@@ -92,7 +111,7 @@ export const useContentActions = (
         return result !== "cancelled";
       }
       const field = action === "favorite" ? "favorite" : "liked",
-        value = !state[field];
+        value = explicit ?? !state[field];
       const saved = await (action === "favorite"
         ? author.favorite(target, value)
         : author.like(target, value));
@@ -104,8 +123,10 @@ export const useContentActions = (
         const read = ++readEpoch.current;
         try {
           const confirmed = await authorClient.state(target);
-          if (scope.current === run && read === readEpoch.current)
+          if (scope.current === run && read === readEpoch.current) {
             setSnapshot({ key: run, ...confirmed, known: true });
+            publishCommentCount(viewerId, target, confirmed.commentCount);
+          }
         } catch {
           // The toggle is committed, but an unknown aggregate is not a guessed +1.
           if (scope.current === run && read === readEpoch.current)
@@ -131,6 +152,11 @@ export const useContentActions = (
       setPendingAction(null);
     }
   };
+  const execute: ContentQuickActionEnvironment["onAction"] = (action) =>
+    apply(action);
+  /** Likes the content unless it already is; never un-likes. */
+  const ensureLiked = (): Promise<boolean> =>
+    state.liked ? Promise.resolve(true) : apply("like", true);
   const actionKey = quickActionContentKey({
     kind: target.type,
     id: target.id,
@@ -141,10 +167,17 @@ export const useContentActions = (
     busy,
     pendingAction,
     execute,
+    ensureLiked,
+    /** A signed-in reader whose state is confirmed and no toggle is running. */
+    canLike: author.viewer !== null && state.known && !busy && !author.checking,
     environment: {
       onAction: execute,
       likedIds: state.liked ? [actionKey] : [],
       favoriteIds: state.favorite ? [actionKey] : [],
+      likeCount: state.likeCount,
+      favoriteCount: state.favoriteCount,
+      commentCount: state.commentCount,
+      ready: state.known && !busy && !author.checking,
     } satisfies ContentQuickActionEnvironment,
   };
 };

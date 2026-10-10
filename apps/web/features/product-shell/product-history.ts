@@ -31,6 +31,16 @@ export interface ViewerProductHistoryState {
   readonly version: typeof PRODUCT_SHELL_HISTORY_VERSION;
 }
 
+/** A phone feed post's full-screen viewer, opened over the feed without Detail. */
+export interface FeedViewerProductHistoryState {
+  readonly kind: "feed-viewer";
+  readonly version: typeof PRODUCT_SHELL_HISTORY_VERSION;
+  readonly target: ContentIdentity;
+  readonly mediaId: string;
+  readonly sourceDestination: PrimaryDestination;
+  readonly sourceScrollTop: number;
+}
+
 export interface SettingsProductHistoryState {
   readonly kind: "settings";
   readonly version: typeof PRODUCT_SHELL_HISTORY_VERSION;
@@ -50,6 +60,7 @@ export type ProductHistoryState =
   | PrimaryProductHistoryState
   | DetailProductHistoryState
   | ViewerProductHistoryState
+  | FeedViewerProductHistoryState
   | SettingsProductHistoryState
   | TopicProductHistoryState
   | ProfileProductHistoryState
@@ -196,6 +207,20 @@ export const viewerHistoryState = (
   sourceDestination,
   sourceScrollTop: boundedScrollTop(sourceScrollTop),
   version: PRODUCT_SHELL_HISTORY_VERSION,
+});
+
+export const feedViewerHistoryState = (
+  target: ContentIdentity,
+  mediaId: string,
+  sourceDestination: PrimaryDestination,
+  sourceScrollTop: number,
+): FeedViewerProductHistoryState => ({
+  kind: "feed-viewer",
+  version: PRODUCT_SHELL_HISTORY_VERSION,
+  target,
+  mediaId,
+  sourceDestination,
+  sourceScrollTop: boundedScrollTop(sourceScrollTop),
 });
 
 export const settingsHistoryState = (
@@ -350,6 +375,27 @@ export const parseProductHistoryState = (
       candidate.sourceDestination,
       candidate.sourceScrollTop,
       candidate.detailScrollTop,
+    );
+  }
+
+  if (
+    candidate.kind === "feed-viewer" &&
+    candidate.version === PRODUCT_SHELL_HISTORY_VERSION &&
+    target !== null &&
+    typeof candidate.mediaId === "string" &&
+    candidate.mediaId.length > 0 &&
+    candidate.mediaId.length <= 128 &&
+    /^\S+$/u.test(candidate.mediaId) &&
+    isPrimaryDestination(candidate.sourceDestination) &&
+    typeof candidate.sourceScrollTop === "number" &&
+    Number.isFinite(candidate.sourceScrollTop) &&
+    candidate.sourceScrollTop >= 0
+  ) {
+    return feedViewerHistoryState(
+      target,
+      candidate.mediaId,
+      candidate.sourceDestination,
+      candidate.sourceScrollTop,
     );
   }
 

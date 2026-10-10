@@ -169,6 +169,44 @@ describe("category paging with the actual Embla core", () => {
     expect(host.active()).toBe(1);
     expect(host.commits).toEqual([1]);
   });
+  it("leaves a drag that starts inside a local horizontal scroller to it", () => {
+    const view = setup();
+    const local = document.createElement("div");
+    local.setAttribute("data-local-horizontal", "");
+    local.innerHTML = "<figure><button>image</button></figure>";
+    view.panels[0]!.append(local);
+    const image = local.querySelector("button")!;
+    const action = vi.fn();
+    image.addEventListener("click", action);
+    const progressBefore = view.progress.length;
+    touch(image, "touchstart", [[300, 300]]);
+    for (let i = 1; i <= 10; i++) {
+      advance();
+      // Embla never claims the move, so the nested native scroller can.
+      expect(
+        touch(image, "touchmove", [[300 - 22 * i, 300]]).defaultPrevented,
+      ).toBe(false);
+    }
+    touch(image, "touchend", []);
+    advance(120);
+    expect(view.commits).toEqual([]);
+    expect(view.active()).toBe(0);
+    expect(view.progress.slice(progressBefore).every((p) => p === 0)).toBe(
+      true,
+    );
+    expect(view.track.style.transform).not.toMatch(/-\d/u);
+    image.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }),
+    );
+    expect(action).toHaveBeenCalledOnce();
+
+    // The same drag starting outside the scroller still pages.
+    view.drag();
+    touch(view.button, "touchend", []);
+    advance(120);
+    expect(view.commits).toEqual([1]);
+  });
+
   it("hands selection and inert over on release, before visual settlement", () => {
     const view = setup();
     view.drag();
