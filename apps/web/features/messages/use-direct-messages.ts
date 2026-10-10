@@ -281,16 +281,22 @@ export const useConversation = (id: string | null, enabled: boolean) => {
   const loadOlder = useCallback(async () => {
     if (!id || oldest.current === null) return;
     const current = lifecycle.current;
-    const page = await authorClient.messages.history(
-      id,
-      {
-        before: oldest.current,
-        pageSize: 30,
-      },
-      controller.current?.signal,
-    );
-    if (current !== lifecycle.current) return;
-    apply(page, "older");
+    const signal = controller.current?.signal;
+    try {
+      const page = await authorClient.messages.history(
+        id,
+        {
+          before: oldest.current,
+          pageSize: 30,
+        },
+        signal,
+      );
+      if (current !== lifecycle.current) return;
+      apply(page, "older");
+    } catch (error) {
+      if (current !== lifecycle.current || signal?.aborted) return;
+      setState({ state: "unavailable", message: describeFailure(error) });
+    }
   }, [id]);
   const send = useCallback(
     async (

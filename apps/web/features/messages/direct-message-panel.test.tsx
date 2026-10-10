@@ -882,6 +882,93 @@ describe("targeted entry loading", () => {
     state = "active";
   });
 
+  const openPagedConversation = async () => {
+    const pair = hold(`/messages/with/${other}`);
+    const history = hold(`/messages/${conversationId}?`);
+    await render();
+    await pair({
+      conversation: conversation({
+        state: "active",
+        canSend: true,
+        sendRefusal: null,
+      }),
+    });
+    await history({
+      conversation: conversation({
+        state: "active",
+        canSend: true,
+        sendRefusal: null,
+        readSequence: 2,
+      }),
+      items: [message(2, other, "在的")],
+      nextBefore: 2,
+    });
+    return [...node.querySelectorAll("button")].find(
+      (button) => button.textContent === "加载更早的消息",
+    )!;
+  };
+
+  for (const departure of ["Back", "account change"] as const) {
+    it(`contains an aborted older-history read on ${departure}`, async () => {
+      const older = await openPagedConversation();
+      let signal: AbortSignal | null | undefined;
+      vi.mocked(fetch).mockImplementationOnce((_input, init) => {
+        expect(String(_input)).toContain("before=2");
+        signal = init?.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          signal!.addEventListener(
+            "abort",
+            () => reject(new DOMException("Cancelled read", "AbortError")),
+            { once: true },
+          );
+        });
+      });
+      await act(async () => older.click());
+      expect(signal).toBeDefined();
+      if (departure === "Back") await render(target, 1);
+      else {
+        author.viewer = { id: `user-${"9".repeat(32)}` };
+        authorClient.setAccount(author.viewer.id);
+        await render();
+      }
+      await flush();
+      expect(signal?.aborted).toBe(true);
+      expect(node.querySelector('[role="alert"]')).toBeNull();
+      expect(node.querySelector('[data-dm-message="2"]')).toBeNull();
+      if (departure === "Back")
+        expect(node.querySelector("[data-dm-list]")).not.toBeNull();
+    });
+  }
+
+  it("contains an older-history failure and retries without replacing the draft", async () => {
+    const older = await openPagedConversation();
+    const input = node.querySelector("textarea")!;
+    await typeDraft(input);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: {} }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await act(async () => older.click());
+    await flush();
+    expect(node.querySelector('[role="alert"]')?.textContent).toContain(
+      "暂时无法完成，请重试",
+    );
+    expect(node.querySelector("textarea")).toBe(input);
+    expect(input.value).toBe("加载时的草稿");
+    await act(async () =>
+      (
+        node.querySelector('[role="alert"] button') as HTMLButtonElement
+      ).click(),
+    );
+    await flush();
+    expect(node.querySelector('[role="alert"]')).toBeNull();
+    expect(node.querySelector("textarea")).toBe(input);
+    expect(input.value).toBe("加载时的草稿");
+    expect(node.querySelector('[data-dm-view="conversation"]')).not.toBeNull();
+  });
+
   for (const existing of [false, true]) {
     it(`preserves the first composer and draft through delayed ${existing ? "pair and history" : "new pair"} resolution without loading the list`, async () => {
       const pair = hold(`/messages/with/${other}`);
