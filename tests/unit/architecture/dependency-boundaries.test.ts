@@ -464,6 +464,56 @@ describe("frontend and browser boundaries", () => {
       ).toBeGreaterThan(0);
   });
 
+  it("admits the reviewed Article creation hook and DTOs while retaining private and arbitrary import denial", () => {
+    const file = path.join(
+      repositoryRoot,
+      "apps/web/features/editorial-content/article-authoring/use-article-draft-creation.ts",
+    );
+    const source = `
+      "use client";
+      import { authorClient } from "../../../lib/public-api/author-community-client";
+      import {
+        articleAuthoringClient,
+        ArticleRequestError,
+        createEmptyArticleDocument,
+      } from "../../../lib/public-api/article-authoring-client";
+      import type { ArticleDraft, ArticleDocument } from "@moya/contracts";
+    `;
+    expect(clientBoundaryViolations(file, source)).toEqual([]);
+    for (const relative of [
+      "apps/web/features/editorial-content/article-authoring/article-create-entry.tsx",
+      "apps/web/features/editorial-content/article-authoring/example.tsx",
+    ]) {
+      expect(
+        clientBoundaryViolations(path.join(repositoryRoot, relative), source),
+      ).toEqual(
+        expect.arrayContaining([
+          "../../../lib/public-api/author-community-client is server/runtime-only",
+          "../../../lib/public-api/article-authoring-client is server/runtime-only",
+        ]),
+      );
+    }
+    for (const bad of [
+      'import { authorClient, authorRequest } from "../../../lib/public-api/author-community-client";',
+      'import { articleAuthoringClient, isArticleSafeLink } from "../../../lib/public-api/article-authoring-client";',
+      'import * as author from "../../../lib/public-api/author-community-client";',
+      'import * as article from "../../../lib/public-api/article-authoring-client";',
+      'import author from "../../../lib/public-api/author-community-client";',
+      'import article from "../../../lib/public-api/article-authoring-client";',
+      'import("../../../lib/public-api/author-community-client");',
+      'import("../../../lib/public-api/article-authoring-client");',
+      'export { authorClient } from "../../../lib/public-api/author-community-client";',
+      'export { articleAuthoringClient } from "../../../lib/public-api/article-authoring-client";',
+      'import { relayServerAuthorCommunity } from "../../../lib/public-api/server";',
+      'import { articleDraftSchema } from "@moya/contracts/schemas";',
+      'import { ArticleAuthoringService } from "@moya/api";',
+      'import type { ArticlePendingModerationCommand } from "@moya/contracts";',
+    ])
+      expect(
+        clientBoundaryViolations(file, '"use client";\n' + bad).length,
+      ).toBeGreaterThan(0);
+  });
+
   it("rejects internal contract types in Client Components", () => {
     const file = path.join(repositoryRoot, "apps", "web", "example.tsx");
     const source = `"use client";\nimport type { CatalogRecord } from "@moya/contracts";`;
@@ -791,9 +841,10 @@ describe("frontend and browser boundaries", () => {
     ).toContain(expectedViolation);
   });
 
-  it("allows only the build mode for the reviewed Production auth guards", () => {
+  it("allows only the literal build mode for reviewed auth and media guards", () => {
     for (const relative of [
       "features/auth/auth-flow.tsx",
+      "features/publishing/ui/media/use-media-actions.ts",
       "lib/public-api/server.ts",
     ]) {
       const file = path.join(repositoryRoot, "apps/web", relative);
@@ -819,16 +870,18 @@ describe("frontend and browser boundaries", () => {
         ).length,
       ).toBeGreaterThan(0);
     }
-    const unrelated = path.join(
-      repositoryRoot,
+    for (const relative of [
       "apps/web/features/home/example.tsx",
-    );
-    expect(
-      frontendBoundaryViolations(
-        unrelated,
-        '"use client"; const mode = process.env.NODE_ENV;',
-      ),
-    ).toContain("server-only configuration or secret access");
+      "apps/web/features/publishing/ui/media/use-media-actions-example.ts",
+      "apps/web/features/home/use-media-actions.ts",
+    ]) {
+      expect(
+        frontendBoundaryViolations(
+          path.join(repositoryRoot, relative),
+          '"use client"; const mode = process.env.NODE_ENV;',
+        ),
+      ).toContain("server-only configuration or secret access");
+    }
   });
 
   it("keeps all real Web, Admin and UI files outside server boundaries", async () => {

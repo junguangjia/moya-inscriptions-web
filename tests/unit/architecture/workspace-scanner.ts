@@ -638,14 +638,15 @@ const articleClientImports: ReadonlyMap<
 > = new Map(
   (
     Object.entries({
-      "features/editorial-content/article-authoring/article-create-entry.tsx": {
-        "author-community-client": ["authorClient"],
-        "article-authoring-client": [
-          "articleAuthoringClient",
-          "ArticleRequestError",
-          "createEmptyArticleDocument",
-        ],
-      },
+      "features/editorial-content/article-authoring/use-article-draft-creation.ts":
+        {
+          "author-community-client": ["authorClient"],
+          "article-authoring-client": [
+            "articleAuthoringClient",
+            "ArticleRequestError",
+            "createEmptyArticleDocument",
+          ],
+        },
       "features/editorial-content/article-authoring/article-drafts-panel.tsx": {
         "author-community-client": ["authorClient"],
         "article-authoring-client": ["articleAuthoringClient"],
@@ -1288,12 +1289,14 @@ export const clientBoundaryViolations = (
   }
   violations.push(...clientContractTypeViolations(source));
 
-  // Next replaces NODE_ENV at build time. This one auth presentation uses it
-  // only to exclude Development verification and draft registration agreements.
-  const configurationSource =
-    path.resolve(filePath) === path.join(webRoot, "features/auth/auth-flow.tsx")
-      ? source.replace(/\bprocess\.env\.NODE_ENV(?![\w$])/g, "")
-      : source;
+  // Next replaces NODE_ENV at build time. The reviewed auth presentation
+  // excludes Development agreements; the media hook warns about duplicate mounts.
+  const configurationSource = [
+    path.join(webRoot, "features/auth/auth-flow.tsx"),
+    path.join(webRoot, "features/publishing/ui/media/use-media-actions.ts"),
+  ].includes(path.resolve(filePath))
+    ? source.replace(/\bprocess\.env\.NODE_ENV(?![\w$])/g, "")
+    : source;
   if (
     /\bDATABASE_URL\b|\b(?:API_SECRET|PRIVATE_KEY|STORAGE_SECRET)\b|process\.env\.(?!NEXT_PUBLIC_)[A-Z0-9_]+/.test(
       configurationSource,

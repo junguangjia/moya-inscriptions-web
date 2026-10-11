@@ -1,0 +1,1155 @@
+/*
+ * The phone edit screen (#244 r3): mockup B's 编辑 (variant-b.html). The
+ * photo fills the stage between the bar and one control band (the ratio
+ * row, then the strip with 应用到全部); toasts sit over the screen. The fix
+ * sheet is the phone screens' shared `PhoneSheet` (tile-menu.tsx). Every
+ * colour, size of type, radius, duration and easing is a token; the literal
+ * px are sizes with no token, as the mockup gives them. The `--crop-line` …
+ * `--stage-edge` mixes are the mockup's own, mixed from tokens as the avatar
+ * editor's mask is.
+ */
+
+/* -- layout --------------------------------------------------------------- */
+
+.editBody {
+  --crop-line: color-mix(
+    in srgb,
+    var(--yoyi-color-paper-light) 85%,
+    transparent
+  );
+  --dim-mask: color-mix(in srgb, var(--yoyi-color-ink-black) 55%, transparent);
+  --dim-peek: color-mix(in srgb, var(--yoyi-color-ink-black) 35%, transparent);
+  --dim-band: color-mix(in srgb, var(--yoyi-color-ink-black) 45%, transparent);
+  --stage-edge: color-mix(
+    in srgb,
+    var(--yoyi-color-paper-light) 22%,
+    transparent
+  );
+
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+/* -- stage (B `.stage`): full-bleed, paper-dark, its own top and bottom edge */
+
+.stage {
+  position: relative;
+  min-height: 160px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: var(--yoyi-color-paper-dark);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+  overscroll-behavior: contain;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  /* A long press before a drag never opens the image menu (iOS). */
+  -webkit-touch-callout: none;
+}
+
+.stage:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* One photo at a time; a switch slides the next one in from its side. */
+.slide {
+  position: absolute;
+  inset: 0;
+}
+
+.slide[data-enter="next"] {
+  animation: enterNext var(--yoyi-duration-slow) var(--yoyi-easing-emphasized);
+}
+
+.slide[data-enter="previous"] {
+  animation: enterPrevious var(--yoyi-duration-slow)
+    var(--yoyi-easing-emphasized);
+}
+
+/* CropSurface's own wrapper holds the cropper's box and its hint. */
+.slide > [data-crop-surface] {
+  position: absolute;
+  inset: 0;
+}
+
+/* The hint row CropSurface draws under the box: kept for the crop area's description only. */
+.slide > [data-crop-surface] > [data-media-crop] + * {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The cropper's box (`cropperBox` in edit-stage.tsx): the stage until it is
+ * measured, then sized so the cropper's frame is the largest frame of the
+ * ratio the stage holds, with the photo just covering it. Centred on the
+ * stage; a finger down steps it back (B's 0.94 peek).
+ */
+.cropBox {
+  position: absolute;
+  inset: 0;
+  transition: transform var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+.stage[data-boxed] .cropBox {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: var(--crop-box-width);
+  height: var(--crop-box-height);
+  margin: calc(var(--crop-box-height) / -2) 0 0 calc(var(--crop-box-width) / -2);
+}
+
+.stage[data-gesture] .cropBox {
+  transform: scale(0.94);
+}
+
+/* react-easy-crop's own container is the box's first child: a grab hand only where a drag moves the photo. */
+.cropBox > :first-child {
+  cursor: default;
+}
+
+.stage[data-pan="1"] .cropBox > :first-child {
+  cursor: grab;
+}
+
+/* The crop frame (B `.mask`): the photo outside it dimmed, lighter while a finger is down. */
+.cropBox .stageCropArea {
+  border: 1px solid var(--crop-line);
+  color: var(--dim-mask);
+  transition: color var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.stage[data-gesture] .cropBox .stageCropArea {
+  color: var(--dim-peek);
+}
+
+/* The crop area takes focus (arrows move, + − zoom): its ring is drawn inward, as `.cropViewport`'s. */
+.cropBox .stageCropArea:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* The frame's own marks, laid over the cropper's frame. */
+.frame {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* B `.cn`: 20px corner marks, 3px paper strokes. */
+.corner {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 0 solid var(--yoyi-color-paper-light);
+}
+
+.corner[data-corner="top-left"] {
+  top: 0;
+  left: 0;
+  border-top-width: 3px;
+  border-left-width: 3px;
+}
+
+.corner[data-corner="top-right"] {
+  top: 0;
+  right: 0;
+  border-top-width: 3px;
+  border-right-width: 3px;
+}
+
+.corner[data-corner="bottom-left"] {
+  bottom: 0;
+  left: 0;
+  border-bottom-width: 3px;
+  border-left-width: 3px;
+}
+
+.corner[data-corner="bottom-right"] {
+  right: 0;
+  bottom: 0;
+  border-right-width: 3px;
+  border-bottom-width: 3px;
+}
+
+/* B `.thirds`: shown while a finger is down. */
+.thirds {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.stage[data-gesture] .thirds {
+  opacity: 1;
+}
+
+.thirds > span {
+  position: absolute;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-paper-light) 55%,
+    transparent
+  );
+}
+
+.thirds > span:nth-child(1),
+.thirds > span:nth-child(2) {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.thirds > span:nth-child(1) {
+  left: 33.333%;
+}
+
+.thirds > span:nth-child(2) {
+  left: 66.666%;
+}
+
+.thirds > span:nth-child(3),
+.thirds > span:nth-child(4) {
+  right: 0;
+  left: 0;
+  height: 1px;
+}
+
+.thirds > span:nth-child(3) {
+  top: 33.333%;
+}
+
+.thirds > span:nth-child(4) {
+  top: 66.666%;
+}
+
+/* 动态流参考线 (B `.band`): what the feed cuts is dimmed, its edge dashed, and a label says what it shows. */
+.band {
+  position: absolute;
+  inset: 0;
+}
+
+.bandEdge {
+  position: absolute;
+  right: 0;
+  left: 0;
+  background: var(--dim-band);
+}
+
+.bandEdge[data-edge="top"] {
+  top: 0;
+  border-bottom: 1px dashed var(--crop-line);
+}
+
+.bandEdge[data-edge="bottom"] {
+  bottom: 0;
+  border-top: 1px dashed var(--crop-line);
+}
+
+.bandLabel {
+  position: absolute;
+  left: var(--yoyi-space-3);
+  display: flex;
+}
+
+/* A photo that cannot be cropped (a carried-over one), shown whole. */
+.still {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.still > img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/*
+ * No preview: `.dialogMessage` (media.module.css) as B's empty slide, paper
+ * text on the stage. Compound, so it outranks `.dialogMessage` either way.
+ */
+.slide > .stageFallback {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  padding: var(--yoyi-space-8) var(--yoyi-space-6);
+  color: var(--yoyi-color-paper-light);
+  background: transparent;
+  border-radius: 0;
+}
+
+/* -- controls over the stage (B `.stageTop`, `.stageRail`) ------------------ */
+
+.stageTop {
+  position: absolute;
+  z-index: 3;
+  top: var(--yoyi-space-3);
+  right: max(var(--yoyi-space-3), env(safe-area-inset-right));
+  left: max(var(--yoyi-space-3), env(safe-area-inset-left));
+  display: flex;
+  align-items: flex-start;
+  gap: var(--yoyi-space-3);
+  pointer-events: none;
+  transition: opacity var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.stageTop > * {
+  pointer-events: auto;
+}
+
+.stageTop > .fab {
+  margin-left: auto;
+}
+
+.stageRail {
+  position: absolute;
+  z-index: 3;
+  right: max(var(--yoyi-space-3), env(safe-area-inset-right));
+  bottom: var(--yoyi-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-3);
+  transition: opacity var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+/* A finger down hides them (B), and nothing under it takes a tap. */
+.stage[data-gesture] .stageTop,
+.stage[data-gesture] .stageRail {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.stage[data-gesture] .stageTop > * {
+  pointer-events: none;
+}
+
+/* B `.fab`: opaque inverse discs with a paper rim, 44px targets. */
+.fab {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border: 1px solid var(--stage-edge);
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color var(--yoyi-duration-fast) var(--yoyi-easing-standard),
+    color var(--yoyi-duration-fast) var(--yoyi-easing-standard),
+    opacity var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.fab[aria-pressed="true"] {
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-elevated);
+  border-color: var(--yoyi-color-background-elevated);
+}
+
+.fab[aria-disabled="true"],
+.fab:disabled {
+  opacity: 0.45;
+}
+
+.fab:disabled {
+  cursor: not-allowed;
+}
+
+.fab:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* The photo's state (B `.stageStatus`): a chip, or a button to the fix sheet. */
+.stageStatusSlot {
+  display: flex;
+  min-width: 0;
+}
+
+.stageStatus {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  font: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button.stageStatus {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.stageStatus .tileChip {
+  min-height: 32px;
+}
+
+button.stageStatus .tileChip {
+  padding-right: var(--yoyi-space-3);
+}
+
+button.stageStatus:focus-visible {
+  outline: none;
+}
+
+button.stageStatus:focus-visible .tileChip {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* B `.tileChip`: the one opaque chip over images, steady digits (review r2). */
+.tileChip {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 28px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  padding: var(--yoyi-space-2) var(--yoyi-space-4) var(--yoyi-space-2)
+    var(--yoyi-space-3);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-full);
+  font-size: var(--yoyi-type-metadata-size);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.tileChipText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The shared icons at the mockup's smaller sizes (`.ic.s16`, `.ic.s14`). */
+span.icon16 {
+  width: 16px;
+  height: 16px;
+}
+
+span.icon14 {
+  width: 14px;
+  height: 14px;
+}
+
+/* The stage's own line icons (edit-stage.tsx `EditGlyph`, ratio shapes). */
+.glyph {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* B `.hint`: once, in the middle of the stage, gone at the first touch. */
+.hint {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  padding: var(--yoyi-space-4) var(--yoyi-space-5);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-lg);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  transition: opacity var(--yoyi-duration-slow) var(--yoyi-easing-standard);
+}
+
+.hint > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  font-weight: 600;
+}
+
+.hint > small {
+  font-size: var(--yoyi-type-caption-size);
+  opacity: 0.82;
+}
+
+.hint[data-show] {
+  opacity: 1;
+}
+
+/* -- the control band (B `.editBand`) -------------------------------------- */
+
+/*
+ * The home indicator's inset below the strip, and at least 8px where there
+ * is none: the 首图 badge (and the places shown while a photo is held) end
+ * on the strip's bottom edge, never on the screen's.
+ */
+.editBand {
+  flex: 0 0 auto;
+  padding-bottom: max(var(--yoyi-space-3), var(--editor-bottom-safe-area));
+  background: var(--yoyi-color-background-page);
+}
+
+/* A notice or the carried-over photo's reason, above the ratio row. */
+.bandNotes {
+  display: grid;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-3)
+    max(var(--yoyi-space-5), env(safe-area-inset-right)) 0
+    max(var(--yoyi-space-5), env(safe-area-inset-left));
+}
+
+/* A notice is a line of text under the stage, never a box (mockup B). */
+.bandNotes > div {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+/* The editor's notices (r4 D6), each as the editor draws it. */
+.bandNotices {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+
+/* Notices that render nothing leave no gap above the ratio row. */
+.bandNotes:has(> .bandNotices:empty:only-child) {
+  display: none;
+}
+
+.bandNote {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+}
+
+.ratioRow {
+  padding: var(--yoyi-space-3)
+    max(var(--yoyi-space-5), env(safe-area-inset-right)) 0
+    max(var(--yoyi-space-5), env(safe-area-inset-left));
+}
+
+/* B `.seg`: one muted track, the chosen ratio lifted onto the elevated fill. */
+.segment {
+  display: grid;
+  height: 44px;
+  box-sizing: border-box;
+  grid-template-columns: 1.34fr repeat(4, 1fr);
+  padding: var(--yoyi-space-1);
+  background: var(--yoyi-color-background-muted);
+  border-radius: var(--yoyi-radius-full);
+}
+
+/* 封面构图's ratios: 原始比例 and three shapes. */
+.segment[data-count="4"] {
+  grid-template-columns: 1.34fr repeat(3, 1fr);
+}
+
+.segmentButton {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-2);
+  padding: 0;
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-size: var(--yoyi-type-label-size);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color var(--yoyi-duration-fast) var(--yoyi-easing-standard),
+    color var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+/* Each segment's target reaches the track's full 44px (B's track pads it by 2px). */
+.segmentButton::before {
+  position: absolute;
+  inset: calc(-1 * var(--yoyi-space-1)) 0;
+  content: "";
+}
+
+.segmentButton[aria-checked="true"] {
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-elevated);
+  box-shadow: 0 0 0 1px var(--yoyi-color-border-default);
+  font-weight: 650;
+}
+
+.segmentButton:disabled {
+  color: var(--yoyi-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.segmentButton:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/*
+ * The strip row, mirrored (r4 D22): photo 1 at the screen's right edge, as
+ * the feed's first slide, the later photos leftwards and + right after the
+ * last one (the strip is only as wide as its photos until they overflow
+ * it); the divider and 应用到全部 sit at the left end. DOM order stays
+ * strip, +, divider, 应用到全部.
+ */
+.stripRow {
+  position: relative;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+}
+
+/*
+ * B `.strip`: one sideways scroller, room above for the ring and the ×, and
+ * below for the 首图 badge. The scroller clips what pokes out of it, so its
+ * top holds the ×'s whole target (18px above a thumbnail: the × sits 6px
+ * out, its target 12px more) and its 6px bottom the badge's overhang.
+ * An ordinary left-to-right scroller (scrollLeft 0..max, as dnd-kit
+ * expects); the track inside it draws the photos right to left (r4 D8).
+ */
+.strip {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  /* Never wider than its photos: + follows the last one. */
+  flex: 0 1 auto;
+  padding: calc(var(--yoyi-space-4) + 6px) 0 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  /* A short swipe scrolls the strip; a long press lifts a photo. */
+  touch-action: pan-x;
+}
+
+.strip::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * The photos, 第 1 项 rightmost (row-reverse; never a scroller itself), with
+ * the side gutters: the screen's edge on the right, +'s on the left. The
+ * strip is as wide as the track until the photos overflow it.
+ */
+.stripTrack {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row-reverse;
+  gap: var(--yoyi-space-4);
+  margin: 0;
+  padding: 0 max(var(--yoyi-space-5), env(safe-area-inset-right)) 0
+    var(--yoyi-space-3);
+  list-style: none;
+  user-select: none;
+  -webkit-user-select: none;
+  /* The long press that lifts a photo never opens the image menu (iOS). */
+  -webkit-touch-callout: none;
+}
+
+.stripCell {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+}
+
+.stripThumb {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  place-items: center;
+  overflow: hidden;
+  color: inherit;
+  background: var(--yoyi-color-background-muted);
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  /* The long press that lifts a photo never opens the image menu (iOS). */
+  -webkit-touch-callout: none;
+  transition:
+    transform var(--yoyi-duration-fast) var(--yoyi-easing-standard),
+    box-shadow var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+/* Nor drags the picture out of the page. */
+.stripThumb img {
+  -webkit-user-drag: none;
+}
+
+/* The edited picture covers the square (B `object-fit: cover`). */
+.stripThumb > span[data-orientation="landscape"] {
+  width: auto;
+  max-width: none;
+  height: 100%;
+}
+
+.stripThumb > span[data-orientation="portrait"] {
+  width: 100%;
+  height: auto;
+  max-height: none;
+}
+
+/* A shadow ring, so it survives the phone focus reset. */
+.stripThumb[aria-current="true"] {
+  box-shadow:
+    0 0 0 2px var(--yoyi-color-background-page),
+    0 0 0 4px var(--yoyi-color-text-primary);
+}
+
+.stripThumb[data-attention]::after {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--yoyi-color-error);
+  border-radius: inherit;
+  content: "";
+}
+
+.stripThumb:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* B `.sDisc`: the error disc at the thumbnail's corner. */
+.stripDisc {
+  position: absolute;
+  z-index: 1;
+  right: var(--yoyi-space-1);
+  bottom: var(--yoyi-space-1);
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-full);
+}
+
+/* B `.sProg`: a 3px seal-red bar on an ink track. */
+.stripProgress {
+  position: absolute;
+  z-index: 1;
+  right: var(--yoyi-space-2);
+  bottom: var(--yoyi-space-2);
+  left: var(--yoyi-space-2);
+  height: 3px;
+  overflow: hidden;
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-full);
+}
+
+.stripProgress > span {
+  display: block;
+  height: 100%;
+  background: var(--yoyi-color-seal-red);
+  transition: width var(--yoyi-duration-normal) linear;
+}
+
+/*
+ * The mark on a thumbnail's bottom edge (r4 D9): 8px over the picture, 6px
+ * in the strip's bottom padding, so the band does not grow. Photo 1's 首图
+ * in seal red always; while a photo is held, each photo's place in ink
+ * (quieter past the feed's ten); an older draft's 封面 at rest. Every pair
+ * reads at 4.5:1 or more in both themes (12px text is never large).
+ */
+.stripMark {
+  position: absolute;
+  z-index: 2;
+  bottom: -6px;
+  left: 50%;
+  min-width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  padding: 0 var(--yoyi-space-1);
+  transform: translateX(-50%);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-full);
+  box-shadow: 0 0 0 2px var(--yoyi-color-background-page);
+  font-size: var(--yoyi-type-caption-size);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 14px;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* The deeper seal red of each theme: 5.6:1 light, 5.2:1 dark. */
+.stripMark[data-edit-mark="first"] {
+  padding: 0 var(--yoyi-space-2);
+  background: var(--yoyi-color-seal-red-hover);
+}
+
+/* Ink on the muted seal red: 10.9:1 light, 7.7:1 dark. */
+.stripMark[data-edit-mark="cover"] {
+  padding: 0 var(--yoyi-space-2);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-seal-red-muted);
+}
+
+/* Quieter than the inverse ink, still 5.4:1 light, 5.9:1 dark. */
+.stripMark[data-edit-mark="beyond"] {
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-muted);
+}
+
+/* Lifted (r4 D14): over its neighbours, with the dialog shadow, a little larger than the finger. */
+.stripCell[data-dragging="true"] {
+  z-index: 3;
+}
+
+.stripCell[data-dragging="true"] .stripThumb {
+  box-shadow: var(--yoyi-shadow-dialog);
+  transform: scale(1.08);
+  cursor: grabbing;
+}
+
+/* While a photo is held the × steps aside. */
+.strip[data-sorting] .stripRemove {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/*
+ * + (B `.sAdd`), outside the scroller right after the last photo: always
+ * whole, however far the photos have scrolled, which pass between it and
+ * the screen's right edge. The strip's own room above and below lines it
+ * up with the thumbnails; with the track's 8px its 4px make the strip's
+ * 12px gap.
+ */
+.stripAddCell {
+  display: flex;
+  flex: 0 0 auto;
+  box-sizing: content-box;
+  width: 44px;
+  height: 44px;
+  margin: 0 var(--yoyi-space-2) 0 var(--yoyi-space-3);
+  padding: calc(var(--yoyi-space-4) + 6px) 0 6px;
+}
+
+/* An icon-only plus. */
+.stripAdd {
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-surface);
+}
+
+.stripAdd:disabled {
+  color: var(--yoyi-color-text-disabled);
+  cursor: not-allowed;
+}
+
+/* B `.sDel`: × on the current photo, its target grown into the corner. */
+.stripRemove {
+  position: absolute;
+  z-index: 2;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  place-items: center;
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  box-shadow: 0 0 0 2px var(--yoyi-color-background-page);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * The ×'s target grows into the corner only: up to the strip's top (12px
+ * over it) and right to the gap's end (6px past it), never further over
+ * the thumbnail than the × itself, so a tap or a long press on the current
+ * photo always reaches the photo (its sheet, its lift). The strip's top and
+ * the next thumbnail bound it to 26 × 32px; 移除 is also in the photo's
+ * sheet, 44px tall.
+ */
+.stripRemove::before {
+  position: absolute;
+  top: -12px;
+  right: -6px;
+  bottom: 0;
+  left: 0;
+  content: "";
+}
+
+.stripRemove:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/*
+ * B `.vsep`. Its auto right margin takes the row's free room, so the
+ * photos and + keep to the right and the divider and 应用到全部 to the
+ * left, + or not (a full album).
+ */
+.stripDivider {
+  width: 1px;
+  height: 28px;
+  flex: 0 0 auto;
+  margin-right: auto;
+  background: var(--yoyi-color-border-subtle);
+}
+
+/* B `.applyBtn`: a quiet text action; 已应用 with a check once done. */
+.applyButton {
+  display: inline-flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  margin: 0 var(--yoyi-space-2) 0
+    max(var(--yoyi-space-3), env(safe-area-inset-left));
+  padding: 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  background: none;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.applyButton:active:not([aria-disabled="true"]) {
+  background: var(--yoyi-color-background-muted);
+}
+
+/* Off without `disabled`, so focus stays on it as it turns to 已应用. */
+.applyButton[aria-disabled="true"] {
+  color: var(--yoyi-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.applyButton[data-done] {
+  color: var(--yoyi-color-text-tertiary);
+}
+
+.applyButton:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/*
+ * The one-time strip hint (r4 D13): a bubble above photo 1 with its arrow
+ * pointing down at it, 3.2 s or until the first touch. Seen only: the
+ * thumbnails' names and dnd-kit's instructions say the same.
+ */
+.stripHint {
+  position: absolute;
+  z-index: 4;
+  right: max(var(--yoyi-space-5), env(safe-area-inset-right));
+  bottom: calc(100% - var(--yoyi-space-4));
+  margin: 0;
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-full);
+  font-size: var(--yoyi-type-label-size);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--yoyi-duration-slow) var(--yoyi-easing-standard);
+}
+
+.stripHint::after {
+  position: absolute;
+  top: 100%;
+  right: 16px;
+  border: 6px solid transparent;
+  border-top-color: var(--yoyi-color-background-inverse);
+  content: "";
+}
+
+.stripHint[data-show] {
+  opacity: 1;
+}
+
+/* -- toast (B `.toast`): 60px under the stage's top edge ------------------- */
+
+.toastHost {
+  position: absolute;
+  z-index: 60;
+  top: calc(112px + env(safe-area-inset-top));
+  right: 0;
+  left: 0;
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--yoyi-space-5);
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  max-width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  padding: 0 var(--yoyi-space-5);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-full);
+  font-size: var(--yoyi-type-label-size);
+  pointer-events: auto;
+  animation: appear var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+.toast[data-action] {
+  padding-right: var(--yoyi-space-2);
+}
+
+/* 撤销: the toast's whole height, a 44px target (mockup A `.toast button`). */
+.toast > button {
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: 0 var(--yoyi-space-3);
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.toast > button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Leaving: 撤销 is no longer offered, so a tap goes through. */
+.toast[data-leaving] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--yoyi-duration-normal) var(--yoyi-easing-exit);
+}
+
+/* -- motion ----------------------------------------------------------------- */
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* Right to left (r4 D10): the next photo sits to the left, so it comes from there. */
+@keyframes enterNext {
+  from {
+    opacity: 0;
+    transform: translateX(-12%);
+  }
+}
+
+@keyframes enterPrevious {
+  from {
+    opacity: 0;
+    transform: translateX(12%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide[data-enter],
+  .toast {
+    animation: none;
+  }
+
+  .cropBox,
+  .cropBox .stageCropArea,
+  .thirds,
+  .stageTop,
+  .stageRail,
+  .fab,
+  .hint,
+  .segmentButton,
+  .stripThumb,
+  .stripProgress > span,
+  .stripHint,
+  .toast[data-leaving] {
+    transition: none;
+  }
+}
+
+/* -- a phone on its side: the stage beside the band (the cover editor's 58/42 split) */
+
+@media (orientation: landscape) and (max-height: 560px) {
+  .editBody {
+    flex-direction: row;
+  }
+
+  .stage {
+    min-width: 0;
+    min-height: 0;
+    flex: 58 1 0;
+    border-bottom: 0;
+  }
+
+  .editBand {
+    display: flex;
+    min-width: 0;
+    flex: 42 1 0;
+    flex-direction: column;
+    justify-content: center;
+    overflow-y: auto;
+    border-top: 1px solid var(--yoyi-color-border-subtle);
+    overscroll-behavior: contain;
+  }
+}

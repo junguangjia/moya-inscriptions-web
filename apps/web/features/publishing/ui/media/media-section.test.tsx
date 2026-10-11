@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useEffect, useState } from "react";
+import { act, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -65,14 +65,25 @@ import {
 } from "../../upload-manager.test-support";
 import {
   EditorSessionProvider,
+  useEditorSession,
   useEditorSessionRegistry,
 } from "../editor/editor-session-provider";
+import { COVER_RESET_NOTICE, keepCoverOnFirst } from "../phone/cover-rule";
 import { MediaSection } from "./media-section";
+import { mediaUiFor } from "./media-ui-store";
+import { useMediaActions } from "./use-media-actions";
 
 import type {
   PublishingClientPort,
   PublishingServices,
 } from "../../publishing-runtime";
+import type { EditDraft } from "./media-ui-store";
+import type {
+  MediaActions,
+  MediaActionsOptions,
+  StageOutcome,
+} from "./use-media-actions";
+import type { EditorSessionHandle } from "../editor/editor-session-provider";
 import type { EditorSessionStore } from "../editor/editor-session-state";
 import type {
   PublishingDraft,
@@ -183,6 +194,54 @@ const Editor = ({ layout }: { readonly layout: Layout }) => {
   );
 };
 
+const hook: { actions: MediaActions | null } = { actions: null };
+
+const ActionsBody = ({
+  editor,
+  options,
+}: {
+  readonly editor: EditorSessionHandle;
+  readonly options: MediaActionsOptions;
+}) => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  hook.actions = useMediaActions(editor, rootRef, options);
+  return (
+    <div ref={rootRef}>
+      {/* Where a test's `focusTarget` sends focus after a removal. */}
+      <button data-actions-probe="" type="button" />
+    </div>
+  );
+};
+
+/** The hook without the section that draws it, as the phone composer uses it. */
+const ActionsEditor = ({
+  options,
+  callers,
+  generation,
+}: {
+  readonly options: MediaActionsOptions;
+  readonly callers: number;
+  /** A new generation remounts every caller in one commit (a layout swap). */
+  readonly generation: number;
+}) => {
+  const registry = useEditorSessionRegistry();
+  const upload = useUploadSession();
+  const [store] = useState(() => registry.create(ACCOUNT, { type: "new" }));
+  useEffect(() => registry.mount(store), [registry, store]);
+  const editor = useEditorSession(store.key);
+  probe.store = store;
+  probe.upload = upload;
+  return editor === null
+    ? null
+    : Array.from({ length: callers }, (_, index) => (
+        <ActionsBody
+          key={`${generation}-${index}`}
+          editor={editor}
+          options={options}
+        />
+      ));
+};
+
 let container: HTMLDivElement;
 let root: Root;
 let current: ReturnType<typeof fixture>;
@@ -215,6 +274,38 @@ const render = async (
     );
     await settle();
   });
+};
+
+const renderActions = async (
+  options: MediaActionsOptions,
+  fixtureOptions: FixtureOptions = {},
+) => {
+  current = fixture(fixtureOptions);
+  const draw = async (callers = 1, generation = 0) => {
+    await act(async () => {
+      root.render(
+        <PublishingProvider services={current.services}>
+          <EditorSessionProvider>
+            <ActionsEditor
+              callers={callers}
+              generation={generation}
+              options={options}
+            />
+          </EditorSessionProvider>
+        </PublishingProvider>,
+      );
+      await settle();
+    });
+  };
+  await draw();
+  await act(async () => {
+    probe.upload!.startSession({
+      target: { type: "new" },
+      saveMode: "unsaved",
+    });
+    await settle();
+  });
+  return draw;
 };
 
 const setView = async (view: { layout: Layout; shown: boolean }) => {
@@ -327,6 +418,7 @@ afterEach(async () => {
   probe.store = null;
   probe.upload = null;
   probe.setView = null;
+  hook.actions = null;
   vi.restoreAllMocks();
   // Execute pending library timers here, where the error would fail this
   // file, instead of letting them leak into the worker's teardown.
@@ -922,6 +1014,90 @@ describe("MediaSection strip", () => {
     );
   });
 
+  it("moves the phone's current item on to its neighbour when it is removed, and drops its crop work", async () => {
+    await render();
+    await addStatic(2);
+    const [a, b] = storeKeys();
+    const ui = mediaUiFor(probe.store!);
+    const draft: EditDraft = {
+      basis: { rotation: 0, crop: null },
+      rotation: 90,
+      stored: null,
+    };
+    act(() => {
+      ui.setCurrentKey(a!);
+      ui.saveCropDraft(a!, draft);
+      ui.saveCropDraft(b!, draft);
+    });
+    await click(buttonByText("移除第 1 项"));
+    expect(storeKeys()).toEqual([b]);
+    expect(ui.get().phone).toMatchObject({ currentKey: b });
+    expect(ui.cropDraftFor(a!)).toBe(null);
+    expect(ui.cropDraftFor(b!)).toBe(draft);
+
+    // The last item leaves nothing to edit.
+    await click(buttonByText("移除第 1 项"));
+    expect(storeKeys()).toEqual([]);
+    expect(ui.get().phone).toMatchObject({
+      currentKey: null,
+      backAsk: false,
+    });
+  });
+
+  it("keeps the phone's current item on its place when a missing item is re-selected", async () => {
+    const draft: PublishingDraft = {
+      id: DRAFT_ID,
+      kind: "new",
+      workId: null,
+      baseRevisionId: null,
+      revision: 1,
+      content: {
+        title: "",
+        body: "",
+        authorship: { kind: "original" },
+        visibility: "public",
+        items: [
+          {
+            key: "missing",
+            itemId: null,
+            kind: "static",
+            qualityMode: "standard",
+            edit: { rotation: 0, crop: null },
+            pendingLabel: "photo",
+          },
+        ],
+        coverKey: null,
+        coverCrop: null,
+      },
+      mediaItems: [],
+      conflict: null,
+      deviceClass: "phone",
+      createdAt: "2026-09-13T12:00:00.000Z",
+      updatedAt: "2026-09-13T12:00:00.000Z",
+    };
+    await render("phone", { draft });
+    await act(async () => {
+      probe.store!.adoptContent(draft.content, []);
+      await probe.upload!.restoreDraftMedia(draft);
+      await settle();
+    });
+    const ui = mediaUiFor(probe.store!);
+    act(() => {
+      ui.setCurrentKey("missing");
+    });
+    await click(buttonByText("重新选择第 1 项"));
+    await setFiles(
+      container.querySelector<HTMLInputElement>(
+        'input[aria-label="重新选择缺少的文件"]',
+      )!,
+      [fileOf(jpeg({ width: 6 }), "replacement.jpg")],
+    );
+    await until(() => storeKeys().length === 1 && storeKeys()[0] !== "missing");
+    expect(ui.get().phone).toMatchObject({
+      currentKey: storeKeys()[0],
+    });
+  });
+
   it("shows a failed transfer with a retry that restarts only that component", async () => {
     await render();
     await addStatic(1);
@@ -1473,5 +1649,298 @@ describe("MediaSection across remounts and interruptions", () => {
     );
     expect(announcer()).toBe("暂时无法添加图片");
     expect(container.querySelector("[data-media-staging]")).toBeNull();
+  });
+});
+
+describe("MediaSection feed preview (#244)", () => {
+  it("shows the stage preview in content order with the first image rightmost", async () => {
+    await render();
+    expect(container.querySelector("[data-media-composer]")).toBe(null);
+    await addStatic(2);
+    const stage = container.querySelector<HTMLElement>(
+      "[data-media-composer] [data-feed-preview-stage]",
+    )!;
+    expect(stage.getAttribute("data-feed-stage-count")).toBe("2");
+    expect(stage.getAttribute("data-feed-stage-index")).toBe("0");
+    expect(stage.className).toContain("postStrip");
+    expect(
+      [...container.querySelectorAll("[data-feed-slide]")].map((slide) =>
+        slide.getAttribute("data-feed-slide"),
+      ),
+    ).toEqual(["0", "1"]);
+    expect(
+      container.querySelector("[data-feed-preview-caption]")!.textContent,
+    ).toContain("第 1 张在最右");
+    // The strip keeps its own order controls; the stage is a preview only.
+    expect(tiles().map((tile) => tile.handle)).toEqual([
+      "第 1 项，照片，长按可拖动排序或多选",
+      "第 2 项，照片，长按可拖动排序或多选",
+    ]);
+    // Removing the last item removes the preview with it.
+    await click(buttonByText("移除第 2 项"));
+    await click(buttonByText("移除第 1 项"));
+    await until(() => tiles().length === 0);
+    expect(container.querySelector("[data-media-composer]")).toBe(null);
+  });
+
+  it("leaves the order to the strip alone: no second reorder control beside the stage", async () => {
+    await render("desktop");
+    await addStatic(3);
+    const [a, b, c] = storeKeys();
+    const composer = container.querySelector("[data-media-composer]")!;
+    expect(composer.getAttribute("aria-label")).toBe("动态预览");
+    expect(composer.querySelector("[data-feed-preview-stage]")).not.toBe(null);
+    // Plan v2: the desktop column has the stage, the strip and its dialogs.
+    expect(container.querySelector("[data-order-rail]")).toBe(null);
+    expect(container.querySelector("[data-rail-key]")).toBe(null);
+    expect(composer.querySelector("button[data-media-handle]")).toBe(null);
+
+    // The strip still orders; the stage follows it.
+    await click(buttonByText("下移第 1 项"));
+    expect(storeKeys()).toEqual([b, a, c]);
+    expect(tiles().map((tile) => tile.key)).toEqual([b, a, c]);
+  });
+
+  it("gives the first item's edit dialog the feed window and its stage ratio", async () => {
+    await render();
+    await addStatic(2);
+    await makeFirstReady();
+    await click(buttonByText("编辑第 1 项"));
+    const dialog = document.querySelector<HTMLElement>(
+      "[data-media-edit-dialog]",
+    )!;
+    // Presentation 4 × 3: a frame wider than the square stage is shown whole.
+    expect(
+      dialog.querySelector("[data-feed-window]")!.getAttribute("data-feed-fit"),
+    ).toBe("contain");
+    expect(dialog.textContent).toContain("动态中整张显示，上下留白");
+    expect(dialog.textContent).toContain("由第 1 张决定");
+    const toggle = dialog.querySelector<HTMLButtonElement>(
+      '[data-editor-switch="feed-window"] [role="switch"]',
+    )!;
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(dialog.querySelector('input[type="range"]')).toBe(null);
+    await click(buttonByText("返回"));
+  });
+});
+
+describe("useMediaActions for the phone composer (#244)", () => {
+  const photos = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      fileOf(jpeg({ width: 4 + index }), `photo-${index}.jpg`),
+    );
+  const stage = async (files: File[]) => {
+    let outcome: StageOutcome | null = null;
+    await act(async () => {
+      outcome = await hook.actions!.stage(files, "picker");
+      await settle();
+    });
+    return outcome;
+  };
+  const run = async (action: (actions: MediaActions) => void) => {
+    await act(async () => {
+      action(hook.actions!);
+      await settle();
+    });
+  };
+  const crop = { x: 0.1, y: 0.1, width: 0.5, height: 0.5 };
+
+  it("says what became of each selection", async () => {
+    await renderActions({}, { maxItems: 3 });
+    expect(await stage(photos(2))).toEqual({
+      status: "added",
+      keys: storeKeys(),
+      replaced: null,
+      unsupported: 0,
+    });
+    expect(await stage(photos(2))).toEqual({
+      status: "refused",
+      reason: "items_limit",
+    });
+    expect(await stage([])).toEqual({ status: "dropped" });
+    expect(storeKeys()).toHaveLength(2);
+  });
+
+  it("says when the files could not be read", async () => {
+    await renderActions(
+      {},
+      {
+        identify: async () => {
+          throw new Error("unreadable");
+        },
+      },
+    );
+    expect(await stage(photos(1))).toEqual({ status: "unreadable" });
+    expect(hook.actions!.notice).toBe("文件无法读取，请重新选择");
+  });
+
+  it("keeps 首图 = 封面 when asked to", async () => {
+    await renderActions({ coverFollowsFirst: true });
+    await stage(photos(3));
+    const [a, b, c] = storeKeys();
+    await run((actions) => actions.applyCoverCrop(a!, crop));
+    expect(probe.store!.get().coverKey).toBe(a);
+
+    await run((actions) => actions.reorder(c!, 0));
+    expect(storeKeys()).toEqual([c, a, b]);
+    expect(probe.store!.get()).toMatchObject({ coverKey: c, coverCrop: null });
+    expect(hook.actions!.notice).toBe(
+      "首图已更换，封面构图已恢复为完整画面，可重新调整",
+    );
+
+    await run((actions) => actions.move(a!, -1, "keep"));
+    expect(storeKeys()).toEqual([a, c, b]);
+    expect(probe.store!.get().coverKey).toBe(a);
+
+    await run((actions) => actions.makeFirst(b!));
+    expect(storeKeys()).toEqual([b, a, c]);
+    expect(probe.store!.get().coverKey).toBe(b);
+    expect(hook.actions!.announcement).toBe("第 3 项已设为首图");
+  });
+
+  it("makes an item the 首图 when its cover is chosen or composed under 首图 = 封面", async () => {
+    await renderActions({ coverFollowsFirst: true });
+    await stage(photos(3));
+    const [a, b, c] = storeKeys();
+    await run((actions) => actions.applyCoverCrop(c!, crop));
+    expect(storeKeys()).toEqual([c, a, b]);
+    expect(probe.store!.get()).toMatchObject({ coverKey: c, coverCrop: crop });
+    expect(hook.actions!.announcement).toBe("第 3 项已设为首图并更新封面构图");
+
+    // The 首图's own composition changes in place.
+    const tighter = { x: 0.2, y: 0.2, width: 0.4, height: 0.4 };
+    await run((actions) => actions.applyCoverCrop(c!, tighter));
+    expect(storeKeys()).toEqual([c, a, b]);
+    expect(probe.store!.get()).toMatchObject({
+      coverKey: c,
+      coverCrop: tighter,
+    });
+    expect(hook.actions!.announcement).toBe("封面构图已更新");
+
+    await run((actions) => actions.chooseCover(b!));
+    expect(storeKeys()).toEqual([b, c, a]);
+    expect(probe.store!.get()).toMatchObject({ coverKey: b, coverCrop: null });
+    expect(hook.actions!.announcement).toBe("第 3 项已设为首图");
+  });
+
+  it("leaves a chosen cover in place by default, while 设为首图 still takes it along", async () => {
+    await renderActions({});
+    await stage(photos(3));
+    const [a, b, c] = storeKeys();
+    await run((actions) => actions.applyCoverCrop(b!, crop));
+    await run((actions) => actions.reorder(c!, 0));
+    expect(storeKeys()).toEqual([c, a, b]);
+    expect(probe.store!.get()).toMatchObject({ coverKey: b, coverCrop: crop });
+
+    await run((actions) => actions.makeFirst(a!));
+    expect(storeKeys()).toEqual([a, c, b]);
+    expect(probe.store!.get()).toMatchObject({ coverKey: a, coverCrop: null });
+
+    await run((actions) => actions.chooseCover(b!));
+    expect(storeKeys()).toEqual([a, c, b]);
+    expect(probe.store!.get().coverKey).toBe(b);
+  });
+
+  it("commits a deferred removal quietly, leaving focus where the author is unless it fell to the page", async () => {
+    await renderActions({
+      deferredRemoval: true,
+      focusTarget: () => "[data-actions-probe]",
+    });
+    await stage(photos(3));
+    const [a, b] = storeKeys();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    await run((actions) => actions.remove(a!));
+    expect(storeKeys()).not.toContain(a);
+    // The screen's toast said it when the photo went: nothing more now.
+    expect(hook.actions!.announcement).not.toContain("已移除");
+    expect(document.activeElement).toBe(elsewhere);
+
+    // Focus fell to the page meanwhile: the photo in its place takes it.
+    elsewhere.blur();
+    expect(document.activeElement).toBe(document.body);
+    await run((actions) => actions.remove(b!));
+    expect(document.activeElement).toBe(
+      container.querySelector("[data-actions-probe]"),
+    );
+    expect(hook.actions!.announcement).not.toContain("已移除");
+    elsewhere.remove();
+  });
+
+  it("keeps an edit without saying so when asked to be quiet", async () => {
+    await renderActions({});
+    await stage(photos(2));
+    const [a, b] = storeKeys();
+    const turned = { rotation: 90, crop: null } as const;
+    await run((actions) => actions.applyEdit(a!, turned, { quiet: true }));
+    expect(probe.store!.get().items[0]!.edit).toEqual(turned);
+    expect(hook.actions!.announcement).not.toContain("编辑已应用");
+    await run((actions) => actions.applyEdit(b!, turned));
+    expect(hook.actions!.announcement).toBe("第 2 项的编辑已应用");
+  });
+
+  const phoneCoverRule = {
+    apply: keepCoverOnFirst,
+    notice: COVER_RESET_NOTICE,
+  };
+
+  it("keeps the phone's 首图 = 封面 when a re-selection replaces item 1", async () => {
+    await renderActions({ coverRule: phoneCoverRule });
+    await stage(photos(3));
+    const [a, b, c] = storeKeys();
+    await run((actions) => actions.applyCoverCrop(c!, crop));
+    expect(probe.store!.get()).toMatchObject({ coverKey: c, coverCrop: crop });
+    await act(async () => {
+      hook.actions!.startReplacement(a!, [
+        fileOf(jpeg({ width: 9 }), "again.jpg"),
+      ]);
+      await settle();
+    });
+    await until(() => !storeKeys().includes(a!));
+    const [first, second, third] = storeKeys();
+    expect([second, third]).toEqual([b, c]);
+    expect(first).not.toBe(a);
+    // Position 1 changed: the chosen cover falls back to it.
+    expect(probe.store!.get()).toMatchObject({
+      coverKey: null,
+      coverCrop: null,
+    });
+    expect(hook.actions!.notice).toBe(COVER_RESET_NOTICE);
+  });
+
+  it("keeps the phone's 首图 = 封面 when the account cancels item 1 elsewhere", async () => {
+    const draftItems = vi.spyOn(UploadManager.prototype, "draftItems");
+    await renderActions({ coverRule: phoneCoverRule });
+    await stage(photos(3));
+    await until(registered);
+    const [a, b, c] = storeKeys();
+    await run((actions) => actions.applyCoverCrop(c!, crop));
+    const manager = draftItems.mock.contexts.at(-1) as UploadManager;
+    await act(async () => {
+      await manager.cancelItem(a!);
+      await settle();
+    });
+    await until(() => storeKeys().length === 2);
+    expect(storeKeys()).toEqual([b, c]);
+    expect(probe.store!.get()).toMatchObject({
+      coverKey: null,
+      coverCrop: null,
+    });
+    expect(hook.actions!.notice).toBe(
+      `1 项已不可用，已从作品中移除；${COVER_RESET_NOTICE}`,
+    );
+  });
+
+  it("flags a second caller for one editor session, not a layout swap", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const message = "useMediaActions mounted twice for one editor session";
+    const draw = await renderActions({});
+    await draw(1, 1);
+    expect(error).not.toHaveBeenCalledWith(message);
+    await draw(2, 1);
+    expect(error).toHaveBeenCalledWith(message);
   });
 });

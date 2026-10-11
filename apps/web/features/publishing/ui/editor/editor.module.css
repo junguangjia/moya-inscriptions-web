@@ -67,6 +67,24 @@
   color: var(--yoyi-color-error);
 }
 
+/*
+ * The phone's 发布 bar (mockup A `.barTitle small[data-state="dirty"]`):
+ * unsaved changes in the warning colour after a 6px dot; 已保存 stays
+ * secondary. The desktop bar keeps the plain line.
+ */
+[data-editor-screen="publish"] .saveStatus[data-save-status="pending"] {
+  color: var(--yoyi-color-warning);
+}
+
+[data-editor-screen="publish"] .saveStatus[data-save-status="pending"]::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  content: "";
+  background: currentColor;
+  border-radius: var(--yoyi-radius-full);
+}
+
 .barActions {
   position: relative;
   display: flex;
@@ -173,8 +191,7 @@
 .primaryButton:focus-visible,
 .inlineAction:focus-visible,
 .switch:focus-visible,
-.menu button:focus-visible,
-.stepHeading:focus-visible {
+.menu button:focus-visible {
   outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: 2px;
 }
@@ -212,6 +229,21 @@
 }
 
 .menu button:hover:not([aria-disabled="true"]) {
+  background: var(--yoyi-color-background-muted);
+}
+
+/*
+ * ≡ 更多操作 on the phone's 发布 (mockup A `.menu`): the elevated panel
+ * with no outline, a little wider, 6px around its 44px rows, a row muted
+ * while pressed. The desktop menu keeps its outline.
+ */
+[data-editor-screen="publish"] .menu {
+  min-width: 168px;
+  padding: calc(var(--yoyi-space-1) + var(--yoyi-space-2));
+  border: 0;
+}
+
+[data-editor-screen="publish"] .menu button:active {
   background: var(--yoyi-color-background-muted);
 }
 
@@ -308,11 +340,6 @@
   box-sizing: border-box;
 }
 
-.stepHeader {
-  display: grid;
-  gap: var(--yoyi-space-2);
-}
-
 .stepProgress {
   display: flex;
   gap: var(--yoyi-space-2);
@@ -330,19 +357,6 @@
 
 .stepProgress li[data-reached="true"] {
   background: var(--yoyi-color-seal-red);
-}
-
-.stepHeading {
-  margin: 0;
-  font-size: var(--yoyi-type-card-title-size);
-  font-weight: 650;
-  line-height: 1.45;
-}
-
-.stepCaption {
-  margin: 0;
-  color: var(--yoyi-color-text-tertiary);
-  font-size: var(--yoyi-type-caption-size);
 }
 
 .stepFooter {
@@ -363,12 +377,6 @@
   display: flex;
   align-items: center;
   gap: var(--yoyi-space-3);
-}
-
-.reorderHint {
-  margin: 0;
-  color: var(--yoyi-color-text-secondary);
-  font-size: var(--yoyi-type-caption-size);
 }
 
 /* Desktop ----------------------------------------------------------------- */

@@ -10,7 +10,8 @@ import type {
 } from "./editor-session-state";
 import type { WorkVisibility } from "@moya/contracts";
 
-const options: readonly {
+/** The two 可见范围 with their words (the phone 发布 draws them as a segment). */
+export const VISIBILITY_OPTIONS: readonly {
   readonly value: WorkVisibility;
   readonly label: string;
   readonly description: string;
@@ -18,6 +19,10 @@ const options: readonly {
   { value: "public", label: "公开", description: "允许其他人浏览" },
   { value: "self", label: "仅自己可见", description: "只有你能看到" },
 ];
+
+/** What an edit's 可见范围 adds: the work's own applies until the update is saved. */
+export const VISIBILITY_EDIT_HINT =
+  "默认沿用作品当前的可见范围，保存更新后生效。";
 
 /** 可见范围 (P03): new works default to public; edits inherit the work's. */
 export const VisibilityField = ({
@@ -37,7 +42,7 @@ export const VisibilityField = ({
     >
       <legend>可见范围</legend>
       <div className={styles.options}>
-        {options.map((option) => (
+        {VISIBILITY_OPTIONS.map((option) => (
           <label className={styles.option} key={option.value}>
             <input
               checked={state.visibility === option.value}
@@ -55,7 +60,7 @@ export const VisibilityField = ({
       </div>
       {state.kind === "edit" ? (
         <p className={styles.hint} id={hintId}>
-          默认沿用作品当前的可见范围，保存更新后生效。
+          {VISIBILITY_EDIT_HINT}
         </p>
       ) : null}
     </fieldset>

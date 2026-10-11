@@ -1,3 +1,5 @@
+import { resolveStageAspect } from "../../../authors/feed-post-strip-geometry";
+
 import type { MediaCrop, MediaEdit, MediaRotation } from "@moya/contracts";
 
 /**
@@ -23,7 +25,7 @@ const FULL_FRAME_TOLERANCE = 0.002;
 const ASPECT_TOLERANCE = 0.01;
 
 export type AspectPresetId =
-  "original" | "1:1" | "4:3" | "3:4" | "16:9" | "9:16";
+  "original" | "1:1" | "4:3" | "3:4" | "4:5" | "16:9" | "9:16";
 
 export interface AspectPreset {
   readonly id: AspectPresetId;
@@ -37,6 +39,8 @@ export const EDIT_PRESETS: readonly AspectPreset[] = [
   { id: "1:1", label: "1:1", ratio: 1 },
   { id: "4:3", label: "4:3", ratio: 4 / 3 },
   { id: "3:4", label: "3:4", ratio: 3 / 4 },
+  /** The tallest shape the phone feed stage shows whole (#243). */
+  { id: "4:5", label: "4:5", ratio: 4 / 5 },
   { id: "16:9", label: "16:9", ratio: 16 / 9 },
   { id: "9:16", label: "9:16", ratio: 9 / 16 },
 ];
@@ -285,4 +289,38 @@ export const drawPlan = (
     origin,
     radians: (edit.rotation * Math.PI) / 180,
   };
+};
+
+/**
+ * How the phone single-column feed stage (#243) shows an edited frame of
+ * `cropRatio` (width / height). The stage takes its shape from the post's
+ * first image, clamped between 1:1 and 4:5 (`resolveStageAspect`); a frame
+ * taller than the stage is centre-cropped (`cover`, only `height` of it is
+ * visible, centred), a frame of the stage's shape fills it (`fill`), any
+ * other frame is shown whole with blank above and below (`contain`). The
+ * stage has no focal point, so the window depends on the shape alone.
+ */
+export interface FeedStageWindow {
+  readonly fit: "cover" | "fill" | "contain";
+  /** Visible fraction of the frame's height (1 unless `cover`). */
+  readonly height: number;
+  /** The stage's height / width ratio the window was computed against. */
+  readonly stageRatio: number;
+}
+
+/** Same tolerance as the stage's `slideFit`. */
+const FEED_FIT_TOLERANCE = 0.001;
+
+export const feedStageWindow = (
+  cropRatio: number,
+  stageRatio: number = resolveStageAspect({ width: 1, height: 1 / cropRatio }),
+): FeedStageWindow => {
+  const frameRatio = 1 / cropRatio;
+  if (!(frameRatio > 0) || !Number.isFinite(frameRatio))
+    return { fit: "fill", height: 1, stageRatio };
+  if (frameRatio > stageRatio + FEED_FIT_TOLERANCE)
+    return { fit: "cover", height: round(stageRatio / frameRatio), stageRatio };
+  if (Math.abs(frameRatio - stageRatio) <= FEED_FIT_TOLERANCE)
+    return { fit: "fill", height: 1, stageRatio };
+  return { fit: "contain", height: 1, stageRatio };
 };

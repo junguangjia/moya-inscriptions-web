@@ -43,32 +43,47 @@ type FrameState =
   | { readonly status: "failed" }
   | { readonly status: "ready"; readonly frame: EditedFrameImage };
 
-export const CoverCropDialog = ({
-  itemNumber,
-  edit,
-  src,
-  blob,
-  coverCrop,
-  derivativeExpected = true,
-  initialDraft = null,
-  onDraftChange,
-  onApply,
-  onClose,
-}: {
-  readonly itemNumber: number;
+export interface CoverCompositionOptions {
   readonly edit: MediaEdit;
   readonly src: string | null;
   readonly blob: Blob | null;
   /** The current composition when this item is already the chosen cover. */
   readonly coverCrop: MediaCrop | null;
-  /** The account will still produce a derivative (the no-preview note says so). */
-  readonly derivativeExpected?: boolean;
   readonly initialDraft?: CoverDraft | null;
-  readonly onDraftChange?: (draft: CoverDraft) => void;
-  readonly onApply: (crop: MediaCrop | null) => void;
-  readonly onClose: () => void;
-}) => {
-  const presetName = useId();
+  readonly onDraftChange?: ((draft: CoverDraft) => void) | undefined;
+}
+
+export interface CoverComposition {
+  /** The item's edited frame, drawn once; null while it is drawn or failed. */
+  readonly frame: EditedFrameImage | null;
+  readonly session: CropSession;
+  readonly onSession: (
+    action: CropSession | ((current: CropSession) => CropSession),
+  ) => void;
+  /** Width / height of the composition's frame. */
+  readonly ratio: number;
+  /** The composition to keep (the stored one while nothing changed). */
+  readonly next: MediaCrop | null;
+  /** Nothing changed since the dialog opened. */
+  readonly unchanged: boolean;
+  /** No picture to compose on (none, or it failed to draw). */
+  readonly unavailable: boolean;
+}
+
+/**
+ * The composition model of 封面构图, shared by the desktop dialog and the
+ * phone's 封面构图 screen: the item's edited frame drawn as one picture, the
+ * crop session on it (resumed from `initialDraft` while edit and crop are
+ * unchanged, reported to `onDraftChange`), its ratio and the crop to keep.
+ */
+export const useCoverComposition = ({
+  edit,
+  src,
+  blob,
+  coverCrop,
+  initialDraft = null,
+  onDraftChange,
+}: CoverCompositionOptions): CoverComposition => {
   const local = useBoundedPreview(src === null ? blob : null, CROP_IMAGE_EDGE);
   const image = src ?? local.url;
   const [state, setState] = useState<FrameState>({ status: "loading" });
@@ -163,6 +178,46 @@ export const CoverCropDialog = ({
   const pendingLocal = src === null && local.status === "loading";
   const unavailable =
     (image === null && !pendingLocal) || state.status === "failed";
+  return { frame, session, onSession, ratio, next, unchanged, unavailable };
+};
+
+export const CoverCropDialog = ({
+  itemKey,
+  itemNumber,
+  edit,
+  src,
+  blob,
+  coverCrop,
+  derivativeExpected = true,
+  initialDraft = null,
+  onDraftChange,
+  onApply,
+  onClose,
+}: {
+  readonly itemKey: string;
+  readonly itemNumber: number;
+  readonly edit: MediaEdit;
+  readonly src: string | null;
+  readonly blob: Blob | null;
+  /** The current composition when this item is already the chosen cover. */
+  readonly coverCrop: MediaCrop | null;
+  /** The account will still produce a derivative (the no-preview note says so). */
+  readonly derivativeExpected?: boolean;
+  readonly initialDraft?: CoverDraft | null;
+  readonly onDraftChange?: (draft: CoverDraft) => void;
+  readonly onApply: (crop: MediaCrop | null) => void;
+  readonly onClose: () => void;
+}) => {
+  const presetName = useId();
+  const { frame, session, onSession, ratio, next, unchanged, unavailable } =
+    useCoverComposition({
+      edit,
+      src,
+      blob,
+      coverCrop,
+      initialDraft,
+      onDraftChange,
+    });
 
   return (
     <AuthorDialog
@@ -174,6 +229,7 @@ export const CoverCropDialog = ({
         {frame !== null ? (
           <CropWorkspace
             image={frame.url}
+            itemKey={itemKey}
             label="拖动图片调整封面构图，可用方向键移动"
             onSession={onSession}
             ratio={ratio}

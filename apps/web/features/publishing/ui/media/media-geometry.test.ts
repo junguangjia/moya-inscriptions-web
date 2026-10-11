@@ -7,6 +7,7 @@ import {
   cropFromPercentages,
   drawPlan,
   editedSize,
+  feedStageWindow,
   matchPreset,
   normalizeCrop,
   previewPlacement,
@@ -21,9 +22,11 @@ describe("media edit geometry", () => {
       "1:1",
       "4:3",
       "3:4",
+      "4:5",
       "16:9",
       "9:16",
     ]);
+    expect(COVER_PRESETS.map((preset) => preset.id)).not.toContain("4:5");
     expect(COVER_PRESETS.map((preset) => preset.id)).toContain("original");
     expect(turn(0, 1)).toBe(90);
     expect(turn(270, 1)).toBe(0);
@@ -74,6 +77,57 @@ describe("media edit geometry", () => {
     expect(editedSize(source, { rotation: 90, crop: square })).toEqual({
       width: 3000,
       height: 3000,
+    });
+  });
+
+  it("matches a 4:5 crop to its preset without disturbing the neighbours", () => {
+    const frame = { width: 3000, height: 3000 };
+    const tall = centeredCrop(4 / 5, frame)!;
+    expect(tall).toEqual({ x: 0.1, y: 0, width: 0.8, height: 1 });
+    expect(matchPreset(tall, frame)).toBe("4:5");
+    expect(matchPreset(centeredCrop(3 / 4, frame), frame)).toBe("3:4");
+    expect(matchPreset({ x: 0, y: 0, width: 0.5, height: 0.9 }, frame)).toBe(
+      null,
+    );
+  });
+
+  it("describes the feed stage window from the shape alone", () => {
+    // 3:4 frame: the stage is 4:5, so 6.25% is cut, half above and half below.
+    expect(feedStageWindow(3 / 4)).toEqual({
+      fit: "cover",
+      height: 0.9375,
+      stageRatio: 1.25,
+    });
+    expect(feedStageWindow(1)).toEqual({
+      fit: "fill",
+      height: 1,
+      stageRatio: 1,
+    });
+    expect(feedStageWindow(4 / 5)).toEqual({
+      fit: "fill",
+      height: 1,
+      stageRatio: 1.25,
+    });
+    expect(feedStageWindow(4 / 3)).toEqual({
+      fit: "contain",
+      height: 1,
+      stageRatio: 1,
+    });
+    expect(feedStageWindow(9 / 16).fit).toBe("cover");
+    expect(feedStageWindow(9 / 16).height).toBeCloseTo(0.703125, 5);
+    // A later item follows the first item's stage.
+    expect(feedStageWindow(16 / 9, 1.25)).toEqual({
+      fit: "contain",
+      height: 1,
+      stageRatio: 1.25,
+    });
+    expect(feedStageWindow(1, 1.25).fit).toBe("contain");
+    expect(feedStageWindow(3 / 4, 1).fit).toBe("cover");
+    expect(feedStageWindow(3 / 4, 1).height).toBe(0.75);
+    expect(feedStageWindow(Number.NaN)).toEqual({
+      fit: "fill",
+      height: 1,
+      stageRatio: 1,
     });
   });
 

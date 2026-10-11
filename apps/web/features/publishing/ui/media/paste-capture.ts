@@ -53,7 +53,8 @@ export const imagesForMediaPaste = (event: ClipboardEvent): File[] => {
 /**
  * Listens for image pastes on `target` while the media step is mounted.
  * `active` refuses a paste (leaving it untouched) while selection is not
- * possible or a modal dialog is open over the editor.
+ * possible or a modal dialog is open over the editor. A paste another
+ * listener already took is never staged a second time.
  */
 export const attachPasteCapture = (
   target: Pick<Document, "addEventListener" | "removeEventListener">,
@@ -61,7 +62,7 @@ export const attachPasteCapture = (
   active: () => boolean = () => true,
 ): (() => void) => {
   const listener = (event: Event) => {
-    if (!active()) return;
+    if (event.defaultPrevented || !active()) return;
     const files = imagesForMediaPaste(event as ClipboardEvent);
     if (files.length === 0) return;
     event.preventDefault();

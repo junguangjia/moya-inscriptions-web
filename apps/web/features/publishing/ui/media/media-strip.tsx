@@ -1,21 +1,13 @@
 "use client";
 
-import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  TouchSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
+import { DndContext, closestCenter } from "@dnd-kit/core";
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { useEffect, useState } from "react";
 
+import { useMediaSortSensors } from "../../../media-composer/sort-sensors";
 import { MediaItemTile } from "./media-item-tile";
 import styles from "./media.module.css";
 
@@ -25,11 +17,15 @@ import type { UploadItemView } from "../../upload-manager";
 import type {
   Announcements,
   DragEndEvent,
-  PointerSensorOptions,
   ScreenReaderInstructions,
 } from "@dnd-kit/core";
 import type { PublishingMediaItem, WorkDraftItem } from "@moya/contracts";
-import type { PointerEvent } from "react";
+
+/** The sensors moved to the composer module (#244); the names stay importable here. */
+export {
+  MousePenSensor,
+  TOUCH_SORT_DELAY_MS,
+} from "../../../media-composer/sort-sensors";
 
 /**
  * The ordered, sortable media strip (M02): pointer drag for mouse and pen,
@@ -38,20 +34,6 @@ import type { PointerEvent } from "react";
  * product language. Order numbers always follow the content order; keys
  * never change.
  */
-
-/** Mouse and pen only: touch input goes to the long-press TouchSensor. */
-export class MousePenSensor extends PointerSensor {
-  static override activators = [
-    {
-      eventName: "onPointerDown" as const,
-      handler: (event: PointerEvent, options: PointerSensorOptions): boolean =>
-        event.nativeEvent.pointerType !== "touch" &&
-        PointerSensor.activators[0]!.handler(event, options),
-    },
-  ];
-}
-
-export const TOUCH_SORT_DELAY_MS = 250;
 
 const screenReaderInstructions: ScreenReaderInstructions = {
   draggable:
@@ -122,15 +104,7 @@ export const MediaStrip = ({
   ...actions
 }: MediaStripProps) => {
   const reducedMotion = usePrefersReducedMotion();
-  const sensors = useSensors(
-    useSensor(MousePenSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: TOUCH_SORT_DELAY_MS, tolerance: 8 },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  );
+  const sensors = useMediaSortSensors();
   const keys = items.map((item) => item.key);
   const position = (value: string | number) => keys.indexOf(String(value)) + 1;
   const announcements: Announcements = {

@@ -14,6 +14,7 @@ const render = async (props: {
   pristine: boolean;
   locked: boolean;
   onReset: () => void;
+  reset?: boolean;
 }) => {
   const node = document.createElement("div");
   document.body.append(node);
@@ -59,4 +60,18 @@ it("keeps 还原 focusable when there is nothing to restore, and blocks it while
     onReset: vi.fn(),
   });
   expect(document.querySelector("button")!.disabled).toBe(true);
+});
+
+it("leaves only the hint when the dialog has its own 还原", async () => {
+  await render({
+    coarse: true,
+    pristine: false,
+    locked: false,
+    onReset: vi.fn(),
+    reset: false,
+  });
+  expect(document.querySelector("button")).toBe(null);
+  expect(document.getElementById("hint")!.textContent).toBe(
+    "拖动照片调整位置，双指缩放。",
+  );
 });

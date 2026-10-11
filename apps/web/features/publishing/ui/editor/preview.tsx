@@ -47,14 +47,17 @@ export interface EditorMediaSource {
   readonly src: string;
   readonly width: number;
   readonly height: number;
+  /** The unedited picture, shown while the edited frame is still being drawn. */
+  readonly pending?: true;
   readonly live?: {
     readonly motionSrc: string;
     readonly hasAudio: boolean;
   };
 }
 
-/** Which album items need a picture now. */
-export type EditorMediaScope = "all" | "cover" | "none";
+/** Which album items need a picture now: all, the cover, the first N, none. */
+export type EditorMediaScope =
+  "all" | "cover" | "none" | { readonly first: number };
 
 export interface EditorMediaSources {
   readonly sources: readonly EditorMediaSource[];
@@ -131,7 +134,9 @@ export const useEditorMediaSources = (
       ? state.items
       : scope === "cover"
         ? state.items.filter((item) => item.key === coverKey)
-        : [];
+        : scope === "none"
+          ? []
+          : state.items.slice(0, scope.first);
 
   const bases = shown.flatMap((item): Base[] => {
     const view = views.get(item.key);
@@ -198,8 +203,11 @@ export const useEditorMediaSources = (
           height: entry.image.size.height,
         },
       ];
-    if (entry?.image === null) failed += 1;
-    return [plain];
+    if (entry?.image === null) {
+      failed += 1;
+      return [plain];
+    }
+    return [{ ...plain, pending: true }];
   });
 
   const wantedBlobs = new Set(
@@ -275,6 +283,7 @@ export const useEditorMediaSources = (
       source.height,
       source.live?.motionSrc ?? null,
       source.live?.hasAudio ?? null,
+      source.pending ?? false,
     ]),
     failed,
   ]);

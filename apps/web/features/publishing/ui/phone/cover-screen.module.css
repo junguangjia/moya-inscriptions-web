@@ -1,0 +1,49 @@
+/*
+ * 封面构图 on the phone (#244 r3): a full-screen modal layer over 编辑,
+ * drawn with 编辑's stage, band and ratio row (edit-screen.module.css) and
+ * the shared bar (phone-screen.module.css). Only the layer and the note are
+ * here. Every colour and type size is a token; there are no literal sizes.
+ */
+
+/* The modal <dialog>: the whole screen on the page colour, its screen inside. */
+.host {
+  position: fixed;
+  z-index: var(--yoyi-z-index-overlay);
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-page);
+  border: 0;
+  font-family: var(--yoyi-font-interface);
+}
+
+.host[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.host::backdrop {
+  background: transparent;
+}
+
+/* Under the stage: what the composition changes, in one quiet line. */
+.note {
+  margin: 0;
+  padding: var(--yoyi-space-3)
+    max(var(--yoyi-space-5), env(safe-area-inset-right)) 0
+    max(var(--yoyi-space-5), env(safe-area-inset-left));
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.6;
+}
+
+/* The band's last space, where 编辑 has its strip. */
+.bandEnd {
+  height: var(--yoyi-space-4);
+}
