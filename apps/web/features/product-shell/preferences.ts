@@ -4,7 +4,13 @@ export const THEME_PREFERENCE_STORAGE_KEY = "yoyi.theme-preference";
 export const FEED_LAYOUT_PREFERENCE_STORAGE_KEY = "yoyi.home-feed-layout";
 
 export type ThemePreference = "light" | "dark" | "system";
+export const DEFAULT_THEME_PREFERENCE: ThemePreference = "light";
 export type FeedLayoutPreference = "single" | "double";
+
+export const feedLayoutLabels = {
+  single: "书法模式",
+  double: "正常模式",
+} as const satisfies Record<FeedLayoutPreference, string>;
 
 export const themePreferences = [
   "light",
@@ -20,7 +26,7 @@ export const feedLayoutPreferences = [
 export const parseThemePreference = (value: unknown): ThemePreference =>
   themePreferences.includes(value as ThemePreference)
     ? (value as ThemePreference)
-    : "system";
+    : DEFAULT_THEME_PREFERENCE;
 
 /**
  * An explicit feed layout choice, or null when the viewer never chose one and
@@ -52,7 +58,7 @@ export const readStoredThemePreference = (
   try {
     return parseThemePreference(storage.getItem(THEME_PREFERENCE_STORAGE_KEY));
   } catch {
-    return "system";
+    return DEFAULT_THEME_PREFERENCE;
   }
 };
 
@@ -84,7 +90,10 @@ export const nextThemePreference = (
   current: ThemePreference,
 ): ThemePreference => {
   const index = themePreferences.indexOf(current);
-  return themePreferences[(index + 1) % themePreferences.length] ?? "system";
+  return (
+    themePreferences[(index + 1) % themePreferences.length] ??
+    DEFAULT_THEME_PREFERENCE
+  );
 };
 
 export const nextFeedLayoutPreference = (

@@ -171,7 +171,12 @@ describe("grouped My settings", () => {
     expect(back.textContent).toBe("");
     await click(node, "外观");
     await click(node, "深色");
-    await click(node, "单列");
+    expect(
+      node
+        .querySelector("[data-layout-example]")
+        ?.getAttribute("data-layout-example"),
+    ).toBe("double");
+    await click(node, "书法模式");
     expect(setThemePreference).toHaveBeenCalledWith("dark");
     expect(setFeedLayoutPreference).toHaveBeenCalledWith("single");
     expect(people).not.toHaveBeenCalled();

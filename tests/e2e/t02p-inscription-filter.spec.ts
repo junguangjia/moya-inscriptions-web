@@ -541,7 +541,7 @@ test("Filter remains legible through themes and respects reduced motion", async 
   const { filter, shell, surface } = await openQaInscriptions(page);
   const userTrigger = shell.locator("[data-user-trigger]");
 
-  for (const preference of ["system", "light", "dark"] as const) {
+  for (const preference of ["light", "dark", "system"] as const) {
     await expect(shell).toHaveAttribute("data-theme-preference", preference);
     const trigger = await openFilter(filter);
     await expectOpaqueSurface(trigger);
@@ -549,7 +549,7 @@ test("Filter remains legible through themes and respects reduced motion", async 
     await trigger.click();
     await expect(trigger).toBeFocused();
 
-    if (preference === "dark") break;
+    if (preference === "system") break;
     await userTrigger.click();
     const userPage = shell.getByRole("dialog", { name: "用户页" });
     await expect(userPage).toBeVisible();

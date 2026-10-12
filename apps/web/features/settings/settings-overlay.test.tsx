@@ -23,7 +23,8 @@ describe("SettingsOverlay", () => {
     (platform) => {
       const markup = renderSettings(platform);
       expect(markup).toContain("data-feed-layout-toggle");
-      expect(markup).toContain("切换布局：当前双列");
+      expect(markup).toContain("正常模式示意图");
+      expect(markup).toContain("切换布局：当前正常模式");
     },
   );
 

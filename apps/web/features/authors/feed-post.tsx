@@ -63,12 +63,13 @@ export const FeedPost = ({
 }) => {
   const shell = useProductShell();
   const [expanded, setExpanded] = useState(false);
+  const [overflow, setOverflow] = useState(false);
   const bodyId = useId();
   const media = useMemo(() => feedPostMedia(item, label), [item, label]);
   const stageRef = useRef<FeedPostStageHandle>(null);
   const work = item.target.type === "work";
-  // Only a work with text has a body to expand; any other post opens Detail.
-  const expandable = work && (item.title !== "" || excerpt !== "");
+  const hasBody = work && excerpt !== "";
+  const expandable = hasBody && overflow;
   const openContent = (opener: HTMLElement) =>
     shell.openContent(item.target, opener);
   // A post with a stage reads its comments as colophons; one without opens
@@ -93,14 +94,16 @@ export const FeedPost = ({
     id: item.target.id,
     title: label,
   } as const;
-  const trailing: FeedPostTrailingAction = expandable
+  const trailing: FeedPostTrailingAction | undefined = expandable
     ? {
         kind: "expand",
         expanded,
         controls: bodyId,
         onToggle: toggle,
       }
-    : { kind: "detail", onOpen: openContent };
+    : work && hasBody
+      ? undefined
+      : { kind: "detail", onOpen: openContent };
 
   const stage =
     media.length > 0 ? (
@@ -164,7 +167,7 @@ export const FeedPost = ({
           <span className={styles.postTitleText}>{item.title}</span>
         </button>
       </h3>
-    ) : excerpt === "" || expanded ? null : (
+    ) : work || excerpt === "" ? null : (
       // The expand action is the control; the line itself is a larger target.
       <p
         className={styles.postSummary}
@@ -196,11 +199,12 @@ export const FeedPost = ({
         ) : null}
         {stage}
         {heading}
-        {expandable ? (
+        {hasBody ? (
           <FeedPostBody
             expanded={expanded}
             id={bodyId}
-            preview={item.title === "" ? excerpt : undefined}
+            preview={excerpt}
+            onOverflowChange={setOverflow}
             workId={item.target.id}
           />
         ) : null}
