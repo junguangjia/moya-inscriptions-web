@@ -1141,80 +1141,168 @@ test("a dot tapped while a swipe's glide runs takes the strip there in one glide
   }
 });
 
-test("tapping unfolded content midway starts a reply and keeps it unfolded", async ({
-  browser,
-  page,
-}, testInfo) => {
-  skipUnlessPhone(testInfo);
-  const feed = await openPhoneFeed(browser, page, testInfo, 0, {
-    signedIn: true,
-    adjust: (answer) => {
-      answer.items.find((item) => item.id === "latest-1")!.text = passage
-        .repeat(5)
-        .slice(0, 480);
-    },
+for (const length of [220, 480]) {
+  test(`tapping unfolded content midway starts a reply and keeps ${length} characters unfolded`, async ({
+    browser,
+    page,
+  }, testInfo) => {
+    skipUnlessPhone(testInfo);
+    const feed = await openPhoneFeed(browser, page, testInfo, 0, {
+      signedIn: true,
+      adjust: (answer) => {
+        answer.items.find((item) => item.id === "latest-1")!.text = passage
+          .repeat(5)
+          .slice(0, length);
+      },
+    });
+    try {
+      const { entry, fold } = await readLongFromStart(feed);
+      await fold.click();
+      await expect(fold).toHaveText("收起");
+      await restingEdges(feed, entry);
+      // Read midway, then tap actual visible content rather than an action icon.
+      const placed = await feed.strip.evaluate((strip) => {
+        const node = strip.querySelector('[data-comment-id="latest-1"]')!;
+        const seal = node.querySelector("[data-colophon-signature]")!;
+        const box = strip.getBoundingClientRect();
+        const offset = -strip.scrollLeft;
+        const snap =
+          offset +
+          box.left +
+          (Number.parseFloat(getComputedStyle(seal).scrollMarginLeft) || 0) -
+          seal.getBoundingClientRect().left;
+        const to = offset + (snap - offset) / 3;
+        strip.style.scrollSnapType = "none";
+        strip.scrollLeft = -to;
+        strip.getBoundingClientRect();
+        strip.style.scrollSnapType = "";
+        return to;
+      });
+      await feed.page.waitForTimeout(600);
+      const before = await feed.strip.evaluate((strip) => -strip.scrollLeft);
+      expect(Math.abs(before - placed)).toBeLessThanOrEqual(2);
+      const text = entry.locator(":scope > div > [data-colophon-text]");
+      if (length === 220) {
+        const widths = await text.evaluate((node) => ({
+          body: node.parentElement!.getBoundingClientRect().width,
+          stage: node.closest("[data-feed-stage]")!.getBoundingClientRect()
+            .width,
+        }));
+        // This body fits the stage, but cannot fit the band beside the input.
+        expect(widths.body).toBeLessThanOrEqual(widths.stage + 1);
+        expect(widths.body).toBeGreaterThan(widths.stage * 0.4 + 1);
+      }
+      const spot = await text.evaluate((node) => {
+        const strip = node
+          .closest("[data-feed-stage]")!
+          .getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = [...range.getClientRects()];
+        const visible = rects
+          .map((rect, index) => ({ rect, index }))
+          .filter(
+            ({ rect }) =>
+              rect.width > 0 &&
+              rect.left > strip.left + 120 &&
+              rect.right < strip.right - 24,
+          );
+        const { rect, index } = visible[Math.floor(visible.length / 2)]!;
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + Math.min(rect.height / 2, 60),
+          rectIndex: index,
+        };
+      });
+      const geometry = () =>
+        text.evaluate((node) => {
+          const stage = node.closest<HTMLElement>("[data-feed-stage]")!;
+          const body = node.parentElement!;
+          const input = stage.querySelector("[data-colophon-input]")!;
+          const seal = body.querySelector("[data-colophon-signature]")!;
+          const box = stage.getBoundingClientRect();
+          const rect = body.getBoundingClientRect();
+          const column = input.getBoundingClientRect();
+          const fade =
+            Number.parseFloat(
+              getComputedStyle(input).getPropertyValue("--colophon-input-edge"),
+            ) || 0;
+          return {
+            offset: -stage.scrollLeft,
+            stage: { left: box.left, right: box.right, width: box.width },
+            body: { left: rect.left, right: rect.right, width: rect.width },
+            input: {
+              left: column.left,
+              right: column.right,
+              width: column.width,
+            },
+            fade,
+            sealLeft: seal.getBoundingClientRect().left,
+            actionsLeft: body
+              .querySelector("[data-colophon-actions]")!
+              .getBoundingClientRect().left,
+            reach: Math.max(
+              column.right + fade,
+              box.left + box.width * 0.6 + fade,
+            ),
+            snap: {
+              inline: stage.style.scrollSnapType,
+              computed: getComputedStyle(stage).scrollSnapType,
+              sealMargin: getComputedStyle(seal).scrollMarginLeft,
+            },
+          };
+        });
+      const beforeTap = await geometry();
+      await expect(text).toHaveAttribute("aria-label", "回复 读者3");
+      await feed.page.touchscreen.tap(spot.x, spot.y);
+      await expect(boxOf(feed)).toBeFocused();
+      const focused = await geometry();
+      // Wait beyond the smooth-scroll window before checking the reading position.
+      await feed.page.waitForTimeout(600);
+      const settled = await geometry();
+      await testInfo.attach("reply-reading-geometry", {
+        body: JSON.stringify({ beforeTap, focused, settled }, null, 2),
+        contentType: "application/json",
+      });
+      if (length === 480) {
+        await expect
+          .poll(async () => Math.abs((await stripOffset(feed)) - before))
+          .toBeLessThanOrEqual(2);
+      } else {
+        // An idle seal can move forward to clear the widened input. Reply
+        // must not return to the start or move farther than that clearance.
+        const advance = settled.offset - before;
+        const clearance = Math.max(
+          0,
+          Number.parseFloat(settled.snap.sealMargin) -
+            Number.parseFloat(beforeTap.snap.sealMargin),
+        );
+        expect(advance).toBeGreaterThanOrEqual(-2);
+        expect(advance).toBeLessThanOrEqual(clearance + 2);
+        const readableLeft = settled.input.right + settled.fade;
+        expect(settled.sealLeft).toBeGreaterThanOrEqual(readableLeft - 2);
+        expect(settled.actionsLeft).toBeGreaterThanOrEqual(readableLeft - 2);
+        expect(settled.snap.computed).toBe("x mandatory");
+        const clicked = await text.evaluate((node, index) => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rect = range.getClientRects()[index]!;
+          return { left: rect.left, right: rect.right };
+        }, spot.rectIndex);
+        expect(clicked.left).toBeGreaterThanOrEqual(readableLeft - 2);
+        expect(clicked.right).toBeLessThanOrEqual(settled.stage.right + 1);
+      }
+      await expect(
+        feed.post.locator("[data-colophon-input-reply]"),
+      ).toContainText("回复 读者3：");
+      await expect(entry).toHaveAttribute("data-colophon-reply-target", "");
+      await expect(fold).toHaveText("收起");
+      await expect(feed.post.locator("[data-colophon-reply]")).toHaveCount(0);
+    } finally {
+      await feed.context?.close();
+    }
   });
-  try {
-    const { entry, fold } = await readLongFromStart(feed);
-    await fold.click();
-    await expect(fold).toHaveText("收起");
-    await restingEdges(feed, entry);
-    // Read midway, then tap actual visible content rather than an action icon.
-    const placed = await feed.strip.evaluate((strip) => {
-      const node = strip.querySelector('[data-comment-id="latest-1"]')!;
-      const seal = node.querySelector("[data-colophon-signature]")!;
-      const box = strip.getBoundingClientRect();
-      const offset = -strip.scrollLeft;
-      const snap =
-        offset +
-        box.left +
-        (Number.parseFloat(getComputedStyle(seal).scrollMarginLeft) || 0) -
-        seal.getBoundingClientRect().left;
-      const to = offset + (snap - offset) / 3;
-      strip.style.scrollSnapType = "none";
-      strip.scrollLeft = -to;
-      strip.getBoundingClientRect();
-      strip.style.scrollSnapType = "";
-      return to;
-    });
-    await feed.page.waitForTimeout(600);
-    const before = await feed.strip.evaluate((strip) => -strip.scrollLeft);
-    expect(Math.abs(before - placed)).toBeLessThanOrEqual(2);
-    const text = entry.locator(":scope > div > [data-colophon-text]");
-    const spot = await text.evaluate((node) => {
-      const strip = node.closest("[data-feed-stage]")!.getBoundingClientRect();
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      const rects = [...range.getClientRects()].filter(
-        (rect) =>
-          rect.width > 0 &&
-          rect.left > strip.left + 120 &&
-          rect.right < strip.right - 24,
-      );
-      const rect = rects[Math.floor(rects.length / 2)]!;
-      return {
-        x: rect.left + rect.width / 2,
-        y: rect.top + Math.min(rect.height / 2, 60),
-      };
-    });
-    await expect(text).toHaveAttribute("aria-label", "回复 读者3");
-    await feed.page.touchscreen.tap(spot.x, spot.y);
-    await expect(boxOf(feed)).toBeFocused();
-    // Wait beyond the smooth-scroll window before checking the reading position.
-    await feed.page.waitForTimeout(600);
-    await expect
-      .poll(async () => Math.abs((await stripOffset(feed)) - before))
-      .toBeLessThanOrEqual(2);
-    await expect(
-      feed.post.locator("[data-colophon-input-reply]"),
-    ).toContainText("回复 读者3：");
-    await expect(entry).toHaveAttribute("data-colophon-reply-target", "");
-    await expect(fold).toHaveText("收起");
-    await expect(feed.post.locator("[data-colophon-reply]")).toHaveCount(0);
-  } finally {
-    await feed.context?.close();
-  }
-});
+}
 
 test("on a narrow phone a long name is cut at the head, the 落款 staying whole", async ({
   browser,

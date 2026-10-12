@@ -1105,14 +1105,41 @@ describe("FeedColophon", () => {
   it.each(
     (["root", "reply"] as const).flatMap((kind) =>
       [
-        { position: "across the readable view", left: -400, bringIn: false },
-        { position: "entirely to the right", left: 400, bringIn: true },
-        { position: "beneath the input", left: -750, bringIn: true },
+        {
+          position: "across the readable view",
+          left: -400,
+          width: 900,
+          bringIn: false,
+        },
+        {
+          position: "entirely to the right",
+          left: 400,
+          width: 900,
+          bringIn: true,
+        },
+        {
+          position: "beneath the input",
+          left: -750,
+          width: 900,
+          bringIn: true,
+        },
+        {
+          position: "narrower than the stage but crossing the readable band",
+          left: 150,
+          width: 300,
+          bringIn: false,
+        },
+        {
+          position: "short enough to fit beside the input",
+          left: 150,
+          width: 150,
+          bringIn: true,
+        },
       ].map((geometry) => ({ kind, ...geometry })),
     ),
   )(
     "preserves an expanded $kind's reading offset $position, bringing it in only when hidden",
-    ({ kind, left, bringIn }) => {
+    ({ kind, left, width, bringIn }) => {
       let offset = 300;
       const scrolled = vi.fn((to: number) => {
         offset = to;
@@ -1141,7 +1168,7 @@ describe("FeedColophon", () => {
           ? [0, 393]
           : node.matches("[data-colophon-input]")
             ? [0, 49]
-            : [left, 900],
+            : [left, width],
       );
       render();
       const anchor = $(
