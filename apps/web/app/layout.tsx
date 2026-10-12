@@ -9,6 +9,7 @@ import "./globals.css";
 import { AuthReturnProvider } from "../features/auth/auth-return";
 
 import { PRODUCT_BOOT_SCRIPT } from "../features/product-shell/product-boot";
+import { DEFAULT_THEME_PREFERENCE } from "../features/product-shell/preferences";
 
 export const metadata: Metadata = {
   title: "由于艺",
@@ -33,7 +34,8 @@ export default function RootLayout({
       data-home-layout="double"
       data-orientation="portrait"
       data-platform="pc"
-      data-theme-preference="system"
+      data-theme={DEFAULT_THEME_PREFERENCE}
+      data-theme-preference={DEFAULT_THEME_PREFERENCE}
       data-yoyi-boot="pending"
     >
       <head>

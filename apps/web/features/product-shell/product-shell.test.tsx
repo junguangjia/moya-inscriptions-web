@@ -2123,7 +2123,37 @@ describe("ProductShell", () => {
     },
   );
 
-  it("updates the effective theme when the system preference changes", async () => {
+  it("defaults to light even when the system prefers dark", async () => {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn(() => createMediaQueryList(true)),
+    });
+
+    renderProductShell(<ProductShellObserver />);
+    await act(async () => vi.runAllTimers());
+
+    expect(observedProductShell?.theme).toBe("light");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(document.documentElement.dataset.effectiveTheme).toBe("light");
+  });
+
+  it("uses light when access to localStorage itself is blocked", async () => {
+    const storage = vi.spyOn(window, "localStorage", "get");
+    storage.mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    try {
+      renderProductShell(<ProductShellObserver />);
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.theme).toBe("light");
+      expect(document.documentElement.dataset.theme).toBe("light");
+    } finally {
+      storage.mockRestore();
+    }
+  });
+
+  it("updates the effective theme when the saved system preference changes", async () => {
+    window.localStorage.setItem("yoyi.theme-preference", "system");
     let systemIsDark = false;
     let notifySystemThemeChange = () => {};
     const media = {

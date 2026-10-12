@@ -1,3 +1,5 @@
+import { DEFAULT_THEME_PREFERENCE } from "./preferences";
+
 export const PRODUCT_LOADING_MINIMUM_MS = 720;
 export const PRODUCT_LOADING_FAILSAFE_MS = 3_000;
 
@@ -17,16 +19,23 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
   let layout = null;
   try {
     const theme = localStorage.getItem(themeKey);
-    const preference = theme === "light" || theme === "dark" ? theme : "system";
+    const preference =
+      theme === "light" || theme === "dark" || theme === "system"
+        ? theme
+        : "${DEFAULT_THEME_PREFERENCE}";
     root.dataset.themePreference = preference;
     if (preference === "system") root.removeAttribute("data-theme");
     else root.dataset.theme = preference;
+  } catch {
+    root.dataset.themePreference = "${DEFAULT_THEME_PREFERENCE}";
+    root.dataset.theme = "${DEFAULT_THEME_PREFERENCE}";
+  }
 
+  try {
     const stored = localStorage.getItem(layoutKey);
     if (stored === "single" || stored === "double") layout = stored;
   } catch {
-    root.dataset.themePreference = "system";
-    root.removeAttribute("data-theme");
+    // An unavailable layout preference uses the platform default.
   }
 
   const synchronizePlatform = () => {

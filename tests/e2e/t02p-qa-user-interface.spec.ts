@@ -296,7 +296,7 @@ test("User stays legible across themes and respects reduced motion", async ({
   test.skip(testInfo.project.name !== "desktop-chromium");
   const { shell, trigger } = await openQa(page);
 
-  for (const preference of ["system", "light", "dark"] as const) {
+  for (const preference of ["light", "dark", "system"] as const) {
     await expect(shell).toHaveAttribute("data-theme-preference", preference);
     const userPage = await openUser(shell, trigger);
     const [profileColors, cardColors] = await Promise.all([
@@ -328,7 +328,7 @@ test("User stays legible across themes and respects reduced motion", async ({
       contrastRatio(cardColors.foreground, cardColors.background),
     ).toBeGreaterThanOrEqual(4.5);
 
-    if (preference !== "dark") {
+    if (preference !== "system") {
       const userSettings = userPage.getByRole("button", {
         name: "打开设置",
       });

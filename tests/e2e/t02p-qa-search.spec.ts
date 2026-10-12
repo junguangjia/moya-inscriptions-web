@@ -549,7 +549,7 @@ test("Search remains legible through themes and respects reduced motion", async 
   const { search, shell } = await openQa(page);
   const trigger = shell.locator("[data-search-trigger]");
 
-  for (const preference of ["system", "light", "dark"] as const) {
+  for (const preference of ["light", "dark", "system"] as const) {
     await expect(shell).toHaveAttribute("data-theme-preference", preference);
     await trigger.click();
     const panel = search.locator("[data-search-panel]");
@@ -561,7 +561,7 @@ test("Search remains legible through themes and respects reduced motion", async 
     await search.locator("[data-search-close]").click();
     await expect(trigger).toBeFocused();
 
-    if (preference === "dark") break;
+    if (preference === "system") break;
     await shell.locator("[data-user-trigger]").click();
     const userPage = shell.getByRole("dialog", { name: "用户页" });
     await expect(
