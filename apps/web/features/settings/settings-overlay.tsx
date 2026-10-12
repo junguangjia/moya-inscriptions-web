@@ -5,6 +5,8 @@ import type { RefObject } from "react";
 import { Icon } from "@moya/ui";
 
 import styles from "./settings-overlay.module.css";
+import { FeedLayoutPreview } from "./feed-layout-preview";
+import { feedLayoutLabels } from "../product-shell/preferences";
 
 import type {
   FeedLayoutPreference,
@@ -24,11 +26,6 @@ const themeIcons = {
   light: "theme-light",
   system: "theme-system",
 } as const satisfies Record<ThemePreference, IconName>;
-
-const layoutLabels = {
-  double: "双列",
-  single: "单列",
-} as const satisfies Record<FeedLayoutPreference, string>;
 
 const layoutIcons = {
   double: "layout-double",
@@ -118,17 +115,18 @@ export const SettingsDisplayControls = ({
       {platform === "pc" ? null : (
         <button
           type="button"
-          aria-label={`切换布局：当前${layoutLabels[feedLayout]}`}
+          aria-label={`切换布局：当前${feedLayoutLabels[feedLayout]}`}
           className={`${styles.settingButton} yoyi-icon-button yoyi-icon-button--quiet yoyi-icon-button--md`}
           data-feed-layout-mode={feedLayout}
           data-feed-layout-toggle=""
           onClick={onCycleFeedLayout}
-          title={layoutLabels[feedLayout]}
+          title={feedLayoutLabels[feedLayout]}
         >
           <Icon name={layoutIcons[feedLayout]} />
-          <span>{layoutLabels[feedLayout]}</span>
+          <span>{feedLayoutLabels[feedLayout]}</span>
         </button>
       )}
     </div>
+    {platform !== "pc" && <FeedLayoutPreview value={feedLayout} />}
   </fieldset>
 );

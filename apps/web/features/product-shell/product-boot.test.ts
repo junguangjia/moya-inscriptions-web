@@ -11,6 +11,7 @@ import {
 describe("Product Shell pre-hydration boot", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     window.localStorage.clear();
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-theme-preference");
@@ -48,6 +49,50 @@ describe("Product Shell pre-hydration boot", () => {
     expect(document.documentElement.dataset.yoyiBoot).toBe("ready");
   });
 
+  it.each([null, "light", "dark", "system"] as const)(
+    "defaults to light while retaining the explicit theme %s",
+    (stored) => {
+      vi.useFakeTimers();
+      document.documentElement.dataset.theme = "light";
+      if (stored !== null)
+        window.localStorage.setItem("yoyi.theme-preference", stored);
+
+      window.eval(PRODUCT_BOOT_SCRIPT);
+
+      const preference = stored ?? "light";
+      expect(document.documentElement.dataset.themePreference).toBe(preference);
+      expect(document.documentElement.dataset.theme).toBe(
+        preference === "system" ? undefined : preference,
+      );
+    },
+  );
+
+  it("uses light when access to localStorage itself is blocked", () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+
+    expect(() => window.eval(PRODUCT_BOOT_SCRIPT)).not.toThrow();
+    expect(document.documentElement.dataset.themePreference).toBe("light");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(document.documentElement.dataset.homeLayout).toBe("double");
+  });
+
+  it("retains an explicit theme when the layout read fails", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation((key) => {
+      if (key === "yoyi.theme-preference") return "dark";
+      throw new Error("blocked");
+    });
+
+    window.eval(PRODUCT_BOOT_SCRIPT);
+
+    expect(document.documentElement.dataset.themePreference).toBe("dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.dataset.homeLayout).toBe("double");
+  });
+
   it("falls back safely for invalid stored values", () => {
     vi.useFakeTimers();
     window.localStorage.setItem("yoyi.theme-preference", "sepia");
@@ -55,8 +100,8 @@ describe("Product Shell pre-hydration boot", () => {
 
     window.eval(PRODUCT_BOOT_SCRIPT);
 
-    expect(document.documentElement.dataset.themePreference).toBe("system");
-    expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
+    expect(document.documentElement.dataset.themePreference).toBe("light");
+    expect(document.documentElement.dataset.theme).toBe("light");
     expect(document.documentElement.dataset.homeLayout).toBe("double");
   });
 

@@ -630,6 +630,13 @@
   overflow-wrap: anywhere;
 }
 
+.postBody[data-feed-post-body-collapsed] .postBodyText {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 .postBodyStatus {
   display: flex;
   min-height: 44px;
