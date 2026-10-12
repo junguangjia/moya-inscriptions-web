@@ -149,11 +149,13 @@ const setup = (
     deviceClass: () => "phone",
     timers: timers.timers,
     metadata: absentMetadata,
+    onBackgroundPublished: vi.fn(),
   };
   const runtime = new PublishingRuntime(services);
   return {
     runtime,
     client,
+    services,
     uploads,
     transfers,
     preprocessors,
@@ -176,7 +178,354 @@ const content = (title: string): WorkDraftContent => ({
   coverCrop: null,
 });
 
+describe("background publication", () => {
+  const pick = async (t: ReturnType<typeof setup>) => {
+    t.signIn(ACCOUNT);
+    t.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+    await t.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+    expect(t.runtime.confirmStaging().ok).toBe(true);
+    await settle();
+    const draft: WorkDraftContent = {
+      ...content("frozen title"),
+      body: "frozen body",
+      visibility: "self",
+      items: t.runtime
+        .draftItems()
+        .map((item) => ({ ...item, edit: { rotation: 0, crop: null } })),
+    };
+    t.runtime.edit(draft);
+    return draft;
+  };
+  const receive = async (t: ReturnType<typeof setup>) => {
+    const id = t.runtime.manager()!.getSnapshot().items[0]!.itemId!;
+    t.transfers[0]!.starts.at(-1)!.callbacks.onSettled({
+      status: 200,
+      responseText: t.uploads.receive(id, "still"),
+      stalled: false,
+    });
+    await settle();
+    return id;
+  };
+  const ready = async (t: ReturnType<typeof setup>, id: string) => {
+    t.uploads.makeReady(id);
+    for (let i = 0; i < 4; i += 1) {
+      t.timers.fireAll();
+      await settle();
+    }
+  };
+
+  it("keeps uploading after the editor leaves and publishes one frozen intent only after authoritative readiness", async () => {
+    const t = setup();
+    const draft = await pick(t);
+    let mediaReady = false;
+    t.client.readiness.mockImplementation(async (_holder, current) => ({
+      ready: mediaReady,
+      pendingItemKeys: mediaReady ? [] : current.items.map((i) => i.key),
+      failedItemKeys: [],
+      editKeys: {},
+    }));
+    expect(t.runtime.queuePublication(draft)).toBe(true);
+    expect(t.runtime.queuePublication(draft)).toBe(true);
+    expect(await t.runtime.closeSession({ discard: false })).toBe("kept");
+    t.runtime.edit(content("late edit"));
+    (draft as { title: string }).title = "mutated caller";
+    expect(t.runtime.submission()?.store.get().status).toBe("queued");
+    expect(t.client.submit).not.toHaveBeenCalled();
+    const id = await receive(t);
+    await ready(t, id);
+    expect(t.client.submit).not.toHaveBeenCalled();
+    mediaReady = true;
+    await ready(t, id);
+    expect(t.client.submit).toHaveBeenCalledOnce();
+    expect(t.client.submit.mock.calls[0]![0]).toMatchObject({
+      content: {
+        title: "frozen title",
+        body: "frozen body",
+        visibility: "self",
+        items: [{ itemId: id }],
+      },
+    });
+    expect(t.services.onBackgroundPublished).toHaveBeenCalledOnce();
+    expect(t.runtime.store.get().session).toBeNull();
+    t.runtime.dispose();
+  });
+
+  it.each(["cancel", "discard"])(
+    "fences late media readiness after %s",
+    async (action) => {
+      const t = setup();
+      const draft = await pick(t);
+      expect(t.runtime.queuePublication(draft)).toBe(true);
+      if (action === "cancel") expect(t.runtime.cancelPublication()).toBe(true);
+      else
+        expect(await t.runtime.closeSession({ discard: true })).toBe("ended");
+      if (action === "cancel") {
+        const id = await receive(t);
+        await ready(t, id);
+        expect(t.runtime.store.get().session).not.toBeNull();
+      }
+      t.timers.fireAll();
+      await settle();
+      expect(t.client.submit).not.toHaveBeenCalled();
+      expect(t.services.onBackgroundPublished).not.toHaveBeenCalled();
+      t.runtime.dispose();
+    },
+  );
+
+  it("pauses queued publication across accounts until the original author explicitly continues", async () => {
+    const t = setup();
+    const draft = await pick(t);
+    t.runtime.queuePublication(draft);
+    t.signIn(OTHER_ACCOUNT);
+    t.timers.fireAll();
+    await settle();
+    expect(t.client.submit).not.toHaveBeenCalled();
+    t.signIn(ACCOUNT);
+    expect(t.runtime.store.get().publicationPaused).toBe(true);
+    await t.runtime.continuePublication();
+    const id = await receive(t);
+    await ready(t, id);
+    expect(t.client.submit).toHaveBeenCalledOnce();
+    t.runtime.dispose();
+  });
+
+  it("does not send after an account change while the holder is being created", async () => {
+    const t = setup();
+    t.signIn(ACCOUNT);
+    t.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+    let release!: (
+      value: Awaited<ReturnType<typeof t.client.createSession>>,
+    ) => void;
+    t.client.createSession.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    t.runtime.queuePublication(content("title"));
+    await settle();
+    t.signIn(OTHER_ACCOUNT);
+    release({
+      id: SESSION_ID,
+      state: "active",
+      workId: null,
+      leaseExpiresAt: stamp,
+      createdAt: stamp,
+    });
+    await settle();
+    expect(t.client.submit).not.toHaveBeenCalled();
+    t.signIn(ACCOUNT);
+    await t.runtime.continuePublication();
+    await settle();
+    expect(t.client.submit).toHaveBeenCalledOnce();
+    t.runtime.dispose();
+  });
+
+  it("reacquires a missing holder on explicit resume after its earlier request failed under another account", async () => {
+    const t = setup();
+    t.signIn(ACCOUNT);
+    const draft: WorkDraftContent = {
+      ...content("ready photo"),
+      items: [
+        {
+          key: "existing",
+          itemId: `media-item-${"5".repeat(32)}`,
+          kind: "static",
+          qualityMode: "standard",
+          edit: { rotation: 0, crop: null },
+        },
+      ],
+    };
+    t.runtime.startSession({
+      target: { type: "new" },
+      saveMode: "unsaved",
+      content: draft,
+    });
+    let reject!: (error: Error) => void;
+    t.client.createSession.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    t.runtime.queuePublication(draft);
+    await settle();
+    t.signIn(OTHER_ACCOUNT);
+    reject(new Error("offline"));
+    await settle();
+    t.signIn(ACCOUNT);
+    await t.runtime.continuePublication();
+    for (let i = 0; i < 4; i += 1) {
+      t.timers.fireAll();
+      await settle();
+    }
+    expect(t.client.createSession).toHaveBeenCalledTimes(2);
+    expect(t.client.submit).toHaveBeenCalledOnce();
+    expect(t.client.submit.mock.calls[0]![0]).toMatchObject({
+      content: { title: "ready photo" },
+    });
+    t.runtime.dispose();
+  });
+
+  it("creates a holder for existing ready photos and rejects a late version adoption", async () => {
+    const t = setup();
+    t.signIn(ACCOUNT);
+    const draft = {
+      ...content("kept title"),
+      items: [
+        {
+          key: "existing",
+          itemId: `media-item-${"5".repeat(32)}`,
+          kind: "static" as const,
+          qualityMode: "standard" as const,
+          edit: { rotation: 0 as const, crop: null },
+        },
+      ],
+    };
+    t.runtime.startSession({
+      target: { type: "new" },
+      saveMode: "unsaved",
+      content: draft,
+    });
+    expect(t.runtime.queuePublication(draft)).toBe(true);
+    t.runtime.adoptDraft(
+      draftOf(content("old history")),
+      content("old history"),
+    );
+    for (let i = 0; i < 4; i += 1) {
+      await settle();
+      t.timers.fireAll();
+    }
+    await settle();
+    expect(t.client.createSession).toHaveBeenCalledOnce();
+    expect(t.client.submit).toHaveBeenCalledOnce();
+    expect(t.client.submit.mock.calls[0]![0]).toMatchObject({
+      content: { title: "kept title" },
+      holder: { sessionId: SESSION_ID },
+    });
+    t.runtime.dispose();
+  });
+
+  it("does not publish a terminal derivative failure and permits explicit cancellation", async () => {
+    const t = setup();
+    const draft = await pick(t);
+    t.client.readiness.mockResolvedValue({
+      ready: false,
+      pendingItemKeys: [],
+      failedItemKeys: draft.items.map((i) => i.key),
+      editKeys: {},
+    });
+    t.runtime.queuePublication(draft);
+    const id = await receive(t);
+    await ready(t, id);
+    expect(t.runtime.manager()!.getSnapshot().items[0]!.phase).toBe("ready");
+    expect(t.runtime.editReadiness()?.get().answered?.failedItemKeys.size).toBe(
+      1,
+    );
+    expect(t.client.submit).not.toHaveBeenCalled();
+    expect(t.runtime.cancelPublication()).toBe(true);
+    t.runtime.edit(content("editable again"));
+    t.runtime.dispose();
+  });
+
+  it("waits again after a definitive not-ready response with the same frozen request", async () => {
+    const t = setup();
+    const draft = await pick(t);
+    t.client.submit.mockResolvedValueOnce({
+      state: "not_ready",
+      itemKeys: draft.items.map((i) => i.key),
+    });
+    t.runtime.queuePublication(draft);
+    const id = await receive(t);
+    await ready(t, id);
+    expect(t.client.submit).toHaveBeenCalledTimes(2);
+    expect(t.client.submit.mock.calls[1]![0]).toEqual(
+      t.client.submit.mock.calls[0]![0],
+    );
+    t.runtime.dispose();
+  });
+
+  it("keeps an unknown outcome for explicit receipt reconciliation without resending", async () => {
+    const t = setup();
+    t.signIn(ACCOUNT);
+    t.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+    t.client.submit.mockRejectedValueOnce(clientError(0, "lost answer", true));
+    t.runtime.queuePublication(content("title"));
+    await settle();
+    expect(t.runtime.submission()?.store.get().status).toBe("unconfirmed");
+    expect(t.client.submissionReceipt).toHaveBeenCalledOnce();
+    expect(await t.runtime.closeSession({ discard: true })).toBe("kept");
+    await t.runtime.continuePublication();
+    t.timers.fireAll();
+    await settle();
+    expect(t.client.submit).toHaveBeenCalledOnce();
+    await t.runtime.submission()!.retry();
+    expect(t.client.submit.mock.calls[1]![0]).toEqual(
+      t.client.submit.mock.calls[0]![0],
+    );
+    expect(t.services.onBackgroundPublished).toHaveBeenCalledOnce();
+    t.runtime.dispose();
+  });
+});
+
 describe("publishing runtime", () => {
+  it.each(["heartbeat", "discard"])(
+    "clears an expired holder when selection cancellation happens during %s",
+    async (waiting) => {
+      const source = setup();
+      source.signIn(ACCOUNT);
+      source.runtime.startSession({
+        target: { type: "new" },
+        saveMode: "saved",
+      });
+      await source.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+      source.runtime.confirmStaging();
+      await settle();
+      const checkpoint = source.runtime.checkpoint()!;
+      expect(checkpoint.view.sessionId).toBe(SESSION_ID);
+      source.runtime.dispose();
+      const identify = vi.fn(identifyFiles);
+      const t = setup(identify);
+      t.signIn(ACCOUNT);
+      let release!: () => void;
+      if (waiting === "heartbeat")
+        t.client.heartbeatSession.mockImplementationOnce(
+          () =>
+            new Promise((_resolve, reject) => {
+              release = () =>
+                reject(Object.assign(new Error("expired"), { status: 404 }));
+            }),
+        );
+      else {
+        t.client.heartbeatSession.mockRejectedValueOnce(
+          Object.assign(new Error("expired"), { status: 404 }),
+        );
+        t.client.discardSession.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              release = () => resolve({ discarded: true });
+            }),
+        );
+      }
+      const restoration = t.runtime.restoreCheckpoint(checkpoint);
+      await settle();
+      t.runtime.cancelStaging();
+      release();
+      await restoration;
+      expect(t.runtime.store.get().session?.sessionId).toBeNull();
+      expect(t.client.discardSession).toHaveBeenCalledOnce();
+      expect(identify).not.toHaveBeenCalled();
+      await t.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+      t.runtime.confirmStaging();
+      await settle();
+      expect(t.client.createSession).toHaveBeenCalledOnce();
+      expect(t.client.registerItem.mock.calls.at(-1)![0]).toMatchObject({
+        holder: { sessionId: SESSION_ID },
+      });
+      t.runtime.dispose();
+    },
+  );
+
   it("keeps an otherwise empty session when leaving during photo identification", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {

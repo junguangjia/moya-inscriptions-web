@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -92,10 +93,19 @@ export const PublishingProvider = ({
   /** Replaced only in tests. */
   readonly services?: PublishingServices;
 }) => {
+  const { viewer, notify } = useAuthors();
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
   const [runtime] = useState(
-    () => new PublishingRuntime(services ?? browserServices()),
+    () =>
+      new PublishingRuntime({
+        ...(services ?? browserServices()),
+        onBackgroundPublished: () => {
+          services?.onBackgroundPublished?.();
+          notifyRef.current?.("作品已发布");
+        },
+      }),
   );
-  const { viewer } = useAuthors();
   const accountId = viewer?.id ?? null;
 
   useEffect(() => {
@@ -328,6 +338,30 @@ export const useGlobalUploadProgress = () => {
         autosave.status === "error" ||
         autosave.status === "conflict" ||
         autosave.status === "reconciling");
+    const publication = runtime.submission()?.store.get();
+    const editReadiness = runtime.editReadiness()?.get();
+    const background = snapshot.backgroundPublication === true;
+    const backgroundText = !background
+      ? null
+      : publication?.status === "failed" ||
+          publication?.status === "unconfirmed"
+        ? publication.message
+        : publication?.status === "reconciling"
+          ? "正在确认发布结果…"
+          : publication?.status === "submitting"
+            ? "正在发布…"
+            : snapshot.publicationPaused || uploads?.status === "paused"
+              ? "后台发布已暂停，返回继续"
+              : (editReadiness?.answered?.failedItemKeys.size ?? 0) > 0 ||
+                  (summary &&
+                    summary.failed +
+                      summary.needsChoice +
+                      summary.missingLocal >
+                      0)
+                ? "图片需要处理，返回继续"
+                : editReadiness?.status === "unavailable"
+                  ? "暂时无法确认图片状态，返回重试"
+                  : `${summary ? (readinessText(summary) ?? "正在确认图片状态") : "正在准备发布"}，完成后自动发布`;
     const bytesTotal = summary?.bytesTotal ?? 0;
     const unsavedSession =
       snapshot.session?.saveMode === "unsaved" &&
@@ -336,14 +370,21 @@ export const useGlobalUploadProgress = () => {
       target: snapshot.session?.target ?? null,
       // The same rule as leaving: the entry shows exactly while leaving would keep the session.
       active: snapshot.session !== null && runtime.hasUnfinishedWork(),
-      paused: uploads?.status === "paused",
+      paused:
+        uploads?.status === "paused" || snapshot.publicationPaused === true,
+      ...(background
+        ? {
+            backgroundPublication: true as const,
+            publicationStatus: publication?.status,
+          }
+        : {}),
       itemCount: summary?.total ?? 0,
       fraction:
         bytesTotal > 0
           ? Math.min(1, (summary?.bytesSent ?? 0) / bytesTotal)
           : 0,
       summary,
-      readiness: summary ? readinessText(summary) : null,
+      readiness: backgroundText ?? (summary ? readinessText(summary) : null),
       hasUnsavedChanges: unsaved || unsavedSession,
     };
   }, [runtime, snapshot, uploads, autosave]);
@@ -352,7 +393,7 @@ export const useGlobalUploadProgress = () => {
 /** Explicit submission with receipt reconciliation. */
 export const useSubmission = () => {
   const runtime = useRuntime();
-  useRuntimeSnapshot(runtime);
+  const snapshot = useRuntimeSnapshot(runtime);
   const controller = runtime.submission();
   const state = useStore<SubmissionState>(controller?.store ?? idleSubmission);
   const submit = useCallback(
@@ -363,10 +404,16 @@ export const useSubmission = () => {
     () => ({
       state,
       submit,
+      background: snapshot.backgroundPublication === true,
+      paused: snapshot.publicationPaused === true,
+      queue: (content: WorkSubmissionContent) =>
+        runtime.queuePublication(content),
+      cancelQueued: () => runtime.cancelPublication(),
+      continueQueued: () => runtime.continuePublication(),
       retry: () => controller?.retry() ?? Promise.resolve(state),
       checkAgain: () => controller?.checkAgain() ?? Promise.resolve(state),
       reset: () => controller?.reset(),
     }),
-    [controller, state, submit],
+    [controller, state, submit, snapshot, runtime],
   );
 };

@@ -231,6 +231,37 @@ afterEach(() => {
 });
 
 describe("CreateWorkAction", () => {
+  it("reopens the pending background publication and keeps a ring during final submission", () => {
+    author.viewer = { id: "synthetic-author" };
+    upload.current = {
+      session: sessionView({ type: "new" }),
+      autosave: null,
+      uploads: null,
+    };
+    progress.current = {
+      ...idle,
+      target: { type: "new" },
+      active: true,
+      backgroundPublication: true,
+      publicationStatus: "submitting",
+      readiness: "正在发布…",
+    };
+    const button = render();
+    expect(button.getAttribute("aria-label")).toBe(
+      "查看后台发布进度：正在发布…",
+    );
+    expect(button.getAttribute("data-create-work-publication")).toBe(
+      "submitting",
+    );
+    expect(
+      button
+        .querySelector("[data-create-work-ring]")
+        ?.getAttribute("data-create-work-ring"),
+    ).toBe("indeterminate");
+    act(() => button.click());
+    expect(shell.openEditor).toHaveBeenCalledWith({ type: "new" }, button);
+  });
+
   it("is one labelled plus action instead of the dock Search trigger", () => {
     const button = render();
     expect(button.getAttribute("aria-label")).toBe("发布作品");

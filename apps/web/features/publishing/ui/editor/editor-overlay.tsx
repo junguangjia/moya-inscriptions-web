@@ -28,6 +28,9 @@ import { detectDeviceClass } from "../../../shell/device-platform";
 import { requestIdentity } from "../../../shell/request-identity";
 import hostStyles from "../../publishing-entry.module.css";
 import { publishingClient } from "../../publishing-data";
+import { itemDerivation } from "../../edit-readiness";
+import { itemStatus } from "../media/media-status";
+import { needsAttention } from "../phone/photo-tile";
 import {
   useEditReadiness,
   useStagedItems,
@@ -554,7 +557,8 @@ const OtherSessionPanel = ({
             forgetLocalCopies: (draftId) =>
               latest.current.forgetDraftLocalCopies(draftId),
           });
-        registry.dispose(other);
+        if (result === "ended") registry.dispose(other);
+        else setError("发布结果正在确认，请回到那项编辑查看进度。");
       }
     } catch (error) {
       setError(
@@ -684,6 +688,8 @@ const EditorWorkspace = ({
   const upload = useUploadSession();
   const staged = useStagedItems();
   const submission = useSubmission();
+  const submissionRef = useRef(submission);
+  submissionRef.current = submission;
   const edits = useEditReadiness();
   const shell = useProductShell();
   const author = useAuthors();
@@ -783,6 +789,23 @@ const EditorWorkspace = ({
 
   const readiness = readinessOf(state, uploads, edits);
   const issues = localIssues(state);
+  const backgroundEligible =
+    layout === "phone" &&
+    state.kind === "new" &&
+    !stagingActive &&
+    (staging?.identifying ?? 0) === 0 &&
+    state.items.every((item) => {
+      const status = itemStatus(
+        uploads?.items.find((view) => view.key === item.key),
+        item.itemId === null ? undefined : state.serverItems[item.itemId],
+        {
+          loaded: state.phase === "ready",
+          item,
+          derivation: itemDerivation(item, state, edits),
+        },
+      );
+      return !needsAttention(status) && status.kind !== "removing";
+    });
   // The phone screens decode their own pictures; 预览作品页 needs them all.
   const mediaScope: EditorMediaScope =
     layout === "desktop" || previewOpen !== null ? "all" : "none";
@@ -879,6 +902,10 @@ const EditorWorkspace = ({
         ? (api.autosave?.draftId ?? api.session.draftId ?? null)
         : null;
     if (
+      (submissionRef.current.background &&
+        ["queued", "submitting", "reconciling", "unconfirmed"].includes(
+          submissionRef.current.state.status,
+        )) ||
       !deps.alive(store) ||
       deps.currentAccount() !== store.accountId ||
       api.accountId !== store.accountId ||
@@ -1221,6 +1248,14 @@ const EditorWorkspace = ({
   const submit = async () => {
     if (submitting) return;
     store.setFieldErrors({});
+    if (backgroundEligible) {
+      if (submission.queue(store.content())) {
+        submitIntentRef.current = false;
+        notifyRef.current("正在后台上传，完成后自动发布，可继续浏览");
+        leaveNow();
+      }
+      return;
+    }
     submitIntentRef.current = true;
     setSubmitting(true);
     try {
@@ -1236,12 +1271,14 @@ const EditorWorkspace = ({
   useEffect(() => {
     // Each result is handled once, and only for a submit made in this editor
     // (a receipt of an earlier session never navigates anywhere).
-    if (
-      !submitIntentRef.current ||
-      handledSubmission.current === submissionState
-    )
-      return;
+    if (submission.background && submissionState.status === "failed") {
+      const field = failureField(submissionState.code);
+      if (store.get().fieldErrors[field] !== submissionState.message)
+        store.setFieldErrors({ [field]: submissionState.message });
+    }
+    if (handledSubmission.current === submissionState) return;
     handledSubmission.current = submissionState;
+    if (!submitIntentRef.current) return;
     if (submissionState.status === "confirmed") {
       submitIntentRef.current = false;
       leavingRef.current = true;
@@ -1261,7 +1298,14 @@ const EditorWorkspace = ({
       // again; the sheet names the count (no field error).
       submitIntentRef.current = false;
     }
-  }, [controls, notify, registry, store, submissionState]);
+  }, [
+    controls,
+    notify,
+    registry,
+    store,
+    submissionState,
+    submission.background,
+  ]);
 
   const goToField = (field: EditorField) => {
     pendingFocusRef.current = field;
@@ -1539,6 +1583,7 @@ const EditorWorkspace = ({
     onSubmit: () => void submit(),
     readiness,
     resolving: submitting,
+    background: backgroundEligible,
     state,
     submission: submissionState,
     unconfirmedFiles:
@@ -1546,6 +1591,11 @@ const EditorWorkspace = ({
   };
   const confirmation = <ConfirmationSheet {...confirmationProps} />;
 
+  const publicationWaiting =
+    submission.background &&
+    ["queued", "submitting", "reconciling", "unconfirmed"].includes(
+      submissionState.status,
+    );
   const previewShown = previewOpen !== null && layout === "phone";
   const leaveHasDraft = draftId !== null;
 
@@ -1608,7 +1658,97 @@ const EditorWorkspace = ({
       <p aria-live="polite" className={styles.visuallyHidden} role="status">
         {announcement}
       </p>
-      <div className={styles.body} data-editor-body="" inert={previewShown}>
+      {publicationWaiting ? (
+        <section
+          className={styles.message}
+          data-editor-background-publication=""
+          aria-label="后台发布进度"
+        >
+          <h2>后台发布</h2>
+          <p role="status">
+            {submissionState.status === "unconfirmed"
+              ? submissionState.message
+              : submissionState.status === "reconciling"
+                ? "正在确认发布结果…"
+                : submissionState.status === "submitting"
+                  ? "正在发布…"
+                  : submission.paused || uploads?.status === "paused"
+                    ? "后台发布已暂停，请继续上传"
+                    : (edits?.answered?.failedItemKeys.size ?? 0) > 0 ||
+                        state.items.some((item) => {
+                          const status = itemStatus(
+                            uploads?.items.find(
+                              (view) => view.key === item.key,
+                            ),
+                            item.itemId === null
+                              ? undefined
+                              : state.serverItems[item.itemId],
+                            {
+                              loaded: state.phase === "ready",
+                              item,
+                              derivation: itemDerivation(item, state, edits),
+                            },
+                          );
+                          return (
+                            needsAttention(status) || status.kind === "removing"
+                          );
+                        })
+                      ? "图片需要处理，请取消自动发布后返回编辑处理"
+                      : edits?.status === "unavailable"
+                        ? "暂时无法确认图片状态，请重试确认"
+                        : "图片上传和处理完成后将自动发布"}
+          </p>
+          <div className={styles.actions}>
+            <button
+              className={styles.primaryButton}
+              type="button"
+              onClick={leaveNow}
+            >
+              继续浏览
+            </button>
+            {submissionState.status === "queued" ? (
+              <>
+                <button
+                  className={styles.inlineAction}
+                  type="button"
+                  onClick={() => void submission.continueQueued()}
+                >
+                  继续上传／重试确认
+                </button>
+                <button
+                  className={styles.inlineAction}
+                  type="button"
+                  onClick={() => submission.cancelQueued()}
+                >
+                  取消自动发布，继续编辑
+                </button>
+              </>
+            ) : submissionState.status === "unconfirmed" ? (
+              <>
+                <button
+                  className={styles.inlineAction}
+                  type="button"
+                  onClick={() => void submission.checkAgain()}
+                >
+                  再次确认
+                </button>
+                <button
+                  className={styles.inlineAction}
+                  type="button"
+                  onClick={() => void submission.retry()}
+                >
+                  重试发布
+                </button>
+              </>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+      <div
+        className={styles.body}
+        data-editor-body=""
+        inert={previewShown || publicationWaiting}
+      >
         {layout === "phone" ? (
           <PhoneFlow
             backButtonRef={controls.backButtonRef}

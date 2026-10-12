@@ -1,5 +1,9 @@
 import { createDraftAutosave, sameDraftContent } from "./draft-autosave";
-import { createEditReadinessTracker } from "./edit-readiness";
+import {
+  createEditReadinessTracker,
+  derivationSignatures,
+} from "./edit-readiness";
+import { publishingContentIssues } from "./publishing-data";
 import {
   addStaticPhotosToStaging,
   attachStagedCounterpart,
@@ -112,6 +116,8 @@ export interface PublishingServices {
   readonly transferConcurrency: number;
   readonly deviceClass: () => PublishingDeviceClass;
   readonly timers?: UploadTimers;
+  /** Background completion never navigates away from the reader's page. */
+  readonly onBackgroundPublished?: () => void;
   /** Private metadata extraction (exifr in browsers). */
   readonly metadata?: UploadManagerOptions["metadata"];
 }
@@ -198,6 +204,8 @@ export interface RuntimeSnapshot {
   readonly session: EditorSessionView | null;
   readonly staging: StagingView | null;
   readonly limits: PublishingLimits | null;
+  readonly backgroundPublication?: boolean;
+  readonly publicationPaused?: boolean;
 }
 
 /** Heartbeat for a temporary no-save session while its editor is open. */
@@ -261,6 +269,11 @@ interface SessionRecord {
   /** The item count last published for staging limits. */
   itemCount: number;
   pendingSelections: Set<symbol>;
+  backgroundPublication: boolean;
+  pendingPublication: {
+    readonly content: WorkDraftContent;
+    paused: boolean;
+  } | null;
 }
 
 const liveItemCount = (manager: UploadManager) =>
@@ -451,6 +464,8 @@ export class PublishingRuntime {
     for (const [id, account] of this.accounts)
       if (id !== accountId) {
         account.manager.pause("account");
+        if (account.session?.pendingPublication)
+          account.session.pendingPublication.paused = true;
         // A pending draft save of this account must never be sent under another one.
         account.session?.autosave?.suspend();
         this.stopHeartbeat(account.session);
@@ -527,6 +542,7 @@ export class PublishingRuntime {
           identities = next;
           this.syncManagedItems(account);
         }
+        this.pumpPublication(account, account.session);
       });
       void this.loadLimits(accountId);
     }
@@ -641,13 +657,24 @@ export class PublishingRuntime {
       unsubscribe: () => undefined,
       appendable: new Set(),
       pendingSelections: new Set(),
+      backgroundPublication: false,
+      pendingPublication: null,
       itemCount: (draft?.content ?? options.content)?.items.length ?? 0,
     };
     // However the confirmation arrives (answer, receipt, explicit retry), the session completes.
-    record.unsubscribe = submission.store.subscribe(() => {
+    const stopSubmission = submission.store.subscribe(() => {
       if (submission.store.get().status === "confirmed")
         this.completeSession(account, record);
+      else this.publish();
     });
+    const stopReadiness = record.readiness.store.subscribe(() => {
+      this.publish();
+      this.pumpPublication(account, record);
+    });
+    record.unsubscribe = () => {
+      stopSubmission();
+      stopReadiness();
+    };
     if (saveMode === "saved")
       record.autosave = this.createAutosave(account, record, draft);
     account.completed?.dispose();
@@ -668,7 +695,11 @@ export class PublishingRuntime {
   /** Reopens a saved draft's media on this browser (after `startSession`). */
   async restoreDraftMedia(draft: PublishingDraft): Promise<RestorePlanEntry[]> {
     const account = this.current();
-    if (!account?.session || account.session.view.saveMode !== "saved")
+    if (
+      !account?.session ||
+      account.session.pendingPublication ||
+      account.session.view.saveMode !== "saved"
+    )
       return [];
     return account.manager.restoreDraft(draft);
   }
@@ -700,11 +731,11 @@ export class PublishingRuntime {
     const session = account?.session;
     if (!view || !account || !session) return;
     const epoch = this.selectionEpoch;
-    const active = () =>
+    const owned = () =>
       this.current() === account &&
       account.session === session &&
-      !session.closed &&
-      this.selectionEpoch === epoch;
+      !session.closed;
+    const active = () => owned() && this.selectionEpoch === epoch;
     session.draftCreation = checkpoint.draftCreation ?? null;
     session.view = {
       ...session.view,
@@ -716,14 +747,15 @@ export class PublishingRuntime {
       try {
         await this.services.client.heartbeatSession(previous);
       } catch (error) {
-        if ((error as { status?: number })?.status === 404 && active()) {
+        if ((error as { status?: number })?.status === 404 && owned()) {
           // Release an expired holder before retrying its cancelled bytes; this
           // preserves any draft/revision references and releases old reservations.
           await this.services.client
             .discardSession(previous, { requestId: this.services.requestId() })
             .catch(() => undefined);
-          if (!active()) return;
+          if (!owned()) return;
           session.view = { ...session.view, sessionId: null };
+          this.publish();
         }
       }
       if (!active()) return;
@@ -848,7 +880,8 @@ export class PublishingRuntime {
   edit(content: WorkDraftContent): void {
     const account = this.current();
     const session = account?.session;
-    if (!account || !session || session.closed) return;
+    if (!account || !session || session.closed || session.pendingPublication)
+      return;
     for (const item of content.items) session.appendable.delete(item.key);
     const merged = withManagedItems(
       content,
@@ -872,7 +905,8 @@ export class PublishingRuntime {
   adoptDraft(draft: PublishingDraft, content: WorkDraftContent): void {
     const account = this.current();
     const session = account?.session;
-    if (!account || !session || session.closed) return;
+    if (!account || !session || session.closed || session.pendingPublication)
+      return;
     session.appendable.clear();
     const adopted = withManagedItems(content, account.manager.draftItems());
     session.latest = adopted;
@@ -1021,10 +1055,17 @@ export class PublishingRuntime {
     const account = this.current();
     const session = account?.session;
     if (!account || !session || session.closed) return "none";
-    if (session.submitting) return "kept";
+    if (
+      session.submitting ||
+      ["submitting", "reconciling", "unconfirmed"].includes(
+        session.submission.store.get().status,
+      )
+    )
+      return "kept";
     if (!options.discard) {
       if (this.leaveWouldLoseWork(account, session)) return "kept";
     } else {
+      this.cancelPublication();
       this.cancelSelectionReads();
       session.pendingSelections.clear();
       session.pendingFiles.clear();
@@ -1108,6 +1149,8 @@ export class PublishingRuntime {
           )
         : uploads.unfinished;
     return (
+      session.backgroundPublication ||
+      session.submitting ||
       session.pendingSelections.size > 0 ||
       unfinished ||
       (session.autosave?.hasUnsavedChanges() ?? false) ||
@@ -1123,6 +1166,7 @@ export class PublishingRuntime {
   ): void {
     if (this.current() === account && account.session === session)
       this.cancelSelectionReads();
+    session.pendingPublication = null;
     session.closed = true;
     if (
       session.view.sessionId !== null &&
@@ -1165,7 +1209,14 @@ export class PublishingRuntime {
         .createRecovery()
         ?.clearDraft(account.manager.accountId, draftId)
         .catch(() => undefined);
+    const background = session.backgroundPublication;
     this.endSession(account, session, true);
+    if (
+      background &&
+      this.current() === account &&
+      this.services.currentAccount() === account.manager.accountId
+    )
+      this.services.onBackgroundPublished?.();
   }
 
   // -- staging -------------------------------------------------------------
@@ -1185,7 +1236,8 @@ export class PublishingRuntime {
     },
   ): Promise<void> {
     const account = this.current();
-    if (!account || files.length === 0) return Promise.resolve();
+    if (!account || files.length === 0 || account.session?.pendingPublication)
+      return Promise.resolve();
     const session = account.session;
     const epoch = this.selectionEpoch;
     const active = () =>
@@ -1323,6 +1375,199 @@ export class PublishingRuntime {
 
   // -- submission ----------------------------------------------------------
 
+  /** Accepts one phone Publish intent immediately; media and submission outlive the editor. */
+  queuePublication(content: WorkSubmissionContent): boolean {
+    const account = this.current();
+    const session = account?.session;
+    if (
+      !account ||
+      !session ||
+      session.closed ||
+      this.services.currentAccount() !== account.manager.accountId
+    )
+      return false;
+    if (session.pendingPublication) return true;
+    const status = session.submission.store.get().status;
+    if (
+      session.submitting ||
+      !["idle", "failed", "not_ready"].includes(status) ||
+      session.pendingSelections.size > 0 ||
+      (account.staging?.entries.length ?? 0) > 0 ||
+      publishingContentIssues(
+        {
+          title: content.title,
+          body: content.body,
+          itemCount: content.items.length,
+        },
+        { maxItems: account.limits?.maxItems ?? DEFAULT_MAX_ITEMS },
+      ).length > 0
+    )
+      return false;
+    this.edit(content);
+    session.pendingPublication = {
+      content: structuredClone(content),
+      paused: false,
+    };
+    session.backgroundPublication = true;
+    session.submission.queue();
+    session.readiness.markPending(content.items.map((item) => item.key));
+    this.publish();
+    this.pumpPublication(account, session);
+    this.preparePublicationHolder(account, session);
+    return true;
+  }
+
+  /** Acquisition is shared by the initial intent and an explicit account resume. */
+  private preparePublicationHolder(
+    account: AccountRuntime,
+    session: SessionRecord,
+  ): void {
+    const pending = session.pendingPublication;
+    if (
+      !pending ||
+      pending.paused ||
+      session.closed ||
+      pending.content.items.length === 0 ||
+      this.existingHolder(session) !== null
+    )
+      return;
+    void this.resolveHolder(account, session, pending.content).then(
+      () => {
+        if (
+          this.current() === account &&
+          account.session === session &&
+          !session.closed &&
+          session.pendingPublication === pending &&
+          !pending.paused
+        )
+          session.readiness.markPending(
+            pending.content.items.map((item) => item.key),
+          );
+      },
+      () => {
+        if (
+          this.current() === account &&
+          account.session === session &&
+          !session.closed &&
+          session.pendingPublication === pending &&
+          !pending.paused
+        ) {
+          session.pendingPublication = null;
+          session.submission.reportFailure({
+            code: null,
+            message: "暂时无法准备发布，请重试",
+          });
+          this.publish();
+        }
+      },
+    );
+  }
+
+  /** Cancels only an intent which has not been sent; leaves the album and uploads intact. */
+  cancelPublication(): boolean {
+    const session = this.current()?.session;
+    if (
+      !session?.pendingPublication ||
+      session.submitting ||
+      session.submission.store.get().status !== "queued"
+    )
+      return false;
+    session.pendingPublication = null;
+    session.backgroundPublication = false;
+    session.submission.reset();
+    this.publish();
+    return true;
+  }
+
+  /** Explicit resume after account/offline interruption or a readiness failure. */
+  async continuePublication(): Promise<void> {
+    const account = this.current();
+    const session = account?.session;
+    const pending = session?.pendingPublication;
+    if (
+      !account ||
+      !session ||
+      !pending ||
+      this.services.currentAccount() !== account.manager.accountId
+    )
+      return;
+    pending.paused = false;
+    await account.manager.continueUploads();
+    if (
+      this.current() !== account ||
+      account.session !== session ||
+      session.pendingPublication !== pending
+    )
+      return;
+    this.preparePublicationHolder(account, session);
+    session.readiness.markPending(
+      pending.content.items.map((item) => item.key),
+    );
+    this.publish();
+    this.pumpPublication(account, session);
+  }
+
+  private pumpPublication(
+    account: AccountRuntime,
+    session: SessionRecord | null,
+  ): void {
+    const pending = session?.pendingPublication;
+    if (
+      !session ||
+      !pending ||
+      pending.paused ||
+      session.closed ||
+      session.submitting ||
+      this.current() !== account ||
+      account.session !== session ||
+      this.services.currentAccount() !== account.manager.accountId ||
+      account.manager.getSnapshot().status !== "active" ||
+      session.submission.store.get().status !== "queued"
+    )
+      return;
+    const managed = account.manager.getSnapshot().items;
+    if (
+      pending.content.items.some((item) => {
+        const view = managed.find((candidate) => candidate.key === item.key);
+        return (
+          view !== undefined &&
+          (view.phase !== "ready" || view.qualityMode !== item.qualityMode)
+        );
+      })
+    )
+      return;
+    const current = withManagedItems(
+      pending.content,
+      account.manager.draftItems(),
+    );
+    if (current.items.some((item) => item.itemId === null)) return;
+    if (current.items.length > 0) {
+      const readiness = session.readiness.store.get();
+      if (
+        readiness.status !== "ready" ||
+        !readiness.answered?.ready ||
+        JSON.stringify(readiness.answered.signatures) !==
+          JSON.stringify(derivationSignatures(current))
+      )
+        return;
+    }
+    void this.submit(current).then((result) => {
+      if (
+        account.session !== session ||
+        session.closed ||
+        session.pendingPublication !== pending
+      )
+        return;
+      if (result?.status === "not_ready") {
+        session.submission.waitForReadiness();
+        session.readiness.markPending(result.itemKeys);
+      } else if (result?.status !== "queued") {
+        session.pendingPublication = null;
+        this.publish();
+      }
+    });
+  }
+
   /** One explicit submit of the current content (idempotent by its request identity). */
   async submit(
     content: WorkSubmissionContent,
@@ -1333,9 +1578,14 @@ export class PublishingRuntime {
     const controller = session.submission;
     if (session.submitting) return controller.store.get();
     const status = controller.store.get().status;
-    if (status !== "idle" && status !== "failed" && status !== "not_ready")
+    if (
+      status !== "idle" &&
+      status !== "queued" &&
+      status !== "failed" &&
+      status !== "not_ready"
+    )
       return controller.store.get();
-    controller.reset();
+    if (status !== "queued") controller.reset();
     // Registration may have assigned ids the editor content does not carry yet.
     const current = withManagedItems(content, account.manager.draftItems());
     let holder: PublishingHolder;
@@ -1358,7 +1608,12 @@ export class PublishingRuntime {
             : "暂时无法发布，请重试",
       });
     }
-    if (session.closed) {
+    if (
+      session.closed ||
+      this.current() !== account ||
+      account.session !== session ||
+      this.services.currentAccount() !== account.manager.accountId
+    ) {
       session.submitting = false;
       return controller.store.get();
     }
@@ -1559,7 +1814,8 @@ export class PublishingRuntime {
     session: SessionRecord,
   ): WorkDraftContent | null {
     if (session.closed) return null;
-    const content = albumContent(session);
+    const content =
+      session.pendingPublication?.content ?? albumContent(session);
     return content === null
       ? null
       : this.contentWithItems(account, session, content);
@@ -1593,7 +1849,8 @@ export class PublishingRuntime {
     )
       return null;
     const holder = this.existingHolder(session);
-    if (holder === null) return null;
+    if (holder === null || content.items.some((item) => item.itemId === null))
+      return null;
     return this.services.client.readiness(holder, content);
   }
 
@@ -1725,6 +1982,8 @@ export class PublishingRuntime {
               }
             : null,
       limits: account?.limits ?? null,
+      backgroundPublication: account?.session?.backgroundPublication ?? false,
+      publicationPaused: account?.session?.pendingPublication?.paused ?? false,
     };
   }
 
