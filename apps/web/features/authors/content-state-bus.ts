@@ -12,6 +12,7 @@ import { contentKey } from "./author-context";
  * guessed locally (a comment awaiting approval is not public).
  */
 const counts = new Map<string, number>();
+const revisions = new Map<string, number>();
 const listeners = new Set<() => void>();
 let version = 0;
 
@@ -25,14 +26,24 @@ const readVersion = () => version;
 const keyOf = (viewerId: string | null, target: ContentIdentity) =>
   `${viewerId ?? "guest"}:${contentKey(target)}`;
 
+/** Capture before a state read so a later discussion publication wins. */
+export const commentCountRevision = (
+  viewerId: string | null,
+  target: ContentIdentity,
+): number => revisions.get(keyOf(viewerId, target)) ?? 0;
+
 /** Records the comment total `viewerId` received for a discussed content. */
 export const publishCommentCount = (
   viewerId: string | null,
   target: DiscussionTarget,
   count: number,
+  expectedRevision?: number,
 ): void => {
   if (target.type === "article") return;
   const key = keyOf(viewerId, target);
+  const revision = revisions.get(key) ?? 0;
+  if (expectedRevision !== undefined && expectedRevision !== revision) return;
+  revisions.set(key, revision + 1);
   if (counts.get(key) === count) return;
   counts.set(key, count);
   version++;

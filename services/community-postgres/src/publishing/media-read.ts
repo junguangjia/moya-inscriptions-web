@@ -373,20 +373,32 @@ export interface RevisionGalleryEntry {
   readonly placeholderColor?: string;
 }
 
-/** A revision's first gallery entries and the number of its media items. */
+/** A revision's first gallery entries and the number of its shown media items. */
 export interface RevisionGalleryView {
   readonly entries: readonly RevisionGalleryEntry[];
-  /** Every item of the revision; `entries` may stop short of it. */
+  /** Every shown item of the revision; `entries` may stop short of it. */
   readonly total: number;
 }
 
+// JSON numbers become doubles on read. Guard their conversion, including
+// overflow, before matching dimension()'s positive-integer rule.
+const doubleOverflow = ((1n << 1024n) - (1n << 970n)).toString();
+const presentationDimensionSql = (field: "width" | "height"): string => {
+  const value = `(i.presentation->>'${field}')`;
+  return `CASE WHEN jsonb_typeof(i.presentation->'${field}')='number' THEN
+    CASE WHEN ${value}::numeric>=0.5 AND ${value}::numeric<${doubleOverflow} THEN
+      CASE WHEN trunc(${value}::double precision)=${value}::double precision
+        THEN ${value}::double precision END
+    END END`;
+};
+
 /**
  * The card gallery of several revisions in one statement (a page of cards):
- * the first `maximum` items of each revision by position, shown exactly as
+ * the first `maximum` shown items of each revision by position, shown exactly as
  * `revisionMedia` shows them (the unedited legacy PNG, else the display
  * derivative of the revision edit) but with the card candidates of that
  * framing and the Live flag instead of motion, plus each revision's item
- * total. The window runs over revision items only, so candidates are read
+ * total. The window runs over eligible items, so candidates are read
  * for at most `maximum` rows per revision. A revision without shown media is
  * absent from the map.
  */
@@ -399,24 +411,33 @@ export const revisionsGallery = async (
   if (revisionIds.length === 0) return views;
   const rows = (
     await db.query<RevisionMediaRow & { revision_id: string; total: string }>(
-      `SELECT ri.revision_id,ri.item_id,ri.total,i.kind,i.state,i.legacy_media_id,um.width AS legacy_width,um.height AS legacy_height,
-        i.presentation,k.display_key,d.width AS display_width,d.height AS display_height,
-        ri.item_id IS NOT DISTINCT FROM r.cover_item_id AS is_cover,i.placeholder_color,
-        ${revisionItemRenditionsSql("ri", "r", "k.display_key")} AS renditions
-      FROM (
-        SELECT x.* FROM (
-          SELECT ri.*,
-            row_number() OVER (PARTITION BY ri.revision_id ORDER BY ri.position) AS rn,
-            count(*) OVER (PARTITION BY ri.revision_id) AS total
-          FROM community.work_revision_items ri
-          WHERE ri.revision_id=ANY($1::text[])
-        ) x WHERE x.rn<=$2
-      ) ri
-      JOIN community.work_revisions r ON r.id=ri.revision_id
-      JOIN community.media_items i ON i.id=ri.item_id
-      CROSS JOIN LATERAL (SELECT community.media_edit_key(ri.edit,NULL) AS display_key) k
-      LEFT JOIN community.user_media um ON um.id=i.legacy_media_id AND um.owner_id=i.owner_id
-      LEFT JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key=k.display_key AND d.state='ready'
+      `WITH shown AS (
+        SELECT ri.*,i.kind,i.state,i.legacy_media_id,um.width AS legacy_width,um.height AS legacy_height,
+          i.presentation,k.display_key,d.width AS display_width,d.height AS display_height,i.placeholder_color
+        FROM community.work_revision_items ri
+        JOIN community.media_items i ON i.id=ri.item_id
+        CROSS JOIN LATERAL (SELECT community.media_edit_key(ri.edit,NULL) AS display_key) k
+        LEFT JOIN community.user_media um ON um.id=i.legacy_media_id AND um.owner_id=i.owner_id
+        LEFT JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key=k.display_key AND d.state='ready'
+        WHERE ri.revision_id=ANY($1::text[]) AND CASE
+          WHEN i.legacy_media_id IS NOT NULL AND k.display_key='base'
+            THEN um.width>0 AND um.height>0
+          ELSE i.state='ready'
+            AND COALESCE(CASE WHEN d.width>0 THEN d.width END,${presentationDimensionSql("width")}) IS NOT NULL
+            AND COALESCE(CASE WHEN d.height>0 THEN d.height END,${presentationDimensionSql("height")}) IS NOT NULL
+          END
+      ), ranked AS (
+        SELECT shown.*,
+          row_number() OVER (PARTITION BY revision_id ORDER BY position) AS rn,
+          count(*) OVER (PARTITION BY revision_id) AS total
+        FROM shown
+      )
+      SELECT ri.revision_id,ri.item_id,ri.total,ri.kind,ri.state,ri.legacy_media_id,ri.legacy_width,ri.legacy_height,
+        ri.presentation,ri.display_key,ri.display_width,ri.display_height,
+        ri.item_id IS NOT DISTINCT FROM r.cover_item_id AS is_cover,ri.placeholder_color,
+        ${revisionItemRenditionsSql("ri", "r", "ri.display_key")} AS renditions
+      FROM ranked ri JOIN community.work_revisions r ON r.id=ri.revision_id
+      WHERE ri.rn<=$2
       ORDER BY ri.revision_id,ri.position`,
       [[...revisionIds], maximum],
     )

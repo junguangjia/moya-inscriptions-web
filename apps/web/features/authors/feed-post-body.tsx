@@ -1,10 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { authorClient } from "./author-data";
+import { useOptionalAuthors } from "./author-context";
 import styles from "../home/home-screen.module.css";
-
-/** Full bodies already read in this document, by work id. */
-const bodies = new Map<string, string>();
 
 type BodyState =
   | { readonly state: "loading" }
@@ -29,38 +27,57 @@ export const FeedPostBody = ({
   readonly id: string;
   readonly preview?: string | undefined;
 }) => {
-  const [body, setBody] = useState<BodyState>(() => {
-    const cached = bodies.get(workId);
-    return cached === undefined
+  const author = useOptionalAuthors();
+  const cache = author?.cache;
+  const key = `work-body:${author?.viewer?.id ?? "guest"}:${workId}`;
+  const checking = author?.checking ?? false;
+  const sessionError = author?.sessionError ?? false;
+  const [snapshot, setSnapshot] = useState<{ key: string; body: BodyState }>(
+    () => {
+      const cached = cache?.get(key);
+      return {
+        key,
+        body:
+          typeof cached === "string"
+            ? { state: "loaded", text: cached }
+            : { state: "loading" },
+      };
+    },
+  );
+  // Hide the old identity's snapshot in the render that changes identity,
+  // before the effect starts its replacement read.
+  const body: BodyState = sessionError
+    ? { state: "error" }
+    : checking || snapshot.key !== key
       ? { state: "loading" }
-      : { state: "loaded", text: cached };
-  });
+      : snapshot.body;
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (!expanded) return undefined;
-    const cached = bodies.get(workId);
-    if (cached !== undefined) {
-      setBody({ state: "loaded", text: cached });
+    if (!expanded || checking || sessionError) return undefined;
+    const cached = cache?.get(key);
+    if (typeof cached === "string") {
+      setSnapshot({ key, body: { state: "loaded", text: cached } });
       return undefined;
     }
     const controller = new AbortController();
-    setBody({ state: "loading" });
+    setSnapshot({ key, body: { state: "loading" } });
     authorClient
       .work(workId, controller.signal)
       .then((work) => {
         if (controller.signal.aborted) return;
         if (!work.available) {
-          setBody({ state: "error" });
+          setSnapshot({ key, body: { state: "error" } });
           return;
         }
-        bodies.set(workId, work.text);
-        setBody({ state: "loaded", text: work.text });
+        cache?.set(key, work.text);
+        setSnapshot({ key, body: { state: "loaded", text: work.text } });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setBody({ state: "error" });
+        if (!controller.signal.aborted)
+          setSnapshot({ key, body: { state: "error" } });
       });
     return () => controller.abort();
-  }, [expanded, workId, attempt]);
+  }, [expanded, workId, attempt, key, cache, checking, sessionError]);
   if (!expanded) return null;
   return (
     <div

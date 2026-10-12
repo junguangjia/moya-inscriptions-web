@@ -7,6 +7,7 @@ import { quickActionContentKey } from "../quick-actions/quick-action-types";
 import { useAuthors, shareContent, contentKey } from "./author-context";
 import { authorClient } from "./author-data";
 import {
+  commentCountRevision,
   publishCommentCount,
   usePublishedCommentCount,
 } from "./content-state-bus";
@@ -62,6 +63,7 @@ export const useContentActions = (
       }));
       if (!includeGuestCounts) return;
     }
+    const countRevision = commentCountRevision(viewerId, target);
     void authorClient
       .state(target)
       .then((value) => {
@@ -72,7 +74,12 @@ export const useContentActions = (
             favorite: author.viewer ? value.favorite : guestFavorite,
             known: true,
           });
-          publishCommentCount(viewerId, target, value.commentCount);
+          publishCommentCount(
+            viewerId,
+            target,
+            value.commentCount,
+            countRevision,
+          );
         }
       })
       .catch(() => {
@@ -121,11 +128,17 @@ export const useContentActions = (
         );
       if (saved && author.viewer && scope.current === run) {
         const read = ++readEpoch.current;
+        const countRevision = commentCountRevision(viewerId, target);
         try {
           const confirmed = await authorClient.state(target);
           if (scope.current === run && read === readEpoch.current) {
             setSnapshot({ key: run, ...confirmed, known: true });
-            publishCommentCount(viewerId, target, confirmed.commentCount);
+            publishCommentCount(
+              viewerId,
+              target,
+              confirmed.commentCount,
+              countRevision,
+            );
           }
         } catch {
           // The toggle is committed, but an unknown aggregate is not a guessed +1.
