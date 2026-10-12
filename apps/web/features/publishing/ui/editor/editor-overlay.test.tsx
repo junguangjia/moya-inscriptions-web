@@ -1088,9 +1088,9 @@ describe("Publishing editor", () => {
       );
       await goToPublish();
       expect(query("[data-editor-readiness]")?.textContent).toBe(
-        "1 项正在处理。全部就绪或移除后才能发布",
+        "图片将在后台上传和处理，完成后自动发布，可继续浏览",
       );
-      expect(submitBlocked()).toBe(true);
+      expect(submitBlocked()).toBe(false);
       // The debounced check asks with the draft as holder; the answer still names the item.
       await fireTimers(harness);
       expect(fn("readiness")).toHaveBeenCalledTimes(1);
@@ -1099,7 +1099,7 @@ describe("Publishing editor", () => {
         items: [{ key: "turned", edit: { rotation: 90, crop: null } }],
       });
       expect(query("[data-editor-readiness]")?.textContent).toBe(
-        "1 项正在处理。全部就绪或移除后才能发布",
+        "图片将在后台上传和处理，完成后自动发布，可继续浏览",
       );
       // The poll (≤ 5 s) learns the derivatives exist.
       expect(
@@ -1119,7 +1119,7 @@ describe("Publishing editor", () => {
       expect(submitBlocked()).toBe(false);
     });
 
-    it("shows the pending count of a not_ready submission and keeps asking instead of a bare error", async () => {
+    it("continues a background intent after a definitive not-ready response without changing its identity", async () => {
       const harness = await renderEditor(
         { type: "draft", id: DRAFT_ID },
         () => {
@@ -1131,41 +1131,18 @@ describe("Publishing editor", () => {
         },
       );
       await goToPublish();
-      expect(query("[data-editor-readiness]")?.textContent).toBe(
-        "全部 1 项已就绪",
-      );
       await click(query("[data-editor-submit]"));
-      expect(fn("submit")).toHaveBeenCalledTimes(1);
-      expect(query("[data-editor-submission='not_ready']")?.textContent).toBe(
-        "1 项正在处理，完成后可再发布",
-      );
-      expect(query("[data-editor-readiness]")?.textContent).toBe(
-        "1 项正在处理。全部就绪或移除后才能发布",
-      );
-      expect(query("[data-editor-issues]")).toBeNull();
-      expect(submitBlocked()).toBe(true);
-      // The account is asked again; once ready the sheet lets the author publish.
-      fn("readiness").mockResolvedValueOnce({
-        ready: true,
-        pendingItemKeys: [],
-        failedItemKeys: [],
-        editKeys: {},
-      });
+      expect(harness.controls.close).toHaveBeenCalledOnce();
+      await leaveOverlay(harness);
       await fireTimers(harness);
-      expect(fn("readiness")).toHaveBeenCalledTimes(1);
-      expect(query("[data-editor-readiness]")?.textContent).toBe(
-        "全部 1 项已就绪",
-      );
-      expect(query("[data-editor-submission='not_ready']")?.textContent).toBe(
-        "",
-      );
-      expect(submitBlocked()).toBe(false);
-      await click(query("[data-editor-submit]"));
+      expect(fn("submit")).toHaveBeenCalledOnce();
+      await fireTimers(harness);
       expect(fn("submit")).toHaveBeenCalledTimes(2);
-      expect(harness.controls.completeWith).toHaveBeenCalledWith({
-        type: "work",
-        id: WORK_ID,
-      });
+      expect(fn("submit").mock.calls[1]![0]).toEqual(
+        fn("submit").mock.calls[0]![0],
+      );
+      expect(harness.controls.completeWith).not.toHaveBeenCalled();
+      expect(author.notify).toHaveBeenCalledWith("作品已发布");
     });
 
     it("says nothing when a draft opened from 草稿箱 leaves from 编辑: its photos are already there", async () => {
@@ -1196,18 +1173,22 @@ describe("Publishing editor", () => {
     });
 
     it("shows the editor's notices on 编辑 (a media field failure)", async () => {
-      await renderEditor({ type: "draft", id: DRAFT_ID }, () => {
-        fn("draft").mockResolvedValue(savedDraft(0));
-        fn("submit").mockRejectedValueOnce(
-          Object.assign(new Error("不支持的文件类型"), {
-            status: 422,
-            code: "unsupported_type",
-            outcomeUnknown: false,
-          }),
-        );
-      });
+      const harness = await renderEditor(
+        { type: "draft", id: DRAFT_ID },
+        () => {
+          fn("draft").mockResolvedValue(savedDraft(0));
+          fn("submit").mockRejectedValueOnce(
+            Object.assign(new Error("不支持的文件类型"), {
+              status: 422,
+              code: "unsupported_type",
+              outcomeUnknown: false,
+            }),
+          );
+        },
+      );
       await goToPublish();
       await click(query("[data-editor-submit]"));
+      await fireTimers(harness);
       await click(buttonByText("前往查看"));
       expect(screen()).toBe("edit");
       expect(query("[data-edit-notices]")?.textContent).toContain(
@@ -1218,63 +1199,255 @@ describe("Publishing editor", () => {
     });
   });
 
-  it("submits once and opens the submitted work on success", async () => {
-    const harness = await renderEditor({ type: "new" });
-    await goToPublish();
-    await type(titleInput(), "新作");
-    // 可见范围 starts at 公开 for a new work.
-    expect(
-      query('[data-publish-choice="public"]')?.getAttribute("aria-checked"),
-    ).toBe("true");
+  it("desktop Publish still confirms and opens the submitted work", async () => {
+    const h = await renderEditor({ type: "new" });
+    await setViewport("pc", 1280);
+    await h.rerender();
+    await type(titleInput(), "桌面作品");
+    await click(query("[data-editor-open-confirmation]"));
     await click(query("[data-editor-submit]"));
-    expect(fn("submit")).toHaveBeenCalledTimes(1);
-    expect(fn("submit").mock.calls[0]![0]).toMatchObject({
-      holder: { sessionId: SESSION_ID },
-      content: { title: "新作", visibility: "public" },
-      baseRevisionId: null,
-    });
-    expect(harness.controls.completeWith).toHaveBeenCalledWith({
+    expect(h.controls.completeWith).toHaveBeenCalledWith({
       type: "work",
       id: WORK_ID,
     });
     expect(author.notify).toHaveBeenCalledWith("作品已提交");
   });
 
-  it("shows 正在确认结果… for a lost answer and completes on the receipt", async () => {
+  it("phone Publish closes immediately and confirms without opening a work page", async () => {
     const harness = await renderEditor({ type: "new" });
-    let answerReceipt: (value: unknown) => void = () => undefined;
+    await goToPublish();
+    await type(titleInput(), "新作");
+    await click(query("[data-editor-submit]"));
+    expect(harness.controls.close).toHaveBeenCalledOnce();
+    await leaveOverlay(harness);
+    expect(fn("submit")).toHaveBeenCalledOnce();
+    expect(fn("submit").mock.calls[0]![0]).toMatchObject({
+      holder: { sessionId: SESSION_ID },
+      content: { title: "新作", visibility: "public" },
+      baseRevisionId: null,
+    });
+    expect(harness.controls.completeWith).not.toHaveBeenCalled();
+    expect(author.notify).toHaveBeenCalledWith("作品已发布");
+  });
+
+  it("phone Publish leaves while photos upload, preserves the frozen content and waits for processing", async () => {
+    const harness = await renderEditor({ type: "new" });
+    await act(async () => {
+      await staged.current!.stageFiles([fileOf(jpeg({}))], "picker");
+      staged.current!.confirm();
+    });
+    await flush();
+    await goToPublish();
+    await type(titleInput(), "后台照片");
+    await type(bodyInput(), "正文");
+    expect(submitBlocked()).toBe(false);
+    await click(query("[data-editor-submit]"));
+    expect(harness.controls.close).toHaveBeenCalledOnce();
+    expect(fn("submit")).not.toHaveBeenCalled();
+    await leaveOverlay(harness);
+    const itemId = await receiveStill(harness);
+    expect(fn("submit")).not.toHaveBeenCalled();
+    await act(async () => {
+      harness.uploads.makeReady(itemId);
+      harness.timers.fireAll();
+    });
+    await flush();
+    await act(async () => harness.timers.fireAll());
+    await flush();
+    expect(fn("submit")).toHaveBeenCalledOnce();
+    expect(fn("submit").mock.calls[0]![0]).toMatchObject({
+      content: { title: "后台照片", body: "正文", items: [{ itemId }] },
+    });
+    expect(harness.controls.completeWith).not.toHaveBeenCalled();
+    expect(author.notify).toHaveBeenCalledWith("作品已发布");
+  });
+
+  it("keeps a failed background upload and releases editing after cancelling its queued intent", async () => {
+    const harness = await renderEditor({ type: "new" });
+    await act(async () => {
+      await staged.current!.stageFiles([fileOf(jpeg({}))], "picker");
+      staged.current!.confirm();
+    });
+    await flush();
+    await goToPublish();
+    await type(titleInput(), "保留标题");
+    await click(query("[data-editor-submit]"));
+    await leaveOverlay(harness);
+    await act(async () =>
+      harness.transfer.starts[0]!.callbacks.onSettled({
+        status: 503,
+        responseText: "",
+        stalled: false,
+      }),
+    );
+    await flush();
+    expect(fn("submit")).not.toHaveBeenCalled();
+    await harness.show(true);
+    expect(
+      query("[data-editor-background-publication]")?.textContent,
+    ).toContain("图片需要处理");
+    expect(query("[data-editor-body]")?.hasAttribute("inert")).toBe(true);
+    await click(buttonByText("取消自动发布，继续编辑"));
+    expect(query("[data-editor-background-publication]")).toBeNull();
+    expect(query("[data-editor-body]")?.hasAttribute("inert")).toBe(false);
+    await goToPublish();
+    expect(titleInput()?.value).toBe("保留标题");
+    expect(submitBlocked()).toBe(true);
+  });
+
+  it("restores a Backend field failure which arrives after the phone editor has closed", async () => {
+    const h = await renderEditor({ type: "new" });
+    let reject!: (error: Error) => void;
+    fn("submit").mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    await goToPublish();
+    await type(titleInput(), "保留标题");
+    await click(query("[data-editor-submit]"));
+    await leaveOverlay(h);
+    await act(async () =>
+      reject(
+        Object.assign(new Error("标题不符合要求"), {
+          status: 422,
+          code: "title_too_long",
+          outcomeUnknown: false,
+        }),
+      ),
+    );
+    await flush();
+    await h.show(true);
+    await goToPublish();
+    expect(titleInput()?.value).toBe("保留标题");
+    expect(query('[data-editor-field="title"]')?.textContent).toContain(
+      "标题不符合要求",
+    );
+    expect(h.controls.completeWith).not.toHaveBeenCalled();
+  });
+
+  it("resumes a paused background transfer from its progress panel without editing the frozen post", async () => {
+    const h = await renderEditor({ type: "new" });
+    await act(async () => {
+      await staged.current!.stageFiles([fileOf(jpeg({}))], "picker");
+      staged.current!.confirm();
+    });
+    await flush();
+    await goToPublish();
+    await type(titleInput(), "断网恢复");
+    await click(query("[data-editor-submit]"));
+    await leaveOverlay(h);
+    await act(async () => window.dispatchEvent(new Event("offline")));
+    await flush();
+    await h.show(true);
+    expect(
+      query("[data-editor-background-publication]")?.textContent,
+    ).toContain("后台发布已暂停");
+    await click(buttonByText("继续上传／重试确认"));
+    expect(h.transfer.starts).toHaveLength(2);
+    const item = (await fn("registerItem").mock.results[0]!
+      .value) as PublishingMediaItem;
+    await act(async () =>
+      h.transfer.starts.at(-1)!.callbacks.onSettled({
+        status: 200,
+        responseText: h.uploads.receive(item.id, "still"),
+        stalled: false,
+      }),
+    );
+    await flush();
+    await act(async () => {
+      h.uploads.makeReady(item.id);
+      h.timers.fireAll();
+    });
+    await flush();
+    await act(async () => h.timers.fireAll());
+    await flush();
+    expect(fn("submit")).toHaveBeenCalledOnce();
+    expect(fn("submit").mock.calls[0]![0]).toMatchObject({
+      content: { title: "断网恢复" },
+    });
+    expect(h.controls.completeWith).not.toHaveBeenCalled();
+    expect(h.controls.close).toHaveBeenCalledTimes(2);
+    expect(h.guard()?.("history")).toBe("allow");
+    expect(query("[data-editor-leave-dialog]")).toBeNull();
+    expect(
+      vi
+        .mocked(author.notify)
+        .mock.calls.filter(([text]) => text === "作品已发布"),
+    ).toHaveLength(1);
+    await leaveOverlay(h);
+    await h.show(true);
+    await goToPublish();
+    expect(titleInput()?.value).toBe("");
+  });
+
+  it("closes the reopened background progress editor when a receipt confirms publication", async () => {
+    const h = await renderEditor({ type: "new" });
+    let reject!: (error: Error) => void;
+    let answerReceipt!: () => void;
+    fn("submit").mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    fn("submissionReceipt").mockImplementationOnce(
+      (id: string) =>
+        new Promise((resolve) => {
+          answerReceipt = () => resolve(receipt(id));
+        }),
+    );
+    await goToPublish();
+    await type(titleInput(), "等待回执");
+    await click(query("[data-editor-submit]"));
+    await leaveOverlay(h);
+    await h.show(true);
+    expect(
+      query("[data-editor-background-publication]")?.textContent,
+    ).toContain("正在发布");
+    await act(async () =>
+      reject(clientError(0, "网络连接中断，结果尚未确认", true)),
+    );
+    await flush();
+    expect(
+      query("[data-editor-background-publication]")?.textContent,
+    ).toContain("正在确认发布结果");
+    await act(async () => answerReceipt());
+    await flush();
+    expect(h.controls.close).toHaveBeenCalledTimes(2);
+    expect(h.controls.completeWith).not.toHaveBeenCalled();
+    expect(fn("submit")).toHaveBeenCalledOnce();
+    expect(h.guard()?.("history")).toBe("allow");
+    expect(
+      vi
+        .mocked(author.notify)
+        .mock.calls.filter(([text]) => text === "作品已发布"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps a lost background result while browsing and confirms by receipt without navigation", async () => {
+    const harness = await renderEditor({ type: "new" });
+    let answerReceipt!: () => void;
     fn("submit").mockRejectedValueOnce(
       clientError(0, "网络连接中断，结果尚未确认", true),
     );
     fn("submissionReceipt").mockImplementationOnce(
-      (requestId: string) =>
+      (id: string) =>
         new Promise((resolve) => {
-          answerReceipt = () => resolve(receipt(requestId));
+          answerReceipt = () => resolve(receipt(id));
         }),
     );
     await goToPublish();
     await type(bodyInput(), "只有正文");
     await click(query("[data-editor-submit]"));
-    expect(query("[data-editor-submission]")?.textContent).toBe(
-      "正在确认结果…",
-    );
-    // The line above 发布 says it too.
-    expect(query("[data-publish-reason]")?.textContent).toBe("正在确认结果…");
+    expect(harness.controls.close).toHaveBeenCalledOnce();
+    await leaveOverlay(harness);
+    expect(fn("submit")).toHaveBeenCalledOnce();
+    await act(async () => answerReceipt());
+    await flush();
     expect(harness.controls.completeWith).not.toHaveBeenCalled();
-    // Leaving now would lose the result: the guard holds the editor.
-    expect(harness.guard()?.("close")).toBe("blocked");
-    await flush();
-    expect(
-      document.querySelector('[data-editor-dialog="leave"] h2')?.textContent,
-    ).toBe("正在确认结果…");
-    await click(buttonByText("继续等待"));
-    await act(async () => answerReceipt(null));
-    await flush();
-    expect(fn("submit")).toHaveBeenCalledTimes(1);
-    expect(harness.controls.completeWith).toHaveBeenCalledWith({
-      type: "work",
-      id: WORK_ID,
-    });
+    expect(author.notify).toHaveBeenCalledWith("作品已发布");
   });
 
   it("places a Backend field failure at its field", async () => {
@@ -1604,6 +1777,45 @@ describe("Publishing editor", () => {
       content: { title: "别处标题（改）", body: "别处正文" },
     });
     expect(saveStatus()).toBe("saved");
+  });
+
+  it("permits a history version after a definitive background failure returns the draft to editing", async () => {
+    const saved = draftOf(emptyContent({ title: "当前" }), { revision: 3 });
+    const h = await renderEditor({ type: "draft", id: DRAFT_ID }, () =>
+      fn("draft").mockResolvedValue(saved),
+    );
+    let reject!: (error: Error) => void;
+    fn("submit").mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    await goToPublish();
+    await click(query("[data-editor-submit]"));
+    await leaveOverlay(h);
+    await act(async () =>
+      reject(
+        Object.assign(new Error("暂时无法发布"), {
+          status: 422,
+          code: "invalid_content",
+          outcomeUnknown: false,
+        }),
+      ),
+    );
+    await flush();
+    await h.show(true);
+    await goToPublish();
+    await click(query("[data-editor-menu]"));
+    await click(query("[data-editor-menu-history]"));
+    versions.restored = draftOf(emptyContent({ title: "恢复历史内容" }), {
+      revision: 7,
+    });
+    await click(query("[data-history-restore]"));
+    await flush();
+    expect(titleInput()?.value).toBe("恢复历史内容");
+    expect(fn("submit")).toHaveBeenCalledOnce();
+    expect(h.controls.completeWith).not.toHaveBeenCalled();
   });
 
   it("continues saving from a restored history version", async () => {
@@ -2637,7 +2849,19 @@ describe("Publishing editor", () => {
   });
 
   it("holds 发布 while a submission is in flight: Back says 正在确认结果…, ‹ and Escape stay", async () => {
-    const harness = await renderEditor({ type: "new" });
+    const harness = await renderEditor({ type: "work", id: WORK_ID }, () => {
+      fn("editableWork").mockResolvedValue({
+        workId: WORK_ID,
+        revisionId: REVISION_ID,
+        content: emptyContent(),
+        mediaItems: [],
+        visibility: "public",
+        firstPublishedAt: T,
+        editedAt: null,
+        draftId: null,
+        version: 1,
+      });
+    });
     let answerReceipt: (value: unknown) => void = () => undefined;
     fn("submit").mockRejectedValueOnce(
       clientError(0, "网络连接中断，结果尚未确认", true),

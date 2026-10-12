@@ -12,8 +12,10 @@ import type {
  * one request identity and one frozen command. A lost answer is reconciled by
  * reading the receipt before anything else is offered; without a receipt the
  * author may check again or retry the very same command with the same
- * request identity. Nothing is ever resubmitted automatically, and a
- * confirmed submission cannot be sent again from this controller.
+ * request identity. Unknown outcomes require an explicit retry; a confirmed
+ * submission cannot be sent again from this controller. An explicit
+ * queued intent may wait again after a definitive media refusal, preserving
+ * its frozen command and request identity.
  */
 
 export interface SubmissionPort {
@@ -23,6 +25,8 @@ export interface SubmissionPort {
 
 export type SubmissionState =
   | { readonly status: "idle" }
+  /** An explicit publish intent is waiting for its media. */
+  | { readonly status: "queued" }
   | { readonly status: "submitting"; readonly requestId: string }
   /** The answer was lost: the receipt is being read (正在确认结果…). */
   | { readonly status: "reconciling"; readonly requestId: string }
@@ -44,6 +48,10 @@ export type SubmissionInput = Omit<WorkSubmissionCommand, "requestId">;
 
 export interface SubmissionController {
   readonly store: ExternalStore<SubmissionState>;
+  /** Accepts an explicit deferred intent without sending a command yet. */
+  queue(): void;
+  /** A definitive media refusal waits again with the same frozen command. */
+  waitForReadiness(): void;
   /** One explicit submit: a new request identity and a frozen command. */
   submit(input: SubmissionInput): Promise<SubmissionState>;
   /** Re-sends the frozen command with the same request identity (only when unconfirmed). */
@@ -143,10 +151,25 @@ export const createSubmissionController = (options: {
 
   return {
     store,
+    queue() {
+      const status = store.get().status;
+      if (
+        disposed ||
+        (status !== "idle" && status !== "failed" && status !== "not_ready")
+      )
+        return;
+      command = null;
+      set({ status: "queued" });
+    },
+    waitForReadiness() {
+      if (!disposed && store.get().status === "not_ready" && command !== null)
+        set({ status: "queued" });
+    },
     async submit(input) {
       if (disposed || busy() || store.get().status === "unconfirmed")
         return store.get();
-      command = { ...input, requestId: options.requestId() };
+      if (store.get().status !== "queued" || command === null)
+        command = { ...input, requestId: options.requestId() };
       return send(command);
     },
     async retry() {
@@ -162,14 +185,23 @@ export const createSubmissionController = (options: {
     },
     reset() {
       const status = store.get().status;
-      if (status === "failed" || status === "not_ready") {
+      if (
+        status === "queued" ||
+        status === "failed" ||
+        status === "not_ready"
+      ) {
         command = null;
         set({ status: "idle" });
       }
     },
     reportFailure(failure) {
       const status = store.get().status;
-      if (status !== "idle" && status !== "failed" && status !== "not_ready")
+      if (
+        status !== "idle" &&
+        status !== "queued" &&
+        status !== "failed" &&
+        status !== "not_ready"
+      )
         return store.get();
       command = null;
       return set({ status: "failed", ...failure });

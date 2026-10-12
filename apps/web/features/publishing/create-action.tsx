@@ -104,7 +104,17 @@ export const CreateWorkAction = ({
   const draftId = upload.autosave?.draftId ?? upload.session?.draftId ?? null;
   const resume = resumeTarget(upload.session, draftId);
   const active = resume !== null && progress.active;
-  const ring = active ? createActionRing(upload.uploads) : null;
+  const uploadRing = active ? createActionRing(upload.uploads) : null;
+  const ring =
+    uploadRing?.kind === "track" &&
+    progress.backgroundPublication &&
+    !progress.paused &&
+    ["queued", "submitting", "reconciling"].includes(
+      progress.publicationStatus ?? "",
+    ) &&
+    (progress.summary?.blocking ?? 0) === 0
+      ? { kind: "indeterminate" as const }
+      : uploadRing;
   const unfinished = progress.summary?.blocking ?? 0;
   const state =
     progress.readiness ??
@@ -112,7 +122,9 @@ export const CreateWorkAction = ({
   const label =
     resume === null
       ? newLabel
-      : `返回正在编辑的作品${active && state !== null ? `：${state}` : ""}`;
+      : progress.backgroundPublication
+        ? `查看后台发布进度${state !== null ? `：${state}` : ""}`
+        : `返回正在编辑的作品${active && state !== null ? `：${state}` : ""}`;
   return (
     <>
       <button
@@ -121,6 +133,7 @@ export const CreateWorkAction = ({
         className={`${searchStyles.trigger} ${styles.action}`}
         data-create-work-action=""
         data-create-work-progress={active ? "active" : undefined}
+        data-create-work-publication={progress.publicationStatus}
         data-create-work-resume={resume === null ? undefined : resume.type}
         data-paused={active && progress.paused ? "true" : undefined}
         disabled={checking}

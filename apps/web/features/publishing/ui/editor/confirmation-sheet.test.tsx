@@ -71,6 +71,32 @@ afterEach(() => {
 });
 
 describe("confirmationBlocked", () => {
+  it("accepts transient media for a background intent while retaining text and submission gates", () => {
+    const gate: ConfirmationGate = {
+      state: titled(),
+      readiness: { ...ready, blocking: 1, confirmed: false },
+      issues: [],
+      submission: { status: "idle" },
+      background: true,
+    };
+    expect(confirmationBlocked(gate)).toBe(false);
+    expect(confirmationBlocked({ ...gate, background: false })).toBe(true);
+    expect(confirmationBlocked({ ...gate, issues: [tooLong] })).toBe(true);
+    expect(
+      confirmationBlocked({ ...gate, submission: { status: "queued" } }),
+    ).toBe(true);
+    expect(
+      confirmationBlocked({
+        ...gate,
+        submission: {
+          status: "unconfirmed",
+          requestId: "id",
+          message: "unknown",
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("keeps 发布 disabled for the same reasons the sheet does", () => {
     const gate: ConfirmationGate = {
       state: titled(),

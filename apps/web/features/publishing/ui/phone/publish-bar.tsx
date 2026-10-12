@@ -24,7 +24,7 @@ export interface PublishReason {
 /** What the reason line reads; the confirmation sheet's own inputs. */
 export type PublishReasonInput = Pick<
   ConfirmationSheetProps,
-  "state" | "readiness" | "issues" | "submission" | "resolving"
+  "state" | "readiness" | "issues" | "submission" | "resolving" | "background"
 >;
 
 /**
@@ -43,27 +43,40 @@ export const publishReason = (
     issues,
     submission,
     resolving = false,
+    background = false,
   }: PublishReasonInput,
   label: string,
   blocked: boolean,
 ): PublishReason | null => {
   const edit = state.kind === "edit";
   const status =
-    submission.status === "reconciling"
-      ? "正在确认结果…"
-      : submission.status === "confirmed"
-        ? edit
-          ? "更新已保存"
-          : "作品已提交"
-        : resolving || submission.status === "submitting"
+    submission.status === "queued"
+      ? "正在后台上传，完成后自动发布"
+      : submission.status === "reconciling"
+        ? "正在确认结果…"
+        : submission.status === "confirmed"
           ? edit
-            ? "正在保存更新…"
-            : "正在发布…"
-          : submission.status === "not_ready" && readiness.blocking > 0
-            ? `${submission.itemKeys.length} 项正在处理，完成后可再${label}`
-            : "";
+            ? "更新已保存"
+            : "作品已提交"
+          : resolving || submission.status === "submitting"
+            ? edit
+              ? "正在保存更新…"
+              : "正在发布…"
+            : submission.status === "not_ready" && readiness.blocking > 0
+              ? `${submission.itemKeys.length} 项正在处理，完成后可再${label}`
+              : "";
   if (status !== "") return { text: status, tone: "status" };
   const hasItems = state.items.length > 0;
+  if (
+    !blocked &&
+    background &&
+    hasItems &&
+    (readiness.blocking > 0 || !readiness.confirmed)
+  )
+    return {
+      text: "图片将在后台上传和处理，完成后自动发布，可继续浏览",
+      tone: "status",
+    };
   if (!blocked)
     return hasItems && readiness.blocking === 0 && readiness.confirmed
       ? { text: `全部 ${readiness.ready} 项已就绪`, tone: "ok" }

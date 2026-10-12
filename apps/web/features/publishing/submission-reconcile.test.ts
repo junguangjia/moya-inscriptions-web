@@ -47,6 +47,49 @@ const fakePort = () => ({
 });
 
 describe("submission reconciliation", () => {
+  it("defers an explicit intent and preserves its command after a definitive not-ready answer", async () => {
+    const port = fakePort();
+    const identity = vi.fn(requestId);
+    port.submit.mockResolvedValueOnce({ state: "not_ready", itemKeys: ["k1"] });
+    const controller = createSubmissionController({
+      port,
+      requestId: identity,
+    });
+    controller.queue();
+    expect(controller.store.get().status).toBe("queued");
+    expect(port.submit).not.toHaveBeenCalled();
+    expect(identity).not.toHaveBeenCalled();
+    expect((await controller.submit(input)).status).toBe("not_ready");
+    controller.waitForReadiness();
+    expect(
+      (
+        await controller.submit({
+          ...input,
+          content: { ...input.content, title: "later" },
+        })
+      ).status,
+    ).toBe("confirmed");
+    expect(port.submit.mock.calls[1]![0]).toEqual(
+      port.submit.mock.calls[0]![0],
+    );
+    expect(identity).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a queued intent and never queues an unknown outcome automatically", async () => {
+    const port = fakePort();
+    const controller = createSubmissionController({ port, requestId });
+    controller.queue();
+    controller.reset();
+    expect(controller.store.get().status).toBe("idle");
+    expect(port.submit).not.toHaveBeenCalled();
+    port.submit.mockRejectedValueOnce(lost);
+    await controller.submit(input);
+    controller.waitForReadiness();
+    controller.queue();
+    expect(controller.store.get().status).toBe("unconfirmed");
+    expect(port.submit).toHaveBeenCalledOnce();
+  });
+
   it("confirms with one request identity per explicit submit", async () => {
     const port = fakePort();
     const controller = createSubmissionController({ port, requestId });
