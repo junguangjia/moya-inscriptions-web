@@ -57,8 +57,6 @@ export interface ColophonInteractions {
   /** The reader's id; never matches a row for a guest. */
   readonly actorId: string;
   readonly now: Date;
-  /** One selected root or reply per post. */
-  readonly selectedId: string | null;
   /** The row briefly marked after it was sent. */
   readonly flashId: string | null;
   /** The row the input answers, marked while it does. */
@@ -67,7 +65,6 @@ export interface ColophonInteractions {
   readonly repliesLoading: ReadonlySet<string>;
   /** Whether 回复 is offered (signed in or out, the thread not closed). */
   readonly canReply: boolean;
-  readonly select: (id: string | null) => void;
   readonly toggleFold: (id: string) => void;
   readonly reply: (target: CommentReplyTarget, opener: HTMLElement) => void;
   readonly like: (
@@ -119,9 +116,9 @@ const ColophonFace = ({
   </span>
 );
 
-type ActionKey = "reply" | "like" | "delete";
+type ActionKey = "like" | "delete";
 
-/** The selected text's vertical action column. */
+/** Every colophon's upper-left icon column, available without selection. */
 const ColophonActions = ({
   item,
   rootId,
@@ -137,7 +134,6 @@ const ColophonActions = ({
 }) => {
   const own = item.deleted !== true && interactions.actorId === item.user.id;
   const keys: ActionKey[] = [
-    ...(interactions.canReply ? (["reply"] as const) : []),
     ...(item.deleted === true ? [] : (["like"] as const)),
     ...(own ? (["delete"] as const) : []),
   ];
@@ -152,8 +148,7 @@ const ColophonActions = ({
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      interactions.select(null);
-      textRef.current?.focus();
+      textRef.current?.focus({ preventScroll: true });
       return;
     }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -167,10 +162,6 @@ const ColophonActions = ({
     buttons.current.get(next)?.focus();
   };
   const tabIndex = (key: ActionKey) => (key === current ? 0 : -1);
-  const target: CommentReplyTarget =
-    replyId === undefined
-      ? { rootCommentId: rootId, user: item.user }
-      : { replyId, rootCommentId: rootId, user: item.user };
   return (
     <div
       aria-label="题跋操作"
@@ -180,20 +171,9 @@ const ColophonActions = ({
       onKeyDown={onKeyDown}
       role="toolbar"
     >
-      {interactions.canReply ? (
-        <button
-          data-colophon-reply=""
-          onClick={(event) => interactions.reply(target, event.currentTarget)}
-          onFocus={() => setActive("reply")}
-          ref={bind("reply")}
-          tabIndex={tabIndex("reply")}
-          type="button"
-        >
-          回复
-        </button>
-      ) : null}
       <button
-        aria-label={`赞，${item.likeCount}`}
+        aria-label={item.liked ? "取消喜欢评论" : "喜欢评论"}
+        aria-description={`${item.likeCount} 人喜欢`}
         aria-pressed={item.liked}
         data-colophon-like=""
         disabled={item.deleted === true}
@@ -205,13 +185,23 @@ const ColophonActions = ({
         tabIndex={tabIndex("like")}
         type="button"
       >
-        赞
-        {item.likeCount > 0 ? (
-          <VerticalDigits text={String(item.likeCount)} />
-        ) : null}
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          width="20"
+          height="20"
+          fill={item.liked ? "currentColor" : "none"}
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z" />
+        </svg>
       </button>
       {own ? (
         <button
+          aria-label="删除正文"
           data-colophon-delete=""
           onClick={() => interactions.remove(item.id)}
           onFocus={() => setActive("delete")}
@@ -219,7 +209,19 @@ const ColophonActions = ({
           tabIndex={tabIndex("delete")}
           type="button"
         >
-          删除
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
+          </svg>
         </button>
       ) : null}
     </div>
@@ -250,7 +252,6 @@ const ColophonBody = ({
   const nameId = useId();
   const sealId = useId();
   const textRef = useRef<HTMLDivElement>(null);
-  const selected = interactions.selectedId === item.id;
   const folded = foldColophonText(item.text);
   const expanded = interactions.expanded.has(item.id);
   // Measured while folded, kept while expanded: 收起 stays offered.
@@ -267,127 +268,131 @@ const ColophonBody = ({
     return () => observer.disconnect();
   }, [expanded, item.text]);
   const foldable = folded !== null || overflows;
-  const toggle = () => interactions.select(selected ? null : item.id);
+  const target: CommentReplyTarget =
+    replyId === undefined
+      ? { rootCommentId: rootId, user: item.user }
+      : { replyId, rootCommentId: rootId, user: item.user };
+  const answer = (opener: HTMLElement) => {
+    if (interactions.canReply) interactions.reply(target, opener);
+  };
   const studioName = item.user.studioName;
   const headName = colophonHeadName(item.user.name);
   const hasSeal =
     item.createdAt !== undefined ||
     (studioName !== undefined && studioName !== null && studioName !== "");
   return (
-    <>
-      <div
-        className={replyId === undefined ? styles.root : styles.replyBody}
-        data-expanded={expanded ? "true" : undefined}
+    <div
+      className={replyId === undefined ? styles.root : styles.replyBody}
+      data-expanded={expanded ? "true" : undefined}
+    >
+      <button
+        aria-label={`打开${item.user.name}的主页`}
+        className={styles.author}
+        data-colophon-author=""
+        onClick={(event) =>
+          interactions.openAuthor(item.user.id, event.currentTarget)
+        }
+        type="button"
       >
+        <ColophonFace className={styles.face} user={item.user} />
+      </button>
+      <div
+        aria-describedby={hasSeal ? `${nameId} ${sealId}` : nameId}
+        aria-description={
+          interactions.canReply ? "点击回复这条题跋" : undefined
+        }
+        aria-disabled={!interactions.canReply}
+        className={styles.text}
+        data-colophon-text=""
+        data-folded={foldable ? String(!expanded) : undefined}
+        data-overflow={overflows && !expanded ? "true" : undefined}
+        onMouseDown={(event) => {
+          // While a colophon is being written, choosing another one to
+          // answer keeps the keyboard up: the text never takes the focus.
+          if (document.activeElement?.closest("[data-colophon-input]") != null)
+            event.preventDefault();
+        }}
+        onClick={(event) => {
+          // Selecting text for copying never starts a reply.
+          if (window.getSelection()?.isCollapsed !== false)
+            answer(event.currentTarget);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          answer(event.currentTarget);
+        }}
+        ref={textRef}
+        role="button"
+        tabIndex={interactions.canReply ? 0 : -1}
+      >
+        {/* Read once, as the text's description, not as part of it; a
+              cut name is described whole (by the hidden one below). */}
+        <span
+          aria-hidden="true"
+          className={styles.name}
+          data-colophon-name=""
+          id={headName === item.user.name ? nameId : undefined}
+        >
+          {headName}
+        </span>
+        {replyTo === undefined ? null : (
+          <span className={styles.replyLead} data-colophon-reply-lead="">
+            回复 <ColophonName name={replyTo} />：
+          </span>
+        )}
+        <span data-colophon-words="">
+          {item.deleted === true ? (
+            <span className={styles.deleted} data-colophon-deleted="">
+              {COLOPHON_DELETED_TEXT}
+            </span>
+          ) : (
+            <VerticalText
+              text={folded !== null && !expanded ? folded : item.text}
+            />
+          )}
+        </span>
+        {headName === item.user.name ? null : (
+          <span hidden id={nameId}>
+            {item.user.name}
+          </span>
+        )}
+      </div>
+      {!foldable ? null : (
         <button
-          aria-label={`打开${item.user.name}的主页`}
-          className={styles.author}
-          data-colophon-author=""
-          onClick={(event) =>
-            interactions.openAuthor(item.user.id, event.currentTarget)
-          }
+          aria-expanded={expanded}
+          className={styles.fold}
+          data-colophon-fold=""
+          onClick={() => interactions.toggleFold(item.id)}
           type="button"
         >
-          <ColophonFace className={styles.face} user={item.user} />
+          {expanded ? "收起" : "全文"}
         </button>
-        <div
-          aria-describedby={hasSeal ? `${nameId} ${sealId}` : nameId}
-          aria-pressed={selected}
-          className={styles.text}
-          data-colophon-text=""
-          data-folded={foldable ? String(!expanded) : undefined}
-          data-overflow={overflows && !expanded ? "true" : undefined}
-          onMouseDown={(event) => {
-            // While a colophon is being written, choosing another one to
-            // answer keeps the keyboard up: the text never takes the focus.
-            if (
-              document.activeElement?.closest("[data-colophon-input]") != null
-            )
-              event.preventDefault();
-          }}
-          onClick={() => {
-            // Selecting text never changes the selected colophon.
-            if (window.getSelection()?.isCollapsed !== false) toggle();
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            toggle();
-          }}
-          ref={textRef}
-          role="button"
-          tabIndex={0}
+      )}
+      {hasSeal ? (
+        <footer
+          className={styles.seal}
+          data-colophon-signature={replyId === undefined ? "root" : "reply"}
+          id={sealId}
         >
-          {/* Read once, as the text's description, not as part of it; a
-              cut name is described whole (by the hidden one below). */}
-          <span
-            aria-hidden="true"
-            className={styles.name}
-            data-colophon-name=""
-            id={headName === item.user.name ? nameId : undefined}
-          >
-            {headName}
-          </span>
-          {replyTo === undefined ? null : (
-            <span className={styles.replyLead} data-colophon-reply-lead="">
-              回复 <ColophonName name={replyTo} />：
-            </span>
-          )}
-          <span data-colophon-words="">
-            {item.deleted === true ? (
-              <span className={styles.deleted} data-colophon-deleted="">
-                {COLOPHON_DELETED_TEXT}
-              </span>
-            ) : (
-              <VerticalText
-                text={folded !== null && !expanded ? folded : item.text}
+          <StudioName orientation="vertical" value={studioName} />
+          {item.createdAt === undefined ? null : (
+            <time className={styles.sealTime} dateTime={item.createdAt}>
+              <VerticalDigits
+                text={formatColophonTime(item.createdAt, interactions.now)}
               />
-            )}
-          </span>
-          {headName === item.user.name ? null : (
-            <span hidden id={nameId}>
-              {item.user.name}
-            </span>
+            </time>
           )}
-        </div>
-        {!foldable ? null : (
-          <button
-            aria-expanded={expanded}
-            className={styles.fold}
-            data-colophon-fold=""
-            onClick={() => interactions.toggleFold(item.id)}
-            type="button"
-          >
-            {expanded ? "收起" : "全文"}
-          </button>
-        )}
-        {hasSeal ? (
-          <footer
-            className={styles.seal}
-            data-colophon-signature={replyId === undefined ? "root" : "reply"}
-            id={sealId}
-          >
-            <StudioName orientation="vertical" value={studioName} />
-            {item.createdAt === undefined ? null : (
-              <time className={styles.sealTime} dateTime={item.createdAt}>
-                <VerticalDigits
-                  text={formatColophonTime(item.createdAt, interactions.now)}
-                />
-              </time>
-            )}
-          </footer>
-        ) : null}
-      </div>
-      {selected ? (
-        <ColophonActions
-          interactions={interactions}
-          item={item}
-          replyId={replyId}
-          rootId={rootId}
-          textRef={textRef}
-        />
+        </footer>
       ) : null}
-    </>
+      <ColophonActions
+        interactions={interactions}
+        item={item}
+        replyId={replyId}
+        rootId={rootId}
+        textRef={textRef}
+      />
+    </div>
   );
 };
 
@@ -422,9 +427,6 @@ export const ColophonEntry = ({
       data-colophon-highlight={highlight(comment.id)}
       data-colophon-reply-target={replyTarget(comment.id)}
       data-comment-id={comment.id}
-      data-selected={
-        interactions.selectedId === comment.id ? "true" : undefined
-      }
     >
       <ColophonBody
         interactions={interactions}

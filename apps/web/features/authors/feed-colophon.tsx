@@ -25,7 +25,7 @@ import {
 import type { FeedColophonInputHandle } from "./feed-colophon-input";
 import { useFeedStage } from "./feed-post-stage-context";
 import type { FeedStageApi, FeedStageSettle } from "./feed-post-stage-context";
-import { elementStartOffset, sealSpan } from "./feed-post-strip-geometry";
+import { elementStartOffset } from "./feed-post-strip-geometry";
 import { useDiscussionThread } from "./use-discussion-thread";
 import type { DiscussionThread } from "./use-discussion-thread";
 import { colophonClipboardText, VerticalDigits } from "./vertical-text";
@@ -160,49 +160,9 @@ const ScopedFeedColophon = ({
   stageRef.current = stage;
   const threadRef = useRef(thread);
   threadRef.current = thread;
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // The strip's offset when the reader chose (or cleared) a selection: the
-  // action column coming or going adds or removes a snap area, which WebKit
-  // may re-snap to elsewhere.
+  // Preserve the tap's offset while replying grows/focuses the input,
+  // including WebKit's resnapping during that movement.
   const tappedRef = useRef<number | null>(null);
-  // A selection cleared while the strip rests on an unfolded colophon's
-  // action column: the strip first glides back to its 落款 (the column then
-  // sits under the input column), and the selection clears as it settles.
-  // Clearing it at once would take the column's snap position away under
-  // the view, and the browser would re-snap 48 px back in one frame.
-  const leavingRef = useRef(false);
-  const choose = (id: string | null, glide = true) => {
-    leavingRef.current = false;
-    const current = stageRef.current;
-    if (id === null && selectedId !== null && glide && current?.strip != null) {
-      const seal = findAnchor(sectionRef.current, selectedId)?.querySelector(
-        ":scope > [data-expanded] > [data-colophon-signature]",
-      );
-      if (seal != null) {
-        const offset = current.readOffset();
-        const { snap } = sealSpan(
-          current.strip.getBoundingClientRect(),
-          seal.getBoundingClientRect(),
-          Number.parseFloat(getComputedStyle(seal).scrollMarginLeft) || 0,
-          offset,
-        );
-        if (offset - snap > 1) {
-          leavingRef.current = true;
-          current.scrollToOffset(snap);
-          return;
-        }
-      }
-    }
-    if (id !== selectedId) {
-      tappedRef.current = current?.readOffset() ?? null;
-      // The action column comes or goes with snapping held off, until the
-      // strip settles where the selection takes it.
-      current?.holdSnap?.();
-    }
-    setSelectedId(id);
-  };
-  const chooseRef = useRef(choose);
-  chooseRef.current = choose;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -498,13 +458,7 @@ const ScopedFeedColophon = ({
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  useEffect(() => {
-    if (region === "media") setSelectedId(null);
-  }, [region]);
-
-  // The input column covers the stage's left edge. A selected colophon whose
-  // actions sit under it, and the colophon a reply answers when the input
-  // could grow over it, are brought to their snap position at the right.
+  // Bring the colophon being answered clear of where the input can grow.
   const [answering, setAnswering] = useState<string | null>(null);
   useLayoutEffect(() => {
     const section = sectionRef.current;
@@ -527,30 +481,6 @@ const ScopedFeedColophon = ({
         getComputedStyle(column).getPropertyValue("--colophon-input-edge"),
       ) || 0;
     const edge = column.getBoundingClientRect().right + fade;
-    if (selectedId !== null) {
-      const actions = section.querySelector("[data-colophon-actions]");
-      const node = findAnchor(section, selectedId);
-      if (actions === null || node === null) return;
-      const left = actions.getBoundingClientRect().left;
-      if (left >= edge) return;
-      // Its start at the right gutter, when that shows the actions too (a
-      // colophon that fits one view); else only as far as the actions need,
-      // to their own snap position (an unfolded one, wider than the view).
-      const box = current.strip.getBoundingClientRect();
-      const gutter =
-        Number.parseFloat(getComputedStyle(node).scrollMarginRight) || 0;
-      const toStart = box.right - gutter - node.getBoundingClientRect().right;
-      if (left + toStart >= edge) current.scrollToElement(node);
-      else
-        current.scrollToOffset(
-          current.readOffset() +
-            box.left +
-            (Number.parseFloat(getComputedStyle(actions).scrollMarginLeft) ||
-              0) -
-            left,
-        );
-      return;
-    }
     if (answering === null) return;
     setAnswering(null);
     const node = findAnchor(section, answering);
@@ -563,11 +493,11 @@ const ScopedFeedColophon = ({
       edge,
       box.left + box.width * COLOPHON_INPUT_MAX_SHARE + fade,
     );
-    // Out of sight on the right, too (the input aims wherever 回复 was).
+    // Out of sight on the right, too (the input aims at the tapped text).
     const rect = body.getBoundingClientRect();
     if (rect.left < reach || rect.right > box.right + 1)
       current.scrollToElement(node);
-  }, [answering, selectedId]);
+  }, [answering]);
 
   // 收起 shortens a colophon read from its far end: bring its start back,
   // rather than leave the reader among later colophons. 全文 lengthens one
@@ -764,28 +694,20 @@ const ScopedFeedColophon = ({
     shown.page > 0 ? shown.visibleTotal : fallbackCount
   }`;
   useLayoutEffect(() => decideHead(), [decideHead, expanded, headRows]);
-  useEffect(
-    () =>
-      subscribeSettle?.(() => {
-        if (leavingRef.current) chooseRef.current(null, false);
-      }),
-    [subscribeSettle],
-  );
-
   // A fresh clock whenever the rows change.
   const now = useMemo(() => new Date(), [shown.hot, shown.items]);
+  const canReply =
+    !thread.composerClosed &&
+    !thread.unavailable &&
+    (viewer.state === "signed-in" || viewer.state === "signed-out");
   const interactions: ColophonInteractions = {
     actorId: thread.currentUser.id,
     now,
-    selectedId,
     flashId,
     replyTargetId,
     expanded,
     repliesLoading: thread.repliesLoading,
-    canReply:
-      !thread.composerClosed &&
-      (viewer.state === "signed-in" || viewer.state === "signed-out"),
-    select: choose,
+    canReply,
     toggleFold: (id) => {
       const node = findAnchor(sectionRef.current, id);
       foldedRef.current =
@@ -807,14 +729,15 @@ const ScopedFeedColophon = ({
       });
     },
     reply: (replyTarget: CommentReplyTarget, opener: HTMLElement) => {
+      if (!canReply) return;
       if (viewer.state === "signed-out") {
         enterAuth(viewer.signInHref, opener);
         return;
       }
-      // The reply moves the strip to what it answers anyway.
-      choose(null, false);
+      tappedRef.current = stageRef.current?.readOffset() ?? null;
+      stageRef.current?.holdSnap?.();
       setAnswering(replyTarget.replyId ?? replyTarget.rootCommentId);
-      // The toolbar closes; the input takes focus in the same tap, so iOS
+      // The input takes focus in the same tap, so iOS
       // raises the keyboard, led by 「回复 X：」.
       inputRef.current?.reply(replyTarget);
     },
@@ -823,8 +746,7 @@ const ScopedFeedColophon = ({
     remove: (id) => {
       if (!window.confirm(deleteQuestion)) return;
       thread.deleteBody(id);
-      choose(null, false);
-      // The toolbar closes; focus stays with the colophon.
+      // Focus stays with the colophon.
       findAnchor(sectionRef.current, id)
         ?.querySelector<HTMLElement>("[data-colophon-text]")
         ?.focus({ preventScroll: true });
@@ -873,19 +795,6 @@ const ScopedFeedColophon = ({
           "text/plain",
           colophonClipboardText(selection),
         );
-      }}
-      onClick={(event) => {
-        // A tap on blank colophon space clears the selection.
-        if (
-          selectedId !== null &&
-          (event.target as Element).closest(
-            "[data-colophon-text],[data-colophon-actions],button,a",
-          ) === null
-        )
-          choose(null);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && selectedId !== null) choose(null);
       }}
       ref={sectionRef}
       style={

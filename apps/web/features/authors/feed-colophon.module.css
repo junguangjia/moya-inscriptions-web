@@ -37,8 +37,6 @@
   --colophon-view: calc(
     100cqw - 2 * var(--yoyi-space-6) - var(--colophon-input-clear)
   );
-  /* A selected text's action column: its 44 px buttons and their margins. */
-  --colophon-actions: calc(44px + 2 * var(--yoyi-space-2));
   /* The head's gap and its margin, full and compact (feed-colophon.tsx
      measures the first view with them). */
   --colophon-head-gap: var(--yoyi-space-3);
@@ -73,10 +71,9 @@
   scroll-margin-left: var(--colophon-seal-clear);
 }
 
-/* So is the action column of an unfolded one, selected: the strip can come
-   to rest on it, clear of the input column. */
-.root[data-expanded] + .actions,
-.replyBody[data-expanded] + .actions {
+/* Without a signature, the shared column still offers a clear snap. */
+.root[data-expanded]:not(:has(> .seal)) > .actions,
+.replyBody[data-expanded]:not(:has(> .seal)) > .actions {
   scroll-snap-align: end;
   scroll-margin-left: var(--colophon-seal-clear);
 }
@@ -191,15 +188,13 @@
   max-block-size: calc(var(--colophon-view) - var(--yoyi-space-3) - 1px);
 }
 
-/* Selected, the folded text also leaves room for its action column, which
-   would otherwise run past the stage's left edge where no snap reaches. */
-.root:not([data-expanded]):has(+ .actions) {
-  max-block-size: calc(var(--colophon-view) - var(--colophon-actions));
-}
-
-.replyBody:not([data-expanded]):has(+ .actions) {
-  max-block-size: calc(
-    var(--colophon-view) - var(--yoyi-space-3) - 1px - var(--colophon-actions)
+/* Metadata normally reserves the shared action column. Undated rows
+   without a studio leave the same space so icons never cover their text. */
+.root:not(:has(> .seal)),
+.replyBody:not(:has(> .seal)) {
+  box-sizing: border-box;
+  padding-block-end: calc(
+    var(--yoyi-space-8) + var(--yoyi-space-2) + var(--yoyi-space-1)
   );
 }
 
@@ -301,10 +296,6 @@
   font-size: var(--yoyi-type-caption-size);
 }
 
-.text[aria-pressed="true"] {
-  background: var(--yoyi-color-background-muted);
-}
-
 /* The cut edge (the left, where the text runs on) fades out. */
 .text[data-overflow="true"] {
   mask-image: linear-gradient(
@@ -352,6 +343,7 @@
    of the text. */
 .seal {
   display: flex;
+  block-size: var(--yoyi-space-8);
   flex-direction: row;
   align-items: center;
   align-self: flex-end;
@@ -413,17 +405,44 @@
   color: var(--yoyi-color-text-tertiary);
 }
 
-/* The selected text's action column, left of its signature. */
+/* Icons share the signature's centerline, above its plaque and time. */
 .actions {
+  position: absolute;
+  top: 0;
+  left: 0;
   display: flex;
   flex-direction: row;
-  gap: var(--yoyi-space-2);
-  margin-block: var(--yoyi-space-2);
+  gap: var(--yoyi-space-1);
+  margin: 0;
+  font-size: var(--yoyi-type-body-size);
+}
+
+.reply .actions {
+  font-size: var(--yoyi-type-body-small-size);
 }
 
 .actions button {
-  border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-full);
+  flex: none;
+  width: var(--yoyi-space-8);
+  height: var(--yoyi-space-8);
+  min-width: var(--yoyi-space-8);
+  min-height: var(--yoyi-space-8);
+  padding: 0;
+  border: 0;
+  border-radius: var(--yoyi-radius-sm);
+  font-size: inherit;
+  letter-spacing: normal;
+  writing-mode: horizontal-tb;
+}
+
+.actions svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+}
+
+.actions [data-colophon-like]:not(:disabled) {
+  color: var(--yoyi-color-seal-red);
 }
 
 .actions button[aria-pressed="true"] {

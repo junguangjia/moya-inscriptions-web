@@ -1141,25 +1141,28 @@ test("a dot tapped while a swipe's glide runs takes the strip there in one glide
   }
 });
 
-test("selecting an unfolded colophon mid-way only ever slides on to its actions", async ({
+test("tapping unfolded content midway starts a reply and keeps it unfolded", async ({
   browser,
   page,
 }, testInfo) => {
   skipUnlessPhone(testInfo);
-  const feed = await openWithLong(browser, page, testInfo, 480);
+  const feed = await openPhoneFeed(browser, page, testInfo, 0, {
+    signedIn: true,
+    adjust: (answer) => {
+      answer.items.find((item) => item.id === "latest-1")!.text = passage
+        .repeat(5)
+        .slice(0, 480);
+    },
+  });
   try {
     const { entry, fold } = await readLongFromStart(feed);
     await fold.click();
     await expect(fold).toHaveText("收起");
     await restingEdges(feed, entry);
-    // A third of the way into it, at rest.
+    // Read midway, then tap actual visible content rather than an action icon.
     const placed = await feed.strip.evaluate((strip) => {
-      const node = strip.querySelector<HTMLElement>(
-        '[data-colophon-entry][data-comment-id="latest-1"]',
-      )!;
-      const seal = node.querySelector(
-        ":scope > div > [data-colophon-signature]",
-      )!;
+      const node = strip.querySelector('[data-comment-id="latest-1"]')!;
+      const seal = node.querySelector("[data-colophon-signature]")!;
       const box = strip.getBoundingClientRect();
       const offset = -strip.scrollLeft;
       const snap =
@@ -1177,16 +1180,6 @@ test("selecting an unfolded colophon mid-way only ever slides on to its actions"
     await feed.page.waitForTimeout(600);
     const before = await feed.strip.evaluate((strip) => -strip.scrollLeft);
     expect(Math.abs(before - placed)).toBeLessThanOrEqual(2);
-    // Every frame from the tap on.
-    await feed.strip.evaluate((strip) => {
-      const frames: number[] = [];
-      (window as unknown as { __frames: number[] }).__frames = frames;
-      const frame = () => {
-        frames.push(-strip.scrollLeft);
-        if (frames.length < 120) requestAnimationFrame(frame);
-      };
-      requestAnimationFrame(frame);
-    });
     const text = entry.locator(":scope > div > [data-colophon-text]");
     const spot = await text.evaluate((node) => {
       const strip = node.closest("[data-feed-stage]")!.getBoundingClientRect();
@@ -1205,25 +1198,13 @@ test("selecting an unfolded colophon mid-way only ever slides on to its actions"
       };
     });
     await feed.page.touchscreen.tap(spot.x, spot.y);
-    await expect(text).toHaveAttribute("aria-pressed", "true");
-    await feed.page.waitForTimeout(2000);
-    const frames = await feed.page.evaluate(
-      () => (window as unknown as { __frames: number[] }).__frames,
-    );
-    // Never back towards the colophon's start, not even for a frame.
-    expect(Math.min(...frames)).toBeGreaterThanOrEqual(before - 1);
-    expect(largestStepBack(frames)).toBeLessThanOrEqual(1);
-    // The actions came into view, clear of the input column.
-    const clear = await feed.post.evaluate((post) => {
-      const actions = post
-        .querySelector("[data-colophon-actions]")!
-        .getBoundingClientRect();
-      const column = post
-        .querySelector("[data-colophon-input]")!
-        .getBoundingClientRect();
-      return actions.left - column.right;
-    });
-    expect(clear).toBeGreaterThanOrEqual(0);
+    await expect(boxOf(feed)).toBeFocused();
+    await expect(
+      feed.post.locator("[data-colophon-input-reply]"),
+    ).toContainText("回复 读者3：");
+    await expect(entry).toHaveAttribute("data-colophon-reply-target", "");
+    await expect(fold).toHaveText("收起");
+    await expect(feed.post.locator("[data-colophon-reply]")).toHaveCount(0);
   } finally {
     await feed.context?.close();
   }
@@ -1802,6 +1783,156 @@ test("with the keyboard up, the column ends above it and the caret's column stay
   await feed.context?.close();
 });
 
+for (const width of [320, 393]) {
+  test(`colophon icons stay at each upper-left without selection at ${width}px`, async ({
+    browser,
+    page,
+  }, testInfo) => {
+    skipUnlessPhone(testInfo);
+    const feed = await openPhoneFeed(browser, page, testInfo, 0, {
+      signedIn: true,
+      viewport: { width: 393, height: 852 },
+      adjust: (answer) => {
+        answer.hot[0]!.author.id = READER.id;
+        answer.hot[0]!.author.studioName = "听雨轩";
+        answer.hot[0]!.replies[0]!.author.studioName = "听雨斋";
+      },
+    });
+    // This case verifies icons; enter through the existing comment dot.
+    // Trusted-swipe behavior is covered by the unchanged gesture cases.
+    await feed.post.locator("[data-feed-post-dot-comments]").click();
+    await expect(feed.strip).toHaveAttribute(
+      "data-feed-stage-region",
+      "comments",
+    );
+    // Resize the already-open discussion to exercise responsive icon geometry
+    // without adding a narrow-screen entry/navigation test to this case.
+    await feed.page.setViewportSize({ width, height: 852 });
+    await expect(feed.strip).toHaveAttribute(
+      "data-feed-stage-region",
+      "comments",
+    );
+    await expect(feed.post.locator("[data-colophon-entry]")).toHaveCount(12);
+    const root = feed.post.locator('[data-comment-id="hot-1"]');
+    const replyRow = root.locator('[data-comment-reply="reply-1"]');
+    for (const [row, size] of [
+      [root, 16],
+      [replyRow, 14],
+    ] as const) {
+      await expect(
+        row.locator(":scope > div > [data-colophon-actions]"),
+      ).toHaveCount(1);
+      await expect(row.locator("[data-colophon-text]").first()).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
+      const geometry = await row.evaluate((node) => {
+        const actions = node.querySelector(
+          ":scope > div > [data-colophon-actions]",
+        )!;
+        const body = node.querySelector(
+          ":scope > div:has(> [data-colophon-text])",
+        )!;
+        const a = actions.getBoundingClientRect();
+        const b = body.getBoundingClientRect();
+        const text = body
+          .querySelector("[data-colophon-text]")!
+          .getBoundingClientRect();
+        const seal = body.querySelector("[data-colophon-signature]")!;
+        const sealBox = seal.getBoundingClientRect();
+        const center = (box: DOMRect) => (box.left + box.right) / 2;
+        const metadata = Array.from(
+          seal.querySelectorAll("time, [data-studio-name]"),
+        );
+        const buttons = Array.from(actions.querySelectorAll("button"));
+        const first = buttons[0]!.getBoundingClientRect();
+        const last = buttons.at(-1)!.getBoundingClientRect();
+        return {
+          leftAligned: Math.abs(a.left - b.left) <= 1,
+          topAligned: Math.abs(a.top - b.top) <= 1,
+          column: a.width,
+          stack: last.bottom - first.top,
+          clearOfText: a.right <= text.left + 1,
+          clearOfMetadata: last.bottom < sealBox.top,
+          centers: [
+            sealBox,
+            ...metadata.map((node) => node.getBoundingClientRect()),
+          ].map((box) => Math.abs(center(a) - center(box))),
+          targets: buttons.map((button) => {
+            const box = button.getBoundingClientRect();
+            const icon = button.querySelector("svg")!.getBoundingClientRect();
+            return { width: box.width, height: box.height, icon: icon.width };
+          }),
+        };
+      });
+      expect(geometry.leftAligned).toBe(true);
+      expect(geometry.clearOfText).toBe(true);
+      expect(geometry.clearOfMetadata).toBe(true);
+      expect(geometry.centers).toHaveLength(3);
+      for (const difference of geometry.centers)
+        expect(difference).toBeLessThanOrEqual(1);
+      expect(geometry.topAligned).toBe(true);
+      expect(geometry.column).toBeCloseTo(32, 1);
+      expect(geometry.stack).toBeLessThanOrEqual(66);
+      for (const target of geometry.targets) {
+        expect(target.width).toBeCloseTo(32, 1);
+        expect(target.height).toBeCloseTo(32, 1);
+        expect(target.icon).toBeCloseTo(size, 1);
+      }
+    }
+    await expect(
+      root.locator(
+        ":scope > div > [data-colophon-actions] [data-colophon-delete]",
+      ),
+    ).toHaveCount(1);
+    await expect(replyRow.locator("[data-colophon-delete]")).toHaveCount(0);
+    await feed.post.screenshot({
+      path: testInfo.outputPath("colophon-icons-initial.png"),
+    });
+    const feedTop = await feed.home.evaluate((node) => node.scrollTop);
+    // Move only the horizontal stage: scrollIntoView on a vertical row also
+    // scrolls WebKit's outer feed, which would leave this post altogether.
+    await feed.strip.evaluate((strip) => {
+      const actions = strip.querySelector(
+        '[data-comment-id="hot-1"] > div > [data-colophon-actions]',
+      )!;
+      const input = strip.querySelector("[data-colophon-input]")!;
+      const delta =
+        input.getBoundingClientRect().right +
+        12 -
+        actions.getBoundingClientRect().left;
+      if (delta > 0) strip.scrollBy({ left: -delta, behavior: "instant" });
+    });
+    await expect
+      .poll(() => feed.home.evaluate((node) => node.scrollTop))
+      .toBe(feedTop);
+    await expect
+      .poll(() =>
+        root
+          .locator(":scope > div > [data-colophon-actions]")
+          .evaluate((node) => {
+            const box = node.getBoundingClientRect();
+            const input = node
+              .closest("[data-feed-colophon]")!
+              .querySelector("[data-colophon-input]")!
+              .getBoundingClientRect();
+            return box.left >= input.right;
+          }),
+      )
+      .toBe(true);
+    await feed.post.screenshot({
+      path: testInfo.outputPath("colophon-icons.png"),
+    });
+    await expect(feed.post.locator("[data-colophon-reply]")).toHaveCount(0);
+    await root.locator(":scope > div > [data-colophon-text]").click();
+    await expect(boxOf(feed)).toBeFocused();
+    await expect(
+      feed.post.locator("[data-colophon-input-reply]"),
+    ).toContainText("回复 读者1：");
+    await feed.context?.close();
+  });
+}
+
 test("回复 leads the input with 「回复 X：」, focused, and sends a reply", async ({
   browser,
   page,
@@ -1821,22 +1952,6 @@ test("回复 leads the input with 「回复 X：」, focused, and sends a reply"
     .locator("[data-colophon-text]")
     .first()
     .evaluate((node) => (node as HTMLElement).click());
-  // The toolbar is never left under the input column: 回复 takes a tap.
-  await expect
-    .poll(() =>
-      root.locator("[data-colophon-reply]").evaluate((node) => {
-        const rect = node.getBoundingClientRect();
-        const hit = document.elementFromPoint(
-          rect.left + rect.width / 2,
-          rect.top + rect.height / 2,
-        );
-        return hit !== null && node.contains(hit);
-      }),
-    )
-    .toBe(true);
-  await root
-    .locator("[data-colophon-reply]")
-    .evaluate((node) => (node as HTMLElement).click());
   const lead = feed.post.locator("[data-colophon-input-reply]");
   await expect(lead).toContainText("回复 读者3：");
   await expect(lead).toHaveCSS("writing-mode", "vertical-rl");
@@ -1851,7 +1966,13 @@ test("回复 leads the input with 「回复 X：」, focused, and sends a reply"
   expect(leadBox!.x).toBeGreaterThanOrEqual(textBox!.x + textBox!.width - 1);
   expect(Math.abs(leadBox!.y - textBox!.y)).toBeLessThanOrEqual(1);
   await expect(boxOf(feed)).toBeFocused();
-  await expect(feed.post.locator("[data-colophon-actions]")).toHaveCount(0);
+  await expect(
+    root.locator(":scope > div > [data-colophon-actions]"),
+  ).toBeVisible();
+  await expect(root.locator("[data-colophon-text]").first()).toHaveAttribute(
+    "aria-disabled",
+    "false",
+  );
   // × drops the reply target and keeps the text.
   await feed.page.keyboard.type("先写");
   await feed.post
@@ -1864,9 +1985,6 @@ test("回复 leads the input with 「回复 X：」, focused, and sends a reply"
   await root
     .locator("[data-colophon-text]")
     .first()
-    .evaluate((node) => (node as HTMLElement).click());
-  await root
-    .locator("[data-colophon-reply]")
     .evaluate((node) => (node as HTMLElement).click());
   await feed.page.keyboard.type("同感，碑阴尤佳");
   await tapSend(feed);
