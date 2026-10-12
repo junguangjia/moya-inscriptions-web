@@ -394,13 +394,14 @@ describe("FeedColophon", () => {
       "2026-10-09T11:57:00.000Z",
     );
     expect(seal?.querySelector("button,[data-comment-avatar]")).toBeNull();
-    // The text is described by its author, plaque and time.
+    // The reply action describes its author, plaque, time and own words.
     expect(text?.getAttribute("aria-describedby")).toBe(
-      `${name?.id} ${seal?.id}`,
+      `${name?.id} ${seal?.id} ${text?.querySelector("[data-colophon-words]")?.id}`,
     );
+    expect(text?.getAttribute("aria-label")).toBe("回复 甲");
   });
 
-  it("describes a colophon without plaque or time by its author alone", () => {
+  it("describes an undated reply action by its author and words", () => {
     const undated: { -readonly [K in keyof CommentItem]?: CommentItem[K] } =
       comment("c1", writer);
     delete undated.createdAt;
@@ -409,7 +410,7 @@ describe("FeedColophon", () => {
     expect($("[data-colophon-signature]")).toBeNull();
     const text = $("[data-colophon-text]");
     expect(text?.getAttribute("aria-describedby")).toBe(
-      text?.querySelector("[data-colophon-name]")?.id,
+      `${text?.querySelector("[data-colophon-name]")?.id} ${text?.querySelector("[data-colophon-words]")?.id}`,
     );
   });
 
@@ -802,6 +803,7 @@ describe("FeedColophon", () => {
       });
       render();
       const text = $('[data-comment-reply="r1"] [data-colophon-text]');
+      expect(text?.getAttribute("aria-label")).toBe("回复 乙");
       if (activation === "click") click(text);
       else
         act(() => {
@@ -1099,6 +1101,75 @@ describe("FeedColophon", () => {
     expect(h.stage.scrollToElement).not.toHaveBeenCalled();
     expect(document.activeElement).toBe($("textarea"));
   });
+
+  it.each(
+    (["root", "reply"] as const).flatMap((kind) =>
+      [
+        { position: "across the readable view", left: -400, bringIn: false },
+        { position: "entirely to the right", left: 400, bringIn: true },
+        { position: "beneath the input", left: -750, bringIn: true },
+      ].map((geometry) => ({ kind, ...geometry })),
+    ),
+  )(
+    "preserves an expanded $kind's reading offset $position, bringing it in only when hidden",
+    ({ kind, left, bringIn }) => {
+      let offset = 300;
+      const scrolled = vi.fn((to: number) => {
+        offset = to;
+      });
+      const bring = vi.fn();
+      h.stage = {
+        ...h.stage,
+        region: "comments",
+        readOffset: () => offset,
+        scrollToOffset: scrolled,
+        scrollToElement: bring,
+        holdSnap: vi.fn(),
+      };
+      const longText = "永".repeat(250);
+      h.thread = makeThread({
+        items: [
+          comment("c1", writer, {
+            ...(kind === "root"
+              ? { text: longText }
+              : { replies: [reply("r1", other, { text: longText })] }),
+          }),
+        ],
+      });
+      layout((node) =>
+        node === strip
+          ? [0, 393]
+          : node.matches("[data-colophon-input]")
+            ? [0, 49]
+            : [left, 900],
+      );
+      render();
+      const anchor = $(
+        kind === "root"
+          ? '[data-comment-id="c1"]'
+          : '[data-comment-reply="r1"]',
+      )!;
+      click(anchor.querySelector("[data-colophon-fold]"));
+      expect(anchor.querySelector("[data-colophon-fold]")?.textContent).toBe(
+        "收起",
+      );
+      scrolled.mockClear();
+      bring.mockClear();
+      offset = 300;
+      // Input layout can resnap the strip between the tap and the effect.
+      host.addEventListener("click", () => {
+        offset = 0;
+      });
+      click(anchor.querySelector("[data-colophon-text]"));
+      expect(scrolled.mock.calls).toEqual([[300, "instant"]]);
+      if (bringIn) expect(bring).toHaveBeenCalledExactlyOnceWith(anchor);
+      else expect(bring).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe($("textarea"));
+      expect(anchor.querySelector("[data-colophon-fold]")?.textContent).toBe(
+        "收起",
+      );
+    },
+  );
 
   it("keeps the 落款's snap clear of the input column a reply widens", () => {
     const resized: (() => void)[] = [];
@@ -1498,6 +1569,7 @@ describe("FeedColophon", () => {
       "true",
     );
     expect($("[data-colophon-text]")?.tabIndex).toBe(-1);
+    expect($("[data-colophon-text]")?.hasAttribute("aria-label")).toBe(false);
     expect(h.enterAuth).not.toHaveBeenCalled();
     expect($("[data-colophon-input-reply]")).toBeNull();
     expect($("[data-colophon-reply]")).toBeNull();

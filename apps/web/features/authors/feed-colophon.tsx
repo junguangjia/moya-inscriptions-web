@@ -495,7 +495,11 @@ const ScopedFeedColophon = ({
     );
     // Out of sight on the right, too (the input aims at the tapped text).
     const rect = body.getBoundingClientRect();
-    if (rect.left < reach || rect.right > box.right + 1)
+    // Keep the reading position within a long body already visible across
+    // the stage; its start cannot fit beside the input at the same time.
+    const readingAcrossBody =
+      rect.width > box.width + 1 && rect.right > reach && rect.left < box.right;
+    if (!readingAcrossBody && (rect.left < reach || rect.right > box.right + 1))
       current.scrollToElement(node);
   }, [answering]);
 

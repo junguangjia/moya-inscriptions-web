@@ -896,10 +896,14 @@ test("Clean Product Preview preserves shell state, scroll, and preferences set t
   const { surface: qa } = await openDevelopmentSurface(page);
   const { settings, userPage } = await openSettingsThroughAvailableEntry(qa);
   await expect(settings.getByRole("button", { name: "返回" })).toBeFocused();
-  await settings.getByRole("button", { name: /切换主题/ }).click();
   await expect(productShell(qa)).toHaveAttribute(
     "data-theme-preference",
     "light",
+  );
+  await settings.getByRole("button", { name: /切换主题/ }).click();
+  await expect(productShell(qa)).toHaveAttribute(
+    "data-theme-preference",
+    "dark",
   );
   // Phone opens single-column and tablet double; the toggle flips either.
   const toggledLayout =
@@ -938,7 +942,7 @@ test("Clean Product Preview preserves shell state, scroll, and preferences set t
       "[data-open-settings], [data-search-trigger], [data-user-trigger]",
     ),
   ).toHaveCount(0);
-  await expect(shell).toHaveAttribute("data-theme-preference", "light");
+  await expect(shell).toHaveAttribute("data-theme-preference", "dark");
 
   const homeScroll = await writePrimaryScroll(shell, "home", 180);
   expect(homeScroll).toBeGreaterThanOrEqual(0);
@@ -959,7 +963,7 @@ test("Clean Product Preview preserves shell state, scroll, and preferences set t
 
   await page.reload();
   const reloadedShell = page.locator("[data-product-shell]");
-  await expect(reloadedShell).toHaveAttribute("data-theme-preference", "light");
+  await expect(reloadedShell).toHaveAttribute("data-theme-preference", "dark");
   await expect(reloadedShell).toHaveAttribute(
     "data-feed-layout",
     expectedInitialAutoPlatform(testInfo.project.name) === "pc"

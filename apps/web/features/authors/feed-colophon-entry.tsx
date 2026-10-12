@@ -251,6 +251,7 @@ const ColophonBody = ({
 }) => {
   const nameId = useId();
   const sealId = useId();
+  const wordsId = useId();
   const textRef = useRef<HTMLDivElement>(null);
   const folded = foldColophonText(item.text);
   const expanded = interactions.expanded.has(item.id);
@@ -297,7 +298,14 @@ const ColophonBody = ({
         <ColophonFace className={styles.face} user={item.user} />
       </button>
       <div
-        aria-describedby={hasSeal ? `${nameId} ${sealId}` : nameId}
+        aria-describedby={[
+          nameId,
+          ...(hasSeal ? [sealId] : []),
+          ...(interactions.canReply ? [wordsId] : []),
+        ].join(" ")}
+        aria-label={
+          interactions.canReply ? `回复 ${item.user.name}` : undefined
+        }
         aria-description={
           interactions.canReply ? "点击回复这条题跋" : undefined
         }
@@ -341,7 +349,7 @@ const ColophonBody = ({
             回复 <ColophonName name={replyTo} />：
           </span>
         )}
-        <span data-colophon-words="">
+        <span data-colophon-words="" id={wordsId}>
           {item.deleted === true ? (
             <span className={styles.deleted} data-colophon-deleted="">
               {COLOPHON_DELETED_TEXT}

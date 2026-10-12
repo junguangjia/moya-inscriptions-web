@@ -22,8 +22,8 @@ describe("Product Shell preferences", () => {
     ["light", "light"],
     ["dark", "dark"],
     ["system", "system"],
-    ["sepia", "system"],
-    [null, "system"],
+    ["sepia", "light"],
+    [null, "light"],
   ] as const)("parses theme preference %s", (value, expected) => {
     expect(parseThemePreference(value)).toBe(expected);
   });
@@ -53,7 +53,7 @@ describe("Product Shell preferences", () => {
       }),
     };
 
-    expect(readStoredThemePreference(storage)).toBe("system");
+    expect(readStoredThemePreference(storage)).toBe("light");
     expect(readStoredFeedLayoutPreference(storage)).toBeNull();
     expect(() =>
       persistPreference(storage, THEME_PREFERENCE_STORAGE_KEY, "dark"),

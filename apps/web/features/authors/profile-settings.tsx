@@ -22,6 +22,8 @@ import type { AccountSecurityHandle } from "../auth/account-security";
 import { useSettingsSwipe } from "../settings/use-settings-swipe";
 import styles from "../settings/settings-view.module.css";
 import { SettingsIcon } from "../settings/settings-icons";
+import { FeedLayoutPreview } from "../settings/feed-layout-preview";
+import { feedLayoutLabels } from "../product-shell/preferences";
 import type { SettingsIconName } from "../settings/settings-icons";
 
 type Page = "root" | "display" | "privacy" | "blocks" | "security" | "factor";
@@ -122,33 +124,23 @@ const ChoiceGroup = <Value extends string>({
             buttons?.[next]?.focus();
           }}
         >
-          <span
-            className={styles.preview}
-            data-theme-preview={kind === "theme" ? option.value : undefined}
-            data-layout-preview={kind === "layout" ? option.value : undefined}
-            aria-hidden="true"
-          >
-            {kind === "theme" ? (
-              <>
-                <span className={styles.previewWindow}>
-                  <span className={styles.previewBar} />
-                  <span className={styles.previewTiles}>
-                    <i />
-                    <i />
-                    <i />
-                  </span>
+          {kind === "theme" && (
+            <span
+              className={styles.preview}
+              data-theme-preview={option.value}
+              aria-hidden="true"
+            >
+              <span className={styles.previewWindow}>
+                <span className={styles.previewBar} />
+                <span className={styles.previewTiles}>
+                  <i />
+                  <i />
+                  <i />
                 </span>
-                {option.icon && <SettingsIcon name={option.icon} />}
-              </>
-            ) : (
-              <span className={styles.previewFeed}>
-                <i />
-                <i />
-                <i />
-                <i />
               </span>
-            )}
-          </span>
+              {option.icon && <SettingsIcon name={option.icon} />}
+            </span>
+          )}
           <span>{option.label}</span>
           <span className={styles.checkmark} aria-hidden="true">
             {value === option.value && <SettingsIcon name="check" />}
@@ -156,6 +148,9 @@ const ChoiceGroup = <Value extends string>({
         </button>
       ))}
     </div>
+    {kind === "layout" && (value === "single" || value === "double") && (
+      <FeedLayoutPreview value={value === "single" ? "single" : "double"} />
+    )}
   </fieldset>
 );
 
@@ -689,7 +684,7 @@ export const ProfileSettings = ({
                     {row(
                       "外观",
                       "display",
-                      `${themeLabels[shell.theme]}${shell.platform === "pc" ? "" : ` · ${shell.feedLayout === "single" ? "单列" : "双列"}`}`,
+                      `${themeLabels[shell.theme]}${shell.platform === "pc" ? "" : ` · ${feedLayoutLabels[shell.feedLayout]}`}`,
                     )}
                   </div>
                 </section>
@@ -774,7 +769,7 @@ export const ProfileSettings = ({
                     onChange={shell.setFeedLayoutPreference}
                     options={(["single", "double"] as const).map((value) => ({
                       value,
-                      label: value === "single" ? "单列" : "双列",
+                      label: feedLayoutLabels[value],
                     }))}
                   />
                 )}

@@ -47,6 +47,7 @@ import {
   viewerLocation,
 } from "./product-history";
 import {
+  DEFAULT_THEME_PREFERENCE,
   FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
   THEME_PREFERENCE_STORAGE_KEY,
   applyFeedLayoutPreferenceToRoot,
@@ -472,7 +473,7 @@ export const ProductShell = ({
     useState<PresentationPlatform>(initialPlatform);
   const [orientation, setOrientation] =
     useState<PresentationOrientation>("portrait");
-  const [theme, setTheme] = useState<ThemePreference>("system");
+  const [theme, setTheme] = useState<ThemePreference>(DEFAULT_THEME_PREFERENCE);
   // An explicit choice wins; otherwise the platform default applies, so a
   // phone that becomes a tablet (or back) follows the right default.
   const [storedFeedLayout, setStoredFeedLayout] =
@@ -1898,10 +1899,15 @@ export const ProductShell = ({
 
   useEffect(() => {
     const root = document.documentElement;
-    const storedTheme = readStoredThemePreference(window.localStorage);
-    const storedFeedLayout = readStoredFeedLayoutPreference(
-      window.localStorage,
-    );
+    let storedTheme: ThemePreference = DEFAULT_THEME_PREFERENCE;
+    let storedFeedLayout: FeedLayoutPreference | null = null;
+    try {
+      const storage = window.localStorage;
+      storedTheme = readStoredThemePreference(storage);
+      storedFeedLayout = readStoredFeedLayoutPreference(storage);
+    } catch {
+      // Accessing localStorage itself may be blocked by browser privacy settings.
+    }
     setTheme(storedTheme);
     setStoredFeedLayout(storedFeedLayout);
     setFeedLayoutRead(true);

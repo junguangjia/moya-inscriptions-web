@@ -1197,8 +1197,14 @@ test("tapping unfolded content midway starts a reply and keeps it unfolded", asy
         y: rect.top + Math.min(rect.height / 2, 60),
       };
     });
+    await expect(text).toHaveAttribute("aria-label", "回复 读者3");
     await feed.page.touchscreen.tap(spot.x, spot.y);
     await expect(boxOf(feed)).toBeFocused();
+    // Wait beyond the smooth-scroll window before checking the reading position.
+    await feed.page.waitForTimeout(600);
+    await expect
+      .poll(async () => Math.abs((await stripOffset(feed)) - before))
+      .toBeLessThanOrEqual(2);
     await expect(
       feed.post.locator("[data-colophon-input-reply]"),
     ).toContainText("回复 读者3：");
