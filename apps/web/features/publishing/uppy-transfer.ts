@@ -62,6 +62,63 @@ interface ResponseBody extends Record<string, unknown> {
   responseText: string;
 }
 
+/** Bound the extra memory used to detach small picker Files from disk. */
+export const TRANSFER_FILE_COPY_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Safari can read a picked File on the page while its network process cannot
+ * serialize that disk-backed File. Detach small Files into memory before XHR
+ * (WebKit bug 319985); larger bodies stay streaming Blob slices. This changes
+ * neither the bytes nor their MIME metadata and never reads a large Original
+ * component into a whole-file buffer.
+ */
+const transferBody = (body: Blob, signal: AbortSignal): Promise<Blob> => {
+  if (
+    typeof File === "undefined" ||
+    !(body instanceof File) ||
+    body.size > TRANSFER_FILE_COPY_MAX_BYTES
+  )
+    return Promise.resolve(body.slice(0, body.size, body.type));
+  return new Promise<Blob>((resolve, reject) => {
+    const reader = new FileReader();
+    let settled = false;
+    const finish = () => {
+      if (settled) return false;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      reader.onload = reader.onerror = reader.onabort = null;
+      return true;
+    };
+    const onAbort = () => {
+      if (!finish()) return;
+      reader.abort();
+      reject(signal.reason);
+    };
+    reader.onload = () => {
+      if (!finish()) return;
+      const bytes = reader.result;
+      if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== body.size) {
+        reject(new Error("transfer_body_unavailable"));
+        return;
+      }
+      resolve(new Blob([bytes], { type: body.type }));
+    };
+    reader.onerror = reader.onabort = () => {
+      if (finish()) reject(new Error("transfer_body_unavailable"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    try {
+      reader.readAsArrayBuffer(body);
+    } catch {
+      if (finish()) reject(new Error("transfer_body_unavailable"));
+    }
+  });
+};
+
 const silentLogger = { debug: () => {}, warn: () => {}, error: () => {} };
 
 export const createUppyTransfer = (
@@ -107,7 +164,8 @@ export const createUppyTransfer = (
   const active = new Map<
     string,
     {
-      fileId: string;
+      fileId: string | null;
+      preparation: AbortController;
       callbacks: TransferCallbacks;
       timer: unknown;
       total: number;
@@ -125,8 +183,8 @@ export const createUppyTransfer = (
    * Core's own listeners have already recorded the result when ours run, so
    * the file is removed synchronously: a later `upload()` never sees it.
    */
-  const remove = (fileId: string) => {
-    if (uppy.getFile(fileId)) uppy.removeFile(fileId);
+  const remove = (fileId: string | null) => {
+    if (fileId !== null && uppy.getFile(fileId)) uppy.removeFile(fileId);
   };
 
   const armTimer = (id: string) => {
@@ -139,6 +197,7 @@ export const createUppyTransfer = (
         const current = active.get(id);
         if (!current) return;
         active.delete(id);
+        current.preparation.abort();
         remove(current.fileId);
         current.callbacks.onSettled({
           status: 0,
@@ -198,37 +257,59 @@ export const createUppyTransfer = (
 
   return {
     start(request, callbacks) {
-      const fileId = uppy.addFile({
-        // A synthetic name: raw file names never enter the transfer layer.
-        name: request.id,
-        type: "application/octet-stream",
-        data: request.body,
-        meta: {
-          transferId: request.id,
-          endpoint: request.endpoint,
-          headers: { ...request.headers },
-        },
-      });
-      active.set(request.id, {
-        fileId,
+      const entry = {
+        fileId: null as string | null,
+        preparation: new AbortController(),
         callbacks,
-        timer: null,
+        timer: null as unknown,
         total: request.body.size,
         sent: 0,
-      });
+      };
+      active.set(request.id, entry);
       armTimer(request.id);
-      uppy.upload().catch(() => undefined);
+      const failed = () => {
+        if (active.get(request.id) !== entry) return;
+        active.delete(request.id);
+        timers.clearTimeout(entry.timer);
+        remove(entry.fileId);
+        callbacks.onSettled({ status: 0, responseText: "", stalled: false });
+      };
+      void transferBody(request.body, entry.preparation.signal).then((body) => {
+        // A cancelled, paused or disposed attempt must never start a late XHR.
+        if (active.get(request.id) !== entry) return;
+        try {
+          entry.fileId = uppy.addFile({
+            // A synthetic name: raw file names never enter the transfer layer.
+            name: request.id,
+            type: "application/octet-stream",
+            data: body,
+            meta: {
+              transferId: request.id,
+              endpoint: request.endpoint,
+              headers: { ...request.headers },
+            },
+          });
+          uppy.upload().catch(() => undefined);
+        } catch {
+          failed();
+        }
+      }, failed);
     },
     abort(id) {
       const entry = active.get(id);
       if (!entry) return;
       timers.clearTimeout(entry.timer);
       active.delete(id);
+      entry.preparation.abort();
       remove(entry.fileId);
     },
     dispose() {
-      for (const entry of active.values()) timers.clearTimeout(entry.timer);
+      const entries = [...active.values()];
       active.clear();
+      for (const entry of entries) {
+        timers.clearTimeout(entry.timer);
+        entry.preparation.abort();
+      }
       uppy.destroy();
     },
   };
