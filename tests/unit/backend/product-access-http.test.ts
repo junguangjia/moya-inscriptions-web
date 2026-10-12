@@ -97,6 +97,7 @@ const start = async (
           liked: false,
           favoriteCount: 1,
           likeCount: 2,
+          commentCount: 0,
         }),
       } as unknown as CommunityDiscoveryPort,
       notificationPort: notifications,

@@ -45,6 +45,7 @@ const pointerEvent = (
 
 interface ViewerTestProperties {
   readonly controls?: ReactNode;
+  readonly direction?: "ltr" | "rtl";
   readonly index?: number;
   readonly open?: boolean;
   readonly selectedMedia?: readonly PublicMedia[];
@@ -68,6 +69,9 @@ const renderViewer = (properties?: ViewerTestProperties) => {
           open={next.open ?? true}
           platform="phone"
           controls={next.controls}
+          {...(next.direction === undefined
+            ? {}
+            : { direction: next.direction })}
         />,
       ),
     );
@@ -755,6 +759,121 @@ describe("CatalogViewer", () => {
       );
     });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+});
+
+/** One horizontal single-pointer swipe across the stage. */
+const swipe = (stage: HTMLElement, fromX: number, toX: number) =>
+  act(() => {
+    stage.dispatchEvent(
+      pointerEvent("pointerdown", {
+        clientX: fromX,
+        clientY: 300,
+        pointerId: 7,
+        timeStamp: 0,
+      }),
+    );
+    stage.dispatchEvent(
+      pointerEvent("pointermove", {
+        clientX: (fromX + toX) / 2,
+        clientY: 300,
+        pointerId: 7,
+        timeStamp: 40,
+      }),
+    );
+    stage.dispatchEvent(
+      pointerEvent("pointermove", {
+        clientX: toX,
+        clientY: 300,
+        pointerId: 7,
+        timeStamp: 80,
+      }),
+    );
+    stage.dispatchEvent(
+      pointerEvent("pointerup", {
+        clientX: toX,
+        clientY: 300,
+        pointerId: 7,
+        timeStamp: 100,
+      }),
+    );
+  });
+
+const trackOf = (stage: HTMLElement) =>
+  stage.querySelector<HTMLElement>("[data-detail-viewer-track]")!;
+
+describe("CatalogViewer direction", () => {
+  it("pages left-to-right by default", () => {
+    const { onClose, onIndexChange, stage, viewer } = renderViewer();
+    expect(viewer.dataset.viewerDirection).toBe("ltr");
+    // The first item has no previous peer: a rightward swipe only rubber-bands.
+    swipe(stage, 80, 320);
+    act(() => vi.advanceTimersByTime(220));
+    expect(onIndexChange).not.toHaveBeenCalled();
+    swipe(stage, 320, 80);
+    expect(trackOf(stage).style.getPropertyValue("--viewer-carousel-x")).toBe(
+      "-400px",
+    );
+    act(() => vi.advanceTimersByTime(220));
+    expect(onIndexChange).toHaveBeenCalledExactlyOnceWith(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("places the next item on the left and advances on a rightward swipe in rtl", () => {
+    const { onClose, onIndexChange, stage, viewer } = renderViewer({
+      direction: "rtl",
+    });
+    expect(viewer.dataset.viewerDirection).toBe("rtl");
+    // A leftward swipe at the first item reaches past its start.
+    swipe(stage, 320, 80);
+    act(() => vi.advanceTimersByTime(220));
+    expect(onIndexChange).not.toHaveBeenCalled();
+    swipe(stage, 80, 320);
+    expect(trackOf(stage).style.getPropertyValue("--viewer-carousel-x")).toBe(
+      "400px",
+    );
+    act(() => vi.advanceTimersByTime(220));
+    expect(onIndexChange).toHaveBeenCalledExactlyOnceWith(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("orders rtl peers next-current-previous and maps arrow keys", () => {
+    const { onIndexChange, stage, viewer } = renderViewer({
+      direction: "rtl",
+      index: 1,
+    });
+    const slides = [...trackOf(stage).children];
+    expect(slides.map((slide) => slide.querySelector("img")?.alt)).toEqual([
+      "查看图像 3",
+      "查看图像 2",
+      "查看图像 1",
+    ]);
+    expect(slides.map((slide) => slide.getAttribute("aria-hidden"))).toEqual([
+      "true",
+      "false",
+      "true",
+    ]);
+    act(() => {
+      viewer.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }),
+      );
+      vi.advanceTimersByTime(220);
+    });
+    expect(onIndexChange).toHaveBeenLastCalledWith(2);
+    act(() => {
+      viewer.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }),
+      );
+      vi.advanceTimersByTime(220);
+    });
+    expect(onIndexChange).toHaveBeenLastCalledWith(0);
+    // A rightward swipe from the middle advances to the item on the left.
+    swipe(stage, 80, 320);
+    act(() => vi.advanceTimersByTime(220));
+    expect(onIndexChange).toHaveBeenLastCalledWith(2);
+    swipe(stage, 320, 80);
+    act(() => vi.advanceTimersByTime(220));
+    expect(onIndexChange).toHaveBeenLastCalledWith(0);
   });
 });
 

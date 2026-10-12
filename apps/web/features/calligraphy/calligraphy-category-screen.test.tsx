@@ -14,7 +14,10 @@ vi.mock("../../lib/public-api/catalog-list-client", async (importOriginal) => ({
 }));
 
 import { createRuntimeCalligraphyCategorySurface } from "./calligraphy-category";
-import { CalligraphyCategoryScreen } from "./calligraphy-category-screen";
+import {
+  AllCalligraphyFeed,
+  CalligraphyCategoryScreen,
+} from "./calligraphy-category-screen";
 
 import type { Root } from "react-dom/client";
 import type { CatalogId, CatalogPage, CatalogSummary } from "@moya/contracts";
@@ -22,6 +25,10 @@ import type { ReactNode } from "react";
 import type { CalligraphyCategorySurfaceData } from "./calligraphy-category";
 
 const openCatalog = vi.fn();
+const shellLayout = {
+  feedLayout: "double" as "single" | "double",
+  platform: "phone" as "phone" | "tablet" | "pc",
+};
 const readActiveScrollTop = vi.fn(() => 0);
 const restoreActiveScrollTop = vi.fn();
 
@@ -29,9 +36,9 @@ vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => ({
     activeCatalogId: null,
     activeDestination: "home",
-    feedLayout: "double",
+    feedLayout: shellLayout.feedLayout,
     openCatalog,
-    platform: "phone",
+    platform: shellLayout.platform,
     readActiveScrollTop,
     restoreActiveScrollTop,
   }),
@@ -207,6 +214,8 @@ describe("CalligraphyCategoryScreen", () => {
       },
     );
     scrollToCalls = [];
+    shellLayout.feedLayout = "double";
+    shellLayout.platform = "phone";
     fetchSameOriginCatalogPageMock.mockReset();
     openCatalog.mockReset();
     readActiveScrollTop.mockReset();
@@ -560,4 +569,42 @@ describe("CalligraphyCategoryScreen", () => {
 
     expect(restoreActiveScrollTop).toHaveBeenCalledWith(146);
   });
+
+  // single-column-feed-v2: the Home 书帖 tab is two-column on phone and
+  // tablet whatever the single-column setting says; PC follows the setting.
+  it.each([
+    ["phone", "single", "double"],
+    ["tablet", "single", "double"],
+    ["phone", "double", "double"],
+    ["pc", "single", "single"],
+    ["pc", "double", "double"],
+  ] as const)(
+    "lays the all-calligraphy feed out on %s with a %s setting as %s",
+    (platform, setting, expected) => {
+      shellLayout.platform = platform;
+      shellLayout.feedLayout = setting;
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      roots.push(root);
+      act(() =>
+        root.render(
+          <AllCalligraphyFeed
+            data={createRuntimeCalligraphyCategorySurface({
+              page: page([item("runtime-calligraphy", "运行时书帖")]),
+              state: "populated",
+            })}
+          />,
+        ),
+      );
+      expect(
+        container
+          .querySelector("[data-calligraphy-all] [data-feed-layout]")
+          ?.getAttribute("data-feed-layout"),
+      ).toBe(expected);
+      expect(container.querySelector("[data-test-masonry]")?.textContent).toBe(
+        "运行时书帖",
+      );
+    },
+  );
 });

@@ -205,8 +205,11 @@ test("Profile empty collections share collapse and preserve long body offsets", 
   page,
 }) => {
   await fixture(page);
+  // The last work, as a two-column card or a phone single-column post.
   await expect(
-    page.getByRole("button", { name: "打开滚动测试作品 12", exact: true }),
+    page.locator(
+      `[data-content-type="work"][data-content-id="work-${"12".padStart(32, "0")}"]`,
+    ),
   ).toBeAttached();
   // Without a photo there is no photo layer, compact cover or snapping: the
   // header stays on the page colour and the page scrolls freely.

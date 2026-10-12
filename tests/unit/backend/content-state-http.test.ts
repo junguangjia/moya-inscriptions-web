@@ -27,6 +27,7 @@ const fixture = async () => {
     liked: false,
     favoriteCount: 4,
     likeCount: 7,
+    commentCount: 3,
   }));
   const server = createBackendServer(
     createBackendApplication({
@@ -80,6 +81,7 @@ describe("Content state reads", () => {
       liked: false,
       favoriteCount: 4,
       likeCount: 7,
+      commentCount: 3,
     });
   });
 
@@ -97,6 +99,7 @@ describe("Content state reads", () => {
       liked: true,
       favoriteCount: 4,
       likeCount: 7,
+      commentCount: 3,
     });
     const response = await fetch(f.stateUrl, {
       headers: { authorization: `Bearer ${session.token}` },
@@ -111,6 +114,7 @@ describe("Content state reads", () => {
       liked: true,
       favoriteCount: 4,
       likeCount: 7,
+      commentCount: 3,
     });
   });
 

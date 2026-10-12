@@ -507,6 +507,146 @@ describe("Editorial and card readers", () => {
       placeholderColor: "#3a2f28",
     });
   });
+
+  it("resolves a card's gallery with its image in one batch", async () => {
+    const secondId = mediaIdSchema.parse("media-delivery-2");
+    const second = {
+      type: "catalog" as const,
+      id: secondId,
+      objectKey: "private/second.webp",
+      width: 1800,
+      height: 2400,
+      renditions: [entry(5, "card", 360, 480), entry(6, "display", 1200, 1600)],
+    };
+    const image = {
+      type: "catalog" as const,
+      id: mediaId,
+      objectKey: "private/approved.webp",
+      width: 4096,
+      height: 2731,
+      renditions,
+      placeholderColor: "#3a2f28",
+    };
+    const record: DiscoveryCardRecord = {
+      target: { type: "catalog", id: catalogId },
+      title: "合成资料",
+      aliases: [],
+      kind: "inscription",
+      authorId: null,
+      firstPublishedAt: null,
+      media: image,
+      gallery: [image, second],
+      mediaCount: 3,
+    };
+    const discovery = {
+      card: async () => record,
+    } as unknown as CommunityDiscoveryPort;
+    const urls = new Map([
+      ...allUrls,
+      [deliveryKey(5), deliveryUrl(deliveryKey(5))],
+      [deliveryKey(6), deliveryUrl(deliveryKey(6))],
+    ]);
+    const { many, keys, resolver } = recordingResolver({ keys: urls });
+    const delivered = contentCardSchema.parse(
+      await new AuthorCommunityService(
+        {} as AuthorCommunityPort,
+        {} as CatalogPublicationPort,
+        undefined,
+        discovery,
+        resolver,
+      ).card({ type: "catalog", id: catalogId }, null),
+    );
+    // The representative image listed in its own gallery resolves once.
+    expect(many).toEqual([[mediaId, secondId]]);
+    expect(keys).toEqual([
+      [
+        deliveryKey(1),
+        deliveryKey(2),
+        deliveryKey(3),
+        deliveryKey(5),
+        deliveryKey(6),
+      ],
+    ]);
+    expect(delivered.mediaCount).toBe(3);
+    expect(delivered.gallery).toEqual([
+      delivered.media,
+      {
+        id: secondId,
+        width: 1200,
+        height: 1600,
+        src: deliveryUrl(deliveryKey(6)),
+        renditions: [card(5, 360, 480), card(6, 1200, 1600)],
+      },
+    ]);
+
+    // An entry without an approved URL is left out; the total stays.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const partial = contentCardSchema.parse(
+      await new AuthorCommunityService(
+        {} as AuthorCommunityPort,
+        {} as CatalogPublicationPort,
+        undefined,
+        discovery,
+        {
+          resolveMany: async () => approved,
+          resolveKeys: async () => urls,
+        },
+      ).card({ type: "catalog", id: catalogId }, null),
+    );
+    expect(partial.gallery?.map((entry) => entry.id)).toEqual([mediaId]);
+    expect(partial.mediaCount).toBe(3);
+    expect(warn).toHaveBeenCalledWith("[catalog-media] gallery_fallback");
+  });
+
+  it("passes a work card's gallery through with its Live flag", async () => {
+    const item = (n: string) => `media-item-${n.repeat(32)}`;
+    const still = (id: string) => ({
+      type: "work" as const,
+      id,
+      src: `/api/community/publishing/media/${id}/display/base`,
+      width: 1600,
+      height: 1200,
+    });
+    const record: DiscoveryCardRecord = {
+      target: { type: "work", id: `work-${"d".repeat(32)}` },
+      title: "合成作品",
+      aliases: [],
+      kind: null,
+      authorId: `user-${"1".repeat(32)}`,
+      firstPublishedAt: null,
+      live: true,
+      media: {
+        ...still(item("a")),
+        src: `/api/community/publishing/media/${item("a")}/cover/base`,
+      },
+      gallery: [{ ...still(item("a")), live: true }, still(item("b"))],
+      mediaCount: 2,
+    };
+    const delivered = contentCardSchema.parse(
+      await new AuthorCommunityService(
+        {} as AuthorCommunityPort,
+        {} as CatalogPublicationPort,
+        undefined,
+        { card: async () => record } as unknown as CommunityDiscoveryPort,
+      ).card(record.target, null),
+    );
+    expect(delivered.gallery).toEqual([
+      {
+        id: item("a"),
+        src: `/api/community/publishing/media/${item("a")}/display/base`,
+        width: 1600,
+        height: 1200,
+        live: true,
+      },
+      {
+        id: item("b"),
+        src: `/api/community/publishing/media/${item("b")}/display/base`,
+        width: 1600,
+        height: 1200,
+      },
+    ]);
+    expect(delivered.mediaCount).toBe(2);
+  });
 });
 
 describe("Catalog rows and reader composition", () => {

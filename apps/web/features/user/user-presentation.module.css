@@ -1142,14 +1142,17 @@
   overflow-x: hidden;
 }
 .panelContent {
+  /* The inline gutter a phone single-column post bleeds across. */
+  --feed-bleed-start: max(var(--yoyi-space-4), env(safe-area-inset-left));
+  --feed-bleed-end: max(var(--yoyi-space-4), env(safe-area-inset-right));
+
   box-sizing: border-box;
   min-height: calc(100dvh - var(--profile-header-height) - 49px);
   width: min(100%, 960px);
   margin: 0 auto;
-  padding: var(--yoyi-space-4)
-    max(var(--yoyi-space-4), env(safe-area-inset-right))
+  padding: var(--yoyi-space-4) var(--feed-bleed-end)
     calc(var(--yoyi-space-7) + env(safe-area-inset-bottom))
-    max(var(--yoyi-space-4), env(safe-area-inset-left));
+    var(--feed-bleed-start);
 }
 .sectionHeading {
   display: flex;

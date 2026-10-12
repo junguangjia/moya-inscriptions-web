@@ -249,8 +249,9 @@ describe("sizes per surface", () => {
     expect(MEDIA_SIZES.feedCard(portrait, { ...phone, span: true })).toBe(
       "calc(100vw - 16px)",
     );
+    // A phone single-column post bleeds to both viewport edges.
     expect(MEDIA_SIZES.feedCard(portrait, { ...phone, columns: 1 })).toBe(
-      "calc(100vw - 16px)",
+      "100vw",
     );
     expect(MEDIA_SIZES.feedCard(wide, phone)).toBe("calc(59.26vw - 16px)");
     expect(MEDIA_SIZES.feedCard(panorama, { ...phone, span: true })).toBe(

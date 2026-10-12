@@ -26,12 +26,18 @@ const mocks = vi.hoisted(() => {
       activeContent: null,
       activeProfile: null,
       activeDestination: "home",
-      feedLayout: "single",
-      platform: "phone",
+      feedLayout: "single" as "single" | "double",
+      platform: "phone" as "phone" | "tablet" | "pc",
+      readActiveScrollTop: () => 0,
+      restoreActiveScrollTop: vi.fn(),
     },
     client: { discovery: vi.fn(), card: vi.fn(), filters: vi.fn() },
+    returnView: undefined as unknown,
   };
 });
+vi.mock("../auth/auth-return", () => ({
+  useAuthReturnView: () => mocks.returnView,
+}));
 vi.mock("./author-context", () => ({ useAuthors: () => mocks.author }));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => mocks.shell,
@@ -53,11 +59,20 @@ vi.mock("./content-card", () => ({
     </article>
   ),
 }));
+// The real catalog card pulls in the built UI package; only the span rule matters.
+vi.mock("../home/catalog-card", () => ({
+  isUltraWideCatalogMedia: (media?: { width: number; height: number }) =>
+    media !== undefined && media.width / media.height >= 2.4,
+}));
 vi.mock("../home/catalog-masonry", () => ({
   CatalogMasonry: <T,>({
     items,
     getKey,
     renderItem,
+    feedLayout,
+    platform,
+    spanAtAlignedRows,
+    isFullSpan,
   }: {
     items: readonly T[];
     getKey: (item: T) => string;
@@ -66,10 +81,24 @@ vi.mock("../home/catalog-masonry", () => ({
       onSettled: () => void,
       index: number,
     ) => React.ReactNode;
+    feedLayout: string;
+    platform: string;
+    spanAtAlignedRows?: boolean;
+    isFullSpan?: (item: T) => boolean;
   }) => (
-    <div data-masonry="">
+    <div
+      data-masonry=""
+      data-feed-layout={feedLayout}
+      data-platform={platform}
+      data-span-aligned-rows={spanAtAlignedRows ? "" : undefined}
+    >
       {items.map((item, index) => (
-        <div key={getKey(item)}>{renderItem(item, () => undefined, index)}</div>
+        <div
+          key={getKey(item)}
+          data-full-span={isFullSpan?.(item) ? "" : undefined}
+        >
+          {renderItem(item, () => undefined, index)}
+        </div>
       ))}
     </div>
   ),
@@ -141,8 +170,12 @@ beforeEach(() => {
   mocks.author.cache.clear();
   mocks.author.revision = 0;
   mocks.author.notice = "";
+  mocks.shell.feedLayout = "single";
+  mocks.shell.platform = "phone";
+  mocks.returnView = undefined;
   mocks.client.discovery.mockReset();
   mocks.client.card.mockReset();
+  mocks.client.filters.mockReset();
   mocks.client.card.mockImplementation(async (target: { id: string }) =>
     card(Number(target.id.slice(-2))),
   );
@@ -246,4 +279,107 @@ describe("Discovery feed media priority", () => {
       expect(priorities()).toEqual(["", "", ""]);
     },
   );
+});
+
+// single-column-feed-v2: the 碑刻 tab renders the shared feed masonry, stays
+// two-column on phone and tablet, and its filter is hidden (Owner 2026-10-09).
+describe("Inscription discovery tab", () => {
+  const masonry = () =>
+    container.querySelector<HTMLElement>("[data-masonry]") ?? null;
+
+  it.each(["phone", "tablet"] as const)(
+    "renders a two-column masonry on %s even when the shell says single",
+    async (platform) => {
+      mocks.shell.platform = platform;
+      mocks.shell.feedLayout = "single";
+      mocks.client.discovery.mockResolvedValue(page(1, false));
+      await act(async () =>
+        root.render(<DiscoveryFeed active kind="inscription" />),
+      );
+      await flush();
+      expect(masonry()?.dataset.feedLayout).toBe("double");
+      expect(masonry()?.dataset.platform).toBe(platform);
+      expect(masonry()?.hasAttribute("data-span-aligned-rows")).toBe(false);
+      expect(container.querySelectorAll("[data-card]")).toHaveLength(2);
+      expect(container.querySelector("[data-inscription-list]")).toBeNull();
+      expect(
+        container.querySelector('section[aria-label="碑刻筛选结果"]'),
+      ).not.toBeNull();
+    },
+  );
+
+  it("follows the shell layout on PC", async () => {
+    mocks.shell.platform = "pc";
+    mocks.shell.feedLayout = "single";
+    mocks.client.discovery.mockResolvedValue(page(1, false));
+    await act(async () =>
+      root.render(<DiscoveryFeed active kind="inscription" />),
+    );
+    await flush();
+    expect(masonry()?.dataset.feedLayout).toBe("single");
+  });
+
+  it("keeps the all tab on the shell layout with aligned spans", async () => {
+    mocks.client.discovery.mockResolvedValue(page(1, false));
+    await act(async () => root.render(<DiscoveryFeed active kind="all" />));
+    await flush();
+    expect(masonry()?.dataset.feedLayout).toBe("single");
+    expect(masonry()?.hasAttribute("data-span-aligned-rows")).toBe(true);
+  });
+
+  it("spans ultra-wide inscription media across both columns", async () => {
+    const wide: ContentCard = {
+      ...card(1),
+      media: { width: 2400, height: 600 } as ContentCard["media"],
+    };
+    mocks.client.discovery.mockResolvedValue({
+      ...page(1, false),
+      items: [wide, card(2)],
+    });
+    await act(async () =>
+      root.render(<DiscoveryFeed active kind="inscription" />),
+    );
+    await flush();
+    expect(
+      [...container.querySelectorAll("[data-masonry] > div")].map((node) =>
+        node.hasAttribute("data-full-span"),
+      ),
+    ).toEqual([true, false]);
+  });
+
+  it("hides the filter, never reads filter options and drops restored filters", async () => {
+    mocks.returnView = {
+      filters: {
+        dynasty: ["唐"],
+        textAuthor: [],
+        calligrapher: [],
+        originalRegion: [],
+        script: [],
+      },
+      search: "九成宫",
+      count: 0,
+      top: 0,
+      anchor: null,
+    };
+    mocks.client.discovery.mockResolvedValue(page(1, false));
+    await act(async () =>
+      root.render(<DiscoveryFeed active kind="inscription" />),
+    );
+    await flush();
+    expect(container.querySelector("[data-inscription-filter]")).toBeNull();
+    expect(mocks.client.filters).not.toHaveBeenCalled();
+    expect(mocks.client.discovery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "inscription",
+        filters: {
+          dynasty: [],
+          textAuthor: [],
+          calligrapher: [],
+          originalRegion: [],
+          script: [],
+        },
+        search: "",
+      }),
+    );
+  });
 });

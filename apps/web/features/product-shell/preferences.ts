@@ -1,3 +1,5 @@
+import type { PresentationPlatform } from "../shell/device-platform";
+
 export const THEME_PREFERENCE_STORAGE_KEY = "yoyi.theme-preference";
 export const FEED_LAYOUT_PREFERENCE_STORAGE_KEY = "yoyi.home-feed-layout";
 
@@ -20,12 +22,24 @@ export const parseThemePreference = (value: unknown): ThemePreference =>
     ? (value as ThemePreference)
     : "system";
 
+/**
+ * An explicit feed layout choice, or null when the viewer never chose one and
+ * the platform default applies.
+ */
 export const parseFeedLayoutPreference = (
   value: unknown,
-): FeedLayoutPreference =>
+): FeedLayoutPreference | null =>
   feedLayoutPreferences.includes(value as FeedLayoutPreference)
     ? (value as FeedLayoutPreference)
-    : "double";
+    : null;
+
+/**
+ * Phone opens on the single-column post feed; tablet keeps two columns. PC
+ * sizes its own columns and ignores the preference.
+ */
+export const defaultFeedLayoutFor = (
+  platform: PresentationPlatform,
+): FeedLayoutPreference => (platform === "phone" ? "single" : "double");
 
 export interface PreferenceStorage {
   readonly getItem: (key: string) => string | null;
@@ -44,13 +58,13 @@ export const readStoredThemePreference = (
 
 export const readStoredFeedLayoutPreference = (
   storage: PreferenceStorage,
-): FeedLayoutPreference => {
+): FeedLayoutPreference | null => {
   try {
     return parseFeedLayoutPreference(
       storage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
     );
   } catch {
-    return "double";
+    return null;
   }
 };
 

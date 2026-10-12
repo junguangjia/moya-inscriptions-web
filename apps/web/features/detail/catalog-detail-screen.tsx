@@ -364,6 +364,7 @@ export const CatalogDetailScreen = ({
         {detailActions}
         <CatalogDetailContentPager
           comments={commentSection}
+          detailId={detail.id}
           information={information}
           key={detail.id}
           platform={platform}

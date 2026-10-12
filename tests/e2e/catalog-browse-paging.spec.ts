@@ -187,6 +187,43 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
     feedSurface(page, "discover").locator("[data-catalog-paging-control]"),
   ).toHaveCount(0);
 
+  // The inscription tab now shares Discover's masonry and paging footer. Its
+  // sentinel prefetches whenever the footer is within 300px of the viewport,
+  // and 12 masonry cards no longer fill a desktop viewport the way the retired
+  // single-column list did, so later pages would arrive before they can be
+  // observed. Hold every later inscription page until the test releases it.
+  const inscriptionRequestedCursors: string[] = [];
+  const heldInscriptionPages = new Map<
+    string,
+    (outcome: "continue" | "fail") => void
+  >();
+  await page.route("**/api/community/discover?*", async (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    const after = query.get("after") ?? "0";
+    if (query.get("kind") !== "inscription" || after === "0") {
+      await route.continue();
+      return;
+    }
+    inscriptionRequestedCursors.push(after);
+    expect(query.get("pageSize")).toBe("12");
+    const outcome = await new Promise<"continue" | "fail">((release) =>
+      heldInscriptionPages.set(after, release),
+    );
+    if (outcome === "fail") await route.fulfill({ status: 503 });
+    else await route.continue();
+  });
+  const releaseInscriptionPage = async (
+    after: string,
+    outcome: "continue" | "fail" = "continue",
+  ) => {
+    await expect.poll(() => heldInscriptionPages.has(after)).toBe(true);
+    const release = heldInscriptionPages.get(after)!;
+    heldInscriptionPages.delete(after);
+    release(outcome);
+  };
+  const requestsFor = (after: string) =>
+    inscriptionRequestedCursors.filter((cursor) => cursor === after);
+
   await selectHomeFeed(page, "碑刻", "inscriptions");
   const inscriptions = feedSurface(page, "inscriptions");
   // Inscriptions use the composed discovery feed: 12 rows and an after cursor.
@@ -198,19 +235,11 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
     name: "加载更多",
   });
   await expect(inscriptionCards).toHaveCount(12);
-  await expect(inscriptionControl).toBeEnabled();
+  // The sentinel may already be fetching page two, so the control is only
+  // required to be present here; it is disabled while that page loads.
+  await expect(inscriptionControl).toBeVisible();
   await settleFeedRestore(page);
 
-  let inscriptionPageTwoRequests = 0;
-  await page.route("**/api/community/discover?*", async (route) => {
-    const query = new URL(route.request().url()).searchParams;
-    if (query.get("kind") === "inscription" && query.get("after") === "12") {
-      inscriptionPageTwoRequests += 1;
-      expect(query.get("pageSize")).toBe("12");
-      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
-    }
-    await route.continue();
-  });
   let inscriptionTop = 0;
   await expect
     .poll(async () => {
@@ -223,46 +252,40 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
   await expect(inscriptions.getByRole("status", { name: "" })).toHaveText(
     "正在加载…",
   );
+  await expect(inscriptionCards).toHaveCount(12);
+  await releaseInscriptionPage("12");
   await expect(inscriptionCards).toHaveCount(24);
-  expect(inscriptionPageTwoRequests).toBe(1);
+  expect(requestsFor("12")).toEqual(["12"]);
   expect(await readFeedScroll(page, "inscriptions")).toBe(inscriptionTop);
-  await page.unroute("**/api/community/discover?*");
   await selectHomeFeed(page, "发现", "discover");
   await selectHomeFeed(page, "碑刻", "inscriptions");
   await expect(inscriptionCards).toHaveCount(24);
 
-  const inscriptionRequestedCursors: string[] = [];
-  let failPageThree = true;
-  await page.route("**/api/community/discover?*", async (route) => {
-    const query = new URL(route.request().url()).searchParams;
-    if (query.get("kind") === "inscription" && query.get("after") === "24") {
-      inscriptionRequestedCursors.push(query.get("after") ?? "");
-      if (failPageThree) {
-        failPageThree = false;
-        await route.fulfill({ status: 503 });
-        return;
-      }
-    }
-    await route.continue();
-  });
+  // A click is a no-op when the sentinel already requested this page.
   await inscriptionControl.evaluate((button) =>
     (button as HTMLButtonElement).click(),
   );
+  await releaseInscriptionPage("24", "fail");
   await expect(inscriptions.getByRole("alert")).toBeVisible();
   await expect(inscriptionCards).toHaveCount(24);
   await inscriptions
     .getByRole("button", { exact: true, name: "重试" })
     .evaluate((button) => (button as HTMLButtonElement).click());
+  await releaseInscriptionPage("24");
   await expect(inscriptionCards).toHaveCount(36);
-  expect(inscriptionRequestedCursors).toEqual(["24", "24"]);
-  await page.unroute("**/api/community/discover?*");
-  for (const count of [48, 55]) {
+  expect(requestsFor("24")).toEqual(["24", "24"]);
+  for (const [after, count] of [
+    ["36", 48],
+    ["48", 55],
+  ] as const) {
     await inscriptionControl.evaluate((button) =>
       (button as HTMLButtonElement).click(),
     );
+    await releaseInscriptionPage(after);
     await expect(inscriptionCards).toHaveCount(count);
   }
   await expect(inscriptionControl).toHaveCount(0);
+  await page.unroute("**/api/community/discover?*");
   const inscriptionIds = await inscriptionCards.evaluateAll((cards) =>
     cards.map((card) => (card as HTMLElement).dataset.contentId),
   );

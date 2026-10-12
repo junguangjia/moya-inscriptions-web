@@ -35,15 +35,27 @@ describe("T02pQaHarness QA chrome", () => {
   it("enables Discover, Calligraphy and Discussion Topic cards with either chrome setting", () => {
     for (const chrome of ["visible", "hidden"] as const) {
       const container = renderHarness(chrome);
-      for (const selector of [
-        '[data-home-feed-panel="discover"]',
-        '[data-home-feed-panel="calligraphy"]',
-        '[data-product-panel="discussion"]',
-      ]) {
+      // A phone single-column Discover shows posts with an action row in
+      // place of the long-press layer; other feeds keep the layer.
+      const posts =
+        container.querySelector(
+          '[data-product-shell][data-platform="phone"][data-feed-layout="single"]',
+        ) !== null;
+      for (const [selector, actions] of [
+        [
+          '[data-home-feed-panel="discover"]',
+          posts
+            ? "[data-feed-post] [data-feed-post-actions]"
+            : '[data-quick-actions="enabled"]',
+        ],
+        [
+          '[data-home-feed-panel="calligraphy"]',
+          '[data-quick-actions="enabled"]',
+        ],
+        ['[data-product-panel="discussion"]', '[data-quick-actions="enabled"]'],
+      ] as const) {
         expect(
-          container.querySelectorAll(
-            `${selector} [data-quick-actions="enabled"]`,
-          ).length,
+          container.querySelectorAll(`${selector} ${actions}`).length,
         ).toBeGreaterThan(0);
       }
       expect(

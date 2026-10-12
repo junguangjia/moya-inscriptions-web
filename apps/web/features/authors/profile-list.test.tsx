@@ -212,6 +212,54 @@ describe("Profile works cards", () => {
     expect(card.live).toBe(true);
   });
 
+  it("lists the work's images as the card gallery, like a feed card", () => {
+    const detail = (n: number, variant: string, width: number) => ({
+      src: `/api/community/publishing/media/${itemId(n)}/${variant}/base`,
+      width,
+      height: width === 801 ? 600 : Math.round((width * 600) / 801),
+      contentType: "image/webp" as const,
+    });
+    const card = workCard(
+      work(1, {
+        media: [
+          {
+            ...still(1),
+            // Detail candidates: the card keeps those up to the still.
+            renditions: [
+              detail(1, "thumb", 480),
+              detail(1, "display", 801),
+              detail(1, "full", 1602),
+            ],
+            placeholderColor: "#4a4038",
+          },
+          live(2),
+        ],
+      }),
+    );
+    expect(card.mediaCount).toBe(2);
+    expect(card.gallery).toEqual([
+      {
+        id: itemId(1),
+        src: still(1).src,
+        width: 801,
+        height: 600,
+        renditions: [detail(1, "thumb", 480), detail(1, "display", 801)],
+        placeholderColor: "#4a4038",
+      },
+      // A Live entry is its still and the flag, never its motion.
+      { id: itemId(2), src: live(2).src, width: 900, height: 1200, live: true },
+    ]);
+    // At most ten entries; the total stays the work's.
+    const many = workCard(
+      work(2, { media: Array.from({ length: 12 }, (_, n) => still(n + 1)) }),
+    );
+    expect(many.gallery).toHaveLength(10);
+    expect(many.mediaCount).toBe(12);
+    // A text-only work has neither.
+    expect(workCard(work(3))).not.toHaveProperty("gallery");
+    expect(workCard(work(3))).not.toHaveProperty("mediaCount");
+  });
+
   it("takes the card still from the revision's cover crop, not the display image", () => {
     // M03/L10: the cover crop belongs to the revision, so the Works tab must
     // not fall back to the uncropped display image of the cover item.

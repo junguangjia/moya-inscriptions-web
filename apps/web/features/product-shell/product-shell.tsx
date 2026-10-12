@@ -28,6 +28,7 @@ import {
   directEditorTargetFromLocation,
   editorHistoryState,
   editorLocation,
+  feedViewerHistoryState,
   parseProductEditorTarget,
   sameEditorLink,
   sameEditorTarget,
@@ -50,6 +51,7 @@ import {
   THEME_PREFERENCE_STORAGE_KEY,
   applyFeedLayoutPreferenceToRoot,
   applyThemePreferenceToRoot,
+  defaultFeedLayoutFor,
   nextFeedLayoutPreference,
   nextThemePreference,
   persistPreference,
@@ -57,6 +59,7 @@ import {
   readStoredThemePreference,
 } from "./preferences";
 import { SettingsOverlay } from "../settings/settings-overlay";
+import { FeedViewerHost } from "./feed-viewer-host";
 import {
   readRuntimeDeviceClass,
   resolvePresentationOrientation,
@@ -73,6 +76,8 @@ import {
 
 import type { ReactNode, RefObject } from "react";
 import type { ContentIdentity } from "@moya/contracts";
+import type { DetailMediaPresentation } from "../detail/catalog-detail-presentation";
+import type { FeedViewerSession } from "./feed-viewer-host";
 import type {
   EditorProductHistoryState,
   ProductEditorTarget,
@@ -108,7 +113,9 @@ const resetHistoryScroll = (state: ProductHistoryState): ProductHistoryState =>
       ? { ...state, detailScrollTop: 0, sourceScrollTop: 0 }
       : state.kind === "profile"
         ? { ...state, profileScrollTop: 0, sourceScrollTop: 0 }
-        : state.kind === "topic" || state.kind === "editor"
+        : state.kind === "topic" ||
+            state.kind === "editor" ||
+            state.kind === "feed-viewer"
           ? { ...state, sourceScrollTop: 0 }
           : state;
 const entryIdentity = (state: ProductHistoryState | null) =>
@@ -116,7 +123,9 @@ const entryIdentity = (state: ProductHistoryState | null) =>
     ? ""
     : state.kind === "profile"
       ? state.entryId
-      : state.kind === "detail" || state.kind === "viewer"
+      : state.kind === "detail" ||
+          state.kind === "viewer" ||
+          state.kind === "feed-viewer"
         ? `${state.kind}:${state.target.type}:${state.target.id}`
         : state.kind === "primary"
           ? state.destination
@@ -196,6 +205,21 @@ export interface ProductShellContextValue {
   ) => () => void;
   readonly activeTopicId: string | null;
   readonly activeViewerMediaId: string | null;
+  /** A feed post's viewer, open over the feed without Detail. */
+  readonly activeFeedViewer: {
+    readonly target: ContentIdentity;
+    readonly mediaId: string;
+  } | null;
+  /** False when another layer is open or `media[index]` is missing. */
+  readonly openFeedViewer: (request: {
+    readonly target: ContentIdentity;
+    readonly media: readonly DetailMediaPresentation[];
+    readonly index: number;
+    readonly opener: HTMLElement;
+    readonly direction?: "ltr" | "rtl";
+  }) => boolean;
+  readonly changeFeedViewerMedia: (index: number) => void;
+  readonly closeFeedViewer: () => void;
   readonly closeTopic: () => void;
   readonly closeViewer: () => void;
   /** Recover only unavailable content from the current authentication return. */
@@ -240,6 +264,10 @@ export const useProductShell = (): ProductShellContextValue => {
   }
   return value;
 };
+
+/** The shell when one is mounted; cards also render outside it (tests, QA). */
+export const useOptionalProductShell = (): ProductShellContextValue | null =>
+  useContext(ProductShellContext);
 
 export interface ProductShellProps {
   readonly user: ReactNode;
@@ -426,6 +454,12 @@ export const ProductShell = ({
     [articleEditorEnabled],
   );
   const viewerMediaIdRef = useRef<string | null>(null);
+  const feedViewerRef = useRef<FeedViewerSession | null>(null);
+  const [feedViewer, setFeedViewer] = useState<FeedViewerSession | null>(null);
+  // The opener that regains focus once the closed feed viewer has unmounted.
+  const feedViewerReturnRef = useRef<HTMLElement | null>(null);
+  // A Back already requested by a close; a second close must not leave the feed.
+  const feedViewerBackRef = useRef(false);
   const topicIdRef = useRef<string | null>(null);
   const scrollPositionsRef = useRef<ScrollPositions>({
     user: 0,
@@ -439,7 +473,12 @@ export const ProductShell = ({
   const [orientation, setOrientation] =
     useState<PresentationOrientation>("portrait");
   const [theme, setTheme] = useState<ThemePreference>("system");
-  const [feedLayout, setFeedLayout] = useState<FeedLayoutPreference>("double");
+  // An explicit choice wins; otherwise the platform default applies, so a
+  // phone that becomes a tablet (or back) follows the right default.
+  const [storedFeedLayout, setStoredFeedLayout] =
+    useState<FeedLayoutPreference | null>(null);
+  const [feedLayoutRead, setFeedLayoutRead] = useState(false);
+  const feedLayout = storedFeedLayout ?? defaultFeedLayoutFor(platform);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeContent, setActiveContent] = useState<ContentIdentity | null>(
     null,
@@ -827,6 +866,7 @@ export const ProductShell = ({
       if (
         destination === current ||
         settingsOpenRef.current ||
+        feedViewerRef.current !== null ||
         contentRef.current !== null ||
         profileRef.current !== null ||
         editorRef.current !== null ||
@@ -865,6 +905,18 @@ export const ProductShell = ({
     setActiveViewerMediaId(mediaId);
   }, []);
 
+  const setFeedViewerSession = useCallback(
+    (session: FeedViewerSession | null) => {
+      const closing = feedViewerRef.current;
+      if (session === null && closing !== null)
+        feedViewerReturnRef.current = closing.opener;
+      feedViewerBackRef.current = false;
+      feedViewerRef.current = session;
+      setFeedViewer(session);
+    },
+    [],
+  );
+
   const setTopicVisibility = useCallback((topicId: string | null) => {
     topicIdRef.current = topicId;
     setActiveTopicId(topicId);
@@ -884,6 +936,7 @@ export const ProductShell = ({
     (opener: HTMLElement) => {
       if (
         settingsOpenRef.current ||
+        feedViewerRef.current !== null ||
         contentRef.current !== null ||
         profileRef.current !== null ||
         editorRef.current !== null ||
@@ -951,6 +1004,7 @@ export const ProductShell = ({
         topicId.length === 0 ||
         activeDestinationRef.current !== "discussion" ||
         settingsOpenRef.current ||
+        feedViewerRef.current !== null ||
         contentRef.current !== null ||
         profileRef.current !== null ||
         editorRef.current !== null ||
@@ -1089,7 +1143,12 @@ export const ProductShell = ({
           ? profileRef.current
           : stored?.kind === "primary"
             ? { ...stored, scrollTop: readActiveScrollTop() }
-            : stored;
+            : stored?.kind === "feed-viewer"
+              ? primaryHistoryState(
+                  stored.sourceDestination,
+                  readActiveScrollTop(),
+                )
+              : stored;
     return { history, positions: { ...scrollPositionsRef.current } };
   });
   const openContent = useCallback(
@@ -1101,6 +1160,7 @@ export const ProductShell = ({
         settingsOpenRef.current ||
         topicIdRef.current !== null ||
         viewerMediaIdRef.current !== null ||
+        feedViewerRef.current !== null ||
         editorRef.current !== null ||
         (target.type === "work" && !profileEnabled)
       )
@@ -1155,6 +1215,7 @@ export const ProductShell = ({
         !profileEnabled ||
         settingsOpenRef.current ||
         viewerMediaIdRef.current !== null ||
+        feedViewerRef.current !== null ||
         topicIdRef.current !== null ||
         editorRef.current !== null ||
         (authorId !== null && !/^user-[0-9a-f]{32}$/.test(authorId))
@@ -1284,6 +1345,7 @@ export const ProductShell = ({
         editorTarget === null ||
         settingsOpenRef.current ||
         viewerMediaIdRef.current !== null ||
+        feedViewerRef.current !== null ||
         (topicIdRef.current !== null && !fromThread) ||
         editorRef.current !== null
       )
@@ -1619,6 +1681,114 @@ export const ProductShell = ({
     );
   }, [setViewerVisibility]);
 
+  const openFeedViewer = useCallback(
+    (request: {
+      readonly target: ContentIdentity;
+      readonly media: readonly DetailMediaPresentation[];
+      readonly index: number;
+      readonly opener: HTMLElement;
+      readonly direction?: "ltr" | "rtl";
+    }) => {
+      const item = request.media[request.index];
+      const destination = activeDestinationRef.current;
+      if (
+        settingsOpenRef.current ||
+        topicIdRef.current !== null ||
+        contentRef.current !== null ||
+        viewerMediaIdRef.current !== null ||
+        editorRef.current !== null ||
+        feedViewerRef.current !== null ||
+        item === undefined ||
+        // Only an entry history can read back again is pushed.
+        parseProductHistoryState(
+          feedViewerHistoryState(request.target, item.id, destination, 0),
+        ) === null
+      )
+        return false;
+      saveCurrentEntry();
+      window.history.pushState(
+        currentProductHistoryState(
+          feedViewerHistoryState(
+            request.target,
+            item.id,
+            destination,
+            scrollPositionsRef.current[destination],
+          ),
+        ),
+        "",
+        viewerLocation(window.location, request.target, item.id),
+      );
+      setFeedViewerSession({
+        target: request.target,
+        media: request.media,
+        index: request.index,
+        opener: request.opener,
+        direction: request.direction ?? "ltr",
+      });
+      return true;
+    },
+    [saveCurrentEntry, setFeedViewerSession],
+  );
+
+  const changeFeedViewerMedia = useCallback(
+    (index: number) => {
+      const session = feedViewerRef.current;
+      const item = session?.media[index];
+      if (session === null || item === undefined || index === session.index)
+        return;
+      const state = parseProductHistoryState(window.history.state);
+      if (state?.kind === "feed-viewer" && state.mediaId !== item.id) {
+        const next = feedViewerHistoryState(
+          state.target,
+          item.id,
+          state.sourceDestination,
+          state.sourceScrollTop,
+        );
+        if (parseProductHistoryState(next) !== null)
+          window.history.replaceState(
+            currentProductHistoryState(next),
+            "",
+            viewerLocation(window.location, state.target, item.id),
+          );
+      }
+      setFeedViewerSession({ ...session, index });
+    },
+    [setFeedViewerSession],
+  );
+
+  const closeFeedViewer = useCallback(() => {
+    if (feedViewerRef.current === null) return;
+    if (
+      parseProductHistoryState(window.history.state)?.kind === "feed-viewer"
+    ) {
+      if (feedViewerBackRef.current) return;
+      feedViewerBackRef.current = true;
+      window.history.back();
+      return;
+    }
+    setFeedViewerSession(null);
+  }, [setFeedViewerSession]);
+
+  // Focus returns once the viewer's modal dialog has left the document.
+  useEffect(() => {
+    if (feedViewer !== null || feedViewerReturnRef.current === null) return;
+    const opener = feedViewerReturnRef.current;
+    feedViewerReturnRef.current = null;
+    const frame = window.requestAnimationFrame(() => {
+      if (
+        feedViewerRef.current === null &&
+        contentRef.current === null &&
+        editorRef.current === null &&
+        topicIdRef.current === null &&
+        !settingsOpenRef.current &&
+        opener.isConnected &&
+        opener.closest('[inert], [hidden], [aria-hidden="true"]') === null
+      )
+        opener.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [feedViewer]);
+
   const closeDetail = useCallback(() => {
     if (viewerMediaIdRef.current !== null) {
       closeViewer();
@@ -1733,9 +1903,9 @@ export const ProductShell = ({
       window.localStorage,
     );
     setTheme(storedTheme);
-    setFeedLayout(storedFeedLayout);
+    setStoredFeedLayout(storedFeedLayout);
+    setFeedLayoutRead(true);
     applyThemePreferenceToRoot(root, storedTheme);
-    applyFeedLayoutPreferenceToRoot(root, storedFeedLayout);
 
     const started = Number(root.dataset.yoyiBootStarted);
     const elapsed = Number.isFinite(started)
@@ -1749,6 +1919,13 @@ export const ProductShell = ({
 
     return () => window.clearTimeout(loadingTimer);
   }, []);
+
+  // The boot script set the attribute before hydration; keep it in step with
+  // the effective layout once storage has been read.
+  useEffect(() => {
+    if (feedLayoutRead)
+      applyFeedLayoutPreferenceToRoot(document.documentElement, feedLayout);
+  }, [feedLayout, feedLayoutRead]);
 
   useEffect(() => {
     const synchronizeEffectiveTheme = () => {
@@ -1907,8 +2084,17 @@ export const ProductShell = ({
   ]);
 
   useEffect(() => {
-    const storedState =
+    const restoredState =
       authReturnView?.history ?? parseProductHistoryState(window.history.state);
+    // A feed viewer cannot be rebuilt: its entry restores the feed beneath it.
+    const feedViewerEntry = restoredState?.kind === "feed-viewer";
+    const storedState =
+      restoredState?.kind === "feed-viewer"
+        ? primaryHistoryState(
+            restoredState.sourceDestination,
+            restoredState.sourceScrollTop,
+          )
+        : restoredState;
     const initialState =
       storedState === null ||
       (storedState.kind === "editor" &&
@@ -1923,7 +2109,7 @@ export const ProductShell = ({
       window.history.replaceState(currentProductHistoryState(initialState), "");
     const candidateTarget = directContentFromLocation(window.location);
     const directTarget =
-      candidateTarget?.type === "work" && !profileEnabled
+      feedViewerEntry || (candidateTarget?.type === "work" && !profileEnabled)
         ? null
         : candidateTarget;
     const directAuthor = profileEnabled
@@ -2162,6 +2348,15 @@ export const ProductShell = ({
         allowedEditorTarget(state.editorTarget) === null
       )
         state = null;
+      // Leaving a feed viewer closes it; its opener regains focus.
+      setFeedViewerSession(null);
+      // Forward onto a feed viewer cannot rebuild it: show its source feed.
+      const feedViewerEntry = state?.kind === "feed-viewer";
+      if (state?.kind === "feed-viewer")
+        state = primaryHistoryState(
+          state.sourceDestination,
+          state.sourceScrollTop,
+        );
       // An entry this shell never wrote, such as a native fragment link's.
       const nativeEntry = state === null;
       let reloadDetail = false;
@@ -2233,6 +2428,12 @@ export const ProductShell = ({
       }
       if (nativeEntry && state !== null)
         window.history.replaceState(currentProductHistoryState(state), "");
+      if (feedViewerEntry && state !== null)
+        window.history.replaceState(
+          currentProductHistoryState(state),
+          "",
+          primaryLocation(window.location),
+        );
       if (reloadDetail) setDetailNavigationRevision((value) => value + 1);
       const wasDetailOpen = contentRef.current !== null;
       const wasSettingsOpen = settingsOpenRef.current;
@@ -2384,6 +2585,7 @@ export const ProductShell = ({
     saveScroll,
     setDetailVisibility,
     setEditorVisibility,
+    setFeedViewerSession,
     setSettingsVisibility,
     setTopicVisibility,
     setViewerVisibility,
@@ -2454,7 +2656,7 @@ export const ProductShell = ({
   };
 
   const setFeedLayoutPreference = (next: FeedLayoutPreference) => {
-    setFeedLayout(next);
+    setStoredFeedLayout(next);
     applyFeedLayoutPreferenceToRoot(document.documentElement, next);
     persistPreference(
       window.localStorage,
@@ -2479,6 +2681,16 @@ export const ProductShell = ({
     activeDestination,
     activeTopicId,
     activeViewerMediaId,
+    activeFeedViewer:
+      feedViewer === null
+        ? null
+        : {
+            target: feedViewer.target,
+            mediaId: feedViewer.media[feedViewer.index]?.id ?? "",
+          },
+    openFeedViewer,
+    changeFeedViewerMedia,
+    closeFeedViewer,
     changeViewerMedia,
     closeViewer,
     recoverUnavailableAuthContent,
@@ -2527,7 +2739,9 @@ export const ProductShell = ({
         data-product-shell=""
         data-settings-open={settingsOpen ? "true" : "false"}
         data-topic-open={activeTopicId === null ? "false" : "true"}
-        data-viewer-open={activeViewerMediaId === null ? "false" : "true"}
+        data-viewer-open={
+          activeViewerMediaId === null && feedViewer === null ? "false" : "true"
+        }
         data-theme-preference={theme}
       >
         <div
@@ -2623,6 +2837,12 @@ export const ProductShell = ({
             {renderEditorOverlay(activeEditor.editorTarget, editorControls)}
           </Fragment>
         ) : null}
+        <FeedViewerHost
+          onClose={closeFeedViewer}
+          onIndexChange={changeFeedViewerMedia}
+          platform={platform}
+          session={feedViewer}
+        />
         <LoadingScreen
           active={bootPending}
           className={styles.loading}

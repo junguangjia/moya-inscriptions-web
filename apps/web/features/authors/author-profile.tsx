@@ -1170,6 +1170,7 @@ const ScopedAuthorProfile = ({
         </div>
         <HorizontalPager
           ref={pager}
+          frameAttributes={{ "data-profile-tab-pager": "" }}
           keys={visibleTabs}
           activeKey={viewTab as (typeof tabs)[number]}
           onCommit={changeTab}

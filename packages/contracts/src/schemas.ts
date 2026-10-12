@@ -1011,6 +1011,37 @@ export type DiscussionPage = z.infer<typeof discussionPageSchema>;
 export type DiscussionReplyPage = z.infer<typeof discussionReplyPageSchema>;
 export type OwnComment = z.infer<typeof ownCommentSchema>;
 
+/** At most this many gallery entries travel with a card; `mediaCount` carries the total. */
+export const CARD_GALLERY_MAXIMUM = 10;
+
+/** One card image: the anchor `src` and size, its card candidates and loading colour. */
+const cardMediaFields = {
+  id: z.string(),
+  src: z.string(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  renditions: cardMediaRenditionListSchema.optional(),
+  placeholderColor: placeholderColorSchema.optional(),
+};
+const addCardMediaAnchorIssues = (
+  media: z.infer<z.ZodObject<typeof cardMediaFields>>,
+  context: z.RefinementCtx,
+) => {
+  if (media.renditions !== undefined)
+    addMediaRenditionAnchorIssues(media, media.renditions, context);
+};
+const cardMediaSchema = z
+  .strictObject(cardMediaFields)
+  .superRefine(addCardMediaAnchorIssues);
+/**
+ * One shown image of a card's item in its full framing, in the same delivery
+ * form as the card's `media`; a Live Photo is its still plus the flag.
+ */
+const cardGalleryEntrySchema = z
+  .strictObject({ ...cardMediaFields, live: z.boolean().optional() })
+  .superRefine(addCardMediaAnchorIssues);
+export type CardGalleryEntry = z.infer<typeof cardGalleryEntrySchema>;
+
 const contentCardFields = z.strictObject({
   aliases: catalogSummarySchema.shape.aliases,
   /** Present only for official Catalog content with a known province. */
@@ -1031,51 +1062,91 @@ const contentCardFields = z.strictObject({
    * The card image: Catalog media, or a work's cover still in its cover
    * framing. `renditions` are card candidates with `src` as the anchor.
    */
-  media: z
-    .strictObject({
-      id: z.string(),
-      src: z.string(),
-      width: z.number().int().positive(),
-      height: z.number().int().positive(),
-      renditions: cardMediaRenditionListSchema.optional(),
-      placeholderColor: placeholderColorSchema.optional(),
-    })
-    .superRefine((media, context) => {
-      if (media.renditions !== undefined)
-        addMediaRenditionAnchorIssues(media, media.renditions, context);
-    })
-    .nullable(),
+  media: cardMediaSchema.nullable(),
+  /**
+   * The item's shown images in their own order (Catalog position, revision
+   * position), each in its full framing, at most CARD_GALLERY_MAXIMUM;
+   * present exactly when `media` is, together with `mediaCount`. A work
+   * entry is its display still: motion never travels on a card.
+   */
+  gallery: z
+    .array(cardGalleryEntrySchema)
+    .min(1)
+    .max(CARD_GALLERY_MAXIMUM)
+    .optional(),
+  /** The item's shown image total; `gallery` may stop short of it. */
+  mediaCount: z.number().int().positive().optional(),
 });
+
 /**
- * A work card lists its cover in the community forms (unsigned published
- * URLs or the authorized path, never a signed URL); a Catalog card in the
- * resolved form of Catalog media.
+ * A work card lists its images in the community forms (unsigned published
+ * URLs or the authorized path, never a signed URL, never motion); a Catalog
+ * card in the resolved form of Catalog media.
  */
+const addCardMediaFormIssues = (
+  type: ContentIdentity["type"],
+  media: {
+    readonly src: string;
+    readonly renditions?: readonly unknown[] | undefined;
+  },
+  context: z.RefinementCtx,
+  path: readonly PropertyKey[],
+): void => {
+  if (type === "work" && !workCoverSrcSchema.safeParse(media.src).success)
+    context.addIssue({
+      code: "custom",
+      path: [...path, "src"],
+      message:
+        "work card media uses an authorized path or unsigned published URL",
+    });
+  if (media.renditions === undefined) return;
+  const form =
+    type === "work" ? mediaRenditionListSchema : publicMediaRenditionListSchema;
+  if (!form.safeParse(media.renditions).success)
+    context.addIssue({
+      code: "custom",
+      path: [...path, "renditions"],
+      message: "card renditions take the delivery form of their target",
+    });
+};
 export const contentCardSchema = contentCardFields.superRefine(
   (card, context) => {
+    if (card.media !== null)
+      addCardMediaFormIssues(card.target.type, card.media, context, ["media"]);
+    if ((card.gallery === undefined) !== (card.mediaCount === undefined))
+      context.addIssue({
+        code: "custom",
+        path: ["mediaCount"],
+        message: "gallery and mediaCount travel together",
+      });
+    if (card.gallery === undefined) return;
+    if (card.media === null)
+      context.addIssue({
+        code: "custom",
+        path: ["gallery"],
+        message: "a gallery needs a card image",
+      });
+    if (card.mediaCount !== undefined && card.mediaCount < card.gallery.length)
+      context.addIssue({
+        code: "custom",
+        path: ["mediaCount"],
+        message: "mediaCount counts every gallery entry",
+      });
     if (
-      card.target.type === "work" &&
-      card.media !== null &&
-      !workCoverSrcSchema.safeParse(card.media.src).success
+      new Set(card.gallery.map((entry) => entry.id)).size !==
+      card.gallery.length
     )
       context.addIssue({
         code: "custom",
-        path: ["media", "src"],
-        message:
-          "work card media uses an authorized path or unsigned published URL",
+        path: ["gallery"],
+        message: "gallery entries are distinct images",
       });
-    const renditions = card.media?.renditions;
-    if (renditions === undefined) return;
-    const form =
-      card.target.type === "work"
-        ? mediaRenditionListSchema
-        : publicMediaRenditionListSchema;
-    if (!form.safeParse(renditions).success)
-      context.addIssue({
-        code: "custom",
-        path: ["media", "renditions"],
-        message: "card renditions take the delivery form of their target",
-      });
+    card.gallery.forEach((entry, index) =>
+      addCardMediaFormIssues(card.target.type, entry, context, [
+        "gallery",
+        index,
+      ]),
+    );
   },
 );
 const filterValues = z
@@ -1143,6 +1214,8 @@ export const contentStateSchema = z.strictObject({
   liked: z.boolean(),
   favoriteCount: z.number().int().nonnegative(),
   likeCount: z.number().int().nonnegative(),
+  /** Public comments and replies this reader may see (the discussion's visibleTotal). */
+  commentCount: z.number().int().nonnegative(),
 });
 export type ContentState = z.infer<typeof contentStateSchema>;
 export type ContentCard = z.infer<typeof contentCardSchema>;

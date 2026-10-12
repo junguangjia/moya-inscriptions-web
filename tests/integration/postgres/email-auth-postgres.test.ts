@@ -104,7 +104,8 @@ const catalogStubs = `
   );
   CREATE TABLE IF NOT EXISTS public.catalog_media(
     catalog_id text, media_id text, object_key text,
-    width integer, height integer, is_representative boolean
+    width integer, height integer, is_representative boolean,
+    position integer NOT NULL DEFAULT 0
   );
   -- parallel-community-integration-qa: the notification source query checks
   -- Article visibility against C's published-only projection, so grant-runtime

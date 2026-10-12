@@ -9,6 +9,7 @@ import {
   directMediaIdFromLocation,
   editorHistoryState,
   editorLocation,
+  feedViewerHistoryState,
   isPrimaryDestination,
   mergeProductHistoryState,
   parseProductHistoryState,
@@ -69,6 +70,57 @@ describe("Product Shell history", () => {
         "catalog one",
       ),
     ).toBe("/dev/t02p?cb=exact-head&catalogId=catalog+one#detail");
+  });
+
+  it("parses the feed viewer layer and reuses the viewer link", () => {
+    const work = { type: "work", id: `work-${"a".repeat(32)}` } as const;
+    const state = feedViewerHistoryState(work, "media-2", "user", 312);
+    expect(state).toEqual({
+      kind: "feed-viewer",
+      version: PRODUCT_SHELL_HISTORY_VERSION,
+      target: work,
+      mediaId: "media-2",
+      sourceDestination: "user",
+      sourceScrollTop: 312,
+    });
+    expect(parseProductHistoryState(state)).toEqual(state);
+    expect(
+      parseProductHistoryState(mergeProductHistoryState({ __NA: true }, state)),
+    ).toEqual(state);
+    expect(
+      feedViewerHistoryState(work, "media-2", "home", -4).sourceScrollTop,
+    ).toBe(0);
+    expect(
+      viewerLocation(
+        { pathname: "/", search: "?catalogId=old" } as Location,
+        work,
+        state.mediaId,
+      ),
+    ).toBe(`/?workId=${work.id}&image=media-2#viewer`);
+  });
+
+  it.each([
+    ["an empty media id", { mediaId: "" }],
+    ["a media id with whitespace", { mediaId: "media 2" }],
+    ["an oversized media id", { mediaId: "m".repeat(129) }],
+    ["a missing media id", { mediaId: undefined }],
+    ["a negative source scroll", { sourceScrollTop: -1 }],
+    ["a non-finite source scroll", { sourceScrollTop: Infinity }],
+    ["an unknown source destination", { sourceDestination: "inscriptions" }],
+    ["an invalid work target", { target: { type: "work", id: "work-1" } }],
+    ["a retired version", { version: 1 }],
+  ])("rejects a feed viewer state with %s", (_label, override) => {
+    expect(
+      parseProductHistoryState({
+        ...feedViewerHistoryState(
+          { type: "catalog", id: "catalog-one" },
+          "media-1",
+          "home",
+          10,
+        ),
+        ...override,
+      }),
+    ).toBeNull();
   });
 
   it("reads only a bounded direct Development CatalogId", () => {

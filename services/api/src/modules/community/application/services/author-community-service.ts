@@ -12,6 +12,7 @@ import type {
 } from "../ports/discussion-port.js";
 import type {
   CommunityDiscoveryPort,
+  DiscoveryCardMediaRecord,
   DiscoveryCardRecord,
 } from "../ports/community-discovery-port.js";
 import type { StorageUrlResolver } from "../../../catalog/application/ports/storage-url-resolver.js";
@@ -48,13 +49,22 @@ export class AuthorCommunityService {
   private async cards(
     items: readonly DiscoveryCardRecord[],
   ): Promise<ContentCard[]> {
+    // Every Catalog image of the page (card images and gallery entries)
+    // resolves in one batch; a representative image listed in its own
+    // gallery resolves once.
     const catalogMedia = items.flatMap((item) =>
-      item.media?.type === "catalog" ? [item.media] : [],
+      [item.media, ...(item.gallery ?? [])].flatMap((media) =>
+        media?.type === "catalog" ? [media] : [],
+      ),
     );
-    const locators = catalogMedia.map((media) => ({
-      mediaId: media.id,
-      objectKey: media.objectKey,
-    }));
+    const locators = [
+      ...new Map(
+        catalogMedia.map((media) => [
+          media.id,
+          { mediaId: media.id, objectKey: media.objectKey },
+        ]),
+      ).values(),
+    ];
     // Catalog cards are a card context: candidates up to the anchor.
     const renditionKeys = [
       ...new Set(
@@ -72,44 +82,62 @@ export class AuthorCommunityService {
         ? noRenditionUrls
         : this.mediaResolver.resolveKeys(renditionKeys),
     ]);
-    return items.map((item) => {
-      const m = item.media;
-      if (!m) return { ...item, media: null };
-      // Work cards carry the path and the cover candidates the adapter
-      // resolved for the viewer's revision.
+    // Work images carry the path and candidates the adapter resolved for the
+    // viewer's revision; Catalog images their approved URL and candidates.
+    const cardImage = (
+      m: DiscoveryCardMediaRecord,
+    ): NonNullable<ContentCard["media"]> | null => {
       if (m.type === "work")
         return {
-          ...item,
-          media: {
-            id: m.id,
-            width: m.width,
-            height: m.height,
-            src: m.src,
-            ...(m.renditions === undefined
-              ? {}
-              : { renditions: [...m.renditions] }),
-            ...(m.placeholderColor === undefined
-              ? {}
-              : { placeholderColor: m.placeholderColor }),
-          },
+          id: m.id,
+          width: m.width,
+          height: m.height,
+          src: m.src,
+          ...(m.renditions === undefined
+            ? {}
+            : { renditions: [...m.renditions] }),
+          ...(m.placeholderColor === undefined
+            ? {}
+            : { placeholderColor: m.placeholderColor }),
         };
       const src = urls?.get(m.id);
-      if (!src) throw new CommunityNotFoundError("Media unavailable");
+      if (!src) return null;
       const delivery = catalogMediaDelivery(m, src, renditionUrls, "card");
       return {
-        ...item,
-        media: {
-          id: m.id,
-          width: delivery.width,
-          height: delivery.height,
-          src: delivery.src,
-          ...(delivery.renditions === undefined
-            ? {}
-            : { renditions: delivery.renditions }),
-          ...(delivery.placeholderColor === undefined
-            ? {}
-            : { placeholderColor: delivery.placeholderColor }),
-        },
+        id: m.id,
+        width: delivery.width,
+        height: delivery.height,
+        src: delivery.src,
+        ...(delivery.renditions === undefined
+          ? {}
+          : { renditions: delivery.renditions }),
+        ...(delivery.placeholderColor === undefined
+          ? {}
+          : { placeholderColor: delivery.placeholderColor }),
+      };
+    };
+    return items.map((item): ContentCard => {
+      const { gallery: galleryRecords, mediaCount, ...card } = item;
+      const m = item.media;
+      if (!m) return { ...card, media: null };
+      const media = cardImage(m);
+      if (media === null) throw new CommunityNotFoundError("Media unavailable");
+      // A gallery entry without an approved URL is left out (the card keeps
+      // its total); a card left with no entry carries no gallery.
+      const gallery = (galleryRecords ?? []).flatMap((entry) => {
+        const image = cardImage(entry);
+        if (image === null) {
+          console.warn("[catalog-media] gallery_fallback");
+          return [];
+        }
+        return [{ ...image, ...(entry.live === true ? { live: true } : {}) }];
+      });
+      return {
+        ...card,
+        media,
+        ...(gallery.length === 0 || mediaCount === undefined
+          ? {}
+          : { gallery, mediaCount }),
       };
     });
   }

@@ -901,13 +901,18 @@ test("Clean Product Preview preserves shell state, scroll, and preferences set t
     "data-theme-preference",
     "light",
   );
+  // Phone opens single-column and tablet double; the toggle flips either.
+  const toggledLayout =
+    expectedInitialAutoPlatform(testInfo.project.name) === "phone"
+      ? "double"
+      : "single";
   if (expectedInitialAutoPlatform(testInfo.project.name) === "pc") {
     await expect(settings.locator("[data-feed-layout-toggle]")).toHaveCount(0);
   } else {
     await settings.locator("[data-feed-layout-toggle]").click();
     await expect(productShell(qa)).toHaveAttribute(
       "data-feed-layout",
-      "single",
+      toggledLayout,
     );
   }
   await closeSettingsAndUserPage(settings, userPage);
@@ -959,7 +964,7 @@ test("Clean Product Preview preserves shell state, scroll, and preferences set t
     "data-feed-layout",
     expectedInitialAutoPlatform(testInfo.project.name) === "pc"
       ? "double"
-      : "single",
+      : toggledLayout,
   );
 });
 
@@ -1432,8 +1437,17 @@ test("Home pager follows touch progress and hands interaction over on release", 
 
   await expect(pager).toHaveAttribute("data-category-pager-engine", "embla");
   await expect(pager).toHaveCSS("scroll-snap-type", "none");
-  // Horizontal input is local; browser vertical scrolling and pinch remain enabled.
-  await expect(pager).toHaveCSS("touch-action", "pan-y pinch-zoom");
+  // Horizontal input is local; browser vertical scrolling and pinch remain
+  // enabled. A phone single-column feed also lets post image stages pan
+  // (Chromium serializes that value as its equivalent `manipulation`).
+  const shell = productShell(surface);
+  await expect(pager).toHaveCSS(
+    "touch-action",
+    (await shell.getAttribute("data-platform")) === "phone" &&
+      (await shell.getAttribute("data-feed-layout")) === "single"
+      ? /^(?:pan-x pan-y pinch-zoom|manipulation)$/u
+      : "pan-y pinch-zoom",
+  );
   await expect(nearby).not.toHaveAttribute("hidden", "");
   await expect(
     home.locator('[data-home-feed-panel="calligraphy"]'),
@@ -2421,13 +2435,15 @@ test("Feed layout remains bounded to phone/tablet while PC stays responsive", as
 }, testInfo) => {
   const { surface } = await openDevelopmentSurface(page);
   const masonry = activeHomeMasonry(surface);
+  const platform = expectedInitialAutoPlatform(testInfo.project.name);
   await expect(masonry).toHaveAttribute("data-layout-ready", "true");
+  // Phone opens on the single-column post feed; tablet and PC on double.
   await expect(productShell(surface)).toHaveAttribute(
     "data-feed-layout",
-    "double",
+    platform === "phone" ? "single" : "double",
   );
 
-  if (expectedInitialAutoPlatform(testInfo.project.name) === "pc") {
+  if (platform === "pc") {
     const { settings, userPage } =
       await openSettingsThroughAvailableEntry(surface);
     await expect(settings.locator("[data-feed-layout-toggle]")).toHaveCount(0);
@@ -2443,7 +2459,13 @@ test("Feed layout remains bounded to phone/tablet while PC stays responsive", as
     return;
   }
 
+  if (platform === "phone") {
+    await expect(masonry).toHaveAttribute("data-masonry-columns", "1");
+    await expect(masonry.locator("[data-feed-post]").first()).toBeVisible();
+    await setFeedLayoutThroughSettings(surface, "double");
+  }
   await expect(masonry).toHaveAttribute("data-masonry-columns", "2");
+  await expect(masonry.locator("[data-feed-post]")).toHaveCount(0);
   await expectActiveDestination(surface, "home");
   await expectAlignedHomeFeatures(masonry);
 

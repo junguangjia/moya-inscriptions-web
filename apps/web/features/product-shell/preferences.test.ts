@@ -7,6 +7,7 @@ import {
   THEME_PREFERENCE_STORAGE_KEY,
   applyFeedLayoutPreferenceToRoot,
   applyThemePreferenceToRoot,
+  defaultFeedLayoutFor,
   nextFeedLayoutPreference,
   nextThemePreference,
   parseFeedLayoutPreference,
@@ -30,10 +31,16 @@ describe("Product Shell preferences", () => {
   it.each([
     ["single", "single"],
     ["double", "double"],
-    ["wide", "double"],
-    [null, "double"],
+    ["wide", null],
+    [null, null],
   ] as const)("parses feed layout preference %s", (value, expected) => {
     expect(parseFeedLayoutPreference(value)).toBe(expected);
+  });
+
+  it("defaults phone to single column and tablet and PC to double", () => {
+    expect(defaultFeedLayoutFor("phone")).toBe("single");
+    expect(defaultFeedLayoutFor("tablet")).toBe("double");
+    expect(defaultFeedLayoutFor("pc")).toBe("double");
   });
 
   it("uses canonical storage keys and fails closed when storage is unavailable", () => {
@@ -47,7 +54,7 @@ describe("Product Shell preferences", () => {
     };
 
     expect(readStoredThemePreference(storage)).toBe("system");
-    expect(readStoredFeedLayoutPreference(storage)).toBe("double");
+    expect(readStoredFeedLayoutPreference(storage)).toBeNull();
     expect(() =>
       persistPreference(storage, THEME_PREFERENCE_STORAGE_KEY, "dark"),
     ).not.toThrow();

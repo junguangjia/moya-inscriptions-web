@@ -20,6 +20,14 @@ import type {
 } from "@moya/contracts";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
+import {
+  replyAudience,
+  rootEligible,
+  rootFrom,
+  rootPublic,
+  visibleDiscussionCountSql,
+} from "./discussion-visibility.js";
+
 const opaque = (prefix: string) =>
   `${prefix}-${randomUUID().replaceAll("-", "")}`;
 const deletedText = "This comment has been deleted";
@@ -29,15 +37,6 @@ const pageMeta = (total: number, q: DiscussionQuery) => ({
   pageSize: q.pageSize,
   totalPages: Math.ceil(total / q.pageSize),
 });
-/** The same root/reply tables and identity graph serve both kinds of content. */
-const rootPublic =
-  "c.moderation='visible' AND (c.body_deleted_at IS NULL OR c.was_public)";
-const rootEligible = `c.thread_removed_at IS NULL AND community.accounts_can_interact($3,c.author_id)
- AND ((${rootPublic}) OR (c.author_id=$3 AND u.status='active'))`;
-const replyAudience = `community.accounts_can_interact($3,r.author_id)
- AND (((${rootPublic}) AND r.moderation='visible' AND (r.body_deleted_at IS NULL OR r.was_public)) OR (r.author_id=$3 AND ru.status='active'))`;
-const rootFrom = `FROM community.catalog_comments c JOIN community.public_users u ON u.id=c.author_id
- WHERE c.target_type=$1 AND c.catalog_id=$2 AND ${rootEligible}`;
 /** Effective work visibility for `$2`; reads also admit the author's own hidden-from-others work. */
 const workVisible = (lock: boolean) =>
   `u.status='active' AND community.accounts_can_interact($2,w.author_id)
@@ -455,18 +454,11 @@ export class PostgresDiscussionStore implements DiscussionPort {
         items = latest.map(attach);
       const visibleTotal = Number(
         (
-          await db.query(
-            `SELECT
-              (SELECT count(*) ${rootFrom} AND ${rootPublic} AND c.body_deleted_at IS NULL)
-              + (SELECT count(*) FROM community.catalog_comment_replies r
-                 JOIN community.catalog_comments c ON c.id=r.root_comment_id
-                 JOIN community.public_users u ON u.id=c.author_id
-                 JOIN community.public_users ru ON ru.id=r.author_id
-                 WHERE c.target_type=$1 AND c.catalog_id=$2 AND ${rootEligible}
-                 AND ${replyAudience} AND ${rootPublic}
-                 AND r.moderation='visible' AND r.body_deleted_at IS NULL) AS n`,
-            [target.type, target.id, viewer],
-          )
+          await db.query(visibleDiscussionCountSql, [
+            target.type,
+            target.id,
+            viewer,
+          ])
         ).rows[0]?.n ?? 0,
       );
       return { hot: hotItems, items, ...pageMeta(total, q), visibleTotal };

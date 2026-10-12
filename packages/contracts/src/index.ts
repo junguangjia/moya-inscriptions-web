@@ -57,6 +57,7 @@ export type {
   OwnComment,
 } from "./schemas.js";
 export type {
+  CardGalleryEntry,
   ContentCard,
   ContentState,
   DiscoveryQuery,

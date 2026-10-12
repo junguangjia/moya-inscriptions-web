@@ -2,7 +2,14 @@
 
 import { useAuthReturnView } from "../auth/auth-return";
 
-import { useContext, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import {
   CommentComposerPortalProvider,
@@ -14,6 +21,10 @@ import {
 } from "../comments/comment-count";
 import { HorizontalPager } from "../shell/horizontal-pager";
 import { CatalogDetailScrollContext } from "./catalog-detail-scroll";
+import {
+  clearDetailCommentsRequest,
+  detailCommentsRequested,
+} from "./detail-comments-request";
 import styles from "./catalog-detail.module.css";
 
 import type { ReactNode } from "react";
@@ -27,12 +38,15 @@ export interface CatalogDetailContentPagerProps {
   readonly comments: ReactNode;
   readonly information: ReactNode;
   readonly platform: Exclude<PresentationPlatform, "pc">;
+  /** The content shown; a feed post's comment entry may ask for comments. */
+  readonly detailId?: string;
 }
 
 const ScopedCatalogDetailContentPager = ({
   comments,
   information,
   platform,
+  detailId,
 }: CatalogDetailContentPagerProps) => {
   const currentPage = useRef<DetailContentPage>("information");
   const capturedScroll = useContext(CatalogDetailScrollContext);
@@ -42,9 +56,14 @@ const ScopedCatalogDetailContentPager = ({
     page: currentPage.current,
     top: scrollRef.current?.read() ?? 0,
   }));
-  const [activePage, setActivePage] = useState<DetailContentPage>(
-    authReturnView?.page ?? "information",
+  const [initialPage] = useState<DetailContentPage>(
+    () =>
+      authReturnView?.page ??
+      (detailId !== undefined && detailCommentsRequested(detailId)
+        ? "comments"
+        : "information"),
   );
+  const [activePage, setActivePage] = useState<DetailContentPage>(initialPage);
   currentPage.current = activePage;
   const [composerPortalTarget, setComposerPortalTarget] =
     useState<HTMLDivElement | null>(null);
@@ -52,9 +71,7 @@ const ScopedCatalogDetailContentPager = ({
   const sectionRef = useRef<HTMLElement>(null);
   const scroll = useContext(CatalogDetailScrollContext);
   const positions = useRef<Partial<Record<DetailContentPage, number>>>({});
-  const committedPage = useRef<DetailContentPage>(
-    authReturnView?.page ?? "information",
-  );
+  const committedPage = useRef<DetailContentPage>(initialPage);
   const pendingTop = useRef<number | null>(null);
   const previousCollapse = useRef<number | null>(null);
   const id = useId();
@@ -63,6 +80,13 @@ const ScopedCatalogDetailContentPager = ({
     pagerRef.current?.scrollToKey(authReturnView.page);
     scroll?.restore(authReturnView.top);
   }, [authReturnView, scroll]);
+  // A comments request opens on comments once; any Detail consumes it.
+  useLayoutEffect(() => {
+    if (!authReturnView && initialPage === "comments")
+      pagerRef.current?.scrollToKey("comments");
+    // Mount only: the initial page is fixed for this Detail.
+  }, []);
+  useEffect(() => clearDetailCommentsRequest(), []);
   const selectPage = (page: DetailContentPage) => {
     pagerRef.current?.scrollToKey(page);
   };

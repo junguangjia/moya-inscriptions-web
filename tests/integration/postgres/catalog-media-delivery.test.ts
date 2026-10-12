@@ -640,6 +640,9 @@ describe("Catalog readers composed with renditions", () => {
       renditions: cardList(),
       placeholderColor: "#3a2f28",
     });
+    // The single published image is also the card's whole gallery.
+    expect(card.mediaCount).toBe(1);
+    expect(card.gallery).toEqual([card.media]);
   });
 
   it("reads the committed blob of a listed rendition for the Development route only", async () => {

@@ -440,6 +440,14 @@ const server = createServer((request, response) => {
   const summaries = url.pathname.startsWith("/paging/")
     ? pagingSummaries
     : baseSummaries;
+  const multiMediaFront = {
+    id: inscriptionFront.id,
+    src: multiMediaCardRenditions[2]!.src,
+    width: 1200,
+    height: 1600,
+    renditions: multiMediaCardRenditions,
+    placeholderColor: "#655044",
+  };
   const card = (item: CatalogSummary): ContentCard => ({
     aliases: [...item.aliases],
     target: { type: "catalog", id: item.id },
@@ -450,20 +458,30 @@ const server = createServer((request, response) => {
     media: !item.representativeMedia
       ? null
       : item.id === "runtime-inscription-multi-media"
-        ? {
-            id: item.representativeMedia.id,
-            src: multiMediaCardRenditions[2]!.src,
-            width: 1200,
-            height: 1600,
-            renditions: multiMediaCardRenditions,
-            placeholderColor: "#655044",
-          }
+        ? multiMediaFront
         : {
             id: item.representativeMedia.id,
             src: item.representativeMedia.src,
             width: item.representativeMedia.width,
             height: item.representativeMedia.height,
           },
+    // The multi-media record's post shows both public images.
+    ...(item.id === "runtime-inscription-multi-media"
+      ? {
+          gallery: [
+            multiMediaFront,
+            {
+              id: inscriptionDetail.id,
+              src: inscriptionDetail.src,
+              width: inscriptionDetail.width,
+              height: inscriptionDetail.height,
+              renditions: inscriptionDetailRenditions,
+              placeholderColor: "#8b735f",
+            },
+          ],
+          mediaCount: 2,
+        }
+      : {}),
   });
   if (communityPath === "/v1/community/discover") {
     const kind = url.searchParams.get("kind") ?? "all";

@@ -10,7 +10,10 @@ import type {
   InscriptionFilterOptions,
   MediaId,
 } from "@moya/contracts";
+import { CARD_GALLERY_MAXIMUM } from "@moya/contracts/schemas";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
+
+import { visibleDiscussionCountSql } from "./discussion-visibility.js";
 
 import {
   mapCatalogMediaDelivery,
@@ -20,6 +23,7 @@ import {
   revisionCover,
   revisionCoverColumns,
   revisionCoverJoin,
+  revisionsGallery,
   workExcerpt,
 } from "./publishing/media-read.js";
 import type { RevisionCoverColumns } from "./publishing/media-read.js";
@@ -85,7 +89,20 @@ interface CardRow extends QueryResultRow {
 }
 interface WorkCardRow extends RevisionCoverColumns {
   work_id: string;
+  revision_id: string;
   body: string;
+}
+interface CatalogCardMediaRow extends QueryResultRow {
+  catalog_id: string;
+  media_id: MediaId;
+  object_key: string;
+  width: number;
+  height: number;
+  is_representative: boolean;
+  rn: string;
+  total: string;
+  renditions: unknown;
+  placeholder_color: unknown;
 }
 const emptyFilters = {
   dynasty: [],
@@ -136,24 +153,38 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
       works = rows
         .filter((r) => r.content_type === "work")
         .map((r) => r.content_id);
-    // Catalog cards carry the rendition delivery facts of their image (the
+    // Catalog cards carry the rendition delivery facts of their images (the
     // published-only community view); the service resolves card candidates.
-    const cm = (
-      await db.query<{
-        catalog_id: string;
-        media_id: MediaId;
-        object_key: string;
-        width: number;
-        height: number;
-        renditions: unknown;
-        placeholder_color: unknown;
-      }>(
-        `SELECT cm.catalog_id,cm.media_id,cm.object_key,cm.width,cm.height,delivery.renditions,delivery.placeholder_color
-        FROM catalog_media cm${catalogMediaDeliveryJoinSql("cm")}
-        WHERE cm.catalog_id=ANY($1::text[]) AND cm.is_representative`,
-        [catalogs],
+    // One read lists each item's representative image and its first gallery
+    // images by position, with the item's image total.
+    const catalogMedia = new Map<string, CatalogCardMediaRow[]>();
+    for (const row of (
+      await db.query<CatalogCardMediaRow>(
+        `SELECT cm.catalog_id,cm.media_id,cm.object_key,cm.width,cm.height,cm.is_representative,cm.rn,cm.total,
+          delivery.renditions,delivery.placeholder_color
+        FROM (
+          SELECT m.*,
+            row_number() OVER (PARTITION BY m.catalog_id ORDER BY m.position) AS rn,
+            count(*) OVER (PARTITION BY m.catalog_id) AS total
+          FROM catalog_media m WHERE m.catalog_id=ANY($1::text[])
+        ) cm${catalogMediaDeliveryJoinSql("cm")}
+        WHERE cm.is_representative OR cm.rn<=$2
+        ORDER BY cm.catalog_id,cm.position`,
+        [catalogs, CARD_GALLERY_MAXIMUM],
       )
-    ).rows;
+    ).rows) {
+      const list = catalogMedia.get(row.catalog_id);
+      if (list === undefined) catalogMedia.set(row.catalog_id, [row]);
+      else list.push(row);
+    }
+    const catalogImage = (row: CatalogCardMediaRow) => ({
+      type: "catalog" as const,
+      id: row.media_id,
+      objectKey: row.object_key,
+      width: row.width,
+      height: row.height,
+      ...mapCatalogMediaDelivery(row.renditions, row.placeholder_color),
+    });
     const provinces = new Map(
       (
         await db.query<{ catalog_id: string; province: string }>(
@@ -168,7 +199,7 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
     // a Live Photo, with the card candidates of the cover's own framing.
     const wm = (
       await db.query<WorkCardRow>(
-        `SELECT w.id AS work_id,r.body,${revisionCoverColumns("cov")}
+        `SELECT w.id AS work_id,r.id AS revision_id,r.body,${revisionCoverColumns("cov")}
         FROM community.works w JOIN community.work_revisions r
           ON r.id=CASE WHEN w.author_id=$2::text THEN COALESCE(w.author_revision_id,w.public_revision_id) ELSE w.public_revision_id END
         ${revisionCoverJoin("r", "cov")}
@@ -176,8 +207,15 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
         [works, viewer],
       )
     ).rows;
+    const workRows = new Map(wm.map((row) => [row.work_id, row]));
+    // The gallery comes from the same revision as the cover, so an author's
+    // newer revision never reaches anyone else.
+    const galleries = await revisionsGallery(
+      db,
+      [...new Set(wm.map((row) => row.revision_id))],
+      CARD_GALLERY_MAXIMUM,
+    );
     return rows.map((r): DiscoveryCardRecord => {
-      const c = cm.find((m) => m.catalog_id === r.content_id);
       const target = { type: r.content_type, id: r.content_id } as const;
       const card = {
         target: target as DiscoveryCardRecord["target"],
@@ -187,24 +225,29 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
         authorId: r.author_id,
         firstPublishedAt: r.first_published_at?.toISOString() ?? null,
       };
-      if (r.content_type === "catalog")
+      if (r.content_type === "catalog") {
+        const list = catalogMedia.get(r.content_id) ?? [];
+        const representative = list.find((row) => row.is_representative);
+        // An item without a representative image keeps no card image and
+        // therefore no gallery.
+        const gallery =
+          representative === undefined
+            ? []
+            : list
+                .filter((row) => Number(row.rn) <= CARD_GALLERY_MAXIMUM)
+                .map(catalogImage);
         return {
           ...card,
           ...(provinces.has(r.content_id)
             ? { province: provinces.get(r.content_id)! }
             : {}),
-          media: c
-            ? {
-                type: "catalog",
-                id: c.media_id,
-                objectKey: c.object_key,
-                width: c.width,
-                height: c.height,
-                ...mapCatalogMediaDelivery(c.renditions, c.placeholder_color),
-              }
-            : null,
+          media: representative ? catalogImage(representative) : null,
+          ...(gallery.length === 0
+            ? {}
+            : { gallery, mediaCount: Number(list[0]!.total) }),
         };
-      const w = wm.find((m) => m.work_id === r.content_id);
+      }
+      const w = workRows.get(r.content_id);
       const cover = w ? revisionCover(w) : null;
       const excerpt = workExcerpt(w?.body ?? "");
       const media = cover
@@ -224,11 +267,34 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
               : { placeholderColor: cover.placeholderColor }),
           }
         : null;
+      const view =
+        media === null || w === undefined
+          ? undefined
+          : galleries.get(w.revision_id);
       return {
         ...card,
         ...(excerpt === "" ? {} : { excerpt }),
         live: cover?.live ?? false,
         media,
+        ...(view === undefined
+          ? {}
+          : {
+              gallery: view.entries.map((entry) => ({
+                type: "work" as const,
+                id: entry.id,
+                src: entry.src,
+                width: entry.width,
+                height: entry.height,
+                ...(entry.live ? { live: true } : {}),
+                ...(entry.renditions === undefined
+                  ? {}
+                  : { renditions: entry.renditions }),
+                ...(entry.placeholderColor === undefined
+                  ? {}
+                  : { placeholderColor: entry.placeholderColor }),
+              })),
+              mediaCount: Math.max(view.total, view.entries.length),
+            }),
       };
     });
   }
@@ -404,11 +470,19 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
           [actor, target.type, target.id],
         )
       ).rows[0]!;
+      const comments = (
+        await db.query<{ n: string }>(visibleDiscussionCountSql, [
+          target.type,
+          target.id,
+          actor,
+        ])
+      ).rows[0];
       return {
         favorite: row.favorite,
         liked: row.liked,
         favoriteCount: Number(row.favorite_count),
         likeCount: Number(row.like_count),
+        commentCount: Number(comments?.n ?? 0),
       };
     });
   }

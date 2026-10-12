@@ -200,7 +200,8 @@ describe("HomeScreen", () => {
     expect(markup).toContain(
       'src="https://media.example.invalid/catalog-001.jpg"',
     );
-    expect(markup).toContain('data-catalog-media-state="valid"');
+    // Phone opens on the single-column feed: the image is a post's stage.
+    expect(markup).toContain('data-feed-slide-image=""');
     expect(markup).not.toContain("objectKey");
     expect(markup).not.toContain("object_key");
     expect(markup).toContain('data-open-catalog=""');

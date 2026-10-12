@@ -380,7 +380,8 @@ export const AllCalligraphyFeed = ({
           onLoadNextPage={() => void paging.loadNextPage()}
           state={paging.requestState}
         />,
-        feedLayout,
+        // 书帖 stays two-column on phone and tablet whatever the setting says.
+        platform === "pc" ? feedLayout : "double",
         platform,
         openCatalog,
       )}

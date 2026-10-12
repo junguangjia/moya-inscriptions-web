@@ -203,6 +203,11 @@ export const clampViewerTransform = (
 
 export interface CatalogViewerProps {
   readonly controls?: ReactNode;
+  /**
+   * The sequence's reading direction. In "rtl" the next item (index + 1)
+   * lies to the left: a rightward swipe and ArrowLeft advance.
+   */
+  readonly direction?: "ltr" | "rtl";
   readonly index: number;
   readonly media: readonly DetailMediaPresentation[];
   readonly onClose: () => void;
@@ -271,7 +276,11 @@ export const CatalogViewer = ({
   open,
   platform,
   controls,
+  direction = "ltr",
 }: CatalogViewerProps) => {
+  // Maps a physical horizontal displacement onto the sequence: negative
+  // values move towards index + 1.
+  const step = direction === "rtl" ? -1 : 1;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef(new Map<number, ViewerPoint>());
@@ -425,7 +434,7 @@ export const CatalogViewer = ({
       stage?.clientWidth ?? stage?.getBoundingClientRect().width ?? 1,
     );
     setSettling(true);
-    setCarouselX(bounded > index ? -width : width);
+    setCarouselX((bounded > index ? -width : width) * step);
     revealPager();
     const reducedMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
@@ -453,7 +462,7 @@ export const CatalogViewer = ({
       1,
       stage?.clientWidth ?? stage?.getBoundingClientRect().width ?? 1,
     );
-    const dx = -gesture.accumulatedX;
+    const dx = -gesture.accumulatedX * step;
     const elapsed = Math.max(16, performance.now() - gesture.startedAt);
     if (
       shouldCommitViewerSwipe(dx, 0, width, dx / elapsed) &&
@@ -469,7 +478,7 @@ export const CatalogViewer = ({
       }, VIEWER_SETTLE_MS);
     }
     revealPager();
-  }, [clearWheelTimer, index, revealPager]);
+  }, [clearWheelTimer, index, revealPager, step]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -821,7 +830,7 @@ export const CatalogViewer = ({
       const atStart = index === 0;
       const atEnd = index === media.length - 1;
       gesture.carouselX =
-        (pageDx > 0 && atStart) || (pageDx < 0 && atEnd)
+        (pageDx * step > 0 && atStart) || (pageDx * step < 0 && atEnd)
           ? pageDx * VIEWER_EDGE_RUBBER
           : pageDx;
       setCarouselX(gesture.carouselX);
@@ -848,7 +857,8 @@ export const CatalogViewer = ({
       const extra = unclampedX - next.x;
       gesture.carouselOriginX = dx - extra;
       gesture.carouselX =
-        (extra > 0 && index === 0) || (extra < 0 && index === media.length - 1)
+        (extra * step > 0 && index === 0) ||
+        (extra * step < 0 && index === media.length - 1)
           ? extra * VIEWER_EDGE_RUBBER
           : extra;
       setCarouselX(gesture.carouselX);
@@ -881,12 +891,14 @@ export const CatalogViewer = ({
       return;
     }
     if (gesture !== null) {
-      const dx = gesture.didCarousel
-        ? gesture.carouselX
-        : event.clientX - gesture.startX;
+      const dx =
+        (gesture.didCarousel
+          ? gesture.carouselX
+          : event.clientX - gesture.startX) * step;
       const dy = event.clientY - gesture.startY;
       const recentTime = Math.max(1, event.timeStamp - gesture.lastTime);
-      const recentVelocity = (event.clientX - gesture.lastX) / recentTime;
+      const recentVelocity =
+        ((event.clientX - gesture.lastX) * step) / recentTime;
       const totalVelocity =
         dx / Math.max(16, event.timeStamp - gesture.startTime);
       const stage = stageRef.current;
@@ -992,7 +1004,7 @@ export const CatalogViewer = ({
     gesture.accumulatedX += event.deltaX;
     const dx = -gesture.accumulatedX;
     setCarouselX(
-      (dx > 0 && gesture.atStart) || (dx < 0 && gesture.atEnd)
+      (dx * step > 0 && gesture.atStart) || (dx * step < 0 && gesture.atEnd)
         ? dx * VIEWER_EDGE_RUBBER
         : dx,
     );
@@ -1009,7 +1021,11 @@ export const CatalogViewer = ({
   const trackStyle: ViewerTrackStyle = {
     "--viewer-carousel-x": `${carouselX}px`,
   };
-  const peers = [media[index - 1], active, media[index + 1]] as const;
+  // The track shows its middle slide; in "rtl" the next item sits on the left.
+  const peers =
+    direction === "rtl"
+      ? ([media[index + 1], active, media[index - 1]] as const)
+      : ([media[index - 1], active, media[index + 1]] as const);
 
   return (
     <dialog
@@ -1018,6 +1034,7 @@ export const CatalogViewer = ({
       className={styles.viewer}
       data-detail-viewer=""
       data-platform={platform}
+      data-viewer-direction={direction}
       onCancel={(event) => {
         event.preventDefault();
         onClose();
@@ -1028,10 +1045,10 @@ export const CatalogViewer = ({
       onKeyDown={(event) => {
         if (event.key === "ArrowLeft") {
           event.preventDefault();
-          settleToIndex(index - 1);
+          settleToIndex(index - step);
         } else if (event.key === "ArrowRight") {
           event.preventDefault();
-          settleToIndex(index + 1);
+          settleToIndex(index + step);
         } else if (event.key === "Escape") {
           event.preventDefault();
           onClose();
@@ -1162,7 +1179,7 @@ export const CatalogViewer = ({
             </span>
             <button
               aria-label="上一张图像"
-              className={`${styles.viewerEdge} ${styles.viewerEdgePrevious}`}
+              className={`${styles.viewerEdge} ${direction === "rtl" ? styles.viewerEdgeNext : styles.viewerEdgePrevious}`}
               data-detail-viewer-control=""
               disabled={index === 0 || transform.scale > 1.05}
               onClick={() => settleToIndex(index - 1)}
@@ -1170,7 +1187,7 @@ export const CatalogViewer = ({
             />
             <button
               aria-label="下一张图像"
-              className={`${styles.viewerEdge} ${styles.viewerEdgeNext}`}
+              className={`${styles.viewerEdge} ${direction === "rtl" ? styles.viewerEdgePrevious : styles.viewerEdgeNext}`}
               data-detail-viewer-control=""
               disabled={index === media.length - 1 || transform.scale > 1.05}
               onClick={() => settleToIndex(index + 1)}

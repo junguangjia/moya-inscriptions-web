@@ -13,6 +13,7 @@ import { ProductShell, useProductShell } from "./product-shell";
 import { AuthReturnProvider, useAuthReturn } from "../auth/auth-return";
 import {
   editorHistoryState,
+  feedViewerHistoryState,
   profileHistoryState,
   detailHistoryState,
   parseProductHistoryState,
@@ -237,6 +238,62 @@ const renderDetailShell = () => {
             <span data-detail-initial-scroll="">{initialScrollTop}</span>
             <ViewerControls />
           </section>
+        )}
+      />,
+    ),
+  );
+  return { container };
+};
+
+const feedMedia = ["media-one", "media-two"].map((id, index) => ({
+  alt: `动态图像 ${index + 1}`,
+  height: 600,
+  id,
+  src: `https://example.test/${id}.jpg`,
+  width: 400,
+}));
+const feedTarget = { type: "catalog", id: "catalog-one" } as const;
+let feedViewerOpened: boolean | undefined;
+const FeedViewerOpener = () => {
+  const { openFeedViewer } = useProductShell();
+  return (
+    <button
+      data-open-feed-viewer-test=""
+      onClick={(event) => {
+        feedViewerOpened = openFeedViewer({
+          target: feedTarget,
+          media: feedMedia,
+          index: 1,
+          opener: event.currentTarget,
+          direction: "rtl",
+        });
+      }}
+      type="button"
+    >
+      Open feed image
+    </button>
+  );
+};
+const renderFeedViewerShell = () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  mountedRoots.push(root);
+  act(() =>
+    root.render(
+      <ProductShell
+        user={<p>user content</p>}
+        home={
+          <>
+            <FeedViewerOpener />
+            <CatalogOpener />
+          </>
+        }
+        primaryUtility={<ProductShellObserver />}
+        initialPlatform="phone"
+        discussion={<p>discussion content</p>}
+        renderDetailOverlay={({ target }) => (
+          <section aria-label={`Detail ${target.id}`} role="dialog" />
         )}
       />,
     ),
@@ -1515,6 +1572,8 @@ describe("ProductShell", () => {
     const back = vi
       .spyOn(window.history, "back")
       .mockImplementation(() => undefined);
+    // An earlier test's spy may still wrap Back.
+    back.mockClear();
     const { container } = renderProductShell(<p>home content</p>, {
       primaryUtility: <SettingsRequester />,
     });
@@ -1880,6 +1939,154 @@ describe("ProductShell", () => {
     expect(
       container.querySelector("[data-viewer-media-test]")?.textContent,
     ).toBe("media-two");
+  });
+
+  it("opens a feed viewer without Detail and closes it through history Back", async () => {
+    feedViewerOpened = undefined;
+    const pushState = vi.spyOn(window.history, "pushState");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    const { container } = renderFeedViewerShell();
+    await act(async () => vi.runAllTimers());
+    const root = container.querySelector<HTMLElement>("[data-product-shell]")!;
+    scrollable(
+      container.querySelector<HTMLElement>(
+        '[data-primary-destination="home"]',
+      )!,
+    ).scrollTop = 146;
+    const opener = container.querySelector<HTMLButtonElement>(
+      "[data-open-feed-viewer-test]",
+    )!;
+    pushState.mockClear();
+
+    click(opener);
+
+    expect(feedViewerOpened).toBe(true);
+    expect(pushState).toHaveBeenCalledOnce();
+    expect(pushState).toHaveBeenCalledWith(
+      withHistoryMarkers(
+        feedViewerHistoryState(feedTarget, "media-two", "home", 146),
+      ),
+      "",
+      "/dev/t02p?catalogId=catalog-one&image=media-two#viewer",
+    );
+    expect(root.getAttribute("data-viewer-open")).toBe("true");
+    expect(root.getAttribute("data-detail-open")).toBe("false");
+    expect(observedProductShell?.activeFeedViewer).toEqual({
+      target: feedTarget,
+      mediaId: "media-two",
+    });
+    const viewer = container.querySelector<HTMLElement>("[data-detail-viewer]");
+    expect(viewer?.getAttribute("data-viewer-direction")).toBe("rtl");
+    expect(
+      viewer?.querySelector<HTMLImageElement>("[data-detail-viewer-image]")
+        ?.alt,
+    ).toBe("动态图像 2");
+
+    // Every other layer and a second viewer refuse while it is open.
+    click(container.querySelector<HTMLButtonElement>("[data-open-catalog]")!);
+    click(opener);
+    act(() => {
+      observedProductShell?.openProfile(null, opener);
+      observedProductShell?.requestSettings(opener);
+    });
+    expect(feedViewerOpened).toBe(false);
+    expect(pushState).toHaveBeenCalledOnce();
+    expect(observedProductShell?.activeContent).toBeNull();
+    expect(observedProductShell?.settingsOpen).toBe(false);
+
+    replaceState.mockClear();
+    act(() => observedProductShell?.changeFeedViewerMedia(0));
+    expect(replaceState).toHaveBeenCalledWith(
+      withHistoryMarkers(
+        feedViewerHistoryState(feedTarget, "media-one", "home", 146),
+      ),
+      "",
+      "/dev/t02p?catalogId=catalog-one&image=media-one#viewer",
+    );
+    expect(observedProductShell?.activeFeedViewer?.mediaId).toBe("media-one");
+
+    const back = vi
+      .spyOn(window.history, "back")
+      .mockImplementation(() => undefined);
+    // An earlier test's spy may still wrap Back.
+    back.mockClear();
+    act(() => observedProductShell?.closeFeedViewer());
+    // A second close before Back lands must not leave the feed as well.
+    act(() => observedProductShell?.closeFeedViewer());
+    expect(back).toHaveBeenCalledOnce();
+    expect(root.getAttribute("data-viewer-open")).toBe("true");
+    back.mockRestore();
+
+    traverse(sameDocument(primaryHistoryState("home", 146)));
+    await act(async () => vi.runAllTimers());
+    expect(container.querySelector("[data-detail-viewer]")).toBeNull();
+    expect(root.getAttribute("data-viewer-open")).toBe("false");
+    expect(observedProductShell?.activeFeedViewer).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    expect(observedProductShell?.activeDestination).toBe("home");
+
+    // Forward onto the old entry cannot rebuild it: the feed stays.
+    replaceState.mockClear();
+    traverse(
+      sameDocument(
+        feedViewerHistoryState(feedTarget, "media-one", "home", 146),
+      ),
+    );
+    await act(async () => vi.runAllTimers());
+    expect(container.querySelector("[data-detail-viewer]")).toBeNull();
+    expect(observedProductShell?.activeContent).toBeNull();
+    expect(parseProductHistoryState(window.history.state)).toEqual(
+      primaryHistoryState("home", 146),
+    );
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
+
+    // Closed, the shell accepts other layers again.
+    click(container.querySelector<HTMLButtonElement>("[data-open-catalog]")!);
+    expect(observedProductShell?.activeContent).toEqual(feedTarget);
+  });
+
+  it("refuses a feed viewer over Detail or for missing media", async () => {
+    const { container } = renderFeedViewerShell();
+    await act(async () => vi.runAllTimers());
+    const opener = container.querySelector<HTMLButtonElement>(
+      "[data-open-feed-viewer-test]",
+    )!;
+    let opened: boolean | undefined;
+    act(() => {
+      opened = observedProductShell?.openFeedViewer({
+        target: feedTarget,
+        media: feedMedia,
+        index: 2,
+        opener,
+      });
+    });
+    expect(opened).toBe(false);
+    act(() => {
+      opened = observedProductShell?.openFeedViewer({
+        target: feedTarget,
+        media: [{ ...feedMedia[0]!, id: "media one" }],
+        index: 0,
+        opener,
+      });
+    });
+    expect(opened).toBe(false);
+    click(container.querySelector<HTMLButtonElement>("[data-open-catalog]")!);
+    act(() => {
+      opened = observedProductShell?.openFeedViewer({
+        target: feedTarget,
+        media: feedMedia,
+        index: 0,
+        opener,
+      });
+    });
+    expect(opened).toBe(false);
+    expect(observedProductShell?.activeFeedViewer).toBeNull();
+    expect(
+      container
+        .querySelector("[data-product-shell]")
+        ?.getAttribute("data-viewer-open"),
+    ).toBe("false");
   });
 
   it.each(["home", "discussion", "user"] as const)(

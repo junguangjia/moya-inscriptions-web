@@ -31,6 +31,15 @@ const MasonrySlotContext = createContext<MediaSlot | null>(null);
 export const useMasonrySlot = (): MediaSlot | null =>
   useContext(MasonrySlotContext);
 
+/**
+ * True for a card in the phone single-column feed, which renders as a
+ * full-bleed post (author, image, title, actions) instead of a framed card.
+ */
+export const useFeedPostSlot = (): boolean => {
+  const slot = useMasonrySlot();
+  return slot?.platform === "phone" && slot.columns === 1;
+};
+
 interface RenderedLayout {
   readonly height: number;
   readonly keys: readonly string[];
