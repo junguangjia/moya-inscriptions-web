@@ -316,6 +316,7 @@ describe("ContentCard as a phone single-column post", () => {
     )!;
     // Browser line-height and layout are mocked because jsdom does not lay out text.
     const paragraph = post.querySelector<HTMLElement>("[data-card-excerpt]")!;
+    Object.defineProperty(paragraph, "clientWidth", { value: 300 });
     paragraph.style.lineHeight = "24px";
     act(() => window.dispatchEvent(new Event("resize")));
     expect(button(post, "展开正文")).not.toBeNull();

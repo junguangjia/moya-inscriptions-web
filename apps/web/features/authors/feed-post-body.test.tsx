@@ -228,6 +228,143 @@ describe("FeedPostBody", () => {
     expect(body(container)?.textContent).toBe("合成公开正文");
   });
 
+  it("exposes a bounded Unicode preview until expansion without changing full-text measurement", async () => {
+    const fullText = "😀".repeat(170) + "全文结尾";
+    client.work.mockResolvedValue(work(fullText));
+    vi.stubGlobal("getComputedStyle", () => ({ lineHeight: "20px" }));
+    const width = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(300);
+    const scrollHeight = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(100);
+    try {
+      const onOverflowChange = vi.fn();
+      const { container, render } = await mount({
+        workId: "work-accessible-preview",
+        expanded: false,
+        preview: "开头摘要",
+        onOverflowChange,
+      });
+      expect(body(container)?.textContent).toBe(fullText);
+      expect(body(container)?.getAttribute("aria-hidden")).toBe("true");
+      const accessiblePreview = () =>
+        container.querySelector("p:not([aria-hidden])");
+      expect(accessiblePreview()?.textContent).toBe("😀".repeat(160) + "…");
+      expect(accessiblePreview()?.textContent).not.toContain("全文结尾");
+      expect(onOverflowChange).toHaveBeenLastCalledWith(true);
+
+      await render({ expanded: true });
+      expect(body(container)?.getAttribute("aria-hidden")).toBeNull();
+      expect(accessiblePreview()).toBe(body(container));
+      expect(accessiblePreview()?.textContent).toBe(fullText);
+
+      await render({ expanded: false });
+      expect(body(container)?.getAttribute("aria-hidden")).toBe("true");
+      expect(accessiblePreview()?.textContent).toBe("😀".repeat(160) + "…");
+      expect(client.work).toHaveBeenCalledOnce();
+    } finally {
+      scrollHeight.mockRestore();
+      width.mockRestore();
+    }
+  });
+
+  it("exposes the entire collapsed body when it fits and has no expand action", async () => {
+    const fullText = "短正文".repeat(60);
+    client.work.mockResolvedValue(work(fullText));
+    vi.stubGlobal("getComputedStyle", () => ({ lineHeight: "20px" }));
+    const width = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(300);
+    const scrollHeight = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(40);
+    try {
+      const onOverflowChange = vi.fn();
+      const { container } = await mount({
+        workId: "work-accessible-short",
+        expanded: false,
+        onOverflowChange,
+      });
+      expect(onOverflowChange).toHaveBeenLastCalledWith(false);
+      expect(container.querySelector("p:not([aria-hidden])")?.textContent).toBe(
+        fullText,
+      );
+    } finally {
+      scrollHeight.mockRestore();
+      width.mockRestore();
+    }
+  });
+
+  it("keeps hidden or zero-size body text unmeasured and resets a short-body measurement for another work", async () => {
+    const opening = "正文".repeat(100);
+    client.work.mockResolvedValue(work(opening));
+    vi.stubGlobal("getComputedStyle", () => ({ lineHeight: "20px" }));
+    const width = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(300);
+    const scrollHeight = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(40);
+    try {
+      const { container, render } = await mount({
+        workId: "work-measured-short",
+        expanded: false,
+        onOverflowChange: vi.fn(),
+      });
+      expect(container.querySelector("p:not([aria-hidden])")?.textContent).toBe(
+        opening,
+      );
+      width.mockReturnValue(0);
+      scrollHeight.mockReturnValue(0);
+      author.cache.set("work-body:viewer:work-hidden", opening);
+      await render({ workId: "work-hidden" });
+      expect(container.querySelector("p:not([aria-hidden])")?.textContent).toBe(
+        "正文".repeat(80) + "…",
+      );
+    } finally {
+      scrollHeight.mockRestore();
+      width.mockRestore();
+    }
+  });
+
+  it("bounds a newline-heavy body with fewer than 160 code points to its visible lines", async () => {
+    client.work.mockResolvedValue(work("甲\n乙\n丙\n丁"));
+    vi.stubGlobal("getComputedStyle", () => ({ lineHeight: "20px" }));
+    const width = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(300);
+    const height = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(80);
+    const createRange = document.createRange.bind(document);
+    const ranges = vi.spyOn(document, "createRange").mockImplementation(() => {
+      const range = createRange();
+      Object.assign(range, {
+        getBoundingClientRect: () => ({
+          bottom: range.endOffset <= 6 ? 60 : 80,
+        }),
+      });
+      return range;
+    });
+    try {
+      const { container, render } = await mount({
+        workId: "work-accessible-newlines",
+        expanded: false,
+        onOverflowChange: vi.fn(),
+      });
+      expect(container.querySelector("p:not([aria-hidden])")?.textContent).toBe(
+        "甲\n乙\n丙…",
+      );
+      await render({ expanded: true });
+      expect(body(container)?.textContent).toBe("甲\n乙\n丙\n丁");
+    } finally {
+      ranges.mockRestore();
+      height.mockRestore();
+      width.mockRestore();
+    }
+  });
+
   it("renders nothing and reads nothing while collapsed", async () => {
     const { container } = await mount({
       workId: "work-collapsed",
