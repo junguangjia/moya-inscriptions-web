@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { authorClient } from "./author-data";
 import { useOptionalAuthors } from "./author-context";
 import styles from "../home/home-screen.module.css";
@@ -9,23 +9,20 @@ type BodyState =
   | { readonly state: "loaded"; readonly text: string }
   | { readonly state: "error" };
 
-/**
- * A work post's full body, shown in place under the title once expanded. The
- * card carries only an excerpt, so the first expansion reads the work once;
- * collapsing aborts a read in flight. Rendering nothing while collapsed keeps
- * the excerpt line the only text of the post. An untitled post passes its
- * excerpt as `preview`, kept in place until the full body replaces it.
- */
+/** Preview the body immediately; read visible posts through the existing,
+ * account-scoped work endpoint to determine whether three lines overflow. */
 export const FeedPostBody = ({
   workId,
   expanded,
   id,
   preview,
+  onOverflowChange,
 }: {
   readonly workId: string;
   readonly expanded: boolean;
   readonly id: string;
   readonly preview?: string | undefined;
+  readonly onOverflowChange?: ((overflow: boolean) => void) | undefined;
 }) => {
   const author = useOptionalAuthors();
   const cache = author?.cache;
@@ -52,8 +49,63 @@ export const FeedPostBody = ({
       ? { state: "loading" }
       : snapshot.body;
   const [attempt, setAttempt] = useState(0);
+  const [previewOwner] = useState(author?.viewer?.id ?? "guest");
+  const safePreview =
+    !checking &&
+    !sessionError &&
+    previewOwner === (author?.viewer?.id ?? "guest")
+      ? preview
+      : undefined;
+  const container = useRef<HTMLDivElement>(null);
+  const text = useRef<HTMLParagraphElement>(null);
+  const [visible, setVisible] = useState(false);
   useEffect(() => {
-    if (!expanded || checking || sessionError) return undefined;
+    if (onOverflowChange === undefined || container.current === null) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(container.current);
+    return () => observer.disconnect();
+  }, [onOverflowChange]);
+  const displayedText =
+    body.state === "loaded" ? body.text : (safePreview ?? "");
+  useLayoutEffect(() => {
+    if (onOverflowChange === undefined || text.current === null) return;
+    const element = text.current;
+    const measure = () => {
+      const lineHeight = Number.parseFloat(
+        getComputedStyle(element).lineHeight,
+      );
+      if (Number.isFinite(lineHeight))
+        onOverflowChange(element.scrollHeight > lineHeight * 3 + 1);
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(element);
+    let active = true;
+    void document.fonts?.ready.then(() => {
+      if (active) measure();
+    });
+    window.addEventListener("resize", measure);
+    return () => {
+      active = false;
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [displayedText, body.state, expanded, onOverflowChange]);
+  const shouldRead = expanded || (visible && onOverflowChange !== undefined);
+  useEffect(() => {
+    if (!shouldRead || checking || sessionError) return undefined;
     const cached = cache?.get(key);
     if (typeof cached === "string") {
       setSnapshot({ key, body: { state: "loaded", text: cached } });
@@ -77,24 +129,28 @@ export const FeedPostBody = ({
           setSnapshot({ key, body: { state: "error" } });
       });
     return () => controller.abort();
-  }, [expanded, workId, attempt, key, cache, checking, sessionError]);
-  if (!expanded) return null;
+  }, [shouldRead, workId, attempt, key, cache, checking, sessionError]);
+  if (!expanded && onOverflowChange === undefined) return null;
   return (
     <div
+      ref={container}
       className={styles.postBody}
+      data-feed-post-body-collapsed={!expanded ? "" : undefined}
       data-feed-post-body-state={body.state}
       id={id}
     >
       {body.state === "loaded" ? (
-        <p className={styles.postBodyText} data-feed-post-body="">
+        <p ref={text} className={styles.postBodyText} data-feed-post-body="">
           {body.text}
         </p>
-      ) : preview === undefined || preview === "" ? null : (
-        <p className={styles.postBodyText} data-card-excerpt="">
-          {preview}
+      ) : safePreview === undefined || safePreview === "" ? null : (
+        <p ref={text} className={styles.postBodyText} data-card-excerpt="">
+          {safePreview}
         </p>
       )}
-      {body.state === "loaded" ? null : body.state === "loading" ? (
+      {body.state === "loaded" ||
+      (!expanded && body.state === "loading") ? null : body.state ===
+        "loading" ? (
         <p className={styles.postBodyStatus} role="status">
           正文加载中…
         </p>

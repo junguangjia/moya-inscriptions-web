@@ -87,6 +87,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   document.body.replaceChildren();
   client.work.mockReset();
+  vi.unstubAllGlobals();
 });
 
 describe("FeedPostBody", () => {
@@ -155,6 +156,76 @@ describe("FeedPostBody", () => {
     await render();
     expect(body(container)!.textContent).toBe("合成公开正文");
     expect(client.work).toHaveBeenCalledTimes(2);
+  });
+
+  it("previews immediately but reads only after the collapsed post becomes visible", async () => {
+    let enter!: IntersectionObserverCallback;
+    const disconnect = vi.fn();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          enter = callback;
+        }
+        observe() {}
+        disconnect = disconnect;
+      },
+    );
+    const pending = deferred();
+    client.work.mockReturnValueOnce(pending.promise);
+    const onOverflowChange = vi.fn();
+    const { container, render } = await mount({
+      workId: "work-visible-preview",
+      expanded: false,
+      preview: "正文开头",
+      onOverflowChange,
+    });
+    expect(container.querySelector("[data-card-excerpt]")?.textContent).toBe(
+      "正文开头",
+    );
+    expect(client.work).not.toHaveBeenCalled();
+    await act(async () =>
+      enter(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    );
+    expect(client.work).toHaveBeenCalledOnce();
+    const signal = client.work.mock.calls[0]![1] as AbortSignal;
+    await render({ expanded: true });
+    await render({ expanded: false });
+    expect(signal.aborted).toBe(false);
+    expect(client.work).toHaveBeenCalledOnce();
+    await act(async () => pending.resolve(work("完整正文")));
+    expect(body(container)?.textContent).toBe("完整正文");
+    vi.unstubAllGlobals();
+  });
+
+  it("hides both cached text and the excerpt during checking, identity failure and sign-out", async () => {
+    client.work.mockResolvedValueOnce(work("合成私密正文"));
+    const { container, render } = await mount({
+      workId: "work-preview-identity",
+      expanded: false,
+      preview: "合成私密摘要",
+      onOverflowChange: vi.fn(),
+    });
+    expect(body(container)?.textContent).toBe("合成私密正文");
+    author.checking = true;
+    await render();
+    expect(container.textContent).not.toContain("合成私密");
+    author.checking = false;
+    author.sessionError = true;
+    await render();
+    expect(container.textContent).not.toContain("合成私密");
+    author.viewer = null;
+    author.cache.clear();
+    author.sessionError = false;
+    const next = deferred();
+    client.work.mockReturnValueOnce(next.promise);
+    await render();
+    expect(container.textContent).not.toContain("合成私密");
+    await act(async () => next.resolve(work("合成公开正文")));
+    expect(body(container)?.textContent).toBe("合成公开正文");
   });
 
   it("renders nothing and reads nothing while collapsed", async () => {

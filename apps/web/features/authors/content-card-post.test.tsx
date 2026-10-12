@@ -137,6 +137,7 @@ const tapImage = (post: HTMLElement) =>
 
 beforeEach(() => {
   vi.useFakeTimers();
+  readWork.mockReturnValue(new Promise(() => {}));
 });
 
 afterEach(() => {
@@ -144,6 +145,7 @@ afterEach(() => {
   colophons.length = 0;
   document.body.replaceChildren();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -281,51 +283,56 @@ describe("ContentCard as a phone single-column post", () => {
     clearDetailCommentsRequest();
   });
 
-  it("expands a work's body in place from its title or the trailing action", async () => {
-    readWork.mockResolvedValue({ available: true, text: "临《兰亭》第三遍。" });
-    const post = render(work());
-    const title = post.querySelector<HTMLButtonElement>(
-      "[data-feed-post-title] button",
-    )!;
-    expect(title.getAttribute("aria-expanded")).toBe("false");
-    act(() => title.click());
-    expect(title.getAttribute("aria-expanded")).toBe("true");
-    expect(post.dataset.feedPostExpanded).toBe("true");
-    expect(readWork).toHaveBeenCalledWith(workId, expect.any(AbortSignal));
+  it("previews titled and untitled short bodies without an expand action", async () => {
+    readWork.mockResolvedValue({ available: true, text: "短正文" });
+    const post = render(work({ excerpt: "短正文" }));
+    expect(post.querySelector("[data-card-excerpt]")?.textContent).toBe(
+      "短正文",
+    );
+    expect(button(post, "展开正文")).toBeNull();
     await act(async () => {
       await Promise.resolve();
     });
-    const body = document.getElementById(title.getAttribute("aria-controls")!);
-    expect(body?.querySelector("[data-feed-post-body]")?.textContent).toBe(
-      "临《兰亭》第三遍。",
+    expect(post.querySelector("[data-feed-post-body]")?.textContent).toBe(
+      "短正文",
     );
-    act(() => button(post, "收起正文")!.click());
-    expect(title.getAttribute("aria-expanded")).toBe("false");
-    expect(post.querySelector("[data-feed-post-body]")).toBeNull();
-    expect(shell.openContent).not.toHaveBeenCalled();
+    expect(button(post, "展开正文")).toBeNull();
+    const untitled = render(work({ title: "", excerpt: "短正文" }));
+    expect(untitled.querySelector("h3")).toBeNull();
+    expect(untitled.querySelector("[data-card-excerpt]")?.textContent).toBe(
+      "短正文",
+    );
   });
 
-  it("uses the body opening as the text line of an untitled work", () => {
-    readWork.mockReturnValue(new Promise(() => {}));
-    // Another work: bodies read earlier stay cached for the document.
-    const post = render(
-      work({
-        target: { type: "work", id: `work-${"c".repeat(32)}` },
-        title: "",
-        excerpt: "兰亭序八种摹本对照",
-      }),
-    );
-    expect(post.querySelector("h3")).toBeNull();
-    const summary = post.querySelector<HTMLElement>("[data-card-excerpt]")!;
-    expect(summary.textContent).toBe("兰亭序八种摹本对照");
-    act(() => summary.click());
-    // The opening stays while the full body loads.
+  it("shows expansion only for overflow and keeps the preview after collapse", async () => {
+    const height = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(120);
+    const long = "临《兰亭》第三遍。".repeat(30);
+    readWork.mockResolvedValue({ available: true, text: long });
+    const post = render(work({ excerpt: long.slice(0, 160) }));
+    const title = post.querySelector<HTMLButtonElement>(
+      "[data-feed-post-title] button",
+    )!;
+    // Browser line-height and layout are mocked because jsdom does not lay out text.
+    const paragraph = post.querySelector<HTMLElement>("[data-card-excerpt]")!;
+    paragraph.style.lineHeight = "24px";
+    act(() => window.dispatchEvent(new Event("resize")));
+    expect(button(post, "展开正文")).not.toBeNull();
+    act(() => title.click());
+    expect(title.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(post.querySelector("[data-feed-post-body]")?.textContent).toBe(long);
+    act(() => button(post, "收起正文")!.click());
+    expect(title.getAttribute("aria-expanded")).toBe("false");
     expect(
-      post.querySelector(
-        '[data-feed-post-body-state="loading"] [data-card-excerpt]',
-      )?.textContent,
-    ).toBe("兰亭序八种摹本对照");
-    expect(button(post, "收起正文")).not.toBeNull();
+      post.querySelector("[data-feed-post-body-collapsed]"),
+    ).not.toBeNull();
+    expect(post.querySelector("[data-feed-post-body]")?.textContent).toBe(long);
+    expect(shell.openContent).not.toHaveBeenCalled();
+    height.mockRestore();
   });
 
   it("offers Detail instead of expanding a work without text", () => {

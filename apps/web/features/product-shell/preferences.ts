@@ -6,6 +6,11 @@ export const FEED_LAYOUT_PREFERENCE_STORAGE_KEY = "yoyi.home-feed-layout";
 export type ThemePreference = "light" | "dark" | "system";
 export type FeedLayoutPreference = "single" | "double";
 
+export const feedLayoutLabels = {
+  single: "书法模式",
+  double: "正常模式",
+} as const satisfies Record<FeedLayoutPreference, string>;
+
 export const themePreferences = [
   "light",
   "dark",
