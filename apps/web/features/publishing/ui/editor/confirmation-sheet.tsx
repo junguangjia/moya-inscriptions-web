@@ -44,6 +44,7 @@ const isEmptyConfirmation = (
 
 const isBusy = (submission: SubmissionState, resolving: boolean): boolean =>
   resolving ||
+  submission.status === "queued" ||
   submission.status === "submitting" ||
   submission.status === "reconciling" ||
   submission.status === "confirmed";
@@ -54,6 +55,8 @@ export interface ConfirmationGate {
   readonly issues: readonly FieldCheck[];
   readonly submission: SubmissionState;
   readonly resolving?: boolean;
+  /** Phone new-work intent: accepted before transient media work settles. */
+  readonly background?: boolean;
 }
 
 /**
@@ -66,10 +69,10 @@ export const confirmationBlocked = ({
   issues,
   submission,
   resolving = false,
+  background = false,
 }: ConfirmationGate): boolean =>
   isEmptyConfirmation(state) ||
-  readiness.blocking > 0 ||
-  !readiness.confirmed ||
+  (!background && (readiness.blocking > 0 || !readiness.confirmed)) ||
   issues.length > 0 ||
   isBusy(submission, resolving) ||
   submission.status === "unconfirmed";
@@ -83,6 +86,7 @@ export interface ConfirmationSheetProps {
   readonly submission: SubmissionState;
   /** The editor is still resolving where to submit from (before the request). */
   readonly resolving?: boolean;
+  readonly background?: boolean;
   /** Staged files the author has not confirmed yet (not part of the work). */
   readonly unconfirmedFiles: number;
   readonly onSubmit: () => void;
@@ -117,6 +121,7 @@ export const ConfirmationSheet = forwardRef<
     issues,
     submission,
     resolving = false,
+    background = false,
     unconfirmedFiles,
     onSubmit,
     onGoToField,
@@ -138,6 +143,7 @@ export const ConfirmationSheet = forwardRef<
     issues,
     submission,
     resolving,
+    background,
   });
   const primaryLabel = state.kind === "edit" ? "保存更新" : "发布";
   const recommendation = recommendationText(state);
@@ -149,20 +155,22 @@ export const ConfirmationSheet = forwardRef<
 
   // A lost answer being reconciled outranks the request still in progress.
   const status =
-    submission.status === "reconciling"
-      ? "正在确认结果…"
-      : submission.status === "confirmed"
-        ? state.kind === "edit"
-          ? "更新已保存"
-          : "作品已提交"
-        : resolving || submission.status === "submitting"
+    submission.status === "queued"
+      ? "正在后台上传，完成后自动发布"
+      : submission.status === "reconciling"
+        ? "正在确认结果…"
+        : submission.status === "confirmed"
           ? state.kind === "edit"
-            ? "正在保存更新…"
-            : "正在发布…"
-          : // Refused as not ready: the count, while the account is asked again.
-            submission.status === "not_ready" && readiness.blocking > 0
-            ? `${submission.itemKeys.length} 项正在处理，完成后可再${primaryLabel}`
-            : "";
+            ? "更新已保存"
+            : "作品已提交"
+          : resolving || submission.status === "submitting"
+            ? state.kind === "edit"
+              ? "正在保存更新…"
+              : "正在发布…"
+            : // Refused as not ready: the count, while the account is asked again.
+              submission.status === "not_ready" && readiness.blocking > 0
+              ? `${submission.itemKeys.length} 项正在处理，完成后可再${primaryLabel}`
+              : "";
 
   return (
     <section
@@ -230,12 +238,16 @@ export const ConfirmationSheet = forwardRef<
           data-editor-readiness=""
           role="status"
         >
-          {readiness.blocking > 0 && readiness.text !== null
-            ? `${readiness.text}。全部就绪或移除后才能${primaryLabel}`
-            : readiness.confirmed
-              ? `全部 ${readiness.ready} 项已就绪`
-              : "正在确认图片状态…"}
-          {readiness.blocking > 0 && onResolveMedia !== undefined ? (
+          {background && (readiness.blocking > 0 || !readiness.confirmed)
+            ? "图片将在后台上传和处理，完成后自动发布，可继续浏览"
+            : readiness.blocking > 0 && readiness.text !== null
+              ? `${readiness.text}。全部就绪或移除后才能${primaryLabel}`
+              : readiness.confirmed
+                ? `全部 ${readiness.ready} 项已就绪`
+                : "正在确认图片状态…"}
+          {!background &&
+          readiness.blocking > 0 &&
+          onResolveMedia !== undefined ? (
             <button
               className={styles.inlineAction}
               data-editor-resolve-media=""

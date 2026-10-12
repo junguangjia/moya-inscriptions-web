@@ -1217,7 +1217,6 @@ export class CommunityAuthService {
       if (checked === "malformed") providerFailure = "AUTH_DELIVERY_FAILED";
       providerPassed = checked === "pass";
     }
-    at = this.clock();
     return this.transactional(async (tx) => {
       // Serialize completion/recovery with logout, then reload observations
       // made before a concurrent completion or external provider call.
@@ -1225,6 +1224,9 @@ export class CommunityAuthService {
       if (observed?.userId === null || observed === null)
         return fail("AUTH_PROOF_REJECTED");
       const currentUser = await tx.lockUser(observed.userId);
+      // A later caller can finish while this one waits for the lock. Its
+      // newly issued receipt Session must never be revoked at an older time.
+      at = this.clock();
       const challenge = await tx.findChallenge(input.challengeId);
       if (
         currentUser === null ||

@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { createServer } from "node:http";
+
 import { devices, expect, test } from "@playwright/test";
 import sharp from "sharp";
 import type {
@@ -12,6 +15,9 @@ import type {
   CreateArticleDraftCommand,
   CreatePublishingDraftCommand,
   SavePublishingDraftCommand,
+  PublishingMediaItem,
+  PublishingReadinessCommand,
+  RegisterMediaItemCommand,
   WorkSubmissionCommand,
 } from "@moya/contracts";
 
@@ -53,9 +59,108 @@ interface Fixture {
   readonly submitted: () => readonly WorkSubmissionCommand[];
   readonly articles: () => readonly CreateArticleDraftCommand[];
   readonly release: () => void;
+  readonly uploadStarted: () => number;
+  readonly uploaded: () => number;
+  readonly releaseUploads: () => void;
+  readonly releaseReady: () => void;
 }
 
-const fixture = async (page: Page): Promise<Fixture> => {
+const fixture = async (
+  page: Page,
+  successfulPhotos = false,
+): Promise<Fixture> => {
+  const items = new Map<string, PublishingMediaItem>();
+  let uploadStarted = 0;
+  let uploaded = 0;
+  let releaseUploads: () => void = () => {};
+  const uploadsHeld = new Promise<void>((resolve) => {
+    releaseUploads = resolve;
+  });
+  // WebKit routing does not expose Blob bodies: receive the real browser
+  // request at a task-owned loopback server instead of deriving a fake receipt.
+  const receiver = createServer((request, response) => {
+    void (async () => {
+      response.setHeader("Access-Control-Allow-Origin", "*");
+      response.setHeader("Access-Control-Allow-Headers", "*");
+      response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+      if (request.method === "OPTIONS") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+      const componentId = request.url?.split("/").at(-1);
+      const item = [...items.values()].find((i) =>
+        i.components.some((component) => component.id === componentId),
+      );
+      if (request.method !== "POST" || !item) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const component = item.components.find(
+        (entry) => entry.id === componentId,
+      )!;
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const bytes = Buffer.concat(chunks);
+      expect(bytes.length).toBe(component.byteSize);
+      uploadStarted += 1;
+      await uploadsHeld;
+      const next: PublishingMediaItem = {
+        ...item,
+        state: "processing",
+        components: item.components.map((entry) =>
+          entry.id === componentId
+            ? { ...entry, state: "received", receivedBytes: bytes.length }
+            : entry,
+        ),
+      };
+      items.set(item.id, next);
+      uploaded += 1;
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          componentId,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          receivedBytes: bytes.length,
+          item: next,
+        }),
+      );
+    })().catch((error: unknown) => {
+      response.writeHead(500);
+      response.end(String(error));
+    });
+  });
+  const receiverUrl = successfulPhotos
+    ? await new Promise<string>((resolve, reject) => {
+        receiver.once("error", reject);
+        receiver.listen(0, "127.0.0.1", () => {
+          const address = receiver.address();
+          if (address === null || typeof address === "string") {
+            reject(new Error("Missing upload fixture port"));
+            return;
+          }
+          resolve(`http://127.0.0.1:${address.port}`);
+        });
+      })
+    : "";
+  receiver.unref();
+  const makeReady = () => {
+    for (const [id, item] of items) {
+      if (!item.components.every((c) => c.receivedBytes === c.byteSize))
+        continue;
+      items.set(id, {
+        ...item,
+        state: "ready",
+        components: item.components.map((c) => ({ ...c, state: "verified" })),
+        presentation: { width: 8, height: 8 },
+        media: {
+          thumbSrc: `/api/community/publishing/media/${id}/thumb/base`,
+          displaySrc: `/api/community/publishing/media/${id}/display/base`,
+        },
+      });
+    }
+  };
   let registered = 0;
   let saved = 0;
   let draft: ReturnType<typeof draftFrom> | null = null;
@@ -145,9 +250,54 @@ const fixture = async (page: Page): Promise<Fixture> => {
       request.method() === "POST"
     ) {
       registered += 1;
-      await held;
-      return route.fulfill({ status: 503, json: { error: {} } });
+      if (!successfulPhotos) {
+        await held;
+        return route.fulfill({ status: 503, json: { error: {} } });
+      }
+      const command = request.postDataJSON() as RegisterMediaItemCommand;
+      const hex = (n: number) => n.toString(16).padStart(32, "0");
+      const item: PublishingMediaItem = {
+        id: `media-item-${hex(registered)}`,
+        kind: command.kind,
+        qualityMode: command.qualityMode,
+        state: "awaiting_upload",
+        failureCode: null,
+        components: command.components.map((c, index) => ({
+          id: `media-component-${hex(registered * 10 + index)}`,
+          role: c.role,
+          state: "awaiting",
+          byteSize: c.byteSize,
+          receivedBytes: 0,
+        })),
+        presentation: null,
+        media: null,
+      };
+      items.set(item.id, item);
+      return route.fulfill({ status: 201, json: item });
     }
+    if (
+      successfulPhotos &&
+      /^\/api\/community\/publishing\/uploads\/(media-component-[0-9a-f]{32})$/u.test(
+        path,
+      ) &&
+      request.method() === "POST"
+    )
+      return route.continue({ url: `${receiverUrl}${path}` });
+    const itemMatch = path.match(
+      /^\/api\/community\/publishing\/items\/(media-item-[0-9a-f]{32})$/u,
+    );
+    if (successfulPhotos && itemMatch && request.method() === "GET")
+      return route.fulfill({ json: items.get(itemMatch[1]!) });
+    if (
+      successfulPhotos &&
+      /^\/api\/community\/publishing\/media\/[^/]+\/(?:thumb|display)\/base$/u.test(
+        path,
+      )
+    )
+      return route.fulfill({
+        contentType: "image/jpeg",
+        body: (await photo("derivative.jpg", 8, 8, "#315c8d")).buffer,
+      });
     if (
       path === "/api/community/publishing/drafts" &&
       request.method() === "POST"
@@ -164,20 +314,37 @@ const fixture = async (page: Page): Promise<Fixture> => {
       draft = draftFrom(command);
       return route.fulfill({ json: { status: "saved", draft } });
     }
-    if (/\/publishing\/(drafts|sessions)\/[^/]+\/readiness$/u.test(path))
+    if (/\/publishing\/(drafts|sessions)\/[^/]+\/readiness$/u.test(path)) {
+      const current = (request.postDataJSON() as PublishingReadinessCommand)
+        .content;
+      const pendingItemKeys = successfulPhotos
+        ? current.items
+            .filter(
+              (i) =>
+                i.itemId === null || items.get(i.itemId)?.state !== "ready",
+            )
+            .map((i) => i.key)
+        : [];
       return route.fulfill({
         json: {
-          ready: true,
-          pendingItemKeys: [],
+          ready: pendingItemKeys.length === 0,
+          pendingItemKeys,
           failedItemKeys: [],
           editKeys: {},
         },
       });
+    }
     if (
       path === "/api/community/publishing/submissions" &&
       request.method() === "POST"
     ) {
       const command = request.postDataJSON() as WorkSubmissionCommand;
+      if (successfulPhotos)
+        expect(
+          command.content.items.every(
+            (i) => i.itemId !== null && items.get(i.itemId)?.state === "ready",
+          ),
+        ).toBe(true);
       submitted.push(command);
       return route.fulfill({
         json: {
@@ -225,7 +392,17 @@ const fixture = async (page: Page): Promise<Fixture> => {
     saved: () => saved,
     submitted: () => submitted,
     articles: () => articles,
-    release: () => release(),
+    uploadStarted: () => uploadStarted,
+    uploaded: () => uploaded,
+    releaseUploads,
+    releaseReady: makeReady,
+    release: () => {
+      release();
+      releaseUploads();
+      makeReady();
+      receiver.closeAllConnections();
+      receiver.close();
+    },
   };
 };
 
@@ -314,6 +491,7 @@ const openComposer = async (
   options: {
     readonly desktop?: boolean;
     readonly reducedMotion?: "reduce";
+    readonly successfulPhotos?: boolean;
   } = {},
 ): Promise<Composer> => {
   let context: BrowserContext | null = null;
@@ -332,7 +510,7 @@ const openComposer = async (
     target = await context.newPage();
     cdp = await context.newCDPSession(target);
   }
-  const state = await fixture(target);
+  const state = await fixture(target, options.successfulPhotos);
   const composer: Composer = {
     context,
     page: target,
@@ -443,6 +621,78 @@ const trustedDrag = async (
     });
   }
 };
+
+for (const progressOpen of [false, true])
+  test(`phone Publish continues while browsing and confirms without navigation${progressOpen ? " with progress open" : ""}`, async ({
+    browser,
+    page,
+  }, testInfo) => {
+    skipUnlessPhone(testInfo);
+    const composer = await openComposer(browser, page, testInfo, {
+      successfulPhotos: true,
+    });
+    await pickPhotos(composer);
+    const frozenKeys = await composer.strip
+      .locator("[data-edit-index]")
+      .evaluateAll((cells) =>
+        cells.map((c) => c.getAttribute("data-edit-key")),
+      );
+    await expect.poll(composer.fixture.uploadStarted).toBe(2);
+    await publishScreen(composer);
+    const publish = screen(composer, "publish");
+    await fill(publish.locator('[data-editor-input="title"]'), "后台发布标题");
+    await fill(publish.locator('[data-editor-input="body"]'), "冻结的正文");
+    await press(publish.locator('[data-editor-input="body"]'), "Tab");
+    await expect(publish.locator("[data-editor-submit]")).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await click(publish.locator("[data-editor-submit]"));
+    await expect(composer.editor).toHaveCount(0);
+    expect(composer.fixture.submitted()).toHaveLength(0);
+    await expect(
+      composer.page.locator("[data-create-work-action]"),
+    ).toHaveAttribute("aria-label", /查看后台发布进度/u);
+    await click(
+      composer.page
+        .getByRole("navigation", { name: "主要内容" })
+        .getByRole("button", { name: "用户", exact: true }),
+    );
+    const profile = composer.page.locator(
+      `[data-author-profile="${authorId}"]`,
+    );
+    await present(profile);
+    const browsingUrl = composer.page.url();
+    composer.fixture.releaseUploads();
+    await expect.poll(composer.fixture.uploaded).toBe(2);
+    expect(composer.fixture.submitted()).toHaveLength(0);
+    await expect(profile).toBeVisible();
+    if (progressOpen) {
+      await click(composer.page.locator("[data-create-work-action]"));
+      await expect(
+        composer.editor.locator("[data-editor-background-publication]"),
+      ).toBeVisible();
+    }
+    composer.fixture.releaseReady();
+    await expect
+      .poll(() => composer.fixture.submitted().length, { timeout: 15_000 })
+      .toBe(1);
+    await expect(composer.page.locator(".phase4-feedback")).toContainText(
+      "作品已发布",
+    );
+    await expect(composer.editor).toHaveCount(0);
+    await expect(profile).toBeVisible();
+    expect(composer.page.url()).toBe(browsingUrl);
+    const command = composer.fixture.submitted()[0]!;
+    expect(command.content).toMatchObject({
+      title: "后台发布标题",
+      body: "冻结的正文",
+      visibility: "public",
+    });
+    expect(command.content.items.map((i) => i.key)).toEqual(frozenKeys);
+    expect(command.content.items.every((i) => i.itemId !== null)).toBe(true);
+    expect(composer.fixture.submitted()).toHaveLength(1);
+  });
 
 test("phone dock + opens the complete start screen directly", async ({
   browser,
@@ -668,9 +918,11 @@ test("发布 previews the feed right to left and card taps return to the corresp
     composer.editor.locator("[data-feed-preview-caption]"),
   ).toHaveText(/^第 1 张在最右/u);
   await expect(composer.editor.locator("[data-publish-reason]")).toBeVisible();
-  await expect(composer.editor.locator("[data-editor-submit]")).toHaveAttribute(
-    "aria-disabled",
-    "true",
+  await expect(
+    composer.editor.locator("[data-editor-submit]"),
+  ).not.toHaveAttribute("aria-disabled", "true");
+  await expect(composer.editor.locator("[data-publish-reason]")).toContainText(
+    "完成后自动发布，可继续浏览",
   );
   await press(composer.editor.locator('[data-publish-card="0"]'), "ArrowLeft");
   await expect(

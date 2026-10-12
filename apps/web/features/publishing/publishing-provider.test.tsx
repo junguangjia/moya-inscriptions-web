@@ -165,6 +165,60 @@ describe("PublishingProvider hooks", () => {
     latest.current = null;
   });
 
+  it("surfaces terminal derivative failure in global background progress and preserves cancellation", async () => {
+    const fake = services();
+    author.viewer = { id: ACCOUNT };
+    fake.account.id = ACCOUNT;
+    Object.assign(fake.services.client, {
+      readiness: vi.fn(async () => ({
+        ready: false,
+        pendingItemKeys: [],
+        failedItemKeys: ["existing"],
+        editKeys: {},
+      })),
+    });
+    await act(async () =>
+      root.render(
+        <PublishingProvider services={fake.services}>
+          <Probe />
+        </PublishingProvider>,
+      ),
+    );
+    const content: WorkDraftContent = {
+      ...contentOf("title"),
+      items: [
+        {
+          key: "existing",
+          itemId: `media-item-${"5".repeat(32)}`,
+          kind: "static",
+          qualityMode: "standard",
+          edit: { rotation: 90, crop: null },
+        },
+      ],
+    };
+    await act(async () => {
+      latest.current!.session.startSession({
+        target: { type: "new" },
+        saveMode: "saved",
+        draft: draftOf(content, 1),
+      });
+      expect(latest.current!.submission.queue(content)).toBe(true);
+      fake.timers.fireAll();
+      await settle();
+    });
+    expect(latest.current!.progress).toMatchObject({
+      active: true,
+      backgroundPublication: true,
+      publicationStatus: "queued",
+      readiness: "图片需要处理，返回继续",
+    });
+    await act(async () => {
+      expect(latest.current!.submission.cancelQueued()).toBe(true);
+    });
+    expect(latest.current!.submission.background).toBe(false);
+    expect(latest.current!.session.session).not.toBeNull();
+  });
+
   it("exposes an account-keyed session, staging and progress, isolated on account change", async () => {
     const fake = services();
     author.viewer = { id: ACCOUNT };

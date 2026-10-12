@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CommunityAuthService,
   createProductionAuthService,
@@ -228,6 +228,57 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
             .map((row) => row.version),
         ).toEqual([1]);
         expect(h.checks()).toBe(environment === "production" ? 1 : 0);
+      });
+      it("timestamps completion recovery after a later caller acquires the user lock first", async () => {
+        const start = Date.now();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(start);
+        let release: (() => void) | undefined;
+        try {
+          const h = harness(environment, createPort),
+            { user, input } = await h.factor();
+          const gate = h.gateFinal();
+          release = gate.release;
+          const earlier = h.service.completeFactor(input);
+          await gate.entered;
+          vi.setSystemTime(start + 1);
+          const later = await h.service.completeFactor(input);
+          expect(later.ok).toBe(true);
+          vi.setSystemTime(start + 2);
+          gate.release();
+          const recovered = await earlier;
+          expect(recovered.ok).toBe(true);
+          if (!later.ok || !recovered.ok)
+            throw Error("Synthetic reversed completion refused");
+          const live = await Promise.all(
+            [later, recovered].map((result) =>
+              h.service.readAccount(result.value.session.token),
+            ),
+          );
+          expect(live.filter((result) => result.ok)).toHaveLength(1);
+          const superseded = await h.memory.transaction(async (tx) =>
+            tx.lockSession(
+              await hashSessionToken(later.value.session.token),
+              environment,
+            ),
+          );
+          expect(superseded?.revokedAt).not.toBeNull();
+          expect(Date.parse(superseded!.revokedAt!)).toBeGreaterThanOrEqual(
+            start + 1, // The later completion was issued at this controlled time.
+          );
+          const identities = await h.memory.transaction((tx) =>
+            tx.listIdentities(user.profile.id),
+          );
+          expect(
+            identities
+              .filter((row) => row.kind === "phone")
+              .map((row) => row.version),
+          ).toEqual([1]);
+          expect(h.checks()).toBe(environment === "production" ? 2 : 0);
+        } finally {
+          release?.();
+          vi.useRealTimers();
+        }
       });
       it("recovers an intermediate cookie superseded by another exact concurrent retry", async () => {
         const h = harness(environment, createPort),
