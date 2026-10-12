@@ -25,7 +25,7 @@ import {
 import type { FeedColophonInputHandle } from "./feed-colophon-input";
 import { useFeedStage } from "./feed-post-stage-context";
 import type { FeedStageApi, FeedStageSettle } from "./feed-post-stage-context";
-import { elementStartOffset } from "./feed-post-strip-geometry";
+import { elementStartOffset, sealSpan } from "./feed-post-strip-geometry";
 import { useDiscussionThread } from "./use-discussion-thread";
 import type { DiscussionThread } from "./use-discussion-thread";
 import { colophonClipboardText, VerticalDigits } from "./vertical-text";
@@ -161,6 +161,48 @@ const ScopedFeedColophon = ({
   const threadRef = useRef(thread);
   threadRef.current = thread;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The strip's offset when the reader chose (or cleared) a selection: the
+  // action column coming or going adds or removes a snap area, which WebKit
+  // may re-snap to elsewhere.
+  const tappedRef = useRef<number | null>(null);
+  // A selection cleared while the strip rests on an unfolded colophon's
+  // action column: the strip first glides back to its 落款 (the column then
+  // sits under the input column), and the selection clears as it settles.
+  // Clearing it at once would take the column's snap position away under
+  // the view, and the browser would re-snap 48 px back in one frame.
+  const leavingRef = useRef(false);
+  const choose = (id: string | null, glide = true) => {
+    leavingRef.current = false;
+    const current = stageRef.current;
+    if (id === null && selectedId !== null && glide && current?.strip != null) {
+      const seal = findAnchor(sectionRef.current, selectedId)?.querySelector(
+        ":scope > [data-expanded] > [data-colophon-signature]",
+      );
+      if (seal != null) {
+        const offset = current.readOffset();
+        const { snap } = sealSpan(
+          current.strip.getBoundingClientRect(),
+          seal.getBoundingClientRect(),
+          Number.parseFloat(getComputedStyle(seal).scrollMarginLeft) || 0,
+          offset,
+        );
+        if (offset - snap > 1) {
+          leavingRef.current = true;
+          current.scrollToOffset(snap);
+          return;
+        }
+      }
+    }
+    if (id !== selectedId) {
+      tappedRef.current = current?.readOffset() ?? null;
+      // The action column comes or goes with snapping held off, until the
+      // strip settles where the selection takes it.
+      current?.holdSnap?.();
+    }
+    setSelectedId(id);
+  };
+  const chooseRef = useRef(choose);
+  chooseRef.current = choose;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -366,7 +408,7 @@ const ScopedFeedColophon = ({
     if (id === undefined || holding) return;
     const node = findAnchor(sectionRef.current, id);
     if (node === null) {
-      // A reply past the preview: read its root's last reply page first.
+      // A reply past the preview: read through its root's last reply page.
       // Anything else that is not shown is dropped, so it cannot pull the
       // strip there later.
       const submitted = thread.lastSubmit;
@@ -467,6 +509,14 @@ const ScopedFeedColophon = ({
   useLayoutEffect(() => {
     const section = sectionRef.current;
     const current = stageRef.current;
+    const tapped = tappedRef.current;
+    tappedRef.current = null;
+    if (
+      current?.strip != null &&
+      tapped !== null &&
+      Math.abs(current.readOffset() - tapped) > 1
+    )
+      current.scrollToOffset(tapped, "instant");
     const column = section?.querySelector<HTMLElement>(
       "[data-colophon-input-shown]:not([data-colophon-input='none'])",
     );
@@ -480,12 +530,25 @@ const ScopedFeedColophon = ({
     if (selectedId !== null) {
       const actions = section.querySelector("[data-colophon-actions]");
       const node = findAnchor(section, selectedId);
-      if (
-        actions !== null &&
-        node !== null &&
-        actions.getBoundingClientRect().left < edge
-      )
-        current.scrollToElement(node);
+      if (actions === null || node === null) return;
+      const left = actions.getBoundingClientRect().left;
+      if (left >= edge) return;
+      // Its start at the right gutter, when that shows the actions too (a
+      // colophon that fits one view); else only as far as the actions need,
+      // to their own snap position (an unfolded one, wider than the view).
+      const box = current.strip.getBoundingClientRect();
+      const gutter =
+        Number.parseFloat(getComputedStyle(node).scrollMarginRight) || 0;
+      const toStart = box.right - gutter - node.getBoundingClientRect().right;
+      if (left + toStart >= edge) current.scrollToElement(node);
+      else
+        current.scrollToOffset(
+          current.readOffset() +
+            box.left +
+            (Number.parseFloat(getComputedStyle(actions).scrollMarginLeft) ||
+              0) -
+            left,
+        );
       return;
     }
     if (answering === null) return;
@@ -556,6 +619,159 @@ const ScopedFeedColophon = ({
       current.scrollToOffset(offset + restore, "instant");
   }, [expanded]);
 
+  // The compact head (the count under the title, one column) where only
+  // that lets the first colophon, its 落款 too, fit the head's view clear of
+  // the input column and its fade. Decided while the strip rests at the
+  // head or on the images, never while the first colophon is unfolded, and
+  // measured without writing to the DOM: the head's parts keep their widths
+  // in either form.
+  const [compactHead, setCompactHead] = useState(false);
+  const compactRef = useRef(compactHead);
+  compactRef.current = compactHead;
+  const compactOffset = useRef<number | null>(null);
+  const decideHead = useCallback(() => {
+    const current = stageRef.current;
+    const section = sectionRef.current;
+    const head = headRef.current;
+    if (current?.strip == null || section === null || head === null) return;
+    const title = head.querySelector("h4");
+    const tally = head.querySelector("[data-colophon-count]");
+    const entry = section.querySelector("[data-colophon-entry]");
+    const body = entry?.firstElementChild;
+    if (title === null || tally === null || entry == null || body == null)
+      return;
+    if (body.hasAttribute("data-expanded") || !current.isSettled()) return;
+    const scroller = current.strip;
+    const box = scroller.getBoundingClientRect();
+    const headBox = head.getBoundingClientRect();
+    const headStyle = getComputedStyle(head);
+    const gutter = Number.parseFloat(headStyle.scrollMarginRight) || 0;
+    // Read on from the head: the reader is in the colophons.
+    if (headBox.right > box.right - gutter + 1) return;
+    const style = getComputedStyle(section);
+    const px = (name: string) =>
+      Number.parseFloat(style.getPropertyValue(name)) || 0;
+    const titleWidth = title.getBoundingClientRect().width;
+    const tallyWidth = tally.getBoundingClientRect().width;
+    // From the head's left (its block-end margin's start) to the first
+    // colophon: the group label, if any, and its margins.
+    const between =
+      headBox.right -
+      entry.getBoundingClientRect().right -
+      headBox.width -
+      (Number.parseFloat(headStyle.marginLeft) || 0);
+    const column = section.querySelector("[data-colophon-input]");
+    const fade =
+      column === null
+        ? 0
+        : Number.parseFloat(
+            getComputedStyle(column).getPropertyValue("--colophon-input-edge"),
+          ) || 0;
+    const clear = px("--colophon-input-clear") + fade;
+    const room = (compact: boolean) =>
+      scroller.clientWidth -
+      gutter -
+      between -
+      (compact
+        ? Math.max(titleWidth, tallyWidth) + px("--colophon-head-end-compact")
+        : titleWidth +
+          px("--colophon-head-gap") +
+          tallyWidth +
+          px("--colophon-head-end")) -
+      clear;
+    const bodyBox = body.getBoundingClientRect();
+    let textLeft = bodyBox.left;
+    // SVG plaque text can extend slightly past the signature's box. Keep
+    // its actual text, and the time, clear of the whole input-column fade.
+    const seal = body.querySelector("[data-colophon-signature]");
+    const range = document.createRange();
+    if (seal !== null && typeof range.getClientRects === "function") {
+      const walker = document.createTreeWalker(seal, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (!walker.currentNode.nodeValue?.trim()) continue;
+        range.selectNodeContents(walker.currentNode);
+        for (const rect of range.getClientRects())
+          if (rect.width > 0 && rect.height > 0)
+            textLeft = Math.min(textLeft, rect.left);
+      }
+    }
+    const width = bodyBox.width + bodyBox.left - textLeft;
+    const on = width > room(false) && width <= room(true);
+    if (on === compactRef.current) return;
+    compactOffset.current = current.readOffset();
+    setCompactHead(on);
+  }, []);
+  // The head's width changed on the strip's left: WebKit measures the
+  // offset from the left edge, so the view is put back.
+  useLayoutEffect(() => {
+    const before = compactOffset.current;
+    compactOffset.current = null;
+    const current = stageRef.current;
+    // A touch that landed since the decision is the reader's to finish.
+    if (
+      before !== null &&
+      current != null &&
+      current.isSettled() &&
+      Math.abs(current.readOffset() - before) > 1
+    )
+      current.scrollToOffset(before, "instant");
+  }, [compactHead]);
+  // The input column's width while it is wider than idle (a reply being
+  // written): the 落款's and the action column's snaps keep clear of it
+  // (--colophon-seal-clear), so a swipe comes to rest with them in view.
+  const [inputWide, setInputWide] = useState<number | null>(null);
+  useEffect(() => {
+    const section = sectionRef.current;
+    const column = section?.querySelector<HTMLElement>("[data-colophon-input]");
+    if (
+      section == null ||
+      column == null ||
+      typeof ResizeObserver !== "function"
+    )
+      return undefined;
+    const observer = new ResizeObserver(() => {
+      const idle =
+        Number.parseFloat(
+          getComputedStyle(section).getPropertyValue("--colophon-input-clear"),
+        ) || 0;
+      const width = Math.ceil(column.getBoundingClientRect().width);
+      setInputWide(width > idle + 1 ? width : null);
+    });
+    observer.observe(column);
+    return () => observer.disconnect();
+  }, [strip]);
+
+  const firstRowId = (shown.hot[0] ?? shown.items[0])?.id;
+  useEffect(() => {
+    const first = sectionRef.current?.querySelector(
+      "[data-colophon-entry]",
+    )?.firstElementChild;
+    if (strip === null || typeof ResizeObserver !== "function")
+      return undefined;
+    const observer = new ResizeObserver(() => decideHead());
+    observer.observe(strip);
+    if (first != null) observer.observe(first);
+    return () => observer.disconnect();
+  }, [decideHead, firstRowId, strip]);
+  useEffect(
+    () => subscribeSettle?.(() => decideHead()),
+    [decideHead, subscribeSettle],
+  );
+  // Also as rows commit (held rows come in as the strip settles at the
+  // head) and on 全文/收起: before paint, so the first colophon is never
+  // shown beside the wrong head first.
+  const headRows = `${firstRowId ?? ""}:${shown.hot.length > 0}:${
+    shown.page > 0 ? shown.visibleTotal : fallbackCount
+  }`;
+  useLayoutEffect(() => decideHead(), [decideHead, expanded, headRows]);
+  useEffect(
+    () =>
+      subscribeSettle?.(() => {
+        if (leavingRef.current) chooseRef.current(null, false);
+      }),
+    [subscribeSettle],
+  );
+
   // A fresh clock whenever the rows change.
   const now = useMemo(() => new Date(), [shown.hot, shown.items]);
   const interactions: ColophonInteractions = {
@@ -569,7 +785,7 @@ const ScopedFeedColophon = ({
     canReply:
       !thread.composerClosed &&
       (viewer.state === "signed-in" || viewer.state === "signed-out"),
-    select: setSelectedId,
+    select: choose,
     toggleFold: (id) => {
       const node = findAnchor(sectionRef.current, id);
       foldedRef.current =
@@ -595,7 +811,8 @@ const ScopedFeedColophon = ({
         enterAuth(viewer.signInHref, opener);
         return;
       }
-      setSelectedId(null);
+      // The reply moves the strip to what it answers anyway.
+      choose(null, false);
       setAnswering(replyTarget.replyId ?? replyTarget.rootCommentId);
       // The toolbar closes; the input takes focus in the same tap, so iOS
       // raises the keyboard, led by 「回复 X：」.
@@ -606,7 +823,7 @@ const ScopedFeedColophon = ({
     remove: (id) => {
       if (!window.confirm(deleteQuestion)) return;
       thread.deleteBody(id);
-      setSelectedId(null);
+      choose(null, false);
       // The toolbar closes; focus stays with the colophon.
       findAnchor(sectionRef.current, id)
         ?.querySelector<HTMLElement>("[data-colophon-text]")
@@ -665,14 +882,19 @@ const ScopedFeedColophon = ({
             "[data-colophon-text],[data-colophon-actions],button,a",
           ) === null
         )
-          setSelectedId(null);
+          choose(null);
       }}
       onKeyDown={(event) => {
-        if (event.key === "Escape" && selectedId !== null) setSelectedId(null);
+        if (event.key === "Escape" && selectedId !== null) choose(null);
       }}
       ref={sectionRef}
       style={
-        { "--colophon-highlight-ms": `${HIGHLIGHT_MS}ms` } as CSSProperties
+        {
+          "--colophon-highlight-ms": `${HIGHLIGHT_MS}ms`,
+          ...(inputWide === null
+            ? {}
+            : { "--colophon-input-wide": `${inputWide}px` }),
+        } as CSSProperties
       }
     >
       {strip === null ? null : (
@@ -702,7 +924,12 @@ const ScopedFeedColophon = ({
           />
         </div>
       )}
-      <header className={styles.head} data-colophon-head="" ref={headRef}>
+      <header
+        className={styles.head}
+        data-colophon-head=""
+        data-compact={compactHead ? "" : undefined}
+        ref={headRef}
+      >
         <h4 className={styles.headTitle}>题跋</h4>
         {count === null || count === undefined ? null : (
           <p className={styles.headCount} data-colophon-count="">

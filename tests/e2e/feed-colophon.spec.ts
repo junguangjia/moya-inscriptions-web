@@ -622,6 +622,613 @@ test("全文 on a colophon longer than a view keeps its start, and a swipe on st
   await feed.context?.close();
 });
 
+/**
+ * latest-1 (480 characters) unfolded in place, on Chromium with trusted
+ * touch: its 落款's snap offset, the strip's offset now and how to place
+ * the strip, and a per-frame record of the offset for a gesture.
+ */
+const unfoldedLong = async (
+  browser: Browser,
+  page: Page,
+  testInfo: TestInfo,
+) => {
+  const feed = await openWithLong(browser, page, testInfo, 480);
+  const { entry, fold } = await readLongFromStart(feed);
+  await fold.click();
+  await expect(fold).toHaveText("收起");
+  await restingEdges(feed, entry);
+  const session = feed.session;
+  if (session === null) throw new Error("Trusted touch needs Chromium");
+  const box = await feed.strip.boundingBox();
+  if (box === null) throw new Error("Missing geometry");
+  /** The 落款's snap and dead zone, the strip's offset, the edges. */
+  const geometry = () =>
+    entry.evaluate((node) => {
+      const strip = node.closest<HTMLElement>("[data-feed-stage]")!;
+      const stage = strip.getBoundingClientRect();
+      const seal = node.querySelector(
+        ":scope > div > [data-colophon-signature]",
+      )!;
+      const sealBox = seal.getBoundingClientRect();
+      const offset = -strip.scrollLeft;
+      const next = node.nextElementSibling!;
+      const column = strip.querySelector("[data-colophon-input]")!;
+      return {
+        offset,
+        start:
+          offset -
+          (stage.right -
+            (Number.parseFloat(getComputedStyle(node).scrollMarginRight) || 0) -
+            node.getBoundingClientRect().right),
+        snap:
+          offset +
+          stage.left +
+          (Number.parseFloat(getComputedStyle(seal).scrollMarginLeft) || 0) -
+          sealBox.left,
+        // Where the 落款's right edge meets the stage's left edge.
+        edge: offset + stage.left - sealBox.right,
+        sealLeft: sealBox.left,
+        // The column's edge and the fade beyond it.
+        clearOf:
+          column.getBoundingClientRect().right +
+          (Number.parseFloat(
+            getComputedStyle(column).getPropertyValue("--colophon-input-edge"),
+          ) || 0),
+        // The next colophon at its snap gutter: the 落款 was passed.
+        nextAtGutter:
+          Math.abs(
+            stage.right -
+              (Number.parseFloat(getComputedStyle(next).scrollMarginRight) ||
+                0) -
+              next.getBoundingClientRect().right,
+          ) <= 2,
+      };
+    });
+  const rest = async () => {
+    let last = await geometry();
+    for (let check = 0; check < 20; check += 1) {
+      await feed.page.waitForTimeout(200);
+      const next = await geometry();
+      if (Math.abs(next.offset - last.offset) < 0.5) return next;
+      last = next;
+    }
+    return last;
+  };
+  /** Puts the strip at `offset` without snapping on the way. */
+  const place = async (offset: number) => {
+    await feed.strip.evaluate((strip, to) => {
+      strip.style.scrollSnapType = "none";
+      strip.scrollLeft = -to;
+      strip.getBoundingClientRect();
+      strip.style.scrollSnapType = "";
+    }, offset);
+    return rest();
+  };
+  /** Records every frame's offset (and its time), the offset at the lift
+   *  and whether the stage drove the strip when the finger landed. */
+  const record = () =>
+    feed.strip.evaluate((strip) => {
+      const fling = {
+        frames: [] as number[],
+        times: [] as number[],
+        lift: Number.NaN,
+        liftAt: Number.NaN,
+        drivenAtStart: false,
+        done: false,
+      };
+      (window as unknown as { __fling: typeof fling }).__fling = fling;
+      // Window capture: before the stage's own touch handlers.
+      window.addEventListener(
+        "touchstart",
+        (event) => {
+          fling.drivenAtStart = strip.style.touchAction !== "";
+          for (
+            let target = event.target instanceof Element ? event.target : null;
+            target !== null && target !== strip;
+            target = target.parentElement
+          )
+            if (getComputedStyle(target).touchAction === "pan-y pinch-zoom")
+              fling.drivenAtStart = true;
+        },
+        { capture: true, once: true },
+      );
+      window.addEventListener(
+        "touchend",
+        () => {
+          fling.lift = -strip.scrollLeft;
+          fling.liftAt = performance.now();
+        },
+        { capture: true, once: true },
+      );
+      const frame = (time: number) => {
+        fling.frames.push(-strip.scrollLeft);
+        fling.times.push(time);
+        if (!fling.done) requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    });
+  const recorded = () =>
+    feed.page.evaluate(() => {
+      const fling = (
+        window as unknown as {
+          __fling: {
+            frames: number[];
+            times: number[];
+            lift: number;
+            liftAt: number;
+            drivenAtStart: boolean;
+            done: boolean;
+          };
+        }
+      ).__fling;
+      fling.done = true;
+      return fling;
+    });
+  const from = { x: box.x + box.width * 0.15, y: box.y + box.height * 0.55 };
+  /**
+   * A drag along `moves` (px rightwards, i.e. on into the strip, and the
+   * pause after each), held `holdMs` before lifting; every frame's offset
+   * until the strip rests (or, `settle: false`, until the lift), and the
+   * offset at the lift. `afterLift` runs right after the finger lifts.
+   */
+  const drag = async (
+    moves: readonly (readonly [number, number])[],
+    {
+      holdMs = 0,
+      afterLift,
+      settle = true,
+      xShare = 0.15,
+    }: {
+      holdMs?: number;
+      afterLift?: () => Promise<unknown>;
+      settle?: boolean;
+      xShare?: number;
+    } = {},
+  ) => {
+    await record();
+    try {
+      const origin = { ...from, x: box.x + box.width * xShare };
+      let x = origin.x;
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [origin],
+      });
+      for (const [dx, pauseMs] of moves) {
+        x += dx;
+        await session.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x, y: from.y }],
+        });
+        await feed.page.waitForTimeout(pauseMs);
+      }
+      if (holdMs > 0) await feed.page.waitForTimeout(holdMs);
+    } finally {
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchEnd",
+        touchPoints: [],
+      });
+    }
+    await afterLift?.();
+    const at = settle ? await rest() : await geometry();
+    const fling = await recorded();
+    return {
+      ...fling,
+      rest: at,
+      max: Math.max(...fling.frames),
+      // The frames from the lift on.
+      after: [
+        fling.lift,
+        ...fling.frames.filter(
+          (_, index) => fling.times[index]! >= fling.liftAt,
+        ),
+      ],
+    };
+  };
+  /** A rightward drag of `share` of the stage in `steps` moves. */
+  const gesture = (
+    share: number,
+    steps: number,
+    stepMs: number,
+    options: Parameters<typeof drag>[1] = {},
+  ) =>
+    drag(
+      Array.from(
+        { length: steps },
+        () => [(box.width * share) / steps, stepMs] as const,
+      ),
+      options,
+    );
+  return {
+    feed,
+    width: box.width,
+    left: box.x,
+    geometry,
+    place,
+    drag,
+    gesture,
+    rest,
+  };
+};
+
+/** Where the strip rests on the 落款: clear of the column and its fade. */
+const expectAtSeal = (at: {
+  offset: number;
+  snap: number;
+  sealLeft: number;
+  clearOf: number;
+  nextAtGutter: boolean;
+}) => {
+  expect(Math.abs(at.offset - at.snap)).toBeLessThanOrEqual(2);
+  expect(at.sealLeft).toBeGreaterThanOrEqual(at.clearOf);
+  expect(at.nextAtGutter).toBe(false);
+};
+
+/** The largest step on between two frames. */
+const largestStepOn = (frames: readonly number[]) =>
+  frames.reduce(
+    (most, offset, index) =>
+      index === 0 ? most : Math.max(most, offset - (frames[index - 1] ?? 0)),
+    0,
+  );
+
+/** The largest step back between two frames. */
+const largestStepBack = (frames: readonly number[]) =>
+  frames.reduce(
+    (most, offset, index) =>
+      index === 0 ? most : Math.max(most, (frames[index - 1] ?? 0) - offset),
+    0,
+  );
+
+const chromiumTouch = (testInfo: TestInfo) =>
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "Trusted touch (and the fling) needs Chromium over CDP.",
+  );
+
+/** The largest gap between two recorded frames, in ms. */
+const largestFrameGap = (times: readonly number[]) =>
+  times.reduce(
+    (most, time, index) =>
+      index === 0 ? most : Math.max(most, time - (times[index - 1] ?? 0)),
+    0,
+  );
+
+test("a fast swipe on the input or background entering an unfolded colophon never passes its 落款", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    const start = await long.geometry();
+    for (const [xShare, share, moves, pause] of [
+      [0.05, 0.6, 6, 15],
+      [0.05, 0.9, 3, 15],
+      [0.95, 0.6, 6, 15],
+      [0.95, 0.9, 3, 15],
+    ] as const) {
+      const placed = await long.place(start.start - 44);
+      // The entry view hands every touch surface over before the row starts.
+      expect(placed.offset).toBeLessThan(start.start - 2);
+      expect(
+        await long.feed.strip.evaluate((strip) => strip.style.touchAction),
+      ).toBe("pan-y pinch-zoom");
+      const fling = await long.gesture(share, moves, pause, { xShare });
+      expect(fling.drivenAtStart).toBe(true);
+      expect(fling.max).toBeLessThanOrEqual(start.snap + 2);
+      expect(fling.rest.offset).toBeGreaterThanOrEqual(fling.lift - 1);
+      expect(largestStepBack(fling.after)).toBeLessThanOrEqual(1);
+      expect(largestStepOn(fling.after)).toBeLessThanOrEqual(40);
+      expect(largestFrameGap(fling.times)).toBeLessThanOrEqual(50);
+    }
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("a fast swipe from a long colophon's last view stops on its 落款, without flying past", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    const start = await long.geometry();
+    await long.place(start.snap - 200);
+    const fling = await long.gesture(0.6, 6, 15);
+    // The stage drove it: Chromium alone may fly past or rest short.
+    expect(fling.drivenAtStart).toBe(true);
+    expectAtSeal(fling.rest);
+    // Never carried past it and back, nor back at all after the lift.
+    expect(fling.max).toBeLessThanOrEqual(fling.rest.offset + 4);
+    expect(largestStepBack(fling.after)).toBeLessThanOrEqual(1);
+    expect(largestFrameGap(fling.times)).toBeLessThanOrEqual(50);
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("a flick or a drag that rolls back 2-6 px as the finger lifts never glides back", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    const start = await long.geometry();
+    for (const roll of [2, 4, 6]) {
+      await long.place(start.snap - 200);
+      const fling = await long.drag([
+        ...Array.from({ length: 5 }, () => [36, 12] as const),
+        [-roll, 8],
+      ]);
+      expectAtSeal(fling.rest);
+      // From its furthest point after the lift, nothing glides back.
+      expect(largestStepBack(fling.after)).toBeLessThanOrEqual(1);
+      expect(fling.rest.offset).toBeGreaterThanOrEqual(fling.lift - 1);
+    }
+    // Dragged across the 落款 (held there), the finger rolls back 6 px over
+    // two moves before it lifts: the strip stays on the 落款.
+    await long.place(start.snap - 150);
+    const held = await long.drag([
+      ...Array.from({ length: 10 }, () => [30, 16] as const),
+      [-3, 16],
+      [-3, 30],
+    ]);
+    expectAtSeal(held.rest);
+    expect(largestStepBack(held.after)).toBeLessThanOrEqual(1);
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("a drag across a long colophon's 落款 holds there, and a swipe on at once moves on", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    const start = await long.geometry();
+    await long.place(start.snap - long.width * 0.25);
+    // The finger travels on well past the 落款, held before the lift: the
+    // strip has stopped on it by then, like a list's end.
+    const across = await long.gesture(0.55, 28, 16, {
+      holdMs: 150,
+      settle: false,
+    });
+    expectAtSeal(across.rest);
+    expect(across.max).toBeLessThanOrEqual(across.rest.offset + 4);
+    // Swiped on at once, before the strip settles: from the 落款 the swipe
+    // is the browser's own again, and goes on to what follows.
+    const on = await long.gesture(0.6, 6, 15);
+    expect(on.drivenAtStart).toBe(false);
+    expect(on.rest.offset - across.rest.offset).toBeGreaterThanOrEqual(
+      long.width / 2,
+    );
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("a drag stopped and lifted in a long colophon's last view never springs back", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    const start = await long.geometry();
+    await long.place(start.snap - (long.width - 64));
+    // Moved, held 60 ms, lifted.
+    const stop = await long.gesture(0.3, 6, 16, { holdMs: 60 });
+    expect(stop.rest.offset).toBeGreaterThanOrEqual(stop.lift - 1);
+    expect(largestStepBack(stop.after)).toBeLessThanOrEqual(1);
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("a drag held and lifted with the 落款 partly in view comes to rest on it", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    const start = await long.geometry();
+    const placed = await long.place(start.snap - 140);
+    // Deep into the 落款's dead zone (partly in view), where Chromium alone
+    // would glide back to the colophon's last view.
+    const target = start.snap - ((start.snap - start.edge) * 3) / 4;
+    const steps = Math.ceil((target - placed.offset) / 8) + 2;
+    const record = await long.drag(
+      Array.from({ length: steps }, () => [8, 16] as const),
+      { holdMs: 60 },
+    );
+    expect(record.lift).toBeGreaterThan(start.edge);
+    expect(record.lift).toBeLessThan(start.snap - 1);
+    expectAtSeal(record.rest);
+    expect(largestStepBack(record.frames)).toBeLessThanOrEqual(1);
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("swiping through a long colophon rests on every view, then on its 落款", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    const start = await long.geometry();
+    const page0 = await long.place(start.offset);
+    const rests = [page0.offset];
+    for (let swipe = 0; swipe < 4; swipe += 1) {
+      const fling = await long.gesture(0.25, 3, 16);
+      expect(largestStepBack(fling.after)).toBeLessThanOrEqual(1);
+      expect(fling.max).toBeLessThanOrEqual(start.snap + 2);
+      rests.push(fling.rest.offset);
+      if (Math.abs(fling.rest.offset - start.snap) <= 2) break;
+    }
+    expectAtSeal(await long.geometry());
+    // No rest more than a view of reading on from the one before.
+    const view = long.width - 24 - (start.clearOf - long.left);
+    for (let index = 1; index < rests.length; index += 1)
+      expect((rests[index] ?? 0) - (rests[index - 1] ?? 0)).toBeLessThanOrEqual(
+        Math.max(view, 0) + 1,
+      );
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("a finger's roll at the lift turns no drag around its 落款", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    const start = await long.geometry();
+    // From the 落款, back 50 px, the last move 2 px forward: back to it,
+    // never thrown across the colophon.
+    await long.place(start.snap);
+    const back = await long.drag([
+      ...Array.from({ length: 10 }, () => [-5, 16] as const),
+      [2, 16],
+    ]);
+    expectAtSeal(back.rest);
+    // Forward into its dead zone, the last move 2 px back: on to the 落款.
+    await long.place(start.snap - 120);
+    const forward = await long.drag([
+      ...Array.from({ length: 10 }, () => [6, 16] as const),
+      [-2, 16],
+    ]);
+    expect(forward.rest.offset).toBeGreaterThanOrEqual(forward.lift - 1);
+    expect(forward.max).toBeLessThanOrEqual(start.snap + 2);
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("a dot tapped while a swipe's glide runs takes the strip there in one glide", async ({
+  browser,
+  page,
+}, testInfo) => {
+  chromiumTouch(testInfo);
+  const long = await unfoldedLong(browser, page, testInfo);
+  try {
+    // Inside the unfolded colophon, driven: a fast swipe on, and the first
+    // image's dot 40 ms after the lift, mid-glide.
+    const start = await long.geometry();
+    await long.place(start.snap - 200);
+    const dot = long.feed.post.locator("[data-feed-post-dot]").first();
+    const record = await long.gesture(0.6, 6, 15, {
+      afterLift: async () => {
+        await long.feed.page.waitForTimeout(40);
+        await dot.click();
+      },
+    });
+    expect(record.drivenAtStart).toBe(true);
+    expect(record.rest.offset).toBeLessThanOrEqual(2);
+    // Back from where the glide was caught, never thrown on first.
+    const turn = record.frames.indexOf(record.max);
+    expect(largestStepOn(record.frames.slice(turn))).toBeLessThanOrEqual(4);
+  } finally {
+    await long.feed.context?.close();
+  }
+});
+
+test("selecting an unfolded colophon mid-way only ever slides on to its actions", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const feed = await openWithLong(browser, page, testInfo, 480);
+  try {
+    const { entry, fold } = await readLongFromStart(feed);
+    await fold.click();
+    await expect(fold).toHaveText("收起");
+    await restingEdges(feed, entry);
+    // A third of the way into it, at rest.
+    const placed = await feed.strip.evaluate((strip) => {
+      const node = strip.querySelector<HTMLElement>(
+        '[data-colophon-entry][data-comment-id="latest-1"]',
+      )!;
+      const seal = node.querySelector(
+        ":scope > div > [data-colophon-signature]",
+      )!;
+      const box = strip.getBoundingClientRect();
+      const offset = -strip.scrollLeft;
+      const snap =
+        offset +
+        box.left +
+        (Number.parseFloat(getComputedStyle(seal).scrollMarginLeft) || 0) -
+        seal.getBoundingClientRect().left;
+      const to = offset + (snap - offset) / 3;
+      strip.style.scrollSnapType = "none";
+      strip.scrollLeft = -to;
+      strip.getBoundingClientRect();
+      strip.style.scrollSnapType = "";
+      return to;
+    });
+    await feed.page.waitForTimeout(600);
+    const before = await feed.strip.evaluate((strip) => -strip.scrollLeft);
+    expect(Math.abs(before - placed)).toBeLessThanOrEqual(2);
+    // Every frame from the tap on.
+    await feed.strip.evaluate((strip) => {
+      const frames: number[] = [];
+      (window as unknown as { __frames: number[] }).__frames = frames;
+      const frame = () => {
+        frames.push(-strip.scrollLeft);
+        if (frames.length < 120) requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    });
+    const text = entry.locator(":scope > div > [data-colophon-text]");
+    const spot = await text.evaluate((node) => {
+      const strip = node.closest("[data-feed-stage]")!.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter(
+        (rect) =>
+          rect.width > 0 &&
+          rect.left > strip.left + 120 &&
+          rect.right < strip.right - 24,
+      );
+      const rect = rects[Math.floor(rects.length / 2)]!;
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + Math.min(rect.height / 2, 60),
+      };
+    });
+    await feed.page.touchscreen.tap(spot.x, spot.y);
+    await expect(text).toHaveAttribute("aria-pressed", "true");
+    await feed.page.waitForTimeout(2000);
+    const frames = await feed.page.evaluate(
+      () => (window as unknown as { __frames: number[] }).__frames,
+    );
+    // Never back towards the colophon's start, not even for a frame.
+    expect(Math.min(...frames)).toBeGreaterThanOrEqual(before - 1);
+    expect(largestStepBack(frames)).toBeLessThanOrEqual(1);
+    // The actions came into view, clear of the input column.
+    const clear = await feed.post.evaluate((post) => {
+      const actions = post
+        .querySelector("[data-colophon-actions]")!
+        .getBoundingClientRect();
+      const column = post
+        .querySelector("[data-colophon-input]")!
+        .getBoundingClientRect();
+      return actions.left - column.right;
+    });
+    expect(clear).toBeGreaterThanOrEqual(0);
+  } finally {
+    await feed.context?.close();
+  }
+});
+
 test("on a narrow phone a long name is cut at the head, the 落款 staying whole", async ({
   browser,
   page,

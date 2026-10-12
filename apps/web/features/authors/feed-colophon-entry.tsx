@@ -334,7 +334,7 @@ const ColophonBody = ({
             </span>
           )}
           <span data-colophon-words="">
-            {item.deleted === true && item.text.trim() === "" ? (
+            {item.deleted === true ? (
               <span className={styles.deleted} data-colophon-deleted="">
                 {COLOPHON_DELETED_TEXT}
               </span>

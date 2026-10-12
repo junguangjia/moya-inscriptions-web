@@ -608,25 +608,30 @@ describe("FeedColophon", () => {
     expect(h.thread.loadReplies).toHaveBeenCalledWith("c1");
   });
 
-  it("keeps a deleted root's author and says its text was deleted", () => {
-    h.thread = makeThread({
-      items: [
-        comment("c1", writer, {
-          deleted: true,
-          text: "",
-          replies: [reply("r1", other)],
-        }),
-      ],
-    });
-    render();
-    const text = $('[data-comment-id="c1"] [data-colophon-text]');
-    expect(text?.querySelector("[data-colophon-name]")?.textContent).toBe("甲");
-    expect(words(text)).toBe("该正文已删除");
-    expect(text?.querySelector("[data-colophon-deleted]")).not.toBeNull();
-    expect(
-      $$("[data-colophon-reply-lead]").map((lead) => lead.textContent),
-    ).toEqual(["回复 甲："]);
-  });
+  it.each(["", "This comment has been deleted"])(
+    "keeps a deleted root's author and replaces its stored placeholder: %s",
+    (storedText) => {
+      h.thread = makeThread({
+        items: [
+          comment("c1", writer, {
+            deleted: true,
+            text: storedText,
+            replies: [reply("r1", other)],
+          }),
+        ],
+      });
+      render();
+      const text = $('[data-comment-id="c1"] [data-colophon-text]');
+      expect(text?.querySelector("[data-colophon-name]")?.textContent).toBe(
+        "甲",
+      );
+      expect(words(text)).toBe("该正文已删除");
+      expect(text?.querySelector("[data-colophon-deleted]")).not.toBeNull();
+      expect(
+        $$("[data-colophon-reply-lead]").map((lead) => lead.textContent),
+      ).toEqual(["回复 甲："]);
+    },
+  );
 
   it("selecting a colophon reveals its actions; 删除 only on one's own", () => {
     h.thread = makeThread({
@@ -994,6 +999,387 @@ describe("FeedColophon", () => {
     expect(h.stage?.scrollToElement).toHaveBeenCalledTimes(1);
   });
 
+  it("brings a selected colophon wider than the view only as far as its actions", () => {
+    h.stage = { ...h.stage, region: "comments" };
+    h.thread = makeThread({
+      items: [comment("c1", writer), comment("c2", other)],
+    });
+    // Unfolded, c1 runs from the gutter far past the stage's left edge.
+    layout((node) =>
+      node === strip
+        ? [0, 393]
+        : node.matches("[data-colophon-input]")
+          ? [0, 49]
+          : node.matches("[data-colophon-actions]")
+            ? [-520, 52]
+            : node.matches('[data-comment-id="c1"]')
+              ? [-560, 933]
+              : [200, 40],
+    );
+    render();
+    click($('[data-comment-id="c1"] [data-colophon-text]'));
+    // Its start at the gutter would leave the actions out of sight: the
+    // strip goes on by as much as they need, to their own snap position.
+    expect(h.stage.scrollToElement).not.toHaveBeenCalled();
+    expect(h.stage.scrollToOffset).toHaveBeenCalledTimes(1);
+    expect(h.stage.scrollToOffset).toHaveBeenCalledWith(520);
+  });
+
+  it("puts the strip back where the tap left it before showing the actions", () => {
+    let offset = 300;
+    const scrolled = vi.fn((to: number) => {
+      offset = to;
+    });
+    h.stage = {
+      ...h.stage,
+      region: "comments",
+      readOffset: () => offset,
+      scrollToOffset: scrolled,
+    };
+    h.thread = makeThread({
+      items: [comment("c1", writer), comment("c2", other)],
+    });
+    // Content moves right as the offset grows (laid out at offset 300).
+    const shift = () => offset - 300;
+    layout((node) =>
+      node === strip
+        ? [0, 393]
+        : node.matches("[data-colophon-input]")
+          ? [0, 49]
+          : node.matches("[data-colophon-actions]")
+            ? [-520 + shift(), 52]
+            : node.matches('[data-comment-id="c1"]')
+              ? [-560 + shift(), 933]
+              : [200 + shift(), 40],
+    );
+    render();
+    const text = $('[data-comment-id="c1"] [data-colophon-text]');
+    // The engine re-snapped as the action column came in (after the tap
+    // was handled).
+    let next = 0;
+    host.addEventListener("click", () => {
+      offset = next;
+    });
+    click(text);
+    // Back to 300 first; from there the actions need 520 more.
+    expect(scrolled.mock.calls).toEqual([[300, "instant"], [820]]);
+    // Clearing the selection (of a folded colophon) restores as well, and
+    // only that.
+    scrolled.mockClear();
+    offset = 300;
+    next = 260;
+    click(text);
+    expect(scrolled.mock.calls).toEqual([[300, "instant"]]);
+  });
+
+  it("glides back to an unfolded colophon's 落款 before clearing its selection", () => {
+    let offset = 2771;
+    const scrolled = vi.fn((to: number) => {
+      offset = to;
+    });
+    const listeners: ((settle: { resized: boolean }) => void)[] = [];
+    h.stage = {
+      ...h.stage,
+      region: "comments",
+      readOffset: () => offset,
+      scrollToOffset: scrolled,
+      subscribeSettle: vi.fn((listener) => {
+        listeners.push(listener);
+        return () => undefined;
+      }),
+    };
+    h.thread = makeThread({
+      items: [
+        comment("c1", writer, { text: "永".repeat(250) }),
+        comment("c2", other),
+      ],
+    });
+    // At rest on the action column, 48 px past the 落款's snap (2723): the
+    // 落款's left edge is 48 px right of where its snap puts it.
+    layout((node) =>
+      node === strip
+        ? [0, 393]
+        : node.matches("[data-colophon-signature]")
+          ? [2771 - offset + 68 + 48, 30]
+          : node.matches("[data-colophon-input]")
+            ? [0, 49]
+            : node.matches("[data-colophon-actions]")
+              ? [2771 - offset + 68, 52]
+              : [200, 40],
+    );
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((node) => {
+      const style = real(node);
+      return node instanceof Element &&
+        node.matches("[data-colophon-signature]")
+        ? ({ ...style, scrollMarginLeft: "68px" } as CSSStyleDeclaration)
+        : style;
+    });
+    render();
+    click($("[data-colophon-fold]"));
+    const text = $('[data-comment-id="c1"] [data-colophon-text]');
+    click(text);
+    expect(host.querySelector("[data-colophon-actions]")).not.toBeNull();
+    scrolled.mockClear();
+    // A tap on blank colophon space.
+    click($("[data-feed-colophon]"));
+    expect(scrolled.mock.calls).toEqual([[2723]]);
+    // Still selected while it glides; cleared once it has settled there.
+    expect(host.querySelector("[data-colophon-actions]")).not.toBeNull();
+    act(() => listeners.forEach((listener) => listener({ resized: false })));
+    expect(host.querySelector("[data-colophon-actions]")).toBeNull();
+    expect(scrolled.mock.calls).toEqual([[2723]]);
+  });
+
+  it("keeps the 落款's snap clear of the input column a reply widens", () => {
+    const resized: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    let column = 48;
+    layout((node) =>
+      node.matches("[data-colophon-input]") ? [0, column] : [-400, 40],
+    );
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((node) => {
+      const style = real(node);
+      if (!(node instanceof Element) || !node.matches("[data-feed-colophon]"))
+        return style;
+      return {
+        ...style,
+        getPropertyValue: (name: string) =>
+          name === "--colophon-input-clear" ? "48px" : "",
+      } as CSSStyleDeclaration;
+    });
+    render();
+    const wide = () =>
+      $("[data-feed-colophon]")?.style.getPropertyValue(
+        "--colophon-input-wide",
+      );
+    const resize = () => act(() => resized.forEach((callback) => callback()));
+    resize();
+    expect(wide()).toBe("");
+    // Writing: the column widened to 73.4 px.
+    column = 73.4;
+    resize();
+    expect(wide()).toBe("74px");
+    column = 48;
+    resize();
+    expect(wide()).toBe("");
+  });
+
+  describe("the head's first view", () => {
+    /**
+     * The strip 393 px wide, the head at its 20 px gutter; full, the head
+     * is 68 px (title 40, gap 8, count 20) and 20 px margin, compact 40 px
+     * and 4; 30 px of group label lie between it and the first colophon,
+     * `width` wide. Clear of the 48 px column and its full 16 px fade:
+     * full leaves 191 px, compact 235.
+     */
+    const setup = (
+      width: number,
+      text = "短跋",
+      { glyphOverhang = 0, fade = 16 } = {},
+    ) => {
+      const geometry = { width, headRight: 373, settled: true, offset: 0 };
+      Object.defineProperty(strip, "clientWidth", {
+        configurable: true,
+        value: 393,
+      });
+      h.stage = {
+        ...h.stage,
+        readOffset: () => geometry.offset,
+        isSettled: () => geometry.settled,
+      };
+      const listeners: ((settle: { resized: boolean }) => void)[] = [];
+      h.stage.subscribeSettle = vi.fn(
+        (listener: (settle: { resized: boolean }) => void) => {
+          listeners.push(listener);
+          return () => undefined;
+        },
+      );
+      h.thread = makeThread({
+        items: [comment("c1", writer, { text }), comment("c2", other)],
+        visibleTotal: 2,
+      });
+      const compact = () =>
+        host
+          .querySelector("[data-colophon-head]")
+          ?.hasAttribute("data-compact") === true;
+      // Whether the head's form changed while it was being measured.
+      const seen = new Set<boolean>();
+      const head = () => ({
+        width: compact() ? 40 : 68,
+        end: compact() ? 4 : 20,
+      });
+      vi.spyOn(document, "createRange").mockImplementation(
+        () =>
+          ({
+            selectNodeContents: vi.fn(),
+            getClientRects: () => {
+              const left =
+                geometry.headRight -
+                head().width -
+                head().end -
+                30 -
+                geometry.width -
+                glyphOverhang;
+              return [{ left, width: 10, height: 20 }];
+            },
+          }) as unknown as Range,
+      );
+      layout((node) => {
+        if (node === strip) return [0, 393];
+        if (node.matches("[data-colophon-head]")) {
+          seen.add(compact());
+          return [geometry.headRight - head().width, head().width];
+        }
+        if (node.matches("h4")) return [0, 40];
+        if (node.matches("[data-colophon-count]")) return [0, 20];
+        const right = geometry.headRight - head().width - head().end - 30;
+        if (node.matches('[data-comment-id="c1"]'))
+          return [right - geometry.width, geometry.width];
+        if (node.parentElement?.matches('[data-comment-id="c1"]'))
+          return [right - geometry.width, geometry.width];
+        return [-400, 40];
+      });
+      const real = window.getComputedStyle.bind(window);
+      vi.spyOn(window, "getComputedStyle").mockImplementation((node) => {
+        const style = real(node);
+        if (
+          !(node instanceof Element) ||
+          !node.matches(
+            "[data-feed-colophon], [data-colophon-head], [data-colophon-input]",
+          )
+        )
+          return style;
+        const custom: Record<string, string> = {
+          "--colophon-input-clear": "48px",
+          "--colophon-input-edge": `${fade}px`,
+          "--colophon-head-gap": "8px",
+          "--colophon-head-end": "20px",
+          "--colophon-head-end-compact": "4px",
+        };
+        return {
+          ...style,
+          scrollMarginRight: "20px",
+          marginLeft: `${head().end}px`,
+          getPropertyValue: (name: string) => custom[name] ?? "",
+        } as CSSStyleDeclaration;
+      });
+      render();
+      const settle = () =>
+        act(() =>
+          listeners.forEach((listener) => listener({ resized: false })),
+        );
+      return { geometry, compact, seen, settle };
+    };
+
+    it("is compact only where that lets the first colophon fit", () => {
+      expect(setup(210).compact()).toBe(true);
+    });
+
+    it("clears the full input fade even when the old eight-pixel rule fit", () => {
+      // The full head puts the signature at 60 px, inside the 48..64 fade.
+      // Compacting moves it to 104 px without folding more of the text.
+      expect(setup(195).compact()).toBe(true);
+    });
+
+    it("keeps a previously compact signature clear of the wider fade", () => {
+      // With the old compact margin the box sat at 58 px (outside 56 px).
+      // The smaller compact margin puts its 0.6 px text overhang at 69.4.
+      const { compact, settle } = setup(229, "短跋", {
+        glyphOverhang: 0.6,
+      });
+      expect(compact()).toBe(true);
+      settle();
+      expect(compact()).toBe(true);
+    });
+
+    it("uses the actual fade and signature text, including its left overhang", () => {
+      // The full box itself clears 64 px, but its text starts at 63.4 px.
+      expect(setup(191, "短跋", { glyphOverhang: 0.6 }).compact()).toBe(true);
+    });
+
+    it("leaves the full head when a narrower input fade clears the text", () => {
+      // A narrower input fade leaves this same full layout readable.
+      expect(setup(195, "短跋", { fade: 8 }).compact()).toBe(false);
+    });
+
+    it("stays full where the first colophon fits anyway, or fits neither", () => {
+      const fits = setup(190);
+      expect(fits.compact()).toBe(false);
+      fits.geometry.width = 240;
+      fits.settle();
+      expect(fits.compact()).toBe(false);
+      // Back to just missing: compact; then fitting: full again.
+      fits.geometry.width = 210;
+      fits.settle();
+      expect(fits.compact()).toBe(true);
+      fits.geometry.width = 190;
+      fits.settle();
+      expect(fits.compact()).toBe(false);
+    });
+
+    it("measures without changing the head's form", () => {
+      const { seen, compact } = setup(210);
+      expect(compact()).toBe(true);
+      // Every read before the decision saw the full head.
+      expect(seen).toEqual(new Set([false]));
+    });
+
+    it("puts the view back where the head's change moved it", () => {
+      const { geometry, settle } = setup(190);
+      geometry.width = 210;
+      // WebKit measures from the left edge: the change shifts the offset.
+      h.stage!.readOffset = () => (geometry.offset += 44) - 44;
+      settle();
+      expect(h.stage!.scrollToOffset).toHaveBeenCalledWith(0, "instant");
+    });
+
+    it("leaves a touch that landed since the decision alone", () => {
+      const { geometry, settle } = setup(190);
+      geometry.width = 210;
+      h.stage!.readOffset = () => (geometry.offset += 44) - 44;
+      // Decided at rest; by the commit a finger is down.
+      h.stage!.isSettled = () => {
+        const settled = geometry.settled;
+        geometry.settled = false;
+        return settled;
+      };
+      settle();
+      expect(h.stage!.scrollToOffset).not.toHaveBeenCalledWith(0, "instant");
+    });
+
+    it("keeps its form while the first colophon is unfolded, read past or moving", () => {
+      const { geometry, compact, settle } = setup(210, "永".repeat(250));
+      expect(compact()).toBe(true);
+      geometry.width = 190;
+      geometry.settled = false;
+      settle();
+      expect(compact()).toBe(true);
+      geometry.settled = true;
+      geometry.headRight = 500;
+      settle();
+      expect(compact()).toBe(true);
+      geometry.headRight = 373;
+      click($("[data-colophon-fold]"));
+      expect($("[data-colophon-fold]")?.textContent).toBe("收起");
+      settle();
+      expect(compact()).toBe(true);
+      // Folded again, it is decided again.
+      click($("[data-colophon-fold]"));
+      expect(compact()).toBe(false);
+    });
+  });
+
   it("brings the colophon a reply answers clear of where the input can grow", () => {
     h.stage = { ...h.stage, region: "comments" };
     h.thread = makeThread({
@@ -1071,7 +1457,7 @@ describe("FeedColophon", () => {
     expect(h.stage?.scrollToElement).not.toHaveBeenCalled();
   });
 
-  it("reads a sent reply's last page when it is past the preview", () => {
+  it("reads through a sent reply's last page when it is past the preview", () => {
     h.thread = makeThread({
       items: [
         comment("c1", writer, {

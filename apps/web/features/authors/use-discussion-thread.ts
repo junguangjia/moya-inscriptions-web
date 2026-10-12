@@ -403,6 +403,12 @@ export function useDiscussionThread({
     }
   };
   const loadReplies = async (root: string, through?: number) => {
+    // Colophons reveal a sent reply without dropping the replies before it.
+    // Detail keeps its existing explicit-page navigation behavior.
+    if (colophon && through !== undefined) {
+      await readReplies(root, 1, through, true);
+      return;
+    }
     const begin = through ?? (replyPages.current.get(root) ?? 0) + 1;
     await readReplies(root, begin, begin, Boolean(through) || begin === 1);
   };

@@ -388,6 +388,50 @@ describe("useDiscussionThread colophon mode", () => {
     expect(thread.error).toBeNull();
   });
 
+  it("keeps earlier replies when locating a published reply beyond the preview", async () => {
+    const firstPage = Array.from({ length: 10 }, (_, n) => reply(`r${n + 1}`));
+    discussion.mockResolvedValue(
+      listing([comment("latest", firstPage.slice(0, 2), 11)]),
+    );
+    await colophon();
+    send.mockResolvedValueOnce({
+      id: "r12",
+      rootId: "latest",
+      item: reply("r12"),
+      awaitingApproval: false,
+    });
+    discussion.mockResolvedValueOnce(
+      listing([comment("latest", firstPage.slice(0, 2), 12)]),
+    );
+    await act(async () => {
+      await thread.sendReply(
+        { rootCommentId: "latest", user: { id: "other", name: "他" } },
+        "回一句",
+      );
+    });
+    expect(thread.highlightId).toBe("r12");
+    replies.mockImplementation(async (_target, _root, page: number) => ({
+      items: page === 1 ? firstPage : [reply("r11"), reply("r12")],
+      page,
+      pageSize: 10,
+      total: 12,
+      totalPages: 2,
+      visibleTotal: 12,
+    }));
+    await act(async () => thread.loadReplies("latest", 2));
+    expect(replies.mock.calls).toEqual([
+      [target, "latest", 1],
+      [target, "latest", 2],
+    ]);
+    expect(ids(thread.items[0]!.replies)).toEqual([
+      ...ids(firstPage),
+      "r11",
+      "r12",
+    ]);
+    expect(thread.items[0]!.replyRemaining).toBe(0);
+    expect(thread.highlightId).toBe("r12");
+  });
+
   it("reports a list-read failure as readError only, and retry replays it", async () => {
     discussion.mockRejectedValueOnce(new Error("评论加载失败"));
     await colophon();
@@ -546,6 +590,24 @@ describe("useDiscussionThread colophon mode", () => {
 });
 
 describe("useDiscussionThread detail mode", () => {
+  it("keeps an explicit reply page as a single-page replacement", async () => {
+    discussion.mockResolvedValue(
+      listing([comment("latest", [reply("r1")], 12)]),
+    );
+    replies.mockResolvedValue({
+      items: [reply("r11"), reply("r12")],
+      page: 2,
+      pageSize: 10,
+      total: 12,
+      totalPages: 2,
+      visibleTotal: 12,
+    });
+    await render();
+    await act(async () => thread.loadReplies("latest", 2));
+    expect(replies.mock.calls).toEqual([[target, "latest", 2]]);
+    expect(ids(thread.items[0]!.replies)).toEqual(["r11", "r12"]);
+  });
+
   it("keeps the shared error channel and reloads page 1 after a like", async () => {
     await render();
     command.mockResolvedValueOnce({ saved: true });

@@ -49,6 +49,12 @@ export interface FeedStageApi {
    * then would move the view, so it waits for the next settle.
    */
   readonly isSettled: () => boolean;
+  /**
+   * Holds the strip's snapping off until it next settles: for a change
+   * about to add or take away a snap area (a selection's action column),
+   * which WebKit would otherwise re-snap the view by at once.
+   */
+  readonly holdSnap?: () => void;
   /** The viewer this post opened is showing. */
   readonly viewerOpen?: boolean;
 }

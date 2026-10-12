@@ -25,18 +25,30 @@ import { FeedStageContext } from "./feed-post-stage-context";
 import type { FeedStageApi, FeedStageSettle } from "./feed-post-stage-context";
 import {
   commentsStartOffset,
+  drivesStrip,
+  driveZones,
   elementStartOffset,
   FEED_POST_CARRY_WATCH_MS,
   FEED_POST_CLICK_SUPPRESSION_MS,
   FEED_POST_DOUBLE_TAP_MS,
+  FEED_POST_DRIVE_LONG_PRESS_MS,
+  FEED_POST_DRIVE_SLOP_PX,
+  FEED_POST_GLIDE_VELOCITY_MS,
   FEED_POST_INPUT_DIRECTION_MS,
   FEED_POST_SETTLE_MS,
   FEED_POST_TAP_TOLERANCE_PX,
+  glideOffset,
+  glideRest,
+  inDriveZone,
   isCarriedStep,
   isLegacyRtlScroll,
   nextSnapOffset,
+  planGlide,
   readStripOffset,
+  releaseThrow,
+  releaseVelocity,
   resolveStageAspect,
+  sealSpan,
   slideFit,
   snapAreaOffset,
   stripIndex,
@@ -44,10 +56,28 @@ import {
   stripRegion,
   stripScrollLeft,
 } from "./feed-post-strip-geometry";
+import type {
+  DrivePoint,
+  DriveSpan,
+  DriveZone,
+  FingerSample,
+  Glide,
+} from "./feed-post-strip-geometry";
 import styles from "../home/home-screen.module.css";
 
 /** A comment row the comments region renders (a root or a reply). */
 const COMMENT_ROW = "[data-colophon-anchor]";
+/** The 落款 of an unfolded colophon or reply. */
+const UNFOLDED_SEAL =
+  "[data-colophon-anchor] > [data-expanded] > [data-colophon-signature]";
+/** The colophons' writing column, pinned at the stage's left edge. */
+const INPUT_COLUMN = "[data-colophon-input]";
+/** The touch-action of a driven strip: the feed's vertical pan and pinch. */
+const DRIVEN_TOUCH_ACTION = "pan-y pinch-zoom";
+/** A delayed glide frame must not jump over a readable column. */
+const GLIDE_MAX_FRAME_PX = 40;
+
+const px = (value: string) => Number.parseFloat(value) || 0;
 
 /**
  * Whether a mutation batch committed comment rows: a fetched page or replies.
@@ -119,10 +149,10 @@ const KEY_DIRECTION: Readonly<Record<string, number>> = {
   Home: -1,
 };
 
-/** Every snap position in the strip, as offsets from its start. */
-const snapOffsets = (strip: HTMLElement, offset: number): number[] => {
+/** Every snap position in the strip (offsets from its start), and its stop. */
+const snapPoints = (strip: HTMLElement, offset: number): DrivePoint[] => {
   const box = strip.getBoundingClientRect();
-  const offsets: number[] = [];
+  const points: DrivePoint[] = [];
   for (const element of strip.querySelectorAll<HTMLElement>("*")) {
     const style = getComputedStyle(element);
     if (style.scrollSnapAlign === "" || style.scrollSnapAlign === "none")
@@ -132,14 +162,87 @@ const snapOffsets = (strip: HTMLElement, offset: number): number[] => {
       box,
       element.getBoundingClientRect(),
       {
-        left: Number.parseFloat(style.scrollMarginLeft) || 0,
-        right: Number.parseFloat(style.scrollMarginRight) || 0,
+        left: px(style.scrollMarginLeft),
+        right: px(style.scrollMarginRight),
       },
       offset,
     );
-    if (snap !== null) offsets.push(snap);
+    if (snap !== null)
+      points.push({ offset: snap, stop: style.scrollSnapStop === "always" });
   }
-  return offsets;
+  return points;
+};
+
+/** Every snap position in the strip, as offsets from its start. */
+const snapOffsets = (strip: HTMLElement, offset: number): number[] =>
+  snapPoints(strip, offset).map((point) => point.offset);
+
+/** The unfolded colophons and replies wider than the stage. */
+const driveSpans = (strip: HTMLElement, offset: number): DriveSpan[] => {
+  const box = strip.getBoundingClientRect();
+  return [...strip.querySelectorAll<HTMLElement>(UNFOLDED_SEAL)].flatMap(
+    (seal) => {
+      const row = seal.parentElement?.parentElement;
+      if (row === null || row === undefined) return [];
+      const { snap, edge } = sealSpan(
+        box,
+        seal.getBoundingClientRect(),
+        px(getComputedStyle(seal).scrollMarginLeft),
+        offset,
+      );
+      const start = elementStartOffset(
+        box.right - px(getComputedStyle(row).scrollMarginRight),
+        row.getBoundingClientRect().right,
+        offset,
+      );
+      // One that fits the stage shows its 落款 from its start: no span.
+      if (snap <= start + 1) return [];
+      return [
+        {
+          start,
+          end: Math.max(start, Math.min(snap, edge)),
+          seal: snap,
+        },
+      ];
+    },
+  );
+};
+
+/** One readable view: the stage less its gutter and the writing column. */
+const readablePage = (strip: HTMLElement): number => {
+  const box = strip.getBoundingClientRect();
+  const column = strip.querySelector(INPUT_COLUMN);
+  const row = strip.querySelector(COMMENT_ROW);
+  const clear =
+    column === null
+      ? 64
+      : column.getBoundingClientRect().right -
+        box.left +
+        (px(
+          getComputedStyle(column).getPropertyValue("--colophon-input-edge"),
+        ) || 16);
+  return (
+    strip.clientWidth -
+    (row === null ? 0 : px(getComputedStyle(row).scrollMarginRight)) -
+    clear
+  );
+};
+
+/** Whether a scroller of its own (an overflowing field) lies under a touch. */
+const scrollerUnder = (strip: HTMLElement, target: EventTarget | null) => {
+  for (
+    let element = target instanceof Element ? target : null;
+    element !== null && element !== strip;
+    element = element.parentElement
+  ) {
+    const overflow = getComputedStyle(element).overflowX;
+    if (
+      (overflow === "auto" || overflow === "scroll") &&
+      element.scrollWidth > element.clientWidth + 1
+    )
+      return true;
+  }
+  return false;
 };
 
 const reducedMotion = () =>
@@ -217,6 +320,56 @@ export const FeedPostStage = forwardRef<
     active: false,
     startOffset: 0,
   });
+  // Chromium only (`drivesStrip`): on an unfolded colophon wider than the
+  // stage (from its start to just short of its 落款, `driveZones`) the strip gets `touch-action: pan-y pinch-zoom`, so the
+  // browser leaves its horizontal pan to us. The strip follows the finger
+  // and, released, glides to a resting offset of `glideRest` (never past a
+  // 落款, every column read at rest), with snapping off inline meanwhile;
+  // it is back on, unmoved, once the glide has arrived. A touch catches a
+  // glide; any scroll of ours cancels it. WebKit is never driven.
+  const driveRef = useRef<{
+    enabled: boolean;
+    /** Driven: the strip's touch-action is handed over. */
+    driven: boolean;
+    /** idle; touch: a driven finger is down; glide: gliding to rest. */
+    mode: "idle" | "touch" | "glide";
+    gesture: {
+      x0: number;
+      y0: number;
+      t0: number;
+      origin: number;
+      locked: boolean;
+      xl: number;
+      /** The strip's own motion (a held 落款 does not move it). */
+      samples: FingerSample[];
+      /** The farthest offsets the drag reached, on and back. */
+      high: number;
+      low: number;
+      caught: boolean;
+      way: number;
+      pin: number;
+    } | null;
+    glide: Glide | null;
+    started: number;
+    frame: number | null;
+    /** The zones, measured once per layout (null: measure again). */
+    zones: DriveZone[] | null;
+    refresh: number | null;
+  }>({
+    enabled: false,
+    driven: false,
+    mode: "idle",
+    gesture: null,
+    glide: null,
+    started: 0,
+    frame: null,
+    zones: null,
+    refresh: null,
+  });
+  // A selection's DOM change (feed-colophon.tsx) adds or takes away a snap
+  // area, and WebKit re-snaps the strip by that at once: snapping is held
+  // off until the strip next settles where the selection scrolled it.
+  const holdRef = useRef(false);
   const suppressUntilRef = useRef(0);
   const settleTimerRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -238,6 +391,71 @@ export const FeedPostStage = forwardRef<
     }
   };
 
+  // Written on the DOM at once: they must be in place for the next touch.
+  const applyStrip = useCallback(() => {
+    const strip = stripRef.current;
+    if (strip === null) return;
+    const drive = driveRef.current;
+    const touchAction = drive.driven ? DRIVEN_TOUCH_ACTION : "";
+    if (strip.style.touchAction !== touchAction)
+      strip.style.touchAction = touchAction;
+    const snap = drive.mode !== "idle" || holdRef.current ? "none" : "";
+    if (strip.style.scrollSnapType !== snap) strip.style.scrollSnapType = snap;
+  }, []);
+
+  const writeOffset = (offset: number) => {
+    const strip = stripRef.current;
+    if (strip !== null)
+      strip.scrollLeft = stripScrollLeft(strip, offset, legacyRef.current);
+  };
+
+  const readZones = (strip: HTMLElement, offset: number) => {
+    const drive = driveRef.current;
+    if (drive.zones === null) {
+      const spans =
+        strip.querySelector(UNFOLDED_SEAL) === null
+          ? []
+          : driveSpans(strip, offset);
+      const mediaEnd =
+        strip.querySelectorAll("[data-feed-slide]").length * strip.clientWidth;
+      const entry = Math.max(0, readablePage(strip) - 2);
+      drive.zones = driveZones(spans).map((zone) => ({
+        from: Math.max(mediaEnd, zone.from - entry),
+        to: zone.to,
+      }));
+    }
+    return drive.zones;
+  };
+
+  /** Drives each long colophon from one readable view before it to its seal. */
+  const refreshDrive = useCallback(() => {
+    const strip = stripRef.current;
+    const drive = driveRef.current;
+    if (strip === null || !drive.enabled) return;
+    const offset = readStripOffset(strip, legacyRef.current);
+    drive.driven =
+      drive.mode !== "idle" || inDriveZone(readZones(strip, offset), offset);
+    applyStrip();
+  }, [applyStrip]);
+
+  const stopGlide = () => {
+    const drive = driveRef.current;
+    if (drive.frame !== null) window.cancelAnimationFrame(drive.frame);
+    drive.frame = null;
+  };
+
+  /** Any scroll of ours, a wheel or a key ends a drive where it is. */
+  const cancelDrive = useCallback(() => {
+    const drive = driveRef.current;
+    if (drive.mode === "idle" && drive.gesture === null) return;
+    if (drive.frame !== null) window.cancelAnimationFrame(drive.frame);
+    drive.frame = null;
+    drive.gesture = null;
+    drive.glide = null;
+    drive.mode = "idle";
+    applyStrip();
+  }, [applyStrip]);
+
   const measure = useCallback(() => {
     const strip = stripRef.current;
     if (strip === null) return { offset: 0, width: 0, progress: 0 };
@@ -248,6 +466,18 @@ export const FeedPostStage = forwardRef<
 
   const settle = useCallback(() => {
     settleTimerRef.current = null;
+    // A glide's frames came late: it settles once it has arrived.
+    if (driveRef.current.mode === "glide") {
+      settleTimerRef.current = window.setTimeout(
+        () => settleRef.current(),
+        FEED_POST_SETTLE_MS,
+      );
+      return;
+    }
+    if (holdRef.current) {
+      holdRef.current = false;
+      applyStrip();
+    }
     aimRef.current = null;
     const resized = resizedRef.current;
     resizedRef.current = false;
@@ -267,7 +497,9 @@ export const FeedPostStage = forwardRef<
     }
     for (const listener of [...settleListenersRef.current])
       listener({ resized });
-  }, [count, hasComments, measure, onRegionChange]);
+    driveRef.current.zones = null;
+    refreshDrive();
+  }, [applyStrip, count, hasComments, measure, onRegionChange, refreshDrive]);
   const settleRef = useRef(settle);
   settleRef.current = settle;
 
@@ -284,6 +516,7 @@ export const FeedPostStage = forwardRef<
     (offset: number, requested: ScrollBehavior = "smooth") => {
       const strip = stripRef.current;
       if (strip === null) return;
+      cancelDrive();
       const left = stripScrollLeft(strip, offset, legacyRef.current);
       if (requested === "instant" || typeof strip.scrollTo !== "function") {
         aimRef.current = null;
@@ -299,7 +532,7 @@ export const FeedPostStage = forwardRef<
       // nothing waits on it.
       scheduleSettle();
     },
-    [scheduleSettle],
+    [cancelDrive, scheduleSettle],
   );
 
   const scrollToElement = useCallback(
@@ -320,6 +553,97 @@ export const FeedPostStage = forwardRef<
     [scrollToOffset],
   );
 
+  /** The drive ends where it rests: snapping back on there moves nothing. */
+  const finishDrive = (rest: number | null) => {
+    const drive = driveRef.current;
+    stopGlide();
+    if (rest !== null) writeOffset(rest);
+    drive.glide = null;
+    drive.mode = "idle";
+    refreshDrive();
+    scheduleSettle();
+  };
+
+  /** Lets the strip go at `offset` with `velocity`: it glides to rest. */
+  const releaseDrive = (
+    offset: number,
+    velocity: number,
+    origin: number,
+    way: number,
+    at: number,
+  ) => {
+    const strip = stripRef.current;
+    const drive = driveRef.current;
+    if (strip === null) return;
+    const rest = glideRest({
+      offset,
+      velocity,
+      origin,
+      way,
+      spans: driveSpans(strip, offset),
+      points: snapPoints(strip, offset),
+      max: strip.scrollWidth - strip.clientWidth,
+      page: readablePage(strip),
+    });
+    if (Math.abs(rest - offset) < 0.5) {
+      finishDrive(rest);
+      return;
+    }
+    const glide = planGlide(offset, velocity, rest);
+    drive.mode = "glide";
+    drive.glide = glide;
+    // From the lift: the first frame carries on at the finger's speed.
+    const now = performance.now();
+    drive.started = at <= now && at > now - 100 ? at : now;
+    const step = (time: number) => {
+      drive.frame = null;
+      const elapsed = Math.max(0, time - drive.started);
+      const planned = glideOffset(glide, elapsed);
+      const current = measure().offset;
+      const delta = planned - current;
+      const next =
+        current +
+        Math.sign(delta) * Math.min(Math.abs(delta), GLIDE_MAX_FRAME_PX);
+      if (
+        elapsed >= glide.duration &&
+        Math.abs(glide.to - current) <= GLIDE_MAX_FRAME_PX
+      ) {
+        finishDrive(glide.to);
+        return;
+      }
+      // A fast entry throw or a late frame can otherwise compress a short
+      // glide into one visible jump. Carry the same curve on over frames.
+      writeOffset(next);
+      drive.frame = window.requestAnimationFrame(step);
+    };
+    drive.frame = window.requestAnimationFrame(step);
+  };
+
+  /** The driven finger lifts (or the touch is cancelled). */
+  const endDrive = (at: number, cancelled: boolean) => {
+    const drive = driveRef.current;
+    const gesture = drive.gesture;
+    drive.gesture = null;
+    if (gesture === null) return;
+    const offset = measure().offset;
+    if (!gesture.locked) {
+      // A tap: it only stopped a glide, which comes to rest on its way.
+      if (gesture.caught)
+        releaseDrive(offset, 0, gesture.origin, gesture.way, at);
+      return;
+    }
+    const thrown = cancelled
+      ? { velocity: 0, way: 0 }
+      : releaseThrow({
+          velocity: releaseVelocity(gesture.samples, at),
+          offset,
+          origin: gesture.origin,
+          high: gesture.high,
+          low: gesture.low,
+        });
+    releaseDrive(offset, thrown.velocity, gesture.origin, thrown.way, at);
+  };
+
   // WebKit keeps a running smooth scroll measured from the strip's left
   // edge: when rows are committed in the frame or two before such a scroll
   // reports itself, the region's instant restore does not stop it, and a
@@ -332,6 +656,7 @@ export const FeedPostStage = forwardRef<
     if (growth === null || strip === null) return;
     if (
       touchRef.current.active ||
+      driveRef.current.mode !== "idle" ||
       aimRef.current !== null ||
       resizedRef.current ||
       performance.now() > growth.until
@@ -380,8 +705,14 @@ export const FeedPostStage = forwardRef<
       },
       isSettled: () =>
         !touchRef.current.active &&
+        driveRef.current.mode === "idle" &&
         settleTimerRef.current === null &&
         aimRef.current === null,
+      holdSnap: () => {
+        holdRef.current = true;
+        applyStrip();
+        scheduleSettle();
+      },
       viewerOpen,
     }),
     [
@@ -391,6 +722,8 @@ export const FeedPostStage = forwardRef<
       measure,
       scrollToOffset,
       scrollToElement,
+      applyStrip,
+      scheduleSettle,
       viewerOpen,
     ],
   );
@@ -422,7 +755,51 @@ export const FeedPostStage = forwardRef<
   useLayoutEffect(() => {
     const strip = stripRef.current;
     if (strip !== null) legacyRef.current = isLegacyRtlScroll(strip);
+    driveRef.current.enabled = drivesStrip(window);
   }, []);
+
+  // The zones move with the layout: measured again on the next check. A
+  // rest that a change put inside or outside one hands the pan over or back.
+  useEffect(() => {
+    const strip = stripNode;
+    const drive = driveRef.current;
+    if (strip === null || !drive.enabled) return undefined;
+    const invalidate = () => {
+      drive.zones = null;
+      if (drive.refresh === null)
+        drive.refresh = window.requestAnimationFrame(() => {
+          drive.refresh = null;
+          refreshDrive();
+        });
+    };
+    const mutations =
+      typeof MutationObserver === "function"
+        ? new MutationObserver((records) => {
+            // The strip's own inline style is ours.
+            if (records.some((record) => record.target !== strip)) invalidate();
+          })
+        : null;
+    mutations?.observe(strip, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    const sizes =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(invalidate)
+        : null;
+    sizes?.observe(strip);
+    const part = strip.querySelector("[data-feed-stage-comments]");
+    for (const child of part?.children ?? []) sizes?.observe(child);
+    invalidate();
+    return () => {
+      mutations?.disconnect();
+      sizes?.disconnect();
+      if (drive.refresh !== null) window.cancelAnimationFrame(drive.refresh);
+      drive.refresh = null;
+    };
+  }, [hasComments, refreshDrive, stripNode]);
 
   // A width change (rotation, resize) keeps the shown image in place, and
   // in the comments region the comment being read (its registered anchor).
@@ -431,7 +808,7 @@ export const FeedPostStage = forwardRef<
     if (strip === null || typeof ResizeObserver !== "function")
       return undefined;
     const observer = new ResizeObserver(() => {
-      if (touchRef.current.active) return;
+      if (touchRef.current.active || driveRef.current.mode !== "idle") return;
       const width = strip.clientWidth;
       const anchored =
         regionRef.current === "comments" ? anchorRef.current?.() : null;
@@ -529,7 +906,9 @@ export const FeedPostStage = forwardRef<
         until: now + FEED_POST_CARRY_WATCH_MS,
       };
     });
+    // The compact head (feed-colophon.tsx) changes the width, too: not rows.
     observer.observe(part, {
+      attributeFilter: ["data-compact"],
       characterData: true,
       childList: true,
       subtree: true,
@@ -544,6 +923,8 @@ export const FeedPostStage = forwardRef<
         window.clearTimeout(settleTimerRef.current);
       if (frameRef.current !== null)
         window.cancelAnimationFrame(frameRef.current);
+      const drive = driveRef.current;
+      if (drive.frame !== null) window.cancelAnimationFrame(drive.frame);
     },
     [],
   );
@@ -631,6 +1012,7 @@ export const FeedPostStage = forwardRef<
               )
             ) {
               noteInputDirection(KEY_DIRECTION[event.key] ?? 0);
+              cancelDrive();
               scheduleSettle();
             }
           }}
@@ -650,6 +1032,7 @@ export const FeedPostStage = forwardRef<
               frameRef.current = window.requestAnimationFrame(() => {
                 frameRef.current = null;
                 setProgress(measure().progress);
+                if (driveRef.current.mode === "idle") refreshDrive();
               });
             if (!touchRef.current.active) scheduleSettle();
           }}
@@ -659,11 +1042,19 @@ export const FeedPostStage = forwardRef<
               // The strip runs right to left: a leftward wheel moves on.
               const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
               noteInputDirection(-Math.sign(delta));
+              cancelDrive();
               scheduleSettle();
             }
           }}
+          onContextMenuCapture={() => {
+            // A long press that became a text selection drives nothing.
+            const gesture = driveRef.current.gesture;
+            if (gesture !== null && !gesture.locked && !gesture.caught)
+              driveRef.current.gesture = null;
+          }}
           onTouchCancelCapture={(event) => {
             if (!fromStrip(event)) return;
+            endDrive(event.timeStamp, true);
             touchRef.current.active = false;
             scheduleSettle();
           }}
@@ -673,15 +1064,131 @@ export const FeedPostStage = forwardRef<
             noteInputDirection(
               Math.sign(measure().offset - touchRef.current.startOffset),
             );
+            endDrive(event.timeStamp, false);
             touchRef.current.active = false;
             scheduleSettle();
           }}
+          onTouchMoveCapture={(event) => {
+            const drive = driveRef.current;
+            const gesture = drive.gesture;
+            const touch = event.touches[0];
+            const strip = stripRef.current;
+            if (
+              gesture === null ||
+              strip === null ||
+              event.touches.length !== 1 ||
+              touch === undefined
+            )
+              return;
+            if (!gesture.locked) {
+              const dx = touch.clientX - gesture.x0;
+              const dy = touch.clientY - gesture.y0;
+              if (Math.hypot(dx, dy) < FEED_POST_DRIVE_SLOP_PX) return;
+              // Vertical first: the feed's own pan. Held first, then moved
+              // with text selected: a selection.
+              const selecting =
+                event.timeStamp - gesture.t0 > FEED_POST_DRIVE_LONG_PRESS_MS &&
+                !(window.getSelection()?.isCollapsed ?? true);
+              if (Math.abs(dy) >= Math.abs(dx) || selecting) {
+                drive.gesture = null;
+                if (gesture.caught) {
+                  const offset = measure().offset;
+                  releaseDrive(offset, 0, offset, gesture.way, event.timeStamp);
+                }
+                return;
+              }
+              gesture.locked = true;
+              gesture.xl = touch.clientX;
+              gesture.origin = measure().offset;
+              gesture.high = gesture.origin;
+              gesture.low = gesture.origin;
+              // The finger never drags a 落款 it began before out of view:
+              // the strip holds there, like a list's end.
+              gesture.pin = driveSpans(strip, gesture.origin).reduce(
+                (pin, span) =>
+                  span.seal > gesture.origin + 2
+                    ? Math.min(pin, span.seal)
+                    : pin,
+                Number.POSITIVE_INFINITY,
+              );
+              drive.mode = "touch";
+              drive.driven = true;
+              applyStrip();
+            }
+            const next = Math.min(
+              strip.scrollWidth - strip.clientWidth,
+              gesture.pin,
+              Math.max(0, gesture.origin + touch.clientX - gesture.xl),
+            );
+            gesture.high = Math.max(gesture.high, next);
+            gesture.low = Math.min(gesture.low, next);
+            gesture.samples.push({ t: event.timeStamp, x: next });
+            while (
+              gesture.samples.length > 2 &&
+              event.timeStamp - (gesture.samples[0]?.t ?? 0) >
+                FEED_POST_GLIDE_VELOCITY_MS * 2
+            )
+              gesture.samples.shift();
+            writeOffset(next);
+          }}
           onTouchStartCapture={(event) => {
-            if (!fromStrip(event) || event.touches.length !== 1) return;
+            if (!fromStrip(event)) return;
+            const drive = driveRef.current;
+            const caught = drive.mode === "glide" || drive.mode === "touch";
+            const way =
+              drive.glide === null
+                ? 0
+                : Math.sign(drive.glide.to - drive.glide.from);
+            stopGlide();
+            // Snapping comes back for the reader's own gesture.
+            if (holdRef.current) {
+              holdRef.current = false;
+              applyStrip();
+            }
+            const touch = event.touches[0];
+            if (event.touches.length !== 1 || touch === undefined) {
+              // A second finger (a pinch): the strip comes to rest.
+              if (drive.gesture !== null || drive.mode === "glide") {
+                const origin = drive.gesture?.origin;
+                drive.gesture = null;
+                const offset = measure().offset;
+                releaseDrive(offset, 0, origin ?? offset, way, event.timeStamp);
+              }
+              return;
+            }
+            const startOffset = measure().offset;
             touchRef.current = {
               active: true,
-              startOffset: measure().offset,
+              startOffset,
             };
+            const strip = stripRef.current;
+            drive.gesture =
+              drive.driven &&
+              strip !== null &&
+              !scrollerUnder(strip, event.target)
+                ? {
+                    x0: touch.clientX,
+                    y0: touch.clientY,
+                    t0: event.timeStamp,
+                    origin: startOffset,
+                    locked: false,
+                    xl: touch.clientX,
+                    samples: [],
+                    high: startOffset,
+                    low: startOffset,
+                    caught,
+                    way,
+                    pin: Number.POSITIVE_INFINITY,
+                  }
+                : null;
+            // A glide the finger caught holds where it is; one under a touch
+            // the browser pans itself comes to rest on its way.
+            if (caught) {
+              drive.glide = null;
+              if (drive.gesture !== null) drive.mode = "touch";
+              else
+                releaseDrive(startOffset, 0, startOffset, way, event.timeStamp);
+            }
             aimRef.current = null;
             resizedRef.current = false;
             growthRef.current = null;

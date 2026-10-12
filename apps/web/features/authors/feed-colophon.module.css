@@ -39,6 +39,18 @@
   );
   /* A selected text's action column: its 44 px buttons and their margins. */
   --colophon-actions: calc(44px + 2 * var(--yoyi-space-2));
+  /* The head's gap and its margin, full and compact (feed-colophon.tsx
+     measures the first view with them). */
+  --colophon-head-gap: var(--yoyi-space-3);
+  --colophon-head-end: var(--yoyi-space-6);
+  --colophon-head-end-compact: var(--yoyi-space-2);
+  /* Where a snap at the stage's left edge keeps clear of the input column
+     and its fade, the column widened by a reply being written, too
+     (--colophon-input-wide, set by feed-colophon.tsx). */
+  --colophon-seal-clear: calc(
+    var(--colophon-input-wide, var(--colophon-input-clear)) +
+      var(--yoyi-space-6)
+  );
 }
 
 /* Snap points keep a gutter from the stage's right edge. */
@@ -58,16 +70,32 @@
 .replyBody[data-expanded] > .seal {
   scroll-snap-align: end;
   scroll-snap-stop: always;
-  scroll-margin-left: calc(var(--colophon-input-clear) + var(--yoyi-space-6));
+  scroll-margin-left: var(--colophon-seal-clear);
+}
+
+/* So is the action column of an unfolded one, selected: the strip can come
+   to rest on it, clear of the input column. */
+.root[data-expanded] + .actions,
+.replyBody[data-expanded] + .actions {
+  scroll-snap-align: end;
+  scroll-margin-left: var(--colophon-seal-clear);
 }
 
 .head {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--yoyi-space-3);
-  margin-block-end: var(--yoyi-space-6);
+  gap: var(--colophon-head-gap);
+  margin-block-end: var(--colophon-head-end);
   scroll-snap-stop: always;
+}
+
+/* Compact (feed-colophon.tsx): the count under the title, in one column,
+   only where that lets the first colophon and its 落款 fit the head's view. */
+.head[data-compact] {
+  flex-direction: row;
+  align-items: center;
+  margin-block-end: var(--colophon-head-end-compact);
 }
 
 .headTitle {

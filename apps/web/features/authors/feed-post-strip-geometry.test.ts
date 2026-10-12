@@ -17,7 +17,20 @@ import {
   stripRegion,
   stripRemaining,
   stripScrollLeft,
+  drivesStrip,
+  driveZones,
+  FEED_POST_GLIDE_MAX_MS,
+  FEED_POST_GLIDE_TAU_MS,
+  glideOffset,
+  glideRest,
+  inDriveZone,
+  isRestingOffset,
+  planGlide,
+  releaseThrow,
+  releaseVelocity,
+  sealSpan,
 } from "./feed-post-strip-geometry";
+import type { DrivePoint, DriveSpan } from "./feed-post-strip-geometry";
 
 const strip = (scrollLeft: number, scrollWidth = 1200, clientWidth = 300) => ({
   scrollLeft,
@@ -314,5 +327,262 @@ describe("nextSnapOffset", () => {
 
   it("keeps the offset without snap positions", () => {
     expect(nextSnapOffset([], 512, 1)).toBe(512);
+  });
+});
+
+describe("sealSpan", () => {
+  it("measures a 落款's snap and the offset its right edge meets the stage's left", () => {
+    const span = sealSpan(
+      { left: 0, right: 393 },
+      { left: -300, right: -280 },
+      64,
+      1000,
+    );
+    expect(span.snap).toBe(1364);
+    expect(span.edge).toBe(1280);
+  });
+});
+
+describe("releaseVelocity", () => {
+  const steady = (from: number, to: number, speed: number) =>
+    Array.from({ length: (to - from) / 16 + 1 }, (_, index) => ({
+      t: from + index * 16,
+      x: 100 + (from + index * 16) * speed,
+    }));
+
+  it("fits the finger's speed over its last moves", () => {
+    expect(releaseVelocity(steady(0, 160, 1.5), 165)).toBeCloseTo(1.5, 5);
+    expect(releaseVelocity(steady(0, 160, -0.8), 165)).toBeCloseTo(-0.8, 5);
+  });
+
+  it("weighs only the last 80 ms", () => {
+    const samples = [
+      ...steady(0, 96, 3),
+      ...steady(112, 192, 0.5).map((s) => ({ ...s, x: s.x + 288 - 56 })),
+    ];
+    expect(releaseVelocity(samples, 195)).toBeCloseTo(0.5, 1);
+  });
+
+  it("throws nothing from a finger held still before it lifts", () => {
+    expect(releaseVelocity(steady(0, 160, 2), 160 + 60)).toBe(0);
+    expect(releaseVelocity([{ t: 0, x: 10 }], 5)).toBe(0);
+  });
+});
+
+// A strip like the live one at 393 px: images to 1572, the 题跋 head at
+// 1572 (a stop), two folded colophons, an unfolded one from 2351 (resting
+// inside it to 2637), its 落款 at 2723, the next colophon at 3052.
+const span: DriveSpan = { start: 2351, end: 2637, seal: 2723 };
+const points: DrivePoint[] = [
+  { offset: 0, stop: true },
+  { offset: 393, stop: true },
+  { offset: 786, stop: true },
+  { offset: 1179, stop: true },
+  { offset: 1572, stop: true },
+  { offset: 1800, stop: false },
+  { offset: 2050, stop: false },
+  { offset: 2351, stop: false },
+  { offset: 2723, stop: true },
+  { offset: 3052, stop: false },
+  { offset: 3300, stop: false },
+];
+const release = (offset: number, velocity: number, origin: number) =>
+  glideRest({
+    offset,
+    velocity,
+    origin,
+    spans: [span],
+    points,
+    max: 4000,
+    page: 305,
+  });
+
+describe("driveZones", () => {
+  it("drives an unfolded colophon's own span, to just short of its 落款", () => {
+    const zones = driveZones([span]);
+    expect(zones).toEqual([{ from: 2349, to: 2721 }]);
+    expect(inDriveZone(zones, 2351)).toBe(true);
+    expect(inDriveZone(zones, 2500)).toBe(true);
+    expect(inDriveZone(zones, 2722)).toBe(false);
+    expect(inDriveZone(zones, 2723)).toBe(false);
+    // The 题跋 head, the folded colophons before it and the images are native.
+    expect(inDriveZone(zones, 1572)).toBe(false);
+    expect(inDriveZone(zones, 2050)).toBe(false);
+    expect(inDriveZone(zones, 1179)).toBe(false);
+  });
+
+  it("gives each unfolded colophon a zone of its own", () => {
+    const next: DriveSpan = { start: 3052, end: 3400, seal: 3500 };
+    const zones = driveZones([span, next]);
+    expect(zones[1]).toEqual({ from: 3050, to: 3498 });
+    expect(inDriveZone(zones, 2900)).toBe(false);
+  });
+});
+
+describe("releaseThrow", () => {
+  const lift = (velocity: number, offset: number, high: number, low = 2400) =>
+    releaseThrow({ velocity, offset, origin: 2400, high, low });
+
+  it("throws nothing back from a finger that rolls back as it lifts", () => {
+    // Dragged on to the 落款 (held there), rolled back: no throw, on.
+    expect(lift(-0.12, 2723, 2723)).toEqual({ velocity: 0, way: 1 });
+    // A flick on that ends with a 6 px roll.
+    expect(lift(-0.4, 2594, 2600)).toEqual({ velocity: 0, way: 1 });
+    expect(lift(-0.4, 2585, 2600)).toEqual({ velocity: 0, way: 1 });
+  });
+
+  it("throws back once the finger has really come back", () => {
+    expect(lift(-0.4, 2584, 2600)).toEqual({ velocity: -0.4, way: 0 });
+  });
+
+  it("throws on and back from a plain drag", () => {
+    expect(lift(1.5, 2600, 2600)).toEqual({ velocity: 1.5, way: 0 });
+    expect(lift(-1.5, 2300, 2400, 2300)).toEqual({ velocity: -1.5, way: 0 });
+    // A short flick back from rest is a throw, not a roll.
+    expect(lift(-0.5, 2388, 2400, 2388)).toEqual({ velocity: -0.5, way: 0 });
+  });
+
+  it("throws nothing on from a drag back that rolls on as it lifts", () => {
+    expect(lift(0.3, 2304, 2400, 2300)).toEqual({ velocity: 0, way: -1 });
+  });
+});
+
+describe("isRestingOffset", () => {
+  it("rests inside a colophon only short of its 落款's dead zone, and on snaps", () => {
+    expect(isRestingOffset(2500, [span], points)).toBe(true);
+    expect(isRestingOffset(2637, [span], points)).toBe(true);
+    expect(isRestingOffset(2680, [span], points)).toBe(false);
+    expect(isRestingOffset(2723, [span], points)).toBe(true);
+    expect(isRestingOffset(1900, [span], points)).toBe(false);
+    expect(isRestingOffset(2050, [span], points)).toBe(true);
+  });
+});
+
+describe("glideRest", () => {
+  it("stops a fast swipe from the last view on the 落款, never past it", () => {
+    expect(release(2600, 3, 2523)).toBe(2723);
+    expect(release(2700, 6, 2523)).toBe(2723);
+  });
+
+  it("moves on at most one readable view from where the gesture began", () => {
+    // From the colophon's start: at the latest its end (the 落款 is more
+    // than a view away), however fast.
+    expect(release(2420, 2, 2351)).toBe(2637);
+    expect(release(2400, 0.5, 2351)).toBe(2400 + 0.5 * FEED_POST_GLIDE_TAU_MS);
+  });
+
+  it("goes on to the 落款 once the finger has carried the strip past the end", () => {
+    expect(release(2650, 0.4, 2351)).toBe(2723);
+  });
+
+  it("moves a throw outside the unfolded colophon on one snap position only", () => {
+    expect(release(1700, 4, 2360)).toBe(1800);
+    expect(release(2000, 1.2, 2360)).toBe(2050);
+    expect(release(2300, 4, 2360)).toBe(2351);
+    expect(release(2300, -4, 2360)).toBe(2050);
+  });
+
+  it("stops a fling back from inside the colophon at its start", () => {
+    expect(release(2400, -4, 2600)).toBe(2351);
+  });
+
+  it("holds a fling back at one view, too", () => {
+    expect(release(2700, -4, 2723)).toBe(2723 - 305);
+  });
+
+  it("never runs back against the finger's way without momentum", () => {
+    // Held in the dead zone after dragging on: on to the 落款.
+    expect(release(2660, 0, 2560)).toBe(2723);
+    // After dragging back: back to the colophon's end.
+    expect(release(2690, 0, 2723)).toBe(2637);
+    // A caught glide's own way decides a tap.
+    expect(
+      glideRest({
+        offset: 2660,
+        velocity: 0,
+        origin: 2660,
+        way: 1,
+        spans: [span],
+        points,
+        max: 4000,
+        page: 305,
+      }),
+    ).toBe(2723);
+  });
+
+  it("rests where it is inside the colophon when held", () => {
+    expect(release(2480, 0, 2400)).toBe(2480);
+  });
+
+  it("snaps to the nearest snap position on its way among folded colophons", () => {
+    expect(release(1820, 0.3, 1780)).toBe(2050);
+    expect(release(1810, 0, 1790)).toBe(1800);
+    expect(release(1620, -1, 1700)).toBe(1572);
+  });
+
+  it("only ever rests where snapping on moves nothing", () => {
+    for (let offset = 1500; offset <= 3200; offset += 37)
+      for (const velocity of [-4, -1, -0.2, 0, 0.2, 1, 4])
+        for (const origin of [offset - 120, offset, offset + 120]) {
+          const rest = release(offset, velocity, origin);
+          expect(isRestingOffset(rest, [span], points)).toBe(true);
+          // Never against the finger's throw.
+          if (velocity >= 0.1)
+            expect(rest).toBeGreaterThanOrEqual(offset - 0.5);
+          if (velocity <= -0.1) expect(rest).toBeLessThanOrEqual(offset + 0.5);
+          // Never past the 落款 from before it.
+          if (offset < 2721) expect(rest).toBeLessThanOrEqual(2723);
+        }
+  });
+});
+
+describe("planGlide and glideOffset", () => {
+  it("starts at the finger's velocity and eases out to rest, never past it", () => {
+    const glide = planGlide(2500, 2, 2723);
+    expect(glide.duration).toBeCloseTo((3 * 223) / 2, 5);
+    expect(glideOffset(glide, 0)).toBe(2500);
+    expect((glideOffset(glide, 1) - 2500) / 1).toBeCloseTo(2, 1);
+    let last = 2500;
+    for (let t = 0; t <= glide.duration + 50; t += 4) {
+      const at = glideOffset(glide, t);
+      expect(at).toBeGreaterThanOrEqual(last - 1e-9);
+      expect(at).toBeLessThanOrEqual(2723 + 1e-9);
+      last = at;
+    }
+    expect(glideOffset(glide, glide.duration)).toBe(2723);
+  });
+
+  it("keeps a long glide within the longest duration, never speeding up", () => {
+    const glide = planGlide(1000, 2, 1650);
+    expect(glide.duration).toBe(FEED_POST_GLIDE_MAX_MS);
+    let lastStep = Number.POSITIVE_INFINITY;
+    let last = 1000;
+    for (let t = 4; t <= glide.duration; t += 4) {
+      const at = glideOffset(glide, t);
+      expect(at - last).toBeLessThanOrEqual(lastStep + 1e-6);
+      lastStep = at - last;
+      last = at;
+    }
+  });
+
+  it("eases in and out without momentum, and never throws against the move", () => {
+    const still = planGlide(2660, 0, 2723);
+    expect(still.velocity).toBe(0);
+    expect(still.duration).toBeGreaterThanOrEqual(200);
+    const against = planGlide(2660, -1, 2723);
+    expect(against.velocity).toBe(0);
+    expect(glideOffset(against, against.duration / 2)).toBeGreaterThan(2660);
+  });
+});
+
+describe("drivesStrip", () => {
+  it("drives where WebKit's gestures do not exist", () => {
+    expect(drivesStrip({} as Window)).toBe(true);
+  });
+
+  it("leaves WebKit native", () => {
+    expect(drivesStrip({ GestureEvent: class {} } as unknown as Window)).toBe(
+      false,
+    );
   });
 });
