@@ -427,6 +427,7 @@ export class PublishingRuntime {
   private readonly timers: UploadTimers;
   private selectionTail: Promise<void> = Promise.resolve();
   private selectionEpoch = 0;
+  private readonly selectionCancels = new Set<() => void>();
 
   constructor(services: PublishingServices) {
     this.services = services;
@@ -446,7 +447,7 @@ export class PublishingRuntime {
    */
   setAccount(accountId: string | null): void {
     if (accountId === this.accountId) return;
-    this.selectionEpoch += 1;
+    this.cancelSelectionReads();
     for (const [id, account] of this.accounts)
       if (id !== accountId) {
         account.manager.pause("account");
@@ -698,6 +699,12 @@ export class PublishingRuntime {
     const account = this.current();
     const session = account?.session;
     if (!view || !account || !session) return;
+    const epoch = this.selectionEpoch;
+    const active = () =>
+      this.current() === account &&
+      account.session === session &&
+      !session.closed &&
+      this.selectionEpoch === epoch;
     session.draftCreation = checkpoint.draftCreation ?? null;
     session.view = {
       ...session.view,
@@ -709,24 +716,22 @@ export class PublishingRuntime {
       try {
         await this.services.client.heartbeatSession(previous);
       } catch (error) {
-        if (
-          (error as { status?: number })?.status === 404 &&
-          this.current() === account
-        ) {
+        if ((error as { status?: number })?.status === 404 && active()) {
           // Release an expired holder before retrying its cancelled bytes; this
           // preserves any draft/revision references and releases old reservations.
           await this.services.client
             .discardSession(previous, { requestId: this.services.requestId() })
             .catch(() => undefined);
+          if (!active()) return;
           session.view = { ...session.view, sessionId: null };
         }
       }
-      if (this.current() !== account || session.closed) return;
+      if (!active()) return;
       if (session.view.sessionId !== null)
         this.startHeartbeat(account, session);
     }
     await account.manager.restoreCheckpoint(checkpoint.uploads);
-    if (this.current() !== account || session.closed) return;
+    if (!active()) return;
     // A pending selection may also have published staging before its acceptance
     // callback. Re-identify its retained files exactly once, with its intent.
     account.staging = checkpoint.pendingFiles.length
@@ -735,6 +740,7 @@ export class PublishingRuntime {
     if (checkpoint.content) this.edit(checkpoint.content);
     if (account.staging?.entries.length) this.confirmStaging();
     for (const [index, pending] of checkpoint.pendingFiles.entries()) {
+      if (!active()) return;
       const replacement = pending.replacement;
       if (
         replacement &&
@@ -766,6 +772,7 @@ export class PublishingRuntime {
         pending.original,
         replacement,
       );
+      if (!active()) return;
     }
     this.publish();
   }
@@ -1018,7 +1025,7 @@ export class PublishingRuntime {
     if (!options.discard) {
       if (this.leaveWouldLoseWork(account, session)) return "kept";
     } else {
-      this.selectionEpoch += 1;
+      this.cancelSelectionReads();
       session.pendingSelections.clear();
       session.pendingFiles.clear();
       const manager = account.manager;
@@ -1114,6 +1121,8 @@ export class PublishingRuntime {
     session: SessionRecord,
     keepSubmission = false,
   ): void {
+    if (this.current() === account && account.session === session)
+      this.cancelSelectionReads();
     session.closed = true;
     if (
       session.view.sessionId !== null &&
@@ -1185,6 +1194,24 @@ export class PublishingRuntime {
       session?.closed !== true &&
       this.selectionEpoch === epoch;
     const selection = Symbol();
+    let finished = false;
+    let resolveCancellation!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    const cleanup = () => {
+      if (finished) return;
+      finished = true;
+      this.selectionCancels.delete(cancel);
+      account.identifying = Math.max(0, account.identifying - files.length);
+      session?.pendingSelections.delete(selection);
+      session?.pendingFiles.delete(selection);
+      this.publish();
+    };
+    const cancel = () => {
+      resolveCancellation();
+      cleanup();
+    };
     session?.pendingSelections.add(selection);
     session?.pendingFiles.set(selection, {
       id: this.services.requestId(),
@@ -1194,26 +1221,23 @@ export class PublishingRuntime {
       ...(replacement ? { replacement } : {}),
     });
     account.identifying += files.length;
+    this.selectionCancels.add(cancel);
     this.publish();
-    const task = this.selectionTail.then(async () => {
-      try {
-        if (!active()) return;
-        const identified = await this.services.identifyFiles(files);
-        if (!active()) return;
-        account.staging = addStaticPhotosToStaging(
-          account.staging,
-          identified,
-          origin,
-        );
-        this.publish();
-        onReady?.();
-      } finally {
-        account.identifying = Math.max(0, account.identifying - files.length);
-        session?.pendingSelections.delete(selection);
-        session?.pendingFiles.delete(selection);
-        this.publish();
-      }
+    const read = this.selectionTail.then(async () => {
+      if (finished || !active()) return;
+      const identified = await this.services.identifyFiles(files);
+      if (finished || !active()) return;
+      account.staging = addStaticPhotosToStaging(
+        account.staging,
+        identified,
+        origin,
+      );
+      this.publish();
+      onReady?.();
     });
+    // A native file read may never settle. Cancellation releases both active
+    // and queued picks without accepting its late result or reporting failure.
+    const task = Promise.race([read, cancelled]).finally(cleanup);
     this.selectionTail = task.catch(() => undefined);
     return task;
   }
@@ -1289,7 +1313,7 @@ export class PublishingRuntime {
     const account = this.current();
     if (!account) return;
     if (cancelPending) {
-      this.selectionEpoch += 1;
+      this.cancelSelectionReads();
       account.session?.pendingSelections.clear();
       account.session?.pendingFiles.clear();
     }
@@ -1355,6 +1379,7 @@ export class PublishingRuntime {
   }
 
   dispose(): void {
+    this.cancelSelectionReads();
     for (const account of this.accounts.values()) {
       if (account.session) {
         account.session.closed = true;
@@ -1373,6 +1398,12 @@ export class PublishingRuntime {
   }
 
   // -- internals -----------------------------------------------------------
+
+  private cancelSelectionReads(): void {
+    this.selectionEpoch += 1;
+    this.selectionTail = Promise.resolve();
+    for (const cancel of [...this.selectionCancels]) cancel();
+  }
 
   private current(): AccountRuntime | null {
     return this.accountId === null

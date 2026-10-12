@@ -246,6 +246,261 @@ describe("publishing runtime", () => {
     },
   );
 
+  it.each(["cancel", "logout", "discard", "dispose"])(
+    "releases hung and queued photo selections on %s without waiting for their bytes",
+    async (action) => {
+      const identify = vi.fn<PublishingServices["identifyFiles"]>();
+      identify.mockImplementationOnce(() => new Promise(() => undefined));
+      identify.mockImplementation(identifyFiles);
+      const test = setup(identify);
+      test.signIn(ACCOUNT);
+      test.runtime.startSession({
+        target: { type: "new" },
+        saveMode: "unsaved",
+      });
+      const accepted = vi.fn();
+      const first = test.runtime.stageFiles(
+        [fileOf(jpeg({}))],
+        "picker",
+        accepted,
+      );
+      const queued = test.runtime.stageFiles(
+        [fileOf(jpeg({}))],
+        "picker",
+        accepted,
+      );
+      const settled = vi.fn();
+      void Promise.all([first, queued]).then(settled);
+      await settle();
+      expect(identify).toHaveBeenCalledOnce();
+      expect(test.runtime.store.get().staging?.identifying).toBe(2);
+      if (action === "cancel") test.runtime.cancelStaging();
+      else if (action === "logout") {
+        test.signIn(null);
+        test.signIn(ACCOUNT);
+      } else if (action === "discard") {
+        await test.runtime.closeSession({ discard: true });
+        test.runtime.startSession({
+          target: { type: "new" },
+          saveMode: "unsaved",
+        });
+      } else test.runtime.dispose();
+      await settle();
+      expect(settled).toHaveBeenCalledOnce();
+      expect(accepted).not.toHaveBeenCalled();
+      expect(test.runtime.store.get().staging).toBeNull();
+      expect(test.runtime.checkpoint()?.pendingFiles ?? []).toHaveLength(0);
+      if (action !== "dispose") {
+        await test.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+        expect(identify).toHaveBeenCalledTimes(2);
+        expect(test.runtime.store.get().staging?.identifying).toBe(0);
+        expect(test.runtime.checkpoint()?.pendingFiles).toHaveLength(0);
+      }
+      test.runtime.dispose();
+    },
+  );
+
+  it.each(["resolve", "reject"])(
+    "ignores a cancelled reader's late %s while a new selection is still reading",
+    async (completion) => {
+      type Identified = Awaited<
+        ReturnType<PublishingServices["identifyFiles"]>
+      >;
+      let resolveOld!: (files: Identified) => void;
+      let rejectOld!: (error: Error) => void;
+      const old = new Promise<Identified>((resolve, reject) => {
+        resolveOld = resolve;
+        rejectOld = reject;
+      });
+      let resolveNew!: (files: Identified) => void;
+      const next = new Promise<Identified>((resolve) => {
+        resolveNew = resolve;
+      });
+      const identify = vi.fn<PublishingServices["identifyFiles"]>();
+      identify
+        .mockImplementationOnce(() => old)
+        .mockImplementationOnce(() => next);
+      const test = setup(identify);
+      test.signIn(ACCOUNT);
+      test.runtime.startSession({
+        target: { type: "new" },
+        saveMode: "unsaved",
+      });
+      const file = fileOf(jpeg({}));
+      const staleReady = vi.fn();
+      const stale = test.runtime.stageFiles([file], "picker", staleReady);
+      await settle();
+      test.runtime.cancelStaging();
+      await stale;
+      const ready = vi.fn();
+      const current = test.runtime.stageFiles([file], "picker", ready, true);
+      await settle();
+      expect(identify).toHaveBeenCalledTimes(2);
+      const identified = await identifyFiles([file]);
+      if (completion === "resolve") resolveOld(identified);
+      else rejectOld(new Error("late file read failure"));
+      await settle();
+      expect(staleReady).not.toHaveBeenCalled();
+      expect(ready).not.toHaveBeenCalled();
+      expect(test.runtime.store.get().staging?.identifying).toBe(1);
+      expect(test.runtime.store.get().staging?.batch.entries).toHaveLength(0);
+      expect(test.runtime.checkpoint()?.pendingFiles).toMatchObject([
+        { original: true },
+      ]);
+      resolveNew(identified);
+      await current;
+      expect(ready).toHaveBeenCalledOnce();
+      expect(test.runtime.store.get().staging?.identifying).toBe(0);
+      expect(test.runtime.store.get().staging?.batch.entries).toHaveLength(1);
+      test.runtime.dispose();
+    },
+  );
+
+  it("preserves pending selection order when only completed staging is cleared", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const identify = vi.fn<PublishingServices["identifyFiles"]>();
+    identify
+      .mockImplementationOnce(async (files) => {
+        await pending;
+        return identifyFiles(files);
+      })
+      .mockImplementation(identifyFiles);
+    const test = setup(identify);
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+    const order: number[] = [];
+    const first = test.runtime.stageFiles([fileOf(jpeg({}))], "picker", () => {
+      order.push(1);
+    });
+    const second = test.runtime.stageFiles([fileOf(jpeg({}))], "picker", () => {
+      order.push(2);
+    });
+    await settle();
+    test.runtime.cancelStaging(false);
+    expect(identify).toHaveBeenCalledOnce();
+    expect(test.runtime.checkpoint()?.pendingFiles).toHaveLength(2);
+    release();
+    await Promise.all([first, second]);
+    expect(order).toEqual([1, 2]);
+    expect(test.runtime.store.get().staging?.identifying).toBe(0);
+    test.runtime.dispose();
+  });
+
+  it("reports an ordinary identification error and still releases the queue", async () => {
+    const identify = vi.fn<PublishingServices["identifyFiles"]>();
+    identify
+      .mockRejectedValueOnce(new Error("file read failure"))
+      .mockImplementation(identifyFiles);
+    const test = setup(identify);
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+    const first = test.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+    const next = test.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+    await expect(first).rejects.toThrow("file read failure");
+    await next;
+    expect(identify).toHaveBeenCalledTimes(2);
+    expect(test.runtime.checkpoint()?.pendingFiles).toHaveLength(0);
+    expect(test.runtime.store.get().staging?.identifying).toBe(0);
+    test.runtime.dispose();
+  });
+
+  it.each(["cancel", "switch-account"])(
+    "stops restoring retained selections after %s instead of reading the next old pick",
+    async (action) => {
+      const source = setup(() => new Promise(() => undefined));
+      source.signIn(ACCOUNT);
+      source.runtime.startSession({
+        target: { type: "new" },
+        saveMode: "saved",
+      });
+      const selections = [
+        source.runtime.stageFiles([fileOf(jpeg({}))], "picker"),
+        source.runtime.stageFiles([fileOf(jpeg({}))], "picker"),
+      ];
+      const checkpoint = source.runtime.checkpoint()!;
+      source.runtime.dispose();
+      await Promise.all(selections);
+      const identify = vi.fn<PublishingServices["identifyFiles"]>();
+      identify
+        .mockImplementationOnce(() => new Promise(() => undefined))
+        .mockImplementation(identifyFiles);
+      const test = setup(identify);
+      test.signIn(ACCOUNT);
+      const restored = vi.fn();
+      void test.runtime.restoreCheckpoint(checkpoint).then(restored);
+      await settle();
+      expect(identify).toHaveBeenCalledOnce();
+      if (action === "cancel") test.runtime.cancelStaging();
+      else {
+        test.signIn(OTHER_ACCOUNT);
+        test.runtime.startSession({
+          target: { type: "new" },
+          saveMode: "unsaved",
+        });
+      }
+      await settle();
+      expect(restored).toHaveBeenCalledOnce();
+      expect(identify).toHaveBeenCalledOnce();
+      expect(test.runtime.store.get().staging).toBeNull();
+      expect(test.client.registerItem).not.toHaveBeenCalled();
+      await test.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+      expect(identify).toHaveBeenCalledTimes(2);
+      test.runtime.dispose();
+    },
+  );
+
+  it("keeps a newer account's pending pick when an old asynchronous discard finishes", async () => {
+    let resolveNew!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      resolveNew = resolve;
+    });
+    const identify = vi.fn<PublishingServices["identifyFiles"]>();
+    identify
+      .mockImplementationOnce(identifyFiles)
+      .mockImplementationOnce(async (files) => {
+        await pending;
+        return identifyFiles(files);
+      });
+    const test = setup(identify);
+    let created!: () => void;
+    const create = test.client.createSession.getMockImplementation()!;
+    test.client.createSession.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          created = () => resolve(create());
+        }),
+    );
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+    await test.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+    test.runtime.confirmStaging();
+    await settle();
+    const closing = test.runtime.closeSession({ discard: true });
+    await settle();
+    test.signIn(OTHER_ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+    const ready = vi.fn();
+    const selected = test.runtime.stageFiles(
+      [fileOf(jpeg({}))],
+      "picker",
+      ready,
+    );
+    await settle();
+    created();
+    expect(await closing).toBe("ended");
+    expect(test.runtime.store.get().staging?.identifying).toBe(1);
+    expect(test.runtime.checkpoint()?.pendingFiles).toHaveLength(1);
+    expect(ready).not.toHaveBeenCalled();
+    resolveNew();
+    await selected;
+    expect(ready).toHaveBeenCalledOnce();
+    expect(test.runtime.store.get().staging?.identifying).toBe(0);
+    test.runtime.dispose();
+  });
+
   it("keeps one manager per account and pauses the previous account on a switch", async () => {
     const test = setup();
     test.signIn(ACCOUNT);
