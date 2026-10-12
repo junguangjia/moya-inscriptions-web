@@ -394,13 +394,14 @@ describe("FeedColophon", () => {
       "2026-10-09T11:57:00.000Z",
     );
     expect(seal?.querySelector("button,[data-comment-avatar]")).toBeNull();
-    // The text is described by its author, plaque and time.
+    // The reply action describes its author, plaque, time and own words.
     expect(text?.getAttribute("aria-describedby")).toBe(
-      `${name?.id} ${seal?.id}`,
+      `${name?.id} ${seal?.id} ${text?.querySelector("[data-colophon-words]")?.id}`,
     );
+    expect(text?.getAttribute("aria-label")).toBe("回复 甲");
   });
 
-  it("describes a colophon without plaque or time by its author alone", () => {
+  it("describes an undated reply action by its author and words", () => {
     const undated: { -readonly [K in keyof CommentItem]?: CommentItem[K] } =
       comment("c1", writer);
     delete undated.createdAt;
@@ -409,7 +410,7 @@ describe("FeedColophon", () => {
     expect($("[data-colophon-signature]")).toBeNull();
     const text = $("[data-colophon-text]");
     expect(text?.getAttribute("aria-describedby")).toBe(
-      text?.querySelector("[data-colophon-name]")?.id,
+      `${text?.querySelector("[data-colophon-name]")?.id} ${text?.querySelector("[data-colophon-words]")?.id}`,
     );
   });
 
@@ -633,27 +634,76 @@ describe("FeedColophon", () => {
     },
   );
 
-  it("selecting a colophon reveals its actions; 删除 only on one's own", () => {
+  it("shows compact like/delete icons and replies directly from content", () => {
+    h.stage = { ...h.stage, region: "comments" };
     h.thread = makeThread({
       currentUser: user("writer", "甲"),
       items: [comment("own", writer), comment("theirs", other)],
     });
     render();
     const [own, theirs] = $$("[data-colophon-text]");
-    expect($("[data-colophon-actions]")).toBeNull();
+    const toolbars = $$("[data-colophon-actions]");
+    expect(toolbars).toHaveLength(2);
+    expect(toolbars[0]?.getAttribute("role")).toBe("toolbar");
+    expect(toolbars[0]?.getAttribute("aria-orientation")).toBe("vertical");
+    expect(
+      toolbars[0]?.querySelector('[aria-label="删除正文"]'),
+    ).not.toBeNull();
+    expect(toolbars[1]?.querySelector("[data-colophon-delete]")).toBeNull();
+    const like = toolbars[0]?.querySelector("[data-colophon-like]");
+    expect(like?.getAttribute("aria-label")).toBe("喜欢评论");
+    expect(like?.getAttribute("aria-description")).toBe("2 人喜欢");
+    expect(like?.querySelector("svg")?.getAttribute("fill")).toBe("none");
+    expect($("[data-colophon-reply]")).toBeNull();
     click(own ?? null);
-    expect(own?.getAttribute("aria-pressed")).toBe("true");
-    const toolbar = $("[data-colophon-actions]");
-    expect(toolbar?.getAttribute("role")).toBe("toolbar");
-    expect(toolbar?.getAttribute("aria-orientation")).toBe("vertical");
-    expect($("[data-colophon-delete]")).not.toBeNull();
-    expect($("[data-colophon-like]")?.getAttribute("aria-label")).toBe("赞，2");
+    expect(document.activeElement).toBe($("textarea"));
+    expect($("[data-colophon-input-reply]")?.textContent).toContain(
+      "回复 甲：",
+    );
     click(theirs ?? null);
-    expect($$("[data-colophon-actions]")).toHaveLength(1);
-    expect($("[data-colophon-delete]")).toBeNull();
-    // Tapping the selected text again clears it.
-    click(theirs ?? null);
-    expect($("[data-colophon-actions]")).toBeNull();
+    expect($("[data-colophon-input-reply]")?.textContent).toContain(
+      "回复 乙：",
+    );
+    expect(own?.hasAttribute("aria-pressed")).toBe(false);
+    expect(theirs?.hasAttribute("aria-pressed")).toBe(false);
+    expect($$("[data-colophon-actions]")).toEqual(toolbars);
+  });
+
+  it("operates a root and reply directly, keeping liked and deleted states truthful", () => {
+    h.thread = makeThread({
+      currentUser: writer,
+      items: [
+        comment("c1", other, {
+          liked: true,
+          replies: [reply("r1", writer)],
+        }),
+        comment("gone", writer, { deleted: true }),
+      ],
+    });
+    render();
+    expect($$("[data-colophon-actions]")).toHaveLength(3);
+    const rootLike = $(
+      '[data-comment-id="c1"] > div > [data-colophon-actions] [data-colophon-like]',
+    );
+    expect(rootLike?.getAttribute("aria-label")).toBe("取消喜欢评论");
+    expect(rootLike?.getAttribute("aria-pressed")).toBe("true");
+    expect(rootLike?.querySelector("svg")?.getAttribute("fill")).toBe(
+      "currentColor",
+    );
+    click(rootLike);
+    expect(h.thread.toggleLike).toHaveBeenCalledWith("c1", undefined, rootLike);
+    const replyLike = $('[data-comment-reply="r1"] [data-colophon-like]');
+    click(replyLike);
+    expect(h.thread.toggleLike).toHaveBeenCalledWith("c1", "r1", replyLike);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    click($('[data-comment-reply="r1"] [data-colophon-delete]'));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(h.thread.deleteBody).toHaveBeenCalledWith("r1");
+    expect($('[data-comment-id="gone"] [data-colophon-delete]')).toBeNull();
+    expect(
+      $<HTMLButtonElement>('[data-comment-id="gone"] [data-colophon-like]')
+        ?.disabled,
+    ).toBe(true);
   });
 
   it("moves through the action column with the arrow keys and leaves with Escape", () => {
@@ -669,7 +719,7 @@ describe("FeedColophon", () => {
       );
     });
     const buttons = $$("[data-colophon-actions] button");
-    expect(buttons.map((button) => button.tabIndex)).toEqual([0, -1, -1]);
+    expect(buttons.map((button) => button.tabIndex)).toEqual([0, -1]);
     act(() => buttons[0]?.focus());
     act(() => {
       buttons[0]?.dispatchEvent(
@@ -682,7 +732,8 @@ describe("FeedColophon", () => {
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
       );
     });
-    expect($("[data-colophon-actions]")).toBeNull();
+    expect($("[data-colophon-text][aria-pressed='true']")).toBeNull();
+    expect($("[data-colophon-actions]")).not.toBeNull();
     expect(document.activeElement).toBe(text);
   });
 
@@ -700,7 +751,8 @@ describe("FeedColophon", () => {
     confirm.mockReturnValue(true);
     click($("[data-colophon-delete]"));
     expect(h.thread.deleteBody).toHaveBeenCalledWith("own");
-    expect($("[data-colophon-actions]")).toBeNull();
+    expect($("[data-colophon-text][aria-pressed='true']")).toBeNull();
+    expect($("[data-colophon-actions]")).not.toBeNull();
     // Focus stays with the colophon, not on the page.
     expect(document.activeElement).toBe($("[data-colophon-text]"));
   });
@@ -711,14 +763,14 @@ describe("FeedColophon", () => {
     });
     render();
     click($('[data-comment-reply="r1"] [data-colophon-text]'));
-    const like = $("[data-colophon-like]");
+    const like = $('[data-comment-reply="r1"] [data-colophon-like]');
     click(like);
     expect(h.thread.toggleLike).toHaveBeenCalledWith("c1", "r1", like);
     // The like stays selectable: the count changes in place.
     expect($("[data-colophon-actions]")).not.toBeNull();
   });
 
-  it("sends a guest to sign in from the input column, 回复 and 赞, returning focus to the opener", () => {
+  it("sends a guest to sign in from content and likes, with the original opener", () => {
     h.authors = { viewer: null };
     h.thread = makeThread({
       currentUser: { id: "guest", name: "访客" },
@@ -734,14 +786,60 @@ describe("FeedColophon", () => {
     // Nothing to write in for a guest, and nothing in the head.
     expect(host.querySelector("textarea")).toBeNull();
     expect($("[data-colophon-head] a, [data-colophon-head] button")).toBeNull();
-    click($("[data-colophon-text]"));
-    const replyButton = $("[data-colophon-reply]");
-    click(replyButton);
-    expect(h.enterAuth).toHaveBeenCalledWith("/login?x=1", replyButton);
+    const text = $("[data-colophon-text]");
+    click(text);
+    expect(h.enterAuth).toHaveBeenCalledWith("/login?x=1", text);
     const like = $("[data-colophon-like]");
     click(like);
     expect(h.thread.toggleLike).toHaveBeenCalledWith("c1", undefined, like);
   });
+
+  it.each(["click", "Enter", " "])(
+    "replies to nested content through %s with its exact target",
+    async (activation) => {
+      h.stage = { ...h.stage, region: "comments" };
+      h.thread = makeThread({
+        items: [comment("c1", writer, { replies: [reply("r1", other)] })],
+      });
+      render();
+      const text = $('[data-comment-reply="r1"] [data-colophon-text]');
+      expect(text?.getAttribute("aria-label")).toBe("回复 乙");
+      if (activation === "click") click(text);
+      else
+        act(() => {
+          text?.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: activation,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        });
+      const box = host.querySelector("textarea")!;
+      expect(document.activeElement).toBe(box);
+      expect($("[data-colophon-input-reply]")?.textContent).toContain(
+        "回复 乙：",
+      );
+      act(() => {
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!.call(box, "答乙");
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {
+        host
+          .querySelector("form")!
+          .dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true }),
+          );
+      });
+      expect(h.thread.sendReply).toHaveBeenCalledWith(
+        { rootCommentId: "c1", replyId: "r1", user: other },
+        "答乙",
+      );
+    },
+  );
 
   it("holds the input column in the strip, at its left edge, shown only on the colophons", () => {
     h.thread = makeThread({ items: [comment("c1", writer)], visibleTotal: 1 });
@@ -769,15 +867,15 @@ describe("FeedColophon", () => {
     expect(document.querySelector("[data-colophon-composer]")).toBeNull();
   });
 
-  it("replies from 回复 in the input, focused in the same tap, and sends through the thread", async () => {
+  it("replies from content, focused in the same tap, and sends through the thread", async () => {
     h.stage = { ...h.stage, region: "comments" };
     h.thread = makeThread({ items: [comment("c1", writer)] });
     render();
     const box = host.querySelector("textarea")!;
     click($("[data-colophon-text]"));
-    click($("[data-colophon-reply]"));
-    // The toolbar closes; the input takes focus, led by 「回复 甲：」.
-    expect($("[data-colophon-actions]")).toBeNull();
+    // The content command focuses the input, led by 「回复 甲：」.
+    expect($("[data-colophon-text][aria-pressed='true']")).toBeNull();
+    expect($("[data-colophon-actions]")).not.toBeNull();
     expect(document.activeElement).toBe(box);
     expect(
       host.querySelector("[data-colophon-input-reply]")?.textContent,
@@ -972,60 +1070,7 @@ describe("FeedColophon", () => {
         } as DOMRect;
       });
 
-  it("brings a selected colophon whose actions sit under the input column to its snap position", () => {
-    h.stage = { ...h.stage, region: "comments" };
-    h.thread = makeThread({
-      items: [comment("c1", writer), comment("c2", other)],
-    });
-    let actionsLeft = 10;
-    layout((node) =>
-      node === strip
-        ? [0, 393]
-        : node.matches("[data-colophon-input]")
-          ? [0, 49]
-          : node.matches("[data-colophon-actions]")
-            ? [actionsLeft, 52]
-            : [200, 40],
-    );
-    render();
-    click($('[data-comment-id="c2"] [data-colophon-text]'));
-    expect(h.stage?.scrollToElement).toHaveBeenCalledWith(
-      $('[data-comment-id="c2"]'),
-    );
-    // Clear of the column: the strip stays where it is.
-    click($('[data-comment-id="c2"] [data-colophon-text]'));
-    actionsLeft = 120;
-    click($('[data-comment-id="c1"] [data-colophon-text]'));
-    expect(h.stage?.scrollToElement).toHaveBeenCalledTimes(1);
-  });
-
-  it("brings a selected colophon wider than the view only as far as its actions", () => {
-    h.stage = { ...h.stage, region: "comments" };
-    h.thread = makeThread({
-      items: [comment("c1", writer), comment("c2", other)],
-    });
-    // Unfolded, c1 runs from the gutter far past the stage's left edge.
-    layout((node) =>
-      node === strip
-        ? [0, 393]
-        : node.matches("[data-colophon-input]")
-          ? [0, 49]
-          : node.matches("[data-colophon-actions]")
-            ? [-520, 52]
-            : node.matches('[data-comment-id="c1"]')
-              ? [-560, 933]
-              : [200, 40],
-    );
-    render();
-    click($('[data-comment-id="c1"] [data-colophon-text]'));
-    // Its start at the gutter would leave the actions out of sight: the
-    // strip goes on by as much as they need, to their own snap position.
-    expect(h.stage.scrollToElement).not.toHaveBeenCalled();
-    expect(h.stage.scrollToOffset).toHaveBeenCalledTimes(1);
-    expect(h.stage.scrollToOffset).toHaveBeenCalledWith(520);
-  });
-
-  it("puts the strip back where the tap left it before showing the actions", () => {
+  it("restores the tapped offset before a reply resizes the input", () => {
     let offset = 300;
     const scrolled = vi.fn((to: number) => {
       offset = to;
@@ -1035,101 +1080,123 @@ describe("FeedColophon", () => {
       region: "comments",
       readOffset: () => offset,
       scrollToOffset: scrolled,
+      holdSnap: vi.fn(),
     };
-    h.thread = makeThread({
-      items: [comment("c1", writer), comment("c2", other)],
-    });
-    // Content moves right as the offset grows (laid out at offset 300).
-    const shift = () => offset - 300;
+    h.thread = makeThread({ items: [comment("c1", writer)] });
     layout((node) =>
       node === strip
         ? [0, 393]
         : node.matches("[data-colophon-input]")
           ? [0, 49]
-          : node.matches("[data-colophon-actions]")
-            ? [-520 + shift(), 52]
-            : node.matches('[data-comment-id="c1"]')
-              ? [-560 + shift(), 933]
-              : [200 + shift(), 40],
+          : [300, 40],
     );
     render();
-    const text = $('[data-comment-id="c1"] [data-colophon-text]');
-    // The engine re-snapped as the action column came in (after the tap
-    // was handled).
-    let next = 0;
+    // The engine resnaps between the tap and the input's layout commit.
     host.addEventListener("click", () => {
-      offset = next;
+      offset = 0;
     });
-    click(text);
-    // Back to 300 first; from there the actions need 520 more.
-    expect(scrolled.mock.calls).toEqual([[300, "instant"], [820]]);
-    // Clearing the selection (of a folded colophon) restores as well, and
-    // only that.
-    scrolled.mockClear();
-    offset = 300;
-    next = 260;
-    click(text);
+    click($("[data-colophon-text]"));
+    expect(h.stage.holdSnap).toHaveBeenCalledOnce();
     expect(scrolled.mock.calls).toEqual([[300, "instant"]]);
+    expect(h.stage.scrollToElement).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe($("textarea"));
   });
 
-  it("glides back to an unfolded colophon's 落款 before clearing its selection", () => {
-    let offset = 2771;
-    const scrolled = vi.fn((to: number) => {
-      offset = to;
-    });
-    const listeners: ((settle: { resized: boolean }) => void)[] = [];
-    h.stage = {
-      ...h.stage,
-      region: "comments",
-      readOffset: () => offset,
-      scrollToOffset: scrolled,
-      subscribeSettle: vi.fn((listener) => {
-        listeners.push(listener);
-        return () => undefined;
-      }),
-    };
-    h.thread = makeThread({
-      items: [
-        comment("c1", writer, { text: "永".repeat(250) }),
-        comment("c2", other),
-      ],
-    });
-    // At rest on the action column, 48 px past the 落款's snap (2723): the
-    // 落款's left edge is 48 px right of where its snap puts it.
-    layout((node) =>
-      node === strip
-        ? [0, 393]
-        : node.matches("[data-colophon-signature]")
-          ? [2771 - offset + 68 + 48, 30]
+  it.each(
+    (["root", "reply"] as const).flatMap((kind) =>
+      [
+        {
+          position: "across the readable view",
+          left: -400,
+          width: 900,
+          bringIn: false,
+        },
+        {
+          position: "entirely to the right",
+          left: 400,
+          width: 900,
+          bringIn: true,
+        },
+        {
+          position: "beneath the input",
+          left: -750,
+          width: 900,
+          bringIn: true,
+        },
+        {
+          position: "narrower than the stage but crossing the readable band",
+          left: 150,
+          width: 300,
+          bringIn: false,
+        },
+        {
+          position: "short enough to fit beside the input",
+          left: 150,
+          width: 150,
+          bringIn: true,
+        },
+      ].map((geometry) => ({ kind, ...geometry })),
+    ),
+  )(
+    "preserves an expanded $kind's reading offset $position, bringing it in only when hidden",
+    ({ kind, left, width, bringIn }) => {
+      let offset = 300;
+      const scrolled = vi.fn((to: number) => {
+        offset = to;
+      });
+      const bring = vi.fn();
+      h.stage = {
+        ...h.stage,
+        region: "comments",
+        readOffset: () => offset,
+        scrollToOffset: scrolled,
+        scrollToElement: bring,
+        holdSnap: vi.fn(),
+      };
+      const longText = "永".repeat(250);
+      h.thread = makeThread({
+        items: [
+          comment("c1", writer, {
+            ...(kind === "root"
+              ? { text: longText }
+              : { replies: [reply("r1", other, { text: longText })] }),
+          }),
+        ],
+      });
+      layout((node) =>
+        node === strip
+          ? [0, 393]
           : node.matches("[data-colophon-input]")
             ? [0, 49]
-            : node.matches("[data-colophon-actions]")
-              ? [2771 - offset + 68, 52]
-              : [200, 40],
-    );
-    const real = window.getComputedStyle.bind(window);
-    vi.spyOn(window, "getComputedStyle").mockImplementation((node) => {
-      const style = real(node);
-      return node instanceof Element &&
-        node.matches("[data-colophon-signature]")
-        ? ({ ...style, scrollMarginLeft: "68px" } as CSSStyleDeclaration)
-        : style;
-    });
-    render();
-    click($("[data-colophon-fold]"));
-    const text = $('[data-comment-id="c1"] [data-colophon-text]');
-    click(text);
-    expect(host.querySelector("[data-colophon-actions]")).not.toBeNull();
-    scrolled.mockClear();
-    // A tap on blank colophon space.
-    click($("[data-feed-colophon]"));
-    expect(scrolled.mock.calls).toEqual([[2723]]);
-    // Still selected while it glides; cleared once it has settled there.
-    expect(host.querySelector("[data-colophon-actions]")).not.toBeNull();
-    act(() => listeners.forEach((listener) => listener({ resized: false })));
-    expect(host.querySelector("[data-colophon-actions]")).toBeNull();
-    expect(scrolled.mock.calls).toEqual([[2723]]);
-  });
+            : [left, width],
+      );
+      render();
+      const anchor = $(
+        kind === "root"
+          ? '[data-comment-id="c1"]'
+          : '[data-comment-reply="r1"]',
+      )!;
+      click(anchor.querySelector("[data-colophon-fold]"));
+      expect(anchor.querySelector("[data-colophon-fold]")?.textContent).toBe(
+        "收起",
+      );
+      scrolled.mockClear();
+      bring.mockClear();
+      offset = 300;
+      // Input layout can resnap the strip between the tap and the effect.
+      host.addEventListener("click", () => {
+        offset = 0;
+      });
+      click(anchor.querySelector("[data-colophon-text]"));
+      expect(scrolled.mock.calls).toEqual([[300, "instant"]]);
+      if (bringIn) expect(bring).toHaveBeenCalledExactlyOnceWith(anchor);
+      else expect(bring).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe($("textarea"));
+      expect(anchor.querySelector("[data-colophon-fold]")?.textContent).toBe(
+        "收起",
+      );
+    },
+  );
 
   it("keeps the 落款's snap clear of the input column a reply widens", () => {
     const resized: (() => void)[] = [];
@@ -1397,10 +1464,8 @@ describe("FeedColophon", () => {
     });
     render();
     click($('[data-comment-id="c2"] [data-colophon-text]'));
-    click($("[data-colophon-reply]"));
     expect(h.stage?.scrollToElement).not.toHaveBeenCalled();
     click($('[data-comment-id="c1"] [data-colophon-text]'));
-    click($("[data-colophon-reply]"));
     expect(h.stage?.scrollToElement).toHaveBeenCalledWith(
       $('[data-comment-id="c1"]'),
     );
@@ -1417,7 +1482,6 @@ describe("FeedColophon", () => {
     const section = $("[data-feed-colophon]")!;
     expect(section.hasAttribute("data-colophon-writing")).toBe(false);
     click($('[data-comment-id="c1"] [data-colophon-text]'));
-    click($("[data-colophon-reply]"));
     expect(section.hasAttribute("data-colophon-writing")).toBe(true);
     expect(
       $('[data-comment-id="c1"]')?.hasAttribute("data-colophon-reply-target"),
@@ -1528,6 +1592,13 @@ describe("FeedColophon", () => {
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.querySelector("[data-colophon-sign-in]")).toBeNull();
     click($("[data-colophon-text]"));
+    expect($("[data-colophon-text]")?.getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+    expect($("[data-colophon-text]")?.tabIndex).toBe(-1);
+    expect($("[data-colophon-text]")?.hasAttribute("aria-label")).toBe(false);
+    expect(h.enterAuth).not.toHaveBeenCalled();
+    expect($("[data-colophon-input-reply]")).toBeNull();
     expect($("[data-colophon-reply]")).toBeNull();
     expect(host.textContent).not.toMatch(/审核|待发布|等待/);
     expect(host.textContent).not.toMatch(/审核|待发布|等待/);
@@ -1628,6 +1699,8 @@ describe("FeedColophon", () => {
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     selection.addRange(range);
+    click(text);
+    expect($("[data-colophon-input-reply]")).toBeNull();
     const setData = vi.fn();
     const event = new Event("copy", { bubbles: true, cancelable: true });
     Object.defineProperty(event, "clipboardData", { value: { setData } });
@@ -1640,7 +1713,7 @@ describe("FeedColophon", () => {
     selection.removeAllRanges();
   });
 
-  it("clears the selection when the stage returns to the images", () => {
+  it("keeps the like/delete controls when the stage returns to the images", () => {
     h.stage = { ...h.stage, region: "comments" };
     h.thread = makeThread({ items: [comment("c1", writer)] });
     render();
@@ -1648,6 +1721,7 @@ describe("FeedColophon", () => {
     expect($("[data-colophon-actions]")).not.toBeNull();
     h.stage = { ...h.stage, region: "media" };
     render();
-    expect($("[data-colophon-actions]")).toBeNull();
+    expect($("[data-colophon-text][aria-pressed='true']")).toBeNull();
+    expect($("[data-colophon-actions]")).not.toBeNull();
   });
 });
