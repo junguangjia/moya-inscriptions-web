@@ -82,4 +82,16 @@ describe("clipboard image paste", () => {
     paste(document.body, { files: [image] });
     expect(onImages).toHaveBeenCalledTimes(2);
   });
+
+  it("stages a paste once when two captures listen", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const detachFirst = attachPasteCapture(document, first);
+    const detachSecond = attachPasteCapture(document, second);
+    paste(document.body, { files: [image] });
+    expect(first).toHaveBeenCalledExactlyOnceWith([image]);
+    expect(second).not.toHaveBeenCalled();
+    detachFirst();
+    detachSecond();
+  });
 });

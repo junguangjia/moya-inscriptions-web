@@ -716,6 +716,47 @@
   outline-offset: -2px;
 }
 
+/* The feed display window over the crop box (#244): ink dims what the phone
+   stage cuts above and below, a paper edge marks the visible band. */
+.feedOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  overflow: hidden;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.feedBand {
+  position: absolute;
+  inset-inline: 0;
+  height: var(--feed-band, 0%);
+  background: color-mix(in srgb, var(--yoyi-color-ink-black) 45%, transparent);
+}
+
+.feedOverlay[data-subtle="true"] .feedBand {
+  background: color-mix(in srgb, var(--yoyi-color-ink-black) 25%, transparent);
+}
+
+.feedBand[data-edge="top"] {
+  top: 0;
+}
+
+.feedBand[data-edge="bottom"] {
+  bottom: 0;
+}
+
+.feedOverlay[data-feed-fit="cover"]::after {
+  position: absolute;
+  inset-inline: 0;
+  top: var(--feed-band, 0%);
+  bottom: var(--feed-band, 0%);
+  content: "";
+  outline: 1px dashed
+    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
+  outline-offset: -1px;
+}
+
 .presets {
   min-width: 0;
   margin: 0;
@@ -777,20 +818,6 @@
 
 .presets:disabled .presetOption span {
   opacity: 0.45;
-}
-
-.zoom {
-  display: flex;
-  align-items: center;
-  gap: var(--yoyi-space-4);
-  font-size: var(--yoyi-type-body-small-size);
-}
-
-.zoom input {
-  min-width: 0;
-  min-height: 44px;
-  flex: 1;
-  accent-color: var(--yoyi-color-text-primary);
 }
 
 .dialogRow {

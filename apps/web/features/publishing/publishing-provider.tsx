@@ -222,6 +222,11 @@ export const useUploadSession = () => {
       adoptDraft: (draft: PublishingDraft, content: WorkDraftContent) =>
         runtime.adoptDraft(draft, content),
       saveNow: () => runtime.saveNow(),
+      /**
+       * What keeps `saveNow` from saving the album's media now (picks still
+       * on their way, or ones that need the author); null when nothing does.
+       */
+      mediaSaveHold: () => runtime.mediaSaveHold(),
       checkpoint: () => runtime.checkpoint(),
       restoreCheckpoint: (checkpoint: PublishingCheckpoint) =>
         runtime.restoreCheckpoint(checkpoint),

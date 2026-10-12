@@ -1,0 +1,608 @@
+/*
+ * The start screen of the phone publishing flow (#244 r4; the 选择照片 of
+ * mockup B): the notes, the tiles and the skip, 原图画质, the toast and the
+ * bottom sheets every phone screen shares (and 发布's chips over photos).
+ * The bar and the bottom bar's frame are phone-screen.module.css's. Every
+ * colour, radius, type size, duration and easing is a token; the mockup's
+ * values were copied from them. Literal px are sizes with no token (the
+ * 44px targets, the 132px tiles); literal numbers are the mockup's line
+ * heights and the toast's layer.
+ */
+
+/* -- body ----------------------------------------------------------------- */
+
+/* The scroller's one child (B `.scroll`): the tiles centre in what is left. */
+.body {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+}
+
+/* The editor's notices and the media notice, inset like the bar. */
+.notes {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  padding: var(--yoyi-space-4)
+    max(var(--yoyi-space-5), env(safe-area-inset-right)) var(--yoyi-space-4)
+    max(var(--yoyi-space-5), env(safe-area-inset-left));
+}
+
+.notes:empty {
+  display: none;
+}
+
+/*
+ * A notice is a line of text over the tiles, never a box (mockup B): its
+ * words, tone and 知道了 stay. The element outranks the `.notice` box of
+ * either module.
+ */
+.notes > p,
+.notes > div {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+/* 正在读取照片…: always mounted (a live region), drawn only with words. */
+.reading {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.reading:not(:empty) {
+  padding: var(--yoyi-space-3)
+    max(var(--yoyi-space-5), env(safe-area-inset-right)) var(--yoyi-space-3)
+    max(var(--yoyi-space-5), env(safe-area-inset-left));
+}
+
+/*
+ * The photo covers a sheet's square thumbnail (B `.shThumb img`: object-fit
+ * cover). EditedImage draws a box of the edited aspect fitted inside; here
+ * the box grows to the shorter side and is centred, so the box keeps the
+ * crop and the rotation it draws.
+ */
+.cover > span[data-orientation] {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  max-width: none;
+  max-height: none;
+  transform: translate(-50%, -50%);
+}
+
+.cover > span[data-orientation="landscape"] {
+  width: auto;
+  height: 100%;
+}
+
+.cover > span[data-orientation="portrait"] {
+  width: 100%;
+  height: auto;
+}
+
+/* Before the size is known, the picture itself covers. */
+.cover > [data-orientation="unknown"] [data-rotation] img {
+  object-fit: cover;
+}
+
+/* One opaque chip over photos (B `.tileChip`), legible in both themes. */
+.tileChip {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 28px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  padding: var(--yoyi-space-2) var(--yoyi-space-4) var(--yoyi-space-2)
+    var(--yoyi-space-3);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-full);
+  font-size: var(--yoyi-type-metadata-size);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.tileChipText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- the start screen's choices (B `.empty`, r4 §3.1) ---------------------- */
+
+.empty {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--yoyi-space-5);
+  padding: var(--yoyi-space-7)
+    max(var(--yoyi-space-5), env(safe-area-inset-right)) var(--yoyi-space-8)
+    max(var(--yoyi-space-5), env(safe-area-inset-left));
+}
+
+/* 选择照片, 拍照 and 专题 share the row in equal columns; alone, a tile takes it. */
+.pickRow {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: var(--yoyi-space-3);
+}
+
+.pickBtn {
+  display: flex;
+  min-height: 132px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-3);
+  padding: 0;
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-surface);
+  border: 0;
+  border-radius: var(--yoyi-radius-lg);
+  font: inherit;
+  font-size: var(--yoyi-type-button-size);
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pickBtn .pickIcon {
+  width: 28px;
+  height: 28px;
+  color: var(--yoyi-color-text-secondary);
+}
+
+.pickBtn:active:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--yoyi-color-background-muted);
+}
+
+/* Off for good (`disabled`), or waiting with focus kept (`aria-disabled`). */
+.pickBtn:disabled,
+.pickBtn:disabled .pickIcon,
+.pickBtn[aria-disabled="true"],
+.pickBtn[aria-disabled="true"] .pickIcon {
+  color: var(--yoyi-color-text-disabled);
+  cursor: not-allowed;
+}
+
+/* 草稿箱 waiting (photos read or held, 专题 creating): off, focus kept. */
+.waitingButton[aria-disabled="true"] {
+  color: var(--yoyi-color-text-disabled);
+  background: var(--yoyi-color-background-muted);
+  cursor: not-allowed;
+}
+
+.pickHint {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  text-align: center;
+}
+
+.skipBtn {
+  min-height: 44px;
+  align-self: center;
+  padding: 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  text-decoration: underline;
+  text-decoration-color: var(--yoyi-color-border-default);
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+
+.pickBtn:focus-visible,
+.skipBtn:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* -- 原图画质: the start screen's bottom bar (B `.selFoot`), 编辑's add sheet */
+
+/* 原图画质: the switch and its words; a tap anywhere on it toggles. */
+.quality {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.qTxt {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.4;
+}
+
+.qLabel {
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 650;
+}
+
+.qHint {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+/* -- toast (B `.toastHost`, `.toast`) -------------------------------------- */
+
+/*
+ * Centred 16px above the bottom bar (its 8px insets around the 44px row);
+ * under the sheets (60, as B).
+ */
+.toastHost {
+  position: absolute;
+  z-index: 60;
+  right: 0;
+  bottom: calc(
+    var(--editor-bottom-safe-area, env(safe-area-inset-bottom)) + 2 *
+      var(--yoyi-space-3) + 44px + var(--yoyi-space-5)
+  );
+  left: 0;
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--yoyi-space-5);
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  max-width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  padding: 0 var(--yoyi-space-5);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border-radius: var(--yoyi-radius-full);
+  font-size: var(--yoyi-type-label-size);
+  pointer-events: auto;
+  animation: rise var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+.toast[data-action] {
+  padding-right: var(--yoyi-space-2);
+}
+
+.toast > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 撤销: the toast's whole height, a 44px target (mockup A `.toast button`). */
+.toast > button {
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: 0 var(--yoyi-space-3);
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.toast > button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Leaving: 撤销 is no longer offered. */
+.toast[data-out] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--yoyi-duration-normal) var(--yoyi-easing-exit);
+}
+
+/* -- bottom sheets (B `.sheetHost`, `.sheet`) ------------------------------- */
+
+/*
+ * The modal <dialog>: the visual viewport, transparent; its children draw.
+ * In the editor it inherits the host's frame (`useVisualViewportFrame` sets
+ * `--editor-viewport-top` and `--editor-viewport-height`), so the on-screen
+ * keyboard shortens it and a sheet stands on the keyboard instead of under
+ * it; anywhere else it is the whole screen.
+ */
+.sheetHost {
+  position: fixed;
+  z-index: var(--yoyi-z-index-overlay);
+  top: var(--editor-viewport-top, 0);
+  right: 0;
+  bottom: auto;
+  left: 0;
+  width: 100%;
+  max-width: none;
+  height: var(--editor-viewport-height, 100%);
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  font-family: var(--yoyi-font-interface);
+}
+
+.sheetHost::backdrop {
+  background: transparent;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--yoyi-color-overlay);
+  animation: fade var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+/*
+ * Rises 4px from the bottom edge, as the shared Sheet does. Its rows keep
+ * clear of a landscape notch: each side inset is the row's own or the safe
+ * area, whichever is wider.
+ */
+.sheet {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  max-height: calc(100% - env(safe-area-inset-top) - var(--yoyi-space-7));
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding: var(--yoyi-space-3) 0
+    calc(
+      var(--editor-bottom-safe-area, env(safe-area-inset-bottom)) +
+        var(--yoyi-space-3)
+    );
+  background: var(--yoyi-color-background-elevated);
+  border-radius: var(--yoyi-radius-lg) var(--yoyi-radius-lg) 0 0;
+  box-shadow: var(--yoyi-shadow-dialog);
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  animation: rise var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+.shHead {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+  padding: var(--yoyi-space-3)
+    max(var(--yoyi-space-6), env(safe-area-inset-right)) var(--yoyi-space-3)
+    max(var(--yoyi-space-6), env(safe-area-inset-left));
+}
+
+.shThumb {
+  position: relative;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  color: var(--yoyi-color-text-tertiary);
+  background: var(--yoyi-color-background-muted);
+  border-radius: var(--yoyi-radius-md);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.shTitle {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  line-height: 1.45;
+}
+
+.shTitle h2 {
+  margin: 0;
+  font-size: var(--yoyi-type-card-title-size);
+  font-weight: 600;
+}
+
+.shTitle small {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+
+.shDesc {
+  margin: 0;
+  padding: 0 max(var(--yoyi-space-6), env(safe-area-inset-right))
+    var(--yoyi-space-3) max(var(--yoyi-space-6), env(safe-area-inset-left));
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.7;
+}
+
+.shList {
+  display: flex;
+  flex-direction: column;
+  padding: var(--yoyi-space-2) 0;
+}
+
+/* One action: icon and words, full width, 52px tall. */
+.shRow {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  gap: var(--yoyi-space-5);
+  padding: 0 max(var(--yoyi-space-6), env(safe-area-inset-right)) 0
+    max(var(--yoyi-space-6), env(safe-area-inset-left));
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: var(--yoyi-type-body-size);
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.shRow .rowIcon {
+  color: var(--yoyi-color-text-secondary);
+}
+
+.shRow:active:not(:disabled) {
+  background: var(--yoyi-color-background-muted);
+}
+
+.shRow:disabled,
+.shRow:disabled .rowIcon {
+  color: var(--yoyi-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.shRow[data-danger],
+.shRow[data-danger] .rowIcon {
+  color: var(--yoyi-color-error);
+}
+
+/* 取消 under a hairline, centred. */
+.shRow[data-cancel] {
+  justify-content: center;
+  margin-top: var(--yoyi-space-2);
+  color: var(--yoyi-color-text-secondary);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+
+.shActions {
+  display: grid;
+  gap: var(--yoyi-space-2);
+  padding: var(--yoyi-space-3)
+    max(var(--yoyi-space-5), env(safe-area-inset-right)) 0
+    max(var(--yoyi-space-5), env(safe-area-inset-left));
+}
+
+/*
+ * 发布's 参考作品 sheet in mockup A's idiom (`.grab`, `.sheetHead`): a 36×5
+ * grab bar (sizes with no token) over the header, which sits flush under it
+ * with 12px below.
+ */
+.sheetHost[data-phone-sheet="references"] .sheet::before {
+  display: block;
+  width: 36px;
+  height: 5px;
+  margin: 0 auto var(--yoyi-space-4);
+  content: "";
+  background: var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-full);
+}
+
+.sheetHost[data-phone-sheet="references"] .shHead {
+  padding: 0 max(var(--yoyi-space-6), env(safe-area-inset-right))
+    var(--yoyi-space-4) max(var(--yoyi-space-6), env(safe-area-inset-left));
+}
+
+/* The remedy: the ink pair, never seal red (B `.inkBtn`). */
+.inkBtn,
+.plainBtn {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-5);
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-size: var(--yoyi-type-button-size);
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.inkBtn {
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  font-weight: 650;
+}
+
+.plainBtn {
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+}
+
+.plainBtn:active {
+  background: var(--yoyi-color-background-muted);
+}
+
+.plainBtn[data-danger] {
+  color: var(--yoyi-color-error);
+}
+
+/* A choice that waits (编辑's back sheet while 存草稿并退出 saves): off, focus kept. */
+.inkBtn[aria-disabled="true"],
+.plainBtn[aria-disabled="true"] {
+  color: var(--yoyi-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.inkBtn[aria-disabled="true"] {
+  background: var(--yoyi-color-background-muted);
+}
+
+/*
+ * 存草稿并退出 waiting for the uploads: off, but its words and progress
+ * stay readable (they are what the author waits on), on two lines.
+ */
+.plainBtn[data-waiting] {
+  padding-block: var(--yoyi-space-2);
+  color: var(--yoyi-color-text-secondary);
+}
+
+.btnLine,
+.btnProgress {
+  display: block;
+}
+
+.btnProgress {
+  font-size: var(--yoyi-type-caption-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.shRow:focus-visible,
+.inkBtn:focus-visible,
+.plainBtn:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* No rising or fading under reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .toast[data-out] {
+    transition: none;
+  }
+
+  .toast,
+  .backdrop,
+  .sheet {
+    animation: none;
+  }
+}

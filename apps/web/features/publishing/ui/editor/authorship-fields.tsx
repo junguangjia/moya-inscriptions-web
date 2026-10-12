@@ -18,7 +18,8 @@ import type {
 import type { EditorTextRule } from "./editor-text";
 import type { WorkAuthorshipKind } from "@moya/contracts";
 
-const kinds: readonly {
+/** The kinds of 作品性质 with their words (the phone 发布 draws them as chips). */
+export const AUTHORSHIP_KINDS: readonly {
   readonly kind: WorkAuthorshipKind;
   readonly label: string;
   readonly description: string;
@@ -36,7 +37,8 @@ const kinds: readonly {
   },
 ];
 
-const referenceInputs: readonly {
+/** The reference fields of 临摹或练习 and 素材分享, in reading order. */
+export const REFERENCE_INPUTS: readonly {
   readonly field: ReferenceField;
   readonly label: string;
   readonly rule: EditorTextRule;
@@ -84,8 +86,9 @@ export const AuthorshipFields = ({
         <span className={styles.hint}>
           {state.authorshipKind === null
             ? "未设置"
-            : (kinds.find((entry) => entry.kind === state.authorshipKind)
-                ?.label ?? "未设置")}
+            : (AUTHORSHIP_KINDS.find(
+                (entry) => entry.kind === state.authorshipKind,
+              )?.label ?? "未设置")}
         </span>
         {state.authorshipKind === null ? null : (
           <button
@@ -106,7 +109,7 @@ export const AuthorshipFields = ({
         )}
       </div>
       <div className={styles.options} ref={options}>
-        {kinds.map((entry) => (
+        {AUTHORSHIP_KINDS.map((entry) => (
           <label className={styles.option} key={entry.kind}>
             <input
               checked={state.authorshipKind === entry.kind}
@@ -125,7 +128,7 @@ export const AuthorshipFields = ({
       {state.authorshipKind === null ||
       state.authorshipKind === "original" ? null : (
         <div className={styles.referenceFields} data-editor-references="">
-          {referenceInputs.map((input) => (
+          {REFERENCE_INPUTS.map((input) => (
             <TextField
               key={input.field}
               error={state.fieldErrors[input.field] ?? null}

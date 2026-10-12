@@ -1,0 +1,81 @@
+/*
+ * The chosen article cover as the 资讯 cards show it (#244): the compact
+ * card's square box and the large card's 16:10 box, both `object-fit: cover`
+ * like discussion-preview.module.css `.newsCard > img`. The body renderer's
+ * own framing is overridden so the preview shows the card's framing.
+ */
+
+.coverPreview {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+
+.coverBoxes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: var(--yoyi-space-3);
+  align-items: start;
+}
+
+.coverBox {
+  display: grid;
+  gap: var(--yoyi-space-1);
+  margin: 0;
+  min-width: 0;
+}
+
+.coverBox figcaption {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  text-align: center;
+}
+
+.coverFrame {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: var(--yoyi-color-background-muted);
+  border-radius: var(--yoyi-radius-md);
+}
+
+.coverFrame[data-shape="square"] {
+  aspect-ratio: 1;
+}
+
+.coverFrame[data-shape="large"] {
+  aspect-ratio: 16 / 10;
+}
+
+/* Whatever box the body renderer draws, the card shows the picture covering
+   its own box, centred; controls of the body renderer stay out of the card. */
+.coverFrame > * {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  aspect-ratio: auto !important;
+  margin: 0 !important;
+}
+
+.coverFrame img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  object-fit: cover !important;
+  transform: none !important;
+  border-radius: 0 !important;
+}
+
+.coverFrame button,
+.coverFrame [data-article-media-control] {
+  display: none !important;
+}
+
+.coverHint {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.7;
+}

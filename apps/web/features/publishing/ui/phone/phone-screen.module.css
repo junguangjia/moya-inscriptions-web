@@ -1,0 +1,183 @@
+/*
+ * The shared chrome of the phone publishing screens (#244, r3). 选择照片 and
+ * 编辑 follow mockup B, 发布 follows mockup A. Both mockups draw the same top
+ * bar (B `.bar`, A `.topbar`), a 52px row with an icon-only Back, a
+ * start-aligned title over a caption line and the actions at the end, with a
+ * hairline that appears only once the content scrolls under it. The bottom
+ * bars differ per screen. Values are tokens. The literal px are sizes with
+ * no token (the 52px row, the 1px hairline).
+ */
+
+/* The positioning box and stacking context of the screen's own layers (toasts, sheets), as the mockups' `.screen`. */
+.screen {
+  position: relative;
+  isolation: isolate;
+}
+
+/*
+ * The top bar. The header keeps `.detailHeader` (every button a 44px round
+ * target) and the editor's `.bar` (text actions, menus). This rule replaces
+ * their sticky position, padding, gap and permanent border, and outranks
+ * both. The top inset clears the status bar, as the host bar did.
+ */
+.screen > .bar {
+  position: relative;
+  z-index: 6;
+  flex: 0 0 auto;
+  min-height: calc(52px + env(safe-area-inset-top));
+  gap: var(--yoyi-space-2);
+  padding: calc(var(--yoyi-space-2) + env(safe-area-inset-top))
+    max(var(--yoyi-space-4), env(safe-area-inset-right)) var(--yoyi-space-2)
+    max(var(--yoyi-space-2), env(safe-area-inset-left));
+  background: var(--yoyi-color-background-page);
+  border-bottom: 0;
+}
+
+/* Mockup A's `.topbar` spaces its items wider than mockup B's `.bar`. */
+.screen[data-editor-screen="publish"] > .bar {
+  gap: var(--yoyi-space-3);
+}
+
+/* The hairline (B `.bar::after`, A `.topbar.lined`), shown by `data-bar-line` and `data-scrolled`. */
+.screen > .bar::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: var(--yoyi-color-border-subtle);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.screen > .bar[data-bar-line="always"]::after,
+.screen > .bar[data-scrolled="true"]::after {
+  opacity: 1;
+}
+
+/* Back and the actions' own buttons darken while pressed (B and A `.iconBtn:active`, B `.textBtn:active`). */
+.screen > .bar > button:active:not(:disabled),
+.screen > .bar > :last-child > button:active:not(:disabled) {
+  background: var(--yoyi-color-background-muted);
+}
+
+/* Touch screens: no hover tint, which a tap would leave behind (both mockups only darken while pressed). */
+@media (hover: none) {
+  .screen > .bar > button:hover:not(:active),
+  .screen > .bar > :last-child > button:hover:not(:active) {
+    background: transparent;
+  }
+}
+
+/*
+ * The bar title as a heading a step change can focus: `.barTitle strong`
+ * (editor.module.css) on an h2, its margin reset.
+ */
+.heading {
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--yoyi-type-button-size);
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The editor's focus ring (editor.module.css `.textButton:focus-visible`). */
+.heading:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* The edit screen's 「3 / 6」 keeps its digits still and a little open (B `.barCount`). */
+.barCounter {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* The caption line under the title (B `.sub`, A `.barTitle small`). */
+.caption {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Both mockups' scrollers (B `.scroll`, A `.pubScroll`): no scrollbar, no sideways scroll. */
+.scroller {
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.scroller::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * 下一步 (B `.textBtn.next`): the editor's outlined `.textButton`, bolder and
+ * wider. `.screen button.next` outranks the bar's `.bar .textButton`.
+ */
+.screen button.next {
+  padding: 0 var(--yoyi-space-6);
+  font-weight: 650;
+  transition: background-color var(--yoyi-duration-fast)
+    var(--yoyi-easing-standard);
+}
+
+.screen button.next:active:not(:disabled) {
+  background: var(--yoyi-color-background-muted);
+}
+
+/*
+ * Hidden at once while typing. `.stepFooter` sets a display that would beat
+ * the hidden attribute (as `.tabs[hidden]` in message-center.module.css).
+ */
+.footer[hidden] {
+  display: none;
+}
+
+/*
+ * The 选择照片 bottom bar (B `.foot.selFoot`): one packed row. The switch at
+ * its start brings its own target, so the start inset is the narrow one.
+ */
+.toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-3)
+    max(var(--yoyi-space-5), env(safe-area-inset-right))
+    calc(var(--yoyi-space-3) + var(--editor-bottom-safe-area))
+    max(var(--yoyi-space-2), env(safe-area-inset-left));
+  background: var(--yoyi-color-background-page);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+
+/*
+ * The 发布 bottom bar (A `.pubFoot`): the reason line above one row of
+ * actions, no hairline, and the home indicator's inset alone at the bottom
+ * (at least the 8px gap). Compound, so it outranks `.stepFooter` whatever
+ * order the two modules load in.
+ */
+.footer.stepFooterStacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--yoyi-space-3);
+  padding-bottom: max(var(--yoyi-space-3), var(--editor-bottom-safe-area));
+  border-top: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen > .bar::after,
+  .screen button.next {
+    transition: none;
+  }
+}

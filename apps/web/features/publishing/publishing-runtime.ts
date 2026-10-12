@@ -42,6 +42,7 @@ import type {
   UploadManagerSnapshot,
   UploadTimers,
   UploadCheckpoint,
+  UploadItemView,
 } from "./upload-manager";
 import type { ExternalStore } from "./upload-manager-store";
 import type { TransferPort } from "./uppy-transfer";
@@ -156,6 +157,41 @@ export interface StagingView {
   /** Files still being identified. */
   readonly identifying: number;
 }
+
+/**
+ * What keeps `saveNow` from saving the album now: a saved draft holds only
+ * bytes the account has received (derivatives may still process). Null when
+ * nothing does.
+ */
+export interface MediaSaveHold {
+  /** Album items whose bytes the account has (every component received, or ready there). */
+  readonly received: number;
+  /** Album items; a pick still being read joins once it is confirmed. */
+  readonly total: number;
+  /** A pick is still being read or waits in staging. */
+  readonly reading: boolean;
+  /**
+   * Album items that will not get there by waiting: a failure, a choice,
+   * a pause (Continue is explicit), a missing file. Empty while every item
+   * still missing is on its way.
+   */
+  readonly blocked: readonly string[];
+}
+
+/** An upload still on its way to the account by itself. */
+const ON_ITS_WAY: ReadonlySet<UploadItemView["phase"]> = new Set([
+  "waiting",
+  "preprocessing",
+  "registering",
+  "queued",
+  "uploading",
+  "uploaded",
+  "processing",
+]);
+
+const STOPPED_COMPONENT: ReadonlySet<
+  UploadItemView["components"][number]["phase"]
+> = new Set(["failed", "paused", "missing_local", "cancelled"]);
 
 export interface RuntimeSnapshot {
   readonly accountId: string | null;
@@ -734,29 +770,59 @@ export class PublishingRuntime {
     this.publish();
   }
 
+  /**
+   * What keeps `saveNow` from saving the album's media now (`MediaSaveHold`),
+   * or null when nothing does: the rule `saveNow` itself applies, so an
+   * editor can wait for exactly that.
+   */
+  mediaSaveHold(): MediaSaveHold | null {
+    const account = this.current();
+    const session = account?.session;
+    if (!account || !session || session.closed) return null;
+    // A saved draft must contain complete uploaded bytes. Derivatives may still
+    // process, but another device must not depend on this tab's local files.
+    const snapshot = account.manager.getSnapshot();
+    const uploads = new Map(snapshot.items.map((item) => [item.key, item]));
+    const items = this.draftItems();
+    const blocked: string[] = [];
+    let received = 0;
+    for (const item of items) {
+      const upload = uploads.get(item.key);
+      if (
+        (item.itemId && upload?.serverItem?.state === "ready") ||
+        (item.itemId !== null &&
+          upload !== undefined &&
+          upload.components.length > 0 &&
+          upload.components.every(
+            (component) => component.phase === "received",
+          ))
+      ) {
+        received += 1;
+        continue;
+      }
+      // A paused manager resumes only on the explicit Continue.
+      const onItsWay =
+        upload !== undefined &&
+        snapshot.status === "active" &&
+        ON_ITS_WAY.has(upload.phase) &&
+        !upload.components.some((component) =>
+          STOPPED_COMPONENT.has(component.phase),
+        );
+      if (!onItsWay) blocked.push(item.key);
+    }
+    const reading =
+      session.pendingSelections.size > 0 ||
+      (account.staging?.entries.length ?? 0) > 0;
+    if (!reading && received === items.length) return null;
+    return { received, total: items.length, reading, blocked };
+  }
+
   async saveNow(): Promise<void> {
     const account = this.current();
     const session = account?.session;
     if (!account || !session || session.closed || !session.autosave) return;
     if (session.submitting) throw new Error("正在提交作品，请等待结果");
-    // A saved draft must contain complete uploaded bytes. Derivatives may still
-    // process, but another device must not depend on this tab's local files.
-    if (
-      session.pendingSelections.size > 0 ||
-      account.staging?.entries.length ||
-      this.draftItems().some((item) => {
-        const upload = account.manager
-          .getSnapshot()
-          .items.find((entry) => entry.key === item.key);
-        if (item.itemId && upload?.serverItem?.state === "ready") return false;
-        return (
-          item.itemId === null ||
-          !upload ||
-          upload.components.length === 0 ||
-          upload.components.some((component) => component.phase !== "received")
-        );
-      })
-    )
+    if (this.mediaSaveHold() !== null)
       throw new Error("图片还未准备好，请完成上传或移除失败项后保存草稿");
     const content = this.contentWithItems(
       account,

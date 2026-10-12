@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -21,6 +21,7 @@ const { crop, frame } = vi.hoisted(() => ({
       ) => void;
       onCropChange: (position: { x: number; y: number }) => void;
       onZoomChange?: (zoom: number) => void;
+      zoom: number;
     },
   },
   frame: {
@@ -40,10 +41,16 @@ vi.mock("./edited-frame", () => ({
 
 import { createPreviewCache } from "./bounded-preview";
 import { CoverCropDialog } from "./cover-crop-dialog";
+import { CropWorkspace, startCrop } from "./crop-workspace";
+import { FeedWindowOverlay } from "./feed-window-overlay";
 import { MediaEditDialog } from "./media-edit-dialog";
+import { cropFromPercentages, percentagesFromCrop } from "./media-geometry";
 import { useBoundedPreview } from "./media-preview";
+// @ts-expect-error -- Vite serves the stylesheet's own text for a ?raw import.
+import mediaCss from "./media.module.css?raw";
 
 import type { PreviewEnvironment } from "./bounded-preview";
+import type { CropSession } from "./crop-workspace";
 import type { BoundedPreviewState } from "./media-preview";
 import type { CoverDraft, EditDraft } from "./media-ui-store";
 import type { Root } from "react-dom/client";
@@ -111,6 +118,7 @@ describe("MediaEditDialog", () => {
         <MediaEditDialog
           blob={null}
           edit={{ rotation: 0, crop: null }}
+          itemKey="item"
           itemNumber={2}
           kind="live"
           onApply={onApply}
@@ -138,6 +146,7 @@ describe("MediaEditDialog", () => {
         <MediaEditDialog
           blob={null}
           edit={{ rotation: 0, crop: stored }}
+          itemKey="item"
           itemNumber={1}
           kind="static"
           knownSize={{ width: 4000, height: 3000 }}
@@ -170,6 +179,147 @@ describe("MediaEditDialog", () => {
   });
 });
 
+describe("MediaEditDialog zoom input (#244)", () => {
+  it("offers no zoom slider; the crop surface zooms by gesture and keys", async () => {
+    await act(async () =>
+      root.render(
+        <MediaEditDialog
+          blob={null}
+          edit={{ rotation: 0, crop: null }}
+          itemKey="item"
+          itemNumber={1}
+          kind="static"
+          knownSize={{ width: 4032, height: 3024 }}
+          onApply={() => undefined}
+          onClose={() => undefined}
+          src="/api/community/publishing/media/example/display/base"
+        />,
+      ),
+    );
+    expect(document.querySelector('input[type="range"]')).toBe(null);
+    expect(
+      [...document.querySelectorAll("label")].some(
+        (label) => label.textContent?.trim() === "缩放",
+      ),
+    ).toBe(false);
+    expect(document.body.textContent).toContain("双指缩放");
+    expect((crop.props as { maxZoom?: number }).maxZoom).toBe(3);
+    // One 还原: the dialog's, which also resets the rotation and preset.
+    expect(
+      [...document.querySelectorAll("button")].filter(
+        (button) => button.textContent === "还原",
+      ),
+    ).toHaveLength(1);
+  });
+});
+
+describe("MediaEditDialog feed window (#244)", () => {
+  const renderWithStage = async (
+    feedStage: { first: boolean; stageRatio: number | null } | null,
+    edit: { rotation: 0 | 90; crop: null } = { rotation: 0, crop: null },
+  ) =>
+    act(async () =>
+      root.render(
+        <MediaEditDialog
+          blob={null}
+          edit={edit}
+          feedStage={feedStage}
+          itemKey="item"
+          itemNumber={feedStage?.first === false ? 2 : 1}
+          kind="static"
+          knownSize={{ width: 4000, height: 3000 }}
+          onApply={() => undefined}
+          onClose={() => undefined}
+          src="/api/community/publishing/media/example/display/base"
+        />,
+      ),
+    );
+
+  it("draws the feed window for the first item and says what the stage shows", async () => {
+    // A turned 4:3 is a 3:4 frame: the 4:5 stage cuts 3% above and below.
+    await renderWithStage(
+      { first: true, stageRatio: null },
+      { rotation: 90, crop: null },
+    );
+    const overlay = () =>
+      document.querySelector<HTMLElement>("[data-feed-window]")!;
+    expect(overlay().getAttribute("data-feed-fit")).toBe("cover");
+    expect(overlay().style.getPropertyValue("--feed-band")).toBe("3.125%");
+    expect(overlay().hidden).toBe(true);
+    expect(document.body.textContent).toContain("上下各裁去 3%");
+    expect(document.body.textContent).toContain("由第 1 张决定");
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[data-editor-switch="feed-window"] [role="switch"]',
+    )!;
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    // The cropper lays the crop box out: the overlay takes its size.
+    await act(async () =>
+      (
+        crop.props as unknown as {
+          onCropSizeChange: (size: { width: number; height: number }) => void;
+        }
+      ).onCropSizeChange({ width: 240, height: 320 }),
+    );
+    expect(overlay().hidden).toBe(false);
+    expect(overlay().style.width).toBe("240px");
+    expect(overlay().querySelectorAll("[data-edge]")).toHaveLength(2);
+    await click(radio("4:5"));
+    expect(overlay().getAttribute("data-feed-fit")).toBe("fill");
+    expect(document.body.textContent).toContain("动态满幅显示");
+    await click(radio("4:3"));
+    expect(overlay().getAttribute("data-feed-fit")).toBe("contain");
+    expect(document.body.textContent).toContain("整张显示，上下留白");
+    await click(toggle);
+    expect(document.querySelector("[data-feed-window]")).toBe(null);
+  });
+
+  it("uses the first item's stage for later items and nothing without a stage", async () => {
+    await renderWithStage({ first: false, stageRatio: 1.25 });
+    // A 4:3 frame on a 4:5 stage is shown whole.
+    expect(
+      document
+        .querySelector("[data-feed-window]")!
+        .getAttribute("data-feed-fit"),
+    ).toBe("contain");
+    expect(document.body.textContent).toContain("（画幅由第 1 张决定）");
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await renderWithStage({ first: false, stageRatio: null });
+    expect(document.querySelector("[data-feed-window]")).toBe(null);
+    expect(document.querySelector('[data-editor-switch="feed-window"]')).toBe(
+      null,
+    );
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await renderWithStage(null);
+    expect(document.querySelector("[data-feed-window]")).toBe(null);
+  });
+});
+
+describe("FeedWindowOverlay (#244)", () => {
+  it("dims the cut bands less on a subtle surface", async () => {
+    const cover = { fit: "cover", height: 0.8, stageRatio: 1.25 } as const;
+    const size = { width: 240, height: 320 };
+    const overlay = () =>
+      document.querySelector<HTMLElement>("[data-feed-window]")!;
+    await act(async () =>
+      root.render(<FeedWindowOverlay size={size} window={cover} />),
+    );
+    expect(overlay().hasAttribute("data-subtle")).toBe(false);
+    await act(async () =>
+      root.render(<FeedWindowOverlay size={size} subtle window={cover} />),
+    );
+    expect(overlay().getAttribute("data-subtle")).toBe("true");
+    expect(overlay().querySelectorAll("[data-edge]")).toHaveLength(2);
+    expect(mediaCss).toMatch(
+      /\.feedBand \{[^}]*var\(--yoyi-color-ink-black\) 45%/,
+    );
+    expect(mediaCss).toMatch(
+      /\.feedOverlay\[data-subtle="true"\] \.feedBand \{[^}]*var\(--yoyi-color-ink-black\) 25%/,
+    );
+  });
+});
+
 describe("MediaEditDialog crop intent (D2)", () => {
   /** What react-easy-crop reports by itself for a turned 4:3 image on a wide layout. */
   const mountReport = async () => {
@@ -188,6 +338,7 @@ describe("MediaEditDialog crop intent (D2)", () => {
         <MediaEditDialog
           blob={null}
           edit={{ rotation: 0, crop: null }}
+          itemKey="item"
           itemNumber={3}
           kind="static"
           knownSize={{ width: 4032, height: 3024 }}
@@ -239,6 +390,90 @@ describe("MediaEditDialog crop intent (D2)", () => {
   });
 });
 
+describe("CropWorkspace across items (#244)", () => {
+  const stored = {
+    a: { x: 0.1, y: 0, width: 0.8, height: 1 },
+    b: { x: 0, y: 0.25, width: 1, height: 0.5 },
+  };
+  let sessions: Record<"a" | "b", CropSession>;
+  /** A stage that stays mounted and shows one item at a time. */
+  const Stage = ({
+    itemKey,
+    image,
+  }: {
+    readonly itemKey: "a" | "b";
+    readonly image: string;
+  }) => {
+    const [all, setAll] = useState(() => ({
+      a: startCrop("custom", stored.a),
+      b: startCrop("custom", stored.b),
+    }));
+    sessions = all;
+    return (
+      <CropWorkspace
+        image={image}
+        itemKey={itemKey}
+        label="拖动图片调整裁剪位置"
+        onSession={(change) =>
+          setAll((current) => ({
+            ...current,
+            [itemKey]:
+              typeof change === "function" ? change(current[itemKey]) : change,
+          }))
+        }
+        ratio={1}
+        rotation={0}
+        session={all[itemKey]}
+      />
+    );
+  };
+  const cropper = () => container.querySelector("[data-test-cropper]");
+
+  it("starts another item on a surface of its own, from that item's crop", async () => {
+    await act(async () => root.render(<Stage image="blob:a" itemKey="a" />));
+    const first = cropper();
+    expect(crop.props!.initialCroppedAreaPercentages).toEqual(
+      percentagesFromCrop(stored.a),
+    );
+    await act(async () => crop.props!.onZoomChange!(1.5));
+    expect(sessions.a.touched).toBe(true);
+
+    await act(async () => root.render(<Stage image="blob:b" itemKey="b" />));
+    expect(cropper()).not.toBe(first);
+    expect(crop.props!.initialCroppedAreaPercentages).toEqual(
+      percentagesFromCrop(stored.b),
+    );
+    expect(crop.props!.zoom).toBe(1);
+    // Neither resumed from the other item nor touched by the switch.
+    expect(sessions.b).toEqual(startCrop("custom", stored.b));
+    expect(sessions.a.touched).toBe(true);
+  });
+
+  it("keeps the same item's crop when its source changes", async () => {
+    await act(async () => root.render(<Stage image="blob:a" itemKey="a" />));
+    const first = cropper();
+    const moved = { x: 20, y: 10, width: 60, height: 60 };
+    await act(async () => {
+      crop.props!.onZoomChange!(1.4);
+      crop.props!.onCropAreaChange(moved, moved);
+    });
+    await act(async () =>
+      root.render(
+        <Stage
+          image="/api/community/publishing/media/example/display/base"
+          itemKey="a"
+        />,
+      ),
+    );
+    expect(cropper()).toBe(first);
+    expect(crop.props!.zoom).toBe(1.4);
+    expect(crop.props!.initialCroppedAreaPercentages).toEqual(moved);
+    expect(sessions.a.seed).toEqual(
+      percentagesFromCrop(cropFromPercentages(moved)!),
+    );
+  });
+});
+
 describe("CoverCropDialog", () => {
   it("keeps the full frame as the composition when the author leaves 原始比例 alone", async () => {
     frame.render = vi.fn(async () => ({
@@ -253,6 +488,7 @@ describe("CoverCropDialog", () => {
           blob={null}
           coverCrop={null}
           edit={{ rotation: 90, crop: null }}
+          itemKey="item"
           itemNumber={1}
           onApply={onApply}
           onClose={() => undefined}
@@ -287,6 +523,7 @@ describe("CoverCropDialog", () => {
           blob={null}
           coverCrop={null}
           edit={edit}
+          itemKey="item"
           itemNumber={3}
           onApply={onApply}
           onClose={() => undefined}
@@ -336,6 +573,7 @@ describe("CoverCropDialog", () => {
           blob={null}
           coverCrop={null}
           edit={{ rotation: 0, crop: null }}
+          itemKey="item"
           itemNumber={1}
           onApply={() => undefined}
           onClose={() => undefined}
@@ -354,6 +592,7 @@ describe("unfinished dialog work", () => {
     const props = {
       blob: null,
       edit: { rotation: 0 as const, crop: null },
+      itemKey: "item",
       itemNumber: 1,
       kind: "static" as const,
       knownSize: { width: 4000, height: 3000 },
@@ -409,6 +648,7 @@ describe("unfinished dialog work", () => {
           blob={null}
           edit={{ rotation: 0, crop: null }}
           initialDraft={stale}
+          itemKey="item"
           itemNumber={1}
           kind="static"
           onApply={onApply}
@@ -432,6 +672,7 @@ describe("unfinished dialog work", () => {
         <MediaEditDialog
           blob={null}
           edit={{ rotation: 0, crop: stored }}
+          itemKey="item"
           itemNumber={1}
           kind="static"
           knownSize={{ width: 4000, height: 3000 }}
@@ -468,6 +709,7 @@ describe("unfinished dialog work", () => {
           blob={null}
           coverCrop={composition}
           edit={{ rotation: 0, crop: null }}
+          itemKey="item"
           itemNumber={1}
           onApply={onCover}
           onClose={closeCover}
@@ -496,6 +738,7 @@ describe("unfinished dialog work", () => {
           blob={null}
           derivativeExpected={false}
           edit={{ rotation: 0, crop: null }}
+          itemKey="item"
           itemNumber={1}
           kind="static"
           onApply={() => undefined}

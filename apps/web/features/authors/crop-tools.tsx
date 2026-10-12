@@ -5,7 +5,8 @@ import styles from "./crop-tools.module.css";
 
 /**
  * The row under a crop surface: 还原 (the publishing crop dialog's word and
- * pill) and the gesture hint. Shared by the cover and avatar editors.
+ * pill) and the gesture hint. Shared by the cover and avatar editors; a
+ * dialog with its own 还原 (rotation and preset too) renders the hint alone.
  */
 export const CropTools = ({
   hintId,
@@ -13,23 +14,28 @@ export const CropTools = ({
   pristine,
   locked,
   onReset,
+  reset = true,
 }: {
   hintId: string;
   coarse: boolean;
   pristine: boolean;
   locked: boolean;
   onReset: () => void;
+  /** Show the 还原 pill (default); false leaves only the hint. */
+  reset?: boolean;
 }) => (
   <div className={media.dialogRow}>
-    <button
-      type="button"
-      className={`${media.actionButton} ${styles.reset}`}
-      disabled={locked}
-      aria-disabled={pristine}
-      onClick={onReset}
-    >
-      还原
-    </button>
+    {reset && (
+      <button
+        type="button"
+        className={`${media.actionButton} ${styles.reset}`}
+        disabled={locked}
+        aria-disabled={pristine}
+        onClick={onReset}
+      >
+        还原
+      </button>
+    )}
     <p id={hintId} className={`${media.dialogNote} ${styles.hint}`}>
       {cropHint(coarse)}
     </p>

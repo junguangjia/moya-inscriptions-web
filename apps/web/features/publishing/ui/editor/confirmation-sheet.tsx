@@ -34,6 +34,46 @@ const excerptOf = (body: string): string => {
     : `${points.slice(0, EXCERPT_POINTS).join("").trimEnd()}…`;
 };
 
+/** Nothing to submit: no title, no body text and no image. */
+const isEmptyConfirmation = (
+  state: Pick<EditorSessionState, "title" | "body" | "items">,
+): boolean =>
+  checkEditorText(state.title, titleRule).value === "" &&
+  excerptOf(state.body) === "" &&
+  state.items.length === 0;
+
+const isBusy = (submission: SubmissionState, resolving: boolean): boolean =>
+  resolving ||
+  submission.status === "submitting" ||
+  submission.status === "reconciling" ||
+  submission.status === "confirmed";
+
+export interface ConfirmationGate {
+  readonly state: Pick<EditorSessionState, "title" | "body" | "items">;
+  readonly readiness: Readiness;
+  readonly issues: readonly FieldCheck[];
+  readonly submission: SubmissionState;
+  readonly resolving?: boolean;
+}
+
+/**
+ * Whether 发布 (保存更新) is disabled now. The sheet's own button uses it; a
+ * primary action drawn elsewhere (a sticky bar) must follow the same rule.
+ */
+export const confirmationBlocked = ({
+  state,
+  readiness,
+  issues,
+  submission,
+  resolving = false,
+}: ConfirmationGate): boolean =>
+  isEmptyConfirmation(state) ||
+  readiness.blocking > 0 ||
+  !readiness.confirmed ||
+  issues.length > 0 ||
+  isBusy(submission, resolving) ||
+  submission.status === "unconfirmed";
+
 export interface ConfirmationSheetProps {
   readonly state: EditorSessionState;
   readonly readiness: Readiness;
@@ -49,6 +89,15 @@ export interface ConfirmationSheetProps {
   readonly onGoToField: (field: EditorField) => void;
   readonly onCheckAgain: () => void;
   readonly onRetry: () => void;
+  /** "hidden" leaves out the summary card (a screen that shows the work itself). */
+  readonly summary?: "card" | "hidden";
+  /** "hidden" leaves out 发布 for a primary action drawn elsewhere. */
+  readonly primary?: "inline" | "hidden";
+  /**
+   * A photo needs the author and sits a screen away (the phone 发布): the
+   * blocking readiness line ends in 前往处理, which goes to it.
+   */
+  readonly onResolveMedia?: (() => void) | undefined;
 }
 
 /**
@@ -73,23 +122,23 @@ export const ConfirmationSheet = forwardRef<
     onGoToField,
     onCheckAgain,
     onRetry,
+    summary = "card",
+    primary = "inline",
+    onResolveMedia,
   },
   primaryRef,
 ) {
   const title = checkEditorText(state.title, titleRule).value;
   const excerpt = excerptOf(state.body);
-  const empty = title === "" && excerpt === "" && state.items.length === 0;
-  const busy =
-    resolving ||
-    submission.status === "submitting" ||
-    submission.status === "reconciling" ||
-    submission.status === "confirmed";
-  const blocked =
-    empty ||
-    readiness.blocking > 0 ||
-    !readiness.confirmed ||
-    issues.length > 0 ||
-    busy;
+  const empty = isEmptyConfirmation(state);
+  const busy = isBusy(submission, resolving);
+  const blocked = confirmationBlocked({
+    state,
+    readiness,
+    issues,
+    submission,
+    resolving,
+  });
   const primaryLabel = state.kind === "edit" ? "保存更新" : "发布";
   const recommendation = recommendationText(state);
   const fieldErrors = Object.entries(state.fieldErrors).filter(
@@ -121,53 +170,57 @@ export const ConfirmationSheet = forwardRef<
       className={styles.sheet}
       data-editor-confirmation=""
     >
-      <div className={styles.summary}>
-        {cover !== null ? (
-          <div className={styles.summaryCover} data-editor-summary="cover">
-            <img alt="" src={cover.src} />
+      {summary === "hidden" ? null : (
+        <div className={styles.summary}>
+          {cover !== null ? (
+            <div className={styles.summaryCover} data-editor-summary="cover">
+              <img alt="" src={cover.src} />
+            </div>
+          ) : excerpt !== "" ? (
+            <p className={styles.summaryText} data-editor-summary="text">
+              {excerpt}
+            </p>
+          ) : (
+            <div className={styles.summaryCover} data-editor-summary="empty" />
+          )}
+          <div className={styles.summaryBody}>
+            <h3
+              className={styles.summaryTitle}
+              data-unnamed={title === "" ? "" : undefined}
+            >
+              {title === "" ? UNNAMED_WORK : title}
+            </h3>
+            <dl className={styles.facts}>
+              <div>
+                <dt>可见范围</dt>
+                <dd data-editor-summary-visibility={state.visibility}>
+                  {visibilityLabels[state.visibility]}
+                </dd>
+              </div>
+              <div>
+                <dt>作品性质</dt>
+                <dd
+                  data-editor-summary-authorship={
+                    state.authorshipKind ?? "unset"
+                  }
+                >
+                  {state.authorshipKind === null
+                    ? AUTHORSHIP_UNSET
+                    : authorshipLabels[state.authorshipKind]}
+                </dd>
+              </div>
+              <div>
+                <dt>图片</dt>
+                <dd>
+                  {state.items.length === 0
+                    ? "无，将以文字展示"
+                    : `${state.items.length} 项`}
+                </dd>
+              </div>
+            </dl>
           </div>
-        ) : excerpt !== "" ? (
-          <p className={styles.summaryText} data-editor-summary="text">
-            {excerpt}
-          </p>
-        ) : (
-          <div className={styles.summaryCover} data-editor-summary="empty" />
-        )}
-        <div className={styles.summaryBody}>
-          <h3
-            className={styles.summaryTitle}
-            data-unnamed={title === "" ? "" : undefined}
-          >
-            {title === "" ? UNNAMED_WORK : title}
-          </h3>
-          <dl className={styles.facts}>
-            <div>
-              <dt>可见范围</dt>
-              <dd data-editor-summary-visibility={state.visibility}>
-                {visibilityLabels[state.visibility]}
-              </dd>
-            </div>
-            <div>
-              <dt>作品性质</dt>
-              <dd
-                data-editor-summary-authorship={state.authorshipKind ?? "unset"}
-              >
-                {state.authorshipKind === null
-                  ? AUTHORSHIP_UNSET
-                  : authorshipLabels[state.authorshipKind]}
-              </dd>
-            </div>
-            <div>
-              <dt>图片</dt>
-              <dd>
-                {state.items.length === 0
-                  ? "无，将以文字展示"
-                  : `${state.items.length} 项`}
-              </dd>
-            </div>
-          </dl>
         </div>
-      </div>
+      )}
 
       {state.items.length === 0 ? null : (
         <p
@@ -182,6 +235,16 @@ export const ConfirmationSheet = forwardRef<
             : readiness.confirmed
               ? `全部 ${readiness.ready} 项已就绪`
               : "正在确认图片状态…"}
+          {readiness.blocking > 0 && onResolveMedia !== undefined ? (
+            <button
+              className={styles.inlineAction}
+              data-editor-resolve-media=""
+              onClick={onResolveMedia}
+              type="button"
+            >
+              前往处理
+            </button>
+          ) : null}
         </p>
       )}
       {unconfirmedFiles > 0 ? (
@@ -264,19 +327,21 @@ export const ConfirmationSheet = forwardRef<
         {status}
       </p>
 
-      <div className={styles.sheetActions}>
-        <button
-          ref={primaryRef}
-          aria-busy={busy || undefined}
-          className={styles.primaryButton}
-          data-editor-submit=""
-          disabled={blocked || submission.status === "unconfirmed"}
-          onClick={onSubmit}
-          type="button"
-        >
-          {primaryLabel}
-        </button>
-      </div>
+      {primary === "hidden" ? null : (
+        <div className={styles.sheetActions}>
+          <button
+            ref={primaryRef}
+            aria-busy={busy || undefined}
+            className={styles.primaryButton}
+            data-editor-submit=""
+            disabled={blocked}
+            onClick={onSubmit}
+            type="button"
+          >
+            {primaryLabel}
+          </button>
+        </div>
+      )}
     </section>
   );
 });

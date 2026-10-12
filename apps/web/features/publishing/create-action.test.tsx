@@ -3,15 +3,27 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { author, shell, progress, upload } = vi.hoisted(() => ({
+const { author, shell, progress, upload, account, client } = vi.hoisted(() => ({
   author: {
     checking: false,
+    sessionError: false,
     viewer: null as { id: string } | null,
     signInHref: "/dev/community",
+    notify: vi.fn<(text: string) => void>(),
+    cache: { set: vi.fn<(key: string, value: unknown) => void>() },
   },
-  shell: { openEditor: vi.fn(), openProfile: vi.fn() },
+  shell: {
+    openEditor: vi.fn(),
+    openProfile: vi.fn(),
+    platform: "pc" as PresentationPlatform,
+  },
   progress: { current: null as unknown },
   upload: { current: null as unknown },
+  account: { epoch: 1 },
+  client: {
+    create:
+      vi.fn<(command: CreateArticleDraftCommand) => Promise<ArticleDraft>>(),
+  },
 }));
 vi.mock("../authors/author-context", () => ({ useAuthors: () => author }));
 vi.mock("../product-shell/product-shell", () => ({
@@ -22,12 +34,40 @@ vi.mock("./publishing-provider", () => ({
   useGlobalUploadProgress: () => progress.current,
   useUploadSession: () => upload.current,
 }));
+// The account fence the 专题文章 creation checks: the signed-in viewer.
+vi.mock(
+  "../../lib/public-api/author-community-client",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../lib/public-api/author-community-client")
+    >()),
+    authorClient: {
+      account: () => author.viewer?.id ?? null,
+      accountEpoch: () => account.epoch,
+    },
+  }),
+);
+vi.mock(
+  "../../lib/public-api/article-authoring-client",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../lib/public-api/article-authoring-client")
+    >()),
+    articleAuthoringClient: client,
+  }),
+);
 
+import { ArticleRequestError } from "../../lib/public-api/article-authoring-client";
+import { ArticleAvailability } from "../editorial-content/article-authoring/article-availability";
+import { ArticleCreateEntry } from "../editorial-content/article-authoring/article-create-entry";
 import { CreateWorkAction, createActionRing } from "./create-action";
 import { PublishingEntryProvider } from "./publishing-entry";
 
+import type { ArticleDraft, CreateArticleDraftCommand } from "@moya/contracts";
+import type { ComponentProps } from "react";
 import type { Root } from "react-dom/client";
 import type { EditorTarget } from "../product-shell/product-history";
+import type { PresentationPlatform } from "../shell/device-platform";
 import type { useGlobalUploadProgress } from "./publishing-provider";
 import type { EditorSessionView } from "./publishing-runtime";
 import type {
@@ -131,7 +171,10 @@ const idle: Progress = {
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 const roots: Root[] = [];
-const render = (withProvider = true) => {
+const render = (
+  withProvider = true,
+  props: ComponentProps<typeof CreateWorkAction> = {},
+) => {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -140,10 +183,10 @@ const render = (withProvider = true) => {
     root.render(
       withProvider ? (
         <PublishingEntryProvider>
-          <CreateWorkAction />
+          <CreateWorkAction {...props} />
         </PublishingEntryProvider>
       ) : (
-        <CreateWorkAction />
+        <CreateWorkAction {...props} />
       ),
     ),
   );
@@ -174,8 +217,12 @@ const noSession: UploadSessionDouble = {
 beforeEach(() => {
   author.checking = false;
   author.viewer = null;
+  shell.platform = "pc";
+  // The shell reports whether the editor opened.
+  shell.openEditor.mockReturnValue(true);
   progress.current = idle;
   upload.current = noSession;
+  account.epoch = 1;
 });
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
@@ -372,6 +419,334 @@ describe("CreateWorkAction", () => {
       { type: "new" },
       button,
     );
+  });
+});
+
+const OWNER = `user-${"a".repeat(32)}`;
+const ARTICLE_ID = `article-${"e".repeat(32)}`;
+
+/** The 发布内容 composition (articles enabled unless said otherwise). */
+const renderEntry = (articles = true) => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() =>
+    root.render(
+      <PublishingEntryProvider>
+        <ArticleAvailability enabled={articles}>
+          <ArticleCreateEntry />
+        </ArticleAvailability>
+      </PublishingEntryProvider>,
+    ),
+  );
+  const plus = container.querySelector<HTMLButtonElement>(
+    "[data-create-work-action]",
+  );
+  if (plus === null) throw new Error("Missing create action");
+  return { container, plus };
+};
+/** The 发布内容 dialog's choices, in order. */
+const choices = () =>
+  [...document.querySelectorAll<HTMLButtonElement>("dialog button")].map(
+    (button) => button.textContent,
+  );
+/** One of the open 发布内容 dialog's choices, by its label. */
+const choice = (label: string) => {
+  const found = [
+    ...document.querySelectorAll<HTMLButtonElement>("dialog button"),
+  ].find((button) => button.textContent === label);
+  if (found === undefined) throw new Error(`Missing ${label} choice`);
+  return found;
+};
+/** Lets a create's answer reach the dialog. */
+const flushAnswer = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+describe("the dock + by layout (#244 r4)", () => {
+  it("opens the editor straight on its start screen on a phone with articles", () => {
+    author.viewer = { id: OWNER };
+    shell.platform = "phone";
+    const click = vi
+      .spyOn(HTMLInputElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    try {
+      const { container, plus } = renderEntry();
+      expect(plus.getAttribute("aria-label")).toBe("发布内容");
+      act(() => plus.click());
+      expect(shell.openEditor).toHaveBeenCalledExactlyOnceWith(
+        { type: "new" },
+        plus,
+      );
+      expect(document.querySelector("dialog")).toBeNull();
+      // No picker opens from the dock: the start screen's 选择照片 does.
+      expect(click).not.toHaveBeenCalled();
+      expect(container.querySelector('input[type="file"]')).toBeNull();
+    } finally {
+      click.mockRestore();
+    }
+  });
+
+  it("keeps the 发布内容 dialog on the desktop layout, whose 作品 opens a new work", () => {
+    author.viewer = { id: OWNER };
+    // jsdom's 1024px window makes a tablet the wide, desktop editor.
+    for (const platform of ["pc", "tablet"] as const) {
+      shell.platform = platform;
+      shell.openEditor.mockClear();
+      const { plus } = renderEntry();
+      act(() => plus.click());
+      expect(shell.openEditor).not.toHaveBeenCalled();
+      expect(document.querySelector("dialog h2")?.textContent).toBe("发布内容");
+      expect(choices()).toEqual(["作品", "专题文章", "草稿箱"]);
+      act(() => choice("作品").click());
+      expect(document.querySelector("dialog")).toBeNull();
+      expect(shell.openEditor).toHaveBeenCalledExactlyOnceWith(
+        { type: "new" },
+        plus,
+      );
+    }
+  });
+
+  it("sends a guest to the sign-in center on both layouts", () => {
+    for (const platform of ["phone", "pc"] as const) {
+      shell.platform = platform;
+      shell.openProfile.mockClear();
+      const { plus } = renderEntry();
+      act(() => plus.click());
+      expect(shell.openProfile).toHaveBeenCalledExactlyOnceWith(null, plus);
+      expect(document.querySelector("dialog")).toBeNull();
+    }
+    expect(shell.openEditor).not.toHaveBeenCalled();
+  });
+
+  it("waits for the session check on both layouts", () => {
+    author.viewer = { id: OWNER };
+    author.checking = true;
+    for (const platform of ["phone", "pc"] as const) {
+      shell.platform = platform;
+      const { plus } = renderEntry();
+      expect(plus.disabled).toBe(true);
+      act(() => plus.click());
+    }
+    expect(shell.openEditor).not.toHaveBeenCalled();
+    expect(shell.openProfile).not.toHaveBeenCalled();
+    expect(document.querySelector("dialog")).toBeNull();
+  });
+
+  it("returns to a kept session or 参与话题 composer without the dialog on both layouts", () => {
+    author.viewer = { id: OWNER };
+    const targets: EditorTarget[] = [
+      { type: "work", id: `work-${"b".repeat(32)}` },
+      { type: "new", threadId: `thread-${"c".repeat(32)}` },
+    ];
+    for (const platform of ["phone", "pc"] as const)
+      for (const target of targets) {
+        shell.platform = platform;
+        upload.current = {
+          session: sessionView(target, { saveMode: "unsaved" }),
+          autosave: null,
+          uploads: snapshot([]),
+        } satisfies UploadSessionDouble;
+        const { plus } = renderEntry();
+        expect(plus.getAttribute("aria-label")).toBe("返回正在编辑的作品");
+        act(() => plus.click());
+        expect(shell.openEditor).toHaveBeenLastCalledWith(target, plus);
+        expect(document.querySelector("dialog")).toBeNull();
+      }
+    expect(shell.openEditor).toHaveBeenCalledTimes(4);
+  });
+
+  it("opens a new work from the plain plus when articles are off, on both layouts", () => {
+    author.viewer = { id: OWNER };
+    for (const platform of ["phone", "pc"] as const) {
+      shell.platform = platform;
+      shell.openEditor.mockClear();
+      const { plus } = renderEntry(false);
+      expect(plus.getAttribute("aria-label")).toBe("发布作品");
+      act(() => plus.click());
+      expect(document.querySelector("dialog")).toBeNull();
+      expect(shell.openEditor).toHaveBeenCalledExactlyOnceWith(
+        { type: "new" },
+        plus,
+      );
+    }
+  });
+});
+
+describe("the desktop 发布内容 dialog's 专题文章", () => {
+  const created = (): ArticleDraft => ({
+    id: ARTICLE_ID as ArticleDraft["id"],
+    ownerId: OWNER as ArticleDraft["ownerId"],
+    title: "",
+    coverRefId: null,
+    document: {
+      format: "blocknote",
+      version: 1,
+      blocks: [],
+      references: {},
+      galleries: {},
+    },
+    version: 1,
+    status: "draft",
+    publicVersion: null,
+    updatedAt: "2026-10-10T00:00:00Z",
+    fingerprint: "a".repeat(64),
+  });
+  const deferred = <Value,>() => {
+    let resolve!: (value: Value) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<Value>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  };
+  const requestIds = () =>
+    client.create.mock.calls.map(([command]) => command.requestId);
+  /** The plus with the 发布内容 dialog open on the desktop layout. */
+  const openDialog = () => {
+    author.viewer = { id: OWNER };
+    shell.platform = "pc";
+    const entry = renderEntry();
+    act(() => entry.plus.click());
+    return entry;
+  };
+  const alert = () =>
+    document.querySelector('dialog [role="alert"]')?.textContent ?? null;
+
+  it("opens the profile, then the new draft's editor, and closes", async () => {
+    const { plus } = openDialog();
+    client.create.mockResolvedValueOnce(created());
+    act(() => choice("专题文章").click());
+    await flushAnswer();
+    expect(author.cache.set).toHaveBeenCalledExactlyOnceWith(
+      `drafts-box-return:${OWNER}`,
+      "article",
+    );
+    expect(shell.openProfile).toHaveBeenCalledExactlyOnceWith(null, plus);
+    expect(shell.openEditor).toHaveBeenCalledExactlyOnceWith(
+      { type: "article-draft", id: ARTICLE_ID },
+      plus,
+    );
+    const [set] = author.cache.set.mock.invocationCallOrder;
+    const [profile] = shell.openProfile.mock.invocationCallOrder;
+    const [editor] = shell.openEditor.mock.invocationCallOrder;
+    expect(set).toBeLessThan(profile!);
+    expect(profile).toBeLessThan(editor!);
+    expect(document.querySelector("dialog")).toBeNull();
+    expect(author.notify).not.toHaveBeenCalled();
+    const [command] = client.create.mock.calls[0]!;
+    expect(command).toMatchObject({ title: "", coverRefId: null });
+  });
+
+  it("points to the draft box when the shell refuses the editor", async () => {
+    openDialog();
+    client.create.mockResolvedValueOnce(created());
+    shell.openEditor.mockReturnValueOnce(false);
+    act(() => choice("专题文章").click());
+    await flushAnswer();
+    expect(author.notify).toHaveBeenCalledExactlyOnceWith(
+      "专题草稿已创建，请从草稿箱继续编辑。",
+    );
+    expect(document.querySelector("dialog")).toBeNull();
+  });
+
+  it("confirms the same creation after an unknown outcome", async () => {
+    const { plus } = openDialog();
+    client.create.mockRejectedValueOnce(
+      new ArticleRequestError(504, null, true),
+    );
+    act(() => choice("专题文章").click());
+    await flushAnswer();
+    expect(alert()).toBe("创建结果尚未确认，重试会确认同一次创建。");
+    expect(choices()).toEqual(["作品", "重试确认创建", "草稿箱"]);
+    expect(shell.openEditor).not.toHaveBeenCalled();
+
+    client.create.mockResolvedValueOnce(created());
+    act(() => choice("重试确认创建").click());
+    await flushAnswer();
+    const [first, second] = requestIds();
+    expect(second).toBe(first);
+    expect(shell.openEditor).toHaveBeenCalledExactlyOnceWith(
+      { type: "article-draft", id: ARTICLE_ID },
+      plus,
+    );
+  });
+
+  it("starts a new creation after a refusal", async () => {
+    openDialog();
+    client.create.mockRejectedValueOnce(
+      new ArticleRequestError(422, "article_invalid", false),
+    );
+    act(() => choice("专题文章").click());
+    await flushAnswer();
+    expect(alert()).toBe("暂时无法创建专题文章，请重试。");
+    expect(choices()).toEqual(["作品", "专题文章", "草稿箱"]);
+
+    client.create.mockResolvedValueOnce(created());
+    act(() => choice("专题文章").click());
+    await flushAnswer();
+    const [first, second] = requestIds();
+    expect(second).not.toBe(first);
+  });
+
+  it("holds the dialog and every choice while creating", async () => {
+    openDialog();
+    const pending = deferred<ArticleDraft>();
+    client.create.mockReturnValueOnce(pending.promise);
+    act(() => choice("专题文章").click());
+    expect(choices()).toEqual(["作品", "正在创建…", "草稿箱"]);
+    for (const button of document.querySelectorAll<HTMLButtonElement>(
+      "dialog button",
+    ))
+      expect(button.disabled).toBe(true);
+    // Escape (the dialog's cancel) keeps it open.
+    const dialog = document.querySelector("dialog")!;
+    act(() => {
+      dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    });
+    expect(document.querySelector("dialog")).toBe(dialog);
+
+    pending.reject(new ArticleRequestError(504, null, true));
+    await flushAnswer();
+    expect(choices()).toEqual(["作品", "重试确认创建", "草稿箱"]);
+    // Cancellable again once the answer is in.
+    act(() => {
+      dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    });
+    expect(document.querySelector("dialog")).toBeNull();
+  });
+
+  it("tells the author where the draft is when the opener left before the answer", async () => {
+    const { container } = openDialog();
+    const pending = deferred<ArticleDraft>();
+    client.create.mockReturnValueOnce(pending.promise);
+    act(() => choice("专题文章").click());
+    // The dock (and the plus with it) left the page meanwhile.
+    container.remove();
+    pending.resolve(created());
+    await flushAnswer();
+    expect(author.notify).toHaveBeenCalledExactlyOnceWith(
+      "专题草稿已创建，请从个人页的草稿箱继续编辑。",
+    );
+    expect(author.cache.set).not.toHaveBeenCalled();
+    expect(shell.openProfile).not.toHaveBeenCalled();
+    expect(shell.openEditor).not.toHaveBeenCalled();
+  });
+
+  it("opens the own profile's draft box from 草稿箱", () => {
+    const { plus } = openDialog();
+    act(() => choice("草稿箱").click());
+    expect(author.cache.set).toHaveBeenCalledExactlyOnceWith(
+      `drafts-box-return:${OWNER}`,
+      "article",
+    );
+    expect(shell.openProfile).toHaveBeenCalledExactlyOnceWith(null, plus);
+    expect(shell.openEditor).not.toHaveBeenCalled();
+    expect(document.querySelector("dialog")).toBeNull();
+    expect(client.create).not.toHaveBeenCalled();
   });
 });
 

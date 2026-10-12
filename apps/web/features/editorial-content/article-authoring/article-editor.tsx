@@ -36,6 +36,7 @@ import "@blocknote/ariakit/style.css";
 import { createExternalStore } from "../../publishing/upload-manager-store";
 import { EditorDialog } from "../../publishing/ui/editor/editor-dialog";
 import { createArticleAutosave } from "./article-autosave";
+import { ArticleCoverPreview } from "./article-cover-preview";
 import { createArticlePublicationAttempt } from "./article-publication-attempt";
 import type { ArticlePublicationAttempt } from "./article-publication-attempt";
 import type {
@@ -1247,6 +1248,16 @@ export default function ArticleEditor(props: ArticleEditorProps) {
               ))}
             </select>
           </label>
+          <ArticleCoverPreview>
+            {coverRefId !== null &&
+            Object.hasOwn(attachments.references, coverRefId)
+              ? media.render(attachments.references[coverRefId]!, {
+                  alt: "封面",
+                  active: false,
+                  crop: null,
+                })
+              : null}
+          </ArticleCoverPreview>
           <p className={styles.dialogHint}>
             正文修改会自动保存到草稿箱。预览确认后再发布。
           </p>

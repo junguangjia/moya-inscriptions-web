@@ -16,6 +16,12 @@ import {
 import { useAuthors } from "../../../authors/author-context";
 import { authorClient } from "../../../authors/author-data";
 import detailStyles from "../../../detail/catalog-detail.module.css";
+import { useArticleAvailability } from "../../../editorial-content/article-authoring/article-availability";
+import {
+  openArticleDraftBox,
+  openArticleDraftInPlace,
+  useArticleDraftCreation,
+} from "../../../editorial-content/article-authoring/use-article-draft-creation";
 import { useProductShell } from "../../../product-shell/product-shell";
 import { resolvePrimaryNavigationViewportInset } from "../../../shell/primary-navigation-motion";
 import { detectDeviceClass } from "../../../shell/device-platform";
@@ -31,9 +37,19 @@ import {
 import { ConflictChooser } from "../drafts/conflict-chooser";
 import { HistoryPanel } from "../drafts/history-panel";
 import { MediaSection } from "../media/media-section";
+import { mediaUiFor, useMediaUiState } from "../media/media-ui-store";
+import {
+  PHONE_MEDIA_TARGET,
+  PhoneFlow,
+  cancelPhoneLayer,
+  showPhoneField,
+  shownPhoneScreen,
+  stepBackPhone,
+} from "../phone/phone-flow";
 import { ConfirmationSheet } from "./confirmation-sheet";
 import { DesktopEditor } from "./desktop-editor";
 import { EditorDialog } from "./editor-dialog";
+import { KEYBOARD_ATTRIBUTE, useEditorLayout } from "./editor-layout";
 import {
   markEditVersionSent,
   openEditorSession,
@@ -49,7 +65,6 @@ import {
   authorshipOf,
   contentOf,
   failureField,
-  fieldStep,
   isEmptyWork,
   localIssues,
   readinessOf,
@@ -59,18 +74,18 @@ import {
 } from "./editor-session-state";
 import { LeaveDialog } from "./leave-dialog";
 import { ModeSwitches, OriginalQualitySwitch } from "./mode-switches";
-import { PhoneSteps } from "./phone-steps";
 import {
   ContinuousPreview,
   PhonePreview,
   editorPreviewPresentation,
   useEditorMediaSources,
 } from "./preview";
-import { SaveStatus } from "./save-status";
+import { ReturnBar } from "./return-bar";
+import { SaveStatus, saveStatusOf } from "./save-status";
 import { TextSettings } from "./text-settings";
 import styles from "./editor.module.css";
 
-import type { MediaSectionLayout } from "../media/media-section";
+import type { ConfirmationSheetProps } from "./confirmation-sheet";
 import type { EditorLoaderDeps } from "./editor-session-loader";
 import type { EditorSessionRegistry } from "./editor-session-provider";
 import type {
@@ -79,6 +94,7 @@ import type {
   EditorSessionStore,
 } from "./editor-session-state";
 import type { LeaveDialogVariant } from "./leave-dialog";
+import type { StartOptions } from "../phone/add-tiles";
 import type { EditorMediaScope } from "./preview";
 import type { AutosaveState } from "../../draft-autosave";
 import type { EditorTarget } from "../../../product-shell/product-history";
@@ -92,10 +108,7 @@ import type {
   PublishingDraftConflict,
   PublishingMediaItem,
 } from "@moya/contracts";
-import type { ReactNode, RefObject } from "react";
-
-/** Wide tablets use the desktop editor from this width (design §11.1). */
-export const DESKTOP_MINIMUM_WIDTH = 896;
+import type { RefObject } from "react";
 
 const editorTitle = (target: EditorTarget, state: EditorSessionState | null) =>
   (state?.kind ?? (target.type === "work" ? "edit" : "new")) === "edit"
@@ -105,6 +118,9 @@ const editorTitle = (target: EditorTarget, state: EditorSessionState | null) =>
       : "发布作品";
 
 type UploadSessionApi = ReturnType<typeof useUploadSession>;
+
+/** Said when a new work leaves from 编辑 with its photos kept as a draft (r4 §2.3). */
+const LEFT_FROM_EDIT_NOTICE = "照片已存入草稿箱，可从草稿箱继续编辑。";
 
 /** The one version panel open at a time: history or the conflict chooser. */
 type VersionsPanel = "history" | "conflict" | null;
@@ -123,23 +139,12 @@ const unfinishedUploads = (uploads: UploadManagerSnapshot | null): number =>
 // ---------------------------------------------------------------------------
 // Viewport
 
-const subscribeResize = (listener: () => void) => {
-  window.addEventListener("resize", listener);
-  window.addEventListener("orientationchange", listener);
-  return () => {
-    window.removeEventListener("resize", listener);
-    window.removeEventListener("orientationchange", listener);
-  };
-};
-
-const useViewportWidth = () =>
-  useSyncExternalStore(
-    subscribeResize,
-    () => window.innerWidth,
-    () => DESKTOP_MINIMUM_WIDTH,
-  );
-
-/** Keeps the editor inside the visual viewport (keyboard, safe areas), like Search. */
+/**
+ * Keeps the editor inside the visual viewport (keyboard, safe areas), like
+ * Search. The host also says whether the keyboard is up (`KEYBOARD_ATTRIBUTE`):
+ * the measured inset, not focus, since a keyboard dismissed by the system
+ * Back or a hardware keyboard leaves focus in the field.
+ */
 export const useVisualViewportFrame = (
   hostRef: RefObject<HTMLElement | null>,
 ) => {
@@ -155,6 +160,7 @@ export const useVisualViewportFrame = (
           "--editor-viewport-height",
           `${window.innerHeight}px`,
         );
+        host.setAttribute(KEYBOARD_ATTRIBUTE, "false");
         return;
       }
       host.style.setProperty(
@@ -175,6 +181,7 @@ export const useVisualViewportFrame = (
         "--editor-bottom-safe-area",
         inset > 1 ? "0px" : "env(safe-area-inset-bottom)",
       );
+      host.setAttribute(KEYBOARD_ATTRIBUTE, inset > 1 ? "true" : "false");
     };
     const schedule = () => {
       if (frame !== null) window.cancelAnimationFrame(frame);
@@ -191,6 +198,7 @@ export const useVisualViewportFrame = (
       window.removeEventListener("resize", schedule);
       window.removeEventListener("orientationchange", schedule);
       if (frame !== null) window.cancelAnimationFrame(frame);
+      host.removeAttribute(KEYBOARD_ATTRIBUTE);
     };
   }, [hostRef]);
 };
@@ -287,64 +295,6 @@ export const EditorOverlay = ({
         )}
       </section>
     </>
-  );
-};
-
-/** Whether the return bar's Back held focus when a state change replaced the bar. */
-const backFocus = new WeakMap<ProductShellEditorOverlayControls, true>();
-
-const ReturnBar = ({
-  controls,
-  title,
-  status,
-  actions,
-  inert = false,
-}: {
-  readonly controls: ProductShellEditorOverlayControls;
-  readonly title: string;
-  readonly status?: ReactNode;
-  readonly actions?: ReactNode;
-  readonly inert?: boolean;
-}) => {
-  // Loading, the workspace and the unavailable state each render their own
-  // bar: a focused Back stays focused across the swap.
-  useLayoutEffect(() => {
-    const button = controls.backButtonRef.current;
-    const active = document.activeElement;
-    if (
-      backFocus.has(controls) &&
-      button !== null &&
-      (active === null || active === document.body)
-    )
-      button.focus({ preventScroll: true });
-    backFocus.delete(controls);
-    return () => {
-      if (button !== null && document.activeElement === button)
-        backFocus.set(controls, true);
-    };
-  }, [controls]);
-  return (
-    <header
-      className={`${detailStyles.detailHeader} ${hostStyles.bar} ${styles.bar}`}
-      data-editor-bar=""
-      inert={inert}
-    >
-      <button
-        ref={controls.backButtonRef}
-        aria-label="返回"
-        onClick={controls.close}
-        type="button"
-      >
-        <Icon aria-hidden="true" name="back" />
-      </button>
-      <div className={styles.barTitle}>
-        <strong>{title}</strong>
-        {status}
-      </div>
-      <div className={styles.barActions}>
-        {actions ?? <span aria-hidden="true" className={hostStyles.balance} />}
-      </div>
-    </header>
   );
 };
 
@@ -677,6 +627,35 @@ const leaveErrorText = (autosave: AutosaveState | null): string =>
       ? autosave.error.message
       : "保存没有完成，可以再试一次，或放弃本次未保存的更改";
 
+/**
+ * Why 存草稿并退出 stopped waiting for the uploads: the photos (by their
+ * place) that need the author before the draft can hold them.
+ */
+const waitStoppedText = (
+  album: readonly { readonly key: string }[],
+  blocked: readonly string[],
+): string => {
+  const places = album.flatMap((item, index) =>
+    blocked.includes(item.key) ? [index + 1] : [],
+  );
+  const first = places[0];
+  if (first === undefined) return "没有存草稿：有照片需要处理";
+  return places.length === 1
+    ? `没有存草稿：第 ${first} 项需要处理`
+    : `没有存草稿：第 ${first} 项等 ${places.length} 项需要处理`;
+};
+
+/**
+ * Why 编辑's 存草稿并退出 did not leave (r4 ASK-1): said among 编辑's
+ * notices, where no dialog offers 放弃.
+ */
+const editSaveErrorText = (autosave: AutosaveState | null): string =>
+  autosave?.status === "conflict"
+    ? "有两个版本待选择，选择版本后才能保存"
+    : autosave?.error?.code != null
+      ? autosave.error.message
+      : "保存没有完成，请再试一次";
+
 interface FocusedField {
   readonly field: EditorField;
   readonly start: number | null;
@@ -708,15 +687,31 @@ const EditorWorkspace = ({
   const edits = useEditReadiness();
   const shell = useProductShell();
   const author = useAuthors();
-  const width = useViewportWidth();
-  const layout =
-    shell.platform === "pc" ||
-    (shell.platform === "tablet" && width >= DESKTOP_MINIMUM_WIDTH)
-      ? "desktop"
-      : "phone";
+  const layout = useEditorLayout();
+  // The phone screens' place (media-ui-store), kept with the session.
+  const mediaUi = mediaUiFor(store);
+  const { phone: phoneUi, dialog: mediaDialog } = useMediaUiState(mediaUi);
+  const phoneScreen =
+    layout === "phone"
+      ? shownPhoneScreen(state.step, state.items, phoneUi.heldRemoval)
+      : null;
+  /**
+   * What 编辑 or the start screen still holds (the shown crop, a removal
+   * waiting for 撤销), kept before a browser Back leaves the screen.
+   */
+  const editCommitRef = useRef<(() => void) | null>(null);
+  // Where the phone resumes is decided once per opening; an editor opened
+  // on the desktop keeps its place when it later swaps to the phone.
+  const [resumeChecked, setResumeChecked] = useState(() => layout !== "phone");
 
   const uploadRef = useRef(upload);
   uploadRef.current = upload;
+
+  // 专题 on the phone's start screen (r4 D3): today's 专题文章 creation,
+  // here so a create in flight outlives a layout swap.
+  const articlesOn = useArticleAvailability();
+  const topicCreation = useArticleDraftCreation();
+  const topicCreating = topicCreation.creating;
 
   const session = upload.session;
   const saveMode = session?.saveMode ?? null;
@@ -733,17 +728,32 @@ const EditorWorkspace = ({
   const [menuOpen, setMenuOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  /**
+   * 存草稿并退出 waiting for the picks' uploads: how it settles (the
+   * refusal's reason, or null once it left or the wait ended).
+   */
+  const uploadWait = useRef<((reason: string | null) => void) | null>(null);
+  const [waitingUploads, setWaitingUploads] = useState(false);
   const leavingRef = useRef(false);
   const submitIntentRef = useRef(false);
   const pendingFocusRef = useRef<EditorField | null>(null);
   const menuId = useId();
 
-  // Author changes reach the runtime (autosave in saved mode) once per edit.
-  useEffect(() => {
-    if (sentEditVersion(store) === state.editVersion) return;
-    markEditVersionSent(store, state.editVersion);
+  /**
+   * Author changes reach the runtime (autosave in saved mode) once per edit;
+   * true when this call sent one. The leave guard sends at once what a Back
+   * just committed, before it decides whether leaving loses anything.
+   */
+  const sendEdits = useCallback(() => {
+    const { editVersion } = store.get();
+    if (sentEditVersion(store) === editVersion) return false;
+    markEditVersionSent(store, editVersion);
     uploadRef.current.edit(contentOf(store.get()));
-  }, [state.editVersion, store]);
+    return true;
+  }, [store]);
+  useEffect(() => {
+    sendEdits();
+  }, [state.editVersion, sendEdits]);
 
   // Items the manager adds or identifies follow into the album.
   useEffect(() => {
@@ -773,12 +783,9 @@ const EditorWorkspace = ({
 
   const readiness = readinessOf(state, uploads, edits);
   const issues = localIssues(state);
+  // The phone screens decode their own pictures; 预览作品页 needs them all.
   const mediaScope: EditorMediaScope =
-    layout === "desktop" || previewOpen !== null
-      ? "all"
-      : state.step === "confirm"
-        ? "cover"
-        : "none";
+    layout === "desktop" || previewOpen !== null ? "all" : "none";
   const media = useEditorMediaSources(
     state,
     uploads,
@@ -939,30 +946,68 @@ const EditorWorkspace = ({
       (uploads?.items.length ?? 0) > 0 ||
       !isEmptyWork(state));
   const unfinishedWork = session !== null && upload.hasUnfinishedWork();
-  const latestGuard = useRef({
+  /**
+   * One phone screen back: 发布 → 编辑 (or the start screen without
+   * photos), 编辑 → its back sheet for a work started here (r4 ASK-1);
+   * false where Back leaves (the start screen, 编辑 of a draft or a work).
+   */
+  const phoneBack = () =>
+    phoneScreen !== null &&
+    stepBackPhone(store, mediaUi, () => editCommitRef.current?.());
+  /** The topmost phone layer (a sheet, 封面构图) closes as its ‹ would. */
+  const phoneLayerBack = () =>
+    phoneScreen !== null &&
+    cancelPhoneLayer(
+      hostRef.current?.querySelector("[data-phone-flow]") ?? null,
+    );
+  const guardState = {
     submissionBusy,
     unsavedText,
     noSaveContent,
     unfinishedWork,
+    topicCreating,
+    // Leaving a new work from 编辑 with its draft: say where the photos are.
+    // Only a work started in this editor: a draft opened from 草稿箱 is
+    // already there (its session is "new" too).
+    leavingFromEdit:
+      phoneScreen === "edit" &&
+      state.openedAs.type === "new" &&
+      draftId !== null,
+    newWorkOnEdit: phoneScreen === "edit" && state.openedAs.type === "new",
+    savedMode: saveMode === "saved",
     previewOpen: previewOpen !== null,
-  });
-  latestGuard.current = {
-    submissionBusy,
-    unsavedText,
-    noSaveContent,
-    unfinishedWork,
-    previewOpen: previewOpen !== null,
+    // 历史版本 or the version chooser over the phone screens.
+    phonePanel: phoneScreen !== null && shownPanel !== null,
+    phoneBack,
+    phoneLayerBack,
+    sendEdits,
   };
+  const latestGuard = useRef(guardState);
+  latestGuard.current = guardState;
+  const notifyRef = useRef(author.notify);
+  notifyRef.current = author.notify;
   const needsGuard =
     submissionBusy ||
     unsavedText ||
     noSaveContent ||
     unfinishedWork ||
-    previewOpen !== null;
+    previewOpen !== null ||
+    phoneScreen === "edit" ||
+    phoneScreen === "publish" ||
+    // 封面构图 over 编辑: Back closes it first.
+    (phoneScreen !== null && mediaDialog?.type === "cover") ||
+    // Removals waiting for 撤销 on the start screen: Back commits them first.
+    (phoneScreen === "select" && phoneUi.heldRemoval !== null) ||
+    // 专题 creating its draft (r4 D3): nothing leaves until it answers.
+    topicCreating ||
+    guardState.phonePanel;
 
   const guard = useCallback((reason: ProductShellEditorLeaveReason) => {
     if (leavingRef.current) return "allow" as const;
     const now = latestGuard.current;
+    // 专题 creating its draft: the editor stays (a reload asks first), so
+    // the result always lands somewhere (r4 D3).
+    if (now.topicCreating) return "blocked" as const;
     if (reason === "unload")
       return now.submissionBusy ||
         now.unsavedText ||
@@ -970,20 +1015,50 @@ const EditorWorkspace = ({
         now.unfinishedWork
         ? ("blocked" as const)
         : ("allow" as const);
-    // The browser's Back from 预览 returns to the editor, like its own Back.
-    if (reason === "history" && now.previewOpen) {
-      setPreviewOpen(null);
-      return "blocked" as const;
+    if (reason === "history") {
+      // The browser's Back from 预览 returns to the editor, like its own Back.
+      if (now.previewOpen) {
+        setPreviewOpen(null);
+        return "blocked" as const;
+      }
+      // On a phone a layer closes first, as 预览 does: 历史版本 or the
+      // version chooser, then a sheet or 封面构图 (which asks first when
+      // its composition changed) ...
+      if (now.phonePanel) {
+        setVersionsPanel(null);
+        return "blocked" as const;
+      }
+      if (now.phoneLayerBack()) return "blocked" as const;
+      // ... then it steps back a screen in the one editor entry: 发布 →
+      // 编辑 (or the start screen) → 编辑's back sheet for a work started
+      // here; on the start screen, or on 编辑 of a draft or a work, it
+      // commits what the screen holds and leaves as below. Never while a
+      // submission is in flight: 发布 stays, and 正在确认结果… says why (编辑
+      // could change the work being submitted).
+      if (!now.submissionBusy && now.phoneBack()) return "blocked" as const;
     }
+    // What a Back just committed reaches the runtime now, so leaving is
+    // decided on the album as it is (a removal waiting for 撤销 included).
+    const sent = now.sendEdits();
+    const upload = uploadRef.current;
+    const unsavedText =
+      now.unsavedText || (sent && now.savedMode && upload.hasUnsavedChanges());
+    const unfinishedWork = sent
+      ? upload.session !== null && upload.hasUnfinishedWork()
+      : now.unfinishedWork;
     const variant: LeaveDialogVariant | null = now.submissionBusy
       ? "submitting"
       : now.noSaveContent
         ? "unsaved"
-        : now.unsavedText || now.unfinishedWork
+        : unsavedText || unfinishedWork
           ? "saved"
           : null;
     // Unsaved text and unfinished media both require an explicit leave choice.
-    if (variant === null) return "allow" as const;
+    if (variant === null) {
+      // The picks are the draft now; the author finds them in 草稿箱.
+      if (now.leavingFromEdit) notifyRef.current(LEFT_FROM_EDIT_NOTICE);
+      return "allow" as const;
+    }
     setLeave({ variant, saving: false, failed: false });
     return "blocked" as const;
   }, []);
@@ -1015,6 +1090,11 @@ const EditorWorkspace = ({
       return;
     }
     if (!uploadRef.current.hasUnsavedChanges()) {
+      // Leaving a new work on 编辑 another way than its back sheet: once
+      // saved, the picks are the draft, and the author is told where to
+      // find them, as when nothing was left to save.
+      if (latestGuard.current.newWorkOnEdit)
+        notifyRef.current(LEFT_FROM_EDIT_NOTICE);
       leaveNow();
       return;
     }
@@ -1022,6 +1102,113 @@ const EditorWorkspace = ({
       (current) => current && { ...current, saving: false, failed: true },
     );
   };
+
+  /** A refusal of 存草稿并退出: among 编辑's notices, and what 编辑 says. */
+  const refuseEditSave = (reason: string) => {
+    store.setNotice(reason);
+    return reason;
+  };
+
+  /**
+   * 编辑's 存草稿并退出 (r4 ASK-1): one tap saves the draft and leaves, as
+   * the leave dialog's 保存草稿并离开 does, and says where the photos are.
+   * Production saves only on an explicit action (r6), so this is that
+   * action and no second question follows. While the picks are still on
+   * their way to the account (the usual state right after a pick), it
+   * waits for them: the back sheet shows 等待上传完成… with the progress,
+   * and the save follows as soon as the runtime would take it. 继续编辑,
+   * Escape or the browser's Back end the wait and stay on 编辑 (nothing is
+   * saved, the uploads go on), and so do the session ending and the
+   * editor going. A save the runtime refuses (a photo that needs the
+   * author, before or during the wait, two versions waiting, an error)
+   * leaves nothing: 编辑 stays, the reason among its notices, and the
+   * reason is what this resolves with, so 编辑 says it through the flow's
+   * announcer (an inserted notice is often not read out). Null when it
+   * left, when the wait ended, or when, without drafts, the leave guard's
+   * own 结束本次编辑？ decides.
+   */
+  const saveFromEdit = async (): Promise<string | null> => {
+    if (leavingRef.current || uploadWait.current !== null) return null;
+    if (!latestGuard.current.savedMode) {
+      controls.close();
+      return null;
+    }
+    // What 编辑 just kept (its crop, a removal) is what is saved.
+    sendEdits();
+    const hold = uploadRef.current.mediaSaveHold();
+    if (hold !== null && hold.blocked.length === 0)
+      return new Promise<string | null>((resolve) => {
+        uploadWait.current = resolve;
+        setWaitingUploads(true);
+      });
+    return saveEditAndLeave();
+  };
+
+  /** 存草稿并退出's save itself, once nothing holds the media back. */
+  const saveEditAndLeave = async (): Promise<string | null> => {
+    if (leavingRef.current) return null;
+    try {
+      await uploadRef.current.saveNow();
+    } catch (error) {
+      return refuseEditSave(
+        error instanceof Error ? error.message : "保存失败，请重试",
+      );
+    }
+    if (uploadRef.current.hasUnsavedChanges())
+      return refuseEditSave(editSaveErrorText(uploadRef.current.autosave));
+    if (latestGuard.current.newWorkOnEdit)
+      notifyRef.current(LEFT_FROM_EDIT_NOTICE);
+    leaveNow();
+    return null;
+  };
+
+  // 存草稿并退出's wait (above): after each render (the uploads, the
+  // staging, the back sheet), it ends without saving once its sheet or 编辑
+  // went or the session ended; it stops, saying why, once a photo needs the
+  // author; it saves and leaves once nothing holds the media back.
+  const backAsk = phoneUi.backAsk;
+  const sessionGone = session === null;
+  useEffect(() => {
+    const settle = uploadWait.current;
+    if (!waitingUploads || settle === null) return;
+    const end = (reason: string | null) => {
+      uploadWait.current = null;
+      setWaitingUploads(false);
+      settle(reason);
+    };
+    if (!backAsk || phoneScreen !== "edit" || sessionGone) {
+      end(null);
+      return;
+    }
+    const hold = uploadRef.current.mediaSaveHold();
+    if (hold === null) {
+      uploadWait.current = null;
+      setWaitingUploads(false);
+      void saveEditAndLeave().then(settle, () => settle(null));
+      return;
+    }
+    if (hold.blocked.length > 0)
+      end(refuseEditSave(waitStoppedText(store.media().items, hold.blocked)));
+  });
+  // The editor going (closed, another account) ends the wait: nothing is
+  // saved after it.
+  useEffect(
+    () => () => {
+      const settle = uploadWait.current;
+      uploadWait.current = null;
+      settle?.(null);
+    },
+    [],
+  );
+  const waitHold = waitingUploads ? upload.mediaSaveHold() : null;
+  const saveWait =
+    waitHold === null || waitHold.blocked.length > 0
+      ? null
+      : {
+          received: waitHold.received,
+          total: waitHold.total,
+          reading: waitHold.reading,
+        };
 
   const discardAndLeave = () => {
     registry.markLeaving(store, "discarded");
@@ -1079,15 +1266,17 @@ const EditorWorkspace = ({
   const goToField = (field: EditorField) => {
     pendingFocusRef.current = field;
     setConfirmOpen(false);
-    if (layout === "phone") store.setStep(fieldStep(field));
+    if (layout === "phone") showPhoneField(store, mediaUi, field);
     nextFrame(() => {
       const target = pendingFocusRef.current;
       pendingFocusRef.current = null;
       if (target === null) return;
       const element = hostRef.current?.querySelector<HTMLElement>(
-        target === "media"
-          ? "[data-editor-media]"
-          : `[data-editor-input="${target}"]`,
+        target !== "media"
+          ? `[data-editor-input="${target}"]`
+          : layout === "phone"
+            ? PHONE_MEDIA_TARGET
+            : "[data-editor-media]",
       );
       element?.focus({ preventScroll: false });
     });
@@ -1169,7 +1358,7 @@ const EditorWorkspace = ({
     else setPreviewOpen(null);
     const entry = focusedField.current;
     if (entry === null || !entry.focused) return;
-    if (layout === "phone") store.setStep(fieldStep(entry.field));
+    if (layout === "phone") showPhoneField(store, mediaUi, entry.field);
     nextFrame(() => {
       const element = hostRef.current?.querySelector<
         HTMLInputElement | HTMLTextAreaElement
@@ -1183,7 +1372,7 @@ const EditorWorkspace = ({
           // Some input types do not keep a selection.
         }
     });
-  }, [hostRef, layout, store]);
+  }, [hostRef, layout, mediaUi, store]);
 
   // -- rendering --------------------------------------------------------------
 
@@ -1211,44 +1400,55 @@ const EditorWorkspace = ({
     if (!uploadRef.current.hasUnsavedChanges()) setAnnouncement("已保存");
   };
 
-  const barActions = (
-    <>
-      {saveMode === "saved" ? (
+  // 保存草稿 and 历史版本 live on the phone's 发布 screen only: the menu
+  // closes with it.
+  if (menuOpen && phoneScreen !== null && phoneScreen !== "publish")
+    setMenuOpen(false);
+
+  const saveNowButton =
+    saveMode === "saved" ? (
+      <button
+        className={styles.textButton}
+        data-editor-save-now=""
+        disabled={!canSaveNow}
+        onClick={() => void saveNow()}
+        type="button"
+      >
+        保存草稿
+      </button>
+    ) : null;
+
+  const versionsMenu =
+    saveMode === "saved" && draftId !== null ? (
+      <>
         <button
-          className={styles.textButton}
-          data-editor-save-now=""
-          disabled={!canSaveNow}
-          onClick={() => void saveNow()}
+          aria-controls={menuOpen ? menuId : undefined}
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
+          aria-label="更多操作"
+          data-editor-menu=""
+          onClick={() => setMenuOpen((open) => !open)}
           type="button"
         >
-          保存草稿
+          <Icon aria-hidden="true" name="menu" />
         </button>
-      ) : null}
-      {saveMode === "saved" && draftId !== null ? (
-        <>
-          <button
-            aria-controls={menuOpen ? menuId : undefined}
-            aria-expanded={menuOpen}
-            aria-haspopup="menu"
-            aria-label="更多操作"
-            data-editor-menu=""
-            onClick={() => setMenuOpen((open) => !open)}
-            type="button"
-          >
-            <Icon aria-hidden="true" name="menu" />
-          </button>
-          {menuOpen ? (
-            <EditorMenu
-              id={menuId}
-              onClose={() => setMenuOpen(false)}
-              onHistory={() => {
-                setMenuOpen(false);
-                setVersionsPanel("history");
-              }}
-            />
-          ) : null}
-        </>
-      ) : null}
+        {menuOpen ? (
+          <EditorMenu
+            id={menuId}
+            onClose={() => setMenuOpen(false)}
+            onHistory={() => {
+              setMenuOpen(false);
+              setVersionsPanel("history");
+            }}
+          />
+        ) : null}
+      </>
+    ) : null;
+
+  const barActions = (
+    <>
+      {saveNowButton}
+      {versionsMenu}
       {layout === "desktop" ? (
         <button
           className={styles.primaryButton}
@@ -1262,64 +1462,64 @@ const EditorWorkspace = ({
     </>
   );
 
-  const switches = () => (
+  const switches = (
     <ModeSwitches>
       <OriginalQualitySwitch
-        autoFocus={layout === "phone"}
         onChange={store.setOriginalNext}
         original={state.originalNext}
       />
     </ModeSwitches>
   );
 
-  const uploadSummary =
-    readiness.total === 0
-      ? ""
-      : readiness.text !== null
-        ? readiness.text
-        : readiness.confirmed
-          ? `全部 ${readiness.ready} 项已就绪`
-          : "正在确认图片状态…";
-
-  const notices = (
-    <>
-      {state.notice === null ? null : (
-        <p className={styles.notice} data-editor-notice="" role="status">
-          <span>{state.notice}</span>
-          <button
-            className={styles.inlineAction}
-            onClick={() => store.setNotice(null)}
-            type="button"
-          >
-            知道了
-          </button>
-        </p>
-      )}
-      {state.fieldErrors.media === undefined ? null : (
-        <p className={styles.notice} data-tone="error" role="alert">
-          {state.fieldErrors.media}
-        </p>
-      )}
-      {session === null &&
-      !leavingRef.current &&
-      !state.restarting &&
-      submissionState.status !== "confirmed" ? (
-        <p className={styles.notice} data-tone="error" role="alert">
-          本次编辑已结束，返回后可重新开始
-        </p>
-      ) : null}
-    </>
+  const saveStatus = (
+    <SaveStatus
+      autosave={autosave}
+      onChooseVersion={() => setVersionsPanel("conflict")}
+      onRetry={() => void saveNow()}
+      saveMode={saveMode}
+    />
   );
+  const saveKind = saveStatusOf(saveMode, autosave);
 
-  const mediaSection = (mediaLayout: MediaSectionLayout) => (
+  const sessionEnded =
+    session === null &&
+    !leavingRef.current &&
+    !state.restarting &&
+    submissionState.status !== "confirmed";
+  // Null when there is nothing to say, so a phone screen draws no notes.
+  const notices =
+    state.notice === null &&
+    state.fieldErrors.media === undefined &&
+    !sessionEnded ? null : (
+      <>
+        {state.notice === null ? null : (
+          <p className={styles.notice} data-editor-notice="" role="status">
+            <span>{state.notice}</span>
+            <button
+              className={styles.inlineAction}
+              onClick={() => store.setNotice(null)}
+              type="button"
+            >
+              知道了
+            </button>
+          </p>
+        )}
+        {state.fieldErrors.media === undefined ? null : (
+          <p className={styles.notice} data-tone="error" role="alert">
+            {state.fieldErrors.media}
+          </p>
+        )}
+        {sessionEnded ? (
+          <p className={styles.notice} data-tone="error" role="alert">
+            本次编辑已结束，返回后可重新开始
+          </p>
+        ) : null}
+      </>
+    );
+
+  const mediaSection = (
     <div data-editor-media="" tabIndex={-1}>
-      <MediaSection
-        layout={mediaLayout}
-        {...(mediaLayout === "phone"
-          ? { onSkip: () => store.setStep("text") }
-          : {})}
-        sessionKey={store.key}
-      />
+      <MediaSection layout="desktop" sessionKey={store.key} />
     </div>
   );
 
@@ -1330,90 +1530,117 @@ const EditorWorkspace = ({
       </p>
     ) : null;
 
-  const confirmation = (
-    <ConfirmationSheet
-      cover={cover}
-      issues={issues}
-      onCheckAgain={() => void submission.checkAgain()}
-      onGoToField={goToField}
-      onRetry={() => void submission.retry()}
-      onSubmit={() => void submit()}
-      readiness={readiness}
-      resolving={submitting}
-      state={state}
-      submission={submissionState}
-      unconfirmedFiles={
-        stagingActive && staging !== null ? staging.count.ready : 0
-      }
-    />
-  );
+  const confirmationProps: ConfirmationSheetProps = {
+    cover,
+    issues,
+    onCheckAgain: () => void submission.checkAgain(),
+    onGoToField: goToField,
+    onRetry: () => void submission.retry(),
+    onSubmit: () => void submit(),
+    readiness,
+    resolving: submitting,
+    state,
+    submission: submissionState,
+    unconfirmedFiles:
+      stagingActive && staging !== null ? staging.count.ready : 0,
+  };
+  const confirmation = <ConfirmationSheet {...confirmationProps} />;
 
   const previewShown = previewOpen !== null && layout === "phone";
   const leaveHasDraft = draftId !== null;
 
+  // 专题 and 草稿箱 on the start screen (r4 §3.1): an untouched new work
+  // (photos held for 撤销 aside) with 专题文章 on; never 参与话题, a draft
+  // or a work, and gone once text or photos exist.
+  const heldKeys = phoneUi.heldRemoval?.keys ?? [];
+  const startOffered =
+    layout === "phone" &&
+    articlesOn &&
+    state.target.type === "new" &&
+    !state.target.threadId &&
+    state.kind === "new" &&
+    isEmptyWork({
+      ...state,
+      items: state.items.filter((item) => !heldKeys.includes(item.key)),
+    });
+  const start: StartOptions | null = startOffered
+    ? {
+        topic: {
+          busy: topicCreating,
+          disabled: author.checking || author.sessionError,
+          retry: topicCreation.retrying,
+          notice: topicCreation.notice,
+          onCreate: () => {
+            void topicCreation.create().then((id) => {
+              if (id === null) return;
+              // The article editor takes this editor's entry; the empty
+              // work session ends as the overlay goes (`closeOnLeave`).
+              openArticleDraftInPlace(controls, id);
+              // The shell's focus follows a new editor session only.
+              nextFrame(() => {
+                const active = document.activeElement;
+                if (active === null || active === document.body)
+                  controls.backButtonRef.current?.focus();
+              });
+            });
+          },
+        },
+        // The article editor's own way to its 草稿箱 (ASK-2).
+        onOpenDrafts: () => openArticleDraftBox(controls),
+      }
+    : null;
+
   return (
     <>
-      <ReturnBar
-        actions={barActions}
-        controls={controls}
-        inert={previewShown}
-        status={
-          <SaveStatus
-            autosave={autosave}
-            onChooseVersion={() => setVersionsPanel("conflict")}
-            onRetry={() => void saveNow()}
-            saveMode={saveMode}
-          />
-        }
-        title={title}
-      />
-      {/* The media section and the confirmation announce their own changes. */}
+      {/* The phone screens draw their own bars (each Back goes a screen back). */}
+      {layout === "desktop" ? (
+        <ReturnBar
+          actions={barActions}
+          controls={controls}
+          status={saveStatus}
+          title={title}
+        />
+      ) : null}
+      {/*
+       * The media section, the phone flow and the confirmation (its readiness
+       * line on 发布) announce their own changes.
+       */}
       <p aria-live="polite" className={styles.visuallyHidden} role="status">
-        {announcement !== ""
-          ? announcement
-          : layout === "phone" && state.step === "text"
-            ? uploadSummary
-            : ""}
+        {announcement}
       </p>
       <div className={styles.body} data-editor-body="" inert={previewShown}>
         {layout === "phone" ? (
-          <PhoneSteps
-            confirm={
-              <>
-                {notices}
-                {confirmation}
-              </>
-            }
-            canContinue={state.items.length > 0 || stagingActive}
-            mediaItemCount={state.items.length}
-            focusHeading
-            media={
-              <>
-                {switches()}
-                {notices}
-                {mediaSection("phone")}
-              </>
-            }
-            onPreview={(opener) => setPreviewOpen({ opener })}
-            onStepChange={store.setStep}
-            step={state.step}
-            text={
-              <TextSettings
-                autoFocusTitle
-                progress={
-                  <>
-                    {notices}
-                    {progressLine}
-                  </>
-                }
-                state={state}
-                store={store}
-              />
-            }
+          <PhoneFlow
+            backButtonRef={controls.backButtonRef}
+            checkResume={!resumeChecked}
+            confirmation={confirmationProps}
+            editCommitRef={editCommitRef}
+            menu={versionsMenu}
+            notices={notices}
+            onClose={controls.close}
+            onOpenPreview={(opener) => setPreviewOpen({ opener })}
+            onResumeChecked={() => setResumeChecked(true)}
+            onSaveAndLeave={saveFromEdit}
+            saveWait={saveWait}
+            publish={{
+              label: primaryLabel,
+              busy: submissionBusy,
+              onSubmit: () => void submit(),
+            }}
+            saveAction={saveNowButton}
+            saveAlert={saveKind === "error" || saveKind === "conflict"}
+            saveStatus={saveStatus}
+            sessionKey={store.key}
+            start={start}
+            // 标题 is never the opening's focus here: its keyboard would
+            // hide 发布's bar and preview (the flow focuses 标题 only for
+            // 跳过，只发布文字).
+            textProps={{ state, store }}
+            title={title}
           />
         ) : (
           <DesktopEditor
-            media={mediaSection("desktop")}
+            media={mediaSection}
             preview={
               <ContinuousPreview
                 presentation={deferredPresentation}
@@ -1426,7 +1653,7 @@ const EditorWorkspace = ({
                 {progressLine}
               </div>
             }
-            switches={switches()}
+            switches={switches}
             text={<TextSettings autoFocusTitle state={state} store={store} />}
           />
         )}

@@ -1,0 +1,922 @@
+/*
+ * The 发布 screen (#244 r3): mockup A's 发布 (variant-a.html `#slot-publish`,
+ * the last screen of 「方向 A · Instagram 式」). Values are tokens, each mockup
+ * value mapped to the token it was copied from. The literal px are sizes
+ * with no token: the 1px hairline and focus line, the 2px focus ring, the
+ * 3px nudge, segment inset and underline offset, the 14px chip glyph, the
+ * 22px 首图 pill, the 36px chip, the 38px segment, the 44px and 52px
+ * targets, the 96px add tile, the 120px body and the 320px segment.
+ */
+
+/*
+ * The reading column with no gap of its own (`.stepContent`): every block
+ * sets the space above it. `div.` outranks `.stepContent` whatever order the
+ * two modules load in. The strip starts 8px under the bar (A `.hs`).
+ */
+div.content {
+  gap: 0;
+  padding-top: var(--yoyi-space-3);
+}
+
+/* The editor's notices, when there are any. */
+.status {
+  display: grid;
+  gap: var(--yoyi-space-3);
+  margin-bottom: var(--yoyi-space-4);
+}
+
+.status:empty {
+  display: none;
+}
+
+/*
+ * Drawn as lines of text, never boxes (mockup A has no notice box): the
+ * notices keep their words, tone and 知道了. The element outranks the
+ * `.notice` box of either module.
+ */
+.status > p,
+.status > div {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+/* Preview strip ---------------------------------------------------------- */
+
+/*
+ * A `.hs`: edge to edge, right to left, snapping card by card, photo 1 at
+ * the start (the right) inset by the reading column's side, a single card
+ * as well.
+ */
+.strip {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--yoyi-space-3);
+  margin-right: calc(-1 * max(var(--yoyi-space-5), env(safe-area-inset-right)));
+  margin-left: calc(-1 * max(var(--yoyi-space-5), env(safe-area-inset-left)));
+  padding-inline-start: max(var(--yoyi-space-5), env(safe-area-inset-right));
+  overflow-x: auto;
+  overflow-y: hidden;
+  direction: rtl;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline-start: max(
+    var(--yoyi-space-5),
+    env(safe-area-inset-right)
+  );
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+
+.strip::-webkit-scrollbar {
+  display: none;
+}
+
+/* The far end's gutter: a flex scroller drops its end padding (A `.hs::after`). */
+.strip::after {
+  flex: 0 0 var(--yoyi-space-3);
+  content: "";
+}
+
+/*
+ * A card (A `.card`): about 74% of the width at the feed stage's ratio,
+ * never taller than 40% of the screen (A `sizeCards`), the whole card a
+ * button. The ratio is the stage's height / width, set by the strip.
+ */
+.card {
+  position: relative;
+  isolation: isolate;
+  display: block;
+  flex: 0 0 auto;
+  width: min(
+    calc((100% - var(--yoyi-space-5)) * 0.74),
+    calc(40svh / var(--publish-stage-aspect))
+  );
+  aspect-ratio: 1 / var(--publish-stage-aspect);
+  padding: 0;
+  overflow: hidden;
+  direction: ltr;
+  color: var(--yoyi-color-text-tertiary);
+  background: var(--yoyi-color-background-muted);
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  font: inherit;
+  cursor: pointer;
+  scroll-snap-align: start;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  transition: opacity var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.card:active {
+  opacity: 0.84;
+}
+
+/* Inside the card's clipped edge (media-composer.module.css `.slideButton`). */
+.card:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* The fit per slide, as the feed draws it (media-composer.module.css `.slideImage`). */
+.cardImage {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+.card[data-fit="cover"] .cardImage {
+  object-fit: cover;
+}
+
+/* 准备中 / 无法预览 / 图像无法加载 (media-composer.module.css `.slidePlaceholder`). */
+.cardPlaceholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--yoyi-space-2);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+/* 首图 at the top-left (A `.card .cTL`). */
+.cardBadge {
+  position: absolute;
+  z-index: 1;
+  top: var(--yoyi-space-3);
+  left: var(--yoyi-space-3);
+  display: flex;
+  pointer-events: none;
+}
+
+/* A `.firstBadge`: a 22px seal-red pill on the muted seal fill. */
+.firstBadge {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  padding: 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-seal-red-muted);
+  border-radius: var(--yoyi-radius-full);
+  font-size: var(--yoyi-type-caption-size);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* The status chip at the bottom-left, never wider than the card (A `.card .cBL`). */
+.cardStatus {
+  position: absolute;
+  z-index: 1;
+  bottom: var(--yoyi-space-3);
+  left: var(--yoyi-space-3);
+  display: flex;
+  max-width: calc(100% - 2 * var(--yoyi-space-3));
+  pointer-events: none;
+}
+
+/*
+ * The chip's lead (A `chipHtml`): 14px, in the chip's ink. The compound
+ * outranks the shared icon's own size whatever order the sheets load in.
+ */
+.cardStatus .chipGlyph {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+/* A `.ring`: the upload's share drawn clockwise from the top over a faint track. */
+.ringTrack,
+.ringBar {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+}
+
+.ringTrack {
+  opacity: 0.3;
+}
+
+.ringBar {
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--yoyi-duration-fast)
+    var(--yoyi-easing-standard);
+}
+
+/* A `.spin`: 处理中's loading glyph turns, one turn per loading cycle. */
+.cardStatus .chipGlyph[data-icon="loading"] {
+  animation-name: chip-turn;
+  animation-duration: var(--yoyi-duration-loading-logo);
+  animation-iteration-count: infinite;
+  animation-timing-function: linear;
+}
+
+@keyframes chip-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A `.hsCap`. */
+.caption {
+  margin: var(--yoyi-space-3) 0 0;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* No photos yet: 添加照片 at the reading column's start (A `.textOnly`, `.addBig`). */
+.addRow {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: var(--yoyi-space-2);
+}
+
+.addTile {
+  display: grid;
+  width: 96px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  place-items: center;
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-muted);
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  font: inherit;
+  font-size: var(--yoyi-type-button-size);
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.addTile:active {
+  background: var(--yoyi-color-border-subtle);
+}
+
+.addTile:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Writing area ----------------------------------------------------------- */
+
+/* A `.canvas`: 20px under the strip. */
+.writing {
+  margin-top: var(--yoyi-space-6);
+}
+
+.bareField {
+  display: block;
+  min-width: 0;
+}
+
+/* A `.bodyWrap`. */
+.bareField + .bareField {
+  margin-top: var(--yoyi-space-4);
+}
+
+/* A `.tRow`: 标题 and its counter on one baseline. */
+.titleRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--yoyi-space-3);
+}
+
+/* A `#fTitle`, `#fBody`: no box, no outline; the caret shows focus. */
+.titleInput,
+.bodyInput {
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  font: inherit;
+}
+
+.titleInput {
+  flex: 1 1 auto;
+  font-size: var(--yoyi-type-section-title-size);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.bodyInput {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  overflow: hidden;
+  font-size: var(--yoyi-type-input-size);
+  line-height: 1.75;
+  white-space: pre-wrap;
+  resize: none;
+}
+
+.titleInput::placeholder,
+.bodyInput::placeholder {
+  color: var(--yoyi-color-text-tertiary);
+  opacity: 1;
+}
+
+.titleInput::placeholder {
+  font-weight: 600;
+}
+
+/* A `.counter`. */
+.counter {
+  flex: none;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.counter[data-over="true"] {
+  color: var(--yoyi-color-error);
+}
+
+/* A `.fHint`: only while 正文 itself has focus (not its @ tools). */
+.bareHint {
+  display: none;
+  margin: var(--yoyi-space-2) 0 0;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.6;
+}
+
+.bodyInput:focus ~ .bareHint {
+  display: block;
+}
+
+/* `p.` outranks `.error`'s margin whatever order the modules load in. */
+p.bareError {
+  margin-top: var(--yoyi-space-2);
+}
+
+/* A `.bodyTools`: 「@ 提醒用户」 at the start, the counter on its line at the end. */
+.bodyTools {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--yoyi-space-3);
+  margin-top: var(--yoyi-space-2);
+}
+
+/* The mention control takes the row; its panel opens under the trigger. */
+.bodyTools > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bodyTools > .counter {
+  margin-left: auto;
+  line-height: 44px;
+}
+
+/*
+ * The trigger as A `.mention`: flush with the text, seal red, bold. The
+ * attribute outranks `.mention button` (notifications.module.css), and only
+ * the trigger controls the panel.
+ */
+.bodyTools button[aria-controls] {
+  padding-right: 0;
+  padding-left: 0;
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bodyTools button[aria-controls]:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/*
+ * Its search field as A's `.fld` input: filled, no border until focus. The
+ * attribute outranks `.mention input`.
+ */
+.bodyTools input[aria-label] {
+  width: 100%;
+  margin-top: var(--yoyi-space-2);
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-muted);
+  border: 1px solid transparent;
+  border-radius: var(--yoyi-radius-md);
+  outline: none;
+  font: inherit;
+  font-size: var(--yoyi-type-input-size);
+}
+
+.bodyTools input[aria-label]:focus-visible {
+  border-color: var(--yoyi-color-focus-ring);
+}
+
+/* A `.divider`: the page's only line, inside the reading column. */
+.divider {
+  height: 1px;
+  margin: var(--yoyi-space-4) 0 0;
+  background: var(--yoyi-color-border-subtle);
+  border: 0;
+}
+
+/* Settings (A `.optSec`) ------------------------------------------------- */
+
+/* 24px under the hairline; the second section 32px under the first. */
+.optSection {
+  margin-top: var(--yoyi-space-7);
+}
+
+.optSection + .optSection {
+  margin-top: var(--yoyi-space-8);
+}
+
+/* A `.optHead`: the heading, 可选, and 清除选择 at the end. */
+.optHead {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  margin-bottom: var(--yoyi-space-2);
+}
+
+.optHead h3 {
+  margin: 0;
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.optOptional {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+/*
+ * A `.inlineAction`: drawn small inside its line, underlined, its 44px hit
+ * area reaching out around it (`::before`), so it never makes its line
+ * taller: 清除选择 keeps the 作品性质 head at 24px, 前往处理 the line above
+ * 发布 at its text height.
+ */
+.inlineAction {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--yoyi-space-1);
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-sm);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.inlineAction::before {
+  position: absolute;
+  top: 50%;
+  right: calc(-1 * var(--yoyi-space-3));
+  left: calc(-1 * var(--yoyi-space-3));
+  height: 44px;
+  content: "";
+  transform: translateY(-50%);
+}
+
+.inlineAction:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* A `.ready .inlineAction`: one that ends a line of text (前往处理, 移除换行). */
+.lineAction {
+  margin-left: var(--yoyi-space-3);
+}
+
+/* A `.optHead .inlineAction`: the element outranks `.inlineAction`. */
+button.optClear {
+  margin-left: auto;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  font-weight: 400;
+}
+
+/* A `.chips`: a 44px target around each 36px pill. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--yoyi-space-3);
+}
+
+.chip {
+  display: inline-grid;
+  min-height: 44px;
+  padding: 0;
+  place-items: center;
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.chipFace {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  padding: 0 var(--yoyi-space-5);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-muted);
+  border-radius: var(--yoyi-radius-full);
+  transition:
+    background-color var(--yoyi-duration-fast) var(--yoyi-easing-standard),
+    color var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+/* The chosen kind inverts to ink (A `.chip[aria-checked="true"] span`). */
+.chip[aria-checked="true"] .chipFace {
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-text-primary);
+  font-weight: 600;
+}
+
+.chip:focus-visible {
+  outline: none;
+}
+
+.chip:focus-visible .chipFace {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* A `.optDesc`: what the choice means; 未设置 in the tertiary colour. */
+.optDescription {
+  margin: var(--yoyi-space-2) 0 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.6;
+}
+
+.optDescription[data-unset] {
+  color: var(--yoyi-color-text-tertiary);
+}
+
+/* A `.refLine`: the references so far, opening their sheet. */
+.refLine {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  margin-top: var(--yoyi-space-3);
+  padding: 0;
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* A `.refLine svg.i`: the shared icon is a span; the compound outranks its colour. */
+.refLine > .refChevron {
+  flex: none;
+  color: var(--yoyi-color-text-tertiary);
+}
+
+.refLine:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.refText {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.refText > b,
+.refText > small {
+  display: block;
+  overflow: hidden;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refText > b {
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 600;
+}
+
+.refText > small {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.refText > small[data-error] {
+  color: var(--yoyi-color-error);
+}
+
+/*
+ * A `.seg`: a muted track, the chosen half lifted onto the elevated fill.
+ * Each half is 38px; its target reaches the track's 44px.
+ */
+.segment {
+  position: relative;
+  display: grid;
+  width: min(100%, 320px);
+  box-sizing: border-box;
+  grid-template-columns: 1fr 1fr;
+  padding: calc(var(--yoyi-space-1) + 1px);
+  background: var(--yoyi-color-background-muted);
+  border-radius: var(--yoyi-radius-full);
+}
+
+.segmentButton {
+  position: relative;
+  min-height: 38px;
+  padding: 0;
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color var(--yoyi-duration-fast) var(--yoyi-easing-standard),
+    color var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.segmentButton::before {
+  position: absolute;
+  inset: -3px 0;
+  content: "";
+}
+
+.segmentButton[aria-checked="true"] {
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-elevated);
+  box-shadow: var(--yoyi-shadow-subtle);
+  font-weight: 600;
+}
+
+.segmentButton:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* The reference sheet (A `.sheetForm`, `.fld`) ----------------------------- */
+
+/* Flush under the sheet's header; the sides clear a landscape notch. */
+.sheetForm {
+  display: grid;
+  gap: var(--yoyi-space-5);
+  padding: 0 max(var(--yoyi-space-5), env(safe-area-inset-right))
+    var(--yoyi-space-2) max(var(--yoyi-space-5), env(safe-area-inset-left));
+}
+
+.sheetField {
+  display: grid;
+  min-width: 0;
+}
+
+.sheetFieldHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--yoyi-space-3);
+  margin-bottom: var(--yoyi-space-3);
+}
+
+.sheetFieldHead label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-label-size);
+  font-weight: 600;
+}
+
+.sheetFieldHead label > span {
+  color: var(--yoyi-color-text-tertiary);
+  font-weight: 400;
+}
+
+/* Filled, no border until focus (A `.fld input`). */
+.fieldInput {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: calc(var(--yoyi-space-3) + 2px) var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-muted);
+  border: 1px solid transparent;
+  border-radius: var(--yoyi-radius-md);
+  outline: none;
+  font: inherit;
+  font-size: var(--yoyi-type-input-size);
+  line-height: 1.5;
+  resize: none;
+}
+
+.fieldInput:focus {
+  border-color: var(--yoyi-color-focus-ring);
+  box-shadow: 0 0 0 1px var(--yoyi-color-focus-ring);
+}
+
+.fieldInput[aria-invalid="true"] {
+  border-color: var(--yoyi-color-error);
+}
+
+/* `p.` outranks `.error`'s margin whatever order the modules load in. */
+p.sheetFieldError {
+  margin-top: var(--yoyi-space-2);
+}
+
+/* The confirmation sheet ------------------------------------------------- */
+
+.confirmation {
+  position: relative;
+  margin-top: var(--yoyi-space-7);
+}
+
+/*
+ * The line above 发布 says these (A `.ready`); the sheet still announces
+ * them (editor.module.css `.visuallyHidden`), and drops the empty work's
+ * error the line already shows.
+ */
+.confirmation [data-editor-readiness],
+.confirmation [data-editor-submission] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.confirmation [data-editor-empty] {
+  display: none;
+}
+
+/* Bars ------------------------------------------------------------------- */
+
+/*
+ * 完成 while a field has the keyboard (Instagram's OK), a bold text action.
+ * The attribute outranks `.detailHeader button`'s 44px circle.
+ */
+button.done[data-publish-done] {
+  width: auto;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  font-size: var(--yoyi-type-button-size);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* A `.ready`: why 发布 cannot go yet (or that every photo is ready), above it. */
+.reason {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.5;
+}
+
+.reason[data-publish-reason="blocking"] {
+  color: var(--yoyi-color-warning);
+}
+
+.reason[data-publish-reason="error"] {
+  color: var(--yoyi-color-error);
+}
+
+/* A `.ready.nudge`: a press on 发布 that cannot go shakes the line once. */
+.reason[data-nudge="true"] {
+  animation: nudge var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+@keyframes nudge {
+  33% {
+    transform: translateX(-3px);
+  }
+
+  66% {
+    transform: translateX(3px);
+  }
+}
+
+/*
+ * A `.pubActions`: 预览 · 保存草稿, then 发布 taking the rest, 2px apart.
+ * The attribute outranks the editor's `.stepFooter > div` gap.
+ */
+.actions[data-publish-actions] {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-1);
+}
+
+/* A `.footAct`: a borderless bold text action, muted while pressed. */
+.footAction,
+.footSave > button[type="button"] {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 44px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.footAction:active,
+.footSave > button[type="button"]:active:not(:disabled) {
+  background: var(--yoyi-color-background-muted);
+}
+
+.footAction:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* The editor's 保存草稿 sits in the row as one of its actions. */
+.footSave {
+  display: contents;
+}
+
+.footSave > button[type="button"]:disabled {
+  color: var(--yoyi-color-text-disabled);
+  background: transparent;
+}
+
+/*
+ * A `.pubBtn`: 发布 takes the rest of the row, 8px after the text actions.
+ * The element selector outranks `.primaryButton`'s width and margin
+ * whatever order the two modules load in.
+ */
+button.publishButton {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin-left: var(--yoyi-space-3);
+}
+
+/* A `.pubBtn[aria-disabled="true"]`: faded seal red, no hover or press. */
+button.publishButton[aria-disabled="true"],
+button.publishButton[aria-disabled="true"]:hover,
+button.publishButton[aria-disabled="true"]:active {
+  background: var(--yoyi-color-seal-red);
+  cursor: default;
+  opacity: 0.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .chipFace,
+  .segmentButton,
+  .ringBar {
+    transition: none;
+  }
+
+  .reason[data-nudge="true"],
+  .cardStatus .chipGlyph[data-icon="loading"] {
+    animation: none;
+  }
+}

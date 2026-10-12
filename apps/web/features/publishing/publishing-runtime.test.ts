@@ -417,6 +417,54 @@ describe("publishing runtime", () => {
     );
   };
 
+  it("says what keeps saveNow from saving the media: picks on their way, or ones that need the author", async () => {
+    const test = setup();
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "saved" });
+    expect(test.runtime.mediaSaveHold()).toBeNull();
+    // A pick still being read holds the save back, with nothing counted yet.
+    const reading = test.runtime.stageFiles(
+      [fileOf(jpeg({})), fileOf(jpeg({ width: 6 }))],
+      "picker",
+    );
+    expect(test.runtime.mediaSaveHold()).toEqual({
+      received: 0,
+      total: 0,
+      reading: true,
+      blocked: [],
+    });
+    await reading;
+    test.runtime.confirmStaging();
+    await settle();
+    test.timers.fireAll();
+    await settle();
+    // Both uploading: on their way, nothing needs the author.
+    expect(test.runtime.mediaSaveHold()).toEqual({
+      received: 0,
+      total: 2,
+      reading: false,
+      blocked: [],
+    });
+    await expect(test.runtime.saveNow()).rejects.toThrow("图片还未准备好");
+    // One in (processing on the account is not waited for), one failed.
+    await receiveStill(test, 0);
+    const failed = test.runtime.manager()!.getSnapshot().items[1]!;
+    test.transfers[0]!.starts[1]!.callbacks.onSettled({
+      status: 0,
+      responseText: "",
+      stalled: true,
+    });
+    await settle();
+    expect(test.runtime.mediaSaveHold()).toEqual({
+      received: 1,
+      total: 2,
+      reading: false,
+      blocked: [failed.key],
+    });
+    await expect(test.runtime.saveNow()).rejects.toThrow("图片还未准备好");
+    expect(test.client.createDraft).not.toHaveBeenCalled();
+  });
+
   it("r6 uploads under a temporary holder, then explicitly saves registered identities without cancelling them", async () => {
     const test = setup();
     test.signIn(ACCOUNT);

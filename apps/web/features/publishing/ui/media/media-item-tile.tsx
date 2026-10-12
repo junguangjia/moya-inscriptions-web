@@ -58,6 +58,47 @@ export interface MediaItemTileProps {
 const kindText = (item: WorkDraftItem) =>
   item.kind === "live" ? "实况照片" : "照片";
 
+/**
+ * The picture a tile (or the composer's rail) shows for an item: the
+ * account's edited thumbnail once its derivatives exist, else the account's
+ * thumbnail or a bounded copy of the local still, drawn in its edited frame.
+ */
+export const useItemThumb = ({
+  view,
+  server,
+  localStill,
+  editedThumbSrc,
+  edit,
+}: {
+  readonly view: UploadItemView | undefined;
+  readonly server: PublishingMediaItem | undefined;
+  readonly localStill: Blob | null;
+  readonly editedThumbSrc: string | null;
+  readonly edit: WorkDraftItem["edit"];
+}) => {
+  const account = view === undefined ? (server ?? null) : view.serverItem;
+  const serverMedia = account?.media ?? null;
+  // A bounded copy of the local still, never the original, at tile size.
+  const local = useBoundedPreview(
+    serverMedia === null ? localStill : null,
+    THUMBNAIL_EDGE,
+  );
+  // The account's edited thumbnail already carries the edit; anything else
+  // is shown in its edited frame here.
+  const edited = editedThumbSrc !== null && serverMedia !== null;
+  return {
+    account,
+    serverMedia,
+    local,
+    edited,
+    src: edited ? editedThumbSrc : (serverMedia?.thumbSrc ?? local.url),
+    edit: edited ? FULL_EDIT : edit,
+    knownSize: edited
+      ? null
+      : (account?.presentation ?? (serverMedia === null ? local.size : null)),
+  };
+};
+
 export const MediaItemTile = ({
   selecting,
   selected,
@@ -89,23 +130,17 @@ export const MediaItemTile = ({
   });
   const number = index + 1;
   const status = itemStatus(view, server, { loaded, item, derivation });
-  const account = view === undefined ? (server ?? null) : view.serverItem;
-  const serverMedia = account?.media ?? null;
-  // A bounded copy of the local still, never the original, at tile size.
-  const local = useBoundedPreview(
-    serverMedia === null ? localStill : null,
-    THUMBNAIL_EDGE,
-  );
-  // The account's edited thumbnail already carries the edit; anything else
-  // is shown in its edited frame here.
-  const edited = editedThumbSrc !== null && serverMedia !== null;
-  const previewSrc = edited
-    ? editedThumbSrc
-    : (serverMedia?.thumbSrc ?? local.url);
-  const previewEdit = edited ? FULL_EDIT : item.edit;
-  const presentation = edited
-    ? null
-    : (account?.presentation ?? (serverMedia === null ? local.size : null));
+  const thumb = useItemThumb({
+    view,
+    server,
+    localStill,
+    editedThumbSrc,
+    edit: item.edit,
+  });
+  const { edited } = thumb;
+  const previewSrc = thumb.src;
+  const previewEdit = thumb.edit;
+  const presentation = thumb.knownSize;
   const live = isVerifiedLive(view, server);
   const statusId = `media-item-${item.key}-status`;
   const style: CSSProperties = {
