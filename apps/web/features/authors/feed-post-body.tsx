@@ -103,7 +103,10 @@ export const FeedPostBody = ({
           正文暂时无法加载
           <button
             className={styles.postBodyRetry}
-            onClick={() => setAttempt((value) => value + 1)}
+            onClick={() => {
+              if (sessionError && author !== null) void author.refresh();
+              else setAttempt((value) => value + 1);
+            }}
             type="button"
           >
             重试

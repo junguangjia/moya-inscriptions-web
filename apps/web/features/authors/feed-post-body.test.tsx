@@ -13,6 +13,7 @@ const { client, author } = vi.hoisted(() => ({
     checking: false,
     sessionError: false,
     cache: new Map<string, unknown>(),
+    refresh: vi.fn(async () => undefined),
   },
 }));
 vi.mock("./author-data", () => ({ authorClient: client }));
@@ -80,6 +81,7 @@ beforeEach(() => {
   author.checking = false;
   author.sessionError = false;
   author.cache = new Map();
+  author.refresh.mockClear();
 });
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
@@ -133,7 +135,7 @@ describe("FeedPostBody", () => {
     expect(body(container)!.textContent).toBe("合成游客正文");
   });
 
-  it("hides an already loaded account body when identity confirmation fails", async () => {
+  it("hides an already loaded body when identity fails and retries identity confirmation", async () => {
     client.work.mockResolvedValueOnce(work("合成账户正文"));
     const { container, render } = await mount({ workId: "work-session-error" });
     expect(body(container)!.textContent).toBe("合成账户正文");
@@ -141,6 +143,10 @@ describe("FeedPostBody", () => {
     await render();
     expect(body(container)).toBeNull();
     expect(container.textContent).not.toContain("合成账户正文");
+    expect(client.work).toHaveBeenCalledTimes(1);
+    await act(async () => retry(container)!.click());
+    expect(author.refresh).toHaveBeenCalledOnce();
+    expect(body(container)).toBeNull();
     expect(client.work).toHaveBeenCalledTimes(1);
     author.viewer = null;
     author.cache.clear();
