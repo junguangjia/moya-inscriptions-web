@@ -1268,7 +1268,25 @@ const EditorWorkspace = ({
   const submissionState = submission.state;
   const notify = author.notify;
   const handledSubmission = useRef(submissionState);
+  // Completion releases the runtime session and its background marker. Remember
+  // an intent observed in this editor so its progress window can close too.
+  const backgroundPublicationRef = useRef<string | null>(null);
   useEffect(() => {
+    if (submission.background) backgroundPublicationRef.current = store.key;
+    else if (submissionState.status !== "confirmed")
+      backgroundPublicationRef.current = null;
+    if (
+      submissionState.status === "confirmed" &&
+      backgroundPublicationRef.current === store.key &&
+      !submitIntentRef.current
+    ) {
+      backgroundPublicationRef.current = null;
+      if (!leavingRef.current) {
+        registry.markLeaving(store, "completed");
+        leaveNow();
+      }
+      return;
+    }
     // Each result is handled once, and only for a submit made in this editor
     // (a receipt of an earlier session never navigates anywhere).
     if (submission.background && submissionState.status === "failed") {
@@ -1305,6 +1323,7 @@ const EditorWorkspace = ({
     store,
     submissionState,
     submission.background,
+    leaveNow,
   ]);
 
   const goToField = (field: EditorField) => {

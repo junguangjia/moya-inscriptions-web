@@ -470,6 +470,69 @@ describe("background publication", () => {
 
 describe("publishing runtime", () => {
   it.each(["heartbeat", "discard"])(
+    "clears an expired retained holder when the account switches during %s",
+    async (waiting) => {
+      const source = setup();
+      source.signIn(ACCOUNT);
+      source.runtime.startSession({
+        target: { type: "new" },
+        saveMode: "saved",
+      });
+      await source.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+      source.runtime.confirmStaging();
+      await settle();
+      const checkpoint = source.runtime.checkpoint()!;
+      source.runtime.dispose();
+      const identify = vi.fn(identifyFiles);
+      const t = setup(identify);
+      t.signIn(ACCOUNT);
+      let release!: () => void;
+      if (waiting === "heartbeat")
+        t.client.heartbeatSession.mockImplementationOnce(
+          () =>
+            new Promise((_resolve, reject) => {
+              release = () =>
+                reject(Object.assign(new Error("expired"), { status: 404 }));
+            }),
+        );
+      else {
+        t.client.heartbeatSession.mockRejectedValueOnce(
+          Object.assign(new Error("expired"), { status: 404 }),
+        );
+        t.client.discardSession.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              release = () => resolve({ discarded: true });
+            }),
+        );
+      }
+      const restoration = t.runtime.restoreCheckpoint(checkpoint);
+      await settle();
+      t.signIn(OTHER_ACCOUNT);
+      t.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+      await settle();
+      const other = t.runtime.store.get();
+      release();
+      await restoration;
+      expect(t.runtime.store.get()).toEqual(other);
+      expect(t.client.discardSession).toHaveBeenCalledTimes(
+        waiting === "heartbeat" ? 0 : 1,
+      );
+      expect(identify).not.toHaveBeenCalled();
+      t.signIn(ACCOUNT);
+      expect(t.runtime.store.get().session?.sessionId).toBeNull();
+      await t.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+      t.runtime.confirmStaging();
+      await settle();
+      expect(t.client.createSession).toHaveBeenCalledOnce();
+      expect(t.client.registerItem.mock.calls.at(-1)![0]).toMatchObject({
+        holder: { sessionId: SESSION_ID },
+      });
+      t.runtime.dispose();
+    },
+  );
+
+  it.each(["heartbeat", "discard"])(
     "clears an expired holder when selection cancellation happens during %s",
     async (waiting) => {
       const source = setup();

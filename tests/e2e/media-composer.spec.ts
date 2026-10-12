@@ -622,66 +622,77 @@ const trustedDrag = async (
   }
 };
 
-test("phone Publish continues while browsing and confirms without navigation", async ({
-  browser,
-  page,
-}, testInfo) => {
-  skipUnlessPhone(testInfo);
-  const composer = await openComposer(browser, page, testInfo, {
-    successfulPhotos: true,
+for (const progressOpen of [false, true])
+  test(`phone Publish continues while browsing and confirms without navigation${progressOpen ? " with progress open" : ""}`, async ({
+    browser,
+    page,
+  }, testInfo) => {
+    skipUnlessPhone(testInfo);
+    const composer = await openComposer(browser, page, testInfo, {
+      successfulPhotos: true,
+    });
+    await pickPhotos(composer);
+    const frozenKeys = await composer.strip
+      .locator("[data-edit-index]")
+      .evaluateAll((cells) =>
+        cells.map((c) => c.getAttribute("data-edit-key")),
+      );
+    await expect.poll(composer.fixture.uploadStarted).toBe(2);
+    await publishScreen(composer);
+    const publish = screen(composer, "publish");
+    await fill(publish.locator('[data-editor-input="title"]'), "后台发布标题");
+    await fill(publish.locator('[data-editor-input="body"]'), "冻结的正文");
+    await press(publish.locator('[data-editor-input="body"]'), "Tab");
+    await expect(publish.locator("[data-editor-submit]")).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await click(publish.locator("[data-editor-submit]"));
+    await expect(composer.editor).toHaveCount(0);
+    expect(composer.fixture.submitted()).toHaveLength(0);
+    await expect(
+      composer.page.locator("[data-create-work-action]"),
+    ).toHaveAttribute("aria-label", /查看后台发布进度/u);
+    await click(
+      composer.page
+        .getByRole("navigation", { name: "主要内容" })
+        .getByRole("button", { name: "用户", exact: true }),
+    );
+    const profile = composer.page.locator(
+      `[data-author-profile="${authorId}"]`,
+    );
+    await present(profile);
+    const browsingUrl = composer.page.url();
+    composer.fixture.releaseUploads();
+    await expect.poll(composer.fixture.uploaded).toBe(2);
+    expect(composer.fixture.submitted()).toHaveLength(0);
+    await expect(profile).toBeVisible();
+    if (progressOpen) {
+      await click(composer.page.locator("[data-create-work-action]"));
+      await expect(
+        composer.editor.locator("[data-editor-background-publication]"),
+      ).toBeVisible();
+    }
+    composer.fixture.releaseReady();
+    await expect
+      .poll(() => composer.fixture.submitted().length, { timeout: 15_000 })
+      .toBe(1);
+    await expect(composer.page.locator(".phase4-feedback")).toContainText(
+      "作品已发布",
+    );
+    await expect(composer.editor).toHaveCount(0);
+    await expect(profile).toBeVisible();
+    expect(composer.page.url()).toBe(browsingUrl);
+    const command = composer.fixture.submitted()[0]!;
+    expect(command.content).toMatchObject({
+      title: "后台发布标题",
+      body: "冻结的正文",
+      visibility: "public",
+    });
+    expect(command.content.items.map((i) => i.key)).toEqual(frozenKeys);
+    expect(command.content.items.every((i) => i.itemId !== null)).toBe(true);
+    expect(composer.fixture.submitted()).toHaveLength(1);
   });
-  await pickPhotos(composer);
-  const frozenKeys = await composer.strip
-    .locator("[data-edit-index]")
-    .evaluateAll((cells) => cells.map((c) => c.getAttribute("data-edit-key")));
-  await expect.poll(composer.fixture.uploadStarted).toBe(2);
-  await publishScreen(composer);
-  const publish = screen(composer, "publish");
-  await fill(publish.locator('[data-editor-input="title"]'), "后台发布标题");
-  await fill(publish.locator('[data-editor-input="body"]'), "冻结的正文");
-  await press(publish.locator('[data-editor-input="body"]'), "Tab");
-  await expect(publish.locator("[data-editor-submit]")).not.toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
-  await click(publish.locator("[data-editor-submit]"));
-  await expect(composer.editor).toHaveCount(0);
-  expect(composer.fixture.submitted()).toHaveLength(0);
-  await expect(
-    composer.page.locator("[data-create-work-action]"),
-  ).toHaveAttribute("aria-label", /查看后台发布进度/u);
-  await click(
-    composer.page
-      .getByRole("navigation", { name: "主要内容" })
-      .getByRole("button", { name: "用户", exact: true }),
-  );
-  const profile = composer.page.locator(`[data-author-profile="${authorId}"]`);
-  await present(profile);
-  const browsingUrl = composer.page.url();
-  composer.fixture.releaseUploads();
-  await expect.poll(composer.fixture.uploaded).toBe(2);
-  expect(composer.fixture.submitted()).toHaveLength(0);
-  await expect(profile).toBeVisible();
-  composer.fixture.releaseReady();
-  await expect
-    .poll(() => composer.fixture.submitted().length, { timeout: 15_000 })
-    .toBe(1);
-  await expect(composer.page.locator(".phase4-feedback")).toContainText(
-    "作品已发布",
-  );
-  await expect(composer.editor).toHaveCount(0);
-  await expect(profile).toBeVisible();
-  expect(composer.page.url()).toBe(browsingUrl);
-  const command = composer.fixture.submitted()[0]!;
-  expect(command.content).toMatchObject({
-    title: "后台发布标题",
-    body: "冻结的正文",
-    visibility: "public",
-  });
-  expect(command.content.items.map((i) => i.key)).toEqual(frozenKeys);
-  expect(command.content.items.every((i) => i.itemId !== null)).toBe(true);
-  expect(composer.fixture.submitted()).toHaveLength(1);
-});
 
 test("phone dock + opens the complete start screen directly", async ({
   browser,

@@ -731,10 +731,8 @@ export class PublishingRuntime {
     const session = account?.session;
     if (!view || !account || !session) return;
     const epoch = this.selectionEpoch;
-    const owned = () =>
-      this.current() === account &&
-      account.session === session &&
-      !session.closed;
+    const retained = () => account.session === session && !session.closed;
+    const owned = () => this.current() === account && retained();
     const active = () => owned() && this.selectionEpoch === epoch;
     session.draftCreation = checkpoint.draftCreation ?? null;
     session.view = {
@@ -747,15 +745,26 @@ export class PublishingRuntime {
       try {
         await this.services.client.heartbeatSession(previous);
       } catch (error) {
-        if ((error as { status?: number })?.status === 404 && owned()) {
-          // Release an expired holder before retrying its cancelled bytes; this
-          // preserves any draft/revision references and releases old reservations.
-          await this.services.client
-            .discardSession(previous, { requestId: this.services.requestId() })
-            .catch(() => undefined);
-          if (!owned()) return;
+        if (
+          (error as { status?: number })?.status === 404 &&
+          retained() &&
+          session.view.sessionId === previous
+        ) {
+          // Forget a known-expired holder in its retained session even when its
+          // account is paused. Clear before discard waits, without touching a
+          // replacement holder or sending under another account.
           session.view = { ...session.view, sessionId: null };
-          this.publish();
+          this.stopHeartbeat(session);
+          if (owned()) this.publish();
+          if (
+            owned() &&
+            this.services.currentAccount() === account.manager.accountId
+          )
+            await this.services.client
+              .discardSession(previous, {
+                requestId: this.services.requestId(),
+              })
+              .catch(() => undefined);
         }
       }
       if (!active()) return;

@@ -1368,6 +1368,62 @@ describe("Publishing editor", () => {
       content: { title: "断网恢复" },
     });
     expect(h.controls.completeWith).not.toHaveBeenCalled();
+    expect(h.controls.close).toHaveBeenCalledTimes(2);
+    expect(h.guard()?.("history")).toBe("allow");
+    expect(query("[data-editor-leave-dialog]")).toBeNull();
+    expect(
+      vi
+        .mocked(author.notify)
+        .mock.calls.filter(([text]) => text === "作品已发布"),
+    ).toHaveLength(1);
+    await leaveOverlay(h);
+    await h.show(true);
+    await goToPublish();
+    expect(titleInput()?.value).toBe("");
+  });
+
+  it("closes the reopened background progress editor when a receipt confirms publication", async () => {
+    const h = await renderEditor({ type: "new" });
+    let reject!: (error: Error) => void;
+    let answerReceipt!: () => void;
+    fn("submit").mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    fn("submissionReceipt").mockImplementationOnce(
+      (id: string) =>
+        new Promise((resolve) => {
+          answerReceipt = () => resolve(receipt(id));
+        }),
+    );
+    await goToPublish();
+    await type(titleInput(), "等待回执");
+    await click(query("[data-editor-submit]"));
+    await leaveOverlay(h);
+    await h.show(true);
+    expect(
+      query("[data-editor-background-publication]")?.textContent,
+    ).toContain("正在发布");
+    await act(async () =>
+      reject(clientError(0, "网络连接中断，结果尚未确认", true)),
+    );
+    await flush();
+    expect(
+      query("[data-editor-background-publication]")?.textContent,
+    ).toContain("正在确认发布结果");
+    await act(async () => answerReceipt());
+    await flush();
+    expect(h.controls.close).toHaveBeenCalledTimes(2);
+    expect(h.controls.completeWith).not.toHaveBeenCalled();
+    expect(fn("submit")).toHaveBeenCalledOnce();
+    expect(h.guard()?.("history")).toBe("allow");
+    expect(
+      vi
+        .mocked(author.notify)
+        .mock.calls.filter(([text]) => text === "作品已发布"),
+    ).toHaveLength(1);
   });
 
   it("keeps a lost background result while browsing and confirms by receipt without navigation", async () => {
