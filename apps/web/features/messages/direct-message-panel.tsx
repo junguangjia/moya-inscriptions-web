@@ -1,6 +1,6 @@
 "use client";
 import { UserIdentity } from "../authors/user-identity";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Icon } from "@moya/ui";
 import type { DirectConversation } from "@moya/contracts";
@@ -14,6 +14,7 @@ import { formatEditorialTime } from "../editorial-content/format-time";
 import { authorClient } from "./message-data";
 import {
   findConversationWith,
+  describeDirectMessageFailure,
   startConversationWith,
   useConversation,
   useConversations,
@@ -104,7 +105,7 @@ const useHostTitle = (
   const id = participant?.id ?? null;
   const name = participant?.displayName ?? null;
   const studioName = participant?.studioName;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!seam || id === null || name === null) return;
     change.current?.({
       label: name,
@@ -148,10 +149,12 @@ const refusalText = (conversation: DirectConversation): string | null =>
  */
 const Composer = ({
   disabledReason,
+  pending = false,
   onSend,
   autoFocus = false,
 }: {
   disabledReason: string | null;
+  pending?: boolean;
   onSend: (
     text: string,
   ) => Promise<{ ok: true } | { ok: false; message: string }>;
@@ -170,7 +173,7 @@ const Composer = ({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || busy || disabledReason) return;
+    if (!text || busy || disabledReason || pending) return;
     setBusy(true);
     setError(null);
     const result = await onSend(text);
@@ -216,7 +219,7 @@ const Composer = ({
           <button
             type="submit"
             className={commentStyles.composerSend}
-            disabled={busy || !draft.trim()}
+            disabled={pending || busy || !draft.trim()}
           >
             发送
           </button>
@@ -235,80 +238,108 @@ const Composer = ({
   );
 };
 
+type ChatTarget = {
+  readonly key: string | number;
+  readonly participant: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly studioName?: string | undefined;
+  };
+  readonly conversationId?: string;
+};
+type PairResolution =
+  | { readonly state: "loading" }
+  | { readonly state: "ready"; readonly id: string | null }
+  | { readonly state: "unavailable"; readonly message: string };
+
+/** One frame and composer through pair resolution, history and first send. */
 const ConversationView = ({
-  id,
+  target,
   onOpenProfile,
   onTitleChange,
 }: {
-  id: string;
+  target: ChatTarget;
   onOpenProfile: (userId: string, opener: HTMLElement) => void;
   onTitleChange?: (title: DirectMessageTitle | null) => void;
 }) => {
   const author = useAuthors();
-  const { state, loadOlder, send, refresh } = useConversation(id, true);
-  const stream = useRef<HTMLDivElement>(null);
-  const count = state.state === "populated" ? state.messages.length : 0;
-  const titleInHost = useHostTitle(
-    onTitleChange,
-    state.state === "populated" ? state.conversation.participant : null,
-    onOpenProfile,
+  const [resolution, setResolution] = useState<PairResolution>(() =>
+    target.conversationId
+      ? { state: "ready", id: target.conversationId }
+      : { state: "loading" },
   );
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (target.conversationId) return;
+    const controller = new AbortController();
+    setResolution({ state: "loading" });
+    void findConversationWith(target.participant.id, controller.signal)
+      .then((conversation) => {
+        if (!controller.signal.aborted)
+          setResolution({ state: "ready", id: conversation?.id ?? null });
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted)
+          setResolution({
+            state: "unavailable",
+            message: describeDirectMessageFailure(error),
+          });
+      });
+    return () => controller.abort();
+  }, [target.participant.id, target.conversationId, attempt]);
+  const id = resolution.state === "ready" ? resolution.id : null;
+  const { state, loadOlder, send, refresh } = useConversation(id, id !== null);
+  const populated = id !== null && state.state === "populated" ? state : null;
+  const participant = populated?.conversation.participant ?? target.participant;
+  const isNew = resolution.state === "ready" && id === null;
+  const failure =
+    resolution.state === "unavailable"
+      ? resolution.message
+      : id !== null && state.state === "unavailable"
+        ? state.message
+        : null;
+  const pending = !isNew && populated === null;
+  const stream = useRef<HTMLDivElement>(null);
+  const count = populated?.messages.length ?? 0;
+  const titleInHost = useHostTitle(onTitleChange, participant, onOpenProfile);
   useEffect(() => {
     stream.current?.scrollTo?.({
       top: stream.current.scrollHeight,
       behavior: "auto",
     });
   }, [count]);
-  if (state.state !== "populated")
-    return (
-      <p
-        role={state.state === "unavailable" ? "alert" : "status"}
-        className={`${panelStyles.panel} ${panelStyles.viewStatus}`}
-        data-dm-view-state={state.state}
-      >
-        {state.state === "loading" ? "正在加载对话…" : state.message}
-        {state.state === "unavailable" && (
-          <>
-            {" "}
-            <button
-              type="button"
-              className={panelStyles.textButton}
-              onClick={() => void refresh()}
-            >
-              重试
-            </button>
-          </>
-        )}
-      </p>
-    );
   const me = author.viewer?.id;
   return (
     <div
       className={`${styles.chat} ${panelStyles.panel} ${panelStyles.conversation}`}
-      data-dm-view="conversation"
+      data-dm-view={isNew ? "start" : populated ? "conversation" : "pending"}
+      data-dm-view-state={
+        failure ? "unavailable" : pending ? "loading" : "populated"
+      }
       data-dm-title={titleInHost ? "host" : "view"}
-      data-dm-conversation={id}
-      data-dm-state={state.conversation.state}
+      data-dm-conversation={id ?? undefined}
+      data-dm-start={isNew ? participant.id : undefined}
+      data-dm-state={populated?.conversation.state}
     >
       {!titleInHost && (
         <div className={panelStyles.title}>
           <Avatar
-            name={state.conversation.participant.displayName}
+            name={participant.displayName}
             onOpen={() => {
               const opener =
                 document.activeElement instanceof HTMLElement
                   ? document.activeElement
                   : document.body;
-              onOpenProfile(state.conversation.participant.id, opener);
+              onOpenProfile(participant.id, opener);
             }}
           />
           <strong>
             <UserIdentity
-              name={state.conversation.participant.displayName}
-              studioName={state.conversation.participant.studioName}
+              name={participant.displayName}
+              studioName={participant.studioName}
             />
           </strong>
-          {state.conversation.muted && <MutedMark />}
+          {populated?.conversation.muted && <MutedMark />}
         </div>
       )}
       <div
@@ -316,104 +347,97 @@ const ConversationView = ({
         ref={stream}
         data-dm-stream=""
       >
-        {state.hasOlder && (
-          <button
-            type="button"
-            className={panelStyles.olderButton}
-            onClick={() => void loadOlder()}
+        {pending && (
+          <p
+            role={failure ? "alert" : "status"}
+            className={panelStyles.inlineNotice}
           >
-            加载更早的消息
-          </button>
+            {failure ?? "正在加载对话…"}
+            {failure && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className={panelStyles.textButton}
+                  onClick={() => {
+                    if (resolution.state === "unavailable")
+                      setAttempt((value) => value + 1);
+                    else void refresh();
+                  }}
+                >
+                  重试
+                </button>
+              </>
+            )}
+          </p>
         )}
-        {state.messages.map((message) => (
-          <div
-            key={message.id}
-            className={panelStyles.message}
-            data-dm-message={message.sequence}
-            data-dm-removed={message.removed}
-            data-dm-sent={message.senderId === me}
-          >
-            <p
-              className={
-                message.senderId === me
-                  ? styles.sentBubble
-                  : styles.receivedBubble
-              }
-            >
-              {message.removed ? <em>此消息已被移除</em> : message.text}
-            </p>
-            <time className={panelStyles.time} dateTime={message.createdAt}>
-              {formatEditorialTime(message.createdAt)}
-            </time>
-          </div>
-        ))}
-        {state.conversation.state === "requested" &&
-          state.conversation.sendRefusal === "request_pending" && (
-            <p
-              role="status"
-              className={panelStyles.inlineNotice}
-              data-dm-gate=""
-            >
-              对方尚未回复。收到回复后即可继续交流。
-            </p>
-          )}
+        {isNew && (
+          <p role="status" className={panelStyles.inlineNotice}>
+            发送第一条私信后，需等待对方回复才能继续发送。
+          </p>
+        )}
+        {populated && (
+          <>
+            {populated.hasOlder && (
+              <button
+                type="button"
+                className={panelStyles.olderButton}
+                onClick={() => void loadOlder()}
+              >
+                加载更早的消息
+              </button>
+            )}
+            {populated.messages.map((message) => (
+              <div
+                key={message.id}
+                className={panelStyles.message}
+                data-dm-message={message.sequence}
+                data-dm-removed={message.removed}
+                data-dm-sent={message.senderId === me}
+              >
+                <p
+                  className={
+                    message.senderId === me
+                      ? styles.sentBubble
+                      : styles.receivedBubble
+                  }
+                >
+                  {message.removed ? <em>此消息已被移除</em> : message.text}
+                </p>
+                <time className={panelStyles.time} dateTime={message.createdAt}>
+                  {formatEditorialTime(message.createdAt)}
+                </time>
+              </div>
+            ))}
+            {populated.conversation.state === "requested" &&
+              populated.conversation.sendRefusal === "request_pending" && (
+                <p
+                  role="status"
+                  className={panelStyles.inlineNotice}
+                  data-dm-gate=""
+                >
+                  对方尚未回复。收到回复后即可继续交流。
+                </p>
+              )}
+          </>
+        )}
       </div>
       <Composer
-        disabledReason={refusalText(state.conversation)}
-        onSend={send}
-      />
-    </div>
-  );
-};
-
-/** First message to an account without a conversation yet; opening sends nothing. */
-const StartConversation = ({
-  userId,
-  displayName,
-  studioName,
-  onStarted,
-  onOpenProfile,
-  onTitleChange,
-}: {
-  userId: string;
-  displayName: string;
-  studioName?: string | undefined;
-  onStarted: (conversationId: string) => void;
-  onOpenProfile: (userId: string, opener: HTMLElement) => void;
-  onTitleChange?: (title: DirectMessageTitle | null) => void;
-}) => {
-  const titleInHost = useHostTitle(
-    onTitleChange,
-    { id: userId, displayName, studioName },
-    onOpenProfile,
-  );
-  return (
-    <div
-      className={`${styles.chat} ${panelStyles.panel} ${panelStyles.conversation}`}
-      data-dm-view="start"
-      data-dm-title={titleInHost ? "host" : "view"}
-      data-dm-start={userId}
-    >
-      {!titleInHost && (
-        <div className={panelStyles.title}>
-          <Avatar name={displayName} />
-          <strong>
-            <UserIdentity name={displayName} studioName={studioName} />
-          </strong>
-        </div>
-      )}
-      <div className={`${styles.chatStream} ${panelStyles.stream}`}>
-        <p role="status" className={panelStyles.inlineNotice}>
-          发送第一条私信后，需等待对方回复才能继续发送。
-        </p>
-      </div>
-      <Composer
-        disabledReason={null}
-        autoFocus
+        disabledReason={populated ? refusalText(populated.conversation) : null}
+        pending={
+          pending || (populated !== null && !populated.conversation.canSend)
+        }
+        autoFocus={target.conversationId === undefined}
         onSend={async (text) => {
-          const result = await startConversationWith(userId, text);
-          if (result.ok) onStarted(result.conversationId);
-          return result.ok ? { ok: true } : result;
+          if (isNew) {
+            const result = await startConversationWith(participant.id, text);
+            if (result.ok)
+              setResolution({ state: "ready", id: result.conversationId });
+            return result.ok ? { ok: true } : result;
+          }
+          if (!populated || !populated.conversation.canSend)
+            return { ok: false, message: "正在加载对话…" };
+          return send(text);
         }}
       />
     </div>
@@ -426,6 +450,7 @@ export interface DirectMessagePanelProps {
     readonly userId: string;
     readonly displayName: string;
     readonly studioName?: string | undefined;
+    readonly token?: number;
   } | null;
   readonly onOpenProfile: (userId: string, opener: HTMLElement) => void;
   /** Reports whether a child conversation is open so the host's Back returns one level. */
@@ -451,13 +476,41 @@ export const DirectMessagePanel = ({
   onTitleChange,
 }: DirectMessagePanelProps) => {
   const author = useAuthors();
-  const conversations = useConversations(author.viewer !== null);
-  const [open, setOpen] = useState<string | null>(null);
-  const [starting, setStarting] = useState<{
-    userId: string;
-    displayName: string;
-    studioName?: string | undefined;
-  } | null>(null);
+  const [entry, setEntry] = useState(openWith);
+  const [previousBack, setPreviousBack] = useState(backRequested);
+  const [target, setTarget] = useState<ChatTarget | null>(() =>
+    openWith
+      ? {
+          key: openWith.token ?? 0,
+          participant: {
+            id: openWith.userId,
+            displayName: openWith.displayName,
+            studioName: openWith.studioName,
+          },
+        }
+      : null,
+  );
+  // Adjust this component's selection before committing children: an incoming
+  // profile request never paints the list or the previous participant first.
+  if (entry !== openWith || previousBack !== backRequested) {
+    setEntry(openWith);
+    setPreviousBack(backRequested);
+    setTarget(
+      previousBack !== backRequested || !openWith
+        ? null
+        : {
+            key: openWith.token ?? 0,
+            participant: {
+              id: openWith.userId,
+              displayName: openWith.displayName,
+              studioName: openWith.studioName,
+            },
+          },
+    );
+  }
+  const conversations = useConversations(
+    author.viewer !== null && target === null,
+  );
   const [undo, setUndo] = useState<{
     conversation: DirectConversation;
     until: number;
@@ -466,7 +519,6 @@ export const DirectMessagePanel = ({
   // At most one row shows its actions; scrolling or pressing anywhere outside
   // that row closes it, as in the accepted list.
   const [expanded, setExpanded] = useState<string | null>(null);
-  const handled = useRef<string | null>(null);
   useEffect(() => {
     if (expanded === null) return;
     const close = () => setExpanded(null);
@@ -481,28 +533,9 @@ export const DirectMessagePanel = ({
       document.removeEventListener("pointerdown", outside, true);
     };
   }, [expanded]);
-  useEffect(() => {
-    onDepthChange?.(open || starting ? 1 : 0);
-  }, [open, starting, onDepthChange]);
-  useEffect(() => {
-    if (backRequested > 0) {
-      setOpen(null);
-      setStarting(null);
-    }
-  }, [backRequested]);
-  // A profile's private-message action: resolve the canonical pair, never create it here.
-  useEffect(() => {
-    if (!openWith || !author.viewer) return;
-    const key = `${author.viewer.id}:${openWith.userId}`;
-    if (handled.current === key) return;
-    handled.current = key;
-    void findConversationWith(openWith.userId)
-      .then((conversation) => {
-        if (conversation) setOpen(conversation.id);
-        else setStarting(openWith);
-      })
-      .catch(() => setStarting(openWith));
-  }, [openWith, author.viewer?.id]);
+  useLayoutEffect(() => {
+    onDepthChange?.(author.viewer && target ? 1 : 0);
+  }, [target, author.viewer?.id, onDepthChange]);
   useEffect(() => {
     if (!undo && !notice) return;
     const timer = window.setTimeout(() => {
@@ -525,25 +558,11 @@ export const DirectMessagePanel = ({
         <a href={author.signInHref}>登录后查看私信</a>
       </p>
     );
-  if (starting)
-    return (
-      <StartConversation
-        userId={starting.userId}
-        displayName={starting.displayName}
-        studioName={starting.studioName}
-        onStarted={(conversationId) => {
-          setStarting(null);
-          setOpen(conversationId);
-          void conversations.refresh();
-        }}
-        onOpenProfile={onOpenProfile}
-        {...(onTitleChange ? { onTitleChange } : {})}
-      />
-    );
-  if (open)
+  if (target)
     return (
       <ConversationView
-        id={open}
+        key={`${author.viewer.id}:${target.participant.id}:${target.key}`}
+        target={target}
         onOpenProfile={onOpenProfile}
         {...(onTitleChange ? { onTitleChange } : {})}
       />
@@ -649,7 +668,13 @@ export const DirectMessagePanel = ({
                 onExpand={(value) =>
                   setExpanded(value ? conversation.id : null)
                 }
-                onOpen={() => setOpen(conversation.id)}
+                onOpen={() =>
+                  setTarget({
+                    key: conversation.id,
+                    participant: conversation.participant,
+                    conversationId: conversation.id,
+                  })
+                }
                 onOpenProfile={(opener) =>
                   onOpenProfile(conversation.participant.id, opener)
                 }

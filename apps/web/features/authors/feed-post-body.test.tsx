@@ -1,13 +1,23 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ComponentProps } from "react";
 import type { Root } from "react-dom/client";
 
-const { client } = vi.hoisted(() => ({ client: { work: vi.fn() } }));
+const { client, author } = vi.hoisted(() => ({
+  client: { work: vi.fn() },
+  author: {
+    viewer: { id: "viewer" } as { id: string } | null,
+    checking: false,
+    sessionError: false,
+    cache: new Map<string, unknown>(),
+    refresh: vi.fn(async () => undefined),
+  },
+}));
 vi.mock("./author-data", () => ({ authorClient: client }));
+vi.mock("./author-context", () => ({ useOptionalAuthors: () => author }));
 
 import { FeedPostBody } from "./feed-post-body";
 
@@ -66,6 +76,13 @@ const retry = (container: HTMLElement) =>
     (button) => button.textContent === "重试",
   );
 
+beforeEach(() => {
+  author.viewer = { id: "viewer" };
+  author.checking = false;
+  author.sessionError = false;
+  author.cache = new Map();
+  author.refresh.mockClear();
+});
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   document.body.replaceChildren();
@@ -73,6 +90,73 @@ afterEach(() => {
 });
 
 describe("FeedPostBody", () => {
+  it("re-reads after sign-out without showing the previous account's body", async () => {
+    client.work.mockResolvedValueOnce(work("合成作者未公开修订"));
+    const { container, render } = await mount({ workId: "work-sign-out" });
+    expect(body(container)!.textContent).toBe("合成作者未公开修订");
+    const guest = deferred();
+    client.work.mockReturnValueOnce(guest.promise);
+    author.viewer = null;
+    author.cache.clear();
+    await render();
+    expect(body(container)).toBeNull();
+    expect(container.textContent).not.toContain("合成作者未公开修订");
+    expect(client.work).toHaveBeenCalledTimes(2);
+    await act(async () => guest.resolve(work("合成公开正文")));
+    expect(body(container)!.textContent).toBe("合成公开正文");
+  });
+
+  it("does not share a cached body with a different account's new post instance", async () => {
+    client.work.mockResolvedValueOnce(work("合成作者修订"));
+    await mount({ workId: "work-account-switch" });
+    author.viewer = { id: "other-viewer" };
+    author.cache.clear();
+    client.work.mockResolvedValueOnce(work("合成公开版本"));
+    const next = await mount({ workId: "work-account-switch" });
+    expect(body(next.container)!.textContent).toBe("合成公开版本");
+    expect(client.work).toHaveBeenCalledTimes(2);
+  });
+
+  it("hides account content while identity is being checked and ignores its late response", async () => {
+    const previous = deferred();
+    client.work.mockReturnValueOnce(previous.promise);
+    const { container, render } = await mount({ workId: "work-checking" });
+    const signal = client.work.mock.calls[0]![1] as AbortSignal;
+    author.checking = true;
+    await render();
+    expect(signal.aborted).toBe(true);
+    await act(async () => previous.resolve(work("合成旧账户正文")));
+    expect(body(container)).toBeNull();
+    author.viewer = null;
+    author.cache.clear();
+    author.checking = false;
+    client.work.mockResolvedValueOnce(work("合成游客正文"));
+    await render();
+    expect(body(container)!.textContent).toBe("合成游客正文");
+  });
+
+  it("hides an already loaded body when identity fails and retries identity confirmation", async () => {
+    client.work.mockResolvedValueOnce(work("合成账户正文"));
+    const { container, render } = await mount({ workId: "work-session-error" });
+    expect(body(container)!.textContent).toBe("合成账户正文");
+    author.sessionError = true;
+    await render();
+    expect(body(container)).toBeNull();
+    expect(container.textContent).not.toContain("合成账户正文");
+    expect(client.work).toHaveBeenCalledTimes(1);
+    await act(async () => retry(container)!.click());
+    expect(author.refresh).toHaveBeenCalledOnce();
+    expect(body(container)).toBeNull();
+    expect(client.work).toHaveBeenCalledTimes(1);
+    author.viewer = null;
+    author.cache.clear();
+    author.sessionError = false;
+    client.work.mockResolvedValueOnce(work("合成公开正文"));
+    await render();
+    expect(body(container)!.textContent).toBe("合成公开正文");
+    expect(client.work).toHaveBeenCalledTimes(2);
+  });
+
   it("renders nothing and reads nothing while collapsed", async () => {
     const { container } = await mount({
       workId: "work-collapsed",

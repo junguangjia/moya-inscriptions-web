@@ -154,6 +154,18 @@ describe("FeedPostDots", () => {
     expect(dots(container)[2]!.dataset.active).toBe("true");
   });
 
+  it("keeps the seal lit while the colophons continue past the comments start", async () => {
+    const { container } = await render({ progress: 4.6, region: "comments" });
+    expect(weight(seal(container)!)).toBe("100%");
+    expect(size(seal(container)!)).toBe("10px");
+    expect(dots(container)[2]!.dataset.active).toBe("true");
+    expect(
+      container
+        .querySelector("[data-feed-post-dots]")!
+        .getAttribute("data-feed-post-progress"),
+    ).toBe("4.6");
+  });
+
   it("reflects the live progress on the group", async () => {
     const { container } = await render({ progress: 1.25 });
     expect(

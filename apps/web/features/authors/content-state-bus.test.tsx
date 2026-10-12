@@ -41,9 +41,10 @@ const snapshot = (change: Partial<ContentState> = {}): ContentState => ({
   ...change,
 });
 
+let actions: ReturnType<typeof useContentActions>;
 const Probe = ({ target }: { target: ContentIdentity }) => {
-  const { state: current } = useContentActions(target, "合成作品");
-  return <output>{String(current.commentCount)}</output>;
+  actions = useContentActions(target, "合成作品");
+  return <output>{String(actions.state.commentCount)}</output>;
 };
 
 const roots: Root[] = [];
@@ -64,6 +65,58 @@ afterEach(() => {
 });
 
 describe("comment totals", () => {
+  it("does not let a delayed state read overwrite a newer discussion count", async () => {
+    const target = { type: "work", id: "work-delayed-count" } as const;
+    let resolve!: (value: ContentState) => void;
+    state.mockReturnValueOnce(
+      new Promise<ContentState>((done) => (resolve = done)),
+    );
+    const shown = await mount(target);
+    await act(async () => publishCommentCount("viewer", target, 23));
+    await act(async () => resolve(snapshot({ commentCount: 22 })));
+    expect(shown.textContent).toBe("23");
+  });
+
+  it("accepts a lower count from a state read started after the last publication", async () => {
+    const target = { type: "work", id: "work-fresh-lower-count" } as const;
+    publishCommentCount("viewer", target, 23);
+    state.mockResolvedValueOnce(snapshot({ commentCount: 22 }));
+    const shown = await mount(target);
+    expect(shown.textContent).toBe("22");
+  });
+
+  it("keeps a discussion count when a like's earlier read-back arrives last", async () => {
+    const target = { type: "work", id: "work-like-read-back" } as const;
+    state.mockResolvedValueOnce(snapshot({ commentCount: 22 }));
+    const shown = await mount(target);
+    let resolve!: (value: ContentState) => void;
+    state.mockReturnValueOnce(
+      new Promise<ContentState>((done) => (resolve = done)),
+    );
+    author.like.mockResolvedValueOnce(true);
+    await act(async () => {
+      void actions.ensureLiked();
+    });
+    expect(state).toHaveBeenCalledTimes(2);
+    await act(async () => publishCommentCount("viewer", target, 23));
+    await act(async () => resolve(snapshot({ liked: true, commentCount: 22 })));
+    expect(shown.textContent).toBe("23");
+    expect(actions.state.liked).toBe(true);
+  });
+
+  it("protects a repeated discussion total from an older state response", async () => {
+    const target = { type: "work", id: "work-repeated-count" } as const;
+    publishCommentCount("viewer", target, 23);
+    let resolve!: (value: ContentState) => void;
+    state.mockReturnValueOnce(
+      new Promise<ContentState>((done) => (resolve = done)),
+    );
+    const shown = await mount(target);
+    await act(async () => publishCommentCount("viewer", target, 23));
+    await act(async () => resolve(snapshot({ commentCount: 22 })));
+    expect(shown.textContent).toBe("23");
+  });
+
   it("shows the state read's total until a discussion read reports a newer one", async () => {
     const target = { type: "work", id: "work-a" } as const;
     state.mockResolvedValue(snapshot({ commentCount: 3 }));
