@@ -1,6 +1,7 @@
 import { PUBLISHING_BLOB_KEY_PATTERN } from "../storage/publishing-media-store.js";
 import { LEGACY_USER_MEDIA_MAX_BYTES } from "./processing/profiles.js";
 import { sniffSignature } from "./processing/signature.js";
+import { profileAnchorIdentities } from "./profile.js";
 
 import type { PublishingMediaStoreBlobEntry } from "../storage/publishing-media-store.js";
 import type {
@@ -16,6 +17,12 @@ import type {
   ProcessorOutcome,
   ProcessorVariant,
 } from "./processing/media-processor.js";
+import type {
+  ProfileRenderer,
+  ProfileWorkerRenderOutcome,
+  ProfileWorkerRenderPlan,
+  ProfileWorkerRenditionIdentity,
+} from "./profile.js";
 
 /*
  * Job handlers of the work publishing worker (design §2.5, §3.5; T05-T06).
@@ -72,8 +79,8 @@ export const MEDIA_WORKER_JOB_KINDS = [
 
 /**
  * Profile image renders (increment 3a): a list of their own, kept out of
- * `MEDIA_WORKER_JOB_KINDS`, so that the media worker can claim them behind
- * their own switch. No process claims them yet.
+ * `MEDIA_WORKER_JOB_KINDS`, so that the media worker claims them only while
+ * `MEDIA_PROFILE_RENDER` is on.
  */
 export const PROFILE_RENDER_JOB_KINDS = [
   "profile_render",
@@ -252,6 +259,20 @@ export interface PublishingWorkerCatalogPort {
   ): Promise<void>;
 }
 
+/** The profile image operations a `profile_render` job uses (structural mirror). */
+export interface PublishingWorkerProfilePort {
+  readProfileRenderPlan(
+    userMediaId: string,
+    anchors: readonly ProfileWorkerRenditionIdentity[],
+  ): Promise<ProfileWorkerRenderPlan | null>;
+  readProfileMediaBytes(userMediaId: string): Promise<Uint8Array | null>;
+  recordProfileRenditions(
+    userMediaId: string,
+    outcome: ProfileWorkerRenderOutcome,
+    now: Date,
+  ): Promise<PublishingWorkerDerivativeCommit>;
+}
+
 /** The media store operations the worker uses (filesystem store in Development). */
 export interface PublishingWorkerStore {
   remove(storageKey: string, signal?: AbortSignal): Promise<void>;
@@ -349,6 +370,11 @@ export interface PublishingJobHandlerOptions {
   readonly catalog?: {
     readonly port: PublishingWorkerCatalogPort;
     readonly renderer: CatalogRenderer;
+  };
+  /** Profile image rendering; absent while `MEDIA_PROFILE_RENDER` is off. */
+  readonly profile?: {
+    readonly port: PublishingWorkerProfilePort;
+    readonly renderer: ProfileRenderer;
   };
   readonly toolJobs?: PublishingWorkerToolJobs;
   readonly clock?: () => Date;
@@ -473,7 +499,7 @@ export class PublishingJobSystemError extends Error {
 export function createPublishingJobHandlers(
   options: PublishingJobHandlerOptions,
 ): PublishingJobHandlers {
-  const { port, store, processor, catalog } = options;
+  const { port, store, processor, catalog, profile } = options;
   const clock = options.clock ?? (() => new Date());
   const timers = options.timers ?? defaultPublishingWorkerTimers;
   const cancellationCheckMs =
@@ -925,6 +951,51 @@ export function createPublishingJobHandlers(
     return COMPLETED;
   };
 
+  /**
+   * Renders the planned families of one profile image in the sandbox and
+   * records them in one transaction. An unknown or erased image, or one
+   * whose families need nothing (no current pointer of an active owner, or
+   * the anchors are ready), completes without work. A content rejection
+   * fails the job with its content-free code, which waits for the operator;
+   * infrastructure failures are retried, and the sweep queues an exhausted
+   * job again a day later.
+   */
+  const renderProfileMedia = async (
+    claim: PublishingWorkerJobClaim,
+    signal: AbortSignal,
+  ): Promise<PublishingJobResult> => {
+    if (profile === undefined) return failed("profile_unavailable", true);
+    const plan = await profile.port.readProfileRenderPlan(
+      claim.subjectId,
+      profileAnchorIdentities(),
+    );
+    if (plan === null || plan.families.length === 0) return COMPLETED;
+    throwIfAborted(signal);
+    const source = await profile.port.readProfileMediaBytes(claim.subjectId);
+    // The image was erased meanwhile: nothing to render.
+    if (source === null) return COMPLETED;
+    throwIfAborted(signal);
+    const result = await profile.renderer.render(plan, source, signal);
+    if (result.status === "rejected") return failed(result.failureCode, false);
+    const keys = result.outcome.renditions.map(
+      (rendition) => rendition.storageKey,
+    );
+    if (signal.aborted) {
+      await Promise.all(
+        keys.map((key) => store.remove(key).catch(() => undefined)),
+      );
+      throw signal.reason;
+    }
+    await commitDerivatives(keys, () =>
+      profile.port.recordProfileRenditions(
+        plan.userMediaId,
+        result.outcome,
+        clock(),
+      ),
+    );
+    return COMPLETED;
+  };
+
   const invalidSubject = failed("invalid_job_subject", false);
   const unavailable = failed("processing_unavailable", true);
 
@@ -983,6 +1054,10 @@ export function createPublishingJobHandlers(
         case "catalog_render":
           return CATALOG_ASSET_ID_PATTERN.test(subject)
             ? renderCatalogAsset(claim, signal)
+            : invalidSubject;
+        case "profile_render":
+          return LEGACY_MEDIA_ID_PATTERN.test(subject)
+            ? renderProfileMedia(claim, signal)
             : invalidSubject;
         default:
           return failed("unsupported_job_kind", false);

@@ -19,15 +19,23 @@ import {
   listPublishedCatalogSources,
 } from "./publishing/catalog.js";
 import {
+  MEDIA_PROFILE_RENDER,
   openProductionPublishingMedia,
   openPublishingMedia,
   parseProductionPublishingMediaConfig,
+  parseProfileMediaSwitch,
   parsePublishingMediaConfig,
 } from "./publishing/config.js";
 import {
   MEDIA_WORKER_JOB_KINDS,
+  PROFILE_RENDER_JOB_KINDS,
   createPublishingJobHandlers,
 } from "./publishing/job-handlers.js";
+import {
+  PROFILE_SWEEP_INTERVAL_MS,
+  createProfileRenderer,
+  createProfileSweep,
+} from "./publishing/profile.js";
 import { PublishingWorker } from "./publishing/worker.js";
 import {
   parsePublicationConfig,
@@ -53,8 +61,9 @@ import type { PublishingCosTransport } from "./storage/publishing-cos-transport.
  * Composition of the media worker process (`yoyi-media-worker`, W1). It runs
  * the durable publishing queue for every processing and maintenance kind
  * except the two coupled to the Backend's own uploads, renders every job in
- * one media sandbox container, and syncs and renders published Catalog
- * media. It opens no HTTP listener. Startup is fail-closed: configuration or
+ * one media sandbox container, syncs and renders published Catalog media,
+ * and, while `MEDIA_PROFILE_RENDER` is on, sweeps and renders profile
+ * images. It opens no HTTP listener. Startup is fail-closed: configuration or
  * isolation problems exit 78 (no restart), an unreachable container daemon
  * or a missing image exits 75 (retried by the supervisor). Logs are
  * content-free.
@@ -93,6 +102,8 @@ export interface PreparedMediaWorker {
   readonly concurrency: number;
   readonly runtime: SandboxRuntime;
   readonly catalog: boolean;
+  /** `MEDIA_PROFILE_RENDER`: claims `profile_render` and runs the sweep. */
+  readonly profile: boolean;
   start(): void;
   /** Stops the worker (bounded) and closes its pools. Idempotent. */
   stop(): Promise<void>;
@@ -155,6 +166,11 @@ const parseWorkerConfiguration = (environment: Environment) => {
   const catalogDatabase =
     catalogSource === null ? null : parsePostgresConfig(environment);
   const publication = parsePublicationConfig(environment, nodeEnv);
+  const profile = parseProfileMediaSwitch(
+    environment,
+    MEDIA_PROFILE_RENDER,
+    nodeEnv,
+  );
   return {
     nodeEnv,
     media,
@@ -162,6 +178,7 @@ const parseWorkerConfiguration = (environment: Environment) => {
     catalogSource,
     catalogDatabase,
     publication,
+    profile,
   };
 };
 
@@ -296,10 +313,24 @@ export async function prepareMediaWorker(
           }),
         }
       : null;
+  // Profile jobs share the one sandbox and the worker concurrency with work
+  // processing; the sweep yields to uploads, edits and Catalog renders.
+  const profile = configuration.profile
+    ? {
+        renderer: createProfileRenderer({
+          store: media.store,
+          sandbox: media.sandbox,
+          logger,
+        }),
+        sweep: createProfileSweep({ port, logger }),
+      }
+    : null;
   const worker = new PublishingWorker({
     port,
     concurrency: mediaConfig.config.workerConcurrency,
-    kinds: MEDIA_WORKER_JOB_KINDS,
+    kinds: profile
+      ? [...MEDIA_WORKER_JOB_KINDS, ...PROFILE_RENDER_JOB_KINDS]
+      : MEDIA_WORKER_JOB_KINDS,
     // The Backend schedules and claims the staging sweep (W3); lease requeue
     // and cleanup scheduling are idempotent across both processes.
     maintenance: { requeue: true, cleanup: true, reconcile: true },
@@ -310,6 +341,15 @@ export async function prepareMediaWorker(
               label: "catalog sync",
               intervalMs: CATALOG_SYNC_INTERVAL_MS,
               run: catalog.sync.run,
+            },
+          ]
+        : []),
+      ...(profile
+        ? [
+            {
+              label: "profile sweep",
+              intervalMs: PROFILE_SWEEP_INTERVAL_MS,
+              run: profile.sweep.run,
             },
           ]
         : []),
@@ -327,6 +367,7 @@ export async function prepareMediaWorker(
       store: media.store,
       processor: media.processor,
       ...(catalog ? { catalog: { port, renderer: catalog.renderer } } : {}),
+      ...(profile ? { profile: { port, renderer: profile.renderer } } : {}),
       logger,
     }),
     logger,
@@ -336,6 +377,7 @@ export async function prepareMediaWorker(
     concurrency: mediaConfig.config.workerConcurrency,
     runtime: check.runtime,
     catalog: catalog !== null,
+    profile: profile !== null,
     start: () => {
       worker.start();
       publicationWorkers.forEach((lane) => lane.start());
@@ -359,7 +401,7 @@ export async function startMediaWorker(
   const prepared = await prepareMediaWorker(environment, dependencies);
   prepared.start();
   logger.info(
-    `[media-worker] ready concurrency=${prepared.concurrency} sharp=${prepared.runtime.sharp} vips=${prepared.runtime.vips} catalog=${prepared.catalog ? "on" : "off"}`,
+    `[media-worker] ready concurrency=${prepared.concurrency} sharp=${prepared.runtime.sharp} vips=${prepared.runtime.vips} catalog=${prepared.catalog ? "on" : "off"} profile=${prepared.profile ? "on" : "off"}`,
   );
   return prepared;
 }

@@ -62,6 +62,7 @@ describe("media sandbox import boundary", () => {
       "worker-composition.ts",
       "publishing/config.ts",
       "publishing/catalog.ts",
+      "publishing/profile.ts",
       "publishing/job-handlers.ts",
       "publishing/processing/media-processor.ts",
       "publishing/sandbox/sandbox-runner.ts",
