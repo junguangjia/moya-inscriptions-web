@@ -384,9 +384,123 @@ function requestBase(config) {
   return url.origin;
 }
 
-/** Inject fetch only for isolated tests. Fixed endpoints never come from source text. */
+/** Keep the existing general API-key client unchanged. */
 export function createTransport(config, fetchImpl = fetch) {
   const origin = requestBase(config);
+  return controlledTransport(config, fetchImpl, {
+    origin,
+    authorization: () => `users API-Key ${config.apiKey}`,
+    scopeFingerprint: stableDigest({ origin, identity: digest(config.apiKey) }),
+  });
+}
+
+// These fields/limits match the installed adapter's draftTargetOrigin and
+// connect-production's capped session expiry. Claim checks are local preflight;
+// the authenticated native endpoint still verifies the JWT signature.
+function metadataSession(config) {
+  let url;
+  try {
+    url = new URL(config.baseURL);
+  } catch {
+    throwCode("PRODUCTION_TARGET_INVALID");
+  }
+  if (
+    config.instance !== "production" ||
+    config.targetVerified !== true ||
+    config.syntheticOnly !== false ||
+    url.protocol !== "https:" ||
+    ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throwCode("PRODUCTION_TARGET_INVALID");
+  const now = Date.now();
+  const expiry = Date.parse(config.sessionExpiresAt);
+  if (
+    typeof config.sessionToken !== "string" ||
+    !config.sessionToken ||
+    config.sessionToken.length > 64 * 1024 ||
+    /[\r\n]/u.test(config.sessionToken) ||
+    config.apiKey !== undefined ||
+    !Number.isSafeInteger(config.actorId) ||
+    config.actorId < 1 ||
+    !Number.isFinite(expiry) ||
+    expiry <= now ||
+    expiry - now > 2 * 60 * 60 * 1000
+  )
+    throwCode("PRODUCTION_LOGIN_REQUIRED");
+  let claims;
+  try {
+    const parts = config.sessionToken.split(".");
+    if (
+      parts.length !== 3 ||
+      parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))
+    )
+      throw new Error("invalid session");
+    const bytes = Buffer.from(parts[1], "base64url");
+    const text = bytes.toString("utf8");
+    if (!bytes.equals(Buffer.from(text, "utf8")))
+      throw new Error("invalid session");
+    claims = JSON.parse(text);
+  } catch {
+    throwCode("PRODUCTION_LOGIN_REQUIRED");
+  }
+  if (
+    !plainObject(claims) ||
+    claims.id !== config.actorId ||
+    claims.collection !== "users" ||
+    !Number.isSafeInteger(claims.iat) ||
+    claims.iat < 0 ||
+    !Number.isSafeInteger(claims.exp) ||
+    !Number.isSafeInteger(claims.exp * 1000) ||
+    claims.exp <= claims.iat ||
+    expiry > claims.exp * 1000
+  )
+    throwCode("PRODUCTION_LOGIN_REQUIRED");
+  return url.origin;
+}
+
+/** Metadata-only compatibility for existing API keys and protected Owner
+ * sessions. No login/configuration write or credential discovery exists here. */
+export function createMetadataTransport(config, fetchImpl = fetch) {
+  const frozen = Object.freeze({ ...config });
+  if (frozen.sessionToken === undefined && frozen.instance !== "production") {
+    const origin = requestBase(frozen);
+    return controlledTransport(frozen, fetchImpl, {
+      origin,
+      metadataOnly: true,
+      authorization: () => `users API-Key ${frozen.apiKey}`,
+      scopeFingerprint: stableDigest({
+        origin,
+        identity: digest(frozen.apiKey),
+      }),
+    });
+  }
+  const origin = metadataSession(frozen);
+  return controlledTransport(frozen, fetchImpl, {
+    origin,
+    metadataOnly: true,
+    authorization: () => {
+      metadataSession(frozen);
+      return `JWT ${frozen.sessionToken}`;
+    },
+    scopeFingerprint: stableDigest({
+      origin,
+      instance: "production",
+      actorId: frozen.actorId,
+    }),
+  });
+}
+
+/** Inject fetch only for isolated tests. Fixed endpoints never come from source text. */
+function controlledTransport(
+  config,
+  fetchImpl,
+  { origin, authorization, scopeFingerprint, metadataOnly = false },
+) {
   const timeoutMs = bounded(
     config.timeoutMs ?? 30_000,
     100,
@@ -394,14 +508,29 @@ export function createTransport(config, fetchImpl = fetch) {
     "TIMEOUT_INVALID",
   );
   const request = async (route, method, body, signal) => {
+    if (
+      metadataOnly &&
+      (method !== "POST" ||
+        ![
+          "/api/editorial/save-curation-metadata",
+          "/api/editorial/read-curation-metadata",
+        ].includes(route))
+    )
+      throwCode("METADATA_ROUTE_INVALID");
     if (signal?.aborted)
       return { ok: false, retryable: true, code: "TRANSPORT_UNCERTAIN" };
+    let header;
+    try {
+      header = authorization();
+    } catch {
+      return { ok: false, retryable: false, code: "PRODUCTION_LOGIN_REQUIRED" };
+    }
     let response;
     try {
       response = await fetchImpl(`${origin}${route}`, {
         method,
         headers: {
-          Authorization: `users API-Key ${config.apiKey}`,
+          Authorization: header,
           ...(body instanceof FormData
             ? {}
             : { "Content-Type": "application/json" }),
@@ -467,6 +596,8 @@ export function createTransport(config, fetchImpl = fetch) {
     return { ok: true, result };
   };
   const transport = async (operation, item, { signal } = {}) => {
+    if (metadataOnly && operation !== "save-curation-metadata")
+      throwCode("OPERATION_INVALID");
     const send = (route, method, body) => request(route, method, body, signal);
     if (
       ![
@@ -581,7 +712,7 @@ export function createTransport(config, fetchImpl = fetch) {
     return { ok: true, result: projectReceipt(response.result.result) };
   };
   Object.defineProperty(transport, "scopeFingerprint", {
-    value: stableDigest({ origin, identity: digest(config.apiKey) }),
+    value: scopeFingerprint,
   });
   return transport;
 }
@@ -804,6 +935,13 @@ export async function runBatch({
             historicalVerified: scoped.filter(
               (item) => item?.status === "historical",
             ).length,
+            ...(scoped.some(
+              (item) =>
+                item?.status === "failed" &&
+                item.code === "PRODUCTION_LOGIN_REQUIRED",
+            )
+              ? { category: "PRODUCTION_LOGIN_REQUIRED" }
+              : {}),
           }
         : {}),
       pending: scoped.filter((item) => !item || item.status === "pending")
@@ -849,7 +987,11 @@ async function main() {
       manifest,
       directory: path.dirname(path.resolve(flags.manifest)),
       receiptFile: flags.receipt,
-      transport: flags.execute ? createTransport(config) : undefined,
+      transport: flags.execute
+        ? manifest.operation === "save-curation-metadata"
+          ? createMetadataTransport(config)
+          : createTransport(config)
+        : undefined,
       dryRun: !flags.execute,
       concurrency: config.concurrency,
       attempts: config.attempts,

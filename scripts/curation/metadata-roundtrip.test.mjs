@@ -1,4 +1,5 @@
 import test from "node:test";
+import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import assert from "node:assert/strict";
@@ -25,6 +26,7 @@ import { metadataRoundtrip } from "./metadata-roundtrip.mjs";
 import {
   runBatch,
   createTransport,
+  createMetadataTransport,
   prepareItems,
 } from "../editorial/batch.mjs";
 import {
@@ -859,4 +861,487 @@ test("offline validation preserves valid Python 1.0 annotation bytes and their e
   assert.equal(result.status, "OFFLINE_VALIDATED");
   assert.equal(result.counts.annotationRevisions, 1);
   assert.deepEqual(await readFile(input.metadataFile), originalBytes);
+});
+
+const sessionConfig = ({
+  actorId = 7,
+  baseURL = "https://cms.example.invalid",
+  sid = "synthetic-session-1",
+  claims = {},
+  changes = {},
+} = {}) => {
+  const now = Math.floor(Date.now() / 1000);
+  const tokenClaims = {
+    id: actorId,
+    collection: "users",
+    email: "synthetic@example.invalid",
+    sid,
+    iat: now,
+    exp: now + 3600,
+    ...claims,
+  };
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  return {
+    instance: "production",
+    targetVerified: true,
+    syntheticOnly: false,
+    baseURL,
+    sessionToken: `${encode({ alg: "HS256", typ: "JWT" })}.${encode(tokenClaims)}.c3ludGhldGljLXNpZ25hdHVyZS1vbmx5`,
+    actorId,
+    sessionExpiresAt: new Date((now + 3600) * 1000).toISOString(),
+    catalogIds: ["synthetic-catalog"],
+    attempts: 1,
+    budgetMs: 2000,
+    ...changes,
+  };
+};
+const saveSessionConfig = (input, config) =>
+  writeFile(input.configFile, JSON.stringify(config), { mode: 0o600 });
+const preparedMetadata = (input) => ({
+  body: {
+    payloadJSON: input.payloadJSON,
+    snapshotSha256: digest(input.payloadJSON),
+    expectedPreviousSha256: null,
+  },
+});
+
+test("metadata-only Owner session uses JWT on exact save/read endpoints and leaves protected config unchanged", async () => {
+  const input = await files();
+  const config = sessionConfig();
+  await saveSessionConfig(input, config);
+  const configBytes = await readFile(input.configFile);
+  const remote = server(input.payloadJSON);
+  const headers = [];
+  const result = await metadataRoundtrip({
+    ...input,
+    execute: true,
+    fetchImpl: async (url, request) => {
+      assert.equal(new URL(url).origin, config.baseURL);
+      assert.equal(request.method, "POST");
+      assert.equal(request.redirect, "error");
+      headers.push(request.headers.Authorization);
+      return remote.fetchImpl(url, request);
+    },
+  });
+  assert.equal(result.status, "PERSISTED_AND_READBACK_VERIFIED");
+  assert.deepEqual(headers, [
+    `JWT ${config.sessionToken}`,
+    `JWT ${config.sessionToken}`,
+  ]);
+  assert.deepEqual(remote.routes, [
+    "/api/editorial/save-curation-metadata",
+    "/api/editorial/read-curation-metadata",
+  ]);
+  assert.deepEqual(await readFile(input.configFile), configBytes);
+  assert.throws(() => createTransport(config), { code: "CONFIG_AUTH_INVALID" });
+});
+
+test("metadata-only transport preserves existing API-key authentication and receipt scope", async () => {
+  const input = await files();
+  const config = JSON.parse(await readFile(input.configFile, "utf8"));
+  const headers = [];
+  const remote = server(input.payloadJSON);
+  const transport = createMetadataTransport(config, async (url, request) => {
+    headers.push(request.headers.Authorization);
+    return remote.fetchImpl(url, request);
+  });
+  const result = await transport(
+    "save-curation-metadata",
+    preparedMetadata(input),
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(headers, [
+    "users API-Key synthetic-test-only",
+    "users API-Key synthetic-test-only",
+  ]);
+  assert.equal(
+    transport.scopeFingerprint,
+    createTransport(config).scopeFingerprint,
+  );
+});
+
+test("session validation rejects expired, overlong, mixed and mismatched native identity before any request", () => {
+  const now = Date.now();
+  for (const config of [
+    sessionConfig({
+      changes: { sessionExpiresAt: new Date(now - 1000).toISOString() },
+    }),
+    sessionConfig({
+      changes: { sessionExpiresAt: new Date(now + 3 * 3600_000).toISOString() },
+    }),
+    sessionConfig({ changes: { sessionExpiresAt: "not-a-date" } }),
+    sessionConfig({ changes: { sessionToken: "" } }),
+    sessionConfig({ changes: { sessionToken: "SYNTHETIC_MALFORMED_TOKEN" } }),
+    sessionConfig({
+      changes: {
+        sessionToken: ["SYNTHETIC_HEADER", "\r\n", "SYNTHETIC_SUFFIX"].join(""),
+      },
+    }),
+    sessionConfig({ changes: { apiKey: "synthetic-mixed" } }),
+    sessionConfig({ changes: { apiKey: null } }),
+    sessionConfig({ changes: { actorId: 0 } }),
+    sessionConfig({ changes: { actorId: "7" } }),
+    sessionConfig({ claims: { id: 8 } }),
+    sessionConfig({ claims: { collection: "other-collection" } }),
+    sessionConfig({ claims: { exp: Math.floor(now / 1000) - 1 } }),
+    sessionConfig({ claims: { exp: Math.floor(now / 1000) + 3599 } }),
+    sessionConfig({ claims: { exp: 1.5 } }),
+    sessionConfig({ claims: { iat: undefined } }),
+    sessionConfig({
+      changes: { sessionToken: undefined, apiKey: "synthetic-role-switch" },
+    }),
+  ]) {
+    let requests = 0;
+    assert.throws(
+      () =>
+        createMetadataTransport(config, () => {
+          requests += 1;
+        }),
+      { code: "PRODUCTION_LOGIN_REQUIRED" },
+    );
+    assert.equal(requests, 0);
+  }
+});
+
+test("session target guards retain explicit verified Production and URL boundaries", () => {
+  const syntheticUserinfo = new URL("https://cms.example.invalid");
+  syntheticUserinfo.username = "SYNTHETIC_USER";
+  syntheticUserinfo.password = "SYNTHETIC_PASSWORD_PLACEHOLDER";
+  for (const changes of [
+    { instance: "development" },
+    { targetVerified: false },
+    { syntheticOnly: true },
+    { baseURL: "http://cms.example.invalid" },
+    { baseURL: "https://127.0.0.1" },
+    { baseURL: "https://localhost" },
+    { baseURL: "https://[::1]" },
+    { baseURL: syntheticUserinfo.href },
+    { baseURL: "https://cms.example.invalid/api" },
+    { baseURL: "https://cms.example.invalid?target=other" },
+    { baseURL: "https://cms.example.invalid#other" },
+  ])
+    assert.throws(() => createMetadataTransport(sessionConfig({ changes })), {
+      code: "PRODUCTION_TARGET_INVALID",
+    });
+});
+
+test("metadata factories refuse draft, publication, upload and arbitrary operations with zero requests", async () => {
+  const input = await files();
+  for (const config of [
+    sessionConfig(),
+    JSON.parse(await readFile(input.configFile, "utf8")),
+  ]) {
+    let requests = 0;
+    const transport = createMetadataTransport(config, () => {
+      requests += 1;
+    });
+    for (const operation of [
+      "save-draft",
+      "publish-approved",
+      "upload-media",
+      "read-draft",
+      "read-curation-metadata",
+      "../users",
+    ]) {
+      await assert.rejects(transport(operation, preparedMetadata(input)), {
+        code: "OPERATION_INVALID",
+      });
+    }
+    assert.equal(requests, 0);
+  }
+});
+
+test("same Owner renewed session resumes the exact receipt while a changed actor or origin cannot", async () => {
+  const input = await files();
+  const firstConfig = sessionConfig();
+  await saveSessionConfig(input, firstConfig);
+  const remote = server(input.payloadJSON, { lostReply: true });
+  assert.equal(
+    (
+      await metadataRoundtrip({
+        ...input,
+        execute: true,
+        fetchImpl: remote.fetchImpl,
+      })
+    ).status,
+    "FAILED",
+  );
+  const renewed = sessionConfig({ sid: "synthetic-renewed-session" });
+  assert.notEqual(renewed.sessionToken, firstConfig.sessionToken);
+  assert.equal(
+    createMetadataTransport(renewed).scopeFingerprint,
+    createMetadataTransport(firstConfig).scopeFingerprint,
+  );
+  await saveSessionConfig(input, renewed);
+  assert.equal(
+    (
+      await metadataRoundtrip({
+        ...input,
+        execute: true,
+        fetchImpl: remote.fetchImpl,
+      })
+    ).status,
+    "PERSISTED_AND_READBACK_VERIFIED",
+  );
+  assert.equal(remote.commits(), 1);
+  const before = remote.routes.length;
+  for (const changed of [
+    sessionConfig({ actorId: 8 }),
+    sessionConfig({ baseURL: "https://other-cms.example.invalid" }),
+  ]) {
+    await saveSessionConfig(input, changed);
+    await assert.rejects(
+      metadataRoundtrip({
+        ...input,
+        execute: true,
+        fetchImpl: remote.fetchImpl,
+      }),
+      { code: "RECEIPT_SCOPE_MISMATCH" },
+    );
+  }
+  assert.equal(remote.routes.length, before);
+});
+
+test("every session request checks expiry; an expired readback never claims success and renewal can reconcile", async (t) => {
+  const input = await files();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const config = sessionConfig();
+  await saveSessionConfig(input, config);
+  const remote = server(input.payloadJSON);
+  const first = await metadataRoundtrip({
+    ...input,
+    execute: true,
+    fetchImpl: async (url, request) => {
+      const result = await remote.fetchImpl(url, request);
+      now = Date.parse(config.sessionExpiresAt) + 1;
+      return result;
+    },
+  });
+  assert.equal(first.status, "FAILED");
+  assert.equal(first.succeeded, 0);
+  assert.deepEqual(remote.routes, ["/api/editorial/save-curation-metadata"]);
+  assert.equal((await latestReceipt(input)).code, "PRODUCTION_LOGIN_REQUIRED");
+  const renewed = sessionConfig({ sid: "synthetic-renewed-after-expiry" });
+  await saveSessionConfig(input, renewed);
+  assert.equal(
+    (
+      await metadataRoundtrip({
+        ...input,
+        execute: true,
+        fetchImpl: remote.fetchImpl,
+      })
+    ).status,
+    "PERSISTED_AND_READBACK_VERIFIED",
+  );
+  assert.equal(remote.commits(), 1);
+});
+
+test("metadata session transport pins original origin and actor against later caller object changes", async () => {
+  const input = await files();
+  const config = sessionConfig();
+  const originalToken = config.sessionToken;
+  const scope = createMetadataTransport(config).scopeFingerprint;
+  const remote = server(input.payloadJSON);
+  const transport = createMetadataTransport(config, (url, request) => {
+    assert.equal(new URL(url).origin, "https://cms.example.invalid");
+    assert.equal(request.headers.Authorization, `JWT ${originalToken}`);
+    return remote.fetchImpl(url, request);
+  });
+  Object.assign(
+    config,
+    sessionConfig({ actorId: 8, baseURL: "https://other-cms.example.invalid" }),
+  );
+  assert.equal(
+    (await transport("save-curation-metadata", preparedMetadata(input))).ok,
+    true,
+  );
+  assert.equal(transport.scopeFingerprint, scope);
+});
+
+async function spawnMetadataCLI(
+  input,
+  { clock, expireAfterSave = false } = {},
+) {
+  const marker = path.join(
+    path.dirname(input.metadataFile),
+    "cli-request-routes.json",
+  );
+  const cli = new URL("./metadata-roundtrip.mjs", import.meta.url);
+  const program = `
+    import { writeFile, readFile } from 'node:fs/promises';
+    import { deriveCurationMetadataCounts, decodeCurationMetadata } from ${JSON.stringify(new URL("../../packages/contracts/dist/internal/editorial/index.js", import.meta.url).href)};
+    const input=${JSON.stringify({ metadataFile: input.metadataFile, configFile: input.configFile, stateDirectory: input.stateDirectory })};
+    const config=JSON.parse(await readFile(input.configFile,'utf8'));
+    const payloadJSON=await readFile(input.metadataFile,'utf8');
+    const counts=deriveCurationMetadataCounts(decodeCurationMetadata(payloadJSON));
+    let clock=${JSON.stringify(clock ?? Date.now())};
+    Date.now=()=>clock;
+    const routes=[];
+    await writeFile(${JSON.stringify(marker)},JSON.stringify(routes),{mode:0o600});
+    globalThis.fetch=async (url,request)=>{
+      const route=new URL(url).pathname;
+      if (request.method!=='POST'||request.redirect!=='error'||!['/api/editorial/save-curation-metadata','/api/editorial/read-curation-metadata'].includes(route)) throw new Error('FIXED_ROUTE_REQUIRED');
+      if(request.headers.Authorization!==('JWT '+config.sessionToken)) throw new Error('FIXED_AUTH_REQUIRED');
+      routes.push(route);
+      await writeFile(${JSON.stringify(marker)},JSON.stringify(routes),{mode:0o600});
+      if(${JSON.stringify(expireAfterSave)}&&route.endsWith('save-curation-metadata')) clock=Date.parse(config.sessionExpiresAt)+1;
+      const body=JSON.parse(request.body);
+      return new Response(JSON.stringify({ok:true,result:{id:1,catalogId:'synthetic-catalog',payloadJSON,
+        snapshotSha256:body.snapshotSha256,previousSha256:null,createdAt:'2026-10-13T00:00:00.000Z',current:true,counts}}),
+        {status:200,headers:{'Content-Type':'application/json'}});
+    };
+    process.argv=[process.execPath,${JSON.stringify(cli.pathname)},'--metadata',input.metadataFile,'--config',input.configFile,'--state',input.stateDirectory,'--execute'];
+    await import(${JSON.stringify(cli.href)});
+  `;
+  const child = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", program],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const [code] = await once(child, "close");
+  return {
+    code,
+    stdout,
+    stderr,
+    result: JSON.parse(stdout),
+    routes: JSON.parse(await readFile(marker, "utf8")),
+  };
+}
+
+test("CLI initial expired session returns only fixed login-required classification with zero requests", async () => {
+  const input = await files();
+  const config = sessionConfig({
+    changes: { sessionExpiresAt: new Date(Date.now() - 1000).toISOString() },
+  });
+  await saveSessionConfig(input, config);
+  const configBytes = await readFile(input.configFile);
+  const result = await spawnMetadataCLI(input);
+  assert.equal(result.code, 1);
+  assert.deepEqual(result.result, {
+    status: "FAILED",
+    category: "PRODUCTION_LOGIN_REQUIRED",
+  });
+  assert.deepEqual(result.routes, []);
+  assert.equal(result.stdout.includes(config.sessionToken), false);
+  assert.equal(result.stderr.includes(config.sessionToken), false);
+  assert.deepEqual(await readFile(input.configFile), configBytes);
+});
+
+test("CLI expiry between committed save and readback exposes fixed category and preserves earlier proof", async () => {
+  const input = await files();
+  const config = sessionConfig();
+  await saveSessionConfig(input, config);
+  const remote = server(input.payloadJSON);
+  await metadataRoundtrip({
+    ...input,
+    execute: true,
+    fetchImpl: remote.fetchImpl,
+  });
+  const proof = (await latestReceipt(input)).result;
+  const configBytes = await readFile(input.configFile);
+  const result = await spawnMetadataCLI(input, { expireAfterSave: true });
+  assert.equal(result.code, 1);
+  assert.equal(result.result.status, "FAILED");
+  assert.equal(result.result.category, "PRODUCTION_LOGIN_REQUIRED");
+  assert.equal(result.result.succeeded, 0);
+  assert.equal(result.result.failed, 1);
+  assert.deepEqual(result.routes, ["/api/editorial/save-curation-metadata"]);
+  const receipt = await latestReceipt(input);
+  assert.equal(receipt.code, "PRODUCTION_LOGIN_REQUIRED");
+  assert.deepEqual(receipt.priorCompletedResult, proof);
+  assert.equal(result.stdout.includes(config.sessionToken), false);
+  assert.deepEqual(await readFile(input.configFile), configBytes);
+});
+
+test("CLI target errors remain generic rather than expanding the auth category whitelist", async () => {
+  const input = await files();
+  await saveSessionConfig(
+    input,
+    sessionConfig({ changes: { targetVerified: false } }),
+  );
+  const result = await spawnMetadataCLI(input);
+  assert.equal(result.code, 1);
+  assert.deepEqual(result.result, {
+    status: "FAILED",
+    category: "CURATION_METADATA_ROUNDTRIP_FAILED",
+  });
+  assert.deepEqual(result.routes, []);
+});
+
+test("metadata API-key remote errors cannot inject login-required category or raw error text", async () => {
+  const input = await files();
+  const result = await metadataRoundtrip({
+    ...input,
+    execute: true,
+    fetchImpl: async () =>
+      response(
+        {
+          ok: false,
+          error: {
+            code: "PRODUCTION_LOGIN_REQUIRED",
+            message: "synthetic-raw-remote-error-must-not-appear",
+          },
+        },
+        401,
+      ),
+  });
+  assert.equal(result.status, "FAILED");
+  assert.equal(Object.hasOwn(result, "category"), false);
+  assert.equal(
+    JSON.stringify(result).includes(
+      "synthetic-raw-remote-error-must-not-appear",
+    ),
+    false,
+  );
+  assert.equal((await latestReceipt(input)).code, "FORBIDDEN");
+});
+
+test("legacy batch summary shape remains unchanged even for the same fixed failure code", async () => {
+  const input = await files();
+  const result = await runBatch({
+    manifest: {
+      version: 1,
+      batchId: "legacy-category-shape",
+      operation: "save-draft",
+      items: [
+        {
+          key: "draft",
+          content: {
+            catalogId: "synthetic-catalog",
+            sourceId: "synthetic-source",
+            kind: "inscription",
+            title: "Synthetic draft",
+          },
+        },
+      ],
+    },
+    directory: path.dirname(input.metadataFile),
+    receiptFile: path.join(
+      input.stateDirectory,
+      "legacy-summary-shape.receipt.jsonl",
+    ),
+    dryRun: false,
+    transport: async () => ({
+      ok: false,
+      retryable: false,
+      code: "PRODUCTION_LOGIN_REQUIRED",
+    }),
+  });
+  assert.deepEqual(result, {
+    dryRun: false,
+    total: 1,
+    succeeded: 0,
+    failed: 1,
+    pending: 0,
+  });
 });

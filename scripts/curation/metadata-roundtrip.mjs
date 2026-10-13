@@ -8,7 +8,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
   runBatch,
-  createTransport,
+  createMetadataTransport,
   readPrivateBounded,
 } from "../editorial/batch.mjs";
 
@@ -74,7 +74,7 @@ export async function metadataRoundtrip({
     manifest,
     directory: path.dirname(file),
     receiptFile,
-    transport: execute ? createTransport(config, fetchImpl) : undefined,
+    transport: execute ? createMetadataTransport(config, fetchImpl) : undefined,
     dryRun: !execute,
     concurrency: 1,
     attempts: config.attempts ?? 3,
@@ -164,10 +164,11 @@ if (
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 )
   main().catch((error) => {
-    const category =
-      error?.code === "RECEIPT_LOCKED"
-        ? "RECEIPT_LOCKED"
-        : "CURATION_METADATA_ROUNDTRIP_FAILED";
+    const category = ["RECEIPT_LOCKED", "PRODUCTION_LOGIN_REQUIRED"].includes(
+      error?.code,
+    )
+      ? error.code
+      : "CURATION_METADATA_ROUNDTRIP_FAILED";
     process.stdout.write(`${JSON.stringify({ status: "FAILED", category })}\n`);
     process.stderr.write("CURATION_METADATA_ROUNDTRIP_FAILED\n");
     process.exitCode = 1;

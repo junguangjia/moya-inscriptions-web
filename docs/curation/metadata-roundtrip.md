@@ -27,13 +27,11 @@ uncertain. `FAILED` does not prove the server did not commit: replay the exact
 snapshot and receipt to reconcile a lost reply. Exact stored historical JSON
 with `current:false` reports `PERSISTED_HISTORICAL_READBACK_VERIFIED`,
 increments `historicalVerified` rather than current successes, and exits the CLI
-with code
-
-1. The original historical proof remains readable even if the live draft is now
-   invalid; authentication, Catalog scope and historical integrity checks still
-   apply. Earlier current and historical verified receipts remain retained when
-   a new attempt resets the active state to pending. Each repeat rechecks
-   metadata; an old local success receipt alone is insufficient.
+with code `1`. The original historical proof remains readable even if the live
+draft is now invalid; authentication, Catalog scope and historical integrity
+checks still apply. Earlier current and historical verified receipts remain
+retained when a new attempt resets the active state to pending. Each repeat
+rechecks metadata; an old local success receipt alone is insufficient.
 
 Image upload ACKs, image metadata SHA, and this metadata roundtrip do not prove
 independently re-read COS image bytes. This workflow never performs that check.
@@ -74,7 +72,14 @@ An initial metadata import uses `expectedPreviousSha256: null`. A revision adds
 `--previous-sha <current-metadata-sha>` obtained from the controlled metadata
 read API. Snapshots and manifests are private, owned, regular files; target
 config is not placed in arguments or logged. Keep the same snapshot, prior hash
-and state directory for retry. Changed content needs a new frozen snapshot.
+and state directory for retry. Changed content needs a new frozen snapshot. The
+metadata-only client accepts the workstation's existing verified Production
+Owner JWT configuration, with a positive actor ID and a valid capped session
+expiry. It checks expiry before every request and permits only metadata save and
+readback routes. Journal scope binds the origin and actor, so a new valid
+session for the same Owner can resume; a different origin or actor is rejected.
+The client performs no login or configuration write. An expired session reports
+`PRODUCTION_LOGIN_REQUIRED`. The general API-key transport remains unchanged.
 Private metadata snapshot and configuration reads use a single no-follow file
 descriptor, with ownership, mode, bounded size and stable identity checks. A
 legitimate stable second hard link is accepted. The wrapper binds its prechecked

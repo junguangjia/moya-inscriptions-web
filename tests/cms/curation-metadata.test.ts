@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
@@ -520,6 +520,188 @@ describe.sequential("native CMS append-only curation metadata", () => {
       ).toHaveLength(1);
     } finally {
       vi.restoreAllMocks();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an existing native Owner JWT for metadata-only SDK readback and journal reopen", async () => {
+    const login = await payload.login({
+      collection: "users",
+      data: { email: ownerEmail, password: ownerPassword },
+    });
+    if (!login.token || !login.user || !Number.isFinite(login.exp))
+      throw new Error("Synthetic Owner JWT authentication required");
+    const actorId = Number(login.user.id);
+    const expiry = Math.min(login.exp! * 1000, Date.now() + 2 * 60 * 60 * 1000);
+    expect(actorId).toBe(Number(owner.id));
+    expect(Number.isSafeInteger(actorId) && actorId > 0).toBe(true);
+    expect(expiry).toBeGreaterThan(Date.now());
+    const origin = "https://synthetic-editorial.example.invalid";
+    const directory = await mkdtemp(join(tmpdir(), "curation-sdk-owner-jwt-"));
+    const metadataFile = join(directory, "snapshot.json");
+    const configFile = join(directory, "config.json");
+    const stateDirectory = join(directory, "owner-jwt-state");
+    try {
+      // Production-shaped existing session; every request is injected into the
+      // isolated native Payload handler. No network or real configuration.
+      await writeFile(metadataFile, command.payloadJSON, { mode: 0o600 });
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          baseURL: origin,
+          instance: "production",
+          targetVerified: true,
+          syntheticOnly: false,
+          sessionToken: login.token,
+          actorId,
+          sessionExpiresAt: new Date(expiry).toISOString(),
+          attempts: 1,
+        }),
+        { mode: 0o600 },
+      );
+      const before = await readDraft(await reqFor(owner), {
+        id: snapshot.draftBaseline.id,
+      });
+      const versions = await payload.countVersions({
+        collection: "catalogs",
+        where: { parent: { equals: before.id } },
+      });
+      const mediaQuery = {
+        collection: "media" as const,
+        where: { catalogId: { equals: catalogId } },
+        limit: 100,
+        pagination: false,
+        depth: 0,
+        sort: "id",
+        overrideAccess: false,
+      };
+      const mediaBefore = await payload.find({
+        ...mediaQuery,
+        req: await reqFor(owner),
+      });
+      const routes: string[] = [];
+      const nativeFetch: typeof fetch = async (input, options) => {
+        const request = new Request(input, options);
+        const url = new URL(request.url);
+        if (
+          url.origin !== origin ||
+          request.method !== "POST" ||
+          ![
+            "/api/editorial/save-curation-metadata",
+            "/api/editorial/read-curation-metadata",
+          ].includes(url.pathname) ||
+          options?.redirect !== "error" ||
+          request.headers.get("Authorization") !== `JWT ${login.token}`
+        )
+          throw new Error("Synthetic metadata-only Owner JWT request required");
+        const req = await createPayloadRequest({ config, request });
+        if (req.user?.collection !== "users")
+          throw new Error("Synthetic native Owner user required");
+        expect(req.user.id).toBe(owner.id);
+        expect(req.user.role).toBe("owner");
+        const route = url.pathname.replace(/^\/api/, "");
+        routes.push(route);
+        const endpoint = payload.config.endpoints.find(
+          (candidate) =>
+            candidate.path === route && candidate.method === "post",
+        );
+        if (!endpoint) throw new Error("Synthetic metadata endpoint required");
+        const response = await endpoint.handler(req);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Cache-Control")).toBe("no-store");
+        const stored = await response.clone().json();
+        expect(stored).toMatchObject({
+          ok: true,
+          result: {
+            current: true,
+            payloadJSON: command.payloadJSON,
+            snapshotSha256: command.snapshotSha256,
+            counts: {
+              photos: 83,
+              currentAnnotations: 83,
+              annotationRevisions: 83,
+              annotationDecisions: 83,
+            },
+          },
+        });
+        expect(digest(stored.result.payloadJSON)).toBe(command.snapshotSha256);
+        return response;
+      };
+      const { metadataRoundtrip } = (await import(
+        new URL(
+          "../../scripts/curation/metadata-roundtrip.mjs",
+          import.meta.url,
+        ).href
+      )) as {
+        metadataRoundtrip(options: {
+          metadataFile: string;
+          configFile: string;
+          stateDirectory: string;
+          execute: boolean;
+          fetchImpl: typeof fetch;
+        }): Promise<Record<string, unknown>>;
+      };
+      const inputs = {
+        metadataFile,
+        configFile,
+        stateDirectory,
+        execute: true,
+        fetchImpl: nativeFetch,
+      };
+      for (let attempt = 0; attempt < 2; attempt++)
+        expect(await metadataRoundtrip(inputs)).toMatchObject({
+          status: "PERSISTED_AND_READBACK_VERIFIED",
+          succeeded: 1,
+          failed: 0,
+          pending: 0,
+          independentMediaByteVerification: "NOT_RUN",
+        });
+      expect(routes).toEqual([
+        "/editorial/save-curation-metadata",
+        "/editorial/read-curation-metadata",
+        "/editorial/save-curation-metadata",
+        "/editorial/read-curation-metadata",
+      ]);
+      const journal = await readFile(
+        join(stateDirectory, `${command.snapshotSha256}.receipt.jsonl`),
+        "utf8",
+      );
+      expect(journal.includes(login.token)).toBe(false);
+      expect(
+        JSON.parse(journal.trim().split("\n").at(-1)!).value,
+      ).toMatchObject({
+        status: "succeeded",
+        result: {
+          snapshotSha256: command.snapshotSha256,
+          verifiedReadback: true,
+          currentAtReadback: true,
+        },
+      });
+      expect(
+        (
+          await payload.count({
+            collection: "editorial-receipts",
+            where: { metadataSha256: { equals: command.snapshotSha256 } },
+            req: await reqFor(owner),
+            overrideAccess: false,
+          })
+        ).totalDocs,
+      ).toBe(1);
+      expect(await readDraft(await reqFor(owner), { id: before.id })).toEqual(
+        before,
+      );
+      expect(
+        (
+          await payload.countVersions({
+            collection: "catalogs",
+            where: { parent: { equals: before.id } },
+          })
+        ).totalDocs,
+      ).toBe(versions.totalDocs);
+      expect(
+        (await payload.find({ ...mediaQuery, req: await reqFor(owner) })).docs,
+      ).toEqual(mediaBefore.docs);
+    } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });
