@@ -7,6 +7,28 @@
 
 # 当前项目状态
 
+## Media pipeline increment 3a — 2026-10-13
+
+Issue #206 r21 splits increment 3 of the unified media pipeline. 3a "profile
+renditions" (task `profile-media-renditions-v1`, Issue #270 r1) makes avatars
+and covers a third rendition subject keyed by the unchanged user-media id: four
+WebP roles rendered from the stored PNG in the media-worker sandbox, queued only
+by a paced worker sweep and served through an authorized origin route. 3b keeps
+direct upload and moving profile bytes out of PostgreSQL; until 3b is deployed,
+avatar and cover bytes stay in PostgreSQL.
+
+3a is in development as one Draft PR, held until the Owner's visual and
+real-device gate on a Development preview; nothing is deployed. Its release is
+one late-night window from the tag `media-pipeline-inc3a` with both switches
+off. `MEDIA_PROFILE_RENDER` (worker) is turned on in that window and starts the
+paced backfill. `MEDIA_PROFILE_RENDITIONS` (Backend) follows at least 72 h
+later, after at least 95% coverage and the Owner's checks. The same release
+removes the once-per-New-York-day avatar-change limit. Every Production
+operation, reads and probes included, needs the Owner's per-action "run". See
+the [task record](development/profile-media-renditions-v1.md) and the
+[release runbook](deployment/media-profile-renditions-inc3a.md). This entry
+records authorization and plan only; it claims no deployment or acceptance.
+
 ## Media pipeline Increment 2 checkpoint — 2026-10-08
 
 Issue

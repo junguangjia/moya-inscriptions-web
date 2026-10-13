@@ -7,7 +7,8 @@ record:
 The Issue holds the frozen scope and Behavior Matrix; this document is the
 public-safe design. Increment 1 is described in detail. Increments 2–4 are fixed
 here at the semantic level and receive their details by revision before each
-starts.
+starts. Issue #206 r21 splits increment 3 into 3a and 3b; 3a is described in
+[Profile images (increment 3a)](#profile-images-increment-3a).
 
 This document names no bucket, account, host, server instance, hostname or
 private path. Those values live in protected runtime configuration and private
@@ -59,14 +60,18 @@ recorded in Issue #206 r6, each increment's deployment runs from an approved
 annotated tag on the verified merged `main` commit (for example
 `media-pipeline-inc1` to `media-pipeline-inc4`), followed by a GitHub Release;
 the rollback point is the previous release together with the previous tag.
+Increment 3 deploys in two parts (Issue #206 r21): 3a from
+`media-pipeline-inc3a` and 3b from `media-pipeline-inc3b`. Turning 3a's emission
+on is a configuration change recorded on Issue #206, without a tag.
 
-| Increment                       | Content                                                                                                                                                                                                           | User-visible                                                 | Switch and rollback                                                                                       |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| 1, PR 1a "pipeline"             | Rendition model and migration, recipes v1 plus `viewer`, sandbox renderer, separate media worker, Catalog processing, retention hold, governance record                                                           | No; Production Web output unchanged                          | Previous release plus the private rollback and roll-forward steps ([Operations notes](#operations-notes)) |
-| 1, PR 1b "delivery"             | Additive rendition candidates and placeholder colour in the contracts, Backend builders, Web `srcset`/`sizes`/aspect/placeholder, progressive Viewer, Development Catalog candidates                              | Yes; Owner visual gate on a Development preview before Ready | Previous release; legacy `src` remains the fallback everywhere                                            |
-| 2 "published delivery"          | Published copies of eligible renditions in a dedicated private published origin behind a new media hostname on the existing EdgeOne subscription; publication, withdrawal and EdgeOne purge lifecycle             | No; delivery URLs change, rendered pages do not              | Configuration switch back to the authorized read paths                                                    |
-| 3 "uploads and profile imagery" | Direct browser-to-storage upload; avatar and background imagery moved into the pipeline                                                                                                                           | Yes; Owner visual and real-device gate                       | Configuration switch back to the upload relay; profile bytes in PostgreSQL retained                       |
-| 4 "deep zoom and completion"    | IIIF Image API 3 Level 0 JPEG tiles in the existing Viewer, resolution-policy controls, backfill, before/after measurement, retirement of superseded paths and the old media hostname, retention follow-up record | Yes; Owner visual and real-device gate                       | Tiles are optional per asset; the bounded viewer image remains the fallback                               |
+| Increment                                        | Content                                                                                                                                                                                                                                                                    | User-visible                                                                                                            | Switch and rollback                                                                                                                                   |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1, PR 1a "pipeline"                              | Rendition model and migration, recipes v1 plus `viewer`, sandbox renderer, separate media worker, Catalog processing, retention hold, governance record                                                                                                                    | No; Production Web output unchanged                                                                                     | Previous release plus the private rollback and roll-forward steps ([Operations notes](#operations-notes))                                             |
+| 1, PR 1b "delivery"                              | Additive rendition candidates and placeholder colour in the contracts, Backend builders, Web `srcset`/`sizes`/aspect/placeholder, progressive Viewer, Development Catalog candidates                                                                                       | Yes; Owner visual gate on a Development preview before Ready                                                            | Previous release; legacy `src` remains the fallback everywhere                                                                                        |
+| 2 "published delivery"                           | Published copies of eligible renditions in a dedicated private published origin behind a new media hostname on the existing EdgeOne subscription; publication, withdrawal and EdgeOne purge lifecycle                                                                      | No; delivery URLs change, rendered pages do not                                                                         | Configuration switch back to the authorized read paths                                                                                                |
+| 3a "profile renditions"                          | Avatars and covers (`community.user_media`) as a third rendition subject keyed by the unchanged user-media id: four WebP roles, owner-less blobs, `profile_render` jobs queued by a paced worker sweep, an authorized origin route, optional `renditions` on `AuthorMedia` | Yes; Owner visual and real-device gate before Ready; emission switched on in Production at least 72 h after the release | `MEDIA_PROFILE_RENDITIONS=off` restores the byte-identical answers; `MEDIA_PROFILE_RENDER=off` stops rendering; the original `src` stays the fallback |
+| 3b "direct upload and profile source relocation" | Direct browser-to-storage upload; hash-verified relocation of existing `user_media` bytes out of PostgreSQL; the `user_media` retention follow-up; optional edge delivery of profile renditions                                                                            | Yes; Owner visual and real-device gate                                                                                  | Configuration switch back to the upload relay; profile bytes in PostgreSQL retained                                                                   |
+| 4 "deep zoom and completion"                     | IIIF Image API 3 Level 0 JPEG tiles in the existing Viewer, resolution-policy controls, backfill, before/after measurement, retirement of superseded paths and the old media hostname, retention follow-up record                                                          | Yes; Owner visual and real-device gate                                                                                  | Tiles are optional per asset; the bounded viewer image remains the fallback                                                                           |
 
 ## Model: assets, renditions, references
 
@@ -86,9 +91,11 @@ asset-management product.
     Catalog key formats are accepted.
 - **Renditions.** `community.media_renditions` replaces
   `community.media_derivatives` for every reader and writer.
-  - Exactly one subject per row: a media item or a Catalog asset.
-  - Identity: subject, edit key (`base` or 32 hex; Catalog is always `base`),
-    role, recipe version and recipe digest.
+  - Exactly one subject per row: a media item, a Catalog asset or, from
+    increment 3a, a profile image (`community.user_media`, by its unchanged
+    public id).
+  - Identity: subject, edit key (`base` or 32 hex; Catalog assets and profile
+    images are always `base`), role, recipe version and recipe digest.
   - Location: one `media_blobs` row. Facts: actual width and height, duration,
     content type.
   - State: `ready`, `superseded` or `released`. At most one `ready` rendition
@@ -101,25 +108,29 @@ asset-management product.
     aborts on any count mismatch. `media_derivatives` stays unchanged and is no
     longer read or written; it is retained until the retention follow-up.
 - **Blobs.** `community.media_blobs` gains the purpose `catalog_derivative` with
-  no owner. Such blobs are recorded, so store reconciliation keeps them, and
-  they never count toward any account's capacity. The new `retention_hold`
-  column marks pre-existing blobs that this task must not physically delete yet
-  (see [Retention hold](#retention-hold)). Every other derivative, including the
-  new `viewer`, counts toward its owner's stored usage as derivatives do today,
-  so a new upload uses somewhat more of the owner's quota than before.
+  no owner, and increment 3a adds `profile_derivative`, also with no owner. Such
+  blobs are recorded, so store reconciliation keeps them, and they never count
+  toward any account's capacity. The new `retention_hold` column marks
+  pre-existing blobs that this task must not physically delete yet (see
+  [Retention hold](#retention-hold)). Every other derivative, including the new
+  `viewer`, counts toward its owner's stored usage as derivatives do today, so a
+  new upload uses somewhat more of the owner's quota than before.
 - **References** stay where they are: `media_item_refs` holders (drafts,
   revisions, snapshots, sessions, Article drafts and revisions),
-  `work_revision_items`, the published Catalog projection, and profile pointers
-  (increment 3 adds profile holders). A rendition stays `ready` while any holder
-  needs it; removing one holder never releases what another needs. Hash equality
-  grants nothing: there is no cross-owner lookup by hash, and storage keys stay
-  random per write.
+  `work_revision_items`, the published Catalog projection, and the profile
+  pointers (a user's avatar and background). From increment 3a those pointers
+  select a profile image's renditions directly; there is no profile holder in
+  `media_item_refs`. A rendition stays `ready` while any holder needs it;
+  removing one holder never releases what another needs. Hash equality grants
+  nothing: there is no cross-owner lookup by hash, and storage keys stay random
+  per write.
 - **Readiness and edits.** Readiness keeps today's required roles (`thumb`,
   `display`, `full`; `cover` where required; `motion` for Live items). `viewer`
   is optional and never blocks readiness or submission. Edit-key semantics are
   unchanged.
-- **Jobs.** The job kinds gain `catalog_render`. One TypeScript list is the
-  source; an integration test keeps the database `CHECK` equal to it.
+- **Jobs.** The job kinds gain `catalog_render`, and increment 3a adds
+  `profile_render`. One TypeScript list is the source; an integration test keeps
+  the database `CHECK` equal to it.
 
 ## Recipes
 
@@ -134,14 +145,18 @@ the digests the migration writes for adopted rows to the registry. The community
 store records the identity the processor names and only checks its form; it
 never defaults or computes one.
 
-| Role@version     | Framing                                                   | Geometry (never upscaled)                                                                                                                                                                                                           | WebP quality | Planned for                    |
-| ---------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------ |
-| `thumb@1`        | Card (the author's cover crop where it applies)           | Long edge ≤ 480                                                                                                                                                                                                                     | 80           | Work items, Catalog            |
-| `cover@1`        | Card for work items; complete for Catalog (no cover crop) | Long edge ≤ 1080                                                                                                                                                                                                                    | 86           | Work items, Catalog            |
-| `display@1`      | Complete                                                  | Long edge ≤ 2048; long scroll: short edge ≤ 1280, long edge ≤ 16,000, ≤ 20 MP                                                                                                                                                       | 86           | Work items, Catalog            |
-| `viewer@1` (new) | Complete                                                  | Long edge ≤ 4096 (≤ 4096 × 4096 pixels); long scroll: short edge ≤ 2048, long edge ≤ 16,000, ≤ 20 MP; never above `full`. Rendered only when it differs from `display` and, for a work item, is smaller than its `full` (see below) | 88           | Work items (optional), Catalog |
-| `full@1`         | Complete                                                  | Long edge ≤ 8192; long scroll: long edge ≤ 16,000, ≤ 40 MP                                                                                                                                                                          | 90           | Work items only                |
-| `motion@1`       | Complete                                                  | Unchanged motion profile (H.264, long edge ≤ 1920)                                                                                                                                                                                  | —            | Live items                     |
+| Role@version             | Framing                                                   | Geometry (never upscaled)                                                                                                                                                                                                           | WebP quality | Planned for                    |
+| ------------------------ | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------ |
+| `thumb@1`                | Card (the author's cover crop where it applies)           | Long edge ≤ 480                                                                                                                                                                                                                     | 80           | Work items, Catalog            |
+| `cover@1`                | Card for work items; complete for Catalog (no cover crop) | Long edge ≤ 1080                                                                                                                                                                                                                    | 86           | Work items, Catalog            |
+| `display@1`              | Complete                                                  | Long edge ≤ 2048; long scroll: short edge ≤ 1280, long edge ≤ 16,000, ≤ 20 MP                                                                                                                                                       | 86           | Work items, Catalog            |
+| `viewer@1` (new)         | Complete                                                  | Long edge ≤ 4096 (≤ 4096 × 4096 pixels); long scroll: short edge ≤ 2048, long edge ≤ 16,000, ≤ 20 MP; never above `full`. Rendered only when it differs from `display` and, for a work item, is smaller than its `full` (see below) | 88           | Work items (optional), Catalog |
+| `full@1`                 | Complete                                                  | Long edge ≤ 8192; long scroll: long edge ≤ 16,000, ≤ 40 MP                                                                                                                                                                          | 90           | Work items only                |
+| `motion@1`               | Complete                                                  | Unchanged motion profile (H.264, long edge ≤ 1920)                                                                                                                                                                                  | —            | Live items                     |
+| `avatar-128@1` (3a)      | Complete                                                  | Long edge ≤ 128                                                                                                                                                                                                                     | 80           | Profile avatars                |
+| `avatar-512@1` (3a)      | Complete                                                  | Long edge ≤ 512; not rendered when its size equals `avatar-128`'s                                                                                                                                                                   | 82           | Profile avatars                |
+| `background-960@1` (3a)  | Complete                                                  | Long edge ≤ 960                                                                                                                                                                                                                     | 82           | Profile backgrounds            |
+| `background-1600@1` (3a) | Complete                                                  | Long edge ≤ 1600; not rendered when its size equals `background-960`'s                                                                                                                                                              | 84           | Profile backgrounds            |
 
 A long scroll is an image whose long edge exceeds 2.5 times its short edge.
 
@@ -151,10 +166,11 @@ when it would be as large as the item's `full`: any frame up to 4096 px on the
 long edge, or a long scroll within the viewer's bounds. A Catalog asset has no
 `full`, so its viewer exists whenever it differs from `display`. These rules
 decide only whether a viewer exists, never its bytes: the job's plan (`work` for
-an item edit, `catalog` for a Catalog asset) travels in the sandbox request, the
-renderer and the coordinator evaluate the same registry function with it, and
-the plan rule is not part of the `viewer@1` digest. Readiness, submission and
-the Catalog sync never require a viewer.
+an item edit, `catalog` for a Catalog asset, `profile` for a profile image from
+increment 3a) travels in the sandbox request, the renderer and the coordinator
+evaluate the same registry function with it, and the plan rule is not part of
+the `viewer@1` digest. Readiness, submission and the Catalog sync never require
+a viewer.
 
 Common still pipeline:
 
@@ -167,10 +183,10 @@ Common still pipeline:
   the sandbox; `null` when any pixel is not opaque.
 
 Not in increment 1: card-box `thumb@2`/`cover@2` (revisited with measurement in
-increment 4), profile roles `avatar-128`, `avatar-512`, `background-960` and
-`background-1600` (increment 3), and tiles (increment 4). A changed
-transformation always gets a new version; from increment 2 a new version also
-gets a new published path and never overwrites a published representation.
+increment 4), the four profile roles (added by increment 3a with the parameters
+above; the six increment-1 digests are unchanged), and tiles (increment 4). A
+changed transformation always gets a new version; from increment 2 a new version
+also gets a new published path and never overwrites a published representation.
 
 ## Worker and sandbox
 
@@ -192,7 +208,9 @@ workspace), compiled from `src/worker-main.ts` and composed by
   transfer registry protects live uploads. Running the shared maintenance in
   both processes is intended and safe: each step locks its rows (skipping busy
   ones) and at most one active job exists per subject. The worker claims every
-  other kind and also runs reconciliation and the Catalog sync.
+  other kind and also runs reconciliation and the Catalog sync; from increment
+  3a it claims `profile_render` and runs the profile sweep only while
+  `MEDIA_PROFILE_RENDER` is on.
 - `embedded` (Development default): the Backend hosts the coordinator loop as
   before, using the same sandbox runner. sharp never runs in-process in any
   mode.
@@ -440,8 +458,9 @@ items) works exactly as before, including for pre-existing media.
   included (their hold is cleared). Releasing an edit rendition that no holder
   needs any more is part of that user lifecycle too.
 - `community.media_derivatives` is kept unchanged until the follow-up; its rows
-  name the same blobs as the adopted renditions. In increment 3 the profile
-  bytes in `user_media` are relocated under the same rule.
+  name the same blobs as the adopted renditions. In increment 3b the profile
+  bytes in `user_media` are relocated under the same rule; increment 3a moves
+  and deletes none of them.
 - In increment 1 every recipe is version 1, so nothing is superseded yet.
 - Automatic deletion otherwise covers only published copies, staging objects and
   regenerable derivatives that this task created.
@@ -463,14 +482,18 @@ Values live in protected runtime configuration. Templates under `infra/` carry
 | `DATABASE_URL`                                 | Backend and worker                            | As the Backend                         | Worker: read-only access to the published Catalog projection           |
 | `COS_*` (Catalog read identity)                | Backend (resolver) and worker (source reads)  | Absent (local store)                   | The existing Catalog read identity; no new identity                    |
 | Container daemon access                        | Worker only                                   | Local Docker                           | Rootless daemon of the worker's own user, through a host-local drop-in |
+| `MEDIA_PROFILE_RENDER` (3a)                    | Worker (and the Development embedded Backend) | Default `on`                           | Default `off`; turned `on` during the release window                   |
+| `MEDIA_PROFILE_RENDITIONS` (3a)                | Backend                                       | Default `on`                           | Default `off`; turned `on` only at the switch-on                       |
 
 In Production the Backend ignores the tools image, work directory and
 concurrency keys; its environment template keeps them as rollback-retained
 values, so one environment file stays valid for the previous release during
 rollback. Later increments add their own keys by revision, for example
 `MEDIA_PUBLIC_DELIVERY` and `MEDIA_PUBLISHED_ORIGIN` (Backend and worker only)
-in increment 2, and a direct-upload switch in increment 3. The published-media
-origin is configured privately and never committed.
+in increment 2, the two profile switches above in increment 3a (each accepts
+only `on` or `off`; any other value refuses startup), and a direct-upload switch
+in increment 3b. The published-media origin is configured privately and never
+committed.
 
 ## Development prerequisite: the sandbox image
 
@@ -484,7 +507,12 @@ cross-task Development change: other tasks' stacks on `main` need the same
 one-time build. The root `package.json` script `dev:media-sandbox` builds the
 image, and the root `turbo.json` passes `WORK_MEDIA_WORKER` through to the
 Development Backend; Issue #206 r5 records these two root configuration lines in
-the task scope.
+the task scope. Increment 3a adds `MEDIA_PROFILE_RENDER` and
+`MEDIA_PROFILE_RENDITIONS` to the same pass-through list, so Development can
+exercise the switch-off path; Issue #270 r1 records that root configuration
+line. Both switches default to `on` in Development, so after 3a every
+Development and preview stack with `WORK_MEDIA_*` set renders profile images
+too.
 
 ## Operations notes
 
@@ -524,6 +552,113 @@ the task scope.
 - **Cost.** Increment 1 creates no cloud resources. Incremental storage for
   renditions is reported per increment.
 
+## Profile images (increment 3a)
+
+Task `profile-media-renditions-v1`, Issue #270 r1, under Issue #206 r21 (Owner
+decisions D1–D13, 2026-10-13). The [task record](profile-media-renditions-v1.md)
+holds the Behavior Matrix and the scope records; the
+[release runbook](../deployment/media-profile-renditions-inc3a.md) holds the
+Production steps.
+
+- **Subject.** Profile images become a third rendition subject next to media
+  items and Catalog assets, keyed by the unchanged public user-media id
+  (amendment entry 6). One forward migration,
+  `20261014010000_profile_media_renditions`, takes all of its locks first under
+  a 5 s lock timeout (`community.user_media` in SHARE ROW EXCLUSIVE, then
+  `media_renditions`, `media_blobs` and `publishing_jobs` in ACCESS EXCLUSIVE).
+  It gives `media_renditions` a `user_media_id`, limits profile rows to the four
+  profile roles as unedited WebP, and allows one `ready` row per image and role.
+  `user_media` and `public_users` keep their schema, and setting an avatar or a
+  cover queues nothing. Apart from the removal of the daily avatar limit (see
+  the task record), the author write path is unchanged. Profile images are not
+  wrapped as media items with profile holders, because legacy items never render
+  the unedited form, items without holders are purged, item renditions count
+  toward capacity, and the item read path would expose media-item ids instead of
+  the unchanged profile ids.
+- **Rendering.** A `profile_render` job reads the stored PNG by its user-media
+  id, only while it is not erased, and checks its size, PNG signature, SHA-256
+  and dimensions against the row. The existing sandbox renders it with the
+  `profile` plan: unedited, complete framing, no placeholder colour and no
+  motion; metadata is stripped, alpha is kept and nothing is upscaled. A
+  family's roles (`avatar-128` and `avatar-512`, or `background-960` and
+  `background-1600`) are rendered together and recorded in one transaction as
+  owner-less `profile_derivative` blobs in the existing private publishing
+  store. A replay is a no-op, and a rejected source records a content-free
+  failure code. Worker concurrency stays 1 and every sandbox bound is unchanged.
+- **Sweep.** Only a paced sweep in the worker maintenance queues
+  `profile_render`, so it is also the backfill. It reads the current avatar and
+  background pointers of active users, never the image bytes, and queues an
+  image whose family anchor (`avatar-128`, `background-960`) is not ready at its
+  current recipe identity.
+  - One pass every 60 s, with at most 2 new jobs per pass. Images of owners with
+    the most recent public work are queued first, and those of owners without
+    public work last.
+  - Nothing is queued while 2 or more `profile_render` jobs are open, or while
+    any `process_item`, `derive_edit` or `catalog_render` job is queued or
+    running. The queue is first in, first out, so a work upload waits behind at
+    most about 2 short profile jobs.
+  - Content rejections are final until an operator retries the job; an exhausted
+    retryable failure is queued again a day later; an abandoned job blocks (the
+    Catalog rule).
+  - The worker logs one content-free count line when the counts change: missing,
+    blocked, enqueued, requeued and paused.
+  - The plan and the sweep compare the anchor only. A lost non-anchor blob is
+    not rendered again while the anchor stands, and a recipe version change of
+    `avatar-512` or `background-1600` alone needs an anchor version change or an
+    extension of the sweep.
+- **Capacity, edge and retention.** Profile renditions count toward no account's
+  capacity. The publication insert trigger and the edge eligibility query refuse
+  them, so 3a never publishes them to the edge. Renditions of a replaced avatar
+  or a cleared cover are kept, readable by the owner only, until the image is
+  erased; erasure releases them in the same transaction, and the existing
+  `purge_blob` schedule deletes the objects an hour later. This task creates
+  these blobs, so none is under the retention hold.
+- **Read route.** `/api/community/media/<user-media-id>/<role>` relays `GET` and
+  `HEAD` (at most one byte range) to the Backend's
+  `/v1/community/media/{mediaId}/{rendition}`.
+  - Access is the original image route's rule narrowed by family. The owner can
+    always read. Others read the avatar roles of the current avatar and the
+    background roles of the current background, while the owner is active, the
+    image is not erased and neither account blocks the other. Everything else is
+    `404`. A query string gets `422` at the Backend and `404` in the relay;
+    without a publishing service the Backend answers `503`.
+  - The Backend always sends `private, no-store` and `Vary: Authorization`. Only
+    for a current image (the family's pointer still selects it) does it add a
+    strong `ETag`, the rendition SHA-256, and answer a matching `If-None-Match`
+    with `304` from the stored hash, without reading storage.
+  - The Web relay turns a tagged answer into `private, no-cache` with
+    `Vary: Cookie` and the `ETag`; an untagged, owner-only answer stays
+    `private, no-store`. It forwards only a well-formed `If-None-Match` of at
+    most 1 KiB, streams without buffering, repeats the read signed out when the
+    Backend refuses a stale session, passes `401`, `403`, `404` and `503` with
+    no body and `no-store`, keeps the range header of a `416`, and turns every
+    other status into `502`.
+  - This extends the
+    [closed-beta caching exception](../production/closed-beta-access-v1.md#where-it-is-enforced)
+    to current renditions (decision D4); owner-only reads and errors keep
+    `private, no-store`, as amendment entry 5 requires. Nginx is unchanged.
+- **`AuthorMedia`.** An optional `renditions` list of one family, ascending by
+  size; `src` stays the original PNG. The contract also accepts future published
+  URLs, but 3a emits none. With `MEDIA_PROFILE_RENDITIONS=on` the Backend lists
+  a family in profile and people answers only when its anchor is ready; the
+  blocked-accounts list carries none, and a list that breaks a contract rule is
+  dropped with one content-free log line. With the switch off those answers are
+  byte-identical to the previous release's. The upload answer never carries
+  renditions. The key-set pin moves as amendment entry 14 allows.
+- **Web.** Avatars drawn at 48 px or less use `avatar-128`. The profile header
+  (80 px) and registration (96 px) use `avatar-128` at 1× and `avatar-512` from
+  2×. The profile cover uses one URL, the largest background rendition, for its
+  photo, compact strip and frost, and samples its tint from it. The owner's
+  avatar and cover editors, every other surface and any image without renditions
+  keep `src`. Box sizes, loading and the cover's framing are unchanged.
+- **Release.** One late-night window ships the migration, contracts, Web,
+  Backend, Admin and worker from `media-pipeline-inc3a` with emission off. The
+  worker starts with rendering off, then on, which begins the backfill. Emission
+  is switched on no earlier than 72 h after the release, with at least 95% of
+  current images rendered and every failure explained, the Owner's preview
+  sign-off and real-device checks. While emission is on, Web is never rolled
+  back below the 3a release.
+
 ## Increments 2–4 (semantics)
 
 - **Increment 2: published delivery.**
@@ -555,7 +690,19 @@ the task scope.
   - Configuration: `MEDIA_PUBLIC_DELIVERY` and `MEDIA_PUBLISHED_ORIGIN`.
     Publisher credentials (the approved keyless role) are delivered to the
     worker only. A cost projection is reported before switch-on.
-- **Increment 3: uploads and profile imagery.**
+- **Increment 3, split into 3a and 3b (Issue #206 r21).** Increment 3 counts as
+  deployed only when 3b is deployed. Until then amendment entry 6's existing
+  rule stays in force: avatar and background bytes stay in PostgreSQL and
+  retained rows are not rewritten; "PostgreSQL receives no new image bytes" is
+  deferred to 3b.
+- **Increment 3a: profile renditions** (`profile-media-renditions-v1`). Avatars
+  and backgrounds become a rendition subject keyed by the unchanged `user_media`
+  id, with roles `avatar-128`, `avatar-512`, `background-960` and
+  `background-1600`, rendered from the stored PNG and served from the origin
+  through an authorized route. It moves no bytes and adds none beyond today's
+  upload path. Details:
+  [Profile images (increment 3a)](#profile-images-increment-3a).
+- **Increment 3b: direct upload and profile source relocation.**
   - The Backend issues per-part presigned upload URLs, signed with short-lived
     credentials restricted to one staging object; the browser holds no
     credentials.
@@ -563,9 +710,10 @@ the task scope.
     copy.
   - A staging lifecycle rule is a backstop only; it is generated from the
     validated prefix and canaried before use.
-  - Avatars and backgrounds become media items with roles `avatar-128`,
-    `avatar-512`, `background-960` and `background-1600`, referenced as profile
-    holders. Their PostgreSQL bytes are retained until the follow-up.
+  - Existing `user_media` bytes are relocated out of PostgreSQL through an
+    explicit, hash-verified mapping; the public profile-media ids do not change
+    and the PostgreSQL bytes are retained until the retention follow-up.
+  - Optional edge delivery of profile renditions.
   - Amendment entries 10 and 11 and the cloud identity changes it needs are
     approved (Owner decisions, 2026-10-04).
 - **Increment 4: deep zoom and completion.**
