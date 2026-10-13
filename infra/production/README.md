@@ -434,3 +434,34 @@ test endpoint. Code-only low-level dependency injection exists solely for
 isolated acceptance; main selects real transports. Real providers, approved
 legal copy, external client and real COS verification remain separately recorded
 gates.
+
+## Profile image switches (increment 3a)
+
+Profile image renditions (avatars and covers; see the
+[unified media pipeline record](../../docs/development/unified-media-pipeline-v1.md))
+have one switch per service:
+
+- `MEDIA_PROFILE_RENDER` in `media-worker.env`: the media worker claims
+  `profile_render` jobs and runs the paced profile sweep, which also backfills
+  the existing avatars and covers.
+- `MEDIA_PROFILE_RENDITIONS` in `backend.env`: the Backend adds `renditions` to
+  profile and people `AuthorMedia`. While it is off those answers are
+  byte-identical to the previous release's.
+
+Each accepts only `on` or `off`; any other value refuses startup with a message
+that names the key only (the media worker exits 78). A missing or empty value
+means `on` in Development and `off` in Production. The Production Backend does
+not read `MEDIA_PROFILE_RENDER`, because it never hosts the worker.
+
+Both templates carry `off`, and Production stays off until the release steps
+turn the switches on, one at a time, each as a separately approved operation:
+
+1. The release starts every service with both switches off.
+2. After the migration, the Backend's readiness check and the sandbox
+   self-check, the media worker starts with `MEDIA_PROFILE_RENDER=off`. Once a
+   normal job has drained, it restarts with `on` and the backfill begins.
+3. `MEDIA_PROFILE_RENDITIONS=on` follows, with a Backend restart, no earlier
+   than 72 h after the release and only after the Owner's checks pass (preview
+   sign-off, real-device checks, and at least 95% of profile images rendered
+   with every failure explained). Setting it back to `off` restores the previous
+   answers.

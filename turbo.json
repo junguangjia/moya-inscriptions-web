@@ -106,7 +106,9 @@
         "MEDIA_PUBLIC_DELIVERY",
         "MEDIA_PUBLISHED_*",
         "MEDIA_PUBLISHER_ROLE_ARN",
-        "MEDIA_EDGE_*"
+        "MEDIA_EDGE_*",
+        "MEDIA_PROFILE_RENDER",
+        "MEDIA_PROFILE_RENDITIONS"
       ]
     }
   },

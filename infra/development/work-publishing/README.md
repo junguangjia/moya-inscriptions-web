@@ -161,6 +161,8 @@ Backend. Production configuration is in
 | `WORK_MEDIA_WORK_DIR`           | with the other two | Private directory for sandbox jobs (`job-<32hex>/`); only each job's `in/` is mounted, read-only.                |
 | `WORK_MEDIA_WORKER_CONCURRENCY` | no (default `1`)   | Publishing jobs one worker leases and runs at once, an integer from 1 to 4.                                      |
 | `WORK_MEDIA_WORKER`             | no                 | `embedded` (Development default): the Backend hosts the processing worker. `external`: see below.                |
+| `MEDIA_PROFILE_RENDER`          | no (default `on`)  | Worker: `on` claims `profile_render` jobs and runs the profile sweep; `off` does neither.                        |
+| `MEDIA_PROFILE_RENDITIONS`      | no (default `on`)  | Backend: `on` adds `renditions` to profile and people `AuthorMedia`; `off` leaves those answers unchanged.       |
 
 - All or nothing. With none of the first three keys set the Backend still
   starts: publishing uploads, item registration and media reads answer 503
@@ -208,6 +210,19 @@ Backend. Production configuration is in
   from the local Payload media files into the same store, syncing the published
   list every five minutes. Pilot `display/v1/` keys have no local file and are
   marked unreadable.
+- Profile images (increment 3a): `MEDIA_PROFILE_RENDER` is read by whichever
+  process runs the worker (the embedded Backend or the external worker),
+  `MEDIA_PROFILE_RENDITIONS` by the Backend. Each accepts only `on` or `off`;
+  any other value fails startup with a message that names the key only. Missing
+  or empty means `on` in Development and `off` in Production. With rendering on,
+  the worker sweeps the current avatars and covers every 60 s (at most 2 new
+  jobs per pass, none while 2 `profile_render` jobs are open or any
+  `process_item`, `derive_edit` or `catalog_render` job is queued or running)
+  and renders them from the stored PNG; the original image is shown until its
+  rendition is ready. `MEDIA_PROFILE_RENDITIONS=off` restores the previous,
+  byte-identical profile and people answers. Production keeps both off until its
+  release steps switch them on (see
+  [`infra/production/README.md`](../../production/README.md)).
 - Uploads and the Backend share one in-process transfer registry. A no-save
   session whose lease lapsed is not expired while one of its component uploads
   began within the last session lease period (`unsaved_session_lease_minutes`,
