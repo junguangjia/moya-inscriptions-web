@@ -4,7 +4,10 @@ import { asCommunityOperationError } from "./availability.js";
 import { createHash, randomUUID } from "node:crypto";
 import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
 import {
+  PROFILE_MEDIA_RENDITION_ROLES,
+  authorMediaSchema,
   authorProfileSchema,
+  profileMediaFamilyOf,
   profileUpdateSchema,
 } from "@moya/contracts/schemas";
 import type {
@@ -24,6 +27,8 @@ import type {
   ContentRelationUpdate,
   GuestFavoriteMerge,
   PrivacyUpdate,
+  ProfileMediaFamily,
+  ProfileMediaRenditionRole,
   ProfileUpdate,
   RelationshipUpdate,
   UserWork,
@@ -61,8 +66,57 @@ const mediaDto = (r: {
   src: `/api/community/media/${r.id}`,
 });
 
+/** A family's roles, ascending by size: the first, its anchor, is always rendered. */
+const familyRoles = (family: ProfileMediaFamily): ProfileMediaRenditionRole[] =>
+  PROFILE_MEDIA_RENDITION_ROLES.filter(
+    (role) => profileMediaFamilyOf(role) === family,
+  );
+
+interface RenderedMediaRow {
+  id: string;
+  width: number;
+  height: number;
+  renditions:
+    | { role: string; width: number; height: number; contentType: string }[]
+    | null;
+}
+
+/**
+ * The DTO of a profile image with its family's ready renditions, listed only
+ * when the anchor is among them. A list the contract refuses is dropped with
+ * one content-free log line, so a bad row never fails a profile read.
+ */
+const renderedMediaDto = (
+  row: RenderedMediaRow,
+  anchor: ProfileMediaRenditionRole,
+): AuthorMedia => {
+  const media = mediaDto(row);
+  const rows = row.renditions ?? [];
+  if (!rows.some((rendition) => rendition.role === anchor)) return media;
+  const parsed = authorMediaSchema.safeParse({
+    ...media,
+    renditions: rows.map(({ role, width, height, contentType }) => ({
+      src: `/api/community/media/${row.id}/${role}`,
+      width,
+      height,
+      contentType,
+    })),
+  });
+  if (parsed.success) return parsed.data;
+  console.warn("[community-media] profile_rendition_fallback");
+  return media;
+};
+
 export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
-  constructor(private readonly pool: Pool) {}
+  /**
+   * `profileRenditions` (the Backend's MEDIA_PROFILE_RENDITIONS switch) adds
+   * ready profile renditions to profile and people JSON; off, both stay byte
+   * for byte what they were before (unified media pipeline increment 3a).
+   */
+  constructor(
+    private readonly pool: Pool,
+    private readonly options: { readonly profileRenditions?: boolean } = {},
+  ) {}
 
   private async read<T>(run: (db: PoolClient) => Promise<T>): Promise<T> {
     const db = await this.pool.connect().catch((error) => {
@@ -157,12 +211,36 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
     if (!row) throw new CommunityNotFoundError();
     return row;
   }
-  private async media(db: PoolClient, ids: string[]): Promise<AuthorMedia[]> {
-    const r = await db.query<{ id: string; width: number; height: number }>(
-      "SELECT m.id,m.width,m.height FROM unnest($1::text[]) WITH ORDINALITY a(id,n) JOIN community.user_media m ON m.id=a.id WHERE m.deleted_at IS NULL ORDER BY a.n",
-      [ids],
+  /**
+   * The images of `ids` that are not erased, in order. With renditions on and
+   * a `family`, an image whose family anchor is ready on a committed blob
+   * also lists every ready role of that family, smallest first; otherwise the
+   * DTO is the one before renditions. An anchor of an older recipe version
+   * still counts until the sweep renders it again.
+   */
+  private async media(
+    db: PoolClient,
+    ids: string[],
+    family: ProfileMediaFamily | null,
+  ): Promise<AuthorMedia[]> {
+    if (this.options.profileRenditions !== true || family === null) {
+      const r = await db.query<{ id: string; width: number; height: number }>(
+        "SELECT m.id,m.width,m.height FROM unnest($1::text[]) WITH ORDINALITY a(id,n) JOIN community.user_media m ON m.id=a.id WHERE m.deleted_at IS NULL ORDER BY a.n",
+        [ids],
+      );
+      return r.rows.map(mediaDto);
+    }
+    const roles = familyRoles(family);
+    const r = await db.query<RenderedMediaRow>(
+      `SELECT m.id,m.width,m.height,f.renditions FROM unnest($1::text[]) WITH ORDINALITY a(id,n) JOIN community.user_media m ON m.id=a.id
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('role',r.role,'width',r.width,'height',r.height,'contentType',r.content_type) ORDER BY r.width,r.height,r.role) AS renditions
+        FROM community.media_renditions r JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed'
+        WHERE r.user_media_id=m.id AND r.state='ready' AND r.role=ANY($2::text[])) f ON TRUE
+      WHERE m.deleted_at IS NULL ORDER BY a.n`,
+      [ids, roles],
     );
-    return r.rows.map(mediaDto);
+    return r.rows.map((row) => renderedMediaDto(row, roles[0]!));
   }
   private async ownedMedia(
     db: PoolClient,
@@ -277,10 +355,11 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
         studioNameSuffix: u.studio_name_suffix,
         bio: u.bio,
         avatar: u.avatar_media_id
-          ? ((await this.media(db, [u.avatar_media_id]))[0] ?? null)
+          ? ((await this.media(db, [u.avatar_media_id], "avatar"))[0] ?? null)
           : null,
         background: u.background_media_id
-          ? ((await this.media(db, [u.background_media_id]))[0] ?? null)
+          ? ((await this.media(db, [u.background_media_id], "background"))[0] ??
+            null)
           : null,
         isOwner: owner,
         following,
@@ -561,6 +640,8 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
         )
       ).rows;
       // One statement resolves every avatar of the page; rows keep their order.
+      // Blocked accounts keep the original only: their renditions, like the
+      // original, answer 404 to the blocker.
       const avatars = new Map(
         (
           await this.media(
@@ -568,6 +649,7 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
             rows.flatMap((row) =>
               row.avatar_media_id ? [row.avatar_media_id] : [],
             ),
+            list === "blocks" ? null : "avatar",
           )
         ).map((m) => [m.id, m] as const),
       );

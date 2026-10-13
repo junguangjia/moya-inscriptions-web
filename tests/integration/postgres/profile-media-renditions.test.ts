@@ -10,13 +10,14 @@ import {
 import {
   CommunityMigrationStateError,
   PROFILE_RENDITION_ROLES,
+  PostgresAuthorCommunityAdapter,
   PostgresWorkPublishingAdapter,
   RENDITION_ROLES,
   runCommunityMigrations,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { publishingJobKindSchema } from "@moya/contracts/internal/community-operator";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   assertSyntheticTestDatabaseUrl,
@@ -28,6 +29,7 @@ import type {
   ProfileRenditionRecord,
   PublishingDerivativeRecord,
 } from "@moya/api";
+import type { AuthorListQuery } from "@moya/contracts";
 
 /*
  * profile-media-renditions-v1 (unified-media-pipeline increment 3a), on
@@ -43,6 +45,10 @@ import type {
  * erasure releasing renditions for the purge schedule, the read
  * authorization matrix, and the store-wide paced sweep (pointer drive,
  * pacing, pauses, retry), each sweep case on a database of its own.
+ * Part 3: renditions in the author DTOs: with emission off, profile and
+ * people JSON byte for byte as before; with it on, a family only once its
+ * anchor is ready, never on the blocked-accounts list, and the original
+ * image alone when a list breaks the contract.
  * Profile renditions are never created on the shared database.
  */
 
@@ -148,7 +154,7 @@ const written = (byteSize = 1000) => {
 
 // Only these test-owned databases and roles are ever created or dropped.
 const dedicatedDatabaseName =
-  /^pmr_(?:upgrade|shared|assets|sweep)_[0-9a-f]{12}_synthetic_test$/;
+  /^pmr_(?:upgrade|shared|assets|sweep|author)_[0-9a-f]{12}_synthetic_test$/;
 const dedicatedRoleName = /^pmr_nobytes_[0-9a-f]{12}$/;
 const administration = createPostgresPool(
   parsePostgresConfig({ DATABASE_URL: testDatabaseUrl }),
@@ -158,7 +164,7 @@ const createdRoles: string[] = [];
 const pools: Pool[] = [];
 
 const createDedicatedDatabase = async (
-  kind: "upgrade" | "shared" | "assets" | "sweep",
+  kind: "upgrade" | "shared" | "assets" | "sweep" | "author",
 ): Promise<Pool> => {
   const probe = await administration.query(
     disposableTarget.disposableTestTargetProbeSql,
@@ -1059,7 +1065,9 @@ const anchors = (["avatar-128", "background-960"] as const).map((role) => ({
   digest: currentRecipe(role).digest,
 }));
 
-const migratedDatabase = async (kind: "assets" | "sweep"): Promise<Pool> => {
+const migratedDatabase = async (
+  kind: "assets" | "sweep" | "author",
+): Promise<Pool> => {
   const pool = await createDedicatedDatabase(kind);
   await runCommunityMigrations(pool, migrationsDirectory);
   return pool;
@@ -2171,6 +2179,356 @@ describe("profile render sweep on dedicated synthetic databases", () => {
         paused: false,
       });
       expect(await snapshotOf(untouched)).toEqual(kept);
+    },
+    SLOW,
+  );
+});
+
+// Part 3: renditions in the author DTOs.
+
+describe("author DTO renditions on a dedicated synthetic database", () => {
+  let pool: Pool;
+  let store: PostgresWorkPublishingAdapter;
+  let at: Date;
+  let off: PostgresAuthorCommunityAdapter;
+  let on: PostgresAuthorCommunityAdapter;
+  const page: AuthorListQuery = {
+    page: 1,
+    pageSize: 20,
+    search: "",
+    kind: "all",
+  };
+
+  beforeAll(async () => {
+    pool = await migratedDatabase("author");
+    store = new PostgresWorkPublishingAdapter(pool);
+    at = await afterMigrations(pool);
+    off = new PostgresAuthorCommunityAdapter(pool);
+    on = new PostgresAuthorCommunityAdapter(pool, { profileRenditions: true });
+  }, SLOW);
+
+  /** Records renditions of `image` at the given sizes, as one render job does. */
+  const render = async (
+    image: Image,
+    ...sizes: readonly (readonly [ProfileRole, number, number])[]
+  ) =>
+    expect(
+      await store.recordProfileRenditions(
+        image.id,
+        {
+          sourceSha256: image.sha256,
+          renditions: sizes.map(([role, width, height]) =>
+            rendition(role, { width, height }),
+          ),
+        },
+        at,
+      ),
+    ).toEqual({ status: "recorded" });
+
+  /** The blob of one rendition is lost out of band: no longer committed. */
+  const loseBlob = (image: Image, role: ProfileRole) =>
+    pool.query(
+      `UPDATE community.media_blobs b SET state='tombstoned', tombstoned_at=$3
+       FROM community.media_renditions r
+       WHERE r.blob_id=b.id AND r.user_media_id=$1 AND r.role=$2`,
+      [image.id, role, at],
+    );
+
+  const follow = (follower: string, followed: string) =>
+    pool.query(
+      "INSERT INTO community.follows(follower_id,followed_id) VALUES($1,$2)",
+      [follower, followed],
+    );
+
+  const block = (blocker: string, blocked: string) =>
+    pool.query(
+      "INSERT INTO community.blocks(blocker_id,blocked_id) VALUES($1,$2)",
+      [blocker, blocked],
+    );
+
+  const handleOf = async (user: string) =>
+    (
+      await pool.query<{ handle: string }>(
+        "SELECT handle FROM community.public_users WHERE id=$1",
+        [user],
+      )
+    ).rows[0]!.handle;
+
+  /** The original image, as every DTO carried it before renditions. */
+  const original = (image: Image, width: number, height: number) => ({
+    id: image.id,
+    src: `/api/community/media/${image.id}`,
+    width,
+    height,
+  });
+
+  /** One candidate on the authorized rendition path. */
+  const candidate = (
+    image: Image,
+    role: ProfileRole,
+    width: number,
+    height: number,
+  ) => ({
+    src: `/api/community/media/${image.id}/${role}`,
+    width,
+    height,
+    contentType: "image/webp",
+  });
+
+  it(
+    "keeps profile and people JSON byte for byte with emission off",
+    async () => {
+      const owner = await createUser(pool);
+      const follower = await createUser(pool);
+      const blocked = await createUser(pool);
+      const avatar = await createImage(pool, owner, 640, 480);
+      const background = await createImage(pool, owner, 1600, 1200);
+      const followerAvatar = await createImage(pool, follower);
+      const blockedAvatar = await createImage(pool, blocked, 300, 200);
+      await setProfile(pool, owner, avatar.id, background.id);
+      await setProfile(pool, follower, followerAvatar.id, null);
+      await setProfile(pool, blocked, blockedAvatar.id, null);
+      await follow(follower, owner);
+      await block(owner, blocked);
+      // Every family is rendered; emission off ignores them all.
+      await render(avatar, ["avatar-128", 128, 96], ["avatar-512", 512, 384]);
+      await render(
+        background,
+        ["background-960", 960, 720],
+        ["background-1600", 1600, 1200],
+      );
+      await render(
+        followerAvatar,
+        ["avatar-128", 128, 128],
+        ["avatar-512", 512, 512],
+      );
+      await render(
+        blockedAvatar,
+        ["avatar-128", 128, 85],
+        ["avatar-512", 300, 200],
+      );
+
+      // The bytes before increment 3a: a profile in its contract's key
+      // order, a person's avatar in the builder's.
+      const ownerHandle = await handleOf(owner);
+      const profile = (following: boolean) =>
+        `{"id":"${owner}","handle":"${ownerHandle}","displayName":"头像测试","bio":"","studioName":"","studioNameSuffix":"",` +
+        `"avatar":{"id":"${avatar.id}","src":"/api/community/media/${avatar.id}","width":640,"height":480},` +
+        `"background":{"id":"${background.id}","src":"/api/community/media/${background.id}","width":1600,"height":1200},` +
+        `"isOwner":false,"following":${following},"privacy":{"following":"public","followers":"public","favorites":"private","likes":"private"},` +
+        `"totals":{"works":0,"following":0,"followers":1,"favorites":null,"likes":null},"nextAvatarChangeAt":null}`;
+      const people = async (
+        user: string,
+        image: Image,
+        width: number,
+        height: number,
+      ) =>
+        `{"items":[{"id":"${user}","handle":"${await handleOf(user)}","displayName":"头像测试","studioName":"",` +
+        `"avatar":{"id":"${image.id}","width":${width},"height":${height},"src":"/api/community/media/${image.id}"}}],` +
+        `"total":1,"page":1,"pageSize":20}`;
+
+      for (const adapter of [
+        off,
+        new PostgresAuthorCommunityAdapter(pool, { profileRenditions: false }),
+      ]) {
+        expect(JSON.stringify(await adapter.readProfile(owner, follower))).toBe(
+          profile(true),
+        );
+        expect(JSON.stringify(await adapter.readProfile(owner, null))).toBe(
+          profile(false),
+        );
+        expect(
+          JSON.stringify(
+            await adapter.listPeople(owner, follower, "followers", page),
+          ),
+        ).toBe(await people(follower, followerAvatar, 512, 512));
+        expect(
+          JSON.stringify(
+            await adapter.listPeople(follower, null, "following", page),
+          ),
+        ).toBe(await people(owner, avatar, 640, 480));
+        expect(
+          JSON.stringify(
+            await adapter.listPeople(owner, owner, "blocks", page),
+          ),
+        ).toBe(await people(blocked, blockedAvatar, 300, 200));
+      }
+    },
+    SLOW,
+  );
+
+  it(
+    "lists a family only while its anchor is ready, smallest first",
+    async () => {
+      const owner = await createUser(pool);
+      const viewer = await createUser(pool);
+      const avatar = await createImage(pool, owner, 640, 480);
+      const background = await createImage(pool, owner, 1600, 1200);
+      await setProfile(pool, owner, avatar.id, background.id);
+      await follow(viewer, owner);
+      const json = async (
+        read: (adapter: PostgresAuthorCommunityAdapter) => Promise<unknown>,
+      ) => [JSON.stringify(await read(on)), JSON.stringify(await read(off))];
+
+      // Nothing rendered yet: the same bytes as with emission off.
+      const [profileOn, profileOff] = await json((adapter) =>
+        adapter.readProfile(owner, viewer),
+      );
+      expect(profileOn).toBe(profileOff);
+      const [followingOn, followingOff] = await json((adapter) =>
+        adapter.listPeople(viewer, viewer, "following", page),
+      );
+      expect(followingOn).toBe(followingOff);
+
+      // Whole families: every ready role of the slot's family, ascending
+      // whatever order they were recorded in.
+      await render(avatar, ["avatar-512", 512, 384], ["avatar-128", 128, 96]);
+      await render(
+        background,
+        ["background-1600", 1600, 1200],
+        ["background-960", 960, 720],
+      );
+      const avatarFamily = [
+        candidate(avatar, "avatar-128", 128, 96),
+        candidate(avatar, "avatar-512", 512, 384),
+      ];
+      const profile = await on.readProfile(owner, viewer);
+      expect(profile.avatar).toStrictEqual({
+        ...original(avatar, 640, 480),
+        renditions: avatarFamily,
+      });
+      expect(profile.background).toStrictEqual({
+        ...original(background, 1600, 1200),
+        renditions: [
+          candidate(background, "background-960", 960, 720),
+          candidate(background, "background-1600", 1600, 1200),
+        ],
+      });
+      expect((await on.readProfile(owner, null)).avatar?.renditions).toEqual(
+        avatarFamily,
+      );
+      expect(
+        (await on.listPeople(viewer, viewer, "following", page)).items[0]!
+          .avatar,
+      ).toStrictEqual({
+        ...original(avatar, 640, 480),
+        renditions: avatarFamily,
+      });
+      expect((await off.readProfile(owner, viewer)).avatar).toStrictEqual(
+        original(avatar, 640, 480),
+      );
+
+      // A lost non-anchor blob leaves the anchor alone listed.
+      await loseBlob(avatar, "avatar-512");
+      expect((await on.readProfile(owner, viewer)).avatar).toStrictEqual({
+        ...original(avatar, 640, 480),
+        renditions: [candidate(avatar, "avatar-128", 128, 96)],
+      });
+      // Without a ready anchor on a committed blob there is no list,
+      // whatever else of the family is ready.
+      await loseBlob(background, "background-960");
+      await pool.query(
+        "UPDATE community.media_renditions SET state='released', released_at=$2 WHERE user_media_id=$1 AND role='avatar-128'",
+        [avatar.id, at],
+      );
+      const partial = await on.readProfile(owner, viewer);
+      expect(partial.avatar).toStrictEqual(original(avatar, 640, 480));
+      expect(partial.background).toStrictEqual(
+        original(background, 1600, 1200),
+      );
+      expect(JSON.stringify(partial)).toBe(
+        JSON.stringify(await off.readProfile(owner, viewer)),
+      );
+
+      // The skip case (no avatar-512 or background-1600 the size of the
+      // anchor), and one image in both slots: each slot lists its family.
+      const small = await createImage(pool, viewer, 100, 80);
+      await setProfile(pool, viewer, small.id, small.id);
+      await render(small, ["avatar-128", 100, 80]);
+      await render(small, ["background-960", 100, 80]);
+      const both = await on.readProfile(viewer, owner);
+      expect(both.avatar).toStrictEqual({
+        ...original(small, 100, 80),
+        renditions: [candidate(small, "avatar-128", 100, 80)],
+      });
+      expect(both.background).toStrictEqual({
+        ...original(small, 100, 80),
+        renditions: [candidate(small, "background-960", 100, 80)],
+      });
+      expect(
+        (await on.listPeople(owner, owner, "followers", page)).items[0]!.avatar,
+      ).toStrictEqual({
+        ...original(small, 100, 80),
+        renditions: [candidate(small, "avatar-128", 100, 80)],
+      });
+    },
+    SLOW,
+  );
+
+  it(
+    "never lists renditions on the blocked-accounts list",
+    async () => {
+      const owner = await createUser(pool);
+      const blocked = await createUser(pool);
+      const image = await createImage(pool, blocked);
+      await setProfile(pool, blocked, image.id, null);
+      await render(image, ["avatar-128", 128, 128], ["avatar-512", 512, 512]);
+      await block(owner, blocked);
+
+      const blocks = await on.listPeople(owner, owner, "blocks", page);
+      expect(blocks.items[0]!.avatar).toStrictEqual(original(image, 512, 512));
+      expect(JSON.stringify(blocks)).toBe(
+        JSON.stringify(await off.listPeople(owner, owner, "blocks", page)),
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "keeps the original image alone when a ready list breaks the contract",
+    async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const owner = await createUser(pool);
+        const viewer = await createUser(pool);
+        // Another framing than the image's.
+        const reframed = await createImage(pool, owner, 512, 512);
+        await render(
+          reframed,
+          ["avatar-128", 128, 64],
+          ["avatar-512", 512, 256],
+        );
+        // Larger than the image.
+        const upscaled = await createImage(pool, owner, 100, 100);
+        await render(upscaled, ["background-960", 960, 960]);
+        await setProfile(pool, owner, reframed.id, upscaled.id);
+        // Two roles of one size (the worker records the anchor alone).
+        const twin = await createImage(pool, viewer, 100, 100);
+        await render(twin, ["avatar-128", 100, 100], ["avatar-512", 100, 100]);
+        await setProfile(pool, viewer, twin.id, null);
+        await follow(viewer, owner);
+        const fallback = ["[community-media] profile_rendition_fallback"];
+
+        // The read still succeeds, without the list, logged content-free.
+        const profile = await on.readProfile(owner, viewer);
+        expect(profile.avatar).toStrictEqual(original(reframed, 512, 512));
+        expect(profile.background).toStrictEqual(original(upscaled, 100, 100));
+        expect(warn.mock.calls).toEqual([fallback, fallback]);
+        warn.mockClear();
+        const followers = await on.listPeople(owner, owner, "followers", page);
+        expect(followers.items[0]!.avatar).toStrictEqual(
+          original(twin, 100, 100),
+        );
+        expect(warn.mock.calls).toEqual([fallback]);
+        expect(JSON.stringify(followers)).toBe(
+          JSON.stringify(await off.listPeople(owner, owner, "followers", page)),
+        );
+        expect(JSON.stringify(profile)).toBe(
+          JSON.stringify(await off.readProfile(owner, viewer)),
+        );
+      } finally {
+        warn.mockRestore();
+      }
     },
     SLOW,
   );
