@@ -4,6 +4,7 @@ import {
   ARTICLE_DOCUMENT_LIMITS,
   authCapabilitiesSchema,
   authPasswordResetResultSchema,
+  legacyMediaSrcSchema,
 } from "@moya/contracts/schemas";
 import { localCatalogFileUrl } from "../../features/detail/local-catalog-media";
 import {
@@ -327,6 +328,25 @@ const communitySessionRefused = async (
   }
 };
 
+// A user-media id names one immutable upload: bytes are only ever inserted or
+// erased, never replaced. Its PNG may therefore stay in the viewer's private
+// browser cache, revalidated on every use; the Backend still authorizes each
+// request and only an unchanged body is skipped.
+const entityTag = async (body: Uint8Array): Promise<string> => {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", body as BufferSource),
+  );
+  return `"${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}"`;
+};
+
+/** If-None-Match uses weak comparison: `W/"x"` and `"x"` match, `*` matches any. */
+const ifNoneMatchIncludes = (header: string | null, tag: string): boolean =>
+  header !== null &&
+  header
+    .split(",")
+    .map((part) => part.trim())
+    .some((part) => part === "*" || part.replace(/^W\//u, "") === tag);
+
 /** Fixed business namespace relay. Credentials stay on the server and every read is private. */
 export const relayServerAuthorCommunity = async (
   request: Request,
@@ -488,7 +508,27 @@ export const relayServerAuthorCommunity = async (
       }
       chunks.push(part.value);
     }
-    return new Response(new Uint8Array(Buffer.concat(chunks)), {
+    const body = new Uint8Array(Buffer.concat(chunks));
+    if (
+      request.method === "GET" &&
+      upstream.status === 200 &&
+      type === "image/png" &&
+      legacyMediaSrcSchema.safeParse(incoming.pathname).success
+    ) {
+      const etag = await entityTag(body);
+      const revalidated = {
+        ...headers,
+        "cache-control": "private, no-cache",
+        etag,
+      };
+      if (ifNoneMatchIncludes(request.headers.get("if-none-match"), etag))
+        return new Response(null, { status: 304, headers: revalidated });
+      return new Response(body, {
+        status: 200,
+        headers: { ...revalidated, "content-type": type },
+      });
+    }
+    return new Response(body, {
       status: upstream.status,
       headers: { ...headers, "content-type": type },
     });

@@ -433,7 +433,14 @@ const WorkAuthor = ({ detail }: { detail: WorkDetail }) => {
     >
       <span className={detailStyles.workAuthorAvatar}>
         {src ? (
-          <img src={src} alt="" width="36" height="36" />
+          <img
+            src={src}
+            alt=""
+            width="36"
+            height="36"
+            loading="lazy"
+            decoding="async"
+          />
         ) : (
           [...detail.authorName][0]
         )}

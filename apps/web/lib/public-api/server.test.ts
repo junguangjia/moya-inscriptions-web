@@ -291,6 +291,159 @@ describe("Community relay with a Session the Backend no longer accepts", () => {
 });
 
 /*
+ * profile-media-startup-relief-v1: a user-media id names one immutable upload,
+ * so its PNG may stay in the viewer's private cache and be revalidated on every
+ * use. The Backend still authorizes each request; only an unchanged body is
+ * skipped. Every other answer keeps `private, no-store`.
+ */
+describe("Community relay revalidates immutable user media", () => {
+  const cookie = `yoyi-session=${"C".repeat(43)}`;
+  const mediaId = `user-media-${"a".repeat(32)}`;
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+  const expectedTag = async () =>
+    `"${Array.from(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", png)),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("")}"`;
+  const image = () =>
+    new Response(png, {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+  const read = (path: string, extra: Record<string, string> = {}) =>
+    new Request(`http://127.0.0.1:3410/api/community/${path}`, {
+      headers: { host: "127.0.0.1:3410", cookie, ...extra },
+    });
+  const upstreamOnce = (...answers: Response[]) => {
+    const upstream = vi.fn<typeof fetch>();
+    for (const answer of answers) upstream.mockResolvedValueOnce(answer);
+    vi.stubGlobal("fetch", upstream);
+    return upstream;
+  };
+
+  it("answers a 200 PNG with a strong ETag and private revalidation", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    upstreamOnce(image());
+    const response = await relayServerAuthorCommunity(read(`media/${mediaId}`));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-cache");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("etag")).toBe(await expectedTag());
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
+  });
+
+  it.each([
+    ["the exact tag", (tag: string) => tag],
+    ["a tag in a list", (tag: string) => `"other", ${tag}`],
+    ["the weak form", (tag: string) => `W/${tag}`],
+    ["any representation", () => "*"],
+  ])(
+    "answers 304 without a body for %s, after the Backend authorized the read",
+    async (_, header) => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = upstreamOnce(image());
+      const tag = await expectedTag();
+      const response = await relayServerAuthorCommunity(
+        read(`media/${mediaId}`, { "if-none-match": header(tag) }),
+      );
+      expect(response.status).toBe(304);
+      expect(await response.text()).toBe("");
+      expect(response.headers.get("etag")).toBe(tag);
+      expect(response.headers.get("cache-control")).toBe("private, no-cache");
+      expect(response.headers.get("vary")).toBe("Cookie");
+      expect(upstream).toHaveBeenCalledOnce();
+      // The validator stays in Web: the Backend always decides on a full read.
+      const sent = new Headers(upstream.mock.calls[0]![1]?.headers);
+      expect(sent.get("if-none-match")).toBeNull();
+      expect(sent.get("authorization")).toBe(`Bearer ${"C".repeat(43)}`);
+    },
+  );
+
+  it.each([
+    ["another tag", () => `"${"0".repeat(64)}"`],
+    ["a lowercase weak prefix", (tag: string) => `w/${tag}`],
+    ["an unquoted tag", (tag: string) => tag.slice(1, -1)],
+  ])("returns the body for %s", async (_, header) => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    upstreamOnce(image());
+    const response = await relayServerAuthorCommunity(
+      read(`media/${mediaId}`, {
+        "if-none-match": header(await expectedTag()),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
+  });
+
+  it("still refuses HEAD before asking the Backend", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = upstreamOnce();
+    const response = await relayServerAuthorCommunity(
+      new Request(`http://127.0.0.1:3410/api/community/media/${mediaId}`, {
+        method: "HEAD",
+        headers: { host: "127.0.0.1:3410", cookie, "if-none-match": "*" },
+      }),
+    );
+    expect(response.status).toBe(405);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("etag")).toBeNull();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a missing or no longer visible id", 404],
+    ["a refused read", 403],
+  ])("keeps %s uncacheable even with a stored tag", async (_, status) => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    upstreamOnce(Response.json({ error: { code: "NOT_FOUND" } }, { status }));
+    const response = await relayServerAuthorCommunity(
+      read(`media/${mediaId}`, { "if-none-match": "*" }),
+    );
+    expect(response.status).toBe(status);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("etag")).toBeNull();
+  });
+
+  it.each([
+    [
+      "JSON reads",
+      "editorial/articles?page=1&pageSize=12&presentation=news",
+      () => Response.json({ items: [] }),
+    ],
+    ["a PNG outside user media", `works/${mediaId}`, image],
+  ])("keeps %s private, no-store and untagged", async (_, path, answer) => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    upstreamOnce(answer());
+    const response = await relayServerAuthorCommunity(
+      read(path, { "if-none-match": "*" }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("etag")).toBeNull();
+  });
+
+  it("revalidates after a refused Session too, and still clears its cookie", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const refused = () =>
+      Response.json({ error: { code: "UNAUTHENTICATED" } }, { status: 401 });
+    const upstream = upstreamOnce(refused(), refused(), image());
+    const response = await relayServerAuthorCommunity(
+      read(`media/${mediaId}`, { "if-none-match": await expectedTag() }),
+    );
+    expect(response.status).toBe(304);
+    expect(response.headers.get("set-cookie")).toMatch(
+      /^yoyi-session=; .*Max-Age=0/u,
+    );
+    expect(upstream).toHaveBeenCalledTimes(3);
+    expect(
+      new Headers(upstream.mock.calls[2]![1]?.headers).get("authorization"),
+    ).toBeNull();
+  });
+});
+
+/*
  * parallel-community-integration-qa: N binds GET notifications to the UI's
  * confirmed account (x-author-account); A clears a Session the Backend
  * refuses. Together a still-valid Session behind a stale account header keeps

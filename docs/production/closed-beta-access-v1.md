@@ -46,9 +46,21 @@ and session-dependent Web pages, relays and prototype documents are
 set `Vary: Cookie`; Next pages and RSC responses retain the framework's `Vary`
 headers. `no-store` is the cache barrier, independently of `Vary`. Next
 Development pages instead use its `no-cache, must-revalidate` behavior; their
-access checks still run for each request. Nginx has no cache. The unused Next.js
-image optimizer is closed for every source, so its cookie-blind shared cache
-cannot retain a protected image across a mode or eligibility change.
+access checks still run for each request. One relay answer is revalidated
+instead of unstored: a `200 image/png` for
+`/api/community/media/user-media-<id>` is `private, no-cache` with a strong
+`ETag` (the SHA-256 of its bytes). Such an id names one immutable upload, so the
+viewer's browser may keep the bytes in its own cache. A normal load still goes
+through the relay, the Backend authorizes the read exactly as before, and only
+an unchanged body is answered `304` without bytes; errors and every other answer
+stay `private, no-store`. Browsers may still reuse a cached image without asking
+on back/forward or session-restore loads while the session cookie is unchanged
+(`Vary: Cookie` forces revalidation after a cookie change), and the bytes stay
+in the device's browser cache after sign-out until they are evicted or refused
+on a later load (Owner decision, 2026-10-13, profile-media-startup-relief-v1).
+Nginx has no cache. The unused Next.js image optimizer is closed for every
+source, so its cookie-blind shared cache cannot retain a protected image across
+a mode or eligibility change.
 
 In both modes the root page and the prototype documents are rendered only after
 the Backend has answered; without a reachable Backend, Web serves neither.

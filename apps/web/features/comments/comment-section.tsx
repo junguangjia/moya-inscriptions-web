@@ -177,7 +177,7 @@ const Avatar = ({ user }: { readonly user: CommentUserPresentation }) => {
         {user.avatarSrc === undefined || user.avatarSrc === null ? (
           user.name.trim().slice(0, 1) || "访"
         ) : (
-          <img alt="" src={user.avatarSrc} />
+          <img alt="" src={user.avatarSrc} loading="lazy" decoding="async" />
         )}
       </span>
     </button>

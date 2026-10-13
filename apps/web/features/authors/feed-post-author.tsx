@@ -153,7 +153,14 @@ export const FeedPostAuthor = ({ authorId }: { authorId: string }) => {
       >
         <span className={styles.postAvatar}>
           {avatarSrc ? (
-            <img src={avatarSrc} alt="" width="36" height="36" />
+            <img
+              src={avatarSrc}
+              alt=""
+              width="36"
+              height="36"
+              loading="lazy"
+              decoding="async"
+            />
           ) : (
             [...name][0]
           )}

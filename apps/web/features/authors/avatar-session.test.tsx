@@ -101,8 +101,10 @@ let me: () => Promise<Response>,
 let readProfile: () => Promise<Response>;
 const closed = vi.fn(),
   requests: { path: string; init: RequestInit }[] = [];
+let sharedCache: Map<string, unknown> | undefined;
 const Harness = () => {
   const author = useAuthors();
+  sharedCache = author.cache;
   const [open, setOpen] = useState(true);
   return (
     <>
@@ -505,4 +507,16 @@ it("refreshes viewer identity when only the studio name changes", async () => {
       .querySelector("[data-viewer-studio]")
       ?.getAttribute("data-viewer-studio"),
   ).toBe("听雨斋");
+});
+
+it("seeds the viewer's own profile from the startup read, so 我 renders on first open", async () => {
+  // profile-media-startup-relief-v1: 我 mounts on first open and starts from this entry.
+  await act(async () => undefined);
+  expect(sharedCache?.get(`profile:${owner.id}`)).toEqual({
+    ...profile,
+    avatar: null,
+  });
+  expect(
+    requests.filter((r) => r.path.startsWith("/api/community/authors/")),
+  ).toHaveLength(1);
 });

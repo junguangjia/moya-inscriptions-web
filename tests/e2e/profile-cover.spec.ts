@@ -212,6 +212,21 @@ async function openProfile(page: Page) {
   ).toBeVisible();
 }
 
+/** 我 mounts on first open (profile-media-startup-relief-v1): wait for the photo itself. */
+async function coverPainted(page: Page) {
+  await page
+    .locator('[data-author-profile] [aria-label="主页背景"] img')
+    .first()
+    .evaluate(async (image: HTMLImageElement) => {
+      if (!image.complete || image.naturalWidth === 0)
+        await new Promise((resolve, reject) => {
+          image.addEventListener("load", resolve, { once: true });
+          image.addEventListener("error", reject, { once: true });
+        });
+      await image.decode();
+    });
+}
+
 async function openEditor(page: Page) {
   await page.getByRole("button", { name: "编辑主页背景" }).click();
   await expect(page.locator('[data-cover-editor="overview"]')).toBeVisible();
@@ -362,6 +377,7 @@ test("Crop frame, saved bytes and the reloaded header show the same framing", as
     await decode(page, cover, HEADER_POINTS),
     await (async () => {
       await openProfile(page);
+      await coverPainted(page);
       return decode(page, cover, HEADER_POINTS);
     })(),
   ])

@@ -318,6 +318,8 @@ export const PeopleList = ({
                       alt=""
                       width={48}
                       height={48}
+                      loading="lazy"
+                      decoding="async"
                     />
                   ) : (
                     person.displayName.slice(0, 1)
