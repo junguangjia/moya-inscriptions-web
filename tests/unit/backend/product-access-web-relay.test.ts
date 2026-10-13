@@ -17,6 +17,7 @@ import { GET as catalogSearch } from "../../../apps/web/app/api/catalog-search/r
 import {
   fetchServerProductAccess,
   relayServerAuthorCommunity,
+  relayServerProfileMedia,
 } from "../../../apps/web/lib/public-api/server";
 import {
   fixtureUsers,
@@ -41,6 +42,8 @@ afterEach(async () => {
 
 const web = "http://web.invalid";
 const statePath = "/api/community/content/catalog/catalog-test/state";
+const profileMediaId = `user-media-${"a".repeat(32)}`;
+const profileMediaPath = `/api/community/media/${profileMediaId}/avatar-128`;
 
 /**
  * The real Backend application behind Web's own relays and route handlers, so
@@ -92,6 +95,12 @@ const start = async (policy: Policy) => {
       list: () => catalogList(request("/api/catalog")),
       search: () => catalogSearch(request("/api/catalog-search?q=%E7%A2%91")),
       state: () => relayServerAuthorCommunity(request(statePath)),
+      profileMedia: () =>
+        relayServerProfileMedia(
+          request(profileMediaPath),
+          profileMediaId,
+          "avatar-128",
+        ),
     };
   };
   return { cookieFor, visit };
@@ -130,6 +139,12 @@ describe("Web relays in front of a closed-beta Backend", () => {
     expect(apiErrorSchema.parse(await state.json()).error.code).toBe(
       "UNAUTHENTICATED",
     );
+    // profile-media-renditions-v1: a profile rendition is refused the same way.
+    const rendition = await visitor.profileMedia();
+    expect(rendition.status).toBe(401);
+    expectNeverStored(rendition);
+    expect(rendition.headers.get("etag")).toBeNull();
+    expect(await rendition.text()).toBe("");
   });
 
   it("refuses a signed-in account that is not approved with 403 and never signs it out", async () => {
@@ -154,6 +169,11 @@ describe("Web relays in front of a closed-beta Backend", () => {
     );
     // The session is valid: Web keeps the cookie so the visitor can sign out.
     expect(state.headers.get("set-cookie")).toBeNull();
+    const rendition = await visitor.profileMedia();
+    expect(rendition.status).toBe(403);
+    expectNeverStored(rendition);
+    expect(await rendition.text()).toBe("");
+    expect(rendition.headers.get("set-cookie")).toBeNull();
   });
 
   it("serves an approved account, then refuses the same cookie once the account is removed", async () => {
@@ -174,11 +194,17 @@ describe("Web relays in front of a closed-beta Backend", () => {
     const state = await visitor.state();
     expect(state.status).toBe(200);
     expect(contentStateSchema.parse(await state.json()).likeCount).toBe(2);
+    // The gate admits the rendition read; this fixture has no publishing
+    // service, so the Backend's own route answers 503.
+    const rendition = await visitor.profileMedia();
+    expect(rendition.status).toBe(503);
+    expectNeverStored(rendition);
 
     beta.accounts.delete(fixtureUsers.active.id);
     expect((await visitor.list()).status).toBe(403);
     expect((await visitor.search()).status).toBe(403);
     expect((await visitor.state()).status).toBe(403);
+    expect((await visitor.profileMedia()).status).toBe(403);
     await expect(fetchServerProductAccess(token)).resolves.toMatchObject({
       access: { access: "restricted" },
     });
@@ -192,6 +218,10 @@ describe("Web relays in front of a closed-beta Backend", () => {
     expect(state.status).toBe(401);
     // The existing relay rule: a refused session's cookie is cleared.
     expect(state.headers.get("set-cookie")).toContain("yoyi-session=;");
+    const rendition = await visitor.profileMedia();
+    expect(rendition.status).toBe(401);
+    expectNeverStored(rendition);
+    expect(rendition.headers.get("set-cookie")).toContain("yoyi-session=;");
   });
 
   it("adds nothing in public mode", async () => {

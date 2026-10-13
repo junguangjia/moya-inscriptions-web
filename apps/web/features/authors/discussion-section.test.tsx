@@ -294,6 +294,27 @@ describe("Phase 4 comment avatar synchronization", () => {
       "/api/community/media/first",
     );
   });
+
+  // profile-media-renditions-v1: comment avatars (32-40 px) load `avatar-128`.
+  it("draws other authors' avatars from their smallest rendition", async () => {
+    profile.mockImplementation(async (id: string) => ({
+      avatar: {
+        src: `/api/community/media/${id}`,
+        renditions: [
+          { src: `/api/community/media/${id}/avatar-128`, width: 128 },
+          { src: `/api/community/media/${id}/avatar-512`, width: 512 },
+        ],
+      },
+    }));
+    await render();
+    for (const selector of [
+      '[data-comment-id="latest"]',
+      '[data-comment-reply="other-reply"]',
+    ])
+      expect(src(selector)).toBe("/api/community/media/other/avatar-128");
+    // The viewer's own avatar comes from the shared context as before.
+    expect(src('[data-comment-id="hot"]')).toBe(context.avatarSrc);
+  });
 });
 
 describe("Discussion composer on the author's own work", () => {

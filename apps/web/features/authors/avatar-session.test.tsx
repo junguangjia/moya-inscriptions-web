@@ -521,3 +521,23 @@ it("seeds the viewer's own profile from the startup read, so 我 renders on firs
     requests.filter((r) => r.path.startsWith("/api/community/authors/")),
   ).toHaveLength(1);
 });
+
+it("shares the viewer's own avatar for small slots as its smallest rendition", async () => {
+  // profile-media-renditions-v1: feed, comment and work-detail avatars of the
+  // viewer use `avatar-128` once the profile lists renditions.
+  const rendition = (size: number) => ({
+    src: `${media.src}/avatar-${size}`,
+    width: size,
+    height: size,
+    contentType: "image/webp",
+  });
+  readProfile = async () =>
+    reply({
+      ...profile,
+      avatar: { ...media, renditions: [rendition(128), rendition(512)] },
+    });
+  await focus();
+  expect(node.querySelector("output")?.getAttribute("data-shared-avatar")).toBe(
+    `${media.src}/avatar-128`,
+  );
+});

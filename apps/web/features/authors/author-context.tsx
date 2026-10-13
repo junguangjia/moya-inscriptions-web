@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import type { ContentIdentity } from "@moya/contracts";
+import { avatarThumbSrc } from "../media/profile-image";
 import { authorClient, AuthorRequestError } from "./author-data";
 import {
   acknowledgeGuestBatch,
@@ -27,6 +28,7 @@ import type { AvatarSaveState } from "./avatar-save";
 type Viewer = Awaited<ReturnType<typeof authorClient.me>>;
 interface Context {
   cache: Map<string, unknown>;
+  /** The viewer's own avatar for slots of 48 CSS px or less. */
   avatarSrc: string | null;
   avatarSave: AvatarSaveState | null;
   saveAvatar: (png: string) => void;
@@ -173,7 +175,7 @@ export const AuthorProvider = ({
     refresh,
     onSaved: (profile, selectedAvatarIsCurrent) => {
       cache.current.set(`profile:${profile.id}`, profile);
-      setAvatarSrc(profile.avatar?.src ?? null);
+      setAvatarSrc(avatarThumbSrc(profile.avatar));
       setRevision((n) => n + 1);
       setNotice(
         selectedAvatarIsCurrent
@@ -208,7 +210,7 @@ export const AuthorProvider = ({
         // 我 mounts on first open (profile-media-startup-relief-v1); seeding it
         // here lets that first open render at once from this same read.
         cache.current.set(`profile:${profile.id}`, profile);
-        setAvatarSrc(profile.avatar?.src ?? null);
+        setAvatarSrc(avatarThumbSrc(profile.avatar));
       })
       .catch(() => undefined);
     return () => {

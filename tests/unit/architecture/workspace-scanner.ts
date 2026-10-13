@@ -297,6 +297,20 @@ const webCommunityServerImports: ReadonlyMap<string, string> = new Map([
     path.join(webRoot, "app", "api", "community", "[...path]", "route.ts"),
     "{relayServerAuthorCommunity}",
   ],
+  // profile-media-renditions-v1: the streamed relay for profile renditions.
+  [
+    path.join(
+      webRoot,
+      "app",
+      "api",
+      "community",
+      "media",
+      "[mediaId]",
+      "[rendition]",
+      "route.ts",
+    ),
+    "{relayServerProfileMedia}",
+  ],
   [
     path.join(
       webRoot,

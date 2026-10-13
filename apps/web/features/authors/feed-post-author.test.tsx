@@ -194,6 +194,39 @@ describe("FeedPostAuthor", () => {
     authors.avatarSrc = null;
   });
 
+  // profile-media-renditions-v1: a 36 px avatar loads `avatar-128` once it is
+  // rendered, and the original until then.
+  it("draws another author's avatar from its smallest rendition", async () => {
+    authors.viewer = { id: user(1) };
+    const media = `user-media-${"d".repeat(32)}`;
+    const avatar = {
+      id: media,
+      src: `/api/community/media/${media}`,
+      width: 512,
+      height: 512,
+    };
+    client.profile.mockResolvedValueOnce(
+      profile({
+        avatar: {
+          ...avatar,
+          renditions: [128, 512].map((size) => ({
+            src: `${avatar.src}/avatar-${size}`,
+            width: size,
+            height: size,
+            contentType: "image/webp",
+          })),
+        },
+      }),
+    );
+    client.profile.mockResolvedValueOnce(profile({ avatar }));
+    const container = await render(user(2), user(3));
+    const [rendered, original] = [...container.querySelectorAll("img")];
+    expect(rendered?.getAttribute("src")).toBe(`${avatar.src}/avatar-128`);
+    expect(rendered?.getAttribute("loading")).toBe("lazy");
+    expect(rendered?.hasAttribute("srcset")).toBe(false);
+    expect(original?.getAttribute("src")).toBe(avatar.src);
+  });
+
   it("offers no follow to a guest", async () => {
     authors.viewer = null;
     client.profile.mockResolvedValue(profile());

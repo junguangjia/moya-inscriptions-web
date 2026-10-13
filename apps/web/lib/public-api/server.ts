@@ -5,6 +5,8 @@ import {
   authCapabilitiesSchema,
   authPasswordResetResultSchema,
   legacyMediaSrcSchema,
+  profileMediaRenditionRoleSchema,
+  userMediaIdSchema,
 } from "@moya/contracts/schemas";
 import { localCatalogFileUrl } from "../../features/detail/local-catalog-media";
 import {
@@ -330,8 +332,9 @@ const communitySessionRefused = async (
 
 // A user-media id names one immutable upload: bytes are only ever inserted or
 // erased, never replaced. Its PNG may therefore stay in the viewer's private
-// browser cache, revalidated on every use; the Backend still authorizes each
-// request and only an unchanged body is skipped.
+// browser cache, revalidated on each normal load; back/forward may reuse it
+// while the cookie is unchanged. The Backend still authorizes each
+// revalidation and only an unchanged body is skipped.
 const entityTag = async (body: Uint8Array): Promise<string> => {
   const digest = new Uint8Array(
     await crypto.subtle.digest("SHA-256", body as BufferSource),
@@ -846,6 +849,20 @@ const publishingEditKeyPattern = /^(?:base|[0-9a-f]{32})$/u;
 /** One range only: `bytes=start-`, `bytes=start-end` or a suffix `bytes=-length`. */
 const publishingRangePattern = /^bytes=(?:(\d{1,16})-(\d{0,16})|-\d{1,16})$/u;
 
+/** A `Range` header the media relays forward: one byte range, its end not before its start. */
+const isSingleByteRange = (range: string): boolean => {
+  const bounds = publishingRangePattern.exec(range);
+  return (
+    bounds !== null &&
+    !(
+      bounds[1] !== undefined &&
+      bounds[2] !== undefined &&
+      bounds[2] !== "" &&
+      Number(bounds[1]) > Number(bounds[2])
+    )
+  );
+};
+
 /**
  * A browser write must come from this origin. Unlike the generic relay, any
  * Fetch Metadata value other than same-origin is refused. A request without
@@ -1105,17 +1122,7 @@ export const relayServerPublishingMedia = async (
   )
     return fail(404);
   const range = request.headers.get("range");
-  if (range !== null) {
-    const bounds = publishingRangePattern.exec(range);
-    if (
-      bounds === null ||
-      (bounds[1] !== undefined &&
-        bounds[2] !== undefined &&
-        bounds[2] !== "" &&
-        Number(bounds[1]) > Number(bounds[2]))
-    )
-      return fail(416);
-  }
+  if (range !== null && !isSingleByteRange(range)) return fail(416);
   let target: URL;
   try {
     target = new URL(
@@ -1197,6 +1204,173 @@ export const relayServerPublishingMedia = async (
     return new Response(null, { status: upstream.status, headers });
   }
   return new Response(upstream.body, { status: upstream.status, headers });
+};
+
+/** The validator the Backend sends for a current profile rendition: its quoted SHA-256. */
+const profileMediaEntityTagPattern = /^"[0-9a-f]{64}"$/u;
+/** `*` or a list of such validators, as a browser revalidates them; nothing else is forwarded. */
+const profileMediaValidatorsPattern =
+  /^(?:\*|(?:W\/)?"[0-9a-f]{64}"(?:\s*,\s*(?:W\/)?"[0-9a-f]{64}")*)$/u;
+const profileMediaValidatorsMaxLength = 1024;
+
+/**
+ * Streaming relay for one rendition of a profile image
+ * (profile-media-renditions-v1): GET or HEAD, at most one byte range. The
+ * Backend authorizes every read with the original image's rule, narrowed by
+ * family, and answers 304 itself from the stored hash. It tags only a current
+ * image, so only that answer and its 304 may stay in the viewer's private
+ * cache, revalidated on each normal load like the original; an untagged
+ * (owner-only) answer and every refusal stay private, no-store. A Session the
+ * Backend refuses is cleared and the read repeated signed out, as in the
+ * community relay, so a stale cookie never hides a visible avatar. The body
+ * streams without buffering and the Backend read ends with the browser's.
+ */
+export const relayServerProfileMedia = async (
+  request: Request,
+  mediaId: string,
+  rendition: string,
+): Promise<Response> => {
+  const cleared: Record<string, string> = {};
+  const fail = (status: number, extra: Record<string, string> = {}) =>
+    new Response(null, {
+      status,
+      headers: { ...publishingPrivateHeaders, ...cleared, ...extra },
+    });
+  if (request.method !== "GET" && request.method !== "HEAD") return fail(405);
+  if (
+    new URL(request.url).search !== "" ||
+    !userMediaIdSchema.safeParse(mediaId).success ||
+    !profileMediaRenditionRoleSchema.safeParse(rendition).success
+  )
+    return fail(404);
+  const range = request.headers.get("range");
+  if (range !== null && !isSingleByteRange(range)) return fail(416);
+  let base: URL;
+  try {
+    base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
+  } catch {
+    return fail(503);
+  }
+  const target = new URL(`v1/community/media/${mediaId}/${rendition}`, base);
+  if (request.signal.aborted) return fail(400);
+  const token = readCommunitySessionToken(request.headers.get("cookie"));
+  const outgoing: Record<string, string> = { accept: "image/webp" };
+  if (range !== null) outgoing.range = range;
+  // A malformed or oversized validator list is dropped: the Backend then
+  // sends the image again instead of comparing it.
+  const validators = request.headers.get("if-none-match");
+  if (
+    validators !== null &&
+    validators.length <= profileMediaValidatorsMaxLength &&
+    profileMediaValidatorsPattern.test(validators)
+  )
+    outgoing["if-none-match"] = validators;
+
+  const upstreamAbort = new AbortController();
+  const abortUpstream = () => upstreamAbort.abort();
+  request.signal.addEventListener("abort", abortUpstream, { once: true });
+  const send = async (session: string | undefined): Promise<Response> => {
+    const headersWait = setTimeout(
+      abortUpstream,
+      publishingMediaResponseWaitMs,
+    );
+    try {
+      return await fetch(target, {
+        method: "GET",
+        headers:
+          session === undefined
+            ? outgoing
+            : { ...outgoing, Authorization: `Bearer ${session}` },
+        cache: "no-store",
+        redirect: "error",
+        signal: upstreamAbort.signal,
+      });
+    } finally {
+      clearTimeout(headersWait);
+    }
+  };
+  let upstream: Response;
+  try {
+    upstream = await send(token);
+    if (
+      upstream.status === 401 &&
+      token !== undefined &&
+      (await communitySessionRefused(base, token))
+    ) {
+      cleared["set-cookie"] = serializeClearedCommunitySessionCookie(
+        isSecureRequest(request),
+      );
+      await cancelQuietly(upstream.body);
+      upstream = await send(undefined);
+    }
+  } catch {
+    request.signal.removeEventListener("abort", abortUpstream);
+    return fail(503);
+  }
+  const { status } = upstream;
+  const contentRange = upstream.headers.get("content-range");
+  if (status === 416) {
+    await cancelQuietly(upstream.body);
+    return fail(
+      416,
+      contentRange !== null && /^bytes \*\/\d{1,16}$/u.test(contentRange)
+        ? { "content-range": contentRange }
+        : {},
+    );
+  }
+  if (status !== 200 && status !== 206 && status !== 304) {
+    await cancelQuietly(upstream.body);
+    return fail([401, 403, 404, 503].includes(status) ? status : 502);
+  }
+  const etag = upstream.headers.get("etag");
+  const current = etag !== null && profileMediaEntityTagPattern.test(etag);
+  if (
+    (etag !== null && !current) ||
+    (status === 304 && (!current || !("if-none-match" in outgoing)))
+  ) {
+    await cancelQuietly(upstream.body);
+    return fail(502);
+  }
+  const caching: Record<string, string> = current
+    ? { "cache-control": "private, no-cache", etag }
+    : {};
+  if (status === 304) {
+    await cancelQuietly(upstream.body);
+    return new Response(null, {
+      status,
+      headers: { ...publishingPrivateHeaders, ...cleared, ...caching },
+    });
+  }
+  const type = mediaTypeOf(upstream);
+  const length = upstream.headers.get("content-length");
+  if (
+    type !== "image/webp" ||
+    upstream.body === null ||
+    (length !== null && !/^\d{1,16}$/u.test(length)) ||
+    (status === 206 &&
+      (contentRange === null ||
+        !/^bytes \d{1,16}-\d{1,16}\/\d{1,16}$/u.test(contentRange)))
+  ) {
+    await cancelQuietly(upstream.body);
+    return fail(502);
+  }
+  const headers: Record<string, string> = {
+    ...publishingPrivateHeaders,
+    ...cleared,
+    ...caching,
+    "content-type": type,
+    "cross-origin-resource-policy": "same-origin",
+  };
+  if (length !== null) headers["content-length"] = length;
+  if (status === 206 && contentRange !== null)
+    headers["content-range"] = contentRange;
+  if (upstream.headers.get("accept-ranges") === "bytes")
+    headers["accept-ranges"] = "bytes";
+  if (request.method === "HEAD") {
+    await cancelQuietly(upstream.body);
+    return new Response(null, { status, headers });
+  }
+  return new Response(upstream.body, { status, headers });
 };
 
 /**

@@ -29,6 +29,7 @@ import {
   ProfileCoverStage,
 } from "./profile-cover-stage";
 import { ProfileCoverPreview } from "./profile-cover-preview";
+import { coverSrc } from "../media/profile-image";
 import { requestIdentity } from "../shell/request-identity";
 import editor from "../publishing/ui/editor/editor.module.css";
 import media from "../publishing/ui/media/media.module.css";
@@ -479,8 +480,9 @@ export const ProfileBackgroundEditor = ({
     }, REFRESH_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [phase]);
+  // The header draws the cover from coverSrc, not always the original.
   const shownId = profile.background?.id ?? null,
-    shownSrc = profile.background?.src ?? null;
+    shownSrc = coverSrc(profile.background);
   useEffect(() => {
     if (phase !== "refresh" || shownId !== target.current) return;
     const finish = () => {
