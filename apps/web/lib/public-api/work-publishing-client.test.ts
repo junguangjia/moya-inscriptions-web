@@ -1,4 +1,3 @@
-import { getEventListeners } from "node:events";
 import * as contracts from "@moya/contracts/schemas";
 import type { ArticleDraft, WorkDraftContent } from "@moya/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1097,7 +1096,10 @@ describe("relay clients without AbortSignal.any", () => {
       });
       expect(read.signal!.aborted).toBe(false);
       expect(write.signal!.aborted).toBe(false);
-      expect(getEventListeners(caller.signal, "abort")).toHaveLength(0);
+      // Finished requests are no longer linked to the caller's signal.
+      caller.abort();
+      expect(read.signal!.aborted).toBe(false);
+      expect(write.signal!.aborted).toBe(false);
     });
 
     it("rethrows a caller's own abort as is, for a write too", async () => {
@@ -1182,7 +1184,10 @@ describe("relay clients without AbortSignal.any", () => {
       });
       expect(read.signal!.aborted).toBe(false);
       expect(write.signal!.aborted).toBe(false);
-      expect(getEventListeners(caller.signal, "abort")).toHaveLength(0);
+      // Finished requests are no longer linked to the caller's signal.
+      caller.abort();
+      expect(read.signal!.aborted).toBe(false);
+      expect(write.signal!.aborted).toBe(false);
     });
 
     it("still ends on a caller's abort and on the request timeout", async () => {

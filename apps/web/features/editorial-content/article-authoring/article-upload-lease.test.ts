@@ -1,4 +1,3 @@
-import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PublishingMediaItem,
@@ -196,8 +195,9 @@ describe("Article temporary upload lease without AbortSignal.any", () => {
       lease.register(command("first-upload", holder), own.signal),
     ).resolves.toEqual(ready);
     expect(received[0]!.aborted).toBe(false);
-    expect(getEventListeners(own.signal, "abort")).toHaveLength(0);
-    expect(getEventListeners(leaseController.signal, "abort")).toHaveLength(0);
+    // The settled registration is no longer linked to its own signal.
+    own.abort();
+    expect(received[0]!.aborted).toBe(false);
 
     // A registration's own abort reaches its request ...
     const own2 = new AbortController();
@@ -212,7 +212,6 @@ describe("Article temporary upload lease without AbortSignal.any", () => {
     pending[0]!.reject(departed);
     await expect(second).rejects.toBe(departed);
     expect(leaseController.signal.aborted).toBe(false);
-    expect(getEventListeners(leaseController.signal, "abort")).toHaveLength(0);
 
     // ... and so does the lease's.
     const third = lease.register(
@@ -225,5 +224,8 @@ describe("Article temporary upload lease without AbortSignal.any", () => {
     expect(received[2]!.reason).toBe(closed);
     pending[1]!.reject(closed);
     await expect(third).rejects.toBe(closed);
+    // Nor are the settled ones linked to the lease.
+    expect(received[0]!.aborted).toBe(false);
+    expect(received[1]!.reason).toBe(departed);
   });
 });

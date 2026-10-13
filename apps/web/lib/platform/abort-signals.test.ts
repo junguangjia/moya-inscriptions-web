@@ -1,9 +1,39 @@
-import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installAbortSignalAny, linkAbortSignals } from "./abort-signals";
 
+// Web code may not import node:events, so each test signal records its own
+// abort listeners. A `once` listener is gone after the single abort event.
+type Listener = EventListenerOrEventListenerObject;
+const registered = new WeakMap<AbortSignal, Map<Listener, boolean>>();
+const controller = (): AbortController => {
+  const created = new AbortController();
+  const { signal } = created;
+  const live = new Map<Listener, boolean>();
+  registered.set(signal, live);
+  const add = signal.addEventListener.bind(signal);
+  const remove = signal.removeEventListener.bind(signal);
+  signal.addEventListener = ((
+    type: string,
+    listener: Listener,
+    options?: boolean | AddEventListenerOptions,
+  ) => {
+    if (type === "abort")
+      live.set(listener, typeof options === "object" && options.once === true);
+    add(type, listener, options);
+  }) as AbortSignal["addEventListener"];
+  signal.removeEventListener = ((
+    type: string,
+    listener: Listener,
+    options?: boolean | EventListenerOptions,
+  ) => {
+    if (type === "abort") live.delete(listener);
+    remove(type, listener, options);
+  }) as AbortSignal["removeEventListener"];
+  return created;
+};
 const listeners = (signal: AbortSignal) =>
-  getEventListeners(signal, "abort").length;
+  [...registered.get(signal)!].filter(([, once]) => !(once && signal.aborted))
+    .length;
 
 const nativeAny = Object.getOwnPropertyDescriptor(AbortSignal, "any");
 const removeNativeAny = () => {
@@ -18,8 +48,8 @@ afterEach(() => {
 
 describe("linkAbortSignals", () => {
   it("starts aborted with the same reason object and adds no listener when a source is already aborted", () => {
-    const live = new AbortController();
-    const done = new AbortController();
+    const live = controller();
+    const done = controller();
     const reason = new Error("left");
     done.abort(reason);
     const linked = linkAbortSignals([live.signal, done.signal]);
@@ -30,8 +60,8 @@ describe("linkAbortSignals", () => {
   });
 
   it("follows the first abort with its reason identity and ignores later ones", () => {
-    const first = new AbortController();
-    const second = new AbortController();
+    const first = controller();
+    const second = controller();
     const linked = linkAbortSignals([first.signal, second.signal]);
     const seen = vi.fn();
     linked.signal.addEventListener("abort", seen);
@@ -45,7 +75,7 @@ describe("linkAbortSignals", () => {
   });
 
   it("removes its listeners from every source once one aborts", () => {
-    const sources = [new AbortController(), new AbortController()];
+    const sources = [controller(), controller()];
     linkAbortSignals(sources.map((source) => source.signal));
     expect(sources.map((source) => listeners(source.signal))).toEqual([1, 1]);
     sources[0]!.abort();
@@ -53,7 +83,7 @@ describe("linkAbortSignals", () => {
   });
 
   it("carries the TimeoutError of AbortSignal.timeout", async () => {
-    const caller = new AbortController();
+    const caller = controller();
     const linked = linkAbortSignals([caller.signal, AbortSignal.timeout(1)]);
     await new Promise((resolve) =>
       linked.signal.addEventListener("abort", resolve, { once: true }),
@@ -64,7 +94,7 @@ describe("linkAbortSignals", () => {
   });
 
   it("throws the source reason from throwIfAborted", () => {
-    const source = new AbortController();
+    const source = controller();
     const linked = linkAbortSignals([source.signal]);
     expect(() => linked.signal.throwIfAborted()).not.toThrow();
     source.abort();
@@ -74,9 +104,9 @@ describe("linkAbortSignals", () => {
   });
 
   it("composes linked signals", () => {
-    const outer = new AbortController();
-    const inner = new AbortController();
-    const other = new AbortController();
+    const outer = controller();
+    const inner = controller();
+    const other = controller();
     const first = linkAbortSignals([inner.signal]);
     const nested = linkAbortSignals([first.signal, other.signal]);
     const sibling = linkAbortSignals([outer.signal, nested.signal]);
@@ -97,7 +127,7 @@ describe("linkAbortSignals", () => {
   });
 
   it("stops propagation and leaves no listener after dispose", () => {
-    const sources = [new AbortController(), new AbortController()];
+    const sources = [controller(), controller()];
     const linked = linkAbortSignals(sources.map((source) => source.signal));
     linked.dispose();
     expect(sources.map((source) => listeners(source.signal))).toEqual([0, 0]);
@@ -107,7 +137,7 @@ describe("linkAbortSignals", () => {
   });
 
   it("leaves a long-lived source without listeners after many finished links", () => {
-    const document = new AbortController();
+    const document = controller();
     for (let request = 0; request < 50; request++) {
       const linked = linkAbortSignals([
         AbortSignal.timeout(15_000),
@@ -136,7 +166,7 @@ describe("installAbortSignalAny", () => {
     removeNativeAny();
     expect(installAbortSignalAny()).toBe(true);
     expect(installAbortSignalAny()).toBe(false);
-    const sources = [new AbortController(), new AbortController()];
+    const sources = [controller(), controller()];
     // The standard accepts any iterable, as Uppy's caller may pass one.
     const signal = AbortSignal.any(
       new Set(
@@ -154,7 +184,7 @@ describe("installAbortSignalAny", () => {
   it("rejects anything that is not an AbortSignal with a TypeError", () => {
     removeNativeAny();
     installAbortSignalAny();
-    const live = new AbortController();
+    const live = controller();
     expect(() =>
       AbortSignal.any([live.signal, {} as unknown as AbortSignal]),
     ).toThrow(TypeError);

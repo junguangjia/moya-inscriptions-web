@@ -1,4 +1,3 @@
-import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authorClient,
@@ -290,8 +289,9 @@ describe("shared private author transport without AbortSignal.any", () => {
       body: '{"kind":"synthetic"}',
     });
     for (const [, init] of calls) expect(init.signal!.aborted).toBe(false);
-    // A finished request leaves nothing behind on a caller's signal.
-    expect(getEventListeners(caller.signal, "abort")).toHaveLength(0);
+    // A finished request is no longer linked to the caller's signal.
+    caller.abort();
+    expect(calls[0]![1].signal!.aborted).toBe(false);
   });
 
   it("rethrows a caller's own abort as is", async () => {
