@@ -184,6 +184,13 @@ describe("FeedPostAuthor", () => {
     expect(container.querySelector("img")?.getAttribute("src")).toBe(
       "/api/community/media/own-avatar",
     );
+    // Feed avatars wait until a post nears the viewport (profile-media-startup-relief-v1).
+    expect(container.querySelector("img")?.getAttribute("loading")).toBe(
+      "lazy",
+    );
+    expect(container.querySelector("img")?.getAttribute("decoding")).toBe(
+      "async",
+    );
     authors.avatarSrc = null;
   });
 

@@ -838,7 +838,12 @@ const ScopedAuthorProfile = ({
         // collections, so they pass under it rather than over the photo. A
         // pinned cover's frost and glass card are here.
         <div aria-hidden="true" className={styles.coverCompact}>
-          <img src={profile.background.src} alt="" />
+          <img
+            src={profile.background.src}
+            alt=""
+            loading="lazy"
+            decoding="async"
+          />
           {coverGlassCard}
         </div>
       )}
