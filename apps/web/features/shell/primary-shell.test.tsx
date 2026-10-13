@@ -42,7 +42,7 @@ const destinationSectionTag = (
 
 describe("PrimaryShell", () => {
   it("represents exactly the three semantic destinations with distinguishable mounted content", () => {
-    const markup = renderShell();
+    const markup = renderShell("user");
 
     expect(markup.match(/data-primary-destination=/g)).toHaveLength(3);
     for (const destination of destinations) {
@@ -51,8 +51,20 @@ describe("PrimaryShell", () => {
     }
   });
 
+  it.each(["home", "discussion"] as const)(
+    "starts on %s without mounting 我, which loads the viewer's profile and images",
+    (activeDestination) => {
+      const markup = renderShell(activeDestination);
+
+      expect(destinationSectionTag(markup, "user")).toContain(" hidden");
+      expect(markup).not.toContain("user content");
+      expect(markup).toContain("home content");
+      expect(markup).toContain("discussion content");
+    },
+  );
+
   it.each(destinations)(
-    "exposes only %s while keeping every destination mounted",
+    "exposes only %s once every destination has been opened",
     (activeDestination) => {
       const markup = renderShell(activeDestination);
 
@@ -67,7 +79,8 @@ describe("PrimaryShell", () => {
           `data-active="${active ? "true" : "false"}"`,
         );
         expect(sectionTag.includes(" hidden")).toBe(!active);
-        expect(markup).toContain(`${destination} content`);
+        if (destination !== "user" || activeDestination === "user")
+          expect(markup).toContain(`${destination} content`);
       }
     },
   );

@@ -584,6 +584,14 @@ describe("Cover stages", () => {
         .querySelector(`:scope > .${presentation.profileCover} img`)
         ?.getAttribute("src"),
     );
+    // The hero photo is on screen whenever the page exists, so it loads at
+    // once; its compact copy waits until shown (profile-media-startup-relief-v1).
+    expect(
+      scene.owner
+        .querySelector(`:scope > .${presentation.profileCover} img`)
+        ?.getAttribute("loading"),
+    ).toBeNull();
+    expect(compact?.querySelector("img")?.getAttribute("loading")).toBe("lazy");
     expect(
       compact?.querySelectorAll(
         `:scope > :is(.${presentation.coverGlass}, .${presentation.coverCard})`,

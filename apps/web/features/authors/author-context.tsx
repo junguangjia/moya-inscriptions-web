@@ -204,7 +204,11 @@ export const AuthorProvider = ({
     void authorClient
       .profile(viewer.id)
       .then((profile) => {
-        if (active) setAvatarSrc(profile.avatar?.src ?? null);
+        if (!active) return;
+        // 我 mounts on first open (profile-media-startup-relief-v1); seeding it
+        // here lets that first open render at once from this same read.
+        cache.current.set(`profile:${profile.id}`, profile);
+        setAvatarSrc(profile.avatar?.src ?? null);
       })
       .catch(() => undefined);
     return () => {
