@@ -40,7 +40,8 @@ upgrade cannot raise it silently.
   decides the reason, and signals from another realm (an iframe) are refused. It
   does not run in workers, which is why the lint rule covers them.
 - `float: inline-start` (Chrome 118) on wrapped Article images has a
-  `float: left` fallback for Chromium 111-117.
+  `float: left` fallback for Chromium 111-117, both in the published rule and in
+  the editor's resize preview.
 - `scripts/check-browser-baseline.mjs` runs after every Web build in
   `scripts/verify.mjs` (`all` and `build`, so also in CI's build job), right
   after its own tests (`check-browser-baseline.spec.mjs`, which need the
@@ -138,7 +139,8 @@ Unit and build checks:
   47.0 s at 05d40467 and 46.8 s at 90e554a7; the branch 47.5 s and 47.5 s before
   the merge, 47.3 s and 46.9 s at the final head; all PASS. The scan and its
   spec add under a second. Web unit tests went from 3,444 to 3,474 (30 new);
-  every earlier test is unchanged and passes.
+  every earlier test passes, and only one earlier assertion changed: the resize
+  preview's expected style now includes the `float: left` fallback (Issue r2).
 
 ### Estimated or not yet verified
 
@@ -204,7 +206,3 @@ Flows on each:
 - Timeout classification on Chromium 123 and older, where `fetch` rejects with a
   generic `AbortError` whatever the abort reason.
 - An audience census of real visitors' engines.
-- The Article editor's own resize preview
-  (`features/editorial-content/article-authoring/article-image-resize.tsx`) also
-  uses `float: inline-start` in an inline rule; it was outside this task's scope
-  and still does not float on Chromium 111-117.
