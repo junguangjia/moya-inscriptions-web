@@ -24,11 +24,17 @@ import {
   cardMediaRenditionListSchema,
   mediaRenditionListSchema,
   placeholderColorSchema,
+  profileMediaRenditionListSchema,
+  profileMediaRenditionPathParts,
   publicMediaRenditionListSchema,
   resolvedMediaUrlSchema,
+  sameMediaFraming,
+  userMediaIdSchema,
+  type ProfileMediaFamily,
 } from "./media-delivery.ts";
 export {
   MEDIA_RENDITIONS_MAXIMUM,
+  PROFILE_MEDIA_RENDITION_ROLES,
   addMediaRenditionAnchorIssues,
   cardMediaRenditionListSchema,
   mediaRenditionContentTypeSchema,
@@ -38,12 +44,23 @@ export {
   mediaRenditionPathSchema,
   mediaRenditionSchema,
   placeholderColorSchema,
+  profileMediaFamilyOf,
+  profileMediaRenditionListSchema,
+  profileMediaRenditionPathParts,
+  profileMediaRenditionPathSchema,
+  profileMediaRenditionRoleSchema,
+  profileMediaRenditionSchema,
   publicMediaRenditionListSchema,
   publicMediaRenditionSchema,
   publishedMediaUrlSchema,
   renditionDimensionSchema,
   resolvedMediaUrlSchema,
   sameMediaFraming,
+  userMediaIdSchema,
+} from "./media-delivery.ts";
+export type {
+  ProfileMediaFamily,
+  ProfileMediaRenditionRole,
 } from "./media-delivery.ts";
 
 import {
@@ -720,7 +737,7 @@ export const apiErrorSchema = z.strictObject({
 const id = z.string().min(1).max(128).regex(/^\S+$/u);
 const userId = z.string().regex(/^user-[0-9a-f]{32}$/u);
 const workId = z.string().regex(/^work-[0-9a-f]{32}$/u);
-const mediaId = z.string().regex(/^user-media-[0-9a-f]{32}$/u);
+const mediaId = userMediaIdSchema;
 const requestId = z.string().uuid();
 const version = z.number().int().nonnegative().max(2147483647);
 const visibility = z.enum(["public", "private"]);
@@ -759,35 +776,109 @@ export const authorPrivacySchema = z.strictObject({
   favorites: visibility,
   likes: visibility,
 });
-export const authorMediaSchema = z.strictObject({
-  id: mediaId,
-  src: z.string().startsWith("/api/community/media/"),
-  width: z.number().int().positive().max(8192),
-  height: z.number().int().positive().max(8192),
-});
+/**
+ * A profile image. `src` stays the original PNG; the optional `renditions`
+ * (profile-media-renditions-v1) are one family of that image, never larger
+ * than it. `src` is not a candidate, so the anchor rule does not apply.
+ */
+export const authorMediaSchema = z
+  .strictObject({
+    id: mediaId,
+    src: z.string().startsWith("/api/community/media/"),
+    width: z.number().int().positive().max(8192),
+    height: z.number().int().positive().max(8192),
+    renditions: profileMediaRenditionListSchema.optional(),
+  })
+  .superRefine((media, context) => {
+    const list = media.renditions;
+    if (list === undefined) return;
+    if (media.src !== `/api/community/media/${media.id}`)
+      context.addIssue({
+        code: "custom",
+        path: ["src"],
+        message: "a rendered image keeps its original src",
+      });
+    if (list.length > 2)
+      context.addIssue({
+        code: "custom",
+        path: ["renditions"],
+        message: "one family has at most two renditions",
+      });
+    const family = list
+      .map((entry) => profileMediaRenditionPathParts(entry.src)?.family)
+      .find((entry) => entry !== undefined);
+    list.forEach((entry, index) => {
+      const parts = profileMediaRenditionPathParts(entry.src);
+      if (parts !== null && parts.mediaId !== media.id)
+        context.addIssue({
+          code: "custom",
+          path: ["renditions", index, "src"],
+          message: "renditions name their image",
+        });
+      if (parts !== null && parts.family !== family)
+        context.addIssue({
+          code: "custom",
+          path: ["renditions", index, "src"],
+          message: "one family per rendition list",
+        });
+      if (!sameMediaFraming(media, entry))
+        context.addIssue({
+          code: "custom",
+          path: ["renditions", index],
+          message: "renditions share the media framing",
+        });
+      if (entry.width > media.width || entry.height > media.height)
+        context.addIssue({
+          code: "custom",
+          path: ["renditions", index],
+          message: "renditions are never larger than the image",
+        });
+    });
+  });
 
-export const authorProfileSchema = z.strictObject({
-  id: userId,
-  handle: z.string(),
-  displayName: authorText(40),
-  bio: authorText(500),
-  studioName: studioNameDisplaySchema.optional(),
-  studioNameSuffix: studioNameSuffixSchema.optional(),
-  avatar: authorMediaSchema.nullable(),
-  background: authorMediaSchema.nullable().optional(),
-  isOwner: z.boolean(),
-  following: z.boolean(),
-  privacy: authorPrivacySchema,
-  totals: z.strictObject({
-    works: version,
-    following: version.nullable(),
-    followers: version.nullable(),
-    favorites: version.nullable(),
-    likes: version.nullable(),
-  }),
-  /** Kept for older clients; always null since the daily avatar limit was removed (2026-10-13). */
-  nextAvatarChangeAt: z.iso.datetime().nullable(),
-});
+/** The avatar and background slots carry only their own family's paths. */
+const addProfileFamilyIssues = (
+  media: AuthorMedia | null | undefined,
+  family: ProfileMediaFamily,
+  context: z.RefinementCtx,
+): void =>
+  media?.renditions?.forEach((entry, index) => {
+    const parts = profileMediaRenditionPathParts(entry.src);
+    if (parts !== null && parts.family !== family)
+      context.addIssue({
+        code: "custom",
+        path: [family, "renditions", index, "src"],
+        message: `the ${family} carries ${family} renditions`,
+      });
+  });
+
+export const authorProfileSchema = z
+  .strictObject({
+    id: userId,
+    handle: z.string(),
+    displayName: authorText(40),
+    bio: authorText(500),
+    studioName: studioNameDisplaySchema.optional(),
+    studioNameSuffix: studioNameSuffixSchema.optional(),
+    avatar: authorMediaSchema.nullable(),
+    background: authorMediaSchema.nullable().optional(),
+    isOwner: z.boolean(),
+    following: z.boolean(),
+    privacy: authorPrivacySchema,
+    totals: z.strictObject({
+      works: version,
+      following: version.nullable(),
+      followers: version.nullable(),
+      favorites: version.nullable(),
+      likes: version.nullable(),
+    }),
+    /** Kept for older clients; always null since the daily avatar limit was removed (2026-10-13). */
+    nextAvatarChangeAt: z.iso.datetime().nullable(),
+  })
+  .superRefine((profile, context) => {
+    addProfileFamilyIssues(profile.avatar, "avatar", context);
+    addProfileFamilyIssues(profile.background, "background", context);
+  });
 export const workSchema = z
   .strictObject({
     id: workId,
@@ -943,13 +1034,17 @@ const pageOf = <T extends z.ZodType>(item: T) =>
     page: z.number().int().positive(),
     pageSize: z.number().int().min(1).max(50),
   });
-export const authorPersonSchema = z.strictObject({
-  id: userId,
-  handle: z.string(),
-  displayName: z.string(),
-  studioName: studioNameDisplaySchema.optional(),
-  avatar: authorMediaSchema.nullable(),
-});
+export const authorPersonSchema = z
+  .strictObject({
+    id: userId,
+    handle: z.string(),
+    displayName: z.string(),
+    studioName: studioNameDisplaySchema.optional(),
+    avatar: authorMediaSchema.nullable(),
+  })
+  .superRefine((person, context) =>
+    addProfileFamilyIssues(person.avatar, "avatar", context),
+  );
 export const authorPeoplePageSchema = pageOf(authorPersonSchema);
 export const workPageSchema = pageOf(workSchema);
 export const guestFavoriteMergeResultSchema = z.strictObject({

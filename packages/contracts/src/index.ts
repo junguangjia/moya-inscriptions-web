@@ -48,6 +48,8 @@ export type {
   RelationshipUpdate,
   ContentRelationUpdate,
   GuestFavoriteMerge,
+  ProfileMediaFamily,
+  ProfileMediaRenditionRole,
 } from "./schemas.js";
 export type {
   DiscussionReply,

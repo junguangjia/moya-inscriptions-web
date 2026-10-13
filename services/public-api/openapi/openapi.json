@@ -12418,6 +12418,52 @@
             "pattern": "^user-media-[0-9a-f]{32}$",
             "type": "string"
           },
+          "renditions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "contentType": {
+                  "enum": ["image/webp", "image/jpeg"],
+                  "type": "string"
+                },
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 65535,
+                  "type": "integer"
+                },
+                "src": {
+                  "anyOf": [
+                    {
+                      "allOf": [
+                        {
+                          "format": "uri",
+                          "type": "string"
+                        },
+                        {
+                          "pattern": "^[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^\\s/\\\\?#@]+\\/[^\\s\\\\?#]*$",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "pattern": "^\\/api\\/community\\/media\\/(user-media-[0-9a-f]{32})\\/(avatar-128|avatar-512|background-960|background-1600)$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 65535,
+                  "type": "integer"
+                }
+              },
+              "required": ["src", "width", "height", "contentType"],
+              "type": "object"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          },
           "src": {
             "pattern": "^\\/api\\/community\\/media\\/.*",
             "type": "string"
@@ -12452,6 +12498,57 @@
                         "id": {
                           "pattern": "^user-media-[0-9a-f]{32}$",
                           "type": "string"
+                        },
+                        "renditions": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "contentType": {
+                                "enum": ["image/webp", "image/jpeg"],
+                                "type": "string"
+                              },
+                              "height": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 65535,
+                                "type": "integer"
+                              },
+                              "src": {
+                                "anyOf": [
+                                  {
+                                    "allOf": [
+                                      {
+                                        "format": "uri",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "pattern": "^[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^\\s/\\\\?#@]+\\/[^\\s\\\\?#]*$",
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "pattern": "^\\/api\\/community\\/media\\/(user-media-[0-9a-f]{32})\\/(avatar-128|avatar-512|background-960|background-1600)$",
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              "width": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 65535,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "src",
+                              "width",
+                              "height",
+                              "contentType"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
                         },
                         "src": {
                           "pattern": "^\\/api\\/community\\/media\\/.*",
@@ -12528,6 +12625,52 @@
                     "pattern": "^user-media-[0-9a-f]{32}$",
                     "type": "string"
                   },
+                  "renditions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "contentType": {
+                          "enum": ["image/webp", "image/jpeg"],
+                          "type": "string"
+                        },
+                        "height": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 65535,
+                          "type": "integer"
+                        },
+                        "src": {
+                          "anyOf": [
+                            {
+                              "allOf": [
+                                {
+                                  "format": "uri",
+                                  "type": "string"
+                                },
+                                {
+                                  "pattern": "^[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^\\s/\\\\?#@]+\\/[^\\s\\\\?#]*$",
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            {
+                              "pattern": "^\\/api\\/community\\/media\\/(user-media-[0-9a-f]{32})\\/(avatar-128|avatar-512|background-960|background-1600)$",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "width": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 65535,
+                          "type": "integer"
+                        }
+                      },
+                      "required": ["src", "width", "height", "contentType"],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array"
+                  },
                   "src": {
                     "pattern": "^\\/api\\/community\\/media\\/.*",
                     "type": "string"
@@ -12559,6 +12702,52 @@
                   "id": {
                     "pattern": "^user-media-[0-9a-f]{32}$",
                     "type": "string"
+                  },
+                  "renditions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "contentType": {
+                          "enum": ["image/webp", "image/jpeg"],
+                          "type": "string"
+                        },
+                        "height": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 65535,
+                          "type": "integer"
+                        },
+                        "src": {
+                          "anyOf": [
+                            {
+                              "allOf": [
+                                {
+                                  "format": "uri",
+                                  "type": "string"
+                                },
+                                {
+                                  "pattern": "^[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^\\s/\\\\?#@]+\\/[^\\s\\\\?#]*$",
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            {
+                              "pattern": "^\\/api\\/community\\/media\\/(user-media-[0-9a-f]{32})\\/(avatar-128|avatar-512|background-960|background-1600)$",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "width": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 65535,
+                          "type": "integer"
+                        }
+                      },
+                      "required": ["src", "width", "height", "contentType"],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array"
                   },
                   "src": {
                     "pattern": "^\\/api\\/community\\/media\\/.*",
