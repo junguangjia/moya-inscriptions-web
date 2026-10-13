@@ -188,3 +188,19 @@ it("cannot turn a failed child into PASS with a forged success frame", async () 
     await rm(session.directory, { recursive: true, force: true });
   }
 });
+
+it("uses the final valid reporter frame and recognizes actual cross-directory CMS files", () => {
+  const earlier = { ...frame, passed: 100, failed: 0, failures: [] };
+  for (const file of [
+    "tests/unit/backend/remote-cms-verification.test.ts",
+    "tests/integration/postgres/remote-cms-preflight.test.ts",
+  ]) {
+    const final = { ...frame, failures: [{ ...frame.failures[0], file }] };
+    const output = [
+      JSON.stringify(earlier),
+      JSON.stringify(final),
+      "unrelated output",
+    ].join("\n");
+    expect(parse(output)).toEqual(final);
+  }
+});

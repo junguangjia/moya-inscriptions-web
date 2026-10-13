@@ -536,6 +536,8 @@ export async function createVerificationSession(
     );
     assertActive();
     if (code !== 0 && diagnostics) console.log(JSON.stringify(diagnostics));
+    if (code !== 0 && label === "integration")
+      for (const line of lines) console.log(line);
     if (code !== 0) throw new Error(named ?? "VERIFICATION_CHILD_FAILED");
     return { output, lines };
   };

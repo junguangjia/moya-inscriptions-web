@@ -1,5 +1,5 @@
 import console from "node:console";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { URL, fileURLToPath } from "node:url";
 import { relative } from "node:path";
 
@@ -9,6 +9,13 @@ const files = new Set(
     .filter((file) => /^[a-z0-9-]+\.test\.ts$/u.test(file))
     .map((file) => `tests/cms/${file}`),
 );
+// `vitest run cms` also selects these existing file names. Never derive
+// arbitrary paths from child output or expose an absolute workspace path.
+for (const file of [
+  "tests/unit/backend/remote-cms-verification.test.ts",
+  "tests/integration/postgres/remote-cms-preflight.test.ts",
+])
+  if (existsSync(new URL(`../../${file}`, import.meta.url))) files.add(file);
 const classes = new Set([
   "Error",
   "AssertionError",
@@ -48,6 +55,7 @@ const postgresCode = (error) => {
  * raw stack, assertion value or arbitrary error code can leave the child. */
 export function parseCmsDiagnosticOutput(output) {
   if (typeof output !== "string") return undefined;
+  let last;
   for (const line of output.split("\n")) {
     if (line.length > 65536) continue;
     let frame;
@@ -88,7 +96,7 @@ export function parseCmsDiagnosticOutput(output) {
       });
     }
     if (!invalid)
-      return {
+      last = {
         syntheticCMSDiagnostics: 1,
         passed: frame.passed,
         failed: frame.failed,
@@ -98,7 +106,7 @@ export function parseCmsDiagnosticOutput(output) {
         failures,
       };
   }
-  return undefined;
+  return last;
 }
 
 /** Test definition locations only. Secrets and complete responses never enter
