@@ -1,7 +1,15 @@
 /** Controlled API client: no content, endpoint, credential or raw error output. */
 import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
-import { open, mkdir, readFile, rename, stat, unlink } from "node:fs/promises";
+import {
+  open,
+  mkdir,
+  readFile,
+  rename,
+  stat,
+  lstat,
+  unlink,
+} from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL, URL } from "node:url";
@@ -60,9 +68,12 @@ export function validateManifest(manifest) {
     !plainObject(manifest) ||
     manifest.version !== 1 ||
     !token(manifest.batchId) ||
-    !["save-draft", "upload-media", "publish-approved"].includes(
-      manifest.operation,
-    ) ||
+    ![
+      "save-draft",
+      "upload-media",
+      "publish-approved",
+      "save-curation-metadata",
+    ].includes(manifest.operation) ||
     !Array.isArray(manifest.items) ||
     !manifest.items.length ||
     manifest.items.length > 10_000
@@ -73,6 +84,15 @@ export function validateManifest(manifest) {
     if (!plainObject(item) || !token(item.key) || keys.has(item.key))
       throwCode("ITEM_IDENTITY_INVALID");
     keys.add(item.key);
+    if (
+      manifest.operation === "save-curation-metadata" &&
+      (typeof item.metadataFile !== "string" ||
+        !(
+          item.expectedPreviousSha256 === null ||
+          /^[a-f0-9]{64}$/.test(item.expectedPreviousSha256)
+        ))
+    )
+      throwCode("CURATION_METADATA_INPUT_INVALID");
     if (
       manifest.operation === "save-draft" &&
       ((!plainObject(item.content) && typeof item.contentFile !== "string") ||
@@ -128,6 +148,30 @@ export async function prepareItems(manifest, directory) {
           : { expectedRevision: item.expectedRevision }),
         content,
       };
+    } else if (manifest.operation === "save-curation-metadata") {
+      const { MAX_CURATION_METADATA_BYTES, decodeCurationMetadata } =
+        await import("../../packages/contracts/dist/internal/editorial/index.js");
+      const metadataPath = localPath(directory, item.metadataFile);
+      const metadataInfo = await lstat(metadataPath);
+      if (
+        metadataInfo.isSymbolicLink() ||
+        metadataInfo.uid !== process.getuid?.()
+      )
+        throwCode("CURATION_METADATA_FILE_INVALID");
+      const bytes = await readBounded(
+        metadataPath,
+        MAX_CURATION_METADATA_BYTES,
+        true,
+      );
+      const payloadJSON = bytes.toString("utf8");
+      if (!bytes.equals(Buffer.from(payloadJSON, "utf8")))
+        throwCode("CURATION_METADATA_ENCODING_INVALID");
+      decodeCurationMetadata(payloadJSON);
+      body = {
+        payloadJSON,
+        snapshotSha256: digest(bytes),
+        expectedPreviousSha256: item.expectedPreviousSha256,
+      };
     } else if (manifest.operation === "publish-approved") {
       body = { id: item.id, approvalId: item.approvalId };
     } else {
@@ -155,10 +199,11 @@ export async function prepareItems(manifest, directory) {
     const idempotencyKey = `batch-${digest(`${manifest.batchId}:${item.key}:${requestHash}`)}`;
     prepared.push({
       key: item.key,
-      body:
-        manifest.operation === "upload-media"
-          ? body
-          : { ...body, idempotencyKey },
+      body: ["upload-media", "save-curation-metadata"].includes(
+        manifest.operation,
+      )
+        ? body
+        : { ...body, idempotencyKey },
       file,
       requestHash,
     });
@@ -351,7 +396,14 @@ export function createTransport(config, fetchImpl = fetch) {
   };
   const transport = async (operation, item, { signal } = {}) => {
     const send = (route, method, body) => request(route, method, body, signal);
-    if (!["save-draft", "upload-media", "publish-approved"].includes(operation))
+    if (
+      ![
+        "save-draft",
+        "upload-media",
+        "publish-approved",
+        "save-curation-metadata",
+      ].includes(operation)
+    )
       throwCode("OPERATION_INVALID");
     if (operation === "upload-media") {
       const find = await send(
@@ -406,6 +458,51 @@ export function createTransport(config, fetchImpl = fetch) {
     if (!response.ok) return response;
     if (response.result?.ok !== true || !plainObject(response.result.result))
       return { ok: false, retryable: false, code: "RESPONSE_INVALID" };
+    if (operation === "save-curation-metadata") {
+      const { decodeCurationMetadata, deriveCurationMetadataCounts } =
+        await import("../../packages/contracts/dist/internal/editorial/index.js");
+      const committed = response.result.result;
+      // An ACK is not complete acceptance. Read the stored metadata through
+      // the controlled API before recording success; this route reads no media.
+      const decoded = decodeCurationMetadata(item.body.payloadJSON);
+      const readback = await send(
+        "/api/editorial/read-curation-metadata",
+        "POST",
+        {
+          catalogId: decoded.catalogId,
+          snapshotSha256: item.body.snapshotSha256,
+        },
+      );
+      if (!readback.ok) return readback;
+      const stored = readback.result?.result;
+      if (
+        readback.result?.ok !== true ||
+        !plainObject(stored) ||
+        stored.payloadJSON !== item.body.payloadJSON ||
+        stored.snapshotSha256 !== item.body.snapshotSha256 ||
+        digest(stored.payloadJSON) !== item.body.snapshotSha256 ||
+        stableDigest(stored.counts) !==
+          stableDigest(deriveCurationMetadataCounts(decoded)) ||
+        stored.previousSha256 !== item.body.expectedPreviousSha256 ||
+        committed.snapshotSha256 !== stored.snapshotSha256 ||
+        stored.current !== true
+      )
+        return {
+          ok: false,
+          retryable: false,
+          code: "CURATION_METADATA_READBACK_MISMATCH",
+        };
+      return {
+        ok: true,
+        result: {
+          ...projectReceipt(committed),
+          snapshotSha256: stored.snapshotSha256,
+          counts: stored.counts,
+          verifiedReadback: true,
+          currentAtReadback: true,
+        },
+      };
+    }
     return { ok: true, result: projectReceipt(response.result.result) };
   };
   Object.defineProperty(transport, "scopeFingerprint", {
@@ -496,6 +593,21 @@ export async function runBatch({
         receipt.items[item.key].requestHash !== item.requestHash
       )
         throwCode("RECEIPT_INPUT_CHANGED");
+    // Metadata success belongs to this invocation's controlled readback. If
+    // cancelled or timed out before a request, an older success is only history.
+    if (manifest.operation === "save-curation-metadata") {
+      for (const item of prepared) {
+        const previous = receipt.items[item.key];
+        receipt.items[item.key] = {
+          requestHash: item.requestHash,
+          status: "pending",
+          attempts: previous?.attempts ?? 0,
+          ...(previous?.status === "succeeded"
+            ? { priorCompletedResult: previous.result }
+            : {}),
+        };
+      }
+    }
     let cursor = 0;
     let writeQueue = Promise.resolve();
     const save = (key) => {
@@ -511,7 +623,11 @@ export async function runBatch({
     const worker = async () => {
       while (cursor < prepared.length) {
         const item = prepared[cursor++];
-        if (receipt.items[item.key]?.status === "succeeded") continue;
+        if (
+          receipt.items[item.key]?.status === "succeeded" &&
+          manifest.operation !== "save-curation-metadata"
+        )
+          continue;
         if (stopped()) break;
         let outcome;
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -550,7 +666,14 @@ export async function runBatch({
         }
         // An interrupted request may have committed remotely. Preserve its
         // pending identity so resume reconciles it before any retry.
-        if (!outcome || (signal?.aborted && !outcome.ok)) break;
+        if (
+          !outcome ||
+          ((signal?.aborted ||
+            (manifest.operation === "save-curation-metadata" &&
+              operationSignal.aborted)) &&
+            !outcome.ok)
+        )
+          break;
         receipt.items[item.key] = {
           ...receipt.items[item.key],
           status: outcome.ok ? "succeeded" : "failed",

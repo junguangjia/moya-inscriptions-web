@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ArtVenn local photo annotation v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "kind", "values"],
+      "properties": {
+        "schema_version": {
+          "const": "artvenn-photo-annotation/v1"
+        },
+        "kind": {
+          "const": "photo"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "object_kind": {
+              "enum": ["inscription", "calligraphy", "unknown", null]
+            },
+            "representation": {
+              "enum": [
+                "stone",
+                "ink_original",
+                "rubbing",
+                "facsimile",
+                "unknown",
+                null
+              ]
+            },
+            "capture_method": {
+              "enum": ["photo", "scan", "unknown", null]
+            },
+            "coverage": {
+              "enum": [
+                "whole_object",
+                "whole_surface_page",
+                "detail",
+                "context",
+                "label",
+                "unknown",
+                null
+              ]
+            },
+            "surfaces": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "front",
+                  "back",
+                  "side_unspecified",
+                  "left",
+                  "right",
+                  "other",
+                  "unknown",
+                  "not_applicable"
+                ]
+              },
+              "maxItems": 8
+            },
+            "side_reference": {
+              "enum": ["facing_front", "unknown", "not_applicable", null]
+            },
+            "parts": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "head",
+                  "body",
+                  "base",
+                  "other",
+                  "unknown",
+                  "not_applicable"
+                ]
+              },
+              "maxItems": 6
+            },
+            "work_format": {
+              "enum": [
+                "handscroll",
+                "album",
+                "folded_book",
+                "hanging_scroll",
+                "other",
+                "unknown",
+                "not_applicable",
+                null
+              ]
+            },
+            "positions": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "main_work",
+                  "frontispiece",
+                  "tail",
+                  "cover_mount",
+                  "leaf_page",
+                  "other",
+                  "unknown",
+                  "not_applicable"
+                ]
+              },
+              "maxItems": 8
+            },
+            "content": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "main_text",
+                  "stele_title",
+                  "title",
+                  "colophon",
+                  "title_slip",
+                  "signature",
+                  "seal",
+                  "ornament",
+                  "damage",
+                  "label",
+                  "unknown"
+                ]
+              },
+              "maxItems": 11
+            },
+            "version_label": {
+              "type": ["string", "null"],
+              "maxLength": 120
+            },
+            "position_index": {
+              "type": ["integer", "null"],
+              "minimum": 1
+            },
+            "notes": {
+              "type": ["string", "null"],
+              "maxLength": 1000
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "kind", "values"],
+      "properties": {
+        "schema_version": {
+          "const": "artvenn-photo-annotation/v1"
+        },
+        "kind": {
+          "const": "object_coverage"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "front": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "back": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "left": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "right": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "head": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "body": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "base": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "main_work": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "frontispiece": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "tail": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "cover_mount": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "leaf_page": {
+              "enum": [
+                "captured",
+                "not_captured",
+                "unknown",
+                "verified_absent",
+                null
+              ]
+            },
+            "coverage_evidence": {
+              "type": ["string", "null"],
+              "maxLength": 1000
+            }
+          }
+        }
+      }
+    }
+  ]
+}

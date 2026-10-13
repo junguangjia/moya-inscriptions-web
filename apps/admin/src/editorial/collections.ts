@@ -1,4 +1,5 @@
 import type { CollectionConfig } from "payload";
+import { MAX_CURATION_METADATA_BYTES } from "@moya/contracts/internal/editorial";
 
 import { canEditCatalog, isAutomation, isOwner } from "./access";
 import { contentFingerprint, publishedContent } from "./content";
@@ -227,7 +228,7 @@ export const EditorialReceipts: CollectionConfig = {
     {
       name: "operation",
       type: "select",
-      options: ["save-draft", "publish-approved"],
+      options: ["save-draft", "publish-approved", "save-curation-metadata"],
       required: true,
     },
     {
@@ -240,6 +241,38 @@ export const EditorialReceipts: CollectionConfig = {
     { name: "revision", type: "number" },
     { name: "fingerprint", type: "text" },
     { name: "errorCode", type: "text" },
+    // The metadata artifact lives in the existing append-only ledger. Text
+    // retains the submitted UTF-8 JSON; a JSONB field would normalize it.
+    {
+      name: "metadataJson",
+      type: "textarea",
+      maxLength: MAX_CURATION_METADATA_BYTES,
+      admin: { hidden: true, readOnly: true },
+    },
+    {
+      name: "metadataSha256",
+      type: "text",
+      maxLength: 64,
+      admin: { hidden: true, readOnly: true },
+    },
+    {
+      name: "metadataCatalogId",
+      type: "text",
+      maxLength: 128,
+      admin: { hidden: true, readOnly: true },
+    },
+    {
+      name: "previousMetadataSha256",
+      type: "text",
+      maxLength: 64,
+      admin: { hidden: true, readOnly: true },
+    },
+    {
+      name: "metadataVersion",
+      type: "number",
+      min: 1,
+      admin: { hidden: true, readOnly: true },
+    },
   ],
   hooks: {
     beforeValidate: [

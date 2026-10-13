@@ -29,6 +29,26 @@ export {
   ownerDraftPageRequestSchema,
   ownerHistoryRequestSchema,
 } from "./automation.js";
+export {
+  CURATION_METADATA_VERSION,
+  MAX_CURATION_METADATA_BYTES,
+  curationMetadataSchema,
+  curationOriginalFrameSchema,
+  saveCurationMetadataSchema,
+  readCurationMetadataSchema,
+  curationMetadataCountsSchema,
+  curationMetadataResponseSchema,
+  decodeCurationMetadata,
+  deriveCurationMetadataCounts,
+  deriveCurationMetadataWarnings,
+} from "./curation-metadata.js";
+export type {
+  CurationMetadata,
+  SaveCurationMetadataRequest,
+  ReadCurationMetadataRequest,
+  CurationMetadataResponse,
+  CurationMetadataCounts,
+} from "./curation-metadata.js";
 export type {
   EditorialApproveBatchRequest,
   EditorialApprovalResult,
