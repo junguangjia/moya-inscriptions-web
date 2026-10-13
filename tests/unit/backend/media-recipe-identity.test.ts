@@ -35,9 +35,9 @@ import { describe, expect, it } from "vitest";
  * parameters and digests; the store keeps only the recorded form. Covered
  * here: the literal digests migration 20261004010000 adopts existing
  * derivatives with, the store's role list, the profile roles the contracts,
- * the registry and the store each name, and parity of the version 1
- * parameters with the pre-task processing profiles (the adopted bytes are
- * what they produce).
+ * the registry and the store each name, the role and job kind lists each
+ * migration restates, and parity of the version 1 parameters with the
+ * pre-task processing profiles (the adopted bytes are what they produce).
  */
 
 const migration = await readFile(
@@ -50,6 +50,13 @@ const migration = await readFile(
 const publicationMigration = await readFile(
   new URL(
     "../../../database/community-migrations/20261008010000_media_publication.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const profileMigration = await readFile(
+  new URL(
+    "../../../database/community-migrations/20261014010000_profile_media_renditions.sql",
     import.meta.url,
   ),
   "utf8",
@@ -173,7 +180,7 @@ describe("rendition recipe identity, version 1", () => {
     );
   });
 
-  it("matches the literals migration 20261004010000 adopts and checks", () => {
+  it("matches the literals migration 20261004010000 adopts and the lists each migration checks", () => {
     const adopted = Object.fromEntries(
       [...migration.matchAll(/WHEN '([a-z]+)' THEN '([0-9a-f]{16})'/gu)].map(
         (match) => [match[1], match[2]],
@@ -213,9 +220,38 @@ describe("rendition recipe identity, version 1", () => {
       "reconcile_capacity",
       "catalog_render",
     ]);
-    expect(listed("publishing_jobs_kind_valid", publicationMigration)).toEqual(
+    // The kinds before profile rendering (increment 3a).
+    expect(listed("publishing_jobs_kind_valid", publicationMigration)).toEqual([
+      "process_item",
+      "derive_edit",
+      "purge_item",
+      "purge_blob",
+      "expire_session",
+      "purge_trashed_work",
+      "sweep_staging",
+      "reconcile_capacity",
+      "catalog_render",
+      "publish_media",
+      "withdraw_media",
+      "verify_withdrawal",
+      "reconcile_publication",
+      "sweep_published",
+    ]);
+    // Migration 20261014010000 restates both complete lists.
+    expect(listed("media_renditions_role_valid", profileMigration)).toEqual([
+      ...RENDITION_ROLES,
+    ]);
+    expect(listed("publishing_jobs_kind_valid", profileMigration)).toEqual(
       publishingJobKindSchema.options,
     );
+    const profileRoles =
+      /CONSTRAINT media_renditions_profile_roles CHECK[^;]*?\brole\s+IN\s*\(([^)]*)\)/u.exec(
+        profileMigration,
+      )?.[1];
+    expect(profileRoles).toBeDefined();
+    expect(
+      [...profileRoles!.matchAll(/'([a-z0-9_-]+)'/gu)].map((match) => match[1]),
+    ).toEqual([...PROFILE_RENDITION_ROLES]);
   });
 
   it("keeps user-initiated purges as today (Owner answer Q4)", () => {

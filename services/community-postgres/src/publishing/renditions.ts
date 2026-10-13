@@ -3,13 +3,15 @@ import type { PublishingMediaWriteResult } from "@moya/api";
 import { nowParam, opaqueId, type PublishingDb } from "./db.js";
 import {
   RECIPE_DIGEST_PATTERN,
+  isProfileRenditionRole,
   isRenditionRole,
   type RenditionRole,
 } from "./recipe-identity.js";
 
 /*
- * community.media_renditions: the one rendition table of media items and
- * Catalog assets (unified media pipeline, increment 1). One definition each
+ * community.media_renditions: the one rendition table of media items,
+ * Catalog assets (unified media pipeline, increment 1) and profile images
+ * (`community.user_media`, increment 3a). One definition each
  * of the rendition recording rule, the holder-need and blob-in-use
  * predicates, and the D7 retention hold. Readers select `state='ready'`;
  * no rendition row is ever deleted. A superseded row keeps its pre-task blob
@@ -54,7 +56,7 @@ export const retentionHoldSql = (blob: string): string =>
 /**
  * SQL (blob id expression): true while a live component or a rendition that
  * is not released uses the blob. A purged item's components and renditions
- * no longer count; Catalog renditions count until released.
+ * no longer count; Catalog and profile renditions count until released.
  */
 export const blobInUseSql = (blobId: string): string => `(
   EXISTS (
@@ -135,10 +137,26 @@ export interface RenditionRecordInput extends PublishingMediaWriteResult {
   readonly recipeDigest: string;
 }
 
-/** The locked subject of a recording: an owned item or an owner-less Catalog asset. */
+/**
+ * The locked subject of a recording: an owned item, an owner-less Catalog
+ * asset or an owner-less profile image (a `user_media` row, by its public id).
+ */
 export type RenditionSubject =
   | { readonly kind: "item"; readonly id: string; readonly ownerId: string }
-  | { readonly kind: "catalog"; readonly id: string };
+  | { readonly kind: "catalog"; readonly id: string }
+  | { readonly kind: "profile"; readonly id: string };
+
+const SUBJECT_COLUMNS = {
+  item: "item_id",
+  catalog: "catalog_asset_id",
+  profile: "user_media_id",
+} as const satisfies Record<RenditionSubject["kind"], string>;
+
+const BLOB_PURPOSES = {
+  item: "derivative",
+  catalog: "catalog_derivative",
+  profile: "profile_derivative",
+} as const satisfies Record<RenditionSubject["kind"], string>;
 
 const RECIPE_VERSION_MAX = 2_147_483_647;
 const EDIT_KEY = /^(?:base|[0-9a-f]{32})$/u;
@@ -169,6 +187,9 @@ const assertRecordShape = (
   if (!isRenditionRole(record.role) || !EDIT_KEY.test(record.editKey))
     throw new TypeError("Unknown rendition role or edit key");
   recipeOf(record);
+  // Profile images hold the profile roles only, and only they hold them.
+  if ((subject.kind === "profile") !== isProfileRenditionRole(record.role))
+    throw new TypeError("Profile roles belong to profile images only");
   if (
     subject.kind === "catalog" &&
     (record.editKey !== "base" ||
@@ -176,6 +197,13 @@ const assertRecordShape = (
       record.contentType !== "image/webp")
   )
     throw new TypeError("Catalog renditions are unedited WebP stills");
+  if (
+    subject.kind === "profile" &&
+    (record.editKey !== "base" ||
+      record.contentType !== "image/webp" ||
+      record.durationMs !== null)
+  )
+    throw new TypeError("Profile renditions are unedited WebP stills");
 };
 
 interface ReadySlot {
@@ -201,8 +229,9 @@ interface ReadySlot {
  * 4. otherwise (an equal or older version) the result is a duplicate: it is
  *    not recorded and its key is returned for removal.
  * Item blobs belong to the item owner (purpose `derivative`) and their bytes
- * are returned for the committed counter; Catalog blobs have no owner
- * (purpose `catalog_derivative`) and count toward no capacity.
+ * are returned for the committed counter; Catalog and profile blobs have no
+ * owner (purposes `catalog_derivative` and `profile_derivative`) and count
+ * toward no capacity.
  */
 export const recordRenditionRows = async (
   db: PublishingDb,
@@ -216,8 +245,7 @@ export const recordRenditionRows = async (
   const at = nowParam(now);
   for (const record of records) assertRecordShape(subject, record);
   const fresh = new Set(await unrecordedKeys(db, records));
-  const subjectColumn =
-    subject.kind === "item" ? "item_id" : "catalog_asset_id";
+  const subjectColumn = SUBJECT_COLUMNS[subject.kind];
   const ready = new Map<string, ReadySlot>(
     (
       await db.query<{
@@ -289,7 +317,7 @@ export const recordRenditionRows = async (
       [
         blobId,
         subject.kind === "item" ? subject.ownerId : null,
-        subject.kind === "item" ? "derivative" : "catalog_derivative",
+        BLOB_PURPOSES[subject.kind],
         record.storageKey,
         record.byteSize,
         record.sha256,

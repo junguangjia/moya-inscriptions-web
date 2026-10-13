@@ -1,5 +1,6 @@
 import {
   MEDIA_WORKER_JOB_KINDS,
+  PROFILE_RENDER_JOB_KINDS,
   UPLOAD_COUPLED_JOB_KINDS,
   createPublishingJobHandlers,
 } from "@moya/backend-production/internal/publishing-job-handlers";
@@ -27,8 +28,8 @@ import type {
  * The process split of the publishing queue (W1-W3, P1-6): the Backend keeps
  * the two kinds coupled to its own uploads with the maintenance that
  * schedules them; the media worker claims every other kind, including
- * `catalog_render`; a handler set without a processor fails processing claims
- * retryably.
+ * `catalog_render`; profile renders keep a list of their own; a handler set
+ * without a processor fails processing claims retryably.
  */
 
 const START = Date.parse("2026-10-04T12:00:00.000Z");
@@ -138,6 +139,7 @@ describe("publishing queue split between the Backend and the media worker", () =
     const split = [
       ...UPLOAD_COUPLED_JOB_KINDS,
       ...MEDIA_WORKER_JOB_KINDS,
+      ...PROFILE_RENDER_JOB_KINDS,
       ...PUBLICATION_PUBLISH_JOB_KINDS,
       ...PUBLICATION_WITHDRAW_JOB_KINDS,
     ];
@@ -148,6 +150,8 @@ describe("publishing queue split between the Backend and the media worker", () =
       "sweep_staging",
     ]);
     expect(MEDIA_WORKER_JOB_KINDS).toContain("catalog_render");
+    expect(PROFILE_RENDER_JOB_KINDS).toEqual(["profile_render"]);
+    expect(MEDIA_WORKER_JOB_KINDS).not.toContain("profile_render");
   });
 
   it("runs only the selected maintenance steps and extra steps on their cadence", async () => {

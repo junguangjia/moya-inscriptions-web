@@ -280,6 +280,7 @@ export const publishingJobKindSchema = z.enum([
   "verify_withdrawal",
   "reconcile_publication",
   "sweep_published",
+  "profile_render",
 ]);
 
 export const publishingJobStateSchema = z.enum([

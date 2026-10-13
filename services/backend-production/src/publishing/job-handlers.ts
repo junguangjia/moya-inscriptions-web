@@ -45,7 +45,8 @@ export type PublishingWorkerJobKind =
   | "withdraw_media"
   | "verify_withdrawal"
   | "reconcile_publication"
-  | "sweep_published";
+  | "sweep_published"
+  | "profile_render";
 
 /**
  * Job kinds coupled to the Backend's own upload state (W3): staging sweeps
@@ -67,6 +68,15 @@ export const MEDIA_WORKER_JOB_KINDS = [
   "purge_trashed_work",
   "reconcile_capacity",
   "catalog_render",
+] as const satisfies readonly PublishingWorkerJobKind[];
+
+/**
+ * Profile image renders (increment 3a): a list of their own, kept out of
+ * `MEDIA_WORKER_JOB_KINDS`, so that the media worker can claim them behind
+ * their own switch. No process claims them yet.
+ */
+export const PROFILE_RENDER_JOB_KINDS = [
+  "profile_render",
 ] as const satisfies readonly PublishingWorkerJobKind[];
 
 /** Mirror of `PublishingDeriveEditPayload`. */
