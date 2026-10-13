@@ -89,10 +89,11 @@ Simulator runtime proves an iOS version.
 Measured results and estimates are kept apart. Only "Measured" rows are
 evidence.
 
-### Measured (2026-10-12)
+### Measured (2026-10-12 and 2026-10-13)
 
 Old-engine lane (`tests/legacy-browsers`, production build, e2e Public API
-fixture; run locally on Docker Desktop for Mac, arm64 images):
+fixture; run locally on Docker Desktop for Mac, arm64 images; the branch result
+holds for the final head, merged with `main` at 90e554a7):
 
 | Image                                        | Engine and version string                                              | Branch result            | Base build (05d40467) |
 | -------------------------------------------- | ---------------------------------------------------------------------- | ------------------------ | --------------------- |
@@ -129,14 +130,15 @@ Unit and build checks:
   47 of them, so Next reads the key.
 - The built CSS keeps `float:left;float:inline-start` for wrapped Article
   images.
-- Client bundle, base to branch: all client JS and CSS +1,268 bytes raw
-  (5,158,504 to 5,159,772; +604 gzip), 14 chunks re-hashed; home route initial
-  JS +1,062 bytes raw (+491 gzip).
-
-- `pnpm verify` (120-second budget) with warm Turbo caches: base 49.7 s and 47.0
-  s, this branch 47.5 s and 47.5 s, all PASS; the scan adds about 0.3 s. Web
-  unit tests went from 3,430 to 3,457 (27 new); every earlier test is unchanged
-  and passes.
+- Client bundle, clean production builds of `main` (90e554a7) and the final
+  head: all client JS and CSS +1,444 bytes raw (5,158,608 to 5,160,052; +658
+  gzip), 14 of 56 chunks re-hashed; home route initial JS +1,238 bytes raw (+545
+  gzip).
+- `pnpm verify` (120-second budget) with warm Turbo caches: `main` 49.7 s and
+  47.0 s at 05d40467 and 46.8 s at 90e554a7; the branch 47.5 s and 47.5 s before
+  the merge, 47.3 s and 46.9 s at the final head; all PASS. The scan and its
+  spec add under a second. Web unit tests went from 3,444 to 3,474 (30 new);
+  every earlier test is unchanged and passes.
 
 ### Estimated or not yet verified
 
