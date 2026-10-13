@@ -64,11 +64,11 @@ private operations records.
 | Rendition missing (switch off, not yet rendered, rejected source, older Backend)                                 | Original `src`                                                                                                                                                                                     | Same                                                                                                                                                                                 | Previous behavior, including the relief `ETag` revalidation                                                 |
 | New avatar or cover set                                                                                          | Original shows first; the rendition appears after the next sweep (about 60 s plus queue)                                                                                                           | Same once the worker switch is on; shown only after emission switch-on                                                                                                               | Backend write path; no job queued on bind                                                                   |
 | Avatar replaced or cover cleared                                                                                 | Other viewers get `404` on the old rendition URL at their next load; the owner can still read it (`no-store`)                                                                                      | Same                                                                                                                                                                                 | Authorization equal to the original route, narrowed by family                                               |
-| Suspended owner, blocked pair, erased image                                                                      | `404`, as for the original                                                                                                                                                                         | Same                                                                                                                                                                                 | Erasure releases renditions in the same transaction; objects are purged after 1 h                           |
+| Suspended owner, blocked pair, erased image                                                                      | `404`, as for the original                                                                                                                                                                         | Same                                                                                                                                                                                 | Erasure releases renditions in the same transaction; objects are purged ≥ 1 h after rendering               |
 | Rendition caching                                                                                                | Current images: relay `private, no-cache`, `Vary: Cookie`, strong `ETag`; the Backend answers `304` from the stored hash without reading storage. Owner-only reads and errors: `private, no-store` | Same                                                                                                                                                                                 | Every normal load is authorized by the Backend; no shared cache (no Nginx cache; image optimizer closed)    |
 | Backfill of existing avatars and covers                                                                          | Paced worker sweep                                                                                                                                                                                 | Starts in the release window with the worker switch on; at most 2 open jobs and 2 per 60 s pass; pauses while `process_item`, `derive_edit` or `catalog_render` is queued or running | A work upload waits behind at most about 2 short profile jobs; concurrency 1; sandbox bounds                |
 | Storage capacity                                                                                                 | Profile renditions are owner-less and not counted                                                                                                                                                  | Same                                                                                                                                                                                 | Account capacity and usage                                                                                  |
-| Profile and people JSON with emission off                                                                        | No `renditions` key; byte-identical                                                                                                                                                                | Same (the default until switch-on)                                                                                                                                                   | Old pages keep parsing                                                                                      |
+| Profile and people JSON with emission off                                                                        | No `renditions` key; otherwise identical, except that an owner's own `nextAvatarChangeAt` is always `null`                                                                                         | Same (the default until switch-on)                                                                                                                                                   | Old pages keep parsing                                                                                      |
 | Old Web pages kept open                                                                                          | n/a                                                                                                                                                                                                | Emission switch-on only ≥ 72 h after the release; a reload fixes it; switching off restores the identical answer                                                                     | No Web rollback below the 3a release while emission is on                                                   |
 | Edge delivery                                                                                                    | Profile renditions never published                                                                                                                                                                 | Same                                                                                                                                                                                 | Increment-2 delivery for works, Catalog and Articles                                                        |
 | Admin job list                                                                                                   | Shows `profile_render` with its label                                                                                                                                                              | Same                                                                                                                                                                                 | Other job views                                                                                             |
@@ -103,7 +103,10 @@ SMS, box sizes and framing, and the Apple and HarmonyOS clients.
   layers.
 - **D7.** Renditions of replaced avatars and cleared covers are kept, readable
   by the owner only, until the source is erased. Erasure releases them in the
-  same transaction, and deletion follows after 1 h.
+  same transaction, and the existing `purge_blob` schedule deletes them once
+  they are not in use and at least 1 h after their blob was created (when they
+  were rendered, not when they were released), so a rendition older than 1 h is
+  usually deleted within about a minute of the erasure.
 - **D8.** The contract already accepts future published URLs.
 - **D9.** One late-night release (migration, Web, contracts, Backend, Admin,
   worker) with emission off; switch-on no earlier than 72 h later.
@@ -203,6 +206,11 @@ the same tag and needs no switch.
   architecture guard allows that import only for the files listed in
   `tests/unit/architecture/workspace-scanner.ts`, which gains one entry for this
   route in the form of the existing relay routes, and nothing else.
+- **Colocated test of `discussion-avatars.ts`.** No separate test file exists
+  for `apps/web/features/authors/discussion-avatars.ts`, so its new case went
+  into `apps/web/features/authors/discussion-section.test.tsx`, the colocated
+  test that exercises it through `DiscussionSection`. That file was changed
+  under the "colocated tests" clause of the approved scope.
 - **Write path.** The `updateAvatar` change for the avatar limit is the only
   Backend write-path change, and it is Owner-requested.
 - **Role lists.** `@moya/backend-production` does not depend on
@@ -211,11 +219,13 @@ the same tag and needs no switch.
 
 ## Accepted limitations and risks
 
-- **Anchor-only identity.** The sweep and the job plan compare only each
-  family's anchor (`avatar-128`, `background-960`). A lost non-anchor blob is
-  not rendered again while the anchor stands, and a recipe version change of
-  `avatar-512` or `background-1600` alone needs an anchor version change or an
-  extension of the sweep.
+- **Anchor-only identity.** The sweep and the job plan look only at each
+  family's anchor (`avatar-128`, `background-960`), and count it as ready at the
+  current recipe version or a later one, whatever its digest; this matches the
+  recording rule, which replaces a ready rendition only with a higher version. A
+  lost non-anchor blob is not rendered again while the anchor stands, and a
+  recipe version change of `avatar-512` or `background-1600` alone needs an
+  anchor version change or an extension of the sweep.
 - **Old pages after switch-on.** Pages parse profiles strictly. A page loaded
   before the 3a release that receives `renditions` fails to read profiles (for
   example, feed post headers without names) until it is reloaded. The ≥ 72 h

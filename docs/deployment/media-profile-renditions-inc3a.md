@@ -149,10 +149,11 @@ their image is rendered, usually after the window.
 The sweep runs every 60 s and queues at most 2 jobs per pass. It queues nothing
 while 2 or more `profile_render` jobs are open, or while any `process_item`,
 `derive_edit` or `catalog_render` job is queued or running. That gives at most
-120 jobs an hour, one at a time. Images are queued by their owner's most recent
-public work, newest first; images of owners without public work come last, in
-media-id order. A test account's avatar is therefore often rendered near the end
-of the backfill, possibly hours after the window.
+120 jobs an hour, one at a time. An owner has at most one open job, and a pass
+queues at most one image per owner. Images are queued by their owner's most
+recent public work, newest first; images of owners without public work come
+last, in media-id order. A test account's avatar is therefore often rendered
+near the end of the backfill, possibly hours after the window.
 
 Watch, content-free (each read an Owner "run"):
 
@@ -205,8 +206,8 @@ With test accounts, confirm, in this order:
 
 Coverage is the share of current avatar and cover pointers of active users whose
 family anchor (`avatar-128`, `background-960`) is ready on a committed blob at
-its current recipe identity. It is measured read-only, with a private query;
-each measurement is an Owner "run".
+its current recipe version or a later one, the sweep's rule. It is measured
+read-only, with a private query; each measurement is an Owner "run".
 
 Switch emission on only when all of these hold:
 
@@ -236,10 +237,13 @@ Use the first step that resolves the problem, in this order. Each step is an
 Owner "run".
 
 1. **Emission off.** `MEDIA_PROFILE_RENDITIONS=off` in the Backend environment
-   and its staged copy, then a Backend restart. The answers are byte-identical
-   to the previous release's again. The read route does not depend on the
-   switch, so rendition URLs that pages already hold keep working; a page that
-   failed to parse profiles recovers on reload.
+   and its staged copy, then a Backend restart. The answers carry no
+   `renditions` key again and are otherwise identical to the previous release's,
+   except that an owner's own `nextAvatarChangeAt` stays `null`, because the
+   avatar-limit removal shipped in the same release. Compare owner reads with
+   that in mind. The read route does not depend on the switch, so rendition URLs
+   that pages already hold keep working; a page that failed to parse profiles
+   recovers on reload.
 2. **Worker off.** `MEDIA_PROFILE_RENDER=off` in the worker environment and its
    staged copy, then a worker restart. No new jobs are queued or run; existing
    renditions stay.

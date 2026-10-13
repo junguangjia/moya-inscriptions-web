@@ -45,11 +45,13 @@ import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
 
 /**
  * Each family's anchor: its smallest role, always rendered with the family.
- * The plan and the sweep compare only the anchor's identity: a lost
- * non-anchor blob is not rendered again while the anchor stands, and a
- * version bump of a non-anchor role (`avatar-512`, `background-1600`) alone
- * is never rendered; it needs an anchor version bump or an extension of the
- * plan and the sweep.
+ * The plan and the sweep look at the anchor only: a family is done while its
+ * anchor is ready at the current recipe version or a later one, whatever its
+ * digest, because the recording rule replaces a ready rendition only with a
+ * higher version. A lost non-anchor blob is not rendered again while the
+ * anchor stands, and a version bump of a non-anchor role (`avatar-512`,
+ * `background-1600`) alone is never rendered; it needs an anchor version
+ * bump or an extension of the plan and the sweep.
  */
 const FAMILY_ANCHORS: Readonly<
   Record<ProfileMediaFamily, ProfileMediaRenditionRole>
@@ -102,13 +104,25 @@ const endedAtSql = (job: string): string =>
 
 /**
  * SQL: image `media` holds a ready rendition, on a committed blob, of the
- * anchor identity `want` (a row of `{family, role, version, digest}`).
+ * anchor role of `want` (a row of `{family, role, version, digest}`) at that
+ * recipe version or a later one, whatever its digest: the recording rule
+ * would discard a render of it, so it never counts as missing.
  */
 const anchorReadySql = (media: string, want: string): string => `EXISTS (
   SELECT 1 FROM community.media_renditions r
   JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed'
   WHERE r.user_media_id=${media} AND r.state='ready' AND r.role=${want}.role
-    AND r.recipe_version=${want}.version AND r.recipe_digest=${want}.digest)`;
+    AND r.recipe_version>=${want}.version)`;
+
+/**
+ * SQL: owner `owner` has a queued or running `profile_render` job, for any
+ * of their images.
+ */
+const ownerJobOpenSql = (owner: string): string => `EXISTS (
+  SELECT 1 FROM community.publishing_jobs o
+  JOIN community.user_media om ON om.id=o.subject_id
+  WHERE o.kind='profile_render' AND o.state IN ('queued','running')
+    AND om.owner_id=${owner})`;
 
 /** SQL: the anchor identities (a JSON parameter) as rows `w` of `{family, role, version, digest}`. */
 const wantSql = (placeholder: string): string =>
@@ -117,10 +131,9 @@ const wantSql = (placeholder: string): string =>
 /**
  * SQL prefix (placeholder `$1`: the anchor identities): `missing`, the
  * profile images a current pointer of an active owner selects, not erased,
- * whose family anchor is missing at its current identity on a committed
- * blob, with their owner. Driven by the pointers (one row per pointer, so an
- * image that is both avatar and background is checked for both families);
- * never reads `bytes`.
+ * whose family anchor is not ready (`anchorReadySql`), with their owner.
+ * Driven by the pointers (one row per pointer, so an image that is both
+ * avatar and background is checked for both families); never reads `bytes`.
  */
 const MISSING_SQL = `WITH want AS (SELECT * FROM ${wantSql("$1")}),
 pointers AS (
@@ -397,8 +410,10 @@ export const enqueueProfileRenders = async (
     if (room === 0 || gate.missing === 0)
       return { ...counts, enqueued: 0, requeued: 0 };
     // One queued or running job per image (the active unique index); a
-    // failed or abandoned job waits, except as below. Owners with the most
-    // recent public work first.
+    // failed or abandoned job waits, except as below. One open job per
+    // owner, so one owner never takes every slot: an owner with an open job
+    // waits, and a pass queues at most one image per owner (the first by
+    // id). Owners with the most recent public work first.
     const enqueued =
       (
         await db.query(
@@ -407,15 +422,19 @@ export const enqueueProfileRenders = async (
            SELECT 'publishing-job-' || replace(gen_random_uuid()::text, '-', ''), 'profile_render', c.media_id,
              'queued', 0, $2::timestamptz, $2::timestamptz, $2::timestamptz
            FROM (
-             SELECT x.media_id FROM missing x
-             WHERE NOT EXISTS (
-               SELECT 1 FROM community.publishing_jobs j
-               WHERE j.kind='profile_render' AND j.subject_id=x.media_id
-                 AND j.state IN ('queued','running','failed','abandoned'))
+             SELECT f.media_id FROM (
+               SELECT DISTINCT ON (x.owner_id) x.media_id, x.owner_id FROM missing x
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM community.publishing_jobs j
+                   WHERE j.kind='profile_render' AND j.subject_id=x.media_id
+                     AND j.state IN ('queued','running','failed','abandoned'))
+                 AND NOT ${ownerJobOpenSql("x.owner_id")}
+               ORDER BY x.owner_id, x.media_id
+             ) f
              ORDER BY (
                SELECT max(w.first_published_at) FROM community.works w
-               WHERE w.author_id=x.owner_id AND community.work_is_public(w)
-             ) DESC NULLS LAST, x.media_id
+               WHERE w.author_id=f.owner_id AND community.work_is_public(w)
+             ) DESC NULLS LAST, f.media_id
              LIMIT $3
            ) c
            ON CONFLICT (kind, subject_id, md5(COALESCE(payload, '{}'::jsonb)::text)) WHERE state IN ('queued', 'running') DO NOTHING
@@ -426,35 +445,44 @@ export const enqueueProfileRenders = async (
     // The latest failed job of a still-missing image whose code is not a
     // content rejection (its attempts were used up) is queued again, with
     // fresh attempts, once the retry delay passed since it failed, within
-    // the same room. A content rejection and an abandoned job (the
+    // the same room and still at most one open job per owner (an owner's
+    // oldest due job first). A content rejection and an abandoned job (the
     // operator's stop) still wait for the operator.
     const requeued =
       enqueued >= room
         ? 0
         : ((
             await db.query(
-              `${MISSING_SQL}
-               UPDATE community.publishing_jobs j
-               SET state='queued', attempts=0, run_after=$2::timestamptz, lease_owner=NULL,
-                   lease_expires_at=NULL, last_error_code=NULL, finished_at=NULL,
-                   updated_at=$2::timestamptz
-               FROM (
-                 SELECT f.id FROM community.publishing_jobs f
+              `${MISSING_SQL},
+               due AS (
+                 SELECT f.id, x.owner_id, ${endedAtSql("f")} AS ended_at
+                 FROM community.publishing_jobs f
+                 JOIN missing x ON x.media_id=f.subject_id
                  WHERE f.kind='profile_render' AND f.state='failed'
                    AND f.last_error_code IS NOT NULL AND f.last_error_code <> ALL($4::text[])
                    AND ${endedAtSql("f")} < $2::timestamptz - ${RETRY_DELAY_SQL}
-                   AND f.subject_id IN (SELECT media_id FROM missing)
                    AND NOT EXISTS (
                      SELECT 1 FROM community.publishing_jobs o
                      WHERE o.kind='profile_render' AND o.subject_id=f.subject_id AND o.id<>f.id
                        AND (o.state IN ('queued','running','abandoned')
                          OR (o.state='failed'
                            AND (${endedAtSql("o")}, o.id) > (${endedAtSql("f")}, f.id))))
-                 ORDER BY ${endedAtSql("f")}, f.id
-                 LIMIT $3
+                   AND NOT ${ownerJobOpenSql("x.owner_id")}
                  FOR UPDATE OF f SKIP LOCKED
-               ) due
-               WHERE j.id=due.id AND j.state='failed'
+               )
+               UPDATE community.publishing_jobs j
+               SET state='queued', attempts=0, run_after=$2::timestamptz, lease_owner=NULL,
+                   lease_expires_at=NULL, last_error_code=NULL, finished_at=NULL,
+                   updated_at=$2::timestamptz
+               FROM (
+                 SELECT d.id FROM (
+                   SELECT DISTINCT ON (owner_id) id, ended_at FROM due
+                   ORDER BY owner_id, ended_at, id
+                 ) d
+                 ORDER BY d.ended_at, d.id
+                 LIMIT $3
+               ) picked
+               WHERE j.id=picked.id AND j.state='failed'
                RETURNING j.id`,
               [want, at, room - enqueued, [...PROFILE_FINAL_FAILURE_CODES]],
             )

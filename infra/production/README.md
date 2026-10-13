@@ -445,8 +445,10 @@ have one switch per service:
   `profile_render` jobs and runs the paced profile sweep, which also backfills
   the existing avatars and covers.
 - `MEDIA_PROFILE_RENDITIONS` in `backend.env`: the Backend adds `renditions` to
-  profile and people `AuthorMedia`. While it is off those answers are
-  byte-identical to the previous release's.
+  profile and people `AuthorMedia`. While it is off those answers carry no
+  `renditions` key and are otherwise identical to the previous release's, except
+  that an owner's own `nextAvatarChangeAt` is always `null`, because the
+  avatar-limit removal shipped in the same release.
 
 Each accepts only `on` or `off`; any other value refuses startup with a message
 that names the key only (the media worker exits 78). A missing or empty value

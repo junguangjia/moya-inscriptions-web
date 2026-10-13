@@ -44,7 +44,8 @@ import type { AuthorListQuery } from "@moya/contracts";
  * recording a whole family (replay, discard, the race with erasure),
  * erasure releasing renditions for the purge schedule, the read
  * authorization matrix, and the store-wide paced sweep (pointer drive,
- * pacing, pauses, retry), each sweep case on a database of its own.
+ * pacing, pauses, one open job per owner, retry), each sweep case on a
+ * database of its own.
  * Part 3: renditions in the author DTOs: with emission off, profile and
  * people JSON byte for byte as before; with it on, a family only once its
  * anchor is ready, never on the blocked-accounts list, and the original
@@ -1251,8 +1252,8 @@ describe("profile assets on a dedicated synthetic database", () => {
         await adapter.readProfileRenderPlan(opaque("user-media"), anchors),
       ).toBeNull();
 
-      // A family whose anchor is ready at its current identity, on a
-      // committed blob, is done; it is planned again once the identity moves
+      // A family whose anchor is ready at its current version, on a
+      // committed blob, is done; it is planned again once the version moves
       // on or the blob is gone.
       expect(
         await adapter.recordProfileRenditions(
@@ -1278,6 +1279,51 @@ describe("profile assets on a dedicated synthetic database", () => {
         [shared.id, at],
       );
       expect(await families(shared.id)).toEqual(["avatar", "background"]);
+
+      // An anchor of a later version, or of the current version with another
+      // digest, is done too: the recording rule keeps it and would discard a
+      // render at the current identity, so planning it would never converge.
+      const later = await createUser(pool);
+      const newer = await createImage(pool, later);
+      const otherDigest = await createImage(pool, later);
+      await setProfile(pool, later, newer.id, otherDigest.id);
+      expect(
+        await adapter.recordProfileRenditions(
+          newer.id,
+          {
+            sourceSha256: newer.sha256,
+            renditions: [
+              rendition("avatar-128", {
+                recipeVersion: currentRecipe("avatar-128").version + 1,
+                recipeDigest: "0123456789abcdef",
+              }),
+            ],
+          },
+          at,
+        ),
+      ).toEqual({ status: "recorded" });
+      expect(
+        await adapter.recordProfileRenditions(
+          otherDigest.id,
+          {
+            sourceSha256: otherDigest.sha256,
+            renditions: [
+              rendition("background-960", { recipeDigest: "0123456789abcdef" }),
+            ],
+          },
+          at,
+        ),
+      ).toEqual({ status: "recorded" });
+      expect(await families(newer.id)).toEqual([]);
+      expect(await families(otherDigest.id)).toEqual([]);
+      const current = outcomeOf(newer.sha256, "avatar-128");
+      expect(
+        await adapter.recordProfileRenditions(newer.id, current, at),
+      ).toEqual({ status: "discarded", storageKeys: keysOf(current) });
+      const again = outcomeOf(otherDigest.sha256, "background-960");
+      expect(
+        await adapter.recordProfileRenditions(otherDigest.id, again, at),
+      ).toEqual({ status: "discarded", storageKeys: keysOf(again) });
 
       // The bytes of an image that is not erased.
       expect(
@@ -1849,18 +1895,26 @@ describe("profile render sweep on dedicated synthetic databases", () => {
         outcomeOf(done.sha256, "background-960"),
         at,
       );
-      // An anchor of another recipe identity only: queued.
-      const stale = await avatarOwner(pool);
-      await adapter.recordProfileRenditions(
-        stale.image.id,
-        {
-          sourceSha256: stale.image.sha256,
-          renditions: [
-            rendition("avatar-128", { recipeDigest: "0123456789abcdef" }),
-          ],
-        },
-        at,
-      );
+      // An anchor of the current version with another digest, or of a later
+      // version: none (the recording rule keeps it, so a render would be
+      // discarded on every pass).
+      for (const [extra, owner] of [
+        [{ recipeDigest: "0123456789abcdef" }, await avatarOwner(pool)],
+        [
+          { recipeVersion: currentRecipe("avatar-128").version + 1 },
+          await avatarOwner(pool),
+        ],
+      ] as const)
+        expect(
+          await adapter.recordProfileRenditions(
+            owner.image.id,
+            {
+              sourceSha256: owner.image.sha256,
+              renditions: [rendition("avatar-128", extra)],
+            },
+            at,
+          ),
+        ).toEqual({ status: "recorded" });
       // An erased image a pointer still names (forced): none.
       const erased = await avatarOwner(pool);
       await pool.query(
@@ -1874,43 +1928,67 @@ describe("profile render sweep on dedicated synthetic databases", () => {
       await expect(
         restricted.readProfileMediaBytes(avatar.id),
       ).rejects.toMatchObject({ code: "42501" });
-      expect(
-        await restricted.enqueueProfileRenders(at, {
+      const pass = (now: Date) =>
+        restricted.enqueueProfileRenders(now, {
           limit: 10,
           maxOpen: 10,
           anchors,
-        }),
-      ).toEqual({
-        missing: 4,
+        });
+      // One image per owner and pass: the first of `a`'s two by id.
+      expect(await pass(at)).toEqual({
+        missing: 3,
         blocked: 0,
-        enqueued: 4,
+        enqueued: 2,
         requeued: 0,
         paused: false,
       });
-      const expected = [avatar.id, background.id, both.id, stale.image.id];
-      expect((await profileJobs(pool)).map((job) => job.subject_id)).toEqual(
-        expect.arrayContaining(expected),
-      );
-      expect(await profileJobs(pool)).toHaveLength(4);
+      const { first } = (
+        await pool.query<{ first: string }>(
+          "SELECT min(id) AS first FROM unnest($1::text[]) AS id",
+          [[avatar.id, background.id]],
+        )
+      ).rows[0]!;
+      expect(
+        (await profileJobs(pool)).map((job) => job.subject_id).sort(),
+      ).toEqual([first, both.id].sort());
       expect(
         (await profileJobs(pool)).every(
           (job) => job.state === "queued" && job.attempts === 0,
         ),
       ).toBe(true);
-      // Queued images are not queued again.
-      expect(
-        await restricted.enqueueProfileRenders(at, {
-          limit: 10,
-          maxOpen: 10,
-          anchors,
-        }),
-      ).toEqual({
-        missing: 4,
+      // Queued images are not queued again, and `a` waits while its job is open.
+      expect(await pass(at)).toEqual({
+        missing: 3,
         blocked: 0,
         enqueued: 0,
         requeued: 0,
         paused: false,
       });
+      // Its family recorded and its job done, `a`'s other image is queued.
+      const firstImage = first === avatar.id ? avatar : background;
+      await adapter.recordProfileRenditions(
+        first,
+        outcomeOf(
+          firstImage.sha256,
+          first === avatar.id ? "avatar-128" : "background-960",
+        ),
+        at,
+      );
+      await pool.query(
+        "UPDATE community.publishing_jobs SET state='succeeded', finished_at=$2, updated_at=$2 WHERE subject_id=$1",
+        [first, at],
+      );
+      const next = new Date(at.getTime() + 60_000);
+      expect(await pass(next)).toEqual({
+        missing: 2,
+        blocked: 0,
+        enqueued: 1,
+        requeued: 0,
+        paused: false,
+      });
+      expect((await profileJobs(pool)).at(-1)!.subject_id).toBe(
+        first === avatar.id ? background.id : avatar.id,
+      );
       // The read authorization needs no bytes either.
       expect(
         await restricted.resolveProfileRenditionRead(
@@ -2179,6 +2257,177 @@ describe("profile render sweep on dedicated synthetic databases", () => {
         paused: false,
       });
       expect(await snapshotOf(untouched)).toEqual(kept);
+    },
+    SLOW,
+  );
+
+  it(
+    "keeps at most one profile job open per owner, so one owner never takes both slots",
+    async () => {
+      const pool = await migratedDatabase("sweep");
+      const adapter = new PostgresWorkPublishingAdapter(pool);
+      const at = await afterMigrations(pool);
+      const minutes = (count: number) =>
+        new Date(at.getTime() + count * 60_000);
+      const subjects = async () =>
+        (await profileJobs(pool)).map((job) => job.subject_id);
+      const succeed = (subject: string, now: Date) =>
+        pool.query(
+          "UPDATE community.publishing_jobs SET state='succeeded', finished_at=$2, updated_at=$2 WHERE subject_id=$1 AND state IN ('queued','running')",
+          [subject, now],
+        );
+      // An owner with the most recent public work and several missing
+      // images (a new avatar and a new background), ordered first.
+      const churner = await createUser(pool);
+      const avatar = await createImage(pool, churner);
+      const background = await createImage(pool, churner);
+      await setProfile(pool, churner, avatar.id, background.id);
+      await publicWork(pool, churner, new Date(at.getTime() - HOUR));
+      // Another owner without public work, ordered last.
+      const other = await avatarOwner(pool);
+
+      // Both slots are free: one goes to the churner's first image by id,
+      // the other to the other owner.
+      expect(await sweep(adapter, at)).toEqual({
+        missing: 3,
+        blocked: 0,
+        enqueued: 2,
+        requeued: 0,
+        paused: false,
+      });
+      const { first } = (
+        await pool.query<{ first: string }>(
+          "SELECT min(id) AS first FROM unnest($1::text[]) AS id",
+          [[avatar.id, background.id]],
+        )
+      ).rows[0]!;
+      expect((await subjects()).sort()).toEqual([first, other.image.id].sort());
+
+      // The other render is done. The churner replaces its avatar and a third
+      // owner sets one: the churner's open job, even one of a replaced
+      // image, keeps its images waiting, so the free slot goes to the third.
+      await adapter.recordProfileRenditions(
+        other.image.id,
+        outcomeOf(other.image.sha256, "avatar-128"),
+        at,
+      );
+      await succeed(other.image.id, at);
+      const replacement = await createImage(pool, churner);
+      await setProfile(pool, churner, replacement.id, background.id);
+      const third = await avatarOwner(pool);
+      expect(await sweep(adapter, minutes(1))).toEqual({
+        missing: 3,
+        blocked: 0,
+        enqueued: 1,
+        requeued: 0,
+        paused: false,
+      });
+      expect((await subjects()).at(-1)).toBe(third.image.id);
+      // An owner with an open job gets no second one, even with room.
+      expect(await sweep(adapter, minutes(2), 2, 10)).toEqual({
+        missing: 3,
+        blocked: 0,
+        enqueued: 0,
+        requeued: 0,
+        paused: false,
+      });
+      expect(await subjects()).toHaveLength(3);
+
+      // Once the churner's job ended, one more of its images is queued.
+      await succeed(first, minutes(2));
+      expect(await sweep(adapter, minutes(3), 2, 10)).toEqual({
+        missing: 3,
+        blocked: 0,
+        enqueued: 1,
+        requeued: 0,
+        paused: false,
+      });
+      expect([replacement.id, background.id]).toContain(
+        (await subjects()).at(-1),
+      );
+      expect(
+        (await profileJobs(pool)).filter((job) => job.state === "queued"),
+      ).toHaveLength(2);
+    },
+    SLOW,
+  );
+
+  it(
+    "queues an owner's exhausted renders again one at a time",
+    async () => {
+      const pool = await migratedDatabase("sweep");
+      const adapter = new PostgresWorkPublishingAdapter(pool);
+      const at = await afterMigrations(pool);
+      const day = new Date(at.getTime() + 26 * HOUR);
+      const stateOf = async (id: string) =>
+        (await profileJobs(pool)).find((job) => job.id === id)?.state;
+      // Both images of one owner and one of another failed retryably.
+      const owner = await createUser(pool);
+      const avatar = await createImage(pool, owner);
+      const background = await createImage(pool, owner);
+      await setProfile(pool, owner, avatar.id, background.id);
+      const older = await insertJob(
+        pool,
+        "profile_render",
+        avatar.id,
+        "failed",
+        at,
+        "processing_unavailable",
+      );
+      const newer = await insertJob(
+        pool,
+        "profile_render",
+        background.id,
+        "failed",
+        new Date(at.getTime() + HOUR),
+        "media_store_failure",
+      );
+      const other = await avatarOwner(pool);
+      const otherJob = await insertJob(
+        pool,
+        "profile_render",
+        other.image.id,
+        "failed",
+        at,
+        "lease_expired",
+      );
+
+      // A day later: the owner's oldest due job and the other owner's.
+      expect(await sweep(adapter, day, 10, 10)).toEqual({
+        missing: 3,
+        blocked: 3,
+        enqueued: 0,
+        requeued: 2,
+        paused: false,
+      });
+      expect(await stateOf(older)).toBe("queued");
+      expect(await stateOf(newer)).toBe("failed");
+      expect(await stateOf(otherJob)).toBe("queued");
+      // While that job is open, the owner's other due job waits.
+      expect(await sweep(adapter, day, 10, 10)).toEqual({
+        missing: 3,
+        blocked: 1,
+        enqueued: 0,
+        requeued: 0,
+        paused: false,
+      });
+      expect(await stateOf(newer)).toBe("failed");
+      // Once it ended with its family recorded, the other is queued.
+      for (const image of [avatar, other.image])
+        await adapter.recordProfileRenditions(
+          image.id,
+          outcomeOf(image.sha256, "avatar-128"),
+          day,
+        );
+      await finishJobs(pool, day);
+      expect(await sweep(adapter, day, 10, 10)).toEqual({
+        missing: 1,
+        blocked: 1,
+        enqueued: 0,
+        requeued: 1,
+        paused: false,
+      });
+      expect(await stateOf(newer)).toBe("queued");
     },
     SLOW,
   );

@@ -69,7 +69,7 @@ on is a configuration change recorded on Issue #206, without a tag.
 | 1, PR 1a "pipeline"                              | Rendition model and migration, recipes v1 plus `viewer`, sandbox renderer, separate media worker, Catalog processing, retention hold, governance record                                                                                                                    | No; Production Web output unchanged                                                                                     | Previous release plus the private rollback and roll-forward steps ([Operations notes](#operations-notes))                                             |
 | 1, PR 1b "delivery"                              | Additive rendition candidates and placeholder colour in the contracts, Backend builders, Web `srcset`/`sizes`/aspect/placeholder, progressive Viewer, Development Catalog candidates                                                                                       | Yes; Owner visual gate on a Development preview before Ready                                                            | Previous release; legacy `src` remains the fallback everywhere                                                                                        |
 | 2 "published delivery"                           | Published copies of eligible renditions in a dedicated private published origin behind a new media hostname on the existing EdgeOne subscription; publication, withdrawal and EdgeOne purge lifecycle                                                                      | No; delivery URLs change, rendered pages do not                                                                         | Configuration switch back to the authorized read paths                                                                                                |
-| 3a "profile renditions"                          | Avatars and covers (`community.user_media`) as a third rendition subject keyed by the unchanged user-media id: four WebP roles, owner-less blobs, `profile_render` jobs queued by a paced worker sweep, an authorized origin route, optional `renditions` on `AuthorMedia` | Yes; Owner visual and real-device gate before Ready; emission switched on in Production at least 72 h after the release | `MEDIA_PROFILE_RENDITIONS=off` restores the byte-identical answers; `MEDIA_PROFILE_RENDER=off` stops rendering; the original `src` stays the fallback |
+| 3a "profile renditions"                          | Avatars and covers (`community.user_media`) as a third rendition subject keyed by the unchanged user-media id: four WebP roles, owner-less blobs, `profile_render` jobs queued by a paced worker sweep, an authorized origin route, optional `renditions` on `AuthorMedia` | Yes; Owner visual and real-device gate before Ready; emission switched on in Production at least 72 h after the release | `MEDIA_PROFILE_RENDITIONS=off` drops `renditions` from the answers; `MEDIA_PROFILE_RENDER=off` stops rendering; the original `src` stays the fallback |
 | 3b "direct upload and profile source relocation" | Direct browser-to-storage upload; hash-verified relocation of existing `user_media` bytes out of PostgreSQL; the `user_media` retention follow-up; optional edge delivery of profile renditions                                                                            | Yes; Owner visual and real-device gate                                                                                  | Configuration switch back to the upload relay; profile bytes in PostgreSQL retained                                                                   |
 | 4 "deep zoom and completion"                     | IIIF Image API 3 Level 0 JPEG tiles in the existing Viewer, resolution-policy controls, backfill, before/after measurement, retirement of superseded paths and the old media hostname, retention follow-up record                                                          | Yes; Owner visual and real-device gate                                                                                  | Tiles are optional per asset; the bounded viewer image remains the fallback                                                                           |
 
@@ -589,10 +589,12 @@ Production steps.
   `profile_render`, so it is also the backfill. It reads the current avatar and
   background pointers of active users, never the image bytes, and queues an
   image whose family anchor (`avatar-128`, `background-960`) is not ready at its
-  current recipe identity.
+  current recipe version or a later one.
   - One pass every 60 s, with at most 2 new jobs per pass. Images of owners with
     the most recent public work are queued first, and those of owners without
-    public work last.
+    public work last. An owner has at most one open `profile_render` job, so a
+    pass queues at most one image per owner and one owner never takes both
+    slots.
   - Nothing is queued while 2 or more `profile_render` jobs are open, or while
     any `process_item`, `derive_edit` or `catalog_render` job is queued or
     running. The queue is first in, first out, so a work upload waits behind at
@@ -602,17 +604,24 @@ Production steps.
     Catalog rule).
   - The worker logs one content-free count line when the counts change: missing,
     blocked, enqueued, requeued and paused.
-  - The plan and the sweep compare the anchor only. A lost non-anchor blob is
-    not rendered again while the anchor stands, and a recipe version change of
-    `avatar-512` or `background-1600` alone needs an anchor version change or an
-    extension of the sweep.
+  - The plan and the sweep look at the anchor only, and count it as ready at the
+    current recipe version or a later one, whatever its digest. That matches the
+    recording rule, which replaces a ready rendition only with a higher version,
+    so a rollback after a future version change never renders the same image
+    again on every pass. A lost non-anchor blob is not rendered again while the
+    anchor stands, and a recipe version change of `avatar-512` or
+    `background-1600` alone needs an anchor version change or an extension of
+    the sweep.
 - **Capacity, edge and retention.** Profile renditions count toward no account's
   capacity. The publication insert trigger and the edge eligibility query refuse
   them, so 3a never publishes them to the edge. Renditions of a replaced avatar
   or a cleared cover are kept, readable by the owner only, until the image is
-  erased; erasure releases them in the same transaction, and the existing
-  `purge_blob` schedule deletes the objects an hour later. This task creates
-  these blobs, so none is under the retention hold.
+  erased; erasure releases them in the same transaction. The existing
+  `purge_blob` schedule then deletes each object once it is not in use and at
+  least 1 h after its blob was created (when it was rendered, not when it was
+  released), so a rendition older than 1 h is usually deleted within about a
+  minute of the erasure. This task creates these blobs, so none is under the
+  retention hold.
 - **Read route.** `/api/community/media/<user-media-id>/<role>` relays `GET` and
   `HEAD` (at most one byte range) to the Backend's
   `/v1/community/media/{mediaId}/{rendition}`.
@@ -642,9 +651,12 @@ Production steps.
   URLs, but 3a emits none. With `MEDIA_PROFILE_RENDITIONS=on` the Backend lists
   a family in profile and people answers only when its anchor is ready; the
   blocked-accounts list carries none, and a list that breaks a contract rule is
-  dropped with one content-free log line. With the switch off those answers are
-  byte-identical to the previous release's. The upload answer never carries
-  renditions. The key-set pin moves as amendment entry 14 allows.
+  dropped with one content-free log line. With the switch off those answers
+  carry no `renditions` key and are otherwise identical to the previous
+  release's, except that an owner's own `nextAvatarChangeAt` is always `null`,
+  because the avatar-limit removal shipped in the same release. The upload
+  answer never carries renditions. The key-set pin moves as amendment entry 14
+  allows.
 - **Web.** Avatars drawn at 48 px or less use `avatar-128`. The profile header
   (80 px) and registration (96 px) use `avatar-128` at 1× and `avatar-512` from
   2×. The profile cover uses one URL, the largest background rendition, for its

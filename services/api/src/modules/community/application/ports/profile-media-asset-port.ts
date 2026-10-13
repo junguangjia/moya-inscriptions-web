@@ -19,12 +19,14 @@ import type { PublishingDerivativeCommit } from "./work-publishing-port.js";
  */
 
 /**
- * The recipe identity a family's anchor (`avatar-128`, `background-960`)
- * must hold. A family is rendered while its anchor is missing at this
- * identity on a committed blob; the other role of a family is rendered with
- * it, never alone. A version bump of a non-anchor role alone is therefore
- * never rendered: it needs an anchor version bump or an extension of the
- * plan and the sweep.
+ * The current recipe identity of a family's anchor (`avatar-128`,
+ * `background-960`). A family is rendered while its anchor is not ready on
+ * a committed blob at this version or a later one, whatever its digest (the
+ * recording rule replaces a ready rendition only with a higher version, so
+ * the plan, the sweep and the recording agree); the other role of a family
+ * is rendered with it, never alone. A version bump of a non-anchor role
+ * alone is therefore never rendered: it needs an anchor version bump or an
+ * extension of the plan and the sweep.
  */
 export interface ProfileRenditionIdentity {
   readonly role: ProfileMediaRenditionRole;
@@ -48,8 +50,8 @@ export interface ProfileRenderPlan {
   readonly byteSize: number;
   /**
    * Families to render, in the order `avatar`, `background`: those a
-   * current pointer of the active owner selects whose anchor is missing at
-   * its current identity. Empty: nothing to do.
+   * current pointer of the active owner selects whose anchor is not ready
+   * (see `ProfileRenditionIdentity`). Empty: nothing to do.
    */
   readonly families: readonly ProfileMediaFamily[];
 }
@@ -86,7 +88,7 @@ export interface ProfileRenderSweepOptions {
 
 /** Counts of one sweep pass (content-free; for logs). */
 export interface ProfileRenderSweepCounts {
-  /** Selected profile images whose anchor is missing at its current identity. */
+  /** Selected profile images whose anchor is not ready. */
   readonly missing: number;
   /** Of those, images without an open job whose job failed or was abandoned. */
   readonly blocked: number;
@@ -131,16 +133,19 @@ export interface ProfileMediaAssetPort {
   /**
    * One paced sweep pass, also the backfill: the profile images the current
    * avatar and background pointers of active owners select, not erased,
-   * whose family anchor is missing at its current identity on a committed
-   * blob, get a `profile_render` job. Nothing is queued while a
-   * `process_item`, `derive_edit` or `catalog_render` job is queued or
-   * running, or while `maxOpen` `profile_render` jobs are open; otherwise at
-   * most `min(limit, maxOpen - open)` per pass, owners with the most recent
-   * public work first. A failed or abandoned job waits for the operator,
-   * except that the latest failed job of a still-missing image whose code is
-   * not a content rejection is queued again, with fresh attempts, once 24
-   * hours passed since it failed; an abandoned job always waits. Never reads
-   * the image bytes. Passes serialize.
+   * whose family anchor is not ready (see `ProfileRenditionIdentity`), get a
+   * `profile_render` job. Nothing is queued while a `process_item`,
+   * `derive_edit` or `catalog_render` job is queued or running, or while
+   * `maxOpen` `profile_render` jobs are open; otherwise at most
+   * `min(limit, maxOpen - open)` per pass, owners with the most recent
+   * public work first. An owner has at most one open `profile_render` job:
+   * an owner with a queued or running one gets none, and a pass queues at
+   * most one image per owner. A failed or abandoned job waits for the
+   * operator, except that the latest failed job of a still-missing image
+   * whose code is not a content rejection is queued again, with fresh
+   * attempts, once 24 hours passed since it failed, under the same per-owner
+   * rule; an abandoned job always waits. Never reads the image bytes.
+   * Passes serialize.
    */
   enqueueProfileRenders(
     now: Date,

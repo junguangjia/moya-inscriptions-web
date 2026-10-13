@@ -219,9 +219,11 @@ Backend. Production configuration is in
   jobs per pass, none while 2 `profile_render` jobs are open or any
   `process_item`, `derive_edit` or `catalog_render` job is queued or running)
   and renders them from the stored PNG; the original image is shown until its
-  rendition is ready. `MEDIA_PROFILE_RENDITIONS=off` restores the previous,
-  byte-identical profile and people answers. Production keeps both off until its
-  release steps switch them on (see
+  rendition is ready. With `MEDIA_PROFILE_RENDITIONS=off` the profile and people
+  answers carry no `renditions` key and are otherwise identical to the previous
+  release's, except that an owner's own `nextAvatarChangeAt` is always `null`,
+  because the avatar-limit removal shipped in the same release. Production keeps
+  both off until its release steps switch them on (see
   [`infra/production/README.md`](../../production/README.md)).
 - Uploads and the Backend share one in-process transfer registry. A no-save
   session whose lease lapsed is not expired while one of its component uploads

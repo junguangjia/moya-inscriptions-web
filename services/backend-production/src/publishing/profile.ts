@@ -112,10 +112,12 @@ export interface ProfileRenderer {
 export const PROFILE_STORE_OWNER = "profile";
 
 /**
- * The identities the anchor of each family (`avatar-128`, `background-960`)
- * must hold; the sweep and the job plan compare only these. A version bump
- * of a non-anchor role alone is therefore never rendered: it needs an
- * anchor version bump or an extension of the plan and the sweep.
+ * The current identity of each family's anchor (`avatar-128`,
+ * `background-960`); the sweep and the job plan look at the anchors only,
+ * and count one as ready at this version or a later one, whatever its
+ * digest. A version bump of a non-anchor role alone is therefore never
+ * rendered: it needs an anchor version bump or an extension of the plan and
+ * the sweep.
  */
 export const profileAnchorIdentities = (): ProfileWorkerRenditionIdentity[] =>
   Object.values(PROFILE_FAMILIES).map(({ anchor }) => {
