@@ -7,6 +7,7 @@ import type {
   MediaFailureCode,
   MediaVariant,
   OpenWorkEditDraftCommand,
+  ProfileMediaRenditionRole,
   PublishingDraft,
   PublishingOpenedEditDraft,
   PublishingDraftDeletionCommand,
@@ -37,6 +38,13 @@ import type {
   CatalogMediaSource,
   CatalogRenderOutcome,
   CatalogRenderPlan,
+  ProfileMediaAssetPort,
+  ProfileRenderOutcome,
+  ProfileRenderPlan,
+  ProfileRenderSweepCounts,
+  ProfileRenderSweepOptions,
+  ProfileRenditionIdentity,
+  ProfileRenditionReadTarget,
   PublishingCleanupCounts,
   PublishingCommandIdentity,
   PublishingDerivativeCommit,
@@ -77,14 +85,15 @@ import * as submissions from "./publishing/submissions.js";
 import * as works from "./publishing/works.js";
 import * as mediaRead from "./publishing/media-read.js";
 import * as catalogAssets from "./publishing/catalog-assets.js";
+import * as profileAssets from "./publishing/profile-assets.js";
 
 /**
  * Work publishing persistence on PostgreSQL, plus the Catalog media asset
- * state the same worker drives. Every method delegates to its
- * publishing/<area>.ts function with this adapter's pool.
+ * and profile image rendition state the same worker drives. Every method
+ * delegates to its publishing/<area>.ts function with this adapter's pool.
  */
 export class PostgresWorkPublishingAdapter
-  implements WorkPublishingPort, CatalogMediaAssetPort
+  implements WorkPublishingPort, CatalogMediaAssetPort, ProfileMediaAssetPort
 {
   constructor(
     private readonly pool: Pool,
@@ -432,6 +441,18 @@ export class PostgresWorkPublishingAdapter
       editKey,
     );
   }
+  resolveProfileRenditionRead(
+    viewerId: string | null,
+    userMediaId: string,
+    role: ProfileMediaRenditionRole,
+  ): Promise<ProfileRenditionReadTarget | null> {
+    return profileAssets.resolveProfileRenditionRead(
+      this.pool,
+      viewerId,
+      userMediaId,
+      role,
+    );
+  }
   syncCatalogAssets(
     sources: readonly CatalogMediaSource[],
     now: Date,
@@ -460,5 +481,32 @@ export class PostgresWorkPublishingAdapter
     now: Date,
   ): Promise<void> {
     return catalogAssets.failCatalogAsset(this.pool, assetId, failureCode, now);
+  }
+  readProfileRenderPlan(
+    userMediaId: string,
+    anchors: readonly ProfileRenditionIdentity[],
+  ): Promise<ProfileRenderPlan | null> {
+    return profileAssets.readProfileRenderPlan(this.pool, userMediaId, anchors);
+  }
+  readProfileMediaBytes(userMediaId: string): Promise<Uint8Array | null> {
+    return profileAssets.readProfileMediaBytes(this.pool, userMediaId);
+  }
+  recordProfileRenditions(
+    userMediaId: string,
+    outcome: ProfileRenderOutcome,
+    now: Date,
+  ): Promise<PublishingDerivativeCommit> {
+    return profileAssets.recordProfileRenditions(
+      this.pool,
+      userMediaId,
+      outcome,
+      now,
+    );
+  }
+  enqueueProfileRenders(
+    now: Date,
+    options: ProfileRenderSweepOptions,
+  ): Promise<ProfileRenderSweepCounts> {
+    return profileAssets.enqueueProfileRenders(this.pool, now, options);
   }
 }

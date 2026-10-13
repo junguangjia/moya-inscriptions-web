@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -44,6 +44,23 @@ const guard = (await import(
   assertDisposableTestTarget(rows: unknown, database: string): string;
 };
 type Pool = ReturnType<typeof createPostgresPool>;
+const connect = (pool: Pool) => pool.connect();
+type Client = Awaited<ReturnType<typeof connect>>;
+// Erasure runs inside a content deletion; called directly to run it as the App role.
+const { eraseUnreferencedLegacyMedia } = (await import(
+  new URL(
+    "../../../services/community-postgres/src/publishing/permanent-media.ts",
+    import.meta.url,
+  ).href
+)) as {
+  readonly eraseUnreferencedLegacyMedia: (
+    db: Client,
+    ownerId: string,
+    itemIds: readonly string[],
+    now: Date,
+    legacyMediaIds?: readonly string[],
+  ) => Promise<void>;
+};
 const poolFor = (url: string) =>
   createPostgresPool(parsePostgresConfig({ DATABASE_URL: url }));
 const administration = poolFor(targetUrl);
@@ -809,6 +826,106 @@ describe.each(["clean", "phase4-upgrade", "legacy-grants-upgrade"] as const)(
       expect(await publishing.completeJob(claim, now)).toBe(true);
       await publishing.scheduleCleanup(now, 10);
       await publishing.reconcileCapacity(actor, now);
+      // profile-media-renditions-v1: the profile image store (sweep, plan,
+      // bytes, recording, read and the release on erasure) runs as the App
+      // role, before any media job could pause the sweep.
+      const profileBytes = randomBytes(64);
+      const profileSha = createHash("sha256")
+        .update(profileBytes)
+        .digest("hex");
+      const profileImage = opaque("user-media");
+      await setup.query(
+        "INSERT INTO community.user_media(id,owner_id,mime_type,width,height,sha256,bytes) VALUES($1,$2,'image/png',4,3,$3,$4)",
+        [profileImage, actor, profileSha, profileBytes],
+      );
+      await setup.query(
+        "UPDATE community.public_users SET avatar_media_id=$2 WHERE id=$1",
+        [actor, profileImage],
+      );
+      const profileAnchors = [
+        { role: "avatar-128", version: 1, digest: "0123456789abcdef" },
+        { role: "background-960", version: 1, digest: "0123456789abcdef" },
+      ] as const;
+      expect(
+        await publishing.enqueueProfileRenders(now, {
+          limit: 2,
+          maxOpen: 2,
+          anchors: profileAnchors,
+        }),
+      ).toEqual({
+        missing: 1,
+        blocked: 0,
+        enqueued: 1,
+        requeued: 0,
+        paused: false,
+      });
+      expect(
+        await publishing.readProfileRenderPlan(profileImage, profileAnchors),
+      ).toEqual({
+        userMediaId: profileImage,
+        sha256: profileSha,
+        width: 4,
+        height: 3,
+        byteSize: 64,
+        families: ["avatar"],
+      });
+      expect(
+        Buffer.from((await publishing.readProfileMediaBytes(profileImage))!),
+      ).toEqual(profileBytes);
+      const profileKey = randomBytes(16).toString("hex");
+      const profileRendition = {
+        storageKey: `blobs/${profileKey.slice(0, 2)}/${profileKey.slice(2, 4)}/${profileKey}`,
+        byteSize: 10,
+        sha256: "e".repeat(64),
+        role: "avatar-128",
+        recipeVersion: 1,
+        recipeDigest: "0123456789abcdef",
+        contentType: "image/webp",
+        width: 4,
+        height: 3,
+      } as const;
+      expect(
+        await publishing.recordProfileRenditions(
+          profileImage,
+          { sourceSha256: profileSha, renditions: [profileRendition] },
+          now,
+        ),
+      ).toEqual({ status: "recorded" });
+      expect(
+        await publishing.resolveProfileRenditionRead(
+          other,
+          profileImage,
+          "avatar-128",
+        ),
+      ).toMatchObject({
+        storageKey: profileRendition.storageKey,
+        revalidate: true,
+      });
+      await setup.query(
+        "UPDATE community.public_users SET avatar_media_id=NULL WHERE id=$1",
+        [actor],
+      );
+      const eraser = await connect(app);
+      try {
+        await eraser.query("BEGIN");
+        await eraseUnreferencedLegacyMedia(eraser, actor, [], now, [
+          profileImage,
+        ]);
+        await eraser.query("COMMIT");
+      } catch (error) {
+        await eraser.query("ROLLBACK");
+        throw error;
+      } finally {
+        eraser.release();
+      }
+      expect(
+        (
+          await setup.query(
+            "SELECT state FROM community.media_renditions WHERE user_media_id=$1",
+            [profileImage],
+          )
+        ).rows,
+      ).toEqual([{ state: "released" }]);
       // unified-media-pipeline-v1: item renditions (record, supersede,
       // placeholder colour) and the Catalog asset store run as the App role.
       const renditionKey = () => {
