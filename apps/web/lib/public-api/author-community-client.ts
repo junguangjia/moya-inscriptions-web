@@ -45,6 +45,7 @@ import type {
   DiscussionTarget,
   MentionReference,
 } from "@moya/contracts";
+import { linkAbortSignals } from "../platform/abort-signals";
 interface Parser<T> {
   parse: (value: unknown) => T;
 }
@@ -134,64 +135,74 @@ const request = async <T>(
     const documentSignal = documentReadSignal();
     if (documentSignal) signals.push(documentSignal);
   }
-  const signal = AbortSignal.any(signals);
-  // React need not unmount during a full navigation. Do not start another
-  // read from a departed document, including its late effect/retry callbacks.
-  signal.throwIfAborted();
-  const response = await fetch(`/api/community/${path}`, {
-    method: options.method ?? "GET",
-    cache: "no-store",
-    credentials: "same-origin",
-    redirect: "error",
-    signal,
-    headers: options.upload
-      ? {
-          ...identityHeaders,
-          "content-type": "image/png",
-          "x-request-id": options.requestId ?? "",
-        }
-      : options.body === undefined
-        ? { ...identityHeaders, accept: "application/json" }
-        : { ...identityHeaders, "content-type": "application/json" },
-    ...(options.upload
-      ? { body: options.upload }
-      : options.body === undefined
-        ? {}
-        : { body: JSON.stringify(options.body) }),
-  });
-  if (!response.ok) {
-    if (response.status === 403)
-      globalThis.dispatchEvent?.(new Event(PRODUCT_ACCESS_REFUSED_EVENT));
-    let message =
-      response.status === 401
-        ? "请先登录"
-        : response.status === 404
-          ? "内容不可用或此列表未公开"
-          : response.status === 409
-            ? "状态已变化，请检查后重试"
-            : "暂时无法完成，请重试";
-    let reason: string | null = null;
-    try {
-      const value = await response.json();
-      if (response.status === 409 && typeof value?.error?.message === "string")
-        message = value.error.message;
-      if (
-        response.status === 422 &&
-        typeof value?.error?.message === "string" &&
-        /^[a-z][a-z0-9_]{0,63}$/u.test(value.error.message)
-      )
-        reason = value.error.message;
-    } catch {
-      /* Preserve the transport failure. */
+  const link = linkAbortSignals(signals);
+  const { signal } = link;
+  // The link is released once the answer is read, so the long-lived
+  // document signal keeps no listener per finished request.
+  try {
+    // React need not unmount during a full navigation. Do not start another
+    // read from a departed document, including its late effect/retry callbacks.
+    signal.throwIfAborted();
+    const response = await fetch(`/api/community/${path}`, {
+      method: options.method ?? "GET",
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      signal,
+      headers: options.upload
+        ? {
+            ...identityHeaders,
+            "content-type": "image/png",
+            "x-request-id": options.requestId ?? "",
+          }
+        : options.body === undefined
+          ? { ...identityHeaders, accept: "application/json" }
+          : { ...identityHeaders, "content-type": "application/json" },
+      ...(options.upload
+        ? { body: options.upload }
+        : options.body === undefined
+          ? {}
+          : { body: JSON.stringify(options.body) }),
+    });
+    if (!response.ok) {
+      if (response.status === 403)
+        globalThis.dispatchEvent?.(new Event(PRODUCT_ACCESS_REFUSED_EVENT));
+      let message =
+        response.status === 401
+          ? "请先登录"
+          : response.status === 404
+            ? "内容不可用或此列表未公开"
+            : response.status === 409
+              ? "状态已变化，请检查后重试"
+              : "暂时无法完成，请重试";
+      let reason: string | null = null;
+      try {
+        const value = await response.json();
+        if (
+          response.status === 409 &&
+          typeof value?.error?.message === "string"
+        )
+          message = value.error.message;
+        if (
+          response.status === 422 &&
+          typeof value?.error?.message === "string" &&
+          /^[a-z][a-z0-9_]{0,63}$/u.test(value.error.message)
+        )
+          reason = value.error.message;
+      } catch {
+        /* Preserve the transport failure. */
+      }
+      throw new AuthorRequestError(response.status, message, reason);
     }
-    throw new AuthorRequestError(response.status, message, reason);
+    const result = schema.parse(
+      response.status === 204 ? null : await response.json(),
+    );
+    if (epoch !== accountEpoch)
+      throw new AuthorRequestError(401, "账户状态已变化，请重试读取");
+    return result;
+  } finally {
+    link.dispose();
   }
-  const result = schema.parse(
-    response.status === 204 ? null : await response.json(),
-  );
-  if (epoch !== accountEpoch)
-    throw new AuthorRequestError(401, "账户状态已变化，请重试读取");
-  return result;
 };
 /** Existing session relay and account fence, reused by Article delegation. */
 export { request as authorRequest };
