@@ -21,6 +21,7 @@ import {
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parseCmsDiagnosticOutput } from "../../tests/cms/safe-reporter.mjs";
 import { spawn, execFileSync } from "node:child_process";
 import { assertSyntheticTestDatabaseUrl } from "../../tests/integration/postgres/synthetic-test-database.ts";
 import {
@@ -512,6 +513,8 @@ export async function createVerificationSession(
     const code = await managed.closed;
     const output = managed.output();
     const lines = summaryLines(output);
+    const diagnostics =
+      label === "integration" ? parseCmsDiagnosticOutput(output) : undefined;
     // A failed child may name its own refusal: the caller's `categorize`
     // reads one bare category from the child's fixed vocabulary, and the
     // shape is enforced here again so nothing but an identifier can pass. A
@@ -527,10 +530,12 @@ export async function createVerificationSession(
         exitCode: code,
         category: failure ?? (code ? (named ?? "CHILD_FAILED") : "PASS"),
         summaries: lines,
+        ...(diagnostics ? { diagnostics } : {}),
       }) + "\n",
       { mode: 0o600 },
     );
     assertActive();
+    if (code !== 0 && diagnostics) console.log(JSON.stringify(diagnostics));
     if (code !== 0) throw new Error(named ?? "VERIFICATION_CHILD_FAILED");
     return { output, lines };
   };
@@ -628,6 +633,9 @@ async function main() {
           "run",
           "cms",
           "--no-file-parallelism",
+          "--includeTaskLocation",
+          "--reporter=default",
+          `--reporter=${path.join(verificationRoot, "tests/cms/safe-reporter.mjs")}`,
           `--testTimeout=${boundedChildLimit(30_000, session.remaining())}`,
           `--hookTimeout=${boundedChildLimit(60_000, session.remaining())}`,
         ],
