@@ -28,6 +28,10 @@
     "typecheck": {
       "dependsOn": ["^typecheck"]
     },
+    "web#typecheck": {
+      "description": "tsc reads the route types in .next/types, which next build deletes and regenerates, so web type checking waits for the web build.",
+      "dependsOn": ["^typecheck", "build"]
+    },
     "test": {
       "dependsOn": ["^build"]
     },
