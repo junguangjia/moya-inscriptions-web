@@ -9,7 +9,10 @@ import "./globals.css";
 import { AuthReturnProvider } from "../features/auth/auth-return";
 
 import { PRODUCT_BOOT_SCRIPT } from "../features/product-shell/product-boot";
-import { DEFAULT_THEME_PREFERENCE } from "../features/product-shell/preferences";
+import {
+  DEFAULT_THEME_PREFERENCE,
+  defaultFeedLayoutFor,
+} from "../features/product-shell/preferences";
 
 export const metadata: Metadata = {
   title: "由于艺",
@@ -31,7 +34,7 @@ export default function RootLayout({
       suppressHydrationWarning
       lang="zh-CN"
       data-device-class="desktop"
-      data-home-layout="double"
+      data-home-layout={defaultFeedLayoutFor("pc")}
       data-orientation="portrait"
       data-platform="pc"
       data-theme={DEFAULT_THEME_PREFERENCE}
