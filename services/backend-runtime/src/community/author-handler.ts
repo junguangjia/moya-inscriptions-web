@@ -21,15 +21,19 @@ import {
   contentRelationUpdateSchema,
   guestFavoriteMergeSchema,
   privacyUpdateSchema,
+  profileMediaRenditionRoleSchema,
   profileUpdateSchema,
   relationshipUpdateSchema,
   requestIdentitySchema,
+  userMediaIdSchema,
   workPublishingFailureCodeSchema,
 } from "@moya/contracts/schemas";
 import { sendApiError } from "../http/api-error-response.js";
+import { ifNoneMatchIncludes, strongEntityTag } from "../http/entity-tag.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
 import { collectTransportQuery } from "../http/transport-query.js";
+import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { refuseTransfer } from "./publishing-upload.js";
 import { readBearerToken } from "./session-credential.js";
 import { handleWorkPublishingRequest } from "./work-publishing-handler.js";
@@ -534,6 +538,57 @@ export const handleAuthorRequest = async (
             sha256: createHash("sha256").update(bytes).digest("hex"),
           }),
           201,
+        );
+        return;
+      }
+      // Profile image renditions: GET|HEAD media/:mediaId/:rendition (Range).
+      if (path.length === 3 && (method === "GET" || method === "HEAD")) {
+        if (url.search) throw new InvalidInput();
+        const mediaId = userMediaIdSchema.safeParse(path[1]);
+        const role = profileMediaRenditionRoleSchema.safeParse(path[2]);
+        if (!mediaId.success || !role.success) {
+          sendApiError(response, "ITEM_NOT_FOUND", "Media is unavailable");
+          return;
+        }
+        if (publishing === undefined) {
+          sendApiError(
+            response,
+            "SERVICE_UNAVAILABLE",
+            "Community service is temporarily unavailable",
+          );
+          return;
+        }
+        const target = await publishing.profileRenditionTarget(
+          viewer,
+          mediaId.data,
+          role.data,
+        );
+        if (target === null) {
+          sendApiError(response, "ITEM_NOT_FOUND", "Media is unavailable");
+          return;
+        }
+        // Only a current image is revalidated, from its stored hash and
+        // without opening the store; owner-only reads are never validated.
+        const etag = target.revalidate
+          ? strongEntityTag(target.sha256)
+          : undefined;
+        if (
+          etag !== undefined &&
+          ifNoneMatchIncludes(request.headers["if-none-match"], etag)
+        ) {
+          response.writeHead(304, {
+            ...noStore,
+            etag,
+            "x-content-type-options": "nosniff",
+          });
+          response.end();
+          return;
+        }
+        await deliverPublishingMedia(
+          request,
+          response,
+          (range) => publishing.openProfileRendition(target, range),
+          { ...noStore, ...(etag === undefined ? {} : { etag }) },
         );
         return;
       }
