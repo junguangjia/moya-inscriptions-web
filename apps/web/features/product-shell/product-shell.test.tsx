@@ -10,6 +10,11 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { ProductShell, useProductShell } from "./product-shell";
+import { PRODUCT_BOOT_SCRIPT } from "./product-boot";
+import {
+  FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+  THEME_PREFERENCE_STORAGE_KEY,
+} from "./preferences";
 import { AuthReturnProvider, useAuthReturn } from "../auth/auth-return";
 import {
   editorHistoryState,
@@ -2152,8 +2157,49 @@ describe("ProductShell", () => {
     }
   });
 
+  it.each([
+    ["dark", 390],
+    ["system", 834],
+  ] as const)(
+    "hydrates legacy %s preferences to defaults at width %s and retains subsequent choices",
+    async (legacyTheme, width) => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: width,
+      });
+      window.localStorage.setItem("yoyi.theme-preference", legacyTheme);
+      window.localStorage.setItem("yoyi.home-feed-layout", "double");
+      window.localStorage.setItem("yoyi.publishing.original-quality", "true");
+      window.eval(PRODUCT_BOOT_SCRIPT);
+      expect(document.documentElement.dataset.theme).toBe("light");
+      expect(document.documentElement.dataset.homeLayout).toBe("single");
+      renderProductShell(<ProductShellObserver />);
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.theme).toBe("light");
+      expect(observedProductShell?.feedLayout).toBe("single");
+      expect(document.documentElement.dataset.theme).toBe("light");
+      expect(document.documentElement.dataset.homeLayout).toBe("single");
+      await act(async () => {
+        observedProductShell!.setThemePreference(legacyTheme);
+        observedProductShell!.setFeedLayoutPreference("double");
+      });
+      for (const root of mountedRoots.splice(0)) act(() => root.unmount());
+      document.body.replaceChildren();
+      // A legacy tab cannot change the versioned choices made after the reset.
+      window.localStorage.setItem("yoyi.theme-preference", "light");
+      window.localStorage.setItem("yoyi.home-feed-layout", "single");
+      renderProductShell(<ProductShellObserver />);
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.theme).toBe(legacyTheme);
+      expect(observedProductShell?.feedLayout).toBe("double");
+      expect(
+        window.localStorage.getItem("yoyi.publishing.original-quality"),
+      ).toBe("true");
+    },
+  );
+
   it("updates the effective theme when the saved system preference changes", async () => {
-    window.localStorage.setItem("yoyi.theme-preference", "system");
+    window.localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, "system");
     let systemIsDark = false;
     let notifySystemThemeChange = () => {};
     const media = {
@@ -2180,8 +2226,8 @@ describe("ProductShell", () => {
   });
 
   it("loads, applies, cycles, and persists canonical preferences", async () => {
-    window.localStorage.setItem("yoyi.theme-preference", "dark");
-    window.localStorage.setItem("yoyi.home-feed-layout", "single");
+    window.localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, "dark");
+    window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single");
     const { container } = renderProductShell();
     await act(async () => vi.runAllTimers());
 
@@ -2202,8 +2248,12 @@ describe("ProductShell", () => {
     click(buttonByLabel(container, /切换主题/));
     click(buttonByLabel(container, /切换布局/));
 
-    expect(window.localStorage.getItem("yoyi.theme-preference")).toBe("system");
-    expect(window.localStorage.getItem("yoyi.home-feed-layout")).toBe("double");
+    expect(window.localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY)).toBe(
+      "system",
+    );
+    expect(
+      window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+    ).toBe("double");
     expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
     expect(document.documentElement.dataset.homeLayout).toBe("double");
   });
@@ -3114,15 +3164,23 @@ describe("ProductShell", () => {
       observedProductShell!.setThemePreference("dark");
       observedProductShell!.setFeedLayoutPreference("single");
     });
-    expect(window.localStorage.getItem("yoyi.theme-preference")).toBe("dark");
-    expect(window.localStorage.getItem("yoyi.home-feed-layout")).toBe("single");
+    expect(window.localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY)).toBe(
+      "dark",
+    );
+    expect(
+      window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+    ).toBe("single");
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(document.documentElement.dataset.homeLayout).toBe("single");
     await act(async () => {
       observedProductShell!.cycleTheme();
       observedProductShell!.cycleFeedLayout();
     });
-    expect(window.localStorage.getItem("yoyi.theme-preference")).toBe("system");
-    expect(window.localStorage.getItem("yoyi.home-feed-layout")).toBe("double");
+    expect(window.localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY)).toBe(
+      "system",
+    );
+    expect(
+      window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+    ).toBe("double");
   });
 });

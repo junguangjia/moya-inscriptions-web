@@ -1,4 +1,9 @@
-import { DEFAULT_THEME_PREFERENCE } from "./preferences";
+import {
+  DEFAULT_THEME_PREFERENCE,
+  FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+  THEME_PREFERENCE_STORAGE_KEY,
+  defaultFeedLayoutFor,
+} from "./preferences";
 
 export const PRODUCT_LOADING_MINIMUM_MS = 720;
 export const PRODUCT_LOADING_FAILSAFE_MS = 3_000;
@@ -7,8 +12,13 @@ export const PRODUCT_LOADING_FAILSAFE_MS = 3_000;
 // preferences and platform attributes are available to the first CSS paint.
 export const PRODUCT_BOOT_SCRIPT = `(() => {
   const root = document.documentElement;
-  const themeKey = "yoyi.theme-preference";
-  const layoutKey = "yoyi.home-feed-layout";
+  const themeKey = ${JSON.stringify(THEME_PREFERENCE_STORAGE_KEY)};
+  const layoutKey = ${JSON.stringify(FEED_LAYOUT_PREFERENCE_STORAGE_KEY)};
+  const defaultLayouts = ${JSON.stringify({
+    phone: defaultFeedLayoutFor("phone"),
+    tablet: defaultFeedLayoutFor("tablet"),
+    pc: defaultFeedLayoutFor("pc"),
+  })};
   const phonePattern = /iPhone|iPod|Windows Phone|IEMobile|Opera Mini|Mobile/i;
   const tabletPattern = /iPad|Tablet|PlayBook|Silk|Kindle/i;
   const started = performance.now();
@@ -73,9 +83,8 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
   };
 
   synchronizePlatform();
-  // Without an explicit choice, phone opens single-column and tablet/PC double.
-  root.dataset.homeLayout =
-    layout ?? (root.dataset.platform === "phone" ? "single" : "double");
+  // Boot and hydration share calligraphy defaults; PC keeps automatic columns.
+  root.dataset.homeLayout = layout ?? defaultLayouts[root.dataset.platform];
   window.YOYI_PRODUCT_BOOT = Object.freeze({ synchronizePlatform });
   window.setTimeout(() => {
     if (root.dataset.yoyiBoot === "pending") root.dataset.yoyiBoot = "ready";

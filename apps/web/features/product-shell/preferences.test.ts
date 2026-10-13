@@ -37,9 +37,9 @@ describe("Product Shell preferences", () => {
     expect(parseFeedLayoutPreference(value)).toBe(expected);
   });
 
-  it("defaults phone to single column and tablet and PC to double", () => {
+  it("defaults phone and tablet to calligraphy while PC keeps its automatic layout", () => {
     expect(defaultFeedLayoutFor("phone")).toBe("single");
-    expect(defaultFeedLayoutFor("tablet")).toBe("double");
+    expect(defaultFeedLayoutFor("tablet")).toBe("single");
     expect(defaultFeedLayoutFor("pc")).toBe("double");
   });
 
@@ -62,6 +62,47 @@ describe("Product Shell preferences", () => {
       persistPreference(storage, FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single"),
     ).not.toThrow();
   });
+
+  it.each(["dark", "system"])(
+    "ignores legacy %s preferences without writing or clearing storage",
+    (legacyTheme) => {
+      const values = new Map([
+        ["yoyi.theme-preference", legacyTheme],
+        ["yoyi.home-feed-layout", "double"],
+        ["yoyi.publishing.original-quality", "true"],
+        ["artvenn.editor.interruption.test-account", "synthetic-draft"],
+        ["yoyi-avatar-save-v1:test-account", "synthetic-avatar"],
+      ]);
+      const before = new Map(values);
+      const storage = {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: vi.fn((key: string, value: string) => values.set(key, value)),
+      };
+
+      expect(readStoredThemePreference(storage)).toBe("light");
+      expect(readStoredFeedLayoutPreference(storage)).toBeNull();
+      expect(values).toEqual(before);
+      expect(storage.setItem).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["dark", "system"])(
+    "retains a later %s and normal-mode choice despite legacy writes",
+    (theme) => {
+      const values = new Map<string, string>();
+      const storage = {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      };
+      persistPreference(storage, THEME_PREFERENCE_STORAGE_KEY, theme);
+      persistPreference(storage, FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "double");
+      // An already open old version can write only its legacy namespace.
+      storage.setItem("yoyi.theme-preference", "light");
+      storage.setItem("yoyi.home-feed-layout", "single");
+      expect(readStoredThemePreference(storage)).toBe(theme);
+      expect(readStoredFeedLayoutPreference(storage)).toBe("double");
+    },
+  );
 
   it("cycles only the approved bounded values", () => {
     expect(nextThemePreference("light")).toBe("dark");

@@ -905,11 +905,8 @@ test("Clean Product Preview preserves shell state, scroll, and preferences set t
     "data-theme-preference",
     "dark",
   );
-  // Phone opens single-column and tablet double; the toggle flips either.
-  const toggledLayout =
-    expectedInitialAutoPlatform(testInfo.project.name) === "phone"
-      ? "double"
-      : "single";
+  // Phone and tablet open in calligraphy mode; the toggle selects normal mode.
+  const toggledLayout = "double";
   if (expectedInitialAutoPlatform(testInfo.project.name) === "pc") {
     await expect(settings.locator("[data-feed-layout-toggle]")).toHaveCount(0);
   } else {
@@ -2441,10 +2438,10 @@ test("Feed layout remains bounded to phone/tablet while PC stays responsive", as
   const masonry = activeHomeMasonry(surface);
   const platform = expectedInitialAutoPlatform(testInfo.project.name);
   await expect(masonry).toHaveAttribute("data-layout-ready", "true");
-  // Phone opens on the single-column post feed; tablet and PC on double.
+  // Phone and tablet open in calligraphy mode; PC keeps automatic columns.
   await expect(productShell(surface)).toHaveAttribute(
     "data-feed-layout",
-    platform === "phone" ? "single" : "double",
+    platform === "pc" ? "double" : "single",
   );
 
   if (platform === "pc") {
@@ -2463,11 +2460,14 @@ test("Feed layout remains bounded to phone/tablet while PC stays responsive", as
     return;
   }
 
+  await expect(masonry).toHaveAttribute("data-masonry-columns", "1");
   if (platform === "phone") {
-    await expect(masonry).toHaveAttribute("data-masonry-columns", "1");
     await expect(masonry.locator("[data-feed-post]").first()).toBeVisible();
-    await setFeedLayoutThroughSettings(surface, "double");
+  } else {
+    // Tablet calligraphy keeps its existing Catalog cards in a single column.
+    await expect(masonry.locator("[data-feed-post]")).toHaveCount(0);
   }
+  await setFeedLayoutThroughSettings(surface, "double");
   await expect(masonry).toHaveAttribute("data-masonry-columns", "2");
   await expect(masonry.locator("[data-feed-post]")).toHaveCount(0);
   await expectActiveDestination(surface, "home");
@@ -2498,6 +2498,7 @@ test("Tablet Double gives Home aligned features and Calligraphy cards stable geo
   await page.setViewportSize({ height: 1194, width: 834 });
   await expect(platformSelector(surface)).toHaveValue("auto");
   await expectPresentationPlatform(surface, "tablet");
+  await setFeedLayoutThroughSettings(surface, "double");
   await expect(productShell(surface)).toHaveAttribute(
     "data-feed-layout",
     "double",

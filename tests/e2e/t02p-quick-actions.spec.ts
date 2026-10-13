@@ -13,7 +13,7 @@ const ready = async (page: Page, path = "/dev/t02p/qa?qaChrome=hidden") => {
   // single-column post feed unless the reader chose Double.
   await page.addInitScript(() => {
     try {
-      window.localStorage.setItem("yoyi.home-feed-layout", "double");
+      window.localStorage.setItem("yoyi.home-feed-layout.v2", "double");
     } catch {
       // Storage may be unavailable; the layout then follows the platform.
     }

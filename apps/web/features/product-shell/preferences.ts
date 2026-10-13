@@ -1,7 +1,9 @@
 import type { PresentationPlatform } from "../shell/device-platform";
 
-export const THEME_PREFERENCE_STORAGE_KEY = "yoyi.theme-preference";
-export const FEED_LAYOUT_PREFERENCE_STORAGE_KEY = "yoyi.home-feed-layout";
+// A new namespace resets presentation defaults once without modifying legacy
+// choices or unrelated storage. Later choices persist in these same keys.
+export const THEME_PREFERENCE_STORAGE_KEY = "yoyi.theme-preference.v2";
+export const FEED_LAYOUT_PREFERENCE_STORAGE_KEY = "yoyi.home-feed-layout.v2";
 
 export type ThemePreference = "light" | "dark" | "system";
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = "light";
@@ -40,12 +42,12 @@ export const parseFeedLayoutPreference = (
     : null;
 
 /**
- * Phone opens on the single-column post feed; tablet keeps two columns. PC
- * sizes its own columns and ignores the preference.
+ * Phone and tablet open in calligraphy mode. PC sizes its own columns and
+ * ignores the preference.
  */
 export const defaultFeedLayoutFor = (
   platform: PresentationPlatform,
-): FeedLayoutPreference => (platform === "phone" ? "single" : "double");
+): FeedLayoutPreference => (platform === "pc" ? "double" : "single");
 
 export interface PreferenceStorage {
   readonly getItem: (key: string) => string | null;
