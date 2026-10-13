@@ -48,9 +48,16 @@ const outputDir = path.resolve(output);
 const webPort = Number(option("--web-port", "3640"));
 const apiPort = Number(option("--api-port", "3641"));
 const onlyLane = option("--lane");
-const lanes = JSON.parse(
+const allLanes = JSON.parse(
   fs.readFileSync(path.join(here, "package.json"), "utf8"),
-).legacyLanes.filter((lane) => !onlyLane || lane.image === onlyLane);
+).legacyLanes;
+const lanes = allLanes.filter((lane) => !onlyLane || lane.image === onlyLane);
+if (lanes.length === 0) {
+  console.error(
+    `No lane matches --lane ${onlyLane}; known images: ${allLanes.map((lane) => lane.image).join(", ")}`,
+  );
+  process.exit(2);
+}
 
 if (!fs.existsSync(path.join(root, "apps/web/.next/BUILD_ID"))) {
   console.error("No production build in apps/web/.next; build the Web first.");
@@ -59,6 +66,13 @@ if (!fs.existsSync(path.join(root, "apps/web/.next/BUILD_ID"))) {
 fs.mkdirSync(outputDir, { recursive: true });
 
 const children = [];
+const results = [];
+let runningContainer = null;
+const writeSummary = () =>
+  fs.writeFileSync(
+    path.join(outputDir, "summary.json"),
+    `${JSON.stringify({ webPort, apiPort, results }, null, 2)}\n`,
+  );
 const start = (name, args, options) => {
   const log = fs.openSync(path.join(outputDir, `${name}.log`), "a");
   const child = spawn(process.execPath, args, {
@@ -73,10 +87,18 @@ const stopAll = () => {
     if (child.exitCode === null) child.kill("SIGTERM");
 };
 process.on("exit", stopAll);
-for (const signal of ["SIGINT", "SIGTERM"])
+for (const [signal, code] of [
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+])
   process.on(signal, () => {
+    // The docker client may outlive this process; stop its container too.
+    if (runningContainer)
+      spawnSync("docker", ["kill", runningContainer], { stdio: "ignore" });
     stopAll();
-    process.exit(130);
+    results.push({ result: "INTERRUPTED", reason: signal });
+    writeSummary();
+    process.exit(code);
   });
 
 const ready = async (url, child, name) => {
@@ -95,7 +117,10 @@ const ready = async (url, child, name) => {
   throw new Error(`${name} was not ready at ${url} within ${READY_MS} ms`);
 };
 
-/** Runs one lane; resolves to its exit status, or "STALLED". */
+/**
+ * Runs one lane; resolves to its exit status, "STALLED", or `{ error }` when
+ * docker itself cannot be started.
+ */
 const runLane = (lane, laneDir, container) =>
   new Promise((resolve) => {
     const log = fs.createWriteStream(path.join(laneDir, "lane.log"));
@@ -155,6 +180,11 @@ const runLane = (lane, laneDir, container) =>
       console.log(`[${lane.projects.join("+")}] STALL: no output for 5 min`);
       spawnSync("docker", ["kill", container], { stdio: "ignore" });
     }, 10_000);
+    child.on("error", (error) => {
+      clearInterval(watchdog);
+      log.end();
+      resolve({ error: `docker could not start: ${error.message}` });
+    });
     child.on("close", (code) => {
       clearInterval(watchdog);
       log.end();
@@ -208,7 +238,6 @@ const summarize = (lane, laneDir, status) => {
   };
 };
 
-const results = [];
 try {
   const api = start("public-api", ["tests/e2e/support/public-api.ts"], {
     cwd: root,
@@ -237,14 +266,18 @@ try {
   await ready(`http://127.0.0.1:${webPort}/`, web, "Web production server");
   for (const [index, lane] of lanes.entries()) {
     const laneDir = path.join(outputDir, `lane-${index + 1}`);
+    // A previous run's engine versions or report must not leak into this one.
+    fs.rmSync(laneDir, { recursive: true, force: true });
     fs.mkdirSync(laneDir, { recursive: true });
     console.log(`Lane ${index + 1}: ${lane.image} (${lane.projects})`);
-    const status = await runLane(
-      lane,
-      laneDir,
-      `legacy-smoke-${process.pid}-${index + 1}`,
+    runningContainer = `legacy-smoke-${process.pid}-${index + 1}`;
+    const status = await runLane(lane, laneDir, runningContainer);
+    runningContainer = null;
+    results.push(
+      typeof status === "object"
+        ? { image: lane.image, result: "NOT RUN", reason: status.error }
+        : summarize(lane, laneDir, status),
     );
-    results.push(summarize(lane, laneDir, status));
   }
 } catch (error) {
   console.error(`Legacy browser smoke could not run: ${error.message}`);
@@ -253,14 +286,11 @@ try {
   stopAll();
 }
 
-fs.writeFileSync(
-  path.join(outputDir, "summary.json"),
-  `${JSON.stringify({ webPort, apiPort, results }, null, 2)}\n`,
-);
+writeSummary();
 for (const entry of results)
   console.log(
     entry.result === "NOT RUN"
-      ? `NOT RUN: ${entry.reason}`
+      ? `NOT RUN: ${entry.image ? `${entry.image} ` : ""}${entry.reason}`
       : `${entry.result}${entry.informational ? " (informational, below the floor)" : ""}: ${entry.image} ${entry.engines
           .map((engine) => `${engine.project} ${engine.version ?? "?"}`)
           .join(", ")}`,
