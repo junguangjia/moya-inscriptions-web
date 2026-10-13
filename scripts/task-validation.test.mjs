@@ -256,6 +256,11 @@ describe("task routing follows the complete changed-path set", () => {
     ],
     [["scripts/verify.mjs"], { web: true, scope: "smoke" }],
     [["scripts/ci-e2e-smoke.mjs"], { web: true, scope: "smoke" }],
+    [["scripts/check-browser-baseline.mjs"], { web: true, scope: "smoke" }],
+    [
+      ["scripts/check-browser-baseline.spec.mjs"],
+      { web: true, scope: "smoke" },
+    ],
     [["scripts/ci-e2e-scope.mjs"], { web: true, scope: "smoke" }],
     [
       ["tests/unit/architecture/ci-e2e-policy.test.ts"],

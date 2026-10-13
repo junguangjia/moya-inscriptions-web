@@ -71,6 +71,7 @@ import type {
   WorkVisibilityResult,
 } from "@moya/contracts";
 
+import { linkAbortSignals } from "../platform/abort-signals";
 import { AuthorRequestError, authorClient } from "./author-community-client";
 
 /**
@@ -365,62 +366,68 @@ async function request<T>(
   if (write && account === null)
     throw new PublishingRequestError(401, "请先确认当前账户");
   const timeout = AbortSignal.timeout(requestTimeoutMs);
-  let response: Response;
+  // Released once the answer is read; the caller's signal may live longer.
+  const link = options.signal
+    ? linkAbortSignals([options.signal, timeout])
+    : null;
   try {
-    response = await fetch(`/api/community/${path}`, {
-      method,
-      cache: "no-store",
-      credentials: "same-origin",
-      redirect: "error",
-      signal: options.signal
-        ? AbortSignal.any([options.signal, timeout])
-        : timeout,
-      headers: write
-        ? {
-            accept: "application/json",
-            "content-type": "application/json",
-            "x-author-account": account!,
-          }
-        : { accept: "application/json" },
-      ...(write ? { body: JSON.stringify(options.body) } : {}),
-    });
-  } catch (error) {
-    // A caller's own abort is rethrown as is; for a write it leaves the
-    // outcome unknown just like a lost connection or the request timeout.
-    if (options.signal?.aborted) throw error;
-    throw write
-      ? new PublishingRequestError(0, networkUnconfirmedMessage, null, true)
-      : new PublishingRequestError(0, networkMessage);
+    let response: Response;
+    try {
+      response = await fetch(`/api/community/${path}`, {
+        method,
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "error",
+        signal: link?.signal ?? timeout,
+        headers: write
+          ? {
+              accept: "application/json",
+              "content-type": "application/json",
+              "x-author-account": account!,
+            }
+          : { accept: "application/json" },
+        ...(write ? { body: JSON.stringify(options.body) } : {}),
+      });
+    } catch (error) {
+      // A caller's own abort is rethrown as is; for a write it leaves the
+      // outcome unknown just like a lost connection or the request timeout.
+      if (options.signal?.aborted) throw error;
+      throw write
+        ? new PublishingRequestError(0, networkUnconfirmedMessage, null, true)
+        : new PublishingRequestError(0, networkMessage);
+    }
+    let value: unknown;
+    let readable = true;
+    try {
+      value = await response.json();
+    } catch {
+      if (options.signal?.aborted) throw options.signal.reason;
+      readable = false;
+    }
+    const refused = !response.ok && isRefusal(response.status, value);
+    // Checked once the whole answer is in: the epoch only grows, so any account
+    // change during the request (even A→B→A) is detected here.
+    if (authorClient.accountEpoch() !== epoch)
+      throw accountChanged(write, write && !refused);
+    if (options.missingAsNull && response.status === 404) return null;
+    if (!response.ok) {
+      if (refused || !write) throw refusal(response.status, value);
+      throw new PublishingRequestError(
+        response.status,
+        unconfirmedMessage,
+        null,
+        true,
+      );
+    }
+    const parsed = readable ? schema.safeParse(value) : null;
+    if (parsed === null || !parsed.success)
+      throw write
+        ? new PublishingRequestError(502, unconfirmedMessage, null, true)
+        : new PublishingRequestError(502, unavailableMessage);
+    return parsed.data;
+  } finally {
+    link?.dispose();
   }
-  let value: unknown;
-  let readable = true;
-  try {
-    value = await response.json();
-  } catch {
-    if (options.signal?.aborted) throw options.signal.reason;
-    readable = false;
-  }
-  const refused = !response.ok && isRefusal(response.status, value);
-  // Checked once the whole answer is in: the epoch only grows, so any account
-  // change during the request (even A→B→A) is detected here.
-  if (authorClient.accountEpoch() !== epoch)
-    throw accountChanged(write, write && !refused);
-  if (options.missingAsNull && response.status === 404) return null;
-  if (!response.ok) {
-    if (refused || !write) throw refusal(response.status, value);
-    throw new PublishingRequestError(
-      response.status,
-      unconfirmedMessage,
-      null,
-      true,
-    );
-  }
-  const parsed = readable ? schema.safeParse(value) : null;
-  if (parsed === null || !parsed.success)
-    throw write
-      ? new PublishingRequestError(502, unconfirmedMessage, null, true)
-      : new PublishingRequestError(502, unavailableMessage);
-  return parsed.data;
 }
 
 const post = <T>(

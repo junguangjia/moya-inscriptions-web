@@ -1,8 +1,12 @@
 import * as contracts from "@moya/contracts/schemas";
-import type { WorkDraftContent } from "@moya/contracts";
+import type { ArticleDraft, WorkDraftContent } from "@moya/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as publishingData from "../../features/publishing/publishing-data";
+import {
+  ArticleRequestError,
+  articleAuthoringClient,
+} from "./article-authoring-client";
 import { AuthorRequestError, authorClient } from "./author-community-client";
 import * as client from "./work-publishing-client";
 import {
@@ -1025,6 +1029,234 @@ describe("work publishing client", () => {
       expect(() =>
         publishingClient.uploadResult(200, JSON.stringify(uploaded), account),
       ).toThrow(expect.objectContaining({ status: 401 }));
+    });
+  });
+});
+
+// Chromium 111-115, Firefox 121-123 and Safari 16.4-17.3 lack AbortSignal.any
+// (docs/development/browser-support.md). The Article authoring client has no
+// test file of its own and shares this relay harness, so it is covered here.
+describe("relay clients without AbortSignal.any", () => {
+  beforeEach(() => {
+    vi.spyOn(AbortSignal, "any").mockImplementation(() => {
+      throw new TypeError("AbortSignal.any is not a function");
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const hanging = () =>
+    upstream.mockImplementationOnce(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) =>
+          init!.signal!.addEventListener("abort", () =>
+            reject(init!.signal!.reason),
+          ),
+        ),
+    );
+  const expiring = () => {
+    const expiry = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(expiry.signal);
+    return {
+      timeout,
+      expire: () =>
+        expiry.abort(
+          new DOMException("The operation timed out.", "TimeoutError"),
+        ),
+    };
+  };
+  const command = { requestId, content, deviceClass: "phone" } as const;
+
+  describe("work publishing", () => {
+    it("still sends a read and a write with a caller's signal", async () => {
+      const caller = new AbortController();
+      answer(awaitingItem);
+      await expect(
+        publishingClient.item(itemId, caller.signal),
+      ).resolves.toEqual(awaitingItem);
+      answer(draft, 201);
+      await expect(
+        publishingClient.createDraft(command, caller.signal),
+      ).resolves.toEqual(draft);
+      const [[readPath, read], [writePath, write]] = upstream.mock.calls as [
+        [string, RequestInit],
+        [string, RequestInit],
+      ];
+      expect(readPath).toBe(`/api/community/publishing/items/${itemId}`);
+      expect(read).toMatchObject({
+        method: "GET",
+        headers: { accept: "application/json" },
+      });
+      expect(writePath).toBe("/api/community/publishing/drafts");
+      expect(write).toMatchObject({
+        method: "POST",
+        headers: { "x-author-account": account },
+      });
+      expect(read.signal!.aborted).toBe(false);
+      expect(write.signal!.aborted).toBe(false);
+      // Finished requests are no longer linked to the caller's signal.
+      caller.abort();
+      expect(read.signal!.aborted).toBe(false);
+      expect(write.signal!.aborted).toBe(false);
+    });
+
+    it("releases the caller's signal after a refused or failed request", async () => {
+      const caller = new AbortController();
+      answer(refusalBody("Synthetic refusal"), 500);
+      await refused(publishingClient.item(itemId, caller.signal));
+      upstream.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      await refused(publishingClient.createDraft(command, caller.signal));
+      expect(upstream).toHaveBeenCalledTimes(2);
+      caller.abort();
+      for (const [, init] of upstream.mock.calls)
+        expect(init!.signal!.aborted).toBe(false);
+    });
+
+    it("rethrows a caller's own abort as is, for a write too", async () => {
+      const caller = new AbortController();
+      hanging();
+      const pending = publishingClient.createDraft(command, caller.signal);
+      const reason = new DOMException("Synthetic departure", "AbortError");
+      caller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+    });
+
+    it("still leaves a write's outcome unknown after the request timeout", async () => {
+      const { timeout, expire } = expiring();
+      hanging();
+      const pending = refused(
+        publishingClient.createDraft(command, new AbortController().signal),
+      );
+      expect(upstream).toHaveBeenCalledOnce();
+      expire();
+      expect(await pending).toMatchObject({ status: 0, outcomeUnknown: true });
+      expect(timeout).toHaveBeenCalledWith(15_000);
+      expect(upstream.mock.calls[0]![1]!.signal!.reason).toMatchObject({
+        name: "TimeoutError",
+      });
+    });
+
+    it("discards an answer when the account switched away and back (A→B→A)", async () => {
+      upstream.mockImplementationOnce(async () => {
+        authorClient.setAccount(otherAccount);
+        authorClient.setAccount(account);
+        return Response.json(awaitingItem);
+      });
+      const error = await refused(
+        publishingClient.item(itemId, new AbortController().signal),
+      );
+      expect(error.status).toBe(401);
+    });
+  });
+
+  describe("article authoring", () => {
+    const articleId = `article-${"7".repeat(32)}` as ArticleDraft["id"];
+    const deletion = { requestId, expectedVersion: 3 };
+    const failure = async (promise: Promise<unknown>) => {
+      const error = await promise.then(
+        () => {
+          throw new Error("expected a failure");
+        },
+        (reason: unknown) => reason,
+      );
+      expect(error).toBeInstanceOf(ArticleRequestError);
+      return error as ArticleRequestError;
+    };
+
+    it("still sends a read and a write with a caller's signal", async () => {
+      const caller = new AbortController();
+      const page = { items: [], nextCursor: null };
+      const deleted = { id: articleId, deleted: true, publicVersion: null };
+      answer(page);
+      await expect(
+        articleAuthoringClient.list({ pageSize: 20 }, caller.signal),
+      ).resolves.toEqual(page);
+      answer(deleted);
+      await expect(
+        articleAuthoringClient.deleteDraft(articleId, deletion, caller.signal),
+      ).resolves.toEqual(deleted);
+      const [[readPath, read], [writePath, write]] = upstream.mock.calls as [
+        [string, RequestInit],
+        [string, RequestInit],
+      ];
+      expect(readPath).toBe("/api/community/article-authoring?pageSize=20");
+      expect(read).toMatchObject({
+        method: "GET",
+        headers: { "x-author-account": account, accept: "application/json" },
+      });
+      expect(writePath).toBe(`/api/community/article-authoring/${articleId}`);
+      expect(write).toMatchObject({
+        method: "DELETE",
+        headers: {
+          "x-author-account": account,
+          "content-type": "application/json",
+        },
+      });
+      expect(read.signal!.aborted).toBe(false);
+      expect(write.signal!.aborted).toBe(false);
+      // Finished requests are no longer linked to the caller's signal.
+      caller.abort();
+      expect(read.signal!.aborted).toBe(false);
+      expect(write.signal!.aborted).toBe(false);
+    });
+
+    it("releases the caller's signal after a refused or failed request", async () => {
+      const caller = new AbortController();
+      answer({ error: { code: "article_not_found" } }, 404);
+      await failure(
+        articleAuthoringClient.list({ pageSize: 20 }, caller.signal),
+      );
+      upstream.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      await failure(
+        articleAuthoringClient.deleteDraft(articleId, deletion, caller.signal),
+      );
+      expect(upstream).toHaveBeenCalledTimes(2);
+      caller.abort();
+      for (const [, init] of upstream.mock.calls)
+        expect(init!.signal!.aborted).toBe(false);
+    });
+
+    it("still ends on a caller's abort and on the request timeout", async () => {
+      const caller = new AbortController();
+      hanging();
+      const aborted = failure(
+        articleAuthoringClient.deleteDraft(articleId, deletion, caller.signal),
+      );
+      caller.abort();
+      expect(await aborted).toMatchObject({ status: 0, outcomeUnknown: true });
+      expect(upstream.mock.calls[0]![1]!.signal!.aborted).toBe(true);
+
+      const { timeout, expire } = expiring();
+      hanging();
+      const expired = failure(
+        articleAuthoringClient.list(
+          { pageSize: 20 },
+          new AbortController().signal,
+        ),
+      );
+      expire();
+      expect(await expired).toMatchObject({ status: 0, outcomeUnknown: false });
+      expect(timeout).toHaveBeenCalledWith(15_000);
+    });
+
+    it("discards an answer when the account switched away and back (A→B→A)", async () => {
+      upstream.mockImplementationOnce(async () => {
+        authorClient.setAccount(otherAccount);
+        authorClient.setAccount(account);
+        return Response.json({ items: [], nextCursor: null });
+      });
+      const error = await failure(
+        articleAuthoringClient.list(
+          { pageSize: 20 },
+          new AbortController().signal,
+        ),
+      );
+      expect(error).toMatchObject({
+        status: 401,
+        reason: "article_account_changed",
+      });
     });
   });
 });

@@ -4,6 +4,7 @@ import type {
   PublishingSession,
   RegisterMediaItemCommand,
 } from "@moya/contracts";
+import { linkAbortSignals } from "../../../lib/platform/abort-signals";
 import type { publishingClient } from "../../../lib/public-api/work-publishing-client";
 
 type LeaseClient = Pick<
@@ -118,12 +119,20 @@ export const createArticleUploadLease = (options: {
         };
         if (previous === undefined)
           registrations.set(command.requestId, receipt);
-        const item = await options.client.registerItem(
-          exact,
+        // The lease signal outlives this one registration request.
+        const link =
           signal === undefined
-            ? options.signal
-            : AbortSignal.any([signal, options.signal]),
-        );
+            ? null
+            : linkAbortSignals([signal, options.signal]);
+        let item: PublishingMediaItem;
+        try {
+          item = await options.client.registerItem(
+            exact,
+            link?.signal ?? options.signal,
+          );
+        } finally {
+          link?.dispose();
+        }
         requireCurrent();
         receipt.itemId = item.id;
         return item;

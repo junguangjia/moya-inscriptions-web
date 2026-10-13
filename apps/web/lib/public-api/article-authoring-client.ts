@@ -31,6 +31,7 @@ import type {
   UpdateArticleDraftCommand,
   DeleteArticleDraftCommand,
 } from "@moya/contracts";
+import { linkAbortSignals } from "../platform/abort-signals";
 import { authorClient } from "./author-community-client";
 
 export class ArticleRequestError extends Error {
@@ -58,73 +59,80 @@ const request = async <Value>(
   const epoch = authorClient.accountEpoch();
   if (account === null) throw new ArticleRequestError(401, null, false);
   const write = options.body !== undefined;
-  let response: Response;
+  const timeout = AbortSignal.timeout(15_000);
+  // Released once the answer is read; the caller's signal may live longer.
+  const link = options.signal
+    ? linkAbortSignals([options.signal, timeout])
+    : null;
   try {
-    response = await fetch(`/api/community/article-authoring${path}`, {
-      method: options.method ?? (write ? "POST" : "GET"),
-      cache: "no-store",
-      credentials: "same-origin",
-      redirect: "error",
-      signal: options.signal
-        ? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)])
-        : AbortSignal.timeout(15_000),
-      headers: {
-        "x-author-account": account,
-        accept: "application/json",
-        ...(write ? { "content-type": "application/json" } : {}),
-      },
-      ...(write ? { body: JSON.stringify(options.body) } : {}),
-    });
-  } catch {
-    throw new ArticleRequestError(0, null, write);
-  }
-  if (
-    authorClient.accountEpoch() !== epoch ||
-    authorClient.account() !== account
-  ) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new ArticleRequestError(401, "article_account_changed", write);
-  }
-  let value: unknown;
-  try {
-    value = await response.json();
-  } catch {
-    throw new ArticleRequestError(
-      response.status,
-      null,
-      write && (response.ok || response.status >= 500),
-    );
-  }
-  if (!response.ok) {
-    const reason =
-      typeof value === "object" &&
-      value !== null &&
-      "error" in value &&
-      typeof value.error === "object" &&
-      value.error !== null &&
-      "code" in value.error &&
-      typeof value.error.code === "string" &&
-      /^[a-z][a-z0-9_]{0,63}$/u.test(value.error.code)
-        ? value.error.code
-        : null;
-    throw new ArticleRequestError(
-      response.status,
-      reason,
-      write && response.status >= 500,
-    );
-  }
-  try {
-    const parsed = parser.parse(value);
+    let response: Response;
+    try {
+      response = await fetch(`/api/community/article-authoring${path}`, {
+        method: options.method ?? (write ? "POST" : "GET"),
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "error",
+        signal: link?.signal ?? timeout,
+        headers: {
+          "x-author-account": account,
+          accept: "application/json",
+          ...(write ? { "content-type": "application/json" } : {}),
+        },
+        ...(write ? { body: JSON.stringify(options.body) } : {}),
+      });
+    } catch {
+      throw new ArticleRequestError(0, null, write);
+    }
     if (
       authorClient.accountEpoch() !== epoch ||
       authorClient.account() !== account
-    )
+    ) {
+      await response.body?.cancel().catch(() => undefined);
       throw new ArticleRequestError(401, "article_account_changed", write);
-    return parsed;
-  } catch (error) {
-    if (error instanceof ArticleRequestError) throw error;
-    // A malformed success may represent a committed write. Retry its identity.
-    throw new ArticleRequestError(502, "article_invalid_response", write);
+    }
+    let value: unknown;
+    try {
+      value = await response.json();
+    } catch {
+      throw new ArticleRequestError(
+        response.status,
+        null,
+        write && (response.ok || response.status >= 500),
+      );
+    }
+    if (!response.ok) {
+      const reason =
+        typeof value === "object" &&
+        value !== null &&
+        "error" in value &&
+        typeof value.error === "object" &&
+        value.error !== null &&
+        "code" in value.error &&
+        typeof value.error.code === "string" &&
+        /^[a-z][a-z0-9_]{0,63}$/u.test(value.error.code)
+          ? value.error.code
+          : null;
+      throw new ArticleRequestError(
+        response.status,
+        reason,
+        write && response.status >= 500,
+      );
+    }
+    try {
+      const parsed = parser.parse(value);
+      if (
+        authorClient.accountEpoch() !== epoch ||
+        authorClient.account() !== account
+      )
+        throw new ArticleRequestError(401, "article_account_changed", write);
+      return parsed;
+    } catch (error) {
+      if (error instanceof ArticleRequestError) throw error;
+      // A malformed success may represent a committed write. Retry its identity.
+      throw new ArticleRequestError(502, "article_invalid_response", write);
+    }
+  } finally {
+    link?.dispose();
   }
 };
 const segment = (id: string) =>

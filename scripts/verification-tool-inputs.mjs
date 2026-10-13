@@ -20,7 +20,7 @@ import process from "node:process";
 // A config change still executes its check; reuse awaits another code review.
 const reviewedConfigs = Object.freeze({
   "eslint.config.mjs":
-    "674edba2d329f686ce6d2d3accbf23431bcefa8592930d31cade9d651b05df61",
+    "7a6cf072912a7d5e72928273b29e063e6b3eafefb4b1effa58ec917627db2e4a",
   "prettier.config.mjs":
     "2286a12d141d48923656ed82ad93857e31874e65566072295249a7ee3c631141",
   ".editorconfig":

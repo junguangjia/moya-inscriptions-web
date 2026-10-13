@@ -189,7 +189,7 @@ describe("Article native image resize adapter", () => {
     expect(view.wrapper().style.width).toBe("200px");
     expect(view.apply).not.toHaveBeenCalled();
     expect(view.container.querySelector("style")?.textContent).toContain(
-      "width: 40%; float: inline-start;",
+      "width: 40%; float: left; float: inline-start;",
     );
     expect(view.outer().hasAttribute("data-article-image-layout")).toBe(false);
     expect(view.outer().hasAttribute("style")).toBe(false);

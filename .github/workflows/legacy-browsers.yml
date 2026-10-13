@@ -1,0 +1,49 @@
+name: Legacy browser smoke
+
+# On demand only, never a required check: the production Web build on real
+# engines at the supported floors (docs/development/browser-support.md).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: legacy-browser-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Production build on Chromium 111, WebKit 16.4 and Firefox 111
+    runs-on: ubuntu-24.04
+    # Containment only; the runner itself stops a lane that goes silent.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the Web production bundle
+        run: pnpm exec turbo run build --filter=web...
+      - name: Pull the pinned Playwright images
+        run: |
+          docker pull mcr.microsoft.com/playwright:v1.31.2-jammy
+          docker pull mcr.microsoft.com/playwright:v1.32.3-jammy
+      - name: Run the smoke on each engine
+        run:
+          node tests/legacy-browsers/run.mjs --output
+          "$RUNNER_TEMP/legacy-browsers"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-browser-smoke
+          path: ${{ runner.temp }}/legacy-browsers
+          if-no-files-found: warn
+          retention-days: 14

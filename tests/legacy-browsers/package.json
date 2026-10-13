@@ -1,0 +1,24 @@
+{
+  "name": "legacy-browser-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "description": "On-demand smoke of the production Web build on real engines at the supported floors. Not a pnpm workspace package: run.mjs installs the @playwright/test version that matches each pinned image inside that image.",
+  "legacyLanes": [
+    {
+      "image": "mcr.microsoft.com/playwright:v1.31.2-jammy",
+      "playwright": "1.31.2",
+      "projects": [
+        "chromium",
+        "webkit"
+      ]
+    },
+    {
+      "image": "mcr.microsoft.com/playwright:v1.32.3-jammy",
+      "playwright": "1.32.3",
+      "projects": [
+        "firefox"
+      ],
+      "informational": true
+    }
+  ]
+}

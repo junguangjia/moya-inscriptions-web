@@ -244,8 +244,9 @@ export const ArticleImageResize = ({
       }}
     >
       {/* The BlockContainer ancestor belongs to ProseMirror. Styling it via
-          a scoped rule avoids attribute writes that would cause reparsing. */}
-      <style data-article-image-layout-rule="">{`.bn-block-outer[data-id=${cssString(block.id)}]:has([data-article-resize-owner=${cssString(instanceId)}]) { width: ${(previewRatio ?? width) * 100}%; float: ${(previewRatio ?? width) < 0.99 ? "inline-start" : "none"}; margin-inline-end: ${(previewRatio ?? width) < 0.99 ? "var(--yoyi-space-6)" : "0"}; clear: ${(previewRatio ?? width) < 0.99 ? "none" : "both"}; }`}</style>
+          a scoped rule avoids attribute writes that would cause reparsing.
+          Chromium 111-117 lacks the logical float value and keeps `left`. */}
+      <style data-article-image-layout-rule="">{`.bn-block-outer[data-id=${cssString(block.id)}]:has([data-article-resize-owner=${cssString(instanceId)}]) { width: ${(previewRatio ?? width) * 100}%; float: ${(previewRatio ?? width) < 0.99 ? "left; float: inline-start" : "none"}; margin-inline-end: ${(previewRatio ?? width) < 0.99 ? "var(--yoyi-space-6)" : "0"}; clear: ${(previewRatio ?? width) < 0.99 ? "none" : "both"}; }`}</style>
       {columnWidth > 0 ? (
         <ResizableFileBlockWrapper
           key={`${basis}/${columnWidth}/${disabled}/${interruption}`}
