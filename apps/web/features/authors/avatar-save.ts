@@ -18,6 +18,10 @@ export type AvatarSaveState = {
   message: string;
   failed: boolean;
 };
+const CONFLICT = "头像未更换：保存状态冲突，请重新选择照片。";
+// Releases before profile-media-renditions-v1 stored a daily-limit or New York
+// date note as the rejection. That limit is gone: show the current 409 copy.
+const LEGACY_LIMIT = "今天已更换过头像";
 const key = (account: string) => `${PREFIX}${account}`;
 const read = (account: string): PendingAvatar | null => {
   const raw = window.localStorage.getItem(key(account));
@@ -40,7 +44,10 @@ const read = (account: string): PendingAvatar | null => {
     ("rejection" in value && typeof value.rejection !== "string")
   )
     throw Error("本机头像保存记录无法读取");
-  return value as PendingAvatar;
+  const job = value as PendingAvatar;
+  return job.rejection?.includes(LEGACY_LIMIT)
+    ? { ...job, rejection: CONFLICT }
+    : job;
 };
 const pngBlob = (png: string) => {
   const bytes = atob(png.slice("data:image/png;base64,".length));
@@ -193,7 +200,7 @@ export const useAvatarSave = (options: {
         ) {
           rejection =
             error.status === 409
-              ? "头像未更换：保存状态冲突，请重新选择照片。"
+              ? CONFLICT
               : "头像未更换：服务器未接受图像，请重新选择照片。";
         }
         // The request can outlive this owner, the confirmed account or a

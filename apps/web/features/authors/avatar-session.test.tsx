@@ -348,6 +348,55 @@ it("records a conflict without retrying, keeps the pending image and reads no pr
   expect(posts("/me/avatar")).toHaveLength(1);
 });
 
+it.each([
+  "头像未更换：今天已更换过头像或保存状态冲突。",
+  "今天已更换过头像。下次可更换：2099年1月2日 00:00（美国纽约时间）。",
+])(
+  "shows a stored pre-release rejection %s as the current conflict copy, and Retry binds it",
+  async (legacy) => {
+    // profile-media-renditions-v1: the daily limit is gone, so a rejection a
+    // previous release stored must not bring back its note after a reload.
+    const storageKey = `yoyi-avatar-save-v1:${owner.id}`;
+    const pending = {
+      accountId: owner.id,
+      uploadId: "00000000-0000-4000-8000-000000000011",
+      saveId: "00000000-0000-4000-8000-000000000012",
+      png: "data:image/png;base64,c3ludGhldGlj",
+      mediaId: media.id,
+    };
+    await act(async () => root.unmount());
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({ ...pending, rejection: legacy }),
+    );
+    root = createRoot(node);
+    await act(async () =>
+      root.render(
+        <AuthorProvider signInHref="/dev/community">
+          <output data-reloaded="" />
+        </AuthorProvider>,
+      ),
+    );
+    expect(node.textContent).toContain(
+      "头像未更换：保存状态冲突，请重新选择照片。",
+    );
+    for (const text of ["今天已更换", "下次可更换", "纽约"])
+      expect(node.textContent).not.toContain(text);
+    await focus();
+    expect(posts("/media")).toHaveLength(0);
+    expect(posts("/me/avatar")).toHaveLength(0);
+    await click("重试保存");
+    expect(posts("/media")).toHaveLength(0);
+    expect(posts("/me/avatar")).toHaveLength(1);
+    expect(JSON.parse(String(posts("/me/avatar")[0]!.init.body))).toEqual({
+      requestId: pending.saveId,
+      mediaId: pending.mediaId,
+    });
+    expect(node.textContent).toContain("头像已更换");
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  },
+);
+
 it("keeps the actual profile and crop when an obsolete profile read rejects after refresh failure", async () => {
   window.history.replaceState({}, "", "/#profile");
   await act(async () =>
