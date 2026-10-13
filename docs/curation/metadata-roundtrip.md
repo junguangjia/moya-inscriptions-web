@@ -12,7 +12,8 @@ receipt ledger and existing Owner/automation access. No role or grant is added.
 2. Offline validate the entire versioned snapshot. Missing optional professional
    values and `unknown` remain legal. Native IDs, media IDs, SHA values,
    sequence, source references and annotation/decision chains must be
-   consistent.
+   consistent. The offline helper and server share the same annotation payload
+   hash verifier, including original Python canonical JSON bytes.
 3. After the server migration/release is approved and available, submit through
    `save-curation-metadata`. One database transaction appends the whole artifact
    or none of it. A transient failure is safe to retry; a conflicting baseline
@@ -23,9 +24,16 @@ receipt ledger and existing Owner/automation access. No role or grant is added.
 
 `OFFLINE_VALIDATED` means no server request. `PENDING` means interrupted or
 uncertain. `FAILED` does not prove the server did not commit: replay the exact
-snapshot and receipt to reconcile a lost reply. A stored historical snapshot
-must not be described as the current snapshot. Each repeat rechecks metadata; an
-old local success receipt alone is insufficient.
+snapshot and receipt to reconcile a lost reply. Exact stored historical JSON
+with `current:false` reports `PERSISTED_HISTORICAL_READBACK_VERIFIED`,
+increments `historicalVerified` rather than current successes, and exits the CLI
+with code
+
+1. The original historical proof remains readable even if the live draft is now
+   invalid; authentication, Catalog scope and historical integrity checks still
+   apply. Earlier current and historical verified receipts remain retained when
+   a new attempt resets the active state to pending. Each repeat rechecks
+   metadata; an old local success receipt alone is insufficient.
 
 Image upload ACKs, image metadata SHA, and this metadata roundtrip do not prove
 independently re-read COS image bytes. This workflow never performs that check.
@@ -38,7 +46,11 @@ packet, portable review history, and model output projections restricted to that
 selected scope. It neither opens originals nor discovers credentials. The
 original model input hash and original record hash are retained, while filtered
 output is explicitly identified. Unknown failed-segment input membership remains
-unknown.
+unknown. Model receipts must provide their required original weights hash and
+mock/cloud flags; missing provenance is an error rather than a fabricated value.
+Generic evidence notes preserve arbitrary text, while known asset references are
+explicit objects. Legacy group members, decisions and evidence references must
+agree with the selected photo scope; asset IDs need no prefix.
 
 The Node `metadataRoundtrip` function is the shared helper entry for the
 existing workstation flow. Its CLI is an operator/debugging interface, not a
@@ -63,6 +75,11 @@ An initial metadata import uses `expectedPreviousSha256: null`. A revision adds
 read API. Snapshots and manifests are private, owned, regular files; target
 config is not placed in arguments or logged. Keep the same snapshot, prior hash
 and state directory for retry. Changed content needs a new frozen snapshot.
+Private metadata snapshot and configuration reads use a single no-follow file
+descriptor, with ownership, mode, bounded size and stable identity checks. A
+legitimate stable second hard link is accepted. The wrapper binds its prechecked
+snapshot SHA to the batch read, so replacement with another valid snapshot is
+rejected.
 
 ## Data boundaries
 

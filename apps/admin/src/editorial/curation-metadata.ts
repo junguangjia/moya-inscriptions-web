@@ -3,6 +3,7 @@ import { sql } from "@payloadcms/db-postgres";
 import {
   decodeCurationMetadata,
   deriveCurationMetadataCounts,
+  verifyCurationMetadataAnnotationHashes,
   readCurationMetadataSchema,
   saveCurationMetadataSchema,
   type CurationMetadata,
@@ -29,56 +30,9 @@ import {
 const operation = "save-curation-metadata" as const;
 const digest = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
-// Controlled payloads use key-sorted semantics. Original Python canonical text
-// retains numeric spelling (for example 1.0); the full artifact stays raw too.
-const canonical = (value: unknown): string => {
-  if (typeof value === "number" && !Number.isFinite(value))
-    throw new EditorialError("CURATION_METADATA_ANNOTATION_HASH_MISMATCH", 400);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object")
-    return `{${Object.keys(value)
-      .sort()
-      .map(
-        (key) => `${JSON.stringify(key)}:${canonical(Reflect.get(value, key))}`,
-      )
-      .join(",")}}`;
-  const encoded = JSON.stringify(value);
-  if (encoded === undefined)
-    throw new EditorialError("CURATION_METADATA_ANNOTATION_HASH_MISMATCH", 400);
-  return encoded;
-};
 const validateAnnotationHashes = (snapshot: CurationMetadata) => {
-  for (const row of snapshot.annotations.annotation_revisions) {
-    let encoded = canonical(row.payload);
-    const original = row.payloadCanonicalJSON;
-    if (original !== undefined) {
-      let parsed: unknown;
-      if (typeof original !== "string")
-        throw new EditorialError(
-          "CURATION_METADATA_ANNOTATION_HASH_MISMATCH",
-          400,
-        );
-      try {
-        parsed = JSON.parse(original);
-      } catch {
-        throw new EditorialError(
-          "CURATION_METADATA_ANNOTATION_HASH_MISMATCH",
-          400,
-        );
-      }
-      if (canonical(parsed) !== encoded)
-        throw new EditorialError(
-          "CURATION_METADATA_ANNOTATION_HASH_MISMATCH",
-          400,
-        );
-      encoded = original;
-    }
-    if (digest(encoded) !== row.payload_sha256)
-      throw new EditorialError(
-        "CURATION_METADATA_ANNOTATION_HASH_MISMATCH",
-        400,
-      );
-  }
+  if (!verifyCurationMetadataAnnotationHashes(snapshot, digest))
+    throw new EditorialError("CURATION_METADATA_ANNOTATION_HASH_MISMATCH", 400);
 };
 const parse = <T>(
   schema: {
@@ -189,7 +143,18 @@ const baselineMatches = (
   snapshot: CurationMetadata,
 ): boolean => {
   const baseline = snapshot.draftBaseline;
-  const content = draftContent(document);
+  let content: ReturnType<typeof draftContent>;
+  let fingerprint: string;
+  try {
+    content = draftContent(document);
+    fingerprint = contentFingerprint(document);
+  } catch (error) {
+    // An independently validated historical artifact remains readable when
+    // only the current Draft fails its content schema. Other failures propagate.
+    if (error instanceof EditorialError && error.code === "CONTENT_INVALID")
+      return false;
+    throw error;
+  }
   const representatives = content.media.filter(
     (media) => media.isRepresentative,
   );
@@ -199,7 +164,7 @@ const baselineMatches = (
     document.sourceId === snapshot.sourceId &&
     document._status === "draft" &&
     document.revision === baseline.revision &&
-    contentFingerprint(document) === baseline.fingerprint &&
+    fingerprint === baseline.fingerprint &&
     JSON.stringify(content.media.map((media) => media.mediaId)) ===
       JSON.stringify(baseline.displayMediaIds) &&
     representatives.length <= 1 &&

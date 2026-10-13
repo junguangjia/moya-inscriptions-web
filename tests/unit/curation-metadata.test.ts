@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   CURATION_METADATA_VERSION,
@@ -7,6 +8,7 @@ import {
   decodeCurationMetadata,
   deriveCurationMetadataCounts,
   deriveCurationMetadataWarnings,
+  verifyCurationMetadataAnnotationHashes,
   readCurationMetadataSchema,
   saveCurationMetadataSchema,
 } from "@moya/contracts/internal/editorial";
@@ -206,6 +208,78 @@ const fixture = (count = 3) => {
 };
 
 describe("versioned portable curation metadata", () => {
+  it("preserves generic evidence words while enforcing explicit nonprefix references", () => {
+    const value = JSON.parse(
+      JSON.stringify(fixture(1)).replaceAll("asset-0", "photo.one"),
+    ) as ReturnType<typeof fixture>;
+    Object.assign(value.modelRuns[0]!.output, {
+      evidence: [
+        "note",
+        "自由文字证据",
+        "asset-unregistered-word",
+        { assetId: "photo.one" },
+      ],
+    });
+    const parsed = curationMetadataSchema.parse(value);
+    expect(parsed.modelRuns[0]!.output.evidence).toEqual([
+      "note",
+      "自由文字证据",
+      "asset-unregistered-word",
+      { assetId: "photo.one" },
+    ]);
+    Object.assign(value.modelRuns[0]!.output, {
+      evidence: [{ assetId: "photo.outside" }],
+    });
+    expect(curationMetadataSchema.safeParse(value).success).toBe(false);
+    for (const key of ["asset_id", "assetIds", "members"])
+      expect(
+        curationMetadataSchema.safeParse({
+          ...value,
+          modelRuns: [
+            {
+              ...value.modelRuns[0]!,
+              output: {
+                [key]: key === "asset_id" ? "photo.outside" : ["photo.outside"],
+              },
+            },
+          ],
+        }).success,
+      ).toBe(false);
+  });
+
+  it("rejects outside legacy evidence and group membership including referenced decisions", () => {
+    const legacy = fixture();
+    legacy.history.proposals[0]!.evidence = ["outside.photo"];
+    expect(curationMetadataSchema.safeParse(legacy).success).toBe(false);
+    const group = fixture();
+    Object.assign(group.history.proposals[0]!, {
+      value: ["asset-0", "outside.photo"],
+    });
+    expect(curationMetadataSchema.safeParse(group).success).toBe(false);
+    for (const collection of ["decisions", "reviewDecisions"] as const) {
+      const value = fixture();
+      Object.assign(value.history, {
+        [collection]: [
+          { ...value.history.decisions[0]!, value: ["outside.photo"] },
+        ],
+      });
+      expect(curationMetadataSchema.safeParse(value).success).toBe(false);
+    }
+    const nested = fixture();
+    Object.assign(nested.modelRuns[0]!.output, {
+      membership: { kind: "group", value: ["outside.photo"] },
+    });
+    expect(curationMetadataSchema.safeParse(nested).success).toBe(false);
+  });
+
+  it("requires actual model provenance rather than accepting unknown substitutes", () => {
+    for (const key of ["weights_sha256", "mock", "cloud"] as const) {
+      const value = fixture();
+      Reflect.deleteProperty(value.modelRuns[0]!.metadata, key);
+      expect(curationMetadataSchema.safeParse(value).success).toBe(false);
+    }
+  });
+
   it("retains an 83-photo archive and one display choice independently", () => {
     const parsed = decodeCurationMetadata(JSON.stringify(fixture(83)));
     expect(parsed.photos).toHaveLength(83);
@@ -321,6 +395,13 @@ describe("versioned portable curation metadata", () => {
     value.annotations.annotation_decisions[0]!.payload_sha256 =
       originalPayloadSha256;
     const parsed = decodeCurationMetadata(JSON.stringify(value));
+    const before = JSON.stringify(parsed);
+    expect(
+      verifyCurationMetadataAnnotationHashes(parsed, (text) =>
+        createHash("sha256").update(text, "utf8").digest("hex"),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(parsed)).toBe(before);
     expect(
       parsed.annotations.annotation_revisions[0]!.payloadCanonicalJSON,
     ).toBe(originalPayloadJSON);
@@ -341,6 +422,34 @@ describe("versioned portable curation metadata", () => {
       payloadCanonicalJSON: "{",
     });
     expect(curationMetadataSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("rejects a forged inner hash and accepts the exact canonical payload without original text", () => {
+    const originalPayloadJSON =
+      '{"kind":"photo","schema_version":"artvenn-photo-annotation/v1","values":{"content":["unknown"],"coverage":"unknown","representation":"stone","surfaces":["unknown"]}}';
+    const hashUTF8 = (text: string) =>
+      createHash("sha256").update(text, "utf8").digest("hex");
+    const snapshot = decodeCurationMetadata(JSON.stringify(fixture(1)));
+    expect(verifyCurationMetadataAnnotationHashes(snapshot, hashUTF8)).toBe(
+      false,
+    );
+    const row = snapshot.annotations.annotation_revisions[0]!;
+    row.payload_sha256 = hashUTF8(originalPayloadJSON);
+    expect(verifyCurationMetadataAnnotationHashes(snapshot, hashUTF8)).toBe(
+      true,
+    );
+    row.payloadCanonicalJSON = originalPayloadJSON.replace(
+      '"stone"',
+      '"rubbing"',
+    );
+    row.payload_sha256 = hashUTF8(row.payloadCanonicalJSON);
+    expect(verifyCurationMetadataAnnotationHashes(snapshot, hashUTF8)).toBe(
+      false,
+    );
+    snapshot.annotations.annotation_revisions = [];
+    expect(verifyCurationMetadataAnnotationHashes(snapshot, hashUTF8)).toBe(
+      true,
+    );
   });
 
   it("keeps an unapplied display plan as intent and reports the empty actual selection", () => {

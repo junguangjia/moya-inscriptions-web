@@ -367,6 +367,91 @@ describe("curation metadata ledger service", () => {
     expect(h.receipts).toHaveLength(1);
   });
 
+  it("reads and replays the intact historical artifact when the live Draft is malformed", async () => {
+    const h = harness();
+    await saveCurationMetadata(h.req(), h.command);
+    Object.assign(h.document, { kind: "unsupported-kind" });
+    expect(
+      await readCurationMetadata(h.req(), {
+        catalogId: h.document.catalogId,
+        snapshotSha256: h.command.snapshotSha256,
+      }),
+    ).toMatchObject({
+      payloadJSON: h.command.payloadJSON,
+      snapshotSha256: h.command.snapshotSha256,
+      current: false,
+      counts: { photos: 83 },
+    });
+    expect(await saveCurationMetadata(h.req(), h.command)).toMatchObject({
+      payloadJSON: h.command.payloadJSON,
+      snapshotSha256: h.command.snapshotSha256,
+      current: false,
+      replayed: true,
+    });
+    expect(h.receipts).toHaveLength(1);
+    expect(h.payload.create).toHaveBeenCalledTimes(1);
+    expect(h.payload.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps historical payload access private even when the live Draft is malformed", async () => {
+    const h = harness();
+    await saveCurationMetadata(h.req(), h.command);
+    Object.assign(h.document, { kind: "unsupported-kind" });
+    h.setActor({
+      collection: "users",
+      id: 2,
+      role: "automation",
+      scopeCatalogIds: [h.document.catalogId],
+    });
+    await expect(
+      readCurationMetadata(h.req(), {
+        catalogId: h.document.catalogId,
+        snapshotSha256: h.command.snapshotSha256,
+      }),
+    ).rejects.toMatchObject({
+      code: "CURATION_METADATA_NOT_AVAILABLE",
+      status: 404,
+    });
+    await expect(
+      saveCurationMetadata(h.req(), h.command),
+    ).rejects.toMatchObject({
+      code: "CURATION_METADATA_NOT_AVAILABLE",
+      status: 409,
+    });
+    expect(h.receipts).toHaveLength(1);
+    expect(h.payload.create).toHaveBeenCalledTimes(1);
+    expect(h.payload.update).not.toHaveBeenCalled();
+  });
+
+  it("still rejects corrupted history and identity changes when the live Draft is malformed", async () => {
+    const corrupt = harness();
+    await saveCurationMetadata(corrupt.req(), corrupt.command);
+    Object.assign(corrupt.document, { kind: "unsupported-kind" });
+    corrupt.receipts[0]!.metadataJson =
+      String(corrupt.receipts[0]!.metadataJson) + " ";
+    await expect(
+      readCurationMetadata(corrupt.req(), {
+        catalogId: corrupt.document.catalogId,
+      }),
+    ).rejects.toMatchObject({
+      code: "CURATION_METADATA_INTEGRITY_FAILED",
+      status: 503,
+    });
+
+    const identity = harness();
+    await saveCurationMetadata(identity.req(), identity.command);
+    Object.assign(identity.document, { kind: "unsupported-kind" });
+    identity.receipts[0]!.catalog = 999;
+    await expect(
+      saveCurationMetadata(identity.req(), identity.command),
+    ).rejects.toMatchObject({
+      code: "CURATION_METADATA_INTEGRITY_FAILED",
+      status: 503,
+    });
+    expect(corrupt.payload.create).toHaveBeenCalledTimes(1);
+    expect(identity.payload.create).toHaveBeenCalledTimes(1);
+  });
+
   it("rolls back an interrupted insert and permits the same request to retry", async () => {
     const h = harness();
     h.interrupt();

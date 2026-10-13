@@ -16,7 +16,7 @@ import unittest
 from unittest import mock
 
 from metadata_snapshot import (SnapshotError, build_metadata_snapshot,
-                               canonical, digest, main, model_run, parse_json,
+                               asset_refs, canonical, digest, main, model_run, parse_json, project,
                                validate_annotation, validate_frame, write_metadata_snapshot, PHOTO_SCHEMA)
 
 
@@ -523,7 +523,81 @@ m.write_metadata_snapshot(json.loads(Path(sys.argv[1]).read_bytes()), sys.argv[2
         self.write(self.model, self.model_value)
         value = self.build()
         fields = value['modelRuns'][0]['output']['segments'][0]['proposal']['groups'][0]['fields']
-        self.assertEqual(fields, [{'field': 'object_form', 'value': '碑刻', 'evidence': [self.aids[0]]}])
+        self.assertEqual(fields, [{'field': 'object_form', 'value': '碑刻',
+                                   'evidence': [{'assetId': self.aids[0]}]}])
+
+    def test_generic_evidence_preserves_words_and_normalizes_only_known_references(self):
+        group = self.model_value['segments'][0]['proposal']['groups'][0]
+        group['fields'] = [{'field': 'title', 'value': '待核题名',
+                            'evidence': ['note', '自由文字证据', self.aids[0], self.outside]}]
+        self.write(self.model, self.model_value)
+        run = self.build()['modelRuns'][0]
+        evidence = run['output']['segments'][0]['proposal']['groups'][0]['fields'][0]['evidence']
+        self.assertEqual(evidence, ['note', '自由文字证据', {'assetId': self.aids[0]}])
+        self.assertEqual((run['originalAssetCount'], run['excludedAssetCount']), (2, 1))
+        self.assertEqual(run['originalRecordSha256'], digest(self.model_value))
+
+    def test_nonprefix_ids_are_explicit_references_without_word_or_prefix_guess(self):
+        source = {'assetIds': ['photo.one', 'photo.outside'],
+                  'evidence': ['note', 'asset-unregistered-word', 'photo.one', 'photo.outside']}
+        known = {'photo.one', 'photo.outside'}
+        projected = project(source, {'photo.one'}, evidence_assets=known)
+        self.assertEqual(projected, {'assetIds': ['photo.one'],
+            'evidence': ['note', 'asset-unregistered-word', {'assetId': 'photo.one'}]})
+        self.assertEqual(asset_refs(source, evidence_assets=known), known)
+        self.assertEqual(asset_refs(projected), {'photo.one'})
+        self.assertEqual(project({'kind': 'group', 'value': ['photo.one', 'photo.outside']}, {'photo.one'}),
+                         {'kind': 'group', 'value': ['photo.one']})
+
+    def test_model_nonprefix_evidence_has_the_same_scope_and_projection_counts(self):
+        raw = canonical(self.model_value).decode().replace(self.aids[0], 'photo.one').replace(self.outside, 'photo.outside')
+        source = parse_json(raw)
+        run = model_run(source, raw.encode(), {'photo.one'})
+        proposal = run['output']['segments'][0]['proposal']
+        self.assertEqual(proposal['groups'][0]['asset_ids'], ['photo.one'])
+        self.assertEqual(proposal['roles'], [{'asset_id': 'photo.one', 'role': 'detail',
+                                            'evidence': [{'assetId': 'photo.one'}]}])
+        self.assertEqual(run['assetIds'], ['photo.one'])
+        self.assertEqual((run['originalAssetCount'], run['excludedAssetCount']), (2, 1))
+        self.assertEqual(run['originalRecordSha256'], digest(source))
+
+    def test_group_decisions_and_review_membership_keep_original_projection_provenance(self):
+        source_value = [self.aids[0], self.outside]
+        self.sql('UPDATE decisions SET value=? WHERE id=?', (json.dumps(source_value), 'decision-0'))
+        local = self.packet['objects'][0]['localAnnotations']
+        local['reviewDecisions'][0]['value'] = source_value
+        local['fieldProvenance'] = [{'id': 'proposal-0', 'field': 'title', 'model_revision': 'v1',
+            'prompt_version': 'v1', 'evidence': [self.aids[0], self.outside], 'decision_id': 'decision-0'}]
+        self.write(self.package, self.packet)
+        value = self.build()
+        for collection in ['decisions', 'reviewDecisions']:
+            row = next(r for r in value['history'][collection] if r['id'] == 'decision-0')
+            self.assertEqual(row['value'], [self.aids[0]])
+            self.assertEqual(row['excluded_asset_count'], 1)
+            self.assertRegex(row['source_record_sha256'], '^[a-f0-9]{64}$')
+        field = value['history']['fieldProvenance'][0]
+        self.assertEqual(field['evidence'], [self.aids[0]])
+        self.assertEqual(field['excluded_asset_count'], 1)
+        self.assertEqual(field['source_record_sha256'], digest(local['fieldProvenance'][0]))
+
+    def test_legacy_proposal_evidence_does_not_guess_a_word_is_valid_asset(self):
+        self.sql('UPDATE proposals SET evidence=? WHERE id=?', (json.dumps(['note']), 'proposal-0'))
+        with self.assertRaisesRegex(SnapshotError, 'SOURCE_GROUP_HISTORY_MISSING|LEGACY_EVIDENCE_REFERENCE_INVALID'):
+            self.build()
+
+    def test_missing_model_provenance_is_blocked_without_fabricating_values(self):
+        for key in ['status', 'engine', 'model_id', 'revision', 'prompt_version',
+                    'weights_sha256', 'mock', 'cloud']:
+            with self.subTest(key=key):
+                value = copy.deepcopy(self.model_value)
+                del value[key]
+                with self.assertRaisesRegex(SnapshotError, '^MODEL_METADATA_INCOMPLETE$'):
+                    model_run(value, canonical(value), set(self.aids))
+        for key, invalid in [('weights_sha256', 'unknown'), ('mock', None), ('cloud', 'false')]:
+            with self.subTest(key=key):
+                value = {**self.model_value, key: invalid}
+                with self.assertRaisesRegex(SnapshotError, '^MODEL_METADATA_INCOMPLETE$'):
+                    model_run(value, canonical(value), set(self.aids))
 
     def test_missing_decision_and_cross_revision_event(self):
         self.sql('UPDATE photo_annotation_decisions SET confirmation_event=? WHERE revision_id=?', ('0' * 64, 'annotation-0'))

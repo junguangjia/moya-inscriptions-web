@@ -1,6 +1,7 @@
 /** Controlled API client: no content, endpoint, credential or raw error output. */
 import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { constants } from "node:fs";
 import {
   open,
   mkdir,
@@ -39,11 +40,74 @@ const canonical = (value) => {
 };
 export const stableDigest = (value) => digest(canonical(value));
 
+/** Read one private regular file through a single no-follow descriptor. The
+ * path must still identify that same file after the bounded read. Published
+ * snapshots may legitimately have a second link after a producer crash. */
+export async function readPrivateBounded(
+  file,
+  maxBytes,
+  invalidCode = "LOCAL_FILE_INVALID",
+) {
+  let handle;
+  try {
+    handle = await open(
+      file,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") throw error;
+    throwCode(invalidCode);
+  }
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (
+      !before.isFile() ||
+      before.uid !== BigInt(process.getuid?.() ?? -1) ||
+      (before.mode & 0o077n) !== 0n ||
+      before.size > BigInt(maxBytes)
+    )
+      throwCode(invalidCode);
+    const chunks = [];
+    let length = 0;
+    for (;;) {
+      const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - length));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+      if (length > maxBytes) throwCode(invalidCode);
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+    const after = await handle.stat({ bigint: true });
+    const named = await lstat(file, { bigint: true }).catch(() =>
+      throwCode(invalidCode),
+    );
+    const sameFile = (other) =>
+      other.isFile() &&
+      [
+        "dev",
+        "ino",
+        "uid",
+        "gid",
+        "mode",
+        "nlink",
+        "size",
+        "mtimeNs",
+        "ctimeNs",
+      ].every((field) => other[field] === before[field]);
+    if (!sameFile(after) || !sameFile(named) || BigInt(length) !== before.size)
+      throwCode(invalidCode);
+    return Buffer.concat(chunks, length);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readBounded(
   file,
   maxBytes = MAX_INPUT_BYTES,
   privateFile = false,
 ) {
+  if (privateFile) return readPrivateBounded(file, maxBytes);
   const info = await stat(file);
   if (
     !info.isFile() ||
@@ -90,7 +154,9 @@ export function validateManifest(manifest) {
         !(
           item.expectedPreviousSha256 === null ||
           /^[a-f0-9]{64}$/.test(item.expectedPreviousSha256)
-        ))
+        ) ||
+        (item.expectedSnapshotSha256 !== undefined &&
+          !/^[a-f0-9]{64}$/.test(item.expectedSnapshotSha256)))
     )
       throwCode("CURATION_METADATA_INPUT_INVALID");
     if (
@@ -149,15 +215,13 @@ export async function prepareItems(manifest, directory) {
         content,
       };
     } else if (manifest.operation === "save-curation-metadata") {
-      const { MAX_CURATION_METADATA_BYTES, decodeCurationMetadata } =
+      const {
+        MAX_CURATION_METADATA_BYTES,
+        decodeCurationMetadata,
+        verifyCurationMetadataAnnotationHashes,
+      } =
         await import("../../packages/contracts/dist/internal/editorial/index.js");
       const metadataPath = localPath(directory, item.metadataFile);
-      const metadataInfo = await lstat(metadataPath);
-      if (
-        metadataInfo.isSymbolicLink() ||
-        metadataInfo.uid !== process.getuid?.()
-      )
-        throwCode("CURATION_METADATA_FILE_INVALID");
       const bytes = await readBounded(
         metadataPath,
         MAX_CURATION_METADATA_BYTES,
@@ -166,10 +230,18 @@ export async function prepareItems(manifest, directory) {
       const payloadJSON = bytes.toString("utf8");
       if (!bytes.equals(Buffer.from(payloadJSON, "utf8")))
         throwCode("CURATION_METADATA_ENCODING_INVALID");
-      decodeCurationMetadata(payloadJSON);
+      const payload = decodeCurationMetadata(payloadJSON);
+      if (!verifyCurationMetadataAnnotationHashes(payload, digest))
+        throwCode("CURATION_METADATA_ANNOTATION_HASH_MISMATCH");
+      const snapshotSha256 = digest(bytes);
+      if (
+        item.expectedSnapshotSha256 !== undefined &&
+        snapshotSha256 !== item.expectedSnapshotSha256
+      )
+        throwCode("CURATION_METADATA_INPUT_CHANGED");
       body = {
         payloadJSON,
-        snapshotSha256: digest(bytes),
+        snapshotSha256,
         expectedPreviousSha256: item.expectedPreviousSha256,
       };
     } else if (manifest.operation === "publish-approved") {
@@ -485,7 +557,9 @@ export function createTransport(config, fetchImpl = fetch) {
           stableDigest(deriveCurationMetadataCounts(decoded)) ||
         stored.previousSha256 !== item.body.expectedPreviousSha256 ||
         committed.snapshotSha256 !== stored.snapshotSha256 ||
-        stored.current !== true
+        stored.catalogId !== decoded.catalogId ||
+        committed.id !== stored.id ||
+        typeof stored.current !== "boolean"
       )
         return {
           ok: false,
@@ -494,12 +568,13 @@ export function createTransport(config, fetchImpl = fetch) {
         };
       return {
         ok: true,
+        historical: stored.current === false,
         result: {
           ...projectReceipt(committed),
           snapshotSha256: stored.snapshotSha256,
           counts: stored.counts,
           verifiedReadback: true,
-          currentAtReadback: true,
+          currentAtReadback: stored.current,
         },
       };
     }
@@ -602,9 +677,20 @@ export async function runBatch({
           requestHash: item.requestHash,
           status: "pending",
           attempts: previous?.attempts ?? 0,
-          ...(previous?.status === "succeeded"
+          ...(previous?.status === "succeeded" &&
+          previous.result?.verifiedReadback === true &&
+          previous.result.currentAtReadback === true
             ? { priorCompletedResult: previous.result }
-            : {}),
+            : previous?.priorCompletedResult
+              ? { priorCompletedResult: previous.priorCompletedResult }
+              : {}),
+          ...(previous?.status === "historical" &&
+          previous.result?.verifiedReadback === true &&
+          previous.result.currentAtReadback === false
+            ? { priorHistoricalResult: previous.result }
+            : previous?.priorHistoricalResult
+              ? { priorHistoricalResult: previous.priorHistoricalResult }
+              : {}),
         };
       }
     }
@@ -633,6 +719,7 @@ export async function runBatch({
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
           if (stopped()) break;
           receipt.items[item.key] = {
+            ...receipt.items[item.key],
             requestHash: item.requestHash,
             status: "pending",
             attempts: (receipt.items[item.key]?.attempts ?? 0) + 1,
@@ -676,7 +763,12 @@ export async function runBatch({
           break;
         receipt.items[item.key] = {
           ...receipt.items[item.key],
-          status: outcome.ok ? "succeeded" : "failed",
+          status: outcome.ok
+            ? manifest.operation === "save-curation-metadata" &&
+              outcome.historical
+              ? "historical"
+              : "succeeded"
+            : "failed",
           ...(outcome.ok
             ? { result: outcome.result }
             : {
@@ -707,6 +799,13 @@ export async function runBatch({
       total: prepared.length,
       succeeded: scoped.filter((item) => item?.status === "succeeded").length,
       failed: scoped.filter((item) => item?.status === "failed").length,
+      ...(manifest.operation === "save-curation-metadata"
+        ? {
+            historicalVerified: scoped.filter(
+              (item) => item?.status === "historical",
+            ).length,
+          }
+        : {}),
       pending: scoped.filter((item) => !item || item.status === "pending")
         .length,
     };
@@ -760,7 +859,8 @@ async function main() {
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (
       !process.exitCode &&
-      (result.failed || (flags.execute && result.pending))
+      (result.failed ||
+        (flags.execute && (result.pending || result.historicalVerified)))
     )
       process.exitCode = 1;
   } finally {

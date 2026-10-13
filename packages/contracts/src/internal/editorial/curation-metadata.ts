@@ -584,7 +584,10 @@ export const curationMetadataSchema = snapshotShape.superRefine(
     );
     const revisionMap = new Map(revisions.map((row) => [row.id, row]));
     const decisionMap = new Map(decisions.map((row) => [row.id, row]));
-    const proposalIds = new Set(value.history.proposals.map((row) => row.id));
+    const proposalMap = new Map(
+      value.history.proposals.map((row) => [row.id, row]),
+    );
+    const proposalIds = new Set(proposalMap.keys());
     const membershipIds = new Set(value.history.decisions.map((row) => row.id));
     for (const [index, row] of revisions.entries()) {
       const path: Path = ["annotations", "annotation_revisions", index];
@@ -716,12 +719,59 @@ export const curationMetadataSchema = snapshotShape.superRefine(
         );
     });
 
+    const legacyEvidence = (evidence: Json, path: Path) => {
+      if (
+        !Array.isArray(evidence) ||
+        evidence.some((ref) => typeof ref !== "string" || !assets.has(ref))
+      )
+        issue(path, "Legacy evidence reference is outside the selected photos");
+    };
+    value.history.proposals.forEach((row, index) =>
+      legacyEvidence(row.evidence, ["history", "proposals", index, "evidence"]),
+    );
+    value.history.fieldProvenance.forEach((row, index) =>
+      legacyEvidence(row.evidence, [
+        "history",
+        "fieldProvenance",
+        index,
+        "evidence",
+      ]),
+    );
+    const groupMembership = (members: Json, path: Path) => {
+      if (
+        !Array.isArray(members) ||
+        members.some((member) => {
+          if (typeof member === "string") return !assets.has(member);
+          if (
+            member === null ||
+            typeof member !== "object" ||
+            Array.isArray(member)
+          )
+            return true;
+          return !["asset_id", "assetId", "source_asset_id"].some(
+            (key) => typeof member[key] === "string" && assets.has(member[key]),
+          );
+        })
+      )
+        issue(path, "Group membership is outside the selected photos");
+    };
+    value.history.proposals.forEach((row, index) => {
+      if (row.kind === "group")
+        groupMembership(row.value, ["history", "proposals", index, "value"]);
+    });
+    for (const collection of ["decisions", "reviewDecisions"] as const)
+      value.history[collection].forEach((row, index) => {
+        if (proposalMap.get(row.proposal_id)?.kind === "group")
+          groupMembership(row.value, ["history", collection, index, "value"]);
+      });
+
     const assetKeys = new Set([
       "assetId",
       "asset_id",
       "source_asset_id",
       "assetIds",
       "asset_ids",
+      "members",
     ]);
     const validTree = walkJson(value, (item, path) => {
       const key = path.at(-1);
@@ -737,13 +787,18 @@ export const curationMetadataSchema = snapshotShape.superRefine(
         if (refs.some((ref) => typeof ref !== "string" || !assets.has(ref)))
           issue(path, "Asset reference is outside the selected photos");
       }
-      // Existing proposal/model evidence is an array of source asset IDs.
+      // Generic evidence may include arbitrary words/notes. Producers normalize
+      // recognized legacy references to explicit asset keys; never guess from
+      // a word's syntax or an asset- prefix. Closed legacy evidence is checked
+      // above in its defined history contexts.
       if (
-        key === "evidence" &&
-        Array.isArray(item) &&
-        item.some((ref) => typeof ref !== "string" || !assets.has(ref))
+        item !== null &&
+        typeof item === "object" &&
+        !Array.isArray(item) &&
+        item.kind === "group" &&
+        "value" in item
       )
-        issue(path, "Evidence is outside the selected photos");
+        groupMembership(item.value!, [...path, "value"]);
     });
     if (!validTree) issue([], "Snapshot is not bounded, well-formed JSON");
   },
@@ -872,6 +927,48 @@ export const deriveCurationMetadataWarnings = (
     warnings.push("DISPLAY_PLAN_NOT_APPLIED");
   }
   return warnings;
+};
+// Hash callbacks keep the contract portable across Node and browser clients.
+// Original Python JSON spelling is retained when supplied, after semantic checks.
+const canonicalAnnotationJSON = (value: unknown): string => {
+  if (typeof value === "number" && !Number.isFinite(value))
+    throw new Error("CURATION_METADATA_ANNOTATION_HASH_MISMATCH");
+  if (Array.isArray(value))
+    return `[${value.map(canonicalAnnotationJSON).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalAnnotationJSON(Reflect.get(value, key))}`,
+      )
+      .join(",")}}`;
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined)
+    throw new Error("CURATION_METADATA_ANNOTATION_HASH_MISMATCH");
+  return encoded;
+};
+
+export const verifyCurationMetadataAnnotationHashes = (
+  snapshot: CurationMetadata,
+  hashUTF8: (text: string) => string,
+): boolean => {
+  try {
+    return snapshot.annotations.annotation_revisions.every((row) => {
+      let encoded = canonicalAnnotationJSON(row.payload);
+      if (row.payloadCanonicalJSON !== undefined) {
+        if (
+          canonicalAnnotationJSON(JSON.parse(row.payloadCanonicalJSON)) !==
+          encoded
+        )
+          return false;
+        encoded = row.payloadCanonicalJSON;
+      }
+      return hashUTF8(encoded) === row.payload_sha256;
+    });
+  } catch {
+    return false;
+  }
 };
 export const curationMetadataResponseSchema = z
   .strictObject({

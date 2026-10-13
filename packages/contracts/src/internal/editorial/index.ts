@@ -41,6 +41,7 @@ export {
   decodeCurationMetadata,
   deriveCurationMetadataCounts,
   deriveCurationMetadataWarnings,
+  verifyCurationMetadataAnnotationHashes,
 } from "./curation-metadata.js";
 export type {
   CurationMetadata,

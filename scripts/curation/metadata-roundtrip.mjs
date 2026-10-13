@@ -2,11 +2,15 @@
  * No upload, image URL, configuration discovery or public operation exists here.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { open, mkdir, readFile, rename, lstat } from "node:fs/promises";
+import { open, mkdir, rename } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { runBatch, createTransport } from "../editorial/batch.mjs";
+import {
+  runBatch,
+  createTransport,
+  readPrivateBounded,
+} from "../editorial/batch.mjs";
 
 const { AbortController } = globalThis;
 
@@ -14,18 +18,8 @@ const fail = (code) => {
   throw new Error(code);
 };
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const privateRead = async (file, maximum) => {
-  const info = await lstat(file);
-  if (
-    !info.isFile() ||
-    info.isSymbolicLink() ||
-    info.uid !== process.getuid?.() ||
-    info.mode & 0o077 ||
-    info.size > maximum
-  )
-    fail("PRIVATE_INPUT_REQUIRED");
-  return readFile(file);
-};
+const privateRead = (file, maximum) =>
+  readPrivateBounded(file, maximum, "PRIVATE_INPUT_REQUIRED");
 
 /** All targets are supplied by the caller. Real Production application has a
  * separate Owner gate; offline dryRun needs no configuration or credentials. */
@@ -43,10 +37,13 @@ export async function metadataRoundtrip({
     decodeCurationMetadata,
     deriveCurationMetadataCounts,
     deriveCurationMetadataWarnings,
+    verifyCurationMetadataAnnotationHashes,
   } = await import("../../packages/contracts/dist/internal/editorial/index.js");
   const file = path.resolve(metadataFile);
   const bytes = await privateRead(file, MAX_CURATION_METADATA_BYTES);
   const payload = decodeCurationMetadata(bytes.toString("utf8"));
+  if (!verifyCurationMetadataAnnotationHashes(payload, digest))
+    fail("CURATION_METADATA_ANNOTATION_HASH_MISMATCH");
   const snapshotSha256 = digest(bytes);
   if (
     expectedPreviousSha256 !== null &&
@@ -57,7 +54,14 @@ export async function metadataRoundtrip({
     version: 1,
     batchId: `metadata-${snapshotSha256}`,
     operation: "save-curation-metadata",
-    items: [{ key: "snapshot", metadataFile: file, expectedPreviousSha256 }],
+    items: [
+      {
+        key: "snapshot",
+        metadataFile: file,
+        expectedPreviousSha256,
+        expectedSnapshotSha256: snapshotSha256,
+      },
+    ],
   };
   const config = execute
     ? JSON.parse(await privateRead(configFile, 64 * 1024))
@@ -87,9 +91,11 @@ export async function metadataRoundtrip({
       ? "OFFLINE_VALIDATED"
       : outcome.succeeded === 1
         ? "PERSISTED_AND_READBACK_VERIFIED"
-        : outcome.pending
-          ? "PENDING"
-          : "FAILED",
+        : outcome.historicalVerified === 1
+          ? "PERSISTED_HISTORICAL_READBACK_VERIFIED"
+          : outcome.pending
+            ? "PENDING"
+            : "FAILED",
     independentMediaByteVerification: "NOT_RUN",
   };
   // The batch owns the durable input-bound journal. This content-free summary
@@ -143,7 +149,10 @@ async function main() {
       signal: controller.signal,
     });
     process.stdout.write(`${JSON.stringify(summary)}\n`);
-    if (summary.failed || (args.execute && summary.pending))
+    if (
+      summary.failed ||
+      (args.execute && (summary.pending || summary.historicalVerified))
+    )
       process.exitCode = 1;
   } finally {
     process.off("SIGINT", stop);

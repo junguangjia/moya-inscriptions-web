@@ -132,36 +132,69 @@ def assert_portable(value):
         require(math.isfinite(value), 'NON_FINITE_JSON')
 
 
-def asset_refs(value):
+ASSET_KEYS = {'asset_id', 'assetId', 'source_asset_id'}
+ASSET_LIST_KEYS = {'asset_ids', 'assetIds', 'members'}
+
+
+def asset_refs(value, *, group_membership=False, evidence_assets=(), strict_evidence=False):
     result = set()
+    if group_membership and isinstance(value, list):
+        result.update(x for x in value if isinstance(x, str))
     if isinstance(value, dict):
         for key, item in value.items():
-            if key in {'asset_id', 'assetId'} and isinstance(item, str):
+            if key in ASSET_KEYS and isinstance(item, str):
                 result.add(item)
-            elif key in {'asset_ids', 'assetIds', 'evidence'} and isinstance(item, list):
-                result.update(x for x in item if isinstance(x, str) and x.startswith('asset-'))
-            result.update(asset_refs(item))
+            elif key in ASSET_LIST_KEYS and isinstance(item, list):
+                result.update(x for x in item if isinstance(x, str))
+            elif key == 'evidence' and isinstance(item, list):
+                result.update(x for x in item if isinstance(x, str)
+                              and (strict_evidence or x in evidence_assets))
+            result.update(asset_refs(item,
+                                     group_membership=(key == 'value' and value.get('kind') == 'group'),
+                                     evidence_assets=evidence_assets))
     elif isinstance(value, list):
         for item in value:
-            result.update(asset_refs(item))
+            result.update(asset_refs(item, evidence_assets=evidence_assets, strict_evidence=strict_evidence))
     return result
 
 
-def project(value, selected):
+def project(value, selected, *, group_membership=False, evidence_assets=(), strict_evidence=False):
     """Explicit projection. Original record identity/hash remain separate."""
     if isinstance(value, list):
-        return [project(item, selected) for item in value
-                if not isinstance(item, dict) or not any(
+        if group_membership:
+            require(all((isinstance(x, str) and ID.fullmatch(x)) or
+                        (isinstance(x, dict) and any(isinstance(x.get(k), str) for k in ASSET_KEYS))
+                        for x in value), 'GROUP_MEMBERSHIP_INVALID')
+        return [project(item, selected, evidence_assets=evidence_assets, strict_evidence=strict_evidence)
+                for item in value
+                if not (group_membership and isinstance(item, str) and item not in selected)
+                and (not isinstance(item, dict) or not any(
                     isinstance(item.get(k), str) and item[k] not in selected
-                    for k in ('asset_id', 'assetId'))]
+                    for k in ASSET_KEYS))]
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
-            if key in {'asset_ids', 'assetIds', 'evidence'} and isinstance(item, list):
-                result[key] = [x for x in item if not isinstance(x, str)
-                               or not x.startswith('asset-') or x in selected]
+            if key in ASSET_LIST_KEYS and isinstance(item, list):
+                require(all(isinstance(x, str) and ID.fullmatch(x) for x in item),
+                        'ASSET_REFERENCE_INVALID')
+                result[key] = [x for x in item if x in selected]
+            elif key == 'evidence' and isinstance(item, list):
+                if strict_evidence:
+                    require(all(isinstance(x, str) and ID.fullmatch(x) for x in item),
+                            'LEGACY_EVIDENCE_REFERENCE_INVALID')
+                    result[key] = [x for x in item if x in selected]
+                else:
+                    # Generic evidence also carries words/notes. Only source-
+                    # registered or explicitly referenced IDs can be recognized
+                    # as old bare references. Normalize those to an explicit key
+                    # so consumers never need a naming or token-shape guess.
+                    result[key] = project(
+                        [{'assetId': x} if isinstance(x, str) and x in evidence_assets else x for x in item],
+                        selected, evidence_assets=evidence_assets)
             else:
-                result[key] = project(item, selected)
+                result[key] = project(item, selected,
+                                      group_membership=(key == 'value' and value.get('kind') == 'group'),
+                                      evidence_assets=evidence_assets)
         return result
     return value
 
@@ -353,23 +386,27 @@ def professional(db, selected, object_id, schema, *, allow_sparse=False):
             'annotation_decisions': sorted(decisions, key=canonical)}
 
 
-def history_and_groups(db, selected, group_ids):
+def history_and_groups(db, selected, group_ids, known_assets):
     proposals = db.rows('SELECT id,batch_id,subject,kind,field,value,evidence,input_hash,'
                         'model_revision,prompt_version,created,version FROM proposals')
     chosen = []
+    originals = {}
     for row in proposals:
         row['value'], row['evidence'] = parse_json(row['value']), parse_json(row['evidence'])
-        if not (set(row['evidence']) & selected):
+        require(isinstance(row['evidence'], list) and all(isinstance(x, str) and ID.fullmatch(x)
+                for x in row['evidence']), 'LEGACY_EVIDENCE_REFERENCE_INVALID')
+        require(set(row['evidence']) <= known_assets | asset_refs(row['value'],
+                group_membership=row['kind'] == 'group'), 'LEGACY_EVIDENCE_REFERENCE_INVALID')
+        if not (asset_refs(row, strict_evidence=True) & selected):
             continue
         if row['kind'] == 'role' and row['field'] not in selected:
             continue
         if row['kind'] != 'issue' and row['subject'] not in group_ids:
             continue
         source = copy.deepcopy(row)
-        row = project(row, selected)
-        if row['kind'] == 'group':
-            row['value'] = [x for x in source['value'] if x in selected]
-        excluded = (asset_refs(source) | (set(source['value']) if source['kind'] == 'group' else set())) - selected
+        originals[row['id']] = source
+        row = project(row, selected, evidence_assets=known_assets, strict_evidence=True)
+        excluded = asset_refs(source, evidence_assets=known_assets, strict_evidence=True) - selected
         row.update(source_record_sha256=digest(source), excluded_asset_count=len(excluded))
         chosen.append(row)
     original_by_id = unique(chosen, 'id')
@@ -379,19 +416,25 @@ def history_and_groups(db, selected, group_ids):
             continue
         row['value'] = parse_json(row['value'])
         source = copy.deepcopy(row)
-        row = project(row, selected)
+        group = original_by_id[row['proposal_id']]['kind'] == 'group'
+        row['value'] = project(row['value'], selected, group_membership=group, evidence_assets=known_assets)
+        row = project(row, selected, evidence_assets=known_assets)
         row.update(source_record_sha256=digest(source),
-                   excluded_asset_count=len(asset_refs(source) - selected))
+                   excluded_asset_count=len(asset_refs(source['value'], group_membership=group,
+                                                       evidence_assets=known_assets) - selected))
         decisions.append(row)
     groups = []
     for gid in sorted(group_ids):
         rows = [r for r in chosen if r['kind'] == 'group' and r['subject'] == gid]
         require(bool(rows), 'SOURCE_GROUP_HISTORY_MISSING')
         first = min(rows, key=lambda r: r['version'])
+        original = originals[first['id']]
+        require(all(isinstance(x, str) for x in original['value'])
+                and len(set(original['value'])) == len(original['value']), 'GROUP_MEMBERSHIP_INVALID')
         groups.append({'id': gid, 'assetIds': sorted(set(first['value'])),
                        'originalRecordSha256': first['source_record_sha256'],
-                       'originalMemberCount': len(first['value']) + first['excluded_asset_count'],
-                       'excludedCount': first['excluded_asset_count'],
+                       'originalMemberCount': len(original['value']),
+                       'excludedCount': len(original['value']) - len(first['value']),
                        'provenance': {'origin': 'manual' if first['model_revision'] == 'human-entry/v1' else 'AI',
                                       'proposalId': first['id'], 'version': first['version'],
                                       'inputHash': first['input_hash'], 'modelRevision': first['model_revision'],
@@ -399,7 +442,14 @@ def history_and_groups(db, selected, group_ids):
     return chosen, decisions, groups
 
 
-def model_run(value, raw, selected):
+def model_run(value, raw, selected, known_assets=()):
+    required_text = {'status': 80, 'engine': 256, 'model_id': 2048,
+                     'revision': 256, 'prompt_version': 256}
+    require(isinstance(value, dict) and all(isinstance(value.get(k), str)
+            and 0 < len(value[k]) <= maximum for k, maximum in required_text.items())
+            and isinstance(value.get('weights_sha256'), str) and SHA.fullmatch(value['weights_sha256'])
+            and type(value.get('mock')) is bool and type(value.get('cloud')) is bool,
+            'MODEL_METADATA_INCOMPLETE')
     allowed = ('status', 'engine', 'model_id', 'revision', 'prompt_version', 'weights_sha256',
                'mock', 'cloud', 'human_review_required', 'load_seconds', 'elapsed_seconds', 'error_category')
     metadata = {k: value[k] for k in allowed if k in value}
@@ -410,9 +460,10 @@ def model_run(value, raw, selected):
     original_assets = set()
     for segment in value['segments']:
         proposal = segment.get('proposal')
-        original_assets.update(asset_refs(proposal))
+        evidence_assets = set(known_assets) | selected | asset_refs(proposal)
+        original_assets.update(asset_refs(proposal, evidence_assets=evidence_assets))
         if isinstance(proposal, dict):
-            proposal = project(proposal, selected)
+            proposal = project(proposal, selected, evidence_assets=evidence_assets)
             proposal['groups'] = [g for g in proposal.get('groups', []) if g.get('asset_ids')]
             for group in proposal['groups']:
                 group['fields'] = [field for field in group.get('fields', []) if field.get('evidence')]
@@ -486,7 +537,8 @@ def build_metadata_snapshot(database, package, review, models, inventory, *, exp
     try:
         annotations = professional(db, selected, oid, schema, allow_sparse=allow_sparse_annotations)
         group_ids = {v['originObjectId'] for v in local['photoRoles'].values()}
-        proposals, decisions, groups = history_and_groups(db, selected, group_ids)
+        known_assets = {r['id'] for r in db.rows('SELECT id FROM assets')}
+        proposals, decisions, groups = history_and_groups(db, selected, group_ids, known_assets)
         current = {r['asset_id']: r for r in annotations['current_annotations']}
         revisions = unique(annotations['annotation_revisions'], 'id')
         membership = unique(db.rows('SELECT oa.asset_id,oa.role,oa.decision_id,d.status '
@@ -547,22 +599,34 @@ def build_metadata_snapshot(database, package, review, models, inventory, *, exp
         require(isinstance(saved['normalized'], dict), 'NATIVE_NORMALIZED_INVALID')
         snapshots.append({'id': 'native-snapshot-' + sha(raw), 'sourceRecordSha256': sha(raw),
                           'taskKey': task_key, 'annotationId': annotation['id'], 'annotationHash': checksum,
-                          'annotation': project(annotation, selected), 'normalized': project(saved['normalized'], selected)})
+                          'annotation': project(annotation, selected, evidence_assets=known_assets),
+                          'normalized': project(saved['normalized'], selected, evidence_assets=known_assets)})
     review_decisions = []
     for source_decision in local['reviewDecisions']:
         parsed = copy.deepcopy(source_decision)
         if isinstance(parsed['value'], str):
             parsed['value'] = parse_json(parsed['value'])
-        row = project(parsed, selected)
-        row.update(source_record_sha256=digest(parsed), excluded_asset_count=len(asset_refs(parsed) - selected))
+        proposal_kind = next((p['kind'] for p in proposals if p['id'] == parsed['proposal_id']), None)
+        require(proposal_kind is not None, 'REVIEW_PROPOSAL_MISSING')
+        group = proposal_kind == 'group'
+        parsed_value = parsed['value']
+        row = project(parsed, selected, evidence_assets=known_assets)
+        row['value'] = project(parsed_value, selected, group_membership=group, evidence_assets=known_assets)
+        row.update(source_record_sha256=digest(parsed),
+                   excluded_asset_count=len(asset_refs(parsed_value, group_membership=group,
+                                                       evidence_assets=known_assets) - selected))
         review_decisions.append(row)
     field_provenance = []
     for field in local['fieldProvenance']:
         field = copy.deepcopy(field)
         if isinstance(field['evidence'], str):
             field['evidence'] = parse_json(field['evidence'])
-        field_provenance.append(project(field, selected))
-    model_runs = [model_run(*inputs.read(path), selected) for path in models]
+        projected = project(field, selected, evidence_assets=known_assets, strict_evidence=True)
+        excluded = asset_refs(field, evidence_assets=known_assets, strict_evidence=True) - selected
+        if excluded:
+            projected.update(source_record_sha256=digest(field), excluded_asset_count=len(excluded))
+        field_provenance.append(projected)
+    model_runs = [model_run(*inputs.read(path), selected, known_assets) for path in models]
     unique(model_runs, 'id')
     result = {'schemaVersion': VERSION, 'sourceHashPolicy': 'registry_recorded_not_reverified',
               'publicationPacketSha256': sha(packet_raw), 'catalogId': catalog, 'sourceId': source,
