@@ -149,7 +149,8 @@ describe("Article temporary upload lease", () => {
 });
 
 describe("Article temporary upload lease without AbortSignal.any", () => {
-  // Chromium 111-115 and Safari 16.4-17.3 lack it (docs/development/browser-support.md).
+  // Chromium 111-115, Firefox 121-123 and Safari 16.4-17.3 lack it
+  // (docs/development/browser-support.md).
   beforeEach(() => {
     vi.spyOn(AbortSignal, "any").mockImplementation(() => {
       throw new TypeError("AbortSignal.any is not a function");
@@ -198,6 +199,19 @@ describe("Article temporary upload lease without AbortSignal.any", () => {
     // The settled registration is no longer linked to its own signal.
     own.abort();
     expect(received[0]!.aborted).toBe(false);
+
+    // ... and so is a registration that failed without an abort.
+    client.registerItem.mockImplementationOnce(async (_command, signal) => {
+      received.push(signal!);
+      throw new Error("synthetic registration failure");
+    });
+    const failed = new AbortController();
+    await expect(
+      lease.register(command("failed-upload", holder), failed.signal),
+    ).rejects.toThrow("synthetic registration failure");
+    failed.abort();
+    expect(received.at(-1)!.aborted).toBe(false);
+    received.pop();
 
     // A registration's own abort reaches its request ...
     const own2 = new AbortController();

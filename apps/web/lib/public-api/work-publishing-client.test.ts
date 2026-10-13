@@ -1033,7 +1033,7 @@ describe("work publishing client", () => {
   });
 });
 
-// Chromium 111-115 and Safari 16.4-17.3 lack AbortSignal.any
+// Chromium 111-115, Firefox 121-123 and Safari 16.4-17.3 lack AbortSignal.any
 // (docs/development/browser-support.md). The Article authoring client has no
 // test file of its own and shares this relay harness, so it is covered here.
 describe("relay clients without AbortSignal.any", () => {
@@ -1100,6 +1100,18 @@ describe("relay clients without AbortSignal.any", () => {
       caller.abort();
       expect(read.signal!.aborted).toBe(false);
       expect(write.signal!.aborted).toBe(false);
+    });
+
+    it("releases the caller's signal after a refused or failed request", async () => {
+      const caller = new AbortController();
+      answer(refusalBody("Synthetic refusal"), 500);
+      await refused(publishingClient.item(itemId, caller.signal));
+      upstream.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      await refused(publishingClient.createDraft(command, caller.signal));
+      expect(upstream).toHaveBeenCalledTimes(2);
+      caller.abort();
+      for (const [, init] of upstream.mock.calls)
+        expect(init!.signal!.aborted).toBe(false);
     });
 
     it("rethrows a caller's own abort as is, for a write too", async () => {
@@ -1188,6 +1200,22 @@ describe("relay clients without AbortSignal.any", () => {
       caller.abort();
       expect(read.signal!.aborted).toBe(false);
       expect(write.signal!.aborted).toBe(false);
+    });
+
+    it("releases the caller's signal after a refused or failed request", async () => {
+      const caller = new AbortController();
+      answer({ error: { code: "article_not_found" } }, 404);
+      await failure(
+        articleAuthoringClient.list({ pageSize: 20 }, caller.signal),
+      );
+      upstream.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      await failure(
+        articleAuthoringClient.deleteDraft(articleId, deletion, caller.signal),
+      );
+      expect(upstream).toHaveBeenCalledTimes(2);
+      caller.abort();
+      for (const [, init] of upstream.mock.calls)
+        expect(init!.signal!.aborted).toBe(false);
     });
 
     it("still ends on a caller's abort and on the request timeout", async () => {

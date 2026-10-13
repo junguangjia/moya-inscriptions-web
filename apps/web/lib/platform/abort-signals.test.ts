@@ -166,12 +166,19 @@ describe("installAbortSignalAny", () => {
     removeNativeAny();
     expect(installAbortSignalAny()).toBe(true);
     expect(installAbortSignalAny()).toBe(false);
+    // The browsers' WebIDL shape: an enumerable, writable, configurable `any`.
+    expect(Object.getOwnPropertyDescriptor(AbortSignal, "any")).toMatchObject({
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    expect(AbortSignal.any.name).toBe("any");
     const sources = [controller(), controller()];
-    // The standard accepts any iterable, as Uppy's caller may pass one.
+    // Any iterable, including a one-shot generator, is read once.
     const signal = AbortSignal.any(
-      new Set(
-        sources.map((source) => source.signal),
-      ) as unknown as AbortSignal[],
+      (function* () {
+        yield* sources.map((source) => source.signal);
+      })() as unknown as AbortSignal[],
     );
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal.aborted).toBe(false);
@@ -189,5 +196,9 @@ describe("installAbortSignalAny", () => {
       AbortSignal.any([live.signal, {} as unknown as AbortSignal]),
     ).toThrow(TypeError);
     expect(listeners(live.signal)).toBe(0);
+    for (const input of [{}, 5, null, undefined])
+      expect(() => AbortSignal.any(input as unknown as AbortSignal[])).toThrow(
+        TypeError,
+      );
   });
 });

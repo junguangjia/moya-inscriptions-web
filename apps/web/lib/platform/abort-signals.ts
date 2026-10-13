@@ -43,14 +43,28 @@ export const linkAbortSignals = (
  * upload). Installed from `instrumentation-client.ts`; an engine with the
  * native API keeps it. Remove once the floors reach Chrome 116, Firefox 124
  * and Safari 17.4.
+ *
+ * It has the standard shape (an enumerable `any`, a TypeError for anything but
+ * an iterable of signals) but links through listeners, so it differs from the
+ * native algorithm in ways no current caller relies on: the result aborts
+ * while the source's own listeners run rather than after them, a listener that
+ * aborts another listed source first decides the reason, and signals from
+ * another realm (an iframe) are refused.
  */
 export const installAbortSignalAny = (): boolean => {
   if (typeof AbortSignal === "undefined") return false;
   if (typeof AbortSignal.any === "function") return false;
   Object.defineProperty(AbortSignal, "any", {
     configurable: true,
+    enumerable: true,
     writable: true,
-    value: (signals: Iterable<AbortSignal>): AbortSignal => {
+    value: function any(signals: Iterable<AbortSignal>): AbortSignal {
+      if (
+        signals === null ||
+        (typeof signals !== "object" && typeof signals !== "function") ||
+        typeof signals[Symbol.iterator] !== "function"
+      )
+        throw new TypeError("AbortSignal.any: signals must be iterable");
       const list = Array.from(signals);
       for (const signal of list)
         if (!(signal instanceof AbortSignal))

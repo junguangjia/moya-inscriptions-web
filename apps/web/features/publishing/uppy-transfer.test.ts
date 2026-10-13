@@ -394,8 +394,9 @@ describe("Uppy component transfer", () => {
   });
 
   it("uploads, cancels and uploads again where only the installed AbortSignal.any exists", async () => {
-    // Uppy's XHR upload calls AbortSignal.any itself; Chromium 111-115 and
-    // Safari 16.4-17.3 get it from the installer in instrumentation-client.ts.
+    // Uppy's XHR upload calls AbortSignal.any itself; Chromium 111-115,
+    // Firefox 121-123 and Safari 16.4-17.3 get it from the installer in
+    // instrumentation-client.ts.
     const native = Object.getOwnPropertyDescriptor(AbortSignal, "any")!;
     Reflect.deleteProperty(AbortSignal, "any");
     try {

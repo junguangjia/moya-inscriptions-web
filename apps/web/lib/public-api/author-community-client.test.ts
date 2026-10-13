@@ -232,7 +232,8 @@ describe("shared private author transport", () => {
 });
 
 describe("shared private author transport without AbortSignal.any", () => {
-  // Chromium 111-115 and Safari 16.4-17.3 lack it (docs/development/browser-support.md).
+  // Chromium 111-115, Firefox 121-123 and Safari 16.4-17.3 lack it
+  // (docs/development/browser-support.md).
   beforeEach(() => {
     vi.spyOn(AbortSignal, "any").mockImplementation(() => {
       throw new TypeError("AbortSignal.any is not a function");
@@ -292,6 +293,33 @@ describe("shared private author transport without AbortSignal.any", () => {
     // A finished request is no longer linked to the caller's signal.
     caller.abort();
     expect(calls[0]![1].signal!.aborted).toBe(false);
+  });
+
+  it("releases the caller's signal after a refused or failed read", async () => {
+    vi.stubGlobal("window", new EventTarget());
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    vi.stubGlobal("fetch", fetch);
+    const caller = new AbortController();
+    fetch.mockResolvedValueOnce(new Response(null, { status: 409 }));
+    await expect(
+      authorRequest(
+        "threads",
+        { parse: (value) => value },
+        { signal: caller.signal },
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(
+      authorRequest(
+        "threads",
+        { parse: (value) => value },
+        { signal: caller.signal },
+      ),
+    ).rejects.toThrow(TypeError);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    caller.abort();
+    for (const [, init] of fetch.mock.calls)
+      expect(init!.signal!.aborted).toBe(false);
   });
 
   it("rethrows a caller's own abort as is", async () => {
