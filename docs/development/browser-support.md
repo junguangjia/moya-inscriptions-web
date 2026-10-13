@@ -11,10 +11,11 @@ Web app supports, what evidence backs each claim, and what is still unverified.
 | Chrome, Edge and other Chromium-based engines | 111   | Includes WebViews such as HarmonyOS 5 ArkWeb (Chromium 114). |
 | Firefox                                       | 121   | The shipped CSS uses `:has()`, which Firefox has from 121.   |
 
-Below these floors (Safari 15, Chromium below 111, Firefox below 121, IE mode)
-the app is unsupported and nothing is adapted for them. The core flows covered
-by the floors are entering the site, navigation, browsing, search, detail pages,
-login and session handling, and ordinary image and text publishing.
+Below these floors (Safari below 16.4, Chromium below 111, Firefox below 121, IE
+mode) the app is unsupported and nothing is adapted for them. The core flows
+covered by the floors are entering the site, navigation, browsing, search,
+detail pages, login and session handling, and ordinary image and text
+publishing.
 
 The Firefox floor is a support statement, not a compile target. The compile
 target stays at Next's defaults, pinned in `apps/web/package.json`
@@ -30,22 +31,40 @@ upgrade cannot raise it silently.
   listener per finished request. ESLint refuses `AbortSignal.any` in `apps/web`
   and `packages`, workers included.
 - `@uppy/xhr-upload` calls `AbortSignal.any` itself. `instrumentation-client.ts`
-  runs `installAbortSignalAny()` before hydration; it installs a standard-shaped
-  `AbortSignal.any` only where the engine lacks one. It does not run in workers,
-  which is why the lint rule covers them.
+  runs `installAbortSignalAny()` before hydration; it installs an
+  `AbortSignal.any` with the standard shape (an enumerable `any`, a TypeError
+  for anything but an iterable of signals) only where the engine lacks one. It
+  links through listeners, so it differs from the native algorithm in ways no
+  current caller relies on: the result aborts while the source's own listeners
+  run rather than after them, a listener that aborts another listed source first
+  decides the reason, and signals from another realm (an iframe) are refused. It
+  does not run in workers, which is why the lint rule covers them.
 - `float: inline-start` (Chrome 118) on wrapped Article images has a
   `float: left` fallback for Chromium 111-117.
 - `scripts/check-browser-baseline.mjs` runs after every Web build in
-  `scripts/verify.mjs` (`all` and `build`). It parses every client script as
-  ES2022 and fails on unguarded uses of a short list of post-baseline APIs
-  (`AbortSignal.any` outside Uppy's chunk and the installer,
-  `Promise.withResolvers`, `Promise.try`, `Object.groupBy`, `Map.groupBy`,
-  `Array.fromAsync`, the new `Set` methods, `Iterator.from`, `RegExp.escape`,
-  the `Uint8Array` base64/hex helpers, `URL.parse`, `Response.json`,
-  `ReadableStream.from`, `checkVisibility`, `requestIdleCallback`,
-  `scheduler.postTask`). It is a tripwire for known gaps, not a compatibility
-  proof. Its matching is heuristic: `union`, `intersection` and `difference`
-  count only on a `new Set(...)`, because zod uses the same method names.
+  `scripts/verify.mjs` (`all` and `build`, so also in CI's build job), right
+  after its own tests (`check-browser-baseline.spec.mjs`, which need the
+  workspace's parser and therefore run there rather than with the
+  dependency-free `scripts/*.test.mjs`). It parses every client script as ES2022
+  and fails on unguarded uses of a short list of post-baseline APIs:
+  `AbortSignal.any`, `Promise.withResolvers`, `Promise.try`, `Object.groupBy`,
+  `Map.groupBy`, `Array.fromAsync`, the new `Set` methods, `Iterator.from`,
+  `RegExp.escape`, the `Uint8Array` base64/hex helpers, `URL.parse`,
+  `Response.json`, `ReadableStream.from`, `checkVisibility`,
+  `requestIdleCallback` and `scheduler.postTask`.
+  - A use counts as guarded only when a test of the same API (same object or
+    receiver) proves it present: the branch of an `if`, `?:`, `&&` or `||`, an
+    earlier early exit, or an optional call. The test itself must not throw on a
+    floor engine, so a bare `requestIdleCallback` or `Iterator.from` in a
+    condition is a finding; `typeof requestIdleCallback` or
+    `globalThis.Iterator?.from` is not.
+  - `AbortSignal.any` may appear only inside Uppy's XHR upload module and as the
+    installer's own feature test, and only while the installer ships in a root
+    main file.
+  - It is a tripwire for known gaps, not a compatibility proof. `union`,
+    `intersection` and `difference` count only on a `new Set(...)`, because zod
+    uses the same method names, and inline scripts in server-rendered HTML (the
+    product boot script) are not scanned.
 
 **Removal condition.** Delete `installAbortSignalAny` and
 `apps/web/instrumentation-client.ts` once the floors reach Chrome 116, Firefox
@@ -92,15 +111,19 @@ fixture; run locally on Docker Desktop for Mac, arm64 images):
 Unit and build checks:
 
 - With `AbortSignal.any` stubbed to throw, the author, publishing and Article
-  authoring clients and the Article upload lease still send their requests and
+  authoring clients and the Article upload lease still send their requests,
   honor caller abort, the 15-second timeout, document retirement and the A -> B
-  -> A account fence (13 cases; all 13 fail against the previous code). With the
-  native API removed and the installer run, the Uppy transfer uploads, cancels
-  and uploads again. The helper itself has 13 cases, including zero listeners
-  left on a long-lived signal after 50 finished links.
+  -> A account fence, and release the caller's signal after success and after
+  failure (16 cases; all 16 fail against the previous code). With the native API
+  removed and the installer run, the Uppy transfer uploads, cancels and uploads
+  again. The helper itself has 13 cases, including zero listeners left on a
+  long-lived signal after 50 finished links; a no-op `dispose()` fails six of
+  them.
 - `scripts/check-browser-baseline.mjs` passes on this branch (48 client scripts
-  parsed as ES2022, the `noModule` polyfill chunk skipped, about 0.3 s) and on
-  the base build reports exactly the six first-party `AbortSignal.any` sites.
+  parsed as ES2022, the `noModule` polyfill chunk skipped, about 0.4 s) and on
+  the base build reports exactly the six first-party `AbortSignal.any` sites and
+  the missing installer. Its 12 spec cases include guards on the wrong object,
+  in the wrong branch, after the use or that throw themselves.
 - The `browserslist` pin alone leaves a clean production build byte-identical
   (all 101 files under `.next/static`); a deliberately different target changes
   47 of them, so Next reads the key.
@@ -136,13 +159,13 @@ These are the outcomes the existing feature probes should produce where a
 capability is missing. They are expectations to check on real devices, not
 results.
 
-| Capability            | Needs                                                                                 | Expected outcome where it is missing                                                                                                                                                                            |
-| --------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Standard stills       | `OffscreenCanvas` in the worker (Safari 16.4, Chrome 69, Firefox 105)                 | Present at every floor. Without it Standard processing reports unsupported and the author keeps the Original or removes the item.                                                                               |
-| WebP encoding         | canvas WebP encoding, which WebKit lacks                                              | Already probed (`preprocess/capabilities.ts`); WebKit writes PNG or JPEG instead.                                                                                                                               |
-| HEIC/HEIF decoding    | only WebKit decodes HEIC                                                              | Elsewhere decoding fails and becomes the existing "keep the Original or remove" choice.                                                                                                                         |
-| Live Photo motion     | WebCodecs: video from Safari 16.4 and Firefox 130; `AudioEncoder` only from Safari 26 | Firefox 121-129: motion is unsupported (`webcodecs_unavailable`). Safari 16.4-25: motion whose audio must be re-encoded is unsupported (`audio_encode_unsupported`); audio is never dropped. The still is kept. |
-| Local upload recovery | IndexedDB and `navigator.storage.estimate` (Safari 17)                                | Safari 16.4-16.x: no recovery store; uploads work but do not survive a reload.                                                                                                                                  |
+| Capability            | Needs                                                                                                    | Expected outcome where it is missing                                                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Standard stills       | `OffscreenCanvas` in the worker (Safari 16.4, Chrome 69, Firefox 105)                                    | Present at every floor. Without it Standard processing reports unsupported and the author keeps the Original or removes the item.                                                                                                                   |
+| WebP encoding         | canvas WebP encoding, which WebKit lacks                                                                 | Already probed (`preprocess/capabilities.ts`); WebKit writes PNG or JPEG instead.                                                                                                                                                                   |
+| HEIC/HEIF decoding    | WebKit from Safari 17 (iOS 17, macOS 14); no other engine                                                | Safari 16.4-16.x (the reported iOS 16.6.1 iPhone included) and every non-WebKit engine: decoding fails (`decode_unsupported`) and the item gets the existing "keep the Original or remove" choice.                                                  |
+| Live Photo motion     | WebCodecs: video from Safari 16.4 and Firefox 130; `AudioDecoder` and `AudioEncoder` only from Safari 26 | Firefox 121-129: motion is unsupported (`webcodecs_unavailable`). Safari 16.4-25: motion whose audio must be re-encoded is unsupported (`audio_decode_unsupported`, since the decoder is checked first); audio is never dropped. The still is kept. |
+| Local upload recovery | IndexedDB and `navigator.storage.estimate` (Safari 17)                                                   | Safari 16.4-16.x: no recovery store; uploads work but do not survive a reload.                                                                                                                                                                      |
 
 ## Manual real-device checklist (Owner, after a separate deployment)
 
@@ -151,7 +174,8 @@ a post-merge follow-up, not a merge gate.
 
 Devices:
 
-- the reported iPhone on iOS 16.6.1;
+- the reported iPhone on iOS 16.6.1 (a HEIC photo should offer the
+  Original-or-remove choice there);
 - an iOS 16.4 Simulator (Xcode 26.x or 16.x; Xcode 27 simulators start at iOS
   17);
 - WeChat on Android;
