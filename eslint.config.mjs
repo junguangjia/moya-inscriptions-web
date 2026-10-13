@@ -515,4 +515,30 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Browser code, workers included (where the installer does not run).
+    files: [
+      "apps/web/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+      "packages/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+    ],
+    ignores: [
+      "apps/web/lib/platform/abort-signals.ts",
+      "apps/web/lib/platform/abort-signals.test.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: [
+            "MemberExpression[object.name='AbortSignal'][property.name='any']",
+            "MemberExpression[object.name='AbortSignal'][property.value='any']",
+            "MemberExpression[object.property.name='AbortSignal'][property.name='any']",
+            "VariableDeclarator[init.name='AbortSignal'] > ObjectPattern > Property[key.name='any']",
+          ].join(", "),
+          message:
+            "AbortSignal.any needs Chrome 116, Firefox 124 and Safari 17.4, above the supported browser floors. Use linkAbortSignals from apps/web/lib/platform/abort-signals.ts and dispose() the link when the request finishes.",
+        },
+      ],
+    },
+  },
 );

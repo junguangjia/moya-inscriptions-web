@@ -7,6 +7,7 @@ import {
   createUppyTransfer,
 } from "./uppy-transfer";
 
+import { installAbortSignalAny } from "../../lib/platform/abort-signals";
 import type { TransferOutcome, TransferTimers } from "./uppy-transfer";
 
 /** The XHR boundary: records every real send so retries would be visible. */
@@ -390,5 +391,46 @@ describe("Uppy component transfer", () => {
     expect(FakeXhr.sends[1]!.aborted).toBe(true);
     expect(FakeXhr.sends).toHaveLength(2);
     transfer.dispose();
+  });
+
+  it("uploads, cancels and uploads again where only the installed AbortSignal.any exists", async () => {
+    // Uppy's XHR upload calls AbortSignal.any itself; Chromium 111-115 and
+    // Safari 16.4-17.3 get it from the installer in instrumentation-client.ts.
+    const native = Object.getOwnPropertyDescriptor(AbortSignal, "any")!;
+    Reflect.deleteProperty(AbortSignal, "any");
+    try {
+      expect(installAbortSignalAny()).toBe(true);
+      const { timers } = manualTimers();
+      const transfer = createUppyTransfer(2, timers);
+      const cancelled = vi.fn();
+      transfer.start(request("6"), {
+        onProgress: vi.fn(),
+        onSettled: cancelled,
+      });
+      await flush();
+      expect(FakeXhr.sends).toHaveLength(1);
+      transfer.abort("6");
+      await flush();
+      expect(FakeXhr.sends[0]!.aborted).toBe(true);
+      expect(cancelled).not.toHaveBeenCalled();
+
+      const settled = vi.fn<(outcome: TransferOutcome) => void>();
+      const again = request("7");
+      transfer.start(again, { onProgress: vi.fn(), onSettled: settled });
+      await flush();
+      expect(FakeXhr.sends).toHaveLength(2);
+      expect(FakeXhr.sends[1]!.url).toBe(again.endpoint);
+      FakeXhr.sends[1]!.answer(200, '{"ok":true}');
+      await flush();
+      expect(settled).toHaveBeenCalledWith({
+        status: 200,
+        responseText: '{"ok":true}',
+        stalled: false,
+      });
+      expect(FakeXhr.sends).toHaveLength(2);
+      transfer.dispose();
+    } finally {
+      Object.defineProperty(AbortSignal, "any", native);
+    }
   });
 });

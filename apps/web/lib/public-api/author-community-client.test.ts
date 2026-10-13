@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { getEventListeners } from "node:events";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authorClient,
   authorRequest,
@@ -228,5 +229,170 @@ describe("shared private author transport", () => {
     expect((dispatched.mock.calls[0]![0] as Event).type).toBe(
       PRODUCT_ACCESS_REFUSED_EVENT,
     );
+  });
+});
+
+describe("shared private author transport without AbortSignal.any", () => {
+  // Chromium 111-115 and Safari 16.4-17.3 lack it (docs/development/browser-support.md).
+  beforeEach(() => {
+    vi.spyOn(AbortSignal, "any").mockImplementation(() => {
+      throw new TypeError("AbortSignal.any is not a function");
+    });
+  });
+  const hangingFetch = () =>
+    vi.fn(
+      (_url: string, options: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          options.signal!.addEventListener("abort", () =>
+            reject(options.signal!.reason),
+          );
+        }),
+    );
+
+  it("still sends reads and commands with their headers", async () => {
+    authorClient.setAccount("synthetic-owner");
+    vi.stubGlobal("window", new EventTarget());
+    const fetch = vi.fn(async () => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetch);
+    const caller = new AbortController();
+    await expect(
+      authorRequest(
+        "threads",
+        { parse: (value) => value },
+        { signal: caller.signal },
+      ),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      authorRequest(
+        "command",
+        { parse: (value) => value },
+        { method: "POST", body: { kind: "synthetic" } },
+      ),
+    ).resolves.toEqual({ ok: true });
+    const calls = fetch.mock.calls as unknown as [string, RequestInit][];
+    expect(calls.map(([url]) => url)).toEqual([
+      "/api/community/threads",
+      "/api/community/command",
+    ]);
+    expect(calls[0]![1]).toMatchObject({
+      method: "GET",
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      headers: { accept: "application/json" },
+    });
+    expect(calls[1]![1]).toMatchObject({
+      method: "POST",
+      headers: {
+        "x-author-account": "synthetic-owner",
+        "content-type": "application/json",
+      },
+      body: '{"kind":"synthetic"}',
+    });
+    for (const [, init] of calls) expect(init.signal!.aborted).toBe(false);
+    // A finished request leaves nothing behind on a caller's signal.
+    expect(getEventListeners(caller.signal, "abort")).toHaveLength(0);
+  });
+
+  it("rethrows a caller's own abort as is", async () => {
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("fetch", hangingFetch());
+    const caller = new AbortController();
+    const pending = authorRequest(
+      "threads",
+      { parse: (value) => value },
+      { signal: caller.signal },
+    );
+    const reason = new DOMException("Synthetic departure", "AbortError");
+    caller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+  });
+
+  it("still ends a request with the 15-second timeout", async () => {
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("fetch", hangingFetch());
+    const expiry = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(expiry.signal);
+    const pending = authorRequest(
+      "threads",
+      { parse: (value) => value },
+      { signal: new AbortController().signal },
+    );
+    expiry.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(timeout).toHaveBeenCalledWith(15000);
+  });
+
+  it("retires reads on pagehide without retiring commands", async () => {
+    authorClient.setAccount("synthetic-owner");
+    const owner = new EventTarget();
+    vi.stubGlobal("window", owner);
+    let writeSignal!: AbortSignal;
+    let complete!: (response: Response) => void;
+    const fetch = vi.fn((_url: string, options: RequestInit) => {
+      if (options.method === "GET")
+        return new Promise<Response>((_resolve, reject) =>
+          options.signal!.addEventListener("abort", () =>
+            reject(options.signal!.reason),
+          ),
+        );
+      writeSignal = options.signal!;
+      return new Promise<Response>((resolve) => {
+        complete = resolve;
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const read = authorRequest("threads", { parse: (value) => value });
+    const write = authorRequest(
+      "command",
+      { parse: (value) => value },
+      { method: "POST", body: {} },
+    );
+    owner.dispatchEvent(new Event("pagehide"));
+    await expect(read).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      authorRequest("threads", { parse: (value) => value }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(writeSignal.aborted).toBe(false);
+    complete(Response.json({ accepted: true }));
+    await expect(write).resolves.toEqual({ accepted: true });
+    owner.dispatchEvent(
+      Object.assign(new Event("pageshow"), { persisted: true }),
+    );
+    fetch.mockResolvedValueOnce(Response.json({ items: [] }));
+    await expect(
+      authorRequest("threads", { parse: (value) => value }),
+    ).resolves.toEqual({ items: [] });
+  });
+
+  it("rejects an old read if A to B to A occurs while its body is parsing", async () => {
+    authorClient.setAccount("synthetic-owner-a");
+    let releaseBody!: (value: unknown) => void;
+    let started!: () => void;
+    const body = new Promise<unknown>((resolve) => {
+      releaseBody = resolve;
+    });
+    const bodyStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const response = new Response("{}", { status: 200 });
+    vi.spyOn(response, "json").mockImplementation(() => {
+      started();
+      return body;
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    const pending = authorRequest(
+      "article-authoring/connections",
+      { parse: (value) => value },
+      { accountScoped: true, signal: new AbortController().signal },
+    );
+    await bodyStarted;
+    authorClient.setAccount("synthetic-owner-b");
+    authorClient.setAccount("synthetic-owner-a");
+    releaseBody({ items: [] });
+    await expect(pending).rejects.toMatchObject({ status: 401 });
   });
 });

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { getEventListeners } from "node:events";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PublishingMediaItem,
   PublishingSession,
@@ -145,5 +146,84 @@ describe("Article temporary upload lease", () => {
     await upload;
     expect(await cleanup).toBe(false);
     expect(client.discardSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("Article temporary upload lease without AbortSignal.any", () => {
+  // Chromium 111-115 and Safari 16.4-17.3 lack it (docs/development/browser-support.md).
+  beforeEach(() => {
+    vi.spyOn(AbortSignal, "any").mockImplementation(() => {
+      throw new TypeError("AbortSignal.any is not a function");
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("registers with both its own and the lease signal and releases them afterwards", async () => {
+    type Client = Parameters<typeof createArticleUploadLease>[0]["client"];
+    const leaseController = new AbortController();
+    const received: AbortSignal[] = [];
+    const pending = [
+      deferred<PublishingMediaItem>(),
+      deferred<PublishingMediaItem>(),
+    ];
+    const client = {
+      createSession: vi.fn<Client["createSession"]>(async () => session("1")),
+      discardSession: vi.fn<Client["discardSession"]>(async () => ({
+        discarded: true,
+      })),
+      heartbeatSession: vi.fn<Client["heartbeatSession"]>(async () =>
+        session("1"),
+      ),
+      registerItem: vi.fn<Client["registerItem"]>(async (_command, signal) => {
+        received.push(signal!);
+        return received.length === 1
+          ? ready
+          : pending[received.length - 2]!.promise;
+      }),
+    };
+    const lease = createArticleUploadLease({
+      client,
+      signal: leaseController.signal,
+      requireAccount: () => undefined,
+      requestId: () => crypto.randomUUID(),
+      onSession: vi.fn(),
+    });
+    const holder = await lease.holder();
+    const own = new AbortController();
+    await expect(
+      lease.register(command("first-upload", holder), own.signal),
+    ).resolves.toEqual(ready);
+    expect(received[0]!.aborted).toBe(false);
+    expect(getEventListeners(own.signal, "abort")).toHaveLength(0);
+    expect(getEventListeners(leaseController.signal, "abort")).toHaveLength(0);
+
+    // A registration's own abort reaches its request ...
+    const own2 = new AbortController();
+    const second = lease.register(
+      command("second-upload", holder),
+      own2.signal,
+    );
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    const departed = new Error("upload removed");
+    own2.abort(departed);
+    expect(received[1]!.reason).toBe(departed);
+    pending[0]!.reject(departed);
+    await expect(second).rejects.toBe(departed);
+    expect(leaseController.signal.aborted).toBe(false);
+    expect(getEventListeners(leaseController.signal, "abort")).toHaveLength(0);
+
+    // ... and so does the lease's.
+    const third = lease.register(
+      command("third-upload", holder),
+      new AbortController().signal,
+    );
+    await vi.waitFor(() => expect(received).toHaveLength(3));
+    const closed = new Error("lease closed");
+    leaseController.abort(closed);
+    expect(received[2]!.reason).toBe(closed);
+    pending[1]!.reject(closed);
+    await expect(third).rejects.toBe(closed);
   });
 });
