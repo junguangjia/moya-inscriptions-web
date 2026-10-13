@@ -51,6 +51,11 @@ const pathSchema = (name: string) => {
     };
   if (name === "editKey")
     return { type: "string", pattern: "^(?:base|[0-9a-f]{32})$" };
+  if (name === "rendition")
+    return {
+      type: "string",
+      enum: ["avatar-128", "avatar-512", "background-960", "background-1600"],
+    };
   return {
     type: "string",
     minLength: 1,
@@ -541,6 +546,72 @@ authorCommunityPaths["/v1/community/media/{mediaId}"] = {
       "401": failure("Invalid credential"),
       "404": failure("Unavailable media"),
       "503": failure("Service unavailable"),
+    },
+  },
+};
+// profile-media-renditions-v1: the WebP renditions of a profile image.
+authorCommunityPaths["/v1/community/media/{mediaId}/{rendition}"] = {
+  get: {
+    ...operation(
+      "readProfileMediaRendition",
+      "/v1/community/media/{mediaId}/{rendition}",
+      null,
+      null,
+      false,
+    ),
+    description:
+      "One ready rendition of a profile image; the original PNG stays at /v1/community/media/{mediaId}. The owner reads every rendition of its own images, replaced avatars and cleared backgrounds included. Anyone else reads only the avatar renditions of the owner's current avatar and the background renditions of the current background, while the owner is active, the image is not erased and neither account blocks the other. Only a current image, one its family's profile pointer still selects, carries a strong ETag (the quoted SHA-256 of the rendition), and a matching If-None-Match is answered 304 without reading the bytes; any other read carries no ETag and ignores If-None-Match. Supports one byte range; a Range header with another unit or several ranges is ignored and the whole rendition is sent. Accepts no query. Private, no-store with Vary: Authorization.",
+    parameters: [
+      ...["mediaId", "rendition"].map((name) => ({
+        name,
+        in: "path",
+        required: true,
+        schema: pathSchema(name),
+      })),
+      {
+        name: "range",
+        in: "header",
+        required: false,
+        description:
+          "One byte range: bytes=start-end, bytes=start- or bytes=-length. Other units and several ranges are ignored.",
+        schema: { type: "string" },
+      },
+      {
+        name: "if-none-match",
+        in: "header",
+        required: false,
+        description:
+          "Entity tags compared weakly, as a list or *. Considered only for a current image.",
+        schema: { type: "string" },
+      },
+    ],
+    responses: {
+      "200": {
+        description:
+          "The whole rendition; private, no-store. A current image carries its ETag.",
+        content: {
+          "image/webp": { schema: { type: "string", format: "binary" } },
+        },
+      },
+      "206": {
+        description:
+          "The requested byte range with Content-Range. A current image carries its ETag.",
+        content: {
+          "image/webp": { schema: { type: "string", format: "binary" } },
+        },
+      },
+      "304": {
+        description:
+          "Authorized and unchanged: If-None-Match names the ETag of a current image. No body; private, no-store with the ETag.",
+      },
+      "401": failure("Invalid credential"),
+      "404": failure("Unavailable rendition"),
+      "416": {
+        description:
+          "The byte range is malformed or outside the rendition; Content-Range names its length.",
+      },
+      "422": failure("A query string was supplied"),
+      "503": failure("Service or media unavailable"),
     },
   },
 };

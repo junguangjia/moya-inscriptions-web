@@ -37067,6 +37067,132 @@
         ]
       }
     },
+    "/v1/community/media/{mediaId}/{rendition}": {
+      "get": {
+        "description": "One ready rendition of a profile image; the original PNG stays at /v1/community/media/{mediaId}. The owner reads every rendition of its own images, replaced avatars and cleared backgrounds included. Anyone else reads only the avatar renditions of the owner's current avatar and the background renditions of the current background, while the owner is active, the image is not erased and neither account blocks the other. Only a current image, one its family's profile pointer still selects, carries a strong ETag (the quoted SHA-256 of the rendition), and a matching If-None-Match is answered 304 without reading the bytes; any other read carries no ETag and ignores If-None-Match. Supports one byte range; a Range header with another unit or several ranges is ignored and the whole rendition is sent. Accepts no query. Private, no-store with Vary: Authorization.",
+        "operationId": "readProfileMediaRendition",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "mediaId",
+            "required": true,
+            "schema": {
+              "description": "Stored opaque identity; never derive a Catalog identity from a user work.",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rendition",
+            "required": true,
+            "schema": {
+              "enum": [
+                "avatar-128",
+                "avatar-512",
+                "background-960",
+                "background-1600"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "One byte range: bytes=start-end, bytes=start- or bytes=-length. Other units and several ranges are ignored.",
+            "in": "header",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Entity tags compared weakly, as a list or *. Considered only for a current image.",
+            "in": "header",
+            "name": "if-none-match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The whole rendition; private, no-store. A current image carries its ETag."
+          },
+          "206": {
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The requested byte range with Content-Range. A current image carries its ETag."
+          },
+          "304": {
+            "description": "Authorized and unchanged: If-None-Match names the ETag of a current image. No body; private, no-store with the ETag."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid credential"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable rendition"
+          },
+          "416": {
+            "description": "The byte range is malformed or outside the rendition; Content-Range names its length."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A query string was supplied"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service or media unavailable"
+          }
+        },
+        "security": [
+          {},
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/community/mentions": {
       "get": {
         "description": "Phase 4 Development only; absent in Production. Optional sessions personalize eligibility; malformed supplied credentials reject. All reads are private, no-store with Vary: Authorization. Unknown or duplicate query fields reject. JSON writes accept no query. RequestIdentity commands are replay-safe for their actor; comment submissions do not have a replay receipt. Removing an own work moves it to the recycle bin.",
