@@ -7,6 +7,8 @@
   overflow-wrap: anywhere;
 }
 .body .resizedImage[data-article-image-wrap="true"] {
+  /* Chromium 111-117 lacks the logical value and keeps this one. */
+  float: left;
   float: inline-start;
   margin-inline-end: var(--yoyi-space-6);
 }
