@@ -46,7 +46,6 @@ interface UserRow extends QueryResultRow {
   likes_privacy: "public" | "private";
   avatar_media_id: string | null;
   background_media_id: string | null;
-  next_avatar_at: Date | null;
 }
 const offset = (q: AuthorListQuery) => (q.page - 1) * q.pageSize;
 const opaque = (prefix: string) =>
@@ -151,9 +150,7 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
   ): Promise<UserRow> {
     const row = (
       await db.query<UserRow>(
-        `SELECT u.*, CASE WHEN avatar_changed_on IS NULL THEN NULL ELSE
-      ((avatar_changed_on + 1)::timestamp AT TIME ZONE 'America/New_York') END AS next_avatar_at
-      FROM community.public_users u WHERE id=$1 AND status='active' AND community.accounts_can_interact($2,id)`,
+        `SELECT u.* FROM community.public_users u WHERE id=$1 AND status='active' AND community.accounts_can_interact($2,id)`,
         [target, viewer],
       )
     ).rows[0];
@@ -316,9 +313,8 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
               ? await relationCount("like")
               : null,
         },
-        nextAvatarChangeAt: owner
-          ? (u.next_avatar_at?.toISOString() ?? null)
-          : null,
+        // Kept for older clients; always null since 2026-10-13.
+        nextAvatarChangeAt: null,
       });
     });
   }
@@ -392,20 +388,18 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
       input,
       async (db) => {
         await this.ownedMedia(db, actor, [input.mediaId]);
+        // No daily limit since 2026-10-13. The date is still written, so an
+        // older release reads current data; the reply carries this change's time.
         const row = (
-          await db.query<{ next_change: Date }>(
+          await db.query<{ changed_at: Date }>(
             `UPDATE community.public_users SET avatar_media_id=$2,
         avatar_changed_on=(statement_timestamp() AT TIME ZONE 'America/New_York')::date,updated_at=CURRENT_TIMESTAMP
-        WHERE id=$1 AND (avatar_changed_on IS NULL OR avatar_changed_on < (statement_timestamp() AT TIME ZONE 'America/New_York')::date)
-        RETURNING ((avatar_changed_on + 1)::timestamp AT TIME ZONE 'America/New_York') AS next_change`,
+        WHERE id=$1 RETURNING statement_timestamp() AS changed_at`,
             [actor, input.mediaId],
           )
         ).rows[0];
-        if (!row)
-          throw new CommunityConflictError(
-            "Avatar has already changed on this New York calendar date",
-          );
-        return { nextChangeAt: row.next_change.toISOString() };
+        if (!row) throw new CommunityNotFoundError();
+        return { nextChangeAt: row.changed_at.toISOString() };
       },
     );
   }

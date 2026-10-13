@@ -196,9 +196,7 @@ const operation = (
       : { description: "Mutation and audit committed." },
     "401": failure("A valid session is required"),
     "404": failure("Unavailable or private subject"),
-    "409": failure(
-      "Version, request identity or New York avatar-date conflict",
-    ),
+    "409": failure("Version or request identity conflict"),
     "422": failure("Strict input validation failed"),
     "503": failure("Service unavailable; no success is claimed"),
   },

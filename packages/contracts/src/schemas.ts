@@ -785,6 +785,7 @@ export const authorProfileSchema = z.strictObject({
     favorites: version.nullable(),
     likes: version.nullable(),
   }),
+  /** Kept for older clients; always null since the daily avatar limit was removed (2026-10-13). */
   nextAvatarChangeAt: z.iso.datetime().nullable(),
 });
 export const workSchema = z
@@ -955,6 +956,7 @@ export const guestFavoriteMergeResultSchema = z.strictObject({
   acknowledged: z.array(contentIdentitySchema).max(100),
 });
 export const avatarUpdateResultSchema = z.strictObject({
+  /** The time of this change; kept for older clients, which require a datetime. */
   nextChangeAt: z.iso.datetime(),
 });
 

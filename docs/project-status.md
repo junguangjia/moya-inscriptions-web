@@ -420,8 +420,9 @@ Active development tracks (independent of the parked cloud track):
    no avatar
    ([decision](community/content-community-completion-v1.md#11-owner-phone-acceptance-decisions-2026-09-25)).
    Work creation/editing/deletion entrances remain frozen; favorites/likes list
-   filters remain hidden. Backend authorization, media ownership and the
-   America/New_York avatar-change rule remain in force. The
+   filters remain hidden. Backend authorization and media ownership remain in
+   force. The America/New_York avatar-change rule was removed on 2026-10-13 at
+   the Owner's request (`profile-media-renditions-v1`). The
    [Behavior Matrix](community/phase4-author-community-v1.md) preserves scope
    and acceptance history;
    [PR #126](https://github.com/nontwo/moya-inscriptions-web/pull/126) records

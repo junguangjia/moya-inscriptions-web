@@ -5,6 +5,7 @@ import {
   authorMediaSchema,
   authorPersonSchema,
   authorProfileSchema,
+  avatarUpdateResultSchema,
   CARD_GALLERY_MAXIMUM,
   contentCardSchema,
   createPublishingDraftCommandSchema,
@@ -1566,6 +1567,26 @@ describe("backward-compatible Phase 4 adjustments", () => {
           .properties,
       ),
     ).toEqual(["id", "src", "width", "height"]);
+  });
+
+  it("keeps both avatar-change fields for older clients after the daily limit was removed", () => {
+    const at = "2026-10-13T12:00:00.000Z";
+    const nextAvatarChangeAt = authorProfileSchema.shape.nextAvatarChangeAt;
+    expect(nextAvatarChangeAt.safeParse(null).success).toBe(true);
+    expect(nextAvatarChangeAt.safeParse(at).success).toBe(true);
+    expect(nextAvatarChangeAt.safeParse(undefined).success).toBe(false);
+    expect(authorCommunityJsonSchemas.AuthorProfile).toMatchObject({
+      required: expect.arrayContaining(["nextAvatarChangeAt"]),
+    });
+    expect(
+      avatarUpdateResultSchema.safeParse({ nextChangeAt: at }).success,
+    ).toBe(true);
+    for (const invalid of [{}, { nextChangeAt: null }, { nextChangeAt: "now" }])
+      expect(avatarUpdateResultSchema.safeParse(invalid).success).toBe(false);
+    expect(authorCommunityJsonSchemas.AvatarUpdateResult).toMatchObject({
+      required: ["nextChangeAt"],
+      additionalProperties: false,
+    });
   });
 
   it("gives work media its own shape with matching ids, paths and Live fields", () => {

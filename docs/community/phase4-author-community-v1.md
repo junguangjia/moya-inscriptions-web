@@ -3,6 +3,18 @@
 Task: `phase4-author-community-v1`. Revision: 2. Owner approved requirements
 provided on 2026-09-13. Phase 3 remains historically CLOSED.
 
+> **Superseded 2026-10-13 (Owner, `profile-media-renditions-v1`):** the limit of
+> one avatar change per America/New_York calendar day is removed, with no
+> replacement limit. Each successful change applies at once. The limit wording
+> below is acceptance history, not current behavior: the "Avatar" row of the
+> approved behavior matrix, the "upload/day limit" browser evidence, the "Cancel
+> or failure" and "Save and daily limit" rows of the avatar UX correction, the
+> "New York daily rule" of the save synchronization fix, the "one success per
+> New York date" cell of the Save-survives table and the "daily-change rule" of
+> the comment avatar correction. For older clients the contract keeps
+> `nextAvatarChangeAt` (always `null`) and `nextChangeAt` (the time of the
+> change).
+
 ## Authority and delivery
 
 Base: `693eb3754a66fd2eac21cc29e6dbb07677638276`, freshly fetched from

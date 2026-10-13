@@ -114,7 +114,6 @@ const Harness = () => {
       />
       {author.viewer?.id === owner.id && open && (
         <AvatarEditor
-          profile={profile}
           file={photo}
           onClose={() => {
             closed();
@@ -333,12 +332,16 @@ it.each(["upload", "bind"])(
   },
 );
 
-it("records a real daily-limit rejection without retrying into another day or losing pending image", async () => {
-  bind = async () => reply({ error: { message: "daily limit" } }, 409);
-  readProfile = async () =>
-    reply({ ...profile, nextAvatarChangeAt: "2099-01-02T05:00:00Z" });
+it("records a conflict without retrying, keeps the pending image and reads no profile", async () => {
+  bind = async () => reply({ error: { message: "conflict" } }, 409);
+  const profileReads = () =>
+    requests.filter((r) => r.path.startsWith("/api/community/authors/")).length;
+  const before = profileReads();
   await click();
-  expect(node.textContent).toContain("2099年1月2日");
+  expect(node.textContent).toContain(
+    "头像未更换：保存状态冲突，请重新选择照片。",
+  );
+  expect(profileReads()).toBe(before);
   const intent = localStorage.getItem(`yoyi-avatar-save-v1:${owner.id}`)!;
   expect(intent).toContain("data:image/png;base64,");
   await focus();
@@ -423,11 +426,10 @@ it("resumes a pending offline reload on online without focus, and rearms failed 
   vi.useRealTimers();
 });
 
-it("does not overwrite another tab's replacement intent after a delayed conflict reconciliation", async () => {
-  const conflictProfile = deferred(),
+it("does not overwrite another tab's replacement intent after a delayed conflict", async () => {
+  const conflict = deferred(),
     replacementUpload = deferred();
-  bind = async () => reply({ error: { message: "daily limit" } }, 409);
-  readProfile = () => conflictProfile.promise.then((r) => r.clone());
+  bind = () => conflict.promise;
   await click();
   const storageKey = `yoyi-avatar-save-v1:${owner.id}`;
   const first = JSON.parse(localStorage.getItem(storageKey)!);
@@ -444,15 +446,13 @@ it("does not overwrite another tab's replacement intent after a delayed conflict
     window.dispatchEvent(new StorageEvent("storage", { key: storageKey })),
   );
   await act(async () =>
-    conflictProfile.resolve(
-      reply({ ...profile, nextAvatarChangeAt: "2099-01-02T05:00:00Z" }),
-    ),
+    conflict.resolve(reply({ error: { message: "conflict" } }, 409)),
   );
   expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual(replacement);
   expect(posts("/media").at(-1)?.init.headers).toMatchObject({
     "x-request-id": replacement.uploadId,
   });
-  expect(node.textContent).not.toContain("今天已更换");
+  expect(node.textContent).not.toContain("保存状态冲突");
   bind = async () => {
     bound = true;
     return reply({ nextChangeAt: "2099-01-02T05:00:00Z" });
@@ -461,15 +461,16 @@ it("does not overwrite another tab's replacement intent after a delayed conflict
   await act(async () => replacementUpload.resolve(reply(media)));
 });
 
-it("rearms account confirmation when a conflict reconciliation overlaps a failed session refresh", async () => {
-  const reconciliation = deferred();
-  bind = async () => reply({ error: { message: "conflict" } }, 409);
-  readProfile = () => reconciliation.promise.then((r) => r.clone());
+it("rearms account confirmation when a delayed conflict overlaps a failed session refresh", async () => {
+  const conflict = deferred();
+  bind = () => conflict.promise;
   await click();
   me = async () => reply({}, 503);
   await focus();
   vi.useFakeTimers();
-  await act(async () => reconciliation.resolve(reply(profile)));
+  await act(async () =>
+    conflict.resolve(reply({ error: { message: "conflict" } }, 409)),
+  );
   const before = requests.filter((r) => r.path === "/api/community/me").length;
   me = async () => reply(owner);
   bind = async () => {

@@ -193,20 +193,11 @@ export const useAvatarSave = (options: {
         ) {
           rejection =
             error.status === 409
-              ? "头像未更换：今天已更换过头像或保存状态冲突。"
+              ? "头像未更换：保存状态冲突，请重新选择照片。"
               : "头像未更换：服务器未接受图像，请重新选择照片。";
-          if (error.status === 409 && current()) {
-            try {
-              const profile = await authorClient.profile(account);
-              if (current() && profile.nextAvatarChangeAt)
-                rejection = `今天已更换过头像。下次可更换：${new Intl.DateTimeFormat("zh-CN", { timeZone: "America/New_York", dateStyle: "long", timeStyle: "short" }).format(new Date(profile.nextAvatarChangeAt))}（美国纽约时间）。`;
-            } catch {
-              /* Retain the actual rejection. */
-            }
-          }
         }
-        // A profile reconciliation can outlive this owner or a replacement
-        // intent submitted by another tab. Never restore the stale record.
+        // The request can outlive this owner, the confirmed account or a
+        // replacement intent submitted by another tab. Never restore the stale record.
         if (!mounted.current || latest.current.accountId !== account) return;
         try {
           stored = read(account);
