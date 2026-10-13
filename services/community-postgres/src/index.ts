@@ -33,8 +33,10 @@ export { PostgresWorkPublishingAdapter } from "./work-publishing-adapter.js";
 // identities (the registry itself lives with the processor) and the D7 hold.
 export {
   ADOPTED_DERIVATIVE_ROLES,
+  PROFILE_RENDITION_ROLES,
   RECIPE_DIGEST_PATTERN,
   RENDITION_ROLES,
+  isProfileRenditionRole,
   isRenditionRole,
 } from "./publishing/recipe-identity.js";
 export type {

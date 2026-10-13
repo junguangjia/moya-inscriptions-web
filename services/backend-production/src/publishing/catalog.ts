@@ -22,7 +22,7 @@ import {
   CATALOG_SOURCE_MAX_BYTES,
   SANDBOX_TIMEOUTS_MS,
 } from "./processing/profiles.js";
-import { currentRecipe } from "./processing/recipes.js";
+import { currentRecipe, isProfileRole } from "./processing/recipes.js";
 import {
   SANDBOX_PROTOCOL_VERSION,
   SandboxProtocolError,
@@ -215,7 +215,8 @@ export function createCatalogRenderer(
           if (
             output.contentType !== "image/webp" ||
             output.role === "full" ||
-            output.role === "motion"
+            output.role === "motion" ||
+            isProfileRole(output.role)
           ) {
             throw new SandboxProtocolError("outputs_mismatch");
           }
