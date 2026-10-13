@@ -419,7 +419,7 @@ test("MIG-C1 card actions preserve trusted touch paging with local horizontal co
   // The card geometry below is the two-column feed's: phone now opens
   // single-column unless the viewer chose Double.
   await context.addInitScript(() =>
-    window.localStorage.setItem("yoyi.home-feed-layout", "double"),
+    window.localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
   );
   const page = await context.newPage();
   const session = await context.newCDPSession(page);
@@ -812,8 +812,8 @@ test("MIG-C1 restores all-Calligraphy scroll and exact opener focus after Detail
   const shell = productShell(surface);
   const platform = await shell.getAttribute("data-platform");
   if (platform === "pc") return;
-  // Phone opens single-column and tablet double; the toggle flips either.
-  const toggledLayout = platform === "phone" ? "double" : "single";
+  // Phone and tablet open in calligraphy mode; the toggle selects normal mode.
+  const toggledLayout = "double";
   await shell.locator("[data-user-trigger]").click();
   const userPage = shell.getByRole("dialog", { name: "用户页" });
   await expect(userPage).toBeVisible();
