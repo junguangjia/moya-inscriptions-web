@@ -94,8 +94,9 @@ evidence.
 
 Old-engine lane (`tests/legacy-browsers`, production build, e2e Public API
 fixture; run locally on Docker Desktop for Mac, arm64 images; the branch result
-is for `cda8a844`, the branch merged with `main` at 90e554a7; the later r2 fix
-changes only the Article editor, which the smoke does not open):
+was re-run on a clean build of `cda8a844`, the branch merged with `main` at
+90e554a7, and matched the earlier pre-merge run; the later r2 fix changes only
+the Article editor, which the smoke does not open):
 
 | Image                                        | Engine and version string                                              | Branch result            | Base build (05d40467) |
 | -------------------------------------------- | ---------------------------------------------------------------------- | ------------------------ | --------------------- |
@@ -140,9 +141,11 @@ Unit and build checks:
 - `pnpm verify` (120-second budget) with warm Turbo caches: `main` 49.7 s and
   47.0 s at 05d40467 and 46.8 s at 90e554a7; the branch 47.5 s and 47.5 s before
   the merge, 47.3 s and 46.9 s at `cda8a844`; all PASS. The scan and its spec
-  add under a second. Web unit tests went from 3,444 to 3,474 (30 new); every
-  earlier test passes, and only one earlier assertion changed: the resize
-  preview's expected style now includes the `float: left` fallback (Issue r2).
+  add under a second. At `cda8a844` Web unit tests went from 3,444 (`main`
+  90e554a7) to 3,474 (30 new) and every earlier test passed unchanged.
+- Issue r2 (`eee52456`) changed exactly one earlier assertion: the resize
+  preview's expected style now includes the `float: left` fallback. The Article
+  authoring suite (199 tests) and the required CI passed on that commit.
 
 ### Estimated or not yet verified
 
