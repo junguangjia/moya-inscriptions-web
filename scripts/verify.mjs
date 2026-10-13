@@ -357,8 +357,13 @@ export function verificationCommands(
   const pnpm = (...args) => ["pnpm", ...args];
   const smoke = [executable, "scripts/ci-e2e-smoke.mjs"];
   // Reads the Web build output just produced: client scripts must stay inside
-  // the supported browser floors (docs/development/browser-support.md).
-  const browserBaseline = [executable, "scripts/check-browser-baseline.mjs"];
+  // the supported browser floors (docs/development/browser-support.md). Its
+  // tests need the workspace's parser, so they run here and not with the
+  // dependency-free scripts/*.test.mjs.
+  const browserBaseline = [
+    [executable, "--test", "scripts/check-browser-baseline.spec.mjs"],
+    [executable, "scripts/check-browser-baseline.mjs"],
+  ];
   // The smoke child owns its BROWSER SMOKE profile (warm for quick, cold for
   // complete) under this stage's remaining time, never a fresh allowance.
   const bounded = (command) => [
@@ -391,7 +396,7 @@ export function verificationCommands(
     all: [
       pnpm("format:check"),
       pnpm("exec", "turbo", "run", "lint", "typecheck", "test", "build"),
-      browserBaseline,
+      ...browserBaseline,
       ...(env.TEST_DATABASE_URL ? postgres : []),
       bounded(smoke),
     ],
@@ -399,7 +404,7 @@ export function verificationCommands(
     typecheck: [pnpm("typecheck")],
     test: [...(env.TEST_DATABASE_URL ? postgres : []), pnpm("test")],
     postgres,
-    build: [pnpm("build"), browserBaseline],
+    build: [pnpm("build"), ...browserBaseline],
     e2e: [bounded(smoke)],
   };
   if (!Object.hasOwn(plans, mode))
@@ -408,9 +413,7 @@ export function verificationCommands(
     const filters = plan.workspaces.map((name) => `--filter=${name}`);
     const turbo = (...tasks) =>
       pnpm("exec", "turbo", "run", ...tasks, ...filters);
-    const webBaseline = plan.workspaces.includes("web")
-      ? [browserBaseline]
-      : [];
+    const webBaseline = plan.workspaces.includes("web") ? browserBaseline : [];
     // The affected-workspace planner has already included real consumers.
     // Selecting @moya/tests executes its entire declared default test suite.
     // Required prerequisite builds remain governed by Turbo's existing graph.

@@ -321,10 +321,10 @@ export function classifyTask(paths, event = "pull_request") {
       // verify.mjs stage plans are the Web lint, typecheck, test, build and
       // smoke job commands, including the test job's marker check. The smoke
       // stage spawns ci-e2e-smoke.mjs and the build stages spawn
-      // check-browser-baseline.mjs; only the test job's Vitest policy test
-      // loads ci-e2e-scope.mjs. validation-profiles.mjs supplies the stage and
-      // smoke ceilings those commands import.
-      /^scripts\/(?:migrate(?:-community)?|generate-catalog-import-template|confidentiality-scan|install-confidentiality-hooks|disposable-test-target|test-target|verify|validation-profiles|ci-e2e-(?:scope|smoke)|check-browser-baseline|materialize-phase4-fixtures|seed-phase4-acceptance|seed-phase4-support|email-auth-acceptance|provision-password-account)\.mjs$/u.test(
+      // check-browser-baseline.mjs and its spec; only the test job's Vitest
+      // policy test loads ci-e2e-scope.mjs. validation-profiles.mjs supplies
+      // the stage and smoke ceilings those commands import.
+      /^scripts\/(?:migrate(?:-community)?|generate-catalog-import-template|confidentiality-scan|install-confidentiality-hooks|disposable-test-target|test-target|verify|validation-profiles|ci-e2e-(?:scope|smoke)|check-browser-baseline(?:\.spec)?|materialize-phase4-fixtures|seed-phase4-acceptance|seed-phase4-support|email-auth-acceptance|provision-password-account)\.mjs$/u.test(
         file,
       )
     ) {
