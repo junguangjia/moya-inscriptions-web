@@ -94,7 +94,8 @@ evidence.
 
 Old-engine lane (`tests/legacy-browsers`, production build, e2e Public API
 fixture; run locally on Docker Desktop for Mac, arm64 images; the branch result
-holds for the final head, merged with `main` at 90e554a7):
+is for `cda8a844`, the branch merged with `main` at 90e554a7; the later r2 fix
+changes only the Article editor, which the smoke does not open):
 
 | Image                                        | Engine and version string                                              | Branch result            | Base build (05d40467) |
 | -------------------------------------------- | ---------------------------------------------------------------------- | ------------------------ | --------------------- |
@@ -131,15 +132,16 @@ Unit and build checks:
   47 of them, so Next reads the key.
 - The built CSS keeps `float:left;float:inline-start` for wrapped Article
   images.
-- Client bundle, clean production builds of `main` (90e554a7) and the final
-  head: all client JS and CSS +1,444 bytes raw (5,158,608 to 5,160,052; +658
-  gzip), 14 of 56 chunks re-hashed; home route initial JS +1,238 bytes raw (+545
-  gzip).
+- Client bundle, clean production builds of `main` (90e554a7) and the branch at
+  `cda8a844` (before the r2 preview fix, which adds a few bytes to one client
+  template): all client JS and CSS +1,444 bytes raw (5,158,608 to 5,160,052;
+  +658 gzip), 14 of 56 chunks re-hashed; home route initial JS +1,238 bytes raw
+  (+545 gzip).
 - `pnpm verify` (120-second budget) with warm Turbo caches: `main` 49.7 s and
   47.0 s at 05d40467 and 46.8 s at 90e554a7; the branch 47.5 s and 47.5 s before
-  the merge, 47.3 s and 46.9 s at the final head; all PASS. The scan and its
-  spec add under a second. Web unit tests went from 3,444 to 3,474 (30 new);
-  every earlier test passes, and only one earlier assertion changed: the resize
+  the merge, 47.3 s and 46.9 s at `cda8a844`; all PASS. The scan and its spec
+  add under a second. Web unit tests went from 3,444 to 3,474 (30 new); every
+  earlier test passes, and only one earlier assertion changed: the resize
   preview's expected style now includes the `float: left` fallback (Issue r2).
 
 ### Estimated or not yet verified
