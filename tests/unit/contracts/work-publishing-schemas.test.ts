@@ -5,6 +5,7 @@ import {
   authorMediaSchema,
   authorPersonSchema,
   authorProfileSchema,
+  avatarUpdateResultSchema,
   CARD_GALLERY_MAXIMUM,
   contentCardSchema,
   createPublishingDraftCommandSchema,
@@ -1525,16 +1526,18 @@ describe("backward-compatible Phase 4 adjustments", () => {
     ).toBe(false);
   });
 
-  it("leaves the avatar media contract exactly as Phase 4 shipped it", () => {
+  it("keeps the Phase 4 avatar media contract and adds only optional renditions", () => {
     const legacy = {
       id: `user-media-${hex("a")}`,
       src: legacySrc,
       width: 1200,
       height: 800,
     };
+    // Amendment entry 14: profile-media-renditions-v1 adds `renditions`.
     expect(Object.keys(authorMediaSchema.shape).sort()).toEqual([
       "height",
       "id",
+      "renditions",
       "src",
       "width",
     ]);
@@ -1565,7 +1568,27 @@ describe("backward-compatible Phase 4 adjustments", () => {
         (authorCommunityJsonSchemas.AuthorMedia as { properties: object })
           .properties,
       ),
-    ).toEqual(["id", "src", "width", "height"]);
+    ).toEqual(["id", "src", "width", "height", "renditions"]);
+  });
+
+  it("keeps both avatar-change fields for older clients after the daily limit was removed", () => {
+    const at = "2026-10-13T12:00:00.000Z";
+    const nextAvatarChangeAt = authorProfileSchema.shape.nextAvatarChangeAt;
+    expect(nextAvatarChangeAt.safeParse(null).success).toBe(true);
+    expect(nextAvatarChangeAt.safeParse(at).success).toBe(true);
+    expect(nextAvatarChangeAt.safeParse(undefined).success).toBe(false);
+    expect(authorCommunityJsonSchemas.AuthorProfile).toMatchObject({
+      required: expect.arrayContaining(["nextAvatarChangeAt"]),
+    });
+    expect(
+      avatarUpdateResultSchema.safeParse({ nextChangeAt: at }).success,
+    ).toBe(true);
+    for (const invalid of [{}, { nextChangeAt: null }, { nextChangeAt: "now" }])
+      expect(avatarUpdateResultSchema.safeParse(invalid).success).toBe(false);
+    expect(authorCommunityJsonSchemas.AvatarUpdateResult).toMatchObject({
+      required: ["nextChangeAt"],
+      additionalProperties: false,
+    });
   });
 
   it("gives work media its own shape with matching ids, paths and Live fields", () => {

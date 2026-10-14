@@ -310,3 +310,33 @@ it("delegates explicit crop saving to the existing account-isolated avatar endpo
   await click("完成");
   expect(complete).toHaveBeenCalledTimes(1);
 });
+it("shows the 96 px avatar at 128 for 1x and 512 from 2x once rendered", async () => {
+  // profile-media-renditions-v1: a just-uploaded avatar usually has no
+  // renditions yet and keeps its original; a rendered one offers both sizes.
+  const rendition = (size: number) => ({
+    src: `${media.src}/avatar-${size}`,
+    width: size,
+    height: size,
+    contentType: "image/webp",
+  });
+  readProfile = async () =>
+    reply({
+      ...profile,
+      avatar: { ...media, renditions: [rendition(128), rendition(512)] },
+    });
+  await render();
+  const image = node.querySelector('[aria-label="当前头像"] img')!;
+  expect(image.getAttribute("src")).toBe(`${media.src}/avatar-128`);
+  expect(image.getAttribute("srcset")).toBe(
+    `${media.src}/avatar-128 128w, ${media.src}/avatar-512 512w`,
+  );
+  expect(image.getAttribute("sizes")).toBe("96px");
+  expect(image.getAttribute("width")).toBe("96");
+});
+it("keeps the original avatar without renditions", async () => {
+  bound = true;
+  await render();
+  const image = node.querySelector('[aria-label="当前头像"] img')!;
+  expect(image.getAttribute("src")).toBe(media.src);
+  expect(image.hasAttribute("srcset")).toBe(false);
+});

@@ -22,7 +22,10 @@ import {
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { StillRole } from "@moya/backend-production/internal/publishing-processing";
+import type {
+  ProfileRole,
+  StillRole,
+} from "@moya/backend-production/internal/publishing-processing";
 import type {
   SandboxJob,
   SandboxRenderBody,
@@ -31,9 +34,9 @@ import type {
 /*
  * The sandboxed renderer, run in-process with the real sharp on small
  * synthetic fixtures: colour management (Display P3 → untagged sRGB), EXIF
- * orientation, alpha, long scrolls, the viewer skip rule, metadata stripping,
- * the placeholder colour and the decode bounds. The pre-task still chain must
- * stay byte-identical for every recipe version 1.
+ * orientation, alpha, long scrolls, the viewer skip rule, the profile
+ * families, metadata stripping, the placeholder colour and the decode bounds.
+ * The pre-task still chain must stay byte-identical for every recipe version 1.
  */
 
 let base: string;
@@ -358,6 +361,114 @@ describe("media sandbox renderer (in-process, real sharp)", () => {
       "display",
       "full",
     ]);
+  });
+
+  it("renders profile families from a PNG: WebP with alpha and no metadata, never upscaled, never repeating an anchor", async () => {
+    const profileJob = (bytes: Buffer, roles: readonly ProfileRole[]) =>
+      deriveJob(bytes, "image/png", {
+        plan: "profile",
+        renditions: roles.map((role) => {
+          const recipe = currentRecipe(role);
+          return { role, version: recipe.version, digest: recipe.digest };
+        }),
+        placeholder: false,
+      });
+    const renderFresh = async (job: SandboxJob, bytes: Buffer) => {
+      await rm(paths.output, { recursive: true });
+      await mkdir(paths.output);
+      return derived(await render(job, bytes));
+    };
+    const sizes = (body: SandboxRenderBody) =>
+      body.outputs.map((output) => [output.role, output.width, output.height]);
+    const png = (
+      width: number,
+      height: number,
+      background: { r: number; g: number; b: number; alpha?: number },
+    ) =>
+      sharp({
+        create: {
+          width,
+          height,
+          channels: background.alpha ? 4 : 3,
+          background,
+        },
+      })
+        .withExif({ IFD0: { Copyright: "synthetic-private-marker" } })
+        .withIccProfile("p3")
+        .png()
+        .toBuffer();
+
+    const avatar = await png(512, 512, { r: 200, g: 10, b: 10, alpha: 0.5 });
+    const input = await sharp(avatar).metadata();
+    expect([input.hasAlpha, !!input.exif, !!input.icc]).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    const avatarJob = profileJob(avatar, ["avatar-128", "avatar-512"]);
+    const avatars = await renderFresh(avatarJob, avatar);
+    expect(sizes(avatars)).toEqual([
+      ["avatar-128", 128, 128],
+      ["avatar-512", 512, 512],
+    ]);
+    expect(avatars.placeholderColor).toBeNull();
+    expect(avatars.inspection).toEqual({
+      width: 512,
+      height: 512,
+      hasAlpha: true,
+    });
+    for (const output of avatars.outputs) {
+      const bytes = await outputFile(output.name);
+      expect(output.name).toBe(`${output.role}.webp`);
+      expect(output.sha256).toBe(
+        createHash("sha256").update(bytes).digest("hex"),
+      );
+      const probe = await plainWebp(bytes);
+      expect(probe).toMatchObject({
+        width: output.width,
+        height: output.height,
+        hasAlpha: true,
+      });
+      expect(bytes.includes("synthetic-private-marker")).toBe(false);
+      expect(
+        expectedStillSize(
+          output.role as ProfileRole,
+          avatars.inspection!,
+          avatarJob.item!.edit,
+          avatarJob.item!.coverCrop,
+          "profile",
+        ),
+      ).toEqual({ width: output.width, height: output.height });
+    }
+
+    const cover = await png(1600, 1200, { r: 30, g: 90, b: 60 });
+    const covers = await renderFresh(
+      profileJob(cover, ["background-960", "background-1600"]),
+      cover,
+    );
+    expect(sizes(covers)).toEqual([
+      ["background-960", 960, 720],
+      ["background-1600", 1600, 1200],
+    ]);
+    for (const output of covers.outputs)
+      await plainWebp(await outputFile(output.name));
+
+    // At or below the anchor's long edge, a family is one rendition.
+    const small = await png(800, 600, { r: 30, g: 90, b: 60 });
+    expect(
+      sizes(
+        await renderFresh(
+          profileJob(small, ["background-960", "background-1600"]),
+          small,
+        ),
+      ),
+    ).toEqual([["background-960", 800, 600]]);
+    const tiny = await png(100, 100, { r: 30, g: 90, b: 60 });
+    expect(
+      sizes(
+        await renderFresh(profileJob(tiny, ["avatar-128", "avatar-512"]), tiny),
+      ),
+    ).toEqual([["avatar-128", 100, 100]]);
   });
 
   it("refuses decoded sizes, truncated bytes and mislabelled formats with precise codes", async () => {

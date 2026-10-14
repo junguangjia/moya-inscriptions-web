@@ -266,3 +266,45 @@ it("consumes the list history entry before navigating to a selected profile", as
     expect.any(HTMLButtonElement),
   );
 });
+// profile-media-renditions-v1: 48 px rows load `avatar-128`, never `avatar-512`.
+it("draws each 48 px avatar from its smallest rendition, else the original", async () => {
+  const src = (n: number) =>
+    `/api/community/media/user-media-${String(n).repeat(32)}`;
+  people.mockResolvedValueOnce({
+    items: [
+      {
+        ...person("rendered"),
+        avatar: {
+          id: `user-media-${"1".repeat(32)}`,
+          src: src(1),
+          width: 512,
+          height: 512,
+          renditions: [
+            { src: `${src(1)}/avatar-128`, width: 128, height: 128 },
+            { src: `${src(1)}/avatar-512`, width: 512, height: 512 },
+          ],
+        },
+      },
+      {
+        ...person("pending"),
+        avatar: {
+          id: `user-media-${"2".repeat(32)}`,
+          src: src(2),
+          width: 512,
+          height: 512,
+        },
+      },
+    ],
+    page: 1,
+    pageSize: 2,
+    total: 2,
+  });
+  await render("following");
+  const images = [...document.querySelectorAll(".phase4-person-avatar img")];
+  expect(images.map((image) => image.getAttribute("src"))).toEqual([
+    `${src(1)}/avatar-128`,
+    src(2),
+  ]);
+  expect(images.every((image) => !image.hasAttribute("srcset"))).toBe(true);
+  expect(images[0]?.getAttribute("loading")).toBe("lazy");
+});

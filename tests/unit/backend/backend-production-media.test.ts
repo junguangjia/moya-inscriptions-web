@@ -15,6 +15,7 @@ import {
   createPostgresPool,
 } from "@moya/catalog-postgres";
 import {
+  PostgresAuthorCommunityAdapter,
   PostgresWorkPublishingAdapter,
   PostgresNotificationAdapter,
   PostgresMediaPublicationAdapter,
@@ -96,13 +97,21 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
 });
 
 // The community ledger check is read-only PostgreSQL I/O as well; the App-role
-// adapter is unused by these media compositions.
+// adapter is unused by these media compositions. The author adapter's
+// options (the profile rendition switch) are observed.
 vi.mock("@moya/community-postgres", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@moya/community-postgres")>();
   return {
     ...actual,
     verifyCommunityMigrationLedger: vi.fn(async () => {}),
+    PostgresAuthorCommunityAdapter: vi.fn(function (
+      ...args: ConstructorParameters<
+        typeof actual.PostgresAuthorCommunityAdapter
+      >
+    ) {
+      return new actual.PostgresAuthorCommunityAdapter(...args);
+    }),
   };
 });
 
@@ -244,6 +253,10 @@ describe("non-Pilot production public media composition", () => {
       { WORK_MEDIA_WORKER: "both" },
       /^WORK_MEDIA_WORKER must be embedded or external$/,
     ],
+    [
+      { MEDIA_PROFILE_RENDITIONS: "synthetic-on" },
+      /^MEDIA_PROFILE_RENDITIONS must be on or off$/,
+    ],
   ])(
     "refuses invalid Production media configuration before pools %#",
     async (invalid, message) => {
@@ -268,6 +281,8 @@ describe("non-Pilot production public media composition", () => {
         WORK_MEDIA_WORK_DIR: "relative",
         WORK_MEDIA_WORKER_CONCURRENCY: "not-a-number",
         WORK_MEDIA_WORKER: "external",
+        // The media worker's profile switch is never read here.
+        MEDIA_PROFILE_RENDER: "synthetic-on",
       },
     ]) {
       const prepared = await prepareProductionBackend({
@@ -524,6 +539,15 @@ describe("Work publishing composition", () => {
         unreferenced: 0,
         enqueued: 0,
       }),
+      profileSweep: vi
+        .spyOn(prototype, "enqueueProfileRenders")
+        .mockResolvedValue({
+          missing: 0,
+          blocked: 0,
+          enqueued: 0,
+          requeued: 0,
+          paused: false,
+        }),
     };
   };
 
@@ -624,6 +648,7 @@ describe("Work publishing composition", () => {
         expect(handlers.processor).toBe(media.processor);
         expect(handlers.toolJobs).toBe(media.sandbox);
         expect(handlers.catalog?.port).toBe(handlers.port);
+        expect(handlers.profile?.port).toBe(handlers.port);
       } else {
         // The media worker processes media: no sandbox, no processor and no
         // Catalog rendering in the Backend.
@@ -644,8 +669,14 @@ describe("Work publishing composition", () => {
         expect(handlers.store).toBe(productionStore);
         expect(handlers.processor).toBeUndefined();
         expect(handlers.catalog).toBeUndefined();
+        expect(handlers.profile).toBeUndefined();
         expect(handlers.toolJobs).toBeUndefined();
       }
+      // Both profile switches default on in Development and off in Production.
+      expect(PostgresAuthorCommunityAdapter).toHaveBeenCalledWith(
+        expect.anything(),
+        { profileRenditions: mode === "development" },
+      );
       await pause(20);
       expect(queue.claim).not.toHaveBeenCalled();
 
@@ -653,7 +684,22 @@ describe("Work publishing composition", () => {
       await vi.waitFor(() =>
         expect(queue.claim).toHaveBeenCalledWith(
           mode === "development"
-            ? expect.objectContaining({ limit: 2, leaseMs: 5 * 60 * 1000 })
+            ? expect.objectContaining({
+                limit: 2,
+                leaseMs: 5 * 60 * 1000,
+                kinds: [
+                  "expire_session",
+                  "sweep_staging",
+                  "process_item",
+                  "derive_edit",
+                  "purge_item",
+                  "purge_blob",
+                  "purge_trashed_work",
+                  "reconcile_capacity",
+                  "catalog_render",
+                  "profile_render",
+                ],
+              })
             : expect.objectContaining({
                 limit: 1,
                 leaseMs: 5 * 60 * 1000,
@@ -670,6 +716,9 @@ describe("Work publishing composition", () => {
           : ["sweep_staging"],
       );
       expect(queue.catalogSync).toHaveBeenCalledTimes(
+        mode === "development" ? 1 : 0,
+      );
+      expect(queue.profileSweep).toHaveBeenCalledTimes(
         mode === "development" ? 1 : 0,
       );
 
@@ -749,6 +798,56 @@ describe("Work publishing composition", () => {
     },
   );
 
+  it.each([
+    ["development", { MEDIA_PROFILE_RENDER: "off" }, false, true],
+    ["development", { MEDIA_PROFILE_RENDITIONS: "off" }, true, false],
+    ["production", { MEDIA_PROFILE_RENDITIONS: "on" }, false, true],
+  ] as const)(
+    "%s follows the profile switches %o",
+    async (mode, switches, render, renditions) => {
+      const queue = quietQueue();
+      if (mode === "development")
+        vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+          fakeMedia() as unknown as Awaited<
+            ReturnType<typeof openPublishingMedia>
+          >,
+        );
+      const prepared = await prepareProductionBackend({
+        ...(mode === "development"
+          ? { ...local, ...publishingKeys }
+          : environment),
+        ...switches,
+      });
+      const [handlers] = vi
+        .mocked(createPublishingJobHandlers)
+        .mock.calls.at(-1)!;
+      expect(handlers.profile !== undefined).toBe(render);
+      expect(PostgresAuthorCommunityAdapter).toHaveBeenCalledWith(
+        expect.anything(),
+        { profileRenditions: renditions },
+      );
+      prepared.startBackgroundWork();
+      await vi.waitFor(() => expect(queue.claim).toHaveBeenCalled());
+      expect(
+        queue.claim.mock.calls[0]![0].kinds?.includes("profile_render"),
+      ).toBe(render);
+      expect(queue.profileSweep).toHaveBeenCalledTimes(render ? 1 : 0);
+      await prepared.closeResources();
+    },
+  );
+
+  it("refuses an invalid embedded profile render switch before opening a pool", async () => {
+    await expect(
+      prepareProductionBackend({
+        ...local,
+        ...publishingKeys,
+        MEDIA_PROFILE_RENDER: "synthetic-on",
+      }),
+    ).rejects.toThrow(/^MEDIA_PROFILE_RENDER must be on or off$/);
+    expect(openPublishingMedia).not.toHaveBeenCalled();
+    expect(createPostgresPool).not.toHaveBeenCalled();
+  });
+
   it("opens only the store for an external media worker in Development", async () => {
     const queue = quietQueue();
     const failure = await prepareProductionBackend({
@@ -756,6 +855,8 @@ describe("Work publishing composition", () => {
       WORK_MEDIA_WORKER: "external",
       WORK_MEDIA_STORE_DIR: publishingKeys.WORK_MEDIA_STORE_DIR,
       WORK_MEDIA_TOOLS_IMAGE: "latest",
+      // The separate media worker reads its profile switch.
+      MEDIA_PROFILE_RENDER: "synthetic-on",
     }).then(
       () => null,
       (error: unknown) => error,

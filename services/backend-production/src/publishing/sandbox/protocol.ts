@@ -1,13 +1,18 @@
 import {
   RENDITION_PLANS,
   isCurrentRecipe,
+  isProfileRole,
   isRenditionPlan,
   isStillRole,
+  planRoles,
 } from "../processing/recipes.js";
 
 import type { MediaEdit, NormalizedCrop } from "../processing/edits.js";
 import type { MediaFailureCode } from "../processing/errors.js";
-import type { RenditionPlan, StillRole } from "../processing/recipes.js";
+import type {
+  RenderedStillRole,
+  RenditionPlan,
+} from "../processing/recipes.js";
 
 /*
  * The private wire protocol between the media worker's coordinator and the
@@ -87,7 +92,7 @@ export type SandboxPairingMethod =
 
 /** One still rendition the job asks for; the renderer looks the recipe up. */
 export interface SandboxRenditionRequest {
-  readonly role: StillRole;
+  readonly role: RenderedStillRole;
   readonly version: number;
   readonly digest: string;
 }
@@ -113,11 +118,16 @@ export interface SandboxItemRequest {
   /** Applied to card roles (`thumb`, `cover`) only. */
   readonly coverCrop: NormalizedCrop | null;
   /**
-   * What the job renders for: `work` (an item edit) or `catalog` (never asks
-   * for `full`). Decides with the recipe whether `viewer` is rendered.
+   * What the job renders for: `work` (an item edit), `catalog` (never asks
+   * for `full`) or `profile` (an unedited static image; profile roles only).
+   * Names the roles the job may ask for, and decides with the recipe whether
+   * `viewer` is rendered.
    */
   readonly plan: RenditionPlan;
-  /** Still renditions; `viewer` may be skipped by its recipe or the plan. */
+  /**
+   * Still renditions; `viewer` may be skipped by its recipe or the plan, and
+   * the larger role of a profile family by its recipe.
+   */
   readonly renditions: readonly SandboxRenditionRequest[];
   /** Render the motion derivative (Live items only). */
   readonly motion: boolean;
@@ -152,7 +162,7 @@ export interface SandboxJob {
 export interface SandboxOutput {
   /** `<role>.webp` or `motion.mp4`. */
   readonly name: string;
-  readonly role: StillRole | "motion";
+  readonly role: RenderedStillRole | "motion";
   readonly contentType: "image/webp" | "video/mp4";
   readonly width: number;
   readonly height: number;
@@ -400,7 +410,7 @@ const renditionRequest = (value: unknown): boolean => {
   const fields = strict(value, ["role", "version", "digest"]);
   return (
     fields !== null &&
-    isStillRole(fields.role) &&
+    (isStillRole(fields.role) || isProfileRole(fields.role)) &&
     integer(fields.version, 1, 65_535) &&
     typeof fields.digest === "string"
   );
@@ -454,10 +464,26 @@ const itemLayout = (value: unknown): string | null => {
     return null;
   const roles = fields.renditions.map((entry) => (entry as Fields).role);
   if (new Set(roles).size !== roles.length) return null;
-  // A plan without `full` never asks for it.
+  // A plan asks only for its roles; a plan without `full` never asks for it.
+  const allowed: readonly unknown[] = planRoles(fields.plan);
+  if (!roles.every((role) => allowed.includes(role))) return null;
   if (!RENDITION_PLANS[fields.plan].full && roles.includes("full")) return null;
   if (fields.placeholder && !roles.includes("thumb")) return null;
   if (fields.renditions.length === 0 && !fields.motion) return null;
+  // A profile image is one unedited static still with at least one rendition.
+  if (
+    fields.plan === "profile" &&
+    (fields.kind !== "static" ||
+      fields.qualityMode !== "standard" ||
+      fields.clientPairing !== null ||
+      fields.coverCrop !== null ||
+      (fields.edit as MediaEdit).rotation !== 0 ||
+      (fields.edit as MediaEdit).crop !== null ||
+      fields.motion ||
+      fields.placeholder ||
+      roles.length === 0)
+  )
+    return null;
   const inputRoles = fields.inputs.map((input) => {
     const entry = strict(input, ["role", "declaredType", "byteSize", "sha256"]);
     return entry &&
@@ -650,7 +676,7 @@ const output = (value: unknown): boolean => {
     "sha256",
   ]);
   if (!fields) return false;
-  const still = isStillRole(fields.role);
+  const still = isStillRole(fields.role) || isProfileRole(fields.role);
   return (
     (still || fields.role === "motion") &&
     fields.name === (still ? `${String(fields.role)}.webp` : "motion.mp4") &&

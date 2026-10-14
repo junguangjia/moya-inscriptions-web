@@ -84,6 +84,8 @@ export type { WebpProbe } from "./output-probe.js";
 export {
   LONG_SCROLL_ASPECT_RATIO,
   MAX_OUTPUT_EDGE,
+  PROFILE_FAMILIES,
+  PROFILE_ROLES,
   RECIPE_DIGESTS_V1,
   RECIPE_PARAMETERS_V1,
   RENDITION_PLANS,
@@ -96,9 +98,11 @@ export {
   editRegion,
   expectedStillSize,
   isCurrentRecipe,
+  isProfileRole,
   isRenditionPlan,
   isRenditionRole,
   isStillRole,
+  planRoles,
   plannedStillSize,
   recipeDigest,
   recipeFraming,
@@ -108,7 +112,10 @@ export {
 } from "./recipes.js";
 export type {
   FrameSize,
+  ProfileFamily,
+  ProfileRole,
   RecipeIdentity,
+  RenderedStillRole,
   RenditionPlan,
   RenditionRole,
   StillRole,

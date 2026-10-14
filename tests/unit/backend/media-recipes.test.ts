@@ -1,18 +1,25 @@
 import {
   MAX_OUTPUT_EDGE,
+  PROFILE_FAMILIES,
+  PROFILE_ROLES,
   RECIPE_DIGESTS_V1,
   RECIPE_PARAMETERS_V1,
   RENDITION_PLANS,
   RENDITION_ROLES,
+  STILL_PIPELINE_V1,
   STILL_ROLES,
   currentRecipe,
   editRegion,
   expectedStillSize,
   isCurrentRecipe,
+  isProfileRole,
   isRenditionPlan,
+  isStillRole,
+  planRoles,
   plannedStillSize,
   recipeDigest,
   recipeFraming,
+  recipeQuality,
   stillOutputSize,
 } from "@moya/backend-production/internal/publishing-processing";
 import { describe, expect, it } from "vitest";
@@ -27,11 +34,15 @@ import type {
  * pinned digests (the identities the store records come only from here),
  * today's profiles byte-for-byte as version 1, the new bounded `viewer` (never
  * a second copy of `display`, nor of `full` where the plan renders `full`),
- * and the geometry both the coordinator and the sandboxed renderer compute
- * sizes with.
+ * the profile image roles of increment 3a (never upscaled, never a second
+ * copy of their family anchor), and the geometry both the coordinator and the
+ * sandboxed renderer compute sizes with.
  */
 
-const PLANS = Object.keys(RENDITION_PLANS) as RenditionPlan[];
+/** The plans that render the work and Catalog still roles. */
+const PLANS = (Object.keys(RENDITION_PLANS) as RenditionPlan[]).filter(
+  (plan) => RENDITION_PLANS[plan].roles === "still",
+);
 
 const size = (width: number, height: number) => ({ width, height });
 
@@ -44,6 +55,10 @@ describe("rendition recipe registry", () => {
       viewer: "041a35a85fbbded3",
       full: "acb3027f6e2affec",
       motion: "61403d6585d07f92",
+      "avatar-128": "a127cd6992900e4a",
+      "avatar-512": "15a60d75ab0b9da9",
+      "background-960": "f6e1093c931edcef",
+      "background-1600": "fdc0f14fbb0a2677",
     });
     for (const role of RENDITION_ROLES) {
       // Changing a parameter without a version bump fails this line.
@@ -57,7 +72,7 @@ describe("rendition recipe registry", () => {
         digest: RECIPE_DIGESTS_V1[role],
       });
     }
-    expect(new Set(Object.values(RECIPE_DIGESTS_V1)).size).toBe(6);
+    expect(new Set(Object.values(RECIPE_DIGESTS_V1)).size).toBe(10);
     expect(
       recipeDigest({ ...RECIPE_PARAMETERS_V1.viewer, quality: 86 }),
     ).not.toBe(RECIPE_DIGESTS_V1.viewer);
@@ -135,14 +150,155 @@ describe("rendition recipe registry", () => {
     );
   });
 
-  it("names the work and Catalog plans; only the work plan renders full", () => {
+  it("names the work, Catalog and profile plans; only the work plan renders full", () => {
     expect(RENDITION_PLANS).toEqual({
-      work: { full: true },
-      catalog: { full: false },
+      work: { full: true, roles: "still" },
+      catalog: { full: false, roles: "still" },
+      profile: { full: false, roles: "profile" },
     });
-    expect(PLANS.every((plan) => isRenditionPlan(plan))).toBe(true);
-    for (const value of ["full", "Work", "toString", "", null, 1])
+    expect(PLANS).toEqual(["work", "catalog"]);
+    for (const plan of ["work", "catalog", "profile"])
+      expect(isRenditionPlan(plan), plan).toBe(true);
+    for (const value of ["full", "Work", "avatar", "toString", "", null, 1])
       expect(isRenditionPlan(value), String(value)).toBe(false);
+    // Each plan asks for its own roles only, in the order a job renders them.
+    expect(planRoles("work")).toEqual(STILL_ROLES);
+    expect(planRoles("catalog")).toEqual(STILL_ROLES);
+    expect(planRoles("profile")).toEqual([
+      "avatar-128",
+      "avatar-512",
+      "background-960",
+      "background-1600",
+    ]);
+  });
+
+  it("adds the profile roles as version 1 WebP stills of the shared pipeline", () => {
+    expect(PROFILE_ROLES).toEqual([
+      "avatar-128",
+      "avatar-512",
+      "background-960",
+      "background-1600",
+    ]);
+    expect(RENDITION_ROLES).toEqual([
+      ...STILL_ROLES,
+      "motion",
+      ...PROFILE_ROLES,
+    ]);
+    expect(
+      Object.fromEntries(
+        PROFILE_ROLES.map((role) => [
+          role,
+          [
+            recipeQuality(role),
+            RECIPE_PARAMETERS_V1[role].maxLongEdge,
+            recipeFraming(role),
+          ],
+        ]),
+      ),
+    ).toEqual({
+      "avatar-128": [80, 128, "complete"],
+      "avatar-512": [82, 512, "complete"],
+      "background-960": [82, 960, "complete"],
+      "background-1600": [84, 1600, "complete"],
+    });
+    for (const role of PROFILE_ROLES) {
+      const recipe = RECIPE_PARAMETERS_V1[role];
+      // Never upscaled, metadata stripped, alpha kept, every byte re-encoded.
+      expect(recipe.pipeline).toBe(STILL_PIPELINE_V1);
+      expect([recipe.maxPixels, recipe.longScroll]).toEqual([null, null]);
+      expect(isProfileRole(role) && !isStillRole(role), role).toBe(true);
+    }
+    expect(STILL_PIPELINE_V1).toMatchObject({
+      metadata: "strip-all",
+      alpha: "preserve",
+      upscale: false,
+      passthrough: false,
+    });
+    expect(RECIPE_PARAMETERS_V1["avatar-512"].skip).toEqual({
+      whenEqualTo: "avatar-128",
+    });
+    expect(RECIPE_PARAMETERS_V1["background-1600"].skip).toEqual({
+      whenEqualTo: "background-960",
+    });
+    expect("skip" in RECIPE_PARAMETERS_V1["avatar-128"]).toBe(false);
+    expect("skip" in RECIPE_PARAMETERS_V1["background-960"]).toBe(false);
+    // Each family anchor is its smallest, always rendered role.
+    expect(PROFILE_FAMILIES).toEqual({
+      avatar: { anchor: "avatar-128", roles: ["avatar-128", "avatar-512"] },
+      background: {
+        anchor: "background-960",
+        roles: ["background-960", "background-1600"],
+      },
+    });
+    for (const value of ["thumb", "motion", "avatar", "avatar-256", null])
+      expect(isProfileRole(value), String(value)).toBe(false);
+  });
+
+  it("sizes profile roles by their long edge and skips a family's second copy of its anchor", () => {
+    const profile = (frame: { width: number; height: number }) =>
+      Object.fromEntries(
+        PROFILE_ROLES.map((role) => [
+          role,
+          plannedStillSize(role, frame, "profile"),
+        ]),
+      );
+    expect(profile(size(512, 512))).toMatchObject({
+      "avatar-128": size(128, 128),
+      "avatar-512": size(512, 512),
+    });
+    // Never upscaled: a small avatar is rendered once, at its own size.
+    expect(profile(size(100, 100))).toMatchObject({
+      "avatar-128": size(100, 100),
+      "avatar-512": null,
+    });
+    expect(profile(size(128, 128))).toMatchObject({
+      "avatar-128": size(128, 128),
+      "avatar-512": null,
+    });
+    expect(profile(size(300, 300))).toMatchObject({
+      "avatar-128": size(128, 128),
+      "avatar-512": size(300, 300),
+    });
+    expect(profile(size(2048, 2048))).toMatchObject({
+      "avatar-128": size(128, 128),
+      "avatar-512": size(512, 512),
+    });
+    expect(profile(size(1600, 1200))).toMatchObject({
+      "background-960": size(960, 720),
+      "background-1600": size(1600, 1200),
+    });
+    expect(profile(size(1024, 768))).toMatchObject({
+      "background-960": size(960, 720),
+      "background-1600": size(1024, 768),
+    });
+    expect(profile(size(3200, 2400))).toMatchObject({
+      "background-960": size(960, 720),
+      "background-1600": size(1600, 1200),
+    });
+    expect(profile(size(800, 600))).toMatchObject({
+      "background-960": size(800, 600),
+      "background-1600": null,
+    });
+    // No long-scroll rule: a tall image keeps the long-edge cap.
+    expect(profile(size(600, 4000))).toMatchObject({
+      "avatar-128": size(19, 128),
+      "background-960": size(144, 960),
+      "background-1600": size(240, 1600),
+    });
+    // The complete framing ignores a cover crop; edits still apply.
+    expect(
+      expectedStillSize(
+        "background-1600",
+        size(1200, 1600),
+        { rotation: 90, crop: null },
+        { x: 0, y: 0, width: 0.5, height: 1 },
+        "profile",
+      ),
+    ).toEqual(size(1600, 1200));
+    for (const role of PROFILE_ROLES)
+      expect(plannedStillSize(role, size(1, 1), "profile")).toEqual(
+        role === "avatar-128" || role === "background-960" ? size(1, 1) : null,
+      );
   });
 
   it("bounds the viewer to 4096 and its long-scroll rule, never above full", () => {
@@ -239,7 +395,7 @@ describe("rendition recipe registry", () => {
     }
   });
 
-  it("never upscales and keeps every planned viewer above display, at most full and below a rendered full", () => {
+  it("never upscales, keeps every planned viewer above display, at most full and below a rendered full, and never repeats a profile anchor", () => {
     let seed = 0x5eed;
     const next = () => {
       seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31;
@@ -293,6 +449,23 @@ describe("rendition recipe registry", () => {
               (RENDITION_PLANS[plan].full && same(sizes.viewer, sizes.full)),
             `${plan} ${width}x${height}`,
           ).toBe(true);
+        }
+      }
+      // A profile family never stores its anchor's size twice.
+      for (const family of Object.values(PROFILE_FAMILIES)) {
+        const anchor = plannedStillSize(family.anchor, frame, "profile")!;
+        expect(anchor.width <= width && anchor.height <= height).toBe(true);
+        for (const role of family.roles) {
+          if (role === family.anchor) continue;
+          const planned = plannedStillSize(role, frame, "profile");
+          if (planned === null) {
+            expect(same(stillOutputSize(role, frame), anchor)).toBe(true);
+          } else {
+            expect(same(planned, anchor)).toBe(false);
+            expect(planned.width <= width && planned.height <= height).toBe(
+              true,
+            );
+          }
         }
       }
     }

@@ -36,7 +36,10 @@ import {
   publicUserIdJsonSchema,
   publicUserProfileJsonSchema,
 } from "@moya/contracts/json-schema";
-import { mediaVariantSchema } from "@moya/contracts/schemas";
+import {
+  mediaVariantSchema,
+  profileMediaRenditionRoleSchema,
+} from "@moya/contracts/schemas";
 import { openApiDocument, serializeOpenApiDocument } from "@moya/public-api";
 import { format, resolveConfig } from "prettier";
 import { describe, expect, it } from "vitest";
@@ -155,6 +158,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/community/me/profile",
         "/v1/community/media",
         "/v1/community/media/{mediaId}",
+        "/v1/community/media/{mediaId}/{rendition}",
         "/v1/community/relationships/block",
         "/v1/community/relationships/follow",
         "/v1/community/auth/account",
@@ -252,6 +256,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "/v1/community/me/profile": ["post"],
       "/v1/community/media": ["post"],
       "/v1/community/media/{mediaId}": ["get"],
+      "/v1/community/media/{mediaId}/{rendition}": ["get"],
       "/v1/community/relationships/block": ["post"],
       "/v1/community/relationships/follow": ["post"],
       "/v1/community/auth/account": ["get"],
@@ -1082,6 +1087,67 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       );
       expect(Object.keys(schemas)).not.toContain(retired);
     }
+  });
+
+  it("documents the profile media rendition read beside the unchanged original", () => {
+    const original = getOperation("/v1/community/media/{mediaId}");
+    expect(original.operationId).toBe("readEligibleOwnedMedia");
+    expect(Object.keys(asObject(original.responses)).sort()).toEqual([
+      "200",
+      "401",
+      "404",
+      "503",
+    ]);
+
+    const path = "/v1/community/media/{mediaId}/{rendition}";
+    const rendition = getOperation(path);
+    expect(rendition.operationId).toBe("readProfileMediaRendition");
+    expect(rendition.security).toEqual([{}, { session: [] }]);
+    expect(Object.keys(asObject(rendition.responses)).sort()).toEqual([
+      "200",
+      "206",
+      "304",
+      "401",
+      "404",
+      "416",
+      "422",
+      "503",
+    ]);
+    for (const status of ["200", "206"])
+      expect(
+        Object.keys(
+          asObject(asObject(asObject(rendition.responses)[status]).content),
+        ),
+      ).toEqual(["image/webp"]);
+    expect(asObject(asObject(rendition.responses)["304"])).not.toHaveProperty(
+      "content",
+    );
+    const parameters = parameterMapFor(path);
+    expect([...parameters.keys()]).toEqual([
+      "mediaId",
+      "rendition",
+      "range",
+      "if-none-match",
+    ]);
+    // The id keeps the original route's generic schema; the role names
+    // exactly the contract's renditions.
+    expect(parameters.get("mediaId")?.schema).toEqual(
+      parameterMapFor("/v1/community/media/{mediaId}").get("mediaId")?.schema,
+    );
+    expect(parameters.get("rendition")?.schema).toEqual({
+      type: "string",
+      enum: [...profileMediaRenditionRoleSchema.options],
+    });
+    for (const header of ["range", "if-none-match"])
+      expect(parameters.get(header)).toMatchObject({
+        in: "header",
+        required: false,
+      });
+    const description = String(rendition.description);
+    expect(description).toContain("avatar renditions of the owner's current");
+    expect(description).toContain("Only a current image");
+    expect(description).toContain("strong ETag");
+    expect(description).toContain("Private, no-store with Vary: Authorization");
   });
 
   it("uses stable public error codes", () => {

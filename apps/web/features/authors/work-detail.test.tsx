@@ -206,6 +206,27 @@ describe("Work detail actions for the author", () => {
     expect(mocks.shell.openProfile).toHaveBeenCalledWith(AUTHOR, identity);
     expect(identity.querySelector("span")).not.toBeNull();
   });
+  // profile-media-renditions-v1: the 36 px author avatar loads `avatar-128`.
+  it("draws the author's avatar from its smallest rendition", async () => {
+    mocks.author.viewer = { id: OTHER };
+    const src = `/api/community/media/user-media-${"e".repeat(32)}`;
+    mocks.profile.mockResolvedValueOnce({
+      avatar: {
+        src,
+        renditions: [
+          { src: `${src}/avatar-128`, width: 128, height: 128 },
+          { src: `${src}/avatar-512`, width: 512, height: 512 },
+        ],
+      },
+    } as never);
+    const view = render(detail({ canEdit: false }));
+    await act(async () => undefined);
+    expect(mocks.profile).toHaveBeenCalledWith(AUTHOR, expect.anything());
+    expect(view.container.querySelector("img")?.getAttribute("src")).toBe(
+      `${src}/avatar-128`,
+    );
+  });
+
   it("opens the editor for this work", () => {
     const view = render(detail({}));
     const edit = view.button("编辑")!;

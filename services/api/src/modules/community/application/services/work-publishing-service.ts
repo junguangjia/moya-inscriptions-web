@@ -13,6 +13,7 @@ import type {
   MediaComponentRole,
   MediaVariant,
   OpenWorkEditDraftCommand,
+  ProfileMediaRenditionRole,
   PublishingDraft,
   PublishingDraftDeletionCommand,
   PublishingDraftDeletionResult,
@@ -47,6 +48,7 @@ import type {
   PublishingMediaWriteResult,
 } from "../ports/publishing-media-store-port.js";
 import type {
+  ProfileRenditionReadTarget,
   PublishingCommandIdentity,
   PublishingEditReadiness,
   PublishingMediaReadTarget,
@@ -766,6 +768,28 @@ export class WorkPublishingService {
       () => this.port.resolveMediaRead(viewerId, itemId, variant, editKey),
       range,
     );
+  }
+
+  /**
+   * The authorized read of a profile image rendition, resolved before any
+   * byte is opened so the route can answer a revalidation from its hash.
+   * `null`: not found for this viewer.
+   */
+  async profileRenditionTarget(
+    viewerId: string | null,
+    userMediaId: string,
+    role: ProfileMediaRenditionRole,
+  ): Promise<ProfileRenditionReadTarget | null> {
+    if (this.store === undefined) throw new CommunityStoreUnavailableError();
+    return this.port.resolveProfileRenditionRead(viewerId, userMediaId, role);
+  }
+
+  /** Streams a profile rendition target resolved by `profileRenditionTarget`. */
+  openProfileRendition(
+    target: ProfileRenditionReadTarget,
+    range?: PublishingMediaByteRange,
+  ): Promise<PublishingMediaDelivery> {
+    return openPublishingMedia(this.store, async () => target, range);
   }
 
   /**

@@ -11,7 +11,7 @@ import {
 
 import type { Metadata, OutputInfo, Stats } from "sharp";
 import type { MediaEdit, NormalizedCrop } from "./edits.js";
-import type { StillRole } from "./recipes.js";
+import type { RenderedStillRole } from "./recipes.js";
 
 /*
  * Still decoding and rendering with sharp. Runs only inside the media
@@ -163,7 +163,7 @@ export async function inspectStaticSource(
 export async function renderStaticDerivative(
   source: StaticSource,
   inspection: StaticInspection,
-  role: StillRole,
+  role: RenderedStillRole,
   edit: MediaEdit,
   coverCrop: NormalizedCrop | null = null,
   options: { readonly timeoutSeconds?: number } = {},

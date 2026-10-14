@@ -66,6 +66,10 @@
       "types": "./src/publishing/catalog.ts",
       "import": "./dist/publishing/catalog.js"
     },
+    "./internal/publishing-profile": {
+      "types": "./src/publishing/profile.ts",
+      "import": "./dist/publishing/profile.js"
+    },
     "./internal/publication": {
       "types": "./src/publication/index.ts",
       "import": "./dist/publication/index.js"

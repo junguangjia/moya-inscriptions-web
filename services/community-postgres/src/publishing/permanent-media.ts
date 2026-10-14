@@ -1,5 +1,6 @@
 import type { PublishingDb } from "./db.js";
 import { nowParam } from "./db.js";
+import { releaseProfileRenditions } from "./profile-assets.js";
 
 /**
  * Erases legacy PNG bytes only for the explicitly deleted content's candidates.
@@ -27,7 +28,7 @@ export const eraseUnreferencedLegacyMedia = async (
   // A fresh statement after locking observes reference writes that committed
   // while the lock was acquired. Keep references from every surviving holder,
   // including legacy drafts and other works and both profile images.
-  await db.query(
+  const erased = await db.query<{ id: string }>(
     `UPDATE community.user_media m SET bytes=''::bytea,deleted_at=$3::timestamptz
      WHERE m.owner_id=$1 AND m.id=ANY($2::text[]) AND m.deleted_at IS NULL
        AND NOT EXISTS (SELECT 1 FROM community.public_users u
@@ -43,7 +44,15 @@ export const eraseUnreferencedLegacyMedia = async (
            OR EXISTS (SELECT 1 FROM community.work_drafts d
              WHERE d.content->'items' @> jsonb_build_array(jsonb_build_object('itemId',i.id)))
            OR EXISTS (SELECT 1 FROM community.work_draft_snapshots s
-             WHERE s.content->'items' @> jsonb_build_array(jsonb_build_object('itemId',i.id)))))`,
+             WHERE s.content->'items' @> jsonb_build_array(jsonb_build_object('itemId',i.id)))))
+     RETURNING m.id`,
     [ownerId, rows.rows.map((row) => row.id), nowParam(now)],
+  );
+  // Renditions of an erased image (a former avatar or background) go with
+  // it, in this transaction: the purge schedule removes their blobs.
+  await releaseProfileRenditions(
+    db,
+    erased.rows.map((row) => row.id),
+    now,
   );
 };

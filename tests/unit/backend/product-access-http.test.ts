@@ -175,6 +175,7 @@ const protectedReads = [
   "/v1/community/authors/user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
   "/v1/community/works/work-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
   "/v1/community/media/user-media-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
+  "/v1/community/media/user-media-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01/avatar-128",
   "/v1/community/publishing/media/media-item-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01/display/base",
   "/v1/community/editorial/articles",
   "/v1/community/threads",

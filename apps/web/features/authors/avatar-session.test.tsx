@@ -114,7 +114,6 @@ const Harness = () => {
       />
       {author.viewer?.id === owner.id && open && (
         <AvatarEditor
-          profile={profile}
           file={photo}
           onClose={() => {
             closed();
@@ -333,17 +332,70 @@ it.each(["upload", "bind"])(
   },
 );
 
-it("records a real daily-limit rejection without retrying into another day or losing pending image", async () => {
-  bind = async () => reply({ error: { message: "daily limit" } }, 409);
-  readProfile = async () =>
-    reply({ ...profile, nextAvatarChangeAt: "2099-01-02T05:00:00Z" });
+it("records a conflict without retrying, keeps the pending image and reads no profile", async () => {
+  bind = async () => reply({ error: { message: "conflict" } }, 409);
+  const profileReads = () =>
+    requests.filter((r) => r.path.startsWith("/api/community/authors/")).length;
+  const before = profileReads();
   await click();
-  expect(node.textContent).toContain("2099年1月2日");
+  expect(node.textContent).toContain(
+    "头像未更换：保存状态冲突，请重新选择照片。",
+  );
+  expect(profileReads()).toBe(before);
   const intent = localStorage.getItem(`yoyi-avatar-save-v1:${owner.id}`)!;
   expect(intent).toContain("data:image/png;base64,");
   await focus();
   expect(posts("/me/avatar")).toHaveLength(1);
 });
+
+it.each([
+  "头像未更换：今天已更换过头像或保存状态冲突。",
+  "今天已更换过头像。下次可更换：2099年1月2日 00:00（美国纽约时间）。",
+])(
+  "shows a stored pre-release rejection %s as the current conflict copy, and Retry binds it",
+  async (legacy) => {
+    // profile-media-renditions-v1: the daily limit is gone, so a rejection a
+    // previous release stored must not bring back its note after a reload.
+    const storageKey = `yoyi-avatar-save-v1:${owner.id}`;
+    const pending = {
+      accountId: owner.id,
+      uploadId: "00000000-0000-4000-8000-000000000011",
+      saveId: "00000000-0000-4000-8000-000000000012",
+      png: "data:image/png;base64,c3ludGhldGlj",
+      mediaId: media.id,
+    };
+    await act(async () => root.unmount());
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({ ...pending, rejection: legacy }),
+    );
+    root = createRoot(node);
+    await act(async () =>
+      root.render(
+        <AuthorProvider signInHref="/dev/community">
+          <output data-reloaded="" />
+        </AuthorProvider>,
+      ),
+    );
+    expect(node.textContent).toContain(
+      "头像未更换：保存状态冲突，请重新选择照片。",
+    );
+    for (const text of ["今天已更换", "下次可更换", "纽约"])
+      expect(node.textContent).not.toContain(text);
+    await focus();
+    expect(posts("/media")).toHaveLength(0);
+    expect(posts("/me/avatar")).toHaveLength(0);
+    await click("重试保存");
+    expect(posts("/media")).toHaveLength(0);
+    expect(posts("/me/avatar")).toHaveLength(1);
+    expect(JSON.parse(String(posts("/me/avatar")[0]!.init.body))).toEqual({
+      requestId: pending.saveId,
+      mediaId: pending.mediaId,
+    });
+    expect(node.textContent).toContain("头像已更换");
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  },
+);
 
 it("keeps the actual profile and crop when an obsolete profile read rejects after refresh failure", async () => {
   window.history.replaceState({}, "", "/#profile");
@@ -423,11 +475,10 @@ it("resumes a pending offline reload on online without focus, and rearms failed 
   vi.useRealTimers();
 });
 
-it("does not overwrite another tab's replacement intent after a delayed conflict reconciliation", async () => {
-  const conflictProfile = deferred(),
+it("does not overwrite another tab's replacement intent after a delayed conflict", async () => {
+  const conflict = deferred(),
     replacementUpload = deferred();
-  bind = async () => reply({ error: { message: "daily limit" } }, 409);
-  readProfile = () => conflictProfile.promise.then((r) => r.clone());
+  bind = () => conflict.promise;
   await click();
   const storageKey = `yoyi-avatar-save-v1:${owner.id}`;
   const first = JSON.parse(localStorage.getItem(storageKey)!);
@@ -444,15 +495,13 @@ it("does not overwrite another tab's replacement intent after a delayed conflict
     window.dispatchEvent(new StorageEvent("storage", { key: storageKey })),
   );
   await act(async () =>
-    conflictProfile.resolve(
-      reply({ ...profile, nextAvatarChangeAt: "2099-01-02T05:00:00Z" }),
-    ),
+    conflict.resolve(reply({ error: { message: "conflict" } }, 409)),
   );
   expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual(replacement);
   expect(posts("/media").at(-1)?.init.headers).toMatchObject({
     "x-request-id": replacement.uploadId,
   });
-  expect(node.textContent).not.toContain("今天已更换");
+  expect(node.textContent).not.toContain("保存状态冲突");
   bind = async () => {
     bound = true;
     return reply({ nextChangeAt: "2099-01-02T05:00:00Z" });
@@ -461,15 +510,16 @@ it("does not overwrite another tab's replacement intent after a delayed conflict
   await act(async () => replacementUpload.resolve(reply(media)));
 });
 
-it("rearms account confirmation when a conflict reconciliation overlaps a failed session refresh", async () => {
-  const reconciliation = deferred();
-  bind = async () => reply({ error: { message: "conflict" } }, 409);
-  readProfile = () => reconciliation.promise.then((r) => r.clone());
+it("rearms account confirmation when a delayed conflict overlaps a failed session refresh", async () => {
+  const conflict = deferred();
+  bind = () => conflict.promise;
   await click();
   me = async () => reply({}, 503);
   await focus();
   vi.useFakeTimers();
-  await act(async () => reconciliation.resolve(reply(profile)));
+  await act(async () =>
+    conflict.resolve(reply({ error: { message: "conflict" } }, 409)),
+  );
   const before = requests.filter((r) => r.path === "/api/community/me").length;
   me = async () => reply(owner);
   bind = async () => {
@@ -519,4 +569,24 @@ it("seeds the viewer's own profile from the startup read, so 我 renders on firs
   expect(
     requests.filter((r) => r.path.startsWith("/api/community/authors/")),
   ).toHaveLength(1);
+});
+
+it("shares the viewer's own avatar for small slots as its smallest rendition", async () => {
+  // profile-media-renditions-v1: feed, comment and work-detail avatars of the
+  // viewer use `avatar-128` once the profile lists renditions.
+  const rendition = (size: number) => ({
+    src: `${media.src}/avatar-${size}`,
+    width: size,
+    height: size,
+    contentType: "image/webp",
+  });
+  readProfile = async () =>
+    reply({
+      ...profile,
+      avatar: { ...media, renditions: [rendition(128), rendition(512)] },
+    });
+  await focus();
+  expect(node.querySelector("output")?.getAttribute("data-shared-avatar")).toBe(
+    `${media.src}/avatar-128`,
+  );
 });

@@ -105,6 +105,30 @@ export const parseMediaWorkerMode = (
   return value;
 };
 
+/** Media worker: claim `profile_render` jobs and run the profile sweep. */
+export const MEDIA_PROFILE_RENDER = "MEDIA_PROFILE_RENDER";
+/** Backend: emit profile image renditions on `AuthorMedia`. */
+export const MEDIA_PROFILE_RENDITIONS = "MEDIA_PROFILE_RENDITIONS";
+
+/**
+ * A profile image switch (unified media pipeline, increment 3a): exactly
+ * `on` or `off`; missing or empty means on in Development and off in
+ * Production. Any other value refuses startup with a message that names the
+ * key only.
+ */
+export const parseProfileMediaSwitch = (
+  environment: Environment,
+  key: typeof MEDIA_PROFILE_RENDER | typeof MEDIA_PROFILE_RENDITIONS,
+  nodeEnv: "production" | "development",
+): boolean => {
+  const value = configured(environment, key);
+  if (value === null) return nodeEnv === "development";
+  if (value !== "on" && value !== "off") {
+    throw new Error(`${key} must be on or off`);
+  }
+  return value === "on";
+};
+
 const isWithin = (candidate: string, root: string): boolean =>
   candidate === root || candidate.startsWith(`${root}${path.sep}`);
 

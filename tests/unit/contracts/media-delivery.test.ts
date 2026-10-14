@@ -1,8 +1,11 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type {
+  AuthorMedia,
   ContentCard,
   MediaRendition,
+  ProfileMediaFamily,
+  ProfileMediaRenditionRole,
   PublicMedia,
   UserWork,
   WorkMedia,
@@ -13,7 +16,11 @@ import {
 } from "@moya/contracts/json-schema";
 import {
   MEDIA_RENDITIONS_MAXIMUM,
+  PROFILE_MEDIA_RENDITION_ROLES,
   addMediaRenditionAnchorIssues,
+  authorMediaSchema,
+  authorPersonSchema,
+  authorProfileSchema,
   cardMediaRenditionListSchema,
   mediaRenditionContentTypeSchema,
   mediaRenditionListOf,
@@ -22,12 +29,19 @@ import {
   mediaRenditionPathSchema,
   mediaRenditionSchema,
   placeholderColorSchema,
+  profileMediaFamilyOf,
+  profileMediaRenditionListSchema,
+  profileMediaRenditionPathParts,
+  profileMediaRenditionPathSchema,
+  profileMediaRenditionRoleSchema,
+  profileMediaRenditionSchema,
   publicMediaRenditionListSchema,
   publicMediaRenditionSchema,
   publishedMediaUrlSchema,
   renditionDimensionSchema,
   resolvedMediaUrlSchema,
   sameMediaFraming,
+  userMediaIdSchema,
 } from "@moya/contracts/schemas";
 
 const hex = (character: string) => character.repeat(32);
@@ -509,5 +523,344 @@ describe("media delivery JSON Schemas", () => {
       "role",
     ])
       expect(delivery).not.toContain(term);
+  });
+});
+
+describe("profile media renditions", () => {
+  const mediaId = `user-media-${hex("c")}`;
+  const original = `/api/community/media/${mediaId}`;
+  const profilePath = (role: string, id = mediaId) =>
+    `/api/community/media/${id}/${role}`;
+  const legacyAvatar = {
+    id: mediaId,
+    src: original,
+    width: 1_024,
+    height: 1_024,
+  };
+  const avatar = {
+    ...legacyAvatar,
+    renditions: [
+      candidate(profilePath("avatar-128"), 128, 128),
+      candidate(profilePath("avatar-512"), 512, 512),
+    ],
+  };
+  const background = {
+    id: mediaId,
+    src: original,
+    width: 2_400,
+    height: 1_800,
+    renditions: [
+      candidate(profilePath("background-960"), 960, 720),
+      candidate(profilePath("background-1600"), 1_600, 1_200),
+    ],
+  };
+  const issuesOf = (value: unknown) =>
+    authorMediaSchema.safeParse(value).error?.issues ?? [];
+
+  it("addresses the four profile roles of one user media id on the authorized path", () => {
+    expect(PROFILE_MEDIA_RENDITION_ROLES).toEqual([
+      "avatar-128",
+      "avatar-512",
+      "background-960",
+      "background-1600",
+    ]);
+    expect(profileMediaRenditionRoleSchema.options).toEqual([
+      ...PROFILE_MEDIA_RENDITION_ROLES,
+    ]);
+    expect(PROFILE_MEDIA_RENDITION_ROLES.map(profileMediaFamilyOf)).toEqual([
+      "avatar",
+      "avatar",
+      "background",
+      "background",
+    ]);
+    expectTypeOf<ProfileMediaRenditionRole>().toEqualTypeOf<
+      "avatar-128" | "avatar-512" | "background-960" | "background-1600"
+    >();
+    expectTypeOf<ProfileMediaFamily>().toEqualTypeOf<"avatar" | "background">();
+    for (const role of PROFILE_MEDIA_RENDITION_ROLES) {
+      expect(
+        profileMediaRenditionPathSchema.safeParse(profilePath(role)).success,
+      ).toBe(true);
+      expect(profileMediaRenditionPathParts(profilePath(role))).toEqual({
+        mediaId,
+        role,
+        family: profileMediaFamilyOf(role),
+      });
+    }
+    for (const src of [
+      original,
+      `${original}/`,
+      profilePath("avatar-256"),
+      profilePath("original"),
+      profilePath("display"),
+      profilePath("Avatar-128"),
+      profilePath("avatar-128", `user-media-${hex("C")}`),
+      profilePath("avatar-128", `media-item-${hex("c")}`),
+      profilePath("avatar-128", `${mediaId}0`),
+      `${profilePath("avatar-128")}?v=1`,
+      `${profilePath("avatar-128")}/base`,
+      `https://app.example.invalid${profilePath("avatar-128")}`,
+      path("display"),
+      path("thumb", "base", mediaId),
+    ]) {
+      expect(profileMediaRenditionPathSchema.safeParse(src).success, src).toBe(
+        false,
+      );
+      expect(profileMediaRenditionPathParts(src), src).toBeNull();
+    }
+    // The work path and the profile path never read as each other.
+    expect(
+      mediaRenditionPathSchema.safeParse(profilePath("avatar-128")).success,
+    ).toBe(false);
+    expect(mediaRenditionPathParts(profilePath("avatar-128"))).toBeNull();
+    expect(userMediaIdSchema.safeParse(mediaId).success).toBe(true);
+    for (const id of [
+      `user-media-${hex("C")}`,
+      `media-item-${hex("c")}`,
+      `user-${hex("c")}`,
+      "user-media-1",
+    ])
+      expect(userMediaIdSchema.safeParse(id).success, id).toBe(false);
+  });
+
+  it("accepts an authorized or a published list, never a mix", () => {
+    const publishedList = [
+      candidate(published("avatar-128"), 128, 128),
+      candidate(published("avatar-512"), 512, 512),
+    ];
+    expect(profileMediaRenditionListSchema.parse(avatar.renditions)).toEqual(
+      avatar.renditions,
+    );
+    expect(profileMediaRenditionListSchema.parse(publishedList)).toEqual(
+      publishedList,
+    );
+    expect(
+      profileMediaRenditionSchema.safeParse(background.renditions[0]).success,
+    ).toBe(true);
+    for (const invalid of [
+      [],
+      [avatar.renditions[0], publishedList[1]],
+      [publishedList[0], avatar.renditions[1]],
+      [avatar.renditions[1], avatar.renditions[0]],
+      [candidate(path("thumb"), 128, 128)],
+      [candidate(signed("avatar-128"), 128, 128)],
+      [{ ...avatar.renditions[0]!, contentType: "image/png" }],
+      [{ ...avatar.renditions[0]!, role: "avatar-128" }],
+    ])
+      expect(
+        profileMediaRenditionListSchema.safeParse(invalid).success,
+        JSON.stringify(invalid),
+      ).toBe(false);
+    expectTypeOf<AuthorMedia["renditions"]>().toEqualTypeOf<
+      MediaRendition[] | undefined
+    >();
+  });
+
+  it("checks a rendered list against its own image and keeps the Phase 4 rules without one", () => {
+    for (const valid of [
+      avatar,
+      background,
+      // Only the family anchor is ready, or the larger role was skipped.
+      { ...avatar, renditions: avatar.renditions.slice(0, 1) },
+      // Never upscaled: a small source gives one rendition of its own size.
+      {
+        ...avatar,
+        width: 100,
+        height: 100,
+        renditions: [candidate(profilePath("avatar-128"), 100, 100)],
+      },
+      {
+        ...background,
+        width: 1_200,
+        height: 900,
+        renditions: [candidate(profilePath("background-960"), 960, 720)],
+      },
+      {
+        ...avatar,
+        renditions: [
+          candidate(published("a128"), 128, 128),
+          candidate(published("a512"), 512, 512),
+        ],
+      },
+    ])
+      expect(
+        authorMediaSchema.safeParse(valid).success,
+        JSON.stringify(valid),
+      ).toBe(true);
+    for (const legacy of [
+      legacyAvatar,
+      { ...legacyAvatar, src: `/api/community/media/user-media-${hex("d")}` },
+    ])
+      expect(authorMediaSchema.safeParse(legacy).success).toBe(true);
+
+    expect(issuesOf({ ...avatar, src: profilePath("avatar-128") })).toEqual([
+      expect.objectContaining({
+        path: ["src"],
+        message: "a rendered image keeps its original src",
+      }),
+    ]);
+    expect(
+      issuesOf({
+        ...avatar,
+        renditions: [
+          ...avatar.renditions,
+          candidate(profilePath("avatar-512"), 1_024, 1_024),
+        ],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        path: ["renditions"],
+        message: "one family has at most two renditions",
+      }),
+    ]);
+    expect(
+      issuesOf({
+        ...avatar,
+        renditions: [
+          avatar.renditions[0],
+          candidate(
+            profilePath("avatar-512", `user-media-${hex("d")}`),
+            512,
+            512,
+          ),
+        ],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        path: ["renditions", 1, "src"],
+        message: "renditions name their image",
+      }),
+    ]);
+    expect(
+      issuesOf({
+        ...avatar,
+        renditions: [
+          avatar.renditions[0],
+          candidate(profilePath("background-960"), 512, 512),
+        ],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        path: ["renditions", 1, "src"],
+        message: "one family per rendition list",
+      }),
+    ]);
+    expect(
+      issuesOf({
+        ...avatar,
+        renditions: [candidate(profilePath("avatar-128"), 128, 96)],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        path: ["renditions", 0],
+        message: "renditions share the media framing",
+      }),
+    ]);
+    expect(issuesOf({ ...avatar, width: 300, height: 300 })).toEqual([
+      expect.objectContaining({
+        path: ["renditions", 1],
+        message: "renditions are never larger than the image",
+      }),
+    ]);
+    for (const invalid of [
+      { ...avatar, src: `https://img.example.invalid${original}` },
+      { ...avatar, renditions: [] },
+      { ...avatar, renditions: null },
+    ])
+      expect(authorMediaSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("keeps each profile slot on its own family", () => {
+    const profile = (avatarMedia: unknown, backgroundMedia: unknown) => ({
+      id: `user-${hex("b")}`,
+      handle: "author",
+      displayName: "作者",
+      bio: "",
+      avatar: avatarMedia,
+      background: backgroundMedia,
+      isOwner: false,
+      following: false,
+      privacy: {
+        following: "public",
+        followers: "public",
+        favorites: "public",
+        likes: "public",
+      },
+      totals: {
+        works: 0,
+        following: 0,
+        followers: 0,
+        favorites: null,
+        likes: null,
+      },
+      nextAvatarChangeAt: null,
+    });
+    const person = (avatarMedia: unknown) => ({
+      id: `user-${hex("b")}`,
+      handle: "author",
+      displayName: "作者",
+      avatar: avatarMedia,
+    });
+    for (const valid of [
+      profile(avatar, background),
+      profile(legacyAvatar, null),
+      profile(null, undefined),
+    ])
+      expect(authorProfileSchema.safeParse(valid).success).toBe(true);
+    expect(
+      authorProfileSchema.safeParse(profile(background, avatar)).error?.issues,
+    ).toEqual(
+      [
+        ["avatar", 0],
+        ["avatar", 1],
+        ["background", 0],
+        ["background", 1],
+      ].map(([slot, index]) =>
+        expect.objectContaining({
+          path: [slot, "renditions", index, "src"],
+          message: `the ${slot} carries ${slot} renditions`,
+        }),
+      ),
+    );
+    expect(authorPersonSchema.safeParse(person(avatar)).success).toBe(true);
+    expect(authorPersonSchema.safeParse(person(null)).success).toBe(true);
+    expect(
+      authorPersonSchema.safeParse(person(background)).error?.issues,
+    ).toEqual([
+      expect.objectContaining({ path: ["avatar", "renditions", 0, "src"] }),
+      expect.objectContaining({ path: ["avatar", "renditions", 1, "src"] }),
+    ]);
+  });
+
+  it("serializes the optional list with no description text", () => {
+    const media = authorCommunityJsonSchemas.AuthorMedia as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(media.required).toEqual(["id", "src", "width", "height"]);
+    expect(media.properties.renditions).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["src", "width", "height", "contentType"],
+      },
+    });
+    const serialized = JSON.stringify(media.properties.renditions);
+    expect(serialized).toContain(
+      "(avatar-128|avatar-512|background-960|background-1600)",
+    );
+    for (const term of [
+      "description",
+      "candidate",
+      "objectkey",
+      "object_key",
+      "bucket",
+      "storage",
+      "role",
+    ])
+      expect(serialized.toLowerCase()).not.toContain(term);
   });
 });

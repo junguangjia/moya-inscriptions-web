@@ -450,10 +450,18 @@ describe("Visitor profile actions", () => {
  * An overlay profile whose own root scrolls: a measured cover (jsdom has no
  * layout), the identity resting 532 px down (500 + 96 − 52 − 12).
  */
+const coverPhoto = `/api/community/media/user-media-${"a".repeat(32)}`;
+const headerAvatar = `/api/community/media/user-media-${"b".repeat(32)}`;
+const webp = (src: string, width: number, height: number) => ({
+  src,
+  width,
+  height,
+  contentType: "image/webp" as const,
+});
 const coverScene = async (
-  options: { coverHeight?: number; photo?: boolean } = {},
+  options: { coverHeight?: number; photo?: boolean; rendered?: boolean } = {},
 ) => {
-  const { coverHeight = 700, photo = true } = options;
+  const { coverHeight = 700, photo = true, rendered = false } = options;
   author.viewer = { id: VISITOR };
   profileRead.mockResolvedValue({
     ...profile(false),
@@ -461,12 +469,31 @@ const coverScene = async (
       ? {
           background: {
             id: `user-media-${"a".repeat(32)}`,
-            src: `/api/community/media/user-media-${"a".repeat(32)}`,
+            src: coverPhoto,
             width: 1600,
             height: 1200,
+            // profile-media-renditions-v1: the background family, once rendered.
+            ...(rendered && {
+              renditions: [
+                webp(`${coverPhoto}/background-960`, 960, 720),
+                webp(`${coverPhoto}/background-1600`, 1600, 1200),
+              ],
+            }),
           },
         }
       : {}),
+    ...(rendered && {
+      avatar: {
+        id: `user-media-${"b".repeat(32)}`,
+        src: headerAvatar,
+        width: 512,
+        height: 512,
+        renditions: [
+          webp(`${headerAvatar}/avatar-128`, 128, 128),
+          webp(`${headerAvatar}/avatar-512`, 512, 512),
+        ],
+      },
+    }),
   });
   const measure = vi
     .spyOn(HTMLElement.prototype, "getBoundingClientRect")
@@ -663,6 +690,75 @@ describe("Cover stages", () => {
       return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
     };
     expect(luminance(shade)).toBeLessThanOrEqual(0.016);
+  });
+
+  // profile-media-renditions-v1: one download for all three layers, sampled
+  // under the same URL it is drawn from.
+  it("draws the photo, the compact cover and the frost from one rendition and tints from it", async () => {
+    const scene = await coverScene({ rendered: true });
+    restore = () => scene.measure.mockRestore();
+    const largest = `${coverPhoto}/background-1600`;
+    const photo = scene.owner.querySelector<HTMLImageElement>(
+      `:scope > .${presentation.profileCover} img`,
+    )!;
+    const compact = scene.owner.querySelector<HTMLImageElement>(
+      `.${presentation.coverCompact} img`,
+    )!;
+    expect(photo.getAttribute("src")).toBe(largest);
+    expect(compact.getAttribute("src")).toBe(largest);
+    expect(photo.hasAttribute("srcset")).toBe(false);
+    const frosts = scene.owner.querySelectorAll<HTMLElement>(
+      `.${presentation.coverGlass}`,
+    );
+    expect(frosts).toHaveLength(2);
+    for (const frost of frosts)
+      expect(frost.style.backgroundImage).toContain(largest);
+    const canvas = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({
+        imageSmoothingQuality: "low",
+        fillStyle: "",
+        fillRect: vi.fn(),
+        drawImage: vi.fn(),
+        getImageData: () => {
+          const data = new Uint8ClampedArray(32 * 8 * 4);
+          for (let index = 0; index < data.length; index += 4)
+            data.set([120, 140, 130, 255], index);
+          return { data };
+        },
+      } as unknown as CanvasRenderingContext2D);
+    Object.defineProperty(photo, "naturalWidth", { value: 1600 });
+    Object.defineProperty(photo, "naturalHeight", { value: 1200 });
+    await act(async () => {
+      photo.dispatchEvent(new Event("load"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    canvas.mockRestore();
+    expect(scene.owner.style.getPropertyValue("--cover-tint")).toBe(
+      "rgb(120 140 130)",
+    );
+  });
+
+  it("offers the 80 px header avatar at 128 for 1x and 512 from 2x", async () => {
+    const scene = await coverScene({ rendered: true });
+    restore = () => scene.measure.mockRestore();
+    const image = scene.node.querySelector('[role="img"] img')!;
+    expect(image.getAttribute("src")).toBe(`${headerAvatar}/avatar-128`);
+    expect(image.getAttribute("srcset")).toBe(
+      `${headerAvatar}/avatar-128 128w, ${headerAvatar}/avatar-512 512w`,
+    );
+    expect(image.getAttribute("sizes")).toBe("80px");
+    expect(image.getAttribute("width")).toBe("80");
+  });
+
+  it("keeps the original images until renditions are listed", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    expect(
+      scene.owner
+        .querySelector(`:scope > .${presentation.profileCover} img`)
+        ?.getAttribute("src"),
+    ).toBe(coverPhoto);
   });
 
   it("glides to the identity at the top when the scroll hint is tapped", async () => {

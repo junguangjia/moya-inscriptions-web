@@ -4,6 +4,8 @@ import {
   LONG_SCROLL_ASPECT_RATIO,
   MOTION_COLOR,
   MOTION_DERIVATIVE,
+  PROFILE_FAMILIES,
+  PROFILE_ROLES as REGISTRY_PROFILE_ROLES,
   RECIPE_DIGESTS_V1,
   RECIPE_PARAMETERS_V1,
   RENDITION_ROLES as REGISTRY_ROLES,
@@ -13,12 +15,18 @@ import {
 } from "@moya/backend-production/internal/publishing-processing";
 import {
   ADOPTED_DERIVATIVE_ROLES,
+  PROFILE_RENDITION_ROLES,
   RECIPE_DIGEST_PATTERN,
   RENDITION_ROLES,
   USER_PURGE_HOLDS_PRE_TASK_BLOBS,
+  isProfileRenditionRole,
   isRenditionRole,
 } from "@moya/community-postgres";
 import { publishingJobKindSchema } from "@moya/contracts/internal/community-operator";
+import {
+  PROFILE_MEDIA_RENDITION_ROLES,
+  profileMediaFamilyOf,
+} from "@moya/contracts/schemas";
 import { describe, expect, it } from "vitest";
 
 /*
@@ -26,9 +34,10 @@ import { describe, expect, it } from "vitest";
  * registry (backend-production `recipes.ts`) is the only source of
  * parameters and digests; the store keeps only the recorded form. Covered
  * here: the literal digests migration 20261004010000 adopts existing
- * derivatives with, the store's role list, and parity of the version 1
- * parameters with the pre-task processing profiles (the adopted bytes are
- * what they produce).
+ * derivatives with, the store's role list, the profile roles the contracts,
+ * the registry and the store each name, the role and job kind lists each
+ * migration restates, and parity of the version 1 parameters with the
+ * pre-task processing profiles (the adopted bytes are what they produce).
  */
 
 const migration = await readFile(
@@ -45,6 +54,13 @@ const publicationMigration = await readFile(
   ),
   "utf8",
 );
+const profileMigration = await readFile(
+  new URL(
+    "../../../database/community-migrations/20261014010000_profile_media_renditions.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 describe("rendition recipe identity, version 1", () => {
   it("records the registry's roles and identity form only", () => {
@@ -55,6 +71,35 @@ describe("rendition recipe identity, version 1", () => {
     }
     expect(isRenditionRole("tiles")).toBe(false);
     expect(RECIPE_DIGEST_PATTERN.test("0123456789ABCDEF")).toBe(false);
+  });
+
+  it("reconciles the profile roles of the contracts, the registry and the store", () => {
+    // The registry keeps its own list: backend-production does not depend on
+    // the contracts.
+    expect([...REGISTRY_PROFILE_ROLES]).toEqual([
+      ...PROFILE_MEDIA_RENDITION_ROLES,
+    ]);
+    expect([...PROFILE_RENDITION_ROLES]).toEqual([
+      ...PROFILE_MEDIA_RENDITION_ROLES,
+    ]);
+    expect(RENDITION_ROLES.slice(-PROFILE_RENDITION_ROLES.length)).toEqual([
+      ...PROFILE_RENDITION_ROLES,
+    ]);
+    for (const [family, { anchor, roles }] of Object.entries(
+      PROFILE_FAMILIES,
+    )) {
+      expect(roles[0], family).toBe(anchor);
+      for (const role of roles) expect(profileMediaFamilyOf(role)).toBe(family);
+    }
+    expect(
+      Object.values(PROFILE_FAMILIES)
+        .flatMap((entry) => entry.roles)
+        .sort(),
+    ).toEqual([...PROFILE_MEDIA_RENDITION_ROLES].sort());
+    for (const role of RENDITION_ROLES)
+      expect(isProfileRenditionRole(role), role).toBe(
+        (PROFILE_MEDIA_RENDITION_ROLES as readonly string[]).includes(role),
+      );
   });
 
   it("hashes canonical JSON independent of key order and refuses non-finite numbers", () => {
@@ -135,7 +180,7 @@ describe("rendition recipe identity, version 1", () => {
     );
   });
 
-  it("matches the literals migration 20261004010000 adopts and checks", () => {
+  it("matches the literals migration 20261004010000 adopts and the lists each migration checks", () => {
     const adopted = Object.fromEntries(
       [...migration.matchAll(/WHEN '([a-z]+)' THEN '([0-9a-f]{16})'/gu)].map(
         (match) => [match[1], match[2]],
@@ -153,9 +198,17 @@ describe("rendition recipe identity, version 1", () => {
         source.slice(start),
       )?.[1];
       expect(body, constraint).toBeDefined();
-      return [...body!.matchAll(/'([a-z_]+)'/gu)].map((match) => match[1]!);
+      return [...body!.matchAll(/'([a-z0-9_-]+)'/gu)].map((match) => match[1]!);
     };
-    expect(listed("media_renditions_role_valid")).toEqual([...RENDITION_ROLES]);
+    // The roles before the profile roles (increment 3a).
+    expect(listed("media_renditions_role_valid")).toEqual([
+      "thumb",
+      "cover",
+      "display",
+      "viewer",
+      "full",
+      "motion",
+    ]);
     expect(listed("publishing_jobs_kind_valid")).toEqual([
       "process_item",
       "derive_edit",
@@ -167,9 +220,38 @@ describe("rendition recipe identity, version 1", () => {
       "reconcile_capacity",
       "catalog_render",
     ]);
-    expect(listed("publishing_jobs_kind_valid", publicationMigration)).toEqual(
+    // The kinds before profile rendering (increment 3a).
+    expect(listed("publishing_jobs_kind_valid", publicationMigration)).toEqual([
+      "process_item",
+      "derive_edit",
+      "purge_item",
+      "purge_blob",
+      "expire_session",
+      "purge_trashed_work",
+      "sweep_staging",
+      "reconcile_capacity",
+      "catalog_render",
+      "publish_media",
+      "withdraw_media",
+      "verify_withdrawal",
+      "reconcile_publication",
+      "sweep_published",
+    ]);
+    // Migration 20261014010000 restates both complete lists.
+    expect(listed("media_renditions_role_valid", profileMigration)).toEqual([
+      ...RENDITION_ROLES,
+    ]);
+    expect(listed("publishing_jobs_kind_valid", profileMigration)).toEqual(
       publishingJobKindSchema.options,
     );
+    const profileRoles =
+      /CONSTRAINT media_renditions_profile_roles CHECK[^;]*?\brole\s+IN\s*\(([^)]*)\)/u.exec(
+        profileMigration,
+      )?.[1];
+    expect(profileRoles).toBeDefined();
+    expect(
+      [...profileRoles!.matchAll(/'([a-z0-9_-]+)'/gu)].map((match) => match[1]),
+    ).toEqual([...PROFILE_RENDITION_ROLES]);
   });
 
   it("keeps user-initiated purges as today (Owner answer Q4)", () => {

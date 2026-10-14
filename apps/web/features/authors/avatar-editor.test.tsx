@@ -148,16 +148,8 @@ afterEach(async () => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
-const render = async (next: string | null = null) =>
-  act(async () =>
-    root.render(
-      <AvatarEditor
-        profile={{ ...profile, nextAvatarChangeAt: next }}
-        file={file}
-        onClose={close}
-      />,
-    ),
-  );
+const render = async () =>
+  act(async () => root.render(<AvatarEditor file={file} onClose={close} />));
 const button = (name: string) =>
   Array.from(node.querySelectorAll("button")).find(
     (b) => (b.getAttribute("aria-label") ?? b.textContent) === name,
@@ -274,18 +266,31 @@ it("does not enqueue a second save from a duplicate click", async () => {
   });
   expect(state.save).toHaveBeenCalledOnce();
 });
-it("shows future cooldown in New York time, but permits an expired cooldown", async () => {
-  await render("2099-01-02T05:00:00Z");
-  expect(button("保存头像").disabled).toBe(true);
-  expect(node.textContent).toContain("2099年1月2日");
-  expect(node.textContent).toContain("00:00");
-  expect(node.textContent).toContain("美国纽约时间");
-});
-it("does not treat a past next-change timestamp as a limit", async () => {
-  await render("2020-01-01T05:00:00Z");
+it("has no daily limit: a future next-change time still opens the picker and saves", async () => {
+  await act(async () =>
+    root.render(
+      <AvatarEntry
+        profile={{ ...profile, nextAvatarChangeAt: "2099-01-02T05:00:00Z" }}
+        className="avatar"
+      >
+        <span>头</span>
+      </AvatarEntry>,
+    ),
+  );
+  const input = node.querySelector("input")!;
+  const picker = vi.spyOn(input, "click");
+  await act(async () => node.querySelector("button")!.click());
+  expect(picker).toHaveBeenCalledOnce();
+  expect(node.querySelector("dialog")).toBeNull();
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  await act(async () =>
+    input.dispatchEvent(new Event("change", { bubbles: true })),
+  );
   expect(button("保存头像").disabled).toBe(false);
+  for (const text of ["美国纽约时间", "每天", "今天已更换"])
+    expect(node.textContent).not.toContain(text);
   await click();
-  expect(state.save).toHaveBeenCalledOnce();
+  expect(state.save).toHaveBeenCalledWith(snapshot);
 });
 it("keeps the crop and waits for account confirmation before saving", async () => {
   state.checking = true;

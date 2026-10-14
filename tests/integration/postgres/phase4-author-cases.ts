@@ -1387,11 +1387,12 @@ export const registerPhase4AuthorTests = (
       expect(rows).toHaveLength(1);
       expect(rows[0]!.created_at.toISOString()).toBe(old);
     });
-    it("enforces media ownership through HTTP and limits successful avatar changes across devices", async () => {
+    it("enforces media ownership through HTTP and allows repeated avatar changes across devices", async () => {
       const base = await server(),
         ta = await signIn(base, a),
         tb = await signIn(base, b);
-      const image = await upload(base, ta);
+      const image = await upload(base, ta),
+        other = await upload(base, ta);
       expect(
         (await fetch(`${base}/v1/community/media/${image.id}`)).status,
       ).toBe(404);
@@ -1405,28 +1406,99 @@ export const registerPhase4AuthorTests = (
       await expect(
         adapter.updateAvatar(b, { requestId: randomUUID(), mediaId: image.id }),
       ).rejects.toBeInstanceOf(CommunityNotFoundError);
-      const results = await Promise.allSettled([
-        adapter.updateAvatar(a, { requestId: randomUUID(), mediaId: image.id }),
-        adapter.updateAvatar(a, { requestId: randomUUID(), mediaId: image.id }),
-      ]);
-      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-      expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+      // No daily limit since 2026-10-13: both devices' changes commit in order.
+      const changes = [image, other];
+      const results = await Promise.allSettled(
+        changes.map((media) =>
+          adapter.updateAvatar(a, {
+            requestId: randomUUID(),
+            mediaId: media.id,
+          }),
+        ),
+      );
+      expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
+      for (const result of results)
+        expect(
+          result.status === "fulfilled"
+            ? Number.isFinite(Date.parse(result.value.nextChangeAt))
+            : false,
+        ).toBe(true);
+      // The two binds serialize on the actor row; whichever committed last is
+      // the current avatar (the bind times may share a millisecond).
+      const current = (await adapter.readProfile(a, a)).avatar?.id;
+      expect([image.id, other.id]).toContain(current);
+      const last = current === image.id ? image : other,
+        replaced = last === image ? other : image;
       expect(
-        (await fetch(`${base}/v1/community/media/${image.id}`)).status,
+        (await fetch(`${base}/v1/community/media/${last.id}`)).status,
       ).toBe(200);
-      const permit = (await adapter.readProfile(a, a)).nextAvatarChangeAt;
-      expect(permit).not.toBeNull();
+      expect(
+        (await fetch(`${base}/v1/community/media/${replaced.id}`)).status,
+      ).toBe(404);
+      expect((await adapter.readProfile(a, a)).nextAvatarChangeAt).toBeNull();
     });
-    it("uses New York calendar dates including short and long DST days", async () => {
-      const rows = (
-        await pool.query<{
-          start: string;
-          hours: number;
-        }>(`SELECT d::text AS start, extract(epoch FROM
-        (((d+1)::timestamp AT TIME ZONE 'America/New_York')-(d::timestamp AT TIME ZONE 'America/New_York')))/3600 AS hours
-        FROM unnest(ARRAY['2026-03-08'::date,'2026-11-01'::date]) d`)
-      ).rows;
-      expect(rows.map((r) => Number(r.hours))).toEqual([23, 25]);
+    it("applies each avatar change at once over HTTP, records it and replays a request id", async () => {
+      const base = await server(),
+        ta = await signIn(base, a),
+        tb = await signIn(base, b);
+      const first = await upload(base, ta),
+        second = await upload(base, ta);
+      const bind = (mediaId: string, requestId = randomUUID()) =>
+        fetch(`${base}/v1/community/me/avatar`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${ta}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ requestId, mediaId }),
+        });
+      const clock = async () =>
+        (
+          await pool.query<{ now: Date }>("SELECT statement_timestamp() AS now")
+        ).rows[0]!.now.getTime();
+      const events = async () =>
+        (
+          await pool.query(
+            "SELECT 1 FROM community.author_events WHERE actor_id=$1 AND action='avatar.update'",
+            [a],
+          )
+        ).rowCount;
+      const read = async (mediaId: string, token: string) =>
+        (
+          await fetch(`${base}/v1/community/media/${mediaId}`, {
+            headers: { authorization: `Bearer ${token}` },
+          })
+        ).status;
+      const started = await clock();
+      expect((await bind(first.id)).status).toBe(200);
+      const requestId = randomUUID();
+      const response = await bind(second.id, requestId);
+      expect(response.status).toBe(200);
+      const reply = (await response.json()) as { nextChangeAt: string };
+      // The reply carries the time of this change; older clients still parse it.
+      expect(Date.parse(reply.nextChangeAt)).toBeGreaterThanOrEqual(started);
+      expect(Date.parse(reply.nextChangeAt)).toBeLessThanOrEqual(await clock());
+      const profile = await adapter.readProfile(a, a);
+      expect(profile.avatar?.id).toBe(second.id);
+      expect(profile.nextAvatarChangeAt).toBeNull();
+      expect((await adapter.readProfile(a, b)).avatar?.id).toBe(second.id);
+      expect(await events()).toBe(2);
+      const replay = await bind(second.id, requestId);
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual(reply);
+      expect(await events()).toBe(2);
+      // The date is still written, so an older release reads current data.
+      expect(
+        (
+          await pool.query<{ written: boolean }>(
+            "SELECT avatar_changed_on IS NOT NULL AS written FROM community.public_users WHERE id=$1",
+            [a],
+          )
+        ).rows[0]!.written,
+      ).toBe(true);
+      expect(await read(first.id, tb)).toBe(404);
+      expect(await read(second.id, tb)).toBe(200);
+      expect(await read(first.id, ta)).toBe(200);
     });
     it("rejects unknown fields, missing authentication and hostile uploads without storing media", async () => {
       const base = await server(),

@@ -49,6 +49,8 @@ export const parsePublishingByteRange = (
 export interface PublishingMediaHeaders {
   readonly "cache-control": string;
   readonly vary?: string;
+  /** Sent only where the route lets the bytes be revalidated. */
+  readonly etag?: string;
 }
 
 /**

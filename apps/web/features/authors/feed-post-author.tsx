@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { AuthorProfile } from "@moya/contracts";
+import { avatarThumbSrc } from "../media/profile-image";
 import { useProductShell } from "../product-shell/product-shell";
 import { requestIdentity } from "../shell/request-identity";
 import { useAuthors } from "./author-context";
@@ -66,7 +67,7 @@ const load = (viewer: string, scope: string, authorId: string) => {
         studioName: profile.studioName,
         isOwner: profile.isOwner,
         following: profile.following,
-        avatarSrc: profile.avatar?.src ?? null,
+        avatarSrc: avatarThumbSrc(profile.avatar),
       }),
       // An unavailable author keeps the last known header, else a bare one.
       () => store.profiles.get(authorId)?.value ?? null,
