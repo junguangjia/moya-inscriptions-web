@@ -211,6 +211,10 @@ the same tag and needs no switch.
   into `apps/web/features/authors/discussion-section.test.tsx`, the colocated
   test that exercises it through `DiscussionSection`. That file was changed
   under the "colocated tests" clause of the approved scope.
+- **Colocated test of the avatar save flow.**
+  `apps/web/features/authors/avatar-session.test.tsx` exercises the in-scope
+  `avatar-save.ts`, `author-context.tsx` and `avatar-editor.tsx` together; it
+  was changed under the same "colocated tests" clause.
 - **Write path.** The `updateAvatar` change for the avatar limit is the only
   Backend write-path change, and it is Owner-requested.
 - **Role lists.** `@moya/backend-production` does not depend on
