@@ -68,8 +68,9 @@ test("QA user UI is isolated from clean Development and formal routes", async ({
     expect(response?.status()).toBe(200);
     await expect(page.locator("[data-qa-user-interface]")).toHaveCount(0);
     await expect(page.locator("[data-open-settings]")).toHaveCount(0);
+    // 我 mounts on first open, so its header trigger is not rendered yet.
     await expect(page.locator("[data-search-trigger]")).toHaveCount(
-      path === "/" ? 3 : 0,
+      path === "/" ? 2 : 0,
     );
     await expect(page.locator("[data-catalog-search]")).toHaveCount(
       path === "/" ? 1 : 0,
