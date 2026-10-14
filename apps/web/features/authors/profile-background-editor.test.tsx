@@ -93,6 +93,7 @@ vi.mock("react-easy-crop", () => ({
   ),
 }));
 import { ProfileBackgroundEditor } from "./profile-background-editor";
+import { coverSrc } from "../media/profile-image";
 import presentation from "../user/user-presentation.module.css";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -134,13 +135,21 @@ const source = () => ({
   release: vi.fn(),
 });
 const exported = { blob: new Blob(["png"]), width: 1600, height: 1200 };
+/** The cover photo as the profile root lays it out beside the header section (author-profile.tsx). */
+const coverImage = () =>
+  header.current!.parentElement!.querySelector<HTMLImageElement>(
+    `:scope > .${presentation.profileCover} img`,
+  );
 const view = () => (
   <>
-    <section ref={header}>
+    <div>
       <div className={presentation.profileCover}>
-        {profile.background && <img src={profile.background.src} alt="" />}
+        {profile.background && (
+          <img src={coverSrc(profile.background)} alt="" />
+        )}
       </div>
-    </section>
+      <section ref={header} />
+    </div>
     <ProfileBackgroundEditor
       profile={profile}
       header={header}
@@ -194,7 +203,7 @@ const selectImage = async () => {
 const readBack = async (next: AuthorProfile["background"]) => {
   profile = { ...profile, background: next };
   await render();
-  const image = header.current!.querySelector("img");
+  const image = coverImage();
   if (image) await act(async () => image.dispatchEvent(new Event("load")));
 };
 const alert = () => document.querySelector('[role="alert"]')?.textContent ?? "";
@@ -299,6 +308,87 @@ it("uploads the exported PNG, saves its media id and closes only after the heade
   expect(author.notify).toHaveBeenCalledWith("主页背景已更新");
   expect(go).toHaveBeenCalledWith(-2);
   expect(confirm).not.toHaveBeenCalled();
+});
+
+// profile-media-renditions-v1: the header draws a rendered cover from its
+// largest rendition; one it has already painted confirms the save at once.
+it("confirms at once when the header already shows the saved cover's rendition", async () => {
+  await render();
+  await selectImage();
+  await click("保存");
+  expect(author.notify).not.toHaveBeenCalled();
+  vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+  vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(
+    1600,
+  );
+  const src = "/api/community/media/user-media-new";
+  profile = {
+    ...profile,
+    background: {
+      id: "user-media-new",
+      src,
+      width: 1600,
+      height: 1200,
+      renditions: [
+        {
+          src: `${src}/background-960`,
+          width: 960,
+          height: 720,
+          contentType: "image/webp",
+        },
+        {
+          src: `${src}/background-1600`,
+          width: 1600,
+          height: 1200,
+          contentType: "image/webp",
+        },
+      ],
+    },
+  };
+  // No load event follows: the image was already complete.
+  await render();
+  expect(coverImage()!.getAttribute("src")).toBe(`${src}/background-1600`);
+  expect(author.notify).toHaveBeenCalledWith("主页背景已更新");
+  expect(go).toHaveBeenCalledWith(-2);
+});
+
+it("previews the original cover and avatar while the header draws renditions", async () => {
+  const cover = "/api/community/media/user-media-old";
+  const face = "/api/community/media/user-media-face";
+  const webp = (src: string, width: number, height: number) => ({
+    src,
+    width,
+    height,
+    contentType: "image/webp" as const,
+  });
+  profile = {
+    ...base,
+    avatar: {
+      id: "user-media-face",
+      src: face,
+      width: 512,
+      height: 512,
+      renditions: [
+        webp(`${face}/avatar-128`, 128, 128),
+        webp(`${face}/avatar-512`, 512, 512),
+      ],
+    },
+    background: {
+      id: "user-media-old",
+      src: cover,
+      width: 1280,
+      height: 720,
+      renditions: [webp(`${cover}/background-960`, 960, 540)],
+    },
+  };
+  await render();
+  expect(coverImage()!.getAttribute("src")).toBe(`${cover}/background-960`);
+  const preview = document.querySelector("[data-cover-preview]")!;
+  expect(
+    [...preview.querySelectorAll("img")].map((image) =>
+      image.getAttribute("src"),
+    ),
+  ).toEqual([cover, face]);
 });
 
 it("uploads once for a double tap", async () => {

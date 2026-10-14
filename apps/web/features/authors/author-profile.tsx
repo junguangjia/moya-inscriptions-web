@@ -15,6 +15,7 @@ import { HorizontalPager } from "../shell/horizontal-pager";
 import type { HorizontalPagerHandle } from "../shell/horizontal-pager";
 import { authorClient } from "./author-data";
 import { useAuthors } from "./author-context";
+import { avatarImage, coverSrc } from "../media/profile-image";
 import { useDirectMessageEntry } from "../messages/direct-message-entry";
 import { AvatarEntry } from "./avatar-editor";
 import { ProfileEditor } from "./profile-editor";
@@ -753,9 +754,11 @@ const ScopedAuthorProfile = ({
     ]),
   ) as Record<(typeof tabs)[number], ReactNode>;
   const name = profile?.displayName ?? (id ? "作者主页" : "访客");
-  const coverTint = tint && tint.src === profile?.background?.src ? tint : null;
-  const coverCardTint =
-    card && card.src === profile?.background?.src ? card : null;
+  // One URL draws the photo, the compact cover and the frost, and its tint is
+  // sampled from that same image.
+  const cover = coverSrc(profile?.background);
+  const coverTint = tint && tint.src === cover ? tint : null;
+  const coverCardTint = card && card.src === cover ? card : null;
   const coverRatio =
     profile?.background?.width && profile.background.height
       ? profile.background.width / profile.background.height
@@ -772,7 +775,7 @@ const ScopedAuthorProfile = ({
         aria-hidden="true"
         className={styles.coverGlass}
         style={{
-          backgroundImage: `url(${JSON.stringify(profile.background.src)})`,
+          backgroundImage: `url(${JSON.stringify(coverSrc(profile.background))})`,
         }}
       />
       <span aria-hidden="true" className={styles.coverCard} />
@@ -811,7 +814,7 @@ const ScopedAuthorProfile = ({
         {profile?.background && (
           <div className={styles.coverPhoto}>
             <img
-              src={profile.background.src}
+              src={coverSrc(profile.background)}
               alt=""
               onLoad={(event) => {
                 const image = event.currentTarget;
@@ -839,7 +842,7 @@ const ScopedAuthorProfile = ({
         // pinned cover's frost and glass card are here.
         <div aria-hidden="true" className={styles.coverCompact}>
           <img
-            src={profile.background.src}
+            src={coverSrc(profile.background)}
             alt=""
             loading="lazy"
             decoding="async"
@@ -902,7 +905,12 @@ const ScopedAuthorProfile = ({
             {ownProfile && profile ? (
               <AvatarEntry profile={profile} className={styles.avatar}>
                 {profile.avatar ? (
-                  <img src={profile.avatar.src} alt="" width={80} height={80} />
+                  <img
+                    {...avatarImage(profile.avatar, 80)}
+                    alt=""
+                    width={80}
+                    height={80}
+                  />
                 ) : (
                   <span>{name.slice(0, 1)}</span>
                 )}
@@ -914,7 +922,12 @@ const ScopedAuthorProfile = ({
                 aria-label={`${name}的头像`}
               >
                 {profile?.avatar ? (
-                  <img src={profile.avatar.src} alt="" width={80} height={80} />
+                  <img
+                    {...avatarImage(profile.avatar, 80)}
+                    alt=""
+                    width={80}
+                    height={80}
+                  />
                 ) : (
                   <span>{name.slice(0, 1)}</span>
                 )}

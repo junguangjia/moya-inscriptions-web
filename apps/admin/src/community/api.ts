@@ -332,6 +332,7 @@ export const jobKindLabels: Record<PublishingJobKind, string> = {
   verify_withdrawal: "核验媒体撤回",
   reconcile_publication: "核对公开媒体",
   sweep_published: "清理历史公开媒体",
+  profile_render: "生成头像与封面小图",
 };
 
 export const jobStateLabels: Record<PublishingJobState, string> = {

@@ -6,6 +6,7 @@ import { Button } from "@moya/ui";
 import { AuthorProvider, useAuthors } from "../authors/author-context";
 import { authorClient } from "../authors/author-data";
 import { AvatarEntry } from "../authors/avatar-editor";
+import { avatarImage } from "../media/profile-image";
 import styles from "./auth-flow.module.css";
 
 const AvatarStep = ({
@@ -78,7 +79,12 @@ const AvatarStep = ({
         aria-label={hasAvatar ? "当前头像" : "默认头像"}
       >
         {currentProfile?.avatar ? (
-          <img src={currentProfile.avatar.src} alt="" width={96} height={96} />
+          <img
+            {...avatarImage(currentProfile.avatar, 96)}
+            alt=""
+            width={96}
+            height={96}
+          />
         ) : (
           <span aria-hidden="true">
             {author.viewer?.id === expectedAccountId

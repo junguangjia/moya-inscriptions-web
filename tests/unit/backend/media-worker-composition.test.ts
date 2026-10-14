@@ -23,8 +23,11 @@ import { isolatedFacts, sandboxRuntime } from "./publishing-sandbox-fixture.js";
  * fails closed with exit 78 on configuration or isolation problems and 75
  * when the sandbox cannot run, removes leftovers before claiming, claims only
  * the media worker's kinds, never schedules the Backend's staging sweep, runs
- * the Catalog sync where Catalog sources are configured, and stops before its
- * pools close. Only PostgreSQL and sandbox I/O are replaced.
+ * the Catalog sync where Catalog sources are configured, claims
+ * `profile_render` and runs the profile sweep only while
+ * `MEDIA_PROFILE_RENDER` is on (default on in Development, off in
+ * Production), and stops before its pools close. Only PostgreSQL and sandbox
+ * I/O are replaced.
  */
 
 const database = vi.hoisted(() => ({ end: vi.fn(async () => {}) }));
@@ -143,8 +146,27 @@ const quietQueue = () => {
       unreferenced: 0,
       enqueued: 0,
     }),
+    profileSweep: vi
+      .spyOn(prototype, "enqueueProfileRenders")
+      .mockResolvedValue({
+        missing: 0,
+        blocked: 0,
+        enqueued: 0,
+        requeued: 0,
+        paused: false,
+      }),
   };
 };
+
+const MEDIA_KINDS = [
+  "process_item",
+  "derive_edit",
+  "purge_item",
+  "purge_blob",
+  "purge_trashed_work",
+  "reconcile_capacity",
+  "catalog_render",
+];
 
 const startupFailure = async (run: () => Promise<unknown>) => {
   try {
@@ -198,6 +220,14 @@ describe("media worker composition", () => {
         },
         /required for the media worker/,
       ],
+      [
+        { ...production, MEDIA_PROFILE_RENDER: "synthetic-on" },
+        /^MEDIA_PROFILE_RENDER must be on or off$/,
+      ],
+      [
+        { ...development, MEDIA_PROFILE_RENDER: "synthetic-off" },
+        /^MEDIA_PROFILE_RENDER must be on or off$/,
+      ],
     ] as const) {
       const [code, text] = await startupFailure(() =>
         prepareMediaWorker(environment, { logger: silent }),
@@ -207,6 +237,7 @@ describe("media worker composition", () => {
       expect(text).not.toMatch(/synthetic/);
     }
     expect(openProductionPublishingMedia).not.toHaveBeenCalled();
+    expect(openPublishingMedia).not.toHaveBeenCalled();
     expect(createPostgresPool).not.toHaveBeenCalled();
   });
 
@@ -263,17 +294,14 @@ describe("media worker composition", () => {
       expect(createPostgresPool).toHaveBeenCalledTimes(2);
       expect(worker.catalog).toBe(true);
       await vi.waitFor(() => expect(queue.claim).toHaveBeenCalled());
+      // Profile renders default on in Development only.
+      expect(worker.profile).toBe(mode === "development");
       expect(queue.claim.mock.calls[0]![0]).toMatchObject({
         limit: 1,
-        kinds: [
-          "process_item",
-          "derive_edit",
-          "purge_item",
-          "purge_blob",
-          "purge_trashed_work",
-          "reconcile_capacity",
-          "catalog_render",
-        ],
+        kinds:
+          mode === "development"
+            ? [...MEDIA_KINDS, "profile_render"]
+            : MEDIA_KINDS,
       });
       expect(queue.requeue).toHaveBeenCalledTimes(1);
       expect(queue.cleanup).toHaveBeenCalledTimes(1);
@@ -282,8 +310,16 @@ describe("media worker composition", () => {
         "reconcile_capacity",
       ]);
       expect(queue.catalogSync).toHaveBeenCalledTimes(1);
+      expect(queue.profileSweep).toHaveBeenCalledTimes(
+        mode === "development" ? 1 : 0,
+      );
+      if (mode === "development")
+        expect(queue.profileSweep.mock.calls[0]![1]).toMatchObject({
+          limit: 2,
+          maxOpen: 2,
+        });
       expect(silent.info).toHaveBeenCalledWith(
-        `[media-worker] ready concurrency=1 sharp=${sandboxRuntime().sharp} vips=${sandboxRuntime().vips} catalog=on`,
+        `[media-worker] ready concurrency=1 sharp=${sandboxRuntime().sharp} vips=${sandboxRuntime().vips} catalog=on profile=${mode === "development" ? "on" : "off"}`,
       );
       expect(silent.info).toHaveBeenCalledWith(
         "[media-worker] leftovers removed containers=2 job_directories=1",
@@ -294,6 +330,39 @@ describe("media worker composition", () => {
       const claims = queue.claim.mock.calls.length;
       await new Promise((resolve) => setTimeout(resolve, 1_100));
       expect(queue.claim.mock.calls.length).toBe(claims);
+    },
+  );
+
+  it.each([
+    ["production", "on"],
+    ["development", "off"],
+  ] as const)(
+    "%s with MEDIA_PROFILE_RENDER=%s follows the switch",
+    async (mode, value) => {
+      const queue = quietQueue();
+      fakeMedia.sandbox.selfCheck.mockResolvedValue({
+        status: "ok",
+        runtime: sandboxRuntime(),
+        facts: isolatedFacts(),
+      });
+      const worker = await startMediaWorker(
+        {
+          ...(mode === "production" ? production : development),
+          MEDIA_PROFILE_RENDER: value,
+        },
+        { logger: silent },
+      );
+      const on = value === "on";
+      expect(worker.profile).toBe(on);
+      await vi.waitFor(() => expect(queue.claim).toHaveBeenCalled());
+      expect(queue.claim.mock.calls[0]![0].kinds).toEqual(
+        on ? [...MEDIA_KINDS, "profile_render"] : MEDIA_KINDS,
+      );
+      expect(queue.profileSweep).toHaveBeenCalledTimes(on ? 1 : 0);
+      expect(silent.info).toHaveBeenCalledWith(
+        expect.stringMatching(on ? / profile=on$/ : / profile=off$/),
+      );
+      await worker.stop();
     },
   );
 

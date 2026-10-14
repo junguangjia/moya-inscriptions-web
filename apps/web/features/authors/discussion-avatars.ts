@@ -4,6 +4,7 @@ import type {
   CommentItem,
   CommentUserPresentation,
 } from "../comments/comment-types";
+import { avatarThumbSrc } from "../media/profile-image";
 import { useAuthors } from "./author-context";
 import { authorClient } from "./author-data";
 
@@ -44,7 +45,7 @@ export const useDiscussionAvatars = (rows: readonly CommentItem[]) => {
         let src: string | null = null;
         try {
           const profile = await authorClient.profile(id, controller.signal);
-          src = profile.avatar?.src ?? null;
+          src = avatarThumbSrc(profile.avatar);
         } catch {
           // An unavailable author uses the existing initial-letter fallback.
         }

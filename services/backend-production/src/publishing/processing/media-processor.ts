@@ -32,7 +32,7 @@ import {
   STILL_ROLES,
   currentRecipe,
   expectedStillSize,
-  isStillRole,
+  isProfileRole,
   recipeFraming,
 } from "./recipes.js";
 import { declaredTypeMatches } from "./signature.js";
@@ -56,7 +56,7 @@ import type {
 } from "../sandbox/sandbox-runner.js";
 import type { MediaEdit, NormalizedCrop } from "./edits.js";
 import type { MediaFailureCode } from "./errors.js";
-import type { StillRole } from "./recipes.js";
+import type { RenderedStillRole, StillRole } from "./recipes.js";
 
 /*
  * The media processing coordinator (unified media pipeline, increment 1).
@@ -381,8 +381,11 @@ async function materialize(
   }
 }
 
-/** Writes the worker-read legacy PNG as the job's still input (never a link). */
-async function writeLegacyStill(
+/**
+ * Writes worker-read still bytes (a legacy or profile PNG) as the job's still
+ * input (never a link).
+ */
+export async function writeJobStill(
   job: SandboxJobDirectory,
   bytes: Uint8Array,
   signal: AbortSignal | undefined,
@@ -431,7 +434,11 @@ export function validateSandboxManifest(
   }
   const expected = new Map<
     string,
-    { readonly role: StillRole | "motion"; width?: number; height?: number }
+    {
+      readonly role: RenderedStillRole | "motion";
+      width?: number;
+      height?: number;
+    }
   >();
   for (const rendition of item.renditions) {
     const size = expectedStillSize(
@@ -587,7 +594,7 @@ export async function storeOutputFile(
 
 /** The recipe identity of a received output. */
 export const outputRecipe = (output: SandboxOutput) =>
-  currentRecipe(isStillRole(output.role) ? output.role : "motion");
+  currentRecipe(output.role === "motion" ? "motion" : output.role);
 
 /** Content-free log line for a sandbox failure the coordinator rejects. */
 export const logSandboxFailure = (
@@ -687,7 +694,7 @@ async function processItem(
     job = await sandbox.createJob();
     const inputs: SandboxInput[] = [];
     if (legacy) {
-      await writeLegacyStill(job, input.legacyStill!, signal);
+      await writeJobStill(job, input.legacyStill!, signal);
       inputs.push({
         role: "still",
         declaredType: legacy.contentType,
@@ -737,6 +744,8 @@ async function processItem(
 
     const derivatives: ProcessorDerivative[] = [];
     for (const output of manifest.outputs) {
+      // A work item never has a profile rendition.
+      if (isProfileRole(output.role)) throw violation("outputs_mismatch");
       const file = result.files.get(output.name)!;
       const stored = await storeOutputFile(
         (body) =>

@@ -73,10 +73,13 @@ import {
   listPublishedCatalogSources,
 } from "./publishing/catalog.js";
 import {
+  MEDIA_PROFILE_RENDER,
+  MEDIA_PROFILE_RENDITIONS,
   openPublishingMedia,
   openPublishingStore,
   openProductionPublishingStore,
   parseMediaWorkerMode,
+  parseProfileMediaSwitch,
   parsePublishingMediaConfig,
   parsePublishingStoreDirectory,
   parseProductionPublishingStoreConfig,
@@ -85,8 +88,14 @@ import { externalPublishingProcessor } from "./publishing/external-processor.js"
 import {
   UPLOAD_COUPLED_JOB_KINDS,
   MEDIA_WORKER_JOB_KINDS,
+  PROFILE_RENDER_JOB_KINDS,
   createPublishingJobHandlers,
 } from "./publishing/job-handlers.js";
+import {
+  PROFILE_SWEEP_INTERVAL_MS,
+  createProfileRenderer,
+  createProfileSweep,
+} from "./publishing/profile.js";
 import { PublishingWorker } from "./publishing/worker.js";
 import { LocalCatalogSourceReader } from "./storage/catalog-source.js";
 import { createLocalStorageUrlResolver } from "./storage/local-media.js";
@@ -274,6 +283,22 @@ export const prepareProductionBackend = async (
     environment,
     runtimeConfig.nodeEnv,
   );
+  // Profile image renditions (increment 3a): this Backend emits them on
+  // AuthorMedia while MEDIA_PROFILE_RENDITIONS is on; only an embedded
+  // worker (Development) also renders them, behind MEDIA_PROFILE_RENDER,
+  // which the separate media worker reads otherwise.
+  const profileRenditions = parseProfileMediaSwitch(
+    environment,
+    MEDIA_PROFILE_RENDITIONS,
+    runtimeConfig.nodeEnv,
+  );
+  const profileRender =
+    mediaWorkerMode === "embedded" &&
+    parseProfileMediaSwitch(
+      environment,
+      MEDIA_PROFILE_RENDER,
+      runtimeConfig.nodeEnv,
+    );
   const publishing = await (async (): Promise<{
     readonly store: PublishingMediaStoreRuntime;
     readonly media?: Awaited<ReturnType<typeof openPublishingMedia>>;
@@ -399,11 +424,15 @@ export const prepareProductionBackend = async (
       ? publishingMedia
         ? new PublishingWorker({
             port: workPublishingPort,
-            kinds: [...UPLOAD_COUPLED_JOB_KINDS, ...MEDIA_WORKER_JOB_KINDS],
+            kinds: [
+              ...UPLOAD_COUPLED_JOB_KINDS,
+              ...MEDIA_WORKER_JOB_KINDS,
+              ...(profileRender ? PROFILE_RENDER_JOB_KINDS : []),
+            ],
             concurrency: publishing.concurrency,
-            ...(catalogSources
-              ? {
-                  extraMaintenance: [
+            extraMaintenance: [
+              ...(catalogSources
+                ? [
                     {
                       label: "catalog sync",
                       intervalMs: CATALOG_SYNC_INTERVAL_MS,
@@ -412,9 +441,18 @@ export const prepareProductionBackend = async (
                         port: workPublishingPort,
                       }).run,
                     },
-                  ],
-                }
-              : {}),
+                  ]
+                : []),
+              ...(profileRender
+                ? [
+                    {
+                      label: "profile sweep",
+                      intervalMs: PROFILE_SWEEP_INTERVAL_MS,
+                      run: createProfileSweep({ port: workPublishingPort }).run,
+                    },
+                  ]
+                : []),
+            ],
             handlers: createPublishingJobHandlers({
               port: workPublishingPort,
               store: publishingMedia.store,
@@ -428,6 +466,17 @@ export const prepareProductionBackend = async (
                         store: publishingMedia.store,
                         sandbox: publishingMedia.sandbox,
                         source: catalogSources,
+                      }),
+                    },
+                  }
+                : {}),
+              ...(profileRender
+                ? {
+                    profile: {
+                      port: workPublishingPort,
+                      renderer: createProfileRenderer({
+                        store: publishingMedia.store,
+                        sandbox: publishingMedia.sandbox,
                       }),
                     },
                   }
@@ -650,7 +699,9 @@ export const prepareProductionBackend = async (
           ),
           directMessagePort: new PostgresDirectMessageAdapter(communityPool),
           authorCommunityPort: withPublishedReads(
-            new PostgresAuthorCommunityAdapter(communityPool),
+            new PostgresAuthorCommunityAdapter(communityPool, {
+              profileRenditions,
+            }),
             ["readWork", "listWorks"],
             deliveryOptions,
           ),

@@ -46,19 +46,36 @@ and session-dependent Web pages, relays and prototype documents are
 set `Vary: Cookie`; Next pages and RSC responses retain the framework's `Vary`
 headers. `no-store` is the cache barrier, independently of `Vary`. Next
 Development pages instead use its `no-cache, must-revalidate` behavior; their
-access checks still run for each request. One relay answer is revalidated
-instead of unstored: a `200 image/png` for
-`/api/community/media/user-media-<id>` is `private, no-cache` with a strong
-`ETag` (the SHA-256 of its bytes). Such an id names one immutable upload, so the
-viewer's browser may keep the bytes in its own cache. A normal load still goes
-through the relay, the Backend authorizes the read exactly as before, and only
-an unchanged body is answered `304` without bytes; errors and every other answer
-stay `private, no-store`. Browsers may still reuse a cached image without asking
-on back/forward or session-restore loads while the session cookie is unchanged
-(`Vary: Cookie` forces revalidation after a cookie change), and the bytes stay
-in the device's browser cache after sign-out until they are evicted or refused
-on a later load (Owner decision, 2026-10-13, profile-media-startup-relief-v1).
-Nginx has no cache. The unused Next.js image optimizer is closed for every
+access checks still run for each request. Two kinds of relay answer are
+revalidated instead of unstored, both `private, no-cache` with `Vary: Cookie`
+and a strong `ETag`:
+
+- A `200 image/png` for `/api/community/media/user-media-<id>`, the original
+  profile image. Its `ETag` is the SHA-256 of its bytes, and such an id names
+  one immutable upload.
+- A `200` or `206 image/webp`, or its `304`, for
+  `/api/community/media/user-media-<id>/<role>`, a rendition of a current avatar
+  or cover: the owner's current avatar for an `avatar-*` role, the current cover
+  for a `background-*` role. Its `ETag` is the SHA-256 of the rendition. A
+  rendition URL is stable but does not name one immutable upload: its bytes
+  change when the role's recipe version changes, and the `ETag` changes with
+  them. The Backend decides the `304` itself, from the stored hash after it has
+  authorized the read, without reading storage.
+
+The viewer's browser may keep these bytes in its own cache. A normal load still
+goes through the relay, the Backend authorizes the read exactly as before (for a
+rendition, the original image's rule narrowed to the current avatar or cover),
+and only an unchanged body is answered `304` without bytes. Owner-only rendition
+reads (a replaced avatar, a cleared cover) carry no `ETag` and stay
+`private, no-store`, as entry 5 of the
+[unified media pipeline amendment](../governance/amendments/2026-10-04-unified-media-pipeline.md)
+requires; so do errors and every other answer. Browsers may still reuse a cached
+image without asking on back/forward or session-restore loads while the session
+cookie is unchanged (`Vary: Cookie` forces revalidation after a cookie change),
+and the bytes stay in the device's browser cache after sign-out until they are
+evicted or refused on a later load (Owner decisions, 2026-10-13,
+profile-media-startup-relief-v1 and, for renditions, profile-media-renditions-v1
+D4). Nginx has no cache. The unused Next.js image optimizer is closed for every
 source, so its cookie-blind shared cache cannot retain a protected image across
 a mode or eligibility change.
 
@@ -184,4 +201,6 @@ paths that exist today: same-origin relays (decided per request by the Backend)
 and short-lived signed links handed out inside protected answers. A stable
 unsigned public media URL would bypass the policy. Any change of media delivery
 therefore needs an arrangement that keeps this restriction, verified before it
-is switched on (coordinated with Issue #206).
+is switched on (coordinated with Issue #206). Profile image renditions
+(increment 3a, Issue #270) use only the same-origin relay and are never
+published to the edge.

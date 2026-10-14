@@ -292,9 +292,10 @@ describe("Community relay with a Session the Backend no longer accepts", () => {
 
 /*
  * profile-media-startup-relief-v1: a user-media id names one immutable upload,
- * so its PNG may stay in the viewer's private cache and be revalidated on every
- * use. The Backend still authorizes each request; only an unchanged body is
- * skipped. Every other answer keeps `private, no-store`.
+ * so its PNG may stay in the viewer's private cache, revalidated on each normal
+ * load; back/forward may reuse it while the cookie is unchanged. The Backend
+ * still authorizes each revalidation; only an unchanged body is skipped. Every
+ * other answer keeps `private, no-store`.
  */
 describe("Community relay revalidates immutable user media", () => {
   const cookie = `yoyi-session=${"C".repeat(43)}`;

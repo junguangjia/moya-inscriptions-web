@@ -7,6 +7,30 @@
 
 # 当前项目状态
 
+## Media pipeline increment 3a — 2026-10-13
+
+Issue #206 r21 splits increment 3 of the unified media pipeline. 3a "profile
+renditions" (task `profile-media-renditions-v1`, Issue #270 r1) makes avatars
+and covers a third rendition subject keyed by the unchanged user-media id: four
+WebP roles rendered from the stored PNG in the media-worker sandbox, queued only
+by a paced worker sweep and served through an authorized origin route. 3b keeps
+direct upload and moving profile bytes out of PostgreSQL; until 3b is deployed,
+avatar and cover bytes stay in PostgreSQL.
+
+3a is merged to `main` as one PR after the Owner accepted a Development preview
+on a phone (2026-10-14); nothing is deployed. Until the 3a release, `main`
+carries the unapplied migration `20261014010000`, so a Backend release from
+`main` follows the 3a runbook and no Web-only release is cut from `main`. Its
+release is one late-night window from the tag `media-pipeline-inc3a` with both
+switches off. `MEDIA_PROFILE_RENDER` (worker) is turned on in that window and
+starts the paced backfill. `MEDIA_PROFILE_RENDITIONS` (Backend) follows at least
+72 h later, after at least 95% coverage and the Owner's checks. The same release
+removes the once-per-New-York-day avatar-change limit. Every Production
+operation, reads and probes included, needs the Owner's per-action "run". See
+the [task record](development/profile-media-renditions-v1.md) and the
+[release runbook](deployment/media-profile-renditions-inc3a.md). This entry
+records authorization and plan only; it claims no deployment or acceptance.
+
 ## Media pipeline Increment 2 checkpoint — 2026-10-08
 
 Issue
@@ -420,8 +444,9 @@ Active development tracks (independent of the parked cloud track):
    no avatar
    ([decision](community/content-community-completion-v1.md#11-owner-phone-acceptance-decisions-2026-09-25)).
    Work creation/editing/deletion entrances remain frozen; favorites/likes list
-   filters remain hidden. Backend authorization, media ownership and the
-   America/New_York avatar-change rule remain in force. The
+   filters remain hidden. Backend authorization and media ownership remain in
+   force. The America/New_York avatar-change rule was removed on 2026-10-13 at
+   the Owner's request (`profile-media-renditions-v1`). The
    [Behavior Matrix](community/phase4-author-community-v1.md) preserves scope
    and acceptance history;
    [PR #126](https://github.com/nontwo/moya-inscriptions-web/pull/126) records

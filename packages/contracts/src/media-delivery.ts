@@ -46,6 +46,60 @@ export const mediaRenditionPathParts = (
     : { itemId, editKey };
 };
 
+/** The renditions of a profile image: two per family, ascending by size. */
+export const PROFILE_MEDIA_RENDITION_ROLES = [
+  "avatar-128",
+  "avatar-512",
+  "background-960",
+  "background-1600",
+] as const;
+export type ProfileMediaRenditionRole =
+  (typeof PROFILE_MEDIA_RENDITION_ROLES)[number];
+/** The profile slot a rendition serves: the avatar or the background. */
+export type ProfileMediaFamily = "avatar" | "background";
+export const profileMediaRenditionRoleSchema = z.enum(
+  PROFILE_MEDIA_RENDITION_ROLES,
+);
+
+/** The public id of a profile image (avatar or background). */
+export const userMediaIdSchema = z.string().regex(/^user-media-[0-9a-f]{32}$/u);
+
+const profileMediaFamilies: Readonly<
+  Record<ProfileMediaRenditionRole, ProfileMediaFamily>
+> = {
+  "avatar-128": "avatar",
+  "avatar-512": "avatar",
+  "background-960": "background",
+  "background-1600": "background",
+};
+
+export const profileMediaFamilyOf = (
+  role: ProfileMediaRenditionRole,
+): ProfileMediaFamily => profileMediaFamilies[role];
+
+const profileRenditionPathPattern =
+  /^\/api\/community\/media\/(user-media-[0-9a-f]{32})\/(avatar-128|avatar-512|background-960|background-1600)$/u;
+
+/** The same-origin authorized read of one rendition of a profile image. */
+export const profileMediaRenditionPathSchema = z
+  .string()
+  .regex(profileRenditionPathPattern);
+
+/** The user media id, role and family a profile rendition path names, or null. */
+export const profileMediaRenditionPathParts = (
+  src: string,
+): {
+  readonly mediaId: string;
+  readonly role: ProfileMediaRenditionRole;
+  readonly family: ProfileMediaFamily;
+} | null => {
+  const [, mediaId, name] = profileRenditionPathPattern.exec(src) ?? [];
+  const role = profileMediaRenditionRoleSchema.safeParse(name);
+  return mediaId === undefined || !role.success
+    ? null
+    : { mediaId, role: role.data, family: profileMediaFamilyOf(role.data) };
+};
+
 /** At most this many candidates describe one image in one context. */
 export const MEDIA_RENDITIONS_MAXIMUM = 8;
 export const renditionDimensionSchema = z.number().int().positive().max(65_535);
@@ -70,6 +124,14 @@ export const publicMediaRenditionSchema = renditionOf(resolvedMediaUrlSchema);
 /** A community candidate: an unsigned published URL or the authorized same-origin path. */
 export const mediaRenditionSchema = renditionOf(
   z.union([publishedMediaUrlSchema, mediaRenditionPathSchema]),
+);
+
+/**
+ * A profile candidate: the authorized same-origin path (emitted now) or an
+ * unsigned published URL (accepted for a later edge delivery).
+ */
+export const profileMediaRenditionSchema = renditionOf(
+  z.union([publishedMediaUrlSchema, profileMediaRenditionPathSchema]),
 );
 
 /** One candidate: a complete image of its list's framing, without a role. */
@@ -185,6 +247,10 @@ export const publicMediaRenditionListSchema = mediaRenditionListOf(
 /** Community lists: every candidate published, or every candidate on the authorized path. */
 export const mediaRenditionListSchema =
   mediaRenditionListOf(mediaRenditionSchema);
+/** Profile image lists: every candidate published, or every candidate on the profile path. */
+export const profileMediaRenditionListSchema = mediaRenditionListOf(
+  profileMediaRenditionSchema,
+);
 /**
  * A content card shows Catalog or work media: a whole list is either the
  * Catalog form or the community form, never a mix.

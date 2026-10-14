@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { authorClient, AuthorRequestError } from "./author-data";
 import { useAuthors } from "./author-context";
 import { AuthorDialog } from "./author-dialog";
+import { avatarThumbSrc } from "../media/profile-image";
 import { requestIdentity } from "../shell/request-identity";
 import { useProductShell } from "../product-shell/product-shell";
 type Page = Awaited<ReturnType<typeof authorClient.people>>;
@@ -314,7 +315,7 @@ export const PeopleList = ({
                 <span className="phase4-person-avatar">
                   {person.avatar ? (
                     <img
-                      src={person.avatar.src}
+                      src={avatarThumbSrc(person.avatar)}
                       alt=""
                       width={48}
                       height={48}

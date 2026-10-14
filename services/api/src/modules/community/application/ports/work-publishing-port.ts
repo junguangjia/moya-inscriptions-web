@@ -6,6 +6,7 @@ import type {
   MediaFailureCode,
   MediaVariant,
   OpenWorkEditDraftCommand,
+  ProfileMediaRenditionRole,
   PublishingDraft,
   PublishingDraftDeletionCommand,
   PublishingDraftDeletionResult,
@@ -272,6 +273,18 @@ export interface PublishingMediaReadTarget {
   readonly byteSize: number;
   /** Lowercase hex SHA-256 of the stored bytes (usable as a strong validator). */
   readonly sha256: string;
+}
+
+/** A profile image rendition the media route may stream (increment 3a). */
+export interface ProfileRenditionReadTarget extends PublishingMediaReadTarget {
+  readonly contentType: "image/webp";
+  /**
+   * True while the family's current pointer still selects the image (its
+   * current avatar or background): only such a read may be revalidated. A
+   * replaced avatar's or cleared background's renditions are the owner's
+   * alone and are never answered from a validator.
+   */
+  readonly revalidate: boolean;
 }
 
 /** Payload of a `derive_edit` job; every other job kind has no payload. Content-free. */
@@ -871,6 +884,19 @@ export interface PublishingMediaReadOperations {
     variant: MediaVariant,
     editKey: string,
   ): Promise<PublishingMediaReadTarget | null>;
+  /**
+   * A ready rendition of a profile image (`user-media-<32hex>`) a viewer may
+   * stream, or `null` (answered as not found). The rule of the original
+   * image route narrowed by family: the owner reads every rendition; anyone
+   * else only the avatar roles of the owner's current avatar and the
+   * background roles of the current background. Always only while the owner
+   * is active, the image is not erased and neither account blocks the other.
+   */
+  resolveProfileRenditionRead(
+    viewerId: string | null,
+    userMediaId: string,
+    role: ProfileMediaRenditionRole,
+  ): Promise<ProfileRenditionReadTarget | null>;
 }
 
 /** The durable PostgreSQL job queue and cleanup primitives (T05-T06). */

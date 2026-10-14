@@ -1,3 +1,6 @@
+import type { ProfileMediaRenditionRole } from "@moya/contracts";
+import { PROFILE_MEDIA_RENDITION_ROLES } from "@moya/contracts/schemas";
+
 /*
  * Rendition recipe identity as the community store records it (unified media
  * pipeline, increment 1). Pure: no database, no image library. A rendition
@@ -9,6 +12,12 @@
  * of its role with the registry's literal digests (a unit test pins them).
  */
 
+/**
+ * The profile image roles (increment 3a): the roles of the public profile
+ * rendition path, held only by user-media renditions.
+ */
+export const PROFILE_RENDITION_ROLES = PROFILE_MEDIA_RENDITION_ROLES;
+
 /** Rendition roles the `media_renditions_role_valid` CHECK admits. */
 export const RENDITION_ROLES = [
   "thumb",
@@ -17,6 +26,7 @@ export const RENDITION_ROLES = [
   "viewer",
   "full",
   "motion",
+  ...PROFILE_RENDITION_ROLES,
 ] as const;
 export type RenditionRole = (typeof RENDITION_ROLES)[number];
 
@@ -43,3 +53,9 @@ export interface RecipeIdentity {
 export const isRenditionRole = (value: unknown): value is RenditionRole =>
   typeof value === "string" &&
   (RENDITION_ROLES as readonly string[]).includes(value);
+
+export const isProfileRenditionRole = (
+  value: unknown,
+): value is ProfileMediaRenditionRole =>
+  typeof value === "string" &&
+  (PROFILE_RENDITION_ROLES as readonly string[]).includes(value);

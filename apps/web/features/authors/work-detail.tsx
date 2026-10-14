@@ -22,6 +22,7 @@ import { useAuthors } from "./author-context";
 import { ContentActions } from "./content-actions";
 import { UNTITLED_WORK_LABEL } from "./content-card";
 import { useProductShell } from "../product-shell/product-shell";
+import { avatarThumbSrc } from "../media/profile-image";
 import { recordLocalHistory } from "./local-library";
 import {
   ownWorkAudienceNote,
@@ -402,7 +403,7 @@ const WorkAuthor = ({ detail }: { detail: WorkDetail }) => {
       .profile(detail.authorId, controller.signal)
       .then((profile) => {
         if (!controller.signal.aborted)
-          setAvatar({ scope, src: profile.avatar?.src ?? null });
+          setAvatar({ scope, src: avatarThumbSrc(profile.avatar) });
       })
       .catch(() => {
         /* An unavailable profile uses the initial fallback. */

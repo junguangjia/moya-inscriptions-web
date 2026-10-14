@@ -31,7 +31,7 @@ import {
   readMotionPhotoDirectory,
 } from "../processing/motion-photo.js";
 import { METADATA_HEAD_BYTES } from "../processing/profiles.js";
-import { STILL_ROLES, expectedStillSize } from "../processing/recipes.js";
+import { expectedStillSize, planRoles } from "../processing/recipes.js";
 import {
   SIGNATURE_HEAD_BYTES,
   countGifFrames,
@@ -541,7 +541,7 @@ async function renderItem(
   const outputs: SandboxOutput[] = [];
   let placeholderColor: string | null = null;
   const requested = new Set(item.renditions.map((request) => request.role));
-  for (const role of STILL_ROLES) {
+  for (const role of planRoles(item.plan)) {
     if (!requested.has(role)) continue;
     const size = expectedStillSize(
       role,

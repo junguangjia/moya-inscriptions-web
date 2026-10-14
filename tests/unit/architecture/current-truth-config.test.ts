@@ -372,6 +372,7 @@ describe("current repository truth and local configuration", () => {
       DATABASE_POOL_MAX: "3",
       WORK_MEDIA_WORKER_CONCURRENCY: "1",
       WORK_MEDIA_WORK_DIR: "/var/lib/yoyi-media/publishing-work",
+      MEDIA_PROFILE_RENDER: "off",
     });
     expect(mediaWorker.WORK_MEDIA_STORE_DIR).toBeUndefined();
     for (const [name, value] of Object.entries(mediaWorker))
@@ -406,6 +407,7 @@ describe("current repository truth and local configuration", () => {
     );
     expect(backend.WORK_MEDIA_TOOLS_IMAGE).toMatch(/REPLACE_ME/);
     expect(backend.WORK_MEDIA_WORKER_CONCURRENCY).toBe("1");
+    expect(backend.MEDIA_PROFILE_RENDITIONS).toBe("off");
     for (const name of [
       "ARTICLE_AUTHORING_ISSUER",
       "ARTICLE_AUTHORING_RESOURCE",

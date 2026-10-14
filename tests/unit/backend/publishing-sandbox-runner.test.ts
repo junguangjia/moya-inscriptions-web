@@ -24,6 +24,7 @@ import {
   MediaProcessingInputError,
   MediaProcessingUnavailableError,
   MediaToolError,
+  PROFILE_ROLES,
   currentRecipe,
   plannedStillRequests,
   validateSandboxManifest,
@@ -55,7 +56,10 @@ import {
   sandboxRuntime,
 } from "./publishing-sandbox-fixture.js";
 
-import type { StillRole } from "@moya/backend-production/internal/publishing-processing";
+import type {
+  RenderedStillRole,
+  StillRole,
+} from "@moya/backend-production/internal/publishing-processing";
 import type {
   SandboxJob,
   SandboxManifest,
@@ -918,13 +922,12 @@ describe("media sandbox protocol", () => {
   };
 
   it("round-trips every recipe: the renderer accepts it and both sides compute the same sizes", async () => {
-    for (const role of [
-      "thumb",
-      "cover",
-      "display",
-      "viewer",
-      "full",
-    ] as const) {
+    for (const [role, plan] of [
+      ...(["thumb", "cover", "display", "viewer", "full"] as const).map(
+        (still) => [still, "work"] as const,
+      ),
+      ...PROFILE_ROLES.map((profile) => [profile, "profile"] as const),
+    ]) {
       const directory = await mkdtemp(path.join(base, `${role}-`));
       const paths = {
         input: path.join(directory, "in"),
@@ -958,6 +961,7 @@ describe("media sandbox protocol", () => {
                   sha256: sha256(bytes),
                 },
               ],
+              plan,
               renditions: [
                 { role, version: recipe.version, digest: recipe.digest },
               ],
@@ -1073,10 +1077,111 @@ describe("media sandbox protocol", () => {
       expect(() => parseSandboxJob(invalid)).toThrow(SandboxJobError);
   });
 
+  it("keeps each plan to its own roles and a profile job to one unedited static still", async () => {
+    const job = await sampleJob();
+    const item = job.item!;
+    const profileRenditions = PROFILE_ROLES.map((role) => {
+      const recipe = currentRecipe(role);
+      return { role, version: recipe.version, digest: recipe.digest };
+    });
+    const profile = {
+      ...job,
+      item: {
+        ...item,
+        inputs: [{ ...item.inputs[0]!, declaredType: "image/png" }],
+        plan: "profile",
+        renditions: profileRenditions,
+        placeholder: false,
+      },
+    };
+    expect(parseSandboxJob(profile)).toEqual(profile);
+    // One family, or one anchor alone, is a profile job too.
+    for (const renditions of [
+      profileRenditions.slice(0, 2),
+      profileRenditions.slice(2, 3),
+    ]) {
+      const family = { ...profile, item: { ...profile.item, renditions } };
+      expect(parseSandboxJob(family)).toEqual(family);
+    }
+    const avatar = profileRenditions[0]!;
+    const thumb = item.renditions.find((entry) => entry.role === "thumb")!;
+    for (const invalid of [
+      // A plan asks only for its own roles.
+      { ...job, item: { ...item, renditions: [...item.renditions, avatar] } },
+      {
+        ...job,
+        item: {
+          ...item,
+          plan: "catalog",
+          renditions: [
+            ...item.renditions.filter((entry) => entry.role !== "full"),
+            avatar,
+          ],
+        },
+      },
+      {
+        ...profile,
+        item: { ...profile.item, renditions: [...profileRenditions, thumb] },
+      },
+      { ...profile, item: { ...profile.item, renditions: [thumb] } },
+      // A profile job renders one unedited static still, at least one role.
+      { ...profile, item: { ...profile.item, renditions: [] } },
+      { ...profile, item: { ...profile.item, kind: "live" } },
+      { ...profile, item: { ...profile.item, qualityMode: "original" } },
+      {
+        ...profile,
+        item: {
+          ...profile.item,
+          clientPairing: { method: "none", identifierSha256: null },
+        },
+      },
+      {
+        ...profile,
+        item: {
+          ...profile.item,
+          coverCrop: { x: 0, y: 0, width: 1, height: 1 },
+        },
+      },
+      {
+        ...profile,
+        item: { ...profile.item, edit: { rotation: 90, crop: null } },
+      },
+      {
+        ...profile,
+        item: {
+          ...profile.item,
+          edit: { rotation: 0, crop: { x: 0, y: 0, width: 1, height: 1 } },
+        },
+      },
+      { ...profile, item: { ...profile.item, motion: true } },
+      { ...profile, item: { ...profile.item, placeholder: true } },
+      // Unknown roles and another release's recipes are refused.
+      {
+        ...profile,
+        item: {
+          ...profile.item,
+          renditions: [{ ...avatar, role: "avatar-256" }],
+        },
+      },
+      {
+        ...profile,
+        item: {
+          ...profile.item,
+          renditions: [{ ...avatar, digest: "0".repeat(16) }],
+        },
+      },
+    ])
+      expect(() => parseSandboxJob(invalid)).toThrow(SandboxJobError);
+  });
+
   it("validates manifests strictly and refuses outputs the recipes do not produce", async () => {
     const request = await sampleJob();
     const inspection = { width: 64, height: 48, hasAlpha: false };
-    const output = (role: StillRole, width: number, height: number) => ({
+    const output = (
+      role: RenderedStillRole,
+      width: number,
+      height: number,
+    ) => ({
       name: `${role}.webp`,
       role,
       contentType: "image/webp" as const,
@@ -1177,6 +1282,79 @@ describe("media sandbox protocol", () => {
     expect(violation({ ...manifest, outputs: manifest.outputs.slice(1) })).toBe(
       "outputs_mismatch",
     );
+    // A work job never receives a profile rendition.
+    expect(
+      violation({
+        ...manifest,
+        outputs: [...manifest.outputs, output("avatar-128", 64, 48)],
+      }),
+    ).toBe("outputs_mismatch");
+    // A profile job expects exactly its family at the registry's sizes; the
+    // larger role is an extra output where it would repeat the anchor.
+    const avatarRequest: SandboxJob = {
+      ...request,
+      item: {
+        ...request.item!,
+        plan: "profile",
+        renditions: (["avatar-128", "avatar-512"] as const).map((role) => {
+          const recipe = currentRecipe(role);
+          return { role, version: recipe.version, digest: recipe.digest };
+        }),
+        placeholder: false,
+      },
+    };
+    const avatar: SandboxManifest = {
+      ...manifest,
+      inspection: { width: 512, height: 512, hasAlpha: true },
+      placeholderColor: null,
+      outputs: [output("avatar-128", 128, 128), output("avatar-512", 512, 512)],
+    };
+    expect(() => validateSandboxManifest(avatar, avatarRequest)).not.toThrow();
+    expect(parseSandboxManifest(JSON.stringify(avatar))).toEqual(avatar);
+    const small = {
+      ...avatar,
+      inspection: { width: 100, height: 100, hasAlpha: true },
+      outputs: [output("avatar-128", 100, 100)],
+    };
+    expect(() => validateSandboxManifest(small, avatarRequest)).not.toThrow();
+    const profileViolation = (tampered: SandboxManifest) => {
+      try {
+        validateSandboxManifest(tampered, avatarRequest);
+      } catch (error) {
+        return (error as SandboxProtocolError).violation;
+      }
+      return null;
+    };
+    expect(
+      profileViolation({
+        ...small,
+        outputs: [...small.outputs, output("avatar-512", 100, 100)],
+      }),
+    ).toBe("outputs_mismatch");
+    expect(
+      profileViolation({
+        ...avatar,
+        outputs: [
+          output("avatar-128", 128, 128),
+          output("avatar-512", 256, 256),
+        ],
+      }),
+    ).toBe("dimensions_mismatch");
+    expect(
+      profileViolation({
+        ...avatar,
+        outputs: [...avatar.outputs, output("thumb", 480, 480)],
+      }),
+    ).toBe("outputs_mismatch");
+    for (const invalid of [
+      { ...avatar.outputs[0]!, name: "avatar-128.png" },
+      { ...avatar.outputs[0]!, name: "avatar-512.webp" },
+      { ...avatar.outputs[0]!, role: "avatar-256", name: "avatar-256.webp" },
+      { ...avatar.outputs[0]!, contentType: "video/mp4" },
+    ])
+      expect(() =>
+        parseSandboxManifest(JSON.stringify({ ...avatar, outputs: [invalid] })),
+      ).toThrow(SandboxProtocolError);
     expect(violation({ ...manifest, status: "processed" })).toBe(
       "status_mismatch",
     );

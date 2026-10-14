@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET, POST, PUT } from "./[...path]/route";
 import { GET as authGet, POST as authPost } from "./auth/[...path]/route";
 import { GET as stream } from "./notifications/stream/route";
+import { GET as profileRendition } from "./media/[mediaId]/[rendition]/route";
 import { GET as catalogRendition } from "../development/catalog-renditions/[renditionId]/route";
 
 const ingress =
@@ -224,6 +225,54 @@ describe("Production notification stream", () => {
     incoming.headers.delete("cookie");
     expect((await stream(incoming)).status).toBe(401);
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+// profile-media-renditions-v1: profile renditions are read in Production too,
+// with the visitor's session, while the original stays on the catch-all.
+describe("Production profile media renditions", () => {
+  const mediaId = `user-media-${"f".repeat(32)}`;
+  const tag = `"${"0".repeat(64)}"`;
+
+  it("relays a rendition with the session and keeps a current one revalidated", async () => {
+    const upstream = vi.fn<typeof fetch>(
+      async () =>
+        new Response(new Uint8Array([1, 2]), {
+          headers: { "content-type": "image/webp", etag: tag },
+        }),
+    );
+    vi.stubGlobal("fetch", upstream);
+    const response = await profileRendition(
+      request(`media/${mediaId}/avatar-128`),
+      { params: Promise.resolve({ mediaId, rendition: "avatar-128" }) },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-cache");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    expect(response.headers.get("etag")).toBe(tag);
+    expect(String(upstream.mock.calls[0]?.[0])).toBe(
+      `${backend}v1/community/media/${mediaId}/avatar-128`,
+    );
+    const headers = new Headers(upstream.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("authorization")).toBe(`Bearer ${session}`);
+    expect(headers.has("cookie")).toBe(false);
+    expect(headers.has("x-author-account")).toBe(false);
+  });
+
+  it("keeps the original image on the catch-all relay", async () => {
+    const upstream = vi.fn<typeof fetch>(
+      async () =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", upstream);
+    const response = await GET(request(`media/${mediaId}`));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(String(upstream.mock.calls[0]?.[0])).toBe(
+      `${backend}v1/community/media/${mediaId}`,
+    );
   });
 });
 

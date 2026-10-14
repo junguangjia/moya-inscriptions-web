@@ -14,11 +14,12 @@ import type { MediaEdit, NormalizedCrop, PixelRegion } from "./edits.js";
  * characters of the SHA-256 of the canonical JSON of the role's parameters.
  * Version 1 of thumb, cover, display, full and motion is the pre-task
  * processing profile exactly (existing derivative rows are adopted as v1
- * without re-rendering); `viewer@1` is new. This is the only copy of the
- * parameters and digests: the community store records the identity the
- * processor names and only validates its form, and a unit test pins the
- * literal digests migration 20261004010000 adopts to this registry.
- * Changing a parameter without bumping the version fails the pinned digests.
+ * without re-rendering); `viewer@1` is new, and so are the four profile image
+ * roles (increment 3a). This is the only copy of the parameters and digests:
+ * the community store records the identity the processor names and only
+ * validates its form, and a unit test pins the literal digests migration
+ * 20261004010000 adopts to this registry. Changing a parameter without
+ * bumping the version fails the pinned digests.
  */
 
 export const STILL_ROLES = [
@@ -30,8 +31,48 @@ export const STILL_ROLES = [
 ] as const;
 export type StillRole = (typeof STILL_ROLES)[number];
 
-/** Every rendition role, in the order a job renders them (smallest first). */
-export const RENDITION_ROLES = [...STILL_ROLES, "motion"] as const;
+/**
+ * Profile image roles (increment 3a): WebP stills of an avatar or a profile
+ * background, rendered only by the `profile` plan. The contracts' public
+ * rendition path and the community store name the same roles (a unit test
+ * reconciles the three lists; this package does not depend on the contracts).
+ */
+export const PROFILE_ROLES = [
+  "avatar-128",
+  "avatar-512",
+  "background-960",
+  "background-1600",
+] as const;
+export type ProfileRole = (typeof PROFILE_ROLES)[number];
+
+/**
+ * The profile families: each renders all its roles in one job, and its
+ * anchor is always rendered (a family is ready when its anchor is).
+ */
+export const PROFILE_FAMILIES = {
+  avatar: { anchor: "avatar-128", roles: ["avatar-128", "avatar-512"] },
+  background: {
+    anchor: "background-960",
+    roles: ["background-960", "background-1600"],
+  },
+} as const satisfies Record<
+  string,
+  { readonly anchor: ProfileRole; readonly roles: readonly ProfileRole[] }
+>;
+export type ProfileFamily = keyof typeof PROFILE_FAMILIES;
+
+/** A role rendered as a WebP still by the sandboxed renderer. */
+export type RenderedStillRole = StillRole | ProfileRole;
+
+/**
+ * Every rendition role: a work or Catalog job's roles in the order it renders
+ * them (smallest first), then the profile roles.
+ */
+export const RENDITION_ROLES = [
+  ...STILL_ROLES,
+  "motion",
+  ...PROFILE_ROLES,
+] as const;
 export type RenditionRole = (typeof RENDITION_ROLES)[number];
 
 /** Tall or wide frames (long edge > 2.5 × short edge) are long scrolls. */
@@ -78,6 +119,8 @@ export const STILL_INPUT_LIMITS = STILL_PIPELINE_V1.decode;
  * exceeds `full`'s; a plan that renders `full` also skips it when it would be
  * at least as large as `full` ({@link RENDITION_PLANS}). That plan rule decides
  * only whether a viewer exists, never its bytes, so it is not in the digest.
+ * The larger role of a profile family is skipped when its size equals the
+ * anchor's (a source no larger than the anchor's long edge).
  */
 export const RECIPE_PARAMETERS_V1 = {
   thumb: {
@@ -171,6 +214,48 @@ export const RECIPE_PARAMETERS_V1 = {
       nominalPeakNits: 100,
     },
   },
+  "avatar-128": {
+    role: "avatar-128",
+    version: 1,
+    pipeline: STILL_PIPELINE_V1,
+    framing: "complete",
+    quality: 80,
+    maxLongEdge: 128,
+    maxPixels: null,
+    longScroll: null,
+  },
+  "avatar-512": {
+    role: "avatar-512",
+    version: 1,
+    pipeline: STILL_PIPELINE_V1,
+    framing: "complete",
+    quality: 82,
+    maxLongEdge: 512,
+    maxPixels: null,
+    longScroll: null,
+    skip: { whenEqualTo: "avatar-128" },
+  },
+  "background-960": {
+    role: "background-960",
+    version: 1,
+    pipeline: STILL_PIPELINE_V1,
+    framing: "complete",
+    quality: 82,
+    maxLongEdge: 960,
+    maxPixels: null,
+    longScroll: null,
+  },
+  "background-1600": {
+    role: "background-1600",
+    version: 1,
+    pipeline: STILL_PIPELINE_V1,
+    framing: "complete",
+    quality: 84,
+    maxLongEdge: 1600,
+    maxPixels: null,
+    longScroll: null,
+    skip: { whenEqualTo: "background-960" },
+  },
 } as const;
 
 /** Pinned digests of {@link RECIPE_PARAMETERS_V1}; tests recompute them. */
@@ -182,6 +267,10 @@ export const RECIPE_DIGESTS_V1: Readonly<Record<RenditionRole, string>> =
     viewer: "041a35a85fbbded3",
     full: "acb3027f6e2affec",
     motion: "61403d6585d07f92",
+    "avatar-128": "a127cd6992900e4a",
+    "avatar-512": "15a60d75ab0b9da9",
+    "background-960": "f6e1093c931edcef",
+    "background-1600": "fdc0f14fbb0a2677",
   });
 
 export interface RecipeIdentity {
@@ -211,22 +300,32 @@ export const isCurrentRecipe = (identity: {
 
 /**
  * What a job renders for: an edit of a work item (every role it needs, `full`
- * included) or a Catalog asset (no `full` in increment 1). A plan decides only
- * whether the optional `viewer` is worth rendering (see
+ * included), a Catalog asset (no `full` in increment 1) or a profile image
+ * (the profile roles only). A plan names the roles it may ask for and decides
+ * only whether the optional `viewer` is worth rendering (see
  * {@link plannedStillSize}); it changes no rendered byte and no recipe digest.
  */
 export const RENDITION_PLANS = {
-  work: { full: true },
-  catalog: { full: false },
+  work: { full: true, roles: "still" },
+  catalog: { full: false, roles: "still" },
+  profile: { full: false, roles: "profile" },
 } as const;
 export type RenditionPlan = keyof typeof RENDITION_PLANS;
 
 export const isRenditionPlan = (value: unknown): value is RenditionPlan =>
   typeof value === "string" && Object.hasOwn(RENDITION_PLANS, value);
 
+/** The roles a plan may ask for, in the order a job renders them. */
+export const planRoles = (plan: RenditionPlan): readonly RenderedStillRole[] =>
+  RENDITION_PLANS[plan].roles === "profile" ? PROFILE_ROLES : STILL_ROLES;
+
 export const isStillRole = (value: unknown): value is StillRole =>
   typeof value === "string" &&
   (STILL_ROLES as readonly string[]).includes(value);
+
+export const isProfileRole = (value: unknown): value is ProfileRole =>
+  typeof value === "string" &&
+  (PROFILE_ROLES as readonly string[]).includes(value);
 
 export const isRenditionRole = (value: unknown): value is RenditionRole =>
   typeof value === "string" &&
@@ -289,18 +388,21 @@ const assertFrame = (frame: FrameSize) => {
 };
 
 /** `card` roles take the reference's cover crop; `complete` roles never do. */
-export const recipeFraming = (role: StillRole): "card" | "complete" =>
+export const recipeFraming = (role: RenderedStillRole): "card" | "complete" =>
   RECIPE_PARAMETERS_V1[role].framing;
 
 /** WebP quality of a still role. */
-export const recipeQuality = (role: StillRole): number =>
+export const recipeQuality = (role: RenderedStillRole): number =>
   RECIPE_PARAMETERS_V1[role].quality;
 
 /**
  * The output size of a still role for a frame, never upscaled. Long scrolls
  * follow the role's short-edge-aware rule instead of the long-edge cap.
  */
-export function stillOutputSize(role: StillRole, frame: FrameSize): FrameSize {
+export function stillOutputSize(
+  role: RenderedStillRole,
+  frame: FrameSize,
+): FrameSize {
   assertFrame(frame);
   const recipe = RECIPE_PARAMETERS_V1[role];
   const { width, height } = frame;
@@ -332,21 +434,30 @@ export function stillOutputSize(role: StillRole, frame: FrameSize): FrameSize {
 
 /**
  * The size a planned still role is rendered at for `plan`, or `null` when it
- * is not rendered. Every role but `viewer` is always rendered. `viewer` is
- * skipped by its recipe when it would equal `display` or exceed `full` on
- * either side, and by a plan that renders `full` when it would be at least as
- * large as `full` on both sides (the same size, as for any frame of at most
- * 4096 px on its long edge, or a long scroll within the viewer's bounds), so
- * no plan stores one size twice. Long scrolls compare their long-scroll
- * geometry. A plan without `full` keeps every viewer that differs from
- * `display`: it is that plan's largest image.
+ * is not rendered. Every role but `viewer` and the larger role of a profile
+ * family is always rendered; that profile role is skipped when its size
+ * equals its family anchor's. `viewer` is skipped by its recipe when it would
+ * equal `display` or exceed `full` on either side, and by a plan that renders
+ * `full` when it would be at least as large as `full` on both sides (the same
+ * size, as for any frame of at most 4096 px on its long edge, or a long
+ * scroll within the viewer's bounds), so no plan stores one size twice. Long
+ * scrolls compare their long-scroll geometry. A plan without `full` keeps
+ * every viewer that differs from `display`: it is that plan's largest image.
  */
 export function plannedStillSize(
-  role: StillRole,
+  role: RenderedStillRole,
   frame: FrameSize,
   plan: RenditionPlan,
 ): FrameSize | null {
   const size = stillOutputSize(role, frame);
+  if (isProfileRole(role)) {
+    const recipe = RECIPE_PARAMETERS_V1[role];
+    if (!("skip" in recipe)) return size;
+    const anchor = stillOutputSize(recipe.skip.whenEqualTo, frame);
+    return size.width === anchor.width && size.height === anchor.height
+      ? null
+      : size;
+  }
   if (role !== "viewer") return size;
   const display = stillOutputSize("display", frame);
   const full = stillOutputSize("full", frame);
@@ -382,7 +493,7 @@ export function editRegion(
 
 /** The region a still role renders from: card roles apply the cover crop. */
 export const renditionRegion = (
-  role: StillRole,
+  role: RenderedStillRole,
   source: FrameSize,
   edit: MediaEdit,
   coverCrop: NormalizedCrop | null,
@@ -396,7 +507,7 @@ export const renditionRegion = (
  * requires it.
  */
 export const expectedStillSize = (
-  role: StillRole,
+  role: RenderedStillRole,
   source: FrameSize,
   edit: MediaEdit,
   coverCrop: NormalizedCrop | null,

@@ -1,5 +1,6 @@
 import {
   MEDIA_WORKER_JOB_KINDS,
+  PROFILE_RENDER_JOB_KINDS,
   UPLOAD_COUPLED_JOB_KINDS,
   createPublishingJobHandlers,
 } from "@moya/backend-production/internal/publishing-job-handlers";
@@ -9,12 +10,17 @@ import {
   PUBLICATION_PUBLISH_JOB_KINDS,
   PUBLICATION_WITHDRAW_JOB_KINDS,
 } from "@moya/backend-production/internal/media-publication-worker";
+import { profileAnchorIdentities } from "@moya/backend-production/internal/publishing-profile";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
   CatalogRenderResult,
   CatalogWorkerRenderPlan,
 } from "@moya/backend-production/internal/publishing-catalog";
+import type {
+  ProfileRenderResult,
+  ProfileWorkerRenderPlan,
+} from "@moya/backend-production/internal/publishing-profile";
 import type {
   PublishingJobHandlerOptions,
   PublishingWorkerJobClaim,
@@ -27,13 +33,15 @@ import type {
  * The process split of the publishing queue (W1-W3, P1-6): the Backend keeps
  * the two kinds coupled to its own uploads with the maintenance that
  * schedules them; the media worker claims every other kind, including
- * `catalog_render`; a handler set without a processor fails processing claims
- * retryably.
+ * `catalog_render`; profile renders keep a list of their own, claimed only
+ * behind their switch; a handler set without a processor, Catalog or profile
+ * rendering fails those claims retryably.
  */
 
 const START = Date.parse("2026-10-04T12:00:00.000Z");
 const hex = (seed: number) => seed.toString(16).padStart(32, "0");
 const ASSET = `catalog-asset-${hex(9)}`;
+const USER_MEDIA = `user-media-${hex(7)}`;
 
 const flush = async (rounds = 25) => {
   for (let round = 0; round < rounds; round += 1) {
@@ -138,6 +146,7 @@ describe("publishing queue split between the Backend and the media worker", () =
     const split = [
       ...UPLOAD_COUPLED_JOB_KINDS,
       ...MEDIA_WORKER_JOB_KINDS,
+      ...PROFILE_RENDER_JOB_KINDS,
       ...PUBLICATION_PUBLISH_JOB_KINDS,
       ...PUBLICATION_WITHDRAW_JOB_KINDS,
     ];
@@ -148,6 +157,8 @@ describe("publishing queue split between the Backend and the media worker", () =
       "sweep_staging",
     ]);
     expect(MEDIA_WORKER_JOB_KINDS).toContain("catalog_render");
+    expect(PROFILE_RENDER_JOB_KINDS).toEqual(["profile_render"]);
+    expect(MEDIA_WORKER_JOB_KINDS).not.toContain("profile_render");
   });
 
   it("runs only the selected maintenance steps and extra steps on their cadence", async () => {
@@ -227,6 +238,13 @@ describe("publishing queue split between the Backend and the media worker", () =
     expect(await handlers.run(claim("catalog_render", ASSET), signal)).toEqual({
       status: "failed",
       errorCode: "catalog_unavailable",
+      retryable: true,
+    });
+    expect(
+      await handlers.run(claim("profile_render", USER_MEDIA), signal),
+    ).toEqual({
+      status: "failed",
+      errorCode: "profile_unavailable",
       retryable: true,
     });
   });
@@ -477,5 +495,201 @@ describe("catalog_render job handler", () => {
     await expect(
       handlers.run(claim("catalog_render", ASSET), signal),
     ).rejects.toMatchObject({ name: "MediaProcessingUnavailableError" });
+  });
+});
+
+describe("profile_render job handler", () => {
+  const source = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const plan: ProfileWorkerRenderPlan = {
+    userMediaId: USER_MEDIA,
+    sha256: "c".repeat(64),
+    width: 512,
+    height: 512,
+    byteSize: source.byteLength,
+    families: ["avatar"],
+  };
+  const rendered: ProfileRenderResult = {
+    status: "rendered",
+    outcome: {
+      sourceSha256: "c".repeat(64),
+      renditions: (["avatar-128", "avatar-512"] as const).map(
+        (role, index) => ({
+          storageKey: `blobs/aa/bb/aabb${hex(index).slice(4)}`,
+          byteSize: 10,
+          sha256: "d".repeat(64),
+          role,
+          recipeVersion: 1,
+          recipeDigest: "0".repeat(16),
+          contentType: "image/webp" as const,
+          width: index === 0 ? 128 : 512,
+          height: index === 0 ? 128 : 512,
+        }),
+      ),
+    },
+  };
+  const setup = (
+    result: ProfileRenderResult | Error,
+    found: ProfileWorkerRenderPlan | null = plan,
+    bytes: Uint8Array | null = source,
+  ) => {
+    const profilePort = {
+      readProfileRenderPlan: vi.fn(async () => found),
+      readProfileMediaBytes: vi.fn(async () => bytes),
+      recordProfileRenditions: vi.fn(
+        async (): Promise<
+          | { readonly status: "recorded" }
+          | { readonly status: "discarded"; readonly storageKeys: string[] }
+        > => ({ status: "recorded" }),
+      ),
+    };
+    const renderer = {
+      render: vi.fn(async () => {
+        if (result instanceof Error) throw result;
+        return result;
+      }),
+    };
+    const store = { remove: vi.fn(async () => undefined) };
+    const port = queuePort();
+    const handlers = createPublishingJobHandlers({
+      port: port as unknown as PublishingWorkerPort,
+      store: store as unknown as PublishingJobHandlerOptions["store"],
+      profile: { port: profilePort, renderer },
+      clock: () => new Date(START),
+      logger: silent,
+    });
+    return { handlers, profilePort, renderer, store, port };
+  };
+  const signal = new AbortController().signal;
+
+  it("plans with the current anchors, renders the stored PNG, records the family and completes", async () => {
+    const { handlers, profilePort, renderer } = setup(rendered);
+    expect(
+      await handlers.run(claim("profile_render", USER_MEDIA), signal),
+    ).toEqual({ status: "completed" });
+    expect(profilePort.readProfileRenderPlan).toHaveBeenCalledWith(
+      USER_MEDIA,
+      profileAnchorIdentities(),
+    );
+    expect(profilePort.readProfileMediaBytes).toHaveBeenCalledWith(USER_MEDIA);
+    expect(renderer.render).toHaveBeenCalledWith(plan, source, signal);
+    expect(profilePort.recordProfileRenditions).toHaveBeenCalledWith(
+      USER_MEDIA,
+      rendered.status === "rendered" ? rendered.outcome : null,
+      new Date(START),
+    );
+  });
+
+  it("does no work for an unknown, erased or current image or a malformed subject", async () => {
+    for (const found of [null, { ...plan, families: [] }]) {
+      const { handlers, profilePort, renderer } = setup(rendered, found);
+      expect(
+        await handlers.run(claim("profile_render", USER_MEDIA), signal),
+      ).toEqual({ status: "completed" });
+      expect(profilePort.readProfileMediaBytes).not.toHaveBeenCalled();
+      expect(renderer.render).not.toHaveBeenCalled();
+    }
+    // Erased between the plan and the byte read.
+    const erased = setup(rendered, plan, null);
+    expect(
+      await erased.handlers.run(claim("profile_render", USER_MEDIA), signal),
+    ).toEqual({ status: "completed" });
+    expect(erased.renderer.render).not.toHaveBeenCalled();
+    expect(erased.profilePort.recordProfileRenditions).not.toHaveBeenCalled();
+    const { handlers, profilePort } = setup(rendered);
+    for (const subject of [ASSET, `user-media-${"G".repeat(32)}`])
+      expect(
+        await handlers.run(claim("profile_render", subject), signal),
+      ).toEqual({
+        status: "failed",
+        errorCode: "invalid_job_subject",
+        retryable: false,
+      });
+    expect(profilePort.readProfileRenderPlan).not.toHaveBeenCalled();
+  });
+
+  it("fails the job with the content-free code of a rejected source, recording nothing", async () => {
+    for (const failureCode of [
+      "size_mismatch",
+      "unsupported_type",
+      "source_mismatch",
+      "decode_failed",
+      "processing_failed",
+    ]) {
+      const { handlers, profilePort } = setup({
+        status: "rejected",
+        failureCode,
+      });
+      expect(
+        await handlers.run(claim("profile_render", USER_MEDIA), signal),
+      ).toEqual({ status: "failed", errorCode: failureCode, retryable: false });
+      expect(profilePort.recordProfileRenditions).not.toHaveBeenCalled();
+    }
+  });
+
+  it("removes discarded duplicates of a replay and lets infrastructure failures reach the worker", async () => {
+    const replay = setup(rendered);
+    replay.profilePort.recordProfileRenditions.mockResolvedValueOnce({
+      status: "discarded",
+      storageKeys: ["blobs/aa/bb/aabb0000000000000000000000000000"],
+    });
+    expect(
+      await replay.handlers.run(claim("profile_render", USER_MEDIA), signal),
+    ).toEqual({ status: "completed" });
+    expect(replay.store.remove).toHaveBeenCalledWith(
+      "blobs/aa/bb/aabb0000000000000000000000000000",
+    );
+    const { handlers } = setup(
+      Object.assign(new Error("Publishing media processing unavailable"), {
+        name: "MediaProcessingUnavailableError",
+      }),
+    );
+    await expect(
+      handlers.run(claim("profile_render", USER_MEDIA), signal),
+    ).rejects.toMatchObject({ name: "MediaProcessingUnavailableError" });
+  });
+
+  it("removes produced blobs when the job was aborted before recording", async () => {
+    const controller = new AbortController();
+    const { handlers, store, profilePort, renderer } = setup(rendered);
+    renderer.render.mockImplementationOnce(async () => {
+      controller.abort(new Error("lease lost"));
+      return rendered;
+    });
+    await expect(
+      handlers.run(claim("profile_render", USER_MEDIA), controller.signal),
+    ).rejects.toThrow("lease lost");
+    expect(store.remove).toHaveBeenCalledTimes(2);
+    expect(profilePort.recordProfileRenditions).not.toHaveBeenCalled();
+  });
+
+  it("records a rejected render as a final job failure through the worker", async () => {
+    const timers = new ManualTimers();
+    const job = claim("profile_render", USER_MEDIA);
+    const port = queuePort([job]);
+    port.failJob.mockResolvedValue("failed" as never);
+    const { handlers } = setup({
+      status: "rejected",
+      failureCode: "source_mismatch",
+    });
+    const worker = new PublishingWorker({
+      port: port as unknown as PublishingWorkerPort,
+      handlers,
+      kinds: [...MEDIA_WORKER_JOB_KINDS, ...PROFILE_RENDER_JOB_KINDS],
+      maintenance: false,
+      timers,
+      clock: timers.clock,
+      logger: silent,
+    });
+    worker.start();
+    await timers.advance(0);
+    await worker.stop();
+    expect(port.claimJobs.mock.calls[0]![0].kinds).toContain("profile_render");
+    expect(port.failJob).toHaveBeenCalledWith(
+      { id: job.id, leaseOwner: job.leaseOwner },
+      "source_mismatch",
+      new Date(START),
+      { retryable: false },
+    );
+    expect(port.completeJob).not.toHaveBeenCalled();
   });
 });

@@ -239,6 +239,16 @@ export type {
   CatalogRenditionRole,
 } from "./modules/community/application/ports/catalog-media-asset-port.js";
 export type {
+  ProfileMediaAssetPort,
+  ProfileRenderOutcome,
+  ProfileRenderPlan,
+  ProfileRenderSweepCounts,
+  ProfileRenderSweepOptions,
+  ProfileRenditionIdentity,
+  ProfileRenditionRecord,
+} from "./modules/community/application/ports/profile-media-asset-port.js";
+export type {
+  ProfileRenditionReadTarget,
   PublishingBlobUnlink,
   PublishingCleanupCounts,
   PublishingCommandIdentity,
