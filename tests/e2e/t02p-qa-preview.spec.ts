@@ -653,12 +653,13 @@ test("Formal and clean Development do not consume the QA chrome parameter", asyn
       await expect(
         page.locator("details[data-inscription-filter]"),
       ).toHaveCount(0);
+      // 我 mounts on first open, so its header trigger is not rendered yet.
       await expect(page.locator("[data-search-trigger]")).toHaveCount(
-        path === "/" ? 3 : 0,
+        path === "/" ? 2 : 0,
       );
       await expect(
         page.locator('[data-search-trigger-placement="header"]'),
-      ).toHaveCount(path === "/" ? 3 : 0);
+      ).toHaveCount(path === "/" ? 2 : 0);
       await expect(page.locator("[data-catalog-search]")).toHaveCount(
         path === "/" ? 1 : 0,
       );

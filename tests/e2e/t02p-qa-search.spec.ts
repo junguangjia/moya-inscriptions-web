@@ -155,8 +155,9 @@ test("QA Search and Filter stay isolated from Formal and clean Development", asy
     await expect(
       page.locator("[data-inscription-filter] [data-filter-trigger]"),
     ).toHaveCount(0);
+    // 我 mounts on first open, so its header trigger is not rendered yet.
     await expect(page.locator("[data-search-trigger]")).toHaveCount(
-      path === "/" ? 3 : 0,
+      path === "/" ? 2 : 0,
     );
     await expect(page.locator("[data-catalog-search]")).toHaveCount(
       path === "/" ? 1 : 0,
