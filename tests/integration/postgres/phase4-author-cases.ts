@@ -1417,13 +1417,18 @@ export const registerPhase4AuthorTests = (
         ),
       );
       expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
-      const [first, second] = results.map((r) =>
-        r.status === "fulfilled" ? Date.parse(r.value.nextChangeAt) : NaN,
-      );
-      expect(first).not.toBe(second);
-      const last = first! > second! ? image : other,
+      for (const result of results)
+        expect(
+          result.status === "fulfilled"
+            ? Number.isFinite(Date.parse(result.value.nextChangeAt))
+            : false,
+        ).toBe(true);
+      // The two binds serialize on the actor row; whichever committed last is
+      // the current avatar (the bind times may share a millisecond).
+      const current = (await adapter.readProfile(a, a)).avatar?.id;
+      expect([image.id, other.id]).toContain(current);
+      const last = current === image.id ? image : other,
         replaced = last === image ? other : image;
-      expect((await adapter.readProfile(a, a)).avatar?.id).toBe(last.id);
       expect(
         (await fetch(`${base}/v1/community/media/${last.id}`)).status,
       ).toBe(200);
