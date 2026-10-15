@@ -198,7 +198,11 @@ const baseStatus = (
       return { kind: "queued", label: "等待上传" };
     case "uploading": {
       const percent = uploadPercent(item);
-      return { kind: "uploading", label: `上传中 ${percent}%`, percent };
+      return {
+        kind: "uploading",
+        label: percent === 100 ? "文件已发送，等待确认" : `上传中 ${percent}%`,
+        percent,
+      };
     }
     case "uploaded":
       return { kind: "uploaded", label: "已上传，等待处理" };

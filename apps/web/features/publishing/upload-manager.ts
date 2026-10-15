@@ -201,10 +201,10 @@ export interface UploadManagerOptions {
   readonly now?: () => number;
 }
 
-/** Bounded polling backoff after upload (ms). */
-export const POLL_DELAYS_MS = [
-  1000, 2000, 3000, 5000, 8000, 13_000, 20_000, 30_000,
-];
+/** Healthy pending items are checked within five seconds (plus request time). */
+export const POLL_DELAYS_MS = [1000, 2000, 3000, 5000];
+/** Consecutive failed status checks back off without slowing healthy processing. */
+export const POLL_ERROR_DELAYS_MS = [5000, 8000, 13_000, 20_000, 30_000];
 
 // ---------------------------------------------------------------------------
 // Product text
@@ -291,6 +291,7 @@ interface ItemRecord {
   hashes: Map<MediaComponentRole, Promise<string | null>>;
   pollTimer: unknown;
   pollAttempt: number;
+  pollFailures: number;
   draftId: string | null;
 }
 
@@ -504,6 +505,7 @@ export class UploadManager {
         hashes: new Map(),
         pollTimer: null,
         pollAttempt: 0,
+        pollFailures: 0,
         draftId: this.draftId,
       };
       this.records.set(key, record);
@@ -630,6 +632,7 @@ export class UploadManager {
         hashes: new Map(),
         pollTimer: null,
         pollAttempt: 0,
+        pollFailures: 0,
         draftId: null,
       };
       this.records.set(entry.key, record);
@@ -1283,6 +1286,7 @@ export class UploadManager {
         hashes: new Map(),
         pollTimer: null,
         pollAttempt: 0,
+        pollFailures: 0,
         draftId: draft.id,
       };
       this.records.set(entry.itemKey, record);
@@ -1938,6 +1942,7 @@ export class UploadManager {
     keepFailedRole?: MediaComponentRole,
   ): void {
     record.view = { ...record.view, serverItem: item, itemId: item.id };
+    record.pollFailures = 0;
     for (const server of item.components) {
       const received =
         server.state === "received" || server.state === "verified";
@@ -2048,7 +2053,13 @@ export class UploadManager {
       return;
     if (record.view.itemId === null) return;
     const delay =
-      POLL_DELAYS_MS[Math.min(record.pollAttempt, POLL_DELAYS_MS.length - 1)]!;
+      record.pollFailures > 0
+        ? POLL_ERROR_DELAYS_MS[
+            Math.min(record.pollFailures - 1, POLL_ERROR_DELAYS_MS.length - 1)
+          ]!
+        : POLL_DELAYS_MS[
+            Math.min(record.pollAttempt, POLL_DELAYS_MS.length - 1)
+          ]!;
     record.pollAttempt += 1;
     const epoch = record.epoch;
     record.pollTimer = this.timers.setTimeout(() => {
@@ -2056,6 +2067,7 @@ export class UploadManager {
       void (async () => {
         if (!this.alive(record, epoch) || this.status !== "active") return;
         const read = await this.fetchItem(record, epoch);
+        if (!this.alive(record, epoch) || this.status !== "active") return;
         if (read === null) return;
         if ("account" in read) {
           this.pause("account");
@@ -2066,7 +2078,8 @@ export class UploadManager {
           return;
         }
         if ("error" in read) {
-          // Bounded backoff while the manager is alive; a pause stops it.
+          // A failed check backs off; successful pending answers stay responsive.
+          record.pollFailures += 1;
           this.schedulePoll(record);
           return;
         }

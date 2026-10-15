@@ -829,6 +829,140 @@ describe("upload manager: pauses never strand work (review fixes)", () => {
   });
 });
 
+describe("upload manager: processing status checks", () => {
+  const delays = (test: ReturnType<typeof createTestManager>) =>
+    [...test.timers.pending.values()].map((timer) => timer.ms);
+
+  it("observes seven pending items within five seconds of readiness without resending them", async () => {
+    const test = createTestManager();
+    const keys = Array.from({ length: 7 }, (_, index) => `photo-${index}`);
+    test.manager.addConfirmed(keys.map((key) => confirm(key, staticSource())));
+    await settle();
+    for (let index = 0; index < keys.length; index += 1) {
+      received(test, index);
+      await settle();
+    }
+    expect(test.transfer.starts).toHaveLength(7);
+    expect(test.client.client.registerItem).toHaveBeenCalledTimes(7);
+    expect(summarizeUploads(test.manager.getSnapshot()).processing).toBe(7);
+
+    let elapsed = 0;
+    const serverReadyAt = 20_000;
+    while (elapsed < serverReadyAt) {
+      const scheduled = delays(test);
+      expect(scheduled).toHaveLength(7);
+      expect(new Set(scheduled).size).toBe(1);
+      const delay = scheduled[0]!;
+      expect(delay).toBeLessThanOrEqual(5000);
+      elapsed += delay;
+      if (elapsed >= serverReadyAt)
+        for (const key of keys) test.client.makeReady(test.item(key).itemId!);
+      test.timers.fireAll();
+      await settle();
+    }
+
+    expect(elapsed).toBeLessThanOrEqual(serverReadyAt + 5000);
+    expect(summarizeUploads(test.manager.getSnapshot())).toMatchObject({
+      ready: 7,
+      blocking: 0,
+      processing: 0,
+    });
+    expect(delays(test)).toEqual([]);
+    expect(test.transfer.starts).toHaveLength(7);
+    expect(test.client.client.registerItem).toHaveBeenCalledTimes(7);
+    expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+    test.manager.dispose();
+  });
+
+  it("backs off failed status checks separately and resets the failure count after a successful check", async () => {
+    const test = createTestManager();
+    test.manager.addConfirmed([confirm("pending", staticSource())]);
+    await settle();
+    const itemId = received(test, 0);
+    await settle();
+    expect(delays(test)).toEqual([1000]);
+
+    for (const delay of [5000, 8000, 13_000, 20_000, 30_000, 30_000]) {
+      test.client.client.item.mockRejectedValueOnce(new Error("offline"));
+      test.timers.fireAll();
+      await settle();
+      expect(test.item("pending").phase).toBe("processing");
+      expect(delays(test)).toEqual([delay]);
+    }
+
+    test.timers.fireAll();
+    await settle();
+    expect(delays(test)).toEqual([5000]);
+    test.client.client.item.mockRejectedValueOnce(new Error("offline"));
+    test.timers.fireAll();
+    await settle();
+    expect(delays(test)).toEqual([5000]);
+
+    test.client.makeReady(itemId);
+    test.timers.fireAll();
+    await settle();
+    expect(test.item("pending").phase).toBe("ready");
+    expect(delays(test)).toEqual([]);
+    expect(test.transfer.starts).toHaveLength(1);
+    expect(test.client.client.registerItem).toHaveBeenCalledOnce();
+    expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+    test.manager.dispose();
+  });
+
+  it.each(["pause", "dispose"] as const)(
+    "%s cancels an error-backoff timer without sending more requests",
+    async (action) => {
+      const test = createTestManager();
+      test.manager.addConfirmed([confirm("pending", staticSource())]);
+      await settle();
+      received(test, 0);
+      await settle();
+      test.client.client.item.mockRejectedValueOnce(new Error("offline"));
+      test.timers.fireAll();
+      await settle();
+      expect(delays(test)).toEqual([5000]);
+      const reads = test.client.client.item.mock.calls.length;
+
+      if (action === "pause") test.manager.pause("offline");
+      else test.manager.dispose();
+      expect(delays(test)).toEqual([]);
+      test.timers.fireAll();
+      await settle();
+      expect(test.client.client.item).toHaveBeenCalledTimes(reads);
+      expect(test.transfer.starts).toHaveLength(1);
+      if (action === "pause") {
+        expect(test.manager.getSnapshot().status).toBe("paused");
+        test.manager.dispose();
+      }
+    },
+  );
+
+  it("ignores a status answer arriving after the manager was paused", async () => {
+    const test = createTestManager();
+    test.manager.addConfirmed([confirm("pending", staticSource())]);
+    await settle();
+    const itemId = received(test, 0);
+    await settle();
+    let release: (
+      item: ReturnType<typeof test.client.makeReady>,
+    ) => void = () => undefined;
+    test.client.client.item.mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    test.timers.fireAll();
+    await settle();
+    test.manager.pause("offline");
+    release(test.client.makeReady(itemId));
+    await settle();
+
+    expect(test.item("pending").phase).not.toBe("ready");
+    expect(test.manager.getSnapshot().status).toBe("paused");
+    expect(delays(test)).toEqual([]);
+    expect(test.transfer.starts).toHaveLength(1);
+    test.manager.dispose();
+  });
+});
+
 describe("upload manager: integrity, processing retries and unavailable items", () => {
   it("cancels a registration whose received bytes differ from the selection and never shows it received again", async () => {
     let digest = "a".repeat(64);
