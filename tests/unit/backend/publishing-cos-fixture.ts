@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   CosPublishingMediaStore,
   PublishingCosResponseError,
+  PublishingMediaStoreError,
 } from "@moya/backend-production/internal/publishing-media-store";
 
 import type {
@@ -54,8 +55,7 @@ export function cosFixture() {
   const transport: PublishingCosTransport = {
     async request(method, input, signal) {
       calls.push({ method, input });
-      if (signal?.aborted)
-        throw Object.assign(new Error("aborted"), { code: "aborted" });
+      if (signal?.aborted) throw new PublishingMediaStoreError("aborted");
       await state.before?.(method, input, signal);
       const Key = input.Key as string;
       const UploadId = input.UploadId as string;
@@ -95,6 +95,28 @@ export function cosFixture() {
               "content-range": `bytes ${start}-${end}/${object.bytes.length}`,
             },
           };
+          break;
+        }
+        case "putObject": {
+          if (headers?.["x-cos-forbid-overwrite"] !== "true")
+            throw new PublishingCosResponseError(400);
+          if (objects.has(Key)) throw new PublishingCosResponseError(409);
+          if (!Buffer.isBuffer(input.Body))
+            throw new PublishingCosResponseError(400);
+          const bytes = Buffer.from(input.Body);
+          const md5 = createHash("md5").update(bytes);
+          const digest = md5.digest();
+          if (
+            input.ContentLength !== bytes.length ||
+            headers["Content-MD5"] !== digest.toString("base64")
+          )
+            throw new PublishingCosResponseError(400);
+          objects.set(Key, {
+            bytes,
+            headers,
+            modified: new Date(),
+          });
+          result.ETag = `"${digest.toString("hex")}"`;
           break;
         }
         case "multipartInit": {
@@ -183,6 +205,8 @@ export function cosFixture() {
           }));
           result.IsTruncated = "false";
           break;
+        default:
+          throw new Error("unsupported synthetic COS operation");
       }
       state.after?.(method, result);
       return result as never;

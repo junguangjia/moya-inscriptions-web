@@ -82,8 +82,12 @@ describe("media item status", () => {
             { ...view().components[0]!, phase: "uploading", bytesSent: 200 },
           ],
         }),
-      ).label,
-    ).toBe("上传中 100%");
+      ),
+    ).toEqual({
+      kind: "uploading",
+      label: "文件已发送，等待确认",
+      percent: 100,
+    });
     expect(itemStatus(view({ phase: "uploaded" })).label).toBe(
       "已上传，等待处理",
     );
@@ -96,6 +100,19 @@ describe("media item status", () => {
       "处理中",
     );
     expect(itemStatus(undefined).label).toBe("正在读取");
+  });
+
+  it("keeps byte progress visible before the server-confirmation wait", () => {
+    expect(
+      itemStatus(
+        view({
+          phase: "uploading",
+          components: [
+            { ...view().components[0]!, phase: "uploading", bytesSent: 198 },
+          ],
+        }),
+      ),
+    ).toEqual({ kind: "uploading", label: "上传中 99%", percent: 99 });
   });
 
   it("stops reading once everything has loaded and nobody describes the item", () => {

@@ -70,8 +70,8 @@ export function assertPublishingCosOptions(
     );
 }
 
-/** Private COS adapter. Multipart parts are invisible until exact-size/hash
- * validation succeeds and CompleteMultipartUpload acknowledges the commit.
+/** Private COS adapter. Exact small derivatives are validated in bounded
+ * memory before one PUT; other streams retain multipart commit semantics.
  * DB keys remain opaque and provider-independent. No public URL is produced.
  */
 export class CosPublishingMediaStore {
@@ -164,6 +164,65 @@ export class CosPublishingMediaStore {
     try {
       await this.unversioned(options.signal);
       if (await this.head(Key, options.signal)) throw failure();
+      if (
+        purpose === "derivative" &&
+        options.requireExactSize === true &&
+        maxBytes <= PUBLISHING_COS_PART_BYTES
+      ) {
+        // These bytes are already a verified sandbox output. Still consume and
+        // validate the complete source before making any object visible, just
+        // as the multipart path does before CompleteMultipartUpload. Original
+        // uploads and unknown/large streams never enter this bounded fast path.
+        const body = Buffer.allocUnsafe(maxBytes);
+        let byteSize = 0;
+        await consume(source, options.signal, async (chunk) => {
+          if (byteSize + chunk.byteLength > maxBytes)
+            throw new PublishingMediaStoreError("size_limit_exceeded");
+          body.set(chunk, byteSize);
+          byteSize += chunk.byteLength;
+        });
+        if (!byteSize) throw new PublishingMediaStoreError("empty_content");
+        if (byteSize !== maxBytes)
+          throw new PublishingMediaStoreError("size_mismatch");
+        if (options.signal?.aborted)
+          throw new PublishingMediaStoreError("aborted");
+        const md5 = createHash("md5").update(body).digest();
+        const sha256 = createHash("sha256").update(body).digest("hex");
+        // A missing PUT answer may still have committed. The shared cleanup
+        // below checks this attempt's marker before deleting anything.
+        completing = true;
+        const uploaded = await this.transport.request<COS.PutObjectResult>(
+          "putObject",
+          {
+            ...this.base(),
+            Key,
+            Body: body,
+            ContentLength: byteSize,
+            ContentType: contentType,
+            ACL: "private",
+            CacheControl: "private, no-store",
+            Headers: {
+              "Content-MD5": md5.toString("base64"),
+              "x-cos-forbid-overwrite": "true",
+              "x-cos-meta-publishing-upload": identity,
+            },
+          },
+          options.signal,
+        );
+        const expectedEtag = md5.toString("hex");
+        if (uploaded.ETag?.replaceAll('"', "").toLowerCase() !== expectedEtag)
+          throw failure();
+        const committed = await this.head(Key, options.signal);
+        if (
+          !committed ||
+          header(committed, "x-cos-meta-publishing-upload") !== identity ||
+          size(header(committed, "content-length")) !== byteSize ||
+          header(committed, "etag")?.replaceAll('"', "").toLowerCase() !==
+            expectedEtag
+        )
+          throw failure();
+        return { storageKey, byteSize, sha256 };
+      }
       const init = await this.transport.request<COS.MultipartInitResult>(
         "multipartInit",
         {
