@@ -7,6 +7,7 @@ import {
   useUploadSession,
 } from "./publishing-provider";
 import { usePublishingEntry } from "./publishing-entry";
+import { hasPendingHighResolution } from "./upload-manager";
 
 import type { EditorTarget } from "../product-shell/product-history";
 import type { EditorSessionView } from "./publishing-runtime";
@@ -56,10 +57,15 @@ export const createActionRing = (
             ? component.byteSize
             : component.bytesSent;
       }
-    else if (UNMEASURED_PHASES.has(item.phase)) unmeasured = true;
+    else if (
+      UNMEASURED_PHASES.has(item.phase) ||
+      hasPendingHighResolution(item)
+    )
+      unmeasured = true;
   }
   const fraction = total > 0 ? Math.min(1, sent / total) : 0;
-  if (fraction > 0) return { kind: "determinate", fraction };
+  if (fraction > 0 && (fraction < 1 || !unmeasured))
+    return { kind: "determinate", fraction };
   return unmeasured || total > 0
     ? { kind: "indeterminate" }
     : { kind: "track" };

@@ -30,6 +30,7 @@ import { IDLE_EDIT_READINESS } from "./edit-readiness";
 import { publishingClient } from "./publishing-data";
 import { PublishingRuntime } from "./publishing-runtime";
 import {
+  backgroundProgressText,
   canRetryProcessing,
   readinessText,
   summarizeUploads,
@@ -257,6 +258,8 @@ export const useUploadSession = () => {
       canRetryProcessing: (item: UploadItemView) => canRetryProcessing(item),
       retryProcessing: (key: string) =>
         manager?.retryProcessing(key) ?? Promise.resolve(),
+      retryHighResolution: (key: string) =>
+        manager?.retryHighResolution(key) ?? Promise.resolve(),
       continueUploads: () => manager?.continueUploads() ?? Promise.resolve(),
     }),
     [runtime, manager, snapshot, autosave, uploads],
@@ -369,7 +372,11 @@ export const useGlobalUploadProgress = () => {
     return {
       target: snapshot.session?.target ?? null,
       // The same rule as leaving: the entry shows exactly while leaving would keep the session.
-      active: snapshot.session !== null && runtime.hasUnfinishedWork(),
+      active:
+        snapshot.session !== null &&
+        (runtime.hasUnfinishedWork() ||
+          (summary?.backgroundProcessing ?? 0) > 0 ||
+          (summary?.backgroundFailed ?? 0) > 0),
       paused:
         uploads?.status === "paused" || snapshot.publicationPaused === true,
       ...(background
@@ -384,7 +391,11 @@ export const useGlobalUploadProgress = () => {
           ? Math.min(1, (summary?.bytesSent ?? 0) / bytesTotal)
           : 0,
       summary,
-      readiness: backgroundText ?? (summary ? readinessText(summary) : null),
+      readiness:
+        backgroundText ??
+        (summary
+          ? (readinessText(summary) ?? backgroundProgressText(summary))
+          : null),
       hasUnsavedChanges: unsaved || unsavedSession,
     };
   }, [runtime, snapshot, uploads, autosave]);

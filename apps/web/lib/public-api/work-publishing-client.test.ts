@@ -1260,3 +1260,42 @@ describe("relay clients without AbortSignal.any", () => {
     });
   });
 });
+
+describe("publishing processing progress", () => {
+  const processing = {
+    previewStatus: "queued",
+    highResolutionStatus: "waiting",
+    completedRenditions: 0,
+  };
+  it("uses a separate private progress read without changing the legacy item response", async () => {
+    answer({ item: awaitingItem, processing });
+    await expect(publishingClient.itemProgress(itemId)).resolves.toEqual({
+      item: awaitingItem,
+      processing,
+    });
+    expect(upstream.mock.calls[0]?.[0]).toBe(
+      `/api/community/publishing/items/${itemId}/progress`,
+    );
+    expect(upstream.mock.calls[0]?.[1]).toMatchObject({
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    answer(awaitingItem);
+    await expect(publishingClient.item(itemId)).resolves.toEqual(awaitingItem);
+    expect(upstream.mock.calls[1]?.[0]).toBe(
+      `/api/community/publishing/items/${itemId}`,
+    );
+  });
+  it("retries HD with the same authenticated request identity and no upload reset", async () => {
+    answer({ item: awaitingItem, processing });
+    await publishingClient.retryHighResolution(itemId, { requestId });
+    expect(upstream.mock.calls[0]?.[0]).toBe(
+      `/api/community/publishing/items/${itemId}/processing/retry`,
+    );
+    expect(upstream.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ requestId }),
+      headers: { "x-author-account": account },
+    });
+  });
+});

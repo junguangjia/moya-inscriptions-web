@@ -699,6 +699,32 @@ export const publishingMediaItemSchema = z
       });
   });
 
+/** Author-only processing facts, separate from the legacy item response. */
+export const publishingMediaProcessingProgressSchema = z.strictObject({
+  previewStatus: z.enum(["waiting", "queued", "processing", "ready", "failed"]),
+  highResolutionStatus: z.enum([
+    "waiting",
+    "queued",
+    "processing",
+    "ready",
+    "failed",
+    "not_required",
+  ]),
+  completedRenditions: z.number().int().min(0),
+});
+
+export const publishingMediaItemProgressSchema = z.strictObject({
+  item: publishingMediaItemSchema,
+  processing: publishingMediaProcessingProgressSchema,
+});
+
+export type PublishingMediaProcessingProgress = z.infer<
+  typeof publishingMediaProcessingProgressSchema
+>;
+export type PublishingMediaItemProgress = z.infer<
+  typeof publishingMediaItemProgressSchema
+>;
+
 /** Same-origin paths start with a slash; a published URL is absolute. */
 const isPublishedSrc = (src: string): boolean => !src.startsWith("/");
 

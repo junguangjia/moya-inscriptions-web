@@ -58,6 +58,7 @@ export const publishingAuthorActions = {
   registerItem: "publishing.item.register",
   cancelItem: "publishing.item.cancel",
   resetComponent: "publishing.component.reset",
+  retryProcessing: "publishing.item.retry_processing",
   submit: "publishing.submit",
   setVisibility: "publishing.work.visibility",
   deleteWork: "publishing.work.delete",

@@ -897,6 +897,7 @@ export class PublishingRuntime {
       account.manager.draftItems(),
       session.appendable,
     );
+    this.refreshChangedProcessing(account, albumContent(session), merged);
     session.latest = merged;
     session.autosave?.edit(merged);
     session.readiness.schedule();
@@ -918,6 +919,7 @@ export class PublishingRuntime {
       return;
     session.appendable.clear();
     const adopted = withManagedItems(content, account.manager.draftItems());
+    this.refreshChangedProcessing(account, albumContent(session), adopted);
     session.latest = adopted;
     if (session.view.saveMode === "saved") {
       const view = session.view;
@@ -1760,6 +1762,12 @@ export class PublishingRuntime {
       accountId: account.manager.accountId,
       currentAccount: this.services.currentAccount,
       onDraftSaved: (saved) => {
+        if (!session.closed && this.current()?.session === session)
+          this.refreshChangedProcessing(
+            account,
+            session.savedDraft?.content ?? null,
+            saved.content,
+          );
         session.savedDraft = saved;
       },
       ...(this.services.timers ? { timers: this.services.timers } : {}),
@@ -1817,6 +1825,30 @@ export class PublishingRuntime {
     if (this.current()?.session === session) this.publish();
   }
 
+  /** Only frame changes invalidate a ready item's stopped HD poll. */
+  private refreshChangedProcessing(
+    account: AccountRuntime,
+    previous: WorkDraftContent | null,
+    next: WorkDraftContent,
+  ): void {
+    const before: Readonly<Record<string, string | null>> =
+      previous === null ? {} : derivationSignatures(previous);
+    const after = derivationSignatures(next);
+    const previousIds = new Map(
+      previous?.items.map((item) => [item.key, item.itemId]) ?? [],
+    );
+    account.manager.refreshProcessing(
+      next.items
+        .filter(
+          (item) =>
+            item.itemId !== null &&
+            (previousIds.get(item.key) !== item.itemId ||
+              before[item.key] !== after[item.key]),
+        )
+        .map((item) => item.key),
+    );
+  }
+
   /** The album content a readiness check describes (with the manager's items). */
   private readinessContent(
     account: AccountRuntime,
@@ -1860,7 +1892,35 @@ export class PublishingRuntime {
     const holder = this.existingHolder(session);
     if (holder === null || content.items.some((item) => item.itemId === null))
       return null;
-    return this.services.client.readiness(holder, content);
+    const answer = await this.services.client.readiness(holder, content);
+    if (
+      session.closed ||
+      this.current()?.session !== session ||
+      this.services.currentAccount() !== account.manager.accountId
+    )
+      return null;
+    // The readiness transaction may have created the edited HD job after an
+    // earlier progress read still saw completed base outputs. Re-arm after
+    // that commit too, but never let an obsolete frame invalidate a newer one.
+    const current = this.readinessContent(account, session);
+    if (current !== null) {
+      const asked = derivationSignatures(content);
+      const latest = derivationSignatures(current);
+      const currentIds = new Map(
+        current.items.map((item) => [item.key, item.itemId]),
+      );
+      account.manager.refreshProcessing(
+        content.items
+          .filter(
+            (item) =>
+              item.itemId !== null &&
+              currentIds.get(item.key) === item.itemId &&
+              latest[item.key] === asked[item.key],
+          )
+          .map((item) => item.key),
+      );
+    }
+    return answer;
   }
 
   private async resolveHolder(

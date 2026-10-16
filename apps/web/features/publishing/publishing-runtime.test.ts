@@ -8,6 +8,7 @@ import {
   motion,
 } from "./parsers/synthetic-media.test-support";
 import { PublishingRuntime, SESSION_HEARTBEAT_MS } from "./publishing-runtime";
+import { processingProgressText, summarizeUploads } from "./upload-manager";
 import {
   ACCOUNT,
   DRAFT_ID,
@@ -32,6 +33,8 @@ import type {
   PublishingDraft,
   PublishingDraftConflict,
   PublishingMediaItem,
+  PublishingMediaItemProgress,
+  PublishingMediaProcessingProgress,
   PublishingReadiness,
   PublishingHolder,
   RegisterMediaItemCommand,
@@ -2086,5 +2089,166 @@ describe("edit derivative readiness (D1)", () => {
     // Leaving the session ends the tracking.
     await t.runtime.closeSession({ discard: true });
     expect(t.runtime.editReadiness()).toBeNull();
+  });
+});
+
+describe("edited-frame background progress lifecycle", () => {
+  const id = `media-item-${"5".repeat(32)}`;
+  const edited = (rotation: 0 | 90): WorkDraftContent => ({
+    ...content("existing private draft"),
+    items: [
+      {
+        key: "k1",
+        itemId: id,
+        kind: "static",
+        qualityMode: "standard",
+        edit: { rotation, crop: null },
+      },
+    ],
+  });
+  const restored = async () => {
+    const t = setup();
+    const item: PublishingMediaItem = {
+      id,
+      kind: "static",
+      qualityMode: "standard",
+      state: "ready",
+      failureCode: null,
+      components: [
+        {
+          id: `media-component-${"6".repeat(32)}`,
+          role: "still",
+          state: "verified",
+          byteSize: 100,
+          receivedBytes: 100,
+        },
+      ],
+      presentation: { width: 4, height: 3 },
+      media: {
+        thumbSrc: `/api/community/publishing/media/${id}/thumb/base`,
+        displaySrc: `/api/community/publishing/media/${id}/display/base`,
+        fullSrc: `/api/community/publishing/media/${id}/full/base`,
+      },
+    };
+    let processing: PublishingMediaProcessingProgress = {
+      previewStatus: "ready",
+      highResolutionStatus: "ready",
+      completedRenditions: 5,
+    };
+    const progress = vi.fn(async (): Promise<PublishingMediaItemProgress> => ({
+      item,
+      processing,
+    }));
+    Object.assign(t.client, { itemProgress: progress });
+    t.uploads.items.set(id, item);
+    t.signIn(ACCOUNT);
+    await settle();
+    const draft = { ...draftOf(edited(0)), mediaItems: [item] };
+    t.runtime.startSession({
+      target: { type: "draft", id: DRAFT_ID },
+      saveMode: "saved",
+      draft,
+    });
+    await t.runtime.restoreDraftMedia(draft);
+    t.timers.fireAll();
+    await settle();
+    expect(
+      t.runtime.manager()!.getSnapshot().items[0]!.processing
+        ?.highResolutionStatus,
+    ).toBe("ready");
+    expect(t.timers.pending.size).toBe(0);
+    return {
+      ...t,
+      item,
+      progress,
+      setProcessing: (next: PublishingMediaProcessingProgress) => {
+        processing = next;
+      },
+    };
+  };
+
+  it.each(["edit", "adopt"] as const)(
+    "rearms completed base HD for %s and checks again after readiness commits",
+    async (change) => {
+      const t = await restored();
+      let answer!: (value: PublishingReadiness) => void;
+      t.client.readiness.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      if (change === "edit") t.runtime.edit(edited(90));
+      else
+        t.runtime.adoptDraft(
+          { ...draftOf(edited(90), 2), mediaItems: [t.item] },
+          edited(90),
+        );
+      const manager = t.runtime.manager()!;
+      expect(processingProgressText(manager.getSnapshot().items[0]!)).toContain(
+        "正在确认高清图进度",
+      );
+      t.timers.fireAll();
+      await settle();
+      expect(t.client.readiness).toHaveBeenCalledOnce();
+      // A status read before the readiness transaction can still see base HD
+      // complete. The post-commit refresh must re-arm this stopped poll.
+      t.setProcessing({
+        previewStatus: "ready",
+        highResolutionStatus: "queued",
+        completedRenditions: 8,
+      });
+      answer({
+        ready: true,
+        pendingItemKeys: [],
+        failedItemKeys: [],
+        editKeys: { k1: "d".repeat(32) },
+      });
+      await settle();
+      expect(t.runtime.editReadiness()?.get()).toMatchObject({
+        status: "ready",
+        answered: { editKeys: { k1: "d".repeat(32) } },
+      });
+      expect(manager.getSnapshot().items[0]!.processingFailure?.code).toBe(
+        "progress_refreshing",
+      );
+      t.timers.fireAll();
+      await settle();
+      expect(manager.getSnapshot().items[0]!).toMatchObject({
+        phase: "ready",
+        processing: { highResolutionStatus: "queued", completedRenditions: 8 },
+      });
+      t.setProcessing({
+        previewStatus: "ready",
+        highResolutionStatus: "failed",
+        completedRenditions: 8,
+      });
+      t.timers.fireAll();
+      await settle();
+      expect(processingProgressText(manager.getSnapshot().items[0]!)).toContain(
+        "高清图处理失败",
+      );
+      expect(summarizeUploads(manager.getSnapshot())).toMatchObject({
+        blocking: 0,
+        backgroundFailed: 1,
+      });
+      expect(t.transfers[0]!.starts).toHaveLength(0);
+      expect(t.client.registerItem).not.toHaveBeenCalled();
+      expect(t.client.resetComponent).not.toHaveBeenCalled();
+      t.runtime.dispose();
+    },
+  );
+
+  it("does not rearm completed HD for a title-only edit or its autosave commit", async () => {
+    const t = await restored();
+    t.runtime.edit({ ...edited(0), title: "title only" });
+    t.timers.fireAll();
+    await settle();
+    expect(t.progress).toHaveBeenCalledOnce();
+    expect(
+      t.runtime.manager()!.getSnapshot().items[0]!.processingFailure,
+    ).toBeNull();
+    expect(t.client.readiness).not.toHaveBeenCalled();
+    t.runtime.dispose();
   });
 });

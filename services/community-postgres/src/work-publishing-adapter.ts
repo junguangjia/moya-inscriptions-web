@@ -14,6 +14,7 @@ import type {
   PublishingDraftPage,
   PublishingDraftSaveResult,
   PublishingMediaItem,
+  PublishingMediaItemProgress,
   PublishingPageQuery,
   PublishingSession,
   PublishingSnapshotPage,
@@ -79,6 +80,7 @@ import type { Pool } from "pg";
 import * as sessions from "./publishing/sessions.js";
 import * as drafts from "./publishing/drafts.js";
 import * as media from "./publishing/media.js";
+import * as mediaProgress from "./publishing/media-progress.js";
 import * as uploads from "./publishing/uploads.js";
 import * as jobs from "./publishing/jobs.js";
 import * as submissions from "./publishing/submissions.js";
@@ -224,6 +226,26 @@ export class PostgresWorkPublishingAdapter
     now: Date,
   ): Promise<PublishingMediaItem> {
     return media.registerItem(this.pool, actorId, command, now);
+  }
+  readItemProgress(
+    actorId: string,
+    itemId: string,
+  ): Promise<PublishingMediaItemProgress> {
+    return mediaProgress.readItemProgress(this.pool, actorId, itemId);
+  }
+  retryItemProcessing(
+    actorId: string,
+    itemId: string,
+    command: PublishingCommandIdentity,
+    now: Date,
+  ): Promise<PublishingMediaItemProgress> {
+    return mediaProgress.retryItemProcessing(
+      this.pool,
+      actorId,
+      itemId,
+      command,
+      now,
+    );
   }
   readItem(actorId: string, itemId: string): Promise<PublishingMediaItem> {
     return media.readItem(this.pool, actorId, itemId);

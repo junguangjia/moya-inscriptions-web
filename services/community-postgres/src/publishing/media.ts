@@ -54,7 +54,12 @@ import {
   writeTransaction,
   type PublishingDb,
 } from "./db.js";
-import { adjustCapacity, insertJob, releaseReservations } from "./jobs.js";
+import {
+  adjustCapacity,
+  insertJob,
+  releaseReservations,
+  spendReservations,
+} from "./jobs.js";
 import {
   recordRenditionRows,
   unrecordedKeys,
@@ -454,6 +459,7 @@ interface ReadinessRow {
   state: PublishingMediaItem["state"] | null;
   kind: "static" | "live" | null;
   quality_mode: "standard" | "original" | "legacy" | null;
+  hd_missing: boolean;
   /** `variant@editKey` of every required derivative not yet recorded. */
   missing: string[];
   /** This item's derive jobs for the row's edit keys that did not succeed. */
@@ -530,6 +536,8 @@ export const ensureContentDerivatives = async (
          FROM jsonb_to_recordset($1::jsonb) AS e(ord integer, item_id text, edit jsonb, is_cover boolean, cover_crop jsonb)
        )
        SELECT e.ord, e.edit_key, e.cover_key, i.id AS item_id, i.state, i.kind, i.quality_mode,
+         NOT EXISTS (SELECT 1 FROM community.media_renditions hd
+           WHERE hd.item_id=i.id AND hd.role='full' AND hd.edit_key=e.edit_key AND hd.state='ready') AS hd_missing,
          COALESCE((SELECT array_agg(rd.variant || '@' || rd.edit_key)
                    FROM community.media_required_derivatives(i.kind, e.edit, e.is_cover, e.cover_crop) rd
                    WHERE ${legacyNeedsSql("i", "rd")} AND NOT EXISTS (
@@ -577,6 +585,32 @@ export const ensureContentDerivatives = async (
       now,
       runAfter,
     );
+    // HD uses the complete edited frame and never blocks preview readiness.
+    if (
+      row?.state === "ready" &&
+      row.kind === "static" &&
+      row.hd_missing &&
+      !(row.quality_mode === "legacy" && row.edit_key === "base") &&
+      !row.jobs.some(
+        (job) => job.editKey === row.edit_key && job.variants.includes("full"),
+      )
+    ) {
+      await insertJob(
+        db,
+        {
+          kind: "derive_edit",
+          subjectId: row.item_id!,
+          payload: {
+            editKey: row.edit_key,
+            edit: normalizedEdit(item.edit),
+            coverCrop: null,
+            variants: ["full"],
+          },
+          runAfter,
+        },
+        now,
+      );
+    }
     // The thumb and cover of the cover item carry its cover crop in their key.
     const editKey =
       state === "ready" && row !== undefined
@@ -699,6 +733,53 @@ const itemReadiness = async (
 // ---------------------------------------------------------------------------
 // Settings and capacity
 
+/** Reacquire only the original static base-HD allowance after a terminal failure. */
+export const reserveBaseHighResolution = async (
+  db: PublishingDb,
+  itemId: string,
+  actorId: string,
+  now: Date,
+): Promise<void> => {
+  const components = (
+    await db.query<{ id: string; reserved_bytes: string }>(
+      "SELECT id,reserved_bytes FROM community.media_components WHERE item_id=$1 AND state='verified' ORDER BY id FOR UPDATE",
+      [itemId],
+    )
+  ).rows;
+  if (components.length !== 1)
+    throw new CommunityConflictError("Verified source is unavailable");
+  const facts = (
+    await db.query<{ declared: string; preview_bytes: string }>(
+      `SELECT declared_total_bytes AS declared,
+    COALESCE((SELECT sum(b.byte_size) FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+      WHERE d.item_id=i.id AND d.edit_key='base' AND d.role IN ('thumb','cover','display') AND d.state='ready'),0)::text AS preview_bytes
+    FROM community.media_items i WHERE i.id=$1`,
+      [itemId],
+    )
+  ).rows[0]!;
+  const remaining = Math.max(
+    0,
+    derivativeAllowance(safeInteger(facts.declared)) -
+      safeInteger(facts.preview_bytes),
+  );
+  const extra = Math.max(
+    0,
+    remaining - safeInteger(components[0]!.reserved_bytes),
+  );
+  if (extra === 0) return;
+  const capacity = await lockCapacity(db, actorId, now);
+  if (
+    capacity.committedBytes + capacity.reservedBytes + extra >
+    capacity.capacityBytes
+  )
+    throw new CommunityInputError("capacity_exceeded");
+  await db.query(
+    "UPDATE community.media_components SET reserved_bytes=reserved_bytes+$2::bigint,updated_at=$3::timestamptz WHERE id=$1",
+    [components[0]!.id, extra, nowParam(now)],
+  );
+  await adjustCapacity(db, actorId, { reserved: extra }, now);
+};
+
 /** WorkPublishingPort.readSettings */
 export const readSettings = async (
   pool: Pool,
@@ -730,6 +811,9 @@ export const reconcileCapacity = async (
          JOIN community.media_items i ON i.id=c.item_id
          WHERE c.owner_id=$1 AND c.reserved_bytes > 0
            AND i.state NOT IN ('awaiting_upload','processing')
+           AND NOT (i.state='ready' AND EXISTS (
+             SELECT 1 FROM community.publishing_jobs hd WHERE hd.subject_id=i.id AND hd.kind='derive_edit'
+               AND hd.payload->>'editKey'='base' AND hd.payload->'variants'='["full"]'::jsonb AND hd.state IN ('queued','running')))
          ORDER BY c.id FOR UPDATE OF c
        ) settled
        WHERE c.id=settled.id`,
@@ -1127,7 +1211,7 @@ const allVariants = (
 ): readonly PublishingDerivativeVariant[] =>
   kind === "live"
     ? ["thumb", "display", "full", "motion", "cover"]
-    : ["thumb", "display", "full", "cover"];
+    : ["thumb", "display", "cover"];
 
 /** WorkPublishingPort.readProcessing */
 export const readProcessing = async (
@@ -1461,8 +1545,33 @@ export const markItemReady = async (
         placeholder ?? null,
       ],
     );
-    await releaseReservations(db, [item.id], now);
+    const backgroundHd =
+      item.kind === "static" &&
+      !outcome.derivatives.some((record) => record.variant === "full");
+    if (backgroundHd) await spendReservations(db, item.id, recordedBytes, now);
+    else await releaseReservations(db, [item.id], now);
     await adjustCapacity(db, item.owner_id, { committed: recordedBytes }, now);
+    // Persist the continuation atomically with preview readiness. Old complete
+    // outcomes and retries never schedule needless reprocessing.
+    if (
+      item.kind === "static" &&
+      !outcome.derivatives.some((record) => record.variant === "full")
+    ) {
+      await insertJob(
+        db,
+        {
+          kind: "derive_edit",
+          subjectId: item.id,
+          payload: {
+            editKey: "base",
+            edit: { rotation: 0, crop: null },
+            coverCrop: null,
+            variants: ["full"],
+          },
+        },
+        now,
+      );
+    }
     await ensureHolderDerivatives(db, item.id, now);
     return duplicates.length === 0
       ? { status: "recorded" }
@@ -1498,6 +1607,12 @@ export const recordDerivatives = async (
         "UPDATE community.media_items SET placeholder_color=$2 WHERE id=$1",
         [item.id, placeholder],
       );
+    if (
+      outcome.derivatives.some(
+        (record) => record.variant === "full" && record.editKey === "base",
+      )
+    )
+      await releaseReservations(db, [item.id], now);
     await adjustCapacity(db, item.owner_id, { committed: recordedBytes }, now);
     return duplicates.length === 0
       ? { status: "recorded" }

@@ -227,7 +227,9 @@ export const thumbName = ({
     number === 1 ? FIRST_MARK : null,
     number > FEED_GALLERY_MAXIMUM ? "仅作品页" : null,
     chosenCover ? "封面" : null,
-    status.kind === "ready" ? null : chipLabel(status, uploadFailed),
+    status.kind === "ready" && status.background === undefined
+      ? null
+      : chipLabel(status, uploadFailed),
   ]
     .filter((part) => part !== null)
     .join("，");

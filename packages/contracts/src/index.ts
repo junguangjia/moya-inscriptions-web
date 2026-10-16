@@ -105,6 +105,8 @@ export type {
   PublishingLimits,
   PublishingMediaComponent,
   PublishingMediaItem,
+  PublishingMediaProcessingProgress,
+  PublishingMediaItemProgress,
   PublishingMediaSources,
   PublishingOpenedEditDraft,
   PublishingPageQuery,

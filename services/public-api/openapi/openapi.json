@@ -25557,6 +25557,270 @@
         ],
         "type": "object"
       },
+      "PublishingMediaItemProgress": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "item": {
+            "additionalProperties": false,
+            "properties": {
+              "components": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "byteSize": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "id": {
+                      "pattern": "^media-component-[0-9a-f]{32}$",
+                      "type": "string"
+                    },
+                    "receivedBytes": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "role": {
+                      "enum": ["still", "motion", "package"],
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "awaiting",
+                        "receiving",
+                        "received",
+                        "verified",
+                        "rejected",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "role",
+                    "state",
+                    "byteSize",
+                    "receivedBytes"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 2,
+                "type": "array"
+              },
+              "failureCode": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "unsupported_type",
+                      "decode_failed",
+                      "dimensions_exceeded",
+                      "duration_exceeded",
+                      "stream_layout_unsupported",
+                      "animated_image_unsupported",
+                      "pairing_mismatch",
+                      "size_mismatch",
+                      "processing_timeout",
+                      "processing_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "pattern": "^media-item-[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": ["static", "live"],
+                "type": "string"
+              },
+              "media": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "displaySrc": {
+                        "anyOf": [
+                          {
+                            "pattern": "^\\/api\\/community\\/publishing\\/media\\/(media-item-[0-9a-f]{32})\\/(thumb|display|full|motion|cover)\\/(?:base|[0-9a-f]{32})$",
+                            "type": "string"
+                          },
+                          {
+                            "pattern": "^\\/api\\/community\\/media\\/user-media-[0-9a-f]{32}$",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "fullSrc": {
+                        "anyOf": [
+                          {
+                            "pattern": "^\\/api\\/community\\/publishing\\/media\\/(media-item-[0-9a-f]{32})\\/(thumb|display|full|motion|cover)\\/(?:base|[0-9a-f]{32})$",
+                            "type": "string"
+                          },
+                          {
+                            "pattern": "^\\/api\\/community\\/media\\/user-media-[0-9a-f]{32}$",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "motionSrc": {
+                        "pattern": "^\\/api\\/community\\/publishing\\/media\\/(media-item-[0-9a-f]{32})\\/(thumb|display|full|motion|cover)\\/(?:base|[0-9a-f]{32})$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "anyOf": [
+                          {
+                            "pattern": "^\\/api\\/community\\/publishing\\/media\\/(media-item-[0-9a-f]{32})\\/(thumb|display|full|motion|cover)\\/(?:base|[0-9a-f]{32})$",
+                            "type": "string"
+                          },
+                          {
+                            "pattern": "^\\/api\\/community\\/media\\/user-media-[0-9a-f]{32}$",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["thumbSrc", "displaySrc"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "presentation": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "durationMs": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 60000,
+                        "type": "integer"
+                      },
+                      "hasAudio": {
+                        "type": "boolean"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 65535,
+                        "type": "integer"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 65535,
+                        "type": "integer"
+                      }
+                    },
+                    "required": ["width", "height"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "qualityMode": {
+                "enum": ["standard", "original", "legacy"],
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "awaiting_upload",
+                  "processing",
+                  "ready",
+                  "failed",
+                  "cancelled",
+                  "purged"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "qualityMode",
+              "state",
+              "failureCode",
+              "components",
+              "presentation",
+              "media"
+            ],
+            "type": "object"
+          },
+          "processing": {
+            "additionalProperties": false,
+            "properties": {
+              "completedRenditions": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "highResolutionStatus": {
+                "enum": [
+                  "waiting",
+                  "queued",
+                  "processing",
+                  "ready",
+                  "failed",
+                  "not_required"
+                ],
+                "type": "string"
+              },
+              "previewStatus": {
+                "enum": ["waiting", "queued", "processing", "ready", "failed"],
+                "type": "string"
+              }
+            },
+            "required": [
+              "previewStatus",
+              "highResolutionStatus",
+              "completedRenditions"
+            ],
+            "type": "object"
+          }
+        },
+        "required": ["item", "processing"],
+        "type": "object"
+      },
+      "PublishingMediaProcessingProgress": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "completedRenditions": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "highResolutionStatus": {
+            "enum": [
+              "waiting",
+              "queued",
+              "processing",
+              "ready",
+              "failed",
+              "not_required"
+            ],
+            "type": "string"
+          },
+          "previewStatus": {
+            "enum": ["waiting", "queued", "processing", "ready", "failed"],
+            "type": "string"
+          }
+        },
+        "required": [
+          "previewStatus",
+          "highResolutionStatus",
+          "completedRenditions"
+        ],
+        "type": "object"
+      },
       "PublishingOpenedEditDraft": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -39806,6 +40070,194 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PublishingMediaItem"
+                }
+              }
+            },
+            "description": "Committed result; private responses are never cached."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable, private, deleted or not owned subject; includes a late write to a deleted draft"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Stale state (for example a draft already submitted or an ended session), or a request identity reused with different content"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Strict input validation failed or a publishing rule rejected the command; the message carries the rule code"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service or media unavailable; no success is claimed"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/community/publishing/items/{itemId}/processing/retry": {
+      "post": {
+        "description": "Work publishing, Development only; absent in Production. Requires the session credential; responses are private, no-store with Vary: Authorization. Commands require x-author-account equal to the session account and accept no query; list reads accept only page and pageSize, and other reads accept no query. A rule rejection answers INVALID_INPUT whose message is the rule code; a stale state answers CONFLICT; a conflicting draft save answers 200 with status conflict and keeps both versions. RequestIdentity commands are replay-safe for their actor. A readiness check names the holder's current content: the Backend starts any missing edit derivative at once and answers which item keys still wait or failed, plus the thumb edit key of ready edited items; it has no other effect and is not receipted.",
+        "operationId": "retryMediaItemProcessing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "itemId",
+            "required": true,
+            "schema": {
+              "pattern": "^media-item-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The authenticated account; a missing or different account rejects. Does not authorize a request.",
+            "in": "header",
+            "name": "x-author-account",
+            "required": true,
+            "schema": {
+              "pattern": "^user-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestIdentity"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishingMediaItemProgress"
+                }
+              }
+            },
+            "description": "Committed result; private responses are never cached."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable, private, deleted or not owned subject; includes a late write to a deleted draft"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Stale state (for example a draft already submitted or an ended session), or a request identity reused with different content"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Strict input validation failed or a publishing rule rejected the command; the message carries the rule code"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service or media unavailable; no success is claimed"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/community/publishing/items/{itemId}/progress": {
+      "get": {
+        "description": "Work publishing, Development only; absent in Production. Requires the session credential; responses are private, no-store with Vary: Authorization. Commands require x-author-account equal to the session account and accept no query; list reads accept only page and pageSize, and other reads accept no query. A rule rejection answers INVALID_INPUT whose message is the rule code; a stale state answers CONFLICT; a conflicting draft save answers 200 with status conflict and keeps both versions. RequestIdentity commands are replay-safe for their actor. A readiness check names the holder's current content: the Backend starts any missing edit derivative at once and answers which item keys still wait or failed, plus the thumb edit key of ready edited items; it has no other effect and is not receipted.",
+        "operationId": "readMediaItemProgress",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "itemId",
+            "required": true,
+            "schema": {
+              "pattern": "^media-item-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishingMediaItemProgress"
                 }
               }
             },

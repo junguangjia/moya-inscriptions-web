@@ -16,6 +16,7 @@ import type {
   CreatePublishingDraftCommand,
   SavePublishingDraftCommand,
   PublishingMediaItem,
+  PublishingMediaProcessingProgress,
   PublishingReadinessCommand,
   RegisterMediaItemCommand,
   WorkSubmissionCommand,
@@ -64,6 +65,11 @@ interface Fixture {
   readonly uploaded: () => number;
   readonly releaseUploads: () => void;
   readonly releaseReady: () => void;
+  readonly setHighResolution: (
+    status: PublishingMediaProcessingProgress["highResolutionStatus"],
+  ) => void;
+  readonly retriedHighResolution: () => number;
+  readonly resetComponents: () => number;
 }
 
 const fixture = async (
@@ -71,6 +77,26 @@ const fixture = async (
   successfulPhotos = false,
 ): Promise<Fixture> => {
   const items = new Map<string, PublishingMediaItem>();
+  let highResolution: PublishingMediaProcessingProgress["highResolutionStatus"] =
+    "ready";
+  let completedRenditions = 5;
+  let retriedHighResolution = 0;
+  let resetComponents = 0;
+  const retryRequests = new Set<string>();
+  const processingProgress = (
+    item: PublishingMediaItem,
+  ): PublishingMediaProcessingProgress => ({
+    previewStatus:
+      item.state === "ready"
+        ? "ready"
+        : item.state === "failed"
+          ? "failed"
+          : item.state === "processing"
+            ? "processing"
+            : "waiting",
+    highResolutionStatus: item.state === "ready" ? highResolution : "waiting",
+    completedRenditions: item.state === "ready" ? completedRenditions : 0,
+  });
   let uploadStarted = 0;
   let uploaded = 0;
   let releaseUploads: () => void = () => {};
@@ -284,6 +310,48 @@ const fixture = async (
       request.method() === "POST"
     )
       return route.continue({ url: `${receiverUrl}${path}` });
+    const progressMatch = path.match(
+      /^\/api\/community\/publishing\/items\/(media-item-[0-9a-f]{32})\/progress$/u,
+    );
+    if (successfulPhotos && progressMatch && request.method() === "GET") {
+      const item = items.get(progressMatch[1]!);
+      return item
+        ? route.fulfill({
+            json: { item, processing: processingProgress(item) },
+          })
+        : route.fulfill({ status: 404, json: { error: {} } });
+    }
+    const retryMatch = path.match(
+      /^\/api\/community\/publishing\/items\/(media-item-[0-9a-f]{32})\/processing\/retry$/u,
+    );
+    if (successfulPhotos && retryMatch && request.method() === "POST") {
+      const item = items.get(retryMatch[1]!);
+      const command = request.postDataJSON() as { requestId: string };
+      expect(Object.keys(command)).toEqual(["requestId"]);
+      expect(command.requestId).toMatch(/^[0-9a-f-]{36}$/u);
+      if (
+        !item ||
+        item.state !== "ready" ||
+        (highResolution !== "failed" && !retryRequests.has(command.requestId))
+      )
+        return route.fulfill({ status: 409, json: { error: {} } });
+      if (!retryRequests.has(command.requestId)) {
+        retryRequests.add(command.requestId);
+        retriedHighResolution += 1;
+        highResolution = "queued";
+      }
+      return route.fulfill({
+        json: { item, processing: processingProgress(item) },
+      });
+    }
+    if (
+      successfulPhotos &&
+      /\/publishing\/items\/[^/]+\/components\/[^/]+\/reset$/u.test(path) &&
+      request.method() === "POST"
+    ) {
+      resetComponents += 1;
+      return route.fulfill({ status: 409, json: { error: {} } });
+    }
     const itemMatch = path.match(
       /^\/api\/community\/publishing\/items\/(media-item-[0-9a-f]{32})$/u,
     );
@@ -397,6 +465,21 @@ const fixture = async (
     uploaded: () => uploaded,
     releaseUploads,
     releaseReady: makeReady,
+    setHighResolution: (status) => {
+      highResolution = status;
+      // This is a synthetic lifecycle control. Committed versions survive
+      // failure/retry, just as the existing source and preview records do.
+      completedRenditions =
+        status === "ready"
+          ? 5
+          : status === "processing"
+            ? 4
+            : status === "failed"
+              ? completedRenditions
+              : 3;
+    },
+    retriedHighResolution: () => retriedHighResolution,
+    resetComponents: () => resetComponents,
     release: () => {
       release();
       releaseUploads();
@@ -1270,4 +1353,137 @@ test("desktop preserves the entry choice, all-at-once editor, feed stage and cro
     "data-fit",
     "contain",
   );
+});
+
+test("phone preview-first processing keeps editing usable and retries only high resolution", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const composer = await openComposer(browser, page, testInfo, {
+    successfulPhotos: true,
+  });
+  composer.fixture.setHighResolution("queued");
+  await chooseFiles(
+    composer.page,
+    composer.editor.getByRole("button", { name: "选择照片", exact: true }),
+    [(await photos())[0]!],
+  );
+  await present(screen(composer, "edit"));
+  await expect(composer.strip.locator("[data-edit-index]")).toHaveCount(1);
+  await expect.poll(composer.fixture.uploadStarted).toBe(1);
+  composer.fixture.releaseUploads();
+  await expect.poll(composer.fixture.uploaded).toBe(1);
+  composer.fixture.releaseReady();
+  const editStatus = composer.editor.locator("[data-edit-status]");
+  await expect(editStatus).toContainText("预览已就绪，高清图等待处理", {
+    timeout: ACTION_TIMEOUT,
+  });
+  await expect(editStatus).toContainText("已保存 3 个图像版本");
+  await publishScreen(composer);
+  const publish = screen(composer, "publish");
+  await fill(
+    publish.locator('[data-editor-input="title"]'),
+    "合成预览先行验证",
+  );
+  await expect(publish.locator('[data-editor-input="title"]')).toHaveValue(
+    "合成预览先行验证",
+  );
+  await expect(publish.locator("[data-publish-chip]")).toContainText(
+    "高清图等待处理",
+  );
+  await expect(publish.locator("[data-editor-submit]")).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect(composer.fixture.submitted()).toHaveLength(0);
+  await click(
+    publish.getByRole("button", { name: "返回编辑照片", exact: true }),
+  );
+  composer.fixture.setHighResolution("failed");
+  await expect(editStatus).toContainText("预览可用，高清图处理失败", {
+    timeout: ACTION_TIMEOUT,
+  });
+  await click(thumb(composer, 0));
+  await click(
+    sheet(composer, "photo-menu").getByRole("button", {
+      name: "重试高清图",
+      exact: true,
+    }),
+  );
+  await expect.poll(composer.fixture.retriedHighResolution).toBe(1);
+  await expect(editStatus).toContainText("高清图等待处理");
+  expect(composer.fixture.registered()).toBe(1);
+  expect(composer.fixture.uploadStarted()).toBe(1);
+  expect(composer.fixture.uploaded()).toBe(1);
+  expect(composer.fixture.resetComponents()).toBe(0);
+  composer.fixture.setHighResolution("ready");
+  await expect(editStatus).toHaveText("", { timeout: ACTION_TIMEOUT });
+  expect(composer.fixture.submitted()).toHaveLength(0);
+});
+
+test("desktop preview-first processing allows confirmation and HD-only retry without publishing", async ({
+  browser,
+  page,
+}, testInfo) => {
+  test.skip(
+    !["desktop-chromium", "desktop-webkit"].includes(testInfo.project.name),
+    "Existing desktop publishing surfaces.",
+  );
+  const composer = await openComposer(browser, page, testInfo, {
+    desktop: true,
+    successfulPhotos: true,
+  });
+  composer.fixture.setHighResolution("processing");
+  const desktop = composer.editor.locator('[data-editor-layout="desktop"]');
+  await chooseFiles(
+    composer.page,
+    desktop.getByRole("button", { name: "选择文件", exact: true }),
+    [(await photos())[0]!],
+  );
+  await expect.poll(composer.fixture.uploadStarted).toBe(1);
+  composer.fixture.releaseUploads();
+  await expect.poll(composer.fixture.uploaded).toBe(1);
+  composer.fixture.releaseReady();
+  const tile = desktop.locator("[data-media-strip] [data-media-key]").first();
+  await expect(tile).toHaveAttribute("data-media-status", "ready", {
+    timeout: ACTION_TIMEOUT,
+  });
+  await expect(tile.locator("[data-media-state-label]")).toContainText(
+    "高清图处理中",
+  );
+  await expect(tile).toContainText("已保存 4 个图像版本");
+  await fill(
+    desktop.locator('[data-editor-input="title"]'),
+    "合成高清后台验证",
+  );
+  await click(composer.editor.locator("[data-editor-open-confirmation]"));
+  const confirmation = composer.editor.locator(
+    '[data-editor-dialog="confirmation"]',
+  );
+  await present(confirmation);
+  await expect(confirmation.locator("[data-editor-submit]")).toBeEnabled();
+  expect(composer.fixture.submitted()).toHaveLength(0);
+  await click(
+    confirmation.getByRole("button", { name: "返回编辑", exact: true }),
+  );
+  composer.fixture.setHighResolution("failed");
+  await expect(tile.locator("[data-media-state-label]")).toContainText(
+    "高清图处理失败",
+    { timeout: ACTION_TIMEOUT },
+  );
+  await click(tile.locator('[data-media-action="retry-high-resolution"]'));
+  await expect.poll(composer.fixture.retriedHighResolution).toBe(1);
+  await expect(tile.locator("[data-media-state-label]")).toContainText(
+    "高清图等待处理",
+  );
+  expect(composer.fixture.registered()).toBe(1);
+  expect(composer.fixture.uploadStarted()).toBe(1);
+  expect(composer.fixture.uploaded()).toBe(1);
+  expect(composer.fixture.resetComponents()).toBe(0);
+  composer.fixture.setHighResolution("ready");
+  await expect(tile.locator("[data-media-state-label]")).toHaveText("已就绪", {
+    timeout: ACTION_TIMEOUT,
+  });
+  expect(composer.fixture.submitted()).toHaveLength(0);
 });

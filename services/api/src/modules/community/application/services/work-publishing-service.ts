@@ -22,6 +22,7 @@ import type {
   PublishingHolder,
   PublishingLimits,
   PublishingMediaItem,
+  PublishingMediaItemProgress,
   PublishingOpenedEditDraft,
   PublishingPageQuery,
   PublishingReadiness,
@@ -530,6 +531,26 @@ export class WorkPublishingService {
   ): Promise<PublishingMediaItem> {
     this.mediaStore();
     return this.port.registerItem(actorId, command, this.clock());
+  }
+
+  readItemProgress(
+    actorId: string,
+    itemId: string,
+  ): Promise<PublishingMediaItemProgress> {
+    return this.port.readItemProgress(actorId, itemId);
+  }
+
+  retryItemProcessing(
+    actorId: string,
+    itemId: string,
+    command: PublishingCommandIdentity,
+  ): Promise<PublishingMediaItemProgress> {
+    return this.port.retryItemProcessing(
+      actorId,
+      itemId,
+      command,
+      this.clock(),
+    );
   }
 
   readItem(actorId: string, itemId: string): Promise<PublishingMediaItem> {

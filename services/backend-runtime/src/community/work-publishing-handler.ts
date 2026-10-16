@@ -321,6 +321,34 @@ export const handleWorkPublishingRequest = async (
     }
 
     if (resource === "items") {
+      if (
+        id !== undefined &&
+        segments.length === 3 &&
+        leaf === "progress" &&
+        method === "GET"
+      ) {
+        const actor = requireActor();
+        noQuery();
+        reply(await service.readItemProgress(actor, segment("itemId", id)));
+        return;
+      }
+      if (
+        id !== undefined &&
+        segments.length === 4 &&
+        leaf === "processing" &&
+        extra === "retry" &&
+        method === "POST"
+      ) {
+        const actor = requireActor();
+        reply(
+          await service.retryItemProcessing(
+            actor,
+            segment("itemId", id),
+            command("requestIdentity", await body()),
+          ),
+        );
+        return;
+      }
       if (segments.length === 1 && method === "POST") {
         const actor = requireActor();
         if (!service.acceptsMedia) throw new MediaUnavailable();

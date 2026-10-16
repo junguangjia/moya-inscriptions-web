@@ -17,6 +17,7 @@ import {
   publishingDraftSchema,
   publishingLimitsSchema,
   publishingMediaItemSchema,
+  publishingMediaItemProgressSchema,
   publishingOpenedEditDraftSchema,
   publishingPageQuerySchema,
   publishingReadinessCommandSchema,
@@ -53,6 +54,7 @@ import type {
   PublishingHolder,
   PublishingLimits,
   PublishingMediaItem,
+  PublishingMediaItemProgress,
   PublishingOpenedEditDraft,
   PublishingReadiness,
   PublishingReadinessCommand,
@@ -654,6 +656,30 @@ export const publishingClient = {
       {
         signal,
       },
+    ),
+
+  /** Authenticated processing state, separate from the unchanged item response. */
+  itemProgress: async (
+    itemId: string,
+    signal?: AbortSignal,
+  ): Promise<PublishingMediaItemProgress> =>
+    request(
+      `publishing/items/${itemSegment(itemId)}/progress`,
+      publishingMediaItemProgressSchema,
+      { signal },
+    ),
+
+  /** Retry only failed background derivatives; uploaded sources stay untouched. */
+  retryHighResolution: async (
+    itemId: string,
+    cmd: PublishingRequestIdentity,
+    signal?: AbortSignal,
+  ): Promise<PublishingMediaItemProgress> =>
+    post(
+      `publishing/items/${itemSegment(itemId)}/processing/retry`,
+      publishingMediaItemProgressSchema,
+      command(requestIdentitySchema, cmd),
+      signal,
     ),
 
   cancelItem: async (
