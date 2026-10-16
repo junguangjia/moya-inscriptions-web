@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, useEffect, useLayoutEffect, useRef } from "react";
+import { act, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ import {
   THEME_PREFERENCE_STORAGE_KEY,
 } from "./preferences";
 import { AuthReturnProvider, useAuthReturn } from "../auth/auth-return";
+import { AuthorDialog } from "../authors/author-dialog";
 import { usePreviewNavigationHistory } from "../shell/use-preview-navigation-history";
 import {
   editorHistoryState,
@@ -3965,6 +3966,105 @@ describe("ProductShell", () => {
       expect(
         container.querySelector("dialog[data-user-dialog][open]"),
       ).not.toBeNull();
+    });
+
+    it("unmounts a real AuthorDialog with 用户 on widening without walking history or leaving a modal", async () => {
+      // jsdom has no modal dialogs; stub them as the authors tests do.
+      const showModal = vi.fn(function (this: HTMLDialogElement) {
+        this.open = true;
+      });
+      const close = vi.fn(function (this: HTMLDialogElement) {
+        this.open = false;
+      });
+      for (const [name, value] of [
+        ["showModal", showModal],
+        ["close", close],
+      ] as const) {
+        const original = Object.getOwnPropertyDescriptor(
+          HTMLDialogElement.prototype,
+          name,
+        );
+        Object.defineProperty(HTMLDialogElement.prototype, name, {
+          configurable: true,
+          value,
+        });
+        restores.push(() => {
+          if (original !== undefined)
+            Object.defineProperty(HTMLDialogElement.prototype, name, original);
+          else
+            delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>)[
+              name
+            ];
+        });
+      }
+      const onClose = vi.fn();
+      // A 用户 page whose 设置 opens the real modal, as its settings do.
+      const UserPageWithAuthorDialog = () => {
+        const [open, setOpen] = useState(false);
+        return (
+          <div data-user-probe="">
+            <button
+              aria-label="打开设置"
+              onClick={() => setOpen(true)}
+              type="button"
+            >
+              设置
+            </button>
+            {open ? (
+              <AuthorDialog
+                title="设置"
+                onClose={() => {
+                  onClose();
+                  setOpen(false);
+                }}
+              >
+                <p data-author-dialog-content="">设置内容</p>
+              </AuthorDialog>
+            ) : null}
+          </div>
+        );
+      };
+      window.history.replaceState(null, "", "/");
+      const { container } = mountShell({
+        initialPlatform: "phone",
+        user: <UserPageWithAuthorDialog />,
+      });
+      await act(async () => vi.runAllTimers());
+      act(() => observedProductShell!.navigatePrimary("user"));
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.activeDestination).toBe("user");
+      act(() => buttonByLabel(container, "打开设置").click());
+      await act(async () => vi.runAllTimers());
+
+      expect(showModal).toHaveBeenCalledTimes(1);
+      expect(
+        container.querySelector('dialog[aria-label="设置"][open]'),
+      ).not.toBeNull();
+      expect(window.history.state).toMatchObject({
+        phase4Dialog: expect.any(String),
+        phase4DialogDepth: 0,
+      });
+      const history = watchHistory();
+
+      resizeTo(1280);
+      await act(async () => vi.runAllTimers());
+      // The unmount queued a microtask that walks Back if its marker remains.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => vi.runAllTimers());
+
+      expect(observedProductShell?.activeDestination).toBe("home");
+      expect(container.querySelector("[data-user-probe]")).toBeNull();
+      expect(document.querySelector("[data-author-dialog-content]")).toBeNull();
+      expect(document.querySelector('dialog[aria-label="设置"]')).toBeNull();
+      expect(document.querySelector("dialog[open]")).toBeNull();
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
+      expectNoHistoryWalk(history);
+      expect(window.history.state).not.toHaveProperty("phase4Dialog");
+      expectBrowseOnly(container, true);
+      expectHomeOnly(container);
     });
 
     it("drops a 消息 link kept while the session was pending once it proves anonymous", async () => {

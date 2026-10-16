@@ -52,11 +52,21 @@ export const WideScreenAuthRedirect = () => {
     // The first check in a document decides, so switching between 登录 and
     // 注册 never leaves a form that was allowed when it loaded.
     if (root.dataset.authRedirect !== undefined) return;
-    const width = window.innerWidth;
-    const platform = resolveRuntimePresentationPlatform(navigator, width);
-    const wide = isWideLayout(platform, width);
-    root.dataset.authRedirect = wide ? "home" : "none";
-    if (wide) window.location.replace("/");
+    const decide = () => {
+      const width = window.innerWidth;
+      const platform = resolveRuntimePresentationPlatform(navigator, width);
+      const wide = isWideLayout(platform, width);
+      root.dataset.authRedirect = wide ? "home" : "none";
+      if (wide) window.location.replace("/");
+    };
+    decide();
+    // Like the inline script: a document restored from the back-forward cache
+    // decides again, so it is never left hidden.
+    const restored = (event: PageTransitionEvent) => {
+      if (event.persisted) decide();
+    };
+    window.addEventListener("pageshow", restored);
+    return () => window.removeEventListener("pageshow", restored);
   }, []);
 
   return serverRendered ? (

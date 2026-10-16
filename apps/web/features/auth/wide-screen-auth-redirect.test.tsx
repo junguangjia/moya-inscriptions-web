@@ -218,6 +218,25 @@ describe("WideScreenAuthRedirect", () => {
     expect(root.dataset.authRedirect).toBe("none");
   });
 
+  it("decides again after a soft-navigation redirect is restored from the back-forward cache", async () => {
+    useDevice({ userAgent: desktop, width: 1280 });
+    reactRoot = createRoot(container);
+    await act(async () => reactRoot!.render(<WideScreenAuthRedirect />));
+    expect(replace).toHaveBeenCalledOnce();
+    expect(root.dataset.authRedirect).toBe("home");
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 800,
+    });
+    window.dispatchEvent(
+      new PageTransitionEvent("pageshow", { persisted: true }),
+    );
+    expect(replace).toHaveBeenCalledOnce();
+    // Visible again: only "home" hides the page.
+    expect(root.dataset.authRedirect).toBe("none");
+  });
+
   it("keeps the first decision for a later 登录/注册 switch in the same document", async () => {
     useDevice({ userAgent: desktop, width: 800 });
     reactRoot = createRoot(container);
