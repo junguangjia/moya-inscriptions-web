@@ -41,6 +41,8 @@ import type {
   PublishingDraft,
   PublishingHolder,
   PublishingMediaItem,
+  PublishingMediaItemProgress,
+  PublishingMediaProcessingProgress,
   PublishingUploadResult,
   RegisterMediaItemCommand,
   StandardComponentOutcome,
@@ -127,6 +129,10 @@ export interface UploadItemView {
   readonly recoverable: boolean;
   /** Latest owner view of the item (derivative paths once ready). */
   readonly serverItem: PublishingMediaItem | null;
+  /** Committed server stages, independent of preview/submission readiness. */
+  readonly processing?: PublishingMediaProcessingProgress | null;
+  /** A background retry refusal never makes a usable preview fail. */
+  readonly processingFailure?: UploadFailure | null;
 }
 
 export type UploadManagerStatus = "active" | "paused" | "disposed";
@@ -148,6 +154,16 @@ export interface UploadClientPort {
     signal?: AbortSignal,
   ): Promise<PublishingMediaItem>;
   item(itemId: string, signal?: AbortSignal): Promise<PublishingMediaItem>;
+  /** Optional for legacy adapters that retain the original item-only response. */
+  itemProgress?(
+    itemId: string,
+    signal?: AbortSignal,
+  ): Promise<PublishingMediaItemProgress>;
+  retryHighResolution?(
+    itemId: string,
+    cmd: { requestId: string },
+    signal?: AbortSignal,
+  ): Promise<PublishingMediaItemProgress>;
   cancelItem(
     itemId: string,
     cmd: { requestId: string },
@@ -293,6 +309,8 @@ interface ItemRecord {
   pollAttempt: number;
   pollFailures: number;
   draftId: string | null;
+  backgroundRetryRequestId?: string | null;
+  backgroundRetrying?: boolean;
 }
 
 /** Local interruption state. Prepared Standard bytes replace the source copy. */
@@ -381,6 +399,59 @@ const RETRYABLE_PROCESSING: ReadonlySet<MediaFailureCode> = new Set([
   "processing_failed",
 ]);
 
+/** Background work never changes whether a verified preview is usable. */
+export const hasPendingHighResolution = (item: UploadItemView): boolean =>
+  item.phase === "ready" &&
+  (item.processingFailure?.code === "progress_refreshing" ||
+    (item.processing !== undefined &&
+      item.processing !== null &&
+      ["waiting", "queued", "processing"].includes(
+        item.processing.highResolutionStatus,
+      )));
+
+/** Authoritative stages/counts, never a fabricated processing percentage. */
+export const processingProgressText = (item: UploadItemView): string | null => {
+  const progress = item.processing;
+  if (
+    item.phase === "ready" &&
+    item.processingFailure?.code === "progress_refreshing"
+  )
+    return "预览可用，正在确认高清图进度";
+  if (
+    item.phase === "ready" &&
+    item.processingFailure?.code === "progress_unavailable"
+  )
+    return "预览可用，暂时无法确认高清图进度";
+  if (progress === undefined || progress === null) return null;
+  const count = `已保存 ${progress.completedRenditions} 个图像版本`;
+  if (item.phase === "ready") {
+    switch (progress.highResolutionStatus) {
+      case "waiting":
+      case "queued":
+        return `预览已就绪，高清图等待处理 · ${count}`;
+      case "processing":
+        return `预览已就绪，高清图处理中 · ${count}`;
+      case "failed":
+        return `预览可用，高清图处理失败 · ${count}`;
+      case "ready":
+      case "not_required":
+        return null;
+    }
+  }
+  if (item.phase === "processing" || item.phase === "uploaded") {
+    switch (progress.previewStatus) {
+      case "waiting":
+      case "queued":
+        return `等待生成预览 · ${count}`;
+      case "processing":
+        return `正在生成预览 · ${count}`;
+      default:
+        return null;
+    }
+  }
+  return null;
+};
+
 /** Whether `retryProcessing` applies to this item. */
 export const canRetryProcessing = (item: UploadItemView): boolean =>
   item.itemId !== null &&
@@ -448,10 +519,52 @@ export class UploadManager {
       if (!enabled) this.stopPolling(record);
       else if (
         record.view.phase === "uploaded" ||
-        record.view.phase === "processing"
+        record.view.phase === "processing" ||
+        this.needsBackgroundPoll(record)
       )
         this.schedulePoll(record);
     }
+  }
+
+  /**
+   * An edited frame can enqueue more derivatives after the base HD finished.
+   * Fence the previous frame's status reads and ask again, retaining the
+   * verified preview, original identity and committed output count.
+   */
+  refreshProcessing(keys: readonly string[]): void {
+    if (
+      this.status === "disposed" ||
+      !this.options.client.itemProgress ||
+      !this.guardAccount()
+    )
+      return;
+    let changed = false;
+    for (const key of new Set(keys)) {
+      const record = this.records.get(key);
+      if (
+        !record ||
+        record.view.phase !== "ready" ||
+        record.view.kind !== "static" ||
+        record.view.itemId === null
+      )
+        continue;
+      this.stopPolling(record);
+      this.renew(record);
+      record.backgroundRetryRequestId = null;
+      record.backgroundRetrying = false;
+      record.pollAttempt = 0;
+      record.pollFailures = 0;
+      this.patch(record, {
+        processingFailure: {
+          code: "progress_refreshing",
+          message: "正在确认当前编辑版本的高清图进度",
+          outcomeUnknown: false,
+        },
+      });
+      this.schedulePoll(record);
+      changed = true;
+    }
+    if (changed) this.publish();
   }
 
   // -- reads ---------------------------------------------------------------
@@ -731,6 +844,87 @@ export class UploadManager {
     )
       return;
     await this.restartComponent(record, role);
+  }
+
+  /** Retry durable HD work only; never reset or resend an original component. */
+  async retryHighResolution(key: string): Promise<void> {
+    const record = this.records.get(key);
+    const retry = this.options.client.retryHighResolution;
+    if (
+      !record ||
+      !retry ||
+      record.backgroundRetrying ||
+      record.view.phase !== "ready" ||
+      record.view.processing?.highResolutionStatus !== "failed" ||
+      record.view.processingFailure?.code === "progress_refreshing" ||
+      record.view.itemId === null ||
+      this.status === "disposed" ||
+      !this.guardAccount()
+    )
+      return;
+    if (this.status === "paused") this.resume();
+    const epoch = record.epoch;
+    record.backgroundRetrying = true;
+    record.backgroundRetryRequestId ??= this.options.requestId();
+    this.patch(record, { processingFailure: null });
+    this.publish();
+    try {
+      const progress = await retry(
+        record.view.itemId,
+        {
+          requestId: record.backgroundRetryRequestId,
+        },
+        record.controller.signal,
+      );
+      if (
+        !this.alive(record, epoch) ||
+        !this.guardAccount() ||
+        this.status !== "active"
+      )
+        return;
+      this.patch(record, {
+        processing: progress.processing,
+        processingFailure: null,
+      });
+      record.backgroundRetryRequestId = null;
+      this.applyServerItem(record, progress.item, false);
+    } catch (error) {
+      if (!this.alive(record, epoch) || !this.guardAccount()) return;
+      if (isAccountError(error)) {
+        this.pause("account");
+        return;
+      }
+      // A lost retry response may already have enqueued work. Re-read the
+      // same item before offering the same idempotent command again.
+      const read = await this.fetchItem(record, epoch);
+      if (!this.alive(record, epoch) || !this.guardAccount()) return;
+      if (read && "item" in read)
+        this.applyServerItem(record, read.item, false);
+      else if (read && "account" in read) {
+        this.pause("account");
+        return;
+      } else if (read && "gone" in read) {
+        this.markUnavailable(record);
+        return;
+      }
+      if (
+        record.view.processing?.highResolutionStatus !== "failed" ||
+        (error as { outcomeUnknown?: boolean }).outcomeUnknown !== true
+      )
+        record.backgroundRetryRequestId = null;
+      if (record.view.processing?.highResolutionStatus === "failed") {
+        this.patch(record, {
+          processingFailure: failureFrom(error, {
+            code: "background_retry_refused",
+            message: "暂时无法重试高清图，预览仍可使用",
+            outcomeUnknown: false,
+          }),
+        });
+        this.publish();
+      }
+    } finally {
+      record.backgroundRetrying = false;
+    }
   }
 
   /**
@@ -1942,7 +2136,8 @@ export class UploadManager {
     keepFailedRole?: MediaComponentRole,
   ): void {
     record.view = { ...record.view, serverItem: item, itemId: item.id };
-    record.pollFailures = 0;
+    if (record.view.processingFailure?.code !== "progress_unavailable")
+      record.pollFailures = 0;
     for (const server of item.components) {
       const received =
         server.state === "received" || server.state === "verified";
@@ -1977,6 +2172,7 @@ export class UploadManager {
         // Derivatives serve previews now; prepared bytes are not held for the session.
         record.prepared = null;
         record.hashes = new Map();
+        if (this.needsBackgroundPoll(record)) this.schedulePoll(record);
         break;
       case "processing":
         this.patch(record, { phase: "processing" });
@@ -2044,6 +2240,17 @@ export class UploadManager {
     if (next === "uploaded") this.schedulePoll(record);
   }
 
+  private needsBackgroundPoll(record: ItemRecord): boolean {
+    return (
+      record.view.phase === "ready" &&
+      record.view.kind === "static" &&
+      this.options.client.itemProgress !== undefined &&
+      (record.view.processing === undefined ||
+        hasPendingHighResolution(record.view) ||
+        record.view.processingFailure?.code === "progress_unavailable")
+    );
+  }
+
   private schedulePoll(record: ItemRecord): void {
     if (
       !this.pollingEnabled ||
@@ -2080,13 +2287,24 @@ export class UploadManager {
         if ("error" in read) {
           // A failed check backs off; successful pending answers stay responsive.
           record.pollFailures += 1;
+          if (record.view.phase === "ready") {
+            this.patch(record, {
+              processingFailure: {
+                code: "progress_unavailable",
+                message: "暂时无法确认高清图进度，预览仍可使用",
+                outcomeUnknown: false,
+              },
+            });
+            this.publish();
+          }
           this.schedulePoll(record);
           return;
         }
         this.applyServerItem(record, read.item, false);
         if (
           record.view.phase === "uploaded" ||
-          record.view.phase === "processing"
+          record.view.phase === "processing" ||
+          this.needsBackgroundPoll(record)
         )
           this.schedulePoll(record);
       })();
@@ -2201,11 +2419,55 @@ export class UploadManager {
     const itemId = record.view.itemId;
     if (itemId === null) return null;
     try {
+      if (this.options.client.itemProgress && record.view.processing !== null) {
+        const progress = await this.options.client.itemProgress(
+          itemId,
+          record.controller.signal,
+        );
+        if (!this.alive(record, epoch)) return null;
+        if (this.options.currentAccount() !== this.accountId)
+          return { account: true };
+        this.patch(record, {
+          processing: progress.processing,
+          processingFailure: null,
+        });
+        return { item: progress.item };
+      }
       const item = await this.options.client.item(itemId);
+      if (this.options.currentAccount() !== this.accountId)
+        return { account: true };
       return this.alive(record, epoch) ? { item } : null;
     } catch (error) {
       if (!this.alive(record, epoch)) return null;
       if (isAccountError(error)) return { account: true };
+      if (
+        isNotFound(error) &&
+        this.options.client.itemProgress &&
+        record.view.processing !== null
+      ) {
+        // A legacy server has no progress route. Confirm the old item read
+        // before treating the item as gone; do not discard a usable preview.
+        try {
+          const item = await this.options.client.item(itemId);
+          if (!this.alive(record, epoch)) return null;
+          if (this.options.currentAccount() !== this.accountId)
+            return { account: true };
+          record.pollFailures += 1;
+          this.patch(record, {
+            processingFailure: {
+              code: "progress_unavailable",
+              message: "暂时无法确认高清图进度，预览仍可使用",
+              outcomeUnknown: false,
+            },
+          });
+          return { item };
+        } catch (legacyError) {
+          if (!this.alive(record, epoch)) return null;
+          if (isAccountError(legacyError)) return { account: true };
+          if (isNotFound(legacyError)) return { gone: true };
+          return { error: legacyError };
+        }
+      }
       if (isNotFound(error)) return { gone: true };
       return { error };
     }
@@ -2298,7 +2560,8 @@ export class UploadManager {
     for (const record of this.records.values())
       if (
         record.view.phase === "uploaded" ||
-        record.view.phase === "processing"
+        record.view.phase === "processing" ||
+        this.needsBackgroundPoll(record)
       )
         this.schedulePoll(record);
     this.publish();
@@ -2383,6 +2646,10 @@ export interface UploadSummary {
   readonly failed: number;
   readonly paused: number;
   readonly missingLocal: number;
+  /** Usable previews whose high-resolution work continues on the account. */
+  readonly backgroundProcessing?: number;
+  readonly backgroundFailed?: number;
+  readonly completedRenditions?: number;
   readonly bytesSent: number;
   readonly bytesTotal: number;
   /** Anything still being prepared, transferred or processed, or interrupted and waiting for Continue. */
@@ -2429,12 +2696,35 @@ export const summarizeUploads = (
     failed: count("failed"),
     paused,
     missingLocal: count("missing_local"),
+    backgroundProcessing: live.filter(hasPendingHighResolution).length,
+    backgroundFailed: live.filter(
+      (item) =>
+        item.phase === "ready" &&
+        item.processing?.highResolutionStatus === "failed" &&
+        item.processingFailure?.code !== "progress_refreshing",
+    ).length,
+    completedRenditions: live.reduce(
+      (sum, item) => sum + (item.processing?.completedRenditions ?? 0),
+      0,
+    ),
     bytesSent,
     bytesTotal,
     active: preparing + queued + uploading + uploaded + processing + paused > 0,
     unfinished: live.some((item) => item.phase !== "ready"),
     blocking: live.filter((item) => item.phase !== "ready").length,
   };
+};
+
+/** Background progress remains visible without blocking preview readiness. */
+export const backgroundProgressText = (
+  summary: UploadSummary,
+): string | null => {
+  const parts: string[] = [];
+  if ((summary.backgroundProcessing ?? 0) > 0)
+    parts.push(`${summary.backgroundProcessing} 项预览已就绪，高清图处理中`);
+  if ((summary.backgroundFailed ?? 0) > 0)
+    parts.push(`${summary.backgroundFailed} 项高清图处理失败，预览仍可使用`);
+  return parts.length === 0 ? null : parts.join("，");
 };
 
 /** Exact readiness wording for the confirmation sheet (e.g. 2 项仍在上传，1 项失败). */

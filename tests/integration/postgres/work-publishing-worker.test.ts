@@ -38,11 +38,20 @@ import {
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
 import {
+  PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
   runCommunityMigrations,
 } from "@moya/community-postgres";
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 
@@ -69,8 +78,9 @@ import type { PublishingMediaItem } from "@moya/contracts";
  * parallel. Two rules keep both suites apart: every time here comes from a
  * virtual clock a century ahead (so no other suite's claim, lease requeue or
  * cleanup pass reaches these jobs, sessions or items), and the worker leases
- * only the job ids this suite created (so it never claims another suite's
- * jobs). The adapter's own claim SQL is covered by the community suite.
+ * only the job ids the current case created (so it never claims another
+ * suite's jobs or a previous case's unfinished continuation). The adapter's
+ * own claim SQL is covered by the community suite.
  */
 
 const testDatabaseUrl = requireSyntheticTestDatabaseUrl();
@@ -92,6 +102,12 @@ const clock = () => new Date(Date.now() + CENTURY_MS);
 const hex = () => randomBytes(16).toString("hex");
 
 const suiteJobIds = new Set<string>();
+const claimableJobIds = new Set<string>();
+const suiteOperator = `worker-it-${hex()}`;
+const trackJob = (id: string) => {
+  suiteJobIds.add(id);
+  claimableJobIds.add(id);
+};
 const suiteUsers: string[] = [];
 const suiteAssets: string[] = [];
 let base: string;
@@ -123,7 +139,7 @@ const enqueue = async (kind: PublishingWorkerJobKind, subjectId: string) => {
   const job = await adapter.enqueueJob({ kind, subjectId }, clock());
   // A reused job would belong to someone else.
   expect(job.created).toBe(true);
-  suiteJobIds.add(job.id);
+  trackJob(job.id);
   return job.id;
 };
 
@@ -158,7 +174,7 @@ const suitePort = (): PublishingWorkerPort => {
        FROM next WHERE j.id = next.id
        RETURNING j.id, j.kind, j.subject_id, j.payload, j.attempts, j.max_attempts, j.lease_owner, j.lease_expires_at`,
       [
-        [...suiteJobIds],
+        [...claimableJobIds],
         now.toISOString(),
         options.limit,
         options.owner,
@@ -348,7 +364,7 @@ const processingItem = async (): Promise<{
     [item.id],
   );
   expect(rows).toHaveLength(1);
-  suiteJobIds.add(rows[0]!.id);
+  trackJob(rows[0]!.id);
   return { actor, item, jobId: rows[0]!.id };
 };
 
@@ -367,6 +383,8 @@ const recordedKeys = async (keys: readonly string[]) =>
       [keys],
     )
   ).rows.map((row) => row.storage_key);
+
+beforeEach(() => claimableJobIds.clear());
 
 beforeAll(async () => {
   // Idempotent, advisory-locked and manifest-checked, exactly as in the
@@ -406,6 +424,11 @@ afterAll(async () => {
       [suiteUsers, [...suiteJobIds]],
     );
     for (const statement of [
+      "DELETE FROM community.content_operator_receipts WHERE operator_label=$1",
+      "DELETE FROM community.content_operator_events WHERE operator_label=$1",
+    ])
+      await pool.query(statement, [suiteOperator]);
+    for (const statement of [
       "DELETE FROM community.media_item_refs WHERE item_id IN (SELECT id FROM community.media_items WHERE owner_id = ANY($1::text[]))",
       "DELETE FROM community.publishing_sessions WHERE owner_id = ANY($1::text[])",
       "DELETE FROM community.work_draft_snapshots WHERE owner_id = ANY($1::text[])",
@@ -429,6 +452,634 @@ afterAll(async () => {
 });
 
 const workerCases = () => {
+  it("commits static previews and durable HD together, retries HD without replacing source or item", async () => {
+    const { actor, item, jobId } = await processingItem();
+    const sourceBefore = (
+      await pool.query(
+        "SELECT id,blob_id,sha256,received_bytes,declared_bytes FROM community.media_components WHERE item_id=$1",
+        [item.id],
+      )
+    ).rows;
+    const input = await adapter.readProcessing({
+      kind: "process_item",
+      subjectId: item.id,
+      payload: null,
+    });
+    expect(input?.variants).toEqual(["thumb", "display", "cover"]);
+    const preview = await storeProcessor().process(input!);
+    expect(preview.status).toBe("processed");
+    if (preview.status !== "processed") throw new Error("Expected preview");
+    await adapter.markItemReady(item.id, preview, clock());
+    expect(await adapter.readItemProgress(actor, item.id)).toMatchObject({
+      item: { state: "ready" },
+      processing: {
+        previewStatus: "ready",
+        highResolutionStatus: "queued",
+        completedRenditions: 3,
+      },
+    });
+    // Existing strict item consumers see the original shape and no dangling HD URL.
+    const oldShape = await adapter.readItem(actor, item.id);
+    expect(oldShape.media?.fullSrc).toBeUndefined();
+    expect(oldShape).not.toHaveProperty("processing");
+    const jobs = (
+      await pool.query<{ id: string; payload: { variants: string[] } }>(
+        "SELECT id,payload FROM community.publishing_jobs WHERE subject_id=$1 AND kind='derive_edit'",
+        [item.id],
+      )
+    ).rows;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.payload.variants).toEqual(["full"]);
+    const hdJob = jobs[0]!.id;
+    trackJob(hdJob);
+    // A lost preview response is idempotent, including its continuation.
+    await adapter.markItemReady(item.id, preview, clock());
+    expect(
+      (
+        await pool.query(
+          "SELECT id FROM community.publishing_jobs WHERE subject_id=$1 AND kind='derive_edit'",
+          [item.id],
+        )
+      ).rowCount,
+    ).toBe(1);
+    const reservedAfterPreview = (await adapter.readCapacity(actor))
+      .reservedBytes;
+    expect(reservedAfterPreview).toBe(MiB / 2 + 4 * MiB - 24);
+    expect(
+      (await adapter.reconcileCapacity(actor, clock())).reservedBytes,
+    ).toBe(reservedAfterPreview);
+    await pool.query(
+      "UPDATE community.publishing_jobs SET state='running',attempts=max_attempts,lease_owner='hd-failure-test',lease_expires_at=$2::timestamptz WHERE id=$1",
+      [hdJob, new Date(clock().getTime() + 60_000).toISOString()],
+    );
+    expect(
+      await adapter.failJob(
+        { id: hdJob, leaseOwner: "hd-failure-test" },
+        "media_store_unavailable",
+        clock(),
+        { retryable: false },
+      ),
+    ).toBe("failed");
+    expect((await adapter.readCapacity(actor)).reservedBytes).toBe(0);
+    expect(
+      (await adapter.readItemProgress(actor, item.id)).processing
+        .highResolutionStatus,
+    ).toBe("failed");
+    const retry = { requestId: randomUUID() };
+    const resumed = await adapter.retryItemProcessing(
+      actor,
+      item.id,
+      retry,
+      clock(),
+    );
+    expect(resumed.processing.highResolutionStatus).toBe("queued");
+    expect((await adapter.readCapacity(actor)).reservedBytes).toBe(
+      reservedAfterPreview,
+    );
+    expect(
+      await adapter.retryItemProcessing(actor, item.id, retry, clock()),
+    ).toEqual(resumed);
+    expect(await adapter.readItem(actor, item.id)).toMatchObject({
+      state: "ready",
+    });
+    expect(
+      (
+        await pool.query(
+          "SELECT id,blob_id,sha256,received_bytes,declared_bytes FROM community.media_components WHERE item_id=$1",
+          [item.id],
+        )
+      ).rows,
+    ).toEqual(sourceBefore);
+    const full = await writeDerivative(actor);
+    const outcome = {
+      status: "derived" as const,
+      derivatives: [
+        {
+          ...full,
+          variant: "full" as const,
+          editKey: "base",
+          contentType: "image/webp" as const,
+          width: 4000,
+          height: 3000,
+          durationMs: null,
+          recipeVersion: 1,
+          recipeDigest: "0".repeat(16),
+        },
+      ],
+    };
+    await adapter.recordDerivatives(item.id, outcome, clock());
+    expect((await adapter.readCapacity(actor)).reservedBytes).toBe(0);
+    await adapter.recordDerivatives(item.id, outcome, clock());
+    expect((await adapter.readItemProgress(actor, item.id)).processing).toEqual(
+      {
+        previewStatus: "ready",
+        highResolutionStatus: "ready",
+        completedRenditions: 4,
+      },
+    );
+    await adapter.retryItemProcessing(
+      actor,
+      item.id,
+      { requestId: randomUUID() },
+      clock(),
+    );
+    expect(
+      (
+        await pool.query(
+          "SELECT id FROM community.media_renditions WHERE item_id=$1",
+          [item.id],
+        )
+      ).rowCount,
+    ).toBe(4);
+    expect(
+      (
+        await pool.query(
+          "SELECT id FROM community.publishing_jobs WHERE subject_id=$1 AND kind='derive_edit'",
+          [item.id],
+        )
+      ).rowCount,
+    ).toBe(1);
+    // The old process job is owned by this synthetic fixture only.
+    expect(suiteJobIds.has(jobId)).toBe(true);
+  });
+
+  it("keeps an operator-stopped HD job stopped without losing usable previews", async () => {
+    const { actor, item } = await processingItem();
+    const input = await adapter.readProcessing({
+      kind: "process_item",
+      subjectId: item.id,
+      payload: null,
+    });
+    const result = await storeProcessor().process(input!);
+    if (result.status !== "processed") throw new Error("Expected preview");
+    await adapter.markItemReady(item.id, result, clock());
+    await pool.query(
+      "UPDATE community.publishing_jobs SET state='abandoned' WHERE subject_id=$1 AND kind='derive_edit'",
+      [item.id],
+    );
+    await expect(
+      adapter.retryItemProcessing(
+        actor,
+        item.id,
+        { requestId: randomUUID() },
+        clock(),
+      ),
+    ).rejects.toMatchObject({ name: "CommunityConflictError" });
+    expect((await adapter.readItemProgress(actor, item.id)).processing).toEqual(
+      {
+        previewStatus: "ready",
+        highResolutionStatus: "failed",
+        completedRenditions: 3,
+      },
+    );
+  });
+
+  it("keeps incomplete historical HD payloads stopped until an explicit operator action", async () => {
+    const { actor, item } = await processingItem();
+    const input = await adapter.readProcessing({
+      kind: "process_item",
+      subjectId: item.id,
+      payload: null,
+    });
+    const preview = await storeProcessor().process(input!);
+    if (preview.status !== "processed") throw new Error("Expected preview");
+    await adapter.markItemReady(item.id, preview, clock());
+    const sourceBefore = (
+      await pool.query(
+        "SELECT id,blob_id,sha256,received_bytes FROM community.media_components WHERE item_id=$1",
+        [item.id],
+      )
+    ).rows;
+    const reserved = (await adapter.readCapacity(actor)).reservedBytes;
+    const operators = new PostgresPublishingOperatorAdapter(pool);
+    for (const payload of [
+      { editKey: "base" },
+      { editKey: "base", variants: null },
+      { editKey: "base", variants: "full" },
+    ]) {
+      const jobId = `publishing-job-${hex()}`;
+      const at = clock();
+      await pool.query(
+        `INSERT INTO community.publishing_jobs(id,kind,subject_id,payload,state,attempts,max_attempts,run_after,last_error_code,created_at,updated_at,finished_at)
+         VALUES($1,'derive_edit',$2,$3::jsonb,'failed',5,5,$4,'processing_failed',$4,$4,$4)`,
+        [jobId, item.id, JSON.stringify(payload), at.toISOString()],
+      );
+      trackJob(jobId);
+      await adapter.retryItemProcessing(
+        actor,
+        item.id,
+        { requestId: randomUUID() },
+        clock(),
+      );
+      expect((await readJob(jobId)).state).toBe("failed");
+      expect(
+        await operators.retryJob(
+          jobId,
+          suiteOperator,
+          { requestId: randomUUID() },
+          clock(),
+        ),
+      ).toMatchObject({ state: "queued", attempts: 0 });
+      expect(
+        await operators.abandonJob(
+          jobId,
+          suiteOperator,
+          { requestId: randomUUID() },
+          clock(),
+        ),
+      ).toMatchObject({ state: "abandoned" });
+      await adapter.retryItemProcessing(
+        actor,
+        item.id,
+        { requestId: randomUUID() },
+        clock(),
+      );
+      expect((await readJob(jobId)).state).toBe("abandoned");
+      // An unrelated malformed job cannot consume/release the real base-HD allowance.
+      expect((await adapter.readCapacity(actor)).reservedBytes).toBe(reserved);
+    }
+    expect(
+      (
+        await pool.query(
+          "SELECT id,blob_id,sha256,received_bytes FROM community.media_components WHERE item_id=$1",
+          [item.id],
+        )
+      ).rows,
+    ).toEqual(sourceBefore);
+  });
+
+  it("requires static previews while retaining full/viewer, and preserves Live readiness", async () => {
+    for (const kind of ["static", "live"]) {
+      const required = (
+        await pool.query<{ variant: string }>(
+          "SELECT variant FROM community.media_required_derivatives($1,$2::jsonb,TRUE,NULL)",
+          [kind, JSON.stringify({ rotation: 0, crop: null })],
+        )
+      ).rows.map((row) => row.variant);
+      expect(required).toEqual(
+        kind === "static"
+          ? ["thumb", "display", "cover"]
+          : ["thumb", "display", "full", "motion", "cover"],
+      );
+      const wanted = (
+        await pool.query<{ role: string }>(
+          "SELECT role FROM community.media_wanted_renditions($1,$2::jsonb,TRUE,NULL)",
+          [kind, JSON.stringify({ rotation: 0, crop: null })],
+        )
+      ).rows.map((row) => row.role);
+      expect(wanted).toContain("full");
+      expect(wanted).toContain("viewer");
+      expect(new Set(wanted).size).toBe(wanted.length);
+    }
+  });
+
+  it("does not invent HD demand for a retained historical edit that never had a job", async () => {
+    const { actor, item } = await processingItem();
+    const draft = (
+      await pool.query<{ id: string; revision: number }>(
+        "SELECT d.id,d.revision FROM community.work_drafts d JOIN community.media_item_refs r ON r.holder_id=d.id AND r.holder_kind='draft' WHERE r.item_id=$1",
+        [item.id],
+      )
+    ).rows[0]!;
+    const content = (rotation: 90 | 180) => ({
+      title: "Synthetic historical edit",
+      body: "",
+      authorship: { kind: "original" as const },
+      visibility: "self" as const,
+      items: [
+        {
+          key: "history-edit",
+          itemId: item.id,
+          kind: "static" as const,
+          qualityMode: "standard" as const,
+          edit: { rotation, crop: null },
+        },
+      ],
+      coverKey: null,
+      coverCrop: null,
+    });
+    await adapter.saveDraft(
+      actor,
+      draft.id,
+      {
+        baseRevision: draft.revision,
+        content: content(90),
+        deviceClass: "desktop",
+      },
+      clock(),
+    );
+    const ninety = await adapter.readDraft(actor, draft.id);
+    await adapter.snapshotDraft(
+      actor,
+      draft.id,
+      {
+        baseRevision: ninety.revision,
+        content: content(90),
+        deviceClass: "desktop",
+      },
+      clock(),
+    );
+    await adapter.saveDraft(
+      actor,
+      draft.id,
+      {
+        baseRevision: ninety.revision,
+        content: content(180),
+        deviceClass: "desktop",
+      },
+      clock(),
+    );
+    const input = await adapter.readProcessing({
+      kind: "process_item",
+      subjectId: item.id,
+      payload: null,
+    });
+    const preview = await storeProcessor().process(input!);
+    if (preview.status !== "processed") throw new Error("Expected preview");
+    await adapter.markItemReady(item.id, preview, clock());
+    const currentKey = (
+      await pool.query<{ key: string }>(
+        "SELECT community.media_edit_key($1::jsonb,NULL) AS key",
+        [JSON.stringify({ rotation: 180, crop: null })],
+      )
+    ).rows[0]!.key;
+    const historicalKey = (
+      await pool.query<{ key: string }>(
+        "SELECT community.media_edit_key($1::jsonb,NULL) AS key",
+        [JSON.stringify({ rotation: 90, crop: null })],
+      )
+    ).rows[0]!.key;
+    expect(
+      (
+        await pool.query(
+          "SELECT id FROM community.publishing_jobs WHERE subject_id=$1 AND payload->>'editKey'=$2",
+          [item.id, historicalKey],
+        )
+      ).rowCount,
+    ).toBe(0);
+    expect(
+      (
+        await pool.query(
+          "SELECT item_id FROM community.media_item_refs WHERE item_id=$1 AND holder_kind='snapshot'",
+          [item.id],
+        )
+      ).rowCount,
+    ).toBeGreaterThan(0);
+    for (const editKey of ["base", currentKey]) {
+      const blob = await writeDerivative(actor);
+      await adapter.recordDerivatives(
+        item.id,
+        {
+          status: "derived",
+          derivatives: [
+            {
+              ...blob,
+              variant: "full",
+              editKey,
+              contentType: "image/webp",
+              width: 4000,
+              height: 3000,
+              durationMs: null,
+              recipeVersion: 1,
+              recipeDigest: "0".repeat(16),
+            },
+          ],
+        },
+        clock(),
+      );
+    }
+    expect(
+      (await adapter.readItemProgress(actor, item.id)).processing
+        .highResolutionStatus,
+    ).toBe("ready");
+    // The snapshot is retained; it is not silently queued, rewritten, or removed.
+    expect(
+      (
+        await pool.query(
+          "SELECT item_id FROM community.media_item_refs WHERE item_id=$1 AND holder_kind='snapshot'",
+          [item.id],
+        )
+      ).rowCount,
+    ).toBeGreaterThan(0);
+  });
+
+  it("reports and retries real unsaved-session HD work without a persisted edit", async () => {
+    const { actor, item } = await processingItem();
+    const input = await adapter.readProcessing({
+      kind: "process_item",
+      subjectId: item.id,
+      payload: null,
+    });
+    const preview = await storeProcessor().process(input!);
+    if (preview.status !== "processed") throw new Error("Expected preview");
+    await adapter.markItemReady(item.id, preview, clock());
+    const full = await writeDerivative(actor);
+    await adapter.recordDerivatives(
+      item.id,
+      {
+        status: "derived",
+        derivatives: [
+          {
+            ...full,
+            variant: "full",
+            editKey: "base",
+            contentType: "image/webp",
+            width: 4000,
+            height: 3000,
+            durationMs: null,
+            recipeVersion: 1,
+            recipeDigest: "0".repeat(16),
+          },
+        ],
+      },
+      clock(),
+    );
+    const session = await adapter.createSession(
+      actor,
+      { requestId: randomUUID(), workId: null },
+      clock(),
+    );
+    await pool.query(
+      "INSERT INTO community.media_item_refs(item_id,holder_kind,holder_id) VALUES($1,'session',$2)",
+      [item.id, session.id],
+    );
+    const content = {
+      items: [
+        {
+          key: "unsaved-edit",
+          itemId: item.id,
+          kind: "static" as const,
+          qualityMode: "standard" as const,
+          edit: { rotation: 90 as const, crop: null },
+        },
+      ],
+      coverKey: null,
+      coverCrop: null,
+    };
+    await adapter.ensureEditDerivatives(actor, content, clock(), {
+      holder: { sessionId: session.id },
+    });
+    const job = (
+      await pool.query<{ id: string }>(
+        "SELECT id FROM community.publishing_jobs WHERE subject_id=$1 AND kind='derive_edit' AND payload->'variants'='[\"full\"]'::jsonb AND payload->>'editKey'<>'base'",
+        [item.id],
+      )
+    ).rows[0]!;
+    expect(
+      (await adapter.readItemProgress(actor, item.id)).processing
+        .highResolutionStatus,
+    ).toBe("queued");
+    await pool.query(
+      "UPDATE community.publishing_jobs SET state='failed',last_error_code='media_store_unavailable' WHERE id=$1",
+      [job.id],
+    );
+    expect(
+      (await adapter.readItemProgress(actor, item.id)).processing
+        .highResolutionStatus,
+    ).toBe("failed");
+    expect(
+      (
+        await adapter.retryItemProcessing(
+          actor,
+          item.id,
+          { requestId: randomUUID() },
+          clock(),
+        )
+      ).processing.highResolutionStatus,
+    ).toBe("queued");
+    await pool.query(
+      "UPDATE community.publishing_jobs SET state='abandoned' WHERE id=$1",
+      [job.id],
+    );
+    expect(
+      (await adapter.readItemProgress(actor, item.id)).processing
+        .highResolutionStatus,
+    ).toBe("ready");
+    expect(
+      (
+        await pool.query("SELECT id FROM community.media_items WHERE id=$1", [
+          item.id,
+        ])
+      ).rowCount,
+    ).toBe(1);
+  });
+
+  it("keeps edited HD pending after edited previews become usable", async () => {
+    const { actor, item } = await processingItem();
+    const input = await adapter.readProcessing({
+      kind: "process_item",
+      subjectId: item.id,
+      payload: null,
+    });
+    const result = await storeProcessor().process(input!);
+    if (result.status !== "processed") throw new Error("Expected preview");
+    await adapter.markItemReady(item.id, result, clock());
+    const full = await writeDerivative(actor);
+    await adapter.recordDerivatives(
+      item.id,
+      {
+        status: "derived",
+        derivatives: [
+          {
+            ...full,
+            variant: "full",
+            editKey: "base",
+            contentType: "image/webp",
+            width: 4000,
+            height: 3000,
+            durationMs: null,
+            recipeVersion: 1,
+            recipeDigest: "0".repeat(16),
+          },
+        ],
+      },
+      clock(),
+    );
+    const draft = (
+      await pool.query<{ id: string; revision: number }>(
+        "SELECT d.id,d.revision FROM community.work_drafts d JOIN community.media_item_refs r ON r.holder_id=d.id AND r.holder_kind='draft' WHERE r.item_id=$1",
+        [item.id],
+      )
+    ).rows[0]!;
+    const content = {
+      title: "Synthetic preview",
+      body: "",
+      authorship: { kind: "original" as const },
+      visibility: "self" as const,
+      items: [
+        {
+          key: "synthetic-edit",
+          itemId: item.id,
+          kind: "static" as const,
+          qualityMode: "standard" as const,
+          edit: { rotation: 90 as const, crop: null },
+        },
+      ],
+      coverKey: null,
+      coverCrop: null,
+    };
+    await adapter.saveDraft(
+      actor,
+      draft.id,
+      {
+        baseRevision: draft.revision,
+        content,
+        deviceClass: "desktop",
+      },
+      clock(),
+    );
+    const readiness = await adapter.ensureEditDerivatives(
+      actor,
+      content,
+      clock(),
+    );
+    expect(readiness.ready).toBe(false);
+    const jobs = (
+      await pool.query<{
+        payload: {
+          editKey: string;
+          variants: ("thumb" | "display" | "full")[];
+          edit: { rotation: 90; crop: null };
+          coverCrop: null;
+        };
+      }>(
+        "SELECT payload FROM community.publishing_jobs WHERE subject_id=$1 AND kind='derive_edit' AND payload->>'editKey'<>'base'",
+        [item.id],
+      )
+    ).rows;
+    expect(jobs.map((job) => job.payload.variants)).toEqual(
+      expect.arrayContaining([["thumb", "display"], ["full"]]),
+    );
+    const preview = jobs.find(
+      (job) => !job.payload.variants.includes("full"),
+    )!.payload;
+    const derivatives = [];
+    for (const variant of preview.variants)
+      derivatives.push({
+        ...(await writeDerivative(actor)),
+        variant,
+        editKey: preview.editKey,
+        contentType: "image/webp" as const,
+        width: 300,
+        height: 400,
+        durationMs: null,
+        recipeVersion: 1,
+        recipeDigest: "0".repeat(16),
+      });
+    await adapter.recordDerivatives(
+      item.id,
+      { status: "derived", derivatives },
+      clock(),
+    );
+    expect(
+      (await adapter.ensureEditDerivatives(actor, content, clock())).ready,
+    ).toBe(true);
+    expect(
+      (await adapter.readItemProgress(actor, item.id)).processing
+        .highResolutionStatus,
+    ).toBe("queued");
+  });
+
   it(
     "leases, renews and completes a store reconciliation job that removes only old unrecorded blobs",
     { timeout: 20_000 },
@@ -584,7 +1235,7 @@ const workerCases = () => {
         state: "ready",
         failure_code: null,
       });
-      expect(processor.produced).toHaveLength(4);
+      expect(processor.produced).toHaveLength(3);
       expect(await recordedKeys(processor.produced)).toEqual(
         [...processor.produced].sort(),
       );
@@ -619,7 +1270,7 @@ const workerCases = () => {
         { kinds: ["process_item"] },
       );
       worker.start();
-      await vi.waitFor(() => expect(processor.produced).toHaveLength(4), {
+      await vi.waitFor(() => expect(processor.produced).toHaveLength(3), {
         timeout: 10_000,
         interval: 20,
       });
@@ -673,6 +1324,13 @@ const workerCases = () => {
          VALUES($1,$2,'static','legacy','legacy_user_media',$3,'ready',$4,$4,'{"width":60,"height":30}'::jsonb,$5,$5,$5)`,
         [itemId, actor, legacyMediaId, png.byteLength, at.toISOString()],
       );
+      expect(
+        (await adapter.readItemProgress(actor, itemId)).processing,
+      ).toEqual({
+        previewStatus: "ready",
+        highResolutionStatus: "not_required",
+        completedRenditions: 0,
+      });
       const edit = { rotation: 90 as const, crop: null };
       const { rows: keys } = await pool.query<{ key: string }>(
         "SELECT community.media_edit_key($1::jsonb, NULL) AS key",
@@ -688,13 +1346,13 @@ const workerCases = () => {
             editKey,
             edit,
             coverCrop: null,
-            variants: ["display", "full"],
+            variants: ["display"],
           },
         },
         at,
       );
       expect(job.created).toBe(true);
-      suiteJobIds.add(job.id);
+      trackJob(job.id);
 
       const port = suitePort();
       const readBytes = vi.spyOn(port, "readLegacyMediaBytes");
@@ -729,6 +1387,90 @@ const workerCases = () => {
       worker.start();
       await settled(job.id, "succeeded");
       await worker.stop();
+      expect(process).toHaveBeenCalledTimes(1);
+      expect(process.mock.calls[0]![0].variants).toEqual(["display"]);
+      expect(
+        (
+          await pool.query(
+            "SELECT role FROM community.media_renditions WHERE item_id=$1 AND state='ready'",
+            [itemId],
+          )
+        ).rows,
+      ).toEqual([{ role: "display" }]);
+      const hdJob = await adapter.enqueueJob(
+        {
+          kind: "derive_edit",
+          subjectId: itemId,
+          payload: { editKey, edit, coverCrop: null, variants: ["full"] },
+        },
+        clock(),
+      );
+      expect(hdJob.created).toBe(true);
+      trackJob(hdJob.id);
+      expect(
+        (await adapter.readItemProgress(actor, itemId)).processing,
+      ).toEqual({
+        previewStatus: "ready",
+        highResolutionStatus: "queued",
+        completedRenditions: 1,
+      });
+      const hdWorker = newWorker(
+        port,
+        createPublishingJobHandlers({
+          port,
+          store,
+          processor,
+          toolJobs: runner,
+          clock,
+          logger: silent,
+        }),
+        { kinds: ["derive_edit"] },
+      );
+      hdWorker.start();
+      await settled(hdJob.id, "succeeded");
+      await hdWorker.stop();
+      expect(process).toHaveBeenCalledTimes(2);
+      expect(process.mock.calls[1]![0]).toMatchObject({
+        mode: "derive",
+        itemId,
+        editKey,
+        variants: ["full"],
+        source: { kind: "legacy_user_media", legacyMediaId },
+      });
+      // Keep this edited frame current after its job finishes; a completed
+      // unheld historical edit correctly stops contributing HD demand.
+      await adapter.createDraft(
+        actor,
+        {
+          requestId: randomUUID(),
+          deviceClass: "desktop",
+          content: {
+            title: "Legacy edited frame",
+            body: "",
+            authorship: { kind: "original" },
+            visibility: "self",
+            items: [
+              {
+                key: "legacy-edit",
+                itemId,
+                kind: "static",
+                qualityMode: "legacy",
+                edit,
+              },
+            ],
+            coverKey: null,
+            coverCrop: null,
+          },
+        },
+        clock(),
+      );
+      expect(
+        (await adapter.readItemProgress(actor, itemId)).processing,
+      ).toEqual({
+        previewStatus: "ready",
+        highResolutionStatus: "ready",
+        completedRenditions: 2,
+      });
 
       expect(readBytes).toHaveBeenCalledWith(itemId);
       readBytes.mockRestore();

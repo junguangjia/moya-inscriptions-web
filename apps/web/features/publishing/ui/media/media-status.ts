@@ -1,4 +1,7 @@
-import { canRetryProcessing } from "../../upload-manager";
+import {
+  canRetryProcessing,
+  processingProgressText,
+} from "../../upload-manager";
 
 import type { ItemDerivation } from "../../edit-readiness";
 import type { UploadItemView } from "../../upload-manager";
@@ -11,6 +14,7 @@ import type { MediaComponentRole, PublishingMediaItem } from "@moya/contracts";
  */
 
 export type RetryPlan =
+  | { readonly type: "high_resolution" }
   | { readonly type: "processing" }
   | { readonly type: "registration" }
   | {
@@ -29,7 +33,13 @@ export type ItemStatus =
     }
   | { readonly kind: "uploaded"; readonly label: string }
   | { readonly kind: "processing"; readonly label: string }
-  | { readonly kind: "ready"; readonly label: string }
+  | {
+      readonly kind: "ready";
+      readonly label: string;
+      readonly background?: "pending" | "failed";
+      readonly message?: string;
+      readonly retry?: RetryPlan;
+    }
   | {
       readonly kind: "paused";
       readonly label: string;
@@ -205,11 +215,34 @@ const baseStatus = (
       };
     }
     case "uploaded":
-      return { kind: "uploaded", label: "已上传，等待处理" };
+      return {
+        kind: "uploaded",
+        label: processingProgressText(item) ?? "已上传，等待处理",
+      };
     case "processing":
-      return { kind: "processing", label: "处理中" };
-    case "ready":
-      return { kind: "ready", label: "已就绪" };
+      return {
+        kind: "processing",
+        label: processingProgressText(item) ?? "处理中",
+      };
+    case "ready": {
+      const label = processingProgressText(item);
+      if (
+        item.processing?.highResolutionStatus === "failed" &&
+        item.processingFailure?.code !== "progress_refreshing"
+      )
+        return {
+          kind: "ready",
+          label: label ?? "预览可用，高清图处理失败",
+          background: "failed",
+          retry: { type: "high_resolution" },
+          message:
+            item.processingFailure?.message ??
+            "预览仍可使用，可以单独重试高清图",
+        };
+      return label === null
+        ? { kind: "ready", label: "已就绪" }
+        : { kind: "ready", label, background: "pending" };
+    }
     case "paused":
       return {
         kind: "paused",

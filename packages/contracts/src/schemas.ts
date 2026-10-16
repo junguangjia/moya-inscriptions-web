@@ -153,6 +153,8 @@ export {
   publishingLimitsSchema,
   publishingMediaComponentSchema,
   publishingMediaItemSchema,
+  publishingMediaProcessingProgressSchema,
+  publishingMediaItemProgressSchema,
   publishingMediaSourcesSchema,
   publishingMediaSrcSchema,
   publishingOpenedEditDraftSchema,

@@ -50,7 +50,12 @@ import {
   selectSettings,
 } from "./db.js";
 import type { PublishingDb } from "./db.js";
-import { failProcessingItems } from "./jobs.js";
+import {
+  failProcessingItems,
+  isBaseHighResolutionJob,
+  releaseReservations,
+} from "./jobs.js";
+import { reserveBaseHighResolution } from "./media.js";
 import { mediaReadTarget, variantEditKeySql } from "./media-read.js";
 import type { MediaReadTargetRow } from "./media-read.js";
 import { applyPublicRevision, touchWork } from "./submissions.js";
@@ -604,6 +609,24 @@ export const retryJob = async (
       now,
     },
     async (db) => {
+      const subject = (
+        await db.query<{
+          kind: string;
+          subject_id: string;
+          payload: { editKey: string; variants: string[] } | null;
+        }>(
+          "SELECT kind,subject_id,payload FROM community.publishing_jobs WHERE id=$1",
+          [jobId],
+        )
+      ).rows[0];
+      let owner: string | undefined;
+      if (isBaseHighResolutionJob(subject))
+        owner = (
+          await db.query<{ owner_id: string }>(
+            "SELECT owner_id FROM community.media_items WHERE id=$1 FOR UPDATE",
+            [subject!.subject_id],
+          )
+        ).rows[0]?.owner_id;
       const job = await lockJob(db, jobId);
       if (job.state !== "failed" && job.state !== "abandoned")
         throw new CommunityConflictError("Only a stopped job can be retried");
@@ -616,6 +639,8 @@ export const retryJob = async (
       );
       if (duplicate.rowCount !== 0)
         throw new CommunityConflictError("An equal job is already active");
+      if (owner !== undefined && subject !== undefined)
+        await reserveBaseHighResolution(db, subject.subject_id, owner, now);
       return jobDto(
         (
           await db.query<JobRow>(
@@ -651,12 +676,19 @@ export const abandonJob = async (
       // A process_item job's item is locked before the job row, the order
       // upload commits and worker results take (kind and subject never change).
       const subject = (
-        await db.query<{ kind: string; subject_id: string }>(
-          "SELECT kind,subject_id FROM community.publishing_jobs WHERE id=$1",
+        await db.query<{
+          kind: string;
+          subject_id: string;
+          payload: { editKey: string; variants: string[] } | null;
+        }>(
+          "SELECT kind,subject_id,payload FROM community.publishing_jobs WHERE id=$1",
           [jobId],
         )
       ).rows[0];
-      if (subject?.kind === "process_item")
+      if (
+        subject !== undefined &&
+        (subject.kind === "process_item" || isBaseHighResolutionJob(subject))
+      )
         await db.query(
           "SELECT id FROM community.media_items WHERE id=$1 FOR UPDATE",
           [subject.subject_id],
@@ -677,6 +709,8 @@ export const abandonJob = async (
       // Nothing will process the item any more: it must not stay processing.
       if (subject?.kind === "process_item")
         await failProcessingItems(db, [subject.subject_id], now);
+      else if (isBaseHighResolutionJob(subject))
+        await releaseReservations(db, [subject!.subject_id], now);
       return jobDto(abandoned);
     },
   );

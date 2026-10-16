@@ -2131,7 +2131,14 @@ export const registerWorkPublishingMediaTests = (
         { holder_kind: "revision", holder_id: revisionId },
       ]);
       expect(
-        (await jobsFor(item.id)).filter((job) => job.kind === "derive_edit"),
+        (await jobsFor(item.id)).filter(
+          (job) =>
+            job.kind === "derive_edit" &&
+            !(
+              job.payload?.variants.length === 1 &&
+              job.payload.variants[0] === "full"
+            ),
+        ),
       ).toHaveLength(2);
       await pool.query(
         "UPDATE community.works SET trashed_at=$2, trash_purge_after=$3 WHERE id=$1",
@@ -2586,6 +2593,172 @@ export const registerWorkPublishingMediaTests = (
       expect(await pinned()).toEqual(["平板", "手机 2"].sort());
     });
 
+    it.each(["abandon", "expired"] as const)(
+      "releases base-HD allowance on %s while preserving previews",
+      async (terminal) => {
+        const draft = await newDraft(a);
+        const item = await adapter.registerItem(
+          a,
+          staticCommand({ draftId: draft.id }),
+          t0,
+        );
+        await uploadAll(a, item);
+        const preview = processedOutcome(item);
+        await adapter.markItemReady(
+          item.id,
+          {
+            ...preview,
+            derivatives: preview.derivatives.filter(
+              (record) => record.variant !== "full",
+            ),
+          },
+          t0,
+        );
+        const reserved = (await adapter.readCapacity(a)).reservedBytes;
+        expect(reserved).toBeGreaterThan(0);
+        const job = (await jobsFor(item.id)).find(
+          (job) => job.kind === "derive_edit",
+        )!;
+        if (terminal === "abandon")
+          await operators.abandonJob(
+            job.id,
+            operator,
+            { requestId: randomUUID() },
+            at(second),
+          );
+        else {
+          await pool.query(
+            "UPDATE community.publishing_jobs SET state='running',attempts=max_attempts,lease_owner='hd-expiry-test',lease_expires_at=$2::timestamptz WHERE id=$1",
+            [job.id, t0.toISOString()],
+          );
+          await adapter.requeueExpiredJobs(at(second), 100);
+        }
+        expect((await adapter.readCapacity(a)).reservedBytes).toBe(0);
+        expect((await adapter.readItem(a, item.id)).state).toBe("ready");
+        expect(
+          (await adapter.readItemProgress(a, item.id)).processing
+            .highResolutionStatus,
+        ).toBe("failed");
+        await operators.retryJob(
+          job.id,
+          operator,
+          { requestId: randomUUID() },
+          at(2 * second),
+        );
+        expect((await adapter.readCapacity(a)).reservedBytes).toBe(reserved);
+      },
+    );
+
+    it("prioritizes previews and bounds HD deferral for a stalled sibling", async () => {
+      const draft = await newDraft(a);
+      const first = await adapter.registerItem(
+        a,
+        staticCommand({ draftId: draft.id }),
+        t0,
+      );
+      const sibling = await adapter.registerItem(
+        a,
+        staticCommand({ draftId: draft.id }),
+        t0,
+      );
+      await uploadAll(a, first);
+      const preview = processedOutcome(first);
+      await adapter.markItemReady(
+        first.id,
+        {
+          ...preview,
+          derivatives: preview.derivatives.filter(
+            (record) => record.variant !== "full",
+          ),
+        },
+        t0,
+      );
+      await pool.query(
+        "UPDATE community.publishing_jobs SET state='succeeded',finished_at=$2::timestamptz WHERE subject_id=$1 AND kind='process_item'",
+        [first.id, t0.toISOString()],
+      );
+      const claims = (
+        offset: number,
+        kinds: ("derive_edit" | "process_item")[],
+        limit = 100,
+      ) =>
+        adapter.claimJobs(
+          { owner: `priority-${hex()}`, limit, leaseMs: minute, kinds },
+          at(offset),
+        );
+      expect(
+        (await claims(second, ["derive_edit"])).filter(
+          (job) => job.subjectId === first.id,
+        ),
+      ).toHaveLength(0);
+      const admitted = (await claims(31 * second, ["derive_edit"])).find(
+        (job) => job.subjectId === first.id,
+      )!;
+      expect(admitted?.payload?.variants).toEqual(["full"]);
+      await adapter.releaseJob(admitted, at(31 * second));
+      await uploadAll(a, sibling);
+      const next = await claims(
+        32 * second,
+        ["process_item", "derive_edit"],
+        1,
+      );
+      expect(next[0]).toMatchObject({
+        kind: "process_item",
+        subjectId: sibling.id,
+      });
+    });
+
+    it("submits verified static previews before HD without publishing them", async () => {
+      const draft = await newDraft(a);
+      const item = await adapter.registerItem(
+        a,
+        staticCommand({ draftId: draft.id }),
+        t0,
+      );
+      await uploadAll(a, item);
+      const preview = processedOutcome(item);
+      await adapter.markItemReady(
+        item.id,
+        {
+          ...preview,
+          derivatives: preview.derivatives.filter(
+            (record) => record.variant !== "full",
+          ),
+        },
+        t0,
+      );
+      const content = {
+        ...text("Private preview test", [entry(item)]),
+        visibility: "self" as const,
+      };
+      expect((await adapter.ensureEditDerivatives(a, content, t0)).ready).toBe(
+        true,
+      );
+      const result = await adapter.submit(
+        a,
+        {
+          requestId: randomUUID(),
+          holder: { draftId: draft.id },
+          content,
+          baseRevisionId: null,
+        },
+        t0,
+      );
+      expect(result.state).toBe("confirmed");
+      expect(
+        (await adapter.readItemProgress(a, item.id)).processing
+          .highResolutionStatus,
+      ).toBe("queued");
+      expect(
+        (
+          await pool.query(
+            "SELECT id FROM community.media_public_assets WHERE item_id=$1",
+            [item.id],
+          )
+        ).rowCount,
+      ).toBe(0);
+    });
+
     it("settles derive jobs for draft edits, covers missing variants and releases edit derivatives nothing needs", async () => {
       const draft = await newDraft(a);
       const item = await adapter.registerItem(
@@ -2601,7 +2774,14 @@ export const registerWorkPublishingMediaTests = (
         text("旋转", [entry(item, { rotation })]);
       const derives = async () =>
         (await jobsFor(item.id))
-          .filter((job) => job.kind === "derive_edit")
+          .filter(
+            (job) =>
+              job.kind === "derive_edit" &&
+              !(
+                job.payload?.variants.length === 1 &&
+                job.payload.variants[0] === "full"
+              ),
+          )
           .map((job) => ({
             key: job.payload?.editKey,
             variants: job.payload?.variants,
@@ -2617,7 +2797,7 @@ export const registerWorkPublishingMediaTests = (
       expect(await derives()).toEqual([
         {
           key: keyOf(90),
-          variants: ["thumb", "display", "full"],
+          variants: ["thumb", "display"],
           state: "queued",
           runAfter: at(minute + 30 * second),
         },
@@ -2632,7 +2812,7 @@ export const registerWorkPublishingMediaTests = (
       expect(await derives()).toEqual([
         {
           key: keyOf(180),
-          variants: ["thumb", "display", "full"],
+          variants: ["thumb", "display"],
           state: "queued",
           runAfter: at(minute + 35 * second),
         },
@@ -2675,7 +2855,7 @@ export const registerWorkPublishingMediaTests = (
       expect(await derives()).toEqual([
         {
           key: keyOf(180),
-          variants: ["thumb", "display", "full"],
+          variants: ["thumb", "display"],
           state: "queued",
           runAfter: at(minute + 10 * second),
         },
@@ -2687,7 +2867,7 @@ export const registerWorkPublishingMediaTests = (
         },
         {
           key: keyOf(270),
-          variants: ["thumb", "full"],
+          variants: ["thumb"],
           state: "queued",
           runAfter: at(minute + 10 * second),
         },
@@ -3320,6 +3500,10 @@ export const registerWorkPublishingMediaTests = (
       expect(legacy.qualityMode).toBe("legacy");
       expect(await jobsFor(legacy.itemId)).toEqual([]);
       // An autosave with a rotation settles like any draft edit.
+      expect(
+        (await adapter.readItemProgress(a, legacy.itemId)).processing
+          .highResolutionStatus,
+      ).toBe("not_required");
       const rotated = {
         ...draft.content,
         items: [{ ...legacy, edit: { rotation: 180 as const, crop: null } }],
@@ -3342,7 +3526,15 @@ export const registerWorkPublishingMediaTests = (
           [JSON.stringify({ rotation: 180, crop: null })],
         )
       ).rows[0]!.key;
-      expect(await jobsFor(legacy.itemId)).toMatchObject([
+      expect(
+        (await jobsFor(legacy.itemId)).filter(
+          (job) =>
+            !(
+              job.payload?.variants.length === 1 &&
+              job.payload.variants[0] === "full"
+            ),
+        ),
+      ).toMatchObject([
         {
           kind: "derive_edit",
           state: "queued",
@@ -3350,10 +3542,38 @@ export const registerWorkPublishingMediaTests = (
           payload: {
             editKey: key,
             coverCrop: null,
-            variants: ["thumb", "display", "full", "cover"],
+            variants: ["thumb", "display", "cover"],
           },
         },
       ]);
+      expect(
+        (await adapter.readItemProgress(a, legacy.itemId)).processing
+          .highResolutionStatus,
+      ).toBe("queued");
+      const hd = (await jobsFor(legacy.itemId)).find(
+        (job) =>
+          job.payload?.variants.length === 1 &&
+          job.payload.variants[0] === "full",
+      )!;
+      await pool.query(
+        "UPDATE community.publishing_jobs SET state='failed',attempts=max_attempts,last_error_code='media_store_unavailable' WHERE id=$1",
+        [hd.id],
+      );
+      expect(
+        (await adapter.readItemProgress(a, legacy.itemId)).processing
+          .highResolutionStatus,
+      ).toBe("failed");
+      expect(
+        (
+          await adapter.retryItemProcessing(
+            a,
+            legacy.itemId,
+            { requestId: randomUUID() },
+            at(2 * second),
+          )
+        ).processing.highResolutionStatus,
+      ).toBe("queued");
+      expect((await adapter.readCapacity(a)).reservedBytes).toBe(0);
       const readiness = await adapter.ensureEditDerivatives(
         a,
         { items: rotated.items, coverKey: legacy.key, coverCrop: null },
@@ -3388,6 +3608,10 @@ export const registerWorkPublishingMediaTests = (
           at(3 * second),
         ),
       ).toEqual({ status: "recorded" });
+      expect(
+        (await adapter.readItemProgress(a, legacy.itemId)).processing
+          .highResolutionStatus,
+      ).toBe("ready");
       expect(
         await adapter.ensureEditDerivatives(
           a,
@@ -3448,7 +3672,14 @@ export const registerWorkPublishingMediaTests = (
       ).slice(0, 32);
       const derives = async () =>
         (await jobsFor(item.id))
-          .filter((job) => job.kind === "derive_edit")
+          .filter(
+            (job) =>
+              job.kind === "derive_edit" &&
+              !(
+                job.payload?.variants.length === 1 &&
+                job.payload.variants[0] === "full"
+              ),
+          )
           .map((job) => job.run_after);
       await adapter.saveDraft(
         a,
@@ -3518,7 +3749,14 @@ export const registerWorkPublishingMediaTests = (
           at(minute + 3 * second),
         )
       ).filter((claim) => claim.subjectId === item.id);
-      expect(claims).toHaveLength(2);
+      expect(claims).toHaveLength(3);
+      expect(
+        claims.filter(
+          (claim) =>
+            claim.payload?.variants.length === 1 &&
+            claim.payload.variants[0] === "full",
+        ),
+      ).toHaveLength(1);
       for (const claim of claims) {
         await adapter.recordDerivatives(
           item.id,

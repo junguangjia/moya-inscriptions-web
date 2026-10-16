@@ -250,3 +250,79 @@ describe("media item status", () => {
     expect(isVerifiedLive(undefined, undefined)).toBe(false);
   });
 });
+
+describe("preview-first status", () => {
+  it("names actual HD stages/counts while the preview remains ready", () => {
+    const processing = {
+      previewStatus: "ready" as const,
+      highResolutionStatus: "processing" as const,
+      completedRenditions: 4,
+    };
+    expect(itemStatus(view({ phase: "ready", processing }))).toEqual({
+      kind: "ready",
+      label: "预览已就绪，高清图处理中 · 已保存 4 个图像版本",
+      background: "pending",
+    });
+    const failed = itemStatus(
+      view({
+        phase: "ready",
+        processing: {
+          ...processing,
+          highResolutionStatus: "failed",
+        },
+      }),
+    );
+    expect(failed).toMatchObject({
+      kind: "ready",
+      background: "failed",
+      retry: { type: "high_resolution" },
+    });
+    expect(itemStatus(view({ phase: "ready" }))).toEqual({
+      kind: "ready",
+      label: "已就绪",
+    });
+  });
+});
+
+it("keeps unknown background status visible without failing a usable preview", () => {
+  expect(
+    itemStatus(
+      view({
+        phase: "ready",
+        processingFailure: {
+          code: "progress_unavailable",
+          message: "unknown",
+          outcomeUnknown: false,
+        },
+      }),
+    ),
+  ).toEqual({
+    kind: "ready",
+    label: "预览可用，暂时无法确认高清图进度",
+    background: "pending",
+  });
+});
+
+it("hides a previous frame's failed HD retry while the new frame progress is being checked", () => {
+  expect(
+    itemStatus(
+      view({
+        phase: "ready",
+        processing: {
+          previewStatus: "ready",
+          highResolutionStatus: "failed",
+          completedRenditions: 5,
+        },
+        processingFailure: {
+          code: "progress_refreshing",
+          message: "checking",
+          outcomeUnknown: false,
+        },
+      }),
+    ),
+  ).toEqual({
+    kind: "ready",
+    label: "预览可用，正在确认高清图进度",
+    background: "pending",
+  });
+});

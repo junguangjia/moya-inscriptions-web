@@ -102,7 +102,8 @@ export const publishChipGlyph = (
     ? { kind: "error" }
     : status.kind === "uploading"
       ? { kind: "progress", percent: status.percent }
-      : status.kind === "processing"
+      : status.kind === "processing" ||
+          (status.kind === "ready" && status.background === "pending")
         ? { kind: "loading" }
         : null;
 

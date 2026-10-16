@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { contentIdentifierSha256 } from "./parsers/apple-live-photo";
+import {
+  createEditorState,
+  readinessOf,
+} from "./ui/editor/editor-session-state";
 import { IDENTIFIER } from "./parsers/synthetic-media.test-support";
 import {
+  backgroundProgressText,
   canRetryProcessing,
+  processingProgressText,
   readinessText,
   summarizeUploads,
 } from "./upload-manager";
@@ -20,7 +26,12 @@ import {
 } from "./upload-manager.test-support";
 
 import type { LogicalSource } from "./import-grouping";
-import type { MediaMetadata, PublishingDraft } from "@moya/contracts";
+import type {
+  MediaMetadata,
+  PublishingDraft,
+  PublishingMediaItemProgress,
+  PublishingMediaProcessingProgress,
+} from "@moya/contracts";
 
 const confirm = (
   key: string,
@@ -1292,5 +1303,363 @@ describe("upload manager: clipboard provenance", () => {
         pendingLabel: "photo",
       },
     ]);
+  });
+});
+
+describe("preview-first background processing", () => {
+  const pending: PublishingMediaProcessingProgress = {
+    previewStatus: "ready",
+    highResolutionStatus: "queued",
+    completedRenditions: 3,
+  };
+  const start = async () => {
+    const test = createTestManager();
+    let processing = { ...pending };
+    const progress = vi.fn(
+      async (id: string): Promise<PublishingMediaItemProgress> => ({
+        item: test.client.items.get(id)!,
+        processing,
+      }),
+    );
+    const retry = vi.fn(
+      async (
+        id: string,
+        _cmd: { requestId: string },
+        _signal?: AbortSignal,
+      ): Promise<PublishingMediaItemProgress> => {
+        void _cmd;
+        void _signal;
+        processing = { ...pending, highResolutionStatus: "queued" };
+        return { item: test.client.items.get(id)!, processing };
+      },
+    );
+    Object.assign(test.client.client, {
+      itemProgress: progress,
+      retryHighResolution: retry,
+    });
+    test.manager.addConfirmed([confirm("preview", staticSource())]);
+    await settle();
+    const id = test.item("preview").itemId!;
+    test.transfer.starts[0]!.callbacks.onSettled({
+      status: 200,
+      responseText: test.client.receive(id, "still"),
+      stalled: false,
+    });
+    await settle();
+    test.client.makeReady(id);
+    test.timers.fireAll();
+    await settle();
+    return {
+      ...test,
+      id,
+      progress,
+      retry,
+      setProcessing: (next: PublishingMediaProcessingProgress) => {
+        processing = next;
+      },
+    };
+  };
+
+  it("unblocks verified previews and continues authoritative HD polling without another upload", async () => {
+    const t = await start();
+    expect(t.item("preview").phase).toBe("ready");
+    expect(t.item("preview").processing).toEqual(pending);
+    expect(summarizeUploads(t.manager.getSnapshot())).toMatchObject({
+      blocking: 0,
+      ready: 1,
+      backgroundProcessing: 1,
+      completedRenditions: 3,
+    });
+    expect(processingProgressText(t.item("preview"))).toBe(
+      "预览已就绪，高清图等待处理 · 已保存 3 个图像版本",
+    );
+    expect(t.timers.pending.size).toBe(1);
+    const editor = {
+      ...createEditorState("editor", ACCOUNT, { type: "new" }),
+      items: [
+        {
+          key: "preview",
+          itemId: t.id,
+          kind: "static" as const,
+          qualityMode: "standard" as const,
+          edit: { rotation: 0 as const, crop: null },
+        },
+      ],
+    };
+    expect(readinessOf(editor, t.manager.getSnapshot())).toMatchObject({
+      ready: 1,
+      blocking: 0,
+      confirmed: true,
+    });
+    t.setProcessing({
+      ...pending,
+      highResolutionStatus: "processing",
+      completedRenditions: 4,
+    });
+    t.timers.fireAll();
+    await settle();
+    expect(processingProgressText(t.item("preview"))).toContain(
+      "已保存 4 个图像版本",
+    );
+    t.setProcessing({
+      ...pending,
+      highResolutionStatus: "ready",
+      completedRenditions: 5,
+    });
+    t.timers.fireAll();
+    await settle();
+    expect(t.item("preview").phase).toBe("ready");
+    expect(t.item("preview").processing?.completedRenditions).toBe(5);
+    expect(t.timers.pending.size).toBe(0);
+    expect(t.transfer.starts).toHaveLength(1);
+    expect(t.client.client.resetComponent).not.toHaveBeenCalled();
+    t.manager.dispose();
+  });
+
+  it("keeps preview readiness through HD failure and retries only the durable background command", async () => {
+    const t = await start();
+    t.setProcessing({ ...pending, highResolutionStatus: "failed" });
+    t.timers.fireAll();
+    await settle();
+    expect(t.item("preview").phase).toBe("ready");
+    const summary = summarizeUploads(t.manager.getSnapshot());
+    expect(summary).toMatchObject({ blocking: 0, backgroundFailed: 1 });
+    expect(readinessText(summary)).toBeNull();
+    expect(backgroundProgressText(summary)).toContain("预览仍可使用");
+    await t.manager.retryHighResolution("preview");
+    expect(t.retry).toHaveBeenCalledWith(
+      t.id,
+      { requestId: expect.any(String) },
+      expect.any(AbortSignal),
+    );
+    expect(t.item("preview").processing?.highResolutionStatus).toBe("queued");
+    expect(t.transfer.starts).toHaveLength(1);
+    expect(t.client.client.resetComponent).not.toHaveBeenCalled();
+    t.manager.dispose();
+  });
+
+  it("reconciles a lost retry response and retains its command identity for a safe repeat", async () => {
+    const t = await start();
+    t.setProcessing({ ...pending, highResolutionStatus: "failed" });
+    t.timers.fireAll();
+    await settle();
+    t.retry.mockRejectedValue(clientError(0, "lost response", true));
+    await t.manager.retryHighResolution("preview");
+    await t.manager.retryHighResolution("preview");
+    expect(t.retry.mock.calls[0]?.[1]).toEqual(t.retry.mock.calls[1]?.[1]);
+    expect(t.item("preview").phase).toBe("ready");
+    expect(t.transfer.starts).toHaveLength(1);
+    t.manager.dispose();
+  });
+
+  it("rechecks a restored ready item and resumes background polling without local bytes", async () => {
+    const t = await start();
+    const checkpoints = t.manager.checkpoint();
+    const restored = createTestManager({ client: t.client.client });
+    await restored.manager.restoreCheckpoint(checkpoints);
+    expect(restored.item("preview").phase).toBe("ready");
+    expect(restored.item("preview").processing).toEqual(pending);
+    await restored.manager.continueUploads();
+    expect(restored.timers.pending.size).toBe(1);
+    expect(restored.transfer.starts).toHaveLength(0);
+    t.manager.dispose();
+    restored.manager.dispose();
+  });
+
+  it.each(["cancel", "account"] as const)(
+    "fences a late progress answer after %s",
+    async (reason) => {
+      const t = await start();
+      let answer!: (value: PublishingMediaItemProgress) => void;
+      t.progress.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      t.timers.fireAll();
+      await settle();
+      if (reason === "cancel") await t.manager.cancelItem("preview");
+      else {
+        t.setAccount(OTHER_ACCOUNT);
+        t.manager.pause("account");
+      }
+      answer({
+        item: { ...t.client.items.get(t.id)!, state: "ready" },
+        processing: {
+          ...pending,
+          highResolutionStatus: "ready",
+          completedRenditions: 5,
+        },
+      });
+      await settle();
+      if (reason === "cancel")
+        expect(t.item("preview").phase).toBe("cancelled");
+      else expect(t.item("preview").processing).toEqual(pending);
+      expect(t.timers.pending.size).toBe(0);
+      t.manager.dispose();
+    },
+  );
+
+  it.each(["cancel", "account"] as const)(
+    "fences a late HD retry answer after %s",
+    async (reason) => {
+      const t = await start();
+      t.setProcessing({ ...pending, highResolutionStatus: "failed" });
+      t.timers.fireAll();
+      await settle();
+      let answer!: (value: PublishingMediaItemProgress) => void;
+      t.retry.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const request = t.manager.retryHighResolution("preview");
+      await settle();
+      if (reason === "cancel") await t.manager.cancelItem("preview");
+      else {
+        t.setAccount(OTHER_ACCOUNT);
+        t.manager.pause("account");
+      }
+      answer({
+        item: { ...t.client.items.get(t.id)!, state: "ready" },
+        processing: pending,
+      });
+      await request;
+      await settle();
+      if (reason === "cancel")
+        expect(t.item("preview").phase).toBe("cancelled");
+      else
+        expect(t.item("preview").processing?.highResolutionStatus).toBe(
+          "failed",
+        );
+      expect(t.client.client.resetComponent).not.toHaveBeenCalled();
+      expect(t.transfer.starts).toHaveLength(1);
+      expect(t.timers.pending.size).toBe(0);
+      t.manager.dispose();
+    },
+  );
+
+  it("keeps completed output counts but reports unknown progress during a status outage", async () => {
+    const t = await start();
+    t.progress.mockRejectedValueOnce(
+      clientError(503, "status unavailable", false),
+    );
+    t.timers.fireAll();
+    await settle();
+    expect(t.item("preview").phase).toBe("ready");
+    expect(t.item("preview").processing?.completedRenditions).toBe(3);
+    expect(processingProgressText(t.item("preview"))).toBe(
+      "预览可用，暂时无法确认高清图进度",
+    );
+    expect([...t.timers.pending.values()][0]?.ms).toBe(5000);
+    t.timers.fireAll();
+    await settle();
+    expect(t.item("preview").processingFailure).toBeNull();
+    expect(processingProgressText(t.item("preview"))).toContain(
+      "高清图等待处理",
+    );
+    t.manager.dispose();
+  });
+
+  it("rearms completed HD after a new frame without resending the source", async () => {
+    const t = await start();
+    t.setProcessing({
+      ...pending,
+      highResolutionStatus: "ready",
+      completedRenditions: 5,
+    });
+    t.timers.fireAll();
+    await settle();
+    expect(t.timers.pending.size).toBe(0);
+    t.manager.refreshProcessing(["preview", "preview"]);
+    expect(processingProgressText(t.item("preview"))).toBe(
+      "预览可用，正在确认高清图进度",
+    );
+    expect(t.item("preview").processing?.completedRenditions).toBe(5);
+    expect(summarizeUploads(t.manager.getSnapshot())).toMatchObject({
+      blocking: 0,
+      backgroundProcessing: 1,
+    });
+    t.setProcessing({
+      ...pending,
+      highResolutionStatus: "queued",
+      completedRenditions: 8,
+    });
+    t.timers.fireAll();
+    await settle();
+    expect(processingProgressText(t.item("preview"))).toContain(
+      "高清图等待处理",
+    );
+    t.setProcessing({
+      ...pending,
+      highResolutionStatus: "failed",
+      completedRenditions: 8,
+    });
+    t.timers.fireAll();
+    await settle();
+    expect(t.item("preview").phase).toBe("ready");
+    expect(summarizeUploads(t.manager.getSnapshot())).toMatchObject({
+      blocking: 0,
+      backgroundFailed: 1,
+    });
+    expect(t.transfer.starts).toHaveLength(1);
+    expect(t.client.client.resetComponent).not.toHaveBeenCalled();
+    t.manager.dispose();
+  });
+
+  it("fences a previous frame's in-flight HD answer when processing is rearmed", async () => {
+    const t = await start();
+    let answer!: (value: PublishingMediaItemProgress) => void;
+    t.progress.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    t.timers.fireAll();
+    await settle();
+    t.manager.refreshProcessing(["preview"]);
+    answer({
+      item: t.client.items.get(t.id)!,
+      processing: {
+        ...pending,
+        highResolutionStatus: "ready",
+        completedRenditions: 5,
+      },
+    });
+    await settle();
+    expect(t.item("preview").processingFailure?.code).toBe(
+      "progress_refreshing",
+    );
+    expect(t.timers.pending.size).toBe(1);
+    t.setProcessing({
+      ...pending,
+      highResolutionStatus: "queued",
+      completedRenditions: 8,
+    });
+    t.timers.fireAll();
+    await settle();
+    expect(t.item("preview").processing?.highResolutionStatus).toBe("queued");
+    expect(t.item("preview").processingFailure).toBeNull();
+    t.manager.dispose();
+  });
+
+  it("preserves ready legacy responses when the optional progress route is absent", async () => {
+    const t = await start();
+    t.progress.mockRejectedValue(clientError(404, "route not found", false));
+    t.timers.fireAll();
+    await settle();
+    expect(t.item("preview").phase).toBe("ready");
+    expect(t.item("preview").processingFailure?.code).toBe(
+      "progress_unavailable",
+    );
+    expect(processingProgressText(t.item("preview"))).toBe(
+      "预览可用，暂时无法确认高清图进度",
+    );
+    expect(t.timers.pending.size).toBe(1);
+    expect(t.transfer.starts).toHaveLength(1);
+    t.manager.dispose();
   });
 });

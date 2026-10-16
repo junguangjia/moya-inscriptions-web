@@ -927,6 +927,9 @@ export const useMediaActions = (
 
   const retry = (key: string, plan: RetryPlan) => {
     switch (plan.type) {
+      case "high_resolution":
+        void session.retryHighResolution(key);
+        return;
       case "processing":
         void session.retryProcessing(key);
         return;

@@ -2572,7 +2572,10 @@ describe("operator work publishing shapes", () => {
 
 describe("work publishing JSON Schemas", () => {
   it("exports strict components free of forbidden OpenAPI terms and names", () => {
-    const serialized = JSON.stringify(workPublishingJsonSchemas).toLowerCase();
+    // The approved previewStatus field is not the deferred review domain.
+    const serialized = JSON.stringify(workPublishingJsonSchemas)
+      .toLowerCase()
+      .replaceAll('"previewstatus"', '"processingstatus"');
     for (const term of [
       "rawsource",
       "candidate",

@@ -1117,6 +1117,20 @@ const publishingRoutes: readonly [
     null,
   ],
   [
+    "/v1/community/publishing/items/{itemId}/progress",
+    "get",
+    "readMediaItemProgress",
+    "PublishingMediaItemProgress",
+    null,
+  ],
+  [
+    "/v1/community/publishing/items/{itemId}/processing/retry",
+    "post",
+    "retryMediaItemProcessing",
+    "PublishingMediaItemProgress",
+    "RequestIdentity",
+  ],
+  [
     "/v1/community/publishing/items/{itemId}/cancel",
     "post",
     "cancelMediaItem",

@@ -812,3 +812,24 @@ describe("createActionRing", () => {
     ).toEqual({ kind: "determinate", fraction: 0.5 });
   });
 });
+
+it("keeps a complete transfer ring indeterminate while another ready preview has HD pending", () => {
+  const background = {
+    ...item("background", "ready", 500, 500),
+    processing: {
+      previewStatus: "ready" as const,
+      highResolutionStatus: "queued" as const,
+      completedRenditions: 3,
+    },
+  };
+  expect(
+    createActionRing(
+      snapshot([item("sending", "uploading", 100, 100), background]),
+    ),
+  ).toEqual({ kind: "indeterminate" });
+  expect(
+    createActionRing(
+      snapshot([item("sending", "uploading", 100, 50), background]),
+    ),
+  ).toEqual({ kind: "determinate", fraction: 0.5 });
+});

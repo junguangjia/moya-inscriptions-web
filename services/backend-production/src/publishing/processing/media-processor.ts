@@ -335,9 +335,10 @@ const componentLayout = (input: ProcessorInput) => {
  */
 export const plannedStillRequests = (
   roles: readonly StillRole[],
+  includeViewer = roles.includes("display"),
 ): SandboxRenditionRequest[] => {
   const planned = new Set<StillRole>(roles);
-  if (planned.has("display")) planned.add("viewer");
+  if (includeViewer) planned.add("viewer");
   return STILL_ROLES.filter((role) => planned.has(role)).map((role) => {
     const recipe = currentRecipe(role);
     return { role, version: recipe.version, digest: recipe.digest };
@@ -671,7 +672,12 @@ async function processItem(
   const live = input.kind === "live";
   const needStill = processing || stillRoles.length > 0;
   const needMotion = live && (processing || input.variants.includes("motion"));
-  const renditions = plannedStillRequests(stillRoles);
+  // Static previews never wait for HD. Catalog uses the unchanged default;
+  // Live still validates and renders its complete original role set.
+  const renditions = plannedStillRequests(
+    stillRoles,
+    live ? stillRoles.includes("display") : input.variants.includes("full"),
+  );
   const placeholder =
     input.editKey === "base" && renditions.some((r) => r.role === "thumb");
   const written: string[] = [];
@@ -718,7 +724,7 @@ async function processItem(
       clientPairing: input.clientPairing,
       edit,
       coverCrop,
-      // Every item edit has its `full` (readiness requires it).
+      // Work previews and background HD share exactly the same recipe geometry.
       plan: "work",
       renditions,
       motion: input.variants.includes("motion"),
