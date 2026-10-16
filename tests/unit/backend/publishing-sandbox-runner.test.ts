@@ -921,6 +921,7 @@ describe("media sandbox protocol", () => {
     return stillJob({ inputPath: (name) => path.join(directory, name) });
   };
 
+  // Nine sequential real-image renders share one test deadline on CI.
   it("round-trips every recipe: the renderer accepts it and both sides compute the same sizes", async () => {
     for (const [role, plan] of [
       ...(["thumb", "cover", "display", "viewer", "full"] as const).map(
@@ -994,7 +995,7 @@ describe("media sandbox protocol", () => {
         }),
       ).toThrow(SandboxJobError);
     }
-  });
+  }, 30_000);
 
   it("validates job files strictly", async () => {
     const job = await sampleJob();
