@@ -188,6 +188,7 @@ describe("the add inputs", () => {
     );
     expect(pick.current!.hidden).toBe(true);
     expect(pick.current!.multiple).toBe(true);
+    expect(pick.current!.hasAttribute("capture")).toBe(false);
     expect(pick.current!.accept).toContain("image/heic");
     expect(capture.current!.getAttribute("capture")).toBe("environment");
     expect(capture.current!.multiple).toBe(false);
@@ -202,6 +203,41 @@ describe("the add inputs", () => {
       pick.current!.dispatchEvent(new Event("change", { bubbles: true })),
     );
     expect(onFiles).toHaveBeenCalledExactlyOnceWith([file]);
+  });
+
+  it("hand a pick on whole and in order, and nothing when it comes back empty or is cancelled", async () => {
+    const pick = createRef<HTMLInputElement>();
+    const onFiles = vi.fn<(files: File[]) => void>();
+    await act(async () =>
+      root.render(
+        <PickInput disabled={false} inputRef={pick} onFiles={onFiles} />,
+      ),
+    );
+    const choose = async (files: File[]) => {
+      Object.defineProperty(pick.current!, "files", {
+        configurable: true,
+        value: files,
+      });
+      await act(async () =>
+        pick.current!.dispatchEvent(new Event("change", { bubbles: true })),
+      );
+    };
+    const files = ["a", "b", "c"].map(
+      (name) => new File([name], `${name}.jpg`, { type: "image/jpeg" }),
+    );
+    await choose(files);
+    expect(onFiles).toHaveBeenCalledOnce();
+    // The same File objects, in the picker's order.
+    expect(
+      onFiles.mock.calls[0]![0].map((file) => files.indexOf(file)),
+    ).toEqual([0, 1, 2]);
+
+    // A cancelled pick must never count as a pick.
+    await choose([]);
+    await act(async () =>
+      pick.current!.dispatchEvent(new Event("cancel", { bubbles: true })),
+    );
+    expect(onFiles).toHaveBeenCalledOnce();
   });
 });
 

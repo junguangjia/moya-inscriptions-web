@@ -559,11 +559,15 @@ const chooseFiles = async (
   page: Page,
   opener: Locator,
   files: LocalPhoto[],
+  options: { readonly multiple?: boolean } = {},
 ) => {
   await present(opener);
   const chooser = page.waitForEvent("filechooser", { timeout: ACTION_TIMEOUT });
   await click(opener);
   const selected = await chooser;
+  // #276: 选择照片 must ask the host picker for several photos, not one.
+  if (options.multiple !== undefined)
+    expect(selected.isMultiple()).toBe(options.multiple);
   // The native chooser is the visible action target; its backing input is hidden.
   await selected.setFiles(files, { timeout: ACTION_TIMEOUT });
 };
@@ -637,6 +641,7 @@ const pickPhotos = async (composer: Composer) => {
     composer.page,
     composer.editor.getByRole("button", { name: "选择照片", exact: true }),
     await photos(),
+    { multiple: true },
   );
   await present(screen(composer, "edit"));
   await expect(composer.strip.locator("[data-edit-index]")).toHaveCount(2);
@@ -1089,6 +1094,7 @@ test("编辑 + exposes quality, album and camera, then appends the new photo dir
     composer.page,
     add.getByRole("button", { name: "选择照片", exact: true }),
     [await photo("blue.jpg", 900, 900, "#315c8d")],
+    { multiple: true },
   );
   await expect(add).toHaveCount(0);
   await expect(composer.strip.locator("[data-edit-index]")).toHaveCount(3);
