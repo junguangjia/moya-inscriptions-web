@@ -22,6 +22,12 @@ const click = async (locator: Locator) => {
   await locator.click();
 };
 
+// From 896px the public product is browse-only for visitors without an
+// account (pc-browse-only-v1): no dock, no 讨论/用户, and /login and /register
+// go to Home. Steps that need them run in a desktop window below that width.
+const narrow = (page: Page) =>
+  page.setViewportSize({ width: 800, height: 900 });
+
 const enter = async (page: Page, path = "/") => {
   const response = await page.goto(path);
   expect(response?.status()).toBe(200);
@@ -95,6 +101,7 @@ test("switches the four home tabs", async ({ page }) => {
 });
 
 test("opens 讨论 and 用户", async ({ page }) => {
+  await narrow(page);
   await enter(page);
   const navigation = surface(page).getByRole("navigation", {
     name: "主要内容",
@@ -137,8 +144,13 @@ test("opens a detail and the viewer, then goes back twice", async ({
   await expect(shell(page)).toBeVisible();
 });
 
-test("opens and closes search", async ({ page }) => {
+test("opens and closes search at 1280 without the dock", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
   await enter(page);
+  await expect(shell(page)).toHaveAttribute("data-browse-only", "true");
+  await expect(
+    surface(page).getByRole("navigation", { name: "主要内容" }),
+  ).toBeHidden();
   await click(page.getByRole("button", { name: "打开搜索", exact: true }));
   const search = page.getByRole("dialog", { name: "搜索", exact: true });
   await expect(search).toBeVisible();
@@ -156,6 +168,7 @@ test("follows a detail deep link", async ({ page }) => {
 
 for (const path of ["/login", "/register"])
   test(`renders the ${path} form`, async ({ page }) => {
+    await narrow(page);
     const response = await page.goto(path);
     expect(response?.status()).toBe(200);
     const main = page.locator("main[data-auth-mode]");

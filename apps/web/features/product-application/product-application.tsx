@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { LiveCommentSection } from "../comments/live-comment-section";
 import { AuthorProvider, useAuthors } from "../authors/author-context";
 import {
@@ -25,8 +27,13 @@ import { MessageTrigger } from "../authors/message-center";
 import { DirectMessageEntryProvider } from "../messages";
 import { useProductShell } from "../product-shell/product-shell";
 import { CatalogSearchHeaderAction } from "../search/catalog-search";
+import { resolveBrowseOnlySession } from "../shell/browse-only";
 
 import type { CommunityCommentSurface } from "./community-comment-surface";
+import type {
+  BrowseOnlyPolicy,
+  WideScreenBrowseOnlyHint,
+} from "../shell/browse-only";
 import type { T02pProductPreviewProps } from "../product-preview/t02p-product-preview";
 
 export interface ProductApplicationProps extends Pick<
@@ -55,6 +62,11 @@ export interface ProductApplicationProps extends Pick<
   readonly messageUnreadCount?: number;
   readonly liveNotifications?: boolean;
   readonly articleAuthoring?: boolean;
+  /**
+   * Wide screens are browse-only for visitors without an account
+   * (pc-browse-only-v1); absent when the policy does not apply.
+   */
+  readonly wideScreenBrowseOnly?: WideScreenBrowseOnlyHint;
 }
 
 /**
@@ -69,6 +81,7 @@ export const ProductApplication = ({
   messageUnreadCount = 0,
   liveNotifications = false,
   articleAuthoring = false,
+  wideScreenBrowseOnly,
   ...preview
 }: ProductApplicationProps) =>
   comments === null || !authorCommunity ? (
@@ -95,6 +108,7 @@ export const ProductApplication = ({
             unreadCount={messageUnreadCount}
             liveNotifications={liveNotifications}
             articleAuthoring={articleAuthoring}
+            wideScreenBrowseOnly={wideScreenBrowseOnly}
           />
         </DirectMessageEntryProvider>
       </NotificationProvider>
@@ -106,6 +120,7 @@ const AuthorProduct = ({
   unreadCount,
   liveNotifications,
   articleAuthoring,
+  wideScreenBrowseOnly,
 }: {
   preview: Omit<
     ProductApplicationProps,
@@ -114,12 +129,28 @@ const AuthorProduct = ({
     | "messageUnreadCount"
     | "liveNotifications"
     | "articleAuthoring"
+    | "wideScreenBrowseOnly"
   >;
   unreadCount: number;
   liveNotifications: boolean;
   articleAuthoring: boolean;
+  wideScreenBrowseOnly: WideScreenBrowseOnlyHint | undefined;
 }) => {
   const author = useAuthors();
+  const session =
+    wideScreenBrowseOnly === undefined
+      ? undefined
+      : resolveBrowseOnlySession({
+          viewer: author.viewer !== null,
+          checking: author.checking,
+          sessionError: author.sessionError,
+          sessionHint: wideScreenBrowseOnly.sessionHint,
+        });
+  // One object per session state, so the shell's effects see a stable policy.
+  const browseOnlyPolicy = useMemo<BrowseOnlyPolicy | undefined>(
+    () => (session === undefined ? undefined : { session }),
+    [session],
+  );
   return (
     // Uploads and the editor session live above every page and overlay (U01).
     <ArticleAvailability enabled={articleAuthoring}>
@@ -130,6 +161,9 @@ const AuthorProduct = ({
             <PublishingEntryProvider>
               <T02pProductPreview
                 {...preview}
+                {...(browseOnlyPolicy === undefined
+                  ? {}
+                  : { browseOnlyPolicy })}
                 detailScopeKey={author.viewer?.id ?? "guest"}
                 liveThreads
                 // Publishing takes the one dock action; Search moves to the headers.

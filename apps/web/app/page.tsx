@@ -11,6 +11,7 @@ import { loadProductionProductStates } from "../features/product-application/loa
 import { ProductApplication } from "../features/product-application/product-application";
 import { readFormalRequestContext } from "./formal-request-context";
 import { readVisitorAccess } from "./product-access";
+import { wideScreenBrowseOnlyHint } from "./wide-screen-browse-only";
 
 export default async function FormalPage({
   searchParams,
@@ -34,13 +35,20 @@ export default async function FormalPage({
     typeof query.topic === "string" && query.topic.length <= 160
       ? query.topic
       : null;
+  const browseOnly = wideScreenBrowseOnlyHint(access);
 
   return (
     <CatalogSearchProvider>
       {access.closedBeta && <ProductAccessWatcher expected="granted" />}
       <ProductApplication
         {...(resolveCommunityCommentSurface() !== null
-          ? { liveNotifications: true, articleAuthoring: true }
+          ? {
+              liveNotifications: true,
+              articleAuthoring: true,
+              ...(browseOnly === undefined
+                ? {}
+                : { wideScreenBrowseOnly: browseOnly }),
+            }
           : {})}
         authorCommunity={resolveCommunityCommentSurface() !== null}
         comments={resolveCommunityCommentSurface()}

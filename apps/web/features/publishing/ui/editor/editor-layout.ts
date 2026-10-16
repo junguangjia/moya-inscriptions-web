@@ -3,6 +3,10 @@
 import { useSyncExternalStore } from "react";
 
 import { useProductShell } from "../../../product-shell/product-shell";
+import {
+  isWideLayout,
+  WIDE_LAYOUT_MINIMUM_WIDTH,
+} from "../../../shell/device-platform";
 
 import type { PresentationPlatform } from "../../../shell/device-platform";
 
@@ -13,7 +17,7 @@ import type { PresentationPlatform } from "../../../shell/device-platform";
  */
 
 /** Wide tablets use the desktop editor from this width (design §11.1). */
-export const DESKTOP_MINIMUM_WIDTH = 896;
+export const DESKTOP_MINIMUM_WIDTH = WIDE_LAYOUT_MINIMUM_WIDTH;
 
 export type EditorLayout = "phone" | "desktop";
 
@@ -36,10 +40,7 @@ const useViewportWidth = () =>
 export const editorLayout = (
   platform: PresentationPlatform,
   width: number,
-): EditorLayout =>
-  platform === "pc" || (platform === "tablet" && width >= DESKTOP_MINIMUM_WIDTH)
-    ? "desktop"
-    : "phone";
+): EditorLayout => (isWideLayout(platform, width) ? "desktop" : "phone");
 
 /**
  * Set on the editor host by its viewport frame ("true" while the on-screen

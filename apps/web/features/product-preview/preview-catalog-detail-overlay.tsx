@@ -49,6 +49,7 @@ export const PreviewCatalogDetailOverlay = ({
   const targetId = target?.id ?? catalogId;
   const {
     activeViewerMediaId,
+    browseOnly,
     changeViewerMedia,
     closeViewer,
     openViewer,
@@ -56,6 +57,10 @@ export const PreviewCatalogDetailOverlay = ({
     platform,
     recoverUnavailableAuthContent,
   } = useProductShell();
+  // Browse-only reads without comments (pc-browse-only-v1): undefined, never
+  // an empty node, so the Detail keeps its hero layout. The actions themselves
+  // keep only the plain author line.
+  const readOnly = browseOnly === true;
   const generationRef = useRef(0);
   const missingTargetRef = useRef<ContentIdentity | null>(null);
   const [revision, setRevision] = useState(0);
@@ -119,7 +124,7 @@ export const PreviewCatalogDetailOverlay = ({
       activeViewerMediaId={activeViewerMediaId}
       backButtonRef={backButtonRef}
       catalogId={catalogId}
-      commentSection={commentSection}
+      commentSection={readOnly ? undefined : commentSection}
       detailActions={
         state.state === "loaded"
           ? renderActions?.(state.detail, () => setRevision((v) => v + 1))

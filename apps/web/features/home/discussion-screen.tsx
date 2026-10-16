@@ -140,6 +140,12 @@ export function DiscussionScreen({
   ]);
   useEffect(() => {
     if (!initialTopicId || openedInitial.current) return;
+    // Browse-only refuses 讨论 (pc-browse-only-v1): the link is spent, so a
+    // later narrower window does not open it unasked.
+    if (shell.isBrowseOnlyEnforced?.() === true) {
+      openedInitial.current = true;
+      return;
+    }
     if (shell.activeDestination !== "discussion") {
       shell.navigatePrimary("discussion");
       return;
@@ -158,6 +164,7 @@ export function DiscussionScreen({
   }, [
     initialTopicId,
     shell.activeDestination,
+    shell.isBrowseOnlyEnforced,
     shell.navigatePrimary,
     shell.openTopic,
   ]);

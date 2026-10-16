@@ -11,7 +11,7 @@ pnpm verify
 ```
 
 This runs formatting, lint, typecheck, ordinary tests and build, then the
-existing five `formal-web.spec.ts` cases on desktop Chromium. If
+current seven `formal-web.spec.ts` cases on desktop Chromium. If
 `TEST_DATABASE_URL` is set, it also runs database dependency builds, migrations
 and PostgreSQL tests. Without that variable local PostgreSQL tests are not run;
 CI always supplies it. The full local sequence shares one 119-second deadline,
@@ -26,7 +26,11 @@ teardown. It uses one worker, zero retries and stops at the first failure.
 Existing assertions are unchanged. Evidence is kept in a fresh
 `.local/e2e-ci/smoke-*` directory locally. The tests cover Formal root/QA
 isolation, truthful lists, primary navigation, Detail/Viewer, browser
-history/reload, redirects and missing/error data.
+history/reload, redirects, missing/error data and wide-screen browse-only for
+visitors without an account (desktop Chromium is wide, so the smoke
+reads 讨论 at an 800 px window and checks the return to Home at full width). The
+wide `/login` redirect stays out of the smoke for its development compile cost;
+the full regression covers it.
 
 ## GitHub CI
 

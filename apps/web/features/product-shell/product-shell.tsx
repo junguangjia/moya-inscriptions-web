@@ -21,6 +21,7 @@ import { requestIdentity } from "../shell/request-identity";
 
 import { PRODUCT_LOADING_MINIMUM_MS } from "./product-boot";
 import {
+  browseOnlyHistoryState,
   detailHistoryState,
   detailLocation,
   directContentFromLocation,
@@ -62,9 +63,11 @@ import {
 import { SettingsOverlay } from "../settings/settings-overlay";
 import { FeedViewerHost } from "./feed-viewer-host";
 import {
+  isWideLayout,
   readRuntimeDeviceClass,
   resolvePresentationOrientation,
   resolveRuntimePresentationPlatform,
+  WIDE_LAYOUT_MINIMUM_WIDTH,
 } from "../shell/device-platform";
 import { PrimaryNavigationPager } from "../shell/primary-navigation-pager";
 import {
@@ -93,6 +96,8 @@ import type {
   RuntimeNavigatorLike,
 } from "../shell/device-platform";
 import type { PrimaryDestination } from "../shell/primary-shell";
+import type { BrowseOnlyPolicy } from "../shell/browse-only";
+import { BrowseOnlyProvider } from "../shell/browse-only-context";
 
 type ScrollPositions = Record<PrimaryDestination, number>;
 
@@ -161,6 +166,24 @@ const currentProductHistoryState = (state: ProductHistoryState) => {
   }
   return merged;
 };
+// Browse-only rewrites drop the markers an unmounting dialog or Thread page
+// would otherwise answer with its own history.back() (pc-browse-only-v1).
+const browseOnlyHistoryEntry = (state: ProductHistoryState) => {
+  const entry: Record<string, unknown> = currentProductHistoryState(state);
+  delete entry.phase4Dialog;
+  delete entry.phase4DialogDepth;
+  delete entry.yoyiPreviewNavigation;
+  return entry;
+};
+// Browse-only URLs drop the 讨论 and 消息 deep links it ignores.
+const withoutBrowseOnlyLinks = (href: string, origin: string) => {
+  const url = new URL(href, origin);
+  url.searchParams.delete("topic");
+  url.searchParams.delete("notifications");
+  return `${url.pathname}${url.search}${url.hash}`;
+};
+const browseOnlyLocation = (location: Location) =>
+  withoutBrowseOnlyLinks(primaryLocation(location), location.origin);
 const rememberHistoryOffset = (top: number) => {
   const id = window.history.state?.__artvennEntry;
   if (typeof id !== "string") return;
@@ -240,6 +263,13 @@ export interface ProductShellContextValue {
   ) => void;
   readonly orientation: PresentationOrientation;
   readonly platform: PresentationPlatform;
+  /**
+   * Wide screens without an account only browse (pc-browse-only-v1): no
+   * navigation, comments, actions, profiles or editor. False without a policy.
+   */
+  readonly browseOnly: boolean;
+  /** Whether browse-only applies right now, read live (not from render state). */
+  readonly isBrowseOnlyEnforced: () => boolean;
   readonly readActiveScrollTop: () => number;
   readonly registerActiveHomeScrollElement: (
     element: HTMLElement,
@@ -294,6 +324,8 @@ export interface ProductShellProps {
     properties: ProductShellTopicOverlayRenderProps,
   ) => ReactNode;
   readonly showDevelopmentPagerControls?: boolean;
+  /** Only the Formal root passes it (pc-browse-only-v1); absent keeps it off. */
+  readonly browseOnlyPolicy?: BrowseOnlyPolicy;
 }
 
 export interface ProductShellDetailOverlayRenderProps {
@@ -387,6 +419,7 @@ export const ProductShell = ({
   renderProfileOverlay,
   renderTopicOverlay,
   showDevelopmentPagerControls = false,
+  browseOnlyPolicy,
 }: ProductShellProps) => {
   const authReturn = useAuthReturn();
   const [authReturnNotice, setAuthReturnNotice] = useState<string | null>(null);
@@ -446,13 +479,29 @@ export const ProductShell = ({
   const [editorSession, setEditorSession] = useState(0);
   const editorOpen = activeEditor !== null;
   const editorEnabled = renderEditorOverlay !== undefined;
+  const browseOnlyPolicyRef = useRef(browseOnlyPolicy);
+  browseOnlyPolicyRef.current = browseOnlyPolicy;
+  const developmentPlatformOverrideRef = useRef(developmentPlatformOverride);
+  developmentPlatformOverrideRef.current = developmentPlatformOverride;
+  // Read live, never from state seeded on the server: a child's mount effect
+  // (a ?topic= link) runs before the shell has corrected its platform.
+  const isBrowseOnlyEnforced = useCallback(
+    () =>
+      browseOnlyPolicyRef.current?.session === false &&
+      isWideLayout(
+        developmentPlatformOverrideRef.current ?? runtimePlatform(),
+        window.innerWidth,
+      ),
+    [],
+  );
   const allowedEditorTarget = useCallback(
     (target: ProductEditorTarget | null) =>
       target !== null &&
+      !isBrowseOnlyEnforced() &&
       (!target.type.startsWith("article-") || articleEditorEnabled)
         ? target
         : null,
-    [articleEditorEnabled],
+    [articleEditorEnabled, isBrowseOnlyEnforced],
   );
   const viewerMediaIdRef = useRef<string | null>(null);
   const feedViewerRef = useRef<FeedViewerSession | null>(null);
@@ -471,6 +520,15 @@ export const ProductShell = ({
     useState<PrimaryDestination>("home");
   const [platform, setPlatform] =
     useState<PresentationPlatform>(initialPlatform);
+  // Seeded from the server's platform, so a wide screen renders browse-only
+  // before hydration; the client can only relax it (pc-browse-only-v1).
+  const [wideLayout, setWideLayout] = useState(() =>
+    isWideLayout(initialPlatform, WIDE_LAYOUT_MINIMUM_WIDTH),
+  );
+  const browseOnlyActive = browseOnlyPolicy !== undefined && wideLayout;
+  const browseOnly = browseOnlyActive && browseOnlyPolicy.session !== true;
+  const browseOnlyEnforced =
+    browseOnlyActive && browseOnlyPolicy.session === false;
   const [orientation, setOrientation] =
     useState<PresentationOrientation>("portrait");
   const [theme, setTheme] = useState<ThemePreference>(DEFAULT_THEME_PREFERENCE);
@@ -866,6 +924,7 @@ export const ProductShell = ({
       const current = activeDestinationRef.current;
       if (
         destination === current ||
+        (destination !== "home" && isBrowseOnlyEnforced()) ||
         settingsOpenRef.current ||
         feedViewerRef.current !== null ||
         contentRef.current !== null ||
@@ -888,7 +947,13 @@ export const ProductShell = ({
       );
       restoreScroll(destination, platformRef.current);
     },
-    [cancelSettingsFocus, expandNavigation, restoreScroll, saveScroll],
+    [
+      cancelSettingsFocus,
+      expandNavigation,
+      isBrowseOnlyEnforced,
+      restoreScroll,
+      saveScroll,
+    ],
   );
 
   const setSettingsVisibility = useCallback((open: boolean) => {
@@ -1003,6 +1068,7 @@ export const ProductShell = ({
     (topicId: string, opener: HTMLElement, sourceScrollTop: number) => {
       if (
         topicId.length === 0 ||
+        isBrowseOnlyEnforced() ||
         activeDestinationRef.current !== "discussion" ||
         settingsOpenRef.current ||
         feedViewerRef.current !== null ||
@@ -1037,7 +1103,7 @@ export const ProductShell = ({
       );
       setTopicVisibility(topicId);
     },
-    [readActiveScrollTop, saveScroll, setTopicVisibility],
+    [isBrowseOnlyEnforced, readActiveScrollTop, saveScroll, setTopicVisibility],
   );
 
   const closeTopic = useCallback(() => {
@@ -1214,6 +1280,7 @@ export const ProductShell = ({
     (authorId: string | null, opener: HTMLElement) => {
       if (
         !profileEnabled ||
+        isBrowseOnlyEnforced() ||
         settingsOpenRef.current ||
         viewerMediaIdRef.current !== null ||
         feedViewerRef.current !== null ||
@@ -1243,6 +1310,7 @@ export const ProductShell = ({
       setProfileVisibility(state);
     },
     [
+      isBrowseOnlyEnforced,
       profileEnabled,
       saveCurrentEntry,
       setDetailVisibility,
@@ -1864,7 +1932,10 @@ export const ProductShell = ({
         window.clearTimeout(detailHistoryTimerRef.current);
         detailHistoryTimerRef.current = null;
       }
-      const { sourceDestination, sourceScrollTop } = state;
+      // Browse-only returns to Home, the only destination it keeps.
+      const homeOnly = isBrowseOnlyEnforced();
+      const sourceDestination = homeOnly ? "home" : state.sourceDestination;
+      const sourceScrollTop = homeOnly ? 0 : state.sourceScrollTop;
       // This replaces the unavailable source entry itself. Closing a viewer
       // with Back would leave an equally unavailable Detail beneath it.
       authReturn.retire();
@@ -1890,6 +1961,7 @@ export const ProductShell = ({
     [
       authReturn,
       expandNavigation,
+      isBrowseOnlyEnforced,
       restoreScroll,
       setDetailVisibility,
       setTopicVisibility,
@@ -1978,6 +2050,9 @@ export const ProductShell = ({
         document.documentElement.dataset.platform = nextPlatform;
         restoreScroll(activeDestinationRef.current, nextPlatform);
       }
+      // A tablet crossing the wide width keeps its platform.
+      const nextWide = isWideLayout(nextPlatform, window.innerWidth);
+      setWideLayout((current) => (current === nextWide ? current : nextWide));
       setOrientation((current) =>
         current === nextOrientation ? current : nextOrientation,
       );
@@ -2101,7 +2176,14 @@ export const ProductShell = ({
             restoredState.sourceScrollTop,
           )
         : restoredState;
-    const initialState =
+    const browseOnlyAtMount = isBrowseOnlyEnforced();
+    if (browseOnlyAtMount) {
+      const href = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const allowed = withoutBrowseOnlyLinks(href, window.location.origin);
+      if (allowed !== href)
+        window.history.replaceState(window.history.state, "", allowed);
+    }
+    const unrestrictedState =
       storedState === null ||
       (storedState.kind === "editor" &&
         allowedEditorTarget(storedState.editorTarget) === null)
@@ -2109,18 +2191,28 @@ export const ProductShell = ({
         : authReturnView
           ? storedState
           : resetHistoryScroll(storedState);
+    const initialState =
+      browseOnlyAtMount && unrestrictedState !== null
+        ? browseOnlyHistoryState(unrestrictedState)
+        : unrestrictedState;
     if (authReturnView)
       scrollPositionsRef.current = { ...authReturnView.positions };
     if (initialState)
-      window.history.replaceState(currentProductHistoryState(initialState), "");
+      window.history.replaceState(
+        browseOnlyAtMount
+          ? browseOnlyHistoryEntry(initialState)
+          : currentProductHistoryState(initialState),
+        "",
+      );
     const candidateTarget = directContentFromLocation(window.location);
     const directTarget =
       feedViewerEntry || (candidateTarget?.type === "work" && !profileEnabled)
         ? null
         : candidateTarget;
-    const directAuthor = profileEnabled
-      ? directAuthorFromLocation(window.location)
-      : undefined;
+    const directAuthor =
+      profileEnabled && !browseOnlyAtMount
+        ? directAuthorFromLocation(window.location)
+        : undefined;
     const directMediaId = directMediaIdFromLocation(window.location);
     const directSettings = window.location.hash === "#settings";
     const directEditor = editorEnabled
@@ -2305,23 +2397,24 @@ export const ProductShell = ({
       setViewerVisibility(null);
       setTopicVisibility(null);
     } else {
+      const primaryState = primaryHistoryState(
+        destination,
+        initialState?.kind === "primary" ? initialState.scrollTop : undefined,
+        initialState?.kind === "primary"
+          ? initialState.focusTopicId
+          : undefined,
+        initialState?.kind === "primary"
+          ? initialState.focusCatalogId
+          : undefined,
+      );
       window.history.replaceState(
-        currentProductHistoryState(
-          primaryHistoryState(
-            destination,
-            initialState?.kind === "primary"
-              ? initialState.scrollTop
-              : undefined,
-            initialState?.kind === "primary"
-              ? initialState.focusTopicId
-              : undefined,
-            initialState?.kind === "primary"
-              ? initialState.focusCatalogId
-              : undefined,
-          ),
-        ),
+        browseOnlyAtMount
+          ? browseOnlyHistoryEntry(primaryState)
+          : currentProductHistoryState(primaryState),
         "",
-        primaryLocation(window.location),
+        browseOnlyAtMount
+          ? browseOnlyLocation(window.location)
+          : primaryLocation(window.location),
       );
       setSettingsVisibility(false);
       setDetailVisibility(null);
@@ -2371,9 +2464,10 @@ export const ProductShell = ({
       // treating it as Home would close the overlay while leaving its URL open.
       if (state === null) {
         const target = directContentFromLocation(window.location);
-        const author = profileEnabled
-          ? directAuthorFromLocation(window.location)
-          : undefined;
+        const author =
+          profileEnabled && !isBrowseOnlyEnforced()
+            ? directAuthorFromLocation(window.location)
+            : undefined;
         const destination = activeDestinationRef.current;
         const editorTarget = editorEnabled
           ? allowedEditorTarget(directEditorTargetFromLocation(window.location))
@@ -2407,6 +2501,30 @@ export const ProductShell = ({
               : viewerHistoryState(target, media, destination, 0);
           reloadDetail = true;
         }
+      }
+      // Browse-only keeps only Home and its content (pc-browse-only-v1),
+      // and no entry it returns to keeps a 讨论 or 消息 link.
+      if (isBrowseOnlyEnforced()) {
+        const href = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        const allowedHref = withoutBrowseOnlyLinks(
+          href,
+          window.location.origin,
+        );
+        const allowed =
+          state === null
+            ? primaryHistoryState("home")
+            : browseOnlyHistoryState(state);
+        if (allowed !== state) {
+          state = allowed;
+          window.history.replaceState(
+            browseOnlyHistoryEntry(allowed),
+            "",
+            allowed.kind === "primary"
+              ? browseOnlyLocation(window.location)
+              : allowedHref,
+          );
+        } else if (allowedHref !== href)
+          window.history.replaceState(window.history.state, "", allowedHref);
       }
       const openEditorState = editorRef.current;
       const sameEditor =
@@ -2581,6 +2699,7 @@ export const ProductShell = ({
     cancelSettingsFocus,
     editorEnabled,
     allowedEditorTarget,
+    isBrowseOnlyEnforced,
     expandNavigation,
     restoreCatalogFocus,
     restoreEditorFocus,
@@ -2598,6 +2717,63 @@ export const ProductShell = ({
     setProfileVisibility,
     profileEnabled,
   ]);
+
+  // Entering browse-only at runtime (pc-browse-only-v1) — a wider window, a
+  // rotation or a sign-out — closes what it hides and returns to Home. An open
+  // Detail, Viewer or Settings stays, with Home beneath it.
+  const enterBrowseOnly = useCallback(() => {
+    if (!isBrowseOnlyEnforced()) return;
+    const current = parseProductHistoryState(window.history.state);
+    const overlay =
+      profileRef.current !== null ||
+      editorRef.current !== null ||
+      topicIdRef.current !== null;
+    const leaving = activeDestinationRef.current !== "home";
+    const covered = contentRef.current !== null || settingsOpenRef.current;
+    const next =
+      current !== null
+        ? browseOnlyHistoryState(current)
+        : covered
+          ? null
+          : primaryHistoryState("home", scrollPositionsRef.current.home);
+    const href = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const staleLinks =
+      withoutBrowseOnlyLinks(href, window.location.origin) !== href;
+    if (!overlay && !leaving && next === current && !staleLinks) return;
+    if (editorRef.current !== null) setEditorVisibility(null);
+    setProfileVisibility(null);
+    setTopicVisibility(null);
+    detailSourceDestinationRef.current = "home";
+    detailSourceScrollTopRef.current = 0;
+    if (leaving) {
+      saveScroll(activeDestinationRef.current, platformRef.current);
+      activeDestinationRef.current = "home";
+      setActiveDestination("home");
+      expandNavigation();
+    }
+    if (next !== null)
+      window.history.replaceState(
+        browseOnlyHistoryEntry(next),
+        "",
+        next.kind === "primary"
+          ? browseOnlyLocation(window.location)
+          : withoutBrowseOnlyLinks(href, window.location.origin),
+      );
+    if (next?.kind === "primary" && !covered)
+      restoreScroll("home", platformRef.current);
+  }, [
+    expandNavigation,
+    isBrowseOnlyEnforced,
+    restoreScroll,
+    saveScroll,
+    setEditorVisibility,
+    setProfileVisibility,
+    setTopicVisibility,
+  ]);
+
+  useEffect(() => {
+    if (browseOnlyEnforced) enterBrowseOnly();
+  }, [browseOnlyEnforced, enterBrowseOnly]);
 
   useLayoutEffect(() => {
     if (
@@ -2711,6 +2887,8 @@ export const ProductShell = ({
     openTopic,
     orientation,
     platform,
+    browseOnly,
+    isBrowseOnlyEnforced,
     readActiveScrollTop,
     registerActiveHomeScrollElement,
     registerActiveDiscussionScrollElement,
@@ -2730,132 +2908,139 @@ export const ProductShell = ({
 
   return (
     <ProductShellContext.Provider value={contextValue}>
-      <div
-        ref={rootRef}
-        className={styles.productShell}
-        data-active-destination={activeDestination}
-        data-feed-layout={feedLayout}
-        data-detail-open={activeContent === null ? "false" : "true"}
-        data-editor-open={editorOpen ? "true" : "false"}
-        data-orientation={orientation}
-        data-primary-navigation-minimized={
-          navigationMinimized ? "true" : "false"
-        }
-        data-platform={platform}
-        data-product-shell=""
-        data-settings-open={settingsOpen ? "true" : "false"}
-        data-topic-open={activeTopicId === null ? "false" : "true"}
-        data-viewer-open={
-          activeViewerMediaId === null && feedViewer === null ? "false" : "true"
-        }
-        data-theme-preference={theme}
-      >
+      <BrowseOnlyProvider value={browseOnly}>
         <div
-          aria-hidden={ownedOverlayOpen || undefined}
-          className={styles.primaryLayer}
-          data-product-primary-layer=""
-          inert={ownedOverlayOpen || undefined}
+          ref={rootRef}
+          className={styles.productShell}
+          data-active-destination={activeDestination}
+          data-browse-only={browseOnly ? "true" : "false"}
+          data-feed-layout={feedLayout}
+          data-detail-open={activeContent === null ? "false" : "true"}
+          data-editor-open={editorOpen ? "true" : "false"}
+          data-orientation={orientation}
+          data-primary-navigation-minimized={
+            navigationMinimized ? "true" : "false"
+          }
+          data-platform={platform}
+          data-product-shell=""
+          data-settings-open={settingsOpen ? "true" : "false"}
+          data-topic-open={activeTopicId === null ? "false" : "true"}
+          data-viewer-open={
+            activeViewerMediaId === null && feedViewer === null
+              ? "false"
+              : "true"
+          }
+          data-theme-preference={theme}
         >
-          <PrimaryNavigationPager
-            activeDestination={activeDestination}
-            user={user}
-            home={home}
-            discussion={discussion}
-            navigationAction={navigationAction}
-            navigationHidden={ownedOverlayOpen}
-            navigationMinimized={navigationMinimized}
-            onNavigationExpand={expandNavigation}
-            onDestinationChange={commitDestination}
-            platform={platform}
-            showDevelopmentPagerControls={showDevelopmentPagerControls}
-          />
-          {primaryUtility}
-        </div>
-
-        {authReturnNotice !== null ? (
           <div
-            aria-live="polite"
-            data-auth-content-recovery=""
-            role="status"
-            style={{
-              position: "fixed",
-              insetInline: "var(--yoyi-space-5)",
-              top: "calc(env(safe-area-inset-top, 0px) + var(--yoyi-space-5))",
-              zIndex: "var(--yoyi-z-index-overlay)",
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--yoyi-space-3)",
-              padding: "var(--yoyi-space-4)",
-              border: "1px solid var(--yoyi-color-border-default)",
-              borderRadius: "var(--yoyi-radius-md)",
-              background: "var(--yoyi-color-background-elevated)",
-              color: "var(--yoyi-color-text-primary)",
-            }}
+            aria-hidden={ownedOverlayOpen || undefined}
+            className={styles.primaryLayer}
+            data-product-primary-layer=""
+            inert={ownedOverlayOpen || undefined}
           >
-            <span style={{ flex: 1 }}>{authReturnNotice}</span>
-            <Button onClick={() => setAuthReturnNotice(null)} variant="quiet">
-              关闭提示
-            </Button>
+            <PrimaryNavigationPager
+              activeDestination={activeDestination}
+              // Browse-only has no 用户: unmounting it closes any dialog it
+              // owns, which would otherwise stay modal over Home.
+              user={browseOnlyEnforced ? null : user}
+              home={home}
+              discussion={discussion}
+              navigationAction={browseOnly ? undefined : navigationAction}
+              navigationHidden={ownedOverlayOpen || browseOnly}
+              navigationMinimized={navigationMinimized}
+              onNavigationExpand={expandNavigation}
+              onDestinationChange={commitDestination}
+              platform={platform}
+              showDevelopmentPagerControls={showDevelopmentPagerControls}
+            />
+            {primaryUtility}
           </div>
-        ) : null}
 
-        {settingsOpen ? (
-          <SettingsOverlay
-            backButtonRef={settingsBackRef}
-            feedLayout={feedLayout}
-            onClose={closeSettings}
-            onCycleFeedLayout={cycleFeedLayout}
-            onCycleTheme={cycleTheme}
+          {authReturnNotice !== null ? (
+            <div
+              aria-live="polite"
+              data-auth-content-recovery=""
+              role="status"
+              style={{
+                position: "fixed",
+                insetInline: "var(--yoyi-space-5)",
+                top: "calc(env(safe-area-inset-top, 0px) + var(--yoyi-space-5))",
+                zIndex: "var(--yoyi-z-index-overlay)",
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--yoyi-space-3)",
+                padding: "var(--yoyi-space-4)",
+                border: "1px solid var(--yoyi-color-border-default)",
+                borderRadius: "var(--yoyi-radius-md)",
+                background: "var(--yoyi-color-background-elevated)",
+                color: "var(--yoyi-color-text-primary)",
+              }}
+            >
+              <span style={{ flex: 1 }}>{authReturnNotice}</span>
+              <Button onClick={() => setAuthReturnNotice(null)} variant="quiet">
+                关闭提示
+              </Button>
+            </div>
+          ) : null}
+
+          {settingsOpen ? (
+            <SettingsOverlay
+              backButtonRef={settingsBackRef}
+              feedLayout={feedLayout}
+              onClose={closeSettings}
+              onCycleFeedLayout={cycleFeedLayout}
+              onCycleTheme={cycleTheme}
+              platform={platform}
+              theme={theme}
+            />
+          ) : null}
+
+          {activeTopicId === null || renderTopicOverlay === undefined
+            ? null
+            : renderTopicOverlay({
+                backButtonRef: topicBackRef,
+                onClose: closeTopic,
+                topicId: activeTopicId,
+              })}
+
+          {activeContent === null || renderDetailOverlay === undefined
+            ? null
+            : renderDetailOverlay({
+                backButtonRef: detailBackRef,
+                target: activeContent,
+                initialScrollTop: detailScrollTopRef.current,
+                navigationRevision: detailNavigationRevision,
+                onClose: closeDetail,
+                onScrollTopChange: updateDetailScrollTop,
+              })}
+
+          {activeProfile !== null && renderProfileOverlay
+            ? renderProfileOverlay({
+                state: activeProfile,
+                backButtonRef: profileBackRef,
+                onClose: closeProfile,
+                onViewChange: updateProfileView,
+              })
+            : null}
+          {activeEditor !== null && renderEditorOverlay ? (
+            <Fragment key={editorSession}>
+              {renderEditorOverlay(activeEditor.editorTarget, editorControls)}
+            </Fragment>
+          ) : null}
+          <FeedViewerHost
+            onClose={closeFeedViewer}
+            onIndexChange={changeFeedViewerMedia}
             platform={platform}
-            theme={theme}
+            session={feedViewer}
           />
-        ) : null}
-
-        {activeTopicId === null || renderTopicOverlay === undefined
-          ? null
-          : renderTopicOverlay({
-              backButtonRef: topicBackRef,
-              onClose: closeTopic,
-              topicId: activeTopicId,
-            })}
-
-        {activeContent === null || renderDetailOverlay === undefined
-          ? null
-          : renderDetailOverlay({
-              backButtonRef: detailBackRef,
-              target: activeContent,
-              initialScrollTop: detailScrollTopRef.current,
-              navigationRevision: detailNavigationRevision,
-              onClose: closeDetail,
-              onScrollTopChange: updateDetailScrollTop,
-            })}
-
-        {activeProfile !== null && renderProfileOverlay
-          ? renderProfileOverlay({
-              state: activeProfile,
-              backButtonRef: profileBackRef,
-              onClose: closeProfile,
-              onViewChange: updateProfileView,
-            })
-          : null}
-        {activeEditor !== null && renderEditorOverlay ? (
-          <Fragment key={editorSession}>
-            {renderEditorOverlay(activeEditor.editorTarget, editorControls)}
-          </Fragment>
-        ) : null}
-        <FeedViewerHost
-          onClose={closeFeedViewer}
-          onIndexChange={changeFeedViewerMedia}
-          platform={platform}
-          session={feedViewer}
-        />
-        <LoadingScreen
-          active={bootPending}
-          className={styles.loading}
-          data-product-boot=""
-          delay={0}
-        />
-      </div>
+          <LoadingScreen
+            active={bootPending}
+            className={styles.loading}
+            data-product-boot=""
+            delay={0}
+          />
+        </div>
+      </BrowseOnlyProvider>
     </ProductShellContext.Provider>
   );
 };

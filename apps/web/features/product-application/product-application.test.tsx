@@ -184,3 +184,74 @@ describe("ProductApplication", () => {
     expect(providersMock).toHaveBeenLastCalledWith(false);
   });
 });
+
+describe("ProductApplication wide-screen browse-only (pc-browse-only-v1)", () => {
+  it("never forwards the hint outside the author composition", () => {
+    renderToStaticMarkup(
+      <ProductApplication
+        comments={null}
+        initialHomeFeed="nearby"
+        initialPlatform="pc"
+        initialTopicId={null}
+        states={states}
+        wideScreenBrowseOnly={{ sessionHint: false }}
+      />,
+    );
+    expect(lastPreviewProps()).toEqual({
+      initialHomeFeed: "nearby",
+      initialPlatform: "pc",
+      initialTopicId: null,
+      states,
+    });
+
+    // Comments without the author community: still no policy.
+    renderToStaticMarkup(
+      <ProductApplication
+        comments={{ signInHref: "/login" }}
+        initialPlatform="pc"
+        states={states}
+        wideScreenBrowseOnly={{ sessionHint: false }}
+      />,
+    );
+    expect(lastPreviewProps()).toEqual({
+      initialPlatform: "pc",
+      renderCommentSection: expect.any(Function),
+      states,
+    });
+  });
+
+  it.each([
+    // No session cookie: no account from the first render.
+    [false, false],
+    // A session cookie: undecided until /me answers.
+    [true, null],
+  ] as const)(
+    "gives the shell a cookie hint %s as the session %s",
+    (sessionHint, session) => {
+      renderToStaticMarkup(
+        <ProductApplication
+          comments={{ signInHref: "/login" }}
+          authorCommunity
+          initialPlatform="pc"
+          states={states}
+          wideScreenBrowseOnly={{ sessionHint }}
+        />,
+      );
+      expect(lastPreviewProps().browseOnlyPolicy).toEqual({ session });
+      expect(lastPreviewProps()).not.toHaveProperty("wideScreenBrowseOnly");
+    },
+  );
+
+  it("gives the shell no policy without the hint", () => {
+    renderToStaticMarkup(
+      <ProductApplication
+        comments={{ signInHref: "/login" }}
+        authorCommunity
+        initialPlatform="pc"
+        states={states}
+      />,
+    );
+    expect(lastPreviewProps()).not.toHaveProperty("browseOnlyPolicy");
+    expect(lastPreviewProps()).not.toHaveProperty("wideScreenBrowseOnly");
+  });
+});

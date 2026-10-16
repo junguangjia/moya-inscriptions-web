@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   PRODUCT_SHELL_HISTORY_VERSION,
+  browseOnlyHistoryState,
   detailHistoryState,
   detailLocation,
   directCatalogIdFromLocation,
@@ -15,6 +16,7 @@ import {
   parseProductHistoryState,
   primaryHistoryState,
   primaryLocation,
+  profileHistoryState,
   sameEditorLink,
   settingsHistoryState,
   topicHistoryState,
@@ -22,6 +24,8 @@ import {
   viewerHistoryState,
   viewerLocation,
 } from "./product-history";
+
+import type { ProductHistoryState } from "./product-history";
 
 describe("Product Shell history", () => {
   it.each(["home", "discussion", "user"] as const)(
@@ -402,5 +406,116 @@ describe("Product Shell history", () => {
     { destination: "home", kind: "primary", version: 999 },
   ])("rejects invalid or future state %#", (value) => {
     expect(parseProductHistoryState(value)).toBeNull();
+  });
+});
+
+describe("browse-only Product Shell history (pc-browse-only-v1)", () => {
+  const work = { type: "work", id: `work-${"a".repeat(32)}` } as const;
+  const authorId = `user-${"b".repeat(32)}`;
+  const home = primaryHistoryState("home");
+
+  it.each([
+    ["a plain Home entry", primaryHistoryState("home")],
+    ["a Home entry with scroll", primaryHistoryState("home", 147)],
+    [
+      "a Home entry with a focused catalog",
+      primaryHistoryState("home", 147, undefined, "catalog-one"),
+    ],
+    ["a Detail over Home", detailHistoryState("catalog-one", "home", 147, 63)],
+    [
+      "a Viewer over Home",
+      viewerHistoryState(work, "media-one", "home", 147, 63),
+    ],
+    [
+      "a feed Viewer over Home",
+      feedViewerHistoryState(work, "media-one", "home", 147),
+    ],
+    ["Settings over Home", settingsHistoryState("home")],
+  ] as const)("returns %s itself", (_label, state: ProductHistoryState) => {
+    expect(browseOnlyHistoryState(state)).toBe(state);
+  });
+
+  it.each([
+    ["Discussion", primaryHistoryState("discussion", 147, "topic-one")],
+    ["the user page", primaryHistoryState("user", 147)],
+  ] as const)("sends %s Home", (_label, state: ProductHistoryState) => {
+    expect(browseOnlyHistoryState(state)).toEqual(home);
+  });
+
+  it.each([
+    [
+      "Detail",
+      detailHistoryState("catalog-one", "discussion", 147, 63),
+      detailHistoryState("catalog-one", "home", 0, 63),
+    ],
+    [
+      "Detail of a Work",
+      detailHistoryState(work, "user", 147, 63),
+      detailHistoryState(work, "home", 0, 63),
+    ],
+    [
+      "Viewer",
+      viewerHistoryState(work, "media-one", "user", 147, 63),
+      viewerHistoryState(work, "media-one", "home", 0, 63),
+    ],
+    [
+      "feed Viewer",
+      feedViewerHistoryState(work, "media-one", "discussion", 147),
+      feedViewerHistoryState(work, "media-one", "home", 0),
+    ],
+    [
+      "Settings",
+      settingsHistoryState("discussion"),
+      settingsHistoryState("home"),
+    ],
+  ] as const)(
+    "keeps %s open with Home beneath it",
+    (_label, state: ProductHistoryState, expected: ProductHistoryState) => {
+      const allowed = browseOnlyHistoryState(state);
+      expect(allowed).toEqual(expected);
+      expect(allowed).not.toBe(state);
+      expect(parseProductHistoryState(allowed)).toEqual(expected);
+    },
+  );
+
+  it.each([
+    ["a Topic", topicHistoryState("topic-one", 147)],
+    [
+      "an own profile over Home",
+      profileHistoryState(null, "entry-one", "works", 63, "home", 147),
+    ],
+    [
+      "an author profile",
+      profileHistoryState(authorId, "entry-one", "likes", 63, "discussion", 1),
+    ],
+    [
+      "a new Work editor over Home",
+      editorHistoryState({ type: "new" }, "home", 0),
+    ],
+    ["an own Work editor", editorHistoryState(work, "user", 147)],
+    [
+      "the Article editor",
+      editorHistoryState({ type: "article-list" }, "discussion", 147),
+    ],
+  ] as const)("replaces %s with Home", (_label, state: ProductHistoryState) => {
+    expect(browseOnlyHistoryState(state)).toEqual(home);
+  });
+
+  it("settles in one step and never changes the given entry", () => {
+    for (const state of [
+      primaryHistoryState("discussion", 147, "topic-one"),
+      detailHistoryState("catalog-one", "discussion", 147, 63),
+      viewerHistoryState(work, "media-one", "user", 147, 63),
+      feedViewerHistoryState(work, "media-one", "user", 147),
+      settingsHistoryState("user"),
+      topicHistoryState("topic-one", 147),
+      profileHistoryState(authorId, "entry-one", "works", 63, "user", 147),
+      editorHistoryState({ type: "new" }, "discussion", 147),
+    ] satisfies readonly ProductHistoryState[]) {
+      const before = structuredClone(state);
+      const allowed = browseOnlyHistoryState(state);
+      expect(state).toEqual(before);
+      expect(browseOnlyHistoryState(allowed)).toBe(allowed);
+    }
   });
 });

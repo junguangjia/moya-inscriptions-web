@@ -5,6 +5,7 @@ import sharp from "sharp";
 import type { Browser, Locator, Page, TestInfo } from "@playwright/test";
 
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
+import { addSessionCookie } from "./support/session-cookie";
 
 const ACTION_TIMEOUT = 10_000;
 
@@ -355,6 +356,11 @@ async function open(page: Page, path: string) {
 }
 
 async function openOwnProfile(page: Page) {
+  // A signed-in browser carries its session cookie: a wide screen shows the
+  // dock once /me answers instead of browse-only (pc-browse-only-v1).
+  const baseURL = test.info().project.use.baseURL;
+  if (typeof baseURL !== "string") throw new Error("Missing E2E base URL");
+  await addSessionCookie(page.context(), baseURL);
   await open(page, "/");
   await click(
     page

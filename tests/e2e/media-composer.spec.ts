@@ -23,6 +23,7 @@ import type {
 } from "@moya/contracts";
 
 import { prepareFormalRoutes } from "./support/prepare-formal-routes";
+import { addSessionCookie } from "./support/session-cookie";
 
 const ACTION_TIMEOUT = 10_000;
 
@@ -580,9 +581,9 @@ const openComposer = async (
   let context: BrowserContext | null = null;
   let target = page;
   let cdp: CDPSession | null = null;
+  const baseURL = testInfo.project.use.baseURL;
+  if (typeof baseURL !== "string") throw new Error("Missing E2E base URL");
   if (testInfo.project.name === "desktop-chromium" && !options.desktop) {
-    const baseURL = testInfo.project.use.baseURL;
-    if (typeof baseURL !== "string") throw new Error("Missing E2E base URL");
     context = await browser.newContext({
       ...devices["iPhone 15"],
       baseURL,
@@ -604,6 +605,10 @@ const openComposer = async (
   };
   // Register cleanup before navigation or an assertion can fail.
   opened.push(composer);
+  // The project's own page is signed in like a real browser, with its session
+  // cookie: a wide screen shows the dock + once /me answers instead of
+  // browse-only (pc-browse-only-v1). The emulated phone is never wide.
+  if (context === null) await addSessionCookie(target.context(), baseURL);
   const response = await target.goto("/", { timeout: 30_000 });
   expect(response?.status()).toBe(200);
   await expect(target.locator("[data-product-boot]")).toHaveCount(0);

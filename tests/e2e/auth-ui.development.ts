@@ -598,10 +598,12 @@ test("application login entry restores the visitor profile tab without a reload"
   page,
 }) => {
   await page.goto("/");
-  await page
+  // The desktop project runs below 896px, where visitors keep the dock.
+  const userDestination = page
     .getByRole("navigation", { name: "主要内容" })
-    .getByRole("button", { name: "用户", exact: true })
-    .click();
+    .getByRole("button", { name: "用户", exact: true });
+  await expect(userDestination).toBeVisible();
+  await userDestination.click();
   const profileSurface = page.locator(
     '[data-primary-destination="user"][data-active="true"]',
   );
@@ -663,6 +665,22 @@ test("synthetic detail comments tab survives cancel and browser back", async ({
   expect(
     (await privateRequest(page.request).get("/api/community/me")).status(),
   ).toBe(401);
+});
+
+test("a wide desktop window is sent from login to Home", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "Phones keep sign-in; one desktop probe covers the wide-screen redirect",
+  );
+  // The project signs in at 800px. From 896px the public product is
+  // browse-only and /login goes to Home before paint (pc-browse-only-v1).
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/login?return=%2Fdev%2Fcommunity", { waitUntil: "commit" });
+  const home = new URL("/", page.url()).href;
+  await page.waitForURL(home, { waitUntil: "commit" });
+  await expect(page).toHaveURL(home);
 });
 
 // Never forward Playwright API call logs containing private Cookie/body data.

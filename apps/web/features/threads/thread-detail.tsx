@@ -100,17 +100,26 @@ const PostCard = ({
   </div>
 );
 
-/** One post read inside its Thread, with the Work's live discussion below. */
+/**
+ * One post read inside its Thread, with the Work's live discussion below
+ * (none in browse-only).
+ */
 const ThreadPost = ({
   work,
   threadTitle,
   comments,
+  commentsHidden = false,
 }: {
   work: UserWork;
   threadTitle: string;
-  comments: ReactNode;
+  comments?: ReactNode;
+  commentsHidden?: boolean;
 }) => (
-  <PostReader id={work.id} comments={comments} onOpenProfile={() => {}}>
+  <PostReader
+    id={work.id}
+    {...(commentsHidden ? { commentsHidden } : { comments })}
+    onOpenProfile={() => {}}
+  >
     <article className={styles.article} data-thread-post-detail={work.id}>
       <p className={styles.eyebrow}>参与话题</p>
       <h2 className={styles.postTopicTitle}>{threadTitle}</h2>
@@ -152,10 +161,14 @@ const ThreadPost = ({
  * As in the accepted discussion preview, a post opens inside the Thread as a
  * 帖子 page with its comments; header Back or browser Back (a swipe) returns
  * to the Thread at its scroll position (Owner acceptance 2026-09-26).
+ *
+ * Browse-only (pc-browse-only-v1) reads posts without comments and without
+ * the 参与话题 entry.
  */
 export function ThreadDetail({
   id,
   backButtonRef,
+  commentsHidden = false,
   onClose,
   onOpened,
   onUnavailable,
@@ -163,6 +176,8 @@ export function ThreadDetail({
 }: {
   id: string;
   backButtonRef: RefObject<HTMLButtonElement | null>;
+  /** Browse-only: no comments, no 参与话题 entry. */
+  commentsHidden?: boolean;
   onClose: () => void;
   onOpened?: (id: string) => void;
   /** Reports a canonical missing source; the composing shell owns recovery. */
@@ -255,13 +270,15 @@ export function ThreadDetail({
           key={post.work.id}
           work={post.work}
           threadTitle={post.threadTitle}
-          comments={
-            renderComments?.(post.work.id) ?? (
-              <p role="status" className={styles.notice}>
-                评论功能尚未接入此帖子。
-              </p>
-            )
-          }
+          {...(commentsHidden
+            ? { commentsHidden }
+            : {
+                comments: renderComments?.(post.work.id) ?? (
+                  <p role="status" className={styles.notice}>
+                    评论功能尚未接入此帖子。
+                  </p>
+                ),
+              })}
         />
       ) : (
         <div
@@ -367,11 +384,13 @@ export function ThreadDetail({
                   {posts.state.state === "loading"
                     ? "正在加载帖子…"
                     : posts.state.state === "empty"
-                      ? "还没有帖子，来分享你的观察。"
+                      ? commentsHidden
+                        ? "还没有帖子。"
+                        : "还没有帖子，来分享你的观察。"
                       : "帖子暂时不可用。"}
                 </p>
               )}
-              {thread.state.thread.status === "open" && (
+              {!commentsHidden && thread.state.thread.status === "open" && (
                 <div className={styles.topicAction}>
                   <button
                     type="button"

@@ -937,6 +937,11 @@
   cursor: pointer;
 }
 
+/* Browse-only names the author without offering the profile. */
+.workAuthor[data-work-author-plain] {
+  cursor: default;
+}
+
 .workAuthor > span:last-child {
   overflow-wrap: anywhere;
 }

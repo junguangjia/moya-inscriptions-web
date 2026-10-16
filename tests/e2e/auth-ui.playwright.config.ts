@@ -55,7 +55,15 @@ export default defineConfig({
   projects: [
     {
       name: "desktop-chromium",
-      use: { ...devices["Desktop Chrome"], browserName: "chromium" },
+      // A desktop window below the 896px wide layout: from 896px the public
+      // product sends /login and /register to Home and hides the dock for
+      // visitors without an account (pc-browse-only-v1). Each journey's
+      // 1280px redirect probe sets its own size.
+      use: {
+        ...devices["Desktop Chrome"],
+        browserName: "chromium",
+        viewport: { width: 800, height: 900 },
+      },
     },
     {
       name: "mobile-390-webkit",

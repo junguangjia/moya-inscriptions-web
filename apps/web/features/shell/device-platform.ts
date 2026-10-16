@@ -55,6 +55,20 @@ export const resolvePresentationPlatform = (
   return width < pcMinimumWidth ? "tablet" : "pc";
 };
 
+/** From this width a tablet also takes the wide (desktop) composition. */
+export const WIDE_LAYOUT_MINIMUM_WIDTH = pcMinimumWidth;
+
+/**
+ * The wide composition: a PC, or a tablet at least as wide as a PC. The
+ * desktop editor and the browse-only policy (pc-browse-only-v1) share it.
+ */
+export const isWideLayout = (
+  platform: PresentationPlatform,
+  viewportWidth: number,
+): boolean =>
+  platform === "pc" ||
+  (platform === "tablet" && viewportWidth >= WIDE_LAYOUT_MINIMUM_WIDTH);
+
 export const readRuntimeDeviceClass = (
   navigatorLike: RuntimeNavigatorLike,
 ): DeviceClass =>

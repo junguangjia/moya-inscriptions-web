@@ -22,6 +22,7 @@ import { useAuthors } from "./author-context";
 import { ContentActions } from "./content-actions";
 import { UNTITLED_WORK_LABEL } from "./content-card";
 import { useProductShell } from "../product-shell/product-shell";
+import { useBrowseOnly } from "../shell/browse-only-context";
 import { avatarThumbSrc } from "../media/profile-image";
 import { recordLocalHistory } from "./local-library";
 import {
@@ -383,7 +384,14 @@ const WorkManagement = ({
   );
 };
 
-const WorkAuthor = ({ detail }: { detail: WorkDetail }) => {
+const WorkAuthor = ({
+  detail,
+  plain = false,
+}: {
+  detail: WorkDetail;
+  /** Browse-only shows who made the work without opening a profile. */
+  plain?: boolean;
+}) => {
   const author = useAuthors();
   const shell = useProductShell();
   const scope = `${author.viewer?.id ?? "guest"}:${author.revision}:${detail.authorId}`;
@@ -424,15 +432,13 @@ const WorkAuthor = ({ detail }: { detail: WorkDetail }) => {
         : avatar?.scope === scope
           ? avatar.src
           : null;
-  return (
-    <button
-      type="button"
-      className={detailStyles.workAuthor}
-      onClick={(event) =>
-        shell.openProfile(detail.authorId, event.currentTarget)
-      }
-    >
-      <span className={detailStyles.workAuthorAvatar}>
+  const identity = (
+    <>
+      {/* The plain line reads as the name alone, without the initial. */}
+      <span
+        aria-hidden={plain || undefined}
+        className={detailStyles.workAuthorAvatar}
+      >
         {src ? (
           <img
             src={src}
@@ -450,6 +456,21 @@ const WorkAuthor = ({ detail }: { detail: WorkDetail }) => {
         name={detail.authorName}
         studioName={detail.authorStudioName}
       />
+    </>
+  );
+  return plain ? (
+    <span className={detailStyles.workAuthor} data-work-author-plain="">
+      {identity}
+    </span>
+  ) : (
+    <button
+      type="button"
+      className={detailStyles.workAuthor}
+      onClick={(event) =>
+        shell.openProfile(detail.authorId, event.currentTarget)
+      }
+    >
+      {identity}
     </button>
   );
 };
@@ -460,6 +481,8 @@ export const DetailActions = ({
   detail: CatalogDetailPresentation;
 }) => {
   const author = useAuthors();
+  // Browse-only keeps who made a work and drops every action (pc-browse-only-v1).
+  const browseOnly = useBrowseOnly();
   const [deletedId, setDeletedId] = useState<string | null>(null);
   const [visibilityChange, setVisibilityChange] = useState<{
     readonly id: string;
@@ -514,7 +537,7 @@ export const DetailActions = ({
     }
   }, [detail.id, author.viewer?.id, author.checking, recordable]);
   if (detail.contentType !== "work")
-    return (
+    return browseOnly ? null : (
       <div>
         <ContentActions target={target} title={detail.title} />{" "}
       </div>
@@ -583,6 +606,15 @@ export const DetailActions = ({
           ? null
           : "此作品当前不对其他人显示。";
   const interactive = detail.available && !deleted && (!owner || ownerPublic);
+  if (browseOnly)
+    return (
+      <div>
+        <div className={detailStyles.workAuthorRow}>
+          <WorkAuthor detail={detail} plain />
+          {notice === null ? null : <p data-work-notice="">{notice}</p>}
+        </div>
+      </div>
+    );
   return (
     <div>
       <div className={detailStyles.workAuthorRow}>

@@ -1,5 +1,7 @@
 import { AuthPage } from "../../features/auth/auth-page";
 import { safeReturnPath } from "../../features/auth/auth-api";
+import { WideScreenAuthRedirect } from "../../features/auth/wide-screen-auth-redirect";
+import { readAuthPageWideScreenRedirect } from "../wide-screen-browse-only";
 
 export default async function LoginPage({
   searchParams,
@@ -8,9 +10,18 @@ export default async function LoginPage({
     Record<string, string | string[] | undefined>
   >;
 }) {
-  const query = (await searchParams) ?? {};
+  const [params, redirectWideScreen] = await Promise.all([
+    searchParams,
+    readAuthPageWideScreenRedirect(),
+  ]);
+  const query = params ?? {};
   const returnTo = safeReturnPath(
     typeof query.return === "string" ? query.return : "/",
   );
-  return <AuthPage mode="sign-in" returnTo={returnTo} />;
+  return (
+    <>
+      {redirectWideScreen ? <WideScreenAuthRedirect /> : null}
+      <AuthPage mode="sign-in" returnTo={returnTo} />
+    </>
+  );
 }

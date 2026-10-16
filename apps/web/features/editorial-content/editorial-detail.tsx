@@ -239,12 +239,15 @@ function NewsArticleContent({
 /** One published Article in the accepted reader; comments arrive through `renderComments`. */
 export function LiveArticleReader({
   id,
+  commentsHidden = false,
   highlightCommentId,
   renderComments,
   onPresentation,
   onUnavailable,
 }: {
   id: string;
+  /** Browse-only (pc-browse-only-v1): the reader without any comments. */
+  commentsHidden?: boolean;
   highlightCommentId?: string;
   renderComments?: (articleId: string) => ReactNode;
   /** Reports the loaded Article's presentation (the overlay's title). */
@@ -273,22 +276,26 @@ export function LiveArticleReader({
     return <DetailState state={state.state} label="文章" onRetry={retry} />;
   const article = state.item;
   // The reader always receives an explicit comment slot: the live discussion
-  // when composed, otherwise a truthful note. It never falls back to the
-  // preview's fixture comments.
-  const comments = renderComments ? (
-    renderComments(article.id)
-  ) : (
-    <p
-      role="status"
-      className={styles.notice}
-      data-editorial-comments="pending"
-    >
-      评论功能尚未接入此文章。
-    </p>
-  );
+  // when composed, otherwise a truthful note, or none at all in browse-only.
+  // It never falls back to the preview's fixture comments.
+  const commentSlot = commentsHidden
+    ? { commentsHidden }
+    : {
+        comments: renderComments ? (
+          renderComments(article.id)
+        ) : (
+          <p
+            role="status"
+            className={styles.notice}
+            data-editorial-comments="pending"
+          >
+            评论功能尚未接入此文章。
+          </p>
+        ),
+      };
   const shared = {
     id: article.id,
-    comments,
+    ...commentSlot,
     ...(highlightCommentId ? { highlightCommentId } : {}),
     onOpenProfile: () => {},
   };
@@ -474,12 +481,15 @@ function CollectionPage({
 export function EditorialDetail({
   id,
   backButtonRef,
+  commentsHidden = false,
   onClose,
   renderComments,
   onUnavailable,
 }: {
   id: string;
   backButtonRef: RefObject<HTMLButtonElement | null>;
+  /** Browse-only (pc-browse-only-v1): Articles show no comments. */
+  commentsHidden?: boolean;
   onClose: () => void;
   renderComments?: (articleId: string) => ReactNode;
   onUnavailable?: () => void;
@@ -544,11 +554,13 @@ export function EditorialDetail({
           id={id}
           {...(onUnavailable ? { onUnavailable } : {})}
           onPresentation={reportPresentation}
+          {...(commentsHidden ? { commentsHidden } : {})}
           {...(renderComments ? { renderComments } : {})}
         />
       ) : child ? (
         <LiveArticleReader
           id={child}
+          {...(commentsHidden ? { commentsHidden } : {})}
           {...(renderComments ? { renderComments } : {})}
         />
       ) : (
