@@ -243,6 +243,34 @@ export const topicHistoryState = (
   version: PRODUCT_SHELL_HISTORY_VERSION,
 });
 
+/**
+ * The same entry as browse-only allows it (pc-browse-only-v1): only Home is a
+ * destination, and topic, profile and editor entries become Home. Returns the
+ * given state itself when nothing changes.
+ */
+export const browseOnlyHistoryState = (
+  state: ProductHistoryState,
+): ProductHistoryState => {
+  switch (state.kind) {
+    case "primary":
+      return state.destination === "home" ? state : primaryHistoryState("home");
+    case "detail":
+    case "viewer":
+    case "feed-viewer":
+      return state.sourceDestination === "home"
+        ? state
+        : { ...state, sourceDestination: "home", sourceScrollTop: 0 };
+    case "settings":
+      return state.sourceDestination === "home"
+        ? state
+        : settingsHistoryState("home");
+    case "topic":
+    case "profile":
+    case "editor":
+      return primaryHistoryState("home");
+  }
+};
+
 export const parseProductHistoryState = (
   value: unknown,
 ): ProductHistoryState | null => {

@@ -941,6 +941,12 @@
     calc(96px + env(safe-area-inset-bottom));
 }
 
+/* Browse-only (pc-browse-only-v1) has no dock to clear. */
+:global([data-product-shell][data-browse-only="true"] [data-primary-shell])
+  .feedPanel {
+  padding-bottom: calc(var(--yoyi-space-4) + env(safe-area-inset-bottom));
+}
+
 :global([data-primary-shell][data-platform="pc"]) .masonry .feedCard {
   overflow: visible;
   background: transparent;

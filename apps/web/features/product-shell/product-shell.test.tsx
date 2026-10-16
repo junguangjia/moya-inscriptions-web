@@ -2,6 +2,7 @@
 
 import { act, useEffect, useLayoutEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
@@ -16,6 +17,7 @@ import {
   THEME_PREFERENCE_STORAGE_KEY,
 } from "./preferences";
 import { AuthReturnProvider, useAuthReturn } from "../auth/auth-return";
+import { usePreviewNavigationHistory } from "../shell/use-preview-navigation-history";
 import {
   editorHistoryState,
   feedViewerHistoryState,
@@ -29,6 +31,8 @@ import {
 } from "./product-history";
 
 import type { ReactNode } from "react";
+import type { BrowseOnlyPolicy } from "../shell/browse-only";
+import type { PresentationPlatform } from "../shell/device-platform";
 import type { ProductEditorTarget } from "./product-history";
 import type {
   ProductShellDetailOverlayRenderProps,
@@ -3182,5 +3186,736 @@ describe("ProductShell", () => {
     expect(
       window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
     ).toBe("double");
+  });
+
+  describe("browse-only (pc-browse-only-v1)", () => {
+    const anonymous: BrowseOnlyPolicy = { session: false };
+    const iPadAgent =
+      "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+    // iPadOS can identify itself as a Mac while keeping multi-touch.
+    const iPadOsAgent =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+    const restores: (() => void)[] = [];
+
+    afterEach(() => {
+      for (const root of mountedRoots.splice(0)) act(() => root.unmount());
+      for (const restore of restores.splice(0)) restore();
+    });
+
+    const setWidth = (width: number) =>
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: width,
+      });
+    const resizeTo = (width: number) =>
+      act(() => {
+        setWidth(width);
+        window.dispatchEvent(new Event("resize"));
+      });
+    const emulateDevice = (userAgent: string, maxTouchPoints: number) => {
+      const agent = vi
+        .spyOn(navigator, "userAgent", "get")
+        .mockReturnValue(userAgent);
+      Object.defineProperty(navigator, "maxTouchPoints", {
+        configurable: true,
+        value: maxTouchPoints,
+      });
+      restores.push(() => {
+        agent.mockRestore();
+        delete (navigator as { maxTouchPoints?: number }).maxTouchPoints;
+      });
+    };
+    // Back and Go stay inert here, so any walk the shell starts is recorded.
+    const watchHistory = () => {
+      const spies = {
+        back: vi
+          .spyOn(window.history, "back")
+          .mockImplementation(() => undefined),
+        go: vi.spyOn(window.history, "go").mockImplementation(() => undefined),
+        pushState: vi.spyOn(window.history, "pushState"),
+      };
+      for (const spy of Object.values(spies)) spy.mockClear();
+      restores.push(() => {
+        for (const spy of Object.values(spies)) spy.mockRestore();
+      });
+      return spies;
+    };
+    const expectNoHistoryWalk = (spies: ReturnType<typeof watchHistory>) => {
+      expect(spies.back).not.toHaveBeenCalled();
+      expect(spies.go).not.toHaveBeenCalled();
+      expect(spies.pushState).not.toHaveBeenCalled();
+    };
+    const address = () =>
+      `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const traverseTo = (state: unknown, url: string) =>
+      act(() => {
+        window.history.replaceState(state, "", url);
+        window.dispatchEvent(new PopStateEvent("popstate", { state }));
+      });
+    const dialogMarkers = () =>
+      Object.keys(window.history.state ?? {}).filter((key) =>
+        ["phase4Dialog", "phase4DialogDepth", "yoyiPreviewNavigation"].includes(
+          key,
+        ),
+      );
+
+    // A Thread post opened inside a topic marks history as the preview does.
+    const ThreadPostPreview = () => {
+      usePreviewNavigationHistory({ depth: 1, onBack: () => undefined });
+      return null;
+    };
+    // Like a ?topic= link: Discussion asks for itself before the shell syncs.
+    const DiscussionRequest = () => {
+      const { navigatePrimary } = useProductShell();
+      useEffect(() => {
+        navigatePrimary("discussion");
+      }, [navigatePrimary]);
+      return null;
+    };
+
+    const browseOnlyShell = ({
+      policy = anonymous,
+      initialPlatform = "pc",
+      home = null,
+      topicContent = null,
+    }: {
+      readonly policy?: BrowseOnlyPolicy | null;
+      readonly initialPlatform?: PresentationPlatform;
+      readonly home?: ReactNode;
+      readonly topicContent?: ReactNode;
+    } = {}) => (
+      <ProductShell
+        initialPlatform={initialPlatform}
+        {...(policy === null ? {} : { browseOnlyPolicy: policy })}
+        articleEditorEnabled
+        home={home}
+        discussion={<p>discussion</p>}
+        user={<p>user</p>}
+        navigationAction={
+          <button aria-label="停靠操作" type="button">
+            Action
+          </button>
+        }
+        primaryUtility={
+          <>
+            <ProductShellObserver />
+            <button aria-label="打开入口" type="button">
+              Opener
+            </button>
+          </>
+        }
+        renderDetailOverlay={({ backButtonRef, onClose, target }) => (
+          <section aria-label={`Detail ${target.id}`} role="dialog">
+            <button
+              ref={backButtonRef}
+              aria-label="返回资料"
+              onClick={onClose}
+              type="button"
+            >
+              Back
+            </button>
+          </section>
+        )}
+        renderEditorOverlay={(target, controls) => (
+          <section
+            aria-label="Editor"
+            data-editor-target={target.type}
+            role="dialog"
+          >
+            <button
+              ref={controls.backButtonRef}
+              aria-label="返回编辑"
+              onClick={controls.close}
+              type="button"
+            >
+              Back
+            </button>
+          </section>
+        )}
+        renderProfileOverlay={({ backButtonRef, onClose }) => (
+          <section aria-label="Profile" role="dialog">
+            <button
+              ref={backButtonRef}
+              aria-label="返回主页"
+              onClick={onClose}
+              type="button"
+            >
+              Back
+            </button>
+          </section>
+        )}
+        renderTopicOverlay={({ backButtonRef, onClose, topicId }) => (
+          <section aria-label={`Topic ${topicId}`} role="dialog">
+            <button
+              ref={backButtonRef}
+              aria-label="返回专题"
+              onClick={onClose}
+              type="button"
+            >
+              Back
+            </button>
+            {topicContent}
+          </section>
+        )}
+      />
+    );
+    const mountShell = (
+      options: Parameters<typeof browseOnlyShell>[0] = {},
+    ) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      mountedRoots.push(root);
+      const render = (policy: BrowseOnlyPolicy | null) =>
+        act(() => root.render(browseOnlyShell({ ...options, policy })));
+      render(options.policy === undefined ? anonymous : options.policy);
+      return {
+        container,
+        render,
+        opener: () => buttonByLabel(container, "打开入口"),
+      };
+    };
+
+    const expectBrowseOnly = (container: ParentNode, active: boolean) => {
+      expect(observedProductShell?.browseOnly).toBe(active);
+      expect(
+        container.querySelector<HTMLElement>("[data-product-shell]")?.dataset
+          .browseOnly,
+      ).toBe(String(active));
+      expect(
+        container
+          .querySelector("[data-primary-navigation-layer]")
+          ?.hasAttribute("hidden"),
+      ).toBe(active);
+      expect(container.querySelector('[aria-label="停靠操作"]') === null).toBe(
+        active,
+      );
+    };
+    const expectHomeOnly = (container: ParentNode) => {
+      expect(container.querySelector('[role="dialog"]')).toBeNull();
+      expect(observedProductShell?.activeProfile).toBeNull();
+      expect(observedProductShell?.activeEditor).toBeNull();
+      expect(observedProductShell?.activeTopicId).toBeNull();
+      expect(observedProductShell?.activeContent).toBeNull();
+      expect(observedProductShell?.activeDestination).toBe("home");
+      expect(parseProductHistoryState(window.history.state)).toEqual(
+        primaryHistoryState("home"),
+      );
+      expect(dialogMarkers()).toEqual([]);
+    };
+
+    it("hides the dock and refuses all but Home and its content at 1280px", async () => {
+      setWidth(1280);
+      window.history.replaceState(null, "", "/");
+      const { container, opener } = mountShell();
+      await act(async () => vi.runAllTimers());
+      expectBrowseOnly(container, true);
+      const history = watchHistory();
+      const replaceState = vi.spyOn(window.history, "replaceState");
+      replaceState.mockClear();
+
+      for (const destination of ["discussion", "user"] as const) {
+        act(() => observedProductShell!.navigatePrimary(destination));
+        expect(observedProductShell?.activeDestination).toBe("home");
+      }
+      act(() => observedProductShell!.openProfile(authorId, opener()));
+      act(() => observedProductShell!.openProfile(null, opener()));
+      expect(observedProductShell?.activeProfile).toBeNull();
+      const targets: ProductEditorTarget[] = [
+        { type: "new" },
+        workTarget,
+        { type: "article-list" },
+      ];
+      for (const target of targets) {
+        let opened: boolean | undefined;
+        act(() => {
+          opened = observedProductShell!.openEditor(target, opener());
+        });
+        expect(opened).toBe(false);
+      }
+      expect(observedProductShell?.activeEditor).toBeNull();
+      expectNoHistoryWalk(history);
+      expect(replaceState).not.toHaveBeenCalled();
+      expect(address()).toBe("/");
+
+      // Profiles are refused, not disabled: a work's Detail still opens.
+      act(() => observedProductShell!.openContent(workTarget, opener()));
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.activeContent).toEqual(workTarget);
+      expect(
+        container.querySelector(`[aria-label="Detail ${workId}"]`),
+      ).not.toBeNull();
+      expect(history.pushState).toHaveBeenCalledExactlyOnceWith(
+        withHistoryMarkers(detailHistoryState(workTarget, "home", 0)),
+        "",
+        `/?workId=${workId}#detail`,
+      );
+    });
+
+    it("keeps the dock, every destination and every overlay at 390px", async () => {
+      window.history.replaceState(null, "", "/");
+      const { container, opener } = mountShell({ initialPlatform: "phone" });
+      await act(async () => vi.runAllTimers());
+      expectBrowseOnly(container, false);
+
+      for (const destination of ["discussion", "user", "home"] as const) {
+        act(() => observedProductShell!.navigatePrimary(destination));
+        expect(observedProductShell?.activeDestination).toBe(destination);
+      }
+      let opened: boolean | undefined;
+      act(() => {
+        opened = observedProductShell!.openEditor({ type: "new" }, opener());
+      });
+      expect(opened).toBe(true);
+      expect(observedProductShell?.activeEditor).toEqual({ type: "new" });
+      traverse(sameDocument(primaryHistoryState("home")));
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.activeEditor).toBeNull();
+
+      act(() => observedProductShell!.openProfile(authorId, opener()));
+      expect(observedProductShell?.activeProfile?.authorId).toBe(authorId);
+      expect(address()).toBe(`/?authorId=${authorId}#profile`);
+    });
+
+    it.each([
+      { url: "/#profile", expected: "/" },
+      { url: `/?authorId=${authorId}`, expected: "/" },
+      {
+        url: `/?feed=nearby&authorId=${authorId}#profile`,
+        expected: "/?feed=nearby",
+      },
+      { url: "/#editor", expected: "/" },
+      { url: "/#article-editor", expected: "/" },
+      { url: "/?topic=topic-one", expected: "/" },
+      { url: "/?feed=nearby&notifications=1", expected: "/?feed=nearby" },
+    ])(
+      "ignores $url on load and settles on $expected",
+      async ({ url, expected }) => {
+        setWidth(1280);
+        window.history.replaceState(null, "", url);
+        const history = watchHistory();
+        const { container } = mountShell();
+        await act(async () => vi.runAllTimers());
+
+        expectBrowseOnly(container, true);
+        expectHomeOnly(container);
+        expect(address()).toBe(expected);
+        expectNoHistoryWalk(history);
+      },
+    );
+
+    it("opens a work's Detail, not its editor, from a work editor link on load", async () => {
+      setWidth(1280);
+      window.history.replaceState(null, "", `/?workId=${workId}#editor`);
+      mountShell();
+      await act(async () => vi.runAllTimers());
+
+      expect(observedProductShell?.activeEditor).toBeNull();
+      expect(observedProductShell?.activeContent).toEqual(workTarget);
+      expect(parseProductHistoryState(window.history.state)).toEqual(
+        detailHistoryState(workTarget, "home", 0),
+      );
+      expect(address()).toBe(`/?workId=${workId}#detail`);
+    });
+
+    it.each([
+      {
+        entry: "discussion",
+        state: primaryHistoryState("discussion", 120, "topic-one"),
+        url: "/?topic=topic-one",
+      },
+      { entry: "user", state: primaryHistoryState("user", 120), url: "/" },
+      {
+        entry: "profile",
+        state: profileHistoryState(
+          authorId,
+          "profile-entry",
+          "works",
+          80,
+          "user",
+          120,
+        ),
+        url: `/?authorId=${authorId}#profile`,
+      },
+      {
+        entry: "topic",
+        state: topicHistoryState("topic-one", 120),
+        url: "/#topic-topic-one",
+      },
+      {
+        entry: "editor",
+        state: editorHistoryState({ type: "new" }, "user", 120),
+        url: "/#editor",
+      },
+    ])("restores Home for a reloaded $entry entry", async ({ state, url }) => {
+      setWidth(1280);
+      window.history.replaceState(
+        {
+          ...state,
+          __artvennDocument: "old-document",
+          phase4Dialog: "old-dialog",
+          phase4DialogDepth: 0,
+        },
+        "",
+        url,
+      );
+      const history = watchHistory();
+      const { container } = mountShell();
+      await act(async () => vi.runAllTimers());
+
+      expectBrowseOnly(container, true);
+      expectHomeOnly(container);
+      expect(address()).toBe("/");
+      expectNoHistoryWalk(history);
+    });
+
+    it.each([
+      {
+        entry: "profile",
+        state: profileHistoryState(
+          authorId,
+          "profile-entry",
+          "works",
+          0,
+          "home",
+          0,
+        ),
+        url: `/?feed=nearby&authorId=${authorId}#profile`,
+      },
+      {
+        entry: "native profile link",
+        state: null,
+        url: `/?feed=nearby&authorId=${authorId}#profile`,
+      },
+      {
+        entry: "topic",
+        state: topicHistoryState("topic-one", 40),
+        url: "/?feed=nearby#topic-topic-one",
+      },
+      {
+        entry: "discussion",
+        state: primaryHistoryState("discussion", 40),
+        url: "/?feed=nearby&topic=topic-one",
+      },
+      {
+        entry: "editor",
+        state: editorHistoryState({ type: "new" }, "home", 0),
+        url: "/?feed=nearby#editor",
+      },
+    ])(
+      "rewrites a $entry entry reached by Back or Forward to Home",
+      async ({ state, url }) => {
+        setWidth(1280);
+        window.history.replaceState(null, "", "/?feed=nearby");
+        const { container } = mountShell();
+        await act(async () => vi.runAllTimers());
+        const history = watchHistory();
+
+        traverseTo(state === null ? null : sameDocument(state), url);
+        await act(async () => vi.runAllTimers());
+
+        expectBrowseOnly(container, true);
+        expectHomeOnly(container);
+        expect(address()).toBe("/?feed=nearby");
+        expectNoHistoryWalk(history);
+      },
+    );
+
+    it.each(["profile", "topic", "editor"] as const)(
+      "closes an open %s and returns to Home when the window widens",
+      async (overlay) => {
+        window.history.replaceState(null, "", "/?feed=nearby");
+        const { container, opener } = mountShell({ initialPlatform: "phone" });
+        await act(async () => vi.runAllTimers());
+        act(() =>
+          observedProductShell!.navigatePrimary(
+            overlay === "topic" ? "discussion" : "user",
+          ),
+        );
+        act(() => {
+          if (overlay === "profile")
+            observedProductShell!.openProfile(authorId, opener());
+          else if (overlay === "topic")
+            observedProductShell!.openTopic("topic-one", opener(), 0);
+          else observedProductShell!.openEditor({ type: "new" }, opener());
+        });
+        await act(async () => vi.runAllTimers());
+        expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+        expect(address()).not.toBe("/?feed=nearby");
+        const history = watchHistory();
+
+        resizeTo(1280);
+        await act(async () => vi.runAllTimers());
+
+        expectBrowseOnly(container, true);
+        expectHomeOnly(container);
+        expect(address()).toBe("/?feed=nearby");
+        expectNoHistoryWalk(history);
+      },
+    );
+
+    it("keeps a Detail opened from 讨论 when the window widens, and Back lands on Home", async () => {
+      window.history.replaceState(null, "", "/");
+      const { container, opener } = mountShell({ initialPlatform: "phone" });
+      await act(async () => vi.runAllTimers());
+      act(() => observedProductShell!.navigatePrimary("discussion"));
+      const discussionEntry = window.history.state;
+      act(() =>
+        observedProductShell!.openContent(
+          { type: "catalog", id: "catalog-one" },
+          opener(),
+        ),
+      );
+      await act(async () => vi.runAllTimers());
+      const history = watchHistory();
+
+      resizeTo(1280);
+      await act(async () => vi.runAllTimers());
+
+      expect(observedProductShell?.browseOnly).toBe(true);
+      expect(observedProductShell?.activeContent).toEqual({
+        type: "catalog",
+        id: "catalog-one",
+      });
+      expect(
+        container.querySelector('[aria-label="Detail catalog-one"]'),
+      ).not.toBeNull();
+      expect(observedProductShell?.activeDestination).toBe("home");
+      expect(parseProductHistoryState(window.history.state)).toEqual(
+        detailHistoryState("catalog-one", "home", 0),
+      );
+      expect(address()).toBe("/?catalogId=catalog-one#detail");
+      expectNoHistoryWalk(history);
+
+      click(buttonByLabel(container, "返回资料"));
+      expect(history.back).toHaveBeenCalledOnce();
+      // The browser then lands on the 讨论 entry beneath the Detail.
+      traverseTo(discussionEntry, "/");
+      await act(async () => vi.runAllTimers());
+
+      expectBrowseOnly(container, true);
+      expectHomeOnly(container);
+      expect(address()).toBe("/");
+    });
+
+    it("keeps Settings opened from 用户 when the window widens, above Home", async () => {
+      window.history.replaceState(null, "", "/");
+      const { container, opener } = mountShell({ initialPlatform: "phone" });
+      await act(async () => vi.runAllTimers());
+      act(() => observedProductShell!.navigatePrimary("user"));
+      act(() => observedProductShell!.requestSettings(opener()));
+      await act(async () => vi.runAllTimers());
+      const history = watchHistory();
+
+      resizeTo(1280);
+      await act(async () => vi.runAllTimers());
+
+      expect(observedProductShell?.browseOnly).toBe(true);
+      expect(observedProductShell?.settingsOpen).toBe(true);
+      expect(dialog(container)).not.toBeNull();
+      expect(observedProductShell?.activeDestination).toBe("home");
+      expect(parseProductHistoryState(window.history.state)).toEqual(
+        settingsHistoryState("home"),
+      );
+      expect(address()).toBe("/#settings");
+      expectNoHistoryWalk(history);
+    });
+
+    it("enters browse-only when a wide session signs out", async () => {
+      setWidth(1280);
+      window.history.replaceState(null, "", "/");
+      const { container, opener, render } = mountShell({
+        policy: { session: true },
+      });
+      await act(async () => vi.runAllTimers());
+      act(() => observedProductShell!.navigatePrimary("user"));
+      act(() => observedProductShell!.openProfile(null, opener()));
+      expect(observedProductShell?.activeProfile).not.toBeNull();
+      const history = watchHistory();
+
+      render(anonymous);
+      await act(async () => vi.runAllTimers());
+
+      expectBrowseOnly(container, true);
+      expectHomeOnly(container);
+      expect(address()).toBe("/");
+      expectNoHistoryWalk(history);
+    });
+
+    it("drops Thread and dialog markers from the entry it rewrites without walking history", async () => {
+      window.history.replaceState(null, "", "/");
+      const { container, opener } = mountShell({
+        initialPlatform: "phone",
+        topicContent: <ThreadPostPreview />,
+      });
+      await act(async () => vi.runAllTimers());
+      act(() => observedProductShell!.navigatePrimary("discussion"));
+      act(() => observedProductShell!.openTopic("topic-one", opener(), 0));
+      await act(async () => vi.runAllTimers());
+      // The opened post pushed its own entry above the topic's.
+      expect(window.history.state.yoyiPreviewNavigation).toEqual({
+        id: expect.any(String),
+        depth: 1,
+      });
+      window.history.replaceState(
+        {
+          ...window.history.state,
+          phase4Dialog: "dialog-one",
+          phase4DialogDepth: 0,
+        },
+        "",
+      );
+      const history = watchHistory();
+
+      resizeTo(1280);
+      await act(async () => vi.runAllTimers());
+
+      expectHomeOnly(container);
+      expect(address()).toBe("/");
+      expectNoHistoryWalk(history);
+    });
+
+    it.each([
+      { device: "A desktop", agent: null, seed: "pc", width: 895 },
+      { device: "A desktop", agent: null, seed: "pc", width: 896 },
+      { device: "An iPad", agent: iPadAgent, seed: "tablet", width: 834 },
+      { device: "An iPad", agent: iPadAgent, seed: "tablet", width: 1024 },
+      { device: "An iPad", agent: iPadAgent, seed: "tablet", width: 1194 },
+      { device: "iPadOS", agent: iPadOsAgent, seed: "pc", width: 820 },
+      { device: "iPadOS", agent: iPadOsAgent, seed: "pc", width: 1024 },
+    ] as const)(
+      "$device at $width px follows the wide layout",
+      async ({ agent, seed, width }) => {
+        if (agent !== null) emulateDevice(agent, 5);
+        setWidth(width);
+        window.history.replaceState(null, "", "/");
+        const { container } = mountShell({ initialPlatform: seed });
+        await act(async () => vi.runAllTimers());
+
+        const wide = width >= 896;
+        // A tablet crossing the wide width keeps its platform.
+        expect(observedProductShell?.platform).toBe(
+          agent === null && wide ? "pc" : "tablet",
+        );
+        expectBrowseOnly(container, wide);
+        act(() => observedProductShell!.navigatePrimary("discussion"));
+        expect(observedProductShell?.activeDestination).toBe(
+          wide ? "home" : "discussion",
+        );
+      },
+    );
+
+    it("returns the dock and every destination when the window narrows again", async () => {
+      setWidth(1280);
+      window.history.replaceState(null, "", "/");
+      const { container } = mountShell();
+      await act(async () => vi.runAllTimers());
+      expectBrowseOnly(container, true);
+
+      resizeTo(800);
+      await act(async () => vi.runAllTimers());
+      expectBrowseOnly(container, false);
+      act(() => observedProductShell!.navigatePrimary("discussion"));
+      expect(observedProductShell?.activeDestination).toBe("discussion");
+
+      resizeTo(1280);
+      await act(async () => vi.runAllTimers());
+      expectBrowseOnly(container, true);
+      expectHomeOnly(container);
+    });
+
+    it.each([
+      { width: 800, destination: "discussion" },
+      { width: 1280, destination: "home" },
+    ] as const)(
+      "judges a child's mount-time request at $width px by the live width",
+      async ({ width, destination }) => {
+        setWidth(width);
+        window.history.replaceState(null, "", "/");
+        // The server guessed a wide screen; the shell has not synced yet.
+        mountShell({ initialPlatform: "pc", home: <DiscussionRequest /> });
+        await act(async () => vi.runAllTimers());
+
+        expect(observedProductShell?.browseOnly).toBe(width >= 896);
+        expect(observedProductShell?.activeDestination).toBe(destination);
+      },
+    );
+
+    it("hides the dock while a session is pending but closes nothing until it proves anonymous", async () => {
+      setWidth(1280);
+      window.history.replaceState(null, "", "/#profile");
+      const { container, render } = mountShell({ policy: { session: null } });
+      await act(async () => vi.runAllTimers());
+
+      expect(observedProductShell?.browseOnly).toBe(true);
+      expect(
+        container.querySelector<HTMLElement>("[data-product-shell]")?.dataset
+          .browseOnly,
+      ).toBe("true");
+      expect(container.querySelector('[aria-label="停靠操作"]')).toBeNull();
+      expect(observedProductShell?.activeProfile?.authorId).toBeNull();
+      expect(container.querySelector('[aria-label="Profile"]')).not.toBeNull();
+      expect(address()).toBe("/#profile");
+      const history = watchHistory();
+
+      render(anonymous);
+      await act(async () => vi.runAllTimers());
+
+      expectBrowseOnly(container, true);
+      expectHomeOnly(container);
+      expect(address()).toBe("/");
+      expectNoHistoryWalk(history);
+    });
+
+    it.each([
+      { name: "a signed-in session", policy: { session: true } },
+      { name: "no policy", policy: null },
+    ] as const)("changes nothing at 1280px for $name", async ({ policy }) => {
+      setWidth(1280);
+      window.history.replaceState(null, "", `/?authorId=${authorId}`);
+      const { container, opener } = mountShell({ policy });
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.activeProfile?.authorId).toBe(authorId);
+      traverse(sameDocument(primaryHistoryState("home")));
+      await act(async () => vi.runAllTimers());
+
+      expectBrowseOnly(container, false);
+      act(() => observedProductShell!.navigatePrimary("user"));
+      expect(observedProductShell?.activeDestination).toBe("user");
+      let opened: boolean | undefined;
+      act(() => {
+        opened = observedProductShell!.openEditor({ type: "new" }, opener());
+      });
+      expect(opened).toBe(true);
+    });
+
+    it.each([
+      { seed: "pc", policy: anonymous, hidden: true },
+      { seed: "tablet", policy: anonymous, hidden: true },
+      { seed: "phone", policy: anonymous, hidden: false },
+      { seed: "pc", policy: { session: null }, hidden: true },
+      { seed: "pc", policy: { session: true }, hidden: false },
+      { seed: "pc", policy: null, hidden: false },
+    ] as const)(
+      "server-renders a $seed seed with policy $policy and the dock hidden: $hidden",
+      ({ seed, policy, hidden }) => {
+        const host = document.createElement("div");
+        host.innerHTML = renderToStaticMarkup(
+          browseOnlyShell({ initialPlatform: seed, policy }),
+        );
+        expect(
+          host.querySelector<HTMLElement>("[data-product-shell]")?.dataset
+            .browseOnly,
+        ).toBe(String(hidden));
+        expect(
+          host
+            .querySelector("[data-primary-navigation-layer]")
+            ?.hasAttribute("hidden"),
+        ).toBe(hidden);
+        expect(host.querySelector('[aria-label="停靠操作"]') === null).toBe(
+          hidden,
+        );
+      },
+    );
   });
 });

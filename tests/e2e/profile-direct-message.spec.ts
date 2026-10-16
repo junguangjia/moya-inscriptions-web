@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { addSessionCookie } from "./support/session-cookie";
+
 const viewer = {
   id: `user-${"1".repeat(32)}`,
   handle: "synthetic-viewer",
@@ -51,6 +53,11 @@ async function fixture(
     reads: string[];
   },
 ) {
+  // A signed-in browser carries its session cookie: a wide screen keeps the
+  // deep link and waits for /me instead of browse-only (pc-browse-only-v1).
+  const baseURL = test.info().project.use.baseURL;
+  if (typeof baseURL !== "string") throw new Error("Missing E2E base URL");
+  await addSessionCookie(page.context(), baseURL);
   const sends: string[] = [];
   await page.route("**/api/community/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace(
@@ -166,6 +173,11 @@ for (const source of [
           : "/",
       );
       await expect(page.locator("[data-product-boot]")).toHaveCount(0);
+      // /me has answered: no screen width keeps the signed-in viewer browsing only.
+      await expect(page.locator("[data-product-shell]")).toHaveAttribute(
+        "data-browse-only",
+        "false",
+      );
       if (source === "messages") {
         await page
           .getByRole("button", { name: "打开消息", exact: true })
@@ -238,6 +250,10 @@ for (const existing of [false, true]) {
     });
     await page.goto(`/?authorId=${participant.id}#profile`);
     await expect(page.locator("[data-product-boot]")).toHaveCount(0);
+    await expect(page.locator("[data-product-shell]")).toHaveAttribute(
+      "data-browse-only",
+      "false",
+    );
     await page.evaluate(() => {
       const observations: boolean[] = [];
       Object.assign(window, { dmListFrames: observations });

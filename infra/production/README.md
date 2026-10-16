@@ -240,6 +240,12 @@ runtime. `admin.env` contains Payload's own DB role, secret, URLs and COS write
 configuration. Missing required production settings fail closed. Staging uses
 these same contracts with distinct database roles, origins and private bucket.
 
+Wide screens (a PC, or a tablet at least 896 px wide) show the Web product as
+browse-only to visitors without an account, and `/login` and `/register` return
+them to Home. The optional `web.env` value `MOYA_WIDE_SCREEN_BROWSE_ONLY=off`
+(also `false` or `0`) turns this off; Web reads it per request but only re-reads
+`web.env` when the service restarts.
+
 For authentication limits, Nginx overwrites source headers with its actual
 network peer and the protected Web `AUTH_INGRESS_TOKEN`. Render only the named
 `__AUTH_INGRESS_TOKEN__` marker into the private Nginx configuration; retain its

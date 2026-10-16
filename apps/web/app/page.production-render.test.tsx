@@ -10,22 +10,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * and request/HTTP boundaries are replaced. Production mounts the existing
  * author, publishing and notification providers, with no QA fixture source.
  */
-const { loadHomeCatalogStateMock } = vi.hoisted(() => ({
+const {
+  loadHomeCatalogStateMock,
+  readFormalRequestContextMock,
+  readVisitorAccessMock,
+} = vi.hoisted(() => ({
   loadHomeCatalogStateMock: vi.fn(),
+  readFormalRequestContextMock: vi.fn(),
+  readVisitorAccessMock: vi.fn(),
 }));
 
 vi.mock("../features/home/load-home-catalog", () => ({
   loadHomeCatalogState: loadHomeCatalogStateMock,
+  // The mocked loader ignores the visitor's source.
+  visitorCatalogSource: () => async () => {
+    throw new Error("Unexpected Catalog source call");
+  },
 }));
 vi.mock("./formal-request-context", () => ({
-  readFormalRequestContext: async () => ({ initialPlatform: "phone" }),
+  readFormalRequestContext: readFormalRequestContextMock,
 }));
 vi.mock("./product-access", () => ({
-  readVisitorAccess: async () => ({
-    state: "granted",
-    closedBeta: false,
-    token: undefined,
-  }),
+  readVisitorAccess: readVisitorAccessMock,
 }));
 
 import FormalPage from "./page";
@@ -60,6 +66,15 @@ const mountedRoots: ReturnType<typeof createRoot>[] = [];
 
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("MOYA_WIDE_SCREEN_BROWSE_ONLY", undefined);
+  readFormalRequestContextMock.mockReset();
+  readFormalRequestContextMock.mockResolvedValue({ initialPlatform: "phone" });
+  readVisitorAccessMock.mockReset();
+  readVisitorAccessMock.mockResolvedValue({
+    state: "granted",
+    closedBeta: false,
+    token: undefined,
+  });
   loadHomeCatalogStateMock.mockReset();
   loadHomeCatalogStateMock.mockImplementation(
     async (query?: { readonly kind?: CatalogKind }) =>
@@ -179,4 +194,181 @@ describe("Formal root in a Production build", () => {
       ),
     ).toBe(true);
   });
+});
+
+describe("Formal root on a wide screen (pc-browse-only-v1)", () => {
+  // A synthetic stand-in with the opaque session shape; not a credential.
+  const visitorSession = "s".repeat(43);
+  const viewer = {
+    id: `user-${"0".repeat(31)}1`,
+    handle: "synthetic-browse-only",
+    displayName: "甲",
+  };
+
+  const renderStatic = async () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(await FormalPage({}));
+    return container;
+  };
+  const browseOnly = (container: ParentNode) =>
+    container
+      .querySelector("[data-product-shell]")
+      ?.getAttribute("data-browse-only");
+  const navigationHidden = (container: ParentNode) => {
+    const layer = container.querySelector("[data-primary-navigation-layer]");
+    expect(layer).not.toBeNull();
+    return layer?.hasAttribute("hidden");
+  };
+  const shown = (container: ParentNode, selector: string) =>
+    [...container.querySelectorAll(selector)].filter(
+      (element) => element.closest("[hidden]") === null,
+    );
+
+  it("renders the pc Formal root browse-only for a visitor without an account", async () => {
+    readFormalRequestContextMock.mockResolvedValue({ initialPlatform: "pc" });
+    const container = await renderStatic();
+
+    expect(browseOnly(container)).toBe("true");
+    expect(navigationHidden(container)).toBe(true);
+    expect(shown(container, "[data-create-work-action]")).toEqual([]);
+    expect(shown(container, "[data-search-trigger]")).not.toEqual([]);
+    expect(container.textContent).toContain("真实书法样例");
+    expect(container.textContent).toContain("豫ICP备");
+  });
+
+  it("keeps the phone Formal root unchanged", async () => {
+    const container = await renderStatic();
+
+    expect(browseOnly(container)).toBe("false");
+    expect(navigationHidden(container)).toBe(false);
+    expect(shown(container, "[data-create-work-action]")).not.toEqual([]);
+  });
+
+  it("keeps a closed beta's pc Formal root complete", async () => {
+    readFormalRequestContextMock.mockResolvedValue({ initialPlatform: "pc" });
+    for (const token of [undefined, visitorSession]) {
+      readVisitorAccessMock.mockResolvedValue({
+        state: "granted",
+        closedBeta: true,
+        token,
+      });
+      const container = await renderStatic();
+
+      expect(browseOnly(container)).toBe("false");
+      expect(navigationHidden(container)).toBe(false);
+      expect(shown(container, "[data-create-work-action]")).not.toEqual([]);
+    }
+  });
+
+  it.each(["off", "false", "0"])(
+    "keeps the pc Formal root complete when switched %s",
+    async (value) => {
+      vi.stubEnv("MOYA_WIDE_SCREEN_BROWSE_ONLY", value);
+      readFormalRequestContextMock.mockResolvedValue({ initialPlatform: "pc" });
+      const container = await renderStatic();
+
+      expect(browseOnly(container)).toBe("false");
+      expect(navigationHidden(container)).toBe(false);
+      expect(shown(container, "[data-create-work-action]")).not.toEqual([]);
+    },
+  );
+
+  it.each([
+    // A signed-in session keeps everything once /me confirms it.
+    {
+      cookie: "a session",
+      token: visitorSession,
+      status: 200,
+      expected: "false",
+    },
+    // A session /me could not check is trusted.
+    {
+      cookie: "a session",
+      token: visitorSession,
+      status: 503,
+      expected: "false",
+    },
+    // An expired session is no account.
+    {
+      cookie: "a session",
+      token: visitorSession,
+      status: 401,
+      expected: "true",
+    },
+    { cookie: "no session", token: undefined, status: 401, expected: "true" },
+  ] as const)(
+    "settles pc with $cookie on /me $status as browse-only $expected",
+    async ({ token, status, expected }) => {
+      readFormalRequestContextMock.mockResolvedValue({ initialPlatform: "pc" });
+      readVisitorAccessMock.mockResolvedValue({
+        state: "granted",
+        closedBeta: false,
+        token,
+      });
+      // The server render cannot know the session yet: browse-only first.
+      expect(browseOnly(await renderStatic())).toBe("true");
+
+      vi.useFakeTimers();
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      // A signed-in viewer opens the live notification stream.
+      vi.stubGlobal(
+        "EventSource",
+        class {
+          onerror = null;
+          addEventListener() {}
+          close() {}
+        },
+      );
+      const fetchMock = vi.fn<typeof fetch>(async (input) =>
+        String(input).split("?")[0] === "/api/community/me"
+          ? status === 200
+            ? Response.json(viewer)
+            : new Response(null, { status })
+          : new Response(null, { status: 401 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      window.history.replaceState(null, "", "/");
+      for (const [name, value] of Object.entries({
+        innerWidth: 1_280,
+        innerHeight: 800,
+        visualViewport: null,
+        matchMedia: () =>
+          ({
+            addEventListener: () => undefined,
+            matches: false,
+            removeEventListener: () => undefined,
+          }) as unknown as MediaQueryList,
+        scrollTo: () => undefined,
+        requestAnimationFrame: (callback: FrameRequestCallback) =>
+          window.setTimeout(() => callback(performance.now()), 0),
+        cancelAnimationFrame: (id: number) => window.clearTimeout(id),
+      }))
+        Object.defineProperty(window, name, { configurable: true, value });
+
+      const page = await FormalPage({});
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      mountedRoots.push(root);
+      act(() => root.render(page));
+      for (let frame = 0; frame < 4; frame += 1)
+        await act(() => vi.advanceTimersByTimeAsync(20));
+
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => String(url) === "/api/community/me",
+        ),
+      ).toBe(true);
+      expect(browseOnly(container)).toBe(expected);
+      expect(navigationHidden(container)).toBe(expected === "true");
+      expect(shown(container, "[data-search-trigger]")).not.toEqual([]);
+    },
+  );
 });

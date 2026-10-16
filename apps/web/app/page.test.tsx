@@ -257,3 +257,97 @@ describe("FormalPage", () => {
     );
   });
 });
+
+describe("FormalPage wide-screen browse-only (pc-browse-only-v1)", () => {
+  // A synthetic stand-in with the opaque session shape; not a credential.
+  const visitorSession = "s".repeat(43);
+  const lastProps = () =>
+    productApplicationMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+  const render = async () => renderToStaticMarkup(await FormalPage({}));
+
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("MOYA_WIDE_SCREEN_BROWSE_ONLY", undefined);
+  });
+
+  it("hands the public policy to the business composition by default", async () => {
+    await render();
+    expect(lastProps()).toMatchObject({
+      authorCommunity: true,
+      liveNotifications: true,
+      articleAuthoring: true,
+    });
+    expect(lastProps().wideScreenBrowseOnly).toEqual({ sessionHint: false });
+  });
+
+  it("tells the client that a session cookie exists, never the session", async () => {
+    readVisitorAccessMock.mockResolvedValue({
+      state: "granted",
+      closedBeta: false,
+      token: visitorSession,
+    });
+    await render();
+    expect(lastProps().wideScreenBrowseOnly).toEqual({ sessionHint: true });
+    expect(JSON.stringify(lastProps().wideScreenBrowseOnly)).not.toContain(
+      visitorSession,
+    );
+    expect(loadProductionProductStatesMock).toHaveBeenCalledWith(
+      visitorSession,
+    );
+  });
+
+  it("keeps the closed beta's sign-in reachable", async () => {
+    for (const token of [undefined, visitorSession]) {
+      readVisitorAccessMock.mockResolvedValue({
+        state: "granted",
+        closedBeta: true,
+        token,
+      });
+      await render();
+      expect(lastProps()).toMatchObject({ authorCommunity: true });
+      expect(lastProps()).not.toHaveProperty("wideScreenBrowseOnly");
+    }
+  });
+
+  it.each(["off", "false", "0"])(
+    "is absent when switched %s, read on every request",
+    async (value) => {
+      vi.stubEnv("MOYA_WIDE_SCREEN_BROWSE_ONLY", value);
+      await render();
+      expect(lastProps()).toMatchObject({ authorCommunity: true });
+      expect(lastProps()).not.toHaveProperty("wideScreenBrowseOnly");
+
+      vi.stubEnv("MOYA_WIDE_SCREEN_BROWSE_ONLY", "on");
+      await render();
+      expect(lastProps().wideScreenBrowseOnly).toEqual({ sessionHint: false });
+
+      vi.stubEnv("MOYA_WIDE_SCREEN_BROWSE_ONLY", value);
+      await render();
+      expect(lastProps()).not.toHaveProperty("wideScreenBrowseOnly");
+    },
+  );
+
+  it("also applies to the Development business composition", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    await render();
+    expect(lastProps().wideScreenBrowseOnly).toEqual({ sessionHint: false });
+  });
+
+  it("never reaches the composition without the community surface", async () => {
+    vi.stubEnv("NODE_ENV", "test");
+    for (const token of [undefined, visitorSession]) {
+      readVisitorAccessMock.mockResolvedValue({
+        state: "granted",
+        closedBeta: false,
+        token,
+      });
+      await render();
+      expect(lastProps()).toMatchObject({
+        authorCommunity: false,
+        comments: null,
+      });
+      expect(lastProps()).not.toHaveProperty("wideScreenBrowseOnly");
+      expect(lastProps()).not.toHaveProperty("liveNotifications");
+    }
+  });
+});

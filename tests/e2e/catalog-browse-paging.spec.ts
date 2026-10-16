@@ -16,10 +16,23 @@ const productShell = (page: Page) =>
 const feedSurface = (page: Page, feed: HomeFeed) =>
   productShell(page).locator(`[data-home-feed-panel="${feed}"]`);
 
+// A wide screen without an account only browses (pc-browse-only-v1): Home
+// keeps every feed, but the dock and 讨论 return only below the wide width.
+const wideProjects = new Set([
+  "desktop-chromium",
+  "desktop-webkit",
+  "tablet-landscape-webkit",
+]);
+
+const primaryNavigationLayer = (page: Page) =>
+  formalSurface(page).locator("[data-primary-navigation-layer]");
+
 const selectPrimary = async (page: Page, label: "首页" | "讨论") => {
   const navigation = formalSurface(page).getByRole("navigation", {
     name: "主要内容",
   });
+  // A hidden dock leaves the accessibility tree; never wait on it unbounded.
+  await expect(navigation).toBeVisible();
   if ((await navigation.getAttribute("data-minimized")) === "true") {
     await navigation
       .locator('[data-primary-navigation-destination][aria-current="page"]')
@@ -149,13 +162,18 @@ const openViewerAndReturn = async (
   const detail = productShell(page).getByRole("dialog", { name: "资料详情" });
   await expect(detail).toBeVisible();
   await expect(detail.locator("[data-detail-title]")).toHaveText(title);
-  await detail.locator("[data-detail-main-image]").click();
+  // Wide browse-only Detail keeps the hero layout; guard each unbounded click.
+  const mainImage = detail.locator("[data-detail-main-image]");
+  await expect(mainImage).toBeVisible();
+  await mainImage.click();
   const viewer = productShell(page).getByRole("dialog", { name: "图像查看" });
   await expect(viewer).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(viewer).toBeHidden();
   await expect(detail).toBeVisible();
-  await detail.getByRole("button", { exact: true, name: "返回" }).click();
+  const back = detail.getByRole("button", { exact: true, name: "返回" });
+  await expect(back).toBeVisible();
+  await back.click();
   await expect(detail).toHaveCount(0);
   await expect(opener).toBeFocused();
   return sourceTop;
@@ -178,11 +196,17 @@ test.beforeAll(async ({ request }) => {
 
 test("Formal Home catalog feeds progressively load and retain later pages", async ({
   page,
-}) => {
+}, testInfo) => {
   if (pagingRuntime === undefined) throw new Error("Missing paging runtime");
+  const wide = wideProjects.has(testInfo.project.name);
   const response = await page.goto(pagingRuntime.baseUrl);
   expect(response?.status()).toBe(200);
   await expect(formalSurface(page)).toBeVisible();
+  // The fixture issues no session cookie, so every visitor is anonymous.
+  await expect(productShell(page)).toHaveAttribute(
+    "data-browse-only",
+    wide ? "true" : "false",
+  );
   await expect(
     feedSurface(page, "discover").locator("[data-catalog-paging-control]"),
   ).toHaveCount(0);
@@ -342,7 +366,32 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
   // primary destination must preserve fetched records and their reading offset.
   await selectHomeFeed(page, "碑刻", "inscriptions");
   await expect(inscriptionCards).toHaveCount(55);
-  await selectPrimary(page, "讨论");
+  if (wide) {
+    // Browse-only has no dock and no 讨论. Below the wide width both return,
+    // so the primary round trip runs at 800px, then the wide layout returns.
+    const viewport = page.viewportSize();
+    if (viewport === null) throw new Error("Missing viewport");
+    await expect(primaryNavigationLayer(page)).toBeHidden();
+    await page.setViewportSize({ height: viewport.height, width: 800 });
+    await expect(productShell(page)).toHaveAttribute(
+      "data-browse-only",
+      "false",
+    );
+    await selectPrimary(page, "讨论");
+    await selectPrimary(page, "首页");
+    await page.setViewportSize(viewport);
+    await expect(productShell(page)).toHaveAttribute(
+      "data-browse-only",
+      "true",
+    );
+    await expect(primaryNavigationLayer(page)).toBeHidden();
+    await expect(productShell(page)).toHaveAttribute(
+      "data-active-destination",
+      "home",
+    );
+  } else {
+    await selectPrimary(page, "讨论");
+  }
   await selectHomeFeed(page, "书帖", "calligraphy");
   await expect(allCards).toHaveCount(48);
   await expect

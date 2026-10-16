@@ -45,6 +45,7 @@ import type { ReactNode, RefObject } from "react";
 import type { HomeCatalogState } from "../home/catalog-state";
 import type { HomeFeed, HomeSurfaceData } from "../home/home-feed";
 import type { PresentationPlatform } from "../shell/device-platform";
+import type { BrowseOnlyPolicy } from "../shell/browse-only";
 
 const PreviewBrowse = ({ state }: { readonly state: HomeCatalogState }) => {
   const { feedLayout, openCatalog } = useProductShell();
@@ -61,6 +62,8 @@ const PreviewBrowse = ({ state }: { readonly state: HomeCatalogState }) => {
 };
 
 export interface T02pProductPreviewProps {
+  /** Wide-screen browse-only (pc-browse-only-v1); only the Formal root sets it. */
+  readonly browseOnlyPolicy?: BrowseOnlyPolicy;
   readonly detailScopeKey?: string;
   readonly developmentDiscussion?: boolean;
   readonly headerStart?: ReactNode;
@@ -105,6 +108,7 @@ export interface T02pProductPreviewProps {
 }
 
 export const T02pProductPreview = ({
+  browseOnlyPolicy,
   catalogDetailLoader = loadCatalogDetailPresentation,
   detailScopeKey = "catalog",
   developmentDiscussion = false,
@@ -179,6 +183,7 @@ export const T02pProductPreview = ({
           </div>
         }
         initialPlatform={initialPlatform}
+        {...(browseOnlyPolicy ? { browseOnlyPolicy } : {})}
         primaryUtility={productUtility}
         navigationAction={navigationAction}
         {...(renderProfileOverlay ? { renderProfileOverlay } : {})}
@@ -247,8 +252,10 @@ const PreviewTopicOverlay = ({
   readonly topicsState: HomeSurfaceData["topics"];
   readonly renderDiscussion?: (target: DiscussionTarget) => ReactNode;
 }) => {
-  const { feedLayout, platform, recoverUnavailableAuthContent } =
+  const { browseOnly, feedLayout, platform, recoverUnavailableAuthContent } =
     useProductShell();
+  // Browse-only shows no comments and no 参与话题 (pc-browse-only-v1).
+  const commentsHidden = browseOnly === true;
   const author = useOptionalAuthors();
   const authReturn = useAuthReturn();
   const identityReady =
@@ -288,6 +295,7 @@ const PreviewTopicOverlay = ({
         backButtonRef={backButtonRef}
         onClose={onClose}
         {...(identityReady ? { onUnavailable: recover } : {})}
+        {...(commentsHidden ? { commentsHidden } : {})}
         {...(renderDiscussion
           ? {
               renderComments: (workId: string) =>
@@ -304,6 +312,7 @@ const PreviewTopicOverlay = ({
         backButtonRef={backButtonRef}
         onClose={onClose}
         {...(identityReady ? { onUnavailable: recover } : {})}
+        {...(commentsHidden ? { commentsHidden } : {})}
         {...(renderDiscussion
           ? {
               renderComments: (articleId: string) =>

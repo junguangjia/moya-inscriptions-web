@@ -237,6 +237,15 @@ const navigateTo = async (
   name: "首页" | "讨论" | "用户",
   destination: "home" | "discussion" | "user",
 ) => {
+  // A wide Formal root without an account has no dock and keeps only Home
+  // (pc-browse-only-v1); the /dev/t02p routes are never browse-only. Read it
+  // after boot, once the client has corrected the server's platform guess.
+  await expect(shell.page().locator("[data-product-boot]")).toHaveCount(0);
+  if ((await shell.getAttribute("data-browse-only")) === "true") {
+    expect(destination).toBe("home");
+    await expect(shell).toHaveAttribute("data-active-destination", "home");
+    return;
+  }
   const navigation = shell.locator("[data-primary-navigation]");
   if ((await navigation.getAttribute("data-minimized")) === "true") {
     // The existing minimized gesture expands only; perform that real action

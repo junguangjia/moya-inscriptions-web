@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { addSessionCookie } from "./support/session-cookie";
+
 // Browser-only synthetic responses. No provider delivery, real session or database.
 const viewer = {
   id: "user-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -117,11 +119,18 @@ for (const channel of ["email", "phone"] as const) {
       await route.fulfill({ status: 200, json: response });
     });
 
+    // A signed-in browser carries its session cookie: a wide screen shows the
+    // dock once /me answers instead of browse-only (pc-browse-only-v1).
+    const baseURL = testInfo.project.use.baseURL;
+    if (typeof baseURL !== "string") throw new Error("Missing E2E base URL");
+    await addSessionCookie(page.context(), baseURL);
     await page.goto("/");
-    await page
+    const user = page
       .getByRole("navigation", { name: "主要内容" })
-      .getByRole("button", { name: "用户", exact: true })
-      .click();
+      .getByRole("button", { name: "用户", exact: true });
+    // Actions have no timeout here: a hidden dock must fail, not wait forever.
+    await expect(user).toBeVisible();
+    await user.click();
     const profile = page.getByRole("region", { name: "用户主页" });
     await profile.getByRole("button", { name: "设置", exact: true }).click();
     const settings = page.locator("dialog[open]");

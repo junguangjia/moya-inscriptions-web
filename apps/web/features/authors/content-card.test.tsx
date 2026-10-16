@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { shell, contentActions } = vi.hoisted(() => ({
-  shell: { openContent: vi.fn() },
+  // `browseOnly` stays unset, like a partial shell, unless a test sets it.
+  shell: { openContent: vi.fn(), browseOnly: undefined as boolean | undefined },
   contentActions: vi.fn(),
 }));
 vi.mock("../product-shell/product-shell", () => ({
@@ -20,6 +21,7 @@ vi.mock("./content-actions", () => ({
 }));
 
 import { ContentCard } from "./content-card";
+import styles from "../home/home-screen.module.css";
 
 import type { ContentCard as Card } from "@moya/contracts";
 import type { Root } from "react-dom/client";
@@ -201,6 +203,102 @@ describe("ContentCard for works", () => {
       action,
     );
   });
+});
+
+/*
+ * pc-browse-only-v1: wide screens without an account only browse. The card
+ * keeps a plain opener (a click opens Detail) and has no long-press menu.
+ */
+describe("ContentCard browse-only activation", () => {
+  const press = (target: EventTarget, type: string) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperties(event, {
+      pointerId: { value: 1 },
+      pointerType: { value: "touch" },
+      isPrimary: { value: true },
+      button: { value: 0 },
+      clientX: { value: 180 },
+      clientY: { value: 400 },
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+  };
+  const hold = (button: HTMLButtonElement) => {
+    press(button, "pointerdown");
+    act(() => vi.advanceTimersByTime(400));
+  };
+  const menu = () => document.querySelector("[data-quick-action-menu]");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+  });
+  afterEach(() => {
+    shell.browseOnly = undefined;
+    vi.useRealTimers();
+  });
+
+  it("opens Detail on a click and opens no menu on a 400 ms hold", () => {
+    shell.browseOnly = true;
+    const view = render(card({}));
+    expect(view.querySelector("[data-quick-actions]")).toBeNull();
+    const action = view.querySelector<HTMLButtonElement>(
+      'button[aria-label="打开春日临帖"]',
+    )!;
+    expect(action.className).toBe(styles.cardAction);
+    expect(action.hasAttribute("data-open-catalog")).toBe(false);
+    hold(action);
+    press(window, "pointerup");
+    expect(menu()).toBeNull();
+    act(() => action.click());
+    expect(shell.openContent).toHaveBeenCalledTimes(1);
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "work", id: workId },
+      action,
+    );
+  });
+
+  it("keeps the Catalog opener on a browse-only catalog card", () => {
+    shell.browseOnly = true;
+    const action = render(
+      card({
+        target: { type: "catalog", id: "catalog-browse" } as Card["target"],
+        kind: "inscription",
+        authorId: null,
+      }),
+    ).querySelector<HTMLButtonElement>("[data-open-catalog]")!;
+    expect(action.getAttribute("aria-label")).toBe("打开春日临帖");
+    expect(action.hasAttribute("data-quick-actions")).toBe(false);
+    act(() => action.click());
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "catalog", id: "catalog-browse" },
+      action,
+    );
+  });
+
+  it.each([false, undefined])(
+    "keeps the long-press menu and click when browseOnly is %s",
+    (browseOnly) => {
+      shell.browseOnly = browseOnly;
+      const action = render(card({})).querySelector<HTMLButtonElement>(
+        '[data-quick-actions="enabled"]',
+      )!;
+      expect(action.getAttribute("aria-label")).toBe("打开春日临帖");
+      act(() => action.click());
+      expect(shell.openContent).toHaveBeenCalledWith(
+        { type: "work", id: workId },
+        action,
+      );
+      hold(action);
+      expect(menu()).not.toBeNull();
+      press(window, "pointerup");
+      expect(menu()).toBeNull();
+    },
+  );
 });
 
 /*

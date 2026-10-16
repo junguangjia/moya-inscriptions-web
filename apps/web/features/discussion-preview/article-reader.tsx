@@ -66,6 +66,7 @@ export function PostReader({
   id,
   children,
   comments,
+  commentsHidden = false,
   highlightCommentId,
   onOpenProfile,
 }: {
@@ -73,6 +74,8 @@ export function PostReader({
   children: ReactNode;
   /** A live comment section; omitted, the preview state supplies comments. */
   comments?: ReactNode;
+  /** Browse-only (pc-browse-only-v1): no comments of either kind, no composer. */
+  commentsHidden?: boolean;
   highlightCommentId?: string;
   onOpenProfile: (name: string) => void;
 }) {
@@ -120,35 +123,42 @@ export function PostReader({
           data-post-reader={id}
         >
           {children}
-          {comments != null ? (
-            <LiveComments>{comments}</LiveComments>
-          ) : (
-            <PreviewComments
-              contentId={id}
-              {...(highlightCommentId ? { highlightCommentId } : {})}
-              onOpenProfile={onOpenProfile}
-            />
-          )}
+          {!commentsHidden &&
+            (comments != null ? (
+              <LiveComments>{comments}</LiveComments>
+            ) : (
+              <PreviewComments
+                contentId={id}
+                {...(highlightCommentId ? { highlightCommentId } : {})}
+                onOpenProfile={onOpenProfile}
+              />
+            ))}
         </div>
       </CommentComposerPortalProvider>
-      <div ref={setOutlet} data-comment-composer-outlet="" data-active="true" />
+      {!commentsHidden && (
+        <div
+          ref={setOutlet}
+          data-comment-composer-outlet=""
+          data-active="true"
+        />
+      )}
     </div>
   );
 }
 const pages = ["reading", "comments"] as const;
 type Page = (typeof pages)[number];
-export function ArticleReader({
-  id,
-  children,
-  comments,
-  highlightCommentId,
-  renderContent,
-  onOpenProfile,
-}: {
+/** Browse-only keeps a single page, so there is nothing to page to. */
+const readingOnly: readonly Page[] = ["reading"];
+interface ArticleReaderProps {
   id: string;
   children?: ReactNode;
   /** A live comment section; omitted, the preview state supplies comments. */
   comments?: ReactNode;
+  /**
+   * Browse-only (pc-browse-only-v1): the reading page alone, without a
+   * comments page, inline comments, paging or a composer.
+   */
+  commentsHidden?: boolean;
   highlightCommentId?: string;
   renderContent?: (context: {
     scrollElement: HTMLElement | null;
@@ -156,7 +166,28 @@ export function ArticleReader({
     overlayTarget: HTMLElement | null;
   }) => ReactNode;
   onOpenProfile: (name: string) => void;
-}) {
+}
+/**
+ * The pager builds its panels once from its first keys, so a change of
+ * `commentsHidden` remounts the reader rather than changing its pages in place.
+ */
+export function ArticleReader(props: ArticleReaderProps) {
+  return (
+    <PagedArticleReader
+      key={props.commentsHidden ? "reading-only" : "paged"}
+      {...props}
+    />
+  );
+}
+function PagedArticleReader({
+  id,
+  children,
+  comments,
+  commentsHidden = false,
+  highlightCommentId,
+  renderContent,
+  onOpenProfile,
+}: ArticleReaderProps) {
   const shell = useProductShell();
   const activeRef = useRef<Page>(highlightCommentId ? "comments" : "reading");
   const readingRef = useRef<HTMLElement | null>(null);
@@ -169,7 +200,9 @@ export function ArticleReader({
     inline: inlineRef.current,
   }));
   const [active, setActive] = useState<Page>(
-    authReturnView?.page ?? (highlightCommentId ? "comments" : "reading"),
+    commentsHidden
+      ? "reading"
+      : (authReturnView?.page ?? (highlightCommentId ? "comments" : "reading")),
   );
   activeRef.current = active;
   const [readingElement, setReadingElement] = useState<HTMLElement | null>(
@@ -188,17 +221,21 @@ export function ArticleReader({
     if (element.dataset.readingPage === "comments") setCommentsElement(element);
     return () => {};
   }, []);
-  const [inline, setInline] = useState(authReturnView?.inline ?? false);
+  const [inline, setInline] = useState(
+    !commentsHidden && (authReturnView?.inline ?? false),
+  );
   inlineRef.current = inline;
   const lastReadingTop = useRef(0);
   const [commentHost, setCommentHost] = useState<HTMLDivElement | null>(null);
   const sideMount = useRef<HTMLDivElement>(null);
   const inlineMount = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
+    // Without a host, browse-only portals no comments anywhere.
+    if (commentsHidden) return;
     const host = document.createElement("div");
     setCommentHost(host);
     return () => host.remove();
-  }, []);
+  }, [commentsHidden]);
   useLayoutEffect(() => {
     const target = inline ? inlineMount.current : sideMount.current;
     if (commentHost && target) target.appendChild(commentHost);
@@ -269,10 +306,17 @@ export function ArticleReader({
       className={styles.reader}
       data-discussion-comments-host=""
       data-preview-reader={id}
-      data-comment-mode={inline ? "inline" : "paged"}
+      data-comment-mode={
+        commentsHidden ? "hidden" : inline ? "inline" : "paged"
+      }
       tabIndex={0}
       onKeyDown={(event) => {
-        if (event.target !== event.currentTarget || inlineRef.current) return;
+        if (
+          commentsHidden ||
+          event.target !== event.currentTarget ||
+          inlineRef.current
+        )
+          return;
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
           event.preventDefault();
           pager.current?.scrollToKey(
@@ -287,6 +331,7 @@ export function ArticleReader({
           onScrollCapture={(event) => {
             const el = event.target;
             if (
+              commentsHidden ||
               !(el instanceof HTMLElement) ||
               el.dataset.readingPage !== "reading" ||
               active !== "reading"
@@ -313,10 +358,10 @@ export function ArticleReader({
         >
           <HorizontalPager
             ref={pager}
-            keys={pages}
+            keys={commentsHidden ? readingOnly : pages}
             activeKey={active}
             onCommit={setActive}
-            canStartGesture={() => !inlineRef.current}
+            canStartGesture={() => !commentsHidden && !inlineRef.current}
             registerActiveScrollElement={registerScroller}
             panels={{
               reading: (
@@ -372,11 +417,13 @@ export function ArticleReader({
           )}
       </CommentComposerPortalProvider>
       <div ref={setOverlayTarget} data-reader-overlay-outlet="" />
-      <div
-        ref={setOutlet}
-        data-comment-composer-outlet=""
-        data-active={active === "comments" || inline}
-      />
+      {!commentsHidden && (
+        <div
+          ref={setOutlet}
+          data-comment-composer-outlet=""
+          data-active={active === "comments" || inline}
+        />
+      )}
     </div>
   );
 }

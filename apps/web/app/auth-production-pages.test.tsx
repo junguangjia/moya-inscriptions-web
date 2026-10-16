@@ -11,12 +11,23 @@ vi.mock("../features/auth/auth-page", () => ({
     <main data-auth-mode={mode} data-auth-return={returnTo} />
   ),
 }));
+const { readAuthPageWideScreenRedirect } = vi.hoisted(() => ({
+  readAuthPageWideScreenRedirect: vi.fn(async () => false),
+}));
+vi.mock("./wide-screen-browse-only", () => ({
+  readAuthPageWideScreenRedirect,
+}));
 
+import { WIDE_SCREEN_AUTH_REDIRECT_SCRIPT } from "../features/auth/wide-screen-auth-redirect";
 import LoginPage from "./login/page";
 import RegisterPage from "./register/page";
 import AgreementsPage from "./login/agreements/page";
 
-beforeEach(() => vi.stubEnv("NODE_ENV", "production"));
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "production");
+  readAuthPageWideScreenRedirect.mockReset();
+  readAuthPageWideScreenRedirect.mockResolvedValue(false);
+});
 afterEach(() => vi.unstubAllEnvs());
 
 describe("Production real authentication pages", () => {
@@ -33,6 +44,40 @@ describe("Production real authentication pages", () => {
       );
       expect(markup).toContain(`data-auth-mode="${mode}"`);
       expect(markup).toContain('data-auth-return="/?feed=inscriptions"');
+    },
+  );
+
+  it.each([
+    ["sign-in", LoginPage],
+    ["register", RegisterPage],
+  ] as const)(
+    "sends a wide screen on %s back to Home before the auth markup when the policy applies",
+    async (mode, page) => {
+      readAuthPageWideScreenRedirect.mockResolvedValue(true);
+      const markup = renderToStaticMarkup(
+        await page({ searchParams: Promise.resolve({}) }),
+      );
+      expect(readAuthPageWideScreenRedirect).toHaveBeenCalledTimes(1);
+      // The inline script leads the page, so it runs before the form is parsed.
+      expect(markup).toBe(
+        `<script id="yoyi-auth-redirect">${WIDE_SCREEN_AUTH_REDIRECT_SCRIPT}</script>` +
+          `<main data-auth-mode="${mode}" data-auth-return="/"></main>`,
+      );
+    },
+  );
+
+  it.each([
+    ["sign-in", LoginPage],
+    ["register", RegisterPage],
+  ] as const)(
+    "keeps %s free of the redirect when the policy does not apply",
+    async (mode, page) => {
+      const markup = renderToStaticMarkup(await page({}));
+      expect(readAuthPageWideScreenRedirect).toHaveBeenCalledTimes(1);
+      expect(markup).not.toContain("<script");
+      expect(markup).toBe(
+        `<main data-auth-mode="${mode}" data-auth-return="/"></main>`,
+      );
     },
   );
 

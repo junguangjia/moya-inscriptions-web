@@ -8,6 +8,7 @@ import { AuthorDialog } from "./author-dialog";
 import { MyComments } from "./author-profile";
 import { useAuthors } from "./author-context";
 import { useProductShell } from "../product-shell/product-shell";
+import { useBrowseOnly } from "../shell/browse-only-context";
 import type { PrimaryDestination } from "../shell/primary-shell";
 import {
   useDiscussionPreview,
@@ -93,6 +94,12 @@ export function MessageTrigger({
   readonly liveNotifications?: boolean;
 }) {
   const author = useAuthors();
+  const browseOnly = useBrowseOnly();
+  // Browse-only has no 消息 (pc-browse-only-v1). The placeholder keeps the
+  // header's end slot, so its data-author-bar grid stays intact, and the live
+  // host's ?notifications= entry never mounts.
+  if (browseOnly)
+    return <span aria-hidden="true" data-message-trigger-hidden="" />;
   if (liveNotifications)
     return <LiveMessageTrigger directMessages={liveDirectMessages} />;
   return (

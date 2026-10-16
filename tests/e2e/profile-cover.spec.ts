@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import sharp from "sharp";
 import type { Page } from "@playwright/test";
 
+import { addSessionCookie } from "./support/session-cookie";
+
 /**
  * Profile cover upload, crop and preview (#171). Community requests are
  * served by page routes with synthetic data; the uploaded bytes are captured
@@ -72,6 +74,11 @@ async function fixture(page: Page, background: Media | null = null) {
     holdMedia: null,
   };
   let counter = 0;
+  // A signed-in browser carries its session cookie: a wide screen shows the
+  // dock once /me answers instead of browse-only (pc-browse-only-v1).
+  const baseURL = test.info().project.use.baseURL;
+  if (typeof baseURL !== "string") throw new Error("Missing E2E base URL");
+  await addSessionCookie(page.context(), baseURL);
   // WebKit does not expose a Blob request body to routes: keep a copy of the
   // uploaded PNG in the page (test instrumentation only).
   await page.addInitScript(() => {
@@ -203,10 +210,12 @@ async function fixture(page: Page, background: Media | null = null) {
 async function openProfile(page: Page) {
   await page.goto("/");
   await expect(page.locator("[data-product-boot]")).toHaveCount(0);
-  await page
+  const user = page
     .getByRole("navigation", { name: "主要内容" })
-    .getByRole("button", { name: "用户", exact: true })
-    .click();
+    .getByRole("button", { name: "用户", exact: true });
+  // Actions have no timeout here: a hidden dock must fail, not wait forever.
+  await expect(user).toBeVisible();
+  await user.click();
   await expect(
     page.getByRole("heading", { name: identity.displayName, exact: true }),
   ).toBeVisible();

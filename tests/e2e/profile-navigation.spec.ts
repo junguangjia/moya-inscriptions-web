@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import sharp from "sharp";
 import type { Page } from "@playwright/test";
 
+import { addSessionCookie } from "./support/session-cookie";
+
 const ownerId = `user-${"7".repeat(32)}`;
 const identity = {
   id: ownerId,
@@ -95,13 +97,20 @@ async function fixture(page: Page, delayed = false, cover = false) {
       });
     return route.continue();
   });
+  // A signed-in browser carries its session cookie: a wide screen shows the
+  // dock once /me answers instead of browse-only (pc-browse-only-v1).
+  const baseURL = test.info().project.use.baseURL;
+  if (typeof baseURL !== "string") throw new Error("Missing E2E base URL");
+  await addSessionCookie(page.context(), baseURL);
   await page.goto("/");
   // A tap before the shell has booted is lost.
   await expect(page.locator("[data-product-boot]")).toHaveCount(0);
-  await page
+  const user = page
     .getByRole("navigation", { name: "主要内容" })
-    .getByRole("button", { name: "用户", exact: true })
-    .click();
+    .getByRole("button", { name: "用户", exact: true });
+  // Actions have no timeout here: a hidden dock must fail, not wait forever.
+  await expect(user).toBeVisible();
+  await user.click();
   await expect(
     page.locator(`[data-author-profile="${ownerId}"]`),
   ).toBeVisible();
@@ -649,10 +658,13 @@ for (const surface of ["home", "discussion"] as const) {
       await page.goto("/");
       await expect(page.locator("[data-product-boot]")).toHaveCount(0);
       if (surface === "discussion") {
-        await page
+        // A guest, but at a phone width the dock is shown on every project
+        // (pc-browse-only-v1); a hidden dock must fail, not wait forever.
+        const discussion = page
           .getByRole("navigation", { name: "主要内容" })
-          .getByRole("button", { name: "讨论", exact: true })
-          .click();
+          .getByRole("button", { name: "讨论", exact: true });
+        await expect(discussion).toBeVisible();
+        await discussion.click();
       }
       const home = page.locator(`[data-${surface}-surface]`);
       const incomingKey = surface === "home" ? "nearby" : "threads";

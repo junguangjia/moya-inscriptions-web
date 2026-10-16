@@ -32,7 +32,11 @@ const mocks = vi.hoisted(() => {
       notify: vi.fn(),
       mutate: vi.fn(),
     },
-    shell: { openProfile: vi.fn(), openContent: vi.fn() },
+    shell: {
+      openProfile: vi.fn(),
+      openContent: vi.fn(),
+      browseOnly: undefined as boolean | undefined,
+    },
     entry: { checking: false, openEditor: vi.fn(() => true) },
     publishing: { setVisibility: vi.fn(), deleteWork: vi.fn() },
     work: vi.fn(),
@@ -42,6 +46,9 @@ const mocks = vi.hoisted(() => {
 vi.mock("./author-context", () => ({ useAuthors: () => mocks.author }));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => mocks.shell,
+}));
+vi.mock("../shell/browse-only-context", () => ({
+  useBrowseOnly: () => mocks.shell.browseOnly === true,
 }));
 vi.mock("../publishing/publishing-entry", () => ({
   usePublishingEntry: () => mocks.entry,
@@ -165,6 +172,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
+  mocks.shell.browseOnly = undefined;
   resetOwnWorkAudiences();
   // Answers queued for reads a test did not make never reach the next test.
   mocks.work.mockReset();
@@ -791,6 +799,49 @@ describe("Work detail follows whether others can see the author's work", () => {
     await act(async () => answer(authorWork({ publiclyVisible: true })));
     expect(actions(view)).toBeNull();
     expect(note(view)).toBe("此作品当前仅你可见。");
+  });
+});
+
+describe("Work detail actions in wide-screen browse-only (pc-browse-only-v1)", () => {
+  beforeEach(() => {
+    mocks.author.viewer = null;
+    mocks.shell.browseOnly = true;
+  });
+
+  it("names the author as plain text and offers no action", () => {
+    const { container } = render(detail({ canEdit: false }));
+    const author = container.querySelector("[data-work-author-plain]");
+    expect(author?.textContent).toContain("临帖人");
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector("[data-content-actions]")).toBeNull();
+    expect(container.querySelector("[data-work-management]")).toBeNull();
+    act(() => (author as HTMLElement).click());
+    expect(mocks.shell.openProfile).not.toHaveBeenCalled();
+  });
+
+  it("keeps the note that a work cannot be read publicly", () => {
+    const { container } = render(detail({ canEdit: false, available: false }));
+    expect(container.querySelector("[data-work-notice]")?.textContent).toBe(
+      "此作品当前不可公开访问。",
+    );
+    expect(container.querySelector("[data-work-author-plain]")).not.toBeNull();
+  });
+
+  it("renders nothing for a catalog record", () => {
+    const { container } = render({
+      ...detail({}),
+      contentType: "catalog",
+    } as unknown as CatalogDetailPresentation);
+    expect(container.textContent).toBe("");
+    expect(container.querySelector("[data-content-actions]")).toBeNull();
+  });
+
+  it("keeps the profile button and actions without browse-only", () => {
+    mocks.shell.browseOnly = false;
+    const { container } = render(detail({ canEdit: false }));
+    expect(container.querySelector("[data-work-author-plain]")).toBeNull();
+    expect(container.querySelector("[data-content-actions]")).not.toBeNull();
+    expect(container.querySelector("button")?.textContent).toContain("临帖人");
   });
 });
 

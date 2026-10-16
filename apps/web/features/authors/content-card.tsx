@@ -132,16 +132,29 @@ export const ContentCard = ({
         {item.target.type === "catalog" ? (
           <CatalogProvinceBadge province={item.province} />
         ) : null}
-        <QuickActionCardAction
-          className={styles.cardAction}
-          content={{
-            kind: item.target.type,
-            id: item.target.id,
-            title: label,
-          }}
-          environment={actions.environment}
-          onActivate={(opener) => shell.openContent(item.target, opener)}
-        />
+        {shell.browseOnly === true ? (
+          // Browse-only: a click opens Detail; no long-press menu.
+          <button
+            type="button"
+            aria-label={`打开${label}`}
+            className={styles.cardAction}
+            data-open-catalog={item.target.type === "catalog" ? "" : undefined}
+            onClick={(event) =>
+              shell.openContent(item.target, event.currentTarget)
+            }
+          />
+        ) : (
+          <QuickActionCardAction
+            className={styles.cardAction}
+            content={{
+              kind: item.target.type,
+              id: item.target.id,
+              title: label,
+            }}
+            environment={actions.environment}
+            onActivate={(opener) => shell.openContent(item.target, opener)}
+          />
+        )}
       </article>
     </div>
   );

@@ -41,7 +41,10 @@ const fixture: { thread: object; items: object[] } = {
 vi.mock("./use-threads", () => ({
   useThread: () => ({ state: fixture.thread, retry: vi.fn() }),
   useThreadPosts: () => ({
-    state: { state: "populated", items: fixture.items, hasMore: false },
+    state:
+      fixture.items.length > 0
+        ? { state: "populated", items: fixture.items, hasMore: false }
+        : { state: "empty" },
     busy: false,
     loadMore: vi.fn(),
   }),
@@ -78,12 +81,13 @@ const openPost = async (id = work.id) =>
       .querySelector<HTMLButtonElement>(`[data-thread-post="${id}"] button`)!
       .click(),
   );
-const element = () => (
+const element = ({ commentsHidden = false } = {}) => (
   <ThreadDetail
     id={`thread-${"2".repeat(32)}`}
     backButtonRef={createRef<HTMLButtonElement>()}
     onClose={onClose}
     renderComments={renderComments}
+    {...(commentsHidden ? { commentsHidden } : {})}
   />
 );
 beforeEach(async () => {
@@ -243,5 +247,84 @@ describe("ThreadDetail post images", () => {
     expect(gallery.getAttribute("width")).toBe("2048");
     expect(gallery.getAttribute("height")).toBe("1536");
     expect(gallery.style.backgroundColor).toBe("");
+  });
+});
+
+/*
+ * pc-browse-only-v1: a browse-only Thread reads its posts without comments
+ * (live, the preview's or the pending note) and without the 参与话题 entry.
+ */
+describe("ThreadDetail browse-only", () => {
+  const compose = () => node.querySelector("[data-thread-compose]");
+  const hint = "文字加最多 3 张静态图片";
+  const comments = () => {
+    expect(renderComments).not.toHaveBeenCalled();
+    expect(node.querySelector("[data-live-discussion]")).toBeNull();
+    expect(node.querySelector("[data-preview-comments]")).toBeNull();
+    expect(node.querySelector("[data-live-comments]")).toBeNull();
+    expect(node.querySelector("[data-comment-composer-outlet]")).toBeNull();
+    expect(node.textContent).not.toContain("评论功能尚未接入此帖子。");
+  };
+
+  it("keeps 参与话题, its hint and the inviting empty copy by default", async () => {
+    expect(compose()?.textContent).toBe("参与话题");
+    expect(node.textContent).toContain(hint);
+    fixture.items = [];
+    await act(async () => root!.render(element()));
+    expect(node.textContent).toContain("还没有帖子，来分享你的观察。");
+  });
+
+  it("hides 参与话题 and its hint, with a neutral empty copy", async () => {
+    await act(async () => root!.render(element({ commentsHidden: true })));
+    expect(compose()).toBeNull();
+    expect(
+      [...node.querySelectorAll("button")].map((button) => button.textContent),
+    ).not.toContain("参与话题");
+    expect(node.textContent).not.toContain(hint);
+    fixture.items = [];
+    await act(async () => root!.render(element({ commentsHidden: true })));
+    expect(node.textContent).toContain("还没有帖子。");
+    expect(node.textContent).not.toContain("来分享你的观察");
+  });
+
+  it("opens a post with its content and no comments", async () => {
+    await act(async () => root!.render(element({ commentsHidden: true })));
+    await openPost();
+    expect(heading()).toBe("帖子");
+    const detail = node.querySelector(`[data-thread-post-detail="${work.id}"]`);
+    expect(detail?.textContent).toContain("今天临了两张。");
+    expect(detail?.querySelectorAll("img")).toHaveLength(2);
+    comments();
+  });
+
+  it("shows no pending note without a live discussion either", async () => {
+    await act(async () =>
+      root!.render(
+        <ThreadDetail
+          id={`thread-${"2".repeat(32)}`}
+          backButtonRef={createRef<HTMLButtonElement>()}
+          onClose={onClose}
+          commentsHidden
+        />,
+      ),
+    );
+    await openPost();
+    comments();
+  });
+
+  it("keeps the open post when the mode flips either way", async () => {
+    await openPost();
+    expect(
+      node.querySelector(`[data-live-discussion="${work.id}"]`),
+    ).not.toBeNull();
+    renderComments.mockClear();
+    await act(async () => root!.render(element({ commentsHidden: true })));
+    expect(heading()).toBe("帖子");
+    comments();
+    await act(async () => root!.render(element()));
+    expect(heading()).toBe("帖子");
+    expect(
+      node.querySelector(`[data-live-discussion="${work.id}"]`),
+    ).not.toBeNull();
   });
 });

@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DESKTOP_MINIMUM_WIDTH,
+  editorLayout,
+} from "../publishing/ui/editor/editor-layout";
+import {
+  WIDE_LAYOUT_MINIMUM_WIDTH,
   detectDeviceClass,
+  isWideLayout,
   readRuntimeDeviceClass,
   resolvePresentationOrientation,
   resolvePresentationPlatform,
   resolveRuntimePresentationPlatform,
 } from "./device-platform";
+
+import type { DeviceClass, PresentationPlatform } from "./device-platform";
 
 describe("current T02 device classification compatibility", () => {
   it.each([
@@ -139,4 +147,72 @@ describe("current T02 presentation platform compatibility", () => {
       expect(resolvePresentationPlatform("desktop", width)).toBe("pc");
     },
   );
+});
+
+describe("wide layout (pc-browse-only-v1)", () => {
+  it("starts at the PC width", () => {
+    expect(WIDE_LAYOUT_MINIMUM_WIDTH).toBe(896);
+    expect(DESKTOP_MINIMUM_WIDTH).toBe(WIDE_LAYOUT_MINIMUM_WIDTH);
+  });
+
+  it.each([320, 767, 768, 895, 896, 1_280, 2_560])(
+    "keeps a PC wide at width %s",
+    (width) => {
+      expect(isWideLayout("pc", width)).toBe(true);
+    },
+  );
+
+  it.each([
+    [767, false],
+    [768, false],
+    [834, false],
+    [895, false],
+    [896, true],
+    [1_024, true],
+    [1_194, true],
+    [1_366, true],
+  ] as const)("resolves a tablet at width %s as wide %s", (width, wide) => {
+    expect(isWideLayout("tablet", width)).toBe(wide);
+  });
+
+  it.each([390, 768, 896, 1_400])(
+    "never makes a phone wide at width %s",
+    (width) => {
+      expect(isWideLayout("phone", width)).toBe(false);
+    },
+  );
+
+  it.each([
+    ["a desktop window", "desktop", 767, false],
+    ["a desktop window", "desktop", 800, false],
+    ["a desktop window", "desktop", 895, false],
+    ["a desktop window", "desktop", 896, true],
+    ["a desktop window", "desktop", 1_280, true],
+    ["an iPad in portrait", "tablet", 834, false],
+    ["an iPad Pro in portrait", "tablet", 1_024, true],
+    ["an iPad in landscape", "tablet", 1_194, true],
+    ["a phone in landscape", "phone", 1_400, false],
+  ] as const)(
+    "applies to %s (%s) at width %s: %s",
+    (_label, deviceClass: DeviceClass, width, wide) => {
+      expect(
+        isWideLayout(resolvePresentationPlatform(deviceClass, width), width),
+      ).toBe(wide);
+    },
+  );
+
+  it("is the same decision as the desktop editor layout", () => {
+    const platforms: readonly PresentationPlatform[] = [
+      "phone",
+      "tablet",
+      "pc",
+    ];
+    for (const platform of platforms)
+      for (const width of [
+        0, 320, 390, 767, 768, 834, 895, 896, 897, 1_024, 1_194, 1_400, 2_560,
+      ])
+        expect(editorLayout(platform, width) === "desktop").toBe(
+          isWideLayout(platform, width),
+        );
+  });
 });
