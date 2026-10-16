@@ -134,6 +134,34 @@ describe("TileMenu", () => {
   });
 });
 
+describe("background high-resolution action", () => {
+  it("retries only high resolution from the existing photo menu", () => {
+    const retry = vi.fn();
+    const dialog = mount(
+      <TileMenu
+        count={1}
+        model={model({
+          kind: "ready",
+          label: "预览可用，高清图处理失败",
+          background: "failed",
+          retry: { type: "high_resolution" },
+        })}
+        number={1}
+        onCancel={vi.fn()}
+        onComposeCover={vi.fn()}
+        onMakeFirst={vi.fn()}
+        onMove={vi.fn()}
+        onRemove={vi.fn()}
+        onRetryHighResolution={retry}
+      />,
+    );
+    expect(dialog.textContent).toContain("预览可用，高清图处理失败");
+    act(() => action(dialog, "retry-high-resolution").click());
+    expect(retry).toHaveBeenCalledOnce();
+    expect(action(dialog, "compose-cover")).not.toBeNull();
+  });
+});
+
 describe("FixSheet", () => {
   const sheet = (
     attention: Attention,

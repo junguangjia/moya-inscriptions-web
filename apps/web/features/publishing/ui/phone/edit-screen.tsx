@@ -1307,6 +1307,10 @@ const EditWorkspace = ({
                 commitRemoval();
                 onComposeCover(item.key);
               }}
+              onRetryHighResolution={() => {
+                setSheet(null);
+                media.retry(item.key, { type: "high_resolution" });
+              }}
               onMakeFirst={() => {
                 setSheet(null);
                 makeFirst(item.key);

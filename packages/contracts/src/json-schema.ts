@@ -380,6 +380,8 @@ import {
   publishingDraftSchema,
   publishingLimitsSchema,
   publishingMediaItemSchema,
+  publishingMediaItemProgressSchema,
+  publishingMediaProcessingProgressSchema,
   publishingOpenedEditDraftSchema,
   publishingSessionHeartbeatCommandSchema,
   publishingSessionSchema,
@@ -416,6 +418,10 @@ export const workPublishingJsonSchemas = {
   WorkAuthorship: toJsonSchema(workAuthorshipSchema),
   WorkDraftContent: toJsonSchema(workDraftContentSchema),
   PublishingMediaItem: toJsonSchema(publishingMediaItemSchema),
+  PublishingMediaItemProgress: toJsonSchema(publishingMediaItemProgressSchema),
+  PublishingMediaProcessingProgress: toJsonSchema(
+    publishingMediaProcessingProgressSchema,
+  ),
   RegisterMediaItemCommand: toJsonSchema(registerMediaItemCommandSchema),
   PublishingUploadResult: toJsonSchema(publishingUploadResultSchema),
   CreatePublishingDraftCommand: toJsonSchema(

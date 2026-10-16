@@ -94,7 +94,9 @@ export const tileChip = (
   status: ItemStatus,
   failure: FailureSource | null,
 ): string | null =>
-  status.kind === "ready" ? null : chipLabel(status, failure);
+  status.kind === "ready" && status.background === undefined
+    ? null
+    : chipLabel(status, failure);
 
 /**
  * Where the photo at `index` sits while the held one (`active`) is over

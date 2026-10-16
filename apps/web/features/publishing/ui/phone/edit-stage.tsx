@@ -1035,7 +1035,8 @@ export const EditStage = ({
       </div>
       <div className={styles.stageTop}>
         <div className={styles.stageStatusSlot} data-edit-status="">
-          {status.kind === "ready" ? null : attention ? (
+          {status.kind === "ready" &&
+          status.background === undefined ? null : attention ? (
             <button
               aria-label={`${chip}，点按处理`}
               className={styles.stageStatus}

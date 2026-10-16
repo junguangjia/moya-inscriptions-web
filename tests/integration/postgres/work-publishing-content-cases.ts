@@ -2381,7 +2381,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           itemId: cover.itemId,
           editKey: "base",
           coverEditKey,
-          variants: ["thumb", "display", "full", "cover"],
+          variants: ["thumb", "display", "cover"],
           presentation: { width: 640, height: 480 },
         }),
         expect.objectContaining({
@@ -2680,7 +2680,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           };
           run_after: Date;
         }>(
-          "SELECT id,subject_id,payload,run_after FROM community.publishing_jobs WHERE kind='derive_edit' AND subject_id=ANY($1::text[]) AND state='queued' ORDER BY subject_id=$2 DESC",
+          "SELECT id,subject_id,payload,run_after FROM community.publishing_jobs WHERE kind='derive_edit' AND subject_id=ANY($1::text[]) AND state='queued' ORDER BY subject_id=$2 DESC, (payload->'variants'='[\"full\"]'::jsonb)",
           [[secondItem.itemId, firstItem.itemId], secondItem.itemId],
         )
       ).rows;
@@ -2707,16 +2707,24 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
             editKey: rotatedKey,
             edit: { rotation: 90, crop: null },
             coverCrop: null,
-            variants: ["thumb", "display", "full"],
+            variants: ["thumb", "display"],
+          },
+          run_after: editedAt,
+        },
+        {
+          subject_id: firstItem.itemId,
+          payload: {
+            editKey: rotatedKey,
+            edit: { rotation: 90, crop: null },
+            coverCrop: null,
+            variants: ["full"],
           },
           run_after: editedAt,
         },
       ]);
       // The worker reads the legacy PNG through the port, never a store key.
-      for (const [job, mediaId] of [
-        [legacyJobs[0]!, second],
-        [legacyJobs[1]!, first],
-      ] as const) {
+      for (const job of legacyJobs) {
+        const mediaId = job.subject_id === secondItem.itemId ? second : first;
         expect(
           await adapter.readProcessing({
             kind: "derive_edit",

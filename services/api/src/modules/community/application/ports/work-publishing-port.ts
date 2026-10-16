@@ -14,6 +14,7 @@ import type {
   PublishingDraftSaveResult,
   PublishingHolder,
   PublishingMediaItem,
+  PublishingMediaItemProgress,
   PublishingOpenedEditDraft,
   PublishingPageQuery,
   PublishingSession,
@@ -627,6 +628,18 @@ export interface PublishingMediaOperations {
   ): Promise<PublishingMediaItem>;
   /** The owner's view of one item in any state. */
   readItem(actorId: string, itemId: string): Promise<PublishingMediaItem>;
+  /** Author-only durable preview/HD progress; legacy response shapes stay unchanged. */
+  readItemProgress(
+    actorId: string,
+    itemId: string,
+  ): Promise<PublishingMediaItemProgress>;
+  /** Retry stopped HD derivations, never reset or retransmit the verified source. */
+  retryItemProcessing(
+    actorId: string,
+    itemId: string,
+    command: PublishingCommandIdentity,
+    now: Date,
+  ): Promise<PublishingMediaItemProgress>;
   /**
    * Author command (U07). An item that is not ready (`awaiting_upload`,
    * `processing`, `failed`): components cancelled, reservation released, draft
@@ -665,7 +678,8 @@ export interface PublishingMediaOperations {
    * item is cancelled, purged or unknown, or (for `derive_edit`) no longer
    * ready: the job completes without work. `process_item` renders edit key
    * `base` with the identity edit and no cover crop: static `thumb`,
-   * `display`, `full`, `cover`; live the same plus `motion`. `derive_edit`
+   * `display`, `cover`; Live keeps `full` and `motion`. Static `full` and
+   * optional viewer follow as a durable nonblocking derive job. `derive_edit`
    * uses the job payload with mode `derive`. Uploaded items carry source
    * `upload`. A legacy item (a Phase 4 PNG) is only ever derived: its
    * `derive_edit` input carries source `legacy_user_media` with the user media

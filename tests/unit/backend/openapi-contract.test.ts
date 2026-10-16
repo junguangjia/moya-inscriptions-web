@@ -84,6 +84,8 @@ const publishingMethods: Record<string, string[]> = {
   "/v1/community/publishing/sessions/{sessionId}/readiness": ["post"],
   "/v1/community/publishing/items": ["post"],
   "/v1/community/publishing/items/{itemId}": ["get"],
+  "/v1/community/publishing/items/{itemId}/progress": ["get"],
+  "/v1/community/publishing/items/{itemId}/processing/retry": ["post"],
   "/v1/community/publishing/items/{itemId}/cancel": ["post"],
   "/v1/community/publishing/items/{itemId}/components/{role}/reset": ["post"],
   "/v1/community/publishing/uploads/{componentId}": ["post"],
@@ -1178,6 +1180,40 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     );
     expect(responseDescription("/v1/catalog", "500")).toContain(
       "INTERNAL_ERROR",
+    );
+  });
+
+  it("documents authenticated preview and high-resolution progress without changing the item response", () => {
+    const progress = getOperation(
+      "/v1/community/publishing/items/{itemId}/progress",
+    );
+    const retry = asObject(
+      asObject(
+        paths["/v1/community/publishing/items/{itemId}/processing/retry"],
+      ).post,
+    );
+    for (const operation of [progress, retry]) {
+      expect(operation.security).toEqual([{ session: [] }]);
+      expect(asObject(operation.responses)["200"]).toMatchObject({
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/PublishingMediaItemProgress",
+            },
+          },
+        },
+      });
+    }
+    expect(asObject(retry.requestBody)).toMatchObject({
+      required: true,
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/RequestIdentity" },
+        },
+      },
+    });
+    expect(asObject(schemas.PublishingMediaItem).properties).not.toHaveProperty(
+      "processing",
     );
   });
 

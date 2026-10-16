@@ -270,6 +270,9 @@ export const MediaItemTile = ({
               }
             />
           )}
+          {status.kind === "ready" && status.background === "failed" && (
+            <span className={styles.mutedText}>{status.message}</span>
+          )}
           {(status.kind === "failed" ||
             status.kind === "needs_choice" ||
             status.kind === "missing_local" ||
@@ -305,6 +308,19 @@ export const MediaItemTile = ({
           >
             下移
           </button>
+          {status.kind === "ready" &&
+            status.background === "failed" &&
+            status.retry && (
+              <button
+                aria-label={`重试第 ${number} 项高清图`}
+                className={styles.actionButton}
+                data-media-action="retry-high-resolution"
+                onClick={() => onRetry(item.key, status.retry!)}
+                type="button"
+              >
+                重试高清图
+              </button>
+            )}
           {status.kind === "failed" && status.retry !== null && (
             <button
               aria-label={`重试第 ${number} 项`}

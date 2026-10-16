@@ -193,6 +193,7 @@ export interface TileMenuProps {
   readonly direction?: PhotoOrderDirection | undefined;
   /** 设为首图: the photo moves to position 1. */
   readonly onMakeFirst: () => void;
+  readonly onRetryHighResolution?: (() => void) | undefined;
   /** 前移 (−1, towards 第 1 项) and 后移 (+1). */
   readonly onMove: (offset: -1 | 1) => void;
   /** 封面构图, offered on item 1 only (首图 = 封面). */
@@ -221,7 +222,7 @@ const SheetRow = ({
   onClick,
 }: {
   readonly action: string;
-  readonly icon: ReactNode;
+  readonly icon?: ReactNode;
   readonly label: string;
   readonly disabled?: boolean;
   readonly danger?: boolean;
@@ -253,6 +254,7 @@ export const TileMenu = ({
   count,
   direction = "ltr",
   onMakeFirst,
+  onRetryHighResolution,
   onMove,
   onComposeCover,
   onRemove,
@@ -266,6 +268,15 @@ export const TileMenu = ({
     title={number === 1 ? "第 1 项 · 首图" : `第 ${number} 项`}
   >
     <div className={styles.shList}>
+      {model.status.kind === "ready" &&
+        model.status.background === "failed" &&
+        onRetryHighResolution && (
+          <SheetRow
+            action="retry-high-resolution"
+            label="重试高清图"
+            onClick={onRetryHighResolution}
+          />
+        )}
       <SheetRow
         action="first"
         disabled={number === 1}

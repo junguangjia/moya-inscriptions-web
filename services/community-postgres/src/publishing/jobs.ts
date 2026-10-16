@@ -75,6 +75,7 @@ interface JobRow {
   run_after: Date;
   lease_owner: string;
   lease_expires_at: Date;
+  background_priority: number;
 }
 
 const claimOf = (row: JobRow): PublishingJobClaim => ({
@@ -209,6 +210,55 @@ export const releaseReservations = async (
     );
 };
 
+/** Converts a static preview's reserved allowance into committed bytes. */
+export const spendReservations = async (
+  db: PublishingDb,
+  itemId: string,
+  bytes: number,
+  now: Date,
+): Promise<void> => {
+  if (!Number.isSafeInteger(bytes) || bytes < 0)
+    throw new TypeError("Invalid reservation spend");
+  let remaining = bytes;
+  const rows = (
+    await db.query<{ id: string; owner_id: string; reserved_bytes: string }>(
+      "SELECT id,owner_id,reserved_bytes FROM community.media_components WHERE item_id=$1 AND reserved_bytes>0 ORDER BY id FOR UPDATE",
+      [itemId],
+    )
+  ).rows;
+  for (const row of rows) {
+    const spent = Math.min(remaining, safeInteger(row.reserved_bytes));
+    if (spent === 0) continue;
+    await db.query(
+      "UPDATE community.media_components SET reserved_bytes=reserved_bytes-$2::bigint,updated_at=$3::timestamptz WHERE id=$1",
+      [row.id, spent, nowParam(now)],
+    );
+    await adjustCapacity(db, row.owner_id, { reserved: -spent }, now);
+    remaining -= spent;
+  }
+};
+
+/** The initial static HD continuation owns the remaining upload allowance. */
+export const isBaseHighResolutionJob = (
+  job:
+    | {
+        readonly kind: string;
+        readonly payload?: {
+          readonly editKey: string;
+          readonly variants: readonly string[];
+        } | null;
+      }
+    | undefined,
+): boolean =>
+  job?.kind === "derive_edit" &&
+  job.payload?.editKey === "base" &&
+  Array.isArray(job.payload.variants) &&
+  job.payload.variants.length === 1 &&
+  job.payload.variants[0] === "full";
+
+const reservedJobSql =
+  "(kind='process_item' OR COALESCE((kind='derive_edit' AND payload->>'editKey'='base' AND payload->'variants'='[\"full\"]'::jsonb),FALSE))";
+
 /**
  * Fails still-processing items whose `process_item` job ended without a
  * worker observing it (lease expiry without attempts left, operator abandon):
@@ -268,7 +318,19 @@ export const claimJobs = async (
          SELECT id FROM community.publishing_jobs
          WHERE state='queued' AND run_after <= $1::timestamptz
            AND ($5::text[] IS NULL OR kind = ANY($5::text[]))
-         ORDER BY run_after, id
+           -- Give later sources in the same editor time to join the preview
+           -- queue before a long HD job starts. A stalled sibling can defer
+           -- HD for at most 30 seconds; running jobs are never preempted.
+           AND (kind<>'derive_edit' OR payload->'variants'<>'["full"]'::jsonb
+             OR created_at <= $1::timestamptz - interval '30 seconds'
+             OR NOT EXISTS (
+               SELECT 1 FROM community.media_item_refs own
+               JOIN community.media_item_refs sibling ON sibling.holder_kind=own.holder_kind AND sibling.holder_id=own.holder_id
+               JOIN community.media_items pending ON pending.id=sibling.item_id
+               WHERE own.item_id=community.publishing_jobs.subject_id AND own.holder_kind IN ('session','draft')
+                 AND sibling.item_id<>own.item_id AND pending.state IN ('awaiting_upload','processing')
+             ))
+         ORDER BY CASE WHEN kind='derive_edit' AND payload->'variants'='["full"]'::jsonb THEN 1 ELSE 0 END, run_after, id
          FOR UPDATE SKIP LOCKED
          LIMIT $2
        )
@@ -277,7 +339,8 @@ export const claimJobs = async (
            lease_expires_at=$1::timestamptz + $4::double precision * interval '1 millisecond',
            updated_at=$1::timestamptz, finished_at=NULL
        FROM next WHERE j.id=next.id
-       RETURNING j.id,j.kind,j.subject_id,j.payload,j.attempts,j.max_attempts,j.run_after,j.lease_owner,j.lease_expires_at`,
+       RETURNING j.id,j.kind,j.subject_id,j.payload,j.attempts,j.max_attempts,j.run_after,j.lease_owner,j.lease_expires_at,
+         CASE WHEN j.kind='derive_edit' AND j.payload->'variants'='["full"]'::jsonb THEN 1 ELSE 0 END AS background_priority`,
       [
         at,
         options.limit,
@@ -290,6 +353,7 @@ export const claimJobs = async (
   return claimed.rows
     .sort(
       (left, right) =>
+        left.background_priority - right.background_priority ||
         left.run_after.getTime() - right.run_after.getTime() ||
         (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     )
@@ -397,12 +461,19 @@ export const failJob = async (
     // upload commits, worker results, lease expiry and abandon take; kind and
     // subject never change), so a final failure can fail the item here.
     const subject = (
-      await db.query<{ kind: PublishingJobKind; subject_id: string }>(
-        "SELECT kind,subject_id FROM community.publishing_jobs WHERE id=$1",
+      await db.query<{
+        kind: PublishingJobKind;
+        subject_id: string;
+        payload: PublishingDeriveEditPayload | null;
+      }>(
+        "SELECT kind,subject_id,payload FROM community.publishing_jobs WHERE id=$1",
         [lease.id],
       )
     ).rows[0];
-    if (subject?.kind === "process_item")
+    if (
+      subject !== undefined &&
+      (subject.kind === "process_item" || isBaseHighResolutionJob(subject))
+    )
       await db.query(
         "SELECT id FROM community.media_items WHERE id=$1 FOR UPDATE",
         [subject.subject_id],
@@ -440,6 +511,8 @@ export const failJob = async (
     // (a crash before the worker's own markItemFailed leaves nothing stuck).
     if (subject?.kind === "process_item")
       await failProcessingItems(db, [subject.subject_id], now);
+    else if (isBaseHighResolutionJob(subject))
+      await releaseReservations(db, [subject!.subject_id], now);
     return "failed";
   });
 };
@@ -464,7 +537,7 @@ export const requeueExpiredJobs = async (
         `SELECT DISTINCT subject_id FROM (
            SELECT subject_id FROM community.publishing_jobs
            WHERE state='running' AND lease_expires_at < $1::timestamptz
-             AND kind='process_item' AND attempts >= max_attempts
+             AND ${reservedJobSql} AND attempts >= max_attempts
            ORDER BY lease_expires_at, id
            LIMIT $2
          ) due`,
@@ -481,11 +554,12 @@ export const requeueExpiredJobs = async (
       kind: PublishingJobKind;
       subject_id: string;
       state: string;
+      payload: PublishingDeriveEditPayload | null;
     }>(
       `WITH expired AS (
          SELECT id FROM community.publishing_jobs
          WHERE state='running' AND lease_expires_at < $1::timestamptz
-           AND (kind <> 'process_item' OR attempts < max_attempts OR subject_id = ANY($3::text[]))
+           AND (NOT ${reservedJobSql} OR attempts < max_attempts OR subject_id = ANY($3::text[]))
          ORDER BY lease_expires_at, id
          FOR UPDATE SKIP LOCKED
          LIMIT $2
@@ -497,10 +571,23 @@ export const requeueExpiredJobs = async (
            last_error_code='lease_expired', lease_owner=NULL, lease_expires_at=NULL,
            updated_at=$1::timestamptz
        FROM expired WHERE j.id=expired.id
-       RETURNING j.kind, j.subject_id, j.state`,
+       RETURNING j.kind, j.subject_id, j.state, j.payload`,
       [at, limit, locked],
     );
-    // No worker observes these failures: their items fail here (P2, B3).
+    // Terminal base-HD work releases its residual allowance atomically; ready
+    // previews stay ready. Lock every component before taking capacity locks.
+    await releaseReservations(
+      db,
+      requeued.rows
+        .filter(
+          (row) =>
+            row.state === "failed" &&
+            (row.kind === "process_item" || isBaseHighResolutionJob(row)),
+        )
+        .map((row) => row.subject_id),
+      now,
+    );
+    // No worker observes these failures: processing items fail here (P2, B3).
     await failProcessingItems(
       db,
       requeued.rows

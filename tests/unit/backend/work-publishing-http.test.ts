@@ -2820,3 +2820,74 @@ describe("work publishing transfers in the service", () => {
     ).toThrow("idleTimeoutMs");
   });
 });
+
+describe("preview-first author progress compatibility", () => {
+  it("keeps old item reads unchanged and exposes progress only through its authenticated endpoint", async () => {
+    const old = mediaItem(1024, "processing");
+    const progress = {
+      item: old,
+      processing: {
+        previewStatus: "processing",
+        highResolutionStatus: "waiting",
+        completedRenditions: 0,
+      },
+    };
+    const fake = fakePort({
+      readItem: () => old,
+      readItemProgress: (owner: string) => {
+        if (owner !== actor) throw new CommunityNotFoundError();
+        return progress;
+      },
+      retryItemProcessing: () => progress,
+    });
+    const { base, signIn } = await start({ port: fake.port });
+    const token = await signIn();
+    const otherToken = await signIn(fixtureUsers.second.handle);
+    const endpoint = `${base}/v1/community/publishing/items/${itemId}`;
+    await expectApiError(
+      await fetch(`${endpoint}/progress`),
+      401,
+      "UNAUTHENTICATED",
+    );
+    const legacy = await fetch(endpoint, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(publishingMediaItemSchema.parse(await legacy.json())).toEqual(old);
+    const reply = await fetch(`${endpoint}/progress`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(reply.status).toBe(200);
+    expect(reply.headers.get("cache-control")).toBe("private, no-store");
+    expect(await reply.json()).toEqual(progress);
+    await expectApiError(
+      await fetch(`${endpoint}/progress?ignored=1`, {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      422,
+      "INVALID_INPUT",
+    );
+    await expectApiError(
+      await fetch(`${endpoint}/progress`, {
+        headers: { authorization: `Bearer ${otherToken}` },
+      }),
+      404,
+      "ITEM_NOT_FOUND",
+    );
+    await expectApiError(
+      await fetch(
+        `${endpoint}/processing/retry`,
+        json(token, { requestId: randomUUID() }, "POST", null),
+      ),
+      401,
+      "UNAUTHENTICATED",
+    );
+    const retry = await fetch(
+      `${endpoint}/processing/retry`,
+      json(token, { requestId: randomUUID() }),
+    );
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual(progress);
+    expect(fake.named("registerItem")).toHaveLength(0);
+    expect(fake.named("resetComponent")).toHaveLength(0);
+  });
+});
