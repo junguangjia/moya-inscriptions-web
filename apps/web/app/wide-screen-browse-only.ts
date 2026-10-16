@@ -28,13 +28,27 @@ export const wideScreenBrowseOnlyHint = (
     ? { sessionHint: access.token !== undefined }
     : undefined;
 
+/** How long sign-in waits for the access answer before it shows the form. */
+export const AUTH_PAGE_ACCESS_WAIT_MS = 1_500;
+
 /**
  * Whether /login and /register send a wide screen back to Home. Only for the
  * public product: a closed beta, a refused account or an unknown access state
- * keeps sign-in reachable, and nothing is asked of the Backend when off.
+ * keeps sign-in reachable, and nothing is asked of the Backend when off. A slow
+ * answer also keeps the form rather than delaying it.
  */
-export const readAuthPageWideScreenRedirect = async (): Promise<boolean> => {
+export const readAuthPageWideScreenRedirect = async (
+  waitMs: number = AUTH_PAGE_ACCESS_WAIT_MS,
+): Promise<boolean> => {
   if (!isWideScreenBrowseOnlyEnabled()) return false;
-  const access = await readVisitorAccess();
-  return access.state === "granted" && !access.closedBeta;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), waitMs);
+  });
+  try {
+    const access = await Promise.race([readVisitorAccess(), late]);
+    return access !== null && access.state === "granted" && !access.closedBeta;
+  } finally {
+    clearTimeout(timer);
+  }
 };

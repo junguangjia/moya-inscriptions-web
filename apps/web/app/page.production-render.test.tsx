@@ -371,4 +371,114 @@ describe("Formal root on a wide screen (pc-browse-only-v1)", () => {
       expect(shown(container, "[data-search-trigger]")).not.toEqual([]);
     },
   );
+
+  it("spends a ?topic= link refused at 1280px, so 讨论 at 800px does not open it", async () => {
+    readFormalRequestContextMock.mockResolvedValue({ initialPlatform: "pc" });
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const thread = {
+      id: threadId,
+      title: "Runtime thread",
+      description: "Published thread from the HTTP boundary",
+      tags: [],
+      status: "open",
+      heat: 0,
+      postCount: 0,
+      latestActivityAt: null,
+      createdAt: "2026-10-02T00:00:00.000Z",
+      unread: null,
+    };
+    // The Thread is readable, so only the spent link keeps it closed.
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input).split("?")[0];
+      if (path === `/api/community/threads/${threadId}`)
+        return Response.json(thread);
+      if (path === `/api/community/threads/${threadId}/posts`)
+        return Response.json({
+          items: [],
+          total: 0,
+          page: 1,
+          pageSize: 20,
+          totalPages: 0,
+        });
+      if (path === "/api/community/threads")
+        return Response.json({
+          items: [thread],
+          total: 1,
+          page: 1,
+          pageSize: 22,
+          totalPages: 1,
+          anchor: "2026-10-02T00:00:00.000Z",
+        });
+      return new Response(null, { status: 401 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", `/?topic=${threadId}`);
+    for (const [name, value] of Object.entries({
+      innerWidth: 1_280,
+      innerHeight: 800,
+      visualViewport: null,
+      matchMedia: () =>
+        ({
+          addEventListener: () => undefined,
+          matches: false,
+          removeEventListener: () => undefined,
+        }) as unknown as MediaQueryList,
+      scrollTo: () => undefined,
+      requestAnimationFrame: (callback: FrameRequestCallback) =>
+        window.setTimeout(() => callback(performance.now()), 0),
+      cancelAnimationFrame: (id: number) => window.clearTimeout(id),
+    }))
+      Object.defineProperty(window, name, { configurable: true, value });
+    const frames = async () => {
+      for (let frame = 0; frame < 4; frame += 1)
+        await act(() => vi.advanceTimersByTimeAsync(20));
+    };
+
+    const page = await FormalPage({
+      searchParams: Promise.resolve({ topic: threadId }),
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    mountedRoots.push(root);
+    act(() => root.render(page));
+    await frames();
+
+    const shell = container.querySelector<HTMLElement>("[data-product-shell]");
+    expect(browseOnly(container)).toBe("true");
+    expect(shell?.dataset.activeDestination).toBe("home");
+    expect(shell?.dataset.topicOpen).toBe("false");
+    expect(container.querySelector("[data-thread-detail]")).toBeNull();
+    expect(window.location.search).not.toContain("topic=");
+
+    act(() => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 800,
+      });
+      window.dispatchEvent(new Event("resize"));
+    });
+    await frames();
+    expect(browseOnly(container)).toBe("false");
+    expect(navigationHidden(container)).toBe(false);
+
+    const discussion = container.querySelector<HTMLButtonElement>(
+      '[data-primary-navigation-destination="discussion"]',
+    );
+    expect(discussion).not.toBeNull();
+    act(() => discussion!.click());
+    await frames();
+
+    expect(shell?.dataset.activeDestination).toBe("discussion");
+    expect(shell?.dataset.topicOpen).toBe("false");
+    expect(container.querySelector("[data-thread-detail]")).toBeNull();
+  });
 });

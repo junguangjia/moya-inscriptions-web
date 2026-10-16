@@ -112,7 +112,7 @@ describe("wide-screen auth redirect script", () => {
         expect(root.dataset.authRedirect).toBe("home");
       } else {
         expect(replace).not.toHaveBeenCalled();
-        expect(root.dataset.authRedirect).toBeUndefined();
+        expect(root.dataset.authRedirect).toBe("none");
       }
     },
   );
@@ -161,7 +161,7 @@ describe("WideScreenAuthRedirect", () => {
       expect(recoverable).not.toHaveBeenCalled();
       expect(errors).not.toHaveBeenCalled();
       expect(replace).toHaveBeenCalledTimes(wide ? 1 : 0);
-      expect(root.dataset.authRedirect).toBe(wide ? "home" : undefined);
+      expect(root.dataset.authRedirect).toBe(wide ? "home" : "none");
       // After hydration the spent script leaves the document.
       expect(container.querySelector("script")).toBeNull();
     },
@@ -185,7 +185,7 @@ describe("WideScreenAuthRedirect", () => {
         expect(root.dataset.authRedirect).toBe("home");
       } else {
         expect(replace).not.toHaveBeenCalled();
-        expect(root.dataset.authRedirect).toBeUndefined();
+        expect(root.dataset.authRedirect).toBe("none");
       }
     },
   );
@@ -215,6 +215,49 @@ describe("WideScreenAuthRedirect", () => {
     });
 
     expect(replace).not.toHaveBeenCalled();
-    expect(root.dataset.authRedirect).toBeUndefined();
+    expect(root.dataset.authRedirect).toBe("none");
+  });
+
+  it("keeps the first decision for a later 登录/注册 switch in the same document", async () => {
+    useDevice({ userAgent: desktop, width: 800 });
+    reactRoot = createRoot(container);
+    await act(async () => reactRoot!.render(<WideScreenAuthRedirect />));
+    await act(async () => reactRoot!.unmount());
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1280,
+    });
+    reactRoot = createRoot(container);
+    await act(async () =>
+      reactRoot!.render(<WideScreenAuthRedirect key="register" />),
+    );
+
+    expect(replace).not.toHaveBeenCalled();
+    expect(root.dataset.authRedirect).toBe("none");
+  });
+});
+
+describe("wide-screen auth redirect after a back-forward cache restore", () => {
+  it("decides again when the restored page is now wide", () => {
+    useDevice({ userAgent: desktop, width: 800 });
+    window.eval(PRODUCT_BOOT_SCRIPT);
+    window.eval(WIDE_SCREEN_AUTH_REDIRECT_SCRIPT);
+    expect(replace).not.toHaveBeenCalled();
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1280,
+    });
+    root.dataset.platform = "pc";
+    window.dispatchEvent(
+      new PageTransitionEvent("pageshow", { persisted: false }),
+    );
+    expect(replace).not.toHaveBeenCalled();
+    window.dispatchEvent(
+      new PageTransitionEvent("pageshow", { persisted: true }),
+    );
+    expect(replace).toHaveBeenCalledWith("/");
+    expect(root.dataset.authRedirect).toBe("home");
   });
 });

@@ -434,7 +434,11 @@ const WorkAuthor = ({
           : null;
   const identity = (
     <>
-      <span className={detailStyles.workAuthorAvatar}>
+      {/* The plain line reads as the name alone, without the initial. */}
+      <span
+        aria-hidden={plain || undefined}
+        className={detailStyles.workAuthorAvatar}
+      >
         {src ? (
           <img
             src={src}

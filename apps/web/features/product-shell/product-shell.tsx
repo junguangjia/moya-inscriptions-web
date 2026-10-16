@@ -175,13 +175,15 @@ const browseOnlyHistoryEntry = (state: ProductHistoryState) => {
   delete entry.yoyiPreviewNavigation;
   return entry;
 };
-// A browse-only primary URL also drops the 讨论 and 消息 deep links.
-const browseOnlyLocation = (location: Location) => {
-  const url = new URL(primaryLocation(location), location.origin);
+// Browse-only URLs drop the 讨论 and 消息 deep links it ignores.
+const withoutBrowseOnlyLinks = (href: string, origin: string) => {
+  const url = new URL(href, origin);
   url.searchParams.delete("topic");
   url.searchParams.delete("notifications");
-  return `${url.pathname}${url.search}`;
+  return `${url.pathname}${url.search}${url.hash}`;
 };
+const browseOnlyLocation = (location: Location) =>
+  withoutBrowseOnlyLinks(primaryLocation(location), location.origin);
 const rememberHistoryOffset = (top: number) => {
   const id = window.history.state?.__artvennEntry;
   if (typeof id !== "string") return;
@@ -266,6 +268,8 @@ export interface ProductShellContextValue {
    * navigation, comments, actions, profiles or editor. False without a policy.
    */
   readonly browseOnly: boolean;
+  /** Whether browse-only applies right now, read live (not from render state). */
+  readonly isBrowseOnlyEnforced: () => boolean;
   readonly readActiveScrollTop: () => number;
   readonly registerActiveHomeScrollElement: (
     element: HTMLElement,
@@ -2173,6 +2177,12 @@ export const ProductShell = ({
           )
         : restoredState;
     const browseOnlyAtMount = isBrowseOnlyEnforced();
+    if (browseOnlyAtMount) {
+      const href = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const allowed = withoutBrowseOnlyLinks(href, window.location.origin);
+      if (allowed !== href)
+        window.history.replaceState(window.history.state, "", allowed);
+    }
     const unrestrictedState =
       storedState === null ||
       (storedState.kind === "editor" &&
@@ -2492,8 +2502,14 @@ export const ProductShell = ({
           reloadDetail = true;
         }
       }
-      // Browse-only keeps only Home and its content (pc-browse-only-v1).
+      // Browse-only keeps only Home and its content (pc-browse-only-v1),
+      // and no entry it returns to keeps a 讨论 or 消息 link.
       if (isBrowseOnlyEnforced()) {
+        const href = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        const allowedHref = withoutBrowseOnlyLinks(
+          href,
+          window.location.origin,
+        );
         const allowed =
           state === null
             ? primaryHistoryState("home")
@@ -2505,9 +2521,10 @@ export const ProductShell = ({
             "",
             allowed.kind === "primary"
               ? browseOnlyLocation(window.location)
-              : undefined,
+              : allowedHref,
           );
-        }
+        } else if (allowedHref !== href)
+          window.history.replaceState(window.history.state, "", allowedHref);
       }
       const openEditorState = editorRef.current;
       const sameEditor =
@@ -2719,7 +2736,10 @@ export const ProductShell = ({
         : covered
           ? null
           : primaryHistoryState("home", scrollPositionsRef.current.home);
-    if (!overlay && !leaving && next === current) return;
+    const href = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const staleLinks =
+      withoutBrowseOnlyLinks(href, window.location.origin) !== href;
+    if (!overlay && !leaving && next === current && !staleLinks) return;
     if (editorRef.current !== null) setEditorVisibility(null);
     setProfileVisibility(null);
     setTopicVisibility(null);
@@ -2737,7 +2757,7 @@ export const ProductShell = ({
         "",
         next.kind === "primary"
           ? browseOnlyLocation(window.location)
-          : undefined,
+          : withoutBrowseOnlyLinks(href, window.location.origin),
       );
     if (next?.kind === "primary" && !covered)
       restoreScroll("home", platformRef.current);
@@ -2868,6 +2888,7 @@ export const ProductShell = ({
     orientation,
     platform,
     browseOnly,
+    isBrowseOnlyEnforced,
     readActiveScrollTop,
     registerActiveHomeScrollElement,
     registerActiveDiscussionScrollElement,
@@ -2919,7 +2940,9 @@ export const ProductShell = ({
           >
             <PrimaryNavigationPager
               activeDestination={activeDestination}
-              user={user}
+              // Browse-only has no 用户: unmounting it closes any dialog it
+              // owns, which would otherwise stay modal over Home.
+              user={browseOnlyEnforced ? null : user}
               home={home}
               discussion={discussion}
               navigationAction={browseOnly ? undefined : navigationAction}

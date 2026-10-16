@@ -11,18 +11,25 @@ import {
 /**
  * Sends a wide screen on /login or /register back to Home before the first
  * paint (pc-browse-only-v1). It runs in the body after the head boot script,
- * which has already set the iPadOS-aware `data-platform`; the marker hides the
- * body until the replacement page loads.
+ * which has already set the iPadOS-aware `data-platform`. The marker records
+ * the decision once per document ("home" also hides the body until the
+ * replacement page loads); a page restored from the back-forward cache decides
+ * again.
  */
 export const WIDE_SCREEN_AUTH_REDIRECT_SCRIPT = `(() => {
   const root = document.documentElement;
-  const platform = root.dataset.platform;
-  const wide =
-    platform === "pc" ||
-    (platform === "tablet" && window.innerWidth >= ${WIDE_LAYOUT_MINIMUM_WIDTH});
-  if (!wide) return;
-  root.dataset.authRedirect = "home";
-  location.replace("/");
+  const decide = () => {
+    const platform = root.dataset.platform;
+    const wide =
+      platform === "pc" ||
+      (platform === "tablet" && window.innerWidth >= ${WIDE_LAYOUT_MINIMUM_WIDTH});
+    root.dataset.authRedirect = wide ? "home" : "none";
+    if (wide) location.replace("/");
+  };
+  decide();
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) decide();
+  });
 })();`;
 
 const subscribe = () => () => undefined;
@@ -42,12 +49,14 @@ export const WideScreenAuthRedirect = () => {
 
   useLayoutEffect(() => {
     const root = document.documentElement;
+    // The first check in a document decides, so switching between 登录 and
+    // 注册 never leaves a form that was allowed when it loaded.
     if (root.dataset.authRedirect !== undefined) return;
     const width = window.innerWidth;
     const platform = resolveRuntimePresentationPlatform(navigator, width);
-    if (!isWideLayout(platform, width)) return;
-    root.dataset.authRedirect = "home";
-    window.location.replace("/");
+    const wide = isWideLayout(platform, width);
+    root.dataset.authRedirect = wide ? "home" : "none";
+    if (wide) window.location.replace("/");
   }, []);
 
   return serverRendered ? (

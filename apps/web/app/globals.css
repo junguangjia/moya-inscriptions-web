@@ -18,7 +18,7 @@ body {
 
 /* A wide screen leaving /login or /register for Home paints nothing of the
    auth page meanwhile (pc-browse-only-v1). */
-html[data-auth-redirect] body {
+html[data-auth-redirect="home"] body {
   visibility: hidden;
 }
 

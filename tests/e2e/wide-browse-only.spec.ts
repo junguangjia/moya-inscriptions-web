@@ -182,8 +182,10 @@ test.describe("anonymous visitor", () => {
     expect(response?.status()).toBe(200);
     await expect(page.locator('[data-auth-mode="sign-in"]')).toBeVisible();
     await expect(page).toHaveURL((url) => url.pathname === "/login");
-    await expect(page.locator("html")).not.toHaveAttribute(
+    // The document decided once to keep the form.
+    await expect(page.locator("html")).toHaveAttribute(
       "data-auth-redirect",
+      "none",
     );
   });
 

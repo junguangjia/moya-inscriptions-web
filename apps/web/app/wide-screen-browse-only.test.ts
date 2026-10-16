@@ -120,6 +120,18 @@ describe("wide-screen redirect of /login and /register", () => {
     },
   );
 
+  it("keeps the form when the access answer is slower than the wait", async () => {
+    vi.useFakeTimers();
+    try {
+      readVisitorAccessMock.mockReturnValue(new Promise(() => undefined));
+      const decision = readAuthPageWideScreenRedirect(1_500);
+      await vi.advanceTimersByTimeAsync(1_500);
+      await expect(decision).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["off", "false", "0"])(
     "asks the Backend nothing when switched %s",
     async (value) => {

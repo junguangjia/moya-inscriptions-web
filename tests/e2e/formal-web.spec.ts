@@ -480,7 +480,9 @@ test("Formal query Detail and Viewer preserve Back, Forward, and reload", async 
       .locator('img[alt="运行时多图碑刻局部"]'),
   ).not.toHaveAttribute("src");
 
-  await detail.locator("[data-detail-main-image]").click();
+  const queryMainImage = detail.locator("[data-detail-main-image]");
+  await expect(queryMainImage).toBeVisible();
+  await queryMainImage.click();
   await expect(viewer).toBeVisible();
   await expect(page).toHaveURL(/image=runtime-inscription-front/u);
 

@@ -3264,6 +3264,14 @@ describe("ProductShell", () => {
       usePreviewNavigationHistory({ depth: 1, onBack: () => undefined });
       return null;
     };
+    // A 用户 page that owns a modal, as its settings and editors do.
+    const UserPageWithDialog = () => (
+      <div data-user-probe="">
+        <dialog data-user-dialog="" open>
+          设置
+        </dialog>
+      </div>
+    );
     // Like a ?topic= link: Discussion asks for itself before the shell syncs.
     const DiscussionRequest = () => {
       const { navigatePrimary } = useProductShell();
@@ -3277,11 +3285,13 @@ describe("ProductShell", () => {
       policy = anonymous,
       initialPlatform = "pc",
       home = null,
+      user = <p>user</p>,
       topicContent = null,
     }: {
       readonly policy?: BrowseOnlyPolicy | null;
       readonly initialPlatform?: PresentationPlatform;
       readonly home?: ReactNode;
+      readonly user?: ReactNode;
       readonly topicContent?: ReactNode;
     } = {}) => (
       <ProductShell
@@ -3290,7 +3300,7 @@ describe("ProductShell", () => {
         articleEditorEnabled
         home={home}
         discussion={<p>discussion</p>}
-        user={<p>user</p>}
+        user={user}
         navigationAction={
           <button aria-label="停靠操作" type="button">
             Action
@@ -3917,5 +3927,218 @@ describe("ProductShell", () => {
         );
       },
     );
+
+    it("unmounts 用户 and the dialog it owns when the window widens, and mounts it again when it narrows", async () => {
+      window.history.replaceState(null, "", "/");
+      const { container } = mountShell({
+        initialPlatform: "phone",
+        user: <UserPageWithDialog />,
+      });
+      await act(async () => vi.runAllTimers());
+      act(() => observedProductShell!.navigatePrimary("user"));
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.activeDestination).toBe("user");
+      expect(container.querySelector("[data-user-probe]")).not.toBeNull();
+      expect(
+        container.querySelector("dialog[data-user-dialog][open]"),
+      ).not.toBeNull();
+      const history = watchHistory();
+
+      resizeTo(1280);
+      await act(async () => vi.runAllTimers());
+
+      expect(observedProductShell?.activeDestination).toBe("home");
+      expect(container.querySelector("[data-user-probe]")).toBeNull();
+      // Nothing it owned stays modal over Home.
+      expect(document.querySelector("dialog[open]")).toBeNull();
+      expect(history.back).not.toHaveBeenCalled();
+      expect(history.go).not.toHaveBeenCalled();
+
+      resizeTo(390);
+      await act(async () => vi.runAllTimers());
+      expectBrowseOnly(container, false);
+      act(() => observedProductShell!.navigatePrimary("user"));
+      await act(async () => vi.runAllTimers());
+
+      expect(observedProductShell?.activeDestination).toBe("user");
+      expect(container.querySelector("[data-user-probe]")).not.toBeNull();
+      expect(
+        container.querySelector("dialog[data-user-dialog][open]"),
+      ).not.toBeNull();
+    });
+
+    it("drops a 消息 link kept while the session was pending once it proves anonymous", async () => {
+      setWidth(1280);
+      window.history.replaceState(null, "", "/?notifications=comments");
+      const { container, render } = mountShell({ policy: { session: null } });
+      await act(async () => vi.runAllTimers());
+      // Pending is not enforced: the link waits for the session.
+      expect(address()).toBe("/?notifications=comments");
+      const history = watchHistory();
+
+      render(anonymous);
+      await act(async () => vi.runAllTimers());
+
+      expect(window.location.search).not.toContain("notifications");
+      expect(address()).toBe("/");
+      expectBrowseOnly(container, true);
+      expectHomeOnly(container);
+      expectNoHistoryWalk(history);
+    });
+
+    it("drops a 消息 link from a Home entry that Back returns to once browse-only applies", async () => {
+      setWidth(1280);
+      window.history.replaceState(
+        null,
+        "",
+        "/?notifications=comments&catalogId=catalog-one",
+      );
+      const { render } = mountShell({ policy: { session: null } });
+      await act(async () => vi.runAllTimers());
+      // Pending keeps the link on both the Home entry and the Detail above it.
+      expect(address()).toContain("notifications=comments");
+
+      render(anonymous);
+      await act(async () => vi.runAllTimers());
+      expect(window.location.search).not.toContain("notifications");
+
+      // Back to the Home entry beneath the Detail, which still has the link.
+      const home = sameDocument(primaryHistoryState("home"));
+      act(() => {
+        window.history.replaceState(home, "", "/?notifications=comments");
+        window.dispatchEvent(new PopStateEvent("popstate", { state: home }));
+      });
+      await act(async () => vi.runAllTimers());
+
+      expect(address()).toBe("/");
+      expect(window.history.state).toMatchObject({
+        kind: "primary",
+        destination: "home",
+      });
+    });
+
+    it("opens a catalog's Detail from a link that also names a 讨论 topic, with topic= in neither entry", async () => {
+      setWidth(1280);
+      const topicId = `thread-${"d".repeat(32)}`;
+      window.history.replaceState(
+        null,
+        "",
+        `/?topic=${topicId}&catalogId=catalog-one`,
+      );
+      // The entries this document writes, bottom to top, as the browser keeps them.
+      const nativePush = History.prototype.pushState.bind(window.history);
+      const nativeReplace = History.prototype.replaceState.bind(window.history);
+      const entries = [{ state: window.history.state, url: address() }];
+      const history = watchHistory();
+      history.pushState.mockImplementation((state, unused, url) => {
+        nativePush(state, unused, url);
+        entries.push({ state: window.history.state, url: address() });
+      });
+      const replaceState = vi
+        .spyOn(window.history, "replaceState")
+        .mockImplementation((state, unused, url) => {
+          nativeReplace(state, unused, url);
+          entries[entries.length - 1] = {
+            state: window.history.state,
+            url: address(),
+          };
+        });
+      replaceState.mockClear();
+      restores.push(() => replaceState.mockRestore());
+
+      const { container } = mountShell();
+      await act(async () => vi.runAllTimers());
+
+      expect(
+        container.querySelector<HTMLElement>("[data-product-shell]")?.dataset
+          .detailOpen,
+      ).toBe("true");
+      expect(observedProductShell?.activeContent).toEqual({
+        type: "catalog",
+        id: "catalog-one",
+      });
+      expect(observedProductShell?.activeTopicId).toBeNull();
+      expect(observedProductShell?.activeDestination).toBe("home");
+      expect(entries.map(({ url }) => url)).toEqual([
+        "/",
+        "/?catalogId=catalog-one#detail",
+      ]);
+      expect(parseProductHistoryState(entries[0]!.state)).toEqual(
+        primaryHistoryState("home", 0, undefined, "catalog-one"),
+      );
+      expect(parseProductHistoryState(entries[1]!.state)).toEqual(
+        detailHistoryState({ type: "catalog", id: "catalog-one" }, "home", 0),
+      );
+      for (const [, , url] of [
+        ...replaceState.mock.calls,
+        ...history.pushState.mock.calls,
+      ])
+        expect(String(url ?? "")).not.toContain("topic=");
+      expect(address()).toBe("/?catalogId=catalog-one#detail");
+      expect(history.back).not.toHaveBeenCalled();
+      expect(history.go).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        name: "1280px without an account",
+        width: 1280,
+        seed: "pc",
+        policy: anonymous,
+        expected: true,
+      },
+      {
+        name: "390px without an account",
+        width: 390,
+        seed: "phone",
+        policy: anonymous,
+        expected: false,
+      },
+      {
+        name: "1280px with a pending session",
+        width: 1280,
+        seed: "pc",
+        policy: { session: null },
+        expected: false,
+      },
+      {
+        name: "1280px with a signed-in session",
+        width: 1280,
+        seed: "pc",
+        policy: { session: true },
+        expected: false,
+      },
+      {
+        name: "1280px without a policy",
+        width: 1280,
+        seed: "pc",
+        policy: null,
+        expected: false,
+      },
+    ] as const)(
+      "isBrowseOnlyEnforced() is $expected at $name",
+      async ({ width, seed, policy, expected }) => {
+        setWidth(width);
+        window.history.replaceState(null, "", "/");
+        mountShell({ initialPlatform: seed, policy });
+        await act(async () => vi.runAllTimers());
+
+        expect(observedProductShell?.isBrowseOnlyEnforced()).toBe(expected);
+      },
+    );
+
+    it("reads isBrowseOnlyEnforced() live, before the shell has seen a resize", async () => {
+      setWidth(1280);
+      window.history.replaceState(null, "", "/");
+      mountShell();
+      await act(async () => vi.runAllTimers());
+      const enforced = observedProductShell!.isBrowseOnlyEnforced;
+      expect(enforced()).toBe(true);
+
+      setWidth(390);
+      expect(enforced()).toBe(false);
+      setWidth(1280);
+      expect(enforced()).toBe(true);
+    });
   });
 });

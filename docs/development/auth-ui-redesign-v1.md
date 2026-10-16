@@ -191,10 +191,10 @@ wide from `/login` and `/register` to `/` before paint, and hides the dock from
 visitors without an account. The desktop project therefore signs in at 800px,
 and each journey (this entry and `AUTH_UI_JOURNEY=password`) asserts the 1280px
 redirect to `/` once. To sign in by hand on a wide desktop, use a window
-narrower than 896px, or start the Development Web directly with
-`MOYA_WIDE_SCREEN_BROWSE_ONLY=off pnpm --filter web dev` (Turbo's strict
-environment does not pass the variable through `pnpm dev`); the redirect probe
-then fails by design.
+narrower than 896px, or start the Development Web with
+`MOYA_WIDE_SCREEN_BROWSE_ONLY=off pnpm dev` (`pnpm dev:all` runs Turbo, whose
+strict environment does not pass the variable through); the redirect probe then
+fails by design.
 
 The entry rejects non-loopback targets, runs one worker without retries, and has
 a shared 299-second deadline. It exercises Chromium and 390/320px WebKit. It
