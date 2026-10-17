@@ -495,12 +495,17 @@ export interface EditorialReceipt {
   deduplicationKey: string;
   requestFingerprint: string;
   actor: number | User;
-  operation: "save-draft" | "publish-approved";
+  operation: "save-draft" | "publish-approved" | "save-curation-metadata";
   status: "completed" | "rejected";
   catalog?: (number | null) | Catalog;
   revision?: number | null;
   fingerprint?: string | null;
   errorCode?: string | null;
+  metadataJson?: string | null;
+  metadataSha256?: string | null;
+  metadataCatalogId?: string | null;
+  previousMetadataSha256?: string | null;
+  metadataVersion?: number | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1095,6 +1100,11 @@ export interface EditorialReceiptsSelect<T extends boolean = true> {
   revision?: T;
   fingerprint?: T;
   errorCode?: T;
+  metadataJson?: T;
+  metadataSha256?: T;
+  metadataCatalogId?: T;
+  previousMetadataSha256?: T;
+  metadataVersion?: T;
   updatedAt?: T;
   createdAt?: T;
 }

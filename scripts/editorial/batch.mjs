@@ -1,7 +1,16 @@
 /** Controlled API client: no content, endpoint, credential or raw error output. */
 import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
-import { open, mkdir, readFile, rename, stat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import {
+  open,
+  mkdir,
+  readFile,
+  rename,
+  stat,
+  lstat,
+  unlink,
+} from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL, URL } from "node:url";
@@ -31,11 +40,74 @@ const canonical = (value) => {
 };
 export const stableDigest = (value) => digest(canonical(value));
 
+/** Read one private regular file through a single no-follow descriptor. The
+ * path must still identify that same file after the bounded read. Published
+ * snapshots may legitimately have a second link after a producer crash. */
+export async function readPrivateBounded(
+  file,
+  maxBytes,
+  invalidCode = "LOCAL_FILE_INVALID",
+) {
+  let handle;
+  try {
+    handle = await open(
+      file,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") throw error;
+    throwCode(invalidCode);
+  }
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (
+      !before.isFile() ||
+      before.uid !== BigInt(process.getuid?.() ?? -1) ||
+      (before.mode & 0o077n) !== 0n ||
+      before.size > BigInt(maxBytes)
+    )
+      throwCode(invalidCode);
+    const chunks = [];
+    let length = 0;
+    for (;;) {
+      const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - length));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+      if (length > maxBytes) throwCode(invalidCode);
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+    const after = await handle.stat({ bigint: true });
+    const named = await lstat(file, { bigint: true }).catch(() =>
+      throwCode(invalidCode),
+    );
+    const sameFile = (other) =>
+      other.isFile() &&
+      [
+        "dev",
+        "ino",
+        "uid",
+        "gid",
+        "mode",
+        "nlink",
+        "size",
+        "mtimeNs",
+        "ctimeNs",
+      ].every((field) => other[field] === before[field]);
+    if (!sameFile(after) || !sameFile(named) || BigInt(length) !== before.size)
+      throwCode(invalidCode);
+    return Buffer.concat(chunks, length);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readBounded(
   file,
   maxBytes = MAX_INPUT_BYTES,
   privateFile = false,
 ) {
+  if (privateFile) return readPrivateBounded(file, maxBytes);
   const info = await stat(file);
   if (
     !info.isFile() ||
@@ -60,9 +132,12 @@ export function validateManifest(manifest) {
     !plainObject(manifest) ||
     manifest.version !== 1 ||
     !token(manifest.batchId) ||
-    !["save-draft", "upload-media", "publish-approved"].includes(
-      manifest.operation,
-    ) ||
+    ![
+      "save-draft",
+      "upload-media",
+      "publish-approved",
+      "save-curation-metadata",
+    ].includes(manifest.operation) ||
     !Array.isArray(manifest.items) ||
     !manifest.items.length ||
     manifest.items.length > 10_000
@@ -73,6 +148,17 @@ export function validateManifest(manifest) {
     if (!plainObject(item) || !token(item.key) || keys.has(item.key))
       throwCode("ITEM_IDENTITY_INVALID");
     keys.add(item.key);
+    if (
+      manifest.operation === "save-curation-metadata" &&
+      (typeof item.metadataFile !== "string" ||
+        !(
+          item.expectedPreviousSha256 === null ||
+          /^[a-f0-9]{64}$/.test(item.expectedPreviousSha256)
+        ) ||
+        (item.expectedSnapshotSha256 !== undefined &&
+          !/^[a-f0-9]{64}$/.test(item.expectedSnapshotSha256)))
+    )
+      throwCode("CURATION_METADATA_INPUT_INVALID");
     if (
       manifest.operation === "save-draft" &&
       ((!plainObject(item.content) && typeof item.contentFile !== "string") ||
@@ -128,6 +214,36 @@ export async function prepareItems(manifest, directory) {
           : { expectedRevision: item.expectedRevision }),
         content,
       };
+    } else if (manifest.operation === "save-curation-metadata") {
+      const {
+        MAX_CURATION_METADATA_BYTES,
+        decodeCurationMetadata,
+        verifyCurationMetadataAnnotationHashes,
+      } =
+        await import("../../packages/contracts/dist/internal/editorial/index.js");
+      const metadataPath = localPath(directory, item.metadataFile);
+      const bytes = await readBounded(
+        metadataPath,
+        MAX_CURATION_METADATA_BYTES,
+        true,
+      );
+      const payloadJSON = bytes.toString("utf8");
+      if (!bytes.equals(Buffer.from(payloadJSON, "utf8")))
+        throwCode("CURATION_METADATA_ENCODING_INVALID");
+      const payload = decodeCurationMetadata(payloadJSON);
+      if (!verifyCurationMetadataAnnotationHashes(payload, digest))
+        throwCode("CURATION_METADATA_ANNOTATION_HASH_MISMATCH");
+      const snapshotSha256 = digest(bytes);
+      if (
+        item.expectedSnapshotSha256 !== undefined &&
+        snapshotSha256 !== item.expectedSnapshotSha256
+      )
+        throwCode("CURATION_METADATA_INPUT_CHANGED");
+      body = {
+        payloadJSON,
+        snapshotSha256,
+        expectedPreviousSha256: item.expectedPreviousSha256,
+      };
     } else if (manifest.operation === "publish-approved") {
       body = { id: item.id, approvalId: item.approvalId };
     } else {
@@ -155,10 +271,11 @@ export async function prepareItems(manifest, directory) {
     const idempotencyKey = `batch-${digest(`${manifest.batchId}:${item.key}:${requestHash}`)}`;
     prepared.push({
       key: item.key,
-      body:
-        manifest.operation === "upload-media"
-          ? body
-          : { ...body, idempotencyKey },
+      body: ["upload-media", "save-curation-metadata"].includes(
+        manifest.operation,
+      )
+        ? body
+        : { ...body, idempotencyKey },
       file,
       requestHash,
     });
@@ -267,9 +384,123 @@ function requestBase(config) {
   return url.origin;
 }
 
-/** Inject fetch only for isolated tests. Fixed endpoints never come from source text. */
+/** Keep the existing general API-key client unchanged. */
 export function createTransport(config, fetchImpl = fetch) {
   const origin = requestBase(config);
+  return controlledTransport(config, fetchImpl, {
+    origin,
+    authorization: () => `users API-Key ${config.apiKey}`,
+    scopeFingerprint: stableDigest({ origin, identity: digest(config.apiKey) }),
+  });
+}
+
+// These fields/limits match the installed adapter's draftTargetOrigin and
+// connect-production's capped session expiry. Claim checks are local preflight;
+// the authenticated native endpoint still verifies the JWT signature.
+function metadataSession(config) {
+  let url;
+  try {
+    url = new URL(config.baseURL);
+  } catch {
+    throwCode("PRODUCTION_TARGET_INVALID");
+  }
+  if (
+    config.instance !== "production" ||
+    config.targetVerified !== true ||
+    config.syntheticOnly !== false ||
+    url.protocol !== "https:" ||
+    ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throwCode("PRODUCTION_TARGET_INVALID");
+  const now = Date.now();
+  const expiry = Date.parse(config.sessionExpiresAt);
+  if (
+    typeof config.sessionToken !== "string" ||
+    !config.sessionToken ||
+    config.sessionToken.length > 64 * 1024 ||
+    /[\r\n]/u.test(config.sessionToken) ||
+    config.apiKey !== undefined ||
+    !Number.isSafeInteger(config.actorId) ||
+    config.actorId < 1 ||
+    !Number.isFinite(expiry) ||
+    expiry <= now ||
+    expiry - now > 2 * 60 * 60 * 1000
+  )
+    throwCode("PRODUCTION_LOGIN_REQUIRED");
+  let claims;
+  try {
+    const parts = config.sessionToken.split(".");
+    if (
+      parts.length !== 3 ||
+      parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))
+    )
+      throw new Error("invalid session");
+    const bytes = Buffer.from(parts[1], "base64url");
+    const text = bytes.toString("utf8");
+    if (!bytes.equals(Buffer.from(text, "utf8")))
+      throw new Error("invalid session");
+    claims = JSON.parse(text);
+  } catch {
+    throwCode("PRODUCTION_LOGIN_REQUIRED");
+  }
+  if (
+    !plainObject(claims) ||
+    claims.id !== config.actorId ||
+    claims.collection !== "users" ||
+    !Number.isSafeInteger(claims.iat) ||
+    claims.iat < 0 ||
+    !Number.isSafeInteger(claims.exp) ||
+    !Number.isSafeInteger(claims.exp * 1000) ||
+    claims.exp <= claims.iat ||
+    expiry > claims.exp * 1000
+  )
+    throwCode("PRODUCTION_LOGIN_REQUIRED");
+  return url.origin;
+}
+
+/** Metadata-only compatibility for existing API keys and protected Owner
+ * sessions. No login/configuration write or credential discovery exists here. */
+export function createMetadataTransport(config, fetchImpl = fetch) {
+  const frozen = Object.freeze({ ...config });
+  if (frozen.sessionToken === undefined && frozen.instance !== "production") {
+    const origin = requestBase(frozen);
+    return controlledTransport(frozen, fetchImpl, {
+      origin,
+      metadataOnly: true,
+      authorization: () => `users API-Key ${frozen.apiKey}`,
+      scopeFingerprint: stableDigest({
+        origin,
+        identity: digest(frozen.apiKey),
+      }),
+    });
+  }
+  const origin = metadataSession(frozen);
+  return controlledTransport(frozen, fetchImpl, {
+    origin,
+    metadataOnly: true,
+    authorization: () => {
+      metadataSession(frozen);
+      return `JWT ${frozen.sessionToken}`;
+    },
+    scopeFingerprint: stableDigest({
+      origin,
+      instance: "production",
+      actorId: frozen.actorId,
+    }),
+  });
+}
+
+/** Inject fetch only for isolated tests. Fixed endpoints never come from source text. */
+function controlledTransport(
+  config,
+  fetchImpl,
+  { origin, authorization, scopeFingerprint, metadataOnly = false },
+) {
   const timeoutMs = bounded(
     config.timeoutMs ?? 30_000,
     100,
@@ -277,14 +508,29 @@ export function createTransport(config, fetchImpl = fetch) {
     "TIMEOUT_INVALID",
   );
   const request = async (route, method, body, signal) => {
+    if (
+      metadataOnly &&
+      (method !== "POST" ||
+        ![
+          "/api/editorial/save-curation-metadata",
+          "/api/editorial/read-curation-metadata",
+        ].includes(route))
+    )
+      throwCode("METADATA_ROUTE_INVALID");
     if (signal?.aborted)
       return { ok: false, retryable: true, code: "TRANSPORT_UNCERTAIN" };
+    let header;
+    try {
+      header = authorization();
+    } catch {
+      return { ok: false, retryable: false, code: "PRODUCTION_LOGIN_REQUIRED" };
+    }
     let response;
     try {
       response = await fetchImpl(`${origin}${route}`, {
         method,
         headers: {
-          Authorization: `users API-Key ${config.apiKey}`,
+          Authorization: header,
           ...(body instanceof FormData
             ? {}
             : { "Content-Type": "application/json" }),
@@ -350,8 +596,17 @@ export function createTransport(config, fetchImpl = fetch) {
     return { ok: true, result };
   };
   const transport = async (operation, item, { signal } = {}) => {
+    if (metadataOnly && operation !== "save-curation-metadata")
+      throwCode("OPERATION_INVALID");
     const send = (route, method, body) => request(route, method, body, signal);
-    if (!["save-draft", "upload-media", "publish-approved"].includes(operation))
+    if (
+      ![
+        "save-draft",
+        "upload-media",
+        "publish-approved",
+        "save-curation-metadata",
+      ].includes(operation)
+    )
       throwCode("OPERATION_INVALID");
     if (operation === "upload-media") {
       const find = await send(
@@ -406,10 +661,58 @@ export function createTransport(config, fetchImpl = fetch) {
     if (!response.ok) return response;
     if (response.result?.ok !== true || !plainObject(response.result.result))
       return { ok: false, retryable: false, code: "RESPONSE_INVALID" };
+    if (operation === "save-curation-metadata") {
+      const { decodeCurationMetadata, deriveCurationMetadataCounts } =
+        await import("../../packages/contracts/dist/internal/editorial/index.js");
+      const committed = response.result.result;
+      // An ACK is not complete acceptance. Read the stored metadata through
+      // the controlled API before recording success; this route reads no media.
+      const decoded = decodeCurationMetadata(item.body.payloadJSON);
+      const readback = await send(
+        "/api/editorial/read-curation-metadata",
+        "POST",
+        {
+          catalogId: decoded.catalogId,
+          snapshotSha256: item.body.snapshotSha256,
+        },
+      );
+      if (!readback.ok) return readback;
+      const stored = readback.result?.result;
+      if (
+        readback.result?.ok !== true ||
+        !plainObject(stored) ||
+        stored.payloadJSON !== item.body.payloadJSON ||
+        stored.snapshotSha256 !== item.body.snapshotSha256 ||
+        digest(stored.payloadJSON) !== item.body.snapshotSha256 ||
+        stableDigest(stored.counts) !==
+          stableDigest(deriveCurationMetadataCounts(decoded)) ||
+        stored.previousSha256 !== item.body.expectedPreviousSha256 ||
+        committed.snapshotSha256 !== stored.snapshotSha256 ||
+        stored.catalogId !== decoded.catalogId ||
+        committed.id !== stored.id ||
+        typeof stored.current !== "boolean"
+      )
+        return {
+          ok: false,
+          retryable: false,
+          code: "CURATION_METADATA_READBACK_MISMATCH",
+        };
+      return {
+        ok: true,
+        historical: stored.current === false,
+        result: {
+          ...projectReceipt(committed),
+          snapshotSha256: stored.snapshotSha256,
+          counts: stored.counts,
+          verifiedReadback: true,
+          currentAtReadback: stored.current,
+        },
+      };
+    }
     return { ok: true, result: projectReceipt(response.result.result) };
   };
   Object.defineProperty(transport, "scopeFingerprint", {
-    value: stableDigest({ origin, identity: digest(config.apiKey) }),
+    value: scopeFingerprint,
   });
   return transport;
 }
@@ -496,6 +799,32 @@ export async function runBatch({
         receipt.items[item.key].requestHash !== item.requestHash
       )
         throwCode("RECEIPT_INPUT_CHANGED");
+    // Metadata success belongs to this invocation's controlled readback. If
+    // cancelled or timed out before a request, an older success is only history.
+    if (manifest.operation === "save-curation-metadata") {
+      for (const item of prepared) {
+        const previous = receipt.items[item.key];
+        receipt.items[item.key] = {
+          requestHash: item.requestHash,
+          status: "pending",
+          attempts: previous?.attempts ?? 0,
+          ...(previous?.status === "succeeded" &&
+          previous.result?.verifiedReadback === true &&
+          previous.result.currentAtReadback === true
+            ? { priorCompletedResult: previous.result }
+            : previous?.priorCompletedResult
+              ? { priorCompletedResult: previous.priorCompletedResult }
+              : {}),
+          ...(previous?.status === "historical" &&
+          previous.result?.verifiedReadback === true &&
+          previous.result.currentAtReadback === false
+            ? { priorHistoricalResult: previous.result }
+            : previous?.priorHistoricalResult
+              ? { priorHistoricalResult: previous.priorHistoricalResult }
+              : {}),
+        };
+      }
+    }
     let cursor = 0;
     let writeQueue = Promise.resolve();
     const save = (key) => {
@@ -511,12 +840,17 @@ export async function runBatch({
     const worker = async () => {
       while (cursor < prepared.length) {
         const item = prepared[cursor++];
-        if (receipt.items[item.key]?.status === "succeeded") continue;
+        if (
+          receipt.items[item.key]?.status === "succeeded" &&
+          manifest.operation !== "save-curation-metadata"
+        )
+          continue;
         if (stopped()) break;
         let outcome;
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
           if (stopped()) break;
           receipt.items[item.key] = {
+            ...receipt.items[item.key],
             requestHash: item.requestHash,
             status: "pending",
             attempts: (receipt.items[item.key]?.attempts ?? 0) + 1,
@@ -550,10 +884,22 @@ export async function runBatch({
         }
         // An interrupted request may have committed remotely. Preserve its
         // pending identity so resume reconciles it before any retry.
-        if (!outcome || (signal?.aborted && !outcome.ok)) break;
+        if (
+          !outcome ||
+          ((signal?.aborted ||
+            (manifest.operation === "save-curation-metadata" &&
+              operationSignal.aborted)) &&
+            !outcome.ok)
+        )
+          break;
         receipt.items[item.key] = {
           ...receipt.items[item.key],
-          status: outcome.ok ? "succeeded" : "failed",
+          status: outcome.ok
+            ? manifest.operation === "save-curation-metadata" &&
+              outcome.historical
+              ? "historical"
+              : "succeeded"
+            : "failed",
           ...(outcome.ok
             ? { result: outcome.result }
             : {
@@ -584,6 +930,20 @@ export async function runBatch({
       total: prepared.length,
       succeeded: scoped.filter((item) => item?.status === "succeeded").length,
       failed: scoped.filter((item) => item?.status === "failed").length,
+      ...(manifest.operation === "save-curation-metadata"
+        ? {
+            historicalVerified: scoped.filter(
+              (item) => item?.status === "historical",
+            ).length,
+            ...(scoped.some(
+              (item) =>
+                item?.status === "failed" &&
+                item.code === "PRODUCTION_LOGIN_REQUIRED",
+            )
+              ? { category: "PRODUCTION_LOGIN_REQUIRED" }
+              : {}),
+          }
+        : {}),
       pending: scoped.filter((item) => !item || item.status === "pending")
         .length,
     };
@@ -627,7 +987,11 @@ async function main() {
       manifest,
       directory: path.dirname(path.resolve(flags.manifest)),
       receiptFile: flags.receipt,
-      transport: flags.execute ? createTransport(config) : undefined,
+      transport: flags.execute
+        ? manifest.operation === "save-curation-metadata"
+          ? createMetadataTransport(config)
+          : createTransport(config)
+        : undefined,
       dryRun: !flags.execute,
       concurrency: config.concurrency,
       attempts: config.attempts,
@@ -637,7 +1001,8 @@ async function main() {
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (
       !process.exitCode &&
-      (result.failed || (flags.execute && result.pending))
+      (result.failed ||
+        (flags.execute && (result.pending || result.historicalVerified)))
     )
       process.exitCode = 1;
   } finally {

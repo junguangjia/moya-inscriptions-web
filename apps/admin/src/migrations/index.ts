@@ -8,6 +8,7 @@ import * as migration_20260917_010000_agent_admin from "./20260917_010000_agent_
 import * as migration_20260922_014939_editorial_content from "./20260922_014939_editorial_content";
 import * as migration_20260922_015000_editorial_content_views from "./20260922_015000_editorial_content_views";
 import * as migration_20260922_021836_editorial_article_approvals from "./20260922_021836_editorial_article_approvals";
+import * as migration_20261013_130000_curation_metadata from "./20261013_130000_curation_metadata";
 
 export const migrations = [
   {
@@ -59,5 +60,10 @@ export const migrations = [
     up: migration_20260922_021836_editorial_article_approvals.up,
     down: migration_20260922_021836_editorial_article_approvals.down,
     name: "20260922_021836_editorial_article_approvals",
+  },
+  {
+    up: migration_20261013_130000_curation_metadata.up,
+    down: migration_20261013_130000_curation_metadata.down,
+    name: "20261013_130000_curation_metadata",
   },
 ];
