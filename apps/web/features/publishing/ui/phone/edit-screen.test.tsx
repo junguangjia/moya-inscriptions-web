@@ -50,6 +50,7 @@ import {
   removeItem,
   setItemEdit,
 } from "../media/media-order";
+import { MEDIA_ACCEPT } from "../media/media-picker";
 import { createMediaUiStore, useMediaUiState } from "../media/media-ui-store";
 import {
   EditScreen,
@@ -1924,6 +1925,33 @@ describe("EditScreen order, sheets and Back (r4)", () => {
     container
       .querySelector("[data-edit-toasts] span")!
       .getAttribute("aria-hidden");
+  const stripPick = () =>
+    container.querySelector<HTMLInputElement>(
+      '[data-edit-add-cell] input[aria-label="选择照片"]',
+    )!;
+  /** Hands `files` to the strip's 选择照片 input as a finished pick. */
+  const pickFiles = (files: File[]) => {
+    Object.defineProperty(stripPick(), "files", {
+      configurable: true,
+      value: files,
+    });
+    act(() =>
+      stripPick().dispatchEvent(new Event("change", { bubbles: true })),
+    );
+  };
+  /**
+   * The `accept` entries that are not a photo type: image types and the
+   * HEIC/HEIF extensions only, never video, any file or another extension
+   * (static photos only, and Chrome's Android photo picker stays eligible).
+   */
+  const notPhotos = (accept: string) =>
+    accept
+      .split(",")
+      .map((type) => type.trim())
+      .filter(
+        (type) =>
+          !type.startsWith("image/") && type !== ".heic" && type !== ".heif",
+      );
 
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -2717,5 +2745,61 @@ describe("EditScreen order, sheets and Back (r4)", () => {
     expect(document.activeElement).toBe(
       container.querySelector("[data-edit-add]"),
     );
+  });
+
+  it("asks +'s album for several static photos, and its camera for one", () => {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: () => ({
+        matches: true,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }),
+    });
+    render({ items: three() });
+    const camera = container.querySelector<HTMLInputElement>(
+      '[data-edit-add-cell] input[aria-label="拍照"]',
+    )!;
+    // On a phone too: 选择照片 never turns into the camera.
+    expect(stripPick().multiple).toBe(true);
+    expect(stripPick().hasAttribute("capture")).toBe(false);
+    expect(stripPick().accept).toBe(MEDIA_ACCEPT);
+    expect(notPhotos(stripPick().accept)).toEqual([]);
+    expect(camera.getAttribute("capture")).toBe("environment");
+    expect(camera.multiple).toBe(false);
+  });
+
+  it("hands +'s pick of several photos on whole, in the picker's order", () => {
+    render({ items: three() });
+    const files = ["d", "e", "f"].map(
+      (name) => new File([name], `${name}.jpg`, { type: "image/jpeg" }),
+    );
+    pickFiles(files);
+    expect(spies.onAddFiles).toHaveBeenCalledOnce();
+    const [added, origin] = spies.onAddFiles.mock.calls[0]!;
+    expect(origin).toBe("picker");
+    // The same File objects, in the picker's order.
+    expect((added as File[]).map((file) => files.indexOf(file))).toEqual([
+      0, 1, 2,
+    ]);
+  });
+
+  it("keeps the album and a waiting removal as they are when +'s album comes back empty or is cancelled", () => {
+    vi.useFakeTimers();
+    render({ items: three() });
+    click(container.querySelector<HTMLButtonElement>("[data-edit-remove]")!);
+    expect(title()).toBe("1 / 2第 1 项，共 2 项");
+    // A cancelled pick must never count as a pick.
+    pickFiles([]);
+    act(() =>
+      stripPick().dispatchEvent(new Event("cancel", { bubbles: true })),
+    );
+    // No pick: nothing added, and the removal still waits for 撤销.
+    expect(spies.onAddFiles).not.toHaveBeenCalled();
+    expect(spies.remove).not.toHaveBeenCalled();
+    expect(title()).toBe("1 / 2第 1 项，共 2 项");
+    expect(stripKeys()).toEqual(["b", "c"]);
+    expect(album.items.map((entry) => entry.key)).toEqual(["a", "b", "c"]);
+    expect(toastText()).toBe("已移除第 1 项撤销");
   });
 });

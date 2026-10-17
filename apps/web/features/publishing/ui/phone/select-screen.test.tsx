@@ -8,6 +8,7 @@ import {
   createEditorSessionStore,
 } from "../editor/editor-session-state";
 import { removeItem } from "../media/media-order";
+import { MEDIA_ACCEPT } from "../media/media-picker";
 import { SELECTION_UNAVAILABLE } from "../media/use-media-actions";
 import {
   chipLabel,
@@ -156,6 +157,20 @@ const pickInput = () =>
   container.querySelector<HTMLInputElement>(
     '[data-media-picker] input[type="file"][multiple]',
   )!;
+
+/**
+ * The `accept` entries that are not a photo type: image types and the
+ * HEIC/HEIF extensions only, never video, any file or another extension
+ * (static photos only, and Chrome's Android photo picker stays eligible).
+ */
+const notPhotos = (accept: string) =>
+  accept
+    .split(",")
+    .map((type) => type.trim())
+    .filter(
+      (type) =>
+        !type.startsWith("image/") && type !== ".heic" && type !== ".heif",
+    );
 
 /** Hands `files` to `input` as a finished pick. */
 const pick = async (input: HTMLInputElement, files: File[]) => {
@@ -338,6 +353,38 @@ describe("SelectScreen (the start screen)", () => {
     const file = new File(["x"], "c.jpg", { type: "image/jpeg" });
     await pick(input, [file]);
     expect(props.onAddFiles).toHaveBeenCalledWith([file], "picker");
+  });
+
+  it("asks the album for several static photos, and the camera for one", async () => {
+    coarsePointer();
+    await render();
+    const picker = container.querySelector("[data-media-picker]")!;
+    const photos = picker.querySelector<HTMLInputElement>(
+      'input[aria-label="选择照片"]',
+    )!;
+    const camera = picker.querySelector<HTMLInputElement>(
+      'input[aria-label="拍照"]',
+    )!;
+    // On a phone too: 选择照片 never turns into the camera.
+    expect(photos.multiple).toBe(true);
+    expect(photos.hasAttribute("capture")).toBe(false);
+    expect(photos.accept).toBe(MEDIA_ACCEPT);
+    expect(notPhotos(photos.accept)).toEqual([]);
+    expect(camera.getAttribute("capture")).toBe("environment");
+    expect(camera.multiple).toBe(false);
+  });
+
+  it("hands a pick of several photos on whole, in the picker's order", async () => {
+    await render();
+    const files = ["a", "b", "c"].map(
+      (name) => new File([name], `${name}.jpg`, { type: "image/jpeg" }),
+    );
+    await pick(pickInput(), files);
+    expect(props.onAddFiles).toHaveBeenCalledOnce();
+    const [added, origin] = vi.mocked(props.onAddFiles).mock.calls[0]!;
+    expect(origin).toBe("picker");
+    // The same File objects, in the picker's order.
+    expect(added.map((file) => files.indexOf(file))).toEqual([0, 1, 2]);
   });
 
   describe("专题 and 草稿箱", () => {
@@ -635,6 +682,22 @@ describe("SelectScreen (the start screen)", () => {
           leave === back ? "close" : "skip",
         ]);
       }
+    });
+
+    it("keeps them held when the album comes back empty or is cancelled", async () => {
+      album("a");
+      await render({ heldRemoval: hold(["a"]) });
+      // A cancelled pick must never count as a pick.
+      await pick(pickInput(), []);
+      await act(async () =>
+        pickInput().dispatchEvent(new Event("cancel", { bubbles: true })),
+      );
+      await render();
+      // No pick: nothing added, nothing committed, 撤销 still offered.
+      expect(props.onAddFiles).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(order()).toEqual(["a"]);
+      expect(toast()!.textContent).toBe("已移除第 1 项撤销");
     });
 
     it("commits them when photos start to be staged some other way (a paste, a drop)", async () => {
