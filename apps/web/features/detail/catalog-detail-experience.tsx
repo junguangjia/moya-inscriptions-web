@@ -283,8 +283,11 @@ export const CatalogDetailExperience = ({
           ? (mediaPositions.get(positionKey) ?? 0)
           : 0),
     );
-    setWithdrawal(null);
   }, [catalogId, positionKey, calligraphy, restoredMediaIndex]);
+
+  useEffect(() => {
+    setWithdrawal(null);
+  }, [catalogId]);
 
   // The notice replaces the content in place: read from the top, focused.
   useEffect(() => {

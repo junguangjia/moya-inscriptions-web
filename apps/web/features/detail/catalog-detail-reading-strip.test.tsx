@@ -162,6 +162,30 @@ afterEach(() => {
 });
 
 describe("CatalogDetailReadingStrip", () => {
+  it.each(["pointerup", "pointercancel"])(
+    "keeps native momentum after %s active through its final reading position",
+    (release) => {
+      const view = mounts();
+      act(() => {
+        view.strip.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+        vi.advanceTimersByTime(600);
+        view.strip.dispatchEvent(new Event(release, { bubbles: true }));
+        for (let step = 1; step <= 12; step += 1) {
+          vi.advanceTimersByTime(100);
+          view.setOffset(step * 80);
+          view.strip.dispatchEvent(new Event("scroll"));
+        }
+        vi.advanceTimersByTime(180);
+      });
+      expect(view.offset()).toBe(960);
+      expect(view.strip.dataset.detailReadingRegion).toBe("comments");
+      expect(authJourney.capture?.()).toMatchObject({
+        offset: 960,
+        region: "comments",
+      });
+    },
+  );
+
   it("retains either shortcut destination while arriving rows preserve their current anchor", () => {
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
     const view = mounts();
