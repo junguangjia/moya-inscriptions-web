@@ -288,6 +288,24 @@ function AccountMessages({
   }, [author.checking, inbox.setFilter]);
   const confirmedRef = useRef(confirmed);
   confirmedRef.current = confirmed;
+  useEffect(() => {
+    confirmedRef.current = confirmed;
+    return () => {
+      confirmedRef.current = false;
+    };
+  }, []);
+  const incomingCategory =
+    view === "reactions"
+      ? "likes"
+      : commentTab === "mentions"
+        ? "mentions"
+        : "comments";
+  const recipient = author.viewer?.id;
+  useEffect(() => {
+    // Session checks and reconnects of this account are not another entry.
+    // The provider validates the confirmed account before starting a write.
+    if (open && incoming && recipient) return inbox.visit(incomingCategory);
+  }, [open, incoming, recipient, incomingCategory, inbox.visit]);
   const activity = confirmed ? (inbox.page?.unread.total ?? 0) : 0;
   const conversations =
     confirmed && Number.isFinite(dmUnread)
@@ -367,16 +385,18 @@ function AccountMessages({
         throw new Error("Article notification without a comment");
       else await authorClient.card(target);
       if (!confirmedRef.current) return;
+      await inbox.read(item.observation);
+      if (!confirmedRef.current) return;
       if (item.commentId)
         author.cache.set("discussion-location", {
           target: item.target,
           id: item.commentId,
         });
-      await inbox.read(item.observation);
       navigate(item.target);
     } catch {
+      if (!confirmedRef.current) return;
       setNotice("原内容或评论已不可用");
-      inbox.refresh();
+      inbox.revalidate();
     }
   };
   return (
@@ -397,7 +417,7 @@ function AccountMessages({
           inbox.setFilter("all");
           setCloseRequested(false);
           setOpen(true);
-          inbox.refresh();
+          inbox.revalidate();
         }}
       >
         <Icon name="message" aria-hidden="true" />
@@ -473,11 +493,7 @@ function AccountMessages({
                 key={location}
                 scrollRef={content}
                 loading={inbox.loading}
-                onRefresh={() =>
-                  inbox.page
-                    ? inbox.read(inbox.page.observation)
-                    : inbox.refresh()
-                }
+                onRefresh={inbox.refresh}
               />
             )}
             {/* parallel-community-integration-qa: revalidating the confirmed

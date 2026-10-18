@@ -42,6 +42,7 @@ const Probe = () => {
 };
 const mounts = (positionKey?: string) => {
   const onRegionChange = vi.fn();
+  const onRevealReading = vi.fn();
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -56,6 +57,7 @@ const mounts = (positionKey?: string) => {
           detailId={id}
           id="reading-one"
           onRegionChange={onRegionChange}
+          onRevealReading={onRevealReading}
           positionKey={positionKey}
           information={
             <>
@@ -117,6 +119,7 @@ const mounts = (positionKey?: string) => {
   return {
     host,
     onRegionChange,
+    onRevealReading,
     strip,
     ref,
     draw,
@@ -162,6 +165,17 @@ afterEach(() => {
 });
 
 describe("CatalogDetailReadingStrip", () => {
+  it("reveals the vertical reading region for a precise reply locator without moving it during anchor maintenance", () => {
+    const view = mounts();
+    const reply = view.host.querySelector<HTMLElement>(
+      "[data-colophon-anchor]",
+    )!;
+    act(() => stage!.scrollToElement(reply));
+    expect(view.onRevealReading).toHaveBeenCalledOnce();
+    expect(view.offset()).toBeGreaterThan(950);
+    act(() => stage!.scrollToElement(reply, "instant"));
+    expect(view.onRevealReading).toHaveBeenCalledOnce();
+  });
   it.each(["pointerup", "pointercancel"])(
     "keeps native momentum after %s active through its final reading position",
     (release) => {

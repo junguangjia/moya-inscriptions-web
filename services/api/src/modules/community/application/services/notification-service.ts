@@ -124,6 +124,7 @@ export class NotificationService {
         owner,
         purpose: "all",
         revision: page.highWater,
+        filter,
       }),
       unread: page.unread,
       nextCursor:
@@ -146,6 +147,7 @@ export class NotificationService {
       owner,
       observed.revision,
       observed.purpose === "group" ? observed.group : undefined,
+      observed.purpose === "all" ? (observed.filter ?? "all") : "all",
     );
   }
   async lookup(owner: string, query: string) {

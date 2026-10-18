@@ -50,6 +50,7 @@ export interface CatalogDetailReadingStripProps {
     ((region: "information" | "comments") => void) | undefined;
   /** Caller-owned reader/account, content and mode scope; never inferred. */
   readonly positionKey?: string | undefined;
+  readonly onRevealReading?: (() => void) | undefined;
 }
 
 interface CommentReadingAnchor {
@@ -83,6 +84,7 @@ export const CatalogDetailReadingStrip = forwardRef<
     positionKey,
     id,
     onRegionChange,
+    onRevealReading,
   },
   ref,
 ) {
@@ -282,6 +284,7 @@ export const CatalogDetailReadingStrip = forwardRef<
     (element: Element, behavior?: ScrollBehavior) => {
       const node = stripRef.current;
       if (node === null) return;
+      if (behavior !== "instant") onRevealReading?.();
       const gutter =
         Number.parseFloat(getComputedStyle(element).scrollMarginRight) || 0;
       scrollToOffset(
@@ -292,7 +295,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         behavior,
       );
     },
-    [readOffset, scrollToOffset],
+    [onRevealReading, readOffset, scrollToOffset],
   );
 
   const scrollToComments = useCallback(() => {

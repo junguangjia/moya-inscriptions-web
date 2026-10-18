@@ -2,7 +2,7 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CommentSection } from "./comment-section";
 import { CommentCountProvider, CommentCountLabel } from "./comment-count";
@@ -79,6 +79,72 @@ afterEach(() => {
 });
 
 describe("CommentSection", () => {
+  it.each(["root", "reply-12"])(
+    "reveals %s's own content while retaining the full row highlight",
+    (id) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      roots.push(root);
+      const scrolled: Element[] = [];
+      const original = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        "scrollIntoView",
+      );
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: vi.fn(function (this: HTMLElement) {
+          scrolled.push(this);
+        }),
+      });
+      try {
+        act(() =>
+          root.render(
+            <CommentSection
+              currentUser={currentUser}
+              items={[
+                {
+                  id: "root",
+                  user: currentUser,
+                  text: "The root itself",
+                  createdAtLabel: "today",
+                  isQaGenerated: false,
+                  likeCount: 0,
+                  liked: false,
+                  replies: Array.from({ length: 12 }, (_, n) => ({
+                    id: `reply-${n + 1}`,
+                    user: currentUser,
+                    text: `Long reply ${n + 1}`,
+                    createdAtLabel: "today",
+                    likeCount: 0,
+                    liked: false,
+                  })),
+                },
+              ]}
+              highlightCommentId={id}
+              onSendComment={() => undefined}
+              onSendReply={() => undefined}
+            />,
+          ),
+        );
+        const row = container.querySelector(
+          `[data-comment-${id === "root" ? "id" : "reply"}="${id}"]`,
+        )!;
+        expect(row.getAttribute("aria-current")).toBe("true");
+        expect(scrolled).toEqual([
+          row.querySelector(":scope > div > [data-comment-reply-action]"),
+        ]);
+      } finally {
+        if (original)
+          Object.defineProperty(
+            HTMLElement.prototype,
+            "scrollIntoView",
+            original,
+          );
+        else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+      }
+    },
+  );
   it("shares the authoritative total with the tab, caps99+, and clears unavailable or switched content", () => {
     const container = document.createElement("div");
     document.body.append(container);

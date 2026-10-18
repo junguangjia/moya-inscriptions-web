@@ -32,6 +32,24 @@ canonical.
 | Sent comments            | Existing MyComments                                        | Unchanged               | Never incoming unread                      |
 | Candidate                | Reviewed Draft; integration evidence distinct              | No deployment           | Owner visual/device gate                   |
 
+## Category-entry read change — 2026-10-18
+
+Entering received likes, received comments (including replies), or mentions
+marks the selected category read through one fresh server-issued observation.
+The observation binds recipient, category and committed revision, so this covers
+unloaded pages and preserves later deliveries, including new actors in an
+existing group. Unvisited categories and sent comments remain unchanged. Passive
+SSE/foreground refresh does not mark arrivals during the visit. Failed entry
+persistence retries the same observation; re-entry obtains a new one. Explicit
+pull/keyboard refresh reads only the currently observed category. This replaces
+r3/r4's cross-category refresh rule. Favorites remain outside notification
+sources and the existing likes/favorites entry is preserved.
+
+Notification navigation keeps the current ProductShell mode and target identity.
+Calligraphy comment/reply location reveals the vertical reading region as well
+as the precise horizontal anchor. Existing normal/desktop and Article paths,
+visibility checks, unavailable states and return history remain authoritative.
+
 ## Owner screenshot change r3
 
 Received comments, mentions and likes share the same layout: date and time at

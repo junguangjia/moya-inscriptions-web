@@ -35,7 +35,9 @@ const { inbox, author, client, shell } = vi.hoisted(() => ({
     loading: false,
     error: "",
     setFilter: vi.fn(),
+    revalidate: vi.fn(),
     refresh: vi.fn(),
+    visit: vi.fn(() => () => {}),
     read: vi.fn(),
     more: vi.fn(),
   },
@@ -125,7 +127,7 @@ afterEach(async () => {
 });
 describe("Owner notification reading interactions", () => {
   it.each(["评论", "赞和收藏"])(
-    "the accessible refresh in %s keeps the all-observed-activity read semantics",
+    "enters %s once and refreshes through its current category visit",
     async (category) => {
       await click(button(category));
       expect(node.textContent).not.toContain("全部标为已读");
@@ -136,10 +138,11 @@ describe("Owner notification reading interactions", () => {
       expect(node.querySelector("time")?.dateTime).toBe(item.createdAt);
       inbox.refresh.mockClear();
       await click(button("刷新消息"));
-      expect(inbox.read).toHaveBeenCalledExactlyOnceWith(
-        "synthetic-inbox-observation",
+      expect(inbox.visit).toHaveBeenCalledExactlyOnceWith(
+        category === "评论" ? "comments" : "likes",
       );
-      expect(inbox.refresh).not.toHaveBeenCalled();
+      expect(inbox.read).not.toHaveBeenCalled();
+      expect(inbox.refresh).toHaveBeenCalledOnce();
     },
   );
   it.each(["comments", "likes", "mentions"] as const)(
@@ -164,8 +167,27 @@ describe("Owner notification reading interactions", () => {
       await act(async () => root.render(<LiveMessageTrigger />));
       expect(node.querySelector('[role="dialog"]')).toBeNull();
       expect(inbox.read).not.toHaveBeenCalled();
+      expect(inbox.visit).toHaveBeenCalledExactlyOnceWith(category);
     },
   );
+  it("keeps one visit during same-account session checks and does not visit sent comments", async () => {
+    await click(button("评论"));
+    expect(inbox.visit).toHaveBeenCalledExactlyOnceWith("comments");
+    author.checking = true;
+    await act(async () => root.render(<LiveMessageTrigger />));
+    author.checking = false;
+    await act(async () => root.render(<LiveMessageTrigger />));
+    expect(inbox.visit).toHaveBeenCalledTimes(1);
+    author.sessionError = true;
+    await act(async () => root.render(<LiveMessageTrigger />));
+    author.sessionError = false;
+    await act(async () => root.render(<LiveMessageTrigger />));
+    expect(inbox.visit).toHaveBeenCalledTimes(1);
+    await click(button("发出的评论"));
+    expect(inbox.visit).toHaveBeenCalledTimes(1);
+    await click(button("提到我"));
+    expect(inbox.visit.mock.calls.at(-1)).toEqual(["mentions"]);
+  });
   it("lets only the active header consume a direct entry", async () => {
     await act(async () => root.render(null));
     window.history.replaceState(
@@ -374,7 +396,7 @@ describe("Owner notification reading interactions", () => {
     expect(node.querySelector("[data-notification-unread]")).toBeNull();
   });
   it("opening the message center does not consume new incoming activity", () => {
-    expect(inbox.refresh).toHaveBeenCalledOnce();
+    expect(inbox.revalidate).toHaveBeenCalledOnce();
     expect(inbox.read).not.toHaveBeenCalled();
   });
   // parallel-community-integration-qa: an open conversation replaces the home

@@ -521,7 +521,13 @@ export const CommentSection = ({
         window.clearTimeout(highlightTimer.current);
       node.classList.add("phase4-comment-highlight");
       node.setAttribute("aria-current", "true");
-      node.scrollIntoView?.({ block: "center" });
+      // A root row includes its expanded replies. Reveal the target's own
+      // content rather than centering that potentially very tall subtree.
+      const content =
+        node.querySelector<HTMLElement>(
+          ":scope > div > [data-comment-reply-action]",
+        ) ?? node;
+      content.scrollIntoView?.({ block: "center" });
       highlightTimer.current = window.setTimeout(() => {
         node.classList.remove("phase4-comment-highlight");
         node.removeAttribute("aria-current");

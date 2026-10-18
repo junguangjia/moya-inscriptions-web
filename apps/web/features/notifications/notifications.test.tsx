@@ -231,6 +231,231 @@ describe("real notification composition", () => {
         expect(client.readNotifications).not.toHaveBeenCalled();
     },
   );
+  it("reads one category snapshot on entry, leaves passive arrivals unread, and retries the same failed observation", async () => {
+    let inbox!: ReturnType<typeof useNotifications>;
+    function Probe() {
+      inbox = useNotifications();
+      return null;
+    }
+    await act(async () =>
+      root.render(
+        <NotificationProvider enabled>
+          <Probe />
+        </NotificationProvider>,
+      ),
+    );
+    client.notifications.mockResolvedValueOnce({
+      ...page(3),
+      observation: "entry-likes",
+    });
+    client.readNotifications.mockRejectedValueOnce(new Error("offline"));
+    let leave!: () => void;
+    await act(async () => {
+      leave = inbox.visit("likes");
+    });
+    expect(client.notifications.mock.calls.at(-1)?.[0]).toBe("likes");
+    expect(client.readNotifications).toHaveBeenCalledExactlyOnceWith(
+      "entry-likes",
+    );
+    expect(inbox.error).toContain("已读状态未保存");
+    const signal = sockets[0]!.addEventListener.mock.calls.find(
+      ([name]) => name === "refresh",
+    )![1] as () => void;
+    client.notifications.mockResolvedValue({
+      ...page(4),
+      observation: "later-arrivals",
+    });
+    await act(async () => signal());
+    expect(client.readNotifications).toHaveBeenCalledTimes(1);
+    expect(inbox.error).toContain("已读状态未保存");
+    client.readNotifications.mockResolvedValue(undefined);
+    await act(async () => inbox.refresh());
+    expect(client.readNotifications.mock.calls.at(-1)).toEqual(["entry-likes"]);
+    expect(inbox.error).toBe("");
+    await act(async () => signal());
+    expect(client.readNotifications).toHaveBeenCalledTimes(2);
+    leave();
+    client.notifications.mockResolvedValueOnce({
+      ...page(4),
+      observation: "second-entry",
+    });
+    await act(async () => {
+      leave = inbox.visit("likes");
+    });
+    expect(client.readNotifications.mock.calls.at(-1)).toEqual([
+      "second-entry",
+    ]);
+    leave();
+  });
+  it("keeps a deferred retry when a category is entered during a temporary session error", async () => {
+    let inbox!: ReturnType<typeof useNotifications>;
+    function Probe() {
+      inbox = useNotifications();
+      return null;
+    }
+    const render = () =>
+      act(async () =>
+        root.render(
+          <NotificationProvider enabled>
+            <Probe />
+          </NotificationProvider>,
+        ),
+      );
+    author.sessionError = true;
+    await render();
+    let leave!: () => void;
+    await act(async () => {
+      leave = inbox.visit("mentions");
+    });
+    expect(client.notifications).not.toHaveBeenCalled();
+    author.sessionError = false;
+    await render();
+    expect(inbox.error).toContain("已读状态未保存");
+    client.notifications.mockResolvedValueOnce({
+      ...page(1),
+      observation: "recovered-entry",
+    });
+    client.readNotifications.mockResolvedValue(undefined);
+    await act(async () => inbox.refresh());
+    expect(client.readNotifications).toHaveBeenCalledExactlyOnceWith(
+      "recovered-entry",
+    );
+    leave();
+  });
+  it("retries the same entry observation after a transient same-account session error", async () => {
+    let inbox!: ReturnType<typeof useNotifications>;
+    function Probe() {
+      inbox = useNotifications();
+      return null;
+    }
+    const render = () =>
+      act(async () =>
+        root.render(
+          <NotificationProvider enabled>
+            <Probe />
+          </NotificationProvider>,
+        ),
+      );
+    await render();
+    let finish!: (value: ReturnType<typeof page>) => void;
+    client.notifications.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    let leave!: () => void;
+    await act(async () => {
+      leave = inbox.visit("comments");
+    });
+    author.sessionError = true;
+    await render();
+    await act(async () =>
+      finish({ ...page(2), observation: "before-session-error" }),
+    );
+    expect(client.readNotifications).not.toHaveBeenCalled();
+    author.sessionError = false;
+    await render();
+    expect(inbox.error).toContain("已读状态未保存");
+    client.readNotifications.mockResolvedValue(undefined);
+    await act(async () => inbox.refresh());
+    expect(client.readNotifications).toHaveBeenCalledExactlyOnceWith(
+      "before-session-error",
+    );
+    leave();
+  });
+  it("only revalidates on an unavailable-target refresh while later arrivals remain unread", async () => {
+    let inbox!: ReturnType<typeof useNotifications>;
+    function Probe() {
+      inbox = useNotifications();
+      return null;
+    }
+    await act(async () =>
+      root.render(
+        <NotificationProvider enabled>
+          <Probe />
+        </NotificationProvider>,
+      ),
+    );
+    client.readNotifications.mockResolvedValue(undefined);
+    let leave!: () => void;
+    await act(async () => {
+      leave = inbox.visit("likes");
+    });
+    client.notifications.mockResolvedValue({
+      ...page(3),
+      observation: "later-arrivals",
+    });
+    await act(async () => inbox.revalidate());
+    expect(client.readNotifications).toHaveBeenCalledTimes(1);
+    expect(inbox.page?.unread.total).toBe(3);
+    leave();
+  });
+  it("finishes the visited category snapshot after a quick Back without consuming another snapshot", async () => {
+    let inbox!: ReturnType<typeof useNotifications>;
+    function Probe() {
+      inbox = useNotifications();
+      return null;
+    }
+    await act(async () =>
+      root.render(
+        <NotificationProvider enabled>
+          <Probe />
+        </NotificationProvider>,
+      ),
+    );
+    let finish!: (value: ReturnType<typeof page>) => void;
+    client.notifications.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    let leave!: () => void;
+    await act(async () => {
+      leave = inbox.visit("likes");
+    });
+    leave();
+    client.readNotifications.mockResolvedValue(undefined);
+    await act(async () => finish({ ...page(2), observation: "quick-entry" }));
+    expect(client.readNotifications).toHaveBeenCalledExactlyOnceWith(
+      "quick-entry",
+    );
+  });
+  it("ignores an entry snapshot after the account leaves, even across A to B to A", async () => {
+    let inbox!: ReturnType<typeof useNotifications>;
+    function Probe() {
+      inbox = useNotifications();
+      return null;
+    }
+    const render = () =>
+      act(async () =>
+        root.render(
+          <NotificationProvider enabled>
+            <Probe />
+          </NotificationProvider>,
+        ),
+      );
+    await render();
+    let finish!: (value: ReturnType<typeof page>) => void;
+    client.notifications.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    let leave!: () => void;
+    await act(async () => {
+      leave = inbox.visit("comments");
+    });
+    author.viewer = { id: `user-${"2".repeat(32)}` };
+    await render();
+    author.viewer = { id: `user-${"1".repeat(32)}` };
+    await render();
+    await act(async () => finish(page(99)));
+    expect(client.readNotifications).not.toHaveBeenCalled();
+    leave();
+  });
   it("selects one stable user among duplicate display names and never parses plain pasted text into recipients", async () => {
     vi.useFakeTimers();
     const person = {
