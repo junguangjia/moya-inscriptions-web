@@ -18,6 +18,7 @@ import {
   responsiveImage,
 } from "../media/responsive-media";
 import type { MediaPriority } from "../media/responsive-media";
+import { LivePhotoFrame } from "../publishing/ui/live/live-photo";
 import { QUICK_ACTION_LIKE_PATH } from "../quick-actions/quick-action-card-action";
 import type { DetailMediaPresentation } from "../detail/catalog-detail-presentation";
 import { FeedPostDots } from "./feed-post-dots";
@@ -104,6 +105,14 @@ export interface FeedPostStageHandle {
 export interface FeedPostStageProps {
   /** The post's images in order; the first is shown at the right edge. */
   readonly media: readonly DetailMediaPresentation[];
+  /** Optional Detail/Viewer index; feed posts keep their own index by default. */
+  readonly activeMediaIndex?: number | undefined;
+  /** Reports a changed image only after the strip settles on it. */
+  readonly onActiveMediaIndexChange?: ((index: number) => void) | undefined;
+  /** Detail contains every image; the feed keeps its adaptive cover fit. */
+  readonly imageFit?: "adaptive" | "contain" | undefined;
+  /** Explicit Live controls are opt-in; the feed remains a still surface. */
+  readonly enableLivePlayback?: boolean | undefined;
   /** Loading priority of the first image only. */
   readonly priority?: MediaPriority | undefined;
   /** Badges the first image as a Live Photo still. */
@@ -128,7 +137,14 @@ export interface FeedPostStageProps {
  * bubble through it in React; only the strip's own DOM counts here.
  */
 const fromStrip = (event: { currentTarget: Element; target: EventTarget }) =>
-  event.currentTarget.contains(event.target as Node);
+  event.currentTarget.contains(event.target as Node) &&
+  !(event.target as Element).closest?.("[data-feed-stage-control]");
+
+const mediaIndex = (index: number, count: number): number =>
+  Math.max(
+    0,
+    Math.min(count - 1, Number.isFinite(index) ? Math.floor(index) : 0),
+  );
 
 /** Keys that scroll the strip when focus is inside it. */
 const SCROLL_KEYS = new Set([
@@ -266,6 +282,10 @@ export const FeedPostStage = forwardRef<
 >(function FeedPostStage(
   {
     media,
+    activeMediaIndex,
+    onActiveMediaIndexChange,
+    imageFit = "adaptive",
+    enableLivePlayback = false,
     priority,
     live = false,
     badge,
@@ -375,9 +395,11 @@ export const FeedPostStage = forwardRef<
   const frameRef = useRef<number | null>(null);
   const pendingTapRef = useRef<number | null>(null);
   const lastDoubleTapRef = useRef(Number.NEGATIVE_INFINITY);
-  const indexRef = useRef(0);
+  const indexRef = useRef(mediaIndex(activeMediaIndex ?? 0, count));
   const regionRef = useRef<"media" | "comments">("media");
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(() =>
+    mediaIndex(activeMediaIndex ?? 0, count),
+  );
   const [region, setRegion] = useState<"media" | "comments">("media");
   const [progress, setProgress] = useState(0);
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
@@ -493,13 +515,22 @@ export const FeedPostStage = forwardRef<
       if (index !== indexRef.current) {
         indexRef.current = index;
         setActiveIndex(index);
+        onActiveMediaIndexChange?.(index);
       }
     }
     for (const listener of [...settleListenersRef.current])
       listener({ resized });
     driveRef.current.zones = null;
     refreshDrive();
-  }, [applyStrip, count, hasComments, measure, onRegionChange, refreshDrive]);
+  }, [
+    applyStrip,
+    count,
+    hasComments,
+    measure,
+    onActiveMediaIndexChange,
+    onRegionChange,
+    refreshDrive,
+  ]);
   const settleRef = useRef(settle);
   settleRef.current = settle;
 
@@ -727,6 +758,25 @@ export const FeedPostStage = forwardRef<
       viewerOpen,
     ],
   );
+
+  // A Detail Viewer can change the selected image while this stage is
+  // covered. Restore that image without animating through the other slides.
+  // The normal feed has no external index and keeps its existing behavior.
+  useLayoutEffect(() => {
+    if (activeMediaIndex === undefined || stripNode === null) return;
+    const next = mediaIndex(activeMediaIndex, count);
+    indexRef.current = next;
+    setActiveIndex(next);
+    regionRef.current = "media";
+    setRegion("media");
+    const width = stripNode.clientWidth;
+    if (width > 0) {
+      const offset = next * width;
+      if (Math.abs(offset - measure().offset) > 1)
+        scrollToOffset(offset, "instant");
+      setProgress(next);
+    }
+  }, [activeMediaIndex, count, measure, scrollToOffset, stripNode]);
 
   useImperativeHandle(ref, () => ({
     scrollToIndex: (index) => {
@@ -993,6 +1043,13 @@ export const FeedPostStage = forwardRef<
           data-local-horizontal=""
           onClickCapture={(event) => {
             if (
+              event.currentTarget.contains(event.target as Node) &&
+              (event.target as Element).closest?.("[data-feed-stage-control]")
+            ) {
+              cancelPendingTap();
+              return;
+            }
+            if (
               fromStrip(event) &&
               event.detail !== 0 &&
               performance.now() < suppressUntilRef.current
@@ -1208,6 +1265,44 @@ export const FeedPostStage = forwardRef<
               const active = index === activeIndex;
               const broken = failed.has(item.id);
               const image = responsiveImage(item, MEDIA_SIZES.feedPostStage());
+              const imageButton = (
+                <button
+                  aria-label={`查看图像：${item.alt}`}
+                  className={styles.postSlideButton}
+                  data-feed-slide-image=""
+                  onClick={(event) =>
+                    tap(index, event.currentTarget, event.detail)
+                  }
+                  tabIndex={active ? 0 : -1}
+                  type="button"
+                >
+                  <img
+                    ref={index === 0 ? firstImageRef : undefined}
+                    alt={item.alt}
+                    decoding="async"
+                    draggable={false}
+                    height={item.height}
+                    {...(index === 0
+                      ? mediaLoading(priority)
+                      : { loading: "lazy" as const })}
+                    onError={() => {
+                      setFailed((current) => new Set(current).add(item.id));
+                      if (index === 0) onMediaSettled?.();
+                    }}
+                    onLoad={index === 0 ? onMediaSettled : undefined}
+                    sizes={image.sizes}
+                    src={image.src}
+                    srcSet={image.srcSet}
+                    style={
+                      imageFit === "adaptive" &&
+                      slideFit(item, ratio) === "cover"
+                        ? placeholderStyle(item.placeholderColor)
+                        : undefined
+                    }
+                    width={item.width}
+                  />
+                </button>
+              );
               return (
                 <div
                   aria-hidden={!active}
@@ -1215,7 +1310,9 @@ export const FeedPostStage = forwardRef<
                   aria-roledescription="slide"
                   className={styles.postSlide}
                   data-feed-slide={index}
-                  data-fit={slideFit(item, ratio)}
+                  data-fit={
+                    imageFit === "contain" ? "contain" : slideFit(item, ratio)
+                  }
                   data-media-id={item.id}
                   inert={!active || undefined}
                   key={item.id}
@@ -1226,42 +1323,17 @@ export const FeedPostStage = forwardRef<
                       label={`图像无法加载：${item.alt}`}
                       state="failed"
                     />
-                  ) : (
-                    <button
-                      aria-label={`查看图像：${item.alt}`}
-                      className={styles.postSlideButton}
-                      data-feed-slide-image=""
-                      onClick={(event) =>
-                        tap(index, event.currentTarget, event.detail)
-                      }
-                      tabIndex={active ? 0 : -1}
-                      type="button"
+                  ) : enableLivePlayback && item.live !== undefined ? (
+                    <LivePhotoFrame
+                      active={active && region === "media" && !viewerOpen}
+                      className={styles.postLiveFrame}
+                      controlAttributes={{ "data-feed-stage-control": "" }}
+                      motion={item.live}
                     >
-                      <img
-                        ref={index === 0 ? firstImageRef : undefined}
-                        alt={item.alt}
-                        decoding="async"
-                        draggable={false}
-                        height={item.height}
-                        {...(index === 0
-                          ? mediaLoading(priority)
-                          : { loading: "lazy" as const })}
-                        onError={() => {
-                          setFailed((current) => new Set(current).add(item.id));
-                          if (index === 0) onMediaSettled?.();
-                        }}
-                        onLoad={index === 0 ? onMediaSettled : undefined}
-                        sizes={image.sizes}
-                        src={image.src}
-                        srcSet={image.srcSet}
-                        style={
-                          slideFit(item, ratio) === "cover"
-                            ? placeholderStyle(item.placeholderColor)
-                            : undefined
-                        }
-                        width={item.width}
-                      />
-                    </button>
+                      {imageButton}
+                    </LivePhotoFrame>
+                  ) : (
+                    imageButton
                   )}
                   {index === 0 && live && !broken ? (
                     <CatalogCardLiveBadge />

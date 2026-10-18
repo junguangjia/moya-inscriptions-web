@@ -102,6 +102,12 @@ describe("colophon input geometry", () => {
   it("keeps the feed's draft key apart from Detail's", () => {
     expect(colophonDraftKey("work:w1")).toBe("feed:work:w1");
     expect(colophonDraftKey("feed:work:w1")).toBe("feed:work:w1");
+    expect(colophonDraftKey("detail-colophon:work:w1")).toBe(
+      "detail-colophon:work:w1",
+    );
+    expect(colophonDraftKey("detail-colophon:work:w1")).not.toBe(
+      colophonDraftKey("work:w1"),
+    );
   });
 
   it("widens with the text up to 60% of the stage, holding whole columns there", () => {

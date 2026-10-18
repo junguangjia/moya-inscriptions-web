@@ -439,6 +439,20 @@
   user-select: none;
 }
 
+.postLiveFrame {
+  width: 100%;
+  height: 100%;
+}
+
+/* Playback controls stay independent of the strip's horizontal gestures. */
+.postLiveFrame [data-feed-stage-control] {
+  touch-action: pan-y pinch-zoom;
+}
+
+.postSlide[data-fit="cover"] .postLiveFrame > video {
+  object-fit: cover;
+}
+
 .postSlideButton:focus-visible {
   outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: -2px;

@@ -163,7 +163,9 @@ const openViewerAndReturn = async (
   await expect(detail).toBeVisible();
   await expect(detail.locator("[data-detail-title]")).toHaveText(title);
   // Wide browse-only Detail keeps the hero layout; guard each unbounded click.
-  const mainImage = detail.locator("[data-detail-main-image]");
+  const mainImage = detail.locator(
+    "[data-detail-main-image], [data-feed-slide][aria-hidden=false] [data-feed-slide-image]",
+  );
   await expect(mainImage).toBeVisible();
   await mainImage.click();
   const viewer = productShell(page).getByRole("dialog", { name: "图像查看" });

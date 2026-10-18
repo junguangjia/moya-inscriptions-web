@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
+  );
+});
+
 async function openDetail(page: Page) {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?catalogId=runtime-inscription-multi-media#detail");

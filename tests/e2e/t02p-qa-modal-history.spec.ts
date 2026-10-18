@@ -120,7 +120,9 @@ for (const query of ["", "?qaChrome=hidden"] as const) {
         back,
         "inert Search must not swallow Detail Tab",
       ).not.toBeFocused();
-      const image = detail.locator('[data-detail-main-image][tabindex="0"]');
+      const image = detail.locator(
+        '[data-detail-main-image][tabindex="0"], [data-feed-slide-image][tabindex="0"]',
+      );
       await expect(image).toBeFocused();
       await page.keyboard.press("Shift+Tab");
       if (macWebKit) {

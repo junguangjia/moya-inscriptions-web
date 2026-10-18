@@ -1,5 +1,7 @@
 "use client";
 
+import { FeedColophon } from "../authors/feed-colophon";
+
 import { useMemo } from "react";
 
 import { LiveCommentSection } from "../comments/live-comment-section";
@@ -30,6 +32,7 @@ import { CatalogSearchHeaderAction } from "../search/catalog-search";
 import { resolveBrowseOnlySession } from "../shell/browse-only";
 
 import type { CommunityCommentSurface } from "./community-comment-surface";
+import type { ContentIdentity } from "@moya/contracts";
 import type {
   BrowseOnlyPolicy,
   WideScreenBrowseOnlyHint,
@@ -96,6 +99,15 @@ export const ProductApplication = ({
                 key={catalogId}
                 signInHref={comments.signInHref}
               />
+            ),
+            renderColophon: (target: ContentIdentity, title: string) => (
+              <AuthorProvider signInHref={comments.signInHref}>
+                <FeedColophon
+                  target={target}
+                  title={title}
+                  presentation="detail"
+                />
+              </AuthorProvider>
             ),
           })}
     />
@@ -196,6 +208,15 @@ const AuthorProduct = ({
                   <DiscussionSection
                     target={target}
                     key={`${target.type}:${target.id}`}
+                  />
+                )}
+                renderColophon={(target, title) => (
+                  <FeedColophon
+                    target={target}
+                    title={title}
+                    presentation="detail"
+                    consumeLocation
+                    authReturnSlot={`detail-colophon:${target.type}:${target.id}`}
                   />
                 )}
                 renderDetailActions={(detail) => (

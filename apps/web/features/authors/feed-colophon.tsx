@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, RefObject } from "react";
 import type { DiscussionTarget } from "@moya/contracts";
 import { useAuthEntry } from "../auth/auth-return";
 import type {
@@ -37,6 +37,17 @@ export interface FeedColophonProps {
   readonly title: string;
   /** The count shown before the discussion is read (the feed's own). */
   readonly fallbackCount?: number | null | undefined;
+  /** Detail owns a separate restoration slot and consumes exact comment links. */
+  readonly presentation?: "feed" | "detail";
+  readonly authReturnSlot?: string;
+  readonly consumeLocation?: boolean;
+}
+
+export interface FeedColophonPresentationProps extends FeedColophonProps {
+  /** QA supplies the same thread shape without mounting a live data reader. */
+  readonly thread: DiscussionThread;
+  readonly enabled?: boolean;
+  readonly headRef?: RefObject<HTMLElement | null>;
 }
 
 const NOTICE_MS = 4000;
@@ -131,29 +142,84 @@ export const FeedColophon = (props: FeedColophonProps) => {
   );
 };
 
-const ScopedFeedColophon = ({
+const ScopedFeedColophon = (props: FeedColophonProps) => {
+  const stage = useFeedStage();
+  const author = useAuthors();
+  const headRef = useRef<HTMLElement>(null);
+  const [approached, setApproached] = useState(false);
+  const consumeLocation =
+    props.consumeLocation ?? props.presentation === "detail";
+  const pending = (
+    consumeLocation ? author.cache.get("discussion-location") : undefined
+  ) as { target: DiscussionTarget; id: string } | undefined;
+  const exactLocation =
+    consumeLocation &&
+    pending !== undefined &&
+    contentKey(pending.target) === contentKey(props.target);
+  const enabled = approached || stage?.region === "comments" || exactLocation;
+  const thread = useDiscussionThread({
+    target: props.target,
+    enabled,
+    mode: "colophon",
+    authReturnSlot:
+      props.authReturnSlot ??
+      `${props.presentation === "detail" ? "detail" : "feed"}-colophon:${contentKey(props.target)}`,
+    consumeLocation,
+  });
+  const strip = stage?.strip ?? null;
+  const imageCount = stage?.count ?? 1;
+  useEffect(() => {
+    if (enabled && !approached) setApproached(true);
+  }, [approached, enabled]);
+  useEffect(() => {
+    const head = headRef.current;
+    if (approached || head === null || (stage !== null && strip === null))
+      return;
+    if (typeof IntersectionObserver !== "function") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) setApproached(true);
+      },
+      {
+        root: strip,
+        rootMargin:
+          stage?.surface === "reading" || imageCount > 1
+            ? APPROACH_MARGIN
+            : APPROACH_MARGIN_SINGLE,
+        threshold: 0,
+      },
+    );
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, [approached, imageCount, stage, strip]);
+  return (
+    <FeedColophonPresentation
+      {...props}
+      enabled={enabled}
+      headRef={headRef}
+      thread={thread}
+    />
+  );
+};
+
+export const FeedColophonPresentation = ({
   target,
   title,
   fallbackCount,
-}: FeedColophonProps) => {
+  presentation = "feed",
+  thread,
+  enabled = true,
+  headRef: suppliedHeadRef,
+}: FeedColophonPresentationProps) => {
   const key = contentKey(target);
   const author = useAuthors();
   const shell = useProductShell();
   const enterAuth = useAuthEntry();
   const stage = useFeedStage();
-  const headRef = useRef<HTMLElement>(null);
+  const localHeadRef = useRef<HTMLElement>(null);
+  const headRef = suppliedHeadRef ?? localHeadRef;
   const inputRef = useRef<FeedColophonInputHandle>(null);
   const region = stage?.region;
-  // Latched: leaving the colophons never resets or rereads the thread.
-  const [approached, setApproached] = useState(false);
-  const enabled = approached || region === "comments";
-  const thread = useDiscussionThread({
-    target,
-    enabled,
-    mode: "colophon",
-    authReturnSlot: `feed-colophon:${key}`,
-    consumeLocation: false,
-  });
   const sectionRef = useRef<HTMLElement>(null);
   const sentinelRef = useRef<HTMLSpanElement>(null);
   const stageRef = useRef<FeedStageApi | null>(stage);
@@ -197,31 +263,6 @@ const ScopedFeedColophon = ({
   const holdingRef = useRef(holding);
   holdingRef.current = holding;
   const [, commitHeld] = useState(0);
-
-  useEffect(() => {
-    if (enabled && !approached) setApproached(true);
-  }, [approached, enabled]);
-
-  // The first read waits until the reader nears the colophons.
-  const imageCount = stage?.count ?? 1;
-  useEffect(() => {
-    const head = headRef.current;
-    if (approached || head === null) return undefined;
-    if (stage !== null && strip === null) return undefined;
-    if (typeof IntersectionObserver !== "function") return undefined;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) setApproached(true);
-      },
-      {
-        root: strip,
-        rootMargin: imageCount > 1 ? APPROACH_MARGIN : APPROACH_MARGIN_SINGLE,
-        threshold: 0,
-      },
-    );
-    observer.observe(head);
-    return () => observer.disconnect();
-  }, [approached, imageCount, stage, strip]);
 
   // The next page is requested when the end comes near. Each observer asks
   // once; a new one after every read (a page, a refresh or a failure)
@@ -789,6 +830,7 @@ const ScopedFeedColophon = ({
       className={styles.colophon}
       data-colophon-writing={writing ? "" : undefined}
       data-feed-colophon=""
+      data-colophon-presentation={presentation}
       onCopy={(event) => {
         // Copies what the reader selected, digits and all (see the helper).
         // A copy in the input is the input's own.
@@ -822,7 +864,9 @@ const ScopedFeedColophon = ({
             actorId={author.viewer?.id ?? null}
             closed={thread.composerClosed}
             closedNote={thread.closedNote}
-            contentKey={key}
+            contentKey={
+              presentation === "detail" ? `detail-colophon:${key}` : key
+            }
             notice={toast.message}
             onSubmit={(text, replyTarget) =>
               replyTarget === null

@@ -13,10 +13,13 @@ export interface FeedStageSettle {
 }
 
 export interface FeedStageApi {
+  /** A text scroll uses real head geometry instead of an image-page count. */
+  readonly surface?: "media" | "reading";
   /** The scroller, once mounted; an IntersectionObserver root. */
   readonly strip: HTMLDivElement | null;
   /** How many images precede the comments region. */
   readonly count: number;
+  readonly commentsStartOffset?: () => number | null;
   /** The settled region. */
   readonly region: "media" | "comments";
   /** Distance scrolled from the strip's start (its right edge), in pixels. */

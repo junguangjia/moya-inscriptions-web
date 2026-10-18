@@ -5,6 +5,12 @@ import { addSessionCookie } from "./support/session-cookie";
 
 import type { Locator, Page } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
+  );
+});
+
 // Wide-screen browse-only for visitors without an account (pc-browse-only-v1),
 // full regression. The fixture issues no session cookie, so every page here is
 // anonymous to the server unless a test adds one.

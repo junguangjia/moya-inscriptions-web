@@ -2,6 +2,12 @@ import { devices, expect, test } from "@playwright/test";
 
 import type { Page } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
+  );
+});
+
 const detailUrl =
   "/dev/t02p/qa?catalogId=qa-visual-inscription-02&acceptance=mig-d2";
 

@@ -34,7 +34,11 @@ import { TopicDetail } from "../topics/topic-detail";
 
 import type { T02pDevelopmentCatalogDestinationStates } from "./catalog-scenarios";
 import type { CatalogDetailPresentationLoader } from "../detail/load-catalog-detail";
-import type { ArticleId, DiscussionTarget } from "@moya/contracts";
+import type {
+  ArticleId,
+  ContentIdentity,
+  DiscussionTarget,
+} from "@moya/contracts";
 import type {
   ProductShellEditorOverlayControls,
   ProductShellProfileOverlayRenderProps,
@@ -86,6 +90,10 @@ export interface T02pProductPreviewProps {
   ) => ReactNode;
   readonly workDetailLoader?: CatalogDetailPresentationLoader;
   readonly renderDiscussion?: (target: DiscussionTarget) => ReactNode;
+  readonly renderColophon?: (
+    target: ContentIdentity,
+    title: string,
+  ) => ReactNode;
   readonly renderDetailActions?: (
     detail: CatalogDetailPresentation,
     refresh: () => void,
@@ -120,6 +128,7 @@ export const T02pProductPreview = ({
   articleEditorEnabled = false,
   workDetailLoader,
   renderDiscussion,
+  renderColophon,
   renderDetailActions,
   renderDiscover,
   renderInscriptions,
@@ -203,6 +212,7 @@ export const T02pProductPreview = ({
             key={`${detailScopeKey}:${target.type}:${target.id}:${navigationRevision}`}
             catalogId={target.id}
             target={target}
+            renderColophon={renderColophon}
             commentSection={
               renderDiscussion?.(target) ??
               (target.type === "catalog"

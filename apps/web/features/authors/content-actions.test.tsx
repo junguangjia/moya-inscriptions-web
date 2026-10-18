@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Root } from "react-dom/client";
 import type { ContentIdentity, ContentState } from "@moya/contracts";
 
-const { author, state } = vi.hoisted(() => ({
+const { author, state, enterAuth } = vi.hoisted(() => ({
+  enterAuth: vi.fn(),
   author: {
     viewer: { id: "viewer" } as { id: string } | null,
     checking: false,
@@ -24,7 +25,9 @@ vi.mock("./author-context", () => ({
   shareContent: vi.fn(async () => "shared"),
 }));
 vi.mock("./author-data", () => ({ authorClient: { state } }));
+vi.mock("../auth/auth-return", () => ({ useAuthEntry: () => enterAuth }));
 import { ContentActions, useContentActions } from "./content-actions";
+import { DetailInteractionsContext } from "../detail/detail-interactions";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -103,6 +106,54 @@ describe("Detail reaction totals", () => {
     await act(async () => button("收藏").click());
     expect(count("favorite")).toBe("4");
     expect(button("收藏").getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("calligraphy Detail actions", () => {
+  const mountCalligraphy = async () => {
+    const onComment = vi.fn();
+    let doubleTap: (() => void) | undefined;
+    const registerLike = vi.fn((like: () => void) => {
+      doubleTap = like;
+      return () => {
+        doubleTap = undefined;
+      };
+    });
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <DetailInteractionsContext.Provider value={{ onComment, registerLike }}>
+          <ContentActions target={target} title="测试" />
+        </DetailInteractionsContext.Provider>,
+      ),
+    );
+    return { onComment, doubleTap: () => doubleTap?.() };
+  };
+
+  it("uses the same guest sign-in entry for the like button and image double tap", async () => {
+    author.viewer = null;
+    const controls = await mountCalligraphy();
+    await act(async () => button("喜欢").click());
+    expect(enterAuth).toHaveBeenCalledWith("/sign-in");
+    enterAuth.mockClear();
+    act(() => controls.doubleTap());
+    expect(enterAuth).toHaveBeenCalledWith("/sign-in");
+    expect(author.like).not.toHaveBeenCalled();
+    act(() => button("评论").click());
+    expect(controls.onComment).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one controller with double tap and never un-likes an already liked work", async () => {
+    const controls = await mountCalligraphy();
+    expect(state).toHaveBeenCalledTimes(1);
+    state.mockResolvedValue(snapshot({ liked: true, likeCount: 1 }));
+    await act(async () => controls.doubleTap());
+    expect(author.like).toHaveBeenCalledWith(target, true);
+    expect(button("喜欢").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => controls.doubleTap());
+    expect(author.like).toHaveBeenCalledTimes(1);
   });
 });
 

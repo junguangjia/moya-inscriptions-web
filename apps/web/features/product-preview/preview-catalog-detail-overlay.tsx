@@ -20,6 +20,8 @@ export interface PreviewCatalogDetailOverlayProps {
   readonly catalogId: string;
   readonly target?: ContentIdentity;
   readonly commentSection?: ReactNode;
+  readonly renderColophon?:
+    ((target: ContentIdentity, title: string) => ReactNode) | undefined;
   readonly renderActions?: (
     detail: CatalogDetailPresentation,
     refresh: () => void,
@@ -35,6 +37,7 @@ export const PreviewCatalogDetailOverlay = ({
   catalogId,
   target,
   commentSection,
+  renderColophon,
   renderActions,
   initialScrollTop,
   loader,
@@ -52,6 +55,7 @@ export const PreviewCatalogDetailOverlay = ({
     browseOnly,
     changeViewerMedia,
     closeViewer,
+    feedLayout,
     openViewer,
     orientation,
     platform,
@@ -61,6 +65,7 @@ export const PreviewCatalogDetailOverlay = ({
   // an empty node, so the Detail keeps its hero layout. The actions themselves
   // keep only the plain author line.
   const readOnly = browseOnly === true;
+  const calligraphy = platform !== "pc" && feedLayout === "single";
   const generationRef = useRef(0);
   const missingTargetRef = useRef<ContentIdentity | null>(null);
   const [revision, setRevision] = useState(0);
@@ -124,7 +129,17 @@ export const PreviewCatalogDetailOverlay = ({
       activeViewerMediaId={activeViewerMediaId}
       backButtonRef={backButtonRef}
       catalogId={catalogId}
-      commentSection={readOnly ? undefined : commentSection}
+      calligraphy={calligraphy}
+      positionKey={`${author?.viewer?.id ?? "guest"}:${targetType}:${targetId}:${calligraphy ? "calligraphy" : "normal"}`}
+      commentSection={readOnly || calligraphy ? undefined : commentSection}
+      colophon={
+        !readOnly && calligraphy && state.state === "loaded"
+          ? (renderColophon?.(
+              { type: targetType, id: targetId },
+              state.detail.title,
+            ) ?? commentSection)
+          : undefined
+      }
       detailActions={
         state.state === "loaded"
           ? renderActions?.(state.detail, () => setRevision((v) => v + 1))
