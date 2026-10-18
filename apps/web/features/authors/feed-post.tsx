@@ -131,6 +131,7 @@ export const FeedPost = ({
           });
         }}
         priority={priority}
+        resetOnExit
         viewerOpen={viewerOpen}
         {...(onMediaSettled === undefined ? {} : { onMediaSettled })}
       />

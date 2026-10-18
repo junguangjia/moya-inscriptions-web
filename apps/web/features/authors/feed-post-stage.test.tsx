@@ -57,7 +57,16 @@ const render = (overrides: Partial<FeedPostStageProps> = {}) => {
     ...overrides,
   };
   const draw = (next: Partial<FeedPostStageProps> = {}) =>
-    act(() => root.render(<FeedPostStage ref={ref} {...props} {...next} />));
+    act(() =>
+      root.render(
+        <section data-test-feed-port="" style={{ overflowY: "auto" }}>
+          <article data-feed-post="">
+            <FeedPostStage ref={ref} {...props} {...next} />
+            <p>Expanded post body</p>
+          </article>
+        </section>,
+      ),
+    );
   draw();
   const strip = container.querySelector<HTMLElement>("[data-feed-stage]")!;
   // A modern RTL scroller: 0 at the right edge, negative towards the end.
@@ -165,7 +174,177 @@ const stubResizeObserver = () => {
     });
 };
 
+const stubPostVisibility = () => {
+  const observers: {
+    callback: IntersectionObserverCallback;
+    options: IntersectionObserverInit | undefined;
+    observe: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+  }[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      constructor(
+        callback: IntersectionObserverCallback,
+        options?: IntersectionObserverInit,
+      ) {
+        observers.push({
+          callback,
+          options,
+          observe: this.observe,
+          disconnect: this.disconnect,
+        });
+      }
+    },
+  );
+  const notify = (top: number, isIntersecting: boolean, height = 600) =>
+    act(() => {
+      const observer = observers.at(-1)!;
+      observer.callback(
+        [
+          {
+            isIntersecting,
+            boundingClientRect: new DOMRect(0, top, WIDTH, height),
+            rootBounds: new DOMRect(0, 100, WIDTH, 600),
+          } as IntersectionObserverEntry,
+        ],
+        {} as IntersectionObserver,
+      );
+    });
+  return { observers, notify };
+};
+
 describe("FeedPostStage", () => {
+  it.each([-600, 701])(
+    "returns to the first image after the whole post exits at y=%s",
+    (top) => {
+      const { observers, notify } = stubPostVisibility();
+      const onActiveMediaIndexChange = vi.fn();
+      const view = render({ resetOnExit: true, onActiveMediaIndexChange });
+      expect(observers).toHaveLength(1);
+      expect(observers[0]!.options?.root).toBe(
+        view.container.querySelector("[data-test-feed-port]"),
+      );
+      expect(observers[0]!.observe).toHaveBeenCalledExactlyOnceWith(
+        view.container.querySelector("[data-feed-post]"),
+      );
+      notify(100, true);
+      view.scrollToOffset(WIDTH * 2);
+      expect(view.strip.dataset.feedStageIndex).toBe("2");
+      notify(top, false);
+      notify(100, true);
+      expect(Math.abs(view.strip.scrollLeft)).toBe(0);
+      expect(view.strip.dataset.feedStageIndex).toBe("0");
+      expect(view.strip.dataset.feedStageRegion).toBe("media");
+      expect(
+        view.container
+          .querySelector("[data-feed-post-dots]")
+          ?.getAttribute("data-feed-post-progress"),
+      ).toBe("0");
+      expect(view.slideButton(0).tabIndex).toBe(0);
+      expect(onActiveMediaIndexChange).toHaveBeenLastCalledWith(0);
+    },
+  );
+
+  it("preserves the image while any of the post remains visible or a tab moves horizontally", () => {
+    const { notify } = stubPostVisibility();
+    const view = render({ resetOnExit: true });
+    notify(100, true);
+    view.scrollToOffset(WIDTH);
+    notify(-200, true);
+    expect(view.strip.dataset.feedStageIndex).toBe("1");
+    notify(100, false);
+    expect(view.strip.dataset.feedStageIndex).toBe("1");
+    // Hidden layout has no readable geometry; it is not a vertical exit.
+    notify(-100, false, 0);
+    expect(view.strip.dataset.feedStageIndex).toBe("1");
+  });
+
+  it("ignores an initial offscreen post and disconnects its observer on unmount", () => {
+    const { observers, notify } = stubPostVisibility();
+    const view = render({ resetOnExit: true });
+    view.scrollToOffset(WIDTH);
+    notify(-600, false);
+    expect(view.strip.dataset.feedStageIndex).toBe("1");
+    act(() => roots.pop()!.unmount());
+    expect(observers[0]!.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a hidden profile tab when switching also restores a different vertical position", () => {
+    const { notify } = stubPostVisibility();
+    const view = render({ resetOnExit: true });
+    const panel = view.container.querySelector("[data-test-feed-port]")!;
+    notify(100, true);
+    view.scrollToOffset(WIDTH);
+    panel.setAttribute("aria-hidden", "true");
+    panel.setAttribute("inert", "");
+    notify(701, false);
+    expect(view.strip.dataset.feedStageIndex).toBe("1");
+    panel.removeAttribute("aria-hidden");
+    panel.removeAttribute("inert");
+    notify(100, true);
+    expect(view.strip.dataset.feedStageIndex).toBe("1");
+    notify(-600, false);
+    expect(view.strip.dataset.feedStageIndex).toBe("0");
+  });
+
+  it("resets on the first vertical exit after revealing a tab without a new intersection entry", () => {
+    const { notify } = stubPostVisibility();
+    const view = render({ resetOnExit: true });
+    const panel = view.container.querySelector("[data-test-feed-port]")!;
+    panel.setAttribute("aria-hidden", "true");
+    panel.setAttribute("inert", "");
+    view.scrollToOffset(WIDTH);
+    notify(100, true);
+    panel.removeAttribute("aria-hidden");
+    panel.removeAttribute("inert");
+    // Explicit-root observers need not report the horizontal reveal.
+    notify(-600, false);
+    expect(view.strip.dataset.feedStageIndex).toBe("0");
+  });
+
+  it("resets comments, held snapping and pending scrolling without reviving a tap", () => {
+    const { notify } = stubPostVisibility();
+    const probe = stageProbe();
+    const onRegionChange = vi.fn();
+    const view = render({
+      resetOnExit: true,
+      comments: probe.comments,
+      onRegionChange,
+    });
+    notify(100, true);
+    view.scrollToOffset(WIDTH * 3);
+    expect(view.strip.dataset.feedStageRegion).toBe("comments");
+    act(() => probe.seen.current!.holdSnap?.());
+    expect(view.strip.style.scrollSnapType).toBe("none");
+    act(() => view.ref.current!.scrollToIndex(1));
+    view.tap(1);
+    notify(-600, false);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(view.strip.dataset.feedStageRegion).toBe("media");
+    expect(view.strip.dataset.feedStageIndex).toBe("0");
+    expect(Math.abs(view.strip.scrollLeft)).toBe(0);
+    expect(view.strip.style.scrollSnapType).toBe("");
+    expect(probe.seen.current!.isSettled()).toBe(true);
+    expect(onRegionChange).toHaveBeenLastCalledWith("media");
+    expect(view.props.onOpenViewer).not.toHaveBeenCalled();
+  });
+
+  it("leaves Detail selection and an open Viewer outside the exit-reset behavior", () => {
+    const { observers } = stubPostVisibility();
+    const detail = render({ activeMediaIndex: 1 });
+    expect(detail.strip.dataset.feedStageIndex).toBe("1");
+    expect(observers).toHaveLength(0);
+    const feed = render({ resetOnExit: true, viewerOpen: true });
+    expect(observers).toHaveLength(0);
+    feed.draw({ viewerOpen: false });
+    expect(observers).toHaveLength(1);
+    feed.draw({ viewerOpen: true });
+    expect(observers[0]!.disconnect).toHaveBeenCalledOnce();
+  });
+
   it("sizes the stage from the first image within square and 4:5", () => {
     const { container } = render();
     const frame = container.querySelector<HTMLElement>(
