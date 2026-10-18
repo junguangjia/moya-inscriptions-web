@@ -508,6 +508,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         }}
         onPointerCancel={() => {
           pointerDown.current = false;
+          noteIntent();
         }}
         onWheel={noteIntent}
         onScroll={() => {
