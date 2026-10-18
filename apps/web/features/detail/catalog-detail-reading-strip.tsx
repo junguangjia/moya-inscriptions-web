@@ -520,6 +520,9 @@ export const CatalogDetailReadingStrip = forwardRef<
             restore();
             return;
           }
+          // Continuous native momentum retains user intent until it settles.
+          if (navigationOffset.current === null)
+            intentUntil.current = performance.now() + 500;
           updateRegion();
           record();
           if (timer.current !== null) window.clearTimeout(timer.current);
