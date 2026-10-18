@@ -483,6 +483,12 @@
   --colophon-input-top: calc(-1 * var(--colophon-top));
 }
 
+/* Detail has no dock over this lower reading strip. Its input remains
+   confined to the colophons and is hidden while prose is being read. */
+.colophon[data-colophon-presentation="detail"] {
+  padding-inline-end: var(--yoyi-space-6);
+}
+
 /* Written in, the colophons recede (the input's edge no longer cuts
    through readable text); the one it answers stays. */
 .head,

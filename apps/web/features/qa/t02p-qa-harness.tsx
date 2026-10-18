@@ -12,6 +12,7 @@ import {
   qaCommentScenarioNames,
 } from "../comments/comment-scenarios";
 import { useQaCommentStore } from "../comments/use-qa-comment-store";
+import { QaDetailColophon } from "./qa-detail-colophon";
 import { homeScenarioNames } from "./home-scenario-contract";
 import { loadCatalogDetailPresentation } from "../detail/load-catalog-detail";
 import {
@@ -362,6 +363,15 @@ export const T02pQaHarness = ({
                     onToggleLike={(commentId, replyId) =>
                       commentStore.toggleLike(catalogId, commentId, replyId)
                     }
+                    scenario={commentScenario}
+                  />
+                )}
+                renderColophon={(target, title) => (
+                  <QaDetailColophon
+                    key={`${commentScenario}:${target.type}:${target.id}`}
+                    target={target}
+                    title={title}
+                    store={commentStore}
                     scenario={commentScenario}
                   />
                 )}

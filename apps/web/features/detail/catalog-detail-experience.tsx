@@ -13,6 +13,7 @@ import { CatalogDetailScreen } from "./catalog-detail-screen";
 import { CatalogDetailScrollContext } from "./catalog-detail-scroll";
 import { CatalogDetailWithdrawalContext } from "./catalog-detail-withdrawal";
 import { CatalogViewer } from "./catalog-viewer";
+import { useAuthReturnView } from "../auth/auth-return";
 import styles from "./catalog-detail.module.css";
 
 import type {
@@ -32,6 +33,9 @@ export interface CatalogDetailExperienceProps {
   readonly backButtonRef: RefObject<HTMLButtonElement | null>;
   readonly catalogId: string;
   readonly commentSection?: ReactNode;
+  readonly colophon?: ReactNode;
+  readonly calligraphy?: boolean;
+  readonly positionKey?: string | undefined;
   readonly detailActions?: ReactNode;
   readonly initialScrollTop: number;
   readonly onBack: () => void;
@@ -54,11 +58,17 @@ const SCROLL_KEYS = new Set([
   "PageUp",
 ]);
 
+// Session-only reading state, scoped by the composition to account and content.
+const mediaPositions = new Map<string, number>();
+
 export const CatalogDetailExperience = ({
   activeViewerMediaId,
   backButtonRef,
   catalogId,
   commentSection,
+  colophon,
+  calligraphy = false,
+  positionKey,
   detailActions,
   initialScrollTop,
   onBack,
@@ -87,7 +97,36 @@ export const CatalogDetailExperience = ({
   const viewerOpenerRef = useRef<HTMLElement | null>(null);
   const viewerWasOpenRef = useRef(false);
   const viewerOpenSuppressedUntilRef = useRef(0);
-  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
+  const mediaIndexRef = useRef(0);
+  const mediaScopeRef = useRef(positionKey);
+  const returnedMedia = useAuthReturnView(
+    `calligraphy-detail-media:${catalogId}`,
+    () => ({ index: mediaIndexRef.current }),
+  );
+  const restoredMediaIndex =
+    calligraphy &&
+    Number.isSafeInteger(returnedMedia?.index) &&
+    returnedMedia!.index >= 0
+      ? returnedMedia!.index
+      : undefined;
+  const [activeMediaIndex, setActiveMediaIndex] = useState(
+    () =>
+      restoredMediaIndex ??
+      (positionKey === undefined ? 0 : (mediaPositions.get(positionKey) ?? 0)),
+  );
+  mediaIndexRef.current = activeMediaIndex;
+  useEffect(() => {
+    if (
+      !calligraphy ||
+      positionKey === undefined ||
+      mediaScopeRef.current !== positionKey
+    )
+      return;
+    mediaPositions.delete(positionKey);
+    mediaPositions.set(positionKey, activeMediaIndex);
+    if (mediaPositions.size > 100)
+      mediaPositions.delete(mediaPositions.keys().next().value!);
+  }, [activeMediaIndex, calligraphy, positionKey]);
   const [withdrawal, setWithdrawal] = useState<{
     readonly id: string;
     readonly notice: CatalogDetailWithdrawalNotice;
@@ -104,6 +143,12 @@ export const CatalogDetailExperience = ({
   // A withdrawn Detail offers no media: the Viewer closes and nothing plays.
   const media =
     state.state === "loaded" && withdrawn === null ? state.detail.media : [];
+  useEffect(() => {
+    if (state.state === "loaded")
+      setActiveMediaIndex((index) =>
+        Math.max(0, Math.min(index, media.length - 1)),
+      );
+  }, [state.state, media.length]);
   const requestedViewerIndex =
     activeViewerMediaId === null
       ? -1
@@ -231,9 +276,15 @@ export const CatalogDetailExperience = ({
   }, [catalogId, clearUserScrollIntent, restoreDesiredScroll]);
 
   useEffect(() => {
-    setActiveMediaIndex(0);
+    mediaScopeRef.current = positionKey;
+    setActiveMediaIndex(
+      restoredMediaIndex ??
+        (calligraphy && positionKey !== undefined
+          ? (mediaPositions.get(positionKey) ?? 0)
+          : 0),
+    );
     setWithdrawal(null);
-  }, [catalogId]);
+  }, [catalogId, positionKey, calligraphy, restoredMediaIndex]);
 
   // The notice replaces the content in place: read from the top, focused.
   useEffect(() => {
@@ -275,7 +326,7 @@ export const CatalogDetailExperience = ({
       restoreDesiredScroll();
       window.requestAnimationFrame(() => {
         const currentOpener = scrollRef.current?.querySelector<HTMLElement>(
-          "[data-detail-main-image]",
+          "[data-detail-main-image], [data-feed-slide][aria-hidden=false] [data-feed-slide-image]",
         );
         const opener = currentOpener ?? viewerOpenerRef.current;
         if (opener?.isConnected === true) opener.focus({ preventScroll: true });
@@ -367,6 +418,9 @@ export const CatalogDetailExperience = ({
               activeMediaIndex={activeMediaIndex}
               backButtonRef={backButtonRef}
               commentSection={commentSection}
+              colophon={colophon}
+              calligraphy={calligraphy}
+              positionKey={positionKey}
               detailActions={detailActions}
               mediaMotionSuspended={viewerOpen}
               onActiveMediaIndexChange={setActiveMediaIndex}
@@ -397,6 +451,7 @@ export const CatalogDetailExperience = ({
         </CatalogDetailWithdrawalContext.Provider>
       </div>
       <CatalogViewer
+        direction={calligraphy ? "rtl" : "ltr"}
         index={activeMediaIndex}
         media={media}
         onClose={() => {

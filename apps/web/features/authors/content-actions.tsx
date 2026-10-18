@@ -12,6 +12,8 @@ import {
   usePublishedCommentCount,
 } from "./content-state-bus";
 import { QuickActionIcon } from "../quick-actions/quick-action-card-action";
+import { FeedPostActions } from "../quick-actions/feed-post-actions";
+import { useDetailInteractions } from "../detail/detail-interactions";
 import type { QuickActionName } from "../quick-actions/quick-action-types";
 import styles from "./content-actions.module.css";
 
@@ -284,5 +286,36 @@ export const ContentActions = ({
   title: string;
 }) => {
   const actions = useContentActions(target, title, true);
+  const { viewer, signInHref } = useAuthors();
+  const enterAuth = useAuthEntry();
+  const interactions = useDetailInteractions();
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  const registerLike = interactions?.registerLike;
+  useEffect(
+    () =>
+      registerLike?.(() => {
+        if (!viewer) enterAuth(signInHref);
+        else void actionsRef.current.ensureLiked();
+      }, actions.canLike),
+    [registerLike, actions.canLike, viewer, signInHref, enterAuth],
+  );
+  if (interactions !== null)
+    return (
+      <FeedPostActions
+        content={{ kind: target.type, id: target.id, title }}
+        environment={{
+          ...actions.environment,
+          onAction: (action, content) => {
+            if (action === "like" && !viewer) {
+              enterAuth(signInHref);
+              return;
+            }
+            return actions.environment.onAction(action, content);
+          },
+        }}
+        onComment={interactions.onComment}
+      />
+    );
   return <ContentActionsView target={target} title={title} actions={actions} />;
 };

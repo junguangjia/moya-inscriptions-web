@@ -67,7 +67,11 @@ test("Formal Search preserves server paging order and Detail/Viewer return state
   await expect(detail.locator("[data-detail-title]")).toHaveText(
     "运行时多图碑刻",
   );
-  await detail.locator("[data-detail-main-image]").click();
+  await detail
+    .locator(
+      "[data-detail-main-image], [data-feed-slide][aria-hidden=false] [data-feed-slide-image]",
+    )
+    .click();
   const viewer = page.getByRole("dialog", { name: "图像查看", exact: true });
   await expect(viewer).toBeVisible();
   await page.goBack();

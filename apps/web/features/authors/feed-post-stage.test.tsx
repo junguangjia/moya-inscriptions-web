@@ -123,6 +123,7 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 /** Renders inside the comments region and keeps the latest stage context. */
@@ -189,6 +190,63 @@ describe("FeedPostStage", () => {
         (slide) => slide.dataset.fit,
       ),
     ).toEqual(["cover", "contain", "cover"]);
+  });
+
+  it("contains every image when Detail requests an uncropped stage", () => {
+    const { container } = render({ imageFit: "contain" });
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-feed-slide]")].map(
+        (slide) => slide.dataset.fit,
+      ),
+    ).toEqual(["contain", "contain", "contain"]);
+    expect(container.querySelectorAll("img")).toHaveLength(3);
+  });
+
+  it("reports a changed image after settling, without reporting the comments", () => {
+    const onActiveMediaIndexChange = vi.fn();
+    const { strip, scrollToOffset } = render({
+      onActiveMediaIndexChange,
+      comments: <p>题跋</p>,
+    });
+    strip.scrollLeft = -WIDTH;
+    act(() => strip.dispatchEvent(new Event("scroll")));
+    act(() => vi.advanceTimersByTime(60));
+    expect(onActiveMediaIndexChange).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(140));
+    expect(onActiveMediaIndexChange).toHaveBeenCalledExactlyOnceWith(1);
+    scrollToOffset(WIDTH);
+    expect(onActiveMediaIndexChange).toHaveBeenCalledTimes(1);
+    scrollToOffset(WIDTH * 3);
+    expect(onActiveMediaIndexChange).toHaveBeenCalledTimes(1);
+    scrollToOffset(WIDTH * 2);
+    expect(onActiveMediaIndexChange).toHaveBeenLastCalledWith(2);
+  });
+
+  it("restores an externally selected Viewer image without echoing a change", () => {
+    const onActiveMediaIndexChange = vi.fn();
+    const { strip, draw } = render({
+      activeMediaIndex: 0,
+      onActiveMediaIndexChange,
+    });
+    draw({ activeMediaIndex: 2, viewerOpen: true });
+    expect(strip.scrollLeft).toBe(-WIDTH * 2);
+    expect(strip.dataset.feedStageIndex).toBe("2");
+    draw({ activeMediaIndex: 2, viewerOpen: false });
+    expect(strip.scrollLeft).toBe(-WIDTH * 2);
+    expect(strip.dataset.feedStageIndex).toBe("2");
+    expect(onActiveMediaIndexChange).not.toHaveBeenCalled();
+    // Media can disappear while the Detail remains mounted.
+    draw({ activeMediaIndex: 2, media: [three[0]!] });
+    expect(Math.abs(strip.scrollLeft)).toBe(0);
+    expect(strip.dataset.feedStageIndex).toBe("0");
+  });
+
+  it("pins an initial external index when stage geometry becomes available", () => {
+    const resize = stubResizeObserver();
+    const { strip } = render({ activeMediaIndex: 2 });
+    resize();
+    expect(strip.scrollLeft).toBe(-WIDTH * 2);
+    expect(strip.dataset.feedStageIndex).toBe("2");
   });
 
   it("keeps every swipe on the stage away from the outer pagers", () => {
@@ -445,6 +503,175 @@ describe("FeedPostStage", () => {
     expect(container.querySelectorAll('[aria-label="实况照片"]')).toHaveLength(
       1,
     );
+  });
+
+  describe("opt-in Live Photo playback", () => {
+    const liveMedia = three.map((item) => ({
+      ...item,
+      live: { motionSrc: `/media/${item.id}.mp4`, hasAudio: true },
+    }));
+    let play: ReturnType<typeof vi.spyOn>;
+    let pause: ReturnType<typeof vi.spyOn>;
+    let load: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      play = vi
+        .spyOn(HTMLMediaElement.prototype, "play")
+        .mockResolvedValue(undefined);
+      pause = vi
+        .spyOn(HTMLMediaElement.prototype, "pause")
+        .mockImplementation(() => {});
+      load = vi
+        .spyOn(HTMLMediaElement.prototype, "load")
+        .mockImplementation(() => {});
+    });
+
+    it("keeps the default feed as stills even when motion is available", () => {
+      const { container } = render({ media: liveMedia, live: true });
+      expect(container.querySelector("[data-live-photo]")).toBeNull();
+      expect(container.querySelector("video")).toBeNull();
+      expect(
+        container.querySelectorAll('[aria-label="实况照片"]'),
+      ).toHaveLength(1);
+      expect(play).not.toHaveBeenCalled();
+    });
+
+    it("loads motion only on explicit play and isolates controls from image taps and gestures", async () => {
+      const probe = stageProbe();
+      const onOpenViewer = vi.fn();
+      const onDoubleTap = vi.fn();
+      const { container, tap, strip } = render({
+        media: liveMedia,
+        enableLivePlayback: true,
+        comments: probe.comments,
+        onOpenViewer,
+        onDoubleTap,
+      });
+      const control = container.querySelector<HTMLButtonElement>(
+        '[data-feed-slide="0"] [data-live-photo-play]',
+      )!;
+      const video = container.querySelector<HTMLVideoElement>("video")!;
+      expect(container.querySelectorAll("video")).toHaveLength(1);
+      expect(video.hasAttribute("src")).toBe(false);
+      expect(play).not.toHaveBeenCalled();
+      // A playback control also cancels the preceding image's delayed tap.
+      tap();
+      act(() => {
+        control.dispatchEvent(
+          new TouchEvent("touchstart", {
+            bubbles: true,
+            touches: [{ clientX: 20, clientY: 20, identifier: 0 } as Touch],
+          }),
+        );
+        control.dispatchEvent(new TouchEvent("touchend", { bubbles: true }));
+      });
+      expect(probe.seen.current!.isSettled()).toBe(true);
+      await act(async () => {
+        control.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, detail: 1 }),
+        );
+      });
+      act(() => vi.advanceTimersByTime(1000));
+      expect(play).toHaveBeenCalledOnce();
+      expect(video.getAttribute("src")).toBe(liveMedia[0]!.live.motionSrc);
+      expect(video.muted).toBe(true);
+      expect(strip.scrollLeft).toBe(0);
+      expect(onOpenViewer).not.toHaveBeenCalled();
+      expect(onDoubleTap).not.toHaveBeenCalled();
+      act(() => video.dispatchEvent(new Event("playing")));
+      const sound = container.querySelector<HTMLButtonElement>(
+        '[data-feed-slide="0"] [data-live-photo-sound]',
+      )!;
+      act(() => sound.click());
+      expect(video.muted).toBe(false);
+      expect(onOpenViewer).not.toHaveBeenCalled();
+      expect(onDoubleTap).not.toHaveBeenCalled();
+    });
+
+    it("releases a playing slide on image change and while the Viewer covers it", async () => {
+      const { container, scrollToOffset, draw } = render({
+        media: liveMedia,
+        enableLivePlayback: true,
+      });
+      const first = container.querySelector<HTMLVideoElement>("video")!;
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>(
+            '[data-feed-slide="0"] [data-live-photo-play]',
+          )!
+          .click();
+      });
+      act(() => first.dispatchEvent(new Event("playing")));
+      scrollToOffset(WIDTH);
+      expect(first.hasAttribute("src")).toBe(false);
+      expect(pause).toHaveBeenCalled();
+      expect(load).toHaveBeenCalled();
+      expect(container.querySelector('[data-feed-slide="0"] video')).toBeNull();
+      const second = container.querySelector<HTMLVideoElement>(
+        '[data-feed-slide="1"] video',
+      )!;
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>(
+            '[data-feed-slide="1"] [data-live-photo-play]',
+          )!
+          .click();
+      });
+      draw({ viewerOpen: true });
+      expect(second.hasAttribute("src")).toBe(false);
+      expect(container.querySelector("video")).toBeNull();
+      draw({ viewerOpen: false });
+      expect(container.querySelectorAll("video")).toHaveLength(1);
+      expect(container.querySelector("video")!.hasAttribute("src")).toBe(false);
+      expect(play).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops motion when its frame leaves view and keeps the original still", async () => {
+      const callbacks: IntersectionObserverCallback[] = [];
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          constructor(callback: IntersectionObserverCallback) {
+            callbacks.push(callback);
+          }
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      const { container } = render({
+        media: [liveMedia[0]!],
+        enableLivePlayback: true,
+      });
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>("[data-live-photo-play]")!
+          .click();
+      });
+      const video = container.querySelector<HTMLVideoElement>("video")!;
+      act(() => video.dispatchEvent(new Event("playing")));
+      act(() =>
+        callbacks.forEach((callback) =>
+          callback(
+            [
+              {
+                isIntersecting: false,
+                intersectionRatio: 0,
+              } as IntersectionObserverEntry,
+            ],
+            {} as IntersectionObserver,
+          ),
+        ),
+      );
+      expect(video.hasAttribute("src")).toBe(false);
+      expect(
+        container.querySelector<HTMLElement>("[data-live-photo]")!.dataset
+          .livePlayback,
+      ).toBe("idle");
+      expect(container.querySelector("img")!.getAttribute("src")).toBe(
+        liveMedia[0]!.src,
+      );
+    });
   });
 
   describe("stage context", () => {

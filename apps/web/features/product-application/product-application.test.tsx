@@ -216,6 +216,7 @@ describe("ProductApplication wide-screen browse-only (pc-browse-only-v1)", () =>
     expect(lastPreviewProps()).toEqual({
       initialPlatform: "pc",
       renderCommentSection: expect.any(Function),
+      renderColophon: expect.any(Function),
       states,
     });
   });

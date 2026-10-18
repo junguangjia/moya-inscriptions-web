@@ -426,7 +426,9 @@ test("Formal Home, Inscriptions, and Calligraphy reuse one Detail and Viewer jou
     "运行时多图碑刻",
   );
   if (wide) await expectBrowseOnlyDetail(detail);
-  const mainImage = detail.locator("[data-detail-main-image]");
+  const mainImage = detail.locator(
+    "[data-detail-main-image], [data-feed-slide][aria-hidden=false] img",
+  );
   await expect(mainImage).toBeVisible();
   await Promise.all([
     page.waitForURL(
@@ -480,7 +482,9 @@ test("Formal query Detail and Viewer preserve Back, Forward, and reload", async 
       .locator('img[alt="运行时多图碑刻局部"]'),
   ).not.toHaveAttribute("src");
 
-  const queryMainImage = detail.locator("[data-detail-main-image]");
+  const queryMainImage = detail.locator(
+    "[data-detail-main-image], [data-feed-slide][aria-hidden=false] img",
+  );
   await expect(queryMainImage).toBeVisible();
   await queryMainImage.click();
   await expect(viewer).toBeVisible();

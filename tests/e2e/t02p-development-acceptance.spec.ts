@@ -1040,6 +1040,10 @@ test("MIG-D1 opens one runtime Detail architecture from Home, Inscriptions, and 
 test("MIG-D1 direct multi-media Detail preserves Carousel and scroll across resize and Back/Forward", async ({
   page,
 }) => {
+  // This regression exercises the normal-mode carousel; calligraphy has its own journeys.
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
+  );
   const response = await page.goto(
     "/dev/t02p?catalogId=runtime-inscription-multi-media",
   );

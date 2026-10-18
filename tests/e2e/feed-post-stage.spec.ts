@@ -284,11 +284,11 @@ test("the seal dot brings in the colophons; the comment button scrolls there ins
   await expect(feed.page.locator("textarea:focus")).toHaveCount(0);
   await expect(feed.page.locator("[data-colophon-composer]")).toHaveCount(0);
 
-  // The title still opens Detail on its information.
+  // The title opens calligraphy Detail at its independent text strip.
   await feed.post.getByRole("button", { name: "打开运行时多图碑刻" }).click();
   await expect(feed.shell).toHaveAttribute("data-detail-open", "true");
   await expect(
-    feed.page.locator("[data-detail-content-pager]"),
-  ).toHaveAttribute("data-detail-content-active-page", "information");
+    feed.page.locator("[data-detail-reading-strip]"),
+  ).toHaveAttribute("data-detail-reading-region", "information");
   await feed.context?.close();
 });

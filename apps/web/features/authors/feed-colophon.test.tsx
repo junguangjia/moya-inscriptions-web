@@ -16,7 +16,10 @@ const h = vi.hoisted(() => ({
   stage: null as Record<string, unknown> | null,
   enterAuth: vi.fn(),
   openProfile: vi.fn(),
-  authors: { viewer: { id: "reader", displayName: "读者" } as unknown },
+  authors: {
+    viewer: { id: "reader", displayName: "读者" } as unknown,
+    cache: new Map<string, unknown>(),
+  },
   entryRenders: 0,
 }));
 vi.mock("./feed-colophon-entry", async (importOriginal) => {
@@ -53,7 +56,7 @@ vi.mock("../product-shell/product-shell", () => ({
     activeDestination: "home",
   }),
 }));
-import { FeedColophon } from "./feed-colophon";
+import { FeedColophon, FeedColophonPresentation } from "./feed-colophon";
 import { COLOPHON_INPUT_BLUR_MS } from "./feed-colophon-input";
 
 (
@@ -202,7 +205,10 @@ beforeEach(() => {
   h.options = [];
   h.enterAuth.mockReset();
   h.openProfile.mockReset();
-  h.authors = { viewer: { id: "reader", displayName: "读者" } };
+  h.authors = {
+    viewer: { id: "reader", displayName: "读者" },
+    cache: new Map(),
+  };
   strip = document.createElement("div");
   h.stage = {
     strip,
@@ -230,6 +236,39 @@ afterEach(() => {
 });
 
 describe("FeedColophon", () => {
+  it("gives Detail its own locator and restoration slot while keeping the feed default", () => {
+    h.stage = { ...h.stage, surface: "reading", count: 0 };
+    h.authors.cache.set("discussion-location", { target, id: "c1" });
+    act(() =>
+      root.render(
+        <FeedColophon target={target} title="寒山诗" presentation="detail" />,
+      ),
+    );
+    expect(h.options.at(-1)).toMatchObject({
+      consumeLocation: true,
+      enabled: true,
+      authReturnSlot: "detail-colophon:work:w1",
+    });
+    expect(
+      $("[data-feed-colophon]")?.getAttribute("data-colophon-presentation"),
+    ).toBe("detail");
+  });
+
+  it("renders a supplied QA thread without mounting a live reader", () => {
+    const thread = makeThread({ items: [comment("qa-one", writer)] });
+    act(() =>
+      root.render(
+        <FeedColophonPresentation
+          target={target}
+          title="QA题跋"
+          thread={thread}
+          presentation="detail"
+        />,
+      ),
+    );
+    expect(h.options).toHaveLength(0);
+    expect($("[data-comment-id='qa-one']")).not.toBeNull();
+  });
   it("reads nothing until the reader nears the colophons, then reads once", () => {
     h.thread = makeThread({ page: 0, totalPages: 0, loading: true });
     render();
@@ -771,7 +810,7 @@ describe("FeedColophon", () => {
   });
 
   it("sends a guest to sign in from content and likes, with the original opener", () => {
-    h.authors = { viewer: null };
+    h.authors = { viewer: null, cache: new Map() };
     h.thread = makeThread({
       currentUser: { id: "guest", name: "访客" },
       viewerState: { state: "signed-out", signInHref: "/login?x=1" },

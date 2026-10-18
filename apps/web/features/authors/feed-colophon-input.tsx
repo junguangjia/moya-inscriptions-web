@@ -37,7 +37,9 @@ export const COLOPHON_INPUT_BLUR_MS = 250;
  * same content, which can be mounted at the same time.
  */
 export const colophonDraftKey = (contentKey: string): string =>
-  contentKey.startsWith("feed:") ? contentKey : `feed:${contentKey}`;
+  contentKey.startsWith("feed:") || contentKey.startsWith("detail-colophon:")
+    ? contentKey
+    : `feed:${contentKey}`;
 
 /** A reply target's name as the lead shows it: cut short when long. */
 export const colophonLeadName = (name: string): string => {

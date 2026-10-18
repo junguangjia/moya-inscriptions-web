@@ -768,9 +768,9 @@ describe("PreviewCatalogDetailOverlay in wide-screen browse-only", () => {
       width: 390,
     });
     expect(shellAttribute(container, "data-browse-only")).toBe("false");
-    expect(container.querySelector("[data-detail-paged-layout]")).not.toBe(
-      null,
-    );
+    expect(
+      container.querySelector("[data-detail-calligraphy-layout]"),
+    ).not.toBe(null);
     expect(container.querySelector("[data-synthetic-comments]")).not.toBe(null);
     expect(container.querySelector("[data-synthetic-actions]")).not.toBe(null);
     expect(renderActions).toHaveBeenCalled();
@@ -791,9 +791,9 @@ describe("PreviewCatalogDetailOverlay in wide-screen browse-only", () => {
     await resize(390);
     expect(shellAttribute(container, "data-browse-only")).toBe("false");
     expect(shellAttribute(container, "data-detail-open")).toBe("true");
-    expect(container.querySelector("[data-detail-paged-layout]")).not.toBe(
-      null,
-    );
+    expect(
+      container.querySelector("[data-detail-calligraphy-layout]"),
+    ).not.toBe(null);
     expect(container.querySelector("[data-synthetic-comments]")).not.toBe(null);
     expect(container.querySelector("[data-synthetic-actions]")).not.toBe(null);
 

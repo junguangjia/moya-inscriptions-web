@@ -1,0 +1,94 @@
+.strip {
+  display: flex;
+  width: 100%;
+  height: clamp(320px, 55svh, 560px);
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  direction: rtl;
+  container-type: size;
+  overscroll-behavior-x: contain;
+  overflow-anchor: none;
+  scrollbar-width: thin;
+  touch-action: pan-x pan-y pinch-zoom;
+  background: var(--yoyi-color-background-page);
+}
+
+.strip:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.information {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  height: 100%;
+  height: 100cqh;
+  padding: var(--yoyi-space-6);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-editorial);
+  direction: ltr;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  line-break: strict;
+  overflow-wrap: anywhere;
+}
+
+/* The same semantic Detail content leaves its ordinary card/grid geometry
+   behind inside this reading surface. All overrides stay local to it. */
+.strip
+  .information[data-detail-reading-information]
+  :where(section, div, dl, ul, li, p, h1, h2, h3):not([data-detail-untitled]) {
+  position: static;
+  display: block;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+  writing-mode: inherit;
+  direction: ltr;
+}
+
+.strip
+  .information[data-detail-reading-information]
+  :where(section, p, dl, ul) {
+  margin-block-end: var(--yoyi-space-6);
+}
+
+.strip .information[data-detail-reading-information] :where(h1, h2, h3) {
+  margin-block-end: var(--yoyi-space-3);
+}
+
+.information :where(p, dd, li) {
+  white-space: pre-wrap;
+  line-height: 1.9;
+}
+
+.information :where(dl > div) {
+  margin-block-end: var(--yoyi-space-3);
+}
+
+.information :where(dt, dd) {
+  display: block;
+  margin: 0;
+}
+
+.information :where(dt) {
+  color: var(--yoyi-color-text-secondary);
+  margin-inline-end: var(--yoyi-space-2);
+}
+
+.information :where(a) {
+  overflow-wrap: anywhere;
+}
+
+.information :where([data-detail-reading-anchor]) {
+  scroll-margin-right: var(--yoyi-space-6);
+}

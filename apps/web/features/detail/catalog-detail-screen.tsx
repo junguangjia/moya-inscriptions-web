@@ -2,6 +2,8 @@ import { Icon } from "@moya/ui";
 
 import { CatalogDetailContentPager } from "./catalog-detail-content-pager";
 import { CatalogMediaCarousel } from "./catalog-media-carousel";
+import { CalligraphyDetailLayout } from "./calligraphy-detail-layout";
+import { VerticalText } from "../authors/vertical-text";
 import styles from "./catalog-detail.module.css";
 
 import type { ReactNode, RefObject } from "react";
@@ -17,6 +19,9 @@ export interface CatalogDetailScreenProps {
   readonly activeMediaIndex: number;
   readonly backButtonRef: RefObject<HTMLButtonElement | null>;
   readonly commentSection?: ReactNode;
+  readonly colophon?: ReactNode;
+  readonly calligraphy?: boolean;
+  readonly positionKey?: string | undefined;
   readonly detailActions?: ReactNode;
   /** True while the Viewer covers the Detail: Live motion in the carousel stops. */
   readonly mediaMotionSuspended?: boolean;
@@ -78,9 +83,13 @@ const WorkPublication = ({
 
 const DetailIdentity = ({
   detail,
+  vertical = false,
 }: {
   readonly detail: CatalogDetailPresentation;
+  readonly vertical?: boolean;
 }) => {
+  const text = (value: string) =>
+    vertical ? <VerticalText text={value} /> : value;
   const identity = [
     detail.contentType === "work"
       ? detail.authorName
@@ -100,10 +109,15 @@ const DetailIdentity = ({
           {UNTITLED_WORK_HEADING}
         </h1>
       ) : (
-        <h1 data-detail-title="">{detail.title}</h1>
+        <h1
+          data-detail-title=""
+          data-detail-reading-anchor={vertical ? "title" : undefined}
+        >
+          {text(detail.title)}
+        </h1>
       )}
       {detail.contentType !== "work" ? (
-        <p className={styles.kindPeriod}>{identity}</p>
+        <p className={styles.kindPeriod}>{text(identity)}</p>
       ) : null}
       {detail.contentType === "work"
         ? (detail.sections ?? [])
@@ -113,8 +127,11 @@ const DetailIdentity = ({
                 key={section.key}
                 className={styles.workBody}
                 data-detail-section="description"
+                data-detail-reading-anchor={
+                  vertical ? "description" : undefined
+                }
               >
-                {section.text}
+                {text(section.text)}
               </p>
             ))
         : null}
@@ -125,12 +142,19 @@ const DetailIdentity = ({
         />
       ) : null}
       {detail.summary === undefined ? null : (
-        <p className={styles.summary}>{detail.summary}</p>
+        <p
+          className={styles.summary}
+          data-detail-reading-anchor={vertical ? "summary" : undefined}
+        >
+          {text(detail.summary)}
+        </p>
       )}
       {detail.aliases.length === 0 ? null : (
         <div className={styles.aliases}>
           <span>又名</span>
-          <p>{detail.aliases.join(" · ")}</p>
+          <p data-detail-reading-anchor={vertical ? "aliases" : undefined}>
+            {text(detail.aliases.join(" · "))}
+          </p>
         </div>
       )}
       {detail.facts.length === 0 ? null : (
@@ -140,7 +164,13 @@ const DetailIdentity = ({
             {detail.facts.map((fact, index) => (
               <div key={`${fact.label}-${fact.value}-${index}`}>
                 <dt>{fact.label}</dt>
-                <dd>{fact.value}</dd>
+                <dd
+                  data-detail-reading-anchor={
+                    vertical ? `fact-${index}` : undefined
+                  }
+                >
+                  {text(fact.value)}
+                </dd>
               </div>
             ))}
           </dl>
@@ -163,8 +193,10 @@ const hasReadingFlow = (detail: CatalogDetailPresentation) =>
 
 const DetailAuthorship = ({
   authorship,
+  vertical = false,
 }: {
   readonly authorship: DetailAuthorshipPresentation;
+  readonly vertical?: boolean;
 }) => (
   <section
     className={styles.readingSection}
@@ -176,10 +208,20 @@ const DetailAuthorship = ({
     {authorship.references.length === 0 ? null : (
       <div className={styles.factsSection}>
         <dl className={styles.facts} data-detail-authorship-references="">
-          {authorship.references.map((reference) => (
+          {authorship.references.map((reference, index) => (
             <div key={reference.label}>
               <dt>{reference.label}</dt>
-              <dd>{reference.value}</dd>
+              <dd
+                data-detail-reading-anchor={
+                  vertical ? `authorship-${index}` : undefined
+                }
+              >
+                {vertical ? (
+                  <VerticalText text={reference.value} />
+                ) : (
+                  reference.value
+                )}
+              </dd>
             </div>
           ))}
         </dl>
@@ -190,8 +232,10 @@ const DetailAuthorship = ({
 
 const DetailReadingFlow = ({
   detail,
+  vertical = false,
 }: {
   readonly detail: CatalogDetailPresentation;
+  readonly vertical?: boolean;
 }) => {
   const sections = (detail.sections ?? []).filter(
     (section) => detail.contentType !== "work" || section.key !== "description",
@@ -208,11 +252,13 @@ const DetailReadingFlow = ({
           data-detail-section={section.key}
         >
           <h2>{section.title}</h2>
-          <p>{section.text}</p>
+          <p data-detail-reading-anchor={vertical ? section.key : undefined}>
+            {vertical ? <VerticalText text={section.text} /> : section.text}
+          </p>
         </section>
       ))}
       {authorship === null ? null : (
-        <DetailAuthorship authorship={authorship} />
+        <DetailAuthorship authorship={authorship} vertical={vertical} />
       )}
       {detail.sourceCitations.length === 0 ? null : (
         <section
@@ -222,10 +268,27 @@ const DetailReadingFlow = ({
           <h2>资料来源</h2>
           <ul className={styles.sources}>
             {detail.sourceCitations.map((citation, index) => (
-              <li key={`${citation.label}-${index}`}>
-                <strong>{citation.label}</strong>
+              <li
+                key={`${citation.label}-${index}`}
+                data-detail-reading-anchor={
+                  vertical ? `source-${index}` : undefined
+                }
+              >
+                <strong>
+                  {vertical ? (
+                    <VerticalText text={citation.label} />
+                  ) : (
+                    citation.label
+                  )}
+                </strong>
                 {citation.citation === undefined ? null : (
-                  <span>{citation.citation}</span>
+                  <span>
+                    {vertical ? (
+                      <VerticalText text={citation.citation} />
+                    ) : (
+                      citation.citation
+                    )}
+                  </span>
                 )}
                 {citation.url === undefined ? null : (
                   <a href={citation.url} rel="noreferrer" target="_blank">
@@ -268,6 +331,9 @@ export const CatalogDetailScreen = ({
   activeMediaIndex,
   backButtonRef,
   commentSection,
+  colophon,
+  calligraphy = false,
+  positionKey,
   detailActions,
   mediaMotionSuspended = false,
   onActiveMediaIndexChange,
@@ -354,7 +420,25 @@ export const CatalogDetailScreen = ({
       (platform === "pc" ||
         (platform === "tablet" && orientation === "landscape"));
 
-    body = pagedComments ? (
+    body = calligraphy ? (
+      <CalligraphyDetailLayout
+        key={detail.id}
+        activeMediaIndex={activeMediaIndex}
+        colophon={colophon}
+        detail={detail}
+        detailActions={detailActions}
+        positionKey={positionKey}
+        information={
+          <>
+            <DetailIdentity detail={detail} vertical />
+            <DetailReadingFlow detail={detail} vertical />
+          </>
+        }
+        onActiveMediaIndexChange={onActiveMediaIndexChange}
+        onOpenViewer={onOpenViewer}
+        viewerOpen={mediaMotionSuspended}
+      />
+    ) : pagedComments ? (
       <div className={styles.pagedDetail} data-detail-paged-layout="">
         {media === null ? null : (
           <div className={styles.pagedMedia} data-detail-paged-media="">
@@ -420,6 +504,7 @@ export const CatalogDetailScreen = ({
       aria-modal="true"
       className={styles.detail}
       data-detail-composition={`${platform}-${orientation}`}
+      data-detail-mode={calligraphy ? "calligraphy" : "normal"}
       data-detail-source={
         state.state === "loaded" ? state.detail.source : undefined
       }
