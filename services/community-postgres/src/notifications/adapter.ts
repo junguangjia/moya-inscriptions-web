@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { CommunityInputError, CommunityNotFoundError } from "@moya/api";
 import type {
+  NotificationFilter,
   NotificationJobClaim,
   NotificationPort,
   NotificationQuery,
@@ -157,6 +158,7 @@ export class PostgresNotificationAdapter
     recipient: string,
     through: string,
     groupId?: string,
+    filter: NotificationFilter = "all",
   ): Promise<void> {
     await this.transaction(true, async (db) => {
       // Recipient serialization also protects mark-all against a newly committing effect.
@@ -170,8 +172,11 @@ export class PostgresNotificationAdapter
         throw new CommunityInputError("Invalid notification observation");
       await db.query(
         `UPDATE community.notification_groups SET read_through=greatest(read_through,$2::bigint)
-        WHERE recipient_id=$1 AND ($3::text IS NULL OR id=$3)`,
-        [recipient, through, groupId ?? null],
+        WHERE recipient_id=$1 AND ($3::text IS NULL OR id=$3)
+          AND ($4='all' OR ($4='likes' AND reason='like')
+            OR ($4='comments' AND reason IN ('comment','reply'))
+            OR ($4='mentions' AND reason='mention'))`,
+        [recipient, through, groupId ?? null, filter],
       );
     });
   }

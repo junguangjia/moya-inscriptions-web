@@ -837,4 +837,252 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
       id: work,
     });
   });
+  it("persists category snapshots across every page without reading other categories or later grouped likes", async () => {
+    // These users and their Work belong only to this case; no Alice/Bob inbox
+    // state or previously published content participates in the assertions.
+    const own = {
+      id: key("user"),
+      handle: `read-owner-${randomBytes(6).toString("hex")}`,
+    };
+    const firstActor = {
+      id: key("user"),
+      handle: `read-first-${randomBytes(6).toString("hex")}`,
+    };
+    const lateActor = {
+      id: key("user"),
+      handle: `read-later-${randomBytes(6).toString("hex")}`,
+    };
+    await setup!.query(
+      "INSERT INTO community.public_users(id,handle,display_name) VALUES($1,$2,'分类读者'),($3,$4,'分类互动者'),($5,$6,'稍后互动者')",
+      [
+        own.id,
+        own.handle,
+        firstActor.id,
+        firstActor.handle,
+        lateActor.id,
+        lateActor.handle,
+      ],
+    );
+    const operator = new PostgresPublishingOperatorAdapter(app!);
+    const originalWorkSettings = await operator.readSettings();
+    const originalCommentPolicy = (
+      await setup!.query<{ policy: string }>(
+        "SELECT policy FROM community.publication_setting WHERE id='publication'",
+      )
+    ).rows[0]!.policy;
+    try {
+      if (originalWorkSettings.policy !== "DIRECT_PUBLICATION") {
+        await operator.setSettings(
+          "synthetic-operator",
+          {
+            ...originalWorkSettings,
+            ...request(),
+            expectedVersion: originalWorkSettings.version,
+            policy: "DIRECT_PUBLICATION",
+          },
+          now,
+        );
+      }
+      await setup!.query(
+        "UPDATE community.publication_setting SET policy='DIRECT_PUBLICATION' WHERE id='publication'",
+      );
+      const draft = await publishing.createDraft(
+        own.id,
+        { ...request(), content: content(), deviceClass: "desktop" },
+        now,
+      );
+      const submitted = await publishing.submit(
+        own.id,
+        {
+          ...request(),
+          holder: { draftId: draft.id },
+          baseRevisionId: draft.baseRevisionId,
+          content: draft.content,
+        },
+        now,
+      );
+      if (submitted.state !== "confirmed")
+        throw Error("Expected the category test Work to be public");
+      const targetWork = { type: "work" as const, id: submitted.workId };
+      for (let index = 0; index < 23; index++) {
+        await comments.submitDiscussion(
+          targetWork,
+          firstActor.id,
+          `跨分页评论 ${index + 1}`,
+        );
+      }
+      // Replies use the comments category too, including an overlapping
+      // Work-owner/reply-recipient delivery to the same real user.
+      const ownRoot = await comments.submitDiscussion(
+        targetWork,
+        own.id,
+        "接收回复的根评论",
+      );
+      await comments.submitDiscussion(
+        targetWork,
+        firstActor.id,
+        "跨分页回复",
+        ownRoot.id,
+      );
+      const mentionText = `@${own.handle}`;
+      await comments.submitDiscussion(
+        targetWork,
+        firstActor.id,
+        mentionText,
+        undefined,
+        undefined,
+        [
+          {
+            userId: own.id,
+            handle: own.handle,
+            start: 0,
+            end: mentionText.length,
+          },
+        ],
+      );
+      await authors.changeRelation(firstActor.id, "like", {
+        ...request(),
+        target: targetWork,
+        enabled: true,
+      });
+      // Stabilize only the source date so the like-group test also works
+      // across midnight. All sources and deliveries still come from the real
+      // interaction adapters and worker, never seeded notification rows.
+      await setup!.query(
+        "UPDATE community.notification_sources SET created_at=$1 WHERE action_key=$2",
+        [now, `work_like:${targetWork.id}:${firstActor.id}`],
+      );
+      await pump();
+      const unread = () => page(own.id).then((result) => result.unread);
+      expect(await unread()).toEqual({
+        total: 26,
+        likes: 1,
+        comments: 24,
+        mentions: 1,
+      });
+
+      const observedComments = await service.list(own.id, "comments", 20);
+      expect(observedComments.items).toHaveLength(20);
+      expect(observedComments.nextCursor).not.toBeNull();
+      const commentTail = await service.list(
+        own.id,
+        "comments",
+        20,
+        observedComments.nextCursor!,
+      );
+      expect(commentTail.items).toHaveLength(4);
+      expect(commentTail.items.every((item) => item.unread)).toBe(true);
+      await expect(
+        service.read(firstActor.id, observedComments.observation),
+      ).rejects.toThrow();
+      expect(await unread()).toEqual({
+        total: 26,
+        likes: 1,
+        comments: 24,
+        mentions: 1,
+      });
+      await service.read(own.id, observedComments.observation);
+      expect(await unread()).toEqual({
+        total: 2,
+        likes: 1,
+        comments: 0,
+        mentions: 1,
+      });
+      const readTail = await service.list(
+        own.id,
+        "comments",
+        20,
+        observedComments.nextCursor!,
+      );
+      expect(readTail.items.every((item) => !item.unread)).toBe(true);
+      await service.read(own.id, observedComments.observation);
+      expect(await unread()).toEqual({
+        total: 2,
+        likes: 1,
+        comments: 0,
+        mentions: 1,
+      });
+
+      const observedLikes = await service.list(own.id, "likes", 20);
+      const likeGroupId = observedLikes.items[0]!.id;
+      await authors.changeRelation(lateActor.id, "like", {
+        ...request(),
+        target: targetWork,
+        enabled: true,
+      });
+      await setup!.query(
+        "UPDATE community.notification_sources SET created_at=$1 WHERE action_key=$2",
+        [now, `work_like:${targetWork.id}:${lateActor.id}`],
+      );
+      await pump();
+      const groupedLikes = await service.list(own.id, "likes", 20);
+      expect(groupedLikes.items).toHaveLength(1);
+      expect(groupedLikes.items[0]).toMatchObject({
+        id: likeGroupId,
+        actorCount: 2,
+        unread: true,
+      });
+      await service.read(own.id, observedLikes.observation);
+      await service.read(own.id, observedLikes.observation);
+      // The initial like was observed; the actor added to that SAME group
+      // after the snapshot remains unread, and mentions are still untouched.
+      expect(await unread()).toEqual({
+        total: 2,
+        likes: 1,
+        comments: 0,
+        mentions: 1,
+      });
+      expect((await service.list(own.id, "likes", 20)).items[0]).toMatchObject({
+        id: likeGroupId,
+        unread: true,
+      });
+
+      // A new service and adapter represent a reload/re-login after durable
+      // writes. Old process-signed tokens are deliberately not reused here.
+      const freshService = new NotificationService(
+        new PostgresNotificationAdapter(app!),
+      );
+      expect((await freshService.list(own.id, "all", 50)).unread).toEqual({
+        total: 2,
+        likes: 1,
+        comments: 0,
+        mentions: 1,
+      });
+      const observedMentions = await freshService.list(own.id, "mentions", 20);
+      await freshService.read(own.id, observedMentions.observation);
+      expect((await freshService.list(own.id, "all", 50)).unread).toEqual({
+        total: 1,
+        likes: 1,
+        comments: 0,
+        mentions: 0,
+      });
+      const latestLikes = await freshService.list(own.id, "likes", 20);
+      await freshService.read(own.id, latestLikes.observation);
+      expect(
+        (
+          await new NotificationService(
+            new PostgresNotificationAdapter(app!),
+          ).list(own.id, "all", 50)
+        ).unread,
+      ).toEqual({ total: 0, likes: 0, comments: 0, mentions: 0 });
+    } finally {
+      await setup!.query(
+        "UPDATE community.publication_setting SET policy=$1 WHERE id='publication'",
+        [originalCommentPolicy],
+      );
+      const currentSettings = await operator.readSettings();
+      if (currentSettings.policy !== originalWorkSettings.policy) {
+        await operator.setSettings(
+          "synthetic-operator",
+          {
+            ...currentSettings,
+            ...request(),
+            expectedVersion: currentSettings.version,
+            policy: originalWorkSettings.policy,
+          },
+          now,
+        );
+      }
+    }
+  }, 30_000);
 });

@@ -28,7 +28,12 @@ export interface NotificationPort {
     recipient: string,
     query: NotificationQuery,
   ): Promise<NotificationReadResult>;
-  markRead(recipient: string, through: string, groupId?: string): Promise<void>;
+  markRead(
+    recipient: string,
+    through: string,
+    groupId?: string,
+    filter?: NotificationFilter,
+  ): Promise<void>;
   lookup(actor: string, query: string): Promise<MentionLookupPage>;
 }
 export interface NotificationJobClaim {

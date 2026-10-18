@@ -441,9 +441,10 @@ export const FeedColophonPresentation = ({
       node.previousElementSibling === null
         ? node.parentElement?.previousElementSibling
         : null;
-    stageRef.current?.scrollToElement(
-      label?.matches("[data-colophon-group]") === true ? label : node,
-    );
+    const anchor =
+      label?.matches("[data-colophon-group]") === true ? label : node;
+    if (thread.lastSubmit?.id === id) stageRef.current?.scrollToElement(anchor);
+    else stageRef.current?.scrollToElement(anchor, undefined, { reveal: true });
     setFlashId(id);
     // The reader's own colophon, just sent: focus moves on to it from the
     // input (which let go of it), rather than dropping to the page.

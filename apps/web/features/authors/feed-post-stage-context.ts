@@ -31,11 +31,13 @@ export interface FeedStageApi {
   readonly scrollToOffset: (offset: number, behavior?: ScrollBehavior) => void;
   /**
    * Scrolls so the element's right edge meets the strip's right edge, less
-   * its `scroll-margin-right` (its snap gutter).
+   * its `scroll-margin-right` (its snap gutter). An explicit locator can also
+   * reveal the enclosing reading surface; ordinary alignment preserves it.
    */
   readonly scrollToElement: (
     element: Element,
     behavior?: ScrollBehavior,
+    options?: { readonly reveal?: boolean },
   ) => void;
   /**
    * The comments region registers a getter for the offset that keeps its

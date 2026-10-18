@@ -50,6 +50,7 @@ export interface CatalogDetailReadingStripProps {
     ((region: "information" | "comments") => void) | undefined;
   /** Caller-owned reader/account, content and mode scope; never inferred. */
   readonly positionKey?: string | undefined;
+  readonly onRevealReading?: (() => void) | undefined;
 }
 
 interface CommentReadingAnchor {
@@ -83,6 +84,7 @@ export const CatalogDetailReadingStrip = forwardRef<
     positionKey,
     id,
     onRegionChange,
+    onRevealReading,
   },
   ref,
 ) {
@@ -278,10 +280,11 @@ export const CatalogDetailReadingStrip = forwardRef<
     [settle],
   );
 
-  const scrollToElement = useCallback(
-    (element: Element, behavior?: ScrollBehavior) => {
+  const scrollToElement = useCallback<FeedStageApi["scrollToElement"]>(
+    (element, behavior, options) => {
       const node = stripRef.current;
       if (node === null) return;
+      if (options?.reveal === true) onRevealReading?.();
       const gutter =
         Number.parseFloat(getComputedStyle(element).scrollMarginRight) || 0;
       scrollToOffset(
@@ -292,7 +295,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         behavior,
       );
     },
-    [readOffset, scrollToOffset],
+    [onRevealReading, readOffset, scrollToOffset],
   );
 
   const scrollToComments = useCallback(() => {
@@ -314,7 +317,7 @@ export const CatalogDetailReadingStrip = forwardRef<
           ) ?? []),
         ].find((node) => node.dataset.colophonAnchor === id);
         if (anchor === undefined) return false;
-        scrollToElement(anchor);
+        scrollToElement(anchor, undefined, { reveal: true });
         return true;
       },
       scrollToStart: () => scrollToOffset(0),

@@ -149,6 +149,7 @@ export const CalligraphyDetailLayout = ({
             id={readingId}
             information={information}
             onRegionChange={setActiveRegion}
+            onRevealReading={revealReading}
             positionKey={positionKey}
           />
         </div>

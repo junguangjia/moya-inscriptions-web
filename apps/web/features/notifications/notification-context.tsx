@@ -13,6 +13,12 @@ import { authorClient } from "../authors/author-data";
 import { useAuthors } from "../authors/author-context";
 
 type Filter = "all" | "likes" | "comments" | "mentions";
+type Category = Exclude<Filter, "all">;
+interface Visit {
+  valid: () => boolean;
+  run: () => Promise<void>;
+  failed: boolean;
+}
 interface Inbox {
   enabled: boolean;
   page: NotificationPage | null;
@@ -21,8 +27,10 @@ interface Inbox {
   filter: Filter;
   setFilter: (value: Filter) => void;
   refresh: () => Promise<void>;
+  revalidate: () => Promise<void>;
   more: () => void;
   read: (observation: string) => Promise<void>;
+  visit: (category: Category) => () => void;
 }
 const Context = createContext<Inbox>({
   enabled: false,
@@ -32,8 +40,10 @@ const Context = createContext<Inbox>({
   filter: "all",
   setFilter: () => {},
   refresh: async () => {},
+  revalidate: async () => {},
   more: () => {},
   read: async () => {},
+  visit: () => () => {},
 });
 export const useNotifications = () => useContext(Context);
 /** Exactly one subscription above all message surfaces; private state is keyed to the confirmed account. */
@@ -45,10 +55,10 @@ export function NotificationProvider({
   children: ReactNode;
 }) {
   const author = useAuthors();
-  const account =
-    enabled && !author.sessionError ? (author.viewer?.id ?? null) : null;
+  const identity = enabled ? (author.viewer?.id ?? null) : null;
+  const account = !author.sessionError ? identity : null;
   return (
-    <AccountInbox enabled={enabled} account={account}>
+    <AccountInbox enabled={enabled} account={account} identity={identity}>
       {children}
     </AccountInbox>
   );
@@ -56,21 +66,29 @@ export function NotificationProvider({
 function AccountInbox({
   enabled,
   account,
+  identity,
   children,
 }: {
   enabled: boolean;
   account: string | null;
+  identity: string | null;
   children: ReactNode;
 }) {
   const [rawPage, setPage] = useState<NotificationPage | null>(null),
     [filter, setFilter] = useState<Filter>("all"),
     [loading, setLoading] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [readError, setReadError] = useState("");
   const generation = useRef(0),
     pending = useRef<AbortController | null>(null),
     current = useRef(rawPage),
     pageOwner = useRef<string | null>(null),
-    activeAccount = useRef(account);
+    activeAccount = useRef(account),
+    activeIdentity = useRef(identity),
+    accountEpoch = useRef(0),
+    activeVisit = useRef<Visit | null>(null);
+  if (activeIdentity.current !== identity) accountEpoch.current++;
+  activeIdentity.current = identity;
   activeAccount.current = account;
   const page =
     account !== null && pageOwner.current === account ? rawPage : null;
@@ -140,6 +158,7 @@ function AccountInbox({
   );
   useEffect(() => {
     setPage(null);
+    setReadError("");
     pageOwner.current = null;
     refresh();
     return () => {
@@ -183,14 +202,71 @@ function AccountInbox({
       document.removeEventListener("visibilitychange", foreground);
     };
   }, [account]);
+  // One independent snapshot per visible category entry. Passive refreshes do
+  // not replace its token, so arrivals during a visit remain unread. A failed
+  // persistence retry uses the same observation, including unloaded pages.
+  const visit = useCallback((category: Category) => {
+    const owner = activeIdentity.current;
+    if (!owner) return () => {};
+    const epoch = accountEpoch.current;
+    const abort = new AbortController();
+    let active = true,
+      running = false,
+      observation: string | null = null;
+    const sameOwner = () =>
+      activeIdentity.current === owner && accountEpoch.current === epoch;
+    const valid = () => activeAccount.current === owner && sameOwner();
+    const entry: Visit = {
+      valid,
+      failed: activeAccount.current !== owner,
+      run: async () => {
+        if (running || !valid()) return;
+        running = true;
+        entry.failed = false;
+        setReadError("");
+        try {
+          observation ??= (
+            await authorClient.notifications(category, undefined, abort.signal)
+          ).observation;
+          if (!valid()) {
+            if (sameOwner() && active) {
+              entry.failed = true;
+              setReadError("已读状态未保存，请刷新后重试");
+            }
+            return;
+          }
+          await authorClient.readNotifications(observation);
+          if (valid()) await refreshRef.current(undefined, true);
+        } catch {
+          if (sameOwner() && active) {
+            entry.failed = true;
+            setReadError("已读状态未保存，请刷新后重试");
+          }
+        } finally {
+          running = false;
+        }
+      },
+    };
+    activeVisit.current = entry;
+    void entry.run();
+    return () => {
+      // Leaving the list detaches retry ownership, but its entry snapshot
+      // still persists if this is the same account (including a quick Back).
+      active = false;
+      if (activeVisit.current === entry) activeVisit.current = null;
+    };
+  }, []);
   const read = async (observation: string) => {
+    const epoch = accountEpoch.current;
     try {
       await authorClient.readNotifications(observation);
-      if (activeAccount.current === account)
+      if (activeAccount.current === account && accountEpoch.current === epoch) {
+        setReadError("");
         await refreshRef.current(undefined, true);
+      }
     } catch {
-      if (activeAccount.current === account)
-        setError("已读状态未保存，请刷新后重试");
+      if (activeAccount.current === account && accountEpoch.current === epoch)
+        setReadError("已读状态未保存，请刷新后重试");
     }
   };
   return (
@@ -206,8 +282,20 @@ function AccountInbox({
           }
         },
         loading,
-        error,
-        refresh: () => refresh(),
+        error:
+          readError ||
+          (activeVisit.current?.valid() && activeVisit.current.failed
+            ? "已读状态未保存，请刷新后重试"
+            : error),
+        revalidate: () => refresh(),
+        refresh: () =>
+          activeVisit.current?.valid()
+            ? activeVisit.current.failed
+              ? activeVisit.current.run()
+              : current.current
+                ? read(current.current.observation)
+                : refresh()
+            : refresh(),
         more: () => {
           if (
             !loading &&
@@ -217,6 +305,7 @@ function AccountInbox({
             refresh(current.current.nextCursor);
         },
         read,
+        visit,
       }}
     >
       {children}

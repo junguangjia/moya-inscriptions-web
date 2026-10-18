@@ -1,4 +1,8 @@
-import { CommunitySessionService, type NotificationPort } from "@moya/api";
+import {
+  CommunitySessionService,
+  NotificationService,
+  type NotificationPort,
+} from "@moya/api";
 import {
   createBackendApplication,
   createBackendServer,
@@ -10,7 +14,7 @@ import {
 import { developmentSessionSchema } from "@moya/contracts/schemas";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
 import type { Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fixtureUsers,
   InMemoryCommunityIdentityPort,
@@ -72,6 +76,32 @@ async function start(production = false) {
   return { identity, signals, base, signIn };
 }
 describe("notification HTTP and actual SSE sockets", () => {
+  it.each(["all", "likes", "comments", "mentions"] as const)(
+    "binds the bulk observation to %s and its owner/high-water",
+    async (filter) => {
+      const markRead = vi.fn(async () => {});
+      const service = new NotificationService({
+        ...store,
+        markRead,
+        read: async () => ({
+          highWater: "42",
+          items: [],
+          unread: { total: 0, likes: 0, comments: 0, mentions: 0 },
+          hasMore: false,
+        }),
+      });
+      const page = await service.list("owner-a", filter, 1);
+      await expect(service.read("owner-b", page.observation)).rejects.toThrow();
+      expect(markRead).not.toHaveBeenCalled();
+      await service.read("owner-a", page.observation);
+      expect(markRead).toHaveBeenCalledExactlyOnceWith(
+        "owner-a",
+        "42",
+        undefined,
+        filter,
+      );
+    },
+  );
   it.each([false, true])(
     "requires session truth and rejects forged cursor/recipient/query/body (Production=%s)",
     async (production) => {

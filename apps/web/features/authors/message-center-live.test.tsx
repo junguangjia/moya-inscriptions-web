@@ -23,6 +23,8 @@ const { author, inbox, shell } = vi.hoisted(() => ({
     loading: false,
     error: "",
     setFilter: vi.fn(),
+    visit: () => () => {},
+    revalidate: () => {},
     refresh: () => {},
     read: () => Promise.resolve(),
     more: () => {},
