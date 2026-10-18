@@ -168,6 +168,7 @@ describe("CatalogDetailReadingStrip", () => {
       const view = mounts();
       act(() => {
         view.strip.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+        vi.advanceTimersByTime(600);
         view.strip.dispatchEvent(new Event(release, { bubbles: true }));
         for (let step = 1; step <= 12; step += 1) {
           vi.advanceTimersByTime(100);
