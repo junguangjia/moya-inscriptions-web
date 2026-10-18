@@ -129,6 +129,8 @@ export interface FeedPostStageProps {
   readonly burstEnabled: boolean;
   /** The viewer this post opened is showing. */
   readonly viewerOpen: boolean;
+  /** Feed posts return to the first image after a complete vertical exit. */
+  readonly resetOnExit?: boolean | undefined;
   readonly onRegionChange?: (region: "media" | "comments") => void;
 }
 
@@ -295,6 +297,7 @@ export const FeedPostStage = forwardRef<
     onDoubleTap,
     burstEnabled,
     viewerOpen,
+    resetOnExit = false,
     onRegionChange,
   },
   ref,
@@ -406,12 +409,12 @@ export const FeedPostStage = forwardRef<
   const [burst, setBurst] = useState(0);
   const firstImageRef = useRef<HTMLImageElement>(null);
 
-  const cancelPendingTap = () => {
+  const cancelPendingTap = useCallback(() => {
     if (pendingTapRef.current !== null) {
       window.clearTimeout(pendingTapRef.current);
       pendingTapRef.current = null;
     }
-  };
+  }, []);
 
   // Written on the DOM at once: they must be in place for the next touch.
   const applyStrip = useCallback(() => {
@@ -777,6 +780,83 @@ export const FeedPostStage = forwardRef<
       setProgress(next);
     }
   }, [activeMediaIndex, count, measure, scrollToOffset, stripNode]);
+
+  // Watch the whole post, including an expanded body. The nearest vertical
+  // scrollport also covers profile overlays and Home's independently scrolled
+  // tabs. A horizontal tab change alone must not count as leaving the post.
+  useEffect(() => {
+    const post = stripNode?.closest("[data-feed-post]");
+    if (
+      !resetOnExit ||
+      viewerOpen ||
+      post === null ||
+      post === undefined ||
+      typeof IntersectionObserver !== "function"
+    )
+      return undefined;
+    let root = post.parentElement;
+    while (
+      root !== null &&
+      !/^(auto|scroll)$/.test(getComputedStyle(root).overflowY)
+    )
+      root = root.parentElement;
+    let seen = false;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            // An explicit root can intersect a post in an inactive tab.
+            // Revealing that tab need not emit another intersection entry.
+            seen = true;
+            continue;
+          }
+          // Profile tabs also restore their own vertical position on commit.
+          // Their departing post can move vertically while the tab hides it.
+          if (post.closest('[inert], [hidden], [aria-hidden="true"]') !== null)
+            continue;
+          const bounds = entry.rootBounds;
+          const box = entry.boundingClientRect;
+          if (
+            !seen ||
+            bounds === null ||
+            bounds.height <= 0 ||
+            box.height <= 0 ||
+            (box.bottom > bounds.top && box.top < bounds.bottom)
+          )
+            continue;
+          seen = false;
+          cancelPendingTap();
+          if (settleTimerRef.current !== null)
+            window.clearTimeout(settleTimerRef.current);
+          settleTimerRef.current = null;
+          if (frameRef.current !== null)
+            window.cancelAnimationFrame(frameRef.current);
+          frameRef.current = null;
+          holdRef.current = false;
+          resizedRef.current = false;
+          growthRef.current = null;
+          touchRef.current = { active: false, startOffset: 0 };
+          inputDirectionRef.current = { direction: 0, at: 0 };
+          lastDoubleTapRef.current = Number.NEGATIVE_INFINITY;
+          scrollToOffset(0, "instant");
+          setProgress(0);
+          // Reuse the normal region/index notification and drive cleanup.
+          settleRef.current();
+          applyStrip();
+        }
+      },
+      { root, threshold: 0 },
+    );
+    observer.observe(post);
+    return () => observer.disconnect();
+  }, [
+    applyStrip,
+    cancelPendingTap,
+    resetOnExit,
+    scrollToOffset,
+    stripNode,
+    viewerOpen,
+  ]);
 
   useImperativeHandle(ref, () => ({
     scrollToIndex: (index) => {

@@ -196,6 +196,7 @@ test("a rightward swipe on the stage pages the post, not the Home tabs", async (
     -title.box.width * 0.6,
   );
   await expect(feed.home).toHaveAttribute("data-active-home-feed", "nearby");
+  await expect(feed.strip).toHaveAttribute("data-feed-stage-index", "1");
   await feed.context?.close();
 });
 
@@ -226,6 +227,66 @@ test("a tap opens the viewer over the feed and Back closes it where it was", asy
   await expect(image).toBeFocused();
   expect(await panel.evaluate((node) => node.scrollTop)).toBe(scrollBefore);
   await feed.context?.close();
+});
+
+test("a post returns to its first image after scrolling fully away and back", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const feed = await openPhoneFeed(browser, page, testInfo);
+  try {
+    const panel = feed.page.locator('[data-home-feed-panel="discover"]');
+    const initialScroll = await panel.evaluate((node) => node.scrollTop);
+    await feed.post.locator("[data-feed-post-dot]").nth(1).click();
+    await expect(feed.strip).toHaveAttribute("data-feed-stage-index", "1");
+
+    // Leave the bottom of the article visible: scrolling past just its
+    // images must not discard the reader's place while reading the body.
+    await feed.post.evaluate((post) => {
+      const port = post.closest<HTMLElement>("[data-home-feed-panel]")!;
+      port.scrollTop +=
+        post.getBoundingClientRect().bottom -
+        port.getBoundingClientRect().top -
+        64;
+    });
+    await expect
+      .poll(() =>
+        feed.post.evaluate((post) => {
+          const port = post.closest("[data-home-feed-panel]")!;
+          return (
+            post.getBoundingClientRect().bottom -
+            port.getBoundingClientRect().top
+          );
+        }),
+      )
+      .toBeCloseTo(64, 0);
+    await expect(feed.strip).toHaveAttribute("data-feed-stage-index", "1");
+
+    await panel.evaluate((node) => {
+      node.scrollTop += 128;
+    });
+    await expect(feed.strip).toHaveAttribute("data-feed-stage-index", "0");
+    const awayScroll = await panel.evaluate((node) => node.scrollTop);
+    // The horizontal reset must not move the vertical feed.
+    await expect
+      .poll(() => panel.evaluate((node) => node.scrollTop))
+      .toBe(awayScroll);
+    await panel.evaluate((node, top) => {
+      node.scrollTop = top;
+    }, initialScroll);
+    await expect(feed.strip).toBeInViewport();
+    await expect(feed.strip).toHaveAttribute("data-feed-stage-region", "media");
+    await expect(feed.strip).toHaveAttribute("data-feed-stage-index", "0");
+    await expect
+      .poll(() => feed.strip.evaluate((node) => Math.abs(node.scrollLeft)))
+      .toBeLessThan(1);
+    await expect(
+      feed.post.locator('[data-feed-post-dot][aria-current="true"]'),
+    ).toHaveAttribute("aria-label", /^第 1 张/u);
+  } finally {
+    await feed.context?.close();
+  }
 });
 
 test("a double tap likes instead of opening the viewer; a guest is asked to sign in", async ({
