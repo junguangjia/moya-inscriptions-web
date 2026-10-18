@@ -1549,6 +1549,19 @@ describe("FeedColophon", () => {
     expect($('[data-comment-id="c1"]')?.dataset.colophonHighlight).toBe("true");
   });
 
+  it("requests reading reveal for an external comment locator", () => {
+    h.thread = makeThread({
+      items: [comment("c1", writer), comment("c2", other)],
+      highlightId: "c2",
+    });
+    render();
+    expect(h.stage?.scrollToElement).toHaveBeenCalledWith(
+      $('[data-comment-id="c2"]'),
+      undefined,
+      { reveal: true },
+    );
+  });
+
   it("drops a mark whose colophon is not shown, without moving the strip", () => {
     h.thread = makeThread({
       items: [comment("c1", writer)],

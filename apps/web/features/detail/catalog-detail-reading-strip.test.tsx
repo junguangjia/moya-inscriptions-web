@@ -165,16 +165,31 @@ afterEach(() => {
 });
 
 describe("CatalogDetailReadingStrip", () => {
-  it("reveals the vertical reading region for a precise reply locator without moving it during anchor maintenance", () => {
+  it("keeps ordinary reply alignment and anchor maintenance horizontal", () => {
     const view = mounts();
     const reply = view.host.querySelector<HTMLElement>(
       "[data-colophon-anchor]",
     )!;
     act(() => stage!.scrollToElement(reply));
+    expect(view.onRevealReading).not.toHaveBeenCalled();
+    expect(view.offset()).toBeGreaterThan(950);
+    act(() => stage!.scrollToElement(reply, "smooth"));
+    expect(view.onRevealReading).not.toHaveBeenCalled();
+    act(() => stage!.scrollToElement(reply, "instant"));
+    expect(view.onRevealReading).not.toHaveBeenCalled();
+  });
+  it("reveals the reading region only for explicit comment location", () => {
+    const view = mounts();
+    const reply = view.host.querySelector<HTMLElement>(
+      "[data-colophon-anchor]",
+    )!;
+    act(() => stage!.scrollToElement(reply, undefined, { reveal: true }));
     expect(view.onRevealReading).toHaveBeenCalledOnce();
     expect(view.offset()).toBeGreaterThan(950);
-    act(() => stage!.scrollToElement(reply, "instant"));
-    expect(view.onRevealReading).toHaveBeenCalledOnce();
+    act(() => expect(view.ref.current!.scrollToComment("reply-1")).toBe(true));
+    expect(view.onRevealReading).toHaveBeenCalledTimes(2);
+    act(() => expect(view.ref.current!.scrollToComment("missing")).toBe(false));
+    expect(view.onRevealReading).toHaveBeenCalledTimes(2);
   });
   it.each(["pointerup", "pointercancel"])(
     "keeps native momentum after %s active through its final reading position",

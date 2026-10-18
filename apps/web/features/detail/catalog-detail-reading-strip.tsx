@@ -280,11 +280,11 @@ export const CatalogDetailReadingStrip = forwardRef<
     [settle],
   );
 
-  const scrollToElement = useCallback(
-    (element: Element, behavior?: ScrollBehavior) => {
+  const scrollToElement = useCallback<FeedStageApi["scrollToElement"]>(
+    (element, behavior, options) => {
       const node = stripRef.current;
       if (node === null) return;
-      if (behavior !== "instant") onRevealReading?.();
+      if (options?.reveal === true) onRevealReading?.();
       const gutter =
         Number.parseFloat(getComputedStyle(element).scrollMarginRight) || 0;
       scrollToOffset(
@@ -317,7 +317,7 @@ export const CatalogDetailReadingStrip = forwardRef<
           ) ?? []),
         ].find((node) => node.dataset.colophonAnchor === id);
         if (anchor === undefined) return false;
-        scrollToElement(anchor);
+        scrollToElement(anchor, undefined, { reveal: true });
         return true;
       },
       scrollToStart: () => scrollToOffset(0),
