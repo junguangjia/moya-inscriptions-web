@@ -341,12 +341,18 @@ describe("CatalogDetailExperience", () => {
     document.body.append(container);
     const root = createRoot(container);
     roots.push(root);
-    const render = (catalogId: string, activeViewerMediaId: string | null) =>
+    const render = (
+      catalogId: string,
+      activeViewerMediaId: string | null,
+      calligraphy = false,
+      positionKey = "reader:normal",
+    ) =>
       act(() =>
         root.render(
           <CatalogDetailExperience
             activeViewerMediaId={activeViewerMediaId}
             backButtonRef={createRef<HTMLButtonElement>()}
+            calligraphy={calligraphy}
             catalogId={catalogId}
             commentSection={<section data-comment-section="">comments</section>}
             detailActions={<Actions />}
@@ -357,7 +363,8 @@ describe("CatalogDetailExperience", () => {
             onScrollTopChange={onScrollTopChange}
             onViewerMediaChange={vi.fn()}
             orientation="landscape"
-            platform="pc"
+            platform={calligraphy ? "phone" : "pc"}
+            positionKey={positionKey}
             state={detail(catalogId)}
           />,
         ),
@@ -388,6 +395,19 @@ describe("CatalogDetailExperience", () => {
     expect(container.querySelector("[data-detail-main-image]")).toBeNull();
     expect(container.querySelector("[data-comment-section]")).toBeNull();
     expect(container.querySelector("[data-test-actions]")).toBeNull();
+
+    // Mode, breakpoint and account-scoped restoration cannot reveal the
+    // same withdrawn content again.
+    for (const [calligraphy, positionKey] of [
+      [true, "reader:single"],
+      [true, "another-reader:single"],
+      [false, "another-reader:normal"],
+    ] as const) {
+      render("work-one", null, calligraphy, positionKey);
+      expect(container.querySelector("[data-detail-withdrawn]")).toBe(notice);
+      expect(container.querySelector("[data-detail-main-image]")).toBeNull();
+      expect(container.querySelector("[data-test-actions]")).toBeNull();
+    }
 
     // Another Detail is never affected.
     render("work-two", null);
