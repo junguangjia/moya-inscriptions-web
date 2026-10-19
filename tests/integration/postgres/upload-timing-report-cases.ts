@@ -47,10 +47,11 @@ const derivatives = (
     ...blobOf(1000),
     variant,
     editKey: "base",
-    contentType: "image/webp" as const,
+    contentType:
+      variant === "motion" ? ("video/mp4" as const) : ("image/webp" as const),
     width: 480,
     height: 360,
-    durationMs: null,
+    durationMs: variant === "motion" ? 3000 : null,
     recipeVersion: currentRecipe(variant).version,
     recipeDigest: currentRecipe(variant).digest,
   }));
@@ -62,6 +63,33 @@ const processed = (): PublishingProcessedOutcome => ({
   pairing: null,
   stillExifOrientation: 1,
   derivatives: derivatives(["thumb", "display", "cover"]),
+  placeholderColor: null,
+});
+
+const pairSha = createHash("sha256").update("pair").digest("hex");
+
+/** A Live item renders every role, `full` included, in its process job. */
+const processedLive = (): PublishingProcessedOutcome => ({
+  status: "processed",
+  detectedTypes: [
+    { role: "still", contentType: "image/jpeg" },
+    { role: "motion", contentType: "video/mp4" },
+  ],
+  presentation: {
+    width: 1440,
+    height: 1920,
+    durationMs: 3000,
+    hasAudio: true,
+    displayRotation: 90,
+  },
+  pairing: {
+    method: "apple-content-identifier",
+    verifiedBy: "server",
+    identifierSha256: pairSha,
+    stillTimeMs: 1500,
+  },
+  stillExifOrientation: 6,
+  derivatives: derivatives(["thumb", "display", "full", "motion", "cover"]),
   placeholderColor: null,
 });
 
@@ -305,10 +333,81 @@ export const registerUploadTimingReportTests = (
       );
       const other = await register(b, draftB.id, MiB, at(100));
       await upload(b, other, at(101), at(103), undefined);
+      // A Live photo in a later batch of the first account.
+      const liveDraft = await adapter.createDraft(
+        a,
+        {
+          requestId: randomUUID(),
+          content: {
+            title: "",
+            body: "实况",
+            authorship: { kind: "original" },
+            visibility: "public",
+            items: [],
+            coverKey: null,
+            coverCrop: null,
+          },
+          deviceClass: "phone",
+        },
+        at(200),
+      );
+      const live = await adapter.registerItem(
+        a,
+        {
+          requestId: randomUUID(),
+          holder: { draftId: liveDraft.id },
+          kind: "live",
+          qualityMode: "standard",
+          processingProfile: "standard-live-v1",
+          components: [
+            {
+              role: "still",
+              byteSize: MiB,
+              contentType: "image/jpeg",
+              standardOutcome: "optimized",
+            },
+            {
+              role: "motion",
+              byteSize: 2 * MiB,
+              contentType: "video/mp4",
+              standardOutcome: "optimized",
+            },
+          ],
+          clientPairing: {
+            method: "apple-content-identifier",
+            identifierSha256: pairSha,
+            stillTimeMs: 1500,
+          },
+        },
+        at(200),
+      );
+      for (const [component, startAt, commitAt, firstByte, lastByte] of [
+        [live.components[0]!, 201, 205, 201.1, 204],
+        [live.components[1]!, 201.5, 208, 201.6, 207],
+      ] as const) {
+        const fence = await adapter.beginComponentUpload(
+          a,
+          component.id,
+          {
+            attempt: randomUUID(),
+            contentLength: component.byteSize,
+            supersede: false,
+          },
+          at(startAt),
+        );
+        await adapter.commitComponentUpload(
+          fence,
+          blobOf(component.byteSize),
+          at(commitAt),
+          { firstByteAt: at(firstByte), lastByteAt: at(lastByte) },
+        );
+      }
+      await runJob(live.id, "process_item", at(209), at(230));
+      await adapter.markItemReady(live.id, processedLive(), at(230));
 
       const rows = await report("upload-timing.sql", a);
-      expect(rows).toHaveLength(2);
-      const [one, two] = rows;
+      expect(rows).toHaveLength(4);
+      const [one, two, liveStill, liveMotion] = rows;
       expect(one).toMatchObject({
         batch_no: "1",
         item_no: "1",
@@ -321,8 +420,13 @@ export const registerUploadTimingReportTests = (
         process_attempts: 1,
         hd_attempts: 1,
         batch_items: "2",
-        batch_bytes: String(3 * MiB),
+        declared_mib: "2.0",
+        received_mib: "2.0",
+        batch_mib: "3.0",
       });
+      // Sizes only as rounded MiB: no exact byte count leaves the report.
+      for (const row of rows)
+        for (const key of Object.keys(row)) expect(key).not.toMatch(/bytes/u);
       const seconds = (row: Record<string, unknown>, keys: string[]) =>
         Object.fromEntries(keys.map((key) => [key, num(row[key])]));
       expect(
@@ -415,11 +519,43 @@ export const registerUploadTimingReportTests = (
         upload_attempts: 1,
         refusals_after_commit: 0,
       });
+      // Live: full comes with the previews, so there is no HD job and no
+      // background HD lag to report.
+      expect(liveStill).toMatchObject({
+        batch_no: "2",
+        component: "still",
+        live: true,
+        hd_queued_s: null,
+        hd_wait_s: null,
+        ready_to_hd_s: null,
+        batch_items: "1",
+        batch_mib: "3.0",
+      });
+      expect(liveMotion).toMatchObject({ batch_no: "2", component: "motion" });
+      expect(
+        seconds(liveStill!, [
+          "ready_s",
+          "full_s",
+          "process_wait_s",
+          "process_run_s",
+          "commit_to_ready_s",
+          "transfer_s",
+          "batch_publish_ready_s",
+        ]),
+      ).toEqual({
+        ready_s: 30,
+        full_s: 30,
+        process_wait_s: 1,
+        process_run_s: 21,
+        commit_to_ready_s: 22,
+        transfer_s: 2.9,
+        batch_publish_ready_s: 30,
+      });
 
       // Every account: the old upload is a second batch whose added times
       // stay NULL (never estimated).
       const everyone = await report("upload-timing.sql", "");
-      expect(everyone).toHaveLength(3);
+      expect(everyone).toHaveLength(5);
       expect(everyone[2]).toMatchObject({
         batch_no: "2",
         upload_attempts: 1,
@@ -432,17 +568,24 @@ export const registerUploadTimingReportTests = (
       const summary = await report("upload-timing-summary.sql", a);
       const phase = (level: string, name: string) =>
         summary.find((row) => row.level === level && row.phase === name);
-      expect(phase("component", "transfer_s")).toMatchObject({ n: "2" });
-      expect(num(phase("component", "transfer_s")?.p50)).toBe(5.6);
+      // Transfers 4.8, 6.4, 2.9 and 5.4 s.
+      expect(phase("component", "transfer_s")).toMatchObject({ n: "4" });
+      expect(num(phase("component", "transfer_s")?.p50)).toBe(5.1);
       expect(num(phase("component", "transfer_s")?.max)).toBe(6.4);
-      expect(num(phase("component", "resent_share")?.mean)).toBe(0.5);
+      expect(num(phase("component", "resent_share")?.mean)).toBe(0.25);
       expect(num(phase("component", "refused_after_commit_share")?.mean)).toBe(
-        0.5,
+        0.25,
       );
+      // Static items and Live items are summarised apart.
       expect(num(phase("item", "process_wait_s")?.p50)).toBe(2.75);
       expect(num(phase("item", "hd_run_s")?.max)).toBe(15);
-      expect(num(phase("batch", "batch_publish_ready_s")?.p50)).toBe(17);
-      expect(phase("batch", "batch_items")).toMatchObject({ n: "1" });
+      expect(phase("item", "ready_to_hd_s")).toMatchObject({ n: "2" });
+      expect(num(phase("item", "ready_to_hd_s")?.max)).toBe(52.9);
+      expect(phase("item_live", "process_run_s")).toMatchObject({ n: "1" });
+      expect(num(phase("item_live", "process_run_s")?.max)).toBe(21);
+      expect(phase("item_live", "ready_to_hd_s")).toMatchObject({ n: "0" });
+      expect(num(phase("batch", "batch_publish_ready_s")?.p50)).toBe(23.5);
+      expect(phase("batch", "batch_items")).toMatchObject({ n: "2" });
 
       // Content-free output: no ids, keys, hashes or names of any kind.
       for (const value of [...rows, ...everyone, ...summary].flatMap((row) =>

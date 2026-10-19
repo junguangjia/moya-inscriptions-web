@@ -819,9 +819,9 @@ export function createPublishingJobHandlers(
       port.recordDerivatives(input.itemId, outcome, clock()),
     );
     const timing = measured.timing;
+    // The claim's background (HD) priority: exactly the ["full"] variants.
     const background =
-      claim.payload?.editKey === "base" &&
-      claim.payload.variants.length === 1 &&
+      claim.payload?.variants.length === 1 &&
       claim.payload.variants[0] === "full";
     if (timing !== undefined)
       logTiming(() =>

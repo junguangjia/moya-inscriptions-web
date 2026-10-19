@@ -31,7 +31,8 @@ worker clock of the same host.
 The refusal note is a separate single-row write, made only after
 `beginComponentUpload` refused a transfer. It never changes the 409, takes no
 actor, holder or item lock, and leaves `updated_at` unchanged. A note failure is
-ignored.
+ignored. The note is awaited, so the 409 goes out one small update later; that
+keeps the count in step with the answer.
 
 ### Backend log line (one per upload attempt that reached the fence)
 
@@ -66,7 +67,9 @@ means another transfer of the same component was still streaming in this process
 - `commit_ms`: recording the renditions.
 - `total_ms`: the whole handler.
 
-Catalog, profile, purge and maintenance jobs log nothing new.
+`lane=hd` marks the background `["full"]` derive (the claim's HD priority).
+`lane=edit` marks any other derive. Catalog, profile, purge and maintenance jobs
+log nothing new.
 
 ### nginx upload log (template only)
 
@@ -87,11 +90,18 @@ A test pins every log format to times, sizes and outcomes only.
 
 `infra/production/sql/upload-timing.sql` returns one row per uploaded component
 in a UTC window. `upload-timing-summary.sql` returns n, mean, p50, p90 and max
-of every phase at the component, item and batch levels. Set `user_id=''` to
-cover every account, or pass one account to line the rows up with a screen
-recording. The run commands are in each file's header. The output numbers
-batches and items, carries no ids, and shows each batch's start only to the
-minute.
+of every phase at the component, static item, Live item and batch levels. Set
+`user_id=''` to cover every account, or pass one account to line the rows up
+with a screen recording. The run commands are in each file's header.
+
+- The output numbers batches and items and carries no ids.
+- Sizes are rounded to 0.1 MiB.
+- Each batch's start shows only to the minute.
+
+A Live item renders `full` in its process job and has no HD job, so its
+`ready_to_hd_s` is NULL. Each item uses its newest process and HD job row. When
+a job was retried, its start is the latest claim, so its wait includes the
+earlier attempts and their backoff.
 
 To read the per-role split, read the worker lines for the same window, for
 example:

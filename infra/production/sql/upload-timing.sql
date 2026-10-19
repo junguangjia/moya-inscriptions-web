@@ -4,9 +4,9 @@
 -- Read-only and content-free (upload-timing-instrumentation-v1, Issue #291).
 -- Reads every upload item registered in one UTC window, or one account's.
 -- Output has no ids, account names, storage keys, hashes, file names, titles,
--- bodies or metadata values: batches and items are numbered, times are
--- seconds since the batch's first registration, and each batch shows only
--- the UTC minute it started.
+-- bodies or metadata values: batches and items are numbered, sizes are
+-- rounded to 0.1 MiB, times are seconds since the batch's first
+-- registration, and each batch shows only the UTC minute it started.
 --
 -- INPUTS (psql variables, all required)
 --   window_start  UTC timestamptz, e.g. '2026-10-20 00:00:00+00'
@@ -38,8 +38,13 @@
 --   process_*       the item's process_item job: queued, claimed (started)
 --                   and finished; static previews, or every Live role
 --   ready           previews recorded (static) or everything (Live)
---   hd_*            the base HD derive_edit job (viewer and full); its wait
---                   includes the up-to-30 s hold for siblings still uploading
+--   hd_*            the base HD derive_edit job (viewer and full) of a static
+--                   item; its wait includes the up-to-30 s hold for siblings
+--                   still uploading. Live items have none (ready_to_hd_s NULL)
+--   process_* / hd_* use each item's newest job row. When *_attempts > 1,
+--                   started is the latest claim, so *_wait_s includes earlier
+--                   attempts and their backoff; a released or deferred job
+--                   keeps its previous claim time until it is claimed again
 --   publish-ready   every item of the batch that still counts is ready
 --   submitted       the first submit of a work containing the item
 --   Per-role render times inside a job are in the media worker's
@@ -127,7 +132,7 @@ hd AS (
   WHERE j.kind = 'derive_edit'
     AND j.payload ->> 'editKey' = 'base'
     AND j.payload -> 'variants' = '["full"]'::jsonb
-  ORDER BY j.subject_id, j.created_at, j.id
+  ORDER BY j.subject_id, j.created_at DESC, j.id
 ),
 rend AS (
   SELECT r.item_id,
@@ -186,8 +191,8 @@ component_rows AS (
     (f.kind = 'live') AS live,
     f.quality_mode,
     c.declared_type,
-    c.declared_bytes,
-    c.received_bytes,
+    round(c.declared_bytes / 1048576.0, 1) AS declared_mib,
+    round(c.received_bytes / 1048576.0, 1) AS received_mib,
     f.state AS item_state,
     c.component_state,
     to_char(date_trunc('minute', ba.t0) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI"Z"') AS batch_start_minute_utc,
@@ -227,10 +232,12 @@ component_rows AS (
     round(extract(epoch FROM (f.ready_at - f.last_commit_at)), 3) AS commit_to_ready_s,
     round(extract(epoch FROM (f.hd_started_at - f.hd_queued_at)), 3) AS hd_wait_s,
     round(extract(epoch FROM (f.hd_finished_at - f.hd_started_at)), 3) AS hd_run_s,
-    round(extract(epoch FROM (f.full_at - f.ready_at)), 3) AS ready_to_hd_s,
+    -- Live renders full inside its process job: it has no background HD lag.
+    CASE WHEN f.kind <> 'live'
+         THEN round(extract(epoch FROM (f.full_at - f.ready_at)), 3) END AS ready_to_hd_s,
     -- Batch milestones and rates.
     ba.batch_items,
-    bb.bytes AS batch_bytes,
+    round(bb.bytes / 1048576.0, 1) AS batch_mib,
     round(extract(epoch FROM (bb.first_byte_at - ba.t0)), 3) AS batch_first_byte_s,
     round(extract(epoch FROM (bb.last_byte_at - ba.t0)), 3) AS batch_last_byte_s,
     round(extract(epoch FROM (bb.last_commit_at - ba.t0)), 3) AS batch_last_commit_s,
