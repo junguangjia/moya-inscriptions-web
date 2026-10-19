@@ -168,7 +168,9 @@ GRANT UPDATE (
 GRANT SELECT, INSERT ON TABLE community.media_components TO :"app_role";
 GRANT UPDATE (
   state, upload_attempt, received_bytes, reserved_bytes, sha256, blob_id,
-  detected_type, updated_at
+  detected_type, updated_at, upload_attempts, upload_first_started_at,
+  upload_first_byte_at, upload_last_byte_at, upload_refusals_after_commit,
+  upload_first_refusal_after_commit_at
 ) ON TABLE community.media_components TO :"app_role";
 GRANT SELECT, INSERT ON TABLE community.media_blobs TO :"app_role";
 GRANT UPDATE (state, tombstoned_at, purged_at) ON TABLE community.media_blobs TO :"app_role";
@@ -176,7 +178,7 @@ GRANT SELECT, INSERT, DELETE ON TABLE community.media_derivatives, community.med
 GRANT SELECT, INSERT, DELETE ON TABLE community.publishing_jobs TO :"app_role";
 GRANT UPDATE (
   state, attempts, run_after, lease_owner, lease_expires_at, last_error_code,
-  finished_at, updated_at
+  finished_at, updated_at, started_at
 ) ON TABLE community.publishing_jobs TO :"app_role";
 
 -- SQL functions the adapters call (EXECUTE is also the PostgreSQL default for

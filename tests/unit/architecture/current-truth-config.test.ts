@@ -305,6 +305,37 @@ describe("current repository truth and local configuration", () => {
     ])
       expect(upload).toContain(directive);
     expect(nginx.match(/client_max_body_size 8g;/g)).toHaveLength(1);
+    // Uploads keep the status line and add one content-free timing line.
+    expect(upload).toContain(
+      "access_log /var/log/nginx/yoyi-access.log yoyi_status;",
+    );
+    expect(upload).toContain(
+      "access_log /var/log/nginx/yoyi-upload.log yoyi_upload;",
+    );
+    // Every log format names only times, sizes and outcomes: no request
+    // line, URI, arguments, host, address, header or cookie.
+    const formats = [...nginx.matchAll(/^log_format (\S+) '([^']*)';$/gmu)];
+    expect(formats.map(([, name]) => name)).toEqual([
+      "yoyi_status",
+      "yoyi_upload",
+    ]);
+    const allowed = new Set([
+      "time_iso8601",
+      "msec",
+      "status",
+      "request_completion",
+      "request_length",
+      "bytes_sent",
+      "request_time",
+      "upstream_status",
+      "upstream_connect_time",
+      "upstream_header_time",
+      "upstream_response_time",
+    ]);
+    for (const [, , format] of formats)
+      for (const [, variable] of format!.matchAll(/\$([a-z0-9_]+)/gu))
+        expect(allowed.has(variable!)).toBe(true);
+    expect(formats[0]![2]).toBe("$time_iso8601 $status $request_time");
     for (const exact of [
       "/mcp/article-authoring",
       "/.well-known/oauth-protected-resource/mcp/article-authoring",

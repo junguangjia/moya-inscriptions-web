@@ -2780,6 +2780,147 @@ describe("work publishing transfers in the service", () => {
     expect(service.transfers.size).toBe(0);
   });
 
+  /** A clock that moves 100 ms per reading, from `now`. */
+  const steppingClock = () => {
+    let readings = 0;
+    return () => new Date(now.getTime() + 100 * readings++);
+  };
+  const chunked = (
+    bytes: Buffer,
+    parts: number,
+  ): AsyncIterable<Uint8Array> => ({
+    async *[Symbol.asyncIterator]() {
+      const size = Math.ceil(bytes.byteLength / parts);
+      for (let offset = 0; offset < bytes.byteLength; offset += size)
+        yield bytes.subarray(offset, offset + size);
+    },
+  });
+  /** Upload lines must never carry ids, attempts, keys or other content. */
+  const expectContentFree = (lines: readonly string[], attempt: string) => {
+    for (const line of lines) {
+      expect(line).not.toContain(componentId);
+      expect(line).not.toContain(itemId);
+      expect(line).not.toContain(actor);
+      expect(line).not.toContain(attempt);
+      expect(line).not.toMatch(/blobs\/|https?:|[0-9a-f]{32}/u);
+    }
+  };
+
+  it("commits the Backend's first and last body byte times and logs one content-free line", async () => {
+    const declared = 96 * KiB;
+    const store = new MemoryMediaStore();
+    const fake = uploadPort(declared);
+    const lines: string[] = [];
+    const service = new WorkPublishingService(fake.port, {
+      store,
+      processor,
+      clock: steppingClock(),
+      logger: { info: (line) => lines.push(line) },
+    });
+    const transfer = {
+      ...transferOf(randomBytes(declared)),
+      source: chunked(randomBytes(declared), 3),
+    };
+    const outcome = await service.uploadComponent(actor, componentId, transfer);
+    expect(outcome.status).toBe("committed");
+    const [commit] = fake.named("commitComponentUpload");
+    const [, , committedNow, timing] = commit?.args ?? [];
+    const { firstByteAt, lastByteAt } = timing as {
+      firstByteAt: Date;
+      lastByteAt: Date;
+    };
+    expect(firstByteAt.getTime()).toBeLessThan(lastByteAt.getTime());
+    expect(lastByteAt.getTime()).toBeLessThan((committedNow as Date).getTime());
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(
+      /^\[publishing-upload\] attempt outcome=committed role=still mib=0\.1 first_byte_ms=\d+ last_byte_ms=\d+ store_ms=\d+ commit_ms=\d+$/u,
+    );
+    expectContentFree(lines, transfer.attempt);
+  });
+
+  it("counts a resend refused after its commit, keeps the 409 and survives a failing note", async () => {
+    const declared = 32 * KiB;
+    const committedAt = new Date(now.getTime() - 4_200);
+    let noteFails = false;
+    const fake = uploadPort(declared, {
+      noteUploadRefusedAfterCommit: () => {
+        if (noteFails) throw new Error("measurement unavailable");
+        return committedAt;
+      },
+    });
+    const lines: string[] = [];
+    const service = new WorkPublishingService(fake.port, {
+      store: new MemoryMediaStore(),
+      processor,
+      clock: () => now,
+      logger: { info: (line) => lines.push(line) },
+    });
+    const first = transferOf(randomBytes(declared));
+    expect(
+      (await service.uploadComponent(actor, componentId, first)).status,
+    ).toBe("committed");
+    // The answer was lost; the client sends the same component again.
+    const resend = transferOf(randomBytes(declared));
+    await expect(
+      service.uploadComponent(actor, componentId, resend),
+    ).rejects.toBeInstanceOf(CommunityConflictError);
+    expect(fake.named("noteUploadRefusedAfterCommit")).toEqual([
+      { name: "noteUploadRefusedAfterCommit", args: [actor, componentId, now] },
+    ]);
+    expect(lines.at(-1)).toBe(
+      "[publishing-upload] attempt outcome=refused reason=after_commit since_commit_ms=4200",
+    );
+    noteFails = true;
+    await expect(
+      service.uploadComponent(
+        actor,
+        componentId,
+        transferOf(randomBytes(declared)),
+      ),
+    ).rejects.toBeInstanceOf(CommunityConflictError);
+    expect(lines.at(-1)).toBe(
+      "[publishing-upload] attempt outcome=refused reason=conflict",
+    );
+    expect(fake.named("commitComponentUpload")).toHaveLength(1);
+    expectContentFree(lines, resend.attempt);
+  });
+
+  it("logs a refusal while another transfer of the component streams here as busy", async () => {
+    const declared = 32 * KiB;
+    const transfers = new PublishingTransferRegistry();
+    const streaming = transfers.claim(componentId, () => undefined);
+    streaming.markStreaming();
+    const fake = uploadPort(declared, {
+      beginComponentUpload: () => {
+        throw new CommunityConflictError(
+          "The component is not awaiting an upload",
+        );
+      },
+      noteUploadRefusedAfterCommit: () => null,
+    });
+    const lines: string[] = [];
+    const service = new WorkPublishingService(fake.port, {
+      store: new MemoryMediaStore(),
+      processor,
+      transfers,
+      clock: () => now,
+      logger: { info: (line) => lines.push(line) },
+    });
+    await expect(
+      service.uploadComponent(
+        actor,
+        componentId,
+        transferOf(randomBytes(declared)),
+      ),
+    ).rejects.toBeInstanceOf(CommunityConflictError);
+    // No takeover is attempted while the other transfer streams.
+    expect(fake.named("beginComponentUpload")).toHaveLength(1);
+    expect(lines).toEqual([
+      "[publishing-upload] attempt outcome=refused reason=busy",
+    ]);
+    streaming.release();
+  });
+
   it("reads size codes only from media store errors", async () => {
     const declared = 32 * KiB;
     const foreign = Object.assign(new Error("not a store error"), {

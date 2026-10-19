@@ -17,10 +17,14 @@ import {
   SANDBOX_JOB_LIMITS,
   configureSandboxSharp,
   loaderAllowlistHolds,
+  parseSandboxManifest,
   renderSandboxJob,
+  sandboxManifest,
 } from "@moya/backend-production/internal/publishing-sandbox";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { sandboxRuntime } from "./publishing-sandbox-fixture.js";
 
 import type {
   ProfileRole,
@@ -274,6 +278,32 @@ describe("media sandbox renderer (in-process, real sharp)", () => {
       ).toBe(true);
     }
     expect(body.placeholderColor).toBeNull();
+  });
+
+  it("reports bounded whole-millisecond timings for exactly the roles it rendered", async () => {
+    const opaque = await sharp({
+      create: { width: 64, height: 48, channels: 3, background: RED },
+    })
+      .png()
+      .toBuffer();
+    const body = derived(await render(deriveJob(opaque, "image/png"), opaque));
+    const timings = body.timings!;
+    expect(Number.isSafeInteger(timings.prepareMs)).toBe(true);
+    expect(timings.prepareMs).toBeGreaterThanOrEqual(0);
+    expect(Object.keys(timings.roles)).toEqual(
+      body.outputs.map((output) => output.role),
+    );
+    for (const ms of Object.values(timings.roles)) {
+      expect(Number.isSafeInteger(ms)).toBe(true);
+      expect(ms).toBeGreaterThanOrEqual(0);
+    }
+    // The coordinator accepts exactly what the renderer reports.
+    const manifest = sandboxManifest(
+      deriveJob(opaque, "image/png"),
+      sandboxRuntime(),
+      body,
+    );
+    expect(parseSandboxManifest(JSON.stringify(manifest))).toEqual(manifest);
   });
 
   it("computes the placeholder colour from the opaque thumb", async () => {

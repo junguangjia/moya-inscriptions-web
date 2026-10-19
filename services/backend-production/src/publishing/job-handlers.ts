@@ -15,6 +15,7 @@ import type {
   ProcessorInput,
   ProcessorLegacySource,
   ProcessorOutcome,
+  ProcessorTiming,
   ProcessorVariant,
 } from "./processing/media-processor.js";
 import type {
@@ -488,6 +489,38 @@ export class PublishingJobCancelledError extends Error {
   }
 }
 
+/** Whole milliseconds since a `performance.now()` reading. */
+const elapsedMs = (since: number): number =>
+  Math.max(0, Math.round(performance.now() - since));
+
+const TIMING_ROLE = /^[a-z][a-z0-9-]{0,31}$/u;
+
+/**
+ * The one content-free timing line of a processed or derived Work media job:
+ * kind, lane, attempt, rounded sizes and milliseconds only.
+ */
+export const jobTimingLine = (
+  kind: "process_item" | "derive_edit",
+  lane: "preview" | "live" | "hd" | "edit",
+  attempt: number,
+  outcome: "processed" | "derived",
+  timing: ProcessorTiming,
+  commitMs: number,
+  totalMs: number,
+): string => {
+  const roles = Object.entries(timing.roles)
+    .filter(([role]) => TIMING_ROLE.test(role))
+    .map(([role, ms]) => ` ${role.replaceAll("-", "_")}_ms=${Math.round(ms)}`)
+    .join("");
+  return (
+    `[publishing-worker] job timing kind=${kind} lane=${lane} attempt=${attempt} outcome=${outcome}` +
+    ` source_mib=${(timing.sourceBytes / 1_048_576).toFixed(1)}` +
+    ` input_mp=${timing.inputPixels === null ? "-" : (timing.inputPixels / 1e6).toFixed(1)}` +
+    ` read_ms=${timing.readMs} sandbox_ms=${timing.sandboxMs} prepare_ms=${timing.prepareMs ?? "-"}${roles}` +
+    ` store_ms=${timing.storeMs} commit_ms=${commitMs} total_ms=${totalMs}`
+  );
+};
+
 /** A system failure that is safe to retry later with backoff. */
 export class PublishingJobSystemError extends Error {
   constructor(readonly code: string) {
@@ -648,10 +681,21 @@ export function createPublishingJobHandlers(
     throw signal.reason;
   };
 
+  /** Logs a job's timing; measurement never changes the job's result. */
+  const logTiming = (line: () => string) => {
+    try {
+      logger.info(line());
+    } catch {
+      // Measurement only.
+    }
+  };
+
   const processItem = async (
     claim: PublishingWorkerJobClaim,
     signal: AbortSignal,
   ): Promise<PublishingJobResult> => {
+    const started = performance.now();
+    const measured: { timing?: ProcessorTiming } = {};
     const input = await port.readProcessing(claim);
     if (input === null) return COMPLETED;
     if (
@@ -663,7 +707,11 @@ export function createPublishingJobHandlers(
       return failed("processing_input_invalid", false);
     }
     throwIfAborted(signal);
-    const outcome = await runProcessor(claim, input, signal);
+    const outcome = await runProcessor(
+      claim,
+      { ...input, onTiming: (timing) => (measured.timing = timing) },
+      signal,
+    );
     if (outcome === null) return COMPLETED;
     await discardIfAborted(outcome, signal);
     if (outcome.status === "rejected") {
@@ -675,9 +723,23 @@ export function createPublishingJobHandlers(
       await removeUnrecorded(keys);
       return failed("processing_outcome_invalid", false);
     }
+    const committing = performance.now();
     await commitDerivatives(keys, () =>
       port.markItemReady(input.itemId, outcome, clock()),
     );
+    const timing = measured.timing;
+    if (timing !== undefined)
+      logTiming(() =>
+        jobTimingLine(
+          "process_item",
+          input.kind === "live" ? "live" : "preview",
+          claim.attempts,
+          "processed",
+          timing,
+          elapsedMs(committing),
+          elapsedMs(started),
+        ),
+      );
     return COMPLETED;
   };
 
@@ -721,6 +783,8 @@ export function createPublishingJobHandlers(
     claim: PublishingWorkerJobClaim,
     signal: AbortSignal,
   ): Promise<PublishingJobResult> => {
+    const started = performance.now();
+    const measured: { timing?: ProcessorTiming } = {};
     const found = await port.readProcessing(claim);
     if (found === null) return COMPLETED;
     if (found.mode !== "derive" || found.itemId !== claim.subjectId) {
@@ -734,7 +798,11 @@ export function createPublishingJobHandlers(
       input = { ...found, legacyStill: still };
     }
     throwIfAborted(signal);
-    const outcome = await runProcessor(claim, input, signal);
+    const outcome = await runProcessor(
+      claim,
+      { ...input, onTiming: (timing) => (measured.timing = timing) },
+      signal,
+    );
     if (outcome === null) return COMPLETED;
     await discardIfAborted(outcome, signal);
     if (outcome.status === "rejected") {
@@ -746,9 +814,27 @@ export function createPublishingJobHandlers(
       await removeUnrecorded(keys);
       return failed("processing_outcome_invalid", false);
     }
+    const committing = performance.now();
     await commitDerivatives(keys, () =>
       port.recordDerivatives(input.itemId, outcome, clock()),
     );
+    const timing = measured.timing;
+    const background =
+      claim.payload?.editKey === "base" &&
+      claim.payload.variants.length === 1 &&
+      claim.payload.variants[0] === "full";
+    if (timing !== undefined)
+      logTiming(() =>
+        jobTimingLine(
+          "derive_edit",
+          background ? "hd" : "edit",
+          claim.attempts,
+          "derived",
+          timing,
+          elapsedMs(committing),
+          elapsedMs(started),
+        ),
+      );
     return COMPLETED;
   };
 

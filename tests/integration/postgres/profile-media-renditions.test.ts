@@ -409,6 +409,7 @@ describe("profile media renditions migration on a dedicated synthetic database",
       expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([
         PROFILE_MIGRATION,
         "20261016010000",
+        "20261019010000",
       ]);
       await verifyCommunityMigrationLedger(pool);
       const after = await snapshot(pool);
@@ -416,11 +417,18 @@ describe("profile media renditions migration on a dedicated synthetic database",
         null,
         null,
       ]);
+      // A later migration's claim time starts unrecorded on existing jobs.
+      expect(after.jobs.map((row) => row.started_at)).toEqual([null, null]);
       expect({
         ...after,
         renditions: after.renditions.map((row) =>
           Object.fromEntries(
             Object.entries(row).filter(([key]) => key !== "user_media_id"),
+          ),
+        ),
+        jobs: after.jobs.map((row) =>
+          Object.fromEntries(
+            Object.entries(row).filter(([key]) => key !== "started_at"),
           ),
         ),
       }).toEqual(before);

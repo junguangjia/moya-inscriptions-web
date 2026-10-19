@@ -7,6 +7,20 @@
 
 # 当前项目状态
 
+## Upload timing instrumentation — 2026-10-18
+
+Task `upload-timing-instrumentation-v1` (Issue #291 r1, Owner-approved) records
+content-free server-side upload and processing times for every upload: a claim
+time on jobs, Backend first and last byte and attempt counts per component,
+resends refused after a commit (lost answers), per-role render times in one
+media worker log line, an nginx upload log template and an Owner-run read-only
+report. The delivery stop is a Draft PR with independent review; the Owner
+decides when it merges. Once merged, `main` carries the unapplied migration
+`20261019010000`, and any Backend or worker release from `main` applies it and
+the runtime grants first. See the
+[task record](development/upload-timing-instrumentation-v1.md). This entry
+records authorization and plan only; it claims no deployment.
+
 ## Media pipeline increment 3a — 2026-10-13
 
 Issue #206 r21 splits increment 3 of the unified media pipeline. 3a "profile
