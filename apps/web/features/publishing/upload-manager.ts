@@ -508,6 +508,8 @@ export class UploadManager {
   /** Late answers that the fence ignored (observable for tests). */
   ignoredLateAnswers = 0;
   private confirmSequence = 0;
+  /** Counts pauses, so a continuation can tell one happened even if Continue followed. */
+  private pauseSequence = 0;
 
   constructor(options: UploadManagerOptions) {
     this.options = options;
@@ -1051,6 +1053,11 @@ export class UploadManager {
     if (!this.guardAccount()) return;
     if (this.status === "paused") this.resume();
     const epoch = record.epoch;
+    const pauses = this.pauseSequence;
+    // A pause during a read or reset stops this restart, even when Continue
+    // followed meanwhile: the pause marked the component, and Continue's own
+    // restart reads again (never two restarts of one component).
+    const interrupted = () => this.pauseSequence !== pauses;
     this.patchComponent(record, role, {
       phase: "queued",
       failure: null,
@@ -1065,9 +1072,7 @@ export class UploadManager {
     };
     // Read first: Continue must never discard bytes the account already has (U05).
     const read = await this.fetchItem(record, epoch);
-    if (read === null) return;
-    // Paused while reading: the pause marked the component; Continue reads again.
-    if (this.status !== "active") return;
+    if (read === null || interrupted()) return;
     if ("account" in read) {
       this.pause("account");
       return;
@@ -1113,7 +1118,7 @@ export class UploadManager {
           return;
         }
         const again = await this.fetchItem(record, epoch);
-        if (again === null || this.status !== "active") return;
+        if (again === null || interrupted()) return;
         const refreshed =
           "item" in again
             ? again.item.components.find((c) => c.role === role)
@@ -1149,7 +1154,7 @@ export class UploadManager {
         }
         item = again.item;
       }
-      if (!this.alive(record, epoch) || this.status !== "active") return;
+      if (!this.alive(record, epoch) || interrupted()) return;
       server = item.components.find((c) => c.role === role);
       this.applyServerItem(record, item, false);
       if (server?.state !== "awaiting") return;
@@ -1342,6 +1347,7 @@ export class UploadManager {
    */
   pause(reason: "account" | "offline"): void {
     if (this.status === "disposed") return;
+    this.pauseSequence += 1;
     this.status = "paused";
     this.pauseReason = reason;
     const message =

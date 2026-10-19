@@ -223,6 +223,8 @@ ends the window) is retried once per user action (the first send or each
 explicit 重试 / 继续上传) through the same read-first path as 重试. A spent
 retry, a window whose deciding read fails, a partial send, a refusal, a pause, a
 cancel or an account change keeps today's behavior and failure text.
+The 专题 editor's image uploads share this upload manager and get the same
+recovery (Issue #292 r2).
 
 ## Media paths and limits of proof
 

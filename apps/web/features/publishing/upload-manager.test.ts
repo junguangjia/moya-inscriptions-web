@@ -895,16 +895,12 @@ describe("upload manager: unconfirmed answer after a full send (#292)", () => {
       expect(test.transfer.starts).toHaveLength(2);
     });
 
-    it("pause during the automatic retry's read: nothing is reset until Continue", async () => {
-      const test = createTestManager();
-      const itemId = await start(test, "r");
-      loseAnswer(test, 0);
-      await settle();
+    /** Runs the window to its end, holding the automatic retry's own read. */
+    const holdRetryRead = async (test: Test) => {
       for (let read = 0; read < 7; read += 1) {
         test.timers.fireAll();
         await settle();
       }
-      // The last window read is answered; the retry's own read is held.
       const read = test.client.client.item.getMockImplementation()!;
       let release!: () => void;
       test.client.client.item
@@ -917,6 +913,15 @@ describe("upload manager: unconfirmed answer after a full send (#292)", () => {
         );
       test.timers.fireAll();
       await settle();
+      return () => release();
+    };
+
+    it("pause during the automatic retry's read: nothing is reset until Continue", async () => {
+      const test = createTestManager();
+      const itemId = await start(test, "r");
+      loseAnswer(test, 0);
+      await settle();
+      const release = await holdRetryRead(test);
       test.manager.pause("offline");
       release();
       await settle();
@@ -929,6 +934,52 @@ describe("upload manager: unconfirmed answer after a full send (#292)", () => {
       await test.manager.continueUploads();
       await settle();
       expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+      expect(test.transfer.starts).toHaveLength(2);
+    });
+
+    it("pause and Continue during the retry's read: one restart, one reset, one resend", async () => {
+      const test = createTestManager();
+      await start(test, "pc");
+      loseAnswer(test, 0);
+      await settle();
+      const release = await holdRetryRead(test);
+      test.manager.pause("offline");
+      await test.manager.continueUploads();
+      await settle();
+      release();
+      await settle();
+      // Only Continue's restart proceeds; the interrupted one stops.
+      expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+      expect(test.transfer.starts).toHaveLength(2);
+      expect(test.transfer.transfer.abort).not.toHaveBeenCalled();
+      expect(test.item("pc").components[0]!.phase).toBe("uploading");
+    });
+
+    it("pause while the retry's reset is in flight: nothing is sent until Continue", async () => {
+      const test = createTestManager();
+      await start(test, "ps");
+      loseAnswer(test, 0);
+      await settle();
+      const reset = test.client.client.resetComponent.getMockImplementation()!;
+      let release!: () => void;
+      test.client.client.resetComponent.mockImplementationOnce(
+        (...args: Parameters<typeof reset>) =>
+          new Promise((resolve) => {
+            release = () => resolve(reset(...args));
+          }),
+      );
+      for (let read = 0; read < 8; read += 1) {
+        test.timers.fireAll();
+        await settle();
+      }
+      expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+      test.manager.pause("offline");
+      release();
+      await settle();
+      expect(test.transfer.starts).toHaveLength(1);
+      expect(test.item("ps").components[0]!.phase).toBe("paused");
+      await test.manager.continueUploads();
+      await settle();
       expect(test.transfer.starts).toHaveLength(2);
     });
 
