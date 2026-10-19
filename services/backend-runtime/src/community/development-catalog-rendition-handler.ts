@@ -67,11 +67,9 @@ export const handleDevelopmentCatalogRendition = async (
   const target = await delivery.resolve(renditionId);
   if (
     target === null ||
-    !(
-      ("kind" in target
-        ? target.kind === "catalog_block" && target.contentType === "image/jpeg"
-        : target.contentType === "image/webp")
-    )
+    !("kind" in target
+      ? target.kind === "catalog_block" && target.contentType === "image/jpeg"
+      : target.contentType === "image/webp")
   ) {
     notFound(response);
     return;

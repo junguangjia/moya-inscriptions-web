@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile, chmod } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+  chmod,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -32,7 +40,8 @@ import type {
  * content-free output). Synthetic header bytes; no database or cloud.
  */
 
-const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const sha = (bytes: Uint8Array) =>
+  createHash("sha256").update(bytes).digest("hex");
 const be16 = (value: number) => [(value >> 8) & 0xff, value & 0xff];
 const be32 = (value: number) => [
   (value >>> 24) & 0xff,
@@ -56,8 +65,18 @@ const jpeg = (
   if (options.orientation !== undefined) {
     // Big-endian TIFF with one IFD0 entry: Orientation (SHORT).
     const tiff = [
-      0x4d, 0x4d, 0x00, 0x2a, ...be32(8), ...be16(1),
-      ...be16(0x0112), ...be16(3), ...be32(1), ...be16(options.orientation), 0, 0,
+      0x4d,
+      0x4d,
+      0x00,
+      0x2a,
+      ...be32(8),
+      ...be16(1),
+      ...be16(0x0112),
+      ...be16(3),
+      ...be32(1),
+      ...be16(options.orientation),
+      0,
+      0,
       ...be32(0),
     ];
     const payload = [...Buffer.from("Exif\0\0", "binary"), ...tiff];
@@ -65,7 +84,10 @@ const jpeg = (
   }
   const components = options.components ?? 3;
   const sof = [
-    options.precision ?? 8, ...be16(height), ...be16(width), components,
+    options.precision ?? 8,
+    ...be16(height),
+    ...be16(width),
+    components,
     ...Array.from({ length: components * 3 }, () => 0x11),
   ];
   parts.push(0xff, options.sof ?? 0xc0, ...be16(sof.length + 2), ...sof);
@@ -87,13 +109,28 @@ const png = (
     ...be32(data.length),
     ...Buffer.from(type, "ascii"),
     ...data,
-    0, 0, 0, 0,
+    0,
+    0,
+    0,
+    0,
   ];
   return Uint8Array.from([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a,
     ...chunk("IHDR", [
-      ...be32(width), ...be32(height),
-      options.bitDepth ?? 8, options.colorType ?? 2, 0, 0, 0,
+      ...be32(width),
+      ...be32(height),
+      options.bitDepth ?? 8,
+      options.colorType ?? 2,
+      0,
+      0,
+      0,
     ]),
     ...(options.chunks ?? []).flatMap(([type, data]) => chunk(type, data)),
     ...chunk("IDAT", [1, 2, 3]),
@@ -104,7 +141,9 @@ const png = (
 const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(
-    directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+    directories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 const temporary = async () => {
@@ -128,7 +167,9 @@ describe("catalog-master header probe", () => {
       width: 4000,
       height: 6000,
     });
-    expect(parseMasterHeader(jpeg(6000, 4000, { orientation: 3 }))).toMatchObject({
+    expect(
+      parseMasterHeader(jpeg(6000, 4000, { orientation: 3 })),
+    ).toMatchObject({
       width: 6000,
       height: 4000,
     });
@@ -140,20 +181,36 @@ describe("catalog-master header probe", () => {
   });
 
   it.each([
-    ["a 12-bit JPEG", () => jpeg(10, 10, { precision: 12 }), "master_bit_depth"],
+    [
+      "a 12-bit JPEG",
+      () => jpeg(10, 10, { precision: 12 }),
+      "master_bit_depth",
+    ],
     ["a CMYK JPEG", () => jpeg(10, 10, { components: 4 }), "master_format"],
     ["a lossless JPEG", () => jpeg(10, 10, { sof: 0xc3 }), "master_format"],
     ["a 16-bit PNG", () => png(10, 10, { bitDepth: 16 }), "master_bit_depth"],
     ["an RGBA PNG", () => png(10, 10, { colorType: 6 }), "master_has_alpha"],
-    ["a grey-alpha PNG", () => png(10, 10, { colorType: 4 }), "master_has_alpha"],
+    [
+      "a grey-alpha PNG",
+      () => png(10, 10, { colorType: 4 }),
+      "master_has_alpha",
+    ],
     ["a palette PNG", () => png(10, 10, { colorType: 3 }), "master_format"],
     [
       "a PNG with transparency",
       () => png(10, 10, { chunks: [["tRNS", [0, 0, 0, 0, 0, 0]]] }),
       "master_has_alpha",
     ],
-    ["a TIFF", () => Uint8Array.from([0x49, 0x49, 0x2a, 0, 8, 0, 0, 0]), "master_format"],
-    ["a truncated JPEG", () => jpeg(10, 10).subarray(0, 8), "master_unreadable"],
+    [
+      "a TIFF",
+      () => Uint8Array.from([0x49, 0x49, 0x2a, 0, 8, 0, 0, 0]),
+      "master_format",
+    ],
+    [
+      "a truncated JPEG",
+      () => jpeg(10, 10).subarray(0, 8),
+      "master_unreadable",
+    ],
   ])("refuses %s", (_label, bytes, code) => {
     expect(() => parseMasterHeader(bytes())).toThrow(MasterHeaderError);
     try {
@@ -165,7 +222,10 @@ describe("catalog-master header probe", () => {
 });
 
 const approved = "a".repeat(64);
-const document = (masterSha256: string, extra: Record<string, unknown> = {}) => ({
+const document = (
+  masterSha256: string,
+  extra: Record<string, unknown> = {},
+) => ({
   version: 1,
   kind: APPROVAL_KIND,
   catalogId: "catalog-example",
@@ -183,7 +243,10 @@ const document = (masterSha256: string, extra: Record<string, unknown> = {}) => 
 
 describe("catalog-master approval document", () => {
   it("parses strictly", () => {
-    expect(parseApprovalDocument(document("b".repeat(64), { maxLongEdge: 6000 })).entries[0]).toMatchObject({
+    expect(
+      parseApprovalDocument(document("b".repeat(64), { maxLongEdge: 6000 }))
+        .entries[0],
+    ).toMatchObject({
       maxLongEdge: 6000,
     });
     for (const bad of [
@@ -217,7 +280,10 @@ describe("catalog-master approval document", () => {
     await mkdir(path.join(lineage, "asset-2"));
     await writeFile(
       path.join(lineage, "asset-2", "lineage.json"),
-      JSON.stringify({ output_sha256: "c".repeat(64), source_sha256: sha(tiff) }),
+      JSON.stringify({
+        output_sha256: "c".repeat(64),
+        source_sha256: sha(tiff),
+      }),
     );
     const result = await draftApprovalDocument({
       catalogId: "catalog-example",
@@ -266,17 +332,25 @@ describe("catalog-master approval document", () => {
     const out = path.join(root, "approval.json");
     const ok = await runCatalogMasterManifest(
       parseCatalogMasterArguments([
-        "manifest", "--catalog", "catalog-example",
-        "--candidates", path.join(root, "candidates.jsonl"),
-        "--lineage", path.join(root, "lineage"),
-        "--originals", path.join(root, "originals"),
-        "--out", out,
+        "manifest",
+        "--catalog",
+        "catalog-example",
+        "--candidates",
+        path.join(root, "candidates.jsonl"),
+        "--lineage",
+        path.join(root, "lineage"),
+        "--originals",
+        path.join(root, "originals"),
+        "--out",
+        out,
       ]),
       (line) => lines.push(line),
     );
     expect(ok).toBe(true);
     expect((await stat(out)).mode & 0o777).toBe(0o600);
-    expect(parseApprovalDocument(JSON.parse(await readFile(out, "utf8"))).entries).toHaveLength(1);
+    expect(
+      parseApprovalDocument(JSON.parse(await readFile(out, "utf8"))).entries,
+    ).toHaveLength(1);
     expect(JSON.stringify(lines)).not.toContain("IMG_1");
   });
 });
@@ -291,8 +365,12 @@ describe("catalog-master arguments", () => {
       ["detach", "--all", "--all"],
       ["erase", "--master", "--dry-run"],
     ])
-      expect(() => parseCatalogMasterArguments(argv)).toThrow(CatalogMasterUsageError);
-    expect(parseCatalogMasterArguments(["detach", "--all"]).options.get("--all")).toBe(true);
+      expect(() => parseCatalogMasterArguments(argv)).toThrow(
+        CatalogMasterUsageError,
+      );
+    expect(
+      parseCatalogMasterArguments(["detach", "--all"]).options.get("--all"),
+    ).toBe(true);
   });
 });
 
@@ -351,24 +429,41 @@ const inboxWith = async (bytes: Uint8Array, masterSha256 = sha(bytes)) => {
 
 const attachArgs = (approval: string, inbox: string, ...extra: string[]) =>
   parseCatalogMasterArguments([
-    "attach", "--media", "media-1", "--approval", approval, "--inbox", inbox, ...extra,
+    "attach",
+    "--media",
+    "media-1",
+    "--approval",
+    approval,
+    "--inbox",
+    inbox,
+    ...extra,
   ]);
 
 describe("catalog-master attach", () => {
   it("checks with a dry run, uploads, then records; output is content-free", async () => {
     const bytes = jpeg(6000, 4000);
     const { inbox, approval } = await inboxWith(bytes);
-    const attach = vi.fn(async (input: Parameters<CatalogMasterPort["attach"]>[0]) => ({
-      status: "done" as const,
-      masterId: input.source.kind === "upload" ? `catalog-master-${"1".repeat(32)}` : null,
-      frameWidth: 6000,
-      frameHeight: 4000,
-      cells: 24,
-      storage,
-    }));
+    const attach = vi.fn(
+      async (input: Parameters<CatalogMasterPort["attach"]>[0]) => ({
+        status: "done" as const,
+        masterId:
+          input.source.kind === "upload"
+            ? `catalog-master-${"1".repeat(32)}`
+            : null,
+        frameWidth: 6000,
+        frameHeight: 4000,
+        cells: 24,
+        storage,
+      }),
+    );
     const c = context({ attach });
-    expect(await runCatalogMasterCommand(attachArgs(approval, inbox), c.value)).toBe(true);
-    expect(attach.mock.calls.map(([input]) => input.source.kind)).toEqual(["dry_run", "upload"]);
+    expect(
+      await runCatalogMasterCommand(attachArgs(approval, inbox), c.value),
+    ).toBe(true);
+    expect(attach.mock.calls.map(([input]) => input.source.kind)).toEqual([
+      "dry_run",
+      "upload",
+    ]);
     expect(attach.mock.calls[1]![0]).toMatchObject({
       header: { contentType: "image/jpeg", width: 6000, height: 4000 },
       maxLongEdge: 8192,
@@ -376,7 +471,12 @@ describe("catalog-master attach", () => {
       masterSha256: sha(bytes),
     });
     expect(c.lines).toEqual([
-      expect.objectContaining({ command: "attach", mediaId: "media-1", status: "attached", cells: 24 }),
+      expect.objectContaining({
+        command: "attach",
+        mediaId: "media-1",
+        status: "attached",
+        cells: 24,
+      }),
     ]);
     expect(JSON.stringify(c.lines)).not.toMatch(/master\.jpg|blobs\/|inbox/u);
   });
@@ -393,7 +493,12 @@ describe("catalog-master attach", () => {
       storage,
     }));
     const c = context({ attach });
-    expect(await runCatalogMasterCommand(attachArgs(approval, inbox, "--dry-run"), c.value)).toBe(true);
+    expect(
+      await runCatalogMasterCommand(
+        attachArgs(approval, inbox, "--dry-run"),
+        c.value,
+      ),
+    ).toBe(true);
     expect(attach).toHaveBeenCalledTimes(1);
     expect(c.written).toEqual([]);
     expect(c.lines[0]).toMatchObject({ status: "dry_run" });
@@ -404,21 +509,28 @@ describe("catalog-master attach", () => {
     const { inbox, approval } = await inboxWith(bytes, "b".repeat(64));
     const attach = vi.fn();
     const c = context({ attach });
-    expect(await runCatalogMasterCommand(attachArgs(approval, inbox), c.value)).toBe(false);
+    expect(
+      await runCatalogMasterCommand(attachArgs(approval, inbox), c.value),
+    ).toBe(false);
     expect(attach).not.toHaveBeenCalled();
-    expect(c.lines[0]).toMatchObject({ status: "refused", code: "master_mismatch" });
+    expect(c.lines[0]).toMatchObject({
+      status: "refused",
+      code: "master_mismatch",
+    });
   });
 
   it("refuses an alpha PNG and a non-private inbox", async () => {
     const alpha = png(6000, 4000, { colorType: 6 });
     const { inbox, approval } = await inboxWith(alpha);
     const c = context({ attach: vi.fn() });
-    expect(await runCatalogMasterCommand(attachArgs(approval, inbox), c.value)).toBe(false);
+    expect(
+      await runCatalogMasterCommand(attachArgs(approval, inbox), c.value),
+    ).toBe(false);
     expect(c.lines[0]).toMatchObject({ code: "master_has_alpha" });
     await chmod(inbox, 0o755);
-    await expect(runCatalogMasterCommand(attachArgs(approval, inbox), c.value)).rejects.toThrow(
-      CatalogMasterUsageError,
-    );
+    await expect(
+      runCatalogMasterCommand(attachArgs(approval, inbox), c.value),
+    ).rejects.toThrow(CatalogMasterUsageError);
   });
 
   it("removes the uploaded object when the store refuses after the upload", async () => {
@@ -427,29 +539,52 @@ describe("catalog-master attach", () => {
     let call = 0;
     const attach = vi.fn(async () =>
       (call += 1) === 1
-        ? { status: "done" as const, masterId: null, frameWidth: 6000, frameHeight: 4000, cells: 24, storage }
+        ? {
+            status: "done" as const,
+            masterId: null,
+            frameWidth: 6000,
+            frameHeight: 4000,
+            cells: 24,
+            storage,
+          }
         : { status: "refused" as const, code: "storage_task_cap", storage },
     );
     const c = context({ attach });
-    expect(await runCatalogMasterCommand(attachArgs(approval, inbox), c.value)).toBe(false);
+    expect(
+      await runCatalogMasterCommand(attachArgs(approval, inbox), c.value),
+    ).toBe(false);
     expect(c.removed).toEqual(c.written);
-    expect(c.lines[0]).toMatchObject({ status: "refused", code: "storage_task_cap", taskCap: 20 });
+    expect(c.lines[0]).toMatchObject({
+      status: "refused",
+      code: "storage_task_cap",
+      taskCap: 20,
+    });
   });
 
   it("re-attaches a held master without a file or upload", async () => {
     const { approval } = await inboxWith(jpeg(6000, 4000), "b".repeat(64));
-    const attach = vi.fn(async () => ({
-      status: "done" as const,
-      masterId: `catalog-master-${"2".repeat(32)}`,
-      frameWidth: 6000,
-      frameHeight: 4000,
-      cells: 24,
-      storage,
-    }));
+    const attach = vi.fn(
+      async (input: Parameters<CatalogMasterPort["attach"]>[0]) => ({
+        status: "done" as const,
+        masterId:
+          input.source.kind === "existing"
+            ? `catalog-master-${"2".repeat(32)}`
+            : null,
+        frameWidth: 6000,
+        frameHeight: 4000,
+        cells: 24,
+        storage,
+      }),
+    );
     const c = context({ attach });
     const parsed = parseCatalogMasterArguments([
-      "attach", "--media", "media-1", "--approval", approval,
-      "--existing-master", `catalog-master-${"9".repeat(32)}`,
+      "attach",
+      "--media",
+      "media-1",
+      "--approval",
+      approval,
+      "--existing-master",
+      `catalog-master-${"9".repeat(32)}`,
     ]);
     expect(await runCatalogMasterCommand(parsed, c.value)).toBe(true);
     expect(attach.mock.calls[0]![0].source).toEqual({
@@ -474,17 +609,34 @@ describe("catalog-master attach", () => {
       masterSha256: sha(bytes),
       derivation: "submitted",
     }));
-    for (const entry of entries) await writeFile(path.join(inbox, entry.masterFile), bytes);
+    for (const entry of entries)
+      await writeFile(path.join(inbox, entry.masterFile), bytes);
     const approval = path.join(root, "approval.json");
-    await writeFile(approval, JSON.stringify({ ...document(sha(bytes)), entries }));
-    const attach = vi.fn(async (input: Parameters<CatalogMasterPort["attach"]>[0]) =>
-      input.mediaId === "media-2"
-        ? { status: "refused" as const, code: "storage_slice_cap", storage }
-        : { status: "done" as const, masterId: null, frameWidth: 6000, frameHeight: 4000, cells: 24, storage },
+    await writeFile(
+      approval,
+      JSON.stringify({ ...document(sha(bytes)), entries }),
+    );
+    const attach = vi.fn(
+      async (input: Parameters<CatalogMasterPort["attach"]>[0]) =>
+        input.mediaId === "media-2"
+          ? { status: "refused" as const, code: "storage_slice_cap", storage }
+          : {
+              status: "done" as const,
+              masterId: null,
+              frameWidth: 6000,
+              frameHeight: 4000,
+              cells: 24,
+              storage,
+            },
     );
     const c = context({ attach });
     const parsed = parseCatalogMasterArguments([
-      "attach-batch", "--approval", approval, "--inbox", inbox, "--dry-run",
+      "attach-batch",
+      "--approval",
+      approval,
+      "--inbox",
+      inbox,
+      "--dry-run",
     ]);
     expect(await runCatalogMasterCommand(parsed, c.value)).toBe(false);
     expect(c.lines.map((line) => line.mediaId)).toEqual(["media-1", "media-2"]);

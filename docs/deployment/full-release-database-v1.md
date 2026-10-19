@@ -109,8 +109,8 @@ for discovery cards. Apply both before starting a Backend of that release: its
 Catalog readers and discovery cards join the view, and startup stops when the
 public read connection or the App connection cannot read it.
 
-Catalog deep zoom (catalog-deep-zoom-v1, community migration
-`20261020010000`, the expand release) adds three named grants and nothing else.
+Catalog deep zoom (catalog-deep-zoom-v1, community migration `20261020010000`,
+the expand release) adds three named grants and nothing else.
 `grant-runtime.sql` gives the App role `SELECT` and `INSERT` on
 `community.catalog_display_masters` with `UPDATE` only on `ended_at` and
 `end_reason` (no table-level `UPDATE`), `UPDATE` on the nullable usage columns

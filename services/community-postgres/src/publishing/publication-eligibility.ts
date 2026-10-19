@@ -7,12 +7,28 @@ export const notHeldSql = (item: string): string =>
   `NOT EXISTS (SELECT 1 FROM community.media_item_holds h WHERE h.item_id=${item} AND h.released_at IS NULL)`;
 
 /**
- * SQL: rendition alias `r` is a block the published-blocks view lists (a
- * ready block of the active master of a ready, referenced Catalog asset,
- * exactly inside the master's frame; catalog-deep-zoom-v1).
+ * SQL: block rendition alias `r` (a `catalog_master_id`, on a committed blob
+ * the caller joined) belongs to its asset's active master, on a committed,
+ * held master blob, with the exact cell geometry inside the master's frame:
+ * the rule of the published-blocks view `community.catalog_media_zoom_blocks`
+ * (migration 20261020010000), spelled on the rendition row so one row is
+ * checked by key lookups instead of materializing the view
+ * (catalog-deep-zoom-v1).
  */
-export const catalogBlockListedSql = (rendition: string): string =>
-  `EXISTS (SELECT 1 FROM community.catalog_media_zoom_blocks z WHERE z.delivery_key=${rendition}.id)`;
+export const catalogBlockListedSql = (rendition: string): string => {
+  const cell = `(CASE WHEN ${rendition}.role ~ '^block-[0-9]{2}$' THEN substring(${rendition}.role FROM 7)::integer END)`;
+  const columns = "((zm.frame_width + 1023) / 1024)";
+  const rows = "((zm.frame_height + 1023) / 1024)";
+  return `EXISTS (
+    SELECT 1 FROM community.catalog_display_masters zm
+    JOIN community.media_blobs zb ON zb.id=zm.blob_id AND zb.state='committed' AND zb.retention_hold='catalog_master'
+    WHERE zm.id=${rendition}.catalog_master_id AND zm.catalog_asset_id=${rendition}.catalog_asset_id
+      AND zm.ended_at IS NULL
+      AND ${rendition}.content_type='image/jpeg' AND ${rendition}.edit_key='base'
+      AND ${cell} < ${columns} * ${rows}
+      AND ${rendition}.width = LEAST(1026, zm.frame_width - (${cell} % ${columns}) * 1024)
+      AND ${rendition}.height = LEAST(1026, zm.frame_height - (${cell} / ${columns}) * 1024))`;
+};
 
 /**
  * One anonymous desired set, recomputed in the transaction that commits public

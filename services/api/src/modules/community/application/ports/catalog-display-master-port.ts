@@ -10,21 +10,6 @@
  * content-free: ids, sizes, hashes and codes, never a key, path or title.
  */
 
-/**
- * At most this many cells per block job, and open block sets at once. The
- * block geometry itself (edge, overlap, cell and long-edge bounds) is the
- * public contract's (`CATALOG_ZOOM_*` in `@moya/contracts/schemas`).
- */
-export const CATALOG_BLOCK_JOB_CELLS = 16;
-export const CATALOG_BLOCK_OPEN_SETS = 2;
-
-/** Content failures of a block job: never run again for that master. */
-export const CATALOG_BLOCK_CONTENT_FAILURES = [
-  "master_mismatch",
-  "zoom_blocks_alpha",
-  "master_unreadable",
-] as const;
-
 /** Payload of a block job: a `catalog_render` variant (no new job kind). */
 export interface CatalogBlockJobPayload {
   readonly variant: "blocks";
@@ -49,7 +34,8 @@ export interface CatalogBlockReadTarget {
 }
 
 export type CatalogMasterDerivation = "submitted" | "edited-export";
-export type CatalogMasterEndReason = "detached" | "limit_changed" | "reattached";
+export type CatalogMasterEndReason =
+  "detached" | "limit_changed" | "reattached";
 
 /** One published image of a Catalog record, for the approval document. */
 export interface CatalogMasterCandidate {

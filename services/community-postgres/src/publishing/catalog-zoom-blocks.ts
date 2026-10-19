@@ -1,8 +1,3 @@
-import {
-  CATALOG_BLOCK_CONTENT_FAILURES,
-  CATALOG_BLOCK_JOB_CELLS,
-  CATALOG_BLOCK_OPEN_SETS,
-} from "@moya/api";
 import type { CatalogBlockJobPayload } from "@moya/api";
 import {
   CATALOG_ZOOM_BLOCK_EDGE,
@@ -23,6 +18,16 @@ import { catalogBlockJobSql, insertJob } from "./jobs.js";
  */
 
 const MASTER_ID = /^catalog-master-[0-9a-f]{32}$/u;
+
+/** At most this many cells per block job, and open block sets at once. */
+export const CATALOG_BLOCK_JOB_CELLS = 16;
+export const CATALOG_BLOCK_OPEN_SETS = 2;
+/** Content failures of a block job: never run again for that master. */
+export const CATALOG_BLOCK_CONTENT_FAILURES = [
+  "master_mismatch",
+  "zoom_blocks_alpha",
+  "master_unreadable",
+] as const;
 
 /** The frame of an oriented master under a long-edge limit: never upscaled. */
 export const catalogMasterFrame = (
@@ -80,7 +85,11 @@ export const catalogBlockCell = (
 
 /** `block-NN` of a cell index (00..99). */
 export const catalogBlockRole = (cell: number): string => {
-  if (!Number.isSafeInteger(cell) || cell < 0 || cell >= CATALOG_ZOOM_BLOCKS_MAXIMUM)
+  if (
+    !Number.isSafeInteger(cell) ||
+    cell < 0 ||
+    cell >= CATALOG_ZOOM_BLOCKS_MAXIMUM
+  )
     throw new TypeError("A block cell is 0..99");
   return `block-${String(cell).padStart(2, "0")}`;
 };
@@ -155,7 +164,11 @@ export const readCatalogBlockSet = async (
   },
 ): Promise<CatalogBlockSetState> => {
   const { cells } = catalogBlockGrid(master.frameWidth, master.frameHeight);
-  const blocks = await db.query<{ role: string; width: number; height: number }>(
+  const blocks = await db.query<{
+    role: string;
+    width: number;
+    height: number;
+  }>(
     `SELECT r.role, r.width, r.height FROM community.media_renditions r
      JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed'
      WHERE r.catalog_master_id=$1 AND r.state='ready'`,
@@ -165,7 +178,11 @@ export const readCatalogBlockSet = async (
   for (const block of blocks.rows) {
     const cell = Number(block.role.slice("block-".length));
     if (!Number.isSafeInteger(cell) || cell >= cells) continue;
-    const expected = catalogBlockCell(master.frameWidth, master.frameHeight, cell);
+    const expected = catalogBlockCell(
+      master.frameWidth,
+      master.frameHeight,
+      cell,
+    );
     if (block.width === expected.width && block.height === expected.height)
       ready.add(cell);
   }
@@ -183,7 +200,9 @@ export const readCatalogBlockSet = async (
      ORDER BY COALESCE(j.finished_at, j.updated_at) DESC, j.id DESC`,
     [master.id],
   );
-  const contentCodes: ReadonlySet<string> = new Set(CATALOG_BLOCK_CONTENT_FAILURES);
+  const contentCodes: ReadonlySet<string> = new Set(
+    CATALOG_BLOCK_CONTENT_FAILURES,
+  );
   let openJobs = 0;
   let contentFailure: string | null = null;
   let paused = false;
@@ -200,7 +219,9 @@ export const readCatalogBlockSet = async (
     const payload = catalogBlockJobPayload(job.payload);
     if (
       payload !== null &&
-      missing.some((cell) => cell >= payload.cells[0] && cell <= payload.cells[1])
+      missing.some(
+        (cell) => cell >= payload.cells[0] && cell <= payload.cells[1],
+      )
     )
       paused = true;
   }
@@ -246,17 +267,21 @@ export const enqueueMissingCatalogBlocks = async (
   | { readonly status: "queued"; readonly jobs: number }
   | {
       readonly status: "skipped";
-      readonly reason: "set_complete" | "set_open" | "content_failure" | "sets_busy";
+      readonly reason:
+        "set_complete" | "set_open" | "content_failure" | "sets_busy";
     }
 > => {
   if (!MASTER_ID.test(master.id)) throw new TypeError("Unknown master id");
   const set = await readCatalogBlockSet(db, master);
-  if (set.missing.length === 0) return { status: "skipped", reason: "set_complete" };
+  if (set.missing.length === 0)
+    return { status: "skipped", reason: "set_complete" };
   if (set.contentFailure !== null)
     return { status: "skipped", reason: "content_failure" };
   if (set.openJobs > 0) return { status: "skipped", reason: "set_open" };
   const open = await openCatalogBlockSets(db);
-  if ([...open].filter((id) => id !== master.id).length >= CATALOG_BLOCK_OPEN_SETS)
+  if (
+    [...open].filter((id) => id !== master.id).length >= CATALOG_BLOCK_OPEN_SETS
+  )
     return { status: "skipped", reason: "sets_busy" };
   let jobs = 0;
   for (const cells of catalogBlockJobRanges(set.missing)) {

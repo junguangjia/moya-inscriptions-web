@@ -114,7 +114,10 @@ describe("media sandbox import boundary", () => {
         );
       if (imported.includes(parser)) importers.push(name);
     }
+    // The catalog-master command (catalog-deep-zoom-v1) is a third,
+    // separate entry: it opens the App role and the private store only.
     expect(importers.sort()).toEqual([
+      "catalog-master-cli.ts",
       "composition.ts",
       "worker-composition.ts",
     ]);

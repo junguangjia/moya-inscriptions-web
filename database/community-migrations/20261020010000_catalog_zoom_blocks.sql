@@ -44,7 +44,8 @@ ALTER TABLE community.media_blobs
     retention_hold IS NULL OR retention_hold IN ('d7_pre_task', 'catalog_master')
   ),
   ADD CONSTRAINT media_blobs_catalog_master_held CHECK (
-    purpose <> 'catalog_master' OR retention_hold = 'catalog_master' OR state <> 'committed'
+    purpose <> 'catalog_master' OR state <> 'committed'
+    OR retention_hold IS NOT DISTINCT FROM 'catalog_master'
   ),
   ADD CONSTRAINT media_blobs_catalog_master_hold_purpose CHECK (
     retention_hold IS DISTINCT FROM 'catalog_master' OR purpose = 'catalog_master'

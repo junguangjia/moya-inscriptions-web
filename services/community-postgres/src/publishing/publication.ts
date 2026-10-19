@@ -507,13 +507,17 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     ttlSeconds: number,
     now: Date,
   ): Promise<boolean> {
-    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 86_400)
+    if (
+      !Number.isSafeInteger(ttlSeconds) ||
+      ttlSeconds < 60 ||
+      ttlSeconds > 86_400
+    )
       throw new TypeError("A forced edge TTL is 60..86400 seconds");
     return this.mutateWithdrawal(
       fence,
       ids,
       now,
-      `UPDATE community.media_publications p SET purge_task_ids='{}',fallback_ttl_seconds=$3,last_error_code='block_budget_deferred',version=version+1 WHERE p.id=ANY($1::text[]) AND p.public_asset_id=$4 AND p.state='withdrawing' AND p.origin_deleted_at IS NOT NULL AND ${blockRowSql("p")}`,
+      `UPDATE community.media_publications p SET purge_task_ids='{}',fallback_ttl_seconds=$3,last_error_code='block_budget_deferred',withdraw_requested_at=COALESCE(p.withdraw_requested_at,$2::timestamptz),version=version+1 WHERE p.id=ANY($1::text[]) AND p.public_asset_id=$4 AND p.state='withdrawing' AND p.origin_deleted_at IS NOT NULL AND ${blockRowSql("p")}`,
       [ttlSeconds],
     );
   }

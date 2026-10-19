@@ -113,7 +113,9 @@ function fixture(units: readonly PublicationUnit[], budget = 0) {
     recordOriginDeleted: vi.fn(async (_fence, ids: readonly string[]) => {
       calls.originDeleted.push([...ids]);
       state.units = state.units.map((entry) =>
-        ids.includes(entry.id) ? { ...entry, originDeletedAt: state.now } : entry,
+        ids.includes(entry.id)
+          ? { ...entry, originDeletedAt: state.now }
+          : entry,
       );
       return true;
     }),
@@ -231,8 +233,8 @@ describe("Catalog block withdrawal (catalog-deep-zoom-v1)", () => {
   });
 
   it("purges ordinary roles first in their own task and defers blocks to the TTL path with one error line", async () => {
-    const ordinary = ["thumb", "cover", "display", "viewer"].map((role, index) =>
-      unit(index + 1, role),
+    const ordinary = ["thumb", "cover", "display", "viewer"].map(
+      (role, index) => unit(index + 1, role),
     );
     const f = fixture([...ordinary, ...blocks(48)]);
     const result = await f.handlers.run(claim(), f.signal);
@@ -285,8 +287,8 @@ describe("Catalog block withdrawal (catalog-deep-zoom-v1)", () => {
   });
 
   it("keeps warmed-edge GETs per withdrawn image within 2 × ordinary units + 4", async () => {
-    const ordinary = ["thumb", "cover", "display", "viewer"].map((role, index) =>
-      unit(index + 1, role),
+    const ordinary = ["thumb", "cover", "display", "viewer"].map(
+      (role, index) => unit(index + 1, role),
     );
     const f = fixture([...ordinary, ...blocks(48)]);
     await f.handlers.run(claim(), f.signal);
@@ -363,7 +365,9 @@ describe("Catalog block withdrawal (catalog-deep-zoom-v1)", () => {
     f.state.now = new Date(NOW.getTime() + 20_000);
     await f.handlers.run(claim("verify_withdrawal"), f.signal);
     expect(f.calls.finished).toEqual([["media-publication-" + HEX(1)]]);
-    expect(f.calls.failed.every((ids) => ids.every((id) => !id.endsWith(HEX(1))))).toBe(true);
+    expect(
+      f.calls.failed.every((ids) => ids.every((id) => !id.endsWith(HEX(1)))),
+    ).toBe(true);
   });
 
   it("sweeps a withdrawn block once: one HEAD each, two sampled edge GETs per asset, no purge", async () => {

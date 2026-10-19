@@ -344,6 +344,7 @@ describe("media_renditions migration on a dedicated synthetic database", () => {
           item_id: string;
           catalog_asset_id: string | null;
           user_media_id: string | null;
+          catalog_master_id: string | null;
           role: string;
           edit_key: string;
           recipe_version: number;
@@ -365,6 +366,7 @@ describe("media_renditions migration on a dedicated synthetic database", () => {
           item_id: row.item,
           catalog_asset_id: null,
           user_media_id: null,
+          catalog_master_id: null,
           role: row.variant,
           edit_key: row.editKey,
           recipe_version: 1,

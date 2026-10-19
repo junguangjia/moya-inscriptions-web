@@ -73,8 +73,14 @@ const approvedSha = (key: string): string | null =>
 const refused = (
   code: CatalogMasterRefusal,
   storage?: CatalogMasterStorage,
-): { readonly status: "refused"; readonly code: CatalogMasterRefusal; readonly storage?: CatalogMasterStorage } =>
-  storage === undefined ? { status: "refused", code } : { status: "refused", code, storage };
+): {
+  readonly status: "refused";
+  readonly code: CatalogMasterRefusal;
+  readonly storage?: CatalogMasterStorage;
+} =>
+  storage === undefined
+    ? { status: "refused", code }
+    : { status: "refused", code, storage };
 
 interface AssetRow {
   id: string;
@@ -167,14 +173,23 @@ const lockPublishedAsset = async (
   if (published.rows.length !== 1) return "not_published";
   const image = published.rows[0]!;
   const asset = (
-    await db.query<Omit<AssetRow, "published_width" | "published_height" | "viewer_long_edge">>(
+    await db.query<
+      Omit<
+        AssetRow,
+        "published_width" | "published_height" | "viewer_long_edge"
+      >
+    >(
       `SELECT id, media_id, source_object_key, source_sha256, state, unreferenced_since
        FROM community.catalog_media_assets
        WHERE media_id=$1 AND source_object_key=$2 FOR UPDATE`,
       [mediaId, image.object_key],
     )
   ).rows[0];
-  if (asset === undefined || asset.state !== "ready" || asset.unreferenced_since !== null)
+  if (
+    asset === undefined ||
+    asset.state !== "ready" ||
+    asset.unreferenced_since !== null
+  )
     return "asset_not_ready";
   const viewer = (
     await db.query<{ long_edge: number }>(
@@ -200,17 +215,24 @@ const frameRefusal = (
   frame: { readonly width: number; readonly height: number },
 ): CatalogMasterRefusal | null => {
   const approvedLong = Math.max(asset.published_width, asset.published_height);
-  if (approvedLong > CATALOG_APPROVED_MAX_LONG_EDGE) return "approved_too_large";
+  if (approvedLong > CATALOG_APPROVED_MAX_LONG_EDGE)
+    return "approved_too_large";
   // Oriented aspects within 0.2 %: |mw·ah − mh·aw| ≤ 0.002 · mw·ah.
   const left = master.width * asset.published_height;
   const right = master.height * asset.published_width;
-  if (Math.abs(left - right) > CATALOG_MASTER_ASPECT_TOLERANCE * Math.max(left, right))
+  if (
+    Math.abs(left - right) >
+    CATALOG_MASTER_ASPECT_TOLERANCE * Math.max(left, right)
+  )
     return "aspect_mismatch";
   if (asset.viewer_long_edge === null) return "asset_not_ready";
   const frameLong = Math.max(frame.width, frame.height);
-  if (frameLong < CATALOG_BLOCK_MIN_GAIN * asset.viewer_long_edge) return "gain_too_small";
-  if (asset.viewer_long_edge < CATALOG_BLOCK_MIN_BASE_SHARE * frameLong) return "base_too_small";
-  if (catalogBlockGrid(frame.width, frame.height).cells < 2) return "gain_too_small";
+  if (frameLong < CATALOG_BLOCK_MIN_GAIN * asset.viewer_long_edge)
+    return "gain_too_small";
+  if (asset.viewer_long_edge < CATALOG_BLOCK_MIN_BASE_SHARE * frameLong)
+    return "base_too_small";
+  if (catalogBlockGrid(frame.width, frame.height).cells < 2)
+    return "gain_too_small";
   return null;
 };
 
@@ -283,13 +305,19 @@ const assertAttach = (input: CatalogMasterAttach): void => {
     !SHA256.test(input.approvedSha256) ||
     !SHA256.test(input.masterSha256) ||
     !OPERATOR.test(input.operator) ||
-    !(input.derivation === "submitted" || input.derivation === "edited-export") ||
+    !(
+      input.derivation === "submitted" || input.derivation === "edited-export"
+    ) ||
     !Number.isSafeInteger(input.maxLongEdge) ||
     input.maxLongEdge < 1 ||
     input.maxLongEdge > CATALOG_ZOOM_MAX_LONG_EDGE ||
     (input.note !== null &&
-      (input.note.length < 1 || input.note.length > 500 || input.note !== input.note.trim())) ||
-    !(header.contentType === "image/jpeg" || header.contentType === "image/png") ||
+      (input.note.length < 1 ||
+        input.note.length > 500 ||
+        input.note !== input.note.trim())) ||
+    !(
+      header.contentType === "image/jpeg" || header.contentType === "image/png"
+    ) ||
     !Number.isSafeInteger(header.width) ||
     !Number.isSafeInteger(header.height) ||
     header.width < 1 ||
@@ -363,8 +391,10 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
     return writeTransaction(this.pool, async (db) => {
       const asset = await lockPublishedAsset(db, input.mediaId);
       if (typeof asset === "string") return refused(asset);
-      const approved = asset.source_sha256 ?? approvedSha(asset.source_object_key);
-      if (approved !== input.approvedSha256) return refused("approved_mismatch");
+      const approved =
+        asset.source_sha256 ?? approvedSha(asset.source_object_key);
+      if (approved !== input.approvedSha256)
+        return refused("approved_mismatch");
       const active = (
         await db.query<{ id: string }>(
           "SELECT id FROM community.catalog_display_masters WHERE catalog_asset_id=$1 AND ended_at IS NULL FOR UPDATE",
@@ -382,14 +412,18 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
           )
         ).rows[0];
         if (previous === undefined) return refused("master_not_found");
-        if (previous.master_sha256 !== input.masterSha256) return refused("master_mismatch");
+        if (previous.master_sha256 !== input.masterSha256)
+          return refused("master_mismatch");
         const blob = (
           await db.query<{ state: string; retention_hold: string | null }>(
             "SELECT state, retention_hold FROM community.media_blobs WHERE id=$1 FOR UPDATE",
             [previous.blob_id],
           )
         ).rows[0];
-        if (blob?.state !== "committed" || blob.retention_hold !== "catalog_master")
+        if (
+          blob?.state !== "committed" ||
+          blob.retention_hold !== "catalog_master"
+        )
           return refused("master_not_held");
         const elsewhere = await db.query(
           "SELECT 1 FROM community.catalog_display_masters WHERE blob_id=$1 AND ended_at IS NULL AND id<>$2",
@@ -413,7 +447,11 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
           height: previous.master_height,
         };
       }
-      const frame = catalogMasterFrame(header.width, header.height, input.maxLongEdge);
+      const frame = catalogMasterFrame(
+        header.width,
+        header.height,
+        input.maxLongEdge,
+      );
       const failure = frameRefusal(asset, header, frame);
       if (failure !== null) return refused(failure);
       const projected =
@@ -510,8 +548,15 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         )
       ).rows[0];
       if (active === undefined) return refused("no_active_master");
-      const master = { width: active.master_width, height: active.master_height };
-      const frame = catalogMasterFrame(master.width, master.height, maxLongEdge);
+      const master = {
+        width: active.master_width,
+        height: active.master_height,
+      };
+      const frame = catalogMasterFrame(
+        master.width,
+        master.height,
+        maxLongEdge,
+      );
       const failure = frameRefusal(asset, master, frame);
       if (failure !== null) return refused(failure);
       const storage = await storageOf(
@@ -588,12 +633,19 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
       ).rows[0];
       if (master === undefined) return refused("master_not_found");
       const blob = (
-        await db.query<{ state: string; retention_hold: string | null; byte_size: string }>(
+        await db.query<{
+          state: string;
+          retention_hold: string | null;
+          byte_size: string;
+        }>(
           "SELECT state, retention_hold, byte_size FROM community.media_blobs WHERE id=$1 FOR UPDATE",
           [master.blob_id],
         )
       ).rows[0];
-      if (blob?.state !== "committed" || blob.retention_hold !== "catalog_master")
+      if (
+        blob?.state !== "committed" ||
+        blob.retention_hold !== "catalog_master"
+      )
         return refused("master_not_held");
       const rows = (
         await db.query<{ id: string; ended_at: Date | null }>(
@@ -601,7 +653,8 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
           [master.blob_id],
         )
       ).rows;
-      if (rows.some((row) => row.ended_at === null)) return refused("master_active");
+      if (rows.some((row) => row.ended_at === null))
+        return refused("master_active");
       const published = await db.query(
         `SELECT 1 FROM community.media_publications p
          JOIN community.media_blobs pb ON pb.storage_key=p.storage_key
@@ -699,14 +752,18 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         });
       }
       const held = (
-        await db.query<{ id: string; byte_size: string; end_reason: CatalogMasterEndReason }>(
+        await db.query<{
+          id: string;
+          byte_size: string;
+          end_reason: CatalogMasterEndReason;
+        }>(
           `SELECT DISTINCT ON (b.id) m.id, b.byte_size, m.end_reason
            FROM community.media_blobs b
            JOIN community.catalog_display_masters m ON m.blob_id=b.id
            WHERE b.purpose='catalog_master' AND b.state='committed' AND b.retention_hold='catalog_master'
              AND NOT EXISTS (
                SELECT 1 FROM community.catalog_display_masters o WHERE o.blob_id=b.id AND o.ended_at IS NULL)
-           ORDER BY b.id, m.ended_at DESC, m.id DESC`,
+           ORDER BY b.id, (m.end_reason = 'detached') DESC, m.ended_at DESC, m.created_at DESC, m.id DESC`,
         )
       ).rows;
       const storage = await storageOf(db, 0);
@@ -730,9 +787,11 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
   async guardCounts(): Promise<CatalogBlockGuardCounts> {
     return readTransaction(this.pool, async (db) => {
       const row = (
-        await db.query<{ publications: string; renditions: string; jobs: string }>(
-          CATALOG_BLOCK_GUARD_SQL,
-        )
+        await db.query<{
+          publications: string;
+          renditions: string;
+          jobs: string;
+        }>(CATALOG_BLOCK_GUARD_SQL)
       ).rows[0]!;
       return {
         blockPublications: safeInteger(row.publications),

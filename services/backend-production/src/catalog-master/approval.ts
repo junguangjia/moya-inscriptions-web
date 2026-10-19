@@ -142,7 +142,8 @@ export async function readApprovalDocument(
 /** SHA-256 of a whole file, streamed. */
 export async function sha256File(file: string): Promise<string> {
   const hash = createHash("sha256");
-  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
+  for await (const chunk of createReadStream(file))
+    hash.update(chunk as Buffer);
   return hash.digest("hex");
 }
 

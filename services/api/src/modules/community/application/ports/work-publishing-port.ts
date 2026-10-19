@@ -350,7 +350,8 @@ export interface PublishingJobEnqueue {
   /** `^[a-z0-9][a-z0-9-]{0,127}$`, as the operator job DTO requires. */
   readonly subjectId: string;
   /** A `derive_edit` payload, or a Catalog block job's (catalog-deep-zoom-v1). */
-  readonly payload?: PublishingDeriveEditPayload | CatalogBlockJobPayload | null;
+  readonly payload?:
+    PublishingDeriveEditPayload | CatalogBlockJobPayload | null;
   /** Defaults to `now`. */
   readonly runAfter?: Date;
   /** 1..1000; the table default when omitted. */

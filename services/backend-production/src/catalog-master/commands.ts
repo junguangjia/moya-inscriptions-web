@@ -2,7 +2,6 @@ import { createReadStream } from "node:fs";
 import { lstat, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-
 import {
   ApprovalDocumentError,
   draftApprovalDocument,
@@ -92,7 +91,10 @@ export interface CatalogMasterPort {
     masterId: string,
     now: Date,
   ): Promise<Result<{ readonly byteSize: number }>>;
-  requeue(mediaId: string, now: Date): Promise<Result<{ readonly jobs: number }>>;
+  requeue(
+    mediaId: string,
+    now: Date,
+  ): Promise<Result<{ readonly jobs: number }>>;
   status(catalogId: string | null): Promise<{
     readonly masters: readonly object[];
     readonly heldWithoutActive: readonly object[];
@@ -306,7 +308,8 @@ async function attachEntry(
     { ...common, header, source: { kind: "dry_run", byteSize: info.size } },
     context.now(),
   );
-  if (checked.status === "refused") return refuse(checked.code, checked.storage);
+  if (checked.status === "refused")
+    return refuse(checked.code, checked.storage);
   if (dryRun) {
     context.out({
       ...base,
@@ -366,7 +369,10 @@ async function attachEntry(
   return "attached";
 }
 
-const entryOf = (document: ApprovalDocument, mediaId: string): ApprovalEntry => {
+const entryOf = (
+  document: ApprovalDocument,
+  mediaId: string,
+): ApprovalEntry => {
   const entry = document.entries.find((item) => item.mediaId === mediaId);
   if (entry === undefined)
     throw new ApprovalDocumentError("The approval document has no such image");
@@ -380,12 +386,16 @@ export async function runCatalogMasterCommand(
 ): Promise<boolean> {
   switch (parsed.command) {
     case "candidates": {
-      const rows = await context.port.listCandidates(required(parsed, "--catalog"));
+      const rows = await context.port.listCandidates(
+        required(parsed, "--catalog"),
+      );
       for (const row of rows) context.out({ command: "candidates", ...row });
       return true;
     }
     case "attach": {
-      const document = await readApprovalDocument(required(parsed, "--approval"));
+      const document = await readApprovalDocument(
+        required(parsed, "--approval"),
+      );
       const entry = entryOf(document, required(parsed, "--media"));
       const existing = optional(parsed, "--existing-master");
       const inbox = optional(parsed, "--inbox");
@@ -402,7 +412,9 @@ export async function runCatalogMasterCommand(
       return outcome === "attached" || outcome === "dry_run";
     }
     case "attach-batch": {
-      const document = await readApprovalDocument(required(parsed, "--approval"));
+      const document = await readApprovalDocument(
+        required(parsed, "--approval"),
+      );
       const inbox = required(parsed, "--inbox");
       await assertPrivateInbox(inbox);
       const operator = operatorOf(parsed);
@@ -422,15 +434,21 @@ export async function runCatalogMasterCommand(
       return ok;
     }
     case "status": {
-      const status = await context.port.status(optional(parsed, "--catalog") ?? null);
-      for (const row of status.masters) context.out({ command: "status", ...row });
+      const status = await context.port.status(
+        optional(parsed, "--catalog") ?? null,
+      );
+      for (const row of status.masters)
+        context.out({ command: "status", ...row });
       for (const row of status.heldWithoutActive)
         context.out({ command: "status", held: true, ...row });
       context.out({ command: "status", storage: status.storage });
       return true;
     }
     case "requeue": {
-      const result = await context.port.requeue(required(parsed, "--media"), context.now());
+      const result = await context.port.requeue(
+        required(parsed, "--media"),
+        context.now(),
+      );
       context.out(
         result.status === "done"
           ? { command: "requeue", status: "queued", jobs: result.jobs }
@@ -484,7 +502,10 @@ export async function runCatalogMasterCommand(
       return result.status === "done";
     }
     case "erase": {
-      const result = await context.port.erase(required(parsed, "--master"), context.now());
+      const result = await context.port.erase(
+        required(parsed, "--master"),
+        context.now(),
+      );
       context.out(
         result.status === "done"
           ? { command: "erase", status: "erased", byteSize: result.byteSize }

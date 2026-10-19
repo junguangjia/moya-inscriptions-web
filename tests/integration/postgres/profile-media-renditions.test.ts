@@ -417,11 +417,19 @@ describe("profile media renditions migration on a dedicated synthetic database",
         null,
         null,
       ]);
+      // Later migrations add nullable columns only (catalog-deep-zoom-v1:
+      // media_renditions.catalog_master_id).
+      expect(after.renditions.map((row) => row.catalog_master_id)).toEqual([
+        null,
+        null,
+      ]);
       expect({
         ...after,
         renditions: after.renditions.map((row) =>
           Object.fromEntries(
-            Object.entries(row).filter(([key]) => key !== "user_media_id"),
+            Object.entries(row).filter(
+              ([key]) => key !== "user_media_id" && key !== "catalog_master_id",
+            ),
           ),
         ),
       }).toEqual(before);

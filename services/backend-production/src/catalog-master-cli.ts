@@ -1,7 +1,4 @@
-import {
-  closePostgresPool,
-  createPostgresPool,
-} from "@moya/catalog-postgres";
+import { closePostgresPool, createPostgresPool } from "@moya/catalog-postgres";
 import {
   PostgresCatalogDisplayMasterAdapter,
   verifyCommunityMigrationLedger,
@@ -63,7 +60,9 @@ const main = async (): Promise<void> => {
     environment.NODE_ENV !== "production" &&
     environment.NODE_ENV !== "development"
   )
-    throw new CatalogMasterUsageError("NODE_ENV must be production or development");
+    throw new CatalogMasterUsageError(
+      "NODE_ENV must be production or development",
+    );
   const pool = createPostgresPool(parseCommunityPostgresConfig(environment), {
     onUnexpectedIdleError: () => {
       console.error("[catalog-master] unexpected PostgreSQL pool error");

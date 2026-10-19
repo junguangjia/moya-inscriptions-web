@@ -311,6 +311,6 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       migrationId: "20261020010000",
       filename: "20261020010000_catalog_zoom_blocks.sql",
       checksum:
-        "9a0c7225a20c4894812b0635ce0da6aaa911f5af77a15b2ebfb91ea42b7918e5",
+        "20c67764f5d17dba94153796a2b565273d37e5fcb2977e8ee0ac78aab6f5d71c",
     }),
   ]);

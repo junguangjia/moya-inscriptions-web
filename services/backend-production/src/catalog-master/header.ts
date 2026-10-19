@@ -1,7 +1,14 @@
 import { open } from "node:fs/promises";
 
-import { asciiEquals, u16be, u32be } from "../publishing/processing/byte-reader.js";
-import { JPEG_LIMITS, listJpegSegments } from "../publishing/processing/jpeg.js";
+import {
+  asciiEquals,
+  u16be,
+  u32be,
+} from "../publishing/processing/byte-reader.js";
+import {
+  JPEG_LIMITS,
+  listJpegSegments,
+} from "../publishing/processing/jpeg.js";
 import { readExifSummary } from "../publishing/processing/tiff-exif.js";
 
 /*
@@ -89,7 +96,8 @@ function parseJpeg(bytes: Uint8Array): MasterHeader {
       asciiEquals(bytes, segment.dataStart, "Exif\0\0")
     )
       exif = data.subarray(6);
-    if (OTHER_SOF.has(segment.marker)) throw new MasterHeaderError("master_format");
+    if (OTHER_SOF.has(segment.marker))
+      throw new MasterHeaderError("master_format");
     if (!SUPPORTED_SOF.has(segment.marker)) continue;
     if (frame !== null || data.byteLength < 6)
       throw new MasterHeaderError("master_unreadable");
