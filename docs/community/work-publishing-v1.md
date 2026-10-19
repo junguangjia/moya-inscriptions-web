@@ -201,7 +201,7 @@ source). No per-image captions.
 | Unsupported compression      | Explicit choice to upload Original or remove                                                                                                                                                                                                         | No exposure        | Never silently send the source as Standard or drop motion/audio                                     |
 | Live Photo                   | Paired by trustworthy identifiers or container; counts as one item; ready only when all components validate and derivatives exist; cards show static cover + LIVE; Detail/Viewer play on explicit action, muted first, audio toggle                  | No exposure        | Stored audio retained; existing long-press gestures                                                 |
 | Ordering and edits           | Drag, long-press, keyboard/button ordering with numbers; independent cover; rotate/crop/revert applied consistently to still and motion derivatives                                                                                                  | No exposure        | Stable item IDs; unchanged masters not retransmitted                                                |
-| Upload execution             | Account-scoped manager survives navigation; global progress entry; distinct states; per-component bounded transfers; no automatic network retries; retry only failed components                                                                      | No exposure        | Account switch/logout pauses and isolates                                                           |
+| Upload execution             | Account-scoped manager survives navigation; global progress entry; distinct states; per-component bounded transfers; no automatic network retries except the bounded lost-answer recovery below (#292); retry only failed components                 | No exposure        | Account switch/logout pauses and isolates                                                           |
 | Saved draft                  | Created on first real content; ~2 s coalesced autosave; Save now; Drafts card first in own Works with newest-first picker; conditional saves with This device / Account version choice; history of 20 important snapshots                            | No exposure        | Visitors see no drafts; unchosen content recoverable; newer input never cleared                     |
 | No-save                      | No persistent draft, snapshot or local recovery copy; minimal temporary session with bounded lease; explicit discard revokes immediately and cleans session-only data                                                                                | No exposure        | Existing published/private work revisions and other drafts untouched                                |
 | Submission                   | Idempotent confirmation tied to an immutable revision; receipt query on lost response; opens the author's work view with a path back                                                                                                                 | No exposure        | No duplicate works or double daily counts                                                           |
@@ -210,6 +210,18 @@ source). No per-image captions.
 | Admin                        | Work policy, submitted-revision moderation (latest only), limits and Owner capacity designation, stuck processing/cleanup outcomes                                                                                                                   | No exposure        | Payload stays operator UI calling the Backend boundary                                              |
 | Recycle bin                  | Submitted works trash for 30 days (configurable); restore as self-only; Admin-removed cannot self-restore; unsubmitted drafts delete immediately                                                                                                     | No exposure        | Discussion identity preserved; shared blobs never deleted while referenced                          |
 | Limits                       | 50 items; 128 MiB per Original item (provisional, configurable); no whole-work cap; 10 GiB ordinary / 20 GiB Owner account capacity; 100 active drafts; 100 first submissions per America/New_York date                                              | No exposure        | Clear feedback at limits; no persistent quota meter; text save and deletion still work              |
+
+Lost-answer recovery (#292, Owner-approved 2026-10-18). When a component's
+upload answer is lost or unreadable after the browser reported every byte sent
+(status 0, a relay 502/504 or other non-refusal 5xx, an unreadable success, or
+the 150 s answer guard), the manager reads the item again, now and then on the
+healthy poll cadence for at most 30 s, writing nothing meanwhile; the photo
+keeps showing 「文件已发送，等待确认」. A committed component continues
+silently. A component the account proves it does not have (awaiting, or still
+receiving when the window ends) is retried once per user action (the first send
+or each explicit 重试 / 继续上传) through the same read-first path as 重试. A
+spent retry, a window without a successful read, a partial send, a refusal, a
+pause, a cancel or an account change keeps today's behavior and failure text.
 
 ## Media paths and limits of proof
 

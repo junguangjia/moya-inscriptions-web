@@ -253,6 +253,38 @@ describe("background publication", () => {
     t.runtime.dispose();
   });
 
+  it("keeps the frozen intent waiting through an unconfirmed full send and publishes once after the account confirms it (#292)", async () => {
+    const t = setup();
+    const draft = await pick(t);
+    expect(t.runtime.queuePublication(draft)).toBe(true);
+    const manager = t.runtime.manager()!;
+    const id = manager.getSnapshot().items[0]!.itemId!;
+    const { request, callbacks } = t.transfers[0]!.starts.at(-1)!;
+    // The Backend began the attempt; its answer is lost after the last byte.
+    t.uploads.markReceiving(request.endpoint.split("/").at(-1)!);
+    callbacks.onProgress(request.body.size, request.body.size);
+    callbacks.onSettled({ status: 0, responseText: "", stalled: false });
+    await settle();
+    t.timers.fireAll();
+    await settle();
+    expect(manager.getSnapshot().items[0]).toMatchObject({
+      phase: "uploading",
+      failure: null,
+    });
+    expect(t.runtime.submission()?.store.get().status).toBe("queued");
+    expect(t.client.submit).not.toHaveBeenCalled();
+    t.uploads.receive(id, "still");
+    t.timers.fireAll();
+    await settle();
+    await ready(t, id);
+    expect(t.client.submit).toHaveBeenCalledOnce();
+    expect(t.client.submit.mock.calls[0]![0]).toMatchObject({
+      content: { title: "frozen title", items: [{ itemId: id }] },
+    });
+    expect(t.transfers[0]!.starts).toHaveLength(1);
+    t.runtime.dispose();
+  });
+
   it.each(["cancel", "discard"])(
     "fences late media readiness after %s",
     async (action) => {
