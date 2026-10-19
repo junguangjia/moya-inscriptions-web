@@ -52,12 +52,13 @@ import type {
 /**
  * The account-scoped upload manager (U01–U07, U11 inputs, L04–L05, M04):
  * preprocessing (bounded, in workers), registration with final byte sizes,
- * per-component transfers through the transfer port (Uppy, no automatic
+ * per-component transfers through the transfer port (Uppy, no transfer-level
  * retries), server polling until ready or failed, per-item cancellation with
  * an epoch fence against late answers, explicit component retry, explicit
- * Continue after a pause, and saved-draft local recovery. One manager serves
- * exactly one account; any account change pauses it and it never writes for
- * another account.
+ * Continue after a pause, and saved-draft local recovery. The only automatic
+ * resend is the bounded one after an unconfirmed answer to a fully sent
+ * component (#292, `confirmSent`). One manager serves exactly one account; any
+ * account change pauses it and it never writes for another account.
  */
 
 // ---------------------------------------------------------------------------
@@ -221,6 +222,12 @@ export interface UploadManagerOptions {
 export const POLL_DELAYS_MS = [1000, 2000, 3000, 5000];
 /** Consecutive failed status checks back off without slowing healthy processing. */
 export const POLL_ERROR_DELAYS_MS = [5000, 8000, 13_000, 20_000, 30_000];
+/**
+ * After an unconfirmed answer to a fully sent component, the item is read
+ * again on the healthy poll cadence for at most this long before the manager
+ * decides (#292).
+ */
+export const CONFIRM_WINDOW_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Product text
@@ -311,6 +318,13 @@ interface ItemRecord {
   draftId: string | null;
   backgroundRetryRequestId?: string | null;
   backgroundRetrying?: boolean;
+  /** The running confirmation per role (`confirmSent`) and its pending wait. */
+  confirms?: Map<
+    MediaComponentRole,
+    { token: number; timer: unknown; wake: (() => void) | null }
+  >;
+  /** Roles whose one automatic resend for the current user action is spent. */
+  autoRetried?: Set<MediaComponentRole>;
 }
 
 /** Local interruption state. Prepared Standard bytes replace the source copy. */
@@ -493,6 +507,9 @@ export class UploadManager {
   private pauseReason: "account" | "offline" | null = null;
   /** Late answers that the fence ignored (observable for tests). */
   ignoredLateAnswers = 0;
+  private confirmSequence = 0;
+  /** Counts pauses, so a continuation can tell one happened even if Continue followed. */
+  private pauseSequence = 0;
 
   constructor(options: UploadManagerOptions) {
     this.options = options;
@@ -843,6 +860,8 @@ export class UploadManager {
       record.view.serverItem?.state === "failed"
     )
       return;
+    // An explicit retry is a new user action: one automatic resend again (#292).
+    record.autoRetried?.delete(role);
     await this.restartComponent(record, role);
   }
 
@@ -957,6 +976,7 @@ export class UploadManager {
     if (this.status === "paused") this.resume();
     const epoch = record.epoch;
     this.stopPolling(record);
+    for (const role of roles) record.autoRetried?.delete(role);
     for (const role of roles)
       this.patchComponent(record, role, {
         phase: "queued",
@@ -1033,6 +1053,11 @@ export class UploadManager {
     if (!this.guardAccount()) return;
     if (this.status === "paused") this.resume();
     const epoch = record.epoch;
+    const pauses = this.pauseSequence;
+    // A pause during a read or reset stops this restart, even when Continue
+    // followed meanwhile: the pause marked the component, and Continue's own
+    // restart reads again (never two restarts of one component).
+    const interrupted = () => this.pauseSequence !== pauses;
     this.patchComponent(record, role, {
       phase: "queued",
       failure: null,
@@ -1047,7 +1072,7 @@ export class UploadManager {
     };
     // Read first: Continue must never discard bytes the account already has (U05).
     const read = await this.fetchItem(record, epoch);
-    if (read === null) return;
+    if (read === null || interrupted()) return;
     if ("account" in read) {
       this.pause("account");
       return;
@@ -1093,7 +1118,7 @@ export class UploadManager {
           return;
         }
         const again = await this.fetchItem(record, epoch);
-        if (again === null) return;
+        if (again === null || interrupted()) return;
         const refreshed =
           "item" in again
             ? again.item.components.find((c) => c.role === role)
@@ -1129,7 +1154,7 @@ export class UploadManager {
         }
         item = again.item;
       }
-      if (!this.alive(record, epoch)) return;
+      if (!this.alive(record, epoch) || interrupted()) return;
       server = item.components.find((c) => c.role === role);
       this.applyServerItem(record, item, false);
       if (server?.state !== "awaiting") return;
@@ -1322,12 +1347,14 @@ export class UploadManager {
    */
   pause(reason: "account" | "offline"): void {
     if (this.status === "disposed") return;
+    this.pauseSequence += 1;
     this.status = "paused";
     this.pauseReason = reason;
     const message =
       reason === "account" ? messages.accountPaused : messages.paused;
     for (const record of this.records.values()) {
       this.stopPolling(record);
+      this.endConfirms(record);
       if (record.view.phase === "preprocessing") {
         this.renew(record);
         this.patch(record, { phase: "waiting" });
@@ -1919,6 +1946,7 @@ export class UploadManager {
       return;
     }
     record.componentIds = new Map(item.components.map((c) => [c.role, c.id]));
+    record.autoRetried = new Set();
     record.draftId = "draftId" in holder ? holder.draftId : null;
     this.patch(record, { itemId: item.id, phase: "queued" });
     void this.storeLocalCopy(record, epoch, session);
@@ -2001,6 +2029,8 @@ export class UploadManager {
     }
     const transferId = `${componentId}.${attempt}`;
     const epoch = record.epoch;
+    // A new attempt ends any confirmation of an earlier one.
+    this.endConfirm(record, role);
     record.transfers.set(role, transferId);
     if (this.options.hasher && !record.hashes.has(role))
       record.hashes.set(
@@ -2093,6 +2123,10 @@ export class UploadManager {
       this.applyServerItem(record, result.item, true);
       return;
     }
+    if (failure?.outcomeUnknown === true && this.sentAll(record, role)) {
+      await this.confirmSent(record, role, epoch, failure);
+      return;
+    }
     // Re-read the item before offering a retry: the bytes may have been committed.
     const read = await this.fetchItem(record, epoch);
     if (read === null) return;
@@ -2115,6 +2149,143 @@ export class UploadManager {
       this.applyServerItem(record, item, true);
       return;
     }
+    this.failSettled(record, role, failure, item);
+  }
+
+  /** The browser reported every byte of this component's current attempt sent. */
+  private sentAll(record: ItemRecord, role: MediaComponentRole): boolean {
+    const prepared = record.prepared?.find((c) => c.role === role);
+    const component = record.view.components.find((c) => c.role === role);
+    return (
+      prepared !== undefined &&
+      component !== undefined &&
+      prepared.blob.size > 0 &&
+      component.bytesSent >= prepared.blob.size
+    );
+  }
+
+  /**
+   * The answer to a fully sent component was lost or unreadable (#292). The
+   * item is read now and then on the healthy poll cadence for at most
+   * `CONFIRM_WINDOW_MS`, writing nothing meanwhile; the component keeps its
+   * truthful "sent, awaiting confirmation" state and holds no transfer slot.
+   * Committed: it continues silently. Proven not committed — awaiting
+   * (nothing stored), or still receiving when the window ends — it is retried
+   * once per user action through the same read-first path as an explicit
+   * retry. Anything else, a spent retry, or a window without a successful
+   * read ends in the failure the answer reported. A pause, cancel, account
+   * change or new attempt ends the confirmation.
+   */
+  private async confirmSent(
+    record: ItemRecord,
+    role: MediaComponentRole,
+    epoch: number,
+    failure: UploadFailure,
+  ): Promise<void> {
+    const token = (this.confirmSequence += 1);
+    (record.confirms ??= new Map()).set(role, {
+      token,
+      timer: null,
+      wake: null,
+    });
+    const now = this.options.now ?? Date.now;
+    const started = now();
+    let waited = 0;
+    let latest: PublishingMediaItem | null;
+    for (let attempt = 0; ; attempt += 1) {
+      const read = await this.fetchItem(record, epoch);
+      if (read === null || !this.confirming(record, role, epoch, token)) return;
+      if ("account" in read) {
+        this.endConfirm(record, role);
+        this.pause("account");
+        return;
+      }
+      if ("gone" in read) {
+        this.endConfirm(record, role);
+        this.markUnavailable(record);
+        return;
+      }
+      const over =
+        waited >= CONFIRM_WINDOW_MS || now() - started >= CONFIRM_WINDOW_MS;
+      if ("item" in read) {
+        latest = read.item;
+        const server = latest.components.find((c) => c.role === role);
+        if (server?.state === "received" || server?.state === "verified") {
+          this.endConfirm(record, role);
+          this.applyServerItem(record, latest, true);
+          return;
+        }
+        // Failed, cancelled or rejected meanwhile: the account decides, as before.
+        if (
+          !server ||
+          latest.state !== "awaiting_upload" ||
+          (server.state !== "awaiting" && server.state !== "receiving")
+        )
+          break;
+        if (server.state === "awaiting" || over) {
+          this.endConfirm(record, role);
+          if (record.autoRetried?.has(role)) break;
+          (record.autoRetried ??= new Set()).add(role);
+          await this.restartComponent(record, role);
+          return;
+        }
+      } else {
+        // Only a successful read decides; a failed one merges nothing.
+        latest = null;
+        if (over) break;
+      }
+      const delay = Math.min(
+        POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)]!,
+        CONFIRM_WINDOW_MS - waited,
+      );
+      waited += delay;
+      await new Promise<void>((resolve) => {
+        const entry = record.confirms?.get(role);
+        if (entry?.token !== token) return resolve();
+        entry.wake = resolve;
+        entry.timer = this.timers.setTimeout(resolve, delay);
+      });
+      // Ending a confirmation wakes its wait; the token check then stops it.
+      if (!this.confirming(record, role, epoch, token)) return;
+    }
+    this.endConfirm(record, role);
+    this.failSettled(record, role, failure, latest);
+  }
+
+  private confirming(
+    record: ItemRecord,
+    role: MediaComponentRole,
+    epoch: number,
+    token: number,
+  ): boolean {
+    return (
+      this.alive(record, epoch) &&
+      this.status === "active" &&
+      record.confirms?.get(role)?.token === token &&
+      record.view.components.find((c) => c.role === role)?.phase === "uploading"
+    );
+  }
+
+  private endConfirm(record: ItemRecord, role: MediaComponentRole): void {
+    const entry = record.confirms?.get(role);
+    if (!entry) return;
+    if (entry.timer !== null) this.timers.clearTimeout(entry.timer);
+    record.confirms!.delete(role);
+    entry.wake?.();
+  }
+
+  private endConfirms(record: ItemRecord): void {
+    for (const role of [...(record.confirms?.keys() ?? [])])
+      this.endConfirm(record, role);
+  }
+
+  /** The answer stands: the component failed, merged with the latest read. */
+  private failSettled(
+    record: ItemRecord,
+    role: MediaComponentRole,
+    failure: UploadFailure | null,
+    item: PublishingMediaItem | null,
+  ): void {
     this.patchComponent(record, role, { phase: "failed", failure });
     if (item) this.applyServerItem(record, item, true, role);
     else {
@@ -2476,6 +2647,7 @@ export class UploadManager {
   /** The account no longer has the item: nothing is polled or sent for it again. */
   private markUnavailable(record: ItemRecord): void {
     this.stopPolling(record);
+    this.endConfirms(record);
     this.abortTransfers(record);
     this.transferQueue = this.transferQueue.filter(
       (queued) => queued.key !== record.view.key,
@@ -2578,6 +2750,7 @@ export class UploadManager {
 
   /** Starts a new epoch: every earlier continuation of this item becomes stale. */
   private renew(record: ItemRecord): void {
+    this.endConfirms(record);
     record.epoch += 1;
     record.controller.abort(new DOMException("cancelled", "AbortError"));
     record.controller = new AbortController();

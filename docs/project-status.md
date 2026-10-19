@@ -21,6 +21,14 @@ the runtime grants first. See the
 [task record](development/upload-timing-instrumentation-v1.md). This entry
 records authorization and plan only; it claims no deployment.
 
+## Upload lost-answer recovery — 2026-10-18
+
+Issue #292 (`upload-lost-answer-recovery-v1`, Web client only): a fully sent
+photo whose upload answer is lost is confirmed by re-reading the item for up to
+30 s and resent at most once per user action, within the Owner-approved INV-1
+bounds; otherwise today's failure stays. Draft until Owner real-device
+acceptance; nothing is deployed.
+
 ## Media pipeline increment 3a — 2026-10-13
 
 Issue #206 r21 splits increment 3 of the unified media pipeline. 3a "profile

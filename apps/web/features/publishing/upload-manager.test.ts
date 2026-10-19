@@ -27,6 +27,7 @@ import {
 
 import type { LogicalSource } from "./import-grouping";
 import type {
+  MediaComponentRole,
   MediaMetadata,
   PublishingDraft,
   PublishingMediaItemProgress,
@@ -506,6 +507,519 @@ describe("upload manager: explicit retries only", () => {
     expect(test.client.client.item).toHaveBeenCalledWith(itemId);
     expect(test.item("r").phase).toBe("processing");
     expect(test.item("r").failure).toBeNull();
+  });
+});
+
+describe("upload manager: unconfirmed answer after a full send (#292)", () => {
+  type Test = ReturnType<typeof createTestManager>;
+
+  /** Every byte of the attempt was reported sent, then its answer was lost. */
+  const loseAnswer = (test: Test, index: number, stalled = false) => {
+    const { request, callbacks } = test.transfer.starts[index]!;
+    callbacks.onProgress(request.body.size, request.body.size);
+    callbacks.onSettled({ status: 0, responseText: "", stalled });
+  };
+
+  /** The account ended the attempt without storing anything. */
+  const storeNothing = (
+    test: Test,
+    itemId: string,
+    role: MediaComponentRole,
+  ) => {
+    const item = test.client.items.get(itemId)!;
+    test.client.items.set(itemId, {
+      ...item,
+      components: item.components.map((c) =>
+        c.role === role
+          ? { ...c, state: "awaiting" as const, receivedBytes: 0 }
+          : c,
+      ),
+    });
+  };
+
+  const waits = (test: Test) =>
+    [...test.timers.pending.values()].map((timer) => timer.ms);
+
+  /** Every phase the item was published with, transient ones included. */
+  const publishedPhases = (test: Test, key: string) => {
+    const phases: string[] = [];
+    const original = test.manager.store.set.bind(test.manager.store);
+    test.manager.store.set = (next) => {
+      const item = next.items.find((entry) => entry.key === key);
+      if (item) phases.push(item.phase);
+      original(next);
+    };
+    return phases;
+  };
+
+  const start = async (test: Test, key: string, source = staticSource()) => {
+    test.manager.addConfirmed([confirm(key, source)]);
+    await settle();
+    return test.item(key).itemId!;
+  };
+
+  it("keeps confirming while the account is still receiving and continues silently once it has the bytes", async () => {
+    const test = createTestManager();
+    const itemId = await start(test, "c");
+    const phases = publishedPhases(test, "c");
+    loseAnswer(test, 0);
+    await settle();
+    // Sent, not yet confirmed: no failure, no resend, the next read in 1 s.
+    expect(test.item("c")).toMatchObject({ phase: "uploading", failure: null });
+    expect(test.item("c").components[0]).toMatchObject({
+      phase: "uploading",
+      bytesSent: 100,
+    });
+    expect(test.client.client.item).toHaveBeenCalledTimes(1);
+    expect(waits(test)).toEqual([1000]);
+    test.timers.fireAll();
+    await settle();
+    expect(test.client.client.item).toHaveBeenCalledTimes(2);
+    expect(waits(test)).toEqual([2000]);
+    test.client.receive(itemId, "still");
+    test.timers.fireAll();
+    await settle();
+    expect(test.item("c")).toMatchObject({
+      phase: "processing",
+      failure: null,
+    });
+    expect(test.transfer.starts).toHaveLength(1);
+    expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+    expect(phases).not.toContain("failed");
+  });
+
+  it("also confirms after the answer guard ended a fully sent attempt", async () => {
+    const test = createTestManager();
+    const itemId = await start(test, "g");
+    loseAnswer(test, 0, true);
+    await settle();
+    expect(test.item("g")).toMatchObject({ phase: "uploading", failure: null });
+    test.client.receive(itemId, "still");
+    test.timers.fireAll();
+    await settle();
+    expect(test.item("g")).toMatchObject({
+      phase: "processing",
+      failure: null,
+    });
+    expect(test.transfer.starts).toHaveLength(1);
+  });
+
+  it("ends the window early by elapsed time, not only by the summed waits", async () => {
+    let clock = 0;
+    const test = createTestManager({ now: () => clock });
+    await start(test, "t");
+    loseAnswer(test, 0);
+    await settle();
+    // Slow reads: 31 s have passed by the next read, which is the last one.
+    clock = 31_000;
+    test.timers.fireAll();
+    await settle();
+    expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+    expect(test.transfer.starts).toHaveLength(2);
+  });
+
+  it.each(["cancelled", "rejected"] as const)(
+    "lets the account decide when the component is %s during the window",
+    async (state) => {
+      const test = createTestManager();
+      const itemId = await start(test, "d");
+      loseAnswer(test, 0);
+      await settle();
+      const item = test.client.items.get(itemId)!;
+      test.client.items.set(itemId, {
+        ...item,
+        state: state === "cancelled" ? "cancelled" : item.state,
+        components: item.components.map((c) => ({ ...c, state })),
+      });
+      test.timers.fireAll();
+      await settle();
+      expect(test.item("d").phase).toBe(
+        state === "cancelled" ? "cancelled" : "failed",
+      );
+      test.timers.fireAll();
+      await settle();
+      expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+      expect(test.transfer.starts).toHaveLength(1);
+    },
+  );
+
+  it("resends once, without a reset, when the account proves nothing was stored", async () => {
+    const test = createTestManager();
+    const itemId = await start(test, "a");
+    const phases = publishedPhases(test, "a");
+    storeNothing(test, itemId, "still");
+    loseAnswer(test, 0);
+    await settle();
+    expect(test.transfer.starts).toHaveLength(2);
+    expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+    const [first, second] = test.transfer.starts;
+    expect(second!.request.endpoint).toBe(first!.request.endpoint);
+    expect(second!.request.headers["x-upload-attempt"]).not.toBe(
+      first!.request.headers["x-upload-attempt"],
+    );
+    expect(test.item("a").components[0]).toMatchObject({
+      phase: "uploading",
+      bytesSent: 0,
+    });
+    second!.callbacks.onSettled({
+      status: 200,
+      responseText: test.client.receive(itemId, "still"),
+      stalled: false,
+    });
+    await settle();
+    expect(test.item("a")).toMatchObject({
+      phase: "processing",
+      failure: null,
+    });
+    expect(phases).not.toContain("failed");
+  });
+
+  it("retries once through the read-first path when the account is still receiving after 30 s", async () => {
+    const test = createTestManager();
+    await start(test, "w");
+    loseAnswer(test, 0);
+    await settle();
+    const cadence: number[] = [];
+    for (let read = 0; read < 8; read += 1) {
+      cadence.push(...waits(test));
+      expect(test.transfer.starts).toHaveLength(1);
+      expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+      test.timers.fireAll();
+      await settle();
+    }
+    // Reads at 0, 1, 3, 6, 11, 16, 21, 26 and 30 s, then one 重试-equivalent.
+    expect(cadence).toEqual([1000, 2000, 3000, 5000, 5000, 5000, 5000, 4000]);
+    expect(cadence.reduce((sum, ms) => sum + ms, 0)).toBe(30_000);
+    expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+    expect(test.transfer.starts).toHaveLength(2);
+    expect(test.item("w").phase).toBe("uploading");
+    expect(test.item("w").failure).toBeNull();
+  });
+
+  it("falls back to the reported failure once the automatic resend is spent, and an explicit retry gets one again", async () => {
+    const test = createTestManager();
+    const itemId = await start(test, "f");
+    storeNothing(test, itemId, "still");
+    loseAnswer(test, 0);
+    await settle();
+    expect(test.transfer.starts).toHaveLength(2);
+    storeNothing(test, itemId, "still");
+    loseAnswer(test, 1);
+    await settle();
+    expect(test.item("f")).toMatchObject({
+      phase: "failed",
+      failure: {
+        code: "network",
+        message: "网络连接中断，结果尚未确认",
+        outcomeUnknown: true,
+      },
+    });
+    test.timers.fireAll();
+    await settle();
+    expect(test.transfer.starts).toHaveLength(2);
+
+    await test.manager.retryComponent("f", "still");
+    await settle();
+    expect(test.transfer.starts).toHaveLength(3);
+    storeNothing(test, itemId, "still");
+    loseAnswer(test, 2);
+    await settle();
+    expect(test.transfer.starts).toHaveLength(4);
+    expect(test.item("f").failure).toBeNull();
+  });
+
+  it("never resends on a guess when no read succeeds within the window", async () => {
+    const test = createTestManager();
+    await start(test, "e");
+    test.client.client.item.mockRejectedValue(
+      clientError(0, "网络连接中断，请检查后重试", false),
+    );
+    loseAnswer(test, 0);
+    await settle();
+    for (let read = 0; read < 8; read += 1) {
+      expect(test.item("e").phase).toBe("uploading");
+      test.timers.fireAll();
+      await settle();
+    }
+    expect(test.client.client.item).toHaveBeenCalledTimes(9);
+    expect(test.item("e")).toMatchObject({
+      phase: "failed",
+      failure: { code: "network", outcomeUnknown: true },
+    });
+    expect(test.transfer.starts).toHaveLength(1);
+    expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+    expect(test.timers.pending.size).toBe(0);
+  });
+
+  it("continues silently after a failed read when the next read finds the bytes", async () => {
+    const test = createTestManager();
+    const itemId = await start(test, "n");
+    test.client.client.item.mockRejectedValueOnce(
+      clientError(0, "网络连接中断，请检查后重试", false),
+    );
+    loseAnswer(test, 0);
+    await settle();
+    expect(test.item("n").phase).toBe("uploading");
+    test.client.receive(itemId, "still");
+    test.timers.fireAll();
+    await settle();
+    expect(test.item("n")).toMatchObject({
+      phase: "processing",
+      failure: null,
+    });
+    expect(test.transfer.starts).toHaveLength(1);
+  });
+
+  it("keeps today's immediate failure for a partial send and for a known refusal", async () => {
+    const test = createTestManager();
+    await start(test, "p");
+    await start(test, "q");
+    const partial = test.transfer.starts[0]!;
+    partial.callbacks.onProgress(50, 100);
+    partial.callbacks.onSettled({
+      status: 0,
+      responseText: "",
+      stalled: false,
+    });
+    const refused = test.transfer.starts[1]!;
+    refused.callbacks.onProgress(100, 100);
+    refused.callbacks.onSettled({
+      status: 409,
+      responseText: "",
+      stalled: false,
+    });
+    await settle();
+    expect(test.item("p")).toMatchObject({
+      phase: "failed",
+      failure: { code: "network", outcomeUnknown: true },
+    });
+    expect(test.item("q")).toMatchObject({
+      phase: "failed",
+      failure: { code: "http_409", outcomeUnknown: false },
+    });
+    expect(test.client.client.item).toHaveBeenCalledTimes(2);
+    expect(test.timers.pending.size).toBe(0);
+    expect(test.transfer.starts).toHaveLength(2);
+  });
+
+  it("confirms only the unanswered component of a Live Photo", async () => {
+    const test = createTestManager();
+    const itemId = await start(test, "live", liveSource(IDENTIFIER));
+    const [still, motion] = test.transfer.starts;
+    still!.callbacks.onSettled({
+      status: 200,
+      responseText: test.client.receive(itemId, "still"),
+      stalled: false,
+    });
+    loseAnswer(test, 1);
+    await settle();
+    expect(test.item("live").components.map((c) => c.phase)).toEqual([
+      "received",
+      "uploading",
+    ]);
+    test.client.receive(itemId, "motion");
+    test.timers.fireAll();
+    await settle();
+    expect(test.item("live")).toMatchObject({
+      phase: "processing",
+      failure: null,
+    });
+    expect(motion).toBeDefined();
+    expect(test.transfer.starts).toHaveLength(2);
+  });
+
+  it("gives a processing retry a fresh automatic resend", async () => {
+    const test = createTestManager();
+    const itemId = await start(test, "rp");
+    storeNothing(test, itemId, "still");
+    loseAnswer(test, 0);
+    await settle();
+    // The automatic resend is spent; it succeeds, then processing fails.
+    expect(test.transfer.starts).toHaveLength(2);
+    test.transfer.starts[1]!.callbacks.onSettled({
+      status: 200,
+      responseText: test.client.receive(itemId, "still"),
+      stalled: false,
+    });
+    await settle();
+    test.client.failProcessing(itemId, "size_mismatch");
+    test.timers.fireAll();
+    await settle();
+    expect(test.item("rp").phase).toBe("failed");
+    await test.manager.retryProcessing("rp");
+    await settle();
+    expect(test.transfer.starts).toHaveLength(3);
+    storeNothing(test, itemId, "still");
+    loseAnswer(test, 2);
+    await settle();
+    expect(test.transfer.starts).toHaveLength(4);
+  });
+
+  describe("fences end the confirmation", () => {
+    it("cancel: nothing is read, reset or sent afterwards", async () => {
+      const test = createTestManager();
+      await start(test, "x");
+      loseAnswer(test, 0);
+      await settle();
+      await test.manager.cancelItem("x");
+      const reads = test.client.client.item.mock.calls.length;
+      test.timers.fireAll();
+      await settle();
+      expect(test.timers.pending.size).toBe(0);
+      expect(test.client.client.item).toHaveBeenCalledTimes(reads);
+      expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+      expect(test.transfer.starts).toHaveLength(1);
+      expect(test.item("x").phase).toBe("cancelled");
+    });
+
+    it("pause: the component waits for Continue, which reads first as today", async () => {
+      const test = createTestManager();
+      await start(test, "o");
+      loseAnswer(test, 0);
+      await settle();
+      test.manager.pause("offline");
+      expect(test.timers.pending.size).toBe(0);
+      expect(test.item("o").components[0]).toMatchObject({
+        phase: "paused",
+        failure: { code: "paused", outcomeUnknown: true },
+      });
+      const reads = test.client.client.item.mock.calls.length;
+      test.timers.fireAll();
+      await settle();
+      expect(test.client.client.item).toHaveBeenCalledTimes(reads);
+      expect(test.transfer.starts).toHaveLength(1);
+      await test.manager.continueUploads();
+      await settle();
+      // The account still shows the attempt receiving: reset, then sent again once.
+      expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+      expect(test.transfer.starts).toHaveLength(2);
+    });
+
+    /** Runs the window to its end, holding the automatic retry's own read. */
+    const holdRetryRead = async (test: Test) => {
+      for (let read = 0; read < 7; read += 1) {
+        test.timers.fireAll();
+        await settle();
+      }
+      const read = test.client.client.item.getMockImplementation()!;
+      let release!: () => void;
+      test.client.client.item
+        .mockImplementationOnce(read)
+        .mockImplementationOnce(
+          (id: string) =>
+            new Promise((resolve) => {
+              release = () => resolve(test.client.items.get(id)!);
+            }),
+        );
+      test.timers.fireAll();
+      await settle();
+      return () => release();
+    };
+
+    it("pause during the automatic retry's read: nothing is reset until Continue", async () => {
+      const test = createTestManager();
+      const itemId = await start(test, "r");
+      loseAnswer(test, 0);
+      await settle();
+      const release = await holdRetryRead(test);
+      test.manager.pause("offline");
+      release();
+      await settle();
+      expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+      expect(test.transfer.starts).toHaveLength(1);
+      expect(test.item("r").components[0]!.phase).toBe("paused");
+      expect(test.client.items.get(itemId)!.components[0]!.state).toBe(
+        "receiving",
+      );
+      await test.manager.continueUploads();
+      await settle();
+      expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+      expect(test.transfer.starts).toHaveLength(2);
+    });
+
+    it("pause and Continue during the retry's read: one restart, one reset, one resend", async () => {
+      const test = createTestManager();
+      await start(test, "pc");
+      loseAnswer(test, 0);
+      await settle();
+      const release = await holdRetryRead(test);
+      test.manager.pause("offline");
+      await test.manager.continueUploads();
+      await settle();
+      release();
+      await settle();
+      // Only Continue's restart proceeds; the interrupted one stops.
+      expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+      expect(test.transfer.starts).toHaveLength(2);
+      expect(test.transfer.transfer.abort).not.toHaveBeenCalled();
+      expect(test.item("pc").components[0]!.phase).toBe("uploading");
+    });
+
+    it("pause while the retry's reset is in flight: nothing is sent until Continue", async () => {
+      const test = createTestManager();
+      await start(test, "ps");
+      loseAnswer(test, 0);
+      await settle();
+      const reset = test.client.client.resetComponent.getMockImplementation()!;
+      let release!: () => void;
+      test.client.client.resetComponent.mockImplementationOnce(
+        (...args: Parameters<typeof reset>) =>
+          new Promise((resolve) => {
+            release = () => resolve(reset(...args));
+          }),
+      );
+      for (let read = 0; read < 8; read += 1) {
+        test.timers.fireAll();
+        await settle();
+      }
+      expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+      test.manager.pause("offline");
+      release();
+      await settle();
+      expect(test.transfer.starts).toHaveLength(1);
+      expect(test.item("ps").components[0]!.phase).toBe("paused");
+      await test.manager.continueUploads();
+      await settle();
+      expect(test.transfer.starts).toHaveLength(2);
+    });
+
+    it("an account change seen by the read pauses without any write", async () => {
+      const test = createTestManager();
+      const itemId = await start(test, "k");
+      storeNothing(test, itemId, "still");
+      test.setAccount(OTHER_ACCOUNT);
+      loseAnswer(test, 0);
+      await settle();
+      expect(test.manager.getSnapshot()).toMatchObject({
+        status: "paused",
+        pauseReason: "account",
+      });
+      test.timers.fireAll();
+      await settle();
+      expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+      expect(test.transfer.starts).toHaveLength(1);
+    });
+
+    it("a holder change (suspend, then detach) or dispose stops it before the next read", async () => {
+      for (const stop of ["holder", "dispose"] as const) {
+        const test = createTestManager();
+        await start(test, "h");
+        loseAnswer(test, 0);
+        await settle();
+        if (stop === "holder") {
+          test.manager.suspendForHolderChange();
+          await test.manager.detachFromHolder();
+          await settle();
+        } else test.manager.dispose();
+        const reads = test.client.client.item.mock.calls.length;
+        test.timers.fireAll();
+        await settle();
+        expect(test.timers.pending.size).toBe(0);
+        expect(test.client.client.item).toHaveBeenCalledTimes(reads);
+        expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+        expect(test.transfer.starts).toHaveLength(1);
+      }
+    });
   });
 });
 
