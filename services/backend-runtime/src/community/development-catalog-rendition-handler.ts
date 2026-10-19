@@ -3,6 +3,7 @@ import { pipeline } from "node:stream/promises";
 import { sendJson } from "../http/json-response.js";
 
 import type {
+  CatalogBlockReadTarget,
   PublishingMediaReadTarget,
   PublishingMediaStorePort,
 } from "@moya/api";
@@ -18,11 +19,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 export interface DevelopmentCatalogRenditions {
   /**
    * The committed blob of a rendition the Catalog delivery view lists (ready,
-   * of a ready Catalog asset the published projection names), or null.
+   * of a ready Catalog asset the published projection names), or of a block
+   * the published-blocks view lists (a `catalog_block` target), or null.
    */
   readonly resolve: (
     renditionId: string,
-  ) => Promise<PublishingMediaReadTarget | null>;
+  ) => Promise<PublishingMediaReadTarget | CatalogBlockReadTarget | null>;
   /** The local publishing store that holds the rendition blobs. */
   readonly store: PublishingMediaStorePort;
 }
@@ -45,9 +47,9 @@ const notFound = (response: ServerResponse): void =>
  * request target (no query, no other form) and GET only; the whole committed
  * blob with its recorded type and length, private and never cached. Any
  * other request, and any id the delivery view does not list, answers 404.
- * Every increment-1 rendition is WebP, the one still type the shared read
- * target admits; a JPEG still (the increment-4 viewer image) arrives with
- * that target, the relay and this route together.
+ * Every Catalog rendition is WebP, the one still type the shared read target
+ * admits, except Catalog blocks (catalog-deep-zoom-v1): a JPEG streams only
+ * for a `catalog_block` target, never for any other target.
  */
 export const handleDevelopmentCatalogRendition = async (
   request: IncomingMessage,
@@ -63,7 +65,14 @@ export const handleDevelopmentCatalogRendition = async (
     return;
   }
   const target = await delivery.resolve(renditionId);
-  if (target === null || target.contentType !== "image/webp") {
+  if (
+    target === null ||
+    !(
+      ("kind" in target
+        ? target.kind === "catalog_block" && target.contentType === "image/jpeg"
+        : target.contentType === "image/webp")
+    )
+  ) {
     notFound(response);
     return;
   }

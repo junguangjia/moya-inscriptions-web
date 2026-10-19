@@ -428,6 +428,12 @@ export interface PublishingJobHandlers {
 
 const COMPLETED: PublishingJobResult = { status: "completed" };
 
+/** A `catalog_render` payload of a Catalog block job (catalog-deep-zoom-v1). */
+export const isCatalogBlockPayload = (payload: unknown): boolean =>
+  typeof payload === "object" &&
+  payload !== null &&
+  (payload as { readonly variant?: unknown }).variant === "blocks";
+
 const failed = (
   errorCode: string,
   retryable: boolean,
@@ -1052,6 +1058,11 @@ export function createPublishingJobHandlers(
           await port.reconcileCapacity(subject, clock());
           return COMPLETED;
         case "catalog_render":
+          // A Catalog block job (payload variant `blocks`, catalog-deep-zoom-v1)
+          // is never a base re-render: this release does not cut blocks, and
+          // its claim never selects one; should it hold one, it waits.
+          if (isCatalogBlockPayload(claim.payload))
+            return { status: "deferred", delayMs: 300_000 };
           return CATALOG_ASSET_ID_PATTERN.test(subject)
             ? renderCatalogAsset(claim, signal)
             : invalidSubject;

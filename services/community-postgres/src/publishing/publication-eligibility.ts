@@ -7,9 +7,18 @@ export const notHeldSql = (item: string): string =>
   `NOT EXISTS (SELECT 1 FROM community.media_item_holds h WHERE h.item_id=${item} AND h.released_at IS NULL)`;
 
 /**
+ * SQL: rendition alias `r` is a block the published-blocks view lists (a
+ * ready block of the active master of a ready, referenced Catalog asset,
+ * exactly inside the master's frame; catalog-deep-zoom-v1).
+ */
+export const catalogBlockListedSql = (rendition: string): string =>
+  `EXISTS (SELECT 1 FROM community.catalog_media_zoom_blocks z WHERE z.delivery_key=${rendition}.id)`;
+
+/**
  * One anonymous desired set, recomputed in the transaction that commits public
- * references. No draft/history/profile/tiles eligibility. Current Catalog
- * projection is deliberately late-bound to keep migration families separate.
+ * references. No draft/history/profile/tiles eligibility; Catalog blocks only
+ * of an asset's active master. Current Catalog projection is deliberately
+ * late-bound to keep migration families separate.
  */
 export const desiredRenditionsSql = (catalogAvailable = true): string => `
   SELECT DISTINCT r.id AS rendition_id,r.item_id,r.catalog_asset_id,b.storage_key,
@@ -35,7 +44,8 @@ export const desiredRenditionsSql = (catalogAvailable = true): string => `
           AND ${publishedArticleItemSql("i.id", "NULL::text", "i.owner_id")})
       ))
       OR (ca.state='ready' AND ca.unreferenced_since IS NULL AND r.edit_key='base'
-        AND r.role IN ('thumb','cover','display','viewer','full')
+        AND (r.role IN ('thumb','cover','display','viewer','full')
+          OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")}))
         AND ${
           catalogAvailable
             ? `EXISTS (SELECT 1 FROM public.catalog_media cm

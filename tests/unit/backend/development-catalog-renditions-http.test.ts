@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryCommunityIdentityPort } from "./community-identity-fixture.js";
 
 import type {
+  CatalogBlockReadTarget,
   PublishingMediaReadResult,
   PublishingMediaReadTarget,
   PublishingMediaStorePort,
@@ -61,7 +62,7 @@ const opened = (size = bytes.length): PublishingMediaReadResult => ({
 
 const delivery = (
   options: {
-    readonly target?: PublishingMediaReadTarget | null;
+    readonly target?: PublishingMediaReadTarget | CatalogBlockReadTarget | null;
     readonly read?: PublishingMediaReadResult | null;
   } = {},
 ) => {
@@ -133,6 +134,23 @@ const raw = (port: number, path: string, method = "GET") =>
 const path = `/v1/development/catalog-renditions/${renditionId}`;
 
 describe("Development Catalog rendition route", () => {
+  it("streams a Catalog block as image/jpeg only for a catalog_block target (catalog-deep-zoom-v1)", async () => {
+    const block: CatalogBlockReadTarget = {
+      kind: "catalog_block",
+      storageKey,
+      contentType: "image/jpeg",
+      byteSize: bytes.length,
+      sha256: "e".repeat(64),
+    };
+    const renditions = delivery({ target: block });
+    const port = await start("development", renditions);
+    const response = await raw(port, path);
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toBe("image/jpeg");
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.body.equals(bytes)).toBe(true);
+  });
+
   it("streams the committed blob with its recorded type and length, private and never cached", async () => {
     const renditions = delivery();
     const port = await start("development", renditions);
@@ -228,12 +246,22 @@ describe("Development Catalog rendition route", () => {
       { target: { ...target, contentType: "video/mp4" as const } },
     ],
     [
-      "a JPEG before the shared read target supports it",
+      "a JPEG of any target but a Catalog block",
       {
         target: {
           ...target,
           contentType: "image/jpeg",
         } as unknown as PublishingMediaReadTarget,
+      },
+    ],
+    [
+      "a Catalog block target of another type",
+      {
+        target: {
+          ...target,
+          kind: "catalog_block",
+          contentType: "image/webp",
+        } as unknown as CatalogBlockReadTarget,
       },
     ],
   ])("answers 404 without detail for %s", async (_label, options) => {

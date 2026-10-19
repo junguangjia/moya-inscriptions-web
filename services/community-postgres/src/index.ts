@@ -47,6 +47,7 @@ export { USER_PURGE_HOLDS_PRE_TASK_BLOBS } from "./publishing/renditions.js";
 // PR 1b: the Development delivery route reads a listed Catalog rendition;
 // startup verifies the App role's read of the delivery view.
 export {
+  catalogBlockReadTarget,
   resolveCatalogRenditionRead,
   verifyCatalogDeliveryReadable,
 } from "./publishing/catalog-delivery.js";
@@ -166,4 +167,20 @@ export {
 } from "./article-authoring/media-read.js";
 
 export { PostgresMediaPublicationAdapter } from "./publishing/publication.js";
+export {
+  CATALOG_BLOCK_GUARD_SQL,
+  CATALOG_MASTER_SLICE_CAP,
+  CATALOG_MASTER_TASK_CAP,
+  CATALOG_MASTER_TASK_SINCE,
+  PostgresCatalogDisplayMasterAdapter,
+} from "./publishing/catalog-masters.js";
+export {
+  catalogBlockCell,
+  catalogBlockGrid,
+  catalogBlockJobPayload,
+  catalogBlockJobRanges,
+  catalogBlockRole,
+  catalogMasterFrame,
+  enqueueMissingCatalogBlocks,
+} from "./publishing/catalog-zoom-blocks.js";
 export type { PublicationSyncOptions } from "./publishing/publication-sync.js";

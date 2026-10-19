@@ -19,6 +19,10 @@ export interface MediaPublicationUnit {
   readonly sweepTaskIds: readonly string[];
   readonly sweepStartedAt: Date | null;
   readonly sweepAttempts: number;
+  /** When a withdrawal deleted the origin object; null before. */
+  readonly originDeletedAt?: Date | null;
+  /** The forced edge TTL a deferred block withdrawal waits for; null otherwise. */
+  readonly fallbackTtlSeconds?: number | null;
 }
 
 export interface MediaPublicationFence {
@@ -73,6 +77,22 @@ export interface MediaPublicationPort {
     fence: MediaPublicationFence,
     unitIds: readonly string[],
     errorCode: string,
+    now: Date,
+  ): Promise<boolean>;
+  /**
+   * Catalog block URLs (role `block-NN`) submitted for purge since `since`:
+   * the daily block purge budget's use (catalog-deep-zoom-v1).
+   */
+  blockPurgesSince(since: Date): Promise<number>;
+  /**
+   * Puts withdrawing block units whose origin object is deleted on the TTL
+   * path: their purge tasks are dropped, `fallbackTtlSeconds` is recorded and
+   * the group finishes once that TTL has passed (catalog-deep-zoom-v1).
+   */
+  deferBlockWithdrawal(
+    fence: MediaPublicationFence,
+    unitIds: readonly string[],
+    ttlSeconds: number,
     now: Date,
   ): Promise<boolean>;
   release(fence: MediaPublicationFence, now: Date): Promise<void>;
