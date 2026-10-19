@@ -70,6 +70,11 @@ interface Fixture {
   ) => void;
   readonly retriedHighResolution: () => number;
   readonly resetComponents: () => number;
+  /**
+   * The next uploads lose their answer after the last byte (#292): `late`
+   * commits 2 s later, as a slow Backend would; `nothing` stores nothing.
+   */
+  readonly dropAnswers: (...modes: ("late" | "nothing")[]) => void;
 }
 
 const fixture = async (
@@ -103,10 +108,37 @@ const fixture = async (
   const uploadsHeld = new Promise<void>((resolve) => {
     releaseUploads = resolve;
   });
+  const drops: ("late" | "nothing")[] = [];
+  const lateCommits = new Set<ReturnType<typeof setTimeout>>();
+  const commit = (itemId: string, componentId: string) => {
+    const current = items.get(itemId)!;
+    const components = current.components.map((entry) =>
+      entry.id === componentId
+        ? {
+            ...entry,
+            state: "received" as const,
+            receivedBytes: entry.byteSize,
+          }
+        : entry,
+    );
+    const next: PublishingMediaItem = {
+      ...current,
+      state: components.every((entry) => entry.state === "received")
+        ? "processing"
+        : current.state,
+      components,
+    };
+    items.set(itemId, next);
+    uploaded += 1;
+    return next;
+  };
   // WebKit routing does not expose Blob bodies: receive the real browser
   // request at a task-owned loopback server instead of deriving a fake receipt.
   const receiver = createServer((request, response) => {
     void (async () => {
+      // A fresh connection per request: a browser may silently resend a
+      // request whose reused connection closed, which would hide a lost answer.
+      response.setHeader("Connection", "close");
       response.setHeader("Access-Control-Allow-Origin", "*");
       response.setHeader("Access-Control-Allow-Headers", "*");
       response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -132,18 +164,30 @@ const fixture = async (
       const bytes = Buffer.concat(chunks);
       expect(bytes.length).toBe(component.byteSize);
       uploadStarted += 1;
+      const drop = drops.shift();
+      if (drop !== undefined) {
+        if (drop === "late") {
+          // Begun and still committing when the connection ends.
+          items.set(item.id, {
+            ...item,
+            components: item.components.map((entry) =>
+              entry.id === componentId
+                ? { ...entry, state: "receiving" }
+                : entry,
+            ),
+          });
+          const timer = setTimeout(() => {
+            lateCommits.delete(timer);
+            commit(item.id, component.id);
+          }, 2_000);
+          lateCommits.add(timer);
+        }
+        // Every byte arrived; no status line ever reaches the browser.
+        request.socket.destroy();
+        return;
+      }
       await uploadsHeld;
-      const next: PublishingMediaItem = {
-        ...item,
-        state: "processing",
-        components: item.components.map((entry) =>
-          entry.id === componentId
-            ? { ...entry, state: "received", receivedBytes: bytes.length }
-            : entry,
-        ),
-      };
-      items.set(item.id, next);
-      uploaded += 1;
+      const next = commit(item.id, component.id);
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
         JSON.stringify({
@@ -480,7 +524,12 @@ const fixture = async (
     },
     retriedHighResolution: () => retriedHighResolution,
     resetComponents: () => resetComponents,
+    dropAnswers: (...modes) => {
+      drops.push(...modes);
+    },
     release: () => {
+      for (const timer of lateCommits) clearTimeout(timer);
+      lateCommits.clear();
       release();
       releaseUploads();
       makeReady();
@@ -1427,6 +1476,92 @@ test("phone preview-first processing keeps editing usable and retries only high 
   await expect(editStatus).toHaveText("", { timeout: ACTION_TIMEOUT });
   expect(composer.fixture.submitted()).toHaveLength(0);
 });
+
+/**
+ * #292: a fully sent photo whose answer is lost is confirmed by reading the
+ * item; the author sees a failure only when the bounded recovery failed.
+ */
+const lostAnswers = {
+  late: "the account commits 2 s later: no failure, one upload",
+  nothing: "the account stored nothing: one automatic resend, no failure",
+  twice: "both attempts are lost: today's failure, then 重试 succeeds",
+} as const;
+for (const [scenario, title] of Object.entries(lostAnswers) as [
+  keyof typeof lostAnswers,
+  string,
+][])
+  test(`phone upload with a lost answer after the last byte — ${title}`, async ({
+    browser,
+    page,
+  }, testInfo) => {
+    skipUnlessPhone(testInfo);
+    const composer = await openComposer(browser, page, testInfo, {
+      successfulPhotos: true,
+    });
+    composer.fixture.releaseUploads();
+    if (scenario === "late") composer.fixture.dropAnswers("late");
+    else if (scenario === "nothing") composer.fixture.dropAnswers("nothing");
+    else composer.fixture.dropAnswers("nothing", "nothing");
+    // Records any failure the author could have seen, however briefly.
+    await composer.page.evaluate(() => {
+      const scope = window as unknown as { failureSeen?: boolean };
+      const seen = () =>
+        document.querySelector(
+          '[data-edit-chip="failed"], [data-edit-status] button[data-fix]',
+        ) !== null;
+      scope.failureSeen = seen();
+      new MutationObserver(() => {
+        if (seen()) scope.failureSeen = true;
+      }).observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        characterData: true,
+      });
+    });
+    const failureSeen = () =>
+      composer.page.evaluate(
+        () =>
+          (window as unknown as { failureSeen?: boolean }).failureSeen === true,
+      );
+    await chooseFiles(
+      composer.page,
+      composer.editor.getByRole("button", { name: "选择照片", exact: true }),
+      [(await photos())[0]!],
+    );
+    await present(screen(composer, "edit"));
+    const editStatus = composer.editor.locator("[data-edit-status]");
+    if (scenario === "late") {
+      // Every byte was reported sent; the answer is awaited, not failed.
+      await expect(editStatus).toContainText("文件已发送，等待确认");
+      await expect.poll(composer.fixture.uploaded).toBe(1);
+      expect(composer.fixture.uploadStarted()).toBe(1);
+    } else if (scenario === "nothing") {
+      await expect.poll(composer.fixture.uploadStarted).toBe(2);
+      await expect.poll(composer.fixture.uploaded).toBe(1);
+      expect(composer.fixture.uploadStarted()).toBe(2);
+    } else {
+      await expect.poll(composer.fixture.uploadStarted).toBe(2);
+      const fix = editStatus.locator("button[data-fix]");
+      await expect(fix).toHaveAttribute("aria-label", "上传失败，点按处理");
+      expect(composer.fixture.uploadStarted()).toBe(2);
+      await click(fix);
+      const attention = sheet(composer, "photo-attention");
+      await expect(attention).toContainText("网络连接中断，结果尚未确认");
+      await click(attention.getByRole("button", { name: "重试", exact: true }));
+      await expect.poll(composer.fixture.uploaded).toBe(1);
+      expect(composer.fixture.uploadStarted()).toBe(3);
+    }
+    composer.fixture.releaseReady();
+    await expect(editStatus).toHaveText("", { timeout: ACTION_TIMEOUT });
+    expect(await failureSeen()).toBe(scenario === "twice");
+    expect(composer.fixture.resetComponents()).toBe(0);
+    expect(composer.fixture.registered()).toBe(1);
+    await publishScreen(composer);
+    await expect(
+      screen(composer, "publish").locator("[data-editor-submit]"),
+    ).not.toHaveAttribute("aria-disabled", "true");
+  });
 
 test("desktop preview-first processing allows confirmation and HD-only retry without publishing", async ({
   browser,
