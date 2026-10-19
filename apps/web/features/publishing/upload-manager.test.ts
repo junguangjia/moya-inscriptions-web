@@ -591,8 +591,11 @@ describe("upload manager: unconfirmed answer after a full send (#292)", () => {
   it("also confirms after the answer guard ended a fully sent attempt", async () => {
     const test = createTestManager();
     const itemId = await start(test, "g");
-    test.client.receive(itemId, "still");
     loseAnswer(test, 0, true);
+    await settle();
+    expect(test.item("g")).toMatchObject({ phase: "uploading", failure: null });
+    test.client.receive(itemId, "still");
+    test.timers.fireAll();
     await settle();
     expect(test.item("g")).toMatchObject({
       phase: "processing",
@@ -600,6 +603,45 @@ describe("upload manager: unconfirmed answer after a full send (#292)", () => {
     });
     expect(test.transfer.starts).toHaveLength(1);
   });
+
+  it("ends the window early by elapsed time, not only by the summed waits", async () => {
+    let clock = 0;
+    const test = createTestManager({ now: () => clock });
+    await start(test, "t");
+    loseAnswer(test, 0);
+    await settle();
+    // Slow reads: 31 s have passed by the next read, which is the last one.
+    clock = 31_000;
+    test.timers.fireAll();
+    await settle();
+    expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+    expect(test.transfer.starts).toHaveLength(2);
+  });
+
+  it.each(["cancelled", "rejected"] as const)(
+    "lets the account decide when the component is %s during the window",
+    async (state) => {
+      const test = createTestManager();
+      const itemId = await start(test, "d");
+      loseAnswer(test, 0);
+      await settle();
+      const item = test.client.items.get(itemId)!;
+      test.client.items.set(itemId, {
+        ...item,
+        state: state === "cancelled" ? "cancelled" : item.state,
+        components: item.components.map((c) => ({ ...c, state })),
+      });
+      test.timers.fireAll();
+      await settle();
+      expect(test.item("d").phase).toBe(
+        state === "cancelled" ? "cancelled" : "failed",
+      );
+      test.timers.fireAll();
+      await settle();
+      expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+      expect(test.transfer.starts).toHaveLength(1);
+    },
+  );
 
   it("resends once, without a reset, when the account proves nothing was stored", async () => {
     const test = createTestManager();
@@ -786,6 +828,33 @@ describe("upload manager: unconfirmed answer after a full send (#292)", () => {
     expect(test.transfer.starts).toHaveLength(2);
   });
 
+  it("gives a processing retry a fresh automatic resend", async () => {
+    const test = createTestManager();
+    const itemId = await start(test, "rp");
+    storeNothing(test, itemId, "still");
+    loseAnswer(test, 0);
+    await settle();
+    // The automatic resend is spent; it succeeds, then processing fails.
+    expect(test.transfer.starts).toHaveLength(2);
+    test.transfer.starts[1]!.callbacks.onSettled({
+      status: 200,
+      responseText: test.client.receive(itemId, "still"),
+      stalled: false,
+    });
+    await settle();
+    test.client.failProcessing(itemId, "size_mismatch");
+    test.timers.fireAll();
+    await settle();
+    expect(test.item("rp").phase).toBe("failed");
+    await test.manager.retryProcessing("rp");
+    await settle();
+    expect(test.transfer.starts).toHaveLength(3);
+    storeNothing(test, itemId, "still");
+    loseAnswer(test, 2);
+    await settle();
+    expect(test.transfer.starts).toHaveLength(4);
+  });
+
   describe("fences end the confirmation", () => {
     it("cancel: nothing is read, reset or sent afterwards", async () => {
       const test = createTestManager();
@@ -826,6 +895,43 @@ describe("upload manager: unconfirmed answer after a full send (#292)", () => {
       expect(test.transfer.starts).toHaveLength(2);
     });
 
+    it("pause during the automatic retry's read: nothing is reset until Continue", async () => {
+      const test = createTestManager();
+      const itemId = await start(test, "r");
+      loseAnswer(test, 0);
+      await settle();
+      for (let read = 0; read < 7; read += 1) {
+        test.timers.fireAll();
+        await settle();
+      }
+      // The last window read is answered; the retry's own read is held.
+      const read = test.client.client.item.getMockImplementation()!;
+      let release!: () => void;
+      test.client.client.item
+        .mockImplementationOnce(read)
+        .mockImplementationOnce(
+          (id: string) =>
+            new Promise((resolve) => {
+              release = () => resolve(test.client.items.get(id)!);
+            }),
+        );
+      test.timers.fireAll();
+      await settle();
+      test.manager.pause("offline");
+      release();
+      await settle();
+      expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+      expect(test.transfer.starts).toHaveLength(1);
+      expect(test.item("r").components[0]!.phase).toBe("paused");
+      expect(test.client.items.get(itemId)!.components[0]!.state).toBe(
+        "receiving",
+      );
+      await test.manager.continueUploads();
+      await settle();
+      expect(test.client.client.resetComponent).toHaveBeenCalledOnce();
+      expect(test.transfer.starts).toHaveLength(2);
+    });
+
     it("an account change seen by the read pauses without any write", async () => {
       const test = createTestManager();
       const itemId = await start(test, "k");
@@ -843,14 +949,17 @@ describe("upload manager: unconfirmed answer after a full send (#292)", () => {
       expect(test.transfer.starts).toHaveLength(1);
     });
 
-    it("a holder change or dispose stops it before the next read", async () => {
+    it("a holder change (suspend, then detach) or dispose stops it before the next read", async () => {
       for (const stop of ["holder", "dispose"] as const) {
         const test = createTestManager();
         await start(test, "h");
         loseAnswer(test, 0);
         await settle();
-        if (stop === "holder") test.manager.suspendForHolderChange();
-        else test.manager.dispose();
+        if (stop === "holder") {
+          test.manager.suspendForHolderChange();
+          await test.manager.detachFromHolder();
+          await settle();
+        } else test.manager.dispose();
         const reads = test.client.client.item.mock.calls.length;
         test.timers.fireAll();
         await settle();

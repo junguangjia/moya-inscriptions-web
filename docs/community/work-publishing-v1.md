@@ -215,13 +215,14 @@ Lost-answer recovery (#292, Owner-approved 2026-10-18). When a component's
 upload answer is lost or unreadable after the browser reported every byte sent
 (status 0, a relay 502/504 or other non-refusal 5xx, an unreadable success, or
 the 150 s answer guard), the manager reads the item again, now and then on the
-healthy poll cadence for at most 30 s, writing nothing meanwhile; the photo
-keeps showing 「文件已发送，等待确认」. A committed component continues
-silently. A component the account proves it does not have (awaiting, or still
-receiving when the window ends) is retried once per user action (the first send
-or each explicit 重试 / 继续上传) through the same read-first path as 重试. A
-spent retry, a window without a successful read, a partial send, a refusal, a
-pause, a cancel or an account change keeps today's behavior and failure text.
+healthy poll cadence for at most 30 s, writing nothing meanwhile; the component
+keeps its sent state (「文件已发送，等待确认」 once every part of the photo is
+sent). A committed component continues silently. A component a successful read
+proves the account does not have (awaiting, or still receiving on the read that
+ends the window) is retried once per user action (the first send or each
+explicit 重试 / 继续上传) through the same read-first path as 重试. A spent
+retry, a window whose deciding read fails, a partial send, a refusal, a pause, a
+cancel or an account change keeps today's behavior and failure text.
 
 ## Media paths and limits of proof
 

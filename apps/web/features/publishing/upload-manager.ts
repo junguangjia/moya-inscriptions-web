@@ -318,8 +318,11 @@ interface ItemRecord {
   draftId: string | null;
   backgroundRetryRequestId?: string | null;
   backgroundRetrying?: boolean;
-  /** The running confirmation per role (`confirmSent`) and its wait. */
-  confirms?: Map<MediaComponentRole, { token: number; timer: unknown }>;
+  /** The running confirmation per role (`confirmSent`) and its pending wait. */
+  confirms?: Map<
+    MediaComponentRole,
+    { token: number; timer: unknown; wake: (() => void) | null }
+  >;
   /** Roles whose one automatic resend for the current user action is spent. */
   autoRetried?: Set<MediaComponentRole>;
 }
@@ -1063,6 +1066,8 @@ export class UploadManager {
     // Read first: Continue must never discard bytes the account already has (U05).
     const read = await this.fetchItem(record, epoch);
     if (read === null) return;
+    // Paused while reading: the pause marked the component; Continue reads again.
+    if (this.status !== "active") return;
     if ("account" in read) {
       this.pause("account");
       return;
@@ -1108,7 +1113,7 @@ export class UploadManager {
           return;
         }
         const again = await this.fetchItem(record, epoch);
-        if (again === null) return;
+        if (again === null || this.status !== "active") return;
         const refreshed =
           "item" in again
             ? again.item.components.find((c) => c.role === role)
@@ -1144,7 +1149,7 @@ export class UploadManager {
         }
         item = again.item;
       }
-      if (!this.alive(record, epoch)) return;
+      if (!this.alive(record, epoch) || this.status !== "active") return;
       server = item.components.find((c) => c.role === role);
       this.applyServerItem(record, item, false);
       if (server?.state !== "awaiting") return;
@@ -2172,11 +2177,15 @@ export class UploadManager {
     failure: UploadFailure,
   ): Promise<void> {
     const token = (this.confirmSequence += 1);
-    (record.confirms ??= new Map()).set(role, { token, timer: null });
+    (record.confirms ??= new Map()).set(role, {
+      token,
+      timer: null,
+      wake: null,
+    });
     const now = this.options.now ?? Date.now;
     const started = now();
     let waited = 0;
-    let latest: PublishingMediaItem | null = null;
+    let latest: PublishingMediaItem | null;
     for (let attempt = 0; ; attempt += 1) {
       const read = await this.fetchItem(record, epoch);
       if (read === null || !this.confirming(record, role, epoch, token)) return;
@@ -2214,7 +2223,11 @@ export class UploadManager {
           await this.restartComponent(record, role);
           return;
         }
-      } else if (over) break;
+      } else {
+        // Only a successful read decides; a failed one merges nothing.
+        latest = null;
+        if (over) break;
+      }
       const delay = Math.min(
         POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)]!,
         CONFIRM_WINDOW_MS - waited,
@@ -2222,10 +2235,11 @@ export class UploadManager {
       waited += delay;
       await new Promise<void>((resolve) => {
         const entry = record.confirms?.get(role);
-        // An ended confirmation never wakes again.
-        if (entry?.token === token)
-          entry.timer = this.timers.setTimeout(resolve, delay);
+        if (entry?.token !== token) return resolve();
+        entry.wake = resolve;
+        entry.timer = this.timers.setTimeout(resolve, delay);
       });
+      // Ending a confirmation wakes its wait; the token check then stops it.
       if (!this.confirming(record, role, epoch, token)) return;
     }
     this.endConfirm(record, role);
@@ -2251,6 +2265,7 @@ export class UploadManager {
     if (!entry) return;
     if (entry.timer !== null) this.timers.clearTimeout(entry.timer);
     record.confirms!.delete(role);
+    entry.wake?.();
   }
 
   private endConfirms(record: ItemRecord): void {

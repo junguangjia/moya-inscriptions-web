@@ -1539,6 +1539,7 @@ for (const [scenario, title] of Object.entries(lostAnswers) as [
     } else if (scenario === "nothing") {
       await expect.poll(composer.fixture.uploadStarted).toBe(2);
       await expect.poll(composer.fixture.uploaded).toBe(1);
+      expect(composer.fixture.uploadStarted()).toBe(2);
     } else {
       await expect.poll(composer.fixture.uploadStarted).toBe(2);
       const fix = editStatus.locator("button[data-fix]");
