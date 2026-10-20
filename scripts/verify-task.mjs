@@ -100,6 +100,14 @@ export function scriptTests(root = process.cwd()) {
     .filter((file) => /^[a-z-]+\.test\.mjs$/u.test(file))
     .sort()
     .map((file) => `scripts/${file}`);
+  const analytics = join(root, "scripts/analytics");
+  if (existsSync(analytics))
+    files.push(
+      ...readdirSync(analytics)
+        .filter((file) => /^[a-z-]+\.test\.mjs$/u.test(file))
+        .sort()
+        .map((file) => `scripts/analytics/${file}`),
+    );
   if (files.length === 0)
     throw new Error("No script tests found under scripts/");
   return files;

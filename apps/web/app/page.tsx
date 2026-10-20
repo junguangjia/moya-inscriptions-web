@@ -12,6 +12,7 @@ import { ProductApplication } from "../features/product-application/product-appl
 import { readFormalRequestContext } from "./formal-request-context";
 import { readVisitorAccess } from "./product-access";
 import { wideScreenBrowseOnlyHint } from "./wide-screen-browse-only";
+import { ProductAnalytics } from "../features/analytics/product-analytics";
 
 export default async function FormalPage({
   searchParams,
@@ -60,7 +61,17 @@ export default async function FormalPage({
         initialPlatform={initialPlatform}
         initialTopicId={initialTopicId}
         navigationAction={<CatalogSearchNavigationAction />}
-        productUtility={<CatalogSearch />}
+        productUtility={
+          <>
+            <CatalogSearch />
+            <ProductAnalytics
+              enabled={
+                process.env.NODE_ENV === "production" &&
+                process.env.NEXT_PUBLIC_MOYA_ANALYTICS_ENABLED === "true"
+              }
+            />
+          </>
+        }
         states={states}
       />
     </CatalogSearchProvider>

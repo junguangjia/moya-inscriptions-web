@@ -297,7 +297,10 @@ const ScopedDiscoveryFeed = ({
     script: "书体",
   } as const;
   return (
-    <section aria-label={kind === "all" ? "发现内容" : "碑刻筛选结果"}>
+    <section
+      aria-label={kind === "all" ? "发现内容" : "碑刻筛选结果"}
+      data-analytics-sequence={snapshot.cursor?.sequence}
+    >
       {INSCRIPTION_FILTER_ENABLED && kind === "inscription" && (
         <details data-inscription-filter="">
           <summary className="phase4-button">筛选碑刻</summary>

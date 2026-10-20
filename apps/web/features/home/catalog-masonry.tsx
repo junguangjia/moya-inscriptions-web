@@ -266,6 +266,7 @@ export const CatalogMasonry = <T,>({
             }}
             className={styles.masonryItem}
             data-home-masonry-item=""
+            data-analytics-position={index + 1}
             data-home-masonry-span={spansAll ? "full" : undefined}
             role="presentation"
             style={style}

@@ -409,6 +409,7 @@ describe("profile media renditions migration on a dedicated synthetic database",
       expect(await runCommunityMigrations(pool, migrationsDirectory)).toEqual([
         PROFILE_MIGRATION,
         "20261016010000",
+        "20261019010000",
         "20261020010000",
       ]);
       await verifyCommunityMigrationLedger(pool);

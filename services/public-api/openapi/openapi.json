@@ -1,6 +1,127 @@
 {
   "components": {
     "schemas": {
+      "AnalyticsBatch": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "dwellMs": {
+                  "maximum": 86400000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "eventId": {
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                  "type": "string"
+                },
+                "name": {
+                  "enum": [
+                    "page_view",
+                    "content_impression",
+                    "content_open",
+                    "content_dwell",
+                    "search",
+                    "search_click",
+                    "like",
+                    "favorite",
+                    "follow"
+                  ],
+                  "type": "string"
+                },
+                "occurredAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "position": {
+                  "maximum": 10000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rankingVersion": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "requestId": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "searchQuery": {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                "sequenceId": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "surface": {
+                  "enum": [
+                    "home",
+                    "browse",
+                    "search",
+                    "detail",
+                    "profile",
+                    "thread",
+                    "other"
+                  ],
+                  "type": "string"
+                },
+                "targetId": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                },
+                "targetType": {
+                  "enum": ["catalog", "work", "article", "profile"],
+                  "type": "string"
+                }
+              },
+              "required": ["eventId", "name", "surface", "occurredAt"],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "sessionId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "visitorId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          }
+        },
+        "required": ["visitorId", "sessionId", "events"],
+        "type": "object"
+      },
+      "AnalyticsBatchResult": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "maximum": 20,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excluded": {
+            "type": "boolean"
+          }
+        },
+        "required": ["accepted", "excluded"],
+        "type": "object"
+      },
       "ApiError": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -31373,6 +31494,12 @@
       }
     },
     "securitySchemes": {
+      "analyticsRelay": {
+        "description": "Dedicated server-only relay admission marker; grants neither user nor Owner identity. Never sent to browser code.",
+        "in": "header",
+        "name": "X-Moya-Analytics-Relay",
+        "type": "apiKey"
+      },
       "session": {
         "description": "Opaque Backend-issued session credential; never a JWT and never readable by browser JavaScript.",
         "scheme": "bearer",
@@ -31425,6 +31552,52 @@
           }
         },
         "summary": "Operational readiness"
+      }
+    },
+    "/v1/analytics/events": {
+      "post": {
+        "description": "Called by the same-origin Web relay, not directly by browsers. Maximum 20 events and 32768 UTF-8 bytes; no query parameters. Client IP comes only from the independently verified ingress/relay and optional user identity from the Backend session. Client-provided IP or user identity fields are rejected. Development and disabled collection store nothing; Owner, configured test accounts and opted-out devices are excluded before persistence. This endpoint serves no product content and is independently admitted in closed-beta mode.",
+        "operationId": "collectProductAnalyticsBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyticsBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsBatchResult"
+                }
+              }
+            },
+            "description": "Accepted or excluded without storing events."
+          },
+          "400": {
+            "description": "Invalid envelope, timestamp, query or body size."
+          },
+          "401": {
+            "description": "Untrusted analytics relay."
+          },
+          "405": {
+            "description": "Only POST is supported."
+          },
+          "500": {
+            "description": "Storage temporarily unavailable; the browser uses bounded retries."
+          }
+        },
+        "security": [
+          {
+            "analyticsRelay": []
+          }
+        ],
+        "summary": "Bounded first-party product events through the trusted Web relay"
       }
     },
     "/v1/catalog": {

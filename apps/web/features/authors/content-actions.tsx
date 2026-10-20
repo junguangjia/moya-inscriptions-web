@@ -16,6 +16,7 @@ import { FeedPostActions } from "../quick-actions/feed-post-actions";
 import { useDetailInteractions } from "../detail/detail-interactions";
 import type { QuickActionName } from "../quick-actions/quick-action-types";
 import styles from "./content-actions.module.css";
+import { trackContentAction } from "../analytics/client";
 
 const unknownState = (key: string) => ({
   key,
@@ -124,6 +125,8 @@ export const useContentActions = (
       const saved = await (action === "favorite"
         ? author.favorite(target, value)
         : author.like(target, value));
+      if (saved && value && scope.current === run)
+        trackContentAction(action, target);
       if (saved && scope.current === run)
         setSnapshot((old) =>
           old.key === run ? { ...old, [field]: value } : old,

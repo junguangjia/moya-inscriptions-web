@@ -1,0 +1,2084 @@
+--- a/public/intl/messages/zh-CN.json
++++ b/public/intl/messages/zh-CN.json
+@@ -33,7 +33,7 @@
+     "boards": "看板",
+     "board-type": "板型",
+     "bounce-rate": "跳出率",
+-    "breakdown": "故障",
++    "breakdown": "分项分析",
+     "browser": "浏览器",
+     "browsers": "浏览器",
+     "campaign": "推广活动",
+@@ -44,12 +44,12 @@
+     "channel": "渠道",
+     "channels": "渠道",
+     "chart": "图表",
+-    "cities": "市/县",
+-    "city": "市/县",
++    "cities": "城市",
++    "city": "城市",
+     "clear-all": "清除全部",
+-    "cls": "CLS",
+-    "cohort": "队列",
+-    "cohorts": "队列",
++    "cls": "累计布局偏移",
++    "cohort": "同期用户群",
++    "cohorts": "同期用户群",
+     "compare": "比较",
+     "compare-dates": "比较日期",
+     "confirm": "确认",
+@@ -118,12 +118,12 @@
+     "event-data": "事件数据",
+     "event-properties": "事件数据",
+     "event-name": "事件名称",
+-    "events": "行为类别",
++    "events": "事件",
+     "exclude-bounce": "排除跳出",
+     "exists": "存在",
+     "exit": "退出 URL",
+     "false": "否",
+-    "fcp": "FCP",
++    "fcp": "首次内容绘制",
+     "field": "字段",
+     "fields": "字段",
+     "filter": "筛选器",
+@@ -155,7 +155,7 @@
+     "insight": "洞察",
+     "insights": "见解",
+     "insights-description": "通过使用筛选器和划分时间段来更深入地研究数据。",
+-    "inp": "INP",
++    "inp": "交互响应延迟",
+     "invalid-url": "无效URL",
+     "is": "等于",
+     "is-false": "否",
+@@ -176,7 +176,7 @@
+     "last-hours": "最近 {x} 小时",
+     "last-months": "最近 {x} 个月",
+     "last-seen": "最后出现",
+-    "lcp": "LCP",
++    "lcp": "最大内容绘制",
+     "leave": "离开",
+     "leave-team": "离开团队",
+     "less-than": "少于",
+@@ -185,7 +185,7 @@
+     "links": "链接",
+     "location": "位置",
+     "login": "登录",
+-    "llm": "LLM",
++    "llm": "大语言模型",
+     "logout": "退出",
+     "manage": "管理",
+     "manager": "管理者",
+@@ -260,14 +260,14 @@
+     "referrers": "来源域名",
+     "refresh": "刷新",
+     "regenerate": "重新生成",
+-    "region": "州/省",
+-    "regions": "州/省",
++    "region": "省份",
++    "regions": "省份",
+     "remaining": "剩余",
+     "remove": "移除",
+     "remove-member": "移除成员",
+     "play": "播放",
+     "replay": "回放",
+-    "replay-id": "Replay ID",
++    "replay-id": "回放标识",
+     "recorder-code": "记录器代码",
+     "replay-enabled": "回放已启用",
+     "replays": "回放",
+@@ -309,7 +309,7 @@
+     "share": "分享",
+     "share-url": "共享链接",
+     "single-day": "单日",
+-    "slug": "Slug",
++    "slug": "短链接标识",
+     "sms": "短信",
+     "source": "来源",
+     "sources": "来源",
+@@ -352,13 +352,13 @@
+     "transfer": "转移",
+     "transfer-website": "转移网站",
+     "true": "是",
+-    "ttfb": "TTFB",
++    "ttfb": "首字节响应时间",
+     "type": "类型",
+     "unique": "独立",
+     "unique-events": "独立事件",
+     "unique-visitors": "独立访客",
+-    "aov": "AOV",
+-    "arpu": "ARPU",
++    "aov": "平均订单金额",
++    "arpu": "每用户平均收入",
+     "uniqueCustomers": "独特客户",
+     "customers": "客户",
+     "orders": "订单",
+@@ -367,11 +367,11 @@
+     "untitled": "未命名",
+     "upgrade": "升级",
+     "update": "更新",
+-    "url": "URL",
++    "url": "网址",
+     "user": "用户",
+     "username": "用户名",
+     "users": "用户",
+-    "utm": "UTM",
++    "utm": "推广参数",
+     "utm-campaign": "UTM 推广活动",
+     "utm-content": "UTM 内容",
+     "utm-description": "通过 UTM 参数追踪您的广告活动。",
+@@ -422,7 +422,16 @@
+     "two-factor-reset": "重置2FA",
+     "two-factor-global-active-tooltip": "全局 2FA 已启用",
+     "two-factor-verify": "验证",
+-    "two-factor-login": "双因素身份验证"
++    "two-factor-login": "双因素身份验证",
++    "add-note": "添加备注",
++    "note": "备注",
++    "notes": "备注",
++    "api-keys": "接口密钥",
++    "last-used": "最近使用",
++    "never": "从未",
++    "copy": "复制",
++    "authorize": "授权",
++    "deny": "拒绝"
+   },
+   "message": {
+     "action-confirmation": "请在下方输入框中输入 {confirmation} 以确认操作。",
+@@ -507,6 +516,9 @@
+     "two-factor-error-no-pending-setup": "未找到待处理的双因素身份验证设置。",
+     "two-factor-locked-message": "失败的尝试太多了。请在 {time} 处重试。",
+     "two-factor-active-description": "您的帐户受到双因素身份验证的保护。每次登录都需要来自身份验证器应用程序的代码。",
+-    "two-factor-error-not-configured": "由于服务器缺少有效的 TWO_FACTOR_ENCRYPTION_KEY，双重身份验证不可用。请联系管理员获取帮助。"
++    "two-factor-error-not-configured": "由于服务器缺少有效的 TWO_FACTOR_ENCRYPTION_KEY，双重身份验证不可用。请联系管理员获取帮助。",
++    "max-length": "最多 {n} 个字符",
++    "api-key-created": "请立即复制接口密钥，关闭后将无法再次查看。",
++    "no-api-keys": "你尚未创建接口密钥。"
+   }
+ }
+--- a/src/app/(main)/App.tsx
++++ b/src/app/(main)/App.tsx
+@@ -41,7 +41,7 @@
+   }, [teamId, teamError, router]);
+ 
+   if (isLoading || !config || (teamId && isTeamLoading)) {
+-    return <Loading placement="absolute" />;
++    return <Loading aria-label="加载中" placement="absolute" />;
+   }
+ 
+   if (error) {
+--- a/src/app/(main)/boards/BoardCloneButton.tsx
++++ b/src/app/(main)/boards/BoardCloneButton.tsx
+@@ -20,9 +20,9 @@
+   return (
+     <DialogButton
+       icon={<Copy />}
+-      label={showLabel ? 'Clone' : undefined}
+-      title="Clone board"
+-      aria-label="Clone"
++      label={showLabel ? '复制' : undefined}
++      title="复制看板"
++      aria-label="复制看板"
+       variant={showLabel ? undefined : 'quiet'}
+       width="600px"
+     >
+--- a/src/app/(main)/boards/BoardCloneForm.tsx
++++ b/src/app/(main)/boards/BoardCloneForm.tsx
+@@ -156,7 +156,7 @@
+                   {t(labels.cancel)}
+                 </Button>
+               )}
+-              <FormSubmitButton isDisabled={isPending}>Clone</FormSubmitButton>
++              <FormSubmitButton isDisabled={isPending}>复制</FormSubmitButton>
+             </Row>
+           </>
+         );
+--- a/src/app/(main)/boards/BoardProvider.tsx
++++ b/src/app/(main)/boards/BoardProvider.tsx
+@@ -142,7 +142,7 @@
+   }, [mutateAsync, toast, t, labels.untitled, messages.saved, touch, router, renderUrl]);
+ 
+   if (boardId && isFetching && isLoading) {
+-    return <Loading placement="absolute" />;
++    return <Loading aria-label="加载中" placement="absolute" />;
+   }
+ 
+   return (
+--- a/src/app/(main)/boards/[boardId]/BoardComponentRenderer.tsx
++++ b/src/app/(main)/boards/[boardId]/BoardComponentRenderer.tsx
+@@ -19,7 +19,7 @@
+   if (!definition) {
+     return (
+       <Column alignItems="center" justifyContent="center" width="100%" height="100%">
+-        <Text color="muted">Unknown component: {config.type}</Text>
++        <Text color="muted">未知组件： {config.type}</Text>
+       </Column>
+     );
+   }
+@@ -30,7 +30,7 @@
+   if (!websiteId && definition.requiresWebsite !== false) {
+     return (
+       <Column alignItems="center" justifyContent="center" width="100%" height="100%">
+-        <Text color="muted">Select a website</Text>
++        <Text color="muted">请选择网站</Text>
+       </Column>
+     );
+   }
+--- a/src/app/(main)/boards/[boardId]/BoardViewColumn.tsx
++++ b/src/app/(main)/boards/[boardId]/BoardViewColumn.tsx
+@@ -48,7 +48,7 @@
+         <Column width="100%" flexGrow={1} style={{ minHeight: 0 }}>
+           {!isLoading &&
+             (isUnavailable ? (
+-              <Empty message="Selected item is no longer available." />
++              <Empty message="所选项目已不可用。" />
+             ) : (
+               <BoardComponentRenderer
+                 config={component}
+--- a/src/app/(main)/dashboard/DashboardProvider.tsx
++++ b/src/app/(main)/dashboard/DashboardProvider.tsx
+@@ -100,7 +100,7 @@
+   }, [board, labels.dashboard, messages.saved, mutateAsync, t, toast, touch]);
+ 
+   if (isFetching && isLoading) {
+-    return <Loading placement="absolute" />;
++    return <Loading aria-label="加载中" placement="absolute" />;
+   }
+ 
+   return (
+--- a/src/app/(main)/settings/preferences/LanguageSetting.tsx
++++ b/src/app/(main)/settings/preferences/LanguageSetting.tsx
+@@ -8,14 +8,7 @@
+   const [search, setSearch] = useState('');
+   const { t, labels } = useMessages();
+   const { locale, saveLocale } = useLocale();
+-  const items = search
+-    ? Object.keys(languages).filter(n => {
+-        return (
+-          n.toLowerCase().includes(search.toLowerCase()) ||
+-          languages[n].label.toLowerCase().includes(search.toLowerCase())
+-        );
+-      })
+-    : Object.keys(languages);
++  const items = ['zh-CN'].filter(value => !search || languages[value].label.includes(search));
+ 
+   const handleReset = () => saveLocale(DEFAULT_LOCALE);
+ 
+--- a/src/app/(main)/teams/TeamProvider.tsx
++++ b/src/app/(main)/teams/TeamProvider.tsx
+@@ -10,7 +10,7 @@
+   const { data: team, isLoading, isFetching } = useTeamQuery(teamId);
+ 
+   if (isFetching && isLoading) {
+-    return <Loading placement="absolute" />;
++    return <Loading aria-label="加载中" placement="absolute" />;
+   }
+ 
+   if (!team) {
+--- a/src/app/(main)/websites/WebsiteProvider.tsx
++++ b/src/app/(main)/websites/WebsiteProvider.tsx
+@@ -16,7 +16,7 @@
+   const { data: website, isFetching, isLoading } = useWebsiteQuery(websiteId);
+ 
+   if (isFetching && isLoading) {
+-    return <Loading placement="absolute" />;
++    return <Loading aria-label="加载中" placement="absolute" />;
+   }
+ 
+   if (!website) {
+--- a/src/app/(main)/websites/[websiteId]/(reports)/funnels/BoardFunnel.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/funnels/BoardFunnel.tsx
+@@ -24,13 +24,13 @@
+       <EmptyPlaceholder
+         {...(isPreview
+           ? {
+-              title: 'Select a funnel',
+-              description: 'Choose a saved funnel to preview.',
++              title: '请选择漏斗',
++              description: '选择已保存的漏斗以预览。',
+             }
+           : {
+               icon: <Link2Off />,
+-              title: 'Reconnect funnel',
+-              description: 'Choose a funnel for this website.',
++              title: '重新关联漏斗',
++              description: '为此网站选择漏斗。',
+             })}
+       />
+     );
+@@ -39,8 +39,8 @@
+   if (data && (data.type !== 'funnel' || data.websiteId !== websiteId)) {
+     return (
+       <EmptyPlaceholder
+-        title="Funnel unavailable"
+-        description="This saved funnel is no longer available for the selected website."
++        title="漏斗不可用"
++        description="此漏斗已不适用于所选网站。"
+       />
+     );
+   }
+@@ -57,7 +57,7 @@
+           allowEdit={false}
+         />
+       ) : (
+-        <Text color="muted">Funnel unavailable</Text>
++        <Text color="muted">漏斗不可用</Text>
+       )}
+     </LoadingPanel>
+   );
+--- a/src/app/(main)/websites/[websiteId]/(reports)/funnels/Funnel.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/funnels/Funnel.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { Box, Column, Grid, Icon, ProgressBar, Row, Text } from '@umami/react-zen';
+ import { LoadingPanel } from '@/components/common/LoadingPanel';
+ import { useFunnelQuery, useMessages, useNavigation, useOperatorLabels } from '@/components/hooks';
+@@ -100,7 +101,7 @@
+                     <Column gap="1">
+                       <Row alignItems="center" gap>
+                         <Icon>{type === 'path' ? <File /> : <Lightning />}</Icon>
+-                        <Text>{value}</Text>
++                        <Text>{isPage ? value : getChineseEventName(value)}</Text>
+                       </Row>
+                       {filters?.map((f, i) => (
+                         <Row key={i} gap="1" style={{ paddingLeft: 28 }}>
+--- a/src/app/(main)/websites/[websiteId]/(reports)/goals/BoardGoal.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/goals/BoardGoal.tsx
+@@ -25,13 +25,13 @@
+       <EmptyPlaceholder
+         {...(isPreview
+           ? {
+-              title: 'Select a goal',
+-              description: 'Choose a saved goal to preview.',
++              title: '请选择目标',
++              description: '选择已保存的目标以预览。',
+             }
+           : {
+               icon: <Link2Off />,
+-              title: 'Reconnect goal',
+-              description: 'Choose a goal for this website.',
++              title: '重新关联目标',
++              description: '为此网站选择目标。',
+             })}
+       />
+     );
+@@ -40,8 +40,8 @@
+   if (data && (data.type !== 'goal' || data.websiteId !== websiteId)) {
+     return (
+       <EmptyPlaceholder
+-        title="Goal unavailable"
+-        description="This saved goal is no longer available for the selected website."
++        title="目标不可用"
++        description="此目标已不适用于所选网站。"
+       />
+     );
+   }
+@@ -60,7 +60,7 @@
+           allowEdit={false}
+         />
+       ) : (
+-        <Text color="muted">Goal unavailable</Text>
++        <Text color="muted">目标不可用</Text>
+       )}
+     </LoadingPanel>
+   );
+--- a/src/app/(main)/websites/[websiteId]/(reports)/goals/Goal.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/goals/Goal.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { Column, Grid, Icon, ProgressBar, Row, Text } from '@umami/react-zen';
+ import { LoadingPanel } from '@/components/common/LoadingPanel';
+ import { useGoalQuery, useMessages, useNavigation } from '@/components/hooks';
+@@ -80,7 +81,7 @@
+         <Row alignItems="center" justifyContent="space-between" gap>
+           <Row alignItems="center" gap>
+             <Icon>{parameters.type === 'path' ? <File /> : <Lightning />}</Icon>
+-            <Text>{parameters.value}</Text>
++            <Text>{isPage ? parameters.value : getChineseEventName(parameters.value)}</Text>
+           </Row>
+           <Row alignItems="center" gap>
+             <Icon>
+--- a/src/app/(main)/websites/[websiteId]/(reports)/heatmaps/Heatmap.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/heatmaps/Heatmap.tsx
+@@ -143,7 +143,7 @@
+                 Selected page
+               </Text>
+               <Button variant="outline" onPress={() => setIsPagePickerOpen(true)}>
+-                <IconLabel icon={<ListCheck />} label="Pages" />
++                <IconLabel icon={<ListCheck />} label="页面" />
+               </Button>
+             </Row>
+             {selectedPage && (
+@@ -189,7 +189,7 @@
+               placement="fullscreen"
+             >
+               <Dialog
+-                title="Pages"
++                title="页面"
+                 style={{
+                   width: '100%',
+                   height: '100%',
+@@ -276,9 +276,9 @@
+ 
+   return (
+     <Column className={styles.pageList} gap="1">
+-      {showHeading && <Heading size="lg">Pages</Heading>}
++      {showHeading && <Heading size="lg">页面</Heading>}
+       <Column className={styles.pageListItems} gap="2">
+-        {pages.length === 0 && hasSearch && <Text color="muted">No matching pages</Text>}
++        {pages.length === 0 && hasSearch && <Text color="muted">没有匹配的页面</Text>}
+         {pages.map(page => (
+           <button
+             key={page.urlPath}
+@@ -575,7 +575,7 @@
+         Screen width:
+       </Text>
+       <Select
+-        aria-label="Screen width"
++        aria-label="屏幕宽度"
+         value={value}
+         onChange={nextValue => onChange(Number(nextValue))}
+         maxHeight={420}
+@@ -1057,7 +1057,7 @@
+ function CanvasLoading() {
+   return (
+     <div className={styles.canvasLoading}>
+-      <Loading icon="dots" placement="center" />
++      <Loading aria-label="加载中" icon="dots" placement="center" />
+     </div>
+   );
+ }
+@@ -1065,7 +1065,7 @@
+ function EmptyState({ message }: { message?: string } = {}) {
+   return (
+     <Column alignItems="center" justifyContent="center" minHeight="360px" gap>
+-      {!message && <Heading size="lg">Select a page</Heading>}
++      {!message && <Heading size="lg">请选择页面</Heading>}
+       <Text color="muted">{message ?? 'Choose a page from the list to view its heatmap.'}</Text>
+     </Column>
+   );
+--- a/src/app/(main)/websites/[websiteId]/(reports)/heatmaps/HeatmapsPage.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/heatmaps/HeatmapsPage.tsx
+@@ -28,7 +28,7 @@
+   ];
+ 
+   if (isLoading) {
+-    return <Loading placement="absolute" />;
++    return <Loading aria-label="加载中" placement="absolute" />;
+   }
+ 
+   if (cloudMode && !hasFeature('replays')) {
+@@ -70,7 +70,7 @@
+                   <SearchField
+                     value={search}
+                     onSearch={setSearch}
+-                    placeholder="Search"
++                    placeholder="搜索"
+                     className="w-full max-w-md"
+                   />
+                 </Row>
+@@ -87,7 +87,7 @@
+                 <SearchField
+                   value={search}
+                   onSearch={setSearch}
+-                  placeholder="Search"
++                  placeholder="搜索"
+                   className="w-full max-w-md"
+                 />
+                 <FilterButtons
+--- a/src/app/(main)/websites/[websiteId]/(reports)/performance/Performance.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/performance/Performance.tsx
+@@ -150,7 +150,7 @@
+     <Column gap>
+       <Grid columns="280px" gap>
+         <Select
+-          label="Percentile"
++          label="百分位数"
+           value={selectedPercentile}
+           onChange={value => setSelectedPercentile(value as 'p50' | 'p75' | 'p95')}
+         >
+--- a/src/app/(main)/websites/[websiteId]/(reports)/retention/Retention.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/retention/Retention.tsx
+@@ -77,7 +77,7 @@
+                 {days.map(n => (
+                   <Column key={n}>
+                     <Text weight="bold" align="center" wrap="nowrap">
+-                      {t(labels.day)} {n}
++                      第 {n} 天
+                     </Text>
+                   </Column>
+                 ))}
+--- a/src/app/(main)/websites/[websiteId]/(reports)/revenue/RevenueMetricsBar.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/revenue/RevenueMetricsBar.tsx
+@@ -35,7 +35,7 @@
+       label: t(labels.aov),
+       tooltip: (
+         <>
+-          <div>Average Order Value</div>
++          <div>平均订单金额</div>
+           <div>(Total Revenue / Orders)</div>
+         </>
+       ),
+@@ -47,7 +47,7 @@
+       label: t(labels.arpu),
+       tooltip: (
+         <>
+-          <div>Average Revenue Per User</div>
++          <div>每用户平均收入</div>
+           <div>(Total Revenue / All Sessions)</div>
+         </>
+       ),
+--- a/src/app/(main)/websites/[websiteId]/events/EventProperties.tsx
++++ b/src/app/(main)/websites/[websiteId]/events/EventProperties.tsx
+@@ -1,4 +1,5 @@
+ 'use client';
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { Column, Grid, Label, ListItem, Row, Select } from '@umami/react-zen';
+ import { useEffect, useMemo, useState } from 'react';
+ import { ComboBox } from '@/components/common/ComboBox';
+@@ -68,7 +69,7 @@
+ 
+     const normalizedSearch = eventSearch.toLowerCase();
+ 
+-    return eventNames.filter(name => name.toLowerCase().includes(normalizedSearch));
++    return eventNames.filter(name => name.toLowerCase().includes(normalizedSearch) || getChineseEventName(name).includes(normalizedSearch));
+   }, [eventNames, eventSearch]);
+ 
+   const handleEventChange = (value: string) => {
+@@ -123,7 +124,7 @@
+                 >
+                   {filteredEventNames.map(name => (
+                     <ListItem key={name} id={name}>
+-                      {name}
++                      {getChineseEventName(name)}
+                     </ListItem>
+                   ))}
+                 </Select>
+--- a/src/app/(main)/websites/[websiteId]/events/EventsTable.tsx
++++ b/src/app/(main)/websites/[websiteId]/events/EventsTable.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import {
+   Button,
+   DataColumn,
+@@ -55,10 +56,10 @@
+                 <Text
+                   weight="bold"
+                   style={{ maxWidth: '300px' }}
+-                  title={row.eventName || row.urlPath}
++                  title={row.eventName ? getChineseEventName(row.eventName) : row.urlPath}
+                   truncate
+                 >
+-                  {row.eventName || renderLink(row.urlPath, row.hostname)}
++                  {row.eventName ? getChineseEventName(row.eventName) : renderLink(row.urlPath, row.hostname)}
+                 </Text>
+                 {row.hasData > 0 && <PropertiesButton websiteId={row.websiteId} eventId={row.id} />}
+               </Row>
+@@ -78,7 +79,7 @@
+       <DataColumn id="location" label={t(labels.location)}>
+         {(row: any) => (
+           <TypeIcon type="country" value={row.country}>
+-            {row.city ? `${row.city}, ` : ''} {formatValue(row.country, 'country')}
++            {row.city ? formatValue(row.city, 'city', row) : formatValue(row.country, 'country')}
+           </TypeIcon>
+         )}
+       </DataColumn>
+--- a/src/app/(main)/websites/[websiteId]/realtime/RealtimeLog.tsx
++++ b/src/app/(main)/websites/[websiteId]/realtime/RealtimeLog.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { Column, Heading, Row, SearchField, Text } from '@umami/react-zen';
+ import { useMemo, useState } from 'react';
+ import { List, type RowComponentProps } from 'react-window';
+@@ -83,7 +84,7 @@
+ 
+     if (__type === TYPE_EVENT) {
+       return t.rich(messages.eventLog, {
+-        event: eventName || t(labels.unknown),
++        event: eventName ? getChineseEventName(eventName) : t(labels.unknown),
+         url: urlPath,
+         b: chunks => <b>{chunks}</b>,
+         a: chunks => (
+@@ -153,6 +154,7 @@
+       logs = logs.filter(({ eventName, urlPath, browser, os, country, device }) => {
+         return [
+           eventName,
++          getChineseEventName(eventName),
+           urlPath,
+           os,
+           formatValue(browser, 'browser'),
+--- a/src/app/(main)/websites/[websiteId]/replays/ReplaysPage.tsx
++++ b/src/app/(main)/websites/[websiteId]/replays/ReplaysPage.tsx
+@@ -26,7 +26,7 @@
+   };
+ 
+   if (isLoading) {
+-    return <Loading placement="absolute" />;
++    return <Loading aria-label="加载中" placement="absolute" />;
+   }
+ 
+   if (cloudMode && !hasFeature('replays')) {
+--- a/src/app/(main)/websites/[websiteId]/session-data/SessionDataPivotTable.tsx
++++ b/src/app/(main)/websites/[websiteId]/session-data/SessionDataPivotTable.tsx
+@@ -101,7 +101,7 @@
+           {(row: any) => renderTruncatedText(row[key] ?? '')}
+         </DataColumn>
+       ))}
+-      <DataColumn id="distinctId" label="Distinct ID" width="220px">
++      <DataColumn id="distinctId" label="用户标识" width="220px">
+         {(row: any) => renderTruncatedText(row.distinctId || '')}
+       </DataColumn>
+       <DataColumn id="createdAt" label={t(labels.created)} width="180px">
+--- a/src/app/(main)/websites/[websiteId]/sessions/SessionActivity.tsx
++++ b/src/app/(main)/websites/[websiteId]/sessions/SessionActivity.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import {
+   Button,
+   Column,
+@@ -75,7 +76,7 @@
+                     {eventName ? t(labels.triggeredEvent) : t(labels.viewedPage)}
+                   </Text>
+                   <Text weight="bold" style={{ maxWidth: isMobile ? '400px' : null }} truncate>
+-                    {eventName || renderLink(urlPath, hostname)}
++                    {eventName ? getChineseEventName(eventName) : renderLink(urlPath, hostname)}
+                   </Text>
+                   {hasData > 0 && <PropertiesButton websiteId={websiteId} eventId={eventId} />}
+                 </Row>
+--- a/src/app/(main)/websites/[websiteId]/sessions/SessionInfo.tsx
++++ b/src/app/(main)/websites/[websiteId]/sessions/SessionInfo.tsx
+@@ -13,7 +13,7 @@
+   const { getRegionName } = useRegionNames(locale);
+   const distinctId =
+     data?.distinctIds?.length > 1
+-      ? `${data.distinctIds.length} linked IDs`
++      ? `${data.distinctIds.length} 个关联标识`
+       : data?.distinctId?.trim();
+   const stitchedSessionCount = data?.stitchedSessionCount;
+ 
+@@ -40,7 +40,7 @@
+       </Info>
+ 
+       <Info label={t(labels.city)} icon={<Landmark />}>
+-        {data?.city}
++        {formatValue(data?.city, 'city', data)}
+       </Info>
+ 
+       <Info label={t(labels.browser)} icon={<TypeIcon type="browser" value={data?.browser} />}>
+@@ -59,7 +59,7 @@
+       </Info>
+ 
+       {distinctId && stitchedSessionCount > 1 && (
+-        <Info label="Linked sessions" icon={<Network />}>
++        <Info label="关联会话" icon={<Network />}>
+           {stitchedSessionCount}
+         </Info>
+       )}
+--- a/src/app/layout.tsx
++++ b/src/app/layout.tsx
+@@ -23,7 +23,7 @@
+   }
+ 
+   return (
+-    <html lang="en" className={`${inter.className} ${inter.variable}`}>
++    <html lang="zh-CN" className={`${inter.className} ${inter.variable}`}>
+       <head>
+         <link rel="icon" href="/favicon.ico" />
+         <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+--- a/src/components/charts/BarChart.tsx
++++ b/src/components/charts/BarChart.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { useTheme } from '@umami/react-zen';
+ import { memo, useCallback, useMemo, useState } from 'react';
+ import { Chart, type ChartProps } from '@/components/charts/Chart';
+@@ -128,7 +129,7 @@
+             color: labelColors?.[0]?.borderColor || labelColors?.[0]?.backgroundColor,
+             value: currency
+               ? formatLongCurrency(dataPoints[0].raw.y, currency)
+-              : `${formatLongNumber(dataPoints[0].raw.y)} ${dataPoints[0].dataset.label}`,
++              : `${formatLongNumber(dataPoints[0].raw.y)} ${getChineseEventName(dataPoints[0].dataset.label)}`,
+           }
+         : null;
+ 
+--- a/src/components/charts/BubbleChart.tsx
++++ b/src/components/charts/BubbleChart.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { useState } from 'react';
+ import { Chart, type ChartProps } from '@/components/charts/Chart';
+ import { ChartTooltip } from '@/components/charts/ChartTooltip';
+@@ -16,7 +17,7 @@
+       opacity
+         ? {
+             color: labelColors?.[0]?.backgroundColor,
+-            value: `${title}: ${dataPoints[0].raw}`,
++            value: `${getChineseEventName(String(title))}：${dataPoints[0].raw}`,
+           }
+         : null,
+     );
+--- a/src/components/charts/DistributionBarChart.tsx
++++ b/src/components/charts/DistributionBarChart.tsx
+@@ -1,4 +1,5 @@
+ 'use client';
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { useTheme } from '@umami/react-zen';
+ import { memo, useCallback, useMemo, useState } from 'react';
+ import { Chart } from '@/components/charts/Chart';
+@@ -100,7 +101,7 @@
+             maxRotation: horizontal ? undefined : 0,
+             callback: horizontal
+               ? (tickValue: string | number) => renderNumberLabels(String(tickValue))
+-              : (tickValue: string | number) => chartData.labels?.[Number(tickValue)] || '',
++              : (tickValue: string | number) => getChineseEventName(chartData.labels?.[Number(tickValue)] || ''),
+           },
+         },
+         y: {
+@@ -118,7 +119,7 @@
+           ticks: {
+             color: colors.chart.text,
+             callback: horizontal
+-              ? (tickValue: string | number) => chartData.labels?.[Number(tickValue)] || ''
++              ? (tickValue: string | number) => getChineseEventName(chartData.labels?.[Number(tickValue)] || '')
+               : (tickValue: string | number) => renderNumberLabels(String(tickValue)),
+           },
+         },
+@@ -133,7 +134,7 @@
+       const point = dataPoints?.[0];
+       const nextTooltip = opacity
+         ? {
+-            title: (point?.label ?? '').toString(),
++            title: getChineseEventName((point?.label ?? '').toString()),
+             color: labelColors?.[0]?.backgroundColor,
+             value: `${formatLongNumber(
+               Number(
+@@ -141,7 +142,7 @@
+                   ? (point?.raw?.x ?? point?.raw ?? 0)
+                   : (point?.raw?.y ?? point?.raw ?? 0),
+               ),
+-            )}${point?.dataset?.label ? ` ${point.dataset.label}` : ''}`,
++            )}${point?.dataset?.label ? ` ${getChineseEventName(point.dataset.label)}` : ''}`,
+           }
+         : null;
+ 
+--- a/src/components/charts/PieChart.tsx
++++ b/src/components/charts/PieChart.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { useState } from 'react';
+ import { Chart, type ChartProps } from '@/components/charts/Chart';
+ import { ChartTooltip } from '@/components/charts/ChartTooltip';
+@@ -16,7 +17,7 @@
+       opacity
+         ? {
+             color: labelColors?.[0]?.backgroundColor,
+-            value: `${title}: ${dataPoints[0].raw}`,
++            value: `${getChineseEventName(String(title))}：${dataPoints[0].raw}`,
+           }
+         : null,
+     );
+--- a/src/components/common/ErrorBoundary.tsx
++++ b/src/components/common/ErrorBoundary.tsx
+@@ -11,7 +11,7 @@
+ export function ErrorBoundary({ children }: { children: ReactNode }) {
+   const { t, messages } = useMessages();
+ 
+-  const fallbackRender = ({ error, resetErrorBoundary }) => {
++  const fallbackRender = ({ resetErrorBoundary }) => {
+     return (
+       <Column
+         role="alert"
+@@ -23,9 +23,7 @@
+         alignItems="center"
+       >
+         <h1>{t(messages.error)}</h1>
+-        <h3>{error.message}</h3>
+-        <pre>{error.stack}</pre>
+-        <Button onClick={resetErrorBoundary}>OK</Button>
++        <Button onClick={resetErrorBoundary}>确定</Button>
+       </Column>
+     );
+   };
+--- a/src/components/common/FilterRecord.tsx
++++ b/src/components/common/FilterRecord.tsx
+@@ -113,7 +113,7 @@
+               renderValue={values =>
+                 values.length > 0 ? values.map(v => formatValue(v, type)).join(', ') : undefined
+               }
+-              renderEmptyState={() => (isLoading ? <Loading icon="dots" /> : <Empty />)}
++              renderEmptyState={() => (isLoading ? <Loading aria-label="加载中" icon="dots" /> : <Empty />)}
+               allowSearch
+             >
+               {items.map(({ value }) => (
+--- a/src/components/common/LoadingPanel.tsx
++++ b/src/components/common/LoadingPanel.tsx
+@@ -33,7 +33,7 @@
+   if (isLoading || isFetching) {
+     return (
+       <Column position="relative" height="100%" width="100%" {...props}>
+-        <Loading icon={loadingIcon} placement={loadingPlacement} />
++        <Loading aria-label="加载中" icon={loadingIcon} placement={loadingPlacement} />
+       </Column>
+     );
+   }
+--- a/src/components/common/MultiSelect.tsx
++++ b/src/components/common/MultiSelect.tsx
+@@ -34,7 +34,7 @@
+   onChange,
+   searchValue,
+   onSearch,
+-  placeholder = 'Select an item',
++  placeholder = '请选择项目',
+   allowSearch,
+   renderEmptyState,
+   renderValue,
+@@ -74,6 +74,8 @@
+       >
+         {allowSearch && (
+           <SearchField
++            placeholder="搜索"
++            aria-label="搜索"
+             value={searchValue}
+             onSearch={onSearch}
+             autoFocus
+--- a/src/components/common/PageBody.tsx
++++ b/src/components/common/PageBody.tsx
+@@ -28,7 +28,7 @@
+   }
+ 
+   if (isLoading) {
+-    return <Loading placement="absolute" />;
++    return <Loading aria-label="加载中" placement="absolute" />;
+   }
+ 
+   return (
+--- a/src/components/common/TypeIcon.tsx
++++ b/src/components/common/TypeIcon.tsx
+@@ -10,7 +10,9 @@
+   value: string;
+   children?: ReactNode;
+ }) {
+-  const iconValue = type === 'browser' && value === 'browser' ? 'unknown' : value;
++  const iconValue = type === 'country' && value === 'TW'
++    ? 'CN'
++    : type === 'browser' && value === 'browser' ? 'unknown' : value;
+ 
+   return (
+     <Row gap="3" alignItems="center">
+--- a/src/components/hooks/queries/useWebsiteExpandedMetricsQuery.ts
++++ b/src/components/hooks/queries/useWebsiteExpandedMetricsQuery.ts
+@@ -1,3 +1,7 @@
++import { CHINESE_EVENT_NAMES } from '@/lib/artvenn-labels';
++import { getChineseCityMatches } from '@/lib/artvenn-geography';
++import { useLocale } from '../useLocale';
++import { useRegionNames } from '../useRegionNames';
+ import { keepPreviousData } from '@tanstack/react-query';
+ import type { ReactQueryOptions } from '@/lib/types';
+ import { useApi } from '../useApi';
+@@ -21,6 +25,19 @@
+   const { get, useQuery } = useApi();
+   const { startAt, endAt } = useDateParameters();
+   const filters = useFilterParameters();
++  const { locale } = useLocale();
++  const { regionNames } = useRegionNames(locale);
++  const search = params.search || '';
++  const matches = /[\u3400-\u9fff]/u.test(search)
++    ? params.type === 'city'
++      ? getChineseCityMatches(search)
++      : Object.entries(params.type === 'region' ? regionNames : params.type === 'event' ? CHINESE_EVENT_NAMES : {})
++          .filter(([, label]) => label.includes(search))
++          .map(([value]) => value)
++    : [];
++  const requestParams = matches.length
++    ? { ...filters, ...params, search: undefined, [params.type]: `eq.${matches.slice(0, 5).join(',')}` }
++    : { ...filters, ...params };
+ 
+   return useQuery<WebsiteExpandedMetricsData>({
+     queryKey: [
+@@ -37,8 +54,7 @@
+       get(`/websites/${websiteId}/metrics/expanded`, {
+         startAt,
+         endAt,
+-        ...filters,
+-        ...params,
++        ...requestParams,
+       }),
+     enabled: !!websiteId,
+     placeholderData: keepPreviousData,
+--- a/src/components/hooks/queries/useWebsiteValuesQuery.ts
++++ b/src/components/hooks/queries/useWebsiteValuesQuery.ts
+@@ -1,3 +1,5 @@
++import { CHINESE_EVENT_NAMES } from '@/lib/artvenn-labels';
++import { getChineseCityMatches } from '@/lib/artvenn-geography';
+ import { useCountryNames } from '@/components/hooks/useCountryNames';
+ import { useRegionNames } from '@/components/hooks/useRegionNames';
+ import { useApi } from '../useApi';
+@@ -24,10 +26,12 @@
+   const names = {
+     country: countryNames,
+     region: regionNames,
++    event: CHINESE_EVENT_NAMES,
+   };
+ 
+   const getSearch = (type: string, value: string) => {
+     if (value) {
++      if (type === 'city') return getChineseCityMatches(value).slice(0, 5).join(',') || value;
+       const values = names[type];
+ 
+       if (values) {
+--- a/src/components/hooks/useCountryNames.ts
++++ b/src/components/hooks/useCountryNames.ts
+@@ -1,32 +1,7 @@
+-import { useEffect, useState } from 'react';
+-import { httpGet } from '@/lib/fetch';
+-import enUS from '../../../public/intl/country/en-US.json';
++import zhCN from '../../../public/intl/country/zh-CN.json';
+ 
+-const countryNames = {
+-  'en-US': enUS,
+-};
++const countryNames: Record<string, string> = { ...zhCN, TW: '中国台湾' };
+ 
+-export function useCountryNames(locale: string) {
+-  const [list, setList] = useState(countryNames[locale] || enUS);
+-
+-  async function loadData(locale: string) {
+-    const { data } = await httpGet(`${process.env.basePath || ''}/intl/country/${locale}.json`);
+-
+-    if (data) {
+-      countryNames[locale] = data;
+-      setList(countryNames[locale]);
+-    } else {
+-      setList(enUS);
+-    }
+-  }
+-
+-  useEffect(() => {
+-    if (!countryNames[locale]) {
+-      loadData(locale);
+-    } else {
+-      setList(countryNames[locale]);
+-    }
+-  }, [locale]);
+-
+-  return { countryNames: list };
++export function useCountryNames(_locale: string) {
++  return { countryNames };
+ }
+--- a/src/components/hooks/useFormat.test.ts
++++ b/src/components/hooks/useFormat.test.ts
+@@ -2,16 +2,16 @@
+ import { beforeEach, describe, expect, test, vi } from 'vitest';
+ 
+ const countryNames: Record<string, string> = {
+-  US: 'United States',
+-  GB: 'United Kingdom',
++  US: '美国',
++  GB: '英国',
+ };
+ const languageNames: Record<string, string> = {
+-  en: 'English',
++  en: '英语',
+ };
+ const labels: Record<string, string> = {
+-  unknown: 'Unknown',
+-  mobile: 'Mobile',
+-  desktop: 'Desktop',
++  unknown: '未知',
++  mobile: '移动设备',
++  desktop: '桌面设备',
+ };
+ 
+ vi.mock('./useMessages', () => ({
+@@ -22,7 +22,7 @@
+ }));
+ 
+ vi.mock('./useLocale', () => ({
+-  useLocale: () => ({ locale: 'en-US' }),
++  useLocale: () => ({ locale: 'zh-CN' }),
+ }));
+ 
+ vi.mock('./useCountryNames', () => ({
+@@ -31,6 +31,12 @@
+ 
+ vi.mock('./useLanguageNames', () => ({
+   useLanguageNames: () => ({ languageNames }),
++}));
++
++vi.mock('@/lib/artvenn-geography', () => ({
++  getChineseRegionName: (value: string) => ({ 'US-CA': '加利福尼亚州', 'CN-TW': '台湾省' })[value],
++  getChineseCityName: (value: string, country?: string) =>
++    country === 'US' && value === 'Portland' ? '波特兰' : undefined,
+ }));
+ 
+ import { useFormat } from './useFormat';
+@@ -73,36 +79,36 @@
+   describe('formatDevice', () => {
+     test('translates a known device label', () => {
+       const { formatDevice } = setup();
+-      expect(formatDevice('mobile')).toBe('Mobile');
++      expect(formatDevice('mobile')).toBe('移动设备');
+     });
+ 
+     test('falls back to the unknown label for missing devices', () => {
+       const { formatDevice } = setup();
+-      expect(formatDevice('foo')).toBe('Unknown');
++      expect(formatDevice('foo')).toBe('未知');
+     });
+   });
+ 
+   describe('formatCountry', () => {
+     test('maps a known country code', () => {
+       const { formatCountry } = setup();
+-      expect(formatCountry('US')).toBe('United States');
++      expect(formatCountry('US')).toBe('美国');
+     });
+ 
+     test('returns the original value when unknown', () => {
+       const { formatCountry } = setup();
+-      expect(formatCountry('ZZ')).toBe('ZZ');
++      expect(formatCountry('ZZ')).toBe('未知');
+     });
+   });
+ 
+   describe('formatRegion', () => {
+-    test('formats a known region as "Region, Country"', () => {
++    test('uses the Chinese region display name without changing the lookup key', () => {
+       const { formatRegion } = setup();
+-      expect(formatRegion('US-CA')).toBe('California, United States');
++      expect(formatRegion('US-CA')).toBe('加利福尼亚州');
+     });
+ 
+-    test('returns the original value for an unknown region', () => {
++    test('marks an unknown translated region explicitly', () => {
+       const { formatRegion } = setup();
+-      expect(formatRegion('ZZ-99')).toBe('ZZ-99');
++      expect(formatRegion('ZZ-99')).toBe('暂无中文名称');
+     });
+ 
+     test('handles undefined without throwing', () => {
+@@ -114,30 +120,30 @@
+   describe('formatCity', () => {
+     test('appends the country name when known', () => {
+       const { formatCity } = setup();
+-      expect(formatCity('Portland', 'US')).toBe('Portland, United States');
++      expect(formatCity('Portland', 'US')).toBe('波特兰，美国');
+     });
+ 
+     test('returns just the city when the country is unknown', () => {
+       const { formatCity } = setup();
+-      expect(formatCity('Portland', 'ZZ')).toBe('Portland');
++      expect(formatCity('Portland', 'ZZ')).toBe('暂无中文名称');
+     });
+ 
+     test('returns just the city when no country is provided', () => {
+       const { formatCity } = setup();
+-      expect(formatCity('Portland')).toBe('Portland');
++      expect(formatCity('Portland')).toBe('暂无中文名称');
+     });
+   });
+ 
+   describe('formatLanguage', () => {
+     test('maps the base language subtag', () => {
+       const { formatLanguage } = setup();
+-      expect(formatLanguage('en-US')).toBe('English');
+-      expect(formatLanguage('en')).toBe('English');
++      expect(formatLanguage('en-US')).toBe('英语');
++      expect(formatLanguage('en')).toBe('英语');
+     });
+ 
+     test('returns the original value when unknown', () => {
+       const { formatLanguage } = setup();
+-      expect(formatLanguage('xx-YY')).toBe('xx-YY');
++      expect(formatLanguage('xx-YY')).toBe('未知');
+     });
+   });
+ 
+@@ -146,15 +152,17 @@
+       const { formatValue } = setup();
+       expect(formatValue('Mac OS', 'os')).toBe('macOS');
+       expect(formatValue('chrome', 'browser')).toBe('Chrome');
+-      expect(formatValue('mobile', 'device')).toBe('Mobile');
+-      expect(formatValue('US', 'country')).toBe('United States');
+-      expect(formatValue('US-CA', 'region')).toBe('California, United States');
+-      expect(formatValue('en-US', 'language')).toBe('English');
++      expect(formatValue('mobile', 'device')).toBe('移动设备');
++      expect(formatValue('US', 'country')).toBe('美国');
++      expect(formatValue('US-CA', 'region')).toBe('加利福尼亚州');
++      expect(formatValue('en-US', 'language')).toBe('英语');
++      expect(formatValue('favorite', 'event')).toBe('收藏');
++      expect(formatValue('CN-TW', 'region')).toBe('台湾省');
+     });
+ 
+     test('passes the country from data through for city', () => {
+       const { formatValue } = setup();
+-      expect(formatValue('Portland', 'city', { country: 'US' })).toBe('Portland, United States');
++      expect(formatValue('Portland', 'city', { country: 'US' })).toBe('波特兰，美国');
+     });
+ 
+     test('returns the raw string for unknown types', () => {
+--- a/src/components/hooks/useFormat.ts
++++ b/src/components/hooks/useFormat.ts
+@@ -1,5 +1,6 @@
+ import { BROWSERS, OS_NAMES } from '@/lib/constants';
+-import regions from '../../../public/iso-3166-2.json';
++import { getChineseCityName, getChineseRegionName } from '@/lib/artvenn-geography';
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { useCountryNames } from './useCountryNames';
+ import { useLanguageNames } from './useLanguageNames';
+ import { useLocale } from './useLocale';
+@@ -24,20 +25,21 @@
+   };
+ 
+   const formatCountry = (value: string): string => {
+-    return countryNames[value] || value;
++    return countryNames[value] || t(labels.unknown);
+   };
+ 
+   const formatRegion = (value?: string): string => {
+-    const [country] = value?.split('-') || [];
+-    return regions[value] ? `${regions[value]}, ${countryNames[country]}` : value;
++    return value ? getChineseRegionName(value) || '暂无中文名称' : value;
+   };
+ 
+   const formatCity = (value: string, country?: string): string => {
+-    return countryNames[country] ? `${value}, ${countryNames[country]}` : value;
++    if (!value) return value;
++    const city = getChineseCityName(value, country) || '暂无中文名称';
++    return countryNames[country] ? `${city}，${countryNames[country]}` : city;
+   };
+ 
+   const formatLanguage = (value: string): string => {
+-    return languageNames[value?.split('-')[0]] || value;
++    return languageNames[value?.split('-')[0]] || t(labels.unknown);
+   };
+ 
+   const formatValue = (value: string, type: string, data?: Record<string, any>): string => {
+@@ -56,6 +58,8 @@
+         return formatCity(value, data?.country);
+       case 'language':
+         return formatLanguage(value);
++      case 'event':
++        return getChineseEventName(value);
+       default:
+         return typeof value === 'string' ? value : undefined;
+     }
+--- a/src/components/hooks/useLanguageNames.ts
++++ b/src/components/hooks/useLanguageNames.ts
+@@ -1,32 +1,7 @@
+-import { useEffect, useState } from 'react';
+-import { httpGet } from '@/lib/fetch';
+-import enUS from '../../../public/intl/language/en-US.json';
++import zhCN from '../../../public/intl/language/zh-CN.json';
+ 
+-const languageNames = {
+-  'en-US': enUS,
+-};
++const languageNames: Record<string, string> = zhCN;
+ 
+-export function useLanguageNames(locale) {
+-  const [list, setList] = useState(languageNames[locale] || enUS);
+-
+-  async function loadData(locale) {
+-    const { data } = await httpGet(`${process.env.basePath || ''}/intl/language/${locale}.json`);
+-
+-    if (data) {
+-      languageNames[locale] = data;
+-      setList(languageNames[locale]);
+-    } else {
+-      setList(enUS);
+-    }
+-  }
+-
+-  useEffect(() => {
+-    if (!languageNames[locale]) {
+-      loadData(locale);
+-    } else {
+-      setList(languageNames[locale]);
+-    }
+-  }, [locale]);
+-
+-  return { languageNames: list };
++export function useLanguageNames(_locale: string) {
++  return { languageNames };
+ }
+--- a/src/components/hooks/useLocale.ts
++++ b/src/components/hooks/useLocale.ts
+@@ -1,63 +1,23 @@
+-import { useEffect } from 'react';
+-import { LOCALE_CONFIG } from '@/lib/constants';
+-import { httpGet } from '@/lib/fetch';
+-import { getDateLocale, getTextDirection } from '@/lib/lang';
+-import { setItem } from '@/lib/storage';
+-import { setLocale, useApp } from '@/store/app';
+-import enUS from '../../../public/intl/messages/en-US.json';
+-import { useForceUpdate } from './useForceUpdate';
++import { getDateLocale } from '@/lib/lang';
++import zhCN from '../../../public/intl/messages/zh-CN.json';
+ 
+-const messages = {
+-  'en-US': enUS,
+-};
+-
+-const selector = (state: { locale: string }) => state.locale;
++// This private workspace synchronously loads its reviewed display language.
++// Old browser settings and URL parameters cannot cause an English first frame.
++const locale = 'zh-CN';
++// Presentation labels, kept as named constants rather than configuration values.
++const apiKeyLabel = '接口密钥';
++const createApiKeyLabel = '创建接口密钥';
++const messages = { 'zh-CN': { ...zhCN, label: {
++  ...zhCN.label,
++  'api-key': apiKeyLabel,
++  'create-api-key': createApiKeyLabel,
++} } };
++const dateLocale = getDateLocale(locale);
+ 
+ export function useLocale() {
+-  const locale = useApp(selector);
+-  const forceUpdate = useForceUpdate();
+-  const dir = getTextDirection(locale);
+-  const dateLocale = getDateLocale(locale);
+-
+-  async function loadMessages(locale: string) {
+-    const { data } = await httpGet(`${process.env.basePath || ''}/intl/messages/${locale}.json`);
+-
+-    messages[locale] = data;
++  async function saveLocale(_value: string) {
++    // Preserve the native preferences API; this workspace has one language.
+   }
+ 
+-  async function saveLocale(value: string) {
+-    if (!messages[value]) {
+-      await loadMessages(value);
+-    }
+-
+-    setItem(LOCALE_CONFIG, value);
+-
+-    if (locale !== value) {
+-      setLocale(value);
+-    } else {
+-      forceUpdate();
+-    }
+-  }
+-
+-  useEffect(() => {
+-    if (!messages[locale]) {
+-      saveLocale(locale);
+-    }
+-  }, [locale]);
+-
+-  useEffect(() => {
+-    document.documentElement.lang = locale.split('-')[0];
+-    document.documentElement.setAttribute('dir', getTextDirection(locale));
+-  }, [locale]);
+-
+-  useEffect(() => {
+-    const url = new URL(window?.location?.href);
+-    const locale = url.searchParams.get('locale');
+-
+-    if (locale) {
+-      saveLocale(locale);
+-    }
+-  }, []);
+-
+-  return { locale, saveLocale, messages, dir, dateLocale };
++  return { locale, saveLocale, messages, dir: 'ltr', dateLocale };
+ }
+--- a/src/components/hooks/useMessages.ts
++++ b/src/components/hooks/useMessages.ts
+@@ -18,7 +18,7 @@
+ 
+     const code = (error as ApiError)?.code;
+ 
+-    return code ? getMessage(code) : error?.message || 'Unknown error';
++    return code ? getMessage(code) : error?.message || '未知错误';
+   };
+ 
+   return { t, messages, labels, getMessage, getErrorMessage };
+--- a/src/components/hooks/useRegionNames.ts
++++ b/src/components/hooks/useRegionNames.ts
+@@ -1,22 +1,22 @@
++import { getChineseRegionName } from '@/lib/artvenn-geography';
+ import regions from '../../../public/iso-3166-2.json';
+-import { useCountryNames } from './useCountryNames';
+ 
+-export function useRegionNames(locale: string) {
+-  const { countryNames } = useCountryNames(locale);
++// Search and filter keys stay intact; only the displayed names are translated.
++const regionNames: Record<string, string> = Object.fromEntries(
++  [...Object.keys(regions).filter(key => !key.startsWith('TW-')), 'CN-TW'].map(key => [
++    key,
++    getChineseRegionName(key) || '暂无中文名称',
++  ]),
++);
+ 
++export function useRegionNames(_locale: string) {
+   const getRegionName = (regionCode: string, countryCode?: string) => {
+-    if (!countryCode) {
+-      return regions[regionCode];
+-    }
+-
+-    if (!regionCode) {
+-      return null;
+-    }
+-
+-    const region = regionCode?.includes('-') ? regionCode : `${countryCode}-${regionCode}`;
+-
+-    return regions[region] ? `${regions[region]}, ${countryNames[countryCode]}` : region;
++    if (!regionCode) return null;
++    const region = regionCode.includes('-') || !countryCode
++      ? regionCode
++      : `${countryCode}-${regionCode}`;
++    return getChineseRegionName(region) || '暂无中文名称';
+   };
+ 
+-  return { regionNames: regions, getRegionName };
++  return { regionNames, getRegionName };
+ }
+--- a/src/components/input/LookupField.tsx
++++ b/src/components/input/LookupField.tsx
+@@ -55,7 +55,7 @@
+ 
+   return (
+     <ComboBox
+-      aria-label="LookupField"
++      aria-label="查找"
+       {...props}
+       items={options}
+       inputValue={value}
+@@ -66,7 +66,7 @@
+       }}
+       renderEmptyState={() =>
+         isLoading ? (
+-          <Loading placement="center" icon="dots" />
++          <Loading aria-label="加载中" placement="center" icon="dots" />
+         ) : (
+           <Empty message={t(messages.noResultsFound)} />
+         )
+--- a/src/components/input/MenuButton.tsx
++++ b/src/components/input/MenuButton.tsx
+@@ -30,7 +30,7 @@
+         </Icon>
+       </Button>
+       <Popover side="bottom" align="start">
+-        <Menu aria-label="menu" style={{ minWidth: '140px' }}>
++        <Menu aria-label="菜单" style={{ minWidth: '140px' }}>
+           {Children.map(children, child => {
+             if (!isValidElement(child)) {
+               return child;
+--- a/src/components/input/TeamsButton.tsx
++++ b/src/components/input/TeamsButton.tsx
+@@ -87,7 +87,7 @@
+           <MenuSeparator />
+           <MenuItem id="manage-teams" onAction={() => handleNavigate(getUrl('/settings/teams'))}>
+             <Row alignItems="center" justifyContent="space-between" gap width="100%">
+-              <Text align="center">Manage teams</Text>
++              <Text align="center">管理团队</Text>
+               <Icon>
+                 <ArrowRight />
+               </Icon>
+--- a/src/components/input/UserButton.tsx
++++ b/src/components/input/UserButton.tsx
+@@ -72,7 +72,7 @@
+     onClose?.();
+   };
+ 
+-  const languageItems = Object.keys(languages).map(key => ({
++  const languageItems = Object.keys(languages).filter(key => key === 'zh-CN').map(key => ({
+     value: key,
+     label: languages[key].label,
+   }));
+@@ -202,13 +202,13 @@
+                     <Icon>
+                       <Sun />
+                     </Icon>
+-                    <Text weight={theme === 'light' ? 'bold' : undefined}>Light</Text>
++                    <Text weight={theme === 'light' ? 'bold' : undefined}>浅色</Text>
+                   </MenuItem>
+                   <MenuItem id="dark" onAction={() => handleSelectTheme('dark')}>
+                     <Icon>
+                       <Moon />
+                     </Icon>
+-                    <Text weight={theme === 'dark' ? 'bold' : undefined}>Dark</Text>
++                    <Text weight={theme === 'dark' ? 'bold' : undefined}>深色</Text>
+                   </MenuItem>
+                 </Menu>
+               </Popover>
+--- a/src/components/input/WebsiteValueComboBox.tsx
++++ b/src/components/input/WebsiteValueComboBox.tsx
+@@ -4,7 +4,7 @@
+ import { Empty } from '@/components/common/Empty';
+ import { useMessages, useWebsiteValuesQuery } from '@/components/hooks';
+ 
+-const DEFAULT_PLACEHOLDER = 'Select an item';
++const DEFAULT_PLACEHOLDER = '请选择项目';
+ 
+ export interface WebsiteValueComboBoxProps
+   extends Omit<
+@@ -80,7 +80,7 @@
+         }}
+         renderEmptyState={() =>
+           primaryQuery.isLoading || additionalQuery.isLoading ? (
+-            <Loading placement="center" icon="dots" />
++            <Loading aria-label="加载中" placement="center" icon="dots" />
+           ) : (
+             <Empty message={t(messages.noResultsFound)} />
+           )
+--- a/src/components/metrics/DatePickerForm.tsx
++++ b/src/components/metrics/DatePickerForm.tsx
+@@ -1,7 +1,7 @@
+ import { Button, Calendar, Column, Row, ToggleGroup, ToggleGroupItem } from '@umami/react-zen';
+ import { endOfDay, isAfter, isBefore, isSameDay, startOfDay } from 'date-fns';
+ import { useState } from 'react';
+-import { useMessages } from '@/components/hooks';
++import { useLocale, useMessages } from '@/components/hooks';
+ 
+ const FILTER_DAY = 'filter-day';
+ const FILTER_RANGE = 'filter-range';
+@@ -21,6 +21,7 @@
+   const [startDate, setStartDate] = useState(defaultStartDate || new Date());
+   const [endDate, setEndDate] = useState(defaultEndDate || new Date());
+   const { t, labels } = useMessages();
++  const { dateLocale } = useLocale();
+ 
+   const disabled = selected.includes(FILTER_DAY)
+     ? isAfter(minDate, date) && isBefore(maxDate, date)
+@@ -44,17 +45,19 @@
+       </Row>
+       <Column>
+         {selected.includes(FILTER_DAY) && (
+-          <Calendar value={date} minValue={minDate} maxValue={maxDate} onChange={setDate} />
++          <Calendar locale={dateLocale} value={date} minValue={minDate} maxValue={maxDate} onChange={setDate} />
+         )}
+         {selected.includes(FILTER_RANGE) && (
+           <Row gap wrap="wrap" style={{ margin: '0 auto' }}>
+             <Calendar
++              locale={dateLocale}
+               value={startDate}
+               minValue={minDate}
+               maxValue={endDate}
+               onChange={setStartDate}
+             />
+             <Calendar
++              locale={dateLocale}
+               value={endDate}
+               minValue={startDate}
+               maxValue={maxDate}
+--- a/src/components/metrics/Legend.tsx
++++ b/src/components/metrics/Legend.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { Row, StatusLight, Text } from '@umami/react-zen';
+ import type { LegendItem } from 'chart.js/auto';
+ import { colord } from 'colord';
+@@ -28,7 +29,7 @@
+                 truncate={true}
+                 style={{ maxWidth: '300px' }}
+               >
+-                {text}
++                {getChineseEventName(text)}
+               </Text>
+             </StatusLight>
+           </Row>
+--- a/src/components/metrics/MetricLabel.tsx
++++ b/src/components/metrics/MetricLabel.tsx
+@@ -1,3 +1,4 @@
++import { getChineseEventName } from '@/lib/artvenn-labels';
+ import { Row, Text } from '@umami/react-zen';
+ import { Favicon } from '@/components/common/Favicon';
+ import { FilterLink } from '@/components/common/FilterLink';
+@@ -100,7 +101,7 @@
+       icon={
+         country && (
+           <img
+-            src={`${process.env.basePath || ''}/images/country/${country?.toLowerCase() || 'xx'}.png`}
++            src={`${process.env.basePath || ''}/images/country/${(country === 'TW' ? 'CN' : country)?.toLowerCase() || 'xx'}.png`}
+             alt={country}
+           />
+         )
+@@ -224,5 +225,5 @@
+ function DefaultMetricLabel({ type, data }: MetricLabelProps) {
+   const { label } = data;
+ 
+-  return <FilterLink type={type} value={label} />;
+-}
++  return <FilterLink type={type} value={label} label={type === 'event' ? getChineseEventName(label) : undefined} />;
++}
+--- a/src/components/metrics/MetricsExpandedTable.tsx
++++ b/src/components/metrics/MetricsExpandedTable.tsx
+@@ -51,6 +51,8 @@
+       <Row alignItems="center" paddingBottom="3">
+         {allowSearch && (
+           <SearchField
++            placeholder="搜索"
++            aria-label="搜索"
+             value={search}
+             onSearch={setSearch}
+             delay={300}
+--- a/src/components/property-data/PropertyDateChart.tsx
++++ b/src/components/property-data/PropertyDateChart.tsx
+@@ -289,7 +289,7 @@
+       >
+         <MetricsBar padding="2">
+           <InsightCard
+-            label="Top weekday"
++            label="最常见星期"
+             value={topWeekday?.label ?? 'None'}
+             hint={
+               topWeekday
+@@ -298,7 +298,7 @@
+             }
+           />
+           <InsightCard
+-            label="Top date"
++            label="最常见日期"
+             value={topDateByDay ? formatDate(topDateByDay.date, 'PP', locale) : 'None'}
+             hint={
+               topDateByDay
+@@ -307,7 +307,7 @@
+             }
+           />
+           <InsightCard
+-            label="Earliest date"
++            label="最早日期"
+             value={minPropertyDate ? formatDate(minPropertyDate, 'PP', locale) : 'None'}
+             hint={
+               minPropertyDate
+@@ -316,7 +316,7 @@
+             }
+           />
+           <InsightCard
+-            label="Latest date"
++            label="最晚日期"
+             value={maxPropertyDate ? formatDate(maxPropertyDate, 'PP', locale) : 'None'}
+             hint={
+               maxPropertyDate
+--- a/src/components/property-data/PropertyFilterRecord.tsx
++++ b/src/components/property-data/PropertyFilterRecord.tsx
+@@ -197,7 +197,7 @@
+               }}
+               renderEmptyState={() =>
+                 isLoading ? (
+-                  <Loading placement="center" icon="dots" />
++                  <Loading aria-label="加载中" placement="center" icon="dots" />
+                 ) : (
+                   <Empty message={t(messages.noResultsFound)} />
+                 )
+@@ -225,7 +225,7 @@
+               renderValue={vals => (vals.length > 0 ? vals.join(', ') : undefined)}
+               renderEmptyState={() =>
+                 isLoading ? (
+-                  <Loading placement="center" icon="dots" />
++                  <Loading aria-label="加载中" placement="center" icon="dots" />
+                 ) : (
+                   <Empty message={t(messages.noResultsFound)} />
+                 )
+--- a/src/components/property-data/PropertyNumericChart.tsx
++++ b/src/components/property-data/PropertyNumericChart.tsx
+@@ -150,7 +150,7 @@
+             value={stats?.average ?? 0}
+             formatValue={formatLongNumber}
+           />
+-          <MetricCard label="Median" value={stats?.median ?? 0} formatValue={formatLongNumber} />
++          <MetricCard label="中位数" value={stats?.median ?? 0} formatValue={formatLongNumber} />
+           <MetricCard
+             label={t(labels.max)}
+             value={stats?.max ?? 0}
+--- /dev/null
++++ b/src/lib/artvenn-geography-sql.ts
+@@ -0,0 +1,14 @@
++/** Display-only PostgreSQL geography. Persisted GeoIP source values stay intact. */
++export function getArtVennGeographySql(column: string, table: 'session' | '' = 'session'): string {
++  const prefix = table ? `${table}.` : '';
++
++  if (column === 'country') {
++    return `(case when ${prefix}country = 'TW' then 'CN' else ${prefix}country end)`;
++  }
++
++  if (column === 'region') {
++    return `(case when ${prefix}country = 'TW' then 'CN-TW' else ${prefix}region end)`;
++  }
++
++  return `${prefix}${column}`;
++}
+--- /dev/null
++++ b/src/lib/artvenn-geography.test.ts
+@@ -0,0 +1,27 @@
++import { expect, test } from 'vitest';
++import { getChineseRegionName, getChineseCityName, getChineseCityMatches } from './artvenn-geography';
++
++test('Taiwan source subdivisions and derived province share one Chinese label', () => {
++  for (const key of ['CN-TW', 'TW-TPE', 'TW-TNN', 'TW-NWT']) expect(getChineseRegionName(key)).toBe('台湾省');
++  expect(getChineseRegionName('CN-ZJ')).toBe('浙江省');
++  expect(getChineseRegionName('CN-GD')).toBe('广东省');
++});
++
++test('real offline Chinese names keep their country and source city keys', () => {
++  expect(getChineseCityName('Hangzhou', 'CN')).toBe('杭州');
++  expect(getChineseCityName('Guangzhou', 'CN')).toBe('广州市');
++  expect(getChineseCityName('Taipei', 'TW')).toBe('台北市');
++  expect(getChineseCityName('Taipei', 'CN')).toBeUndefined();
++  expect(getChineseCityName('NOT_VALID', 'CN')).toBeUndefined();
++  expect(getChineseCityName('Athens')).toBeUndefined();
++  expect(getChineseCityName('Hangzhou')).toBe('杭州');
++});
++
++test('Chinese lookup produces native filter keys rather than display labels', () => {
++  expect(getChineseCityMatches('杭州')).toContain('Hangzhou');
++  expect(getChineseCityMatches('台北')).toContain('Taipei');
++  expect(getChineseCityName('Athens', 'GR')).toBe('雅典');
++  expect(getChineseCityMatches('雅典')).toContain('Athens');
++  expect(getChineseCityMatches('Hangzhou')).toEqual([]);
++  expect(getChineseCityMatches('')).toEqual([]);
++});
+--- /dev/null
++++ b/src/lib/artvenn-geography.ts
+@@ -0,0 +1,64 @@
++import cities from '../data/geo-city.zh-CN.json';
++import regions from '../data/geo-region.zh-CN.json';
++import globalCities from '../data/geo-city-global.zh-CN.json';
++
++// Generated once at build time from the pinned public MMDB; never a per-visit lookup.
++const cityNames: Record<string, string> = cities;
++const regionNames: Record<string, string> = regions;
++const provinces: Record<string, string> = {
++  "CN-BJ": "北京市",
++  "CN-TJ": "天津市",
++  "CN-HE": "河北省",
++  "CN-SX": "山西省",
++  "CN-NM": "内蒙古自治区",
++  "CN-LN": "辽宁省",
++  "CN-JL": "吉林省",
++  "CN-HL": "黑龙江省",
++  "CN-SH": "上海市",
++  "CN-JS": "江苏省",
++  "CN-ZJ": "浙江省",
++  "CN-AH": "安徽省",
++  "CN-FJ": "福建省",
++  "CN-JX": "江西省",
++  "CN-SD": "山东省",
++  "CN-HA": "河南省",
++  "CN-HB": "湖北省",
++  "CN-HN": "湖南省",
++  "CN-GD": "广东省",
++  "CN-GX": "广西壮族自治区",
++  "CN-HI": "海南省",
++  "CN-CQ": "重庆市",
++  "CN-SC": "四川省",
++  "CN-GZ": "贵州省",
++  "CN-YN": "云南省",
++  "CN-XZ": "西藏自治区",
++  "CN-SN": "陕西省",
++  "CN-GS": "甘肃省",
++  "CN-QH": "青海省",
++  "CN-NX": "宁夏回族自治区",
++  "CN-XJ": "新疆维吾尔自治区",
++  "CN-HK": "香港特别行政区",
++  "CN-MO": "澳门特别行政区",
++  "CN-TW": "台湾省"
++};
++const globalCityNames: Record<string, string> = globalCities;
++const cityEntries = Object.entries(cityNames);
++
++export function getChineseRegionName(region: string): string | undefined {
++  if (region === 'CN-TW' || region?.startsWith('TW-')) return '台湾省';
++  return provinces[region] || regionNames[region];
++}
++
++export function getChineseCityName(city: string, country?: string): string | undefined {
++  if (!city) return undefined;
++  if (country) return cityNames[`${country}|${city}`];
++  return globalCityNames[city];
++}
++
++export function getChineseCityMatches(search: string): string[] {
++  if (!search || !/\p{Script=Han}/u.test(search)) return [];
++  const value = search.normalize('NFKC').trim();
++  if (!value) return [];
++  return [...new Set(cityEntries.filter(([, name]) => name.includes(value))
++    .map(([key]) => key.slice(key.indexOf('|') + 1)))];
++}
+--- /dev/null
++++ b/src/lib/artvenn-labels.test.ts
+@@ -0,0 +1,25 @@
++import { expect, test } from 'vitest';
++import { CHINESE_EVENT_NAMES, getChineseEventName } from './artvenn-labels';
++
++test.each([
++  ['page_view', '页面浏览'],
++  ['content_impression', '内容曝光'],
++  ['content_open', '打开内容'],
++  ['content_dwell', '内容停留'],
++  ['search', '搜索'],
++  ['search_click', '搜索结果点击'],
++  ['like', '点赞'],
++  ['favorite', '收藏'],
++  ['follow', '关注'],
++])('displays canonical event %s in Chinese without changing raw identifiers', (raw, chinese) => {
++  const data = Object.freeze({ eventName: raw, filter: `eq.${raw}`, dataset: raw });
++  expect(getChineseEventName(data.eventName)).toBe(chinese);
++  expect(data).toEqual({ eventName: raw, filter: `eq.${raw}`, dataset: raw });
++});
++
++test('keeps unrelated source values and prototype property names unchanged', () => {
++  for (const raw of ['custom_event', 'constructor', '__proto__', '内容原文', '']) {
++    expect(getChineseEventName(raw)).toBe(raw);
++  }
++  expect(Object.isFrozen(CHINESE_EVENT_NAMES)).toBe(true);
++});
+--- /dev/null
++++ b/src/lib/artvenn-labels.ts
+@@ -0,0 +1,16 @@
++// Presentation only: translated names never become identity or filter keys.
++export const CHINESE_EVENT_NAMES: Readonly<Record<string, string>> = Object.freeze({
++  page_view: '页面浏览',
++  content_impression: '内容曝光',
++  content_open: '打开内容',
++  content_dwell: '内容停留',
++  search: '搜索',
++  search_click: '搜索结果点击',
++  like: '点赞',
++  favorite: '收藏',
++  follow: '关注',
++});
++
++export function getChineseEventName(value: string): string {
++  return Object.hasOwn(CHINESE_EVENT_NAMES, value) ? CHINESE_EVENT_NAMES[value] : value;
++}
+--- a/src/lib/constants.ts
++++ b/src/lib/constants.ts
+@@ -22,7 +22,7 @@
+ export const LINKS_URL = `${globalThis?.location?.origin}/q`;
+ export const PIXELS_URL = `${globalThis?.location?.origin}/p`;
+ 
+-export const DEFAULT_LOCALE = 'en-US';
++export const DEFAULT_LOCALE = 'zh-CN';
+ export const DEFAULT_THEME = 'light';
+ export const DEFAULT_ANIMATION_DURATION = 300;
+ export const DEFAULT_DATE_RANGE_VALUE = '24hour';
+--- a/src/lib/format.test.ts
++++ b/src/lib/format.test.ts
+@@ -16,9 +16,9 @@
+ });
+ 
+ test('formatShortTime', () => {
+-  expect(format.formatShortTime(3600 + 60 + 1)).toBe('1m1s');
++  expect(format.formatShortTime(3600 + 60 + 1)).toBe('1分1秒');
+ 
+-  expect(format.formatShortTime(3600 + 60 + 1, ['h', 'm', 's'])).toBe('1h1m1s');
++  expect(format.formatShortTime(3600 + 60 + 1, ['h', 'm', 's'])).toBe('1小时1分1秒');
+ });
+ 
+ test('formatNumber', () => {
+@@ -27,12 +27,12 @@
+ });
+ 
+ test('formatLongNumber', () => {
+-  expect(format.formatLongNumber(1000000000)).toBe('1.0b');
+-  expect(format.formatLongNumber(2500000000)).toBe('2.5b');
+-  expect(format.formatLongNumber(1200000)).toBe('1.2m');
+-  expect(format.formatLongNumber(575000)).toBe('575k');
+-  expect(format.formatLongNumber(10500)).toBe('10.5k');
+-  expect(format.formatLongNumber(1200)).toBe('1.20k');
++  expect(format.formatLongNumber(1000000000)).toBe('10亿');
++  expect(format.formatLongNumber(2500000000)).toBe('25亿');
++  expect(format.formatLongNumber(1200000)).toBe('120万');
++  expect(format.formatLongNumber(575000)).toBe('57.5万');
++  expect(format.formatLongNumber(10500)).toBe('1.1万');
++  expect(format.formatLongNumber(1200)).toBe('1200');
+ });
+ 
+ test('stringToColor', () => {
+@@ -50,3 +50,14 @@
+   expect(format.decodePunycodeDomain('example.com')).toBe('example.com');
+   expect(format.decodePunycodeDomain(undefined)).toBeUndefined();
+ });
++
++test('Chinese display handles zero, negatives and unit boundaries', () => {
++  expect(format.formatShortTime(0)).toBe('0秒');
++  expect(format.formatShortTime(0, ['ms'])).toBe('0毫秒');
++  expect(format.formatShortTime(86401, ['d', 'h', 'm', 's'])).toBe('1天1秒');
++  expect(format.formatLongNumber(9999)).toBe('9999');
++  expect(format.formatLongNumber(10000)).toBe('1万');
++  expect(format.formatLongNumber(100000000)).toBe('1亿');
++  expect(format.formatLongNumber(-120000000)).toBe('-1.2亿');
++  expect(format.formatLongCurrency(10000, 'CNY')).toBe('¥1.00万');
++});
+--- a/src/lib/format.ts
++++ b/src/lib/format.ts
+@@ -29,15 +29,16 @@
+ export function formatShortTime(val: number, formats = ['m', 's'], space = '') {
+   const { days, hours, minutes, seconds, ms } = parseTime(val);
+   let t = '';
++  const units = { d: '天', h: '小时', m: '分', s: '秒', ms: '毫秒' };
+ 
+-  if (days > 0 && formats.indexOf('d') !== -1) t += `${days}d${space}`;
+-  if (hours > 0 && formats.indexOf('h') !== -1) t += `${hours}h${space}`;
+-  if (minutes > 0 && formats.indexOf('m') !== -1) t += `${minutes}m${space}`;
+-  if (seconds > 0 && formats.indexOf('s') !== -1) t += `${seconds}s${space}`;
+-  if (ms > 0 && formats.indexOf('ms') !== -1) t += `${ms}ms`;
++  if (days > 0 && formats.indexOf('d') !== -1) t += `${days}天${space}`;
++  if (hours > 0 && formats.indexOf('h') !== -1) t += `${hours}小时${space}`;
++  if (minutes > 0 && formats.indexOf('m') !== -1) t += `${minutes}分${space}`;
++  if (seconds > 0 && formats.indexOf('s') !== -1) t += `${seconds}秒${space}`;
++  if (ms > 0 && formats.indexOf('ms') !== -1) t += `${ms}毫秒`;
+ 
+   if (!t) {
+-    return `0${formats[formats.length - 1]}`;
++    return `0${units[formats[formats.length - 1]] || formats[formats.length - 1]}`;
+   }
+ 
+   return t;
+@@ -49,23 +50,8 @@
+ 
+ export function formatLongNumber(value: number) {
+   const n = Number(value);
+-
+-  if (n >= 1000000000) {
+-    return `${(n / 1000000000).toFixed(1)}b`;
+-  }
+-  if (n >= 1000000) {
+-    return `${(n / 1000000).toFixed(1)}m`;
+-  }
+-  if (n >= 100000) {
+-    return `${(n / 1000).toFixed(0)}k`;
+-  }
+-  if (n >= 10000) {
+-    return `${(n / 1000).toFixed(1)}k`;
+-  }
+-  if (n >= 1000) {
+-    return `${(n / 1000).toFixed(2)}k`;
+-  }
+-
++  if (Math.abs(n) >= 100000000) return `${(n / 100000000).toFixed(1).replace(/\.0$/, '')}亿`;
++  if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(1).replace(/\.0$/, '')}万`;
+   return formatNumber(n);
+ }
+ 
+@@ -85,7 +71,7 @@
+   return color;
+ }
+ 
+-export function formatCurrency(value: number, currency: string, locale = 'en-US') {
++export function formatCurrency(value: number, currency: string, locale = 'zh-CN') {
+   let formattedValue: Intl.NumberFormat;
+ 
+   try {
+@@ -104,19 +90,10 @@
+   return formattedValue.format(value);
+ }
+ 
+-export function formatLongCurrency(value: number, currency: string, locale = 'en-US') {
++export function formatLongCurrency(value: number, currency: string, locale = 'zh-CN') {
+   const n = Number(value);
+-
+-  if (n >= 1000000000) {
+-    return `${formatCurrency(n / 1000000000, currency, locale)}b`;
+-  }
+-  if (n >= 1000000) {
+-    return `${formatCurrency(n / 1000000, currency, locale)}m`;
+-  }
+-  if (n >= 1000) {
+-    return `${formatCurrency(n / 1000, currency, locale)}k`;
+-  }
+-
++  if (Math.abs(n) >= 100000000) return `${formatCurrency(n / 100000000, currency, locale)}亿`;
++  if (Math.abs(n) >= 10000) return `${formatCurrency(n / 10000, currency, locale)}万`;
+   return formatCurrency(n, currency, locale);
+ }
+ 
+--- a/src/lib/prisma.ts
++++ b/src/lib/prisma.ts
+@@ -2,6 +2,7 @@
+ import { readReplicas } from '@prisma/extension-read-replicas';
+ import debug from 'debug';
+ import { PrismaClient } from '@/generated/prisma/client';
++import { getArtVennGeographySql } from './artvenn-geography-sql';
+ import { DATA_TYPE, DEFAULT_PAGE_SIZE, FILTER_COLUMNS, OPERATORS, SESSION_COLUMNS } from './constants';
+ import { filtersObjectToArray } from './params';
+ import type { Operator, PropertyFilter, QueryFilters, QueryOptions } from './types';
+@@ -147,20 +148,23 @@
+   }
+ 
+   const table = SESSION_COLUMNS.includes(name) ? 'session' : 'website_event';
++  const expression = table === 'session'
++    ? getArtVennGeographySql(column)
++    : `${table}.${column}`;
+ 
+   switch (operator) {
+     case OPERATORS.equals:
+-      return `${table}.${column} = ANY(${value})`;
++      return `${expression} = ANY(${value})`;
+     case OPERATORS.notEquals:
+-      return `${table}.${column} != ALL(${value})`;
++      return `${expression} != ALL(${value})`;
+     case OPERATORS.contains:
+-      return `${table}.${column} ilike ${value}`;
++      return `${expression} ilike ${value}`;
+     case OPERATORS.doesNotContain:
+-      return `${table}.${column} not ilike ${value}`;
++      return `${expression} not ilike ${value}`;
+     case OPERATORS.regex:
+-      return `${table}.${column} ~* ${value}`;
++      return `${expression} ~* ${value}`;
+     case OPERATORS.notRegex:
+-      return `${table}.${column} !~* ${value}`;
++      return `${expression} !~* ${value}`;
+     default:
+       return '';
+   }
+--- a/src/queries/sql/getValues.ts
++++ b/src/queries/sql/getValues.ts
+@@ -1,3 +1,4 @@
++import { getArtVennGeographySql } from '@/lib/artvenn-geography-sql';
+ import clickhouse from '@/lib/clickhouse';
+ import { FILTER_COLUMNS, SESSION_COLUMNS } from '@/lib/constants';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+@@ -22,7 +23,13 @@
+ async function relationalQuery(websiteId: string, column: string, filters: QueryFilters) {
+   const { rawQuery, getSearchSQL } = prisma;
+   const params = {};
+-  const { startDate, endDate, search } = filters;
++  const { startDate, endDate } = filters;
++  // The selector still sends a stable province key, never a translated label.
++  const search = column === 'region' && /^(台湾|台湾省)$/.test(filters.search?.trim() || '')
++    ? 'CN-TW'
++    : filters.search;
++  const sessionColumn = SESSION_DB_COLUMNS.has(column);
++  const expression = sessionColumn ? getArtVennGeographySql(column, '') : column;
+ 
+   let searchQuery = '';
+   let excludeDomain = '';
+@@ -42,21 +49,29 @@
+ 
+           params[key] = value;
+ 
+-          return getSearchSQL(column, key).replace('and ', '');
++          return getSearchSQL(expression, key).replace('and ', '');
+         })
+         .join(' OR ')})`;
+     } else {
+-      searchQuery = getSearchSQL(column);
++      searchQuery = getSearchSQL(expression);
+     }
+   }
+ 
+-  if (SESSION_DB_COLUMNS.has(column)) {
++  if (sessionColumn) {
+     return rawQuery(
+       `
+-      select ${column} as "value", count(*) as "count"
++      select ${expression} as "value", count(*) as "count"
+       from session
+       where website_id = {{websiteId::uuid}}
+-        and created_at between {{startDate}} and {{endDate}}
++        and exists (
++          select 1 from website_event active
++          where active.website_id = session.website_id
++            and active.session_id = session.session_id
++            and active.created_at between {{startDate}} and {{endDate}}
++            and active.event_type NOT IN (2, 5)
++        )
++        and ${expression} is not null
++        and ${expression} != ''
+         ${searchQuery}
+       group by 1
+       order by 2 desc
+--- a/src/queries/sql/sessions/getSessionExpandedMetrics.ts
++++ b/src/queries/sql/sessions/getSessionExpandedMetrics.ts
+@@ -1,3 +1,4 @@
++import { getArtVennGeographySql } from '@/lib/artvenn-geography-sql';
+ import clickhouse from '@/lib/clickhouse';
+ import {
+   EVENT_TYPE,
+@@ -54,6 +55,12 @@
+     );
+   const needsBounceEvents = filters.excludeBounce !== true;
+   const includeCountry = column === 'city' || column === 'region';
++  // City keys retain their source country for unambiguous Chinese labels.
++  const countryColumn = type === 'region' ? getArtVennGeographySql('country') : 'country';
++
++  if (column === 'country' || column === 'region') {
++    column = getArtVennGeographySql(column);
++  }
+ 
+   if (type === 'language') {
+     column = `lower(left(${type}, 2))`;
+@@ -87,7 +94,7 @@
+     from (
+       select
+         ${column} as "name",
+-        ${includeCountry ? 'country,' : ''}
++        ${includeCountry ? `${countryColumn} as country,` : ''}
+         website_event.session_id,
+         website_event.visit_id,
+         count(*) as "c",
+@@ -102,7 +109,7 @@
+         and website_event.event_type NOT IN (2, 5)
+         ${filterQuery}
+       group by name, website_event.session_id, website_event.visit_id
+-      ${includeCountry ? ', country' : ''}
++      ${includeCountry ? `, ${countryColumn}` : ''}
+     ) as t
+     ${visitEventsJoin}
+     where name != ''
+--- a/src/queries/sql/sessions/getSessionMetrics.ts
++++ b/src/queries/sql/sessions/getSessionMetrics.ts
+@@ -1,3 +1,4 @@
++import { getArtVennGeographySql } from '@/lib/artvenn-geography-sql';
+ import clickhouse from '@/lib/clickhouse';
+ import { EVENT_COLUMNS, FILTER_COLUMNS, SESSION_COLUMNS } from '@/lib/constants';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+@@ -40,6 +41,12 @@
+       },
+     );
+   const includeCountry = column === 'city' || column === 'region';
++  // City keys retain their source country for unambiguous Chinese labels.
++  const countryColumn = type === 'region' ? getArtVennGeographySql('country') : 'country';
++
++  if (column === 'country' || column === 'region') {
++    column = getArtVennGeographySql(column);
++  }
+ 
+   if (type === 'language') {
+     column = `lower(left(${type}, 2))`;
+@@ -50,7 +57,7 @@
+     select 
+       ${column} x,
+       count(distinct website_event.session_id) y
+-      ${includeCountry ? ', country' : ''}
++      ${includeCountry ? `, ${countryColumn} as country` : ''}
+     from website_event
+     ${cohortQuery}
+     ${excludeBounceQuery}
+--- a/src/store/app.ts
++++ b/src/store/app.ts
+@@ -4,7 +4,6 @@
+   DEFAULT_DATE_RANGE_VALUE,
+   DEFAULT_LOCALE,
+   DEFAULT_THEME,
+-  LOCALE_CONFIG,
+   THEME_CONFIG,
+   TIMEZONE_CONFIG,
+ } from '@/lib/constants';
+@@ -12,7 +11,7 @@
+ import { getItem } from '@/lib/storage';
+ 
+ const initialState = {
+-  locale: getItem(LOCALE_CONFIG) || process.env.defaultLocale || DEFAULT_LOCALE,
++  locale: DEFAULT_LOCALE,
+   theme: getItem(THEME_CONFIG) || DEFAULT_THEME,
+   timezone: getItem(TIMEZONE_CONFIG) || getTimezone(),
+   dateRangeValue: getItem(DATE_RANGE_CONFIG) || DEFAULT_DATE_RANGE_VALUE,
+@@ -28,8 +27,8 @@
+   store.setState({ timezone });
+ }
+ 
+-export function setLocale(locale: string) {
+-  store.setState({ locale });
++export function setLocale(_locale: string) {
++  store.setState({ locale: DEFAULT_LOCALE });
+ }
+ 
+ export function setShareData(share: object | null, shareToken: { token?: string } | null) {

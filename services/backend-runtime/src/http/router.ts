@@ -1,4 +1,6 @@
 import { handleNotificationRequest } from "../community/notification-handler.js";
+import { handleAnalyticsRequest } from "../analytics/analytics-handler.js";
+import type { AnalyticsRouteDependencies } from "../analytics/analytics-handler.js";
 import { handleArticleAuthoringRequest } from "../community/article-authoring-handler.js";
 import { handleArticleDelegationHttpRequest } from "../community/article-delegation-handler.js";
 import type { BackendApplicationOptions } from "../application.js";
@@ -117,6 +119,7 @@ export interface CommunityRouterDependencies {
 }
 
 export interface RouterDependencies {
+  readonly analytics?: AnalyticsRouteDependencies;
   readonly catalogReadService: CatalogReadService;
   readonly healthReadinessCheck: HealthReadinessCheck;
   readonly community?: CommunityRouterDependencies;
@@ -127,6 +130,7 @@ export const createRouter =
     catalogReadService,
     healthReadinessCheck,
     community,
+    analytics,
   }: RouterDependencies): RequestListener =>
   (request, response) => {
     // A request target that is not a URL path (for example `//[`) is a client
@@ -140,6 +144,21 @@ export const createRouter =
       return;
     }
 
+    if (
+      analytics !== undefined &&
+      [
+        "/v1/analytics/events",
+        "/internal/community/analytics/status",
+        "/internal/community/analytics/ips",
+      ].includes(pathname)
+    ) {
+      containRequest(
+        response,
+        handleAnalyticsRequest(request, response, pathname, analytics),
+        apiFailure,
+      );
+      return;
+    }
     if (pathname === "/health") {
       if (request.method !== "GET") {
         sendRouteError(response, 405, "Method Not Allowed");

@@ -461,3 +461,15 @@ export type {
   MediaPublicationPort,
   MediaPublicationUnit,
 } from "./modules/community/application/ports/media-publication-port.js";
+
+export { AnalyticsService } from "./modules/analytics/analytics-service.js";
+export type {
+  AnalyticsPolicy,
+  AnalyticsRequestContext,
+} from "./modules/analytics/analytics-service.js";
+export type {
+  AnalyticsPort,
+  AnalyticsDeliveryPort,
+  AnalyticsDelivery,
+  AnalyticsWriteContext,
+} from "./modules/analytics/analytics-port.js";
