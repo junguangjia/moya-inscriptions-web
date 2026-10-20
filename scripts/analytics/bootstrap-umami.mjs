@@ -18,7 +18,7 @@ import {
 } from "./common.mjs";
 
 const names = {
-  team: "ArtVenn Analytics",
+  team: "ArtVenn 数据分析",
   funnel: "ArtVenn: 曝光 → 打开 → 收藏",
   board: "ArtVenn: 内容行为与省市",
 };
@@ -325,7 +325,7 @@ export async function bootstrapUmami(environment, selected, options = {}) {
       type: "website",
       name: names.board,
       description:
-        "Umami 原生内容行为与省市看板；IP 仅表示近似网络出口，Owner、测试与开发活动在采集前排除。",
+        "Umami 原生内容行为与省市看板；IP 仅表示近似网络出口，本人、测试与开发活动在采集前排除。",
       teamId,
       parameters,
     });

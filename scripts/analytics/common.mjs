@@ -5,6 +5,8 @@ import { parseEnv } from "node:util";
 
 export const UMAMI_VERSION = "3.4.0";
 export const UMAMI_SOURCE_COMMIT = "ec0ff50388c264ed8ce46f00967e92f7e71476ae";
+export const UMAMI_WORKSPACE_IDENTITY =
+  "fe1ae90c0f4b9b71c3362d62404518f8bdcbe7ce35de22abdfc4d6d3567cf101";
 export const UMAMI_BASE_PATH = "/admin/analytics-workspace";
 
 /** Error codes deliberately contain no upstream messages, URLs or credentials. */

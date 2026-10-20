@@ -17,6 +17,8 @@ import { URL, fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { test } from "node:test";
 
+import { UMAMI_WORKSPACE_IDENTITY } from "./common.mjs";
+
 const imageId = `sha256:${"a".repeat(64)}`;
 const labels = {
   "org.opencontainers.image.version": "3.4.0",
@@ -26,6 +28,11 @@ const labels = {
   "com.artvenn.umami.libc": "glibc",
   "com.artvenn.umami.node-major": "24",
   "com.artvenn.umami.pool-max": "3",
+  "com.artvenn.umami.locale": "zh-CN",
+  "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
+  "com.artvenn.umami.geography": "cn-province-v1",
+  "com.artvenn.umami.geo-sha256":
+    "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029",
 };
 
 test("runtime exporter streams/hash-checks a synthetic tar, writes private metadata and removes only its stopped container", async () => {
@@ -86,6 +93,8 @@ else if(command!=='rm')process.exit(13);\n`,
       createHash("sha256").update(archive).digest("hex"),
       manifest.archiveSha256,
     );
+    assert.equal(manifest.workspaceIdentitySha256, UMAMI_WORKSPACE_IDENTITY);
+    assert.equal(manifest.locale, "zh-CN");
     assert.ok(
       gunzipSync(archive).includes(Buffer.from("synthetic fixture only")),
     );

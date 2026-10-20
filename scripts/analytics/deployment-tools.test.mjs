@@ -2,6 +2,8 @@ import { URL } from "node:url";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { UMAMI_WORKSPACE_IDENTITY } from "./common.mjs";
+import { createHash } from "node:crypto";
 import { buildImagePlan } from "./build-umami-image.mjs";
 import {
   seedSyntheticUmami,
@@ -52,8 +54,8 @@ test("pinned build isolates its context and checks the exact pool-only patch", a
 
 test("synthetic seed is bounded, local only, and uses pageviews plus canonical funnel names", async () => {
   const events = syntheticEvents(environment, 1792368000000);
-  assert.equal(events.length, 18);
-  assert.equal(events.filter((event) => !event.payload.name).length, 6);
+  assert.equal(events.length, 20);
+  assert.equal(events.filter((event) => !event.payload.name).length, 8);
   assert.equal(
     events.filter((event) => event.payload.name === "content_impression")
       .length,
@@ -103,20 +105,20 @@ test("native collection acceptance counts must match and never return cache cred
       });
     if (endpoint === "batch")
       return globalThis.Response.json({
-        size: 18,
-        processed: 18,
+        size: 20,
+        processed: 20,
         errors: 0,
         cache: "synthetic-private-cache",
       });
     if (endpoint.endsWith("/stats"))
-      return globalThis.Response.json({ pageviews: { value: 6 } });
+      return globalThis.Response.json({ pageviews: { value: 8 } });
     assert.fail("Unexpected synthetic endpoint");
   };
   const result = await seedSyntheticUmami(environment, {
     execute: true,
     fetchImpl,
   });
-  assert.equal(result.acceptedEvents, 18);
+  assert.equal(result.acceptedEvents, 20);
   assert.ok(!JSON.stringify(result).includes("synthetic-token"));
   assert.ok(!JSON.stringify(result).includes("synthetic-private-cache"));
 });
@@ -151,9 +153,27 @@ test("standalone runtime export requires immutable glibc image metadata and expl
       "com.artvenn.umami.libc": "glibc",
       "com.artvenn.umami.node-major": "24",
       "com.artvenn.umami.pool-max": "3",
+      "com.artvenn.umami.locale": "zh-CN",
+      "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
+      "com.artvenn.umami.geography": "cn-province-v1",
+      "com.artvenn.umami.geo-sha256":
+        "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029",
     },
   };
   assert.doesNotThrow(() => verifyRuntimeImage(metadata, plan));
+  for (const key of [
+    "com.artvenn.umami.patch-sha256",
+    "com.artvenn.umami.locale",
+    "com.artvenn.umami.geography",
+    "com.artvenn.umami.geo-sha256",
+  ]) {
+    const labels = { ...metadata.labels };
+    delete labels[key];
+    assert.throws(
+      () => verifyRuntimeImage({ ...metadata, labels }, plan),
+      /GLIBC/,
+    );
+  }
   assert.throws(
     () => verifyRuntimeImage({ ...metadata, architecture: "arm64" }, plan),
     /GLIBC/,
@@ -170,4 +190,29 @@ test("standalone runtime export requires immutable glibc image metadata and expl
     /GLIBC/,
   );
   assert.equal((await exportRuntime(values)).status, "PLAN_ONLY");
+});
+
+test("Chinese native patch, generator and immutable export identity stay bound", async () => {
+  const directory = new URL("../../infra/production/umami/", import.meta.url);
+  const source = JSON.parse(
+    await readFile(new URL("source.json", directory), "utf8"),
+  );
+  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const patch = await readFile(new URL("chinese-workspace.patch", directory));
+  const generator = await readFile(
+    new URL("generate-chinese-dictionaries.mjs", directory),
+  );
+  assert.equal(hash(patch), source.localizationPatch.sha256);
+  assert.equal(hash(generator), source.localizationPatch.generatorSha256);
+  assert.equal(hash(hash(patch) + hash(generator)), UMAMI_WORKSPACE_IDENTITY);
+  assert.equal(
+    source.localizationPatch.identitySha256,
+    UMAMI_WORKSPACE_IDENTITY,
+  );
+  const dockerfile = await readFile(new URL("Dockerfile", directory), "utf8");
+  assert.match(dockerfile, /SKIP_BUILD_GEO=1/u);
+  assert.ok(dockerfile.includes(source.geographyDatabase.archiveSha256));
+  assert.ok(dockerfile.includes(UMAMI_WORKSPACE_IDENTITY));
+  assert.match(dockerfile, /sha256sum -c \/tmp\/generated-chinese.sha256/u);
+  assert.match(dockerfile, /vitest run src\/lib\/format.test.ts/u);
 });

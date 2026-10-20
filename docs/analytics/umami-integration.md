@@ -119,11 +119,18 @@ ID 一样验证 UUID；缺少时显示未配置，不退回带地图的网站概
 
 省份、城市表统计原生
 `count(distinct session_id)`，标注“去重访客”；这是 Umami 访客标识的估算去重，不是精确人数或浏览量。原生汇总的 Visitors 使用此口径，Visits 则统计
-`count(distinct visit_id)`；同一访客多次访问可使 Visits 大于省市表访客数。点击省份后，全局 region 筛选会作用到城市排行。同名城市在全局视图按城市名与国家聚合，需要先筛选省份再解释。原生查询不把缺失省市计入相应排行，排行占比也不能解释为全体访问占比。工作台保留实际未知值，不用国家、注册地址或省会猜补。原生省份/城市名称可能为英文，不宣称仅设置中文界面就会得到中文城市名。
+`count(distinct visit_id)`；同一访客多次访问可使 Visits 大于省市表访客数。点击省份后，全局 region 筛选会作用到城市排行。同名城市在全局视图按城市名与国家聚合，需要先筛选省份再解释。原生查询不把缺失省市计入相应排行，排行占比也不能解释为全体访问占比。工作台保留实际未知值，不用国家、注册地址或省会猜补。省市名称通过同一离线定位库的
+`zh-CN`
+名称表显示；缺少可靠中文名称时显示“暂无中文名称”，不猜测音译。筛选与存储仍使用原始键。台湾原始
+`TW` / `TW-*` 不改写，PostgreSQL 分析查询统一派生为 `CN` /
+`CN-TW`，省份显示“台湾省”；城市仍保留原始国家键用于准确翻译。所有省份/国家过滤运算、普通及展开排行和筛选候选值共享该派生规则。
 
 结果仅含版本、ID、状态，不输出响应全文、用户名、密码、Bearer token 或 collection
 cache。漏斗是同一访客会话中的事件顺序；默认没有强制相同
 `target_id`，不能解释为同一篇内容的因果转化。
+
+中文原生工作台固定 `zh-CN`，同步加载词典，不受旧浏览器语言或 URL
+locale 覆盖；日期、图例、漏斗、筛选标签与事件名称均使用中文显示。原始事件名和筛选键不变，保留协议/品牌/用户内容原值。中文省市和事件搜索反查原始键，候选最多 5 个，与原生选择器上限一致。省份指标查询在现有语句里增加固定 CASE 表达式。筛选候选值用当前窗口内活动事件的 EXISTS 判断活跃访客，避免只按首次出现时间漏掉回访者；仍是按需一次查询、最多 10 条候选，无额外数据库往返。站点/日期索引仍适用，但地域尾列未保证可直接下推索引，需上线后测量，不能据此承诺零开销。
 
 ## Owner 私有原生 UI 代理
 
@@ -152,7 +159,7 @@ worker 直连 loopback 固定 `/admin/analytics-workspace/api/batch`。
 
 `seed-synthetic-umami.mjs` 只接受 `ANALYTICS_TASK_ENV=synthetic`、loopback
 origin 和 `localhost`/`.invalid` 网站域名。额外提供合成 `UMAMI_SYNTHETIC_RUN_ID`
-UUID。工具验证只读身份和网站后，向专用任务数据库对应的内网 collector 发送两日 18 条合成事件：6 页面访问、6 曝光、4 打开、2 收藏。GeoIP 用三个公开 DNS
+UUID。工具验证只读身份和网站后，向专用任务数据库对应的内网 collector 发送两日 20 条合成事件：8 页面访问、6 曝光、4 打开、2 收藏。GeoIP 用四个公开 DNS
 resolver 地址作为合成地址 fixture；并非真实访客或真实用户位置，地域标签取决于打包 GeoIP 库，不预设精确城市。
 
 ```sh
@@ -173,12 +180,17 @@ API 不是幂等事件 upsert；seed 每个全新 disposable 数据库只执行�
 bytes，数据构建时间 `2026-10-16T18:58:36Z`，SHA256
 `fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029`。只读离线 fixture 核验得到
 `223.5.5.5 → CN-ZJ / Hangzhou`、
-`1.12.12.12 → CN-GD / Guangzhou`、`2400:3200::1 → CN-ZJ / Hangzhou`；
+`1.12.12.12 → CN-GD / Guangzhou`、`140.112.2.2 → TW-TPE / Taipei`、`2400:3200::1 → CN-ZJ / Hangzhou`；
 `114.114.114.114` 与 `180.76.76.76`
 仅有国家，没有省市。这些都是公开 DNS 地址的合成测试，绝不是实际访客或其物理位置的证明。
 
-当前归档身份已经固定；上游的 GeoIP 构建下载地址本身随时间变化，不能仅凭 Umami 源码版本宣称未来构建也得到同一份定位数据。后续更新时记录新数据的日期、哈希和 fixture 结果，按受控发布替换，重启 native
-reader 后再验证；不静默热换或引入付费 API。
+r4 构建显式固定公开 GeoIP 归档提交 `e26a98449d33ab0639d555b736898d4f55623c82`
+与归档 SHA256
+`46df66d141c04e4920e00b5e4bbfc4445178adc11de9a8b2900bcea79c100c0e`，同时核对上述 MMDB 哈希，并跳过上游随时间变化的下载。中文名称表从这一份公共数据库离线生成，保留来源与冲突统计。无每访问外部 API、额外数据库查找或常驻服务。定位数据包含 MaxMind
+GeoLite 数据（https://www.maxmind.com）及
+GeoNames 地理数据（https://www.geonames.org）。保留随库的版权/许可文件，派生中文名称在构建时生成，不写入
+Git 历史。更新维护须遵循
+[GeoLite EULA](https://www.maxmind.com/en/geolite/eula)，包括新版发布后的旧版使用/删除期限；数据更新需要同步审核库哈希、中文表和 fixture，按受控发布替换后重启验证，不静默热换。
 
 依据：[固定定位源码](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/src/lib/detect.ts)、
 [固定构建脚本](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/scripts/build-geo.js)、

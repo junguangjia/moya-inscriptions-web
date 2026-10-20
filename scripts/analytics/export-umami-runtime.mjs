@@ -15,6 +15,7 @@ import {
   UMAMI_VERSION,
   UMAMI_SOURCE_COMMIT,
   UMAMI_BASE_PATH,
+  UMAMI_WORKSPACE_IDENTITY,
 } from "./common.mjs";
 
 export function runtimeExportPlan(values) {
@@ -51,7 +52,12 @@ export function verifyRuntimeImage(metadata, plan) {
     labels["com.artvenn.umami.base-path"] !== UMAMI_BASE_PATH ||
     labels["com.artvenn.umami.libc"] !== "glibc" ||
     labels["com.artvenn.umami.node-major"] !== "24" ||
-    labels["com.artvenn.umami.pool-max"] !== "3"
+    labels["com.artvenn.umami.pool-max"] !== "3" ||
+    labels["com.artvenn.umami.locale"] !== "zh-CN" ||
+    labels["com.artvenn.umami.patch-sha256"] !== UMAMI_WORKSPACE_IDENTITY ||
+    labels["com.artvenn.umami.geography"] !== "cn-province-v1" ||
+    labels["com.artvenn.umami.geo-sha256"] !==
+      "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029"
   )
     throw new AnalyticsToolError("PINNED_GLIBC_RUNTIME_IMAGE_REQUIRED");
 }
@@ -186,7 +192,7 @@ export async function exportRuntime(values) {
     manifest = await open(plan.manifest, "wx", 0o600);
     manifestCreated = true;
     await manifest.writeFile(
-      `${JSON.stringify({ version: UMAMI_VERSION, sourceCommit: UMAMI_SOURCE_COMMIT, sourceArchiveSha256: "dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a", imageId: plan.image, platform: plan.platform, libc: "glibc", nodeMajor: 24, basePath: UMAMI_BASE_PATH, poolMax: 3, archiveSha256: sha256, archiveBytes: bytes, contents: "/app standalone only; no private env/config/database" }, null, 2)}\n`,
+      `${JSON.stringify({ version: UMAMI_VERSION, sourceCommit: UMAMI_SOURCE_COMMIT, sourceArchiveSha256: "dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a", imageId: plan.image, platform: plan.platform, libc: "glibc", nodeMajor: 24, basePath: UMAMI_BASE_PATH, poolMax: 3, workspaceIdentitySha256: UMAMI_WORKSPACE_IDENTITY, locale: "zh-CN", geographyPolicy: "cn-province-v1", geoDatabaseSha256: "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029", archiveSha256: sha256, archiveBytes: bytes, contents: "/app standalone only; no private env/config/database" }, null, 2)}\n`,
     );
     await manifest.sync();
     success = true;

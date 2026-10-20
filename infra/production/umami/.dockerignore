@@ -4,3 +4,8 @@
 !pool-limit.patch
 !upstream-pool.sha256
 !patched-pool.sha256
+!chinese-workspace.patch
+!upstream-chinese.sha256
+!patched-chinese.sha256
+!generated-chinese.sha256
+!generate-chinese-dictionaries.mjs

@@ -110,7 +110,7 @@ export const AnalyticsClient = ({
           <>
             <p className={styles.note}>
               默认显示省份与城市排行；点击省份可筛选城市，国家保留为筛选条件。
-              位置缺失不计入对应排行，不代表没有访问。省市为原生定位库名称，可能显示英文。
+              台湾省纳入省份排行，省市名称以中文显示；定位缺失不猜补。
               <a href={workspacePath} rel="noreferrer" target="_blank">
                 全屏打开
               </a>
@@ -124,7 +124,7 @@ export const AnalyticsClient = ({
           </>
         ) : (
           <p role="status">
-            Umami 尚未配置。完成独立数据库、只读账号及省市看板初始化并配置 Board
+            Umami 尚未配置。完成独立数据库、只读账号及省市看板初始化并配置看板
             后，这里将显示实际看板。
           </p>
         )
@@ -132,7 +132,7 @@ export const AnalyticsClient = ({
       {tab === "ips" ? (
         <>
           <p className={styles.note}>
-            最近 7 天内最新 50 批访问的可信来源 IP，仅限 Owner。地域分布请查看
+            最近 7 天内最新 50 批访问的可信来源 IP，仅限管理员。地域分布请查看
             Umami 工作台。
           </p>
           {ips ? (
