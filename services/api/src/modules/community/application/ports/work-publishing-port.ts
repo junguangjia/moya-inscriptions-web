@@ -148,6 +148,17 @@ export interface PublishingUploadFence {
 }
 
 /**
+ * Backend-side timing of the committed transfer, recorded with the commit for
+ * content-free upload measurement. `firstByteAt` is when the media store took
+ * the first body chunk (after its own preparation), `lastByteAt` when the
+ * request body ended; the commit time itself is the blob's creation time.
+ */
+export interface PublishingUploadTiming {
+  readonly firstByteAt: Date;
+  readonly lastByteAt: Date;
+}
+
+/**
  * `commitComponentUpload` outcome. Every status other than `committed` stored
  * nothing: the caller removes the written blob from the media store and
  * answers 409 (`superseded`, `cancelled`) or 413 (`size_mismatch`).
@@ -794,12 +805,14 @@ export interface PublishingUploadOperations {
    * inserts the blob (purpose from the fence), marks the component `received`
    * with its SHA-256, moves its declared bytes from reserved to committed
    * (actual size) and, when every component is received, moves the item to
-   * `processing` and enqueues `process_item`.
+   * `processing` and enqueues `process_item`. A committing write also
+   * records the optional transfer `timing`; no other outcome records it.
    */
   commitComponentUpload(
     fence: PublishingUploadFence,
     blob: PublishingMediaWriteResult,
     now: Date,
+    timing?: PublishingUploadTiming,
   ): Promise<PublishingUploadCommit>;
   /**
    * The transfer ended without a stored blob (client abort, overflow, store
@@ -807,6 +820,18 @@ export interface PublishingUploadOperations {
    * `awaiting`. Idempotent; any other state is left unchanged.
    */
   abortComponentUpload(fence: PublishingUploadFence, now: Date): Promise<void>;
+  /**
+   * Measurement only, after `beginComponentUpload` refused a transfer with a
+   * conflict: when the actor's component already holds a committed blob (the
+   * client resent after losing the answer), counts the refusal, keeps the
+   * first refusal time and resolves the commit time; otherwise changes
+   * nothing and resolves `null`. Never part of the refusal's outcome.
+   */
+  noteUploadRefusedAfterCommit(
+    actorId: string,
+    componentId: string,
+    now: Date,
+  ): Promise<Date | null>;
 }
 
 /** Explicit, idempotent submissions (U11, P05-P06, V06-V07, A03). */

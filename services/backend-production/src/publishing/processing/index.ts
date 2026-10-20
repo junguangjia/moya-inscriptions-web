@@ -77,6 +77,7 @@ export type {
   ProcessorOutcome,
   ProcessorPairing,
   ProcessorRenditionRole,
+  ProcessorTiming,
   PublishingMediaProcessorOptions,
 } from "./media-processor.js";
 export { probeJpegBlock, probeMp4, probeWebp } from "./output-probe.js";

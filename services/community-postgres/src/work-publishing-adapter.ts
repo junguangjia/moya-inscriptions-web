@@ -76,6 +76,7 @@ import type {
   PublishingUploadCommit,
   PublishingUploadFence,
   PublishingUploadStart,
+  PublishingUploadTiming,
   WorkPublishingPort,
 } from "@moya/api";
 import type { Pool } from "pg";
@@ -336,11 +337,24 @@ export class PostgresWorkPublishingAdapter
     fence: PublishingUploadFence,
     blob: PublishingMediaWriteResult,
     now: Date,
+    timing?: PublishingUploadTiming,
   ): Promise<PublishingUploadCommit> {
-    return uploads.commitComponentUpload(this.pool, fence, blob, now);
+    return uploads.commitComponentUpload(this.pool, fence, blob, now, timing);
   }
   abortComponentUpload(fence: PublishingUploadFence, now: Date): Promise<void> {
     return uploads.abortComponentUpload(this.pool, fence, now);
+  }
+  noteUploadRefusedAfterCommit(
+    actorId: string,
+    componentId: string,
+    now: Date,
+  ): Promise<Date | null> {
+    return uploads.noteUploadRefusedAfterCommit(
+      this.pool,
+      actorId,
+      componentId,
+      now,
+    );
   }
   claimJobs(
     options: PublishingJobClaimOptions,
