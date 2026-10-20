@@ -337,7 +337,18 @@ describe("background publication", () => {
           release = resolve;
         }),
     );
-    t.runtime.queuePublication(content("title"));
+    t.runtime.queuePublication({
+      ...content("title"),
+      items: [
+        {
+          key: "photo",
+          itemId: `media-item-${"8".repeat(32)}`,
+          kind: "static",
+          qualityMode: "standard",
+          edit: { rotation: 0, crop: null },
+        },
+      ],
+    });
     await settle();
     t.signIn(OTHER_ACCOUNT);
     release({
@@ -351,6 +362,10 @@ describe("background publication", () => {
     expect(t.client.submit).not.toHaveBeenCalled();
     t.signIn(ACCOUNT);
     await t.runtime.continuePublication();
+    for (let round = 0; round < 4; round += 1) {
+      t.timers.fireAll();
+      await settle();
+    }
     await settle();
     expect(t.client.submit).toHaveBeenCalledOnce();
     t.runtime.dispose();
@@ -485,8 +500,23 @@ describe("background publication", () => {
     t.signIn(ACCOUNT);
     t.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
     t.client.submit.mockRejectedValueOnce(clientError(0, "lost answer", true));
-    t.runtime.queuePublication(content("title"));
+    t.runtime.queuePublication({
+      ...content("title"),
+      items: [
+        {
+          key: "photo",
+          itemId: `media-item-${"8".repeat(32)}`,
+          kind: "static",
+          qualityMode: "standard",
+          edit: { rotation: 0, crop: null },
+        },
+      ],
+    });
     await settle();
+    for (let round = 0; round < 4; round += 1) {
+      t.timers.fireAll();
+      await settle();
+    }
     expect(t.runtime.submission()?.store.get().status).toBe("unconfirmed");
     expect(t.client.submissionReceipt).toHaveBeenCalledOnce();
     expect(await t.runtime.closeSession({ discard: true })).toBe("kept");

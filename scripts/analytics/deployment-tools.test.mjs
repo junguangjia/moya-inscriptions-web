@@ -2,7 +2,10 @@ import { URL } from "node:url";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { UMAMI_WORKSPACE_IDENTITY } from "./common.mjs";
+import {
+  UMAMI_WORKSPACE_IDENTITY,
+  UMAMI_PG_TLS_HOST_SHA256,
+} from "./common.mjs";
 import { createHash } from "node:crypto";
 import { buildImagePlan } from "./build-umami-image.mjs";
 import {
@@ -50,6 +53,113 @@ test("pinned build isolates its context and checks the exact pool-only patch", a
     .filter((line) => line.startsWith("+") && !line.startsWith("+++"));
   assert.equal(added.length, 2);
   assert.ok(added.every((line) => line.includes("max: 3")));
+});
+
+test("pg TLS patch only adds the original host to the existing socket options", async () => {
+  const patch = await readFile(
+    new URL("../../infra/production/umami/pg-tls-host.patch", import.meta.url),
+    "utf8",
+  );
+  const target =
+    "node_modules/.pnpm/pg@8.22.0/node_modules/pg/lib/connection.js";
+  const assertHostOnly = (value) => {
+    assert.deepEqual(
+      value.split("\n").filter((line) => /^[+@-]/u.test(line)),
+      [
+        `--- a/${target}`,
+        `+++ b/${target}`,
+        "@@ -96,6 +96,7 @@",
+        "+      host,",
+      ],
+    );
+  };
+  assertHostOnly(patch);
+  for (const changed of [
+    patch.replace("+      host,", "+      host: self.host,"),
+    patch.replace(
+      "+      host,",
+      "+      host,\n+      rejectUnauthorized: false,",
+    ),
+    patch.replace("       socket: self.stream,", "-      socket: self.stream,"),
+    `${patch}@@ -120,0 +121,1 @@\n+      host,\n`,
+    `${patch}--- a/another.js\n+++ b/another.js\n`,
+  ]) {
+    assert.throws(() => assertHostOnly(changed), assert.AssertionError);
+  }
+});
+
+test("pg TLS patch and checksum pins stay bound to both image build paths and exports", async () => {
+  const directory = new URL("../../infra/production/umami/", import.meta.url);
+  const source = JSON.parse(
+    await readFile(new URL("source.json", directory), "utf8"),
+  ).postgresTlsPatch;
+  const target =
+    "node_modules/.pnpm/pg@8.22.0/node_modules/pg/lib/connection.js";
+  assert.equal(source.file, "pg-tls-host.patch");
+  assert.equal(source.dependency, "pg@8.22.0");
+  assert.equal(
+    source.upstreamFileSha256,
+    "5c17c585f307518f8369d6162d138c58eef1309128ad2fae2d6b315c8000234e",
+  );
+  assert.equal(source.upstreamHashes, "upstream-pg-tls.sha256");
+  assert.equal(source.patchedHashes, "patched-pg-tls.sha256");
+  assert.equal(
+    createHash("sha256")
+      .update(await readFile(new URL(source.file, directory)))
+      .digest("hex"),
+    source.sha256,
+  );
+  assert.equal(
+    await readFile(new URL(source.upstreamHashes, directory), "utf8"),
+    `${source.upstreamFileSha256}  ${target}\n`,
+  );
+  assert.equal(source.patchedFileSha256, UMAMI_PG_TLS_HOST_SHA256);
+  assert.equal(
+    await readFile(new URL(source.patchedHashes, directory), "utf8"),
+    `${UMAMI_PG_TLS_HOST_SHA256}  ${target}\n`,
+  );
+
+  const dockerfile = await readFile(new URL("Dockerfile", directory), "utf8");
+  const stages = new Map(
+    dockerfile
+      .split(/^FROM /mu)
+      .slice(1)
+      .map((body) => [/^\S+ AS (\S+)\n/u.exec(body)?.[1], body]),
+  );
+  const patchStep =
+    "RUN sha256sum -c /tmp/upstream-pg-tls.sha256 && patch -p1 --fuzz=0 < /tmp/pg-tls-host.patch && sha256sum -c /tmp/patched-pg-tls.sha256";
+  for (const name of ["builder", "standalone-builder"]) {
+    const stage = stages.get(name);
+    assert.ok(stage, `${name} must remain a named build stage`);
+    const instructions = stage.replace(/[ \t]*\\\n[ \t]*/gu, " ").split("\n");
+    assert.equal(
+      instructions.filter(
+        (line) =>
+          line ===
+          "COPY pg-tls-host.patch upstream-pg-tls.sha256 patched-pg-tls.sha256 /tmp/",
+      ).length,
+      1,
+    );
+    assert.equal(instructions.filter((line) => line === patchStep).length, 1);
+    assert.ok(
+      stage.indexOf("COPY pg-tls-host.patch") <
+        stage.indexOf("RUN sha256sum -c /tmp/upstream-pg-tls.sha256"),
+    );
+    assert.ok(
+      stage.indexOf(patchStep.split(" && ")[0]) <
+        stage.indexOf("pnpm build:docker"),
+    );
+  }
+  for (const name of ["runtime", "standalone"]) {
+    assert.ok(
+      stages
+        .get(name)
+        ?.includes(
+          `com.artvenn.umami.pg-tls-host-sha256="${UMAMI_PG_TLS_HOST_SHA256}"`,
+        ),
+      `${name} must declare the checked TLS file identity`,
+    );
+  }
 });
 
 test("synthetic seed is bounded, local only, and uses pageviews plus canonical funnel names", async () => {
@@ -155,6 +265,7 @@ test("standalone runtime export requires immutable glibc image metadata and expl
       "com.artvenn.umami.pool-max": "3",
       "com.artvenn.umami.locale": "zh-CN",
       "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
+      "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
       "com.artvenn.umami.geography": "cn-province-v1",
       "com.artvenn.umami.geo-sha256":
         "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029",
@@ -163,6 +274,7 @@ test("standalone runtime export requires immutable glibc image metadata and expl
   assert.doesNotThrow(() => verifyRuntimeImage(metadata, plan));
   for (const key of [
     "com.artvenn.umami.patch-sha256",
+    "com.artvenn.umami.pg-tls-host-sha256",
     "com.artvenn.umami.locale",
     "com.artvenn.umami.geography",
     "com.artvenn.umami.geo-sha256",

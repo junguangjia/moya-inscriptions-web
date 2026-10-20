@@ -193,6 +193,8 @@ const unconfirmedMessage = "暂时无法确认结果，请稍后检查";
 
 const failureMessages: Readonly<Record<PublishingRequestErrorCode, string>> = {
   empty_work: "标题、正文和图片不能都为空",
+  title_required: "请填写标题",
+  image_required: "请至少添加一张图片",
   title_too_long: "标题过长",
   title_line_break: "标题不能换行",
   body_too_long: "正文过长",

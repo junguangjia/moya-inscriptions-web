@@ -24,6 +24,13 @@ const emptyContent = {
   coverKey: null,
   coverCrop: null,
 };
+const image = {
+  key: "photo-1",
+  itemId: `media-item-${"a".repeat(32)}`,
+  kind: "static",
+  qualityMode: "standard",
+  edit: { rotation: 0, crop: null },
+};
 
 describe("work publishing Unicode counting rule", () => {
   it("counts code points, not UTF-16 units", () => {
@@ -80,6 +87,7 @@ describe("work publishing Unicode counting rule", () => {
     const submitted = workSubmissionContentSchema.safeParse({
       ...emptyContent,
       title: "上\r\n下",
+      items: [image],
     });
     expect(
       submitted.success
@@ -91,6 +99,7 @@ describe("work publishing Unicode counting rule", () => {
         .safeParse({
           ...emptyContent,
           title: astral.repeat(201),
+          items: [image],
         })
         .error?.issues.map((issue) => issue.message),
     ).toEqual(["title_too_long"]);
@@ -133,6 +142,18 @@ describe("work publishing Unicode counting rule", () => {
         { title: "", body: " 正文 ", itemCount: 0 },
         { maxItems: 50 },
       ),
+    ).toEqual(["title_required", "image_required"]);
+    expect(
+      publishingContentIssues(
+        { title: " \t　", body: "正文", itemCount: 1 },
+        { maxItems: 50 },
+      ),
+    ).toEqual(["title_required"]);
+    expect(
+      publishingContentIssues(
+        { title: " 标题 ", body: "", itemCount: 1 },
+        { maxItems: 50 },
+      ),
     ).toEqual([]);
   });
 
@@ -147,16 +168,16 @@ describe("work publishing Unicode counting rule", () => {
   });
 
   it("decides the item limit at 0, 1, 50 and 51 items", () => {
-    const issues = (itemCount: number, title = "") =>
+    const issues = (itemCount: number, title = "标题") =>
       publishingContentIssues({ title, body: "", itemCount }, { maxItems: 50 });
-    expect(issues(0)).toEqual(["empty_work"]);
-    expect(issues(0, "只有标题")).toEqual([]);
+    expect(issues(0)).toEqual(["image_required"]);
+    expect(issues(1, "")).toEqual(["title_required"]);
     expect(issues(1)).toEqual([]);
     expect(issues(50)).toEqual([]);
     expect(issues(51)).toEqual(["items_limit"]);
     expect(
       publishingContentIssues(
-        { title: "", body: "", itemCount: 501 },
+        { title: "标题", body: "", itemCount: 501 },
         { maxItems: 1_000 },
       ),
     ).toEqual(["items_limit"]);

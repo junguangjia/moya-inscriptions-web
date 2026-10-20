@@ -14,7 +14,7 @@ import type { ChangeEvent, MouseEvent, RefObject } from "react";
 
 /**
  * How photos enter the phone publishing flow (#244 r4). The start screen
- * offers 选择照片 · 拍照 · 专题 as large tiles above 跳过，只发布文字, with
+ * offers 选择照片 · 拍照 · 专题 as large tiles above 先写标题和正文, with
  * 原图画质 in its bottom bar; 编辑's + (beside the strip's last photo,
  * outside its scroller) opens the add sheet with 原图画质 · 选择照片 · 拍照
  * (r4 ASK-3). 选择照片 opens the system picker for several photos, 拍照 the
@@ -246,7 +246,7 @@ export interface StartOptions {
 }
 
 export interface EmptySelectionProps extends AddControlProps {
-  /** 跳过，只发布文字; absent while files are still being read. */
+  /** 先写标题和正文; absent while files are still being read. */
   readonly onSkip: (() => void) | null;
   /** 专题 (the screen draws 草稿箱 in its bar); absent: photos only. */
   readonly start?: StartOptions | null | undefined;
@@ -372,7 +372,7 @@ export const EmptySelection = ({
           onClick={onSkip}
           type="button"
         >
-          跳过，只发布文字
+          先写标题和正文
         </button>
       )}
     </div>

@@ -435,6 +435,8 @@ describe("editor session store", () => {
       "正文最多 10000 字",
     ]);
     expect(failureField("title_too_long")).toBe("title");
+    expect(failureField("title_required")).toBe("title");
+    expect(failureField("image_required")).toBe("media");
     expect(failureField("source_note_too_long")).toBe("sourceNote");
     expect(failureField("not_ready")).toBe("media");
     expect(failureField("daily_limit")).toBe("general");

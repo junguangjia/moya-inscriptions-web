@@ -37,5 +37,15 @@
     "globalCityEntries": 13397,
     "regionEntries": 1320,
     "identitySha256": "fe1ae90c0f4b9b71c3362d62404518f8bdcbe7ce35de22abdfc4d6d3567cf101"
+  },
+  "postgresTlsPatch": {
+    "file": "pg-tls-host.patch",
+    "sha256": "fd7cd1286fd6670c3fc02dcc36cac246386d62c7aef771d6946307a2e383b300",
+    "dependency": "pg@8.22.0",
+    "scope": "Pass the original host to tls.connect with the existing socket; retain default certificate and CA validation",
+    "upstreamFileSha256": "5c17c585f307518f8369d6162d138c58eef1309128ad2fae2d6b315c8000234e",
+    "patchedFileSha256": "ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6",
+    "upstreamHashes": "upstream-pg-tls.sha256",
+    "patchedHashes": "patched-pg-tls.sha256"
   }
 }

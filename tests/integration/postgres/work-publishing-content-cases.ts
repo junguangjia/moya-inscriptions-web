@@ -600,49 +600,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         await discovery.browse(viewer, discoveryQuerySchema.parse({}))
       ).items.map((card) => card.target.id);
 
-    it("accepts text-only, title-only and media-only works, stores normalized text and refuses whitespace-empty content", async () => {
+    it("requires a title and photo, stores normalized text and refuses incomplete submissions", async () => {
       const now = at("2026-06-01T12:00:00.000Z");
-      const text = await publish(
-        a,
-        { body: "  只有正文\r\n第二行\r第三行  " },
-        now,
-      );
-      expect(await revisionRow(text.revisionId)).toMatchObject({
-        title: "",
-        body: "只有正文\n第二行\n第三行",
-        disposition: "approved",
-        sequence: 1,
-      });
-      const textView = await authors.readWork(text.workId, b);
-      expect(textView).toMatchObject({
-        title: "",
-        text: "只有正文\n第二行\n第三行",
-        media: [],
-        available: true,
-        canEdit: false,
-        firstPublishedAt: now.toISOString(),
-        editedAt: null,
-        authorship: { kind: "original" },
-      });
-      expect(textView).not.toHaveProperty("visibility");
-      expect(
-        await discovery.card({ type: "work", id: text.workId }, b),
-      ).toMatchObject({
-        title: "",
-        excerpt: "只有正文\n第二行\n第三行",
-        live: false,
-        media: null,
-      });
-
-      const title = await publish(a, { title: "  只有标题  " }, now);
-      expect((await authors.readWork(title.workId, null)).title).toBe(
-        "只有标题",
-      );
-
       const { itemId } = await mediaItem(a);
       const media = await publish(
         a,
         {
+          title: "  图文作品  ",
+          body: "  正文\r\n第二行\r第三行  ",
           items: [entry(itemId)],
           authorship: {
             kind: "copy_practice",
@@ -652,7 +617,22 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         },
         now,
       );
+      expect(await revisionRow(media.revisionId)).toMatchObject({
+        title: "图文作品",
+        body: "正文\n第二行\n第三行",
+        disposition: "approved",
+        sequence: 1,
+      });
       const mediaView = await authors.readWork(media.workId, null);
+      expect(mediaView).toMatchObject({
+        title: "图文作品",
+        text: "正文\n第二行\n第三行",
+        available: true,
+        canEdit: false,
+        firstPublishedAt: now.toISOString(),
+        editedAt: null,
+      });
+      expect(mediaView).not.toHaveProperty("visibility");
       // Every recorded rendition has the display's size: one candidate, the
       // display itself (the anchor).
       expect(mediaView.media).toEqual([
@@ -680,7 +660,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         { type: "work", id: media.workId },
         null,
       );
-      expect(mediaCard.excerpt).toBeUndefined();
+      expect(mediaCard.excerpt).toBe("正文\n第二行\n第三行");
       expect(mediaCard.media).toEqual({
         type: "work",
         id: itemId,
@@ -708,11 +688,22 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       const empty = await holdSession(a);
       const rejected: [Partial<WorkSubmissionContent>, string][] = [
         [{ title: "   ", body: " \n\t\r\n " }, "empty_work"],
-        [{ title: "第一行\n第二行" }, "title_line_break"],
-        [{ body: "字".repeat(10_001) }, "body_too_long"],
+        [{ body: "只有正文" }, "title_required"],
+        [{ title: "只有标题", body: "正文" }, "image_required"],
+        [{ items: [entry(itemId)] }, "title_required"],
+        [{ title: " \t　", items: [entry(itemId)] }, "title_required"],
+        [
+          { title: "第一行\n第二行", items: [entry(itemId)] },
+          "title_line_break",
+        ],
+        [
+          { title: "作品", body: "字".repeat(10_001), items: [entry(itemId)] },
+          "body_too_long",
+        ],
         [
           {
             title: "作品",
+            items: [entry(itemId)],
             authorship: {
               kind: "material_sharing",
               originalAuthor: "名".repeat(101),
@@ -741,13 +732,13 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           "SELECT count(*) AS n FROM community.works WHERE author_id=$1",
           [a],
         ),
-      ).toBe(3);
+      ).toBe(1);
       expect(
         await count(
           "SELECT count(*) AS n FROM community.author_events WHERE actor_id=$1 AND action='publishing.submit'",
           [a],
         ),
-      ).toBe(3);
+      ).toBe(1);
     });
 
     it("answers not_ready with placeholder, unprocessed and underived item keys without writing anything", async () => {
@@ -877,7 +868,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           a,
           command(
             { sessionId: await holdSession(a) },
-            { items: [entry(foreign.itemId)] },
+            { title: "其他作者的图片", items: [entry(foreign.itemId)] },
           ),
           now,
         ),
@@ -1005,8 +996,12 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
     it("is idempotent by request id, answers lost responses from the receipt and refuses a reused id with other content", async () => {
       const now = at("2026-06-03T12:00:00.000Z");
-      const sessionId = await holdSession(a);
-      const request = command({ sessionId }, { title: "一次提交" });
+      const { itemId } = await mediaItem(a);
+      const sessionId = await holdSession(a, null, [itemId]);
+      const request = command(
+        { sessionId },
+        { title: "一次提交", items: [entry(itemId)] },
+      );
       const [first, second] = await Promise.all([
         adapter.submit(a, request, now),
         adapter.submit(a, request, now),
@@ -1073,18 +1068,20 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
     it("counts the 100th first submission and refuses the 101st on one America/New_York date", async () => {
       const now = at("2026-06-15T16:00:00.000Z");
+      const { itemId } = await mediaItem(a);
+      const items = [entry(itemId)];
       // 99 earlier successful first submissions on New York date 2026-06-15.
       await pool.query(
         "INSERT INTO community.daily_new_work_submissions(account_id,ny_date,count) VALUES($1,'2026-06-15',99)",
         [a],
       );
-      await publish(a, { title: "第一百件" }, now);
+      await publish(a, { title: "第一百件", items }, now);
       await expectRejection(
         adapter.submit(
           a,
           command(
             { sessionId: await holdSession(a) },
-            { title: "第一百零一件" },
+            { title: "第一百零一件", items },
           ),
           now,
         ),
@@ -1105,17 +1102,25 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           [a],
         ),
       ).toBe(1);
-      await publish(a, { title: "次日" }, at("2026-06-16T04:00:00.000Z"));
+      await publish(
+        a,
+        { title: "次日", items },
+        at("2026-06-16T04:00:00.000Z"),
+      );
     });
 
     it("uses the America/New_York date of the injected clock across midnight on both DST change dates", async () => {
+      const { itemId } = await mediaItem(a);
       await pool.query(
         "UPDATE community.work_publishing_settings SET daily_new_work_limit=1 WHERE id='settings'",
       );
       const attempt = async (iso: string) =>
         adapter.submit(
           a,
-          command({ sessionId: await holdSession(a) }, { body: iso }),
+          command(
+            { sessionId: await holdSession(a) },
+            { title: "跨日作品", body: iso, items: [entry(itemId)] },
+          ),
           at(iso),
         );
       // 2026-03-08 is 23 hours long; the next New York midnight is 04:00Z (EDT).
@@ -1154,13 +1159,18 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         "UPDATE community.work_publishing_settings SET daily_new_work_limit=1 WHERE id='settings'",
       );
       const now = at("2026-07-01T15:00:00.000Z");
+      const photo = await mediaItem(a);
+      const nextPhoto = await mediaItem(a);
+      const items = [entry(photo.itemId)];
       const request = command(
         { sessionId: await holdSession(a) },
-        { title: "当天唯一新作" },
+        { title: "当天唯一新作", items },
       );
       const work = confirmed(await adapter.submit(a, request, now));
       expect(await adapter.submit(a, request, now)).toEqual(work);
-      confirmed(await editWork(a, work.workId, { title: "编辑一次" }, now));
+      confirmed(
+        await editWork(a, work.workId, { title: "编辑一次", items }, now),
+      );
       for (const visibility of ["self", "public"] as const)
         await adapter.setVisibility(
           a,
@@ -1177,7 +1187,10 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       await expectRejection(
         adapter.submit(
           a,
-          command({ sessionId: await holdSession(a) }, { title: "第二件" }),
+          command(
+            { sessionId: await holdSession(a) },
+            { title: "第二件", items: [entry(nextPhoto.itemId)] },
+          ),
           now,
         ),
         CommunityInputError,
@@ -1195,7 +1208,9 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
     it("publishes directly or holds the first submission for moderation, and keeps self-only submissions out of the queue", async () => {
       const now = at("2026-07-02T10:00:00.000Z");
-      const direct = await publish(a, { title: "直接发布" }, now);
+      const { itemId } = await mediaItem(a);
+      const items = [entry(itemId)];
+      const direct = await publish(a, { title: "直接发布", items }, now);
       expect(await workRow(direct.workId)).toMatchObject({
         visibility: "public",
         public_revision_id: direct.revisionId,
@@ -1206,7 +1221,11 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       expect(await browseIds(b)).toContain(direct.workId);
 
       await setPolicy("PRE_MODERATION");
-      const held = await publish(a, { title: "等待审核", body: "正文" }, now);
+      const held = await publish(
+        a,
+        { title: "等待审核", body: "正文", items },
+        now,
+      );
       expect(await revisionRow(held.revisionId)).toMatchObject({
         disposition: "pending",
         version: 1,
@@ -1243,7 +1262,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
       const self = await publish(
         a,
-        { title: "仅自己可见", visibility: "self" },
+        { title: "仅自己可见", visibility: "self", items },
         now,
       );
       expect(await revisionRow(self.revisionId)).toMatchObject({
@@ -1308,9 +1327,11 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
     it("keeps the previous public revision for others while an edit awaits approval, shows the author the latest and denies stale edits", async () => {
       const published = at("2026-07-03T09:00:00.000Z");
+      const { itemId } = await mediaItem(a);
+      const items = [entry(itemId)];
       const work = await publish(
         a,
-        { title: "原来的标题", body: "原来的正文" },
+        { title: "原来的标题", body: "原来的正文", items },
         published,
       );
       await setPolicy("PRE_MODERATION");
@@ -1322,7 +1343,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           a,
           command(
             { draftId },
-            { title: "新的标题", body: "新的正文" },
+            { title: "新的标题", body: "新的正文", items },
             work.revisionId,
           ),
           editedAt,
@@ -1365,7 +1386,11 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       expect(await adapter.readEditableWork(a, work.workId)).toMatchObject({
         workId: work.workId,
         revisionId: edit.revisionId,
-        content: { title: "新的标题", body: "新的正文", items: [] },
+        content: {
+          title: "新的标题",
+          body: "新的正文",
+          items: items.map((item) => ({ ...item, key: item.itemId })),
+        },
         visibility: "public",
         firstPublishedAt: published.toISOString(),
         editedAt: null,
@@ -1408,7 +1433,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           a,
           command(
             { sessionId: staleSession },
-            { title: "过期的编辑" },
+            { title: "过期的编辑", items },
             work.revisionId,
           ),
           editedAt,
@@ -1420,7 +1445,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           a,
           command(
             { sessionId: await holdSession(a, work.workId) },
-            { title: "缺少基础版本" },
+            { title: "缺少基础版本", items },
             null,
           ),
           editedAt,
@@ -1430,7 +1455,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       await expectRejection(
         adapter.submit(
           a,
-          command({ draftId }, { title: "再次提交" }, edit.revisionId),
+          command({ draftId }, { title: "再次提交", items }, edit.revisionId),
           editedAt,
         ),
         CommunityConflictError,
@@ -1444,9 +1469,11 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
     it("approves only the latest pending submission at its current version and marks Edited only after a real content change", async () => {
       await setPolicy("PRE_MODERATION");
       const t0 = at("2026-07-04T08:00:00.000Z");
-      const first = await publish(a, { title: "第一版" }, t0);
+      const { itemId } = await mediaItem(a);
+      const items = [entry(itemId)];
+      const first = await publish(a, { title: "第一版", items }, t0);
       const second = confirmed(
-        await editWork(a, first.workId, { title: "第二版" }, t0),
+        await editWork(a, first.workId, { title: "第二版", items }, t0),
       );
       expect(await revisionRow(first.revisionId)).toMatchObject({
         disposition: "superseded",
@@ -1502,7 +1529,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       });
 
       const third = confirmed(
-        await editWork(a, first.workId, { title: "第三版" }, approvedAt),
+        await editWork(a, first.workId, { title: "第三版", items }, approvedAt),
       );
       const thirdAt = at("2026-07-04T10:00:00.000Z");
       await moderate(third.revisionId, 1, "approve", thirdAt);
@@ -1512,7 +1539,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         title: "第三版",
       });
       const fourth = confirmed(
-        await editWork(a, first.workId, { title: "第三版" }, thirdAt),
+        await editWork(a, first.workId, { title: "第三版", items }, thirdAt),
       );
       expect((await revisionRow(fourth.revisionId)).content_sha256).toBe(
         (await revisionRow(third.revisionId)).content_sha256,
@@ -1526,7 +1553,12 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       expect((await workRow(first.workId)).edited_at).toEqual(thirdAt);
 
       const fifth = confirmed(
-        await editWork(a, first.workId, { title: "被拒绝的版本" }, thirdAt),
+        await editWork(
+          a,
+          first.workId,
+          { title: "被拒绝的版本", items },
+          thirdAt,
+        ),
       );
       expect(
         await moderate(
@@ -1693,9 +1725,11 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
     it("makes a self-only work public under the current policy with its actual first publication time", async () => {
       const created = at("2026-07-06T08:00:00.000Z");
+      const { itemId } = await mediaItem(a);
+      const items = [entry(itemId)];
       const direct = await publish(
         a,
-        { title: "先私密后公开", visibility: "self" },
+        { title: "先私密后公开", visibility: "self", items },
         created,
       );
       expect(await workRow(direct.workId)).toMatchObject({
@@ -1744,7 +1778,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       await setPolicy("PRE_MODERATION");
       const held = await publish(
         a,
-        { title: "审核后公开", visibility: "self" },
+        { title: "审核后公开", visibility: "self", items },
         created,
       );
       await adapter.setVisibility(
@@ -1777,14 +1811,21 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
     it("never lets edits undo an Admin hide or removal, and refuses a self-restore of a removed work", async () => {
       const now = at("2026-07-07T08:00:00.000Z");
-      const hidden = await publish(a, { title: "被隐藏" }, now);
+      const { itemId } = await mediaItem(a);
+      const items = [entry(itemId)];
+      const hidden = await publish(a, { title: "被隐藏", items }, now);
       await contentOperator.moderateWork(hidden.workId, operator, {
         requestId: randomUUID(),
         state: "hidden",
         expectedVersion: (await authors.readWork(hidden.workId, a)).version,
       });
       confirmed(
-        await editWork(a, hidden.workId, { title: "隐藏期间的编辑" }, now),
+        await editWork(
+          a,
+          hidden.workId,
+          { title: "隐藏期间的编辑", items },
+          now,
+        ),
       );
       await adapter.setVisibility(
         a,
@@ -1824,14 +1865,14 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         CommunityConflictError,
       );
 
-      const removed = await publish(a, { title: "被移除" }, now);
+      const removed = await publish(a, { title: "被移除", items }, now);
       await contentOperator.moderateWork(removed.workId, operator, {
         requestId: randomUUID(),
         state: "removed",
         expectedVersion: (await authors.readWork(removed.workId, a)).version,
       });
       await expectRejection(
-        editWork(a, removed.workId, { title: "试图恢复" }, now),
+        editWork(a, removed.workId, { title: "试图恢复", items }, now),
         CommunityInputError,
         "work_unavailable",
       );
@@ -1852,7 +1893,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         now,
       );
       await expectRejection(
-        editWork(a, removed.workId, { title: "删除后的编辑" }, now),
+        editWork(a, removed.workId, { title: "删除后的编辑", items }, now),
         CommunityInputError,
         "work_unavailable",
       );
@@ -3049,7 +3090,10 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         await expectRejection(
           adapter.submit(
             a,
-            command({ sessionId }, { title: `迟到 ${round}` }),
+            command(
+              { sessionId },
+              { title: `迟到 ${round}`, items: [entry(itemId)] },
+            ),
             now,
           ),
           CommunityConflictError,
@@ -3334,27 +3378,34 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
     it("submits a session under the expiry rule: an unlapsed lease or a transfer still progressing", async () => {
       const now = at("2026-07-15T10:00:00.000Z");
+      const { itemId } = await mediaItem(a);
       const lease = (sessionId: string, expires: Date) =>
         pool.query(
           "UPDATE community.publishing_sessions SET lease_expires_at=$2 WHERE id=$1",
           [sessionId, expires],
         );
-      const atLease = await holdSession(a);
+      const atLease = await holdSession(a, null, [itemId]);
       await lease(atLease, now);
       confirmed(
         await adapter.submit(
           a,
-          command({ sessionId: atLease }, { title: "租约恰好到期" }),
+          command(
+            { sessionId: atLease },
+            { title: "租约恰好到期", items: [entry(itemId)] },
+          ),
           now,
         ),
       );
 
-      const lapsed = await holdSession(a);
+      const lapsed = await holdSession(a, null, [itemId]);
       await lease(lapsed, at("2026-07-15T09:59:59.999Z"));
       await expectRejection(
         adapter.submit(
           a,
-          command({ sessionId: lapsed }, { title: "租约已过期" }),
+          command(
+            { sessionId: lapsed },
+            { title: "租约已过期", items: [entry(itemId)] },
+          ),
           now,
         ),
         CommunityConflictError,
@@ -3363,7 +3414,6 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         status: "expired",
       });
 
-      const { itemId } = await mediaItem(a);
       const streaming = await mediaItem(a, { state: "processing" });
       await pool.query(
         "UPDATE community.media_components SET state='receiving',upload_attempt=$2,blob_id=NULL,updated_at=$3 WHERE item_id=$1",
@@ -3392,6 +3442,8 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
     it("never re-exposes an older public revision replaced while self-only, and makes a rejected revision public again only under the current policy", async () => {
       const t0 = at("2026-07-16T08:00:00.000Z");
       const { itemId } = await mediaItem(a);
+      const replacement = await mediaItem(a);
+      const items = [entry(replacement.itemId)];
       const firstPublic = await publish(
         a,
         { title: "带图的公开版本", items: [entry(itemId)] },
@@ -3399,13 +3451,18 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       );
       await setPolicy("PRE_MODERATION");
       const pendingPublic = confirmed(
-        await editWork(a, firstPublic.workId, { title: "待审的修改" }, t0),
+        await editWork(
+          a,
+          firstPublic.workId,
+          { title: "待审的修改", items: [entry(itemId)] },
+          t0,
+        ),
       );
       const privateEdit = confirmed(
         await editWork(
           a,
           firstPublic.workId,
-          { title: "私密期间删掉了图片", visibility: "self" },
+          { title: "私密期间换掉了图片", visibility: "self", items },
           at("2026-07-16T09:00:00.000Z"),
         ),
       );
@@ -3436,7 +3493,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         await adapter.resolveMediaRead(b, itemId, "display", "base"),
       ).toBeNull();
       expect(await authors.readWork(firstPublic.workId, a)).toMatchObject({
-        title: "私密期间删掉了图片",
+        title: "私密期间换掉了图片",
         visibility: "public",
       });
       const approvedAt = at("2026-07-16T11:00:00.000Z");
@@ -3454,28 +3511,42 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         public_revision_id: privateEdit.revisionId,
         first_published_at: t0,
         edited_at: approvedAt,
-        title: "私密期间删掉了图片",
+        title: "私密期间换掉了图片",
       });
-      expect((await authors.readWork(firstPublic.workId, b)).media).toEqual([]);
+      expect(
+        (await authors.readWork(firstPublic.workId, b)).media.map(
+          (image) => image.id,
+        ),
+      ).toEqual([replacement.itemId]);
+      expect(
+        await adapter.resolveMediaRead(b, itemId, "display", "base"),
+      ).toBeNull();
 
       // A public submission on a self-only work follows current policy even
       // when its content matches an earlier approved revision (Owner r2).
       await setPolicy("DIRECT_PUBLICATION");
-      const unchanged = await publish(a, { title: "内容未变" }, t0);
-      const replaced = await publish(a, { title: "内容已变" }, t0);
+      const unchanged = await publish(a, { title: "内容未变", items }, t0);
+      const replaced = await publish(a, { title: "内容已变", items }, t0);
       for (const workId of [unchanged.workId, replaced.workId])
         confirmed(
           await editWork(
             a,
             workId,
-            { title: "内容已变", visibility: "self" },
+            { title: "内容已变", visibility: "self", items },
             t0,
           ),
         );
       await setPolicy("PRE_MODERATION");
-      confirmed(await editWork(a, unchanged.workId, { title: "内容未变" }, t0));
       confirmed(
-        await editWork(a, replaced.workId, { title: "内容再次改变" }, t0),
+        await editWork(a, unchanged.workId, { title: "内容未变", items }, t0),
+      );
+      confirmed(
+        await editWork(
+          a,
+          replaced.workId,
+          { title: "内容再次改变", items },
+          t0,
+        ),
       );
       await expectRejection(
         authors.readWork(unchanged.workId, b),
@@ -3492,7 +3563,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       const rejectedAt = at("2026-07-16T12:00:00.000Z");
       const rejectedWorks: string[] = [];
       for (const title of ["再次送审", "直接公开"]) {
-        const held = await publish(a, { title }, rejectedAt);
+        const held = await publish(a, { title, items }, rejectedAt);
         await operators.moderateSubmission(
           held.revisionId,
           operator,
@@ -3550,6 +3621,8 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
     });
 
     it("lists never-public works by first submission in Admin and searches only content requested for public view", async () => {
+      const { itemId } = await mediaItem(a);
+      const items = [entry(itemId)];
       const handle = (
         await pool.query<{ handle: string }>(
           "SELECT handle FROM community.public_users WHERE id=$1",
@@ -3558,18 +3631,18 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       ).rows[0]!.handle;
       const older = await publish(
         a,
-        { title: "早已公开" },
+        { title: "早已公开", items },
         at("2026-07-17T08:00:00.000Z"),
       );
       await setPolicy("PRE_MODERATION");
       const pending = await publish(
         a,
-        { title: "等待审核的标题" },
+        { title: "等待审核的标题", items },
         at("2026-07-17T09:00:00.000Z"),
       );
       const self = await publish(
         a,
-        { title: "只给自己看的标题", visibility: "self" },
+        { title: "只给自己看的标题", visibility: "self", items },
         at("2026-07-17T10:00:00.000Z"),
       );
       const page = await contentOperator.readWorks({
@@ -3626,6 +3699,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
 
     it("sets versioned settings and account capacity with audit, and retries or abandons content-free jobs", async () => {
       const now = at("2026-07-14T08:00:00.000Z");
+      const { itemId } = await mediaItem(a);
       const settings = await operators.readSettings();
       expect(settings).toMatchObject({
         policy: "DIRECT_PUBLICATION",
@@ -3660,7 +3734,11 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         ),
         CommunityConflictError,
       );
-      const held = await publish(a, { title: "设置之后" }, now);
+      const held = await publish(
+        a,
+        { title: "设置之后", items: [entry(itemId)] },
+        now,
+      );
       expect((await revisionRow(held.revisionId)).disposition).toBe("pending");
 
       expect(await operators.readCapacity(a)).toEqual({
@@ -3734,7 +3812,6 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         },
       ]);
 
-      const { itemId } = await mediaItem(a);
       const failed = id("publishing-job");
       const running = id("publishing-job");
       await pool.query(
@@ -3902,7 +3979,12 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         coverMediaId: fourth!.itemId,
         coverSrc: coverSrc(fourth!.itemId),
       });
-      const textOnly = await publish(a, { body: "只有文字" }, now);
+      // Existing text-only works remain readable under the new submission rule.
+      const textOnly = { workId: id("work") };
+      await pool.query(
+        "INSERT INTO community.works(id,author_id,title,text,first_published_at,synthetic_provenance) VALUES($1,$2,'',$3,$4,'work-publishing-bridge-test')",
+        [textOnly.workId, a, "只有文字", now],
+      );
       expect(await authors.readWork(textOnly.workId, a)).toMatchObject({
         media: [],
         coverMediaId: null,
@@ -3955,7 +4037,11 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         publiclyVisible: false,
       });
       await setPolicy("PRE_MODERATION");
-      const pendingFirst = await publish(a, { title: "首次待审" }, now);
+      const pendingFirst = await publish(
+        a,
+        { title: "首次待审", items: [e1] },
+        now,
+      );
       expect(await authors.readWork(pendingFirst.workId, a)).toMatchObject({
         firstPublishedAt: null,
         visibility: "public",
@@ -4263,7 +4349,12 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         },
         now,
       );
-      const textOnly = await publish(a, { body: "  只有文字  " }, now);
+      // Seed a legacy text-only work so card compatibility stays covered.
+      const textOnly = { workId: id("work") };
+      await pool.query(
+        "INSERT INTO community.works(id,author_id,title,text,first_published_at,synthetic_provenance) VALUES($1,$2,'',$3,$4,'work-publishing-bridge-test')",
+        [textOnly.workId, a, "只有文字", now],
+      );
       const albumTarget = { type: "work" as const, id: album.workId };
       const expectedExcerpt = `${"𠮷".repeat(10)}${"甲".repeat(149)}`;
       const coverSrc = `/api/community/publishing/media/${live.itemId}/cover/${coverKey}`;
@@ -4370,10 +4461,12 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         { title: "公开", items: [entry(media.itemId)] },
         now,
       );
-      const selfOnly = await publish(a, { title: "仅自己" }, now);
-      const trashed = await publish(a, { title: "回收站" }, now);
-      const hidden = await publish(a, { title: "隐藏" }, now);
-      const removed = await publish(a, { title: "移除" }, now);
+      const restrictedPhoto = await mediaItem(a);
+      const items = [entry(restrictedPhoto.itemId)];
+      const selfOnly = await publish(a, { title: "仅自己", items }, now);
+      const trashed = await publish(a, { title: "回收站", items }, now);
+      const hidden = await publish(a, { title: "隐藏", items }, now);
+      const removed = await publish(a, { title: "移除", items }, now);
       const works = { visible, selfOnly, trashed, hidden, removed };
       for (const work of Object.values(works)) {
         const target = { type: "work" as const, id: work.workId };
@@ -4406,7 +4499,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           expectedVersion: (await authors.readWork(work.workId, a)).version,
         });
       await setPolicy("PRE_MODERATION");
-      const pendingFirst = await publish(a, { title: "首次待审" }, now);
+      const pendingFirst = await publish(a, { title: "首次待审", items }, now);
       // A guest favorite merged later keeps its relation without making the
       // work visible (the merge never checks availability).
       await authors.mergeGuestFavorites(b, {
@@ -4536,7 +4629,12 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       ] as const) {
         const target = { type: "work" as const, id: work.workId };
         const card = await discovery.card(target, a);
-        expect(card).toMatchObject({ target, title, authorId: a, media: null });
+        expect(card).toMatchObject({
+          target,
+          title,
+          authorId: a,
+          media: { type: "work", id: restrictedPhoto.itemId },
+        });
         expect(card.firstPublishedAt !== null).toBe(firstPublished);
         expect((await publicService.card(target, a)).target).toEqual(target);
       }
