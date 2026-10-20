@@ -89,7 +89,12 @@ const PROFILE_FINAL_FAILURE_CODES = [
 ] as const;
 /** How long an exhausted retryable render waits before the sweep queues it again. */
 const RETRY_DELAY_SQL = "interval '24 hours'";
-/** While one of these is queued or running, the sweep queues nothing (uploads first). */
+/**
+ * While one of these is queued or running, the sweep queues nothing (uploads
+ * first). Catalog block jobs (catalog-deep-zoom-v1) are `catalog_render`
+ * rows at the lowest claim priority and may wait for hours, so they never
+ * hold the sweep back.
+ */
 const YIELD_TO_KINDS = [
   "process_item",
   "derive_edit",
@@ -392,7 +397,8 @@ export const enqueueProfileRenders = async (
                   AND j.state IN ('failed','abandoned')))::int AS blocked,
            EXISTS (
              SELECT 1 FROM community.publishing_jobs
-             WHERE kind=ANY($2::text[]) AND state IN ('queued','running')) AS busy,
+             WHERE kind=ANY($2::text[]) AND state IN ('queued','running')
+               AND COALESCE(payload->>'variant','')<>'blocks') AS busy,
            (SELECT count(*) FROM community.publishing_jobs
             WHERE kind='profile_render' AND state IN ('queued','running'))::int AS open`,
         [want, [...YIELD_TO_KINDS]],

@@ -244,6 +244,7 @@ export const openCatalogBlockSets = async (
     (
       await db.query<{ master_id: string }>(
         `SELECT DISTINCT j.payload->>'masterId' AS master_id FROM community.publishing_jobs j
+         JOIN community.catalog_display_masters m ON m.id=j.payload->>'masterId' AND m.ended_at IS NULL
          WHERE ${catalogBlockJobSql("j")} AND j.state IN ('queued','running')`,
       )
     ).rows.map((row) => row.master_id),

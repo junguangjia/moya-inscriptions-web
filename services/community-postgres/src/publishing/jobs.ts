@@ -68,10 +68,12 @@ export const jobBackoffMs = (attempts: number): number =>
 /**
  * SQL: job alias `job` is a block job of a Catalog display master, a
  * `catalog_render` payload variant (catalog-deep-zoom-v1). The operator job
- * kind list is unchanged.
+ * kind list is unchanged. Always true or false, never NULL: a base Catalog
+ * render carries no payload, and `NOT` of a NULL test would drop it from
+ * every claim and from the idle gate.
  */
 export const catalogBlockJobSql = (job: string): string =>
-  `(${job}.kind='catalog_render' AND ${job}.payload->>'variant'='blocks')`;
+  `(${job}.kind='catalog_render' AND COALESCE(${job}.payload->>'variant','')='blocks')`;
 
 /**
  * SQL: the claim class of job alias `job`, claimed in ascending order:
@@ -254,7 +256,6 @@ export const spendReservations = async (
   }
 };
 
-/** The initial static HD continuation owns the remaining upload allowance. */
 /**
  * A block job of a Catalog display master (catalog-deep-zoom-v1). Only the
  * catalog-master command retries or stops these; the operator's retry and
@@ -269,6 +270,7 @@ export const isCatalogBlockJob = (
   job.payload !== null &&
   (job.payload as { readonly variant?: unknown }).variant === "blocks";
 
+/** The initial static HD continuation owns the remaining upload allowance. */
 export const isBaseHighResolutionJob = (
   job:
     | {
