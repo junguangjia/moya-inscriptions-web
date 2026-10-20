@@ -86,6 +86,9 @@ export const FeedPostBody = ({
   // again, so its error and 重试 stay this post's own.
   const known = useWorkSnapshot(workId);
   const knownText = known?.available ? known.text : null;
+  // Held, but no longer available to read (an operator hid it): never keep a
+  // copied text then; read again, so the post shows its own error and 重试.
+  const heldUnavailable = known !== null && !known.available;
   // What this post shows of its own: a copy of the held text, or its read's
   // answer. Loaded text carries whom it was current for and the forget
   // generation it was current at, so text the bounded store merely dropped
@@ -217,7 +220,7 @@ export const FeedPostBody = ({
       // the account is the same and nothing was forgotten since it was
       // current: the store only dropped the record to stay bounded.
       const now = workSnapshotToken();
-      if (sameToken(shown, now)) return undefined;
+      if (sameToken(shown, now) && !heldUnavailable) return undefined;
       // Something was forgotten since (an edit, a block, a refused Detail
       // read; the store does not say which work). This post reads once more
       // for itself only: recording that answer could push another post's
@@ -264,7 +267,16 @@ export const FeedPostBody = ({
           setSnapshot({ key, body: { state: "error" } });
       });
     return () => controller.abort();
-  }, [shouldRead, workId, attempt, key, checking, sessionError, knownText]);
+  }, [
+    shouldRead,
+    workId,
+    attempt,
+    key,
+    checking,
+    sessionError,
+    knownText,
+    heldUnavailable,
+  ]);
   if (!expanded && onOverflowChange === undefined) return null;
   // CSS clipping does not shorten the accessibility tree. Keep the full text
   // for accurate visual measurement, but expose only an opening when collapsed.

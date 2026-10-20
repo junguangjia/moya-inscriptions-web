@@ -661,6 +661,39 @@ describe("FeedPostBody with a held work", () => {
     expect(retry(container)).toBeDefined();
   });
 
+  it("drops a shown text once the held work turns unavailable, and reads once for its error", async () => {
+    await hold(work("work-flip", "原本公开的正文"));
+    const { container } = await mount({ workId: "work-flip" });
+    expect(body(container)!.textContent).toBe("原本公开的正文");
+    expect(client.work).not.toHaveBeenCalled();
+    const pending = deferred();
+    client.work.mockReturnValueOnce(pending.promise);
+    // A Works list refresh or the owner's own Detail read records it hidden.
+    await hold(work("work-flip", "原本公开的正文", false));
+    expect(client.work).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("原本公开的正文");
+    expect(status(container)!.textContent).toBe("正文加载中…");
+    await act(async () => pending.resolve(work("work-flip", "", false)));
+    expect(wrapper(container)!.dataset.feedPostBodyState).toBe("error");
+    expect(alert(container)!.textContent).toContain("正文暂时无法加载");
+    expect(retry(container)).toBeDefined();
+    await flush();
+    expect(client.work).toHaveBeenCalledOnce();
+  });
+
+  it("drops text it read itself once the held work turns unavailable", async () => {
+    client.work.mockResolvedValueOnce(work("work-read-flip", "自己读到的正文"));
+    const { container } = await mount({ workId: "work-read-flip" });
+    expect(body(container)!.textContent).toBe("自己读到的正文");
+    const pending = deferred();
+    client.work.mockReturnValueOnce(pending.promise);
+    await hold(work("work-read-flip", "自己读到的正文", false));
+    expect(client.work).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain("自己读到的正文");
+    await act(async () => pending.resolve(work("work-read-flip", "", false)));
+    expect(alert(container)!.textContent).toContain("正文暂时无法加载");
+  });
+
   it("shows the newer text when the held work changes under a mounted post", async () => {
     await hold(work("work-known-update", "第一版正文"));
     const { container } = await mount({ workId: "work-known-update" });
