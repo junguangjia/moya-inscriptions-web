@@ -83,6 +83,12 @@ export interface PublishingWorkerOptions {
   /** Claim only these job kinds; every kind when omitted. */
   readonly kinds?: readonly PublishingWorkerJobKind[];
   /**
+   * Claim Catalog block jobs (`MEDIA_CATALOG_ZOOM_BLOCKS_RENDER`,
+   * catalog-deep-zoom-v1); the store hands one out only on an idle queue.
+   * Default false: block jobs stay queued.
+   */
+  readonly catalogBlocks?: boolean;
+  /**
    * Run the periodic queue maintenance (lease requeue, cleanup scheduling,
    * sweep and reconciliation enqueueing). Default true (every step); an
    * object selects steps, and a worker that shares its queue with another
@@ -214,6 +220,7 @@ export class PublishingWorker {
   private readonly concurrency: number;
   private readonly owner: string;
   private readonly kinds: readonly PublishingWorkerJobKind[] | undefined;
+  private readonly catalogBlocks: boolean;
   private readonly steps: Required<PublishingWorkerMaintenanceSteps>;
   private readonly extraSteps: readonly {
     readonly step: PublishingWorkerExtraStep;
@@ -266,6 +273,7 @@ export class PublishingWorker {
       throw new Error("Publishing worker owner label is invalid");
     }
     this.kinds = options.kinds ? [...options.kinds] : undefined;
+    this.catalogBlocks = options.catalogBlocks === true;
     const maintenance = options.maintenance ?? true;
     const all = maintenance === true;
     const selected = typeof maintenance === "object" ? maintenance : {};
@@ -479,6 +487,7 @@ export class PublishingWorker {
             limit: free,
             leaseMs: this.leaseMs,
             ...(this.kinds ? { kinds: this.kinds } : {}),
+            ...(this.catalogBlocks ? { catalogBlocks: true } : {}),
           },
           this.clock(),
         );

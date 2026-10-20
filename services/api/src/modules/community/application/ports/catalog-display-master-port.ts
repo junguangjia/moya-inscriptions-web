@@ -210,3 +210,84 @@ export interface CatalogDisplayMasterPort {
   status(catalogId: string | null): Promise<CatalogMasterStatus>;
   guardCounts(): Promise<CatalogBlockGuardCounts>;
 }
+
+/**
+ * What one block job needs (catalog-deep-zoom-v1): the held master blob and
+ * its oriented size, the frame, the asset's ready `display` rendition (the
+ * alignment reference) and the cells to cut. `null` from
+ * `readCatalogBlockPlan`: the master is no longer active, the asset is not
+ * ready or no longer referenced, or the job's cells lie outside the frame
+ * (the job completes without work).
+ */
+export interface CatalogBlockPlan {
+  readonly assetId: string;
+  readonly masterId: string;
+  readonly master: {
+    readonly storageKey: string;
+    readonly byteSize: number;
+    readonly sha256: string;
+    readonly contentType: "image/jpeg" | "image/png";
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly frame: { readonly width: number; readonly height: number };
+  readonly reference: {
+    readonly storageKey: string;
+    readonly byteSize: number;
+    readonly sha256: string;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly cells: readonly [number, number];
+}
+
+/** One block written to the private store. */
+export interface CatalogBlockRecord {
+  readonly storageKey: string;
+  readonly byteSize: number;
+  readonly sha256: string;
+  readonly cell: number;
+  readonly recipeVersion: number;
+  readonly recipeDigest: string;
+  readonly contentType: "image/jpeg";
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The blocks of one successful block job. */
+export interface CatalogBlockOutcome {
+  readonly masterId: string;
+  readonly blocks: readonly CatalogBlockRecord[];
+}
+
+/** The block store a media worker with the block render switch on uses. */
+export interface CatalogBlockPort {
+  readCatalogBlockPlan(
+    assetId: string,
+    payload: unknown,
+  ): Promise<CatalogBlockPlan | null>;
+  /**
+   * One transaction under the asset row lock: when the master is still the
+   * asset's active one, releases ready blocks of any other master and records
+   * each block blob (owner-less `catalog_derivative`) and row with its
+   * master; otherwise every unrecorded key is returned for removal.
+   */
+  recordCatalogBlocks(
+    assetId: string,
+    outcome: CatalogBlockOutcome,
+    now: Date,
+  ): Promise<
+    | { readonly status: "recorded" }
+    | { readonly status: "discarded"; readonly storageKeys: readonly string[] }
+  >;
+  /**
+   * The Catalog sync's block step: queues the missing cells of incomplete
+   * sets of active masters on ready, referenced assets, in runs of at most 16
+   * cells, never for a paused set or after a content failure, and never with
+   * more than two sets open.
+   */
+  enqueueCatalogBlockSets(
+    now: Date,
+    limit: number,
+  ): Promise<{ readonly enqueued: number }>;
+}

@@ -717,6 +717,24 @@ the increment-4 wording, for this slice only).
   claimable job due or running, no upload in flight changed within 2 minutes).
   The Admin's retry and abandon refuse block jobs with the existing conflict
   error; only `catalog-master requeue` and `detach` manage them.
+- **Cutting.** Only a worker whose `MEDIA_CATALOG_ZOOM_BLOCKS_RENDER` is `on`
+  (missing means on in Development, off in Production) runs the block step of
+  the 5-minute Catalog sync and claims block jobs. The step queues the missing
+  cells of each active master's incomplete set in runs of at most 16 cells, with
+  at most two open sets, and skips complete sets, sets that failed on content
+  and paused sets (a stopped job still covers a missing cell;
+  `catalog-master requeue` resumes it). The sandbox operation `blocks` reads the
+  master and the asset's `display` rendition, decodes the master once (oriented
+  once, ICC to untagged sRGB, Lanczos3 to the frame), refuses a master that does
+  not match the display rendition (both compared at a 512 px long edge: luma
+  PSNR below 40 dB or a channel mean more than 2 apart; calibrated on local
+  originals and real pairs) and encodes each cell as baseline JPEG q85 4:4:4
+  without metadata (recipe `block@1`). Content failures (`master_unreadable`,
+  `zoom_blocks_alpha`, `master_mismatch`) are never retried for that master.
+  Each job logs one content-free line
+  (`[media-worker] catalog blocks stage_ms=… render_ms=… cells=N outcome=…`).
+  Recording discards a late job of an ended master and releases any other
+  master's ready blocks, so an asset keeps one set.
 - **Publication and withdrawal.** The desired set adds the blocks the view
   lists; Work and Article branches never admit them. Keys follow the existing
   grammar (`…/base/block-NN.r1.jpg`). Withdrawal purges ordinary roles first, in

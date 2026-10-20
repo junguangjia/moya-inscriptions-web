@@ -241,6 +241,10 @@ export type {
 export type {
   CatalogBlockGuardCounts,
   CatalogBlockJobPayload,
+  CatalogBlockOutcome,
+  CatalogBlockPlan,
+  CatalogBlockPort,
+  CatalogBlockRecord,
   CatalogBlockReadTarget,
   CatalogDisplayMasterPort,
   CatalogMasterAttach,

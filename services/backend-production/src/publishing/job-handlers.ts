@@ -5,7 +5,10 @@ import { profileAnchorIdentities } from "./profile.js";
 
 import type { PublishingMediaStoreBlobEntry } from "../storage/publishing-media-store.js";
 import type {
+  CatalogBlockRenderer,
   CatalogRenderer,
+  CatalogWorkerBlockOutcome,
+  CatalogWorkerBlockPlan,
   CatalogWorkerRenderOutcome,
   CatalogWorkerRenderPlan,
 } from "./catalog.js";
@@ -192,6 +195,8 @@ export interface PublishingWorkerPort {
       readonly limit: number;
       readonly leaseMs: number;
       readonly kinds?: readonly PublishingWorkerJobKind[];
+      /** Claim Catalog block jobs too, on an idle queue (catalog-deep-zoom-v1). */
+      readonly catalogBlocks?: boolean;
     },
     now: Date,
   ): Promise<readonly PublishingWorkerJobClaim[]>;
@@ -258,6 +263,22 @@ export interface PublishingWorkerCatalogPort {
     failureCode: string,
     now: Date,
   ): Promise<void>;
+}
+
+/**
+ * The block operations a Catalog block job uses (structural mirror of
+ * `CatalogBlockPort`, catalog-deep-zoom-v1).
+ */
+export interface PublishingWorkerCatalogBlockPort {
+  readCatalogBlockPlan(
+    assetId: string,
+    payload: unknown,
+  ): Promise<CatalogWorkerBlockPlan | null>;
+  recordCatalogBlocks(
+    assetId: string,
+    outcome: CatalogWorkerBlockOutcome,
+    now: Date,
+  ): Promise<PublishingWorkerDerivativeCommit>;
 }
 
 /** The profile image operations a `profile_render` job uses (structural mirror). */
@@ -371,6 +392,14 @@ export interface PublishingJobHandlerOptions {
   readonly catalog?: {
     readonly port: PublishingWorkerCatalogPort;
     readonly renderer: CatalogRenderer;
+    /**
+     * Catalog block cutting (catalog-deep-zoom-v1); present only while
+     * `MEDIA_CATALOG_ZOOM_BLOCKS_RENDER` is on.
+     */
+    readonly blocks?: {
+      readonly port: PublishingWorkerCatalogBlockPort;
+      readonly renderer: CatalogBlockRenderer;
+    };
   };
   /** Profile image rendering; absent while `MEDIA_PROFILE_RENDER` is off. */
   readonly profile?: {
@@ -1044,6 +1073,45 @@ export function createPublishingJobHandlers(
   };
 
   /**
+   * Cuts the cells of one Catalog block job (catalog-deep-zoom-v1) and records
+   * them when their master is still active. A job whose master ended, whose
+   * asset is no longer ready and referenced, or whose cells lie outside the
+   * frame completes without work. A content failure of the master
+   * (`master_unreadable`, `zoom_blocks_alpha`, `master_mismatch`) fails the
+   * job without retry and is never queued again for that master. Any other
+   * rejection (`processing_failed`: a sandbox protocol failure, a bad display
+   * reference) also fails without retry and pauses the set until the Owner's
+   * `requeue`; infrastructure failures and timeouts are retried.
+   */
+  const cutCatalogBlocks = async (
+    claim: PublishingWorkerJobClaim,
+    blocks: NonNullable<
+      NonNullable<PublishingJobHandlerOptions["catalog"]>["blocks"]
+    >,
+    signal: AbortSignal,
+  ): Promise<PublishingJobResult> => {
+    const plan = await blocks.port.readCatalogBlockPlan(
+      claim.subjectId,
+      claim.payload,
+    );
+    if (plan === null) return COMPLETED;
+    throwIfAborted(signal);
+    const result = await blocks.renderer.render(plan, signal);
+    if (result.status === "rejected") return failed(result.failureCode, false);
+    const keys = result.outcome.blocks.map((block) => block.storageKey);
+    if (signal.aborted) {
+      await Promise.all(
+        keys.map((key) => store.remove(key).catch(() => undefined)),
+      );
+      throw signal.reason;
+    }
+    await commitDerivatives(keys, () =>
+      blocks.port.recordCatalogBlocks(plan.assetId, result.outcome, clock()),
+    );
+    return COMPLETED;
+  };
+
+  /**
    * Renders the planned families of one profile image in the sandbox and
    * records them in one transaction. An unknown or erased image, or one
    * whose families need nothing (no current pointer of an active owner, or
@@ -1145,10 +1213,15 @@ export function createPublishingJobHandlers(
           return COMPLETED;
         case "catalog_render":
           // A Catalog block job (payload variant `blocks`, catalog-deep-zoom-v1)
-          // is never a base re-render: this release does not cut blocks, and
-          // its claim never selects one; should it hold one, it waits.
-          if (isCatalogBlockPayload(claim.payload))
-            return { status: "deferred", delayMs: 300_000 };
+          // is never a base re-render. Only a worker whose block render switch
+          // is on claims one; any other worker that holds one leaves it
+          // queued.
+          if (isCatalogBlockPayload(claim.payload)) {
+            if (!CATALOG_ASSET_ID_PATTERN.test(subject)) return invalidSubject;
+            return catalog?.blocks === undefined
+              ? { status: "deferred", delayMs: 300_000 }
+              : cutCatalogBlocks(claim, catalog.blocks, signal);
+          }
           return CATALOG_ASSET_ID_PATTERN.test(subject)
             ? renderCatalogAsset(claim, signal)
             : invalidSubject;

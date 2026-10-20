@@ -697,10 +697,14 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
           frameHeight: active.frame_height,
         },
         now,
+        { resume: true },
       );
-      return queued.status === "queued"
-        ? { status: "done", jobs: queued.jobs }
-        : refused(queued.reason);
+      if (queued.status === "queued")
+        return { status: "done", jobs: queued.jobs };
+      // `resume` lifts the pause, so a paused set is never the reason here.
+      if (queued.reason === "set_paused")
+        throw new Error("A resumed set is not paused");
+      return refused(queued.reason);
     });
   }
 
