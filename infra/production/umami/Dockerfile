@@ -10,6 +10,12 @@ RUN tar -xzf /tmp/umami.tar.gz --strip-components=1 -C /app \
     && npm install --global pnpm@12.3.4 \
     && printf '\nstrictDepBuilds: false\n' >> pnpm-workspace.yaml \
     && pnpm install --frozen-lockfile
+# Preserve the actual host when upgrading pg's existing socket to strict TLS.
+# With Node 24 and an IP target, omitting it makes certificate checks use localhost.
+COPY pg-tls-host.patch upstream-pg-tls.sha256 patched-pg-tls.sha256 /tmp/
+RUN sha256sum -c /tmp/upstream-pg-tls.sha256 \
+    && patch -p1 --fuzz=0 < /tmp/pg-tls-host.patch \
+    && sha256sum -c /tmp/patched-pg-tls.sha256
 COPY pool-limit.patch upstream-pool.sha256 patched-pool.sha256 /tmp/
 RUN sha256sum -c /tmp/upstream-pool.sha256 \
     && patch -p1 --fuzz=0 < /tmp/pool-limit.patch \
@@ -51,6 +57,7 @@ LABEL org.opencontainers.image.title="ArtVenn private Umami" \
     org.opencontainers.image.source="https://github.com/umami-software/umami" \
     org.opencontainers.image.revision="ec0ff50388c264ed8ce46f00967e92f7e71476ae" \
     com.artvenn.umami.patch-sha256="fe1ae90c0f4b9b71c3362d62404518f8bdcbe7ce35de22abdfc4d6d3567cf101" \
+    com.artvenn.umami.pg-tls-host-sha256="ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6" \
     com.artvenn.umami.locale="zh-CN" \
     com.artvenn.umami.geography="cn-province-v1" \
     com.artvenn.umami.geo-sha256="fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029" \
@@ -86,6 +93,12 @@ RUN tar -xzf /tmp/umami.tar.gz --strip-components=1 -C /app \
     && npm install --global pnpm@12.3.4 \
     && printf '\nstrictDepBuilds: false\n' >> pnpm-workspace.yaml \
     && pnpm install --frozen-lockfile
+# Preserve the actual host when upgrading pg's existing socket to strict TLS.
+# With Node 24 and an IP target, omitting it makes certificate checks use localhost.
+COPY pg-tls-host.patch upstream-pg-tls.sha256 patched-pg-tls.sha256 /tmp/
+RUN sha256sum -c /tmp/upstream-pg-tls.sha256 \
+    && patch -p1 --fuzz=0 < /tmp/pg-tls-host.patch \
+    && sha256sum -c /tmp/patched-pg-tls.sha256
 COPY pool-limit.patch upstream-pool.sha256 patched-pool.sha256 /tmp/
 RUN sha256sum -c /tmp/upstream-pool.sha256 \
     && patch -p1 --fuzz=0 < /tmp/pool-limit.patch \
@@ -119,6 +132,7 @@ LABEL org.opencontainers.image.title="ArtVenn private Umami standalone artifact"
     org.opencontainers.image.source="https://github.com/umami-software/umami" \
     org.opencontainers.image.revision="ec0ff50388c264ed8ce46f00967e92f7e71476ae" \
     com.artvenn.umami.patch-sha256="fe1ae90c0f4b9b71c3362d62404518f8bdcbe7ce35de22abdfc4d6d3567cf101" \
+    com.artvenn.umami.pg-tls-host-sha256="ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6" \
     com.artvenn.umami.locale="zh-CN" \
     com.artvenn.umami.geography="cn-province-v1" \
     com.artvenn.umami.geo-sha256="fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029" \
