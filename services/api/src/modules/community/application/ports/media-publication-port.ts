@@ -126,6 +126,25 @@ export interface MediaPublicationPort {
     },
     now: Date,
   ): Promise<void>;
+  /**
+   * catalog-deep-zoom-v1: stores the image host's day-to-date counts on the
+   * usage row (its day columns only). False when the row does not exist yet.
+   */
+  recordDayUsage(
+    usage: {
+      readonly dayStart: Date;
+      readonly requests: number;
+      readonly bytes: number | null;
+    },
+    now: Date,
+  ): Promise<boolean>;
+  /** catalog-deep-zoom-v1: the stored day-to-date counts, or null. */
+  readDayUsage(): Promise<{
+    readonly dayStart: Date;
+    readonly requests: number;
+    readonly bytes: number | null;
+    readonly observedAt: Date;
+  } | null>;
   /** Keys are existing same-origin item/role/edit paths; values stay Backend-only until URL resolution. */
   lookupPublishedItems(
     itemIds: readonly string[],

@@ -72,6 +72,30 @@ export interface DetailMediaPresentation {
   readonly placeholderColor?: string | undefined;
   /** Present only for a Live Photo; the still stays the presented image. */
   readonly live?: DetailLiveMotionPresentation;
+  /**
+   * catalog-deep-zoom-v1: present only on a Catalog Detail image whose block
+   * set is deliverable: the blocks' frame and the record they are read from.
+   */
+  readonly deepZoom?: DetailZoomPresentation;
+}
+
+/** A Catalog Detail image's block frame (absent on every other image). */
+const catalogZoomFrame = (
+  media: object,
+): { readonly width: number; readonly height: number } | undefined => {
+  const zoom = (media as { readonly zoom?: unknown }).zoom;
+  if (typeof zoom !== "object" || zoom === null) return undefined;
+  const { width, height } = zoom as Record<string, unknown>;
+  return typeof width === "number" && typeof height === "number"
+    ? { width, height }
+    : undefined;
+};
+
+/** The deep-zoom frame of a Catalog Detail image and its record. */
+export interface DetailZoomPresentation {
+  readonly width: number;
+  readonly height: number;
+  readonly catalogId: string;
 }
 interface DetailPresentationBase {
   readonly aliases: readonly string[];
@@ -260,6 +284,9 @@ export const toCatalogDetailPresentation = (
       ...(item.renditions === undefined
         ? {}
         : { renditions: localCatalogRenditions(item.renditions) }),
+      ...(catalogZoomFrame(item) === undefined
+        ? {}
+        : { deepZoom: { ...catalogZoomFrame(item)!, catalogId: detail.id } }),
     })),
     ...(detail.periodLabel === undefined
       ? {}

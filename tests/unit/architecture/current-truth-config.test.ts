@@ -394,6 +394,8 @@ describe("current repository truth and local configuration", () => {
         "utf8",
       ),
     );
+    // catalog-deep-zoom-v1: the Backend's deep-zoom switch ships off.
+    expect(backend.MEDIA_CATALOG_ZOOM_BLOCKS).toBe("off");
     expect(backend.ARTICLE_AUTHORIZATION_DATABASE_URL).toBeUndefined();
     expect(backend.ARTICLE_AUTHORIZATION_SIGNING_JWKS_FILE).toBeUndefined();
     expect(issuer.APP_DATABASE_URL).toBeUndefined();

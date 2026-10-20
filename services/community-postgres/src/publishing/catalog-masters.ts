@@ -13,7 +13,10 @@ import type {
   CatalogMasterStatusRow,
   CatalogMasterStorage,
 } from "@moya/api";
-import { CATALOG_ZOOM_MAX_LONG_EDGE } from "@moya/contracts/schemas";
+import {
+  CATALOG_ZOOM_MAX_LONG_EDGE,
+  sameMediaFraming,
+} from "@moya/contracts/schemas";
 import type { Pool } from "pg";
 
 import {
@@ -223,6 +226,16 @@ const frameRefusal = (
   if (
     Math.abs(left - right) >
     CATALOG_MASTER_ASPECT_TOLERANCE * Math.max(left, right)
+  )
+    return "aspect_mismatch";
+  // The Detail carries a frame only when it shows the approved image's
+  // framing within the rounding of each side (the public contract), so a
+  // master whose frame cannot is refused here rather than cut and never shown.
+  if (
+    !sameMediaFraming(frame, {
+      width: asset.published_width,
+      height: asset.published_height,
+    })
   )
     return "aspect_mismatch";
   if (asset.viewer_long_edge === null) return "asset_not_ready";

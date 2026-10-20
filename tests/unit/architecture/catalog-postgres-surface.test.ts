@@ -41,6 +41,9 @@ describe("@moya/catalog-postgres package boundary", () => {
       "authoredArticleCatalogPairKey",
       "catalogPageOffset",
       "catalogSearchSourceSelectSql",
+      // catalog-deep-zoom-v1: the published-blocks reads (cost-checked in PG).
+      "catalogZoomBlocksSql",
+      "catalogZoomFramesSql",
       "checkPostgresReadiness",
       "closePostgresPool",
       "createPostgresPool",

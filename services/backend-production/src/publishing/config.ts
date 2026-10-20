@@ -113,6 +113,11 @@ export const MEDIA_PROFILE_RENDITIONS = "MEDIA_PROFILE_RENDITIONS";
 /** Media worker: claim and enqueue Catalog block jobs (catalog-deep-zoom-v1). */
 export const MEDIA_CATALOG_ZOOM_BLOCKS_RENDER =
   "MEDIA_CATALOG_ZOOM_BLOCKS_RENDER";
+/**
+ * Backend: the Catalog Detail `zoom` frame and the per-image block-list read
+ * (catalog-deep-zoom-v1).
+ */
+export const MEDIA_CATALOG_ZOOM_BLOCKS = "MEDIA_CATALOG_ZOOM_BLOCKS";
 
 /**
  * A Catalog deep-zoom switch (catalog-deep-zoom-v1), parsed exactly like the
@@ -121,7 +126,8 @@ export const MEDIA_CATALOG_ZOOM_BLOCKS_RENDER =
  */
 export const parseCatalogZoomSwitch = (
   environment: Environment,
-  key: typeof MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
+  key:
+    typeof MEDIA_CATALOG_ZOOM_BLOCKS_RENDER | typeof MEDIA_CATALOG_ZOOM_BLOCKS,
   nodeEnv: "production" | "development",
 ): boolean => {
   const value = configured(environment, key);

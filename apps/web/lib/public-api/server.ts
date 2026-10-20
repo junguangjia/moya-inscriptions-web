@@ -21,6 +21,8 @@ import type { CatalogSearchTransportResult } from "./catalog-search";
 import type { CatalogSearchTransportQuery } from "@moya/contracts";
 
 import { fetchCatalogDetail } from "./catalog-detail";
+import { fetchCatalogZoomBlocks } from "./catalog-zoom-blocks";
+import type { CatalogZoomBlocksTransportResult } from "./catalog-zoom-blocks";
 import { fetchCatalogPage } from "./catalog-list";
 import {
   createCatalogComment,
@@ -153,6 +155,22 @@ export const fetchServerCatalogDetail = async (
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
     return await withVisitorSession(token, (fetch) =>
       fetchCatalogDetail({ baseUrl, fetch }, catalogId),
+    );
+  } catch {
+    return { state: "unexpected-error" };
+  }
+};
+
+/** catalog-deep-zoom-v1: one image's block list, with the visitor's session. */
+export const fetchServerCatalogZoomBlocks = async (
+  catalogId: string,
+  mediaId: string,
+  token?: string,
+): Promise<CatalogZoomBlocksTransportResult | AccessDeniedTransportResult> => {
+  try {
+    const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
+    return await withVisitorSession(token, (fetch) =>
+      fetchCatalogZoomBlocks({ baseUrl, fetch }, catalogId, mediaId),
     );
   } catch {
     return { state: "unexpected-error" };

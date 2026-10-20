@@ -20,6 +20,10 @@ export {
   MENTION_LIMIT,
 } from "./mention-references.ts";
 import {
+  CATALOG_ZOOM_BLOCK_EDGE,
+  CATALOG_ZOOM_BLOCK_OVERLAP,
+  CATALOG_ZOOM_BLOCKS_MAXIMUM,
+  CATALOG_ZOOM_MAX_LONG_EDGE,
   addMediaRenditionAnchorIssues,
   cardMediaRenditionListSchema,
   mediaRenditionListSchema,
@@ -332,6 +336,74 @@ export const publicMediaSchema = z
       addMediaRenditionAnchorIssues(media, media.renditions, context);
   });
 
+/**
+ * Catalog deep zoom (catalog-deep-zoom-v1): the frame of an image's blocks,
+ * at most 8192 px on each side. A Catalog Detail image carries it only while
+ * its whole block set is deliverable, and it shows the image's framing; the
+ * blocks themselves are read per image (`catalogZoomBlocksSchema`), never
+ * carried in the Detail.
+ */
+export const catalogZoomFrameSchema = z.strictObject({
+  width: z.number().int().positive().max(CATALOG_ZOOM_MAX_LONG_EDGE),
+  height: z.number().int().positive().max(CATALOG_ZOOM_MAX_LONG_EDGE),
+});
+
+/** The number of blocks of a frame: one row-major cell per 1024 px square. */
+export const catalogZoomBlockCount = (frame: {
+  readonly width: number;
+  readonly height: number;
+}): number =>
+  Math.ceil(frame.width / CATALOG_ZOOM_BLOCK_EDGE) *
+  Math.ceil(frame.height / CATALOG_ZOOM_BLOCK_EDGE);
+
+/**
+ * A Catalog Detail image: the public image plus, only while its block set is
+ * deliverable, the frame of its blocks (at least two, showing its framing).
+ */
+export const catalogDetailMediaSchema = publicMediaSchema
+  .safeExtend({ zoom: catalogZoomFrameSchema.optional() })
+  .superRefine((media, context) => {
+    if (media.zoom === undefined) return;
+    const count = catalogZoomBlockCount(media.zoom);
+    if (
+      count < 2 ||
+      count > CATALOG_ZOOM_BLOCKS_MAXIMUM ||
+      !sameMediaFraming(media.zoom, media)
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["zoom"],
+        message:
+          "The zoom frame must show the image's framing in 2 to 100 blocks",
+      });
+  });
+
+/**
+ * The blocks of one Catalog image (`GET /v1/catalog/{catalogId}/media/{mediaId}/zoom-blocks`):
+ * the frame, the block edge and overlap, and one resolved URL per block in
+ * row-major order. A client derives each block's rectangle from its index,
+ * the frame, the edge and the overlap; it never composes a URL.
+ */
+export const catalogZoomBlocksSchema = z
+  .strictObject({
+    width: catalogZoomFrameSchema.shape.width,
+    height: catalogZoomFrameSchema.shape.height,
+    edge: z.literal(CATALOG_ZOOM_BLOCK_EDGE),
+    overlap: z.literal(CATALOG_ZOOM_BLOCK_OVERLAP),
+    srcs: z
+      .array(resolvedMediaUrlSchema)
+      .min(2)
+      .max(CATALOG_ZOOM_BLOCKS_MAXIMUM),
+  })
+  .superRefine((blocks, context) => {
+    if (blocks.srcs.length !== catalogZoomBlockCount(blocks))
+      context.addIssue({
+        code: "custom",
+        path: ["srcs"],
+        message: "One block per cell of the frame",
+      });
+  });
+
 export const publicSourceCitationSchema = z.strictObject({
   label: displayLabelSchema,
   citation: exactTextSchema(2_000).optional(),
@@ -390,7 +462,7 @@ export const catalogDetailSchema = z.strictObject({
   historicalContext: exactTextSchema(20_000).optional(),
   scholarlyResearch: exactTextSchema(20_000).optional(),
   sourceCitations: z.array(publicSourceCitationSchema),
-  media: z.array(publicMediaSchema),
+  media: z.array(catalogDetailMediaSchema),
 });
 
 const positiveIntegerStringSchema = z

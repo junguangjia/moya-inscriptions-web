@@ -680,6 +680,57 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       );
     });
   }
+  async recordDayUsage(
+    usage: { dayStart: Date; requests: number; bytes: number | null },
+    now: Date,
+  ): Promise<boolean> {
+    if (
+      !Number.isSafeInteger(usage.requests) ||
+      usage.requests < 0 ||
+      (usage.bytes !== null &&
+        (!Number.isSafeInteger(usage.bytes) || usage.bytes < 0))
+    )
+      throw new TypeError("Invalid day usage");
+    return writeTransaction(this.pool, async (db) => {
+      const result = await db.query(
+        "UPDATE community.media_request_usage SET day_start=$1::timestamptz,day_requests=$2::bigint,day_bytes=$3::bigint,day_observed_at=$4::timestamptz WHERE id='published-media'",
+        [nowParam(usage.dayStart), usage.requests, usage.bytes, nowParam(now)],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
+  async readDayUsage(): Promise<{
+    dayStart: Date;
+    requests: number;
+    bytes: number | null;
+    observedAt: Date;
+  } | null> {
+    return readTransaction(this.pool, async (db) => {
+      const row = (
+        await db.query<{
+          day_start: Date | null;
+          day_requests: string | null;
+          day_bytes: string | null;
+          day_observed_at: Date | null;
+        }>(
+          "SELECT day_start,day_requests,day_bytes,day_observed_at FROM community.media_request_usage WHERE id='published-media'",
+        )
+      ).rows[0];
+      if (
+        row === undefined ||
+        row.day_start === null ||
+        row.day_requests === null ||
+        row.day_observed_at === null
+      )
+        return null;
+      return {
+        dayStart: new Date(row.day_start),
+        requests: safeInteger(row.day_requests),
+        bytes: row.day_bytes === null ? null : safeInteger(row.day_bytes),
+        observedAt: new Date(row.day_observed_at),
+      };
+    });
+  }
   async lookupPublishedItems(
     itemIds: readonly string[],
     _now: Date,

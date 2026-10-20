@@ -57,6 +57,7 @@ import {
 import { publishedObjectUrl } from "./publication/keys.js";
 import { withPublishedReads } from "./publication/delivery.js";
 import { createPublicationWorkers } from "./publication/runtime.js";
+import { createCatalogZoomGate } from "./publication/worker.js";
 import { createLocalPublicationReadHandler } from "./publication/local-read.js";
 import { loadPilotConfiguration, openPilotPool } from "./pilot-config.js";
 import { articleBackendConfigurationFrom } from "./article-authoring/runtime-config.js";
@@ -74,6 +75,7 @@ import {
   listPublishedCatalogSources,
 } from "./publishing/catalog.js";
 import {
+  MEDIA_CATALOG_ZOOM_BLOCKS,
   MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
   MEDIA_PROFILE_RENDER,
   MEDIA_PROFILE_RENDITIONS,
@@ -302,6 +304,13 @@ export const prepareProductionBackend = async (
       MEDIA_PROFILE_RENDER,
       runtimeConfig.nodeEnv,
     );
+  // Catalog deep zoom (catalog-deep-zoom-v1): this Backend serves the Detail
+  // frame and the block-list read behind MEDIA_CATALOG_ZOOM_BLOCKS.
+  const catalogZoom = parseCatalogZoomSwitch(
+    environment,
+    MEDIA_CATALOG_ZOOM_BLOCKS,
+    runtimeConfig.nodeEnv,
+  );
   // Catalog blocks (catalog-deep-zoom-v1): only an embedded worker
   // (Development) cuts them here, behind MEDIA_CATALOG_ZOOM_BLOCKS_RENDER.
   const blocksRender =
@@ -573,10 +582,21 @@ export const prepareProductionBackend = async (
     throw error;
   }
 
-  const catalogQueryPort = new PostgresCatalogQueryAdapter(
-    pool,
-    catalogReaders,
-  );
+  // catalog-deep-zoom-v1: the Detail `zoom` frame and the per-image
+  // block-list read, behind MEDIA_CATALOG_ZOOM_BLOCKS, only where blocks can
+  // be delivered (edge delivery, or Development's relay) and while the
+  // breaker is closed. Only the Catalog Detail reader gets the gate.
+  const catalogZoomGate = catalogZoom
+    ? createCatalogZoomGate({
+        readUsage: () => publicationPort.readDayUsage(),
+        edgeDelivery: () => allowsEdgeDelivery(publicationConfig),
+        development: runtimeConfig.nodeEnv === "development",
+      })
+    : undefined;
+  const catalogQueryPort = new PostgresCatalogQueryAdapter(pool, {
+    ...catalogReaders,
+    ...(catalogZoomGate === undefined ? {} : { zoom: catalogZoomGate }),
+  });
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,
     {

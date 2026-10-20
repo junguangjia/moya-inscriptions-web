@@ -13865,6 +13865,23 @@
                   "exclusiveMinimum": 0,
                   "maximum": 9007199254740991,
                   "type": "integer"
+                },
+                "zoom": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "height": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8192,
+                      "type": "integer"
+                    },
+                    "width": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 8192,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["width", "height"],
+                  "type": "object"
                 }
               },
               "required": ["id", "kind", "src", "alt", "width", "height"],
@@ -14681,6 +14698,49 @@
           }
         },
         "required": ["id", "kind", "title", "aliases"],
+        "type": "object"
+      },
+      "CatalogZoomBlocks": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "edge": {
+            "const": 1024,
+            "type": "number"
+          },
+          "height": {
+            "exclusiveMinimum": 0,
+            "maximum": 8192,
+            "type": "integer"
+          },
+          "overlap": {
+            "const": 2,
+            "type": "number"
+          },
+          "srcs": {
+            "items": {
+              "allOf": [
+                {
+                  "format": "uri",
+                  "type": "string"
+                },
+                {
+                  "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:\\/\\/",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 100,
+            "minItems": 2,
+            "type": "array"
+          },
+          "width": {
+            "exclusiveMinimum": 0,
+            "maximum": 8192,
+            "type": "integer"
+          }
+        },
+        "required": ["width", "height", "edge", "overlap", "srcs"],
         "type": "object"
       },
       "CommentAuthor": {
@@ -32101,6 +32161,85 @@
           }
         ],
         "summary": "Reply to one root comment"
+      }
+    },
+    "/v1/catalog/{catalogId}/media/{mediaId}/zoom-blocks": {
+      "get": {
+        "description": "Answers only while the image's Catalog Detail entry carries a `zoom` frame: the frame, the block edge and overlap, and one URL per block in row-major order. A client derives each block's rectangle from its index; it never composes a URL. Any other image, or an image whose blocks cannot all be delivered now, answers 404. Accepts no query parameters.",
+        "operationId": "getCatalogMediaZoomBlocks",
+        "parameters": [
+          {
+            "description": "Opaque platform CatalogId of a currently published record.",
+            "in": "path",
+            "name": "catalogId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CatalogId"
+            }
+          },
+          {
+            "description": "Opaque platform MediaId of one image of the record.",
+            "in": "path",
+            "name": "mediaId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/MediaId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogZoomBlocks"
+                }
+              }
+            },
+            "description": "The blocks of the requested image."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query; error code INVALID_QUERY."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "No deliverable blocks; error code ITEM_NOT_FOUND."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error; error code INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service is temporarily unavailable; error code SERVICE_UNAVAILABLE."
+          }
+        },
+        "summary": "Get the deep-zoom blocks of one Catalog image"
       }
     },
     "/v1/community/access": {

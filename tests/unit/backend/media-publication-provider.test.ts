@@ -420,6 +420,63 @@ describe("purge authority and request accounting", () => {
   });
 });
 
+describe("image host day usage (catalog-deep-zoom-v1 breaker)", () => {
+  it("sums host-filtered requests and response traffic from the cap's day start, hourly", async () => {
+    const f = fixture();
+    f.respond({
+      Data: [
+        {
+          TypeValue: [
+            { MetricName: "l7Flow_request", Sum: 120_000 },
+            { MetricName: "l7Flow_outFlux", Sum: 3_500_000_000 },
+          ],
+        },
+        { TypeValue: [{ MetricName: "l7Flow_request", Sum: 5 }] },
+      ],
+      TotalCount: 2,
+    });
+    const dayStart = new Date("2026-10-07T16:00:00.000Z");
+    expect(
+      await f.provider.dayUsage(dayStart, new Date("2026-10-08T03:15:00.250Z")),
+    ).toEqual({ dayStart, requests: 120_005, bytes: 3_500_000_000 });
+    expect(f.apiCalls[0]!.input).toEqual({
+      ZoneIds: ["zone-synthetic"],
+      StartTime: "2026-10-07T16:00:00Z",
+      EndTime: "2026-10-08T03:15:00Z",
+      Interval: "hour",
+      MetricNames: ["l7Flow_request", "l7Flow_outFlux"],
+      Filters: [
+        { Key: "domain", Operator: "equals", Value: ["media.synthetic.test"] },
+      ],
+    });
+  });
+
+  it("refuses an unknown metric, a negative or fractional sum and a short page", async () => {
+    const f = fixture();
+    const dayStart = new Date("2026-10-07T16:00:00.000Z");
+    for (const response of [
+      {
+        Data: [{ TypeValue: [{ MetricName: "l7Flow_flux", Sum: 1 }] }],
+        TotalCount: 1,
+      },
+      {
+        Data: [{ TypeValue: [{ MetricName: "l7Flow_request", Sum: -1 }] }],
+        TotalCount: 1,
+      },
+      {
+        Data: [{ TypeValue: [{ MetricName: "l7Flow_outFlux", Sum: 1.5 }] }],
+        TotalCount: 1,
+      },
+      { Data: [], TotalCount: 1 },
+    ]) {
+      f.respond(response);
+      await expect(
+        f.provider.dayUsage(dayStart, new Date("2026-10-08T03:15:00Z")),
+      ).rejects.toMatchObject({ code: "unavailable" });
+    }
+  });
+});
+
 describe("local publication and rollback drain", () => {
   it("is inspectable without a public server, forbids overwrite, and drains previously registered copies in Beta", async () => {
     const directory = await mkdtemp(join(tmpdir(), "media-publication-"));

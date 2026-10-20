@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VIEWER_UPGRADE_SETTLE_MS } from "../media/responsive-media";
+import { resetZoomBlockLists } from "./zoom-block-layer";
+import { resetZoomBlockSession } from "./zoom-blocks";
 import {
   CatalogViewer,
   clampViewerTransform,
@@ -1166,5 +1168,186 @@ describe("CatalogViewer progressive renditions", () => {
         width: 1600,
       }),
     ).toBe("4");
+  });
+});
+
+/*
+ * catalog-deep-zoom-v1 (Issue #295), criteria 15, 17 and 18: a Catalog Detail
+ * image with a `zoom` frame (8192 × 4608 → 8 × 5 blocks) over the 1600 × 900
+ * rendition ladder ending at 3200. On the 400 × 600 stage at a pixel ratio
+ * of 2 it fits 400 CSS px wide, so the layer mounts beyond 4.6× (1.15 × the
+ * 3200 base), and the ceiling becomes 1.25 × the frame's one-to-one zoom
+ * (12.8×) instead of 8×.
+ */
+describe("CatalogViewer deep-zoom blocks", () => {
+  const blockSrc = (cell: number) =>
+    `https://images.example.invalid/v1/p/g/base/block-${String(cell).padStart(2, "0")}.r1.jpg`;
+  const zoomMedia = (index: number) => ({
+    ...renditionMedia(index),
+    deepZoom: { width: 8192, height: 4608, catalogId: "catalog-zoom" },
+  });
+  const list = {
+    width: 8192,
+    height: 4608,
+    edge: 1024,
+    overlap: 2,
+    srcs: Array.from({ length: 40 }, (_, cell) => blockSrc(cell)),
+  };
+  const stubList = (status = 200) => {
+    const fetchList = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      void init;
+      return new Response(status === 200 ? JSON.stringify(list) : null, {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchList);
+    return fetchList;
+  };
+  const scale = (container: HTMLElement) =>
+    Number(
+      currentImage(container)?.style.getPropertyValue("--viewer-scale") ?? "1",
+    );
+  const blocksShown = (container: HTMLElement) => [
+    ...container.querySelectorAll<HTMLImageElement>("[data-viewer-zoom-block]"),
+  ];
+  const state = (stage: HTMLElement) =>
+    stage.getAttribute("data-viewer-zoom-blocks");
+  const flush = async () => {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+
+  beforeEach(() => {
+    resetZoomBlockLists();
+    resetZoomBlockSession();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads nothing below the mount, then one list read and at most four visible blocks at rest", async () => {
+    const fetchList = stubList();
+    const decodes = mockDecode();
+    const value = openProgressive({
+      selectedMedia: [zoomMedia(1), zoomMedia(2)],
+    });
+    setStageSize(value.stage, 400, 600);
+    act(() => window.dispatchEvent(new Event("resize")));
+    expect(state(value.stage)).toBe("idle");
+    pinch(value.stage, 100, 400); // 4×: still below the mount.
+    settleUpgradeTimer();
+    await flush();
+    expect(fetchList).not.toHaveBeenCalled();
+    expect(state(value.stage)).toBe("idle");
+    pinch(value.stage, 100, 150); // 6×: above the mount.
+    await flush();
+    expect(fetchList).toHaveBeenCalledTimes(1);
+    expect(String(fetchList.mock.calls[0]![0])).toMatch(
+      /\/api\/catalog\/catalog-zoom\/media\/rendition-media-1\/zoom-blocks$/u,
+    );
+    settleUpgradeTimer();
+    await flush();
+    const blockDecodes = decodes.filter(({ image }) =>
+      image.src.includes("/block-"),
+    );
+    expect(blockDecodes.length).toBeGreaterThan(0);
+    expect(blockDecodes.length).toBeLessThanOrEqual(4);
+    expect(state(value.stage)).toBe("loading");
+    // A block is inserted only once decoded, without crossorigin.
+    expect(blocksShown(value.container)).toHaveLength(0);
+    await act(async () => {
+      for (const decode of blockDecodes) decode.resolve();
+      await Promise.resolve();
+    });
+    await flush();
+    const shown = blocksShown(value.container);
+    expect(shown.length).toBeGreaterThan(0);
+    for (const block of shown) {
+      expect(block.getAttribute("alt")).toBe("");
+      expect(block.getAttribute("decoding")).toBe("async");
+      expect(block.hasAttribute("crossorigin")).toBe(false);
+    }
+    // The list is never read twice for the image.
+    pinch(value.stage, 100, 120);
+    settleUpgradeTimer();
+    await flush();
+    expect(fetchList).toHaveBeenCalledTimes(1);
+  });
+
+  it("raises the ceiling of a usable tiled image to 1.25 × its one-to-one zoom", () => {
+    stubList();
+    mockDecode();
+    const value = openProgressive({ selectedMedia: [zoomMedia(1)] });
+    setStageSize(value.stage, 400, 600);
+    act(() => window.dispatchEvent(new Event("resize")));
+    pinch(value.stage, 10, 400);
+    expect(scale(value.container)).toBeCloseTo(12.8, 5);
+    const plain = openProgressive({ selectedMedia: [renditionMedia(1)] });
+    setStageSize(plain.stage, 400, 600);
+    act(() => window.dispatchEvent(new Event("resize")));
+    pinch(plain.stage, 10, 400);
+    expect(scale(plain.container)).toBe(8);
+    expect(state(plain.stage)).toBe("none");
+  });
+
+  it("leaves today's Viewer after a 404 list read, without counting a failure", async () => {
+    stubList(404);
+    mockDecode();
+    const value = openProgressive({ selectedMedia: [zoomMedia(1)] });
+    setStageSize(value.stage, 400, 600);
+    act(() => window.dispatchEvent(new Event("resize")));
+    pinch(value.stage, 100, 600);
+    await flush();
+    expect(state(value.stage)).toBe("unusable");
+    expect(blocksShown(value.container)).toHaveLength(0);
+  });
+
+  it("aborts the old image's block loads when paging away, and falls back after three failures", async () => {
+    stubList();
+    const decodes = mockDecode();
+    const value = openProgressive({
+      selectedMedia: [zoomMedia(1), zoomMedia(2)],
+    });
+    setStageSize(value.stage, 400, 600);
+    act(() => window.dispatchEvent(new Event("resize")));
+    pinch(value.stage, 100, 600);
+    await flush();
+    settleUpgradeTimer();
+    await flush();
+    const pending = decodes.filter(({ image }) =>
+      image.src.includes("/block-"),
+    );
+    expect(pending.length).toBeGreaterThan(0);
+    value.rerender({ index: 1, selectedMedia: [zoomMedia(1), zoomMedia(2)] });
+    await flush();
+    for (const { image } of pending)
+      expect(image.hasAttribute("src")).toBe(false);
+    // Aborted loads that settle later count nothing.
+    await act(async () => {
+      for (const decode of pending) decode.reject(new Error("aborted"));
+      await Promise.resolve();
+    });
+    expect(state(value.stage)).not.toBe("fallback");
+    // Three counted failures switch the layer off for the session.
+    pinch(value.stage, 100, 600);
+    await flush();
+    settleUpgradeTimer();
+    await flush();
+    const failing = decodes.filter(
+      ({ image }) =>
+        image.src.includes("/block-") &&
+        !pending.some((p) => p.image === image),
+    );
+    expect(failing.length).toBeGreaterThanOrEqual(3);
+    await act(async () => {
+      for (const decode of failing.slice(0, 3))
+        decode.reject(new Error("broken"));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(state(value.stage)).toBe("fallback");
   });
 });

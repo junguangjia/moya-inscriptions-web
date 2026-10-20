@@ -136,6 +136,15 @@ export interface PublicationRepository {
     },
     now: Date,
   ): Promise<void>;
+  /** catalog-deep-zoom-v1: today's counts on the usage row; false without one. */
+  recordDayUsage(
+    usage: {
+      readonly dayStart: Date;
+      readonly requests: number;
+      readonly bytes: number | null;
+    },
+    now: Date,
+  ): Promise<boolean>;
 }
 
 /** Existing private rendition store; publication never calls its remove method. */
@@ -203,6 +212,119 @@ export const purgeQuotaDayStart = (now: Date): Date => {
   return new Date(
     Math.floor((now.getTime() + shanghai) / day) * day - shanghai,
   );
+};
+
+/**
+ * The image host's day-to-date usage that the Catalog deep-zoom breaker reads
+ * (catalog-deep-zoom-v1): written by the worker's usage step every 15
+ * minutes, evaluated by the Backend.
+ */
+export interface CatalogZoomDayUsage {
+  /** The cap's day the counts belong to (from 00:00 Asia/Shanghai). */
+  readonly dayStart: Date;
+  readonly requests: number;
+  /** Bytes the cap counts; null when the provider reports no traffic figure. */
+  readonly bytes: number | null;
+  readonly observedAt: Date;
+}
+
+/**
+ * The breaker's thresholds (planned; P0 item 7 settles them): a warning line
+ * at 100,000 requests or 3 GB, a trip at 150,000 requests or 5 GB. A trip
+ * hides the Detail `zoom` frame and answers 404 on the block-list read until
+ * the cap's next day. GB is 10^9 bytes, the lower reading of the cap.
+ */
+export const CATALOG_ZOOM_USAGE_LIMITS = {
+  warningRequests: 100_000,
+  warningBytes: 3_000_000_000,
+  tripRequests: 150_000,
+  tripBytes: 5_000_000_000,
+  /** An observation older than this counts as missing. */
+  staleMs: 60 * 60 * 1_000,
+} as const;
+
+/** The worker's day usage step interval (96 provider reads a day). */
+export const CATALOG_ZOOM_USAGE_INTERVAL_MS = 15 * 60 * 1_000;
+
+/** Whether today's counts reach a threshold of the given level. */
+export const catalogZoomUsageAt = (
+  usage: Pick<CatalogZoomDayUsage, "requests" | "bytes">,
+  level: "warning" | "trip",
+): boolean => {
+  const limits = CATALOG_ZOOM_USAGE_LIMITS;
+  const requests =
+    level === "warning" ? limits.warningRequests : limits.tripRequests;
+  const bytes = level === "warning" ? limits.warningBytes : limits.tripBytes;
+  return usage.requests >= requests || (usage.bytes ?? 0) >= bytes;
+};
+
+/**
+ * The breaker (catalog-deep-zoom-v1): with edge delivery on, a missing row
+ * for today or an observation older than an hour counts as tripped (fail
+ * closed); with edge delivery off (Development's relay) only a row for today
+ * that reaches a trip threshold trips it, and a missing row leaves it closed.
+ */
+export const catalogZoomBreakerTripped = (
+  usage: CatalogZoomDayUsage | null,
+  now: Date,
+  edgeDelivery: boolean,
+): boolean => {
+  if (
+    usage === null ||
+    usage.dayStart.getTime() !== purgeQuotaDayStart(now).getTime()
+  )
+    return edgeDelivery;
+  const stale =
+    now.getTime() - usage.observedAt.getTime() >
+    CATALOG_ZOOM_USAGE_LIMITS.staleMs;
+  if (edgeDelivery && stale) return true;
+  return catalogZoomUsageAt(usage, "trip");
+};
+
+/** How long the Backend keeps one usage read for the breaker. */
+export const CATALOG_ZOOM_USAGE_CACHE_MS = 60_000;
+
+/**
+ * The Backend's deep-zoom gate (catalog-deep-zoom-v1): open only where blocks
+ * can be delivered (edge delivery, or the Development relay) and while the
+ * breaker is closed. The usage row is read at most once a minute; a failed
+ * read counts as missing (tripped with edge delivery, closed without).
+ */
+export const createCatalogZoomGate = (options: {
+  readonly readUsage: () => Promise<CatalogZoomDayUsage | null>;
+  readonly edgeDelivery: () => boolean;
+  readonly development: boolean;
+  readonly clock?: () => Date;
+  readonly logger?: { error(message: string): void };
+}): { isOpen(): Promise<boolean> } => {
+  const clock = options.clock ?? (() => new Date());
+  const logger = options.logger ?? console;
+  let cached: {
+    readonly at: number;
+    readonly usage: Promise<CatalogZoomDayUsage | null>;
+  } | null = null;
+  const usage = (now: Date) => {
+    if (
+      cached === null ||
+      now.getTime() - cached.at >= CATALOG_ZOOM_USAGE_CACHE_MS
+    )
+      cached = {
+        at: now.getTime(),
+        usage: options.readUsage().catch(() => {
+          logger.error("[catalog-zoom] usage_unavailable");
+          return null;
+        }),
+      };
+    return cached.usage;
+  };
+  return {
+    async isOpen() {
+      const edge = options.edgeDelivery();
+      if (!edge && !options.development) return false;
+      const now = clock();
+      return !catalogZoomBreakerTripped(await usage(now), now, edge);
+    },
+  };
 };
 
 const BLOCK_ROLE = /^block-[0-9]{2}$/u;
@@ -1047,6 +1169,25 @@ export function publicationMaintenanceSteps(
           logger.error(
             "publication.usage code=monthly_request_warning threshold=2000000",
           );
+      },
+    });
+    // catalog-deep-zoom-v1: the breaker's day-to-date counts, read from the
+    // start of the cap's day. Lines are content-free (a code and the counts)
+    // and error-level, like the monthly warning, so the journal grep finds
+    // both thresholds.
+    steps.push({
+      label: "publication_day_usage",
+      intervalMs: CATALOG_ZOOM_USAGE_INTERVAL_MS,
+      async run(now) {
+        if (!options.allowPublish()) return;
+        const usage = await provider.dayUsage(purgeQuotaDayStart(now), now);
+        const stored = await options.port.recordDayUsage(usage, now);
+        if (!stored) logger.error("publication.usage code=day_usage_no_row");
+        const counts = `requests=${usage.requests} bytes=${usage.bytes}`;
+        if (catalogZoomUsageAt(usage, "trip"))
+          logger.error(`publication.usage code=day_usage_trip ${counts}`);
+        else if (catalogZoomUsageAt(usage, "warning"))
+          logger.error(`publication.usage code=day_usage_warning ${counts}`);
       },
     });
   }

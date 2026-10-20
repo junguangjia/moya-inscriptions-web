@@ -14,6 +14,7 @@ import {
   validatePurgeTarget,
 } from "./keys.js";
 import {
+  CATALOG_ZOOM_TRAFFIC_METRIC,
   MONTHLY_REQUEST_WARNING,
   PUBLICATION_CACHE_CONTROL,
   PublicationProviderError,
@@ -334,6 +335,57 @@ export function createTencentPublicationProvider(
     async verifyGone(target, signal) {
       validatePurgeTarget(origin, target, "file");
       return guarded(() => verifyGone(target, signal), signal);
+    },
+    async dayUsage(dayStart, at, signal) {
+      return guarded(async () => {
+        const response = await api.call(
+          "DescribeTimingL7AnalysisData",
+          {
+            ZoneIds: [config.zoneId],
+            StartTime: dayStart.toISOString().replace(/\.\d{3}Z$/u, "Z"),
+            EndTime: at.toISOString().replace(/\.\d{3}Z$/u, "Z"),
+            Interval: "hour",
+            MetricNames: ["l7Flow_request", CATALOG_ZOOM_TRAFFIC_METRIC],
+            Filters: [
+              {
+                Key: "domain",
+                Operator: "equals",
+                Value: [new URL(origin).hostname],
+              },
+            ],
+          },
+          publisherCredentials,
+          signal,
+        );
+        if (
+          !Array.isArray(response.Data) ||
+          !Number.isSafeInteger(response.TotalCount) ||
+          Number(response.TotalCount) !== response.Data.length
+        )
+          throw new PublicationProviderError("unavailable");
+        const sums = { l7Flow_request: 0, [CATALOG_ZOOM_TRAFFIC_METRIC]: 0 };
+        for (const row of response.Data) {
+          if (!object(row) || !Array.isArray(row.TypeValue))
+            throw new PublicationProviderError("unavailable");
+          for (const metric of row.TypeValue) {
+            if (
+              !object(metric) ||
+              (metric.MetricName !== "l7Flow_request" &&
+                metric.MetricName !== CATALOG_ZOOM_TRAFFIC_METRIC) ||
+              typeof metric.Sum !== "number" ||
+              !Number.isSafeInteger(metric.Sum) ||
+              metric.Sum < 0
+            )
+              throw new PublicationProviderError("unavailable");
+            sums[metric.MetricName] += metric.Sum;
+          }
+        }
+        const requests = sums.l7Flow_request;
+        const bytes = sums[CATALOG_ZOOM_TRAFFIC_METRIC];
+        if (!Number.isSafeInteger(requests) || !Number.isSafeInteger(bytes))
+          throw new PublicationProviderError("unavailable");
+        return { dayStart, requests, bytes };
+      }, signal);
     },
     async monthlyRequests(at, signal) {
       const start = publicationPlanMonth(at);

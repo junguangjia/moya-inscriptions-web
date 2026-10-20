@@ -672,6 +672,24 @@
   will-change: transform;
 }
 
+/* catalog-deep-zoom-v1: the block layer over the current slide's image. */
+.viewerZoomLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.viewer .viewerZoomBlock {
+  position: absolute;
+  display: block;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 .viewerMediaError {
   display: grid;
   width: min(100%, 680px);

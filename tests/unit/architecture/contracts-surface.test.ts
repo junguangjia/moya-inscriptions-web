@@ -20,6 +20,11 @@ describe("contracts package surface", () => {
       "CatalogContributor",
       "CatalogContributorRole",
       "CatalogDetail",
+      // catalog-deep-zoom-v1: a Detail image with its optional block frame,
+      // the frame and the per-image block list.
+      "CatalogDetailMedia",
+      "CatalogZoomBlocks",
+      "CatalogZoomFrame",
       "CatalogId",
       "CatalogKind",
       "CatalogListTransportQuery",

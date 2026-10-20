@@ -10,6 +10,8 @@ import {
 } from "../media/responsive-media";
 import { LivePhotoFrame } from "../publishing/ui/live/live-photo";
 import styles from "./catalog-detail.module.css";
+import { useZoomBlockLayer } from "./zoom-block-layer";
+import { zoomBlockMaxScale } from "./zoom-blocks";
 
 import type {
   CSSProperties,
@@ -310,6 +312,36 @@ export const CatalogViewer = ({
   const refusedRenditionsRef = useRef(new Set<string>());
   const active = media[index];
   const openStage = open ? stageSize : null;
+  // catalog-deep-zoom-v1: the block layer of the current item (Catalog Detail
+  // images with a `zoom` frame only; every other item reports "none").
+  const activeFit =
+    active === undefined || openStage === null
+      ? null
+      : viewerFit(
+          active.width,
+          active.height,
+          openStage.width,
+          openStage.height,
+        );
+  const zoomBlocks = useZoomBlockLayer({
+    item: active,
+    open,
+    view:
+      activeFit === null
+        ? null
+        : {
+            fitWidth: activeFit.width,
+            fitHeight: activeFit.height,
+            stageWidth: activeFit.stageWidth,
+            stageHeight: activeFit.stageHeight,
+            scale: transform.scale,
+            x: transform.x,
+            y: transform.y,
+          },
+    pixelRatio: openStage?.pixelRatio ?? 1,
+    baseWidth: active === undefined ? 1 : viewerDetailWidth(active),
+  });
+  const zoomUsable = zoomBlocks.usable;
 
   const updateTransform = useCallback((next: ViewerTransform) => {
     transformRef.current = next;
@@ -382,14 +414,31 @@ export const CatalogViewer = ({
     const stage = stageRef.current;
     if (active === undefined || stage === null) return null;
     const rectangle = stage.getBoundingClientRect();
-    return viewerFit(
+    const fit = viewerFit(
       active.width,
       active.height,
       stage.clientWidth || rectangle.width,
       stage.clientHeight || rectangle.height,
       viewerDetailWidth(active),
     );
-  }, [active]);
+    // A usable tiled item zooms further: up to 40, at least 1.25 x its
+    // frame's one-to-one zoom and the zoom that fills the stage.
+    if (active.deepZoom === undefined || !zoomUsable) return fit;
+    return {
+      ...fit,
+      maxScale: zoomBlockMaxScale(
+        fit.maxScale,
+        active.deepZoom,
+        {
+          fitWidth: fit.width,
+          fitHeight: fit.height,
+          stageWidth: fit.stageWidth,
+          stageHeight: fit.stageHeight,
+        },
+        window.devicePixelRatio > 0 ? window.devicePixelRatio : 1,
+      ),
+    };
+  }, [active, zoomUsable]);
 
   const zoomAt = (clientX: number, clientY: number, nextScale: number) => {
     const stage = stageRef.current;
@@ -1061,6 +1110,7 @@ export const CatalogViewer = ({
         className={styles.viewerStage}
         data-active-live={active?.live === undefined ? undefined : "true"}
         data-viewer-scale={transform.scale > 1.05 ? "zoomed" : "fit"}
+        data-viewer-zoom-blocks={zoomBlocks.state}
         onLostPointerCapture={cancelPointer}
         onPointerCancel={cancelPointer}
         onPointerDown={handlePointerDown}
@@ -1147,7 +1197,10 @@ export const CatalogViewer = ({
                     图像无法加载
                   </div>
                 ) : item.live === undefined ? (
-                  still
+                  <>
+                    {still}
+                    {current ? zoomBlocks.node : null}
+                  </>
                 ) : (
                   <LivePhotoFrame
                     active={current && open}
