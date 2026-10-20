@@ -18,7 +18,7 @@ import {
   articleIdSchema,
   catalogCommentIdSchema,
 } from "@moya/contracts/schemas";
-import type { WorkSubmissionContent } from "@moya/contracts";
+import type { WorkDraftItem, WorkSubmissionContent } from "@moya/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -31,12 +31,15 @@ const admin = poolFor(target);
 const key = (prefix: string) => `${prefix}-${randomBytes(16).toString("hex")}`;
 const now = new Date("2026-09-22T12:00:00Z");
 const request = () => ({ requestId: randomUUID() });
-const content = (body = ""): WorkSubmissionContent => ({
+const content = (
+  body = "",
+  items: WorkDraftItem[] = [],
+): WorkSubmissionContent => ({
   title: "通知合成作品",
   body,
   authorship: null,
   visibility: "public",
-  items: [],
+  items,
   coverKey: null,
   coverCrop: null,
 });
@@ -65,6 +68,25 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
     cara = key("user"),
     dana = key("user");
   let work = "";
+  const photo = async (owner: string): Promise<WorkDraftItem> => {
+    const mediaId = key("user-media"),
+      itemId = key("media-item");
+    await setup!.query(
+      "INSERT INTO community.user_media(id,owner_id,mime_type,width,height,sha256,bytes) VALUES($1,$2,'image/png',4,3,$3,$4)",
+      [mediaId, owner, "a".repeat(64), Buffer.from([0x89, 0x50, 0x4e, 0x47])],
+    );
+    await setup!.query(
+      "INSERT INTO community.media_items(id,owner_id,kind,quality_mode,source,legacy_media_id,state,presentation) VALUES($1,$2,'static','legacy','legacy_user_media',$3,'ready','{\"width\":4,\"height\":3}'::jsonb)",
+      [itemId, owner, mediaId],
+    );
+    return {
+      key: itemId,
+      itemId,
+      kind: "static",
+      qualityMode: "legacy",
+      edit: { rotation: 0, crop: null },
+    };
+  };
   // parallel-community-integration-qa: C publishes Articles through the
   // published-only public.article_entries projection. A withdrawn or never
   // published Article simply has no row there.
@@ -167,7 +189,11 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
     );
     const draft = await publishing.createDraft(
       alice,
-      { ...request(), content: content(), deviceClass: "desktop" },
+      {
+        ...request(),
+        content: content("", [await photo(alice)]),
+        deviceClass: "desktop",
+      },
       now,
     );
     const published = await publishing.submit(
@@ -466,7 +492,7 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
       {
         ...request(),
         content: {
-          ...content("@reader-dana"),
+          ...content("@reader-dana", [await photo(alice)]),
           mentions: [
             { userId: dana, handle: "reader-dana", start: 0, end: 12 },
           ],
@@ -506,7 +532,7 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
           holder: { draftId: edit.id },
           baseRevisionId: edit.baseRevisionId,
           content: {
-            ...content(body),
+            ...content(body, [...edit.content.items]),
             ...(body.startsWith("@")
               ? {
                   mentions: [
@@ -888,7 +914,11 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
       );
       const draft = await publishing.createDraft(
         own.id,
-        { ...request(), content: content(), deviceClass: "desktop" },
+        {
+          ...request(),
+          content: content("", [await photo(own.id)]),
+          deviceClass: "desktop",
+        },
         now,
       );
       const submitted = await publishing.submit(

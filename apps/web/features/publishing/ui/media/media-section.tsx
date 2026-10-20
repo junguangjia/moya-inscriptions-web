@@ -37,7 +37,7 @@ export type MediaSectionLayout = "phone" | "desktop";
 export interface MediaSectionProps {
   readonly sessionKey: string;
   readonly layout: MediaSectionLayout;
-  /** 跳过，只发布文字 for the phone steps, when the step shows it here. */
+  /** 先写标题和正文 for the phone steps, when the step shows it here. */
   readonly onSkip?: () => void;
 }
 
@@ -220,7 +220,7 @@ const MediaSectionBody = ({
           onClick={onSkip}
           type="button"
         >
-          跳过，只发布文字
+          先写标题和正文
         </button>
       )}
 

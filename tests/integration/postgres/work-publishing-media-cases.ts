@@ -2890,6 +2890,7 @@ export const registerWorkPublishingMediaTests = (
       );
       const content = {
         ...text("Private preview test", [entry(item)]),
+        title: "Private preview test",
         visibility: "self" as const,
       };
       expect((await adapter.ensureEditDerivatives(a, content, t0)).ready).toBe(
@@ -3937,6 +3938,7 @@ export const registerWorkPublishingMediaTests = (
       // unedited item reports the base key. A session holder answers alike.
       const readyContent: WorkDraftContent = {
         ...content,
+        title: "就绪",
         items: [content.items[0] as WorkDraftItem],
       };
       expect(

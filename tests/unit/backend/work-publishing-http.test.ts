@@ -98,6 +98,19 @@ const content = {
   coverCrop: null,
 } as const;
 
+const submissionContent = {
+  ...content,
+  items: [
+    {
+      key: "photo",
+      itemId: `media-item-${"3".repeat(32)}`,
+      kind: "static",
+      qualityMode: "standard",
+      edit: { rotation: 0, crop: null },
+    },
+  ],
+} as const;
+
 const draft = {
   id: draftId,
   kind: "new",
@@ -1974,7 +1987,7 @@ describe("work publishing author HTTP surface", () => {
     const command = {
       requestId: receipt.requestId,
       holder: { draftId },
-      content,
+      content: submissionContent,
       baseRevisionId: null,
     };
     const submitted = await fetch(
@@ -2321,7 +2334,7 @@ describe("work publishing author HTTP surface", () => {
     const command = {
       requestId: receipt.requestId,
       holder: { draftId },
-      content,
+      content: submissionContent,
       baseRevisionId: null,
     };
     const submit = () =>
@@ -2444,7 +2457,7 @@ describe("work publishing author HTTP surface", () => {
     const submission = (holder: string) => ({
       requestId: randomUUID(),
       holder: { draftId: holder },
-      content,
+      content: submissionContent,
       baseRevisionId: null,
     });
 
