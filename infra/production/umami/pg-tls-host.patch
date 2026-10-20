@@ -1,0 +1,10 @@
+--- a/node_modules/.pnpm/pg@8.22.0/node_modules/pg/lib/connection.js
++++ b/node_modules/.pnpm/pg@8.22.0/node_modules/pg/lib/connection.js
+@@ -96,6 +96,7 @@
+     const self = this
+     const options = {
+       socket: self.stream,
++      host,
+     }
+ 
+     if (self.ssl !== true) {
