@@ -439,7 +439,13 @@ test("feed, comment and people avatars load only avatar-128", async ({
           .locator("img"),
       ),
     ).toEqual(thumb(author));
-    await click(target.page.getByRole("tab", { name: /^评论/u }));
+    // The phone single-column feed opens the calligraphy Detail, whose
+    // reading navigation switches to the comments.
+    await click(
+      target.page
+        .getByRole("navigation", { name: "详情与评论" })
+        .getByRole("button", { name: "评论", exact: true }),
+    );
     for (const entry of commenters)
       expect(
         await painted(
