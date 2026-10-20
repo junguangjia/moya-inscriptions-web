@@ -37,10 +37,16 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
     await importOriginal<typeof import("@moya/catalog-postgres")>();
   return {
     ...actual,
-    createPostgresPool: vi.fn(() => ({
-      end: database.end,
-      query: vi.fn(async () => ({ rows: [] })),
-    })),
+    createPostgresPool: vi.fn(() => {
+      const query = vi.fn(async (text: string) => ({
+        rows: text.includes("clock_timestamp()") ? [{ at: new Date() }] : [],
+      }));
+      return {
+        end: database.end,
+        query,
+        connect: async () => ({ query, release: vi.fn() }),
+      };
+    }),
   };
 });
 
@@ -89,6 +95,13 @@ vi.mock(
   },
 );
 
+const sourceEnvironment = {
+  CATALOG_SOURCE_COS_BUCKET: "synthetic-source-1250000000",
+  CATALOG_SOURCE_COS_REGION: "ap-guangzhou",
+  CATALOG_SOURCE_COS_SECRET_ID: "synthetic-source-id",
+  CATALOG_SOURCE_COS_SECRET_KEY: "synthetic-source-secret",
+} as const;
+
 const production = {
   NODE_ENV: "production",
   APP_DATABASE_URL:
@@ -102,6 +115,8 @@ const production = {
   WORK_MEDIA_COS_SECRET_KEY: "synthetic-publishing-secret",
   WORK_MEDIA_TOOLS_IMAGE: "yoyi-work-publishing-media-tools:v2",
   WORK_MEDIA_WORK_DIR: "/Users/synthetic/publishing/work",
+  ...sourceEnvironment,
+  // These are unrelated public signer settings, never source fallbacks.
   COS_BUCKET: "synthetic-example-1250000000",
   COS_REGION: "ap-guangzhou",
   COS_SECRET_ID: "synthetic-unit-id",
@@ -204,9 +219,18 @@ describe("media worker composition", () => {
         /WORK_MEDIA_WORK_DIR/,
       ],
       [{ ...production, APP_DATABASE_URL: undefined }, /APP_DATABASE_URL/],
-      [{ ...production, COS_SECRET_KEY: undefined }, /COS_SECRET_KEY/],
-      [{ ...production, COS_BUCKET: "Invalid_Bucket" }, /COS_BUCKET/],
-      [{ ...production, COS_REGION: "AP-Guangzhou" }, /COS_REGION/],
+      [
+        { ...production, CATALOG_SOURCE_COS_SECRET_KEY: undefined },
+        /CATALOG_SOURCE_COS_SECRET_KEY/,
+      ],
+      [
+        { ...production, CATALOG_SOURCE_COS_BUCKET: "Invalid_Bucket" },
+        /CATALOG_SOURCE_COS_BUCKET/,
+      ],
+      [
+        { ...production, CATALOG_SOURCE_COS_REGION: "AP-Guangzhou" },
+        /CATALOG_SOURCE_COS_REGION/,
+      ],
       [
         { ...production, WORK_MEDIA_STORE_DIR: "/srv/store" },
         /WORK_MEDIA_STORE_DIR/,
@@ -366,7 +390,49 @@ describe("media worker composition", () => {
     },
   );
 
-  it("turns Catalog rendering off without Catalog source configuration", async () => {
+  it.each(["production", "development"] as const)(
+    "%s refuses an incomplete source namespace before sandbox or pools, even with other identities or local media",
+    async (mode) => {
+      const environment = {
+        ...(mode === "production" ? production : development),
+        CMS_MEDIA_DIR: "/Users/synthetic/payload-media",
+      };
+      for (const partial of [
+        { ...sourceEnvironment, CATALOG_SOURCE_COS_SECRET_KEY: undefined },
+        { CATALOG_SOURCE_COS_SECURITY_TOKEN: "synthetic-orphan-session" },
+        { ...sourceEnvironment, CATALOG_SOURCE_COS_REGION: "invalid" },
+        { ...sourceEnvironment, CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS: "0" },
+        {
+          ...sourceEnvironment,
+          CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT: "9999999999",
+        },
+        {
+          ...sourceEnvironment,
+          CATALOG_SOURCE_COS_SECURITY_TOKEN: "synthetic-orphan-session",
+        },
+        {
+          ...sourceEnvironment,
+          CATALOG_SOURCE_COS_SECURITY_TOKEN: "synthetic-expired-session",
+          CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT: "1",
+        },
+      ]) {
+        const [code, text] = await startupFailure(() =>
+          prepareMediaWorker(
+            { ...environment, ...partial },
+            { logger: silent },
+          ),
+        );
+        expect(code).toBe(MEDIA_WORKER_EXIT_CODES.config);
+        expect(text).toMatch(/CATALOG_SOURCE_COS_/);
+        expect(text).not.toMatch(/synthetic/);
+      }
+      expect(openProductionPublishingMedia).not.toHaveBeenCalled();
+      expect(openPublishingMedia).not.toHaveBeenCalled();
+      expect(createPostgresPool).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts explicit COS source configuration in Development without a local directory", async () => {
     quietQueue();
     fakeMedia.sandbox.selfCheck.mockResolvedValue({
       status: "ok",
@@ -374,18 +440,43 @@ describe("media worker composition", () => {
       facts: isolatedFacts(),
     });
     const worker = await prepareMediaWorker(
+      { ...development, ...sourceEnvironment, CMS_MEDIA_DIR: undefined },
+      { logger: silent },
+    );
+    expect(worker.catalog).toBe(true);
+    expect(createPostgresPool).toHaveBeenCalledTimes(2);
+    await worker.stop();
+  });
+
+  it("turns Production Catalog rendering off without source settings despite a public signer, UGC identity and local directory", async () => {
+    const queue = quietQueue();
+    fakeMedia.sandbox.selfCheck.mockResolvedValue({
+      status: "ok",
+      runtime: sandboxRuntime(),
+      facts: isolatedFacts(),
+    });
+    const worker = await startMediaWorker(
       {
         ...production,
-        COS_BUCKET: undefined,
-        COS_REGION: undefined,
-        COS_SECRET_ID: undefined,
-        COS_SECRET_KEY: undefined,
+        CATALOG_SOURCE_COS_BUCKET: undefined,
+        CATALOG_SOURCE_COS_REGION: undefined,
+        CATALOG_SOURCE_COS_SECRET_ID: undefined,
+        CATALOG_SOURCE_COS_SECRET_KEY: undefined,
+        CMS_MEDIA_DIR: "/Users/synthetic/payload-media",
       },
       { logger: silent },
     );
     expect(worker.catalog).toBe(false);
-    // The Community App role only.
-    expect(createPostgresPool).toHaveBeenCalledTimes(1);
+    // Rendering is off, but live published metadata/withdrawal discovery must
+    // continue on its separate read-only CMS connection.
+    expect(createPostgresPool).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(queue.catalogSync).toHaveBeenCalledTimes(1));
+    expect(queue.catalogSync.mock.calls[0]![2].snapshot).toMatchObject({
+      publishedSources: [],
+    });
+    expect(queue.catalogSync.mock.calls[0]![2].snapshot).not.toHaveProperty(
+      "preparations",
+    );
     await worker.stop();
   });
 });

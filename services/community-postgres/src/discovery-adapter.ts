@@ -118,27 +118,84 @@ const queryIdentity = (q: DiscoveryQuery) => ({
   pageSize: q.pageSize,
 });
 export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly options: { catalogPool?: Pool } = {},
+  ) {}
   private async run<T>(
     write: boolean,
     fn: (db: PoolClient) => Promise<T>,
+    scope: "catalog" | "app" = "catalog",
   ): Promise<T> {
     const db = await this.pool.connect().catch((error) => {
       throw asCommunityOperationError(error, "connect");
     });
+    let catalog: PoolClient | undefined;
+    let source: readonly Record<string, unknown>[] = [];
     try {
+      if (scope === "catalog" && this.options.catalogPool) {
+        catalog = await this.options.catalogPool.connect();
+        await catalog.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+        source = (
+          await catalog.query(
+            "SELECT catalog_id,kind,title,aliases,first_published_at,filter_metadata FROM public.catalog_discovery ORDER BY catalog_id LIMIT 10001",
+          )
+        ).rows;
+        if (source.length > 10000)
+          throw new Error(
+            "Catalog discovery source exceeds its complete bound",
+          );
+      }
+      const sourceJson = JSON.stringify(source);
+      if (Buffer.byteLength(sourceJson) > 8 * 1024 * 1024)
+        throw new Error("Catalog discovery source byte bound exceeded");
+      const reader = catalog;
+      const scoped = reader
+        ? new Proxy(db, {
+            get(target, key) {
+              if (key !== "query") {
+                const value = Reflect.get(target, key);
+                return typeof value === "function" ? value.bind(target) : value;
+              }
+              return async (text: string, values: unknown[] = []) => {
+                if (typeof text !== "string")
+                  throw new TypeError("Discovery SQL must be static text");
+                if (
+                  (text.includes("FROM catalog_media") ||
+                    text.includes("FROM catalog_entries")) &&
+                  !text.includes("community.")
+                )
+                  return reader.query(text, values);
+                if (text.includes("catalog_discovery")) {
+                  if (!text.includes("community."))
+                    return reader.query(text, values);
+                  const cte = `catalog_discovery AS (SELECT * FROM jsonb_to_recordset($${values.length + 1}::jsonb) AS c(catalog_id text,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb))`;
+                  const sql = /^\s*WITH\s/i.test(text)
+                    ? text.replace(/^\s*WITH\s/i, `WITH ${cte}, `)
+                    : `WITH ${cte} ${text}`;
+                  return target.query(sql, [...values, sourceJson]);
+                }
+                return target.query(text, values);
+              };
+            },
+          })
+        : db;
       await db.query(
         write
           ? "BEGIN ISOLATION LEVEL REPEATABLE READ"
           : "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );
-      const result = await fn(db);
+      const result = await fn(scoped);
       await db.query("COMMIT");
       return result;
     } catch (error) {
       await db.query("ROLLBACK").catch(() => undefined);
       throw asCommunityOperationError(error, "query");
     } finally {
+      if (catalog) {
+        await catalog.query("ROLLBACK").catch(() => undefined);
+        catalog.release();
+      }
       db.release();
     }
   }
@@ -161,13 +218,13 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
     for (const row of (
       await db.query<CatalogCardMediaRow>(
         `SELECT cm.catalog_id,cm.media_id,cm.object_key,cm.width,cm.height,cm.is_representative,cm.rn,cm.total,
-          delivery.renditions,delivery.placeholder_color
+          ${this.options.catalogPool ? "NULL::jsonb AS renditions,NULL::text AS placeholder_color" : "delivery.renditions,delivery.placeholder_color"}
         FROM (
           SELECT m.*,
             row_number() OVER (PARTITION BY m.catalog_id ORDER BY m.position) AS rn,
             count(*) OVER (PARTITION BY m.catalog_id) AS total
           FROM catalog_media m WHERE m.catalog_id=ANY($1::text[])
-        ) cm${catalogMediaDeliveryJoinSql("cm")}
+        ) cm${this.options.catalogPool ? "" : catalogMediaDeliveryJoinSql("cm")}
         WHERE cm.is_representative OR cm.rn<=$2
         ORDER BY cm.catalog_id,cm.position`,
         [catalogs, CARD_GALLERY_MAXIMUM],
@@ -452,39 +509,43 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
     });
   }
   async state(target: ContentIdentity, actor: string | null) {
-    return this.run(false, async (db) => {
-      const row = (
-        await db.query<{
-          favorite: boolean;
-          liked: boolean;
-          favorite_count: string;
-          like_count: string;
-        }>(
-          `SELECT COALESCE(bool_or(r.user_id=$1 AND r.relation='favorite'),false) AS favorite,
+    return this.run(
+      false,
+      async (db) => {
+        const row = (
+          await db.query<{
+            favorite: boolean;
+            liked: boolean;
+            favorite_count: string;
+            like_count: string;
+          }>(
+            `SELECT COALESCE(bool_or(r.user_id=$1 AND r.relation='favorite'),false) AS favorite,
            COALESCE(bool_or(r.user_id=$1 AND r.relation='like'),false) AS liked,
            count(*) FILTER(WHERE r.relation='favorite') AS favorite_count,
            count(*) FILTER(WHERE r.relation='like') AS like_count
            FROM community.content_relations r
            JOIN community.public_users u ON u.id=r.user_id AND u.status='active'
            WHERE r.content_type=$2 AND r.content_id=$3`,
-          [actor, target.type, target.id],
-        )
-      ).rows[0]!;
-      const comments = (
-        await db.query<{ n: string }>(visibleDiscussionCountSql, [
-          target.type,
-          target.id,
-          actor,
-        ])
-      ).rows[0];
-      return {
-        favorite: row.favorite,
-        liked: row.liked,
-        favoriteCount: Number(row.favorite_count),
-        likeCount: Number(row.like_count),
-        commentCount: Number(comments?.n ?? 0),
-      };
-    });
+            [actor, target.type, target.id],
+          )
+        ).rows[0]!;
+        const comments = (
+          await db.query<{ n: string }>(visibleDiscussionCountSql, [
+            target.type,
+            target.id,
+            actor,
+          ])
+        ).rows[0];
+        return {
+          favorite: row.favorite,
+          liked: row.liked,
+          favoriteCount: Number(row.favorite_count),
+          likeCount: Number(row.like_count),
+          commentCount: Number(comments?.n ?? 0),
+        };
+      },
+      "app",
+    );
   }
   async filterOptions(): Promise<InscriptionFilterOptions> {
     return this.run(false, async (db) => {

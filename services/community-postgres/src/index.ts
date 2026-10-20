@@ -29,6 +29,12 @@ export { PostgresAuthorCommunityAdapter } from "./author-adapter.js";
 export { PostgresCommunityDiscoveryAdapter } from "./discovery-adapter.js";
 export { PostgresCommunityContentOperatorAdapter } from "./content-operator-adapter.js";
 export { PostgresWorkPublishingAdapter } from "./work-publishing-adapter.js";
+export {
+  synchronizeCatalogDeliveryIntents,
+  parseCatalogPrepareRows,
+  inspectCatalogDelivery,
+  readCatalogDeliveryProjection,
+} from "./publishing/catalog-delivery-intents.js";
 // unified-media-pipeline-v1: the recorded form of rendition recipe
 // identities (the registry itself lives with the processor) and the D7 hold.
 export {

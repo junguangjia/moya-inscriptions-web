@@ -11,14 +11,17 @@ export const notHeldSql = (item: string): string =>
  * references. No draft/history/profile/tiles eligibility. Current Catalog
  * projection is deliberately late-bound to keep migration families separate.
  */
-export const desiredRenditionsSql = (catalogAvailable = true): string => `
+export const desiredRenditionsSql = (
+  catalogAvailable = true,
+  catalogSelector?: string,
+): string => `
   SELECT DISTINCT r.id AS rendition_id,r.item_id,r.catalog_asset_id,b.storage_key,
     r.content_type,b.purpose,b.byte_size,b.sha256,r.role,r.edit_key,r.recipe_version
   FROM community.media_renditions r
   JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed'
   LEFT JOIN community.media_items i ON i.id=r.item_id
   LEFT JOIN community.catalog_media_assets ca ON ca.id=r.catalog_asset_id
-  WHERE r.state='ready' AND b.purpose IN ('derivative','catalog_derivative')
+  WHERE (r.state='ready' OR (${catalogSelector ? `r.catalog_asset_id IS NOT NULL AND (${catalogSelector}) AND r.state IN ('released','superseded')` : "FALSE"})) AND b.purpose IN ('derivative','catalog_derivative')
     AND r.content_type IN ('image/webp','image/jpeg','video/mp4') AND b.content_type=r.content_type
     AND ${withinPublicPolicySql("r")}
     AND (
@@ -34,12 +37,13 @@ export const desiredRenditionsSql = (catalogAvailable = true): string => `
         ) OR (r.edit_key='base' AND r.role IN ('thumb','cover','display','viewer','full','motion')
           AND ${publishedArticleItemSql("i.id", "NULL::text", "i.owner_id")})
       ))
-      OR (ca.state='ready' AND ca.unreferenced_since IS NULL AND r.edit_key='base'
+      OR (ca.state='ready' AND ${catalogSelector ? "TRUE" : "ca.unreferenced_since IS NULL"} AND r.edit_key='base'
         AND r.role IN ('thumb','cover','display','viewer','full')
         AND ${
-          catalogAvailable
+          catalogSelector ??
+          (catalogAvailable
             ? `EXISTS (SELECT 1 FROM public.catalog_media cm
           WHERE cm.media_id=ca.media_id AND cm.object_key=ca.source_object_key)`
-            : "FALSE"
+            : "FALSE")
         })
     )`;

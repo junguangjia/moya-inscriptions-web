@@ -1,3 +1,4 @@
+import type { CatalogMediaProjection } from "../catalog-read-projections.js";
 import type { MediaId } from "@moya/contracts";
 
 export interface StorageMediaLocator {
@@ -9,6 +10,15 @@ export type ResolvedMediaUrl = string;
 
 /** Application-owned batch boundary between logical object keys and runtime URLs. */
 export interface StorageUrlResolver {
+  /** App rendition facts for exact CMS-published source pairs. No original I/O. */
+  catalogFacts?(
+    locators: readonly StorageMediaLocator[],
+  ): Promise<
+    ReadonlyMap<
+      string,
+      Pick<CatalogMediaProjection, "renditions" | "placeholderColor">
+    >
+  >;
   resolveMany(
     locators: readonly StorageMediaLocator[],
   ): Promise<ReadonlyMap<MediaId, ResolvedMediaUrl>>;

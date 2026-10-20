@@ -27,6 +27,7 @@ const take = (limit: number): number =>
 const errorCode = (code: string): string =>
   /^[a-z][a-z0-9_]{0,63}$/u.test(code) ? code : "publication_failure";
 const LEASE = "interval '10 minutes'";
+const CATALOG_CONTEXT_STALE = Symbol("catalog-context-stale");
 interface Asset {
   id: string;
   item_id: string | null;
@@ -94,9 +95,65 @@ const subjects = "COALESCE(a.item_id,a.catalog_asset_id)";
 export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
   constructor(
     private readonly pool: Pool,
-    private readonly options: PublicationSyncOptions,
+    private readonly options: PublicationSyncOptions & {
+      catalogAuthority?: NonNullable<MediaPublicationPort["catalogAuthority"]>;
+    },
   ) {}
 
+  private readonly catalogSubjects = new Map<
+    string,
+    {
+      readonly renditionIds: readonly string[];
+      current(): Promise<boolean>;
+      authorized(): Promise<boolean>;
+      release(): Promise<void>;
+    }
+  >();
+  private readonly catalogLeases = new Map<
+    string,
+    {
+      readonly renditionIds: readonly string[];
+      current(): Promise<boolean>;
+      authorized(): Promise<boolean>;
+      release(): Promise<void>;
+    }
+  >();
+  private jobKey(job: PublishingJobLease) {
+    return `${job.id}:${job.leaseOwner}`;
+  }
+  private async holdCatalog(subject: string, job: PublishingJobLease) {
+    if (!this.options.catalogAuthority || !subject.startsWith("catalog-asset-"))
+      return true;
+    const key = this.jobKey(job);
+    if (this.catalogLeases.has(key))
+      throw new Error("Catalog job already holds a source fence");
+    try {
+      const lease = await this.options.catalogAuthority.acquire(subject);
+      this.catalogLeases.set(key, lease);
+      this.catalogSubjects.set(subject, lease);
+      return true;
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "55P03") return false;
+      throw error;
+    }
+  }
+  private async releaseCatalog(job: PublishingJobLease) {
+    const key = this.jobKey(job);
+    const lease = this.catalogLeases.get(key);
+    this.catalogLeases.delete(key);
+    for (const [subject, holder] of this.catalogSubjects)
+      if (holder === lease) this.catalogSubjects.delete(subject);
+    await lease?.release();
+  }
+  private async catalogCurrent(
+    subject: string | null,
+    job: PublishingJobLease,
+  ) {
+    return !this.options.catalogAuthority ||
+      !subject?.startsWith("catalog-asset-")
+      ? true
+      : (await this.catalogLeases.get(this.jobKey(job))?.current()) === true;
+  }
   async hasRegisteredPublications(): Promise<boolean> {
     return readTransaction(this.pool, async (db) => {
       const result = await db.query<{ registered: boolean }>(
@@ -120,7 +177,23 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       ).rowCount === 1
     );
   }
-  private async desiredSql(db: PublishingDb): Promise<string> {
+  private async desiredSql(
+    db: PublishingDb,
+    catalogIds?: readonly string[],
+  ): Promise<string> {
+    if (this.options.catalogAuthority) {
+      const ids =
+        catalogIds ?? (await this.options.catalogAuthority.copyRenditionIds());
+      if (
+        ids.length > 40000 ||
+        ids.some((id) => !/^media-rendition-[a-f0-9]{32}$/.test(id))
+      )
+        throw new Error("Catalog selector invalid");
+      return desiredRenditionsSql(
+        false,
+        `r.id=ANY(ARRAY[${ids.map((id) => `'${id}'`).join(",")}]::text[])`,
+      );
+    }
     const exists = (
       await db.query<{ available: boolean }>(
         "SELECT to_regclass('public.catalog_media') IS NOT NULL AS available",
@@ -134,9 +207,15 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     allow: boolean,
   ): Promise<Desired[]> {
     if (!allow) return [];
+    if (asset.catalog_asset_id && this.options.catalogAuthority) {
+      const lease = this.catalogSubjects.get(asset.catalog_asset_id);
+      // The per-job current check additionally binds its own lease. Reconcile
+      // uses a fresh metadata-only selector solely to schedule existing jobs.
+      if (lease && !(await lease.authorized())) return [];
+    }
     return (
       await db.query<Desired>(
-        `SELECT d.* FROM (${await this.desiredSql(db)}) d WHERE d.item_id=$1 OR d.catalog_asset_id=$2 ORDER BY d.rendition_id`,
+        `SELECT d.* FROM (${await this.desiredSql(db, asset.catalog_asset_id && this.catalogSubjects.has(asset.catalog_asset_id) ? this.catalogSubjects.get(asset.catalog_asset_id)!.renditionIds : asset.item_id ? [] : undefined)}) d WHERE d.item_id=$1 OR d.catalog_asset_id=$2 ORDER BY d.rendition_id`,
         [asset.item_id, asset.catalog_asset_id],
       )
     ).rows;
@@ -178,6 +257,10 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
         intent === "withdraw" && asset.lease_sequence !== asset.desired_seq;
       if (holderLive && !expired && !superseded) return "busy";
     }
+    // The App row lock may have waited across a Native lifecycle/expiry change.
+    // A stale captured context is busy, never an empty stable permission set.
+    if (!(await this.catalogCurrent(asset.catalog_asset_id, job)))
+      return "busy";
     await db.query(
       `UPDATE community.media_public_assets SET lease_job_id=$2,lease_job_owner=$3,lease_sequence=desired_seq,lease_expires_at=$4::timestamptz+${LEASE},updated_at=$4::timestamptz WHERE id=$1`,
       [asset.id, job.id, job.leaseOwner, nowParam(now)],
@@ -222,7 +305,19 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       )
     ).rows[0];
     if (!a) return null;
+    if (
+      a.catalog_asset_id &&
+      this.options.catalogAuthority &&
+      !(await this.catalogLeases.get(this.jobKey(fence.job))?.current())
+    )
+      return null;
     if (fence.intent === "publish") {
+      if (
+        a.catalog_asset_id &&
+        this.options.catalogAuthority &&
+        !(await this.catalogLeases.get(this.jobKey(fence.job))?.authorized())
+      )
+        return null;
       const desired = await this.desired(db, a, this.options.isPublic());
       const present = (
         await db.query<{ rendition_id: string }>(
@@ -252,103 +347,139 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
   ): Promise<MediaPublicationPlan> {
     if (!this.options.isPublic() || !this.options.allowPublish())
       return { status: "disabled" };
-    return writeTransaction<MediaPublicationPlan>(this.pool, async (db) => {
-      if (!this.options.isPublic() || !this.options.allowPublish())
-        return { status: "disabled" };
-      const a = await this.acquire(db, subjectId, job, now, "publish");
-      if (a === "busy") return { status: "busy" };
-      if (!a) return { status: "missing" };
-      const desired = await this.desired(db, a, true);
-      const token = hex();
-      for (const r of desired) {
-        const existing = await db.query(
-          "SELECT id FROM community.media_publications WHERE rendition_id=$1 AND state IN ('publishing','published')",
-          [r.rendition_id],
-        );
-        if (existing.rowCount) continue;
-        const ext =
-          r.content_type === "image/webp"
-            ? "webp"
-            : r.content_type === "image/jpeg"
-              ? "jpg"
-              : "mp4";
-        const key = `v1/${a.id}/${token}/${r.edit_key}/${r.role}.r${r.recipe_version}.${ext}`;
-        await db.query(
-          `INSERT INTO community.media_publications(id,public_asset_id,rendition_id,generation_token,object_key,storage_key,content_type,purpose,byte_size,sha256,role,edit_key,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::bigint,$10,$11,$12,$13::timestamptz)`,
-          [
-            `media-publication-${hex()}`,
-            a.id,
-            r.rendition_id,
-            token,
-            key,
-            r.storage_key,
-            r.content_type,
-            r.purpose,
-            r.byte_size,
-            r.sha256,
-            r.role,
-            r.edit_key,
-            nowParam(now),
-          ],
-        );
+    if (!(await this.holdCatalog(subjectId, job))) return { status: "busy" };
+    try {
+      if (!(await this.catalogCurrent(subjectId, job))) {
+        await this.releaseCatalog(job);
+        return { status: "busy" };
       }
-      const rows = (
-        await db.query<UnitRow>(
-          "SELECT * FROM community.media_publications WHERE public_asset_id=$1 AND state='publishing' AND rendition_id=ANY($2::text[]) ORDER BY id",
-          [a.id, desired.map((r) => r.rendition_id)],
-        )
-      ).rows;
-      // The gate is evaluated again immediately before committing the registered plan.
-      if (!this.options.isPublic() || !this.options.allowPublish())
-        throw new Error("Publication mode changed while planning");
-      return {
-        status: "ready",
-        fence: this.fence(
-          a,
-          job,
-          "publish",
-          rows.map((r) => r.id),
-        ),
-        units: rows.map(unitOf),
-      };
-    });
+      const plan = await writeTransaction<MediaPublicationPlan>(
+        this.pool,
+        async (db) => {
+          if (!this.options.isPublic() || !this.options.allowPublish())
+            return { status: "disabled" };
+          const a = await this.acquire(db, subjectId, job, now, "publish");
+          if (a === "busy") return { status: "busy" };
+          if (!a) return { status: "missing" };
+          const desired = await this.desired(db, a, true);
+          if (!(await this.catalogCurrent(a.catalog_asset_id, job)))
+            throw CATALOG_CONTEXT_STALE;
+          const token = hex();
+          for (const r of desired) {
+            const existing = await db.query(
+              "SELECT id FROM community.media_publications WHERE rendition_id=$1 AND state IN ('publishing','published')",
+              [r.rendition_id],
+            );
+            if (existing.rowCount) continue;
+            const ext =
+              r.content_type === "image/webp"
+                ? "webp"
+                : r.content_type === "image/jpeg"
+                  ? "jpg"
+                  : "mp4";
+            const key = `v1/${a.id}/${token}/${r.edit_key}/${r.role}.r${r.recipe_version}.${ext}`;
+            await db.query(
+              `INSERT INTO community.media_publications(id,public_asset_id,rendition_id,generation_token,object_key,storage_key,content_type,purpose,byte_size,sha256,role,edit_key,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::bigint,$10,$11,$12,$13::timestamptz)`,
+              [
+                `media-publication-${hex()}`,
+                a.id,
+                r.rendition_id,
+                token,
+                key,
+                r.storage_key,
+                r.content_type,
+                r.purpose,
+                r.byte_size,
+                r.sha256,
+                r.role,
+                r.edit_key,
+                nowParam(now),
+              ],
+            );
+          }
+          const rows = (
+            await db.query<UnitRow>(
+              "SELECT * FROM community.media_publications WHERE public_asset_id=$1 AND state='publishing' AND rendition_id=ANY($2::text[]) ORDER BY id",
+              [a.id, desired.map((r) => r.rendition_id)],
+            )
+          ).rows;
+          // The gate is evaluated again immediately before committing the registered plan.
+          if (!this.options.isPublic() || !this.options.allowPublish())
+            throw new Error("Publication mode changed while planning");
+          return {
+            status: "ready",
+            fence: this.fence(
+              a,
+              job,
+              "publish",
+              rows.map((r) => r.id),
+            ),
+            units: rows.map(unitOf),
+          };
+        },
+      );
+      if (plan.status !== "ready") await this.releaseCatalog(job);
+      return plan;
+    } catch (error) {
+      await this.releaseCatalog(job);
+      if (error === CATALOG_CONTEXT_STALE) return { status: "busy" };
+      throw error;
+    }
   }
   async planWithdrawal(
     subjectId: string,
     job: PublishingJobLease,
     now: Date,
   ): Promise<MediaPublicationPlan> {
-    return writeTransaction<MediaPublicationPlan>(this.pool, async (db) => {
-      const a = await this.acquire(db, subjectId, job, now, "withdraw");
-      if (a === "busy") return { status: "busy" };
-      if (!a) return { status: "missing" };
-      const desired = await this.desired(db, a, this.options.isPublic());
-      await db.query(
-        `UPDATE community.media_publications SET state='withdrawing',withdraw_requested_at=COALESCE(withdraw_requested_at,$3::timestamptz),version=version+1 WHERE public_asset_id=$1 AND (state='purge_failed' OR (state IN ('publishing','published') AND (NOT (rendition_id=ANY($2::text[])) OR (state='publishing' AND NOT $4::boolean))))`,
-        [
-          a.id,
-          desired.map((r) => r.rendition_id),
-          nowParam(now),
-          this.options.allowPublish(),
-        ],
+    if (!(await this.holdCatalog(subjectId, job))) return { status: "busy" };
+    try {
+      if (!(await this.catalogCurrent(subjectId, job))) {
+        await this.releaseCatalog(job);
+        return { status: "busy" };
+      }
+      const plan = await writeTransaction<MediaPublicationPlan>(
+        this.pool,
+        async (db) => {
+          const a = await this.acquire(db, subjectId, job, now, "withdraw");
+          if (a === "busy") return { status: "busy" };
+          if (!a) return { status: "missing" };
+          const desired = await this.desired(db, a, this.options.isPublic());
+          if (!(await this.catalogCurrent(a.catalog_asset_id, job)))
+            throw CATALOG_CONTEXT_STALE;
+          await db.query(
+            `UPDATE community.media_publications SET state='withdrawing',withdraw_requested_at=COALESCE(withdraw_requested_at,$3::timestamptz),version=version+1 WHERE public_asset_id=$1 AND (state='purge_failed' OR (state IN ('publishing','published') AND (NOT (rendition_id=ANY($2::text[])) OR (state='publishing' AND NOT $4::boolean))))`,
+            [
+              a.id,
+              desired.map((r) => r.rendition_id),
+              nowParam(now),
+              this.options.allowPublish(),
+            ],
+          );
+          const rows = (
+            await db.query<UnitRow>(
+              "SELECT * FROM community.media_publications WHERE public_asset_id=$1 AND state='withdrawing' ORDER BY id",
+              [a.id],
+            )
+          ).rows;
+          return {
+            status: "ready",
+            fence: this.fence(
+              a,
+              job,
+              "withdraw",
+              rows.map((r) => r.id),
+            ),
+            units: rows.map(unitOf),
+          };
+        },
       );
-      const rows = (
-        await db.query<UnitRow>(
-          "SELECT * FROM community.media_publications WHERE public_asset_id=$1 AND state='withdrawing' ORDER BY id",
-          [a.id],
-        )
-      ).rows;
-      return {
-        status: "ready",
-        fence: this.fence(
-          a,
-          job,
-          "withdraw",
-          rows.map((r) => r.id),
-        ),
-        units: rows.map(unitOf),
-      };
-    });
+      if (plan.status !== "ready") await this.releaseCatalog(job);
+      return plan;
+    } catch (error) {
+      await this.releaseCatalog(job);
+      if (error === CATALOG_CONTEXT_STALE) return { status: "busy" };
+      throw error;
+    }
   }
   async isCurrent(fence: MediaPublicationFence, now: Date): Promise<boolean> {
     return writeTransaction(
@@ -485,29 +616,36 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     );
   }
   async release(fence: MediaPublicationFence, now: Date): Promise<void> {
-    await writeTransaction(this.pool, async (db) => {
-      await db.query(
-        "UPDATE community.media_public_assets SET lease_job_id=NULL,lease_job_owner=NULL,lease_sequence=NULL,lease_expires_at=NULL,updated_at=$5::timestamptz WHERE id=$1 AND lease_sequence=$2::bigint AND lease_job_id=$3 AND lease_job_owner=$4",
-        [
-          fence.assetId,
-          fence.sequence,
-          fence.job.id,
-          fence.job.leaseOwner,
-          nowParam(now),
-        ],
-      );
-    });
+    try {
+      await writeTransaction(this.pool, async (db) => {
+        await db.query(
+          "UPDATE community.media_public_assets SET lease_job_id=NULL,lease_job_owner=NULL,lease_sequence=NULL,lease_expires_at=NULL,updated_at=$5::timestamptz WHERE id=$1 AND lease_sequence=$2::bigint AND lease_job_id=$3 AND lease_job_owner=$4",
+          [
+            fence.assetId,
+            fence.sequence,
+            fence.job.id,
+            fence.job.leaseOwner,
+            nowParam(now),
+          ],
+        );
+      });
+    } finally {
+      await this.releaseCatalog(fence.job);
+    }
   }
   async reconcile(
     now: Date,
     allowPublish: boolean,
     limit: number,
   ): Promise<{ publish: number; withdraw: number }> {
+    const catalogDesiredIds = this.options.catalogAuthority
+      ? await this.options.catalogAuthority.copyRenditionIds()
+      : undefined;
     return writeTransaction(this.pool, async (db) => {
       const allow =
         allowPublish && this.options.isPublic() && this.options.allowPublish();
       const desired = this.options.isPublic()
-        ? await this.desiredSql(db)
+        ? await this.desiredSql(db, catalogDesiredIds)
         : `SELECT r.id AS rendition_id,r.item_id,r.catalog_asset_id FROM community.media_renditions r WHERE false`;
       const rows = (
         await db.query<{
@@ -656,7 +794,7 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
           edit_key: string;
           object_key: string;
         }>(
-          `SELECT a.item_id,p.role,p.edit_key,p.object_key FROM community.media_publications p JOIN community.media_public_assets a ON a.id=p.public_asset_id JOIN (${await this.desiredSql(db)}) d ON d.rendition_id=p.rendition_id WHERE p.state='published' AND a.item_id=ANY($1::text[])`,
+          `SELECT a.item_id,p.role,p.edit_key,p.object_key FROM community.media_publications p JOIN community.media_public_assets a ON a.id=p.public_asset_id JOIN (${await this.desiredSql(db, [])}) d ON d.rendition_id=p.rendition_id WHERE p.state='published' AND a.item_id=ANY($1::text[])`,
           [itemIds],
         )
       ).rows;
@@ -676,11 +814,36 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
   ): Promise<ReadonlyMap<string, string>> {
     void _now;
     if (!this.options.isPublic() || !renditionIds.length) return new Map();
+    if (!this.options.catalogAuthority)
+      return readTransaction(this.pool, async (db) => {
+        const rows = (
+          await db.query<{ rendition_id: string; object_key: string }>(
+            `SELECT p.rendition_id,p.object_key FROM community.media_publications p JOIN (${await this.desiredSql(db)}) d ON d.rendition_id=p.rendition_id WHERE p.state='published' AND p.rendition_id=ANY($1::text[]) AND d.catalog_asset_id IS NOT NULL`,
+            [renditionIds],
+          )
+        ).rows;
+        return new Map(rows.map((row) => [row.rendition_id, row.object_key]));
+      });
+    const ids = this.options.catalogAuthority
+      ? await this.options.catalogAuthority.publishedAssetIds(
+          (
+            await this.pool.query<{ catalog_asset_id: string }>(
+              "SELECT DISTINCT catalog_asset_id FROM community.media_renditions WHERE id=ANY($1::text[]) AND catalog_asset_id IS NOT NULL",
+              [renditionIds],
+            )
+          ).rows.map((r) => r.catalog_asset_id),
+        )
+      : undefined;
     return readTransaction(this.pool, async (db) => {
       const rows = (
         await db.query<{ rendition_id: string; object_key: string }>(
-          `SELECT p.rendition_id,p.object_key FROM community.media_publications p JOIN (${await this.desiredSql(db)}) d ON d.rendition_id=p.rendition_id WHERE p.state='published' AND p.rendition_id=ANY($1::text[]) AND d.catalog_asset_id IS NOT NULL`,
-          [renditionIds],
+          `SELECT p.rendition_id,p.object_key FROM community.media_publications p
+          JOIN community.media_renditions r ON r.id=p.rendition_id AND (r.state='ready' OR EXISTS(SELECT 1 FROM community.catalog_delivery_rendition_pins pin WHERE pin.rendition_id=r.id AND pin.public_generation_id=p.id AND pin.public_generation_version=p.version))
+          JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' AND b.sha256=p.sha256 AND b.byte_size=p.byte_size
+          JOIN community.catalog_media_assets a ON a.id=r.catalog_asset_id AND a.state='ready'
+          WHERE p.state='published' AND p.rendition_id=ANY($1::text[]) AND ($2::text[] IS NULL OR a.id=ANY($2::text[]))
+          AND (a.source_object_key NOT LIKE 'editorial/%' OR r.role IN ('thumb','cover','display','viewer'))`,
+          [renditionIds, ids ?? null],
         )
       ).rows;
       return this.options.isPublic()

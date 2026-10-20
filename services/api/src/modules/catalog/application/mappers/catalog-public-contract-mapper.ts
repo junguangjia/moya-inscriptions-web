@@ -47,7 +47,7 @@ export type CatalogMediaContext = "card" | "detail";
 export type CatalogImageProjection = Pick<
   CatalogMediaProjection,
   "id" | "alt" | "width" | "height" | "renditions" | "placeholderColor"
->;
+> & { readonly objectKey?: string };
 
 /** Rendition delivery URLs by opaque delivery key, as `resolveKeys` answers. */
 export type CatalogRenditionUrls = ReadonlyMap<string, ResolvedMediaUrl>;
@@ -170,8 +170,19 @@ export const mapCatalogPublicMedia = (
   resolvedMedia: ReadonlyMap<MediaId, ResolvedMediaUrl>,
   renditionUrls: CatalogRenditionUrls,
   context: CatalogMediaContext,
-): PublicMedia => {
-  const src = resolvedMedia.get(image.id);
+): PublicMedia | undefined => {
+  const editorial = image.objectKey?.startsWith("editorial/") === true;
+  const entries = contextRenditions(image, context);
+  const anchor = entries.find((entry) => entry.level === "display");
+  const complete =
+    anchor !== undefined &&
+    entries.length > 0 &&
+    entries.every(({ key }) => renditionUrls.has(key));
+  // New originals have no public URL path and never fall back to a signer.
+  if (editorial && !complete) return undefined;
+  const src = editorial
+    ? renditionUrls.get(anchor!.key)
+    : resolvedMedia.get(image.id);
   if (src === undefined) {
     throw new CatalogMediaResolutionError({
       cause: new Error(`Missing resolved URL for MediaId ${image.id}`),
@@ -245,12 +256,13 @@ export const mapCatalogSummary = (
   const province = projectPublicText(projection.province);
   if (province !== undefined) summary.province = province;
   if (projection.representativeMedia !== undefined) {
-    summary.representativeMedia = mapCatalogPublicMedia(
+    const representativeMedia = mapCatalogPublicMedia(
       projection.representativeMedia,
       resolvedMedia,
       renditionUrls,
       "card",
     );
+    if (representativeMedia) summary.representativeMedia = representativeMedia;
   }
 
   return catalogSummarySchema.parse(summary);
@@ -268,9 +280,15 @@ export const mapCatalogDetail = (
   const detail: CatalogDetail = {
     ...mapCatalogSummary(projection, resolvedMedia, renditionUrls),
     sourceCitations: projection.sourceCitations.map(mapCatalogSourceCitation),
-    media: projection.media.map((media) =>
-      mapCatalogPublicMedia(media, resolvedMedia, renditionUrls, "detail"),
-    ),
+    media: projection.media.flatMap((media) => {
+      const mapped = mapCatalogPublicMedia(
+        media,
+        resolvedMedia,
+        renditionUrls,
+        "detail",
+      );
+      return mapped ? [mapped] : [];
+    }),
   };
 
   const dynasty = projectPublicText(projection.dynasty);

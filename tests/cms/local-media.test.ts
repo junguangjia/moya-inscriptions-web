@@ -115,10 +115,27 @@ describe("native local Payload file access against published snapshots", () => {
     expect((await get(publishedRoute)).status).toBe(403);
     expect((await get(privateRoute)).status).toBe(403);
 
-    const published = await payload.update({
+    // New editorial originals cannot bypass the delivery workflow, including
+    // Development. The read-access regression below uses an explicitly seeded
+    // pre-existing publication in this isolated fixture, not a publish bypass
+    // available to an application actor.
+    await expect(
+      payload.update({
+        collection: "catalogs",
+        id: draft.id,
+        data: { revision: draft.revision, _status: "published" },
+        req: ownerReq,
+        overrideAccess: false,
+      }),
+    ).rejects.toThrow("CATALOG_DELIVERY_PREPARATION_REQUIRED");
+    await payload.db.pool.query(
+      "UPDATE catalogs SET _status = 'published' WHERE id = $1",
+      [draft.id],
+    );
+    const published = await payload.findByID({
       collection: "catalogs",
       id: draft.id,
-      data: { revision: draft.revision, _status: "published" },
+      draft: false,
       req: ownerReq,
       overrideAccess: false,
     });

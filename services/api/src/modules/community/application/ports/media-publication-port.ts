@@ -38,6 +38,16 @@ export type MediaPublicationPlan =
   | { readonly status: "busy" | "disabled" | "missing" };
 
 export interface MediaPublicationPort {
+  readonly catalogAuthority?: {
+    copyRenditionIds(): Promise<readonly string[]>;
+    publishedAssetIds(assetIds: readonly string[]): Promise<readonly string[]>;
+    acquire(assetId: string): Promise<{
+      readonly renditionIds: readonly string[];
+      current(): Promise<boolean>;
+      authorized(): Promise<boolean>;
+      release(): Promise<void>;
+    }>;
+  };
   /** Includes historical generations, so cleanup remains active in Beta/off. */
   hasRegisteredPublications(): Promise<boolean>;
   planPublish(

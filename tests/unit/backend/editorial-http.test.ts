@@ -13,7 +13,7 @@ import {
   articlePageSchema,
 } from "@moya/contracts/schemas";
 import { MappedStorageUrlResolver } from "@moya/image";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { InMemoryCommunityIdentityPort } from "./community-identity-fixture.js";
 
@@ -22,6 +22,7 @@ import type {
   ArticleDetailRecord,
   AuthorCommunityPort,
   EditorialContentReadPort,
+  StorageUrlResolver,
 } from "@moya/api";
 import type { NodeEnvironment } from "@moya/backend-runtime";
 import type { ArticleId, MediaId } from "@moya/contracts";
@@ -33,7 +34,7 @@ const collectionId = `collection-${"b".repeat(32)}`;
 const mediaId = "media-synthetic-cover" as MediaId;
 const cover = {
   id: mediaId,
-  objectKey: "editorial/synthetic/cover.jpg",
+  objectKey: `display/v1/media_${"a".repeat(32)}/${"b".repeat(64)}.webp`,
   alt: "封面",
   width: 1200,
   height: 800,
@@ -79,17 +80,18 @@ const collection: ArticleCollectionDetailRecord = {
 
 class FixtureEditorialPort implements EditorialContentReadPort {
   readonly calls: string[] = [];
+  constructor(private readonly record: ArticleDetailRecord = article) {}
   async listArticles(query: { page: number; pageSize: number }) {
     this.calls.push(`list:${query.page}:${query.pageSize}`);
     return {
-      items: [article],
+      items: [this.record],
       total: 1,
       page: query.page,
       pageSize: query.pageSize,
     };
   }
   async findArticle(id: ArticleId) {
-    return id === articleId ? article : null;
+    return id === articleId ? this.record : null;
   }
   async isArticlePublished(id: string) {
     return id === articleId;
@@ -110,6 +112,9 @@ class FixtureEditorialPort implements EditorialContentReadPort {
 const start = async (
   nodeEnv: NodeEnvironment,
   port?: EditorialContentReadPort,
+  storageUrlResolver: StorageUrlResolver = new MappedStorageUrlResolver(
+    new Map([[cover.objectKey, "http://media.invalid/cover.jpg"]]),
+  ),
 ) => {
   const server = createBackendServer(
     createBackendApplication({
@@ -118,9 +123,7 @@ const start = async (
       communityIdentityPort: new InMemoryCommunityIdentityPort(),
       // The editorial reads never touch the author port; the branch only needs it composed.
       authorCommunityPort: {} as unknown as AuthorCommunityPort,
-      storageUrlResolver: new MappedStorageUrlResolver(
-        new Map([[cover.objectKey, "http://media.invalid/cover.jpg"]]),
-      ),
+      storageUrlResolver,
       ...(port ? { editorialContentPort: port } : {}),
     }),
   );
@@ -163,6 +166,137 @@ describe("published editorial content HTTP reads (content-community-completion-v
         "http://media.invalid/cover.jpg",
       );
       expect(JSON.stringify(body)).not.toContain("objectKey");
+    },
+  );
+
+  it.each(["development", "production"] as const)(
+    "omits unpublished editorial originals while preserving Article text in %s",
+    async (nodeEnv) => {
+      const image = {
+        ...cover,
+        objectKey: `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.webp`,
+      };
+      const record = {
+        ...article,
+        cover: image,
+        sections: article.sections.map((section) => ({ ...section, image })),
+      };
+      const originalUrl =
+        "http://media.invalid/original-must-stay-private.webp";
+      const resolveMany = vi.fn(
+        async (locators: Parameters<StorageUrlResolver["resolveMany"]>[0]) =>
+          new Map(locators.map(({ mediaId }) => [mediaId, originalUrl])),
+      );
+      const base = await start(nodeEnv, new FixtureEditorialPort(record), {
+        resolveMany,
+      });
+      const list = await fetch(`${base}/articles`);
+      expect(list.status).toBe(200);
+      const page = articlePageSchema.parse(await list.json());
+      const detail = await fetch(`${base}/articles/${articleId}`);
+      expect(detail.status).toBe(200);
+      const body = articleDetailSchema.parse(await detail.json());
+      expect(page.items[0]?.cover).toBeNull();
+      expect(body.cover).toBeNull();
+      expect(body.sections[0]?.image).toBeNull();
+      expect(body.title).toBe(article.title);
+      expect(body.sections[0]?.paragraphs).toEqual([
+        "第一段。",
+        "第二段。",
+        "第三段。",
+      ]);
+      for (const [locators] of resolveMany.mock.calls)
+        expect(locators).toEqual([]);
+      expect(resolveMany).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify([page, body])).not.toContain(originalUrl);
+      expect(JSON.stringify([page, body])).not.toContain("objectKey");
+    },
+  );
+
+  it.each(["development", "production"] as const)(
+    "delivers editorial Article images only from the complete published family in %s",
+    async (nodeEnv) => {
+      const image = {
+        ...cover,
+        objectKey: `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.webp`,
+      };
+      const record = {
+        ...article,
+        cover: image,
+        sections: article.sections.map((section) => ({ ...section, image })),
+      };
+      const family = [
+        {
+          key: "synthetic-card",
+          level: "card" as const,
+          width: 300,
+          height: 200,
+          contentType: "image/webp" as const,
+        },
+        {
+          key: "synthetic-display",
+          level: "display" as const,
+          width: 1200,
+          height: 800,
+          contentType: "image/webp" as const,
+        },
+      ];
+      const urls = new Map(
+        family.map((entry) => [
+          entry.key,
+          `http://media.invalid/v1/${"a".repeat(32)}/${"b".repeat(32)}/base/${entry.level === "card" ? "cover" : "display"}.r1.webp`,
+        ]),
+      );
+      const resolveMany = vi.fn(
+        async (locators: Parameters<StorageUrlResolver["resolveMany"]>[0]) => {
+          if (locators.length !== 0)
+            throw new Error("Editorial originals must not be resolved");
+          return new Map<MediaId, string>();
+        },
+      );
+      const resolveKeys = vi.fn(
+        async (keys: readonly string[]) =>
+          new Map(keys.map((key) => [key, urls.get(key)!])),
+      );
+      const resolver: StorageUrlResolver = {
+        resolveMany,
+        resolveKeys,
+        catalogFacts: async () =>
+          new Map([
+            [
+              JSON.stringify([mediaId, image.objectKey]),
+              { renditions: family },
+            ],
+          ]),
+      };
+      const base = await start(
+        nodeEnv,
+        new FixtureEditorialPort(record),
+        resolver,
+      );
+      const list = await fetch(`${base}/articles`);
+      expect(list.status).toBe(200);
+      const page = articlePageSchema.parse(await list.json());
+      const detail = await fetch(`${base}/articles/${articleId}`);
+      expect(detail.status).toBe(200);
+      const body = articleDetailSchema.parse(await detail.json());
+      for (const delivered of [
+        page.items[0]?.cover,
+        body.cover,
+        body.sections[0]?.image,
+      ]) {
+        expect(delivered?.src).toBe(urls.get("synthetic-display"));
+        expect(delivered?.renditions?.map((r) => r.src)).toEqual([
+          ...urls.values(),
+        ]);
+      }
+      expect(resolveKeys).toHaveBeenCalledTimes(2);
+      for (const [keys] of resolveKeys.mock.calls)
+        expect(keys).toEqual(family.map((entry) => entry.key));
+      for (const [locators] of resolveMany.mock.calls)
+        expect(locators).toEqual([]);
+      expect(resolveMany).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify([page, body])).not.toContain("objectKey");
     },
   );
 

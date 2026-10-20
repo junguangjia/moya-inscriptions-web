@@ -69,6 +69,9 @@ export interface CatalogWorkerRenderPlan {
   readonly sourceContentType: "image/jpeg" | "image/png" | "image/webp";
   readonly sourceWidth: number | null;
   readonly sourceHeight: number | null;
+  readonly masterSha256?: string | null;
+  readonly masterWidth?: number | null;
+  readonly masterHeight?: number | null;
   readonly state: "pending" | "ready";
   readonly referenced: boolean;
   readonly ready: readonly {
@@ -311,6 +314,9 @@ export interface CatalogSyncPort {
     now: Date,
     options: {
       readonly limit: number;
+      readonly snapshot?: Parameters<
+        import("@moya/community-postgres").PostgresWorkPublishingAdapter["syncCatalogAssets"]
+      >[2]["snapshot"];
       readonly renditions: readonly {
         readonly role: CatalogWorkerRole;
         readonly version: number;
@@ -341,6 +347,13 @@ export const CATALOG_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 export function createCatalogSync(options: {
   readonly listSources: () => Promise<readonly CatalogWorkerSource[] | null>;
   readonly port: CatalogSyncPort;
+  readonly readSnapshot?: () => Promise<
+    Awaited<
+      ReturnType<
+        typeof import("./catalog-delivery-intents.js").readCatalogSourceSnapshot
+      >
+    >
+  >;
   readonly limit?: number;
   readonly logger?: {
     info(message: string): void;
@@ -349,22 +362,38 @@ export function createCatalogSync(options: {
 }): { run(now: Date): Promise<void> } {
   const logger = options.logger ?? console;
   const limit = options.limit ?? CATALOG_SYNC_BATCH;
+  let active: Promise<void> | undefined;
+  const run = async (now: Date) => {
+    const snapshot = options.readSnapshot
+      ? await options.readSnapshot()
+      : undefined;
+    if (snapshot === null) {
+      logger.error("[media-worker] catalog sync skipped: incomplete snapshot");
+      return;
+    }
+    const sources = snapshot?.sources ?? (await options.listSources());
+    if (sources === null) {
+      logger.error("[media-worker] catalog sync skipped: list too large");
+      return;
+    }
+    const counts = await options.port.syncCatalogAssets(sources, now, {
+      limit,
+      renditions: catalogSyncIdentities(),
+      ...(snapshot ? { snapshot } : {}),
+    });
+    if (counts.created + counts.unreferenced + counts.enqueued > 0) {
+      logger.info(
+        `[media-worker] catalog sync referenced=${counts.referenced} skipped=${counts.skipped} created=${counts.created} unreferenced=${counts.unreferenced} enqueued=${counts.enqueued}`,
+      );
+    }
+  };
   return {
-    async run(now) {
-      const sources = await options.listSources();
-      if (sources === null) {
-        logger.error("[media-worker] catalog sync skipped: list too large");
-        return;
-      }
-      const counts = await options.port.syncCatalogAssets(sources, now, {
-        limit,
-        renditions: catalogSyncIdentities(),
+    run(now) {
+      if (active) return active;
+      active = run(now).finally(() => {
+        active = undefined;
       });
-      if (counts.created + counts.unreferenced + counts.enqueued > 0) {
-        logger.info(
-          `[media-worker] catalog sync referenced=${counts.referenced} skipped=${counts.skipped} created=${counts.created} unreferenced=${counts.unreferenced} enqueued=${counts.enqueued}`,
-        );
-      }
+      return active;
     },
   };
 }

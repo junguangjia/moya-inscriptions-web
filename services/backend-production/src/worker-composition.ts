@@ -11,6 +11,11 @@ import {
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 
+import {
+  parseCatalogPrepareDatabaseConfig,
+  readCatalogSourceSnapshot,
+  createCatalogPublicationAuthority,
+} from "./publishing/catalog-delivery-intents.js";
 import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
   CATALOG_SYNC_INTERVAL_MS,
@@ -44,7 +49,6 @@ import {
 import { createPublicationWorkers } from "./publication/runtime.js";
 import {
   LocalCatalogSourceReader,
-  assertCatalogCosTarget,
   openCosCatalogSourceReader,
   parseCatalogSourceConfig,
 } from "./storage/catalog-source.js";
@@ -123,17 +127,6 @@ const configError = (error: unknown): never => {
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
-/**
- * The Production Catalog read configuration, its COS target format included:
- * a malformed bucket or region is a configuration problem (exit 78), found
- * before the media runtime or any pool opens.
- */
-const productionCatalogSource = (environment: Environment) => {
-  const config = parseCatalogSourceConfig(environment);
-  if (config !== null) assertCatalogCosTarget(config);
-  return config;
-};
-
 const parseWorkerConfiguration = (environment: Environment) => {
   const nodeEnv = environment.NODE_ENV;
   if (nodeEnv !== "production" && nodeEnv !== "development") {
@@ -157,14 +150,18 @@ const parseWorkerConfiguration = (environment: Environment) => {
           return { production: false as const, config };
         })();
   const community = parseCommunityPostgresConfig(environment);
+  // Validate explicit COS source settings in every environment before opening
+  // any runtime or pool. Development retains its explicitly configured local
+  // Payload directory; Production never borrows that directory or a signer.
   const catalogSource =
-    nodeEnv === "production"
-      ? productionCatalogSource(environment)
-      : environment.CMS_MEDIA_DIR
-        ? path.resolve(environment.CMS_MEDIA_DIR)
-        : null;
-  const catalogDatabase =
-    catalogSource === null ? null : parsePostgresConfig(environment);
+    parseCatalogSourceConfig(environment) ??
+    (nodeEnv === "development" && environment.CMS_MEDIA_DIR
+      ? path.resolve(environment.CMS_MEDIA_DIR)
+      : null);
+  const catalogDatabase = environment.DATABASE_URL
+    ? parsePostgresConfig(environment)
+    : null;
+  const catalogPrepareDatabase = parseCatalogPrepareDatabaseConfig(environment);
   const publication = parsePublicationConfig(environment, nodeEnv);
   const profile = parseProfileMediaSwitch(
     environment,
@@ -177,6 +174,7 @@ const parseWorkerConfiguration = (environment: Environment) => {
     community,
     catalogSource,
     catalogDatabase,
+    catalogPrepareDatabase,
     publication,
     profile,
   };
@@ -261,10 +259,16 @@ export async function prepareMediaWorker(
       : createPostgresPool(configuration.catalogDatabase, {
           onUnexpectedIdleError,
         });
+  const catalogPreparePool = configuration.catalogPrepareDatabase
+    ? createPostgresPool(configuration.catalogPrepareDatabase, {
+        onUnexpectedIdleError,
+      })
+    : null;
   const closePools = () =>
     Promise.all([
       closePostgresPool(communityPool),
       ...(catalogPool === null ? [] : [closePostgresPool(catalogPool)]),
+      ...(catalogPreparePool ? [closePostgresPool(catalogPreparePool)] : []),
     ]).then(() => undefined);
   try {
     await verifyCommunityMigrationLedger(communityPool);
@@ -280,6 +284,15 @@ export async function prepareMediaWorker(
   const publicationPort = new PostgresMediaPublicationAdapter(communityPool, {
     allowPublish,
     isPublic,
+    ...(catalogPool
+      ? {
+          catalogAuthority: createCatalogPublicationAuthority(
+            catalogPool,
+            catalogPreparePool,
+            communityPool,
+          ),
+        }
+      : {}),
   });
   let publicationWorkers: ReturnType<typeof createPublicationWorkers>;
   try {
@@ -306,13 +319,17 @@ export async function prepareMediaWorker(
             source: catalogSource,
             logger,
           }),
-          sync: createCatalogSync({
-            listSources: () => listPublishedCatalogSources(catalogPool),
-            port,
-            logger,
-          }),
         }
       : null;
+  const catalogSync = catalogPool
+    ? createCatalogSync({
+        listSources: () => listPublishedCatalogSources(catalogPool),
+        readSnapshot: () =>
+          readCatalogSourceSnapshot(catalogPool, catalogPreparePool),
+        port,
+        logger,
+      })
+    : null;
   // Profile jobs share the one sandbox and the worker concurrency with work
   // processing; the sweep yields to uploads, edits and Catalog renders.
   const profile = configuration.profile
@@ -335,12 +352,12 @@ export async function prepareMediaWorker(
     // and cleanup scheduling are idempotent across both processes.
     maintenance: { requeue: true, cleanup: true, reconcile: true },
     extraMaintenance: [
-      ...(catalog
+      ...(catalogSync
         ? [
             {
               label: "catalog sync",
               intervalMs: CATALOG_SYNC_INTERVAL_MS,
-              run: catalog.sync.run,
+              run: catalogSync.run,
             },
           ]
         : []),

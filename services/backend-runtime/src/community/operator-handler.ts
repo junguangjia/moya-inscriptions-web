@@ -12,6 +12,13 @@ import {
   catalogCommentIdSchema,
   publicUserIdSchema,
 } from "@moya/contracts/schemas";
+import {
+  catalogRecipePolicySchema,
+  catalogDeliveryReadinessRequestSchema,
+  catalogDeliveryReadinessSchema,
+  type CatalogDeliveryReadiness,
+  type CatalogRecipePolicy,
+} from "@moya/contracts/internal/editorial";
 
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
@@ -36,6 +43,11 @@ import type {
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export interface OperatorRouteDependencies {
+  readonly catalogDeliveryReadiness?:
+    | ((intentId: string) => Promise<CatalogDeliveryReadiness | null>)
+    | undefined;
+  readonly catalogRecipePolicy?:
+    (() => Promise<CatalogRecipePolicy>) | undefined;
   readonly articlePublicationOperatorService?:
     ArticlePublicationOperatorService | undefined;
   readonly moderationService: CommunityModerationService;
@@ -173,6 +185,8 @@ export const handleOperatorRequest = async (
   pathname: string,
   {
     moderationService,
+    catalogRecipePolicy,
+    catalogDeliveryReadiness,
     operatorCredential,
     contentOperatorPort,
     discussionPort,
@@ -191,6 +205,40 @@ export const handleOperatorRequest = async (
   const methodNotAllowed = () =>
     sendOperatorError(response, 405, "METHOD_NOT_ALLOWED");
   try {
+    if (pathname === "/internal/community/catalog-delivery/readiness") {
+      if (method !== "POST") return methodNotAllowed();
+      if (!catalogDeliveryReadiness)
+        return sendOperatorError(
+          response,
+          503,
+          "CATALOG_DELIVERY_NOT_CONFIGURED",
+        );
+      const input = catalogDeliveryReadinessRequestSchema.safeParse(
+        await readJsonBody(request),
+      );
+      if (!input.success)
+        return sendOperatorError(response, 400, "INVALID_INPUT");
+      const result = await catalogDeliveryReadiness(input.data.intentId);
+      if (!result)
+        return sendOperatorError(response, 404, "CATALOG_DELIVERY_NOT_FOUND");
+      sendJson(response, 200, catalogDeliveryReadinessSchema.parse(result));
+      return;
+    }
+    if (pathname === "/internal/community/catalog-delivery/recipe-policy") {
+      if (method !== "GET") return methodNotAllowed();
+      if (!catalogRecipePolicy)
+        return sendOperatorError(
+          response,
+          503,
+          "CATALOG_DELIVERY_NOT_CONFIGURED",
+        );
+      sendJson(
+        response,
+        200,
+        catalogRecipePolicySchema.parse(await catalogRecipePolicy()),
+      );
+      return;
+    }
     if (
       articlePublicationOperatorService !== undefined &&
       (await handleArticlePublicationOperatorRequest(

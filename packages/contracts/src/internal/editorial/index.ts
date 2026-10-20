@@ -29,6 +29,30 @@ export {
   ownerDraftPageRequestSchema,
   ownerHistoryRequestSchema,
 } from "./automation.js";
+export {
+  prepareCatalogDeliverySchema,
+  readCatalogDeliverySchema,
+  requestCatalogReleaseSchema,
+  releaseCatalogDeliverySchema,
+  cancelCatalogDeliverySchema,
+  catalogDeliveryManifestSchema,
+  catalogDeliveryMediaSchema,
+  catalogDeliveryStateSchema,
+  catalogDeliveryResultSchema,
+  catalogRecipeManifestSchema,
+  catalogRecipePolicySchema,
+  catalogProcessingIntentSchema,
+  catalogDeliveryReadinessRequestSchema,
+  catalogDeliveryReadinessSchema,
+} from "./catalog-delivery.js";
+export type {
+  CatalogDeliveryMedia,
+  CatalogDeliveryState,
+  CatalogDeliveryResult,
+  CatalogRecipePolicy,
+  CatalogProcessingIntent,
+  CatalogDeliveryReadiness,
+} from "./catalog-delivery.js";
 export type {
   EditorialApproveBatchRequest,
   EditorialApprovalResult,
@@ -43,3 +67,25 @@ export type {
   OwnerHistoryPage,
   OwnerHistoryRequest,
 } from "./automation.js";
+
+export {
+  MEDIA_UPLOAD_CHUNK_BYTES,
+  MEDIA_UPLOAD_STREAM_VERSION,
+  MAX_MEDIA_UPLOAD_BYTES,
+  MAX_MEDIA_UPLOAD_CHUNKS,
+  editorialMediaUploadStartSchema,
+  editorialMediaUploadSessionRequestSchema,
+  editorialMediaUploadSessionSchema,
+  editorialMediaUploadChunkResultSchema,
+  editorialUploadedMediaSchema,
+  editorialMediaUploadCompleteResultSchema,
+} from "./upload.js";
+export type {
+  EditorialMediaUploadStart,
+  EditorialMediaUploadStartInput,
+  EditorialMediaUploadSessionRequest,
+  EditorialMediaUploadSession,
+  EditorialMediaUploadChunkResult,
+  EditorialUploadedMedia,
+  EditorialMediaUploadCompleteResult,
+} from "./upload.js";

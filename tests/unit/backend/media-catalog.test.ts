@@ -31,7 +31,11 @@ import {
   FilesystemPublishingMediaStore,
   PublishingCosResponseError,
 } from "@moya/backend-production/internal/publishing-media-store";
-import { currentRecipe } from "@moya/backend-production/internal/publishing-processing";
+import {
+  currentRecipe,
+  plannedStillSize,
+  stillOutputSize,
+} from "@moya/backend-production/internal/publishing-processing";
 import {
   createSandboxRunner,
   defaultSandboxAppDist,
@@ -40,6 +44,16 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inProcessSandbox } from "./publishing-sandbox-fixture.js";
+import {
+  currentCatalogRecipePolicy,
+  catalogExpectedRenditions,
+  parseCatalogPrepareDatabaseConfig,
+} from "@moya/backend-production/internal/catalog-delivery";
+import { readCatalogDeliveryProjection } from "@moya/community-postgres";
+import {
+  catalogRecipeManifestSchema,
+  catalogRecipePolicySchema,
+} from "@moya/contracts/internal/editorial";
 
 import type { CatalogWorkerRenderPlan } from "@moya/backend-production/internal/publishing-catalog";
 import type { PublishingCosTransport } from "@moya/backend-production/internal/publishing-media-store";
@@ -60,6 +74,223 @@ const editorialKey = (bytes: Buffer, extension = "jpg") =>
   `editorial/${CATALOG_HASH}/${MEDIA_HASH}-${sha256(bytes)}.${extension}`;
 const displayKey = (bytes: Buffer) =>
   `display/v1/media_${"c".repeat(32)}/${sha256(bytes)}.webp`;
+
+describe("live Catalog delivery locator identity", () => {
+  const pair = (id: string) => ({
+    mediaId: `synthetic-${id}`,
+    objectKey: `editorial/synthetic/${id}.png`,
+  });
+  const plan = catalogExpectedRenditions(640, 480);
+  const sourceSha256 = "d".repeat(64);
+  const mockProjectionPool = () => {
+    const query = vi.fn(async (_sql: string, values: readonly string[]) => {
+      const inputs = JSON.parse(values[0]!) as ReturnType<typeof pair>[];
+      // jsonb_to_recordset expands once per input row, including duplicates.
+      return {
+        rows: inputs.flatMap((source) =>
+          plan.map((rendition) => ({
+            media_id: source.mediaId,
+            source_object_key: source.objectKey,
+            master_sha256: sourceSha256,
+            source_sha256: sourceSha256,
+            master_width: 640,
+            master_height: 480,
+            rendition_id: `${source.mediaId}:${source.objectKey}:${rendition.role}`,
+            role: rendition.role,
+            recipe_version: rendition.version,
+            recipe_digest: rendition.digest,
+            width: rendition.width,
+            height: rendition.height,
+            content_type: "image/webp",
+            approved_intent: null,
+          })),
+        ),
+      };
+    });
+    return {
+      pool: { query } as unknown as Parameters<
+        typeof readCatalogDeliveryProjection
+      >[0],
+      query,
+    };
+  };
+
+  it("keeps a complete family when detail repeats its representative locator", async () => {
+    const source = pair("representative");
+    const { pool, query } = mockProjectionPool();
+    const result = await readCatalogDeliveryProjection(
+      pool,
+      [source, source],
+      catalogExpectedRenditions,
+    );
+    expect(JSON.parse(query.mock.calls[0]![1][0]!)).toEqual([source]);
+    expect(result.size).toBe(1);
+    const family = result.get(
+      JSON.stringify([source.mediaId, source.objectKey]),
+    )!.renditions!;
+    expect(family).toHaveLength(plan.length);
+    expect(family.filter(({ level }) => level === "display")).toHaveLength(1);
+    expect(family.map(({ key }) => key)).toEqual(
+      plan.map(({ role }) => `${source.mediaId}:${source.objectKey}:${role}`),
+    );
+  });
+
+  it("preserves two logical media with identical source bytes and separate families", async () => {
+    const first = pair("first");
+    const second = pair("second");
+    const { pool, query } = mockProjectionPool();
+    const result = await readCatalogDeliveryProjection(
+      pool,
+      [first, second, first],
+      catalogExpectedRenditions,
+    );
+    expect(JSON.parse(query.mock.calls[0]![1][0]!)).toEqual([first, second]);
+    expect(result.size).toBe(2);
+    for (const source of [first, second]) {
+      const family = result.get(
+        JSON.stringify([source.mediaId, source.objectKey]),
+      )!.renditions!;
+      expect(family).toHaveLength(plan.length);
+      expect(family.filter(({ level }) => level === "display")).toHaveLength(1);
+      expect(
+        family.every(({ key }) =>
+          key.startsWith(`${source.mediaId}:${source.objectKey}:`),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("preserves a changed object key under the same logical media id", async () => {
+    const first = pair("same-id");
+    const second = { ...first, objectKey: "editorial/synthetic/revision.png" };
+    const { pool, query } = mockProjectionPool();
+    const result = await readCatalogDeliveryProjection(
+      pool,
+      [first, second, first],
+      catalogExpectedRenditions,
+    );
+    expect(JSON.parse(query.mock.calls[0]![1][0]!)).toEqual([first, second]);
+    expect(result.size).toBe(2);
+    const families = [first, second].map(
+      (source) =>
+        result.get(JSON.stringify([source.mediaId, source.objectKey]))!
+          .renditions!,
+    );
+    expect(families.every((family) => family.length === plan.length)).toBe(
+      true,
+    );
+    expect(
+      new Set(families.flatMap((family) => family.map(({ key }) => key))).size,
+    ).toBe(plan.length * 2);
+  });
+
+  it("retains the input bound before deduplicating repeated locators", async () => {
+    const { pool, query } = mockProjectionPool();
+    await expect(
+      readCatalogDeliveryProjection(
+        pool,
+        Array.from({ length: 10001 }, () => pair("repeated")),
+        catalogExpectedRenditions,
+      ),
+    ).rejects.toThrow("Catalog delivery batch too large");
+    expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe("actual Catalog recipe policy and private database authority", () => {
+  it("pins full registry parameters plus the actual conditional viewer geometry and excludes full outputs", () => {
+    const policy = currentCatalogRecipePolicy();
+    expect(policy).toEqual(currentCatalogRecipePolicy());
+    expect(policy.recipeManifestSha256).toBe(
+      sha256(Buffer.from(policy.canonicalManifest)),
+    );
+    const manifest = catalogRecipeManifestSchema.parse(
+      JSON.parse(policy.canonicalManifest),
+    );
+    expect(manifest.roles.map(({ role }) => role)).toEqual([
+      "thumb",
+      "cover",
+      "display",
+      "viewer",
+    ]);
+    expect(
+      manifest.roles.map(({ role, version, digest }) => ({
+        role,
+        version,
+        digest,
+      })),
+    ).toEqual(
+      ["thumb", "cover", "display", "viewer"].map((role) =>
+        currentRecipe(role as "thumb" | "cover" | "display" | "viewer"),
+      ),
+    );
+    expect(manifest.excludedRoles).toEqual(["full", "motion"]);
+    expect(manifest.geometry.plannedStillSizeSha256).toBe(
+      sha256(Buffer.from(plannedStillSize.toString())),
+    );
+    expect(manifest.geometry.stillOutputSizeSha256).toBe(
+      sha256(Buffer.from(stillOutputSize.toString())),
+    );
+    expect(
+      plannedStillSize("viewer", { width: 100, height: 100 }, "catalog"),
+    ).toBeNull();
+    expect(
+      plannedStillSize("viewer", { width: 5000, height: 10000 }, "catalog"),
+    ).not.toBeNull();
+    const incomplete = { ...manifest, roles: manifest.roles.slice(0, 3) };
+    expect(
+      catalogRecipePolicySchema.safeParse({
+        ...policy,
+        canonicalManifest: JSON.stringify(incomplete),
+      }).success,
+    ).toBe(false);
+    const altered = JSON.parse(policy.canonicalManifest);
+    altered.geometry.viewer = "always-render";
+    expect(
+      catalogRecipePolicySchema.safeParse({
+        ...policy,
+        canonicalManifest: JSON.stringify(altered),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("never borrows public/App settings and requires an explicit separate reader on the same CMS target", () => {
+    const publicUrl =
+      "postgresql://synthetic_public@127.0.0.1:1/synthetic_cms?sslmode=disable";
+    const privateUrl =
+      "postgresql://synthetic_prepare@127.0.0.1:1/synthetic_cms?sslmode=disable";
+    expect(
+      parseCatalogPrepareDatabaseConfig({
+        DATABASE_URL: publicUrl,
+        APP_DATABASE_URL: privateUrl,
+      }),
+    ).toBeNull();
+    expect(
+      parseCatalogPrepareDatabaseConfig({
+        DATABASE_URL: publicUrl,
+        CATALOG_PREPARE_DATABASE_URL: privateUrl,
+      }),
+    ).toMatchObject({ max: 1, connectionTimeoutMillis: 5000 });
+    for (const patch of [
+      { CATALOG_PREPARE_DATABASE_SSL_CA_FILE: "REPLACE_ME_CA" },
+      { CATALOG_PREPARE_DATABASE_URL: "" },
+      { CATALOG_PREPARE_DATABASE_URL: publicUrl },
+      {
+        CATALOG_PREPARE_DATABASE_URL: privateUrl.replace(
+          "synthetic_cms",
+          "another_cms",
+        ),
+      },
+      { CATALOG_PREPARE_DATABASE_URL: privateUrl.replace(":1/", ":2/") },
+    ])
+      expect(() =>
+        parseCatalogPrepareDatabaseConfig({
+          DATABASE_URL: publicUrl,
+          ...patch,
+        }),
+      ).toThrow();
+  });
+});
 
 let base: string;
 
@@ -114,6 +345,13 @@ const reader = (transport: PublishingCosTransport) =>
     { bucket: "synthetic-catalog-1250000000", region: "ap-guangzhou" },
     transport,
   );
+
+const sourceEnvironment = {
+  CATALOG_SOURCE_COS_BUCKET: "synthetic-catalog-1250000000",
+  CATALOG_SOURCE_COS_REGION: "ap-guangzhou",
+  CATALOG_SOURCE_COS_SECRET_ID: "synthetic-source-id",
+  CATALOG_SOURCE_COS_SECRET_KEY: "synthetic-source-secret",
+} as const;
 
 describe("Catalog source readers", () => {
   it("accepts only the two approved key forms and their embedded hashes", () => {
@@ -244,30 +482,99 @@ describe("Catalog source readers", () => {
     expect(() => new LocalCatalogSourceReader("relative")).toThrow();
   });
 
-  it("parses the Catalog read identity all-or-nothing without echoing values", () => {
-    expect(parseCatalogSourceConfig({})).toBeNull();
-    const environment = {
-      COS_BUCKET: "synthetic-catalog-1250000000",
-      COS_REGION: "ap-guangzhou",
-      COS_SECRET_ID: "synthetic-id",
-      COS_SECRET_KEY: "synthetic-secret",
+  it("never borrows public signer or UGC credentials for source reads", async () => {
+    const otherIdentities = {
+      COS_BUCKET: "synthetic-public-1250000000",
+      COS_REGION: "ap-beijing",
+      COS_SECRET_ID: "synthetic-public-id",
+      COS_SECRET_KEY: "synthetic-public-secret",
+      COS_REQUEST_TIMEOUT_MS: "invalid-legacy-setting",
+      WORK_MEDIA_COS_BUCKET: "synthetic-ugc-1250000000",
+      WORK_MEDIA_COS_REGION: "ap-shanghai",
+      WORK_MEDIA_COS_SECRET_ID: "synthetic-ugc-id",
+      WORK_MEDIA_COS_SECRET_KEY: "synthetic-ugc-secret",
     };
-    expect(parseCatalogSourceConfig(environment)).toMatchObject({
-      bucket: environment.COS_BUCKET,
-      region: environment.COS_REGION,
+    expect(parseCatalogSourceConfig({})).toBeNull();
+    expect(parseCatalogSourceConfig(otherIdentities)).toBeNull();
+    const parsed = parseCatalogSourceConfig({
+      ...otherIdentities,
+      ...sourceEnvironment,
+    });
+    expect(parsed).toMatchObject({
+      bucket: sourceEnvironment.CATALOG_SOURCE_COS_BUCKET,
+      region: sourceEnvironment.CATALOG_SOURCE_COS_REGION,
       requestTimeoutMs: 30_000,
     });
+    await expect(parsed!.credentials()).resolves.toEqual({
+      secretId: sourceEnvironment.CATALOG_SOURCE_COS_SECRET_ID,
+      secretKey: sourceEnvironment.CATALOG_SOURCE_COS_SECRET_KEY,
+    });
+  });
+
+  it.each(Object.keys(sourceEnvironment))(
+    "refuses missing or empty %s without echoing source values",
+    (key) => {
+      for (const value of [undefined, ""]) {
+        expect(() =>
+          parseCatalogSourceConfig({ ...sourceEnvironment, [key]: value }),
+        ).toThrow(`Catalog source configuration missing or invalid: ${key}`);
+      }
+    },
+  );
+
+  it.each([
+    ["CATALOG_SOURCE_COS_BUCKET", "Invalid_Bucket"],
+    ["CATALOG_SOURCE_COS_REGION", "AP-Guangzhou"],
+    ["CATALOG_SOURCE_COS_SECRET_ID", "synthetic/invalid-id"],
+    ["CATALOG_SOURCE_COS_SECRET_KEY", " synthetic-secret"],
+    ["CATALOG_SOURCE_COS_SECRET_KEY", "synthetic\nsecret"],
+    ["CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS", "0"],
+    ["CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS", "1.5"],
+    ["CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS", "9007199254740992"],
+    ["CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS", "120001"],
+  ])("refuses invalid source %s", (key, value) => {
     expect(() =>
-      parseCatalogSourceConfig({ ...environment, COS_SECRET_KEY: undefined }),
-    ).toThrow(
-      /^Catalog source configuration missing or invalid: COS_SECRET_KEY$/,
-    );
-    expect(() =>
-      parseCatalogSourceConfig({
-        ...environment,
-        COS_REQUEST_TIMEOUT_MS: "999999",
-      }),
-    ).toThrow("COS_REQUEST_TIMEOUT_MS");
+      parseCatalogSourceConfig({ ...sourceEnvironment, [key]: value }),
+    ).toThrow(new RegExp(`^Catalog source configuration .*: ${key}$`));
+  });
+
+  it("does not treat an orphan optional setting as disabled source processing", () => {
+    for (const key of [
+      "CATALOG_SOURCE_COS_SECURITY_TOKEN",
+      "CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT",
+      "CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS",
+    ])
+      expect(() => parseCatalogSourceConfig({ [key]: "" })).toThrow(
+        /^Catalog source configuration missing or invalid: CATALOG_SOURCE_COS_BUCKET$/,
+      );
+  });
+
+  it("requires paired, sufficiently valid source STS fields and bounds its timeout", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const temporary = {
+      ...sourceEnvironment,
+      CATALOG_SOURCE_COS_SECURITY_TOKEN: "synthetic-source-session",
+      CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT: String(now + 3600),
+      CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS: "120000",
+    };
+    const parsed = parseCatalogSourceConfig(temporary)!;
+    expect(parsed.requestTimeoutMs).toBe(120_000);
+    await expect(parsed.credentials()).resolves.toEqual({
+      secretId: sourceEnvironment.CATALOG_SOURCE_COS_SECRET_ID,
+      secretKey: sourceEnvironment.CATALOG_SOURCE_COS_SECRET_KEY,
+      securityToken: temporary.CATALOG_SOURCE_COS_SECURITY_TOKEN,
+      expiresAt: now + 3600,
+    });
+    for (const [key, value] of [
+      ["CATALOG_SOURCE_COS_SECURITY_TOKEN", undefined],
+      ["CATALOG_SOURCE_COS_SECURITY_TOKEN", ""],
+      ["CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT", undefined],
+      ["CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT", "invalid-synthetic-expiry"],
+      ["CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT", String(now + 30)],
+    ])
+      expect(() =>
+        parseCatalogSourceConfig({ ...temporary, [key!]: value }),
+      ).toThrow(new RegExp(`^Catalog source configuration .*: ${key}$`));
   });
 });
 

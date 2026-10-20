@@ -20,6 +20,10 @@ import { recordFirstCatalogPublication } from "../published/discovery";
 import { synchronizePublishedCatalogSearch } from "../published/search";
 import { claimEditorialIdentities } from "./identities";
 import { validateCatalogMedia } from "../media/validation";
+import {
+  assertCatalogDeliveryPublication,
+  invalidateCatalogDelivery,
+} from "./catalog-delivery";
 
 interface MutationArguments {
   id?: number | string;
@@ -221,6 +225,8 @@ export const catalogHooks: NonNullable<CollectionConfig["hooks"]> = {
       await validateCatalogMedia(req, candidate, {
         publishing: state.mode === "publish",
       });
+      if (state.mode === "publish")
+        assertCatalogDeliveryPublication(candidate, req);
       Object.assign(data, payloadContentData(candidate), {
         revision: state.nextRevision,
         lastEditedBy: req.user?.id,
@@ -250,6 +256,20 @@ export const catalogHooks: NonNullable<CollectionConfig["hooks"]> = {
   afterChange: [
     async ({ data, doc, req }) => {
       const state = mutationState(req);
+      if (
+        state &&
+        ["draft", "restore", "withdraw", "publish"].includes(state.mode)
+      ) {
+        await invalidateCatalogDelivery(
+          req,
+          Number(doc.id),
+          state.mode === "withdraw"
+            ? "WITHDRAWN"
+            : state.mode === "publish"
+              ? "PUBLISHED"
+              : "DRAFT_CHANGED",
+        );
+      }
       if (state?.mode === "publish" || state?.mode === "withdraw") {
         if (typeof data.catalogId !== "string")
           throw new EditorialError("CONTENT_INVALID", 422);

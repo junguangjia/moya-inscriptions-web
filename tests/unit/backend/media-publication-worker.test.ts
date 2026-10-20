@@ -10,6 +10,7 @@ import {
   publicationMaintenanceSteps,
 } from "@moya/backend-production/internal/media-publication-worker";
 import { describe, expect, it, vi } from "vitest";
+import { PostgresMediaPublicationAdapter } from "@moya/community-postgres";
 
 import type {
   PublicationFence,
@@ -29,6 +30,145 @@ const BYTES = new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]);
 const SHA = (bytes = BYTES) => createHash("sha256").update(bytes).digest("hex");
 const MD5 = (bytes = BYTES) => createHash("md5").update(bytes).digest("hex");
 const HEX = (n: number) => n.toString(16).padStart(32, "0");
+
+describe("Catalog publication captured-context cleanup", () => {
+  const subject = `catalog-asset-${"1".repeat(32)}`;
+  const setup = () => {
+    const statements: string[] = [];
+    const asset = {
+      id: "synthetic-public-asset",
+      item_id: null,
+      catalog_asset_id: subject,
+      desired_seq: "1",
+      lease_job_id: null,
+      lease_job_owner: null,
+      lease_sequence: null,
+      lease_expires_at: null,
+    };
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        statements.push(sql);
+        const rows = sql.startsWith("SELECT id FROM community.publishing_jobs")
+          ? [{ id: "synthetic-job" }]
+          : sql.startsWith("SELECT a.* FROM community.media_public_assets")
+            ? [asset]
+            : [];
+        return { rows, rowCount: rows.length };
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client) };
+    const current = vi.fn(async () => true);
+    const release = vi.fn(async () => undefined);
+    const authorized = vi.fn(async () => false);
+    const port = new PostgresMediaPublicationAdapter(
+      pool as unknown as ConstructorParameters<
+        typeof PostgresMediaPublicationAdapter
+      >[0],
+      {
+        isPublic: () => true,
+        allowPublish: () => true,
+        catalogAuthority: {
+          copyRenditionIds: async () => [],
+          publishedAssetIds: async () => [],
+          acquire: async () => ({
+            renditionIds: [],
+            current,
+            authorized,
+            release,
+          }),
+        },
+      },
+    );
+    const job = { ...claim("withdraw_media"), subjectId: subject };
+    return {
+      port,
+      current,
+      release,
+      authorized,
+      pool,
+      client,
+      statements,
+      job,
+    };
+  };
+
+  it.each(["publish", "withdraw"] as const)(
+    "releases the CMS lease when %s preflight throws before App checkout",
+    async (kind) => {
+      const f = setup();
+      const failure = new Error("SYNTHETIC_CMS_READ_FAILED");
+      f.current.mockRejectedValueOnce(failure);
+      const pending =
+        kind === "publish"
+          ? f.port.planPublish(subject, f.job, NOW)
+          : f.port.planWithdrawal(subject, f.job, NOW);
+      await expect(pending).rejects.toBe(failure);
+      expect(f.release).toHaveBeenCalledTimes(1);
+      expect(f.pool.connect).not.toHaveBeenCalled();
+    },
+  );
+
+  it("defers if the captured context expires while waiting for the App asset lock", async () => {
+    const f = setup();
+    f.current.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    expect(await f.port.planWithdrawal(subject, f.job, NOW)).toEqual({
+      status: "busy",
+    });
+    expect(
+      f.statements.some((sql) =>
+        sql.startsWith("UPDATE community.media_public_assets"),
+      ),
+    ).toBe(false);
+    expect(
+      f.statements.some((sql) =>
+        sql.startsWith("UPDATE community.media_publications"),
+      ),
+    ).toBe(false);
+    expect(f.release).toHaveBeenCalledTimes(1);
+    expect(f.client.release).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["publish", "withdraw"] as const)(
+    "does not turn a stale empty desired result into %s mutations",
+    async (kind) => {
+      const f = setup();
+      f.current
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      const plan =
+        kind === "publish"
+          ? await f.port.planPublish(subject, f.job, NOW)
+          : await f.port.planWithdrawal(subject, f.job, NOW);
+      expect(plan).toEqual({ status: "busy" });
+      expect(f.authorized).toHaveBeenCalledTimes(1);
+      expect(
+        f.statements.some((sql) =>
+          /^(?:INSERT INTO|UPDATE) community\.media_publications/.test(sql),
+        ),
+      ).toBe(false);
+      expect(f.statements).toContain("ROLLBACK");
+      expect(f.statements).not.toContain("COMMIT");
+      expect(f.release).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps a stable loss of permission eligible for genuine withdrawal", async () => {
+    const f = setup();
+    const plan = await f.port.planWithdrawal(subject, f.job, NOW);
+    expect(plan.status).toBe("ready");
+    expect(
+      f.statements.some((sql) =>
+        sql.startsWith(
+          "UPDATE community.media_publications SET state='withdrawing'",
+        ),
+      ),
+    ).toBe(true);
+    if (plan.status === "ready") await f.port.release(plan.fence, NOW);
+    expect(f.release).toHaveBeenCalledTimes(1);
+  });
+});
 const claim = (
   kind: PublishingWorkerJobKind = "publish_media",
 ): PublishingWorkerJobClaim => ({

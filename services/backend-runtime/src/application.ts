@@ -63,6 +63,7 @@ import type {
   WorkPublishingPort,
 } from "@moya/api";
 import type { ArticleAuthoringGrant } from "@moya/contracts";
+import type { CatalogRecipePolicy } from "@moya/contracts/internal/editorial";
 import type { NodeEnvironment } from "./config.js";
 import type { ArticleDelegationRuntime } from "./community/article-delegation-handler.js";
 import type { DevelopmentCatalogRenditions } from "./community/development-catalog-rendition-handler.js";
@@ -74,6 +75,8 @@ import type { CommunityRouterDependencies } from "./http/router.js";
 import type { RequestListener } from "node:http";
 
 export interface BackendApplicationOptions {
+  readonly catalogRecipePolicy?: () => Promise<CatalogRecipePolicy>;
+  readonly catalogDeliveryReadiness?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogDeliveryReadiness"];
   readonly analytics?: {
     readonly port: AnalyticsPort;
     readonly policy: AnalyticsPolicy;
@@ -401,6 +404,8 @@ const resolveCommunity = (
           ),
         }
       : {}),
+    catalogRecipePolicy: options.catalogRecipePolicy,
+    catalogDeliveryReadiness: options.catalogDeliveryReadiness,
     operatorCredential: options.communityOperatorCredential ?? "",
   };
 };

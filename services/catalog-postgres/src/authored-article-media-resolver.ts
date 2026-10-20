@@ -76,10 +76,24 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
     } finally {
       db.release();
     }
-    const projections = rows.map((row) => ({
+    let projections = rows.map((row) => ({
       catalogId: row.catalog_id as string,
       media: mapCatalogMediaRow(row),
     }));
+    const facts = await this.storage.catalogFacts?.(
+      projections.map(({ media }) => ({
+        mediaId: media.id,
+        objectKey: media.objectKey,
+      })),
+    );
+    if (facts)
+      projections = projections.map((p) => ({
+        ...p,
+        media: {
+          ...p.media,
+          ...facts.get(JSON.stringify([p.media.id, p.media.objectKey])),
+        },
+      }));
     const groups: StorageMediaLocator[][] = [];
     const locatorGroup = new Map<string, number>();
     const occurrence = new Map<MediaId, Map<string, number>>();
@@ -114,7 +128,13 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
     let renditionUrls: CatalogRenditionUrls = new Map();
     try {
       for (const group of groups)
-        urls.push(await this.storage.resolveMany(group));
+        urls.push(
+          await this.storage.resolveMany(
+            group.filter(
+              ({ objectKey }) => !objectKey.startsWith("editorial/"),
+            ),
+          ),
+        );
       if (renditionKeys.length > 0 && this.storage.resolveKeys !== undefined)
         renditionUrls = await this.storage.resolveKeys(renditionKeys);
     } catch (error) {
@@ -128,14 +148,21 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
         JSON.stringify([media.id, media.objectKey]),
       );
       const resolved = group === undefined ? undefined : urls[group];
-      if (resolved === undefined || resolved.get(media.id) === undefined)
+      if (
+        !media.objectKey.startsWith("editorial/") &&
+        (resolved === undefined || resolved.get(media.id) === undefined)
+      )
         throw new CatalogMediaResolutionError({
           cause: new Error("Article Catalog URL unavailable"),
         });
-      result.set(
-        authoredArticleCatalogPairKey(catalogId, media.id),
-        mapCatalogPublicMedia(media, resolved, renditionUrls, "detail"),
+      const mapped = mapCatalogPublicMedia(
+        media,
+        resolved ?? new Map(),
+        renditionUrls,
+        "detail",
       );
+      if (mapped)
+        result.set(authoredArticleCatalogPairKey(catalogId, media.id), mapped);
     }
     return result;
   }

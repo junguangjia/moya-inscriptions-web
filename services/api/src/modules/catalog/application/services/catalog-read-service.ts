@@ -82,6 +82,47 @@ export class CatalogReadService {
     private readonly catalogSearchQueryPort?: CatalogSearchQueryPort,
   ) {}
 
+  private async hydrate<
+    T extends CatalogListPageProjection | CatalogDetailProjection,
+  >(projection: T): Promise<T> {
+    if (!this.storageUrlResolver.catalogFacts) return projection;
+    const images =
+      "media" in projection
+        ? [
+            ...projection.media,
+            ...(projection.representativeMedia
+              ? [projection.representativeMedia]
+              : []),
+          ]
+        : projection.items.flatMap((p) =>
+            p.representativeMedia ? [p.representativeMedia] : [],
+          );
+    const facts = await this.storageUrlResolver.catalogFacts(
+      images.map(mediaLocator),
+    );
+    const media = (image: CatalogMediaProjection) => ({
+      ...image,
+      ...facts.get(JSON.stringify([image.id, image.objectKey])),
+    });
+    if ("media" in projection)
+      return {
+        ...projection,
+        media: projection.media.map(media),
+        ...(projection.representativeMedia
+          ? { representativeMedia: media(projection.representativeMedia) }
+          : {}),
+      };
+    return {
+      ...projection,
+      items: projection.items.map((item) => ({
+        ...item,
+        ...(item.representativeMedia
+          ? { representativeMedia: media(item.representativeMedia) }
+          : {}),
+      })),
+    };
+  }
+
   /**
    * Approved image URLs and rendition delivery URLs in one step; either
    * batch failing fails the read (503), as before renditions.
@@ -94,7 +135,11 @@ export class CatalogReadService {
       const [media, renditions] = await Promise.all([
         locators.length === 0
           ? noResolvedMedia
-          : this.storageUrlResolver.resolveMany(locators),
+          : this.storageUrlResolver.resolveMany(
+              locators.filter(
+                ({ objectKey }) => !objectKey.startsWith("editorial/"),
+              ),
+            ),
         renditionKeys.length === 0 ||
         this.storageUrlResolver.resolveKeys === undefined
           ? noRenditionUrls
@@ -108,7 +153,9 @@ export class CatalogReadService {
   }
 
   async list(query: CatalogListQuery): Promise<CatalogPage> {
-    const projection = await this.catalogQueryPort.list(query);
+    const projection = await this.hydrate(
+      await this.catalogQueryPort.list(query),
+    );
     const resolved = await this.resolveMedia(
       listMediaLocators(projection),
       listRenditionKeys(projection),
@@ -117,7 +164,8 @@ export class CatalogReadService {
   }
 
   async getById(id: CatalogId): Promise<CatalogDetail | null> {
-    const projection = await this.catalogQueryPort.getById(id);
+    const raw = await this.catalogQueryPort.getById(id);
+    const projection = raw ? await this.hydrate(raw) : null;
     if (projection === null) return null;
     const resolved = await this.resolveMedia(
       detailMediaLocators(projection),
@@ -128,7 +176,9 @@ export class CatalogReadService {
 
   async search(query: CatalogSearchQuery): Promise<CatalogSearchPage> {
     if (!this.catalogSearchQueryPort) throw new CatalogQueryUnavailableError();
-    const projection = await this.catalogSearchQueryPort.search(query);
+    const projection = await this.hydrate(
+      await this.catalogSearchQueryPort.search(query),
+    );
     const resolved = await this.resolveMedia(
       listMediaLocators(projection),
       listRenditionKeys(projection),

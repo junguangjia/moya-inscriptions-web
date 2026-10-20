@@ -86,6 +86,7 @@ describe("@moya/backend-runtime package boundary", () => {
       "@moya/api",
       "@moya/contracts",
       "@moya/contracts/analytics",
+      "@moya/contracts/internal/editorial",
       "@moya/contracts/schemas",
       "@moya/image",
       "@moya/public-api",

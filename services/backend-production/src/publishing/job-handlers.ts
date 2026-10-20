@@ -1,3 +1,4 @@
+import { currentRecipe, plannedStillSize } from "./processing/recipes.js";
 import { PUBLISHING_BLOB_KEY_PATTERN } from "../storage/publishing-media-store.js";
 import { LEGACY_USER_MEDIA_MAX_BYTES } from "./processing/profiles.js";
 import { sniffSignature } from "./processing/signature.js";
@@ -915,6 +916,31 @@ export function createPublishingJobHandlers(
     if (catalog === undefined) return failed("catalog_unavailable", true);
     const plan = await catalog.port.readCatalogRenderPlan(claim.subjectId);
     if (plan === null || !plan.referenced) return COMPLETED;
+    // A lost job response is not permission to download the original again.
+    if (
+      plan.state === "ready" &&
+      plan.masterSha256 === plan.sourceSha256 &&
+      plan.masterWidth &&
+      plan.masterHeight &&
+      (["thumb", "cover", "display", "viewer"] as const).every((role) => {
+        const size = plannedStillSize(
+          role,
+          { width: plan.masterWidth!, height: plan.masterHeight! },
+          "catalog",
+        );
+        if (!size) return true;
+        const identity = currentRecipe(role);
+        return plan.ready.some(
+          (r) =>
+            r.role === role &&
+            r.version === identity.version &&
+            r.digest === identity.digest &&
+            r.width === size.width &&
+            r.height === size.height,
+        );
+      })
+    )
+      return COMPLETED;
     throwIfAborted(signal);
     const result = await catalog.renderer.render(plan, signal);
     if (

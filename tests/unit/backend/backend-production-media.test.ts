@@ -1,4 +1,4 @@
-import { prepareProductionBackend } from "@moya/backend-production";
+import { prepareProductionBackend as prepareProductionBackendImplementation } from "@moya/backend-production";
 import { ProductionCosStorageUrlResolver } from "@moya/backend-production/internal/production-cos";
 import {
   openPublishingMedia,
@@ -39,7 +39,10 @@ const productionStore = vi.hoisted(() => ({
 
 const database = vi.hoisted(() => ({
   published: true,
-  mediaKey: `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.webp`,
+  mediaKey: `display/v1/media_${"a".repeat(32)}/${"b".repeat(64)}.webp`,
+  snapshotObservedAt: new Date("2026-10-20T00:00:00.000Z"),
+  snapshotClients: [] as { statements: string[]; released: boolean }[],
+  snapshotsReleasedAtSync: null as boolean | null,
   end: vi.fn(async () => {}),
 }));
 
@@ -73,8 +76,26 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
     ...actual,
     createPostgresPool: vi.fn(() => ({
       end: database.end,
-      // The Development Catalog sync reads the published list.
       query: vi.fn(async () => ({ rows: [] })),
+      // A real Catalog snapshot checks out its own read-only transaction.
+      connect: vi.fn(async () => {
+        const record = { statements: [] as string[], released: false };
+        database.snapshotClients.push(record);
+        return {
+          query: vi.fn(async (sql: string) => {
+            record.statements.push(sql);
+            return {
+              rows:
+                sql === "SELECT clock_timestamp() AS at"
+                  ? [{ at: database.snapshotObservedAt }]
+                  : [],
+            };
+          }),
+          release: vi.fn(() => {
+            record.released = true;
+          }),
+        };
+      }),
     })),
     assertPostgresStartupReady: vi.fn(async () => {}),
     PostgresCatalogQueryAdapter: class {
@@ -185,6 +206,25 @@ const environment = {
   WORK_MEDIA_WORK_DIR: "/Users/synthetic/publishing/work",
   WORK_MEDIA_WORKER_CONCURRENCY: "2",
 } as const;
+const preparedResources = new Set<
+  Awaited<ReturnType<typeof prepareProductionBackendImplementation>>
+>();
+const prepareProductionBackend: typeof prepareProductionBackendImplementation =
+  async (...args) => {
+    const prepared = await prepareProductionBackendImplementation(...args);
+    let closing: Promise<void> | undefined;
+    const tracked = {
+      ...prepared,
+      closeResources: () => {
+        closing ??= prepared.closeResources().finally(() => {
+          preparedResources.delete(tracked);
+        });
+        return closing;
+      },
+    };
+    preparedResources.add(tracked);
+    return tracked;
+  };
 const handles = new Set<BackendProcessHandle>();
 const start = async () => {
   const prepared = await prepareProductionBackend(environment);
@@ -198,11 +238,23 @@ const start = async () => {
 };
 
 afterEach(async () => {
-  for (const handle of handles) await handle.shutdown();
-  handles.clear();
-  database.published = true;
-  vi.restoreAllMocks();
-  vi.clearAllMocks();
+  try {
+    const outcomes = await Promise.allSettled([
+      ...[...handles].map((handle) => handle.shutdown()),
+      ...[...preparedResources].map((prepared) => prepared.closeResources()),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual(
+      [],
+    );
+  } finally {
+    handles.clear();
+    database.published = true;
+    database.mediaKey = `display/v1/media_${"a".repeat(32)}/${"b".repeat(64)}.webp`;
+    database.snapshotClients = [];
+    database.snapshotsReleasedAtSync = null;
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  }
 });
 
 describe("non-Pilot production public media composition", () => {
@@ -307,7 +359,7 @@ describe("non-Pilot production public media composition", () => {
     expect(createPostgresPool).not.toHaveBeenCalled();
   });
 
-  it("returns signed src through the unchanged public DTO and rejects arbitrary key input", async () => {
+  it("preserves signed legacy display media through the unchanged public DTO and rejects arbitrary key input", async () => {
     const base = await start();
     const resolver = vi.spyOn(
       ProductionCosStorageUrlResolver.prototype,
@@ -352,6 +404,25 @@ describe("non-Pilot production public media composition", () => {
         (response) => response.status,
       ),
     ).toBe(404);
+  });
+
+  it("omits new editorial originals without a published rendition family", async () => {
+    database.mediaKey = `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.webp`;
+    const base = await start();
+    const signer = vi.spyOn(
+      ProductionCosStorageUrlResolver.prototype,
+      "resolveMany",
+    );
+    const response = await fetch(`${base}/v1/catalog/catalog-unit-published`);
+    expect(response.status).toBe(200);
+    const detail = catalogDetailSchema.parse(await response.json());
+    expect(detail.title).toBe("Synthetic published projection");
+    expect(detail.media).toEqual([]);
+    expect(detail.representativeMedia).toBeUndefined();
+    expect(signer).toHaveBeenCalled();
+    for (const [locators] of signer.mock.calls) expect(locators).toEqual([]);
+    expect(JSON.stringify(detail)).not.toContain("q-signature");
+    expect(JSON.stringify(detail)).not.toContain("objectKey");
   });
 
   it("does not resolve missing or withdrawn published projections", async () => {
@@ -532,13 +603,20 @@ describe("Work publishing composition", () => {
         id: `publishing-job-${"0".repeat(32)}`,
         created: false,
       }),
-      catalogSync: vi.spyOn(prototype, "syncCatalogAssets").mockResolvedValue({
-        referenced: 0,
-        skipped: 0,
-        created: 0,
-        unreferenced: 0,
-        enqueued: 0,
-      }),
+      catalogSync: vi
+        .spyOn(prototype, "syncCatalogAssets")
+        .mockImplementation(async () => {
+          database.snapshotsReleasedAtSync =
+            database.snapshotClients.length > 0 &&
+            database.snapshotClients.every((client) => client.released);
+          return {
+            referenced: 0,
+            skipped: 0,
+            created: 0,
+            unreferenced: 0,
+            enqueued: 0,
+          };
+        }),
       profileSweep: vi
         .spyOn(prototype, "enqueueProfileRenders")
         .mockResolvedValue({
@@ -626,130 +704,160 @@ describe("Work publishing composition", () => {
             }
           : environment,
       );
-      const [application] = vi
-        .mocked(createBackendApplication)
-        .mock.calls.at(-1)!;
-      const [handlers] = vi
-        .mocked(createPublishingJobHandlers)
-        .mock.calls.at(-1)!;
-      if (mode === "development") {
-        expect(openPublishingMedia).toHaveBeenCalledWith(
-          {
-            storeDirectory: publishingKeys.WORK_MEDIA_STORE_DIR,
-            toolsImage: publishingKeys.WORK_MEDIA_TOOLS_IMAGE,
-            workDirectory: publishingKeys.WORK_MEDIA_WORK_DIR,
-            workerConcurrency: 2,
-          },
-          { foreignDirectories: [local.CMS_MEDIA_DIR] },
-        );
-        expect(application.publishingMediaStore).toBe(media.store);
-        expect(application.publishingMediaProcessor).toBe(media.processor);
-        expect(handlers.store).toBe(media.store);
-        expect(handlers.processor).toBe(media.processor);
-        expect(handlers.toolJobs).toBe(media.sandbox);
-        expect(handlers.catalog?.port).toBe(handlers.port);
-        expect(handlers.profile?.port).toBe(handlers.port);
-      } else {
-        // The media worker processes media: no sandbox, no processor and no
-        // Catalog rendering in the Backend.
-        expect(openProductionPublishingStore).toHaveBeenCalledWith(
-          expect.objectContaining({
-            bucket: environment.WORK_MEDIA_COS_BUCKET,
-            region: environment.WORK_MEDIA_COS_REGION,
-            prefix: environment.WORK_MEDIA_COS_PREFIX,
-          }),
-          {},
-        );
-        expect(
-          vi.mocked(openProductionPublishingStore).mock.calls[0]![0],
-        ).not.toHaveProperty("workDirectory");
-        expect(openPublishingMedia).not.toHaveBeenCalled();
-        expect(application.publishingMediaStore).toBe(productionStore);
-        expect(application.publishingMediaProcessor).toBeDefined();
-        expect(handlers.store).toBe(productionStore);
-        expect(handlers.processor).toBeUndefined();
-        expect(handlers.catalog).toBeUndefined();
-        expect(handlers.profile).toBeUndefined();
-        expect(handlers.toolJobs).toBeUndefined();
-      }
-      // Both profile switches default on in Development and off in Production.
-      expect(PostgresAuthorCommunityAdapter).toHaveBeenCalledWith(
-        expect.anything(),
-        { profileRenditions: mode === "development" },
-      );
-      await pause(20);
-      expect(queue.claim).not.toHaveBeenCalled();
-
-      prepared.startBackgroundWork();
-      await vi.waitFor(() =>
-        expect(queue.claim).toHaveBeenCalledWith(
-          mode === "development"
-            ? expect.objectContaining({
-                limit: 2,
-                leaseMs: 5 * 60 * 1000,
-                kinds: [
-                  "expire_session",
-                  "sweep_staging",
-                  "process_item",
-                  "derive_edit",
-                  "purge_item",
-                  "purge_blob",
-                  "purge_trashed_work",
-                  "reconcile_capacity",
-                  "catalog_render",
-                  "profile_render",
-                ],
-              })
-            : expect.objectContaining({
-                limit: 1,
-                leaseMs: 5 * 60 * 1000,
-                kinds: ["expire_session", "sweep_staging"],
-              }),
-          expect.any(Date),
-        ),
-      );
-      expect(queue.requeue).toHaveBeenCalledTimes(1);
-      expect(queue.cleanup).toHaveBeenCalledTimes(1);
-      expect(queue.enqueue.mock.calls.map(([job]) => job.kind)).toEqual(
-        mode === "development"
-          ? ["sweep_staging", "reconcile_capacity"]
-          : ["sweep_staging"],
-      );
-      expect(queue.catalogSync).toHaveBeenCalledTimes(
-        mode === "development" ? 1 : 0,
-      );
-      expect(queue.profileSweep).toHaveBeenCalledTimes(
-        mode === "development" ? 1 : 0,
-      );
-
-      // Hold the worker inside its next claim: closing must wait for it before
-      // any pool ends.
       const releaseClaims: ((claims: []) => void)[] = [];
-      const polled = queue.claim.mock.calls.length;
-      queue.claim.mockImplementation(
-        () =>
-          new Promise<[]>((resolve) => {
+      let closing: Promise<void> | undefined;
+      try {
+        const [application] = vi
+          .mocked(createBackendApplication)
+          .mock.calls.at(-1)!;
+        const [handlers] = vi
+          .mocked(createPublishingJobHandlers)
+          .mock.calls.at(-1)!;
+        if (mode === "development") {
+          expect(openPublishingMedia).toHaveBeenCalledWith(
+            {
+              storeDirectory: publishingKeys.WORK_MEDIA_STORE_DIR,
+              toolsImage: publishingKeys.WORK_MEDIA_TOOLS_IMAGE,
+              workDirectory: publishingKeys.WORK_MEDIA_WORK_DIR,
+              workerConcurrency: 2,
+            },
+            { foreignDirectories: [local.CMS_MEDIA_DIR] },
+          );
+          expect(application.publishingMediaStore).toBe(media.store);
+          expect(application.publishingMediaProcessor).toBe(media.processor);
+          expect(handlers.store).toBe(media.store);
+          expect(handlers.processor).toBe(media.processor);
+          expect(handlers.toolJobs).toBe(media.sandbox);
+          expect(handlers.catalog?.port).toBe(handlers.port);
+          expect(handlers.profile?.port).toBe(handlers.port);
+        } else {
+          // The media worker processes media: no sandbox, no processor and no
+          // Catalog rendering in the Backend.
+          expect(openProductionPublishingStore).toHaveBeenCalledWith(
+            expect.objectContaining({
+              bucket: environment.WORK_MEDIA_COS_BUCKET,
+              region: environment.WORK_MEDIA_COS_REGION,
+              prefix: environment.WORK_MEDIA_COS_PREFIX,
+            }),
+            {},
+          );
+          expect(
+            vi.mocked(openProductionPublishingStore).mock.calls[0]![0],
+          ).not.toHaveProperty("workDirectory");
+          expect(openPublishingMedia).not.toHaveBeenCalled();
+          expect(application.publishingMediaStore).toBe(productionStore);
+          expect(application.publishingMediaProcessor).toBeDefined();
+          expect(handlers.store).toBe(productionStore);
+          expect(handlers.processor).toBeUndefined();
+          expect(handlers.catalog).toBeUndefined();
+          expect(handlers.profile).toBeUndefined();
+          expect(handlers.toolJobs).toBeUndefined();
+        }
+        // Both profile switches default on in Development and off in Production.
+        expect(PostgresAuthorCommunityAdapter).toHaveBeenCalledWith(
+          expect.anything(),
+          { profileRenditions: mode === "development" },
+        );
+        await pause(20);
+        expect(queue.claim).not.toHaveBeenCalled();
+
+        prepared.startBackgroundWork();
+        await vi.waitFor(() =>
+          expect(queue.claim).toHaveBeenCalledWith(
+            mode === "development"
+              ? expect.objectContaining({
+                  limit: 2,
+                  leaseMs: 5 * 60 * 1000,
+                  kinds: [
+                    "expire_session",
+                    "sweep_staging",
+                    "process_item",
+                    "derive_edit",
+                    "purge_item",
+                    "purge_blob",
+                    "purge_trashed_work",
+                    "reconcile_capacity",
+                    "catalog_render",
+                    "profile_render",
+                  ],
+                })
+              : expect.objectContaining({
+                  limit: 1,
+                  leaseMs: 5 * 60 * 1000,
+                  kinds: ["expire_session", "sweep_staging"],
+                }),
+            expect.any(Date),
+          ),
+        );
+        expect(queue.requeue).toHaveBeenCalledTimes(1);
+        expect(queue.cleanup).toHaveBeenCalledTimes(1);
+        expect(queue.enqueue.mock.calls.map(([job]) => job.kind)).toEqual(
+          mode === "development"
+            ? ["sweep_staging", "reconcile_capacity"]
+            : ["sweep_staging"],
+        );
+        expect(queue.catalogSync).toHaveBeenCalledTimes(
+          mode === "development" ? 1 : 0,
+        );
+        expect(queue.profileSweep).toHaveBeenCalledTimes(
+          mode === "development" ? 1 : 0,
+        );
+        if (mode === "development") {
+          const snapshot = queue.catalogSync.mock.calls[0]?.[2]?.snapshot;
+          expect(snapshot).toEqual({
+            sources: [],
+            publishedSources: [],
+            observedAt: database.snapshotObservedAt,
+          });
+          expect(database.snapshotClients).toHaveLength(1);
+          expect(database.snapshotClients[0]?.statements[0]).toBe(
+            "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          );
+          expect(database.snapshotClients[0]?.statements.at(-1)).toBe(
+            "ROLLBACK",
+          );
+          expect(database.snapshotClients[0]?.released).toBe(true);
+          expect(database.snapshotsReleasedAtSync).toBe(true);
+        }
+
+        // Hold the worker inside its next claim: closing must wait for it before
+        // any pool ends.
+        let enteredOwnPendingClaim = false;
+        queue.claim.mockImplementation(function (
+          this: PostgresWorkPublishingAdapter,
+        ) {
+          if (this !== handlers.port) return Promise.resolve([]);
+          enteredOwnPendingClaim = true;
+          return new Promise<[]>((resolve) => {
             releaseClaims.push(resolve);
-          }),
-      );
-      await vi.waitFor(
-        () => expect(queue.claim.mock.calls.length).toBeGreaterThan(polled),
-        { timeout: 7_000 },
-      );
-      let closed = false;
-      const closing = prepared.closeResources().then(() => {
-        closed = true;
-      });
-      await pause(50);
-      expect(closed).toBe(false);
-      expect(database.end).not.toHaveBeenCalled();
-      for (const release of releaseClaims) release([]);
-      await closing;
-      expect(database.end).toHaveBeenCalledTimes(2);
-      const claims = queue.claim.mock.calls.length;
-      await pause(1_100);
-      expect(queue.claim.mock.calls.length).toBe(claims);
-      expect(media.processor.process).not.toHaveBeenCalled();
+          });
+        });
+        await vi.waitFor(() => expect(enteredOwnPendingClaim).toBe(true), {
+          timeout: 7_000,
+        });
+        expect(releaseClaims.length).toBeGreaterThan(0);
+        let closed = false;
+        closing = prepared.closeResources().then(() => {
+          closed = true;
+        });
+        await pause(50);
+        expect(closed).toBe(false);
+        expect(database.end).not.toHaveBeenCalled();
+        for (const release of releaseClaims) release([]);
+        await closing;
+        expect(database.end).toHaveBeenCalledTimes(2);
+        const ownClaims = () =>
+          queue.claim.mock.contexts.filter(
+            (context) => context === handlers.port,
+          ).length;
+        const claims = ownClaims();
+        await pause(1_100);
+        expect(ownClaims()).toBe(claims);
+        expect(media.processor.process).not.toHaveBeenCalled();
+      } finally {
+        for (const release of releaseClaims) release([]);
+        await (closing ?? prepared.closeResources());
+      }
     },
     15_000,
   );
@@ -878,8 +986,8 @@ describe("Work publishing composition", () => {
     expect(application.publishingTransfers).toBeDefined();
     expect(application.workPublishingPort).toBeDefined();
     expect(createPublishingJobHandlers).not.toHaveBeenCalled();
-    // Without a publishing store there are no rendition bytes to deliver, so
-    // no Catalog rendition is named either: the approved image's src stays.
+    // With no publishing store, no derivative family exists. A new editorial
+    // original must remain omitted from anonymous resolution in every mode.
     expect(application.developmentCatalogRenditions).toBeUndefined();
     expect(application.storageUrlResolver?.resolveKeys).toBeUndefined();
     expect(
@@ -889,14 +997,7 @@ describe("Work publishing composition", () => {
           objectKey: `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.webp`,
         },
       ]),
-    ).toEqual(
-      new Map([
-        [
-          "media-unit-local",
-          `http://127.0.0.1:3002/api/media/file/${"b".repeat(64)}-${"c".repeat(64)}.webp`,
-        ],
-      ]),
-    );
+    ).toEqual(new Map());
     await prepared.closeResources();
   });
 
@@ -916,24 +1017,41 @@ describe("Work publishing composition", () => {
       const [application] = vi
         .mocked(createBackendApplication)
         .mock.calls.at(-1)!;
-      expect(assertPostgresStartupReady).toHaveBeenCalledWith(
-        expect.anything(),
-        "payload",
-        { renditions: true },
-      );
-      // Discovery cards join the view through the App role, whose read of it
-      // is verified at startup as well.
-      const statements = vi
+      const created = vi
         .mocked(createPostgresPool)
-        .mock.results.slice(pools)
-        .flatMap(({ value }) =>
-          (
-            value as unknown as { query: { mock: { calls: unknown[][] } } }
-          ).query.mock.calls.map(([sql]) => sql),
-        );
-      expect(statements).toContain(
-        "SELECT 1 FROM community.catalog_media_delivery LIMIT 0",
+        .mock.calls.slice(pools)
+        .map(([config], index) => ({
+          config,
+          pool: vi.mocked(createPostgresPool).mock.results[pools + index]!
+            .value,
+        }));
+      expect(created).toHaveLength(2);
+      const settings = mode === "development" ? local : environment;
+      const catalogPool = created.find(
+        ({ config }) => config.connectionString === settings.DATABASE_URL,
+      )?.pool;
+      const appPool = created.find(
+        ({ config }) => config.connectionString === settings.APP_DATABASE_URL,
+      )?.pool;
+      expect(catalogPool).toBeDefined();
+      expect(appPool).toBeDefined();
+      expect(appPool).not.toBe(catalogPool);
+      expect(assertPostgresStartupReady).toHaveBeenCalledTimes(1);
+      expect(assertPostgresStartupReady).toHaveBeenCalledWith(
+        catalogPool,
+        "payload",
+        { renditions: false },
       );
+      // CMS supplies live public metadata; only the independent App pool may
+      // inspect its delivery view. Swapping the two pools must fail this test.
+      const statements = (pool: unknown) =>
+        (
+          pool as { query: { mock: { calls: unknown[][] } } }
+        ).query.mock.calls.map(([sql]) => sql);
+      const deliverySql =
+        "SELECT 1 FROM community.catalog_media_delivery LIMIT 0";
+      expect(statements(appPool)).toContain(deliverySql);
+      expect(statements(catalogPool)).not.toContain(deliverySql);
       const renditionId = `media-rendition-${"7".repeat(32)}`;
       const named = await application.storageUrlResolver?.resolveKeys?.([
         renditionId,

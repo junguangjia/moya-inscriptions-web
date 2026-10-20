@@ -22,6 +22,7 @@ import {
   AuthorCommunityService,
   CommunityConflictError,
   CommunityNotFoundError,
+  CommunityStoreUnavailableError,
 } from "@moya/api";
 import type { AuthorListQuery, AuthorPrivacy } from "@moya/contracts";
 import { discoveryQuerySchema } from "@moya/contracts/schemas";
@@ -41,6 +42,18 @@ export const registerPhase4DiscoveryTests = (
       operatorPort = new PostgresCommunityContentOperatorAdapter(reads),
       authors = new PostgresAuthorCommunityAdapter(reads),
       comments = new PostgresCommunityCommentAdapter(pool);
+    let catalogConnectAttempts = 0;
+    const unavailableCatalog = {
+      connect: async () => {
+        catalogConnectAttempts++;
+        throw Object.assign(new Error("Synthetic CMS unavailable"), {
+          code: "ECONNREFUSED",
+        });
+      },
+    } as unknown as typeof reads;
+    const appOnlyDiscovery = new PostgresCommunityDiscoveryAdapter(reads, {
+      catalogPool: unavailableCatalog,
+    });
     let author: string,
       visitor: string,
       work: string,
@@ -60,6 +73,7 @@ export const registerPhase4DiscoveryTests = (
       await pool.query(`DROP SCHEMA ${schema} CASCADE`);
     });
     beforeEach(async () => {
+      catalogConnectAttempts = 0;
       author = id("user");
       visitor = id("user");
       work = id("work");
@@ -168,7 +182,7 @@ export const registerPhase4DiscoveryTests = (
     });
     it("reads actual aggregate reactions for guests and viewers without counting duplicate toggles", async () => {
       const target = { type: "catalog", id: catalog } as const;
-      expect(await discovery.state(target, null)).toEqual({
+      expect(await appOnlyDiscovery.state(target, null)).toEqual({
         favorite: false,
         liked: false,
         favoriteCount: 0,
@@ -196,14 +210,14 @@ export const registerPhase4DiscoveryTests = (
         enabled: true,
         requestId: randomUUID(),
       });
-      expect(await discovery.state(target, null)).toEqual({
+      expect(await appOnlyDiscovery.state(target, null)).toEqual({
         favorite: false,
         liked: false,
         favoriteCount: 2,
         likeCount: 1,
         commentCount: 0,
       });
-      expect(await discovery.state(target, visitor)).toEqual({
+      expect(await appOnlyDiscovery.state(target, visitor)).toEqual({
         favorite: true,
         liked: true,
         favoriteCount: 2,
@@ -215,7 +229,7 @@ export const registerPhase4DiscoveryTests = (
         enabled: false,
         requestId: randomUUID(),
       });
-      expect(await discovery.state(target, visitor)).toEqual({
+      expect(await appOnlyDiscovery.state(target, visitor)).toEqual({
         favorite: true,
         liked: false,
         favoriteCount: 2,
@@ -226,7 +240,10 @@ export const registerPhase4DiscoveryTests = (
         "UPDATE community.public_users SET status='suspended' WHERE id=$1",
         [author],
       );
-      expect((await discovery.state(target, null)).favoriteCount).toBe(1);
+      expect((await appOnlyDiscovery.state(target, null)).favoriteCount).toBe(
+        1,
+      );
+      expect(catalogConnectAttempts).toBe(0);
     });
     it("counts the comments a reader may see exactly as the discussion's visible total", async () => {
       const target = { type: "work" as const, id: work };
@@ -239,7 +256,7 @@ export const registerPhase4DiscoveryTests = (
         ).visibleTotal;
       const expectCount = async (expected: number) => {
         for (const reader of [null, author, visitor]) {
-          const state = await discovery.state(target, reader);
+          const state = await appOnlyDiscovery.state(target, reader);
           expect(state.commentCount).toBe(expected);
           expect(state.commentCount).toBe(await visible(reader));
         }
@@ -256,6 +273,64 @@ export const registerPhase4DiscoveryTests = (
       // A deleted body is not counted; replies under a once-public root stay.
       await comments.operatorDeleteBody(operator, root.id, randomUUID());
       await expectCount(2);
+      expect(catalogConnectAttempts).toBe(0);
+    });
+    it("rolls back and releases App state queries with their existing error semantics", async () => {
+      for (const code of ["ECONNRESET", "42601"]) {
+        const failure = Object.assign(
+          new Error("Synthetic App query failure"),
+          {
+            code,
+          },
+        );
+        const statements: string[] = [];
+        let released = 0;
+        const failingApp = {
+          connect: async () => {
+            const client = await reads.connect();
+            return {
+              query: async (text: string, values?: unknown[]) => {
+                statements.push(text);
+                // BEGIN and the real reaction aggregate succeed; fail the
+                // discussion read while the actual App transaction is open.
+                if (statements.length === 3) throw failure;
+                return client.query(text, values);
+              },
+              release: () => {
+                released++;
+                client.release();
+              },
+            };
+          },
+        } as unknown as typeof reads;
+        const adapter = new PostgresCommunityDiscoveryAdapter(failingApp, {
+          catalogPool: unavailableCatalog,
+        });
+        const result = adapter.state({ type: "work", id: work }, visitor);
+        if (code === "ECONNRESET") {
+          await expect(result).rejects.toBeInstanceOf(
+            CommunityStoreUnavailableError,
+          );
+          await expect(result).rejects.toMatchObject({ cause: failure });
+        } else await expect(result).rejects.toBe(failure);
+        expect(statements[0]).toBe(
+          "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        );
+        expect(statements.at(-1)).toBe("ROLLBACK");
+        expect(statements).not.toContain("COMMIT");
+        expect(released).toBe(1);
+      }
+      expect(catalogConnectAttempts).toBe(0);
+    });
+    it("still requires the Catalog source for card and browse reads", async () => {
+      await expect(
+        appOnlyDiscovery.card({ type: "catalog", id: catalog }, visitor),
+      ).rejects.toBeInstanceOf(CommunityStoreUnavailableError);
+      expect(catalogConnectAttempts).toBe(1);
+      await expect(
+        appOnlyDiscovery.browse(visitor, discoveryQuerySchema.parse({})),
+      ).rejects.toBeInstanceOf(CommunityStoreUnavailableError);
+      expect(catalogConnectAttempts).toBe(2);
     });
     it("projects an authoritative province only for official Catalog cards", async () => {
       expect(

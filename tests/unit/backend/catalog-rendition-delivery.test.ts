@@ -170,15 +170,48 @@ describe("Catalog image mapping by context", () => {
     );
     expect(detail).toMatchObject({ src: approvedUrl, width: 4096 });
     expect(detail).not.toHaveProperty("renditions");
-    expect(detail.placeholderColor).toBe("#3a2f28");
+    expect(detail?.placeholderColor).toBe("#3a2f28");
     expect(warn).toHaveBeenCalledTimes(1);
     const line = String(warn.mock.calls[0]?.[0]);
     expect(line).toBe("[catalog-media] rendition_fallback");
     // A card does not need the zoom level, so its list is complete.
     expect(
       mapCatalogPublicMedia(media(), approved, withoutViewer, "card")
-        .renditions,
+        ?.renditions,
     ).toEqual(cardList);
+  });
+
+  it("omits a new editorial original even when a signer supplied its URL; only complete published candidates expose it", () => {
+    const image = media({
+      objectKey: `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.png`,
+    });
+    expect(
+      mapCatalogPublicMedia(image, approved, new Map(), "detail"),
+    ).toBeUndefined();
+    const partial = new Map(allUrls);
+    partial.delete(deliveryKey(4));
+    expect(
+      mapCatalogPublicMedia(image, approved, partial, "detail"),
+    ).toBeUndefined();
+    expect(
+      mapCatalogPublicMedia(image, new Map(), allUrls, "detail")?.src,
+    ).toBe(deliveryUrl(deliveryKey(3)));
+    const projection = {
+      id: catalogId,
+      kind: "inscription" as const,
+      title: "Text survives",
+      aliases: [],
+      sourceCitations: [],
+      representativeMedia: image,
+      media: [image],
+    };
+    expect(mapCatalogDetail(projection, approved, new Map())).toMatchObject({
+      title: "Text survives",
+      media: [],
+    });
+    expect(
+      mapCatalogDetail(projection, approved, new Map()),
+    ).not.toHaveProperty("representativeMedia");
   });
 
   it("keeps one entry per size, preferring the anchor, and needs exactly one anchor", () => {
@@ -193,7 +226,7 @@ describe("Catalog image mapping by context", () => {
       ],
     });
     expect(
-      mapCatalogPublicMedia(small, approved, allUrls, "detail").renditions,
+      mapCatalogPublicMedia(small, approved, allUrls, "detail")?.renditions,
     ).toEqual([card(3, 400, 300)]);
     for (const list of [
       renditions.filter(({ level }) => level !== "display"),
@@ -205,7 +238,7 @@ describe("Catalog image mapping by context", () => {
         new Map([...allUrls, [deliveryKey(9), deliveryUrl(deliveryKey(9))]]),
         "card",
       );
-      expect(mapped.src).toBe(approvedUrl);
+      expect(mapped?.src).toBe(approvedUrl);
       expect(mapped).not.toHaveProperty("renditions");
     }
   });
@@ -280,7 +313,9 @@ const recordingResolver = (
 ) => {
   const many: string[][] = [];
   const keys: string[][] = [];
-  const resolver: Required<StorageUrlResolver> = {
+  const resolver: Required<
+    Pick<StorageUrlResolver, "resolveMany" | "resolveKeys">
+  > = {
     async resolveMany(locators) {
       many.push(locators.map(({ mediaId: id }) => id));
       if (options.failMany) throw new Error("synthetic batch failure");

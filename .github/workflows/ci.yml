@@ -249,6 +249,10 @@ jobs:
       - name: Complete CI test milestone
         run: node scripts/verify.mjs test --ci-milestone
 
+      - name: Catalog workflow client regressions
+        if: env.MOYA_VERIFY_WORKSPACES != ''
+        run: pnpm test:catalog-workflow-client
+
       - name: Mark the CI PostgreSQL 16 service as a disposable test target
         run: >-
           docker exec -i "${{ job.services.postgres16.id }}" psql -v

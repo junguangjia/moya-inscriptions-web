@@ -44,6 +44,9 @@ import type {
 
 /** Approved image URLs by MediaId and rendition delivery URLs by key. */
 interface Resolved {
+  readonly facts?: Awaited<
+    ReturnType<NonNullable<StorageUrlResolver["catalogFacts"]>>
+  >;
   readonly media: ReadonlyMap<MediaId, ResolvedMediaUrl>;
   readonly renditions: CatalogRenditionUrls;
 }
@@ -96,22 +99,32 @@ export class EditorialContentReadService {
     context: CatalogMediaContext,
   ): Promise<Resolved> {
     const locators = this.collectLocators(media);
+    const facts = await this.storageUrlResolver.catalogFacts?.(locators);
+    const effective = media.map((item) =>
+      item
+        ? { ...item, ...facts?.get(JSON.stringify([item.id, item.objectKey])) }
+        : null,
+    );
     if (locators.length === 0) return nothingResolved;
     const keys = [
       ...new Set(
-        media.flatMap((item) =>
+        effective.flatMap((item) =>
           item === null ? [] : catalogMediaRenditionKeys(item, context),
         ),
       ),
     ];
     try {
       const [urls, renditions] = await Promise.all([
-        this.storageUrlResolver.resolveMany(locators),
+        this.storageUrlResolver.resolveMany(
+          locators.filter(
+            ({ objectKey }) => !objectKey.startsWith("editorial/"),
+          ),
+        ),
         keys.length === 0 || this.storageUrlResolver.resolveKeys === undefined
           ? noRenditionUrls
           : this.storageUrlResolver.resolveKeys(keys),
       ]);
-      return { media: urls, renditions };
+      return { media: urls, renditions, ...(facts ? { facts } : {}) };
     } catch (error) {
       if (error instanceof CatalogMediaResolutionError) throw error;
       throw new CatalogMediaResolutionError({ cause: error });
@@ -125,12 +138,17 @@ export class EditorialContentReadService {
   ): PublicMedia | null {
     return record === null
       ? null
-      : mapCatalogPublicMedia(
-          record,
+      : (mapCatalogPublicMedia(
+          {
+            ...record,
+            ...resolved.facts?.get(
+              JSON.stringify([record.id, record.objectKey]),
+            ),
+          },
           resolved.media,
           resolved.renditions,
           context,
-        );
+        ) ?? null);
   }
 
   private summary(
@@ -273,7 +291,22 @@ export class EditorialContentReadService {
               kind: "catalog" as const,
               position: member.position,
               record: mapCatalogSummary(
-                member.record,
+                {
+                  ...member.record,
+                  ...(member.record.representativeMedia
+                    ? {
+                        representativeMedia: {
+                          ...member.record.representativeMedia,
+                          ...resolved.facts?.get(
+                            JSON.stringify([
+                              member.record.representativeMedia.id,
+                              member.record.representativeMedia.objectKey,
+                            ]),
+                          ),
+                        },
+                      }
+                    : {}),
+                },
                 resolved.media,
                 resolved.renditions,
               ),

@@ -2,6 +2,13 @@ import type { Endpoint, PayloadRequest } from "payload";
 
 import { requireActor } from "./access";
 import { ownerDraftPage, ownerHistoryPage } from "./owner";
+import {
+  prepareCatalogDelivery,
+  readCatalogDelivery,
+  requestCatalogRelease,
+  releaseCatalogDelivery,
+  cancelCatalogDelivery,
+} from "./catalog-delivery";
 
 import { EditorialError, safeEditorialFailure } from "./errors";
 import {
@@ -54,6 +61,11 @@ export const editorialEndpoints: Endpoint[] = [
   endpoint("approve-batch", approveBatch),
   endpoint("publish-approved", publishApproved),
   endpoint("restore-draft", restoreDraft),
+  endpoint("prepare-catalog-delivery", prepareCatalogDelivery),
+  endpoint("read-catalog-delivery", readCatalogDelivery),
+  endpoint("request-catalog-release", requestCatalogRelease),
+  endpoint("release-catalog-delivery", releaseCatalogDelivery),
+  endpoint("cancel-catalog-delivery", cancelCatalogDelivery),
   // content-community-completion-v1: the same mechanism for Articles.
   endpoint("save-article-draft", saveArticleDraft),
   endpoint("approve-article-batch", approveArticleBatch),

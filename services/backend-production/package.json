@@ -109,6 +109,10 @@
     "./internal/analytics": {
       "types": "./src/analytics/index.ts",
       "import": "./dist/analytics/index.js"
+    },
+    "./internal/catalog-delivery": {
+      "types": "./src/publishing/catalog-delivery-intents.ts",
+      "import": "./dist/publishing/catalog-delivery-intents.js"
     }
   },
   "scripts": {
