@@ -2,7 +2,10 @@ import { URL } from "node:url";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { UMAMI_WORKSPACE_IDENTITY } from "./common.mjs";
+import {
+  UMAMI_WORKSPACE_IDENTITY,
+  UMAMI_PG_TLS_HOST_SHA256,
+} from "./common.mjs";
 import { createHash } from "node:crypto";
 import { buildImagePlan } from "./build-umami-image.mjs";
 import {
@@ -155,6 +158,7 @@ test("standalone runtime export requires immutable glibc image metadata and expl
       "com.artvenn.umami.pool-max": "3",
       "com.artvenn.umami.locale": "zh-CN",
       "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
+      "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
       "com.artvenn.umami.geography": "cn-province-v1",
       "com.artvenn.umami.geo-sha256":
         "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029",
@@ -163,6 +167,7 @@ test("standalone runtime export requires immutable glibc image metadata and expl
   assert.doesNotThrow(() => verifyRuntimeImage(metadata, plan));
   for (const key of [
     "com.artvenn.umami.patch-sha256",
+    "com.artvenn.umami.pg-tls-host-sha256",
     "com.artvenn.umami.locale",
     "com.artvenn.umami.geography",
     "com.artvenn.umami.geo-sha256",
