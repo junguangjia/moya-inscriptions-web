@@ -463,12 +463,17 @@ async function describeFile(filePath: string) {
   }
 }
 
+/** Whole milliseconds since a `performance.now()` reading. */
+const elapsedMs = (since: number): number =>
+  Math.max(0, Math.round(performance.now() - since));
+
 /** Renders a `process` or `derive` job; content rejections are thrown. */
 async function renderItem(
   job: SandboxJob,
   paths: SandboxRendererPaths,
   tools: MediaToolRunner,
 ): Promise<SandboxRenderBody> {
+  const started = performance.now();
   const item = job.item!;
   const processing = job.operation === "process";
   const live = item.kind === "live";
@@ -539,10 +544,14 @@ async function renderItem(
   }
 
   const outputs: SandboxOutput[] = [];
+  // Measurement only: per-role render time, reported in the manifest.
+  const prepareMs = elapsedMs(started);
+  const roleMs: Record<string, number> = {};
   let placeholderColor: string | null = null;
   const requested = new Set(item.renditions.map((request) => request.role));
   for (const role of planRoles(item.plan)) {
     if (!requested.has(role)) continue;
+    const roleStarted = performance.now();
     const size = expectedStillSize(
       role,
       still!.inspection,
@@ -583,8 +592,10 @@ async function renderItem(
     if (role === "thumb" && item.placeholder) {
       placeholderColor = await placeholderColour(filePath);
     }
+    roleMs[role] = elapsedMs(roleStarted);
   }
   if (item.motion) {
+    const motionStarted = performance.now();
     const filePath = path.join(paths.output, "motion.mp4");
     const file = await renderMotionDerivative(
       tools,
@@ -602,7 +613,9 @@ async function renderItem(
       durationMs: file.durationMs,
       ...(await describeFile(filePath)),
     });
+    roleMs.motion = elapsedMs(motionStarted);
   }
+  const timings = { prepareMs, roles: roleMs };
 
   const inspection = still
     ? {
@@ -622,6 +635,7 @@ async function renderItem(
       stillExifOrientation: null,
       placeholderColor,
       outputs,
+      timings,
     };
   }
   const detectedTypes = packageType
@@ -662,6 +676,7 @@ async function renderItem(
       : still!.inspection.orientation,
     placeholderColor,
     outputs,
+    timings,
   };
 }
 

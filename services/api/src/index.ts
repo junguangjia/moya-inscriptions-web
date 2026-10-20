@@ -305,6 +305,7 @@ export type {
   PublishingUploadFence,
   PublishingUploadOperations,
   PublishingUploadStart,
+  PublishingUploadTiming,
   PublishingWorkOperations,
   WorkPublishingPort,
 } from "./modules/community/application/ports/work-publishing-port.js";

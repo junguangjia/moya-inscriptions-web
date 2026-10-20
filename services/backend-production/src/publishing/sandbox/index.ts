@@ -50,6 +50,7 @@ export type {
   SandboxPresentation,
   SandboxRenditionRequest,
   SandboxRuntime,
+  SandboxTimings,
   SandboxViolation,
 } from "./protocol.js";
 export {
