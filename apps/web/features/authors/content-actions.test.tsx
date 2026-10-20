@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Root } from "react-dom/client";
 import type { ContentIdentity, ContentState } from "@moya/contracts";
 
-const { author, state, enterAuth } = vi.hoisted(() => ({
+const { author, state, enterAuth, analytics } = vi.hoisted(() => ({
+  analytics: vi.fn(),
   enterAuth: vi.fn(),
   author: {
     viewer: { id: "viewer" } as { id: string } | null,
@@ -26,6 +27,7 @@ vi.mock("./author-context", () => ({
 }));
 vi.mock("./author-data", () => ({ authorClient: { state } }));
 vi.mock("../auth/auth-return", () => ({ useAuthEntry: () => enterAuth }));
+vi.mock("../analytics/client", () => ({ trackContentAction: analytics }));
 import { ContentActions, useContentActions } from "./content-actions";
 import { DetailInteractionsContext } from "../detail/detail-interactions";
 (
@@ -83,15 +85,18 @@ describe("Detail reaction totals", () => {
     await act(async () => button("收藏").click());
     expect(count("favorite")).toBe("2");
     expect(button("收藏").getAttribute("aria-pressed")).toBe("true");
+    expect(analytics).toHaveBeenCalledExactlyOnceWith("favorite", target);
     state.mockResolvedValue(snapshot());
     await act(async () => button("收藏").click());
     expect(count("favorite")).toBeUndefined();
+    expect(analytics).toHaveBeenCalledOnce();
   });
   it("never invents a total for a failed toggle or an unavailable read-back", async () => {
     await mount();
     author.like.mockResolvedValueOnce(false);
     await act(async () => button("喜欢").click());
     expect(count("like")).toBeUndefined();
+    expect(analytics).not.toHaveBeenCalled();
     state.mockRejectedValue(new Error("offline"));
     await act(async () => button("喜欢").click());
     expect(count("like")).toBeUndefined();

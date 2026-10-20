@@ -34,6 +34,10 @@
     "./internal/editorial": {
       "types": "./src/internal/editorial/index.ts",
       "import": "./dist/internal/editorial/index.js"
+    },
+    "./analytics": {
+      "types": "./src/analytics.ts",
+      "import": "./dist/analytics.js"
     }
   },
   "scripts": {

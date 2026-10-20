@@ -1,0 +1,94 @@
+.root {
+  padding: 1.5rem;
+  color: var(--theme-text);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.header h1 {
+  margin: 0 0 0.5rem;
+}
+
+.note,
+.header p {
+  color: var(--theme-elevation-600);
+  line-height: 1.6;
+}
+
+.note a {
+  margin-inline-start: 0.75rem;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1.25rem 0;
+}
+
+.root button {
+  padding: 0.65rem 0.9rem;
+  color: var(--theme-text);
+  background: var(--theme-elevation-50);
+  border: 1px solid var(--theme-elevation-200);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tabs button[aria-current="page"] {
+  background: var(--theme-elevation-150);
+  border-color: var(--theme-elevation-500);
+}
+
+.workspace {
+  display: block;
+  width: 100%;
+  height: max(640px, calc(100dvh - 280px));
+  border: 1px solid var(--theme-elevation-150);
+  border-radius: 6px;
+  background: var(--theme-elevation-0);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.metrics > div {
+  padding: 1rem;
+  border: 1px solid var(--theme-elevation-150);
+  border-radius: 6px;
+}
+
+.metrics dt {
+  color: var(--theme-elevation-600);
+}
+
+.metrics dd {
+  margin: 0.75rem 0 0;
+  font-size: 1.35rem;
+}
+
+.tableScroll {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.table th,
+.table td {
+  padding: 0.8rem;
+  border-bottom: 1px solid var(--theme-elevation-150);
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily bounded Umami activity retention
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 UTC
+RandomizedDelaySec=20m
+Persistent=true
+Unit=yoyi-umami-prune.service
+
+[Install]
+WantedBy=timers.target

@@ -20,6 +20,7 @@ import {
 import { agentConnectionEndpoints } from "./src/agent-connections/endpoints";
 import { agentConnectionAuthenticateHeader } from "./src/agent-connections/discovery";
 import { communityEndpoints } from "./src/community/endpoints";
+import { analyticsEndpoints } from "./src/analytics/endpoints";
 import { editorialMcp } from "./src/mcp";
 import { createMediaCollection } from "./src/media/collection";
 import { createEditorialStoragePlugin } from "./src/media/storage";
@@ -60,6 +61,11 @@ export default buildConfig({
         Icon: "/src/branding/Brand#AdminIcon",
       },
       views: {
+        analytics: {
+          Component: "/src/analytics/View#AnalyticsView",
+          path: "/analytics",
+          exact: true,
+        },
         editorialWorkflow: {
           Component: "/src/owner-workflow/View#OwnerWorkflowView",
           path: "/editorial-workflow",
@@ -233,6 +239,7 @@ export default buildConfig({
   endpoints: [
     ...editorialEndpoints,
     ...communityEndpoints,
+    ...analyticsEndpoints,
     // Empty unless the connection surface is composed at all; the gate is the
     // array, not a branch inside a handler.
     ...agentConnectionEndpoints(),

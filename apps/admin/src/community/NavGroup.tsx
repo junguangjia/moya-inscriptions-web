@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NavGroup, useAuth } from "@payloadcms/ui";
+import { useEffect } from "react";
+import { excludeOwnerAnalyticsDevice } from "../analytics/device";
 
 import styles from "./community.module.css";
 
@@ -14,6 +16,10 @@ import styles from "./community.module.css";
  * so the built-in collection groups stay intact.
  */
 const groups = [
+  {
+    label: "数据",
+    links: [{ href: "/admin/analytics", label: "访问与用户分析" }],
+  },
   {
     label: "社区",
     links: [
@@ -71,6 +77,12 @@ export const CommunityNavGroups = ({
 }) => {
   const { user } = useAuth();
   const pathname = usePathname();
+  useEffect(() => {
+    if (user?.collection !== "users" || user.role !== "owner") return;
+    const controller = new AbortController();
+    void excludeOwnerAnalyticsDevice(controller.signal);
+    return () => controller.abort();
+  }, [user?.collection, user?.role]);
   if (user?.collection !== "users" || user.role !== "owner") return null;
   return (
     <>

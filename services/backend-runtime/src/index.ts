@@ -68,3 +68,5 @@ export { handleArticleAuthoringRequest } from "./community/article-authoring-han
 
 export { createTrustedAuthRequestSource } from "./community/auth-request-source.js";
 export type { AuthRequestSource } from "./community/auth-request-source.js";
+
+export { createTrustedAnalyticsRequestSource } from "./community/auth-request-source.js";

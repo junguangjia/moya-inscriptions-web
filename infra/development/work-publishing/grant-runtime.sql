@@ -407,3 +407,10 @@ GRANT UPDATE (state,version,published_at,withdraw_requested_at,origin_deleted_at
   swept_at,sweep_started_at,sweep_task_ids,sweep_attempts) ON community.media_publications TO :"app_role";
 GRANT UPDATE (created_at,released_at) ON community.media_item_holds TO :"app_role";
 GRANT UPDATE (month_start,period_end,requests,warning,observed_at) ON community.media_request_usage TO :"app_role";
+
+-- Dedicated analytics relations: raw IP is never part of canonical event export.
+GRANT SELECT, INSERT, DELETE ON TABLE
+  community.analytics_events, community.analytics_ip_observations, community.analytics_outbox
+TO :"app_role";
+GRANT UPDATE (forwarded_at) ON TABLE community.analytics_events TO :"app_role";
+GRANT UPDATE (attempts, next_attempt_at, failed_at) ON TABLE community.analytics_outbox TO :"app_role";
