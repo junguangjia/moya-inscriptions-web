@@ -38,6 +38,8 @@ import {
   startBackendProcess,
 } from "@moya/backend-runtime";
 import {
+  PostgresCatalogQueryAdapter,
+  catalogZoomFramesSql,
   createPostgresPool,
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
@@ -164,6 +166,9 @@ beforeAll(async () => {
       )
     ).replaceAll(':"public_read_role"', `"${publicRole}"`),
   );
+  // The Catalog database's own public read grant covers its published
+  // tables; the stub needs the same for the Detail's deep-zoom reads.
+  await setup.query(`GRANT SELECT ON public.catalog_media TO "${publicRole}"`);
   app = poolFor(url({ role: appRole, password: appPassword }));
   publicRead = poolFor(url({ role: publicRole, password: publicPassword }));
 }, SLOW);
@@ -581,6 +586,18 @@ describe("catalog-master store as the App role (criteria 1, 2, 3a, 25)", () => {
         await masters.attach(
           attachInput(image, {
             header: { contentType: "image/jpeg", width: 6000, height: 4030 },
+          }),
+          t0,
+        ),
+      ),
+    ).toBe("aspect_mismatch");
+    // Within 0.2 % but beyond the rounding of a side (PR C): the Detail would
+    // never show this frame, so attach refuses it.
+    expect(
+      codeOf(
+        await masters.attach(
+          attachInput(image, {
+            header: { contentType: "image/jpeg", width: 6000, height: 4004 },
           }),
           t0,
         ),
@@ -2139,6 +2156,155 @@ describe.skipIf(process.env.CATALOG_BLOCKS_SANDBOX_SMOKE !== "1")(
     }, 240_000);
   },
 );
+
+describe("Catalog Detail deep-zoom reads (PR C; criteria 12, 13, 20)", () => {
+  const as = (pool: () => Pool) =>
+    new Proxy({} as Pool, {
+      get: (_target, property) => Reflect.get(pool(), property, pool()),
+    });
+  const publication = new PostgresMediaPublicationAdapter(
+    as(() => app),
+    { isPublic: () => true, allowPublish: () => true },
+  );
+  let open = true;
+  const reader = () =>
+    new PostgresCatalogQueryAdapter(
+      as(() => publicRead),
+      {
+        renditions: true,
+        zoom: { isOpen: async () => open },
+      },
+    );
+  const mastered = async (cells: "all" | "missing-one" | "none" = "all") => {
+    const image = await catalogImage();
+    const master = await attached(image);
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    const all = allCells(frame);
+    const ids =
+      cells === "none"
+        ? []
+        : await insertBlocks(
+            image,
+            master.masterId!,
+            frame,
+            cells === "all" ? all : all.slice(1),
+          );
+    return { image, frame, ids };
+  };
+
+  it("lists frames of complete sets only, and one image's keys row-major, as the public read role", async () => {
+    const complete = await mastered("all");
+    const partial = await mastered("missing-one");
+    expect([
+      ...(await reader().getZoomFrames(complete.image.catalogId as never)),
+    ]).toEqual([[complete.image.mediaId, complete.frame]]);
+    expect(
+      (await reader().getZoomFrames(partial.image.catalogId as never)).size,
+    ).toBe(0);
+    expect(
+      await reader().getZoomBlocks(
+        complete.image.catalogId as never,
+        complete.image.mediaId as never,
+      ),
+    ).toEqual({ ...complete.frame, keys: complete.ids });
+    expect(
+      await reader().getZoomBlocks(
+        partial.image.catalogId as never,
+        partial.image.mediaId as never,
+      ),
+    ).toBeNull();
+    // Another record's image is never listed.
+    expect(
+      await reader().getZoomBlocks(
+        partial.image.catalogId as never,
+        complete.image.mediaId as never,
+      ),
+    ).toBeNull();
+    // A closed gate, or a reader composed without it, reads nothing.
+    open = false;
+    expect(
+      (await reader().getZoomFrames(complete.image.catalogId as never)).size,
+    ).toBe(0);
+    open = true;
+    expect(
+      (
+        await new PostgresCatalogQueryAdapter(
+          as(() => publicRead),
+          {
+            renditions: true,
+          },
+        ).getZoomFrames(complete.image.catalogId as never)
+      ).size,
+    ).toBe(0);
+    // A detached master's blocks leave the Detail at once.
+    await masters.detach({ mediaId: complete.image.mediaId }, t0);
+    expect(
+      (await reader().getZoomFrames(complete.image.catalogId as never)).size,
+    ).toBe(0);
+  });
+
+  it(
+    "keeps the Detail frame read flat as other images gain block sets",
+    async () => {
+      const target = await mastered("all");
+      const measure = async () => {
+        let best = Number.POSITIVE_INFINITY;
+        for (let run = 0; run < 5; run += 1) {
+          const plan = await publicRead.query<{ "QUERY PLAN": unknown }>(
+            `EXPLAIN (ANALYZE, FORMAT JSON) ${catalogZoomFramesSql}`,
+            [target.image.catalogId],
+          );
+          const [root] = plan.rows[0]!["QUERY PLAN"] as [
+            { "Execution Time": number },
+          ];
+          best = Math.min(best, root["Execution Time"]);
+        }
+        return best;
+      };
+      const before = await measure();
+      for (let n = 0; n < 20; n += 1) await mastered("all");
+      await setup.query("ANALYZE");
+      const after = await measure();
+      console.info(
+        `[catalog-zoom-cost] detail frame read before=${before.toFixed(3)}ms after=${after.toFixed(3)}ms other_sets=20`,
+      );
+      expect(after).toBeLessThanOrEqual(2 * before + 0.5);
+    },
+    SLOW,
+  );
+
+  it("stores and reads the day-to-date usage columns as the App role", async () => {
+    await setup.query("DELETE FROM community.media_request_usage");
+    expect(
+      await publication.recordDayUsage(
+        { dayStart: t0, requests: 5, bytes: 6 },
+        t0,
+      ),
+    ).toBe(false);
+    expect(await publication.readDayUsage()).toBeNull();
+    await publication.recordRequestUsage(
+      { start: t0, end: t0, requests: 0, warning: false },
+      t0,
+    );
+    expect(await publication.readDayUsage()).toBeNull();
+    const observed = new Date(t0.getTime() + 60_000);
+    expect(
+      await publication.recordDayUsage(
+        { dayStart: t0, requests: 150_000, bytes: null },
+        observed,
+      ),
+    ).toBe(true);
+    expect(await publication.readDayUsage()).toEqual({
+      dayStart: t0,
+      requests: 150_000,
+      bytes: null,
+      observedAt: observed,
+    });
+    await expect(
+      publication.recordDayUsage({ dayStart: t0, requests: -1, bytes: 0 }, t0),
+    ).rejects.toThrow(TypeError);
+  });
+});
 
 describe("PR A review fixes (B1, B2, S2, S3, S5)", () => {
   const works = () =>

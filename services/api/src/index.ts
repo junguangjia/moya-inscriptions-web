@@ -17,6 +17,7 @@ export type {
   CatalogImageProjection,
   CatalogMediaContext,
   CatalogRenditionUrls,
+  CatalogZoomFrames,
 } from "./modules/catalog/application/mappers/catalog-public-contract-mapper.js";
 export {
   CatalogMediaResolutionError,
@@ -172,6 +173,8 @@ export type {
   CatalogMediaRenditionProjection,
   CatalogSourceCitationProjection,
   CatalogStatefulTextProjection,
+  CatalogZoomBlocksProjection,
+  CatalogZoomFrameProjection,
 } from "./modules/catalog/application/catalog-read-projections.js";
 export type { CatalogRecord } from "./modules/catalog/domain/catalog-record.js";
 

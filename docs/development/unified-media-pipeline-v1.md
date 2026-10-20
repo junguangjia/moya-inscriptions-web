@@ -698,11 +698,12 @@ the increment-4 wording, for this slice only).
   `requeue`, `set-limit`, `detach`, `erase` and `guard`. Each Production run is
   an Owner run with the worker's environment. Attach refuses an image outside
   the published projection, an unready asset, an approved image above 4096 px, a
-  SHA-256 or aspect (0.2 %) mismatch, a frame below 1.25 × the viewer, a file
-  above 128 MiB or 120 MP, anything but 8-bit JPEG or opaque PNG, and an attach
-  that would cross either storage bound, measured live at that attach: masters
-  plus blocks at most 10 GiB, and every byte #206 created at most 45 GB. Output
-  is content-free.
+  SHA-256 mismatch, an aspect off by more than 0.2 % or a frame that does not
+  show the approved image's framing within the rounding of each side, a frame
+  below 1.25 × the viewer, a file above 128 MiB or 120 MP, anything but 8-bit
+  JPEG or opaque PNG, and an attach that would cross either storage bound,
+  measured live at that attach: masters plus blocks at most 10 GiB, and every
+  byte #206 created at most 45 GB. Output is content-free.
 - **Blocks.** A block is a Catalog rendition `block-NN` (row-major, at most 100)
   of one master: an unedited JPEG of at most 1024 px plus a 2 px overlap on the
   right and bottom, named by `catalog_master_id`, on an owner-less
@@ -746,6 +747,40 @@ the increment-4 wording, for this slice only).
   (`publication.withdrawal code=block_budget_deferred units=N ttl_seconds=T`)
   reports the deferral. Blocks are verified by two samples per set and swept
   once (one origin HEAD each and two sampled edge checks).
+- **Read path.** Behind `MEDIA_CATALOG_ZOOM_BLOCKS` (missing means on in
+  Development, off in Production) the Catalog Detail gives an image the strict
+  frame `zoom: {width, height}` when its block set is complete, its rendition
+  group resolved (never on the approved-`src` fallback) and the frame shows its
+  framing; a failing frame read omits every frame and the Detail still answers.
+  The blocks themselves are read once per image from
+  `GET /v1/catalog/{catalogId}/media/{mediaId}/zoom-blocks` (frame, edge 1024,
+  overlap 2, one URL per row-major cell, all resolved or 404), behind the same
+  access gate; the Web reaches it through its same-origin proxy, parses it
+  strictly and, in Development, rewrites each URL to the same-origin relay. No
+  Detail, Article body or article tool output carries a block URL. Both reads
+  reach the published-blocks view through `LATERAL`, so a Detail reads only its
+  own images' rows.
+- **Breaker.** The read path is open only where blocks can be delivered (edge
+  delivery, or the Development relay) and while the breaker is closed. The
+  worker stores the image host's day-to-date requests and response traffic
+  (`l7Flow_request`, `l7Flow_outFlux`; P0 settles the metric) every 15 minutes
+  from 00:00 Asia/Shanghai, with content-free lines at 100,000 requests or 3 GB
+  (`publication.usage code=day_usage_warning`) and at 150,000 or 5 GB
+  (`code=day_usage_trip`). The Backend reads that row at most once a minute:
+  with edge delivery a missing or stale (> 1 h) reading, or a trip threshold,
+  hides every frame and answers 404 on the list until the cap's next day.
+- **Viewer.** Only a Catalog Detail image with a frame gets the block layer
+  (Work Detail, the feed and Articles never do). It mounts once the zoom asks
+  for more than 1.15 × the widest base candidate, unless more than 24 blocks
+  would be visible at that point (a large desktop keeps today's ladder); it then
+  reads the list once, loads the visible blocks nearest the centre first while
+  the zoom rests (at most 4 in flight, 24 decoded, never evicting a visible
+  block), inserts each only once decoded and draws it on device pixels. Paging
+  away or closing aborts the old image; a 404 or refused list leaves today's
+  Viewer; three failed blocks switch the layer off for the session. A tiled
+  image zooms to min(40, max(today's ceiling, 1.25 × its frame's one-to-one
+  zoom, fill)). `data-viewer-zoom-blocks` on the stage reports `none`,
+  `unusable`, `idle`, `loading`, `ready` or `fallback`.
 - **Rollback floor.** The expand release handles block rows in every state and
   never claims a block job. Once any block rendition, block job or block
   publication exists, code older than the expand release must not run:

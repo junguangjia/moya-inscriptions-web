@@ -13,8 +13,11 @@ import type {
   catalogCommentTransportQuerySchema,
   catalogContributorRoleSchema,
   catalogContributorSchema,
+  catalogDetailMediaSchema,
   catalogDetailSchema,
   catalogIdSchema,
+  catalogZoomBlocksSchema,
+  catalogZoomFrameSchema,
   commentAuthorSchema,
   createCatalogCommentReplyRequestSchema,
   createCatalogCommentRequestSchema,
@@ -47,6 +50,9 @@ export type PublicMedia = z.infer<typeof publicMediaSchema>;
 export type PublicSourceCitation = z.infer<typeof publicSourceCitationSchema>;
 export type CatalogSummary = z.infer<typeof catalogSummarySchema>;
 export type CatalogDetail = z.infer<typeof catalogDetailSchema>;
+export type CatalogDetailMedia = z.infer<typeof catalogDetailMediaSchema>;
+export type CatalogZoomFrame = z.infer<typeof catalogZoomFrameSchema>;
+export type CatalogZoomBlocks = z.infer<typeof catalogZoomBlocksSchema>;
 export type CatalogListTransportQuery = z.infer<
   typeof catalogListTransportQuerySchema
 >;

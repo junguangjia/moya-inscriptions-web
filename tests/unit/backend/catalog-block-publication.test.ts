@@ -165,6 +165,7 @@ function fixture(units: readonly PublicationUnit[], budget = 0) {
       calls.sweeps.push(...ids);
     }),
     recordRequestUsage: vi.fn(async () => {}),
+    recordDayUsage: vi.fn(async () => true),
   };
   let task = 0;
   const provider: PublicationProvider = {
@@ -186,6 +187,9 @@ function fixture(units: readonly PublicationUnit[], budget = 0) {
       return !state.servedAtEdge.has(target);
     }),
     monthlyRequests: vi.fn(async () => {
+      throw new Error("unused");
+    }),
+    dayUsage: vi.fn(async () => {
       throw new Error("unused");
     }),
   };

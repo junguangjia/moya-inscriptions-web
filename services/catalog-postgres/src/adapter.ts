@@ -28,8 +28,19 @@ import {
   buildCatalogSearchSql,
   catalogSearchReadySql,
 } from "./search-queries.js";
+import {
+  catalogZoomBlocksSql,
+  catalogZoomFramesSql,
+  mapCatalogZoomBlockRows,
+  mapCatalogZoomFrameRows,
+} from "./catalog-zoom-blocks.js";
 
 import type { CatalogReaderOptions } from "./catalog-media-delivery.js";
+import type {
+  CatalogZoomBlockRow,
+  CatalogZoomFrameRow,
+  CatalogZoomGate,
+} from "./catalog-zoom-blocks.js";
 import type {
   CatalogAliasRow,
   CatalogCitationScopeRow,
@@ -45,8 +56,14 @@ import type {
   CatalogSearchPageProjection,
   CatalogSearchQuery,
   CatalogSearchQueryPort,
+  CatalogZoomBlocksProjection,
+  CatalogZoomFrameProjection,
 } from "@moya/api";
-import type { CatalogId, CatalogSearchMatchKind } from "@moya/contracts";
+import type {
+  CatalogId,
+  CatalogSearchMatchKind,
+  MediaId,
+} from "@moya/contracts";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 interface CatalogCountRow extends QueryResultRow {
@@ -122,6 +139,7 @@ export class PostgresCatalogQueryAdapter
 {
   private readonly representativeMediaSql: string;
   private readonly mediaSql: string;
+  private readonly zoom: CatalogZoomGate | null;
 
   constructor(
     private readonly pool: Pool,
@@ -133,6 +151,41 @@ export class PostgresCatalogQueryAdapter
     this.mediaSql = options.renditions
       ? listCatalogMediaDeliverySql
       : listCatalogMediaSql;
+    this.zoom =
+      options.renditions === true && options.zoom !== undefined
+        ? options.zoom
+        : null;
+  }
+
+  /** catalog-deep-zoom-v1: frames of the record's complete sets (gated). */
+  async getZoomFrames(
+    id: CatalogId,
+  ): Promise<ReadonlyMap<MediaId, CatalogZoomFrameProjection>> {
+    if (this.zoom === null || !(await this.zoom.isOpen())) return new Map();
+    return withReadTransaction(this.pool, async (client) =>
+      mapCatalogZoomFrameRows(
+        (await client.query<CatalogZoomFrameRow>(catalogZoomFramesSql, [id]))
+          .rows,
+      ),
+    );
+  }
+
+  /** catalog-deep-zoom-v1: the keys of one image's complete set (gated). */
+  async getZoomBlocks(
+    id: CatalogId,
+    mediaId: MediaId,
+  ): Promise<CatalogZoomBlocksProjection | null> {
+    if (this.zoom === null || !(await this.zoom.isOpen())) return null;
+    return withReadTransaction(this.pool, async (client) =>
+      mapCatalogZoomBlockRows(
+        (
+          await client.query<CatalogZoomBlockRow>(catalogZoomBlocksSql, [
+            id,
+            mediaId,
+          ])
+        ).rows,
+      ),
+    );
   }
 
   async search(
