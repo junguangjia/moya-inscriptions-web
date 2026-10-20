@@ -345,6 +345,14 @@ describe("Catalog block withdrawal (catalog-deep-zoom-v1)", () => {
     expect(failing.logger.error).toHaveBeenCalledWith(
       "publication.withdrawal code=block_purge_unconfirmed units=30 ttl_seconds=3600",
     );
+    // The stored reason is the one logged (review S2).
+    expect(failing.port.deferBlockWithdrawal).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      3600,
+      expect.any(Date),
+      "block_purge_unconfirmed",
+    );
     expect(result).toEqual({ status: "deferred", delayMs: 300_000 });
   });
 

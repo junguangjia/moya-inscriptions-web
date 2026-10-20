@@ -645,6 +645,13 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         )
       ).rows[0];
       if (master === undefined) return refused("master_not_found");
+      // Master rows before the blob, the order attach --existing-master takes.
+      const rows = (
+        await db.query<{ id: string; ended_at: Date | null }>(
+          "SELECT id, ended_at FROM community.catalog_display_masters WHERE blob_id=$1 ORDER BY id FOR UPDATE",
+          [master.blob_id],
+        )
+      ).rows;
       const blob = (
         await db.query<{
           state: string;
@@ -660,12 +667,6 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         blob.retention_hold !== "catalog_master"
       )
         return refused("master_not_held");
-      const rows = (
-        await db.query<{ id: string; ended_at: Date | null }>(
-          "SELECT id, ended_at FROM community.catalog_display_masters WHERE blob_id=$1 FOR UPDATE",
-          [master.blob_id],
-        )
-      ).rows;
       if (rows.some((row) => row.ended_at === null))
         return refused("master_active");
       const published = await db.query(

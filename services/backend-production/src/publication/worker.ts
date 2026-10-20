@@ -105,6 +105,7 @@ export interface PublicationRepository {
     unitIds: readonly string[],
     ttlSeconds: number,
     now: Date,
+    code?: "block_budget_deferred" | "block_purge_unconfirmed",
   ): Promise<boolean>;
   release(fence: PublicationFence, now: Date): Promise<void>;
   reconcile(
@@ -595,9 +596,14 @@ export function createPublicationJobHandlers(
     throw new Error("Media publication block withdrawal options are invalid");
   }
 
-  const alert = (errorCode: string) =>
+  // A block group falls back to the block TTL T, every other group to the
+  // ordinary edge TTL.
+  const alert = (
+    errorCode: string,
+    ttlSeconds: number = PUBLICATION_EDGE_FALLBACK_TTL_SECONDS,
+  ) =>
     logger.error(
-      `publication.withdrawal code=${errorCode} fallback_ttl_seconds=${PUBLICATION_EDGE_FALLBACK_TTL_SECONDS}`,
+      `publication.withdrawal code=${errorCode} fallback_ttl_seconds=${ttlSeconds}`,
     );
 
   /**
@@ -620,7 +626,12 @@ export function createPublicationJobHandlers(
   ): Promise<GroupOutcome> => {
     const held = await port.failPurge(fence, ids(units), errorCode, clock());
     if (!held) return LOST;
-    alert(errorCode);
+    alert(
+      errorCode,
+      units.some(isBlockUnit)
+        ? blockTtlSeconds
+        : PUBLICATION_EDGE_FALLBACK_TTL_SECONDS,
+    );
     return {
       kind: "failed",
       result: failed(errorCode, attempts(units) + 1 < MAX_PURGE_ATTEMPTS),
@@ -756,6 +767,7 @@ export function createPublicationJobHandlers(
         ids(units),
         blockTtlSeconds,
         clock(),
+        code,
       ))
     )
       return null;

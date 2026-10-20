@@ -486,7 +486,7 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       fence,
       ids,
       now,
-      "UPDATE community.media_publications SET state='purge_failed',withdraw_requested_at=COALESCE(withdraw_requested_at,$2::timestamptz),purge_attempts=LEAST(3,purge_attempts+1),last_error_code=$3,fallback_ttl_seconds=COALESCE(fallback_ttl_seconds,3600),version=version+1 WHERE id=ANY($1::text[]) AND public_asset_id=$4 AND state='withdrawing'",
+      `UPDATE community.media_publications SET state='purge_failed',withdraw_requested_at=COALESCE(withdraw_requested_at,$2::timestamptz),purge_attempts=LEAST(3,purge_attempts+1),last_error_code=$3,fallback_ttl_seconds=CASE WHEN ${blockRowSql("media_publications")} THEN fallback_ttl_seconds ELSE COALESCE(fallback_ttl_seconds,3600) END,version=version+1 WHERE id=ANY($1::text[]) AND public_asset_id=$4 AND state='withdrawing'`,
       [errorCode(code)],
     );
   }
@@ -506,6 +506,9 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     ids: readonly string[],
     ttlSeconds: number,
     now: Date,
+    code:
+      | "block_budget_deferred"
+      | "block_purge_unconfirmed" = "block_budget_deferred",
   ): Promise<boolean> {
     if (
       !Number.isSafeInteger(ttlSeconds) ||
@@ -513,12 +516,14 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       ttlSeconds > 86_400
     )
       throw new TypeError("A forced edge TTL is 60..86400 seconds");
+    if (code !== "block_budget_deferred" && code !== "block_purge_unconfirmed")
+      throw new TypeError("Unknown block deferral code");
     return this.mutateWithdrawal(
       fence,
       ids,
       now,
-      `UPDATE community.media_publications p SET purge_task_ids='{}',fallback_ttl_seconds=$3,last_error_code='block_budget_deferred',withdraw_requested_at=COALESCE(p.withdraw_requested_at,$2::timestamptz),version=version+1 WHERE p.id=ANY($1::text[]) AND p.public_asset_id=$4 AND p.state='withdrawing' AND p.origin_deleted_at IS NOT NULL AND ${blockRowSql("p")}`,
-      [ttlSeconds],
+      `UPDATE community.media_publications p SET purge_task_ids='{}',fallback_ttl_seconds=$3,last_error_code=$4,withdraw_requested_at=COALESCE(p.withdraw_requested_at,$2::timestamptz),version=version+1 WHERE p.id=ANY($1::text[]) AND p.public_asset_id=$5 AND p.state='withdrawing' AND p.origin_deleted_at IS NOT NULL AND ${blockRowSql("p")}`,
+      [ttlSeconds, code],
     );
   }
   async release(fence: MediaPublicationFence, now: Date): Promise<void> {

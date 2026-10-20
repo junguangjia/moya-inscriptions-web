@@ -992,8 +992,10 @@ export function createPublishingJobHandlers(
    * asset is no longer ready and referenced, or whose cells lie outside the
    * frame completes without work. A content failure of the master
    * (`master_unreadable`, `zoom_blocks_alpha`, `master_mismatch`) fails the
-   * job without retry and is never queued again for that master;
-   * infrastructure failures are retried.
+   * job without retry and is never queued again for that master. Any other
+   * rejection (`processing_failed`: a sandbox protocol failure, a bad display
+   * reference) also fails without retry and pauses the set until the Owner's
+   * `requeue`; infrastructure failures and timeouts are retried.
    */
   const cutCatalogBlocks = async (
     claim: PublishingWorkerJobClaim,

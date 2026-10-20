@@ -773,11 +773,16 @@ export async function renderSandboxBlocksJob(
   try {
     if (
       master === undefined ||
-      reference === undefined ||
-      !(await stagedTypeMatches(masterPath, master.declaredType)) ||
-      !(await stagedTypeMatches(referencePath, reference.declaredType))
+      !(await stagedTypeMatches(masterPath, master.declaredType))
     )
       return rejected("master_unreadable");
+    // A bad display reference is not the master's fault: the set pauses and
+    // `catalog-master requeue` can resume it.
+    if (
+      reference === undefined ||
+      !(await stagedTypeMatches(referencePath, reference.declaredType))
+    )
+      return rejected("processing_failed");
     const blocks = await renderCatalogBlocks({
       master: masterPath,
       masterFormat: master.declaredType === "image/png" ? "png" : "jpeg",

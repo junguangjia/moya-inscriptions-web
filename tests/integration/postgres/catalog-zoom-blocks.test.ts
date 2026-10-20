@@ -1778,6 +1778,62 @@ describe("Catalog block jobs in the store (PR B; criteria 3a, 5)", () => {
       code: "content_failure",
     });
   });
+
+  it("reaches a newer set past older ones that wait, and skips a set without a display rendition (review M1, L3)", async () => {
+    await quiet();
+    await setup.query(
+      "UPDATE community.catalog_display_masters SET ended_at=$1, end_reason='detached' WHERE ended_at IS NULL",
+      [t0],
+    );
+    await setup.query(
+      "UPDATE community.media_renditions SET state='released', released_at=$1 WHERE catalog_master_id IS NOT NULL AND state='ready'",
+      [t0],
+    );
+    const images = await Promise.all([1, 2, 3, 4, 5].map(() => catalogImage()));
+    const ids: string[] = [];
+    for (const image of images) ids.push((await attached(image)).masterId!);
+    const frame = { width: 6000, height: 4000 };
+    // Four sets that cannot be queued: complete, failed on content, paused,
+    // and one without a display rendition.
+    for (const cells of [
+      Array.from({ length: 16 }, (_, cell) => cell),
+      Array.from({ length: 8 }, (_, cell) => cell + 16),
+    ])
+      await works.recordCatalogBlocks(
+        images[0]!.assetId,
+        { masterId: ids[0]!, blocks: blockRecords(frame, cells) },
+        t0,
+      );
+    await blockJob(
+      images[1]!.assetId,
+      ids[1]!,
+      [0, 15],
+      "failed",
+      "zoom_blocks_alpha",
+    );
+    await blockJob(
+      images[2]!.assetId,
+      ids[2]!,
+      [0, 15],
+      "abandoned",
+      "processing_failed",
+    );
+    await setup.query(
+      "UPDATE community.media_renditions SET state='released', released_at=$1 WHERE catalog_asset_id=$2 AND role='display'",
+      [t0, images[3]!.assetId],
+    );
+    // A pass of one set still reaches the newest set.
+    expect(await works.enqueueCatalogBlockSets(t0, 1)).toEqual({
+      enqueued: 2,
+    });
+    const open = (
+      await setup.query<{ master: string }>(
+        "SELECT DISTINCT payload->>'masterId' AS master FROM community.publishing_jobs WHERE kind='catalog_render' AND payload->>'variant'='blocks' AND state='queued'",
+      )
+    ).rows.map((row) => row.master);
+    expect(open).toEqual([ids[4]]);
+    await quiet();
+  });
 });
 
 /*
@@ -2247,5 +2303,115 @@ describe("Catalog Detail deep-zoom reads (PR C; criteria 12, 13, 20)", () => {
     await expect(
       publication.recordDayUsage({ dayStart: t0, requests: -1, bytes: 0 }, t0),
     ).rejects.toThrow(TypeError);
+  });
+});
+
+describe("PR A review fixes (B1, B2, S2, S3, S5)", () => {
+  const works = () =>
+    new PostgresWorkPublishingAdapter(app, {
+      publication: { allowPublish: () => true, isPublic: () => true },
+    });
+  const reset = () =>
+    setup.query(
+      "UPDATE community.publishing_jobs SET state='abandoned', finished_at=$1, lease_owner=NULL, lease_expires_at=NULL WHERE state IN ('queued','running')",
+      [t0],
+    );
+  const baseJob = async (assetId: string, state = "queued") => {
+    const id = `publishing-job-${hex()}`;
+    await setup.query(
+      `INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after,created_at,updated_at,lease_owner,lease_expires_at)
+       VALUES($1,'catalog_render',$2,$3,$4,$4,$4,CASE WHEN $3='running' THEN 'test' END,CASE WHEN $3='running' THEN $4::timestamptz + interval '1 hour' END)`,
+      [id, assetId, state, t0],
+    );
+    return id;
+  };
+  const claim = async (catalogBlocks?: boolean) =>
+    (
+      await works().claimJobs(
+        {
+          owner: `w-${hex(4)}`,
+          limit: 1,
+          leaseMs: 60_000,
+          kinds: ["catalog_render"],
+          ...(catalogBlocks === undefined ? {} : { catalogBlocks }),
+        },
+        new Date(t0.getTime() + 600_000),
+      )
+    )[0]?.id;
+
+  it("claims a payload-less base Catalog render with the block flag omitted or false (B1)", async () => {
+    await reset();
+    const image = await catalogImage();
+    for (const flag of [undefined, false] as const) {
+      const id = await baseJob(image.assetId);
+      expect(await claim(flag), String(flag)).toBe(id);
+      await reset();
+    }
+  });
+
+  it("never starts a block job while a base Catalog render is due or running (B1, criterion 5)", async () => {
+    await reset();
+    const image = await catalogImage();
+    const master = await attached(image);
+    const block = await blockJob(
+      image.assetId,
+      master.masterId!,
+      [0, 15],
+      "queued",
+    );
+    const running = await baseJob(image.assetId, "running");
+    expect(await claim(true)).toBeUndefined();
+    await setup.query(
+      "UPDATE community.publishing_jobs SET state='succeeded', finished_at=$2, lease_owner=NULL, lease_expires_at=NULL WHERE id=$1",
+      [running, t0],
+    );
+    const due = await baseJob(image.assetId);
+    expect(await claim(true)).toBe(due);
+    expect(await claim(true)).toBeUndefined();
+    await setup.query(
+      "UPDATE community.publishing_jobs SET state='succeeded', finished_at=$2, lease_owner=NULL, lease_expires_at=NULL WHERE id=$1",
+      [due, t0],
+    );
+    expect(await claim(true)).toBe(block);
+  });
+
+  it("never pauses the profile sweep for a queued block job (B2)", async () => {
+    await reset();
+    const anchors = [
+      { role: "avatar-128" as const, version: 1, digest: "1111111111111111" },
+      {
+        role: "background-960" as const,
+        version: 1,
+        digest: "1111111111111111",
+      },
+    ];
+    const sweep = () =>
+      works().enqueueProfileRenders(t0, { limit: 2, maxOpen: 2, anchors });
+    expect((await sweep()).paused).toBe(false);
+    const image = await catalogImage();
+    const master = await attached(image);
+    await blockJob(image.assetId, master.masterId!, [0, 15], "queued");
+    expect((await sweep()).paused).toBe(false);
+    // A base render still yields the sweep, as before.
+    await baseJob(image.assetId);
+    expect((await sweep()).paused).toBe(true);
+    await reset();
+  });
+
+  it("counts only an active master's jobs as an open set (S5)", async () => {
+    await reset();
+    const image = await catalogImage();
+    const master = await attached(image);
+    await blockJob(image.assetId, master.masterId!, [0, 15], "running");
+    await masters.detach({ mediaId: image.mediaId }, t0);
+    const open = (
+      await setup.query<{ master_id: string }>(
+        `SELECT DISTINCT j.payload->>'masterId' AS master_id FROM community.publishing_jobs j
+         JOIN community.catalog_display_masters m ON m.id=j.payload->>'masterId' AND m.ended_at IS NULL
+         WHERE j.kind='catalog_render' AND COALESCE(j.payload->>'variant','')='blocks' AND j.state IN ('queued','running')`,
+      )
+    ).rows.map((row) => row.master_id);
+    expect(open).not.toContain(master.masterId);
+    await reset();
   });
 });

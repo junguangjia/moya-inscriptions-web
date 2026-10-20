@@ -170,11 +170,13 @@ export async function renderCatalogBlocks(
       .removeAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
+    // A reference of another size than recorded is the reference's fault,
+    // never a content failure of the master.
     if (
       reference.info.width !== input.referenceWidth ||
       reference.info.height !== input.referenceHeight
     )
-      throw reject("master_mismatch");
+      throw new MediaRejectedError("processing_failed");
     // Both sides at the coarse compare size (see BLOCK_ALIGNMENT).
     const scale = Math.min(
       1,
@@ -223,9 +225,9 @@ export async function renderCatalogBlocks(
       .jpeg({
         quality: recipe.encoder.quality,
         chromaSubsampling: recipe.encoder.chromaSubsampling,
-        progressive: false,
+        progressive: recipe.encoder.progressive,
         mozjpeg: false,
-        optimiseCoding: true,
+        optimiseCoding: recipe.encoder.optimiseCoding,
       })
       .toBuffer({ resolveWithObject: true });
     if (

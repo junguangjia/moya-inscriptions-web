@@ -14,7 +14,8 @@ import { readExifSummary } from "../publishing/processing/tiff-exif.js";
 /*
  * Header probe of a Catalog display master (catalog-deep-zoom-v1). It reads
  * only the leading header bytes of the Owner's file and decodes no pixel:
- * the format (8-bit baseline or progressive JPEG with 1 or 3 components, or
+ * the format (8-bit baseline, extended sequential or progressive JPEG with 1
+ * or 3 components, or
  * 8-bit grey or RGB PNG without transparency), the stored size and the EXIF
  * orientation, which together give the oriented size the frame is cut from.
  * The block job decodes the master inside the media sandbox and checks the

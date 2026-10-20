@@ -261,6 +261,7 @@ export const openCatalogBlockSets = async (
     (
       await db.query<{ master_id: string }>(
         `SELECT DISTINCT j.payload->>'masterId' AS master_id FROM community.publishing_jobs j
+         JOIN community.catalog_display_masters m ON m.id=j.payload->>'masterId' AND m.ended_at IS NULL
          WHERE ${catalogBlockJobSql("j")} AND j.state IN ('queued','running')`,
       )
     ).rows.map((row) => row.master_id),
@@ -296,6 +297,11 @@ export const enqueueMissingCatalogBlocks = async (
     }
 > => {
   if (!MASTER_ID.test(master.id)) throw new TypeError("Unknown master id");
+  // The sync pass and `catalog-master requeue` take the same lock, so the
+  // two never open a third set together (re-entrant within a transaction).
+  await db.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended('catalog-block-sets',0))",
+  );
   const set = await readCatalogBlockSet(db, master);
   if (set.missing.length === 0)
     return { status: "skipped", reason: "set_complete" };
@@ -505,38 +511,62 @@ export const enqueueCatalogBlockSets = async (
     await db.query(
       "SELECT pg_advisory_xact_lock(hashtextextended('catalog-block-sets',0))",
     );
-    const masters = (
-      await db.query<{
-        id: string;
-        catalog_asset_id: string;
-        frame_width: number;
-        frame_height: number;
-      }>(
-        `SELECT m.id, m.catalog_asset_id, m.frame_width, m.frame_height
+    // Pages of `limit` sets, oldest first: a set that waits (open, paused)
+    // never keeps a newer one from its turn; the pass ends at the bound.
+    const seen: string[] = [];
+    let enqueued = 0;
+    for (;;) {
+      const masters = (
+        await db.query<{
+          id: string;
+          catalog_asset_id: string;
+          frame_width: number;
+          frame_height: number;
+        }>(
+          // Only sets that can still be queued take a place in the pass:
+          // incomplete, never failed on content, with a ready display
+          // rendition to check the master against (no silent re-queue loop).
+          `SELECT m.id, m.catalog_asset_id, m.frame_width, m.frame_height
          FROM community.catalog_display_masters m
          JOIN community.catalog_media_assets a ON a.id=m.catalog_asset_id
          JOIN community.media_blobs b ON b.id=m.blob_id AND b.state='committed' AND b.retention_hold='catalog_master'
          WHERE m.ended_at IS NULL AND a.state='ready' AND a.unreferenced_since IS NULL
+           AND EXISTS (
+             SELECT 1 FROM community.media_renditions d
+             JOIN community.media_blobs db ON db.id=d.blob_id AND db.state='committed'
+             WHERE d.catalog_asset_id=a.id AND d.role='display' AND d.edit_key='base' AND d.state='ready')
+           AND (
+             SELECT count(*) FROM community.media_renditions r
+             JOIN community.media_blobs rb ON rb.id=r.blob_id AND rb.state='committed'
+             WHERE r.catalog_master_id=m.id AND r.state='ready'
+           ) < ceil(m.frame_width / 1024.0) * ceil(m.frame_height / 1024.0)
+           AND NOT EXISTS (
+             SELECT 1 FROM community.publishing_jobs j
+             WHERE ${catalogBlockJobSql("j")} AND j.payload->>'masterId'=m.id
+               AND j.state IN ('failed','abandoned')
+               AND j.last_error_code = ANY($2::text[]))
+           AND NOT (m.id = ANY($3::text[]))
          ORDER BY m.created_at, m.id
          LIMIT $1`,
-        [limit],
-      )
-    ).rows;
-    let enqueued = 0;
-    for (const master of masters) {
-      const queued = await enqueueMissingCatalogBlocks(
-        db,
-        {
-          id: master.id,
-          catalogAssetId: master.catalog_asset_id,
-          frameWidth: master.frame_width,
-          frameHeight: master.frame_height,
-        },
-        now,
-      );
-      if (queued.status === "queued") enqueued += queued.jobs;
-      else if (queued.reason === "sets_busy") break;
+          [limit, [...CATALOG_BLOCK_CONTENT_FAILURES], seen],
+        )
+      ).rows;
+      for (const master of masters) {
+        seen.push(master.id);
+        const queued = await enqueueMissingCatalogBlocks(
+          db,
+          {
+            id: master.id,
+            catalogAssetId: master.catalog_asset_id,
+            frameWidth: master.frame_width,
+            frameHeight: master.frame_height,
+          },
+          now,
+        );
+        if (queued.status === "queued") enqueued += queued.jobs;
+        else if (queued.reason === "sets_busy") return { enqueued };
+      }
+      if (masters.length < limit) return { enqueued };
     }
-    return { enqueued };
   });
 };

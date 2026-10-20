@@ -85,7 +85,12 @@ const writeObject = async (
     },
   );
 
-const setup = async (sandboxOptions: InProcessSandboxOptions = {}) => {
+const setup = async (
+  sandboxOptions: InProcessSandboxOptions = {},
+  wrapStore: (
+    store: FilesystemPublishingMediaStore,
+  ) => FilesystemPublishingMediaStore = (store) => store,
+) => {
   const root = await mkdtemp(path.join(base, "setup-"));
   const storeDirectory = path.join(root, "store");
   const work = path.join(root, "work");
@@ -99,7 +104,7 @@ const setup = async (sandboxOptions: InProcessSandboxOptions = {}) => {
   const sandbox = inProcessSandbox(sandboxOptions);
   const logger = { info: vi.fn(), error: vi.fn() };
   const renderer = createCatalogBlockRenderer({
-    store,
+    store: wrapStore(store),
     sandbox: await createSandboxRunner({
       image: "yoyi-work-publishing-media-tools:v2",
       workDirectory: work,
@@ -207,6 +212,58 @@ describe("the Catalog block renderer (coordinator)", () => {
       status: "rejected",
       failureCode: "processing_failed",
     });
+  });
+
+  it("throws a sandbox timeout as a retryable tool failure, never a content code (review L4)", async () => {
+    const { renderer, plan, logger } = await setup({
+      tamper: (manifest) => ({
+        ...manifest,
+        status: "rejected",
+        failureCode: "processing_timeout",
+        outputs: [],
+      }),
+    });
+    await expect(renderer.render(plan)).rejects.toMatchObject({
+      name: "MediaToolError",
+      code: "timeout",
+    });
+    expect(String(logger.info.mock.calls.at(-1)?.[0])).toMatch(
+      /outcome=timeout$/u,
+    );
+  });
+
+  it("removes the blocks it already wrote when a later block fails (review L4)", async () => {
+    const writes: string[] = [];
+    const { store, renderer, plan } = await setup({}, (inner) => {
+      const wrapped = Object.create(inner) as FilesystemPublishingMediaStore;
+      wrapped.writeStream = async (...args) => {
+        if (writes.length === 2) throw new Error("disk full");
+        const stored = await inner.writeStream(...args);
+        writes.push(stored.storageKey);
+        return stored;
+      };
+      return wrapped;
+    });
+    await expect(renderer.render(plan)).rejects.toThrow();
+    expect(writes).toHaveLength(2);
+    for (const key of writes) {
+      const read = await store.openRead(key);
+      expect(read?.status).not.toBe("ok");
+      if (read?.status === "ok") await read.close();
+    }
+  });
+
+  it("reports a staging failure's time as stage_ms with render_ms=0", async () => {
+    const { renderer, plan, logger } = await setup();
+    await expect(
+      renderer.render({
+        ...plan,
+        reference: { ...plan.reference, sha256: sha(Buffer.from("other")) },
+      }),
+    ).rejects.toThrow();
+    expect(String(logger.info.mock.calls.at(-1)?.[0])).toMatch(
+      /render_ms=0 cells=4 outcome=error$/u,
+    );
   });
 });
 

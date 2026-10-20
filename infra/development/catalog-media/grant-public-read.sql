@@ -10,7 +10,8 @@
 GRANT USAGE ON SCHEMA community TO :"public_read_role";
 GRANT SELECT ON community.catalog_media_delivery TO :"public_read_role";
 -- catalog-deep-zoom-v1 (community migration 20261020010000): Catalog readers
--- read the published-blocks view (each image's block frame and the block
--- delivery keys of its active master's complete set). Requires that
+-- read the published-blocks view (each image's block frame and the
+-- delivery keys of its active master's ready cells; readers check that a
+-- set is complete). Requires that
 -- migration applied first; nothing else that is new (never the master table).
 GRANT SELECT ON community.catalog_media_zoom_blocks TO :"public_read_role";
