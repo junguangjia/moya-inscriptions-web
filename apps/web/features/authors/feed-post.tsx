@@ -71,10 +71,13 @@ export const FeedPost = ({
   const work = item.target.type === "work";
   const hasBody = work && excerpt !== "";
   const expandable = hasBody && overflow;
-  // `pointer` is false for keyboard and assistive activation (click detail 0).
-  const openContent = (opener: HTMLElement, pointer = true) => {
+  const openContent = (opener: HTMLElement) =>
     shell.openContent(item.target, opener);
-    // The rest of the tap (a double tap's second click) would land on Detail.
+  // Body text is a large target that invites a double tap; the rest of that
+  // tap would land on Detail. `pointer` is false for keyboard and assistive
+  // activation (click detail 0). Titles and other openers keep their behavior.
+  const openFromBody = (opener: HTMLElement, pointer: boolean) => {
+    openContent(opener);
     if (pointer) suppressFollowingPointerClicks();
   };
   // A post with a stage reads its comments as colophons; one without opens
@@ -159,9 +162,7 @@ export const FeedPost = ({
           {...(item.target.type === "catalog"
             ? { "data-open-catalog": "" }
             : {})}
-          onClick={(event) =>
-            openContent(event.currentTarget, event.detail !== 0)
-          }
+          onClick={(event) => openContent(event.currentTarget)}
         >
           <span className={styles.postTitleText}>{item.title}</span>
         </button>
@@ -204,7 +205,7 @@ export const FeedPost = ({
             id={bodyId}
             preview={excerpt}
             onOverflowChange={setOverflow}
-            onOpen={openContent}
+            onOpen={openFromBody}
             workId={item.target.id}
           />
         ) : null}

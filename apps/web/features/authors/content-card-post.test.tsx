@@ -410,6 +410,15 @@ describe("ContentCard as a phone single-column post", () => {
     expect(actions.environment.onAction).toHaveBeenCalledOnce();
   });
 
+  it("keeps the title's pointer tap as before: no guard follows it", () => {
+    const post = render(work({ title: "有题", excerpt: "短正文" }));
+    // Only body text arms the double-tap guard; a quick Back stays usable.
+    press(button(post, "打开有题")!);
+    press(button(post, "喜欢")!);
+    expect(shell.openContent).toHaveBeenCalledOnce();
+    expect(actions.environment.onAction).toHaveBeenCalledOnce();
+  });
+
   it("expands and collapses only from its trailing action and keeps the preview after collapse", async () => {
     const height = vi
       .spyOn(HTMLElement.prototype, "scrollHeight", "get")
