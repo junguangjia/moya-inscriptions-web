@@ -71,6 +71,8 @@ const dimensionSchema = z.number().int().positive().max(65_535);
 
 export const workPublishingFailureCodeSchema = z.enum([
   "empty_work",
+  "title_required",
+  "image_required",
   "title_too_long",
   "title_line_break",
   "body_too_long",
@@ -476,8 +478,8 @@ export const workDraftContentSchema = z
   .superRefine(checkContentReferences);
 
 /**
- * Submitted content: normalized text rules (a single-line title) and not
- * empty. Pending placeholders and items that are not ready are not a
+ * Submitted content needs a nonblank, single-line title and at least one
+ * photo. Pending placeholders and items that are not ready are not a
  * validation failure: the Backend answers them with the `not_ready` result
  * listing their keys, so readiness has one channel.
  */
@@ -492,6 +494,20 @@ export const workSubmissionContentSchema = z
       });
     if (isEmptyWorkContent(content))
       context.addIssue({ code: "custom", message: "empty_work" });
+    else {
+      if (normalizePublishingTitle(content.title) === "")
+        context.addIssue({
+          code: "custom",
+          path: ["title"],
+          message: "title_required",
+        });
+      if (content.items.length === 0)
+        context.addIssue({
+          code: "custom",
+          path: ["items"],
+          message: "image_required",
+        });
+    }
   });
 
 export const PUBLISHING_MEDIA_PATH_PREFIX = "/api/community/publishing/media/";

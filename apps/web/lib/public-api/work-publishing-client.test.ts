@@ -36,6 +36,19 @@ const content: WorkDraftContent = {
   coverCrop: null,
 };
 
+const illustratedContent: WorkDraftContent = {
+  ...content,
+  items: [
+    {
+      key: "photo",
+      itemId,
+      kind: "static",
+      qualityMode: "standard",
+      edit: { rotation: 0, crop: null },
+    },
+  ],
+};
+
 const draft = {
   id: draftId,
   kind: "new",
@@ -188,6 +201,25 @@ describe("work publishing client", () => {
     expect(tooLong).toMatchObject({ status: 422, code: "title_too_long" });
     expect(upstream).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [{ ...illustratedContent, title: " \n " }, "title_required", "请填写标题"],
+    [content, "image_required", "请至少添加一张图片"],
+  ] as const)(
+    "refuses incomplete publication before sending it: %s",
+    async (content, code, message) => {
+      const error = await refused(
+        publishingClient.submit({
+          requestId,
+          holder: { draftId },
+          content,
+          baseRevisionId: null,
+        }),
+      );
+      expect(error).toMatchObject({ status: 422, code, message });
+      expect(upstream).not.toHaveBeenCalled();
+    },
+  );
 
   it("parses a conditional save that reports a conflict", async () => {
     const conflict = {
@@ -600,7 +632,7 @@ describe("work publishing client", () => {
     const command = {
       requestId,
       holder: { sessionId },
-      content,
+      content: illustratedContent,
       baseRevisionId: revisionId,
     } as const;
     answer({ state: "not_ready", itemKeys: ["item-1"] });

@@ -422,9 +422,39 @@ describe.each(["clean", "phase4-upgrade", "legacy-grants-upgrade"] as const)(
         );
       };
       const publish = async (title: string) => {
+        const mediaId = opaque("user-media"),
+          itemId = opaque("media-item");
+        await setup.query(
+          "INSERT INTO community.user_media(id,owner_id,mime_type,width,height,sha256,bytes) VALUES($1,$2,'image/png',4,3,$3,$4)",
+          [
+            mediaId,
+            actor,
+            "a".repeat(64),
+            Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+          ],
+        );
+        await setup.query(
+          "INSERT INTO community.media_items(id,owner_id,kind,quality_mode,source,legacy_media_id,state,presentation) VALUES($1,$2,'static','legacy','legacy_user_media',$3,'ready','{\"width\":4,\"height\":3}'::jsonb)",
+          [itemId, actor, mediaId],
+        );
         const draft = await publishing.createDraft(
           actor,
-          { ...commandId(), content: content(title), deviceClass: "desktop" },
+          {
+            ...commandId(),
+            content: {
+              ...content(title),
+              items: [
+                {
+                  key: itemId,
+                  itemId,
+                  kind: "static",
+                  qualityMode: "legacy",
+                  edit: { rotation: 0, crop: null },
+                },
+              ],
+            },
+            deviceClass: "desktop",
+          },
           now,
         );
         return receipt(

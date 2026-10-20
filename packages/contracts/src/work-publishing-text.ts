@@ -115,6 +115,8 @@ export const checkPublishingBody = (raw: string): PublishingTextCheck =>
  */
 export type PublishingContentIssue =
   | "empty_work"
+  | "title_required"
+  | "image_required"
   | "title_too_long"
   | "title_line_break"
   | "body_too_long"
@@ -128,9 +130,9 @@ export interface PublishingContentInput {
 
 /**
  * Validates content for submission against the counting rule and a configured
- * item maximum. Title, body and retained media all empty is `empty_work`;
- * whitespace-only text is empty. Drafts keep a title line break; a submission
- * refuses it with `title_line_break`.
+ * item maximum. A submission needs a nonblank title and at least one retained
+ * photo; wholly empty content keeps the `empty_work` code. Drafts keep a title
+ * line break; a submission refuses it with `title_line_break`.
  */
 export const publishingContentIssues = (
   content: PublishingContentInput,
@@ -141,6 +143,10 @@ export const publishingContentIssues = (
   const issues: PublishingContentIssue[] = [];
   if (title.length === 0 && body.length === 0 && content.itemCount === 0)
     issues.push("empty_work");
+  else {
+    if (title.length === 0) issues.push("title_required");
+    if (content.itemCount === 0) issues.push("image_required");
+  }
   if (title.issue === "too_long") issues.push("title_too_long");
   if (title.issue === "line_break") issues.push("title_line_break");
   if (body.issue === "too_long") issues.push("body_too_long");

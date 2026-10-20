@@ -31,6 +31,19 @@ const ready: Readiness = {
 const titled = () => {
   const store = createEditorSessionStore(ACCOUNT, { type: "new" });
   store.setTitle("临兰亭");
+  store.setMedia({
+    items: [
+      {
+        key: "photo",
+        itemId: null,
+        kind: "static",
+        qualityMode: "standard",
+        edit: { rotation: 0, crop: null },
+      },
+    ],
+    coverKey: null,
+    coverCrop: null,
+  });
   return store.get();
 };
 
@@ -71,6 +84,24 @@ afterEach(() => {
 });
 
 describe("confirmationBlocked", () => {
+  it.each([
+    ["", "有正文", true],
+    [" \n ", "有正文", true],
+    ["临兰亭", "", false],
+  ])("requires a nonblank title with photos: %s", (title, body, blocked) => {
+    const state = { ...titled(), title, body };
+    const gate: ConfirmationGate = {
+      state,
+      readiness: ready,
+      issues: [],
+      submission: { status: "idle" },
+    };
+    expect(confirmationBlocked(gate)).toBe(blocked);
+    expect(
+      confirmationBlocked({ ...gate, state: { ...state, items: [] } }),
+    ).toBe(true);
+  });
+
   it("accepts transient media for a background intent while retaining text and submission gates", () => {
     const gate: ConfirmationGate = {
       state: titled(),

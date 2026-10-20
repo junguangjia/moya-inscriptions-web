@@ -522,7 +522,7 @@ const PhoneFlowBody = ({
 
   // A screen change moves focus to the new bar title (also 编辑's 下一步 to
   // 发布, mockup A: no field takes focus, so no keyboard hides the 发布 bar
-  // and the preview), or to 标题 when 跳过，只发布文字 went there to write,
+  // and the preview), or to 标题 when 先写标题和正文 went there to write,
   // or to what the change named (`focusNext`: the start screen's 撤销 names
   // the photo it brings back, revealed in 编辑's strip). Mounting (open,
   // layout swap) never does, and neither does a change whose removal already

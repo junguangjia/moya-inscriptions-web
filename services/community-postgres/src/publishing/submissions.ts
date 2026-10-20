@@ -126,7 +126,7 @@ const optionalText = (
 /**
  * Applies the shared counting rule (C02) to submitted content: single-line
  * normalized title, trimmed body with LF line breaks, authorship fields, the
- * empty-work rule and the cover reference.
+ * required title and photo, empty-work rule and the cover reference.
  */
 export const normalizeSubmission = (
   content: WorkSubmissionContent,
@@ -139,6 +139,8 @@ export const normalizeSubmission = (
     tooLong: "body_too_long",
   });
   if (isEmptyWorkContent(content)) fail("empty_work");
+  if (title === "") fail("title_required");
+  if (content.items.length === 0) fail("image_required");
   // Not set stays not set: nothing is stored as `original` unless declared.
   const source = content.authorship;
   const referenced = source !== null && source.kind !== "original";

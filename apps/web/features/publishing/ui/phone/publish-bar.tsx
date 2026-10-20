@@ -3,7 +3,7 @@
 import { useEffect, useId, useState } from "react";
 
 import { KEYBOARD_ATTRIBUTE } from "../editor/editor-layout";
-import { bodyRule, checkEditorText, titleRule } from "../editor/editor-text";
+import { publicationRequirement } from "../editor/text-settings";
 import editorStyles from "../editor/editor.module.css";
 import styles from "./publish-screen.module.css";
 
@@ -32,8 +32,7 @@ export type PublishReasonInput = Pick<
  * a disabled button never carries the reason alone). The submission's
  * progress comes first; otherwise, while `blocked`, the first blocking
  * reason in the scroll area's reading order; once 发布 can go, 「全部 N 项已
- * 就绪」 for a work with photos (mockup A `renderReady`) and nothing for a
- * text-only one. The wording is the confirmation sheet's
+ * 就绪」 for a work with photos (mockup A `renderReady`). The wording is the confirmation sheet's
  * (confirmation-sheet.tsx), so both say the same thing.
  */
 export const publishReason = (
@@ -66,6 +65,8 @@ export const publishReason = (
               ? `${submission.itemKeys.length} 项正在处理，完成后可再${label}`
               : "";
   if (status !== "") return { text: status, tone: "status" };
+  const requirement = publicationRequirement(state);
+  if (requirement !== null) return { text: requirement, tone: "error" };
   const hasItems = state.items.length > 0;
   if (
     !blocked &&
@@ -88,12 +89,6 @@ export const publishReason = (
     };
   if (hasItems && !readiness.confirmed)
     return { text: "正在确认图片状态…", tone: "pending" };
-  if (
-    !hasItems &&
-    checkEditorText(state.title, titleRule).value === "" &&
-    checkEditorText(state.body, bodyRule).value === ""
-  )
-    return { text: "标题、正文和图片不能都为空", tone: "error" };
   const issue = issues.find((entry) => entry.message !== null);
   if (issue?.message != null) return { text: issue.message, tone: "error" };
   const general = state.fieldErrors.general;
