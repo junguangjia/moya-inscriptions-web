@@ -1,0 +1,17 @@
+# Raw ingress IPs are operational data, separate from product analytics.
+# Install only for the named application logs. Do not apply to other services.
+/var/log/nginx/yoyi-access.log /var/log/nginx/yoyi-article-status.log {
+    daily
+    rotate 6
+    maxage 6
+    maxsize 10M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        /usr/sbin/nginx -s reopen
+    endscript
+}

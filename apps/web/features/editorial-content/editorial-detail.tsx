@@ -1,4 +1,5 @@
 "use client";
+import { useContentAnalytics } from "../analytics/product-analytics";
 import { editorialImage, editorialMediaSrc } from "./editorial-media";
 import {
   useCallback,
@@ -264,6 +265,11 @@ export function LiveArticleReader({
         : document.body,
     );
   const { state, retry } = useArticle(id);
+  useContentAnalytics(
+    "article",
+    id,
+    state.state === "populated" && shell.activeTopicId === id,
+  );
   useEffect(() => {
     if (state.state === "missing") onUnavailable?.();
   }, [state.state, onUnavailable]);

@@ -309,7 +309,13 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
     }),
     Object.freeze({
       migrationId: "20261019010000",
-      filename: "20261019010000_upload_timing_instrumentation.sql",
+      filename: "20261019010000_product_analytics.sql",
+      checksum:
+        "0b587658175940c52e3c87a0333db235910789a364101269e0a89475f5c36b56",
+    }),
+    Object.freeze({
+      migrationId: "20261019020000",
+      filename: "20261019020000_upload_timing_instrumentation.sql",
       checksum:
         "12352f71f9638fa14c341b355d18a1c706342e30ca0d2dd0f875a097baceb1cf",
     }),

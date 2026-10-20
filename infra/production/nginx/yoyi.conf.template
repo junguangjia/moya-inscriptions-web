@@ -1,6 +1,39 @@
 # Include within nginx http {}. All names/paths below are fictional examples.
 # Render/validate this template only during separately authorized deployment.
-log_format yoyi_status '$time_iso8601 $status $request_time';
+# Fixed classifications omit raw paths/query strings, cookies, tokens and UA text.
+limit_req_zone $binary_remote_addr zone=yoyi_analytics:1m rate=30r/m;
+map $uri $yoyi_route_class {
+    default other;
+    / page;
+    ~^/admin/analytics-workspace(?:/|$) analytics-workspace;
+    ~^/admin(?:/|$) admin;
+    ~^/api/community/analytics$ analytics-collection;
+    ~^/api/community/notifications/stream$ notification-stream;
+    ~^/api/community/notifications(?:/|$) notifications;
+    ~^/api/community/auth(?:/|$) authentication;
+    ~^/api/community/publishing(?:/|$) publishing;
+    ~^/api/community(?:/|$) community;
+    ~^/api/catalog(?:/|$) catalog;
+    ~^/api/catalog-search$ search;
+    ~^/api/ admin-api;
+    ~^/(?:_next|admin-assets)(?:/|$) assets;
+    ~^/mcp(?:/|$) machine-api;
+}
+map $http_user_agent $yoyi_client_class {
+    default other;
+    "" empty;
+    ~*(?:playwright|headless|puppeteer) test-like;
+    ~*(?:curl|wget|python|node|undici|axios) script-like;
+    ~*(?:bot|spider|crawler) crawler-like;
+    ~*mozilla browser-like;
+}
+map $http_cookie $yoyi_device_excluded {
+    default 0;
+    "~*(^|;[[:space:]]*)moya-analytics-excluded=1(;|$)" 1;
+}
+# Client class is a heuristic, not proof of the human or AI operator.
+# Install the accompanying 7-day logrotate policy before enabling this format.
+log_format yoyi_status escape=json '{"at":"$time_iso8601","status":$status,"duration":$request_time,"bytes":$body_bytes_sent,"method":"$request_method","route":"$yoyi_route_class","client":"$yoyi_client_class","device_excluded":$yoyi_device_excluded,"ip":"$remote_addr"}';
 # Upload timing (upload-timing-instrumentation-v1): end time, outcome, sizes
 # and durations only; never a URI, host, address, header or cookie.
 log_format yoyi_upload '$time_iso8601 $msec $status $request_completion $request_length $bytes_sent $request_time $upstream_status $upstream_connect_time $upstream_header_time $upstream_response_time';
@@ -13,6 +46,7 @@ upstream yoyi_article_authorization { server 127.0.0.1:3003; }
 server {
     listen 80 default_server;
     server_name _;
+    access_log /var/log/nginx/yoyi-access.log yoyi_status;
     return 404;
 }
 
@@ -39,6 +73,10 @@ server {
     proxy_set_header X-Moya-Client-Ip "";
     proxy_set_header X-Moya-Auth-Relay "";
     proxy_set_header X-Moya-Auth-Source "";
+    proxy_set_header X-Moya-Analytics-Ingress "";
+    proxy_set_header X-Moya-Analytics-Relay "";
+    proxy_set_header X-Moya-Analytics-Source "";
+    proxy_set_header X-Moya-Analytics-Excluded "";
     proxy_set_header Forwarded "";
     proxy_set_header Connection "";
     proxy_connect_timeout 5s;
@@ -60,6 +98,28 @@ server {
         proxy_pass http://yoyi_backend;
     }
     # Shared hostname preserves the existing host-only Payload preview cookie.
+    # Preserve native RSC/hash inputs before Payload's separate Next server
+    # normalizes them; the Owner-gated proxy restores this fixed header set.
+    location ^~ /admin/analytics-workspace {
+        proxy_set_header Host catalog.example.invalid;
+        proxy_set_header X-Forwarded-Host catalog.example.invalid;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_set_header X-Moya-Umami-Rsc $http_rsc;
+        proxy_set_header X-Moya-Umami-Next-Router-State-Tree $http_next_router_state_tree;
+        proxy_set_header X-Moya-Umami-Next-Router-Prefetch $http_next_router_prefetch;
+        proxy_set_header X-Moya-Umami-Next-Router-Segment-Prefetch $http_next_router_segment_prefetch;
+        proxy_set_header X-Moya-Umami-Next-Url $http_next_url;
+        proxy_set_header X-Moya-Umami-Rsc-Query $arg__rsc;
+        proxy_set_header Rsc "";
+        proxy_set_header Next-Router-State-Tree "";
+        proxy_set_header Next-Router-Prefetch "";
+        proxy_set_header Next-Router-Segment-Prefetch "";
+        proxy_set_header Next-Url "";
+        proxy_set_header Forwarded "";
+        proxy_pass http://yoyi_admin;
+    }
     location = /admin { proxy_pass http://yoyi_admin; }
     location ^~ /admin/ { proxy_pass http://yoyi_admin; }
     # The Admin build uses assetPrefix=/admin-assets; preserve Web's /_next assets.
@@ -88,6 +148,34 @@ server {
         proxy_set_header X-Moya-Client-Ip $remote_addr;
         proxy_set_header X-Moya-Auth-Relay "";
         proxy_set_header X-Moya-Auth-Source "";
+        proxy_set_header X-Moya-Analytics-Ingress "";
+        proxy_set_header X-Moya-Analytics-Relay "";
+        proxy_set_header X-Moya-Analytics-Source "";
+        proxy_set_header X-Moya-Analytics-Excluded "";
+        proxy_pass http://yoyi_web;
+    }
+    # Dedicated analytics ingress proof. Render from private configuration;
+    # Web validates it and independently authenticates its Backend relay.
+    location = /api/community/analytics {
+        limit_req zone=yoyi_analytics burst=10 nodelay;
+        limit_req_status 429;
+        client_max_body_size 32k;
+        proxy_set_header Host catalog.example.invalid;
+        proxy_set_header X-Forwarded-Host catalog.example.invalid;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Moya-Auth-Ingress "";
+        proxy_set_header X-Moya-Auth-Relay "";
+        proxy_set_header X-Moya-Auth-Source "";
+        proxy_set_header X-Moya-Analytics-Ingress "__ANALYTICS_INGRESS_TOKEN__";
+        proxy_set_header X-Moya-Client-Ip $remote_addr;
+        proxy_set_header X-Moya-Analytics-Relay "";
+        proxy_set_header X-Moya-Analytics-Source "";
+        proxy_set_header X-Moya-Analytics-Excluded "";
+        proxy_cache off;
+        proxy_read_timeout 5s;
         proxy_pass http://yoyi_web;
     }
     # Profile/avatar/background PNG upload: matches the existing 4 MiB Web/Backend limit.
@@ -164,6 +252,10 @@ server {
         proxy_set_header X-Moya-Client-Ip "";
         proxy_set_header X-Moya-Auth-Relay "";
         proxy_set_header X-Moya-Auth-Source "";
+        proxy_set_header X-Moya-Analytics-Ingress "";
+        proxy_set_header X-Moya-Analytics-Relay "";
+        proxy_set_header X-Moya-Analytics-Source "";
+        proxy_set_header X-Moya-Analytics-Excluded "";
         proxy_set_header Forwarded "";
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-For $remote_addr;

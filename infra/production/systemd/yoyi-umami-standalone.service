@@ -1,0 +1,47 @@
+[Unit]
+Description=Yoyi private Umami standalone analytics (loopback only)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/srv/yoyi/umami/current/server.js
+ConditionPathExists=/etc/yoyi/umami.env
+
+[Service]
+Type=simple
+# Dedicated account created during approved deployment; no other app credentials.
+User=yoyi-umami
+Group=yoyi-umami
+WorkingDirectory=/srv/yoyi/umami/current
+EnvironmentFile=/etc/yoyi/umami.env
+# Existing Node 24 runtime, no bundled daemon or package installation on startup.
+# Fix the listener/heap independently of EnvironmentFile.
+ExecStartPre=/usr/bin/mkdir -p /var/lib/yoyi-umami/cache
+ExecStart=/usr/bin/env NODE_ENV=production HOSTNAME=127.0.0.1 PORT=3010 NODE_OPTIONS=--max-old-space-size=512 node server.js
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=35
+KillSignal=SIGTERM
+KillMode=mixed
+UMask=0077
+CPUAccounting=true
+MemoryAccounting=true
+CPUQuota=50%
+MemoryMax=768M
+TasksMax=128
+StateDirectory=yoyi-umami
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/srv/yoyi/umami/current
+ReadWritePaths=/var/lib/yoyi-umami
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

@@ -2,7 +2,11 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-const { openCatalog } = vi.hoisted(() => ({ openCatalog: vi.fn() }));
+const { openCatalog, analytics } = vi.hoisted(() => ({
+  openCatalog: vi.fn(),
+  analytics: vi.fn(),
+}));
+vi.mock("../analytics/client", () => ({ trackAnalytics: analytics }));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => ({ platform: "phone", openCatalog }),
 }));
@@ -110,6 +114,14 @@ describe("real Catalog Search utility", () => {
     type(container, "测试");
     input.focus();
     await submit(container);
+    expect(analytics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "search",
+        surface: "search",
+        searchQuery: "测试",
+        requestId: expect.any(String),
+      }),
+    );
     expect(document.activeElement).not.toBe(input);
     expect(container.querySelector("[data-search-clear]")).toBeNull();
     expect(container.querySelectorAll("[data-search-close]")).toHaveLength(1);

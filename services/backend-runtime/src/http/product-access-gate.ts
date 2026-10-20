@@ -60,6 +60,7 @@ export const productAccessPath = "/v1/community/access";
  */
 const openPaths: ReadonlySet<string> = new Set([
   "/health",
+  "/v1/analytics/events",
   "/v1/me",
   "/v1/development/sign-in",
   "/v1/development/sign-out",

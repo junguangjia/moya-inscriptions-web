@@ -9,7 +9,7 @@ metadata values or bytes.
 
 ## What is recorded
 
-### Database (migration `20261019010000`)
+### Database (migration `20261019020000`)
 
 | Column                                                  | Written by   | Meaning                                                                                                                      |
 | ------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -84,7 +84,9 @@ upload location writes it to `/var/log/nginx/yoyi-upload.log` and keeps its
 - `$request_time`;
 - upstream status and connect, header and response times.
 
-A test pins every log format to times, sizes and outcomes only.
+A test pins the `yoyi_upload` format to times, sizes and outcomes only. The
+upload log is not in the `yoyi-traffic` logrotate policy, which names only the
+two IP-bearing logs; the host's default nginx rotation covers it.
 
 ## Reading the data (Owner-run, read-only)
 
@@ -132,8 +134,11 @@ only through column grants.
 
 1. Back up the database, verify the backup, and stop the media worker and the
    Backend.
-2. Apply community migration `20261019010000` with the migration role. It is
+2. Apply community migration `20261019020000` with the migration role. It is
    additive and nullable, with no backfill or rewrite.
+   `pnpm db:migrate:community` applies every pending migration in order, so a
+   release from `main` also applies any earlier unapplied one (for example
+   #299's `20261019010000`) first.
 3. Re-apply the runtime grants in their established order, including the private
    copies. `grant-runtime.sql` adds `UPDATE` on the seven new columns.
 4. Start the Backend and the media worker from the same tag. Smoke-test one

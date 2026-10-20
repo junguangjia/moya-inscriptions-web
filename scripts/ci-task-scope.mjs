@@ -318,6 +318,7 @@ export function classifyTask(paths, event = "pull_request") {
       webRoots.some((prefix) => file.startsWith(prefix)) ||
       file.startsWith("packages/contracts/src/internal/") ||
       file.startsWith("scripts/editorial/") ||
+      file.startsWith("scripts/analytics/") ||
       // verify.mjs stage plans are the Web lint, typecheck, test, build and
       // smoke job commands, including the test job's marker check. The smoke
       // stage spawns ci-e2e-smoke.mjs and the build stages spawn

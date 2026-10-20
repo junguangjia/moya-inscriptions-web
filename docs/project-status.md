@@ -16,7 +16,7 @@ resends refused after a commit (lost answers), per-role render times in one
 media worker log line, an nginx upload log template and an Owner-run read-only
 report. The delivery stop is a Draft PR with independent review; the Owner
 decides when it merges. Once merged, `main` carries the unapplied migration
-`20261019010000`, and any Backend or worker release from `main` applies it and
+`20261019020000`, and any Backend or worker release from `main` applies it and
 the runtime grants first. See the
 [task record](development/upload-timing-instrumentation-v1.md). This entry
 records authorization and plan only; it claims no deployment.

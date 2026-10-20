@@ -420,6 +420,22 @@ export const isAuthorizedWebPublicApiFile = (
 ): boolean =>
   isPathInside(webPublicApiRoot, filePath) && !hasUseClientDirective(source);
 
+// One bounded browser telemetry client and one server-only trusted relay.
+// No neighboring feature or route inherits these transport exceptions.
+const isApprovedAnalyticsTransportReference = (
+  filePath: string,
+  reference: ModuleReference,
+): boolean => {
+  if (reference.kind !== "static-import") return false;
+  const relative = path.relative(webRoot, filePath).replaceAll("\\", "/");
+  return (
+    (relative === "features/analytics/client.ts" &&
+      reference.specifier === "../../lib/public-api/analytics-client") ||
+    (relative === "app/api/community/analytics/route.ts" &&
+      reference.specifier === "../../../../lib/public-api/analytics-server")
+  );
+};
+
 const isApprovedHomeConnectionReference = (
   filePath: string,
   source: string,
@@ -1152,6 +1168,10 @@ export const isAuthorizedCmsServerFile = (
   return (
     relative === "payload.config.ts" ||
     relative === "next.config.ts" ||
+    /^src\/analytics\/(?:config|endpoints|proxy|upstream)\.ts$/.test(
+      relative,
+    ) ||
+    relative === "src/analytics/View.tsx" ||
     /^scripts\/(?:build\.mjs|bootstrap-synthetic\.ts|provision-initial-owner\.ts|benchmark-synthetic\.ts|migrate-legacy\.ts|recovery-synthetic\.ts|seed-community-acceptance\.ts)$/.test(
       relative,
     ) ||
@@ -1277,6 +1297,7 @@ export const clientBoundaryViolations = (
     if (
       referencesWebPublicApiBoundary(filePath, reference.specifier) &&
       !isApprovedCatalogSearchClientReference(filePath, source, reference) &&
+      !isApprovedAnalyticsTransportReference(filePath, reference) &&
       !isApprovedArticleClientReference(filePath, source, reference)
     ) {
       violations.push(`${reference.specifier} is server/runtime-only`);
@@ -1308,6 +1329,7 @@ export const clientBoundaryViolations = (
   const configurationSource = [
     path.join(webRoot, "features/auth/auth-flow.tsx"),
     path.join(webRoot, "features/publishing/ui/media/use-media-actions.ts"),
+    path.join(webRoot, "features/analytics/client.ts"),
   ].includes(path.resolve(filePath))
     ? source.replace(/\bprocess\.env\.NODE_ENV(?![\w$])/g, "")
     : source;
@@ -1362,6 +1384,11 @@ export const frontendBoundaryViolations = (
     !hasUseClientDirective(source) &&
     path.resolve(filePath) ===
       path.join(webRoot, "app/editorial-preview/[id]/page.tsx");
+  const isAnalyticsTransport =
+    !hasUseClientDirective(source) &&
+    path.resolve(filePath) ===
+      path.join(webPublicApiRoot, "analytics-server.ts") &&
+    /import\s*["']server-only["']/u.test(source);
   const isWebTestFile =
     isPathInside(webRoot, filePath) && /\.test\.[cm]?[jt]sx?$/.test(filePath);
   const isDomainAgnosticUi = isPathInside(
@@ -1420,6 +1447,16 @@ export const frontendBoundaryViolations = (
       !approvedWebStartupNodeImport &&
       !isOwnerWorkflowTypes(filePath, reference) &&
       !approvedPublicApiRuntimeImport &&
+      !isApprovedAnalyticsTransportReference(filePath, reference) &&
+      !(
+        isAnalyticsTransport &&
+        reference.kind === "static-import" &&
+        (["node:crypto", "node:net"].includes(reference.specifier) ||
+          (reference.specifier === "./server" &&
+            /import\s*\{\s*parsePublicApiBaseUrl\s*\}\s*from\s*["']\.\/server["']/u.test(
+              source,
+            )))
+      ) &&
       !(
         isAuthSourceTransport &&
         reference.kind === "static-import" &&
@@ -1487,6 +1524,15 @@ export const frontendBoundaryViolations = (
           )
         ) &&
         !(isPreviewTransport && match[1] === "CMS_INTERNAL_URL") &&
+        !(
+          isAnalyticsTransport &&
+          [
+            "NODE_ENV",
+            "MOYA_ANALYTICS_ENABLED",
+            "ANALYTICS_INGRESS_TOKEN",
+            "ANALYTICS_RELAY_TOKEN",
+          ].includes(match[1] ?? "")
+        ) &&
         !(
           path.resolve(filePath) === path.join(webPublicApiRoot, "server.ts") &&
           match[1] === "NODE_ENV"
