@@ -1761,6 +1761,62 @@ describe("Catalog block jobs in the store (PR B; criteria 3a, 5)", () => {
       code: "content_failure",
     });
   });
+
+  it("reaches a newer set past older ones that wait, and skips a set without a display rendition (review M1, L3)", async () => {
+    await quiet();
+    await setup.query(
+      "UPDATE community.catalog_display_masters SET ended_at=$1, end_reason='detached' WHERE ended_at IS NULL",
+      [t0],
+    );
+    await setup.query(
+      "UPDATE community.media_renditions SET state='released', released_at=$1 WHERE catalog_master_id IS NOT NULL AND state='ready'",
+      [t0],
+    );
+    const images = await Promise.all([1, 2, 3, 4, 5].map(() => catalogImage()));
+    const ids: string[] = [];
+    for (const image of images) ids.push((await attached(image)).masterId!);
+    const frame = { width: 6000, height: 4000 };
+    // Four sets that cannot be queued: complete, failed on content, paused,
+    // and one without a display rendition.
+    for (const cells of [
+      Array.from({ length: 16 }, (_, cell) => cell),
+      Array.from({ length: 8 }, (_, cell) => cell + 16),
+    ])
+      await works.recordCatalogBlocks(
+        images[0]!.assetId,
+        { masterId: ids[0]!, blocks: blockRecords(frame, cells) },
+        t0,
+      );
+    await blockJob(
+      images[1]!.assetId,
+      ids[1]!,
+      [0, 15],
+      "failed",
+      "zoom_blocks_alpha",
+    );
+    await blockJob(
+      images[2]!.assetId,
+      ids[2]!,
+      [0, 15],
+      "abandoned",
+      "processing_failed",
+    );
+    await setup.query(
+      "UPDATE community.media_renditions SET state='released', released_at=$1 WHERE catalog_asset_id=$2 AND role='display'",
+      [t0, images[3]!.assetId],
+    );
+    // A pass of one set still reaches the newest set.
+    expect(await works.enqueueCatalogBlockSets(t0, 1)).toEqual({
+      enqueued: 2,
+    });
+    const open = (
+      await setup.query<{ master: string }>(
+        "SELECT DISTINCT payload->>'masterId' AS master FROM community.publishing_jobs WHERE kind='catalog_render' AND payload->>'variant'='blocks' AND state='queued'",
+      )
+    ).rows.map((row) => row.master);
+    expect(open).toEqual([ids[4]]);
+    await quiet();
+  });
 });
 
 /*

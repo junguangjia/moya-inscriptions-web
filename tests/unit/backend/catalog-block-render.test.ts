@@ -95,6 +95,8 @@ const setup = async (options: {
   readonly masterType?: "image/jpeg" | "image/png";
   readonly reference?: Buffer;
   readonly masterSize?: { width: number; height: number };
+  /** The reference size the job records, when it differs from the file. */
+  readonly referenceSize?: { width: number; height: number };
   readonly frameLongEdge?: number;
   readonly cells?: [number, number];
 }): Promise<Setup> => {
@@ -150,7 +152,10 @@ const setup = async (options: {
       ],
       master: masterSize,
       frame,
-      reference: { width: referenceMeta.width, height: referenceMeta.height },
+      reference: options.referenceSize ?? {
+        width: referenceMeta.width,
+        height: referenceMeta.height,
+      },
       cells,
       recipe: {
         version: BLOCK_RECIPE_V1.version,
@@ -325,6 +330,25 @@ describe("the sandbox renderer's blocks operation (real sharp)", () => {
       status: "rejected",
       failureCode: "master_mismatch",
     });
+  });
+
+  it("never blames the master for a bad display reference (processing_failed, review L2)", async () => {
+    const master = await texture(3000, 2000).jpeg({ quality: 95 }).toBuffer();
+    const sized = await setup({
+      master,
+      referenceSize: { width: 2048, height: 1366 },
+    });
+    expect(await renderSandboxBlocksJob(sized.job, sized.paths)).toMatchObject({
+      status: "rejected",
+      failureCode: "processing_failed",
+    });
+    const notWebp = await setup({
+      master,
+      reference: await texture(2048, 1365).png().toBuffer(),
+    });
+    expect(
+      await renderSandboxBlocksJob(notWebp.job, notWebp.paths),
+    ).toMatchObject({ status: "rejected", failureCode: "processing_failed" });
   });
 
   it("refuses an unreadable master (master_unreadable)", async () => {

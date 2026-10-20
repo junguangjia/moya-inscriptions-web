@@ -483,7 +483,8 @@ export function createCatalogBlockRenderer(
       const written: string[] = [];
       let job: SandboxJobDirectory | undefined;
       const started = clock();
-      let staged = started;
+      // Unset while staging runs: a staging failure reports its time as stage_ms.
+      let staged: number | undefined;
       let outcome = "rendered";
       const cells = plan.cells[1] - plan.cells[0] + 1;
       try {
@@ -587,7 +588,10 @@ export function createCatalogBlockRenderer(
         await Promise.all(
           written.map((key) => store.remove(key).catch(() => undefined)),
         );
-        outcome = "error";
+        outcome =
+          error instanceof MediaToolError && error.code === "timeout"
+            ? "timeout"
+            : "error";
         if (signal?.aborted) throw new MediaToolError("aborted");
         if (error instanceof SandboxProtocolError) {
           logSandboxFailure(logger, error);
@@ -605,8 +609,9 @@ export function createCatalogBlockRenderer(
       } finally {
         await job?.dispose().catch(() => undefined);
         const ended = clock();
+        const stageEnd = staged ?? ended;
         logger.info(
-          `[media-worker] catalog blocks stage_ms=${staged - started} render_ms=${ended - staged} cells=${cells} outcome=${outcome}`,
+          `[media-worker] catalog blocks stage_ms=${stageEnd - started} render_ms=${ended - stageEnd} cells=${cells} outcome=${outcome}`,
         );
       }
     },
