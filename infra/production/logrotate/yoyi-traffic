@@ -6,7 +6,7 @@
     maxage 6
     maxsize 10M
     missingok
-    notifempty
+    ifempty
     compress
     delaycompress
     create 0640 www-data adm
