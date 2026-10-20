@@ -34,6 +34,9 @@ map $http_cookie $yoyi_device_excluded {
 # Client class is a heuristic, not proof of the human or AI operator.
 # Install the accompanying 7-day logrotate policy before enabling this format.
 log_format yoyi_status escape=json '{"at":"$time_iso8601","status":$status,"duration":$request_time,"bytes":$body_bytes_sent,"method":"$request_method","route":"$yoyi_route_class","client":"$yoyi_client_class","device_excluded":$yoyi_device_excluded,"ip":"$remote_addr"}';
+# Upload timing (upload-timing-instrumentation-v1): end time, outcome, sizes
+# and durations only; never a URI, host, address, header or cookie.
+log_format yoyi_upload '$time_iso8601 $msec $status $request_completion $request_length $bytes_sent $request_time $upstream_status $upstream_connect_time $upstream_header_time $upstream_response_time';
 
 upstream yoyi_web { server 127.0.0.1:3000; }
 upstream yoyi_backend { server 127.0.0.1:3001; }
@@ -208,6 +211,9 @@ server {
         proxy_next_upstream off;
         proxy_send_timeout 130s;
         proxy_read_timeout 75s;
+        # A location access_log replaces the server's: keep the status line.
+        access_log /var/log/nginx/yoyi-access.log yoyi_status;
+        access_log /var/log/nginx/yoyi-upload.log yoyi_upload;
         proxy_pass http://yoyi_web;
     }
     # Private derivative bytes keep Range/status/headers and stream to the viewer.

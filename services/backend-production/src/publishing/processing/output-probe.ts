@@ -1,4 +1,5 @@
 import { fourCc, u32be } from "./byte-reader.js";
+import { listJpegSegments } from "./jpeg.js";
 
 import type { ByteReader } from "./byte-reader.js";
 
@@ -119,4 +120,56 @@ export async function probeMp4(reader: ByteReader): Promise<boolean> {
   const head = await reader.read(0, 8);
   const size = u32be(head, 0);
   return fourCc(head, 4) === "ftyp" && size >= 16 && size <= reader.size;
+}
+
+/** Bytes of a block JPEG's header a probe reads (its segments precede the scan). */
+const JPEG_BLOCK_HEADER_BYTES = 64 * 1024;
+
+/**
+ * A Catalog block (catalog-deep-zoom-v1): one baseline 8-bit JPEG with three
+ * components at full chroma resolution (4:4:4), no APP1…APP15 segment (no
+ * EXIF, XMP or ICC) and ending in EOI. Returns its size, or `null`.
+ */
+export async function probeJpegBlock(
+  reader: ByteReader,
+): Promise<{ readonly width: number; readonly height: number } | null> {
+  if (reader.size < 128) return null;
+  const head = await reader.read(
+    0,
+    Math.min(reader.size, JPEG_BLOCK_HEADER_BYTES),
+  );
+  const tail = await reader.read(reader.size - 2, 2);
+  if (tail[0] !== 0xff || tail[1] !== 0xd9) return null;
+  let segments;
+  try {
+    segments = listJpegSegments(head);
+  } catch {
+    return null;
+  }
+  let frame: { width: number; height: number } | null = null;
+  for (const segment of segments) {
+    if (segment.marker >= 0xe1 && segment.marker <= 0xef) return null;
+    if (segment.marker === 0xc0) {
+      if (frame !== null) return null;
+      const data = head.subarray(segment.dataStart, segment.dataEnd);
+      if (data.byteLength !== 6 + 3 * 3 || data[0] !== 8 || data[5] !== 3)
+        return null;
+      for (let component = 0; component < 3; component += 1)
+        if (data[6 + component * 3 + 1] !== 0x11) return null;
+      frame = {
+        height: (data[1]! << 8) | data[2]!,
+        width: (data[3]! << 8) | data[4]!,
+      };
+    } else if (
+      segment.marker >= 0xc1 &&
+      segment.marker <= 0xcf &&
+      segment.marker !== 0xc4 &&
+      segment.marker !== 0xc8 &&
+      segment.marker !== 0xcc
+    ) {
+      // Any other frame type (progressive, arithmetic, lossless) is refused.
+      return null;
+    }
+  }
+  return frame;
 }

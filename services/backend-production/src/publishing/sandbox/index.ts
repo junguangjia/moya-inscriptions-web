@@ -23,9 +23,14 @@ export {
   SANDBOX_EXIT_CODES,
   SANDBOX_JOB_FILE,
   SANDBOX_PATHS,
+  SANDBOX_BLOCK_FAILURES,
   SANDBOX_PROTOCOL_VERSION,
   SandboxJobError,
   SandboxProtocolError,
+  isSandboxBlockRole,
+  itemDetectedTypes,
+  itemOutput,
+  itemRejection,
   encodeEndFrame,
   encodeFrameHeader,
   parseFrameHeader,
@@ -33,6 +38,10 @@ export {
   parseSandboxManifest,
 } from "./protocol.js";
 export type {
+  ItemSandboxOutput,
+  SandboxBlockFailure,
+  SandboxBlockRole,
+  SandboxBlocksRequest,
   SandboxBoundsFacts,
   SandboxBoundsProbe,
   SandboxDeclaredType,
@@ -50,9 +59,11 @@ export type {
   SandboxPresentation,
   SandboxRenditionRequest,
   SandboxRuntime,
+  SandboxTimings,
   SandboxViolation,
 } from "./protocol.js";
 export {
+  renderSandboxBlocksJob,
   renderSandboxJob,
   sandboxManifest,
   writeSandboxStream,

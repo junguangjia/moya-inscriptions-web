@@ -5,7 +5,10 @@ import { profileAnchorIdentities } from "./profile.js";
 
 import type { PublishingMediaStoreBlobEntry } from "../storage/publishing-media-store.js";
 import type {
+  CatalogBlockRenderer,
   CatalogRenderer,
+  CatalogWorkerBlockOutcome,
+  CatalogWorkerBlockPlan,
   CatalogWorkerRenderOutcome,
   CatalogWorkerRenderPlan,
 } from "./catalog.js";
@@ -15,6 +18,7 @@ import type {
   ProcessorInput,
   ProcessorLegacySource,
   ProcessorOutcome,
+  ProcessorTiming,
   ProcessorVariant,
 } from "./processing/media-processor.js";
 import type {
@@ -191,6 +195,8 @@ export interface PublishingWorkerPort {
       readonly limit: number;
       readonly leaseMs: number;
       readonly kinds?: readonly PublishingWorkerJobKind[];
+      /** Claim Catalog block jobs too, on an idle queue (catalog-deep-zoom-v1). */
+      readonly catalogBlocks?: boolean;
     },
     now: Date,
   ): Promise<readonly PublishingWorkerJobClaim[]>;
@@ -257,6 +263,22 @@ export interface PublishingWorkerCatalogPort {
     failureCode: string,
     now: Date,
   ): Promise<void>;
+}
+
+/**
+ * The block operations a Catalog block job uses (structural mirror of
+ * `CatalogBlockPort`, catalog-deep-zoom-v1).
+ */
+export interface PublishingWorkerCatalogBlockPort {
+  readCatalogBlockPlan(
+    assetId: string,
+    payload: unknown,
+  ): Promise<CatalogWorkerBlockPlan | null>;
+  recordCatalogBlocks(
+    assetId: string,
+    outcome: CatalogWorkerBlockOutcome,
+    now: Date,
+  ): Promise<PublishingWorkerDerivativeCommit>;
 }
 
 /** The profile image operations a `profile_render` job uses (structural mirror). */
@@ -370,6 +392,14 @@ export interface PublishingJobHandlerOptions {
   readonly catalog?: {
     readonly port: PublishingWorkerCatalogPort;
     readonly renderer: CatalogRenderer;
+    /**
+     * Catalog block cutting (catalog-deep-zoom-v1); present only while
+     * `MEDIA_CATALOG_ZOOM_BLOCKS_RENDER` is on.
+     */
+    readonly blocks?: {
+      readonly port: PublishingWorkerCatalogBlockPort;
+      readonly renderer: CatalogBlockRenderer;
+    };
   };
   /** Profile image rendering; absent while `MEDIA_PROFILE_RENDER` is off. */
   readonly profile?: {
@@ -427,6 +457,12 @@ export interface PublishingJobHandlers {
 }
 
 const COMPLETED: PublishingJobResult = { status: "completed" };
+
+/** A `catalog_render` payload of a Catalog block job (catalog-deep-zoom-v1). */
+export const isCatalogBlockPayload = (payload: unknown): boolean =>
+  typeof payload === "object" &&
+  payload !== null &&
+  (payload as { readonly variant?: unknown }).variant === "blocks";
 
 const failed = (
   errorCode: string,
@@ -487,6 +523,38 @@ export class PublishingJobCancelledError extends Error {
     this.name = "PublishingJobCancelledError";
   }
 }
+
+/** Whole milliseconds since a `performance.now()` reading. */
+const elapsedMs = (since: number): number =>
+  Math.max(0, Math.round(performance.now() - since));
+
+const TIMING_ROLE = /^[a-z][a-z0-9-]{0,31}$/u;
+
+/**
+ * The one content-free timing line of a processed or derived Work media job:
+ * kind, lane, attempt, rounded sizes and milliseconds only.
+ */
+export const jobTimingLine = (
+  kind: "process_item" | "derive_edit",
+  lane: "preview" | "live" | "hd" | "edit",
+  attempt: number,
+  outcome: "processed" | "derived",
+  timing: ProcessorTiming,
+  commitMs: number,
+  totalMs: number,
+): string => {
+  const roles = Object.entries(timing.roles)
+    .filter(([role]) => TIMING_ROLE.test(role))
+    .map(([role, ms]) => ` ${role.replaceAll("-", "_")}_ms=${Math.round(ms)}`)
+    .join("");
+  return (
+    `[publishing-worker] job timing kind=${kind} lane=${lane} attempt=${attempt} outcome=${outcome}` +
+    ` source_mib=${(timing.sourceBytes / 1_048_576).toFixed(1)}` +
+    ` input_mp=${timing.inputPixels === null ? "-" : (timing.inputPixels / 1e6).toFixed(1)}` +
+    ` read_ms=${timing.readMs} sandbox_ms=${timing.sandboxMs} prepare_ms=${timing.prepareMs ?? "-"}${roles}` +
+    ` store_ms=${timing.storeMs} commit_ms=${commitMs} total_ms=${totalMs}`
+  );
+};
 
 /** A system failure that is safe to retry later with backoff. */
 export class PublishingJobSystemError extends Error {
@@ -648,10 +716,21 @@ export function createPublishingJobHandlers(
     throw signal.reason;
   };
 
+  /** Logs a job's timing; measurement never changes the job's result. */
+  const logTiming = (line: () => string) => {
+    try {
+      logger.info(line());
+    } catch {
+      // Measurement only.
+    }
+  };
+
   const processItem = async (
     claim: PublishingWorkerJobClaim,
     signal: AbortSignal,
   ): Promise<PublishingJobResult> => {
+    const started = performance.now();
+    const measured: { timing?: ProcessorTiming } = {};
     const input = await port.readProcessing(claim);
     if (input === null) return COMPLETED;
     if (
@@ -663,7 +742,11 @@ export function createPublishingJobHandlers(
       return failed("processing_input_invalid", false);
     }
     throwIfAborted(signal);
-    const outcome = await runProcessor(claim, input, signal);
+    const outcome = await runProcessor(
+      claim,
+      { ...input, onTiming: (timing) => (measured.timing = timing) },
+      signal,
+    );
     if (outcome === null) return COMPLETED;
     await discardIfAborted(outcome, signal);
     if (outcome.status === "rejected") {
@@ -675,9 +758,23 @@ export function createPublishingJobHandlers(
       await removeUnrecorded(keys);
       return failed("processing_outcome_invalid", false);
     }
+    const committing = performance.now();
     await commitDerivatives(keys, () =>
       port.markItemReady(input.itemId, outcome, clock()),
     );
+    const timing = measured.timing;
+    if (timing !== undefined)
+      logTiming(() =>
+        jobTimingLine(
+          "process_item",
+          input.kind === "live" ? "live" : "preview",
+          claim.attempts,
+          "processed",
+          timing,
+          elapsedMs(committing),
+          elapsedMs(started),
+        ),
+      );
     return COMPLETED;
   };
 
@@ -721,6 +818,8 @@ export function createPublishingJobHandlers(
     claim: PublishingWorkerJobClaim,
     signal: AbortSignal,
   ): Promise<PublishingJobResult> => {
+    const started = performance.now();
+    const measured: { timing?: ProcessorTiming } = {};
     const found = await port.readProcessing(claim);
     if (found === null) return COMPLETED;
     if (found.mode !== "derive" || found.itemId !== claim.subjectId) {
@@ -734,7 +833,11 @@ export function createPublishingJobHandlers(
       input = { ...found, legacyStill: still };
     }
     throwIfAborted(signal);
-    const outcome = await runProcessor(claim, input, signal);
+    const outcome = await runProcessor(
+      claim,
+      { ...input, onTiming: (timing) => (measured.timing = timing) },
+      signal,
+    );
     if (outcome === null) return COMPLETED;
     await discardIfAborted(outcome, signal);
     if (outcome.status === "rejected") {
@@ -746,9 +849,27 @@ export function createPublishingJobHandlers(
       await removeUnrecorded(keys);
       return failed("processing_outcome_invalid", false);
     }
+    const committing = performance.now();
     await commitDerivatives(keys, () =>
       port.recordDerivatives(input.itemId, outcome, clock()),
     );
+    const timing = measured.timing;
+    // The claim's background (HD) priority: exactly the ["full"] variants.
+    const background =
+      claim.payload?.variants.length === 1 &&
+      claim.payload.variants[0] === "full";
+    if (timing !== undefined)
+      logTiming(() =>
+        jobTimingLine(
+          "derive_edit",
+          background ? "hd" : "edit",
+          claim.attempts,
+          "derived",
+          timing,
+          elapsedMs(committing),
+          elapsedMs(started),
+        ),
+      );
     return COMPLETED;
   };
 
@@ -952,6 +1073,45 @@ export function createPublishingJobHandlers(
   };
 
   /**
+   * Cuts the cells of one Catalog block job (catalog-deep-zoom-v1) and records
+   * them when their master is still active. A job whose master ended, whose
+   * asset is no longer ready and referenced, or whose cells lie outside the
+   * frame completes without work. A content failure of the master
+   * (`master_unreadable`, `zoom_blocks_alpha`, `master_mismatch`) fails the
+   * job without retry and is never queued again for that master. Any other
+   * rejection (`processing_failed`: a sandbox protocol failure, a bad display
+   * reference) also fails without retry and pauses the set until the Owner's
+   * `requeue`; infrastructure failures and timeouts are retried.
+   */
+  const cutCatalogBlocks = async (
+    claim: PublishingWorkerJobClaim,
+    blocks: NonNullable<
+      NonNullable<PublishingJobHandlerOptions["catalog"]>["blocks"]
+    >,
+    signal: AbortSignal,
+  ): Promise<PublishingJobResult> => {
+    const plan = await blocks.port.readCatalogBlockPlan(
+      claim.subjectId,
+      claim.payload,
+    );
+    if (plan === null) return COMPLETED;
+    throwIfAborted(signal);
+    const result = await blocks.renderer.render(plan, signal);
+    if (result.status === "rejected") return failed(result.failureCode, false);
+    const keys = result.outcome.blocks.map((block) => block.storageKey);
+    if (signal.aborted) {
+      await Promise.all(
+        keys.map((key) => store.remove(key).catch(() => undefined)),
+      );
+      throw signal.reason;
+    }
+    await commitDerivatives(keys, () =>
+      blocks.port.recordCatalogBlocks(plan.assetId, result.outcome, clock()),
+    );
+    return COMPLETED;
+  };
+
+  /**
    * Renders the planned families of one profile image in the sandbox and
    * records them in one transaction. An unknown or erased image, or one
    * whose families need nothing (no current pointer of an active owner, or
@@ -1052,6 +1212,16 @@ export function createPublishingJobHandlers(
           await port.reconcileCapacity(subject, clock());
           return COMPLETED;
         case "catalog_render":
+          // A Catalog block job (payload variant `blocks`, catalog-deep-zoom-v1)
+          // is never a base re-render. Only a worker whose block render switch
+          // is on claims one; any other worker that holds one leaves it
+          // queued.
+          if (isCatalogBlockPayload(claim.payload)) {
+            if (!CATALOG_ASSET_ID_PATTERN.test(subject)) return invalidSubject;
+            return catalog?.blocks === undefined
+              ? { status: "deferred", delayMs: 300_000 }
+              : cutCatalogBlocks(claim, catalog.blocks, signal);
+          }
           return CATALOG_ASSET_ID_PATTERN.test(subject)
             ? renderCatalogAsset(claim, signal)
             : invalidSubject;

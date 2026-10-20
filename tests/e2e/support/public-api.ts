@@ -94,6 +94,97 @@ const inscriptionDetail: PublicMedia = {
   renditions: inscriptionDetailRenditions,
   placeholderColor: "#8b735f",
 };
+/*
+ * catalog-deep-zoom-v1: Catalog Detail images with a `zoom` frame. Each is
+ * a 1600 × 900 rendition ladder ending at 3200, plus a block frame: 6144 ×
+ * 3456 (6 × 4 blocks) on the `runtime-zoom-blocks` record, whose third image
+ * answers 404 on its block list, and 8192 × 4608 (8 × 5) on
+ * `runtime-zoom-large`. Each block is a JPEG of its exact cell size, coloured
+ * by its index, rendered on first request.
+ */
+const zoomImage = (
+  id: string,
+  color: string,
+  frame: { readonly width: number; readonly height: number },
+) => {
+  const ladder = renditions(id, color, [
+    [480, 270],
+    [1080, 608],
+    [1600, 900],
+    [3200, 1800],
+  ]);
+  return {
+    ...publicMedia(
+      id,
+      "inscription-detail.svg",
+      `深度缩放图像 ${id}`,
+      1600,
+      900,
+    ),
+    src: ladder[2]!.src,
+    renditions: ladder,
+    placeholderColor: color,
+    zoom: frame,
+  };
+};
+const zoomFrame = { width: 6144, height: 3456 } as const;
+const zoomLargeFrame = { width: 8192, height: 4608 } as const;
+const zoomMedia = [
+  zoomImage("runtime-zoom-wide", "#7a6a5a", zoomFrame),
+  zoomImage("runtime-zoom-second", "#6a5a7a", zoomFrame),
+  zoomImage("runtime-zoom-missing", "#5a7a6a", zoomFrame),
+];
+const zoomLargeMedia = [
+  zoomImage("runtime-zoom-large-1", "#7a5a5a", zoomLargeFrame),
+];
+const zoomBlockLists = new Map(
+  [...zoomMedia.slice(0, 2), ...zoomLargeMedia].map((media) => {
+    const columns = Math.ceil(media.zoom.width / 1024);
+    const cells = columns * Math.ceil(media.zoom.height / 1024);
+    return [
+      media.id as string,
+      {
+        width: media.zoom.width,
+        height: media.zoom.height,
+        edge: 1024,
+        overlap: 2,
+        srcs: Array.from(
+          { length: cells },
+          (_, cell) =>
+            `${baseUrl}/media/zoom-blocks/${media.id}/block-${String(cell).padStart(2, "0")}.jpg`,
+        ),
+      },
+    ] as const;
+  }),
+);
+const zoomBlockFiles = new Map<string, Buffer>();
+const zoomBlock = async (
+  mediaId: string,
+  cell: number,
+): Promise<Buffer | undefined> => {
+  const list = zoomBlockLists.get(mediaId);
+  if (list === undefined || cell >= list.srcs.length) return undefined;
+  const key = `${mediaId}/${cell}`;
+  const cached = zoomBlockFiles.get(key);
+  if (cached !== undefined) return cached;
+  const columns = Math.ceil(list.width / 1024);
+  const x = (cell % columns) * 1024;
+  const y = Math.floor(cell / columns) * 1024;
+  const shade = 60 + ((cell * 37) % 140);
+  const bytes = await sharp({
+    create: {
+      background: { r: shade, g: 255 - shade, b: 128 },
+      channels: 3,
+      width: Math.min(1026, list.width - x),
+      height: Math.min(1026, list.height - y),
+    },
+  })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+  zoomBlockFiles.set(key, bytes);
+  return bytes;
+};
+
 /** The Discover card of the multi-media record: card candidates of its front. */
 const multiMediaCardRenditions = renditions(
   "inscription-front-card",
@@ -216,6 +307,35 @@ const pagingSummaries: readonly CatalogSummary[] = [
 ];
 
 const details = new Map<string, CatalogDetail>([
+  [
+    "runtime-zoom-blocks",
+    {
+      aliases: [],
+      id: catalogId("runtime-zoom-blocks"),
+      kind: "inscription",
+      media: zoomMedia,
+      representativeMedia: publicMedia(
+        "runtime-zoom-wide",
+        "inscription-detail.svg",
+        "深度缩放图像 runtime-zoom-wide",
+        1600,
+        900,
+      ),
+      sourceCitations: [{ label: "测试公开资料" }],
+      title: "运行时深度缩放碑刻",
+    },
+  ],
+  [
+    "runtime-zoom-large",
+    {
+      aliases: [],
+      id: catalogId("runtime-zoom-large"),
+      kind: "inscription",
+      media: zoomLargeMedia,
+      sourceCitations: [{ label: "测试公开资料" }],
+      title: "运行时大幅深度缩放碑刻",
+    },
+  ],
   [
     "runtime-inscription-no-media",
     {
@@ -585,6 +705,47 @@ const server = createServer((request, response) => {
       total: 0,
       totalPages: 0,
     });
+    return;
+  }
+
+  // catalog-deep-zoom-v1: the per-image block list (404 for every other image).
+  const zoomBlocksMatch = url.pathname.match(
+    /^\/v1\/catalog\/([^/]+)\/media\/([^/]+)\/zoom-blocks$/,
+  );
+  if (zoomBlocksMatch) {
+    const record = details.get(decodeURIComponent(zoomBlocksMatch[1] ?? ""));
+    const mediaId = decodeURIComponent(zoomBlocksMatch[2] ?? "");
+    const list = zoomBlockLists.get(mediaId);
+    if (record?.media.some((media) => media.id === mediaId) && list) {
+      sendJson(response, 200, list);
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+    return;
+  }
+  const zoomBlockFile = url.pathname.match(
+    /^\/media\/zoom-blocks\/([^/]+)\/block-([0-9]{2})\.jpg$/,
+  );
+  if (zoomBlockFile) {
+    void zoomBlock(zoomBlockFile[1] ?? "", Number(zoomBlockFile[2])).then(
+      (bytes) => {
+        if (bytes) {
+          response.writeHead(200, {
+            "Content-Length": bytes.byteLength,
+            "Content-Type": "image/jpeg",
+          });
+          response.end(bytes);
+          return;
+        }
+        response.writeHead(404);
+        response.end();
+      },
+      () => {
+        response.writeHead(500);
+        response.end();
+      },
+    );
     return;
   }
 

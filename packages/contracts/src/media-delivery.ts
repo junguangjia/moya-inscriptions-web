@@ -46,6 +46,16 @@ export const mediaRenditionPathParts = (
     : { itemId, editKey };
 };
 
+/**
+ * Catalog deep zoom (catalog-deep-zoom-v1): one level of JPEG blocks of this
+ * edge, each with up to this many extra pixels on the right and bottom, at
+ * most this many per image and never beyond this long edge, for every aspect.
+ */
+export const CATALOG_ZOOM_BLOCK_EDGE = 1024;
+export const CATALOG_ZOOM_BLOCK_OVERLAP = 2;
+export const CATALOG_ZOOM_BLOCKS_MAXIMUM = 100;
+export const CATALOG_ZOOM_MAX_LONG_EDGE = 8192;
+
 /** The renditions of a profile image: two per family, ascending by size. */
 export const PROFILE_MEDIA_RENDITION_ROLES = [
   "avatar-128",

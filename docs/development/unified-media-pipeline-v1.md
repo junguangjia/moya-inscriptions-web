@@ -671,6 +671,122 @@ Production steps.
   sign-off and real-device checks. While emission is on, Web is never rolled
   back below the 3a release.
 
+## Catalog deep zoom (increment 4 slice)
+
+Task `catalog-deep-zoom-v1`, Issue #295 r1, reopened by Issue #206 r22 (Owner
+decisions 2026-10-19). Every other increment-4 item stays paused. The slice cuts
+a private, Owner-attached display master into one level of 1024 px JPEG blocks;
+no IIIF pyramid, OpenSeadragon or dependency is added (a named deviation from
+the increment-4 wording, for this slice only).
+
+- **Masters.** A display master is the private, byte-exact 8-bit JPEG or PNG
+  behind one exact approved Catalog image. It is an owner-less blob of purpose
+  `catalog_master` in the existing private store, held by the retention hold
+  `catalog_master` while committed, so no purge path removes it.
+  `community.catalog_display_masters` attaches it to one Catalog asset: at most
+  one active row per asset and per blob, a row is only ever ended (`detached`,
+  `limit_changed`, `reattached`), never rewritten. The frame L is the oriented
+  master scaled to min(master, the Owner's limit, 8192 px long edge), for every
+  aspect, never upscaled; CHECKs enforce it. Masters drive only the blocks:
+  thumb, cover, display and viewer keep coming from the approved image.
+- **The `catalog-master` command** (`node dist/catalog-master-cli.js` in
+  `@moya/backend-production`) is the only way masters change: `candidates`,
+  `manifest` (on the Owner's Mac: drafts the approval document from the curation
+  lineage and the originals), `attach` / `attach-batch` (approval document with
+  each master's SHA-256, a private inbox, `--dry-run`),
+  `attach --existing-master` (re-attach without a second upload), `status`,
+  `requeue`, `set-limit`, `detach`, `erase` and `guard`. Each Production run is
+  an Owner run with the worker's environment. Attach refuses an image outside
+  the published projection, an unready asset, an approved image above 4096 px, a
+  SHA-256 mismatch, an aspect off by more than 0.2 % or a frame that does not
+  show the approved image's framing within the rounding of each side, a frame
+  below 1.25 × the viewer, a file above 128 MiB or 120 MP, anything but 8-bit
+  JPEG or opaque PNG, and an attach that would cross either storage bound,
+  measured live at that attach: masters plus blocks at most 10 GiB, and every
+  byte #206 created at most 45 GB. Output is content-free.
+- **Blocks.** A block is a Catalog rendition `block-NN` (row-major, at most 100)
+  of one master: an unedited JPEG of at most 1024 px plus a 2 px overlap on the
+  right and bottom, named by `catalog_master_id`, on an owner-less
+  `catalog_derivative` blob. The `security_barrier` view
+  `community.catalog_media_zoom_blocks` lists the ready blocks of each ready,
+  referenced asset's active master with their exact cell geometry; the App and
+  public read roles read it. Block work is a `catalog_render` payload variant
+  `{variant: "blocks", masterId, cells: [from, to]}` (at most 16 cells, at most
+  two open sets); the job kind list is unchanged. Claim classes: previews and
+  everything else 0, HD 1, base Catalog renders 2, blocks 3, and a block job
+  only for a worker whose block render switch is on, on an idle queue (no other
+  claimable job due or running, no upload in flight changed within 2 minutes).
+  The Admin's retry and abandon refuse block jobs with the existing conflict
+  error; only `catalog-master requeue` and `detach` manage them.
+- **Cutting.** Only a worker whose `MEDIA_CATALOG_ZOOM_BLOCKS_RENDER` is `on`
+  (missing means on in Development, off in Production) runs the block step of
+  the 5-minute Catalog sync and claims block jobs. The step queues the missing
+  cells of each active master's incomplete set in runs of at most 16 cells, with
+  at most two open sets, and skips complete sets, sets that failed on content
+  and paused sets (a stopped job still covers a missing cell;
+  `catalog-master requeue` resumes it). The sandbox operation `blocks` reads the
+  master and the asset's `display` rendition, decodes the master once (oriented
+  once, ICC to untagged sRGB, Lanczos3 to the frame), refuses a master that does
+  not match the display rendition (both compared at a 512 px long edge: luma
+  PSNR below 40 dB or a channel mean more than 2 apart; calibrated on local
+  originals and real pairs) and encodes each cell as baseline JPEG q85 4:4:4
+  without metadata (recipe `block@1`). Content failures (`master_unreadable`,
+  `zoom_blocks_alpha`, `master_mismatch`) are never retried for that master.
+  Each job logs one content-free line
+  (`[media-worker] catalog blocks stage_ms=… render_ms=… cells=N outcome=…`).
+  Recording discards a late job of an ended master and releases any other
+  master's ready blocks, so an asset keeps one set.
+- **Publication and withdrawal.** The desired set adds the blocks the view
+  lists; Work and Article branches never admit them. Keys follow the existing
+  grammar (`…/base/block-NN.r1.jpg`). Withdrawal purges ordinary roles first, in
+  their own tasks, with per-group attempts and failure. Block URLs use at most
+  the daily block purge budget (25 % of the zone's daily URL-purge quota read at
+  P0; 0 until a figure is recorded); beyond it a block group takes the TTL path:
+  its origin objects are deleted, it records the forced edge TTL and finishes
+  after that TTL plus 5 minutes, and one content-free error line
+  (`publication.withdrawal code=block_budget_deferred units=N ttl_seconds=T`)
+  reports the deferral. Blocks are verified by two samples per set and swept
+  once (one origin HEAD each and two sampled edge checks).
+- **Read path.** Behind `MEDIA_CATALOG_ZOOM_BLOCKS` (missing means on in
+  Development, off in Production) the Catalog Detail gives an image the strict
+  frame `zoom: {width, height}` when its block set is complete, its rendition
+  group resolved (never on the approved-`src` fallback) and the frame shows its
+  framing; a failing frame read omits every frame and the Detail still answers.
+  The blocks themselves are read once per image from
+  `GET /v1/catalog/{catalogId}/media/{mediaId}/zoom-blocks` (frame, edge 1024,
+  overlap 2, one URL per row-major cell, all resolved or 404), behind the same
+  access gate; the Web reaches it through its same-origin proxy, parses it
+  strictly and, in Development, rewrites each URL to the same-origin relay. No
+  Detail, Article body or article tool output carries a block URL. Both reads
+  reach the published-blocks view through `LATERAL`, so a Detail reads only its
+  own images' rows.
+- **Breaker.** The read path is open only where blocks can be delivered (edge
+  delivery, or the Development relay) and while the breaker is closed. The
+  worker stores the image host's day-to-date requests and response traffic
+  (`l7Flow_request`, `l7Flow_outFlux`; P0 settles the metric) every 15 minutes
+  from 00:00 Asia/Shanghai, with content-free lines at 100,000 requests or 3 GB
+  (`publication.usage code=day_usage_warning`) and at 150,000 or 5 GB
+  (`code=day_usage_trip`). The Backend reads that row at most once a minute:
+  with edge delivery a missing or stale (> 1 h) reading, or a trip threshold,
+  hides every frame and answers 404 on the list until the cap's next day.
+- **Viewer.** Only a Catalog Detail image with a frame gets the block layer
+  (Work Detail, the feed and Articles never do). It mounts once the zoom asks
+  for more than 1.15 × the widest base candidate, unless more than 24 blocks
+  would be visible at that point (a large desktop keeps today's ladder); it then
+  reads the list once, loads the visible blocks nearest the centre first while
+  the zoom rests (at most 4 in flight, 24 decoded, never evicting a visible
+  block), inserts each only once decoded and draws it on device pixels. Paging
+  away or closing aborts the old image; a 404 or refused list leaves today's
+  Viewer; three failed blocks switch the layer off for the session. A tiled
+  image zooms to min(40, max(today's ceiling, 1.25 × its frame's one-to-one
+  zoom, fill)). `data-viewer-zoom-blocks` on the stage reports `none`,
+  `unusable`, `idle`, `loading`, `ready` or `fallback`.
+- **Rollback floor.** The expand release handles block rows in every state and
+  never claims a block job. Once any block rendition, block job or block
+  publication exists, code older than the expand release must not run:
+  `catalog-master guard` (and the same three counts in SQL) is the release
+  toolkit's rollback pre-check.
+
 ## Increments 2–4 (semantics)
 
 - **Increment 2: published delivery.**
@@ -728,7 +844,10 @@ Production steps.
   - Optional edge delivery of profile renditions.
   - Amendment entries 10 and 11 and the cloud identity changes it needs are
     approved (Owner decisions, 2026-10-04).
-- **Increment 4: deep zoom and completion.**
+- **Increment 4: deep zoom and completion.** Paused on 2026-10-18 except the
+  Catalog slice reopened by r22 (see
+  [Catalog deep zoom](#catalog-deep-zoom-increment-4-slice)), which uses one
+  level of JPEG blocks instead of the IIIF wording below.
   - IIIF Image API 3 Level 0 with JPEG tiles. `full/max` is the bounded viewer
     image, and the contract carries a resolved `info.json` URL.
   - OpenSeadragon runs inside the existing Viewer.

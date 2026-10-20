@@ -61,6 +61,7 @@ import type {
   MediaFailureCode,
   MediaToolRunner,
   ProcessorInput,
+  ProcessorTiming,
   MotionColor,
 } from "@moya/backend-production/internal/publishing-processing";
 import type {
@@ -1266,15 +1267,33 @@ const processorCases = () => {
   it("processes a static JPEG in one sandbox job and commits WebP derivatives", async () => {
     const { store, processor, put, toolsRun, sandbox } = await setup();
     const still = await put(await orientedJpeg());
-    const outcome = processed(
-      await processor.process({
-        ...baseInput,
-        kind: "static",
-        qualityMode: "original",
-        components: [{ role: "still", declaredType: "image/jpeg", ...still }],
-        variants: ["thumb", "display", "full"],
-      }),
-    );
+    const timings: ProcessorTiming[] = [];
+    // The worker's processor input carries the optional timing callback.
+    const input: ProcessorInput = {
+      ...baseInput,
+      kind: "static",
+      qualityMode: "original",
+      components: [{ role: "still", declaredType: "image/jpeg", ...still }],
+      variants: ["thumb", "display", "full"],
+      onTiming: (timing) => timings.push(timing),
+    };
+    const outcome = processed(await processor.process(input));
+    // One content-free measurement: whole milliseconds, sizes and roles.
+    expect(timings).toHaveLength(1);
+    const [timing] = timings;
+    expect(timing).toMatchObject({
+      sourceBytes: still.byteSize,
+      inputPixels: 200 * 300,
+    });
+    expect(Object.keys(timing!.roles)).toEqual(["thumb", "display", "full"]);
+    for (const ms of [
+      timing!.readMs,
+      timing!.sandboxMs,
+      timing!.prepareMs,
+      timing!.storeMs,
+      ...Object.values(timing!.roles),
+    ])
+      expect(Number.isSafeInteger(ms) && ms! >= 0).toBe(true);
     expect(outcome.presentation).toEqual({ width: 200, height: 300 });
     expect(mediaPresentationSchema.parse(outcome.presentation)).toEqual(
       outcome.presentation,

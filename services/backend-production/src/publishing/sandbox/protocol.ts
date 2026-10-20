@@ -1,11 +1,17 @@
 import {
+  BLOCK_RECIPE_DIGEST_V1,
+  BLOCK_RECIPE_V1,
   RENDITION_PLANS,
+  blockCellOf,
+  blockGrid,
   isCurrentRecipe,
   isProfileRole,
   isRenditionPlan,
   isStillRole,
   planRoles,
 } from "../processing/recipes.js";
+
+import { MediaRejectedError } from "../processing/errors.js";
 
 import type { MediaEdit, NormalizedCrop } from "../processing/edits.js";
 import type { MediaFailureCode } from "../processing/errors.js";
@@ -64,7 +70,8 @@ export const SANDBOX_ALLOWED_ENVIRONMENT_KEYS: readonly string[] = [
   ...Object.keys(SANDBOX_ENVIRONMENT),
 ].sort();
 
-export type SandboxOperation = "process" | "derive" | "self-check" | "bounds";
+export type SandboxOperation =
+  "process" | "derive" | "self-check" | "bounds" | "blocks";
 
 /**
  * Active bound probes (W11, acceptance only): each drives one resource to
@@ -78,7 +85,8 @@ export const SANDBOX_BOUNDS_PROBES = [
   "stdout",
 ] as const;
 export type SandboxBoundsProbe = (typeof SANDBOX_BOUNDS_PROBES)[number];
-export type SandboxInputRole = "still" | "motion" | "package";
+export type SandboxInputRole =
+  "still" | "motion" | "package" | "master" | "reference";
 export type SandboxDeclaredType =
   | "image/jpeg"
   | "image/png"
@@ -135,6 +143,33 @@ export interface SandboxItemRequest {
   readonly placeholder: boolean;
 }
 
+/** A Catalog block role, `block-00` … `block-99` (catalog-deep-zoom-v1). */
+export type SandboxBlockRole = `block-${number}`;
+
+/** Content failures of a block job; the coordinator records them on the job. */
+export const SANDBOX_BLOCK_FAILURES = [
+  "master_unreadable",
+  "zoom_blocks_alpha",
+  "master_mismatch",
+] as const;
+export type SandboxBlockFailure = (typeof SANDBOX_BLOCK_FAILURES)[number];
+
+/**
+ * A Catalog block job (catalog-deep-zoom-v1): the staged master and the
+ * asset's `display` rendition (the alignment reference), the oriented master
+ * size the attach recorded, the frame L, the reference size and the
+ * inclusive row-major cell range (at most 16 cells) to cut.
+ */
+export interface SandboxBlocksRequest {
+  /** `master` (image/jpeg or image/png) then `reference` (image/webp). */
+  readonly inputs: readonly SandboxInput[];
+  readonly master: { readonly width: number; readonly height: number };
+  readonly frame: { readonly width: number; readonly height: number };
+  readonly reference: { readonly width: number; readonly height: number };
+  readonly cells: readonly [number, number];
+  readonly recipe: { readonly version: number; readonly digest: string };
+}
+
 export interface SandboxLimits {
   readonly maxPixels: number;
   readonly maxDecodedBytes: number;
@@ -156,14 +191,16 @@ export interface SandboxJob {
   readonly item: SandboxItemRequest | null;
   /** Present exactly for `bounds`. */
   readonly probe?: SandboxBoundsProbe;
+  /** Present exactly for `blocks` (then `item` is null). */
+  readonly blocks?: SandboxBlocksRequest;
   readonly limits: SandboxLimits;
 }
 
 export interface SandboxOutput {
-  /** `<role>.webp` or `motion.mp4`. */
+  /** `<role>.webp`, `motion.mp4` or (a block job) `block-NN.jpg`. */
   readonly name: string;
-  readonly role: RenderedStillRole | "motion";
-  readonly contentType: "image/webp" | "video/mp4";
+  readonly role: RenderedStillRole | "motion" | SandboxBlockRole;
+  readonly contentType: "image/webp" | "video/mp4" | "image/jpeg";
   readonly width: number;
   readonly height: number;
   /** Motion only. */
@@ -237,15 +274,26 @@ export interface SandboxBoundsFacts {
   readonly errorCode: string | null;
 }
 
+/**
+ * Renderer-side milliseconds of one `process` or `derive` job, for
+ * content-free measurement only: never an input to any decision.
+ */
+export interface SandboxTimings {
+  /** Input split, container checks, pairing, still decode and motion probe. */
+  readonly prepareMs: number;
+  /** Render time of each produced output role, including its file write. */
+  readonly roles: Readonly<Record<string, number>>;
+}
+
 /** The first stdout line (at most 256 KiB). */
 export interface SandboxManifest {
   readonly protocol: 1;
   readonly nonce: string;
   readonly runtime: SandboxRuntime;
   readonly status:
-    "processed" | "derived" | "rejected" | "self-check" | "bounds";
+    "processed" | "derived" | "rejected" | "self-check" | "bounds" | "blocks";
   /** Non-null exactly when `rejected`. */
-  readonly failureCode: MediaFailureCode | null;
+  readonly failureCode: MediaFailureCode | SandboxBlockFailure | null;
   /** The decoded still (after source orientation, unedited), when one was. */
   readonly inspection: {
     readonly width: number;
@@ -267,7 +315,61 @@ export interface SandboxManifest {
   readonly selfCheck: SandboxIsolationFacts | null;
   /** Present exactly when `bounds`. */
   readonly bounds?: SandboxBoundsFacts;
+  /** Optional, and only when `processed` or `derived`. */
+  readonly timings?: SandboxTimings;
 }
+
+/** True for a Catalog block role (`block-00` … `block-99`). */
+export const isSandboxBlockRole = (role: string): role is SandboxBlockRole =>
+  blockCellOf(role) !== null;
+
+/** An output of an item (`process` / `derive`) job: never a block. */
+export type ItemSandboxOutput = SandboxOutput & {
+  readonly role: RenderedStillRole | "motion";
+  readonly contentType: "image/webp" | "video/mp4";
+};
+
+/** Narrows an item job's output; a block output there breaks the protocol. */
+export const itemOutput = (output: SandboxOutput): ItemSandboxOutput => {
+  if (output.contentType === "image/jpeg" || isSandboxBlockRole(output.role))
+    throw new SandboxProtocolError("outputs_mismatch");
+  return output as ItemSandboxOutput;
+};
+
+/** The detected input types of a processed item: never a block job's roles. */
+export const itemDetectedTypes = (
+  detected: SandboxManifest["detectedTypes"],
+): readonly {
+  readonly role: "still" | "motion" | "package";
+  readonly contentType: SandboxDeclaredType;
+}[] => {
+  if (
+    detected === null ||
+    detected.some(
+      (entry) => entry.role === "master" || entry.role === "reference",
+    )
+  )
+    throw new SandboxProtocolError("status_mismatch");
+  return detected as readonly {
+    readonly role: "still" | "motion" | "package";
+    readonly contentType: SandboxDeclaredType;
+  }[];
+};
+
+/**
+ * The rejection an item job reports: a content-free media code. A block
+ * failure code from an item job breaks the protocol.
+ */
+export const itemRejection = (
+  code: SandboxManifest["failureCode"],
+): MediaRejectedError => {
+  if (
+    code === null ||
+    (SANDBOX_BLOCK_FAILURES as readonly string[]).includes(code)
+  )
+    throw new SandboxProtocolError("status_mismatch");
+  return new MediaRejectedError(code as MediaFailureCode);
+};
 
 /** A job the renderer refuses (a coordinator bug); content-free. */
 export class SandboxJobError extends TypeError {
@@ -328,7 +430,8 @@ const FAILURE_CODES: ReadonlySet<string> = new Set([
   "size_mismatch",
   "processing_timeout",
   "processing_failed",
-] satisfies readonly MediaFailureCode[]);
+  ...SANDBOX_BLOCK_FAILURES,
+] satisfies readonly (MediaFailureCode | SandboxBlockFailure)[]);
 const DECLARED_TYPES: ReadonlySet<string> = new Set([
   "image/jpeg",
   "image/png",
@@ -343,6 +446,7 @@ const INPUT_ROLES: ReadonlySet<string> = new Set([
   "motion",
   "package",
 ]);
+const BLOCK_EDGE_MAX = BLOCK_RECIPE_V1.grid.edge + BLOCK_RECIPE_V1.grid.overlap;
 const PAIRING_METHODS: ReadonlySet<string> = new Set([
   "apple-content-identifier",
   "motion-photo-container",
@@ -522,6 +626,71 @@ const layoutAllowed = (
   return layout === "motion" && !stills && item.motion;
 };
 
+const size = (value: unknown, max: number) => {
+  const fields = strict(value, ["width", "height"]);
+  return (
+    fields !== null &&
+    integer(fields.width, 1, max) &&
+    integer(fields.height, 1, max)
+  );
+};
+
+/** A well-formed block request of the current `block@1` recipe. */
+const blocksRequest = (value: unknown): boolean => {
+  const fields = strict(value, [
+    "inputs",
+    "master",
+    "frame",
+    "reference",
+    "cells",
+    "recipe",
+  ]);
+  if (
+    !fields ||
+    !size(fields.master, 65_535) ||
+    !size(fields.frame, BLOCK_RECIPE_V1.frame.maxLongEdge) ||
+    !size(fields.reference, 16_383) ||
+    !Array.isArray(fields.cells) ||
+    fields.cells.length !== 2 ||
+    !Array.isArray(fields.inputs) ||
+    fields.inputs.length !== 2
+  )
+    return false;
+  const recipe = strict(fields.recipe, ["version", "digest"]);
+  if (
+    recipe === null ||
+    recipe.version !== BLOCK_RECIPE_V1.version ||
+    recipe.digest !== BLOCK_RECIPE_DIGEST_V1
+  )
+    return false;
+  const master = fields.master as { width: number; height: number };
+  const frame = fields.frame as { width: number; height: number };
+  const [from, to] = fields.cells as unknown[];
+  const { cells } = blockGrid(frame.width, frame.height);
+  if (
+    frame.width > master.width ||
+    frame.height > master.height ||
+    cells > BLOCK_RECIPE_V1.grid.maxCells ||
+    !integer(from, 0, cells - 1) ||
+    !integer(to, from as number, cells - 1) ||
+    (to as number) - (from as number) + 1 > MAX_RENDITIONS
+  )
+    return false;
+  const roles = (fields.inputs as unknown[]).map((input) => {
+    const entry = strict(input, ["role", "declaredType", "byteSize", "sha256"]);
+    return entry &&
+      integer(entry.byteSize, 1, Number.MAX_SAFE_INTEGER) &&
+      typeof entry.sha256 === "string" &&
+      SHA256.test(entry.sha256)
+      ? `${String(entry.role)}:${String(entry.declaredType)}`
+      : null;
+  });
+  return (
+    (roles[0] === "master:image/jpeg" || roles[0] === "master:image/png") &&
+    roles[1] === "reference:image/webp"
+  );
+};
+
 const limits = (value: unknown): boolean => {
   const fields = strict(value, [
     "maxPixels",
@@ -552,7 +721,7 @@ export function parseSandboxJob(value: unknown): SandboxJob {
   const fields = strict(
     value,
     ["protocol", "nonce", "operation", "item", "limits"],
-    ["probe"],
+    ["probe", "blocks"],
   );
   if (
     !fields ||
@@ -562,11 +731,18 @@ export function parseSandboxJob(value: unknown): SandboxJob {
     (fields.operation !== "process" &&
       fields.operation !== "derive" &&
       fields.operation !== "self-check" &&
-      fields.operation !== "bounds") ||
+      fields.operation !== "bounds" &&
+      fields.operation !== "blocks") ||
     !limits(fields.limits) ||
-    (fields.operation === "bounds") !== (fields.probe !== undefined)
+    (fields.operation === "bounds") !== (fields.probe !== undefined) ||
+    (fields.operation === "blocks") !== (fields.blocks !== undefined)
   )
     throw new SandboxJobError();
+  if (fields.operation === "blocks") {
+    if (fields.item !== null || !blocksRequest(fields.blocks))
+      throw new SandboxJobError();
+    return fields as unknown as SandboxJob;
+  }
   if (fields.operation === "bounds") {
     if (
       fields.item !== null ||
@@ -676,6 +852,17 @@ const output = (value: unknown): boolean => {
     "sha256",
   ]);
   if (!fields) return false;
+  if (typeof fields.role === "string" && blockCellOf(fields.role) !== null)
+    return (
+      fields.name === `${fields.role}.jpg` &&
+      fields.contentType === "image/jpeg" &&
+      integer(fields.width, 1, BLOCK_EDGE_MAX) &&
+      integer(fields.height, 1, BLOCK_EDGE_MAX) &&
+      fields.durationMs === null &&
+      integer(fields.bytes, 1, Number.MAX_SAFE_INTEGER) &&
+      typeof fields.sha256 === "string" &&
+      SHA256.test(fields.sha256)
+    );
   const still = isStillRole(fields.role) || isProfileRole(fields.role);
   return (
     (still || fields.role === "motion") &&
@@ -767,6 +954,26 @@ const boundsFacts = (value: unknown): boolean => {
   );
 };
 
+/** A day bounds every reported duration. */
+const MAX_TIMING_MS = 86_400_000;
+
+/** Bounded integer milliseconds, keyed only by roles the manifest produced. */
+const timings = (
+  value: unknown,
+  outputs: readonly SandboxOutput[],
+): boolean => {
+  if (value === undefined) return true;
+  const fields = strict(value, ["prepareMs", "roles"]);
+  if (!fields || !integer(fields.prepareMs, 0, MAX_TIMING_MS)) return false;
+  const roles = fields.roles;
+  if (typeof roles !== "object" || roles === null || Array.isArray(roles))
+    return false;
+  const produced = new Set<string>(outputs.map((entry) => entry.role));
+  return Object.entries(roles).every(
+    ([role, ms]) => produced.has(role) && integer(ms, 0, MAX_TIMING_MS),
+  );
+};
+
 /**
  * Coordinator side: parses and strictly validates the manifest line (without
  * its newline). Throws `SandboxProtocolError("manifest_invalid")`.
@@ -795,7 +1002,7 @@ export function parseSandboxManifest(line: string): SandboxManifest {
       "outputs",
       "selfCheck",
     ],
-    ["bounds"],
+    ["bounds", "timings"],
   );
   if (
     !fields ||
@@ -803,9 +1010,14 @@ export function parseSandboxManifest(line: string): SandboxManifest {
     typeof fields.nonce !== "string" ||
     !HEX32.test(fields.nonce) ||
     !runtime(fields.runtime) ||
-    !["processed", "derived", "rejected", "self-check", "bounds"].includes(
-      fields.status as string,
-    ) ||
+    ![
+      "processed",
+      "derived",
+      "rejected",
+      "self-check",
+      "bounds",
+      "blocks",
+    ].includes(fields.status as string) ||
     (fields.failureCode !== null &&
       !FAILURE_CODES.has(fields.failureCode as string)) ||
     (fields.failureCode !== null) !== (fields.status === "rejected") ||
@@ -836,6 +1048,13 @@ export function parseSandboxManifest(line: string): SandboxManifest {
       fields.status === "self-check" ||
       fields.status === "bounds") &&
     names.length > 0
+  )
+    throw new SandboxProtocolError("manifest_invalid");
+  if (
+    !timings(fields.timings, fields.outputs as SandboxOutput[]) ||
+    (fields.timings !== undefined &&
+      fields.status !== "processed" &&
+      fields.status !== "derived")
   )
     throw new SandboxProtocolError("manifest_invalid");
   return fields as unknown as SandboxManifest;

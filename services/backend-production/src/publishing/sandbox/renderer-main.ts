@@ -14,6 +14,7 @@ import {
   parseSandboxJob,
 } from "./protocol.js";
 import {
+  renderSandboxBlocksJob,
   renderSandboxJob,
   sandboxManifest,
   writeSandboxStream,
@@ -86,19 +87,29 @@ async function main(): Promise<number> {
             await loaderAllowlistHolds(SANDBOX_PATHS.tmp),
           ),
         })
-      : sandboxManifest(
-          job,
-          runtime,
-          await renderSandboxJob(
+      : job.operation === "blocks"
+        ? sandboxManifest(
             job,
-            {
+            runtime,
+            await renderSandboxBlocksJob(job, {
               input: SANDBOX_PATHS.input,
               work: SANDBOX_PATHS.work,
               output: SANDBOX_PATHS.output,
-            },
-            createLocalToolRunner(),
-          ),
-        );
+            }),
+          )
+        : sandboxManifest(
+            job,
+            runtime,
+            await renderSandboxJob(
+              job,
+              {
+                input: SANDBOX_PATHS.input,
+                work: SANDBOX_PATHS.work,
+                output: SANDBOX_PATHS.output,
+              },
+              createLocalToolRunner(),
+            ),
+          );
   await writeSandboxStream(manifest, SANDBOX_PATHS.output, writeStdout);
   return 0;
 }

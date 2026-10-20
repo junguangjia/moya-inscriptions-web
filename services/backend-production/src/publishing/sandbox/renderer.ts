@@ -11,6 +11,10 @@ import {
   readQuickTimeContentIdentifier,
 } from "../processing/apple-live-photo.js";
 import { openFileByteReader } from "../processing/byte-reader.js";
+import {
+  BlockRejectedError,
+  renderCatalogBlocks,
+} from "../processing/block-processor.js";
 import { MediaParseError, MediaRejectedError } from "../processing/errors.js";
 import {
   ISOBMFF_LIMITS,
@@ -31,7 +35,11 @@ import {
   readMotionPhotoDirectory,
 } from "../processing/motion-photo.js";
 import { METADATA_HEAD_BYTES } from "../processing/profiles.js";
-import { expectedStillSize, planRoles } from "../processing/recipes.js";
+import {
+  blockRole,
+  expectedStillSize,
+  planRoles,
+} from "../processing/recipes.js";
 import {
   SIGNATURE_HEAD_BYTES,
   countGifFrames,
@@ -70,6 +78,7 @@ import type {
   SandboxManifest,
   SandboxOutput,
   SandboxPairing,
+  SandboxBlockRole,
   SandboxPairingMethod,
   SandboxRuntime,
 } from "./protocol.js";
@@ -463,12 +472,17 @@ async function describeFile(filePath: string) {
   }
 }
 
+/** Whole milliseconds since a `performance.now()` reading. */
+const elapsedMs = (since: number): number =>
+  Math.max(0, Math.round(performance.now() - since));
+
 /** Renders a `process` or `derive` job; content rejections are thrown. */
 async function renderItem(
   job: SandboxJob,
   paths: SandboxRendererPaths,
   tools: MediaToolRunner,
 ): Promise<SandboxRenderBody> {
+  const started = performance.now();
   const item = job.item!;
   const processing = job.operation === "process";
   const live = item.kind === "live";
@@ -539,10 +553,14 @@ async function renderItem(
   }
 
   const outputs: SandboxOutput[] = [];
+  // Measurement only: per-role render time, reported in the manifest.
+  const prepareMs = elapsedMs(started);
+  const roleMs: Record<string, number> = {};
   let placeholderColor: string | null = null;
   const requested = new Set(item.renditions.map((request) => request.role));
   for (const role of planRoles(item.plan)) {
     if (!requested.has(role)) continue;
+    const roleStarted = performance.now();
     const size = expectedStillSize(
       role,
       still!.inspection,
@@ -583,8 +601,10 @@ async function renderItem(
     if (role === "thumb" && item.placeholder) {
       placeholderColor = await placeholderColour(filePath);
     }
+    roleMs[role] = elapsedMs(roleStarted);
   }
   if (item.motion) {
+    const motionStarted = performance.now();
     const filePath = path.join(paths.output, "motion.mp4");
     const file = await renderMotionDerivative(
       tools,
@@ -602,7 +622,9 @@ async function renderItem(
       durationMs: file.durationMs,
       ...(await describeFile(filePath)),
     });
+    roleMs.motion = elapsedMs(motionStarted);
   }
+  const timings = { prepareMs, roles: roleMs };
 
   const inspection = still
     ? {
@@ -622,6 +644,7 @@ async function renderItem(
       stillExifOrientation: null,
       placeholderColor,
       outputs,
+      timings,
     };
   }
   const detectedTypes = packageType
@@ -662,6 +685,7 @@ async function renderItem(
       : still!.inspection.orientation,
     placeholderColor,
     outputs,
+    timings,
   };
 }
 
@@ -715,6 +739,119 @@ export async function renderSandboxJob(
       placeholderColor: null,
       outputs: [],
     };
+  }
+}
+
+const emptyBody = {
+  inspection: null,
+  detectedTypes: null,
+  pairing: null,
+  presentation: null,
+  stillExifOrientation: null,
+  placeholderColor: null,
+} as const;
+
+/** True when a staged file's leading bytes are the declared container. */
+async function stagedTypeMatches(filePath: string, declared: string) {
+  const reader = await openFileByteReader(filePath);
+  try {
+    const detected = sniffSignature(
+      await readHead(reader, SIGNATURE_HEAD_BYTES),
+    );
+    return declaredTypeMatches(declared, detected.type);
+  } finally {
+    await reader.close();
+  }
+}
+
+/**
+ * Renders one `blocks` job (catalog-deep-zoom-v1): cuts the requested cells
+ * of the master's frame into `block-NN.jpg` outputs, or rejects with a
+ * content-free code (an unreadable, transparent or misaligned master, a
+ * timeout). Throws only for infrastructure failures.
+ */
+export async function renderSandboxBlocksJob(
+  job: SandboxJob,
+  paths: SandboxRendererPaths,
+): Promise<SandboxRenderBody> {
+  const request = job.blocks;
+  if (request === undefined) throw new TypeError("A blocks job names blocks");
+  const [master, reference] = request.inputs;
+  const masterPath = path.join(paths.input, "master");
+  const referencePath = path.join(paths.input, "reference");
+  const rejected = (failureCode: SandboxRenderBody["failureCode"]) => ({
+    status: "rejected" as const,
+    failureCode,
+    ...emptyBody,
+    outputs: [],
+  });
+  try {
+    if (
+      master === undefined ||
+      !(await stagedTypeMatches(masterPath, master.declaredType))
+    )
+      return rejected("master_unreadable");
+    // A bad display reference is not the master's fault: the set pauses and
+    // `catalog-master requeue` can resume it.
+    if (
+      reference === undefined ||
+      !(await stagedTypeMatches(referencePath, reference.declaredType))
+    )
+      return rejected("processing_failed");
+    const blocks = await renderCatalogBlocks({
+      master: masterPath,
+      masterFormat: master.declaredType === "image/png" ? "png" : "jpeg",
+      reference: referencePath,
+      masterWidth: request.master.width,
+      masterHeight: request.master.height,
+      frameWidth: request.frame.width,
+      frameHeight: request.frame.height,
+      referenceWidth: request.reference.width,
+      referenceHeight: request.reference.height,
+      cells: request.cells,
+      timeoutSeconds: job.limits.renditionTimeoutSeconds,
+    });
+    const outputs: SandboxOutput[] = [];
+    for (const block of blocks) {
+      const role = blockRole(block.cell) as SandboxBlockRole;
+      const name = `${role}.jpg`;
+      const filePath = path.join(paths.output, name);
+      const handle = await open(filePath, "wx", 0o600);
+      try {
+        await handle.writeFile(block.buffer);
+      } finally {
+        await handle.close();
+      }
+      outputs.push({
+        name,
+        role,
+        contentType: "image/jpeg",
+        width: block.width,
+        height: block.height,
+        durationMs: null,
+        ...(await describeFile(filePath)),
+      });
+    }
+    return {
+      status: "blocks",
+      failureCode: null,
+      ...emptyBody,
+      inspection: {
+        width: request.master.width,
+        height: request.master.height,
+        hasAlpha: false,
+      },
+      outputs,
+    };
+  } catch (error) {
+    if (error instanceof BlockRejectedError) return rejected(error.failureCode);
+    if (error instanceof MediaRejectedError) return rejected(error.failureCode);
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? (error as { code: unknown }).code
+        : null;
+    if (code === "ENOSPC") return rejected("processing_failed");
+    throw error;
   }
 }
 

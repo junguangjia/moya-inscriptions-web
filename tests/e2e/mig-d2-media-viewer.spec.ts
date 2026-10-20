@@ -2,10 +2,13 @@ import { devices, expect, test } from "@playwright/test";
 
 import type { Page } from "@playwright/test";
 
+// The double feed layout keeps phone Detail on the media carousel rather
+// than the calligraphy reading layout; every context that opens Detail needs it.
+const doubleFeedLayout = () =>
+  localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() =>
-    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
-  );
+  await page.addInitScript(doubleFeedLayout);
 });
 
 const detailUrl =
@@ -304,6 +307,7 @@ test("MIG-D2 Detail Carousel accepts trusted diagonal native touch", async ({
     ...devices["iPhone 15"],
     baseURL,
   });
+  await context.addInitScript(doubleFeedLayout);
   const page = await context.newPage();
 
   try {

@@ -12,6 +12,7 @@ import {
   handleCatalogDetail,
   handleCatalogList,
   handleCatalogSearch,
+  handleCatalogZoomBlocks,
 } from "../catalog/catalog-handler.js";
 import {
   handleCreateComment,
@@ -469,6 +470,28 @@ export const createRouter =
           operatorCredential: community?.operatorCredential ?? "",
         }),
         operatorFailure,
+      );
+      return;
+    }
+
+    const zoomBlocksRoute =
+      /^\/v1\/catalog\/([^/]+)\/media\/([^/]+)\/zoom-blocks$/.exec(pathname);
+    if (zoomBlocksRoute !== null) {
+      if (request.method !== "GET") {
+        sendRouteError(response, 405, "Method Not Allowed");
+        return;
+      }
+
+      containRequest(
+        response,
+        handleCatalogZoomBlocks(
+          request,
+          zoomBlocksRoute[1] ?? "",
+          zoomBlocksRoute[2] ?? "",
+          response,
+          catalogReadService,
+        ),
+        apiFailure,
       );
       return;
     }

@@ -55,6 +55,8 @@ interface UnitRow {
   sweep_task_ids: string[];
   sweep_started_at: Date | null;
   sweep_attempts: number;
+  origin_deleted_at: Date | null;
+  fallback_ttl_seconds: number | null;
 }
 interface Desired {
   rendition_id: string;
@@ -87,7 +89,11 @@ const unitOf = (p: UnitRow): MediaPublicationUnit => ({
   sweepTaskIds: p.sweep_task_ids,
   sweepStartedAt: p.sweep_started_at,
   sweepAttempts: p.sweep_attempts,
+  originDeletedAt: p.origin_deleted_at,
+  fallbackTtlSeconds: p.fallback_ttl_seconds,
 });
+/** SQL: publication row alias is a Catalog block (catalog-deep-zoom-v1). */
+const blockRowSql = (row: string): string => `${row}.role ~ '^block-[0-9]{2}$'`;
 const subjects = "COALESCE(a.item_id,a.catalog_asset_id)";
 
 /** The App pool owns state. There are no object-store calls in this adapter. */
@@ -480,8 +486,44 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       fence,
       ids,
       now,
-      "UPDATE community.media_publications SET state='purge_failed',withdraw_requested_at=COALESCE(withdraw_requested_at,$2::timestamptz),purge_attempts=LEAST(3,purge_attempts+1),last_error_code=$3,fallback_ttl_seconds=3600,version=version+1 WHERE id=ANY($1::text[]) AND public_asset_id=$4 AND state='withdrawing'",
+      `UPDATE community.media_publications SET state='purge_failed',withdraw_requested_at=COALESCE(withdraw_requested_at,$2::timestamptz),purge_attempts=LEAST(3,purge_attempts+1),last_error_code=$3,fallback_ttl_seconds=CASE WHEN ${blockRowSql("media_publications")} THEN fallback_ttl_seconds ELSE COALESCE(fallback_ttl_seconds,3600) END,version=version+1 WHERE id=ANY($1::text[]) AND public_asset_id=$4 AND state='withdrawing'`,
       [errorCode(code)],
+    );
+  }
+  async blockPurgesSince(since: Date): Promise<number> {
+    return readTransaction(this.pool, async (db) => {
+      const result = await db.query<{ submitted: string }>(
+        `SELECT count(*) AS submitted FROM community.media_publications p
+         WHERE ${blockRowSql("p")} AND p.purge_submitted_at IS NOT NULL
+           AND p.purge_submitted_at >= $1::timestamptz`,
+        [nowParam(since)],
+      );
+      return safeInteger(result.rows[0]!.submitted);
+    });
+  }
+  async deferBlockWithdrawal(
+    fence: MediaPublicationFence,
+    ids: readonly string[],
+    ttlSeconds: number,
+    now: Date,
+    code:
+      | "block_budget_deferred"
+      | "block_purge_unconfirmed" = "block_budget_deferred",
+  ): Promise<boolean> {
+    if (
+      !Number.isSafeInteger(ttlSeconds) ||
+      ttlSeconds < 60 ||
+      ttlSeconds > 86_400
+    )
+      throw new TypeError("A forced edge TTL is 60..86400 seconds");
+    if (code !== "block_budget_deferred" && code !== "block_purge_unconfirmed")
+      throw new TypeError("Unknown block deferral code");
+    return this.mutateWithdrawal(
+      fence,
+      ids,
+      now,
+      `UPDATE community.media_publications p SET purge_task_ids='{}',fallback_ttl_seconds=$3,last_error_code=$4,withdraw_requested_at=COALESCE(p.withdraw_requested_at,$2::timestamptz),version=version+1 WHERE p.id=ANY($1::text[]) AND p.public_asset_id=$5 AND p.state='withdrawing' AND p.origin_deleted_at IS NOT NULL AND ${blockRowSql("p")}`,
+      [ttlSeconds, code],
     );
   }
   async release(fence: MediaPublicationFence, now: Date): Promise<void> {
@@ -574,7 +616,8 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     return writeTransaction(this.pool, async (db) => {
       const rows = (
         await db.query<UnitRow>(
-          `SELECT * FROM community.media_publications WHERE state='withdrawn' AND sweep_attempts<3 AND (sweep_started_at IS NOT NULL OR swept_at IS NULL OR swept_at<$1::timestamptz-interval '1 hour') ORDER BY COALESCE(sweep_started_at,swept_at,created_at),id FOR UPDATE SKIP LOCKED LIMIT $2`,
+          // Catalog blocks are swept once; every other row hourly, as before.
+          `SELECT * FROM community.media_publications p WHERE p.state='withdrawn' AND p.sweep_attempts<3 AND (p.sweep_started_at IS NOT NULL OR p.swept_at IS NULL OR (p.swept_at<$1::timestamptz-interval '1 hour' AND NOT ${blockRowSql("p")})) ORDER BY COALESCE(p.sweep_started_at,p.swept_at,p.created_at),p.id FOR UPDATE SKIP LOCKED LIMIT $2`,
           [nowParam(now), take(limit)],
         )
       ).rows;
@@ -640,6 +683,57 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
           nowParam(now),
         ],
       );
+    });
+  }
+  async recordDayUsage(
+    usage: { dayStart: Date; requests: number; bytes: number | null },
+    now: Date,
+  ): Promise<boolean> {
+    if (
+      !Number.isSafeInteger(usage.requests) ||
+      usage.requests < 0 ||
+      (usage.bytes !== null &&
+        (!Number.isSafeInteger(usage.bytes) || usage.bytes < 0))
+    )
+      throw new TypeError("Invalid day usage");
+    return writeTransaction(this.pool, async (db) => {
+      const result = await db.query(
+        "UPDATE community.media_request_usage SET day_start=$1::timestamptz,day_requests=$2::bigint,day_bytes=$3::bigint,day_observed_at=$4::timestamptz WHERE id='published-media'",
+        [nowParam(usage.dayStart), usage.requests, usage.bytes, nowParam(now)],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
+  async readDayUsage(): Promise<{
+    dayStart: Date;
+    requests: number;
+    bytes: number | null;
+    observedAt: Date;
+  } | null> {
+    return readTransaction(this.pool, async (db) => {
+      const row = (
+        await db.query<{
+          day_start: Date | null;
+          day_requests: string | null;
+          day_bytes: string | null;
+          day_observed_at: Date | null;
+        }>(
+          "SELECT day_start,day_requests,day_bytes,day_observed_at FROM community.media_request_usage WHERE id='published-media'",
+        )
+      ).rows[0];
+      if (
+        row === undefined ||
+        row.day_start === null ||
+        row.day_requests === null ||
+        row.day_observed_at === null
+      )
+        return null;
+      return {
+        dayStart: new Date(row.day_start),
+        requests: safeInteger(row.day_requests),
+        bytes: row.day_bytes === null ? null : safeInteger(row.day_bytes),
+        observedAt: new Date(row.day_observed_at),
+      };
     });
   }
   async lookupPublishedItems(

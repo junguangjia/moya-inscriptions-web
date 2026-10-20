@@ -43,6 +43,7 @@ const routes: Readonly<Record<string, string>> = {
   "docs/prototypes/mobile-preview/[...path]/route.ts": "content",
   "api/catalog/route.ts": "session",
   "api/catalog/[catalogId]/route.ts": "session",
+  "api/catalog/[catalogId]/media/[mediaId]/zoom-blocks/route.ts": "session",
   "api/catalog/[catalogId]/comments/route.ts": "session",
   "api/catalog/[catalogId]/comments/[commentId]/replies/route.ts": "session",
   "api/catalog-search/route.ts": "session",

@@ -279,6 +279,21 @@ const webCommunityServerImports: ReadonlyMap<string, string> = new Map([
     ),
     "{relayServerLocalEditorialMedia}",
   ],
+  // catalog-deep-zoom-v1: the same-origin relay of one image's block list.
+  [
+    path.join(
+      webRoot,
+      "app",
+      "api",
+      "catalog",
+      "[catalogId]",
+      "media",
+      "[mediaId]",
+      "zoom-blocks",
+      "route.ts",
+    ),
+    "{fetchServerCatalogZoomBlocks}",
+  ],
   // unified-media-pipeline-v1: Development-only Catalog renditions for a phone
   // on the LAN acceptance origin, named by the opaque rendition id.
   [
@@ -749,6 +764,14 @@ const articleClientImports: ReadonlyMap<
       },
       "features/editorial-content/editorial-detail.tsx": {
         "article-authoring-client": ["articleDocumentPlainText"],
+      },
+      // catalog-deep-zoom-v1: the Viewer's block layer reads one image's
+      // block list (and the contract's grid) through the browser-safe client.
+      "features/detail/zoom-block-layer.tsx": {
+        "catalog-zoom-blocks-client": [
+          "catalogZoomGrid",
+          "fetchSameOriginCatalogZoomBlocks",
+        ],
       },
     }) as [string, Record<string, readonly string[]>][]
   ).map(([file, targets]) => [

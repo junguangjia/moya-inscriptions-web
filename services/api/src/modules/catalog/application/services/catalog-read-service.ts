@@ -3,6 +3,7 @@ import type {
   CatalogId,
   CatalogPage,
   CatalogSearchPage,
+  CatalogZoomBlocks,
   MediaId,
 } from "@moya/contracts";
 
@@ -16,6 +17,9 @@ import {
   mapCatalogDetail,
   mapCatalogPage,
   mapCatalogSearchPage,
+  mapCatalogZoomBlocks,
+  warnCatalogZoom,
+  type CatalogZoomFrames,
 } from "../mappers/catalog-public-contract-mapper.js";
 
 import type { CatalogQueryPort } from "../ports/catalog-query-port.js";
@@ -116,14 +120,74 @@ export class CatalogReadService {
     return mapCatalogPage(projection, resolved.media, resolved.renditions);
   }
 
+  /**
+   * catalog-deep-zoom-v1: the frames of the record's complete block sets,
+   * best effort. A failure omits every frame (content-free warning) and
+   * never fails the Detail.
+   */
+  private async zoomFrames(id: CatalogId): Promise<CatalogZoomFrames> {
+    if (this.catalogQueryPort.getZoomFrames === undefined) return noZoomFrames;
+    try {
+      return await this.catalogQueryPort.getZoomFrames(id);
+    } catch {
+      warnCatalogZoom("frame_unavailable");
+      return noZoomFrames;
+    }
+  }
+
   async getById(id: CatalogId): Promise<CatalogDetail | null> {
     const projection = await this.catalogQueryPort.getById(id);
     if (projection === null) return null;
-    const resolved = await this.resolveMedia(
-      detailMediaLocators(projection),
-      detailRenditionKeys(projection),
+    const [resolved, frames] = await Promise.all([
+      this.resolveMedia(
+        detailMediaLocators(projection),
+        detailRenditionKeys(projection),
+      ),
+      projection.media.length === 0 ? noZoomFrames : this.zoomFrames(id),
+    ]);
+    return mapCatalogDetail(
+      projection,
+      resolved.media,
+      resolved.renditions,
+      frames,
     );
-    return mapCatalogDetail(projection, resolved.media, resolved.renditions);
+  }
+
+  /**
+   * catalog-deep-zoom-v1: the blocks of one image of a published record, only
+   * while its Detail entry carries a `zoom` frame (the same gates) and every
+   * block key resolves; null answers 404. Neither the article tool nor
+   * Article bodies call it.
+   */
+  async getZoomBlocks(
+    id: CatalogId,
+    mediaId: MediaId,
+  ): Promise<CatalogZoomBlocks | null> {
+    if (this.catalogQueryPort.getZoomBlocks === undefined) return null;
+    const detail = await this.getById(id);
+    const frame = detail?.media.find((media) => media.id === mediaId)?.zoom;
+    if (frame === undefined) return null;
+    const blocks = await this.catalogQueryPort.getZoomBlocks(id, mediaId);
+    if (
+      blocks === null ||
+      blocks.width !== frame.width ||
+      blocks.height !== frame.height ||
+      this.storageUrlResolver.resolveKeys === undefined
+    )
+      return null;
+    let urls: ReadonlyMap<string, ResolvedMediaUrl>;
+    try {
+      urls = await this.storageUrlResolver.resolveKeys(blocks.keys);
+    } catch (error) {
+      throw new CatalogMediaResolutionError({ cause: error });
+    }
+    const srcs: ResolvedMediaUrl[] = [];
+    for (const key of blocks.keys) {
+      const url = urls.get(key);
+      if (url === undefined) return null;
+      srcs.push(url);
+    }
+    return mapCatalogZoomBlocks(frame, srcs);
   }
 
   async search(query: CatalogSearchQuery): Promise<CatalogSearchPage> {
@@ -143,3 +207,4 @@ export class CatalogReadService {
 
 const noResolvedMedia = new Map<MediaId, ResolvedMediaUrl>();
 const noRenditionUrls = new Map<string, ResolvedMediaUrl>();
+const noZoomFrames: CatalogZoomFrames = new Map();

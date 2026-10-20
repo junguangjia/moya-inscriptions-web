@@ -17,6 +17,7 @@ export type {
   CatalogImageProjection,
   CatalogMediaContext,
   CatalogRenditionUrls,
+  CatalogZoomFrames,
 } from "./modules/catalog/application/mappers/catalog-public-contract-mapper.js";
 export {
   CatalogMediaResolutionError,
@@ -172,6 +173,8 @@ export type {
   CatalogMediaRenditionProjection,
   CatalogSourceCitationProjection,
   CatalogStatefulTextProjection,
+  CatalogZoomBlocksProjection,
+  CatalogZoomFrameProjection,
 } from "./modules/catalog/application/catalog-read-projections.js";
 export type { CatalogRecord } from "./modules/catalog/domain/catalog-record.js";
 
@@ -239,6 +242,27 @@ export type {
   CatalogRenditionRole,
 } from "./modules/community/application/ports/catalog-media-asset-port.js";
 export type {
+  CatalogBlockGuardCounts,
+  CatalogBlockJobPayload,
+  CatalogBlockOutcome,
+  CatalogBlockPlan,
+  CatalogBlockPort,
+  CatalogBlockRecord,
+  CatalogBlockReadTarget,
+  CatalogDisplayMasterPort,
+  CatalogMasterAttach,
+  CatalogMasterAttached,
+  CatalogMasterCandidate,
+  CatalogMasterDerivation,
+  CatalogMasterEndReason,
+  CatalogMasterHeader,
+  CatalogMasterRefusal,
+  CatalogMasterResult,
+  CatalogMasterStatus,
+  CatalogMasterStatusRow,
+  CatalogMasterStorage,
+} from "./modules/community/application/ports/catalog-display-master-port.js";
+export type {
   ProfileMediaAssetPort,
   ProfileRenderOutcome,
   ProfileRenderPlan,
@@ -288,6 +312,7 @@ export type {
   PublishingUploadFence,
   PublishingUploadOperations,
   PublishingUploadStart,
+  PublishingUploadTiming,
   PublishingWorkOperations,
   WorkPublishingPort,
 } from "./modules/community/application/ports/work-publishing-port.js";

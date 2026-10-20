@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { chmod, open } from "node:fs/promises";
+
 import {
   CATALOG_SOURCE_REJECTIONS,
   CatalogSourceError,
@@ -18,21 +21,33 @@ import {
   validateSandboxManifest,
 } from "./processing/media-processor.js";
 import { MediaToolError } from "./processing/media-tools.js";
+import { openFileByteReader } from "./processing/byte-reader.js";
+import { probeJpegBlock } from "./processing/output-probe.js";
 import {
   CATALOG_SOURCE_MAX_BYTES,
   SANDBOX_TIMEOUTS_MS,
 } from "./processing/profiles.js";
-import { currentRecipe, isProfileRole } from "./processing/recipes.js";
+import {
+  BLOCK_RECIPE_DIGEST_V1,
+  BLOCK_RECIPE_V1,
+  blockCellOf,
+  blockCellRegion,
+  blockRole,
+  currentRecipe,
+  isProfileRole,
+} from "./processing/recipes.js";
 import {
   SANDBOX_PROTOCOL_VERSION,
   SandboxProtocolError,
+  itemOutput,
+  itemRejection,
 } from "./sandbox/protocol.js";
 import { SANDBOX_JOB_LIMITS, sandboxNonce } from "./sandbox/sandbox-runner.js";
 
 import type { createPostgresPool } from "@moya/catalog-postgres";
 import type { CatalogSourceReader } from "../storage/catalog-source.js";
 import type { ProcessorLogger } from "./processing/media-processor.js";
-import type { SandboxJob } from "./sandbox/protocol.js";
+import type { SandboxJob, SandboxManifest } from "./sandbox/protocol.js";
 import type {
   SandboxJobDirectory,
   SandboxRunner,
@@ -205,13 +220,13 @@ export function createCatalogRenderer(
         });
         const manifest = result.manifest;
         if (manifest.status === "rejected") {
-          throw new MediaRejectedError(manifest.failureCode!);
+          throw itemRejection(manifest.failureCode);
         }
         validateSandboxManifest(manifest, request);
         await probeSandboxOutputs(result);
         const renditions: CatalogWorkerRenderOutcome["renditions"][number][] =
           [];
-        for (const output of manifest.outputs) {
+        for (const output of manifest.outputs.map(itemOutput)) {
           if (
             output.contentType !== "image/webp" ||
             output.role === "full" ||
@@ -297,6 +312,312 @@ export function createCatalogRenderer(
   };
 }
 
+/** Mirror of `CatalogBlockPlan` (catalog-deep-zoom-v1). */
+export interface CatalogWorkerBlockPlan {
+  readonly assetId: string;
+  readonly masterId: string;
+  readonly master: {
+    readonly storageKey: string;
+    readonly byteSize: number;
+    readonly sha256: string;
+    readonly contentType: "image/jpeg" | "image/png";
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly frame: { readonly width: number; readonly height: number };
+  readonly reference: {
+    readonly storageKey: string;
+    readonly byteSize: number;
+    readonly sha256: string;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly cells: readonly [number, number];
+}
+
+/** Mirror of `CatalogBlockOutcome`. */
+export interface CatalogWorkerBlockOutcome {
+  readonly masterId: string;
+  readonly blocks: readonly {
+    readonly storageKey: string;
+    readonly byteSize: number;
+    readonly sha256: string;
+    readonly cell: number;
+    readonly recipeVersion: number;
+    readonly recipeDigest: string;
+    readonly contentType: "image/jpeg";
+    readonly width: number;
+    readonly height: number;
+  }[];
+}
+
+export type CatalogBlockRenderResult =
+  | { readonly status: "rendered"; readonly outcome: CatalogWorkerBlockOutcome }
+  | { readonly status: "rejected"; readonly failureCode: string };
+
+/** Cuts the cells of one block job (implemented by {@link createCatalogBlockRenderer}). */
+export interface CatalogBlockRenderer {
+  render(
+    plan: CatalogWorkerBlockPlan,
+    signal?: AbortSignal,
+  ): Promise<CatalogBlockRenderResult>;
+}
+
+export interface CatalogBlockRendererOptions {
+  /** The private publishing store (the UGC store in Production). */
+  readonly store: {
+    openRead(storageKey: string): Promise<
+      | {
+          readonly status: "ok";
+          readonly byteSize: number;
+          readonly body: AsyncIterable<Uint8Array>;
+          close(): Promise<void>;
+        }
+      | { readonly status: "range_not_satisfiable"; readonly byteSize: number }
+      | null
+    >;
+    writeStream(
+      ownerId: string,
+      purpose: "derivative",
+      contentType: "image/jpeg",
+      maxBytes: number,
+      source: AsyncIterable<Uint8Array>,
+      options?: {
+        readonly signal?: AbortSignal;
+        readonly requireExactSize?: boolean;
+      },
+    ): Promise<{ storageKey: string; byteSize: number; sha256: string }>;
+    remove(storageKey: string): Promise<void>;
+  };
+  readonly sandbox: Pick<SandboxRunner, "createJob" | "run">;
+  readonly logger?: ProcessorLogger & { info(message: string): void };
+  readonly clock?: () => number;
+}
+
+/** Copies one private object into the job input, verifying size and hash. */
+async function stageStoredInput(
+  store: CatalogBlockRendererOptions["store"],
+  job: SandboxJobDirectory,
+  name: "master" | "reference",
+  object: {
+    readonly storageKey: string;
+    readonly byteSize: number;
+    readonly sha256: string;
+  },
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const read = await store.openRead(object.storageKey);
+  if (read?.status !== "ok") throw new MediaProcessingUnavailableError(null);
+  const target = job.inputPath(name);
+  const handle = await open(target, "wx", 0o644);
+  const hash = createHash("sha256");
+  let bytes = 0;
+  try {
+    if (read.byteSize !== object.byteSize)
+      throw new MediaProcessingUnavailableError(null);
+    for await (const chunk of read.body) {
+      if (signal?.aborted) throw new MediaToolError("aborted");
+      bytes += chunk.byteLength;
+      if (bytes > object.byteSize)
+        throw new MediaProcessingUnavailableError(null);
+      hash.update(chunk);
+      await handle.write(chunk);
+    }
+  } finally {
+    await read.close();
+    await handle.close().catch(() => undefined);
+  }
+  await chmod(target, 0o644);
+  if (bytes !== object.byteSize || hash.digest("hex") !== object.sha256)
+    throw new MediaProcessingUnavailableError(null);
+}
+
+/** The block outputs a job must return: exactly its cells, in order. */
+const validateBlockManifest = (
+  manifest: SandboxManifest,
+  plan: CatalogWorkerBlockPlan,
+): void => {
+  const [from, to] = plan.cells;
+  if (
+    manifest.status !== "blocks" ||
+    manifest.inspection === null ||
+    manifest.inspection.width !== plan.master.width ||
+    manifest.inspection.height !== plan.master.height ||
+    manifest.detectedTypes !== null ||
+    manifest.pairing !== null ||
+    manifest.presentation !== null ||
+    manifest.placeholderColor !== null ||
+    manifest.outputs.length !== to - from + 1
+  )
+    throw new SandboxProtocolError("status_mismatch");
+  manifest.outputs.forEach((output, index) => {
+    const cell = from + index;
+    const region = blockCellRegion(plan.frame.width, plan.frame.height, cell);
+    if (
+      output.role !== blockRole(cell) ||
+      output.name !== `${blockRole(cell)}.jpg` ||
+      output.contentType !== "image/jpeg"
+    )
+      throw new SandboxProtocolError("outputs_mismatch");
+    if (output.width !== region.width || output.height !== region.height)
+      throw new SandboxProtocolError("dimensions_mismatch");
+  });
+};
+
+/**
+ * The block coordinator of one `catalog_render` block job: stages the held
+ * master and the asset's `display` rendition from the private store (hash
+ * verified), runs the `blocks` operation in the same sandbox, validates and
+ * header-probes every block, and writes them as owner-less Catalog
+ * derivatives. One content-free line per job reports its staging and render
+ * time and outcome.
+ */
+export function createCatalogBlockRenderer(
+  options: CatalogBlockRendererOptions,
+): CatalogBlockRenderer {
+  const { store, sandbox } = options;
+  const logger = options.logger ?? console;
+  const clock = options.clock ?? Date.now;
+  return {
+    async render(plan, signal) {
+      const written: string[] = [];
+      let job: SandboxJobDirectory | undefined;
+      const started = clock();
+      // Unset while staging runs: a staging failure reports its time as stage_ms.
+      let staged: number | undefined;
+      let outcome = "rendered";
+      const cells = plan.cells[1] - plan.cells[0] + 1;
+      try {
+        job = await sandbox.createJob();
+        await stageStoredInput(store, job, "master", plan.master, signal);
+        await stageStoredInput(store, job, "reference", plan.reference, signal);
+        staged = clock();
+        const request: SandboxJob = {
+          protocol: SANDBOX_PROTOCOL_VERSION,
+          nonce: sandboxNonce(),
+          operation: "blocks",
+          item: null,
+          blocks: {
+            inputs: [
+              {
+                role: "master",
+                declaredType: plan.master.contentType,
+                byteSize: plan.master.byteSize,
+                sha256: plan.master.sha256,
+              },
+              {
+                role: "reference",
+                declaredType: "image/webp",
+                byteSize: plan.reference.byteSize,
+                sha256: plan.reference.sha256,
+              },
+            ],
+            master: { width: plan.master.width, height: plan.master.height },
+            frame: plan.frame,
+            reference: {
+              width: plan.reference.width,
+              height: plan.reference.height,
+            },
+            cells: plan.cells,
+            recipe: {
+              version: BLOCK_RECIPE_V1.version,
+              digest: BLOCK_RECIPE_DIGEST_V1,
+            },
+          },
+          limits: SANDBOX_JOB_LIMITS,
+        };
+        const result = await sandbox.run(job, request, {
+          timeoutMs: SANDBOX_TIMEOUTS_MS.static,
+          ...withSignal(signal),
+        });
+        const manifest = result.manifest;
+        if (manifest.status === "rejected") {
+          const code = manifest.failureCode ?? "processing_failed";
+          // A timeout is retried, never a content failure of the master.
+          if (code === "processing_timeout")
+            throw new MediaToolError("timeout");
+          outcome = code;
+          return { status: "rejected", failureCode: code };
+        }
+        validateBlockManifest(manifest, plan);
+        const blocks: CatalogWorkerBlockOutcome["blocks"][number][] = [];
+        for (const output of manifest.outputs) {
+          const file = result.files.get(output.name);
+          if (file === undefined || file.bytes !== output.bytes)
+            throw new SandboxProtocolError("stream_incomplete");
+          const reader = await openFileByteReader(file.path);
+          let probe;
+          try {
+            probe = await probeJpegBlock(reader);
+          } finally {
+            await reader.close();
+          }
+          if (probe?.width !== output.width || probe.height !== output.height)
+            throw new SandboxProtocolError("output_invalid");
+          const stored = await storeOutputFile(
+            (body) =>
+              store.writeStream(
+                CATALOG_STORE_OWNER,
+                "derivative",
+                "image/jpeg",
+                output.bytes,
+                body,
+                { requireExactSize: true, ...withSignal(signal) },
+              ),
+            file.path,
+            output.bytes,
+          );
+          written.push(stored.storageKey);
+          if (stored.sha256 !== output.sha256)
+            throw new SandboxProtocolError("hash_mismatch");
+          blocks.push({
+            ...stored,
+            cell: blockCellOf(output.role)!,
+            recipeVersion: BLOCK_RECIPE_V1.version,
+            recipeDigest: BLOCK_RECIPE_DIGEST_V1,
+            contentType: "image/jpeg",
+            width: output.width,
+            height: output.height,
+          });
+        }
+        return {
+          status: "rendered",
+          outcome: { masterId: plan.masterId, blocks },
+        };
+      } catch (error) {
+        await Promise.all(
+          written.map((key) => store.remove(key).catch(() => undefined)),
+        );
+        outcome =
+          error instanceof MediaToolError && error.code === "timeout"
+            ? "timeout"
+            : "error";
+        if (signal?.aborted) throw new MediaToolError("aborted");
+        if (error instanceof SandboxProtocolError) {
+          logSandboxFailure(logger, error);
+          outcome = "processing_failed";
+          return { status: "rejected", failureCode: "processing_failed" };
+        }
+        if (
+          error instanceof MediaToolError ||
+          error instanceof PublishingMediaStoreError ||
+          error instanceof MediaProcessingInputError ||
+          error instanceof MediaProcessingUnavailableError
+        )
+          throw error;
+        throw new MediaProcessingUnavailableError(systemErrorCode(error));
+      } finally {
+        await job?.dispose().catch(() => undefined);
+        const ended = clock();
+        const stageEnd = staged ?? ended;
+        logger.info(
+          `[media-worker] catalog blocks stage_ms=${stageEnd - started} render_ms=${ended - stageEnd} cells=${cells} outcome=${outcome}`,
+        );
+      }
+    },
+  };
+}
+
 /** The identities a ready Catalog asset must hold (the sync re-renders otherwise). */
 export const catalogSyncIdentities = () =>
   CATALOG_ALWAYS_RENDERED_ROLES.map((role) => {
@@ -341,6 +662,17 @@ export const CATALOG_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 export function createCatalogSync(options: {
   readonly listSources: () => Promise<readonly CatalogWorkerSource[] | null>;
   readonly port: CatalogSyncPort;
+  /**
+   * The block step (catalog-deep-zoom-v1), present only while
+   * `MEDIA_CATALOG_ZOOM_BLOCKS_RENDER` is on: after the asset sync, queue the
+   * missing cells of incomplete sets of active masters (two open sets at most).
+   */
+  readonly blocks?: {
+    enqueueCatalogBlockSets(
+      now: Date,
+      limit: number,
+    ): Promise<{ readonly enqueued: number }>;
+  };
   readonly limit?: number;
   readonly logger?: {
     info(message: string): void;
@@ -364,6 +696,13 @@ export function createCatalogSync(options: {
         logger.info(
           `[media-worker] catalog sync referenced=${counts.referenced} skipped=${counts.skipped} created=${counts.created} unreferenced=${counts.unreferenced} enqueued=${counts.enqueued}`,
         );
+      }
+      if (options.blocks !== undefined) {
+        const blocks = await options.blocks.enqueueCatalogBlockSets(now, limit);
+        if (blocks.enqueued > 0)
+          logger.info(
+            `[media-worker] catalog block sync enqueued=${blocks.enqueued}`,
+          );
       }
     },
   };

@@ -53,6 +53,7 @@ import type { PublishingDb } from "./db.js";
 import {
   failProcessingItems,
   isBaseHighResolutionJob,
+  isCatalogBlockJob,
   releaseReservations,
 } from "./jobs.js";
 import { reserveBaseHighResolution } from "./media.js";
@@ -619,6 +620,10 @@ export const retryJob = async (
           [jobId],
         )
       ).rows[0];
+      if (isCatalogBlockJob(subject))
+        throw new CommunityConflictError(
+          "Catalog block jobs are managed by the catalog-master command",
+        );
       let owner: string | undefined;
       if (isBaseHighResolutionJob(subject))
         owner = (
@@ -685,6 +690,10 @@ export const abandonJob = async (
           [jobId],
         )
       ).rows[0];
+      if (isCatalogBlockJob(subject))
+        throw new CommunityConflictError(
+          "Catalog block jobs are managed by the catalog-master command",
+        );
       if (
         subject !== undefined &&
         (subject.kind === "process_item" || isBaseHighResolutionJob(subject))

@@ -433,7 +433,7 @@ describe("post-Community grants of the delivery view", () => {
       "utf8",
     );
     expect(file).not.toMatch(
-      /ALL TABLES|community\.(?!catalog_media_delivery)/u,
+      /ALL TABLES|community\.(?!catalog_media_delivery|catalog_media_zoom_blocks)/u,
     );
     await asTemporaryRole(
       (role) => file.replaceAll(':"public_read_role"', `"${role}"`),

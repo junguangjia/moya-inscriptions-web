@@ -77,11 +77,29 @@ export type {
   ProcessorOutcome,
   ProcessorPairing,
   ProcessorRenditionRole,
+  ProcessorTiming,
   PublishingMediaProcessorOptions,
 } from "./media-processor.js";
-export { probeMp4, probeWebp } from "./output-probe.js";
+export { probeJpegBlock, probeMp4, probeWebp } from "./output-probe.js";
+export {
+  BlockRejectedError,
+  blockAlignment,
+  renderCatalogBlocks,
+} from "./block-processor.js";
+export type {
+  BlockFailure,
+  BlockRenderInput,
+  RenderedBlock,
+} from "./block-processor.js";
 export type { WebpProbe } from "./output-probe.js";
 export {
+  BLOCK_ALIGNMENT,
+  BLOCK_RECIPE_DIGEST_V1,
+  BLOCK_RECIPE_V1,
+  blockCellOf,
+  blockCellRegion,
+  blockGrid,
+  blockRole,
   LONG_SCROLL_ASPECT_RATIO,
   MAX_OUTPUT_EDGE,
   PROFILE_FAMILIES,

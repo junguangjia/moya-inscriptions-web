@@ -35,6 +35,9 @@ import type {
 import type {
   CatalogAssetSyncCounts,
   CatalogAssetSyncOptions,
+  CatalogBlockOutcome,
+  CatalogBlockPlan,
+  CatalogBlockPort,
   CatalogMediaAssetPort,
   CatalogMediaSource,
   CatalogRenderOutcome,
@@ -73,6 +76,7 @@ import type {
   PublishingUploadCommit,
   PublishingUploadFence,
   PublishingUploadStart,
+  PublishingUploadTiming,
   WorkPublishingPort,
 } from "@moya/api";
 import type { Pool } from "pg";
@@ -87,6 +91,7 @@ import * as submissions from "./publishing/submissions.js";
 import * as works from "./publishing/works.js";
 import * as mediaRead from "./publishing/media-read.js";
 import * as catalogAssets from "./publishing/catalog-assets.js";
+import * as catalogBlocks from "./publishing/catalog-zoom-blocks.js";
 import * as profileAssets from "./publishing/profile-assets.js";
 
 /**
@@ -95,7 +100,11 @@ import * as profileAssets from "./publishing/profile-assets.js";
  * delegates to its publishing/<area>.ts function with this adapter's pool.
  */
 export class PostgresWorkPublishingAdapter
-  implements WorkPublishingPort, CatalogMediaAssetPort, ProfileMediaAssetPort
+  implements
+    WorkPublishingPort,
+    CatalogMediaAssetPort,
+    CatalogBlockPort,
+    ProfileMediaAssetPort
 {
   constructor(
     private readonly pool: Pool,
@@ -328,11 +337,24 @@ export class PostgresWorkPublishingAdapter
     fence: PublishingUploadFence,
     blob: PublishingMediaWriteResult,
     now: Date,
+    timing?: PublishingUploadTiming,
   ): Promise<PublishingUploadCommit> {
-    return uploads.commitComponentUpload(this.pool, fence, blob, now);
+    return uploads.commitComponentUpload(this.pool, fence, blob, now, timing);
   }
   abortComponentUpload(fence: PublishingUploadFence, now: Date): Promise<void> {
     return uploads.abortComponentUpload(this.pool, fence, now);
+  }
+  noteUploadRefusedAfterCommit(
+    actorId: string,
+    componentId: string,
+    now: Date,
+  ): Promise<Date | null> {
+    return uploads.noteUploadRefusedAfterCommit(
+      this.pool,
+      actorId,
+      componentId,
+      now,
+    );
   }
   claimJobs(
     options: PublishingJobClaimOptions,
@@ -503,6 +525,25 @@ export class PostgresWorkPublishingAdapter
     now: Date,
   ): Promise<void> {
     return catalogAssets.failCatalogAsset(this.pool, assetId, failureCode, now);
+  }
+  readCatalogBlockPlan(
+    assetId: string,
+    payload: unknown,
+  ): Promise<CatalogBlockPlan | null> {
+    return catalogBlocks.readCatalogBlockPlan(this.pool, assetId, payload);
+  }
+  recordCatalogBlocks(
+    assetId: string,
+    outcome: CatalogBlockOutcome,
+    now: Date,
+  ): Promise<PublishingDerivativeCommit> {
+    return catalogBlocks.recordCatalogBlocks(this.pool, assetId, outcome, now);
+  }
+  enqueueCatalogBlockSets(
+    now: Date,
+    limit: number,
+  ): Promise<{ readonly enqueued: number }> {
+    return catalogBlocks.enqueueCatalogBlockSets(this.pool, now, limit);
   }
   readProfileRenderPlan(
     userMediaId: string,

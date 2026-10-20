@@ -50,6 +50,14 @@ const MISSING_IDENTITY_SQL = `EXISTS (
     SELECT 1 FROM ${LIVE_RENDITION_SQL}
     WHERE r.catalog_asset_id=a.id AND r.state='ready' AND r.role=want.role
       AND r.recipe_version=want.version AND r.recipe_digest=want.digest))`;
+/**
+ * SQL: job alias `j` is a base `catalog_render` job (the four ordinary roles),
+ * not a block job of a display master (payload variant `blocks`,
+ * catalog-deep-zoom-v1). Base jobs carry no payload today; a future base
+ * payload without a variant stays base.
+ */
+export const baseCatalogRenderJobSql = (job: string): string =>
+  `${job}.kind='catalog_render' AND COALESCE(${job}.payload->>'variant','base')='base'`;
 /** SQL: when job `j` ended (failed rows always carry `finished_at`). */
 const endedAtSql = (job: string): string =>
   `COALESCE(${job}.finished_at, ${job}.updated_at)`;
@@ -247,7 +255,7 @@ export const syncCatalogAssets = async (
            AND (a.state='pending' OR (a.state='ready' AND ${MISSING_IDENTITY_SQL}))
            AND NOT EXISTS (
              SELECT 1 FROM community.publishing_jobs j
-             WHERE j.kind='catalog_render' AND j.subject_id=a.id
+             WHERE ${baseCatalogRenderJobSql("j")} AND j.subject_id=a.id
                AND j.state IN ('queued','running','failed','abandoned'))
          ORDER BY a.created_at, a.id
          LIMIT $4
@@ -275,13 +283,13 @@ export const syncCatalogAssets = async (
                FROM (
                  SELECT f.id FROM community.publishing_jobs f
                  JOIN community.catalog_media_assets a ON a.id=f.subject_id
-                 WHERE f.kind='catalog_render' AND f.state='failed'
+                 WHERE ${baseCatalogRenderJobSql("f")} AND f.state='failed'
                    AND ${endedAtSql("f")} < $2::timestamptz - ${RETRY_DELAY_SQL}
                    AND a.id=ANY($1::text[]) AND a.unreferenced_since IS NULL
                    AND a.state='ready' AND ${MISSING_IDENTITY_SQL}
                    AND NOT EXISTS (
                      SELECT 1 FROM community.publishing_jobs o
-                     WHERE o.kind='catalog_render' AND o.subject_id=f.subject_id AND o.id<>f.id
+                     WHERE ${baseCatalogRenderJobSql("o")} AND o.subject_id=f.subject_id AND o.id<>f.id
                        AND (o.state IN ('queued','running','abandoned')
                          OR (o.state='failed'
                            AND (${endedAtSql("o")}, o.id) > (${endedAtSql("f")}, f.id))))
@@ -339,6 +347,7 @@ export const readCatalogRenderPlan = async (
       `SELECT r.role, r.recipe_version, r.recipe_digest, r.width, r.height
        FROM ${LIVE_RENDITION_SQL}
        WHERE r.catalog_asset_id=$1 AND r.state='ready'
+         AND r.role IN ('thumb','cover','display','viewer')
        ORDER BY r.role`,
       [assetId],
     );

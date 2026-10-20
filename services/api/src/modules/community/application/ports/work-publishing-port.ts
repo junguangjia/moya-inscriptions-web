@@ -48,6 +48,7 @@ import type {
   PublishingBlobContentType,
   PublishingMediaWriteResult,
 } from "./publishing-media-store-port.js";
+import type { CatalogBlockJobPayload } from "./catalog-display-master-port.js";
 
 /*
  * Work publishing persistence (work-publishing-v1, design.md §2-§5, §9-§10).
@@ -144,6 +145,17 @@ export interface PublishingUploadFence {
   readonly byteSize: number;
   /** `original` for Original items, `standard_master` for Standard items (optimized or retained). */
   readonly purpose: "original" | "standard_master";
+}
+
+/**
+ * Backend-side timing of the committed transfer, recorded with the commit for
+ * content-free upload measurement. `firstByteAt` is when the media store took
+ * the first body chunk (after its own preparation), `lastByteAt` when the
+ * request body ended; the commit time itself is the blob's creation time.
+ */
+export interface PublishingUploadTiming {
+  readonly firstByteAt: Date;
+  readonly lastByteAt: Date;
 }
 
 /**
@@ -327,6 +339,13 @@ export interface PublishingJobClaimOptions {
   readonly leaseMs: number;
   /** Restrict the claim to these kinds; all kinds when omitted. */
   readonly kinds?: readonly PublishingJobKind[];
+  /**
+   * Claim Catalog block jobs (`catalog_render` with payload variant
+   * `blocks`, catalog-deep-zoom-v1): only a worker whose block render switch
+   * is on passes true, and then only on an idle queue. Default false: block
+   * jobs stay queued, never failed.
+   */
+  readonly catalogBlocks?: boolean;
 }
 
 /** `retry_scheduled`: queued again with backoff. `lease_lost`: the claim was no longer held; nothing changed. */
@@ -341,7 +360,9 @@ export interface PublishingJobEnqueue {
   readonly kind: PublishingJobKind;
   /** `^[a-z0-9][a-z0-9-]{0,127}$`, as the operator job DTO requires. */
   readonly subjectId: string;
-  readonly payload?: PublishingDeriveEditPayload | null;
+  /** A `derive_edit` payload, or a Catalog block job's (catalog-deep-zoom-v1). */
+  readonly payload?:
+    PublishingDeriveEditPayload | CatalogBlockJobPayload | null;
   /** Defaults to `now`. */
   readonly runAfter?: Date;
   /** 1..1000; the table default when omitted. */
@@ -784,12 +805,14 @@ export interface PublishingUploadOperations {
    * inserts the blob (purpose from the fence), marks the component `received`
    * with its SHA-256, moves its declared bytes from reserved to committed
    * (actual size) and, when every component is received, moves the item to
-   * `processing` and enqueues `process_item`.
+   * `processing` and enqueues `process_item`. A committing write also
+   * records the optional transfer `timing`; no other outcome records it.
    */
   commitComponentUpload(
     fence: PublishingUploadFence,
     blob: PublishingMediaWriteResult,
     now: Date,
+    timing?: PublishingUploadTiming,
   ): Promise<PublishingUploadCommit>;
   /**
    * The transfer ended without a stored blob (client abort, overflow, store
@@ -797,6 +820,18 @@ export interface PublishingUploadOperations {
    * `awaiting`. Idempotent; any other state is left unchanged.
    */
   abortComponentUpload(fence: PublishingUploadFence, now: Date): Promise<void>;
+  /**
+   * Measurement only, after `beginComponentUpload` refused a transfer with a
+   * conflict: when the actor's component already holds a committed blob (the
+   * client resent after losing the answer), counts the refusal, keeps the
+   * first refusal time and resolves the commit time; otherwise changes
+   * nothing and resolves `null`. Never part of the refusal's outcome.
+   */
+  noteUploadRefusedAfterCommit(
+    actorId: string,
+    componentId: string,
+    now: Date,
+  ): Promise<Date | null>;
 }
 
 /** Explicit, idempotent submissions (U11, P05-P06, V06-V07, A03). */

@@ -60,6 +60,7 @@ import {
 import { publishedObjectUrl } from "./publication/keys.js";
 import { withPublishedReads } from "./publication/delivery.js";
 import { createPublicationWorkers } from "./publication/runtime.js";
+import { createCatalogZoomGate } from "./publication/worker.js";
 import { createLocalPublicationReadHandler } from "./publication/local-read.js";
 import { loadPilotConfiguration, openPilotPool } from "./pilot-config.js";
 import { articleBackendConfigurationFrom } from "./article-authoring/runtime-config.js";
@@ -71,16 +72,20 @@ import {
 import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
   CATALOG_SYNC_INTERVAL_MS,
+  createCatalogBlockRenderer,
   createCatalogRenderer,
   createCatalogSync,
   listPublishedCatalogSources,
 } from "./publishing/catalog.js";
 import {
+  MEDIA_CATALOG_ZOOM_BLOCKS,
+  MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
   MEDIA_PROFILE_RENDER,
   MEDIA_PROFILE_RENDITIONS,
   openPublishingMedia,
   openPublishingStore,
   openProductionPublishingStore,
+  parseCatalogZoomSwitch,
   parseMediaWorkerMode,
   parseProfileMediaSwitch,
   parsePublishingMediaConfig,
@@ -306,6 +311,22 @@ export const prepareProductionBackend = async (
       MEDIA_PROFILE_RENDER,
       runtimeConfig.nodeEnv,
     );
+  // Catalog deep zoom (catalog-deep-zoom-v1): this Backend serves the Detail
+  // frame and the block-list read behind MEDIA_CATALOG_ZOOM_BLOCKS.
+  const catalogZoom = parseCatalogZoomSwitch(
+    environment,
+    MEDIA_CATALOG_ZOOM_BLOCKS,
+    runtimeConfig.nodeEnv,
+  );
+  // Catalog blocks (catalog-deep-zoom-v1): only an embedded worker
+  // (Development) cuts them here, behind MEDIA_CATALOG_ZOOM_BLOCKS_RENDER.
+  const blocksRender =
+    mediaWorkerMode === "embedded" &&
+    parseCatalogZoomSwitch(
+      environment,
+      MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
+      runtimeConfig.nodeEnv,
+    );
   const publishing = await (async (): Promise<{
     readonly store: PublishingMediaStoreRuntime;
     readonly media?: Awaited<ReturnType<typeof openPublishingMedia>>;
@@ -436,6 +457,7 @@ export const prepareProductionBackend = async (
               ...MEDIA_WORKER_JOB_KINDS,
               ...(profileRender ? PROFILE_RENDER_JOB_KINDS : []),
             ],
+            ...(blocksRender && catalogSources ? { catalogBlocks: true } : {}),
             concurrency: publishing.concurrency,
             extraMaintenance: [
               ...(catalogSources
@@ -446,6 +468,7 @@ export const prepareProductionBackend = async (
                       run: createCatalogSync({
                         listSources: () => listPublishedCatalogSources(pool),
                         port: workPublishingPort,
+                        ...(blocksRender ? { blocks: workPublishingPort } : {}),
                       }).run,
                     },
                   ]
@@ -474,6 +497,17 @@ export const prepareProductionBackend = async (
                         sandbox: publishingMedia.sandbox,
                         source: catalogSources,
                       }),
+                      ...(blocksRender
+                        ? {
+                            blocks: {
+                              port: workPublishingPort,
+                              renderer: createCatalogBlockRenderer({
+                                store: publishingMedia.store,
+                                sandbox: publishingMedia.sandbox,
+                              }),
+                            },
+                          }
+                        : {}),
                     },
                   }
                 : {}),
@@ -562,10 +596,23 @@ export const prepareProductionBackend = async (
     throw error;
   }
 
-  const catalogQueryPort = new PostgresCatalogQueryAdapter(
-    pool,
-    catalogReaders,
-  );
+  // catalog-deep-zoom-v1: the Detail `zoom` frame and the per-image
+  // block-list read, behind MEDIA_CATALOG_ZOOM_BLOCKS, only where blocks can
+  // be delivered (edge delivery, or Development's relay) and while the
+  // breaker is closed. Only the Catalog query port gets the gate: the Detail
+  // and its block list, and the article tool's read of that same Detail,
+  // which carries the frame only (never a block URL).
+  const catalogZoomGate = catalogZoom
+    ? createCatalogZoomGate({
+        readUsage: () => publicationPort.readDayUsage(),
+        edgeDelivery: () => allowsEdgeDelivery(publicationConfig),
+        development: runtimeConfig.nodeEnv === "development",
+      })
+    : undefined;
+  const catalogQueryPort = new PostgresCatalogQueryAdapter(pool, {
+    ...catalogReaders,
+    ...(catalogZoomGate === undefined ? {} : { zoom: catalogZoomGate }),
+  });
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,
     {

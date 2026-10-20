@@ -30,6 +30,8 @@ import { sniffSignature } from "./processing/signature.js";
 import {
   SANDBOX_PROTOCOL_VERSION,
   SandboxProtocolError,
+  itemOutput,
+  itemRejection,
 } from "./sandbox/protocol.js";
 import { SANDBOX_JOB_LIMITS, sandboxNonce } from "./sandbox/sandbox-runner.js";
 
@@ -249,7 +251,7 @@ export function createProfileRenderer(
         });
         const manifest = result.manifest;
         if (manifest.status === "rejected") {
-          throw new MediaRejectedError(manifest.failureCode!);
+          throw itemRejection(manifest.failureCode);
         }
         validateSandboxManifest(manifest, request);
         await probeSandboxOutputs(result);
@@ -262,7 +264,7 @@ export function createProfileRenderer(
           return rejected("source_mismatch");
         }
         const outputs: ProfileWorkerRenderOutcome["renditions"][number][] = [];
-        for (const output of manifest.outputs) {
+        for (const output of manifest.outputs.map(itemOutput)) {
           if (
             output.contentType !== "image/webp" ||
             output.role === "motion" ||

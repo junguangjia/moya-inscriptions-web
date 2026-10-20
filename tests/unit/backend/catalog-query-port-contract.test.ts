@@ -28,7 +28,14 @@ describe("CatalogQueryPort contract", () => {
     expectTypeOf<DetailResult>().not.toEqualTypeOf<CatalogDetail | null>();
   });
 
-  it("exposes exactly the frozen read methods", () => {
-    expectTypeOf<keyof CatalogQueryPort>().toEqualTypeOf<"list" | "getById">();
+  it("exposes exactly the frozen read methods, plus the optional deep-zoom reads", () => {
+    expectTypeOf<keyof CatalogQueryPort>().toEqualTypeOf<
+      "list" | "getById" | "getZoomFrames" | "getZoomBlocks"
+    >();
+    // catalog-deep-zoom-v1: the two block reads are optional; every existing
+    // reader still satisfies the port with list and getById alone.
+    expectTypeOf<
+      Pick<CatalogQueryPort, "list" | "getById">
+    >().toMatchTypeOf<CatalogQueryPort>();
   });
 });

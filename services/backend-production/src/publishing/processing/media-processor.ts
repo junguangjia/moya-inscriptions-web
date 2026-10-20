@@ -8,6 +8,9 @@ import { PublishingMediaStoreError } from "../../storage/publishing-media-store.
 import {
   SANDBOX_PROTOCOL_VERSION,
   SandboxProtocolError,
+  itemDetectedTypes,
+  itemOutput,
+  itemRejection,
 } from "../sandbox/protocol.js";
 import { SANDBOX_JOB_LIMITS, sandboxNonce } from "../sandbox/sandbox-runner.js";
 import { openFileByteReader } from "./byte-reader.js";
@@ -46,7 +49,7 @@ import type {
   SandboxItemRequest,
   SandboxJob,
   SandboxManifest,
-  SandboxOutput,
+  ItemSandboxOutput,
   SandboxRenditionRequest,
 } from "../sandbox/protocol.js";
 import type {
@@ -130,6 +133,11 @@ export interface ProcessorInput {
   readonly coverCrop: NormalizedCrop | null;
   readonly variants: readonly ProcessorVariant[];
   readonly signal?: AbortSignal;
+  /**
+   * Measurement only: receives the coordinator and renderer timing of a job
+   * that produced its derivatives, before the outcome resolves.
+   */
+  readonly onTiming?: (timing: ProcessorTiming) => void;
 }
 
 export interface ProcessorDerivative {
@@ -182,6 +190,30 @@ export type ProcessorOutcome =
       readonly placeholderColor?: string | null;
     }
   | { readonly status: "rejected"; readonly failureCode: MediaFailureCode };
+
+/**
+ * Content-free timing of one processed or derived job: whole milliseconds,
+ * staged source size and decoded input pixels only.
+ */
+export interface ProcessorTiming {
+  /** Staging the source components from the media store. */
+  readonly readMs: number;
+  /** The container run: start-up, decode, render and the framed transfer. */
+  readonly sandboxMs: number;
+  /** Renderer-side preparation (decode included); `null` when not reported. */
+  readonly prepareMs: number | null;
+  /** Renderer-side milliseconds per produced role, in render order. */
+  readonly roles: Readonly<Record<string, number>>;
+  /** Output probes and the derivative uploads to the media store. */
+  readonly storeMs: number;
+  readonly sourceBytes: number;
+  /** Decoded still pixels (after orientation); `null` without a still. */
+  readonly inputPixels: number | null;
+}
+
+/** Whole milliseconds since a `performance.now()` reading. */
+const elapsedMs = (since: number): number =>
+  Math.max(0, Math.round(performance.now() - since));
 
 /** The media store operations the coordinator needs. */
 export interface ProcessorMediaStore {
@@ -594,7 +626,7 @@ export async function storeOutputFile(
 }
 
 /** The recipe identity of a received output. */
-export const outputRecipe = (output: SandboxOutput) =>
+export const outputRecipe = (output: ItemSandboxOutput) =>
   currentRecipe(output.role === "motion" ? "motion" : output.role);
 
 /** Content-free log line for a sandbox failure the coordinator rejects. */
@@ -641,6 +673,15 @@ function settleFailure(
   }
   throw new MediaProcessingUnavailableError(systemErrorCode(error));
 }
+
+/** Hands timing to the caller; a failing measurement never fails the job. */
+const reportTiming = (input: ProcessorInput, timing: ProcessorTiming) => {
+  try {
+    input.onTiming?.(timing);
+  } catch {
+    // Measurement only.
+  }
+};
 
 async function processItem(
   { store, sandbox, logger = console }: PublishingMediaProcessorOptions,
@@ -697,6 +738,7 @@ async function processItem(
     if (stagedBytes > SANDBOX_INPUT_LIMITS.maxInputBytes) {
       throw new MediaRejectedError("dimensions_exceeded");
     }
+    const readStarted = performance.now();
     job = await sandbox.createJob();
     const inputs: SandboxInput[] = [];
     if (legacy) {
@@ -737,19 +779,23 @@ async function processItem(
       item,
       limits: SANDBOX_JOB_LIMITS,
     };
+    const readMs = elapsedMs(readStarted);
+    const sandboxStarted = performance.now();
     const result = await sandbox.run(job, request, {
       timeoutMs: live ? SANDBOX_TIMEOUTS_MS.live : SANDBOX_TIMEOUTS_MS.static,
       ...withSignal(signal),
     });
+    const sandboxMs = elapsedMs(sandboxStarted);
     const manifest = result.manifest;
     if (manifest.status === "rejected") {
-      throw new MediaRejectedError(manifest.failureCode!);
+      throw itemRejection(manifest.failureCode);
     }
     validateSandboxManifest(manifest, request);
+    const storeStarted = performance.now();
     await probeSandboxOutputs(result);
 
     const derivatives: ProcessorDerivative[] = [];
-    for (const output of manifest.outputs) {
+    for (const output of manifest.outputs.map(itemOutput)) {
       // A work item never has a profile rendition.
       if (isProfileRole(output.role)) throw violation("outputs_mismatch");
       const file = result.files.get(output.name)!;
@@ -781,6 +827,17 @@ async function processItem(
         recipeDigest: recipe.digest,
       });
     }
+    reportTiming(input, {
+      readMs,
+      sandboxMs,
+      prepareMs: manifest.timings?.prepareMs ?? null,
+      roles: manifest.timings?.roles ?? {},
+      storeMs: elapsedMs(storeStarted),
+      sourceBytes: stagedBytes,
+      inputPixels: manifest.inspection
+        ? manifest.inspection.width * manifest.inspection.height
+        : null,
+    });
     if (!processing) {
       return {
         status: "derived",
@@ -790,7 +847,7 @@ async function processItem(
     }
     return {
       status: "processed",
-      detectedTypes: manifest.detectedTypes!,
+      detectedTypes: itemDetectedTypes(manifest.detectedTypes),
       presentation: manifest.presentation!,
       pairing: manifest.pairing,
       stillExifOrientation: manifest.stillExifOrientation,

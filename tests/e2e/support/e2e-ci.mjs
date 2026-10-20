@@ -106,6 +106,18 @@ async function runShard(shard) {
       "--frozen-lockfile",
     ]);
     if (install.exitCode !== 0) return install.exitCode ?? 1;
+    // Specs import @moya/contracts values at collection time and its exports
+    // resolve to dist, so build it before any list or run.
+    const build = await command(directory, "workspace-build", [
+      "exec",
+      "turbo",
+      "run",
+      "build",
+      "--filter=@moya/contracts",
+      "--cache-dir=.turbo/library-cache",
+      "--no-daemon",
+    ]);
+    if (build.exitCode !== 0) return build.exitCode ?? 1;
     const browsers = await command(directory, "browser-install", [
       "--filter",
       "@moya/tests",

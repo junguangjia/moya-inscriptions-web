@@ -376,6 +376,32 @@ export const registerWorkPublishingMediaTests = (
         )
       ).rows;
 
+    const startedAt = async (jobId: string): Promise<Date | null> =>
+      (
+        await pool.query<{ started_at: Date | null }>(
+          "SELECT started_at FROM community.publishing_jobs WHERE id=$1",
+          [jobId],
+        )
+      ).rows[0]?.started_at ?? null;
+
+    const uploadTiming = async (componentId: string) =>
+      (
+        await pool.query<{
+          upload_attempts: number | null;
+          upload_first_started_at: Date | null;
+          upload_first_byte_at: Date | null;
+          upload_last_byte_at: Date | null;
+          upload_refusals_after_commit: number | null;
+          upload_first_refusal_after_commit_at: Date | null;
+          updated_at: Date;
+        }>(
+          `SELECT upload_attempts, upload_first_started_at, upload_first_byte_at, upload_last_byte_at,
+                  upload_refusals_after_commit, upload_first_refusal_after_commit_at, updated_at
+           FROM community.media_components WHERE id=$1`,
+          [componentId],
+        )
+      ).rows[0];
+
     const refsOf = async (itemId: string) =>
       (
         await pool.query<{ holder_kind: string; holder_id: string }>(
@@ -1481,9 +1507,12 @@ export const registerWorkPublishingMediaTests = (
         payload: null,
       });
       if (first === undefined) throw new Error("claim missing");
+      expect(await startedAt(first.id)).toEqual(t0);
       expect(await adapter.renewJobLease(first, minute, at(30 * second))).toBe(
         true,
       );
+      // Lease renewal keeps the claim time.
+      expect(await startedAt(first.id)).toEqual(t0);
       expect(
         await adapter.renewJobLease(
           { id: first.id, leaseOwner: "worker-b" },
@@ -1506,6 +1535,8 @@ export const registerWorkPublishingMediaTests = (
       const [second2] = await claim("worker-b", at(92 * second));
       if (second2 === undefined) throw new Error("claim missing");
       expect(second2.attempts).toBe(2);
+      // A retried claim records its own start.
+      expect(await startedAt(second2.id)).toEqual(at(92 * second));
       expect(
         await adapter.failJob(second2, "store_unavailable", at(100 * second)),
       ).toBe("retry_scheduled");
@@ -1572,6 +1603,136 @@ export const registerWorkPublishingMediaTests = (
         "failed",
         "succeeded",
       ]);
+      // Completion keeps the claim time next to the finish time.
+      expect(await startedAt(done.id)).toEqual(at(day));
+    });
+
+    it("records Backend upload timing, attempts and resends refused after commit", async () => {
+      const draft = await newDraft(a);
+      const item = await adapter.registerItem(
+        a,
+        staticCommand({ draftId: draft.id }, 2 * MiB),
+        t0,
+      );
+      const component = item.components[0];
+      if (component === undefined) throw new Error("component missing");
+      const start = () => ({
+        attempt: randomUUID(),
+        contentLength: 2 * MiB,
+        supersede: false,
+      });
+      // New rows start at zero counts and record nothing else.
+      expect(await uploadTiming(component.id)).toMatchObject({
+        upload_attempts: 0,
+        upload_first_started_at: null,
+        upload_first_byte_at: null,
+        upload_last_byte_at: null,
+        upload_refusals_after_commit: 0,
+        upload_first_refusal_after_commit_at: null,
+      });
+      const interrupted = await adapter.beginComponentUpload(
+        a,
+        component.id,
+        start(),
+        at(second),
+      );
+      await adapter.abortComponentUpload(interrupted, at(2 * second));
+      const resent = await adapter.beginComponentUpload(
+        a,
+        component.id,
+        start(),
+        at(3 * second),
+      );
+      expect(await uploadTiming(component.id)).toMatchObject({
+        upload_attempts: 2,
+        upload_first_started_at: at(second),
+        upload_first_byte_at: null,
+        upload_last_byte_at: null,
+      });
+      // A refusal while the component is still receiving is not a lost answer.
+      expect(
+        await adapter.noteUploadRefusedAfterCommit(
+          a,
+          component.id,
+          at(4 * second),
+        ),
+      ).toBeNull();
+      expect(
+        await adapter.commitComponentUpload(
+          resent,
+          blobOf(2 * MiB),
+          at(9 * second),
+          { firstByteAt: at(3_500), lastByteAt: at(8 * second) },
+        ),
+      ).toMatchObject({ status: "committed" });
+      const committed = await uploadTiming(component.id);
+      expect(committed).toMatchObject({
+        upload_attempts: 2,
+        upload_first_started_at: at(second),
+        upload_first_byte_at: at(3_500),
+        upload_last_byte_at: at(8 * second),
+        upload_refusals_after_commit: 0,
+      });
+      // The resend after a lost answer is still refused, then counted once
+      // per refusal with its first time; the commit time comes back.
+      await expect(
+        adapter.beginComponentUpload(a, component.id, start(), at(12 * second)),
+      ).rejects.toMatchObject({ name: "CommunityConflictError" });
+      expect(
+        await adapter.noteUploadRefusedAfterCommit(
+          a,
+          component.id,
+          at(12 * second),
+        ),
+      ).toEqual(at(9 * second));
+      expect(
+        await adapter.noteUploadRefusedAfterCommit(
+          a,
+          component.id,
+          at(20 * second),
+        ),
+      ).toEqual(at(9 * second));
+      expect(
+        await adapter.noteUploadRefusedAfterCommit(
+          b,
+          component.id,
+          at(21 * second),
+        ),
+      ).toBeNull();
+      expect(await uploadTiming(component.id)).toMatchObject({
+        upload_attempts: 2,
+        upload_refusals_after_commit: 2,
+        upload_first_refusal_after_commit_at: at(12 * second),
+        // Measurement never moves the component's own clock.
+        updated_at: committed?.updated_at,
+      });
+      // Unordered timing still commits but records nothing.
+      const other = await adapter.registerItem(
+        a,
+        staticCommand({ draftId: draft.id }, MiB),
+        t0,
+      );
+      const otherComponent = other.components[0];
+      if (otherComponent === undefined) throw new Error("component missing");
+      const otherFence = await adapter.beginComponentUpload(
+        a,
+        otherComponent.id,
+        { attempt: randomUUID(), contentLength: MiB, supersede: false },
+        at(second),
+      );
+      expect(
+        await adapter.commitComponentUpload(
+          otherFence,
+          blobOf(MiB),
+          at(5 * second),
+          { firstByteAt: at(4 * second), lastByteAt: at(2 * second) },
+        ),
+      ).toMatchObject({ status: "committed" });
+      expect(await uploadTiming(otherComponent.id)).toMatchObject({
+        upload_attempts: 1,
+        upload_first_byte_at: null,
+        upload_last_byte_at: null,
+      });
     });
 
     it("records processing results, derives edit keys and reports readiness", async () => {
