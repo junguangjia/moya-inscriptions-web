@@ -80,7 +80,7 @@ export function boardParameters(websiteId, funnelId) {
           column(
             "region",
             "MetricsTable",
-            { type: "region", limit: 20, metric: "访问会话" },
+            { type: "region", limit: 20, metric: "去重访客" },
             {
               title: "省份 / 地区",
               description:
@@ -90,10 +90,11 @@ export function boardParameters(websiteId, funnelId) {
           column(
             "city",
             "MetricsTable",
-            { type: "city", limit: 20, metric: "访问会话" },
+            { type: "city", limit: 20, metric: "去重访客" },
             {
               title: "城市",
-              description: "按所选省份查看；仅统计已解析城市的访问会话。",
+              description:
+                "按所选省份查看；仅统计已解析城市的去重访客，非精确人数。",
             },
           ),
         ],

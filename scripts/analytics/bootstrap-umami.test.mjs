@@ -186,7 +186,7 @@ test("native website, team-view-only membership, saved funnel and Board bootstra
     ["region", "city"],
   );
   assert.ok(
-    regions.every((component) => component.props.metric === "访问会话"),
+    regions.every((component) => component.props.metric === "去重访客"),
   );
   assert.equal(regions[0].title, "省份 / 地区");
   assert.equal(regions[1].title, "城市");
