@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,12 +33,25 @@ vi.mock("../features/product-application/product-application", () => ({
 }));
 
 import FormalPage from "./page";
+import { ProductAnalytics } from "../features/analytics/product-analytics";
 import {
   CatalogSearch,
   CatalogSearchNavigationAction,
 } from "../features/search/catalog-search";
 
 const states = { identity: "production-states" };
+const productUtility = expect.objectContaining({
+  type: Fragment,
+  props: expect.objectContaining({
+    children: [
+      expect.objectContaining({ type: CatalogSearch }),
+      expect.objectContaining({
+        type: ProductAnalytics,
+        props: { enabled: false },
+      }),
+    ],
+  }),
+});
 
 beforeEach(() => {
   loadProductionProductStatesMock.mockReset();
@@ -80,7 +94,7 @@ describe("FormalPage", () => {
       navigationAction: expect.objectContaining({
         type: CatalogSearchNavigationAction,
       }),
-      productUtility: expect.objectContaining({ type: CatalogSearch }),
+      productUtility,
       states,
     });
     expect(productApplicationMock.mock.calls[0]?.[0]).not.toHaveProperty(
@@ -177,7 +191,7 @@ describe("FormalPage", () => {
       navigationAction: expect.objectContaining({
         type: CatalogSearchNavigationAction,
       }),
-      productUtility: expect.objectContaining({ type: CatalogSearch }),
+      productUtility,
       states,
     });
   });

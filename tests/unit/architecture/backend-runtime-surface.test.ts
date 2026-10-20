@@ -58,6 +58,7 @@ describe("@moya/backend-runtime package boundary", () => {
       "createDevelopmentCatalogFixtureQueryPort",
       "createProductionAuthService",
       "createPublishingTransferRegistry",
+      "createTrustedAnalyticsRequestSource",
       "createTrustedAuthRequestSource",
       "handleArticleAuthoringRequest",
       "handleArticleDelegationHttpRequest",
@@ -84,6 +85,7 @@ describe("@moya/backend-runtime package boundary", () => {
     const approvedImports = new Set([
       "@moya/api",
       "@moya/contracts",
+      "@moya/contracts/analytics",
       "@moya/contracts/schemas",
       "@moya/image",
       "@moya/public-api",

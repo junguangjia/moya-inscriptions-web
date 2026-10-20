@@ -12,6 +12,8 @@ import { CatalogPagingControl } from "../catalog-paging/catalog-paging-control";
 import { useProductShell } from "../product-shell/product-shell";
 import { SearchPresentation, SearchTrigger } from "./search-presentation";
 import styles from "./search.module.css";
+import { trackAnalytics } from "../analytics/client";
+import { requestIdentity } from "../shell/request-identity";
 import type { ReactNode, RefObject } from "react";
 import type {
   CatalogSearchItem,
@@ -113,6 +115,7 @@ export const CatalogSearch = ({
   const generationRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
   const submittedRef = useRef("");
+  const analyticsRequest = useRef<string | null>(null);
   const setSnapshot = (value: SearchSnapshot) => {
     snapshotRef.current = value;
     setSnapshotState(value);
@@ -149,6 +152,7 @@ export const CatalogSearch = ({
     submittedRef.current = value;
     const previous = snapshotRef.current;
     const append = requestedPage > 1;
+    if (!append) analyticsRequest.current = requestIdentity();
     setSnapshot(
       append
         ? { ...previous, paging: "loading" }
@@ -184,6 +188,13 @@ export const CatalogSearch = ({
       );
       return;
     }
+    if (!append && analyticsRequest.current)
+      trackAnalytics({
+        name: "search",
+        surface: "search",
+        requestId: analyticsRequest.current,
+        searchQuery: query.q.slice(0, 100),
+      });
     // Keep the server's complete order. Dedupe only overlapping page identities.
     const seen = new Set(append ? previous.items.map(({ id }) => id) : []);
     const items = append ? [...previous.items] : [];
@@ -232,20 +243,38 @@ export const CatalogSearch = ({
       }}
     >
       {snapshot.state === "results" ? (
-        <div className={styles.groups} data-search-results="">
+        <div
+          className={styles.groups}
+          data-search-results=""
+          data-analytics-search-request={analyticsRequest.current ?? undefined}
+        >
           <p role="status">找到 {snapshot.page?.total} 条资料</p>
           <div className={styles.results}>
-            {snapshot.items.map((item) => (
-              <div key={item.id} data-search-result="">
+            {snapshot.items.map((item, index) => (
+              <div
+                key={item.id}
+                data-search-result=""
+                data-analytics-position={index + 1}
+              >
                 <p className={styles.matchKind}>
                   {matchLabels[item.matchKind]}
                 </p>
                 <CatalogCard
                   item={item}
                   variant="inscription"
-                  onOpenCatalog={(record, opener) =>
-                    openCatalog(record.id, opener)
-                  }
+                  onOpenCatalog={(record, opener) => {
+                    trackAnalytics({
+                      name: "search_click",
+                      surface: "search",
+                      targetType: "catalog",
+                      targetId: record.id,
+                      ...(index < 10_000 ? { position: index + 1 } : {}),
+                      ...(analyticsRequest.current
+                        ? { requestId: analyticsRequest.current }
+                        : {}),
+                    });
+                    openCatalog(record.id, opener);
+                  }}
                 />
               </div>
             ))}

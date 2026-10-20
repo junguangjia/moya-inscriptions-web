@@ -843,9 +843,9 @@ describe("MediaSection automatic photo selection", () => {
     );
   });
 
-  it("offers 跳过，只发布文字 only while the phone step has no media", async () => {
+  it("offers 先写标题和正文 only while the phone step has no media", async () => {
     await render();
-    await click(buttonByText("跳过，只发布文字"));
+    await click(buttonByText("先写标题和正文"));
     expect(probe.store!.get().step).toBe("text");
     await addStatic(1);
     expect(container.querySelector("[data-media-skip]")).toBeNull();

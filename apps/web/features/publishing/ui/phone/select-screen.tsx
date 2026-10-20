@@ -24,7 +24,7 @@ import type { ReactNode, Ref, RefObject } from "react";
 /**
  * The start screen of the phone publishing flow (#244 r4, the old 选择照片
  * empty state, `data-editor-screen="select"`): 选择照片 · 拍照 · 专题 as
- * large tiles, 跳过，只发布文字 under them, 草稿箱 at the bar's end on an
+ * large tiles, 先写标题和正文 under them, 草稿箱 at the bar's end on an
  * untouched new work (ASK-2) and 原图画质 for the next photos in the bottom
  * bar. It shows exactly when no photo is visible (D4): the album is empty,
  * or every photo in it waits here for 撤销 (`heldRemoval`: 编辑's last
@@ -54,7 +54,7 @@ export interface SelectScreenProps {
   readonly notices?: ReactNode;
   /** ‹ 返回: closes the editor through its leave guard. */
   readonly onClose: () => void;
-  /** 跳过，只发布文字. */
+  /** 先写标题和正文. */
   readonly onSkipToText: () => void;
   /** Files from 选择照片 or 拍照, to stage (the flow then shows 编辑). */
   readonly onAddFiles: (files: readonly File[], origin: FileOrigin) => void;
