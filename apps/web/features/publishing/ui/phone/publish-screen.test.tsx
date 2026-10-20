@@ -327,7 +327,8 @@ describe("PublishScreen", () => {
     const label = screen.querySelector<HTMLLabelElement>(
       `label[for="${title.id}"]`,
     )!;
-    expect(label.textContent).toBe("标题（可选）");
+    expect(label.textContent).toBe("标题（必填）");
+    expect(title.getAttribute("aria-required")).toBe("true");
     expect(names(label)).toEqual(["visuallyHidden"]);
     expect(screen.querySelector(`label[for="${body.id}"]`)!.textContent).toBe(
       "正文（可选）",
@@ -700,7 +701,7 @@ describe("PublishScreen", () => {
     expect(names(submit())).toEqual(["primaryButton", "publishButton"]);
     const reason = () =>
       footer().querySelector<HTMLElement>("[data-publish-reason]")!;
-    expect(reason().textContent).toBe("标题、正文和图片不能都为空");
+    expect(reason().textContent).toBe("请填写标题并至少添加一张图片");
     expect(reason().getAttribute("data-publish-reason")).toBe("error");
     expect(names(reason())).toEqual(["reason"]);
     // Mockup A's row under the line: 预览, then 发布 taking the rest (no
@@ -740,10 +741,23 @@ describe("PublishScreen", () => {
 
     act(() => store.setTitle("临兰亭"));
     draw({ publish });
+    expect(submit().getAttribute("aria-disabled")).toBe("true");
+    expect(reason().textContent).toBe("请至少添加一张图片");
+    act(() => submit().click());
+    expect(onSubmit).not.toHaveBeenCalled();
+    act(() => {
+      for (const name of ["animationend", "webkitAnimationEnd"])
+        reason().dispatchEvent(new Event(name, { bubbles: true }));
+    });
+    act(() =>
+      store.setMedia({ items: [item("a")], coverKey: null, coverCrop: null }),
+    );
+    draw({
+      publish,
+      confirmation: { readiness: { ...ready, total: 1, ready: 1 } },
+    });
     expect(submit().hasAttribute("aria-disabled")).toBe(false);
-    // A text-only work that can go has nothing to say above 发布.
-    expect(footer().querySelector("[data-publish-reason]")).toBe(null);
-    expect(submit().hasAttribute("aria-describedby")).toBe(false);
+    expect(reason().textContent).toBe("全部 1 项已就绪");
     act(() => submit().click());
     expect(onSubmit).toHaveBeenCalledOnce();
 
@@ -1322,6 +1336,7 @@ describe("PublishPreviewStrip", () => {
 describe("publishReason", () => {
   const store = createEditorSessionStore(ACCOUNT, { type: "new" });
   store.setTitle("临兰亭");
+  store.setMedia({ items: [item("a")], coverKey: null, coverCrop: null });
   const input: PublishReasonInput = {
     state: store.get(),
     readiness: ready,
@@ -1329,8 +1344,14 @@ describe("publishReason", () => {
     submission: { status: "idle" },
   };
 
-  it("says nothing while a text-only work can go, and that every photo is ready otherwise", () => {
-    expect(publishReason(input, "发布", false)).toBe(null);
+  it("requires a photo even with a title, and reports ready photos otherwise", () => {
+    expect(
+      publishReason(
+        { ...input, state: { ...input.state, items: [] } },
+        "发布",
+        true,
+      ),
+    ).toEqual({ text: "请至少添加一张图片", tone: "error" });
     const withPhotos = {
       ...input,
       state: {

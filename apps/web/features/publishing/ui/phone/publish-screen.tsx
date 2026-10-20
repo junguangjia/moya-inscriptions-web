@@ -624,6 +624,7 @@ const BareText = ({
   }, [value]);
 
   const common = {
+    "aria-required": field === "title" || undefined,
     "aria-describedby": describedBy,
     "aria-invalid": message === null ? undefined : true,
     "data-editor-autofocus": autoFocus ? "" : undefined,
@@ -654,7 +655,8 @@ const BareText = ({
   return (
     <div className={styles.bareField} data-editor-field={field}>
       <label className={editorStyles.visuallyHidden} htmlFor={id}>
-        {label}（可选）
+        {label}
+        {multiline ? "（可选）" : "（必填）"}
       </label>
       {multiline ? (
         <textarea

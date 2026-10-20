@@ -55,7 +55,7 @@ export const registerThreadTests = (
     const content = (
       over: Partial<WorkSubmissionContent> = {},
     ): WorkSubmissionContent => ({
-      title: "",
+      title: "访碑记录",
       body: "线下访碑记录",
       authorship: { kind: "original" },
       visibility: "public",
@@ -67,14 +67,46 @@ export const registerThreadTests = (
     const command = async (
       owner: string,
       over: Partial<WorkSubmissionCommand> = {},
-    ): Promise<WorkSubmissionCommand> =>
-      workSubmissionCommandSchema.parse({
+    ): Promise<WorkSubmissionCommand> => {
+      const holder = over.holder ?? { sessionId: await holdSession(owner) };
+      const mediaId = id("user-media");
+      const itemId = id("media-item");
+      await pool.query(
+        "INSERT INTO community.user_media(id,owner_id,mime_type,width,height,sha256,bytes) VALUES($1,$2,'image/png',30,40,$3,$4)",
+        [mediaId, owner, "b".repeat(64), Buffer.from([0x89, 0x50, 0x4e, 0x47])],
+      );
+      await pool.query(
+        "INSERT INTO community.media_items(id,owner_id,kind,quality_mode,source,legacy_media_id,state,presentation) VALUES($1,$2,'static','legacy','legacy_user_media',$3,'ready','{\"width\":30,\"height\":40}'::jsonb)",
+        [itemId, owner, mediaId],
+      );
+      await pool.query(
+        "INSERT INTO community.media_item_refs(item_id,holder_kind,holder_id) VALUES($1,$2,$3)",
+        [
+          itemId,
+          "sessionId" in holder ? "session" : "draft",
+          "sessionId" in holder ? holder.sessionId : holder.draftId,
+        ],
+      );
+      return workSubmissionCommandSchema.parse({
         requestId: randomUUID(),
-        holder: { sessionId: await holdSession(owner) },
-        content: content(),
         baseRevisionId: null,
         ...over,
+        holder,
+        content: {
+          ...content(),
+          ...over.content,
+          items: [
+            {
+              key: itemId,
+              itemId,
+              kind: "static",
+              qualityMode: "legacy",
+              edit: { rotation: 0, crop: null },
+            },
+          ],
+        },
       });
+    };
     const createThread = async (title: string) => {
       const created = await threads.operatorCreateThread("owner", {
         requestId: randomUUID(),
@@ -159,6 +191,10 @@ export const registerThreadTests = (
           [users],
         );
         await pool.query(
+          "DELETE FROM community.user_media WHERE owner_id=ANY($1::text[])",
+          [users],
+        );
+        await pool.query(
           "DELETE FROM community.public_users WHERE id=ANY($1::text[])",
           [users],
         );
@@ -217,7 +253,7 @@ export const registerThreadTests = (
       await expect(
         publishing.submit(
           author,
-          workSubmissionCommandSchema.parse({
+          await command(author, {
             requestId: randomUUID(),
             holder: { sessionId: editHolder },
             content: content({ body: "改动" }),

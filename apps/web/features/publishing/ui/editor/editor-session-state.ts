@@ -505,6 +505,7 @@ export const failureField = (
   code: WorkPublishingFailureCode | string | null,
 ): EditorField => {
   switch (code) {
+    case "title_required":
     case "title_too_long":
     case "title_line_break":
       return "title";
@@ -516,6 +517,7 @@ export const failureField = (
       return "originalAuthor";
     case "source_note_too_long":
       return "sourceNote";
+    case "image_required":
     case "items_limit":
     case "not_ready":
     case "unsupported_type":
