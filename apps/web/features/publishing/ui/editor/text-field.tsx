@@ -70,6 +70,7 @@ export const TextField = ({
   }, [value, size]);
 
   const common = {
+    "aria-required": field === "title" || undefined,
     "aria-describedby": describedBy,
     "aria-invalid": message === null ? undefined : true,
     className: multiline ? styles.textarea : styles.input,

@@ -418,7 +418,7 @@ describe("draft and submission content", () => {
       workSubmissionCommandSchema.parse({
         requestId,
         holder: { sessionId },
-        content: notSet,
+        content: { ...notSet, items: [item("k1")] },
         baseRevisionId: null,
       }).content.authorship,
     ).toBeNull();
@@ -456,7 +456,7 @@ describe("draft and submission content", () => {
     }
   });
 
-  it("refuses to create an empty draft", () => {
+  it("refuses to create an empty draft but saves incomplete nonempty drafts", () => {
     expect(
       messagesOf(
         createPublishingDraftCommandSchema.safeParse({
@@ -466,16 +466,29 @@ describe("draft and submission content", () => {
         }),
       ),
     ).toEqual(["empty_work"]);
-    expect(
-      createPublishingDraftCommandSchema.safeParse({
-        requestId,
-        content: content({ body: "正文" }),
-        deviceClass: null,
-      }).success,
-    ).toBe(true);
+    for (const incomplete of [
+      content({ body: "正文" }),
+      content({ title: "只有标题" }),
+      content({ title: " \t　", items: [item("k1")] }),
+    ]) {
+      expect(
+        createPublishingDraftCommandSchema.safeParse({
+          requestId,
+          content: incomplete,
+          deviceClass: null,
+        }).success,
+      ).toBe(true);
+      expect(
+        savePublishingDraftCommandSchema.safeParse({
+          baseRevision: 1,
+          content: incomplete,
+          deviceClass: null,
+        }).success,
+      ).toBe(true);
+    }
   });
 
-  it("accepts text-only, title-only and media-only submissions and refuses empty or pending ones", () => {
+  it("requires a title and photo at submission and leaves pending photos to readiness", () => {
     const submit = (overrides: Record<string, unknown>) =>
       workSubmissionCommandSchema.safeParse({
         requestId,
@@ -483,15 +496,30 @@ describe("draft and submission content", () => {
         content: content(overrides),
         baseRevisionId: null,
       });
-    expect(submit({ body: "正文\n第二行" }).success).toBe(true);
-    expect(submit({ title: "只有标题" }).success).toBe(true);
-    expect(submit({ items: [item("k1")] }).success).toBe(true);
+    expect(messagesOf(submit({ body: "正文\n第二行" }))).toEqual([
+      "title_required",
+      "image_required",
+    ]);
+    expect(messagesOf(submit({ title: "只有标题" }))).toEqual([
+      "image_required",
+    ]);
+    expect(messagesOf(submit({ items: [item("k1")] }))).toEqual([
+      "title_required",
+    ]);
+    expect(messagesOf(submit({ title: " \t　", items: [item("k1")] }))).toEqual(
+      ["title_required"],
+    );
+    for (const kind of ["static", "live"])
+      expect(
+        submit({ title: " 标题 ", items: [item("k1", { kind })] }).success,
+      ).toBe(true);
     expect(messagesOf(submit({ title: " ", body: " " }))).toEqual([
       "empty_work",
     ]);
     // Readiness has one channel: the Backend's not_ready result, never a 422.
     expect(
       submit({
+        title: "待上传图片",
         items: [
           {
             key: "k1",
@@ -507,6 +535,7 @@ describe("draft and submission content", () => {
       messagesOf(
         submit({
           title: legacyTitle,
+          items: [item("k1")],
           authorship: { kind: "copy_practice", referenceTitle: "上\n下" },
         }),
       ),

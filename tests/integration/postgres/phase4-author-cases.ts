@@ -36,6 +36,7 @@ import type {
   AuthorMedia,
   CatalogCommentId,
   PublicUserId,
+  WorkDraftItem,
 } from "@moya/contracts";
 import type { BackendProcessHandle } from "@moya/backend-runtime";
 
@@ -279,6 +280,25 @@ export const registerPhase4AuthorTests = (
       });
       expect(response.status).toBe(201);
       return response.json() as Promise<AuthorMedia>;
+    };
+    const photo = async (): Promise<WorkDraftItem> => {
+      const mediaId = id("user-media"),
+        itemId = id("media-item");
+      await pool.query(
+        "INSERT INTO community.user_media(id,owner_id,mime_type,width,height,sha256,bytes) VALUES($1,$2,'image/png',4,3,$3,$4)",
+        [mediaId, a, "a".repeat(64), Buffer.from([0x89, 0x50, 0x4e, 0x47])],
+      );
+      await pool.query(
+        "INSERT INTO community.media_items(id,owner_id,kind,quality_mode,source,legacy_media_id,state,presentation) VALUES($1,$2,'static','legacy','legacy_user_media',$3,'ready','{\"width\":4,\"height\":3}'::jsonb)",
+        [itemId, a, mediaId],
+      );
+      return {
+        key: itemId,
+        itemId,
+        kind: "static",
+        qualityMode: "legacy",
+        edit: { rotation: 0, crop: null },
+      };
     };
     it("persists and clears studio composition while omitted updates preserve it across every author read", async () => {
       const studioName = "🌿".repeat(5) + "书斋";
@@ -1290,7 +1310,11 @@ export const registerPhase4AuthorTests = (
         {
           requestId: randomUUID(),
           holder: { sessionId: session },
-          content: { ...editable.content, body: "发布后的新正文" },
+          content: {
+            ...editable.content,
+            body: "发布后的新正文",
+            items: [await photo()],
+          },
           baseRevisionId: editable.revisionId,
         },
         editedAt,
@@ -1328,7 +1352,11 @@ export const registerPhase4AuthorTests = (
         {
           requestId: randomUUID(),
           holder: { sessionId: session },
-          content: { ...editable.content, title: "更新" },
+          content: {
+            ...editable.content,
+            title: "更新",
+            items: [await photo()],
+          },
           baseRevisionId: editable.revisionId,
         },
         new Date("2026-09-13T12:00:00.000Z"),

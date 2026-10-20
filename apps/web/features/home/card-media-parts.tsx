@@ -15,7 +15,10 @@ export const CatalogProvinceBadge = ({
 }: {
   province: string | undefined;
 }) => {
-  const label = province?.trim();
+  const label = province
+    ?.trim()
+    .replace(/省$/u, "")
+    .replace(/^台湾地区$/u, "台湾");
   return label ? (
     <span className={styles.provinceBadge} data-catalog-province="">
       {label}
