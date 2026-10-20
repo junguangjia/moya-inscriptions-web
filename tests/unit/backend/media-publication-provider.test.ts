@@ -451,7 +451,7 @@ describe("image host day usage (catalog-deep-zoom-v1 breaker)", () => {
     });
   });
 
-  it("refuses an unknown metric, a negative or fractional sum and a short page", async () => {
+  it("refuses an unknown or missing metric, a negative or fractional sum, a short or empty page", async () => {
     const f = fixture();
     const dayStart = new Date("2026-10-07T16:00:00.000Z");
     for (const response of [
@@ -468,6 +468,12 @@ describe("image host day usage (catalog-deep-zoom-v1 breaker)", () => {
         TotalCount: 1,
       },
       { Data: [], TotalCount: 1 },
+      // No traffic metric, or no row at all: no reading (review blocker 1).
+      {
+        Data: [{ TypeValue: [{ MetricName: "l7Flow_request", Sum: 5 }] }],
+        TotalCount: 1,
+      },
+      { Data: [], TotalCount: 0 },
     ]) {
       f.respond(response);
       await expect(

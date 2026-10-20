@@ -9,6 +9,7 @@ import {
 import { VIEWER_UPGRADE_SETTLE_MS } from "../media/responsive-media";
 import styles from "./catalog-detail.module.css";
 import {
+  ZOOM_BLOCK_DECODED_BUDGET,
   ZOOM_BLOCK_IN_FLIGHT,
   ZOOM_BLOCK_MOUNT_RATIO,
   ZOOM_BLOCK_USABLE_VISIBLE,
@@ -244,7 +245,12 @@ export const useZoomBlockLayer = ({
       return;
     }
     if (!resting) return;
-    const visible = visibleZoomBlocks(zoom, view);
+    // The nearest blocks up to the decoded budget: a wider view (panned at
+    // the mount zoom) shows the base beyond them, never more than 24 blocks.
+    const visible = visibleZoomBlocks(zoom, view).slice(
+      0,
+      ZOOM_BLOCK_DECODED_BUDGET,
+    );
     visibleRef.current = visible;
     const ring = zoomBlockRing(zoom, visible);
     const wanted = new Set(visible);

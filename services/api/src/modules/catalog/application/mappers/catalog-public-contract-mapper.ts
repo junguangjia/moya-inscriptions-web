@@ -213,6 +213,24 @@ export type CatalogZoomFrames = ReadonlyMap<
 
 const noZoomFrames: CatalogZoomFrames = new Map();
 
+/** How often one `[catalog-zoom]` warning code may repeat (catalog-deep-zoom-v1). */
+const CATALOG_ZOOM_WARNING_MS = 60_000;
+const catalogZoomWarnedAt = new Map<string, number>();
+
+/**
+ * A content-free `[catalog-zoom]` warning, at most once a minute per code,
+ * so one misfit image read on every Detail open cannot flood the journal.
+ */
+export const warnCatalogZoom = (
+  code: "frame_refused" | "blocks_refused" | "frame_unavailable",
+  now = Date.now(),
+): void => {
+  const last = catalogZoomWarnedAt.get(code);
+  if (last !== undefined && now - last < CATALOG_ZOOM_WARNING_MS) return;
+  catalogZoomWarnedAt.set(code, now);
+  console.warn(`[catalog-zoom] ${code}`);
+};
+
 /**
  * catalog-deep-zoom-v1: a Detail image carries its block frame only when its
  * rendition group resolved (never on the approved-`src` fallback) and the
@@ -229,7 +247,7 @@ export const withCatalogZoomFrame = (
     zoom: { width: frame.width, height: frame.height },
   });
   if (!parsed.success) {
-    console.warn("[catalog-zoom] frame_refused");
+    warnCatalogZoom("frame_refused");
     return media;
   }
   return parsed.data;
@@ -251,7 +269,7 @@ export const mapCatalogZoomBlocks = (
     srcs,
   });
   if (!parsed.success) {
-    console.warn("[catalog-zoom] blocks_refused");
+    warnCatalogZoom("blocks_refused");
     return null;
   }
   return parsed.data;

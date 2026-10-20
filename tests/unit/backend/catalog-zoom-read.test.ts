@@ -1,5 +1,6 @@
 import { CatalogReadService, mapCatalogDetail } from "@moya/api";
 import {
+  createArticleCatalogReadCallbacks,
   createBackendApplication,
   createBackendServer,
   startServer,
@@ -186,16 +187,23 @@ describe("the Detail zoom frame", () => {
 
   it("omits every frame when the frame read fails, and the Detail still answers", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const detail = await new CatalogReadService(
+    const service = new CatalogReadService(
       port({
         frames: async () => {
           throw new Error("view unavailable");
         },
       }),
       resolver().value,
-    ).getById(catalogId);
+    );
+    const detail = await service.getById(catalogId);
     expect(detail?.media.every((media) => media.zoom === undefined)).toBe(true);
-    expect(warn).toHaveBeenCalledWith("[catalog-zoom] frame_unavailable");
+    // The warning repeats at most once a minute per code.
+    await service.getById(catalogId);
+    expect(
+      warn.mock.calls.filter(
+        ([line]) => line === "[catalog-zoom] frame_unavailable",
+      ),
+    ).toHaveLength(1);
     warn.mockRestore();
   });
 
@@ -232,6 +240,41 @@ describe("the Detail zoom frame", () => {
     const growth = Buffer.byteLength(withFrames) - Buffer.byteLength(without);
     expect(growth / 83).toBeLessThanOrEqual(48);
     expect(growth).toBeLessThanOrEqual(4 * 1024);
+  });
+});
+
+describe("the article tool's Catalog read (criteria 12, 20)", () => {
+  it("carries the frame only: no block URL, and the block list is never read", async () => {
+    const { value, keys } = resolver();
+    const getZoomBlocks = vi.fn(port().getZoomBlocks);
+    const callbacks = createArticleCatalogReadCallbacks(
+      {
+        ...port(),
+        getZoomBlocks,
+        search: async (query) => ({
+          items: [],
+          total: 0,
+          page: query.page,
+          pageSize: query.pageSize,
+          totalPages: 0,
+        }),
+      },
+      value,
+    );
+    const detail = await callbacks.readCatalog(catalogId);
+    expect(detail?.media.find((media) => media.id === tiled)?.zoom).toEqual(
+      frame,
+    );
+    const json = JSON.stringify(detail);
+    for (const blockKey of blockKeys) {
+      expect(json).not.toContain(blockKey);
+      expect(json).not.toContain(deliveryUrl(blockKey));
+    }
+    expect(json).not.toMatch(/block-\d{2}/u);
+    expect(getZoomBlocks).not.toHaveBeenCalled();
+    for (const [requested] of keys.mock.calls)
+      for (const blockKey of blockKeys)
+        expect(requested).not.toContain(blockKey);
   });
 });
 

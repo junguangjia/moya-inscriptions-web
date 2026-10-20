@@ -338,10 +338,11 @@ export const publicMediaSchema = z
 
 /**
  * Catalog deep zoom (catalog-deep-zoom-v1): the frame of an image's blocks,
- * at most 8192 px on each side. A Catalog Detail image carries it only while
- * its whole block set is deliverable, and it shows the image's framing; the
- * blocks themselves are read per image (`catalogZoomBlocksSchema`), never
- * carried in the Detail.
+ * at most 8192 px on each side. A Catalog Detail image carries it once its
+ * block set is complete, and it shows the image's framing. The blocks
+ * themselves are read per image (`catalogZoomBlocksSchema`), never carried
+ * in the Detail; that read may still answer 404 until every block is
+ * published, and a client then keeps today's image.
  */
 export const catalogZoomFrameSchema = z.strictObject({
   width: z.number().int().positive().max(CATALOG_ZOOM_MAX_LONG_EDGE),
@@ -357,8 +358,8 @@ export const catalogZoomBlockCount = (frame: {
   Math.ceil(frame.height / CATALOG_ZOOM_BLOCK_EDGE);
 
 /**
- * A Catalog Detail image: the public image plus, only while its block set is
- * deliverable, the frame of its blocks (at least two, showing its framing).
+ * A Catalog Detail image: the public image plus, once its block set is
+ * complete, the frame of its blocks (at least two, showing its framing).
  */
 export const catalogDetailMediaSchema = publicMediaSchema
   .safeExtend({ zoom: catalogZoomFrameSchema.optional() })

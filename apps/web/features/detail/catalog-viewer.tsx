@@ -440,6 +440,16 @@ export const CatalogViewer = ({
     };
   }, [active, zoomUsable]);
 
+  // An item whose blocks turn out unusable (the list read answered anything
+  // but 200, or the session fell back) returns to today's ceiling: a zoom
+  // past it settles at it.
+  useEffect(() => {
+    if (zoomUsable) return;
+    const fit = currentFit();
+    if (fit === null || transformRef.current.scale <= fit.maxScale) return;
+    updateTransform(clampViewerTransform(fit, transformRef.current));
+  }, [currentFit, updateTransform, zoomUsable]);
+
   const zoomAt = (clientX: number, clientY: number, nextScale: number) => {
     const stage = stageRef.current;
     const fit = currentFit();

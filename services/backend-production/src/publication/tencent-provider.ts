@@ -364,6 +364,7 @@ export function createTencentPublicationProvider(
         )
           throw new PublicationProviderError("unavailable");
         const sums = { l7Flow_request: 0, [CATALOG_ZOOM_TRAFFIC_METRIC]: 0 };
+        const seen = new Set<string>();
         for (const row of response.Data) {
           if (!object(row) || !Array.isArray(row.TypeValue))
             throw new PublicationProviderError("unavailable");
@@ -378,8 +379,16 @@ export function createTencentPublicationProvider(
             )
               throw new PublicationProviderError("unavailable");
             sums[metric.MetricName] += metric.Sum;
+            seen.add(metric.MetricName);
           }
         }
+        // A reading without either metric (an empty page included) is no
+        // reading: the breaker then fails closed instead of counting 0 bytes.
+        if (
+          !seen.has("l7Flow_request") ||
+          !seen.has(CATALOG_ZOOM_TRAFFIC_METRIC)
+        )
+          throw new PublicationProviderError("unavailable");
         const requests = sums.l7Flow_request;
         const bytes = sums[CATALOG_ZOOM_TRAFFIC_METRIC];
         if (!Number.isSafeInteger(requests) || !Number.isSafeInteger(bytes))

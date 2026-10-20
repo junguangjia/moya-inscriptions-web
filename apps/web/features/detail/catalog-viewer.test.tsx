@@ -1305,6 +1305,19 @@ describe("CatalogViewer deep-zoom blocks", () => {
     expect(blocksShown(value.container)).toHaveLength(0);
   });
 
+  it("settles a zoom past today's ceiling back to it once the list read fails (review F1)", async () => {
+    stubList(404);
+    mockDecode();
+    const value = openProgressive({ selectedMedia: [zoomMedia(1)] });
+    setStageSize(value.stage, 400, 600);
+    act(() => window.dispatchEvent(new Event("resize")));
+    pinch(value.stage, 10, 400);
+    expect(scale(value.container)).toBeGreaterThan(8);
+    await flush();
+    expect(state(value.stage)).toBe("unusable");
+    expect(scale(value.container)).toBe(8);
+  });
+
   it("aborts the old image's block loads when paging away, and falls back after three failures", async () => {
     stubList();
     const decodes = mockDecode();

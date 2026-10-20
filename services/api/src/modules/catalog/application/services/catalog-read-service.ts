@@ -18,6 +18,7 @@ import {
   mapCatalogPage,
   mapCatalogSearchPage,
   mapCatalogZoomBlocks,
+  warnCatalogZoom,
   type CatalogZoomFrames,
 } from "../mappers/catalog-public-contract-mapper.js";
 
@@ -129,7 +130,7 @@ export class CatalogReadService {
     try {
       return await this.catalogQueryPort.getZoomFrames(id);
     } catch {
-      console.warn("[catalog-zoom] frame_unavailable");
+      warnCatalogZoom("frame_unavailable");
       return noZoomFrames;
     }
   }

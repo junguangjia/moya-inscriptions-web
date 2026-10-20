@@ -585,7 +585,9 @@ export const prepareProductionBackend = async (
   // catalog-deep-zoom-v1: the Detail `zoom` frame and the per-image
   // block-list read, behind MEDIA_CATALOG_ZOOM_BLOCKS, only where blocks can
   // be delivered (edge delivery, or Development's relay) and while the
-  // breaker is closed. Only the Catalog Detail reader gets the gate.
+  // breaker is closed. Only the Catalog query port gets the gate: the Detail
+  // and its block list, and the article tool's read of that same Detail,
+  // which carries the frame only (never a block URL).
   const catalogZoomGate = catalogZoom
     ? createCatalogZoomGate({
         readUsage: () => publicationPort.readDayUsage(),
