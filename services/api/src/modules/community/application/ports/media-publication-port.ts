@@ -94,6 +94,8 @@ export interface MediaPublicationPort {
     unitIds: readonly string[],
     ttlSeconds: number,
     now: Date,
+    /** The reason stored on the rows; the budget deferral when omitted. */
+    code?: "block_budget_deferred" | "block_purge_unconfirmed",
   ): Promise<boolean>;
   release(fence: MediaPublicationFence, now: Date): Promise<void>;
   reconcile(
