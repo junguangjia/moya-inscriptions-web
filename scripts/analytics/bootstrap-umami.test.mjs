@@ -171,11 +171,25 @@ test("native website, team-view-only membership, saved funnel and Board bootstra
     state.funnels[0].parameters.steps.map((step) => step.value),
     ["content_impression", "content_open", "favorite"],
   );
-  assert.ok(
-    state.boards[0].parameters.rows.some((row) =>
-      row.columns.some((column) => column.component.type === "WorldMap"),
-    ),
+  const rows = state.boards[0].parameters.rows;
+  const components = rows.flatMap((row) =>
+    row.columns.map((column) => column.component),
   );
+  assert.equal(
+    components.some((component) => component.type === "WorldMap"),
+    false,
+  );
+  assert.equal(rows[1].id, "regions");
+  const regions = rows[1].columns.map((column) => column.component);
+  assert.deepEqual(
+    regions.map((component) => component.props.type),
+    ["region", "city"],
+  );
+  assert.ok(
+    regions.every((component) => component.props.metric === "访问会话"),
+  );
+  assert.equal(regions[0].title, "省份 / 地区");
+  assert.equal(regions[1].title, "城市");
   const serialized = JSON.stringify(first);
   for (const forbidden of [
     "password",

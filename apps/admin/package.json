@@ -82,6 +82,7 @@
     "./analytics-proxy": "./src/analytics/proxy.ts",
     "./analytics-upstream": "./src/analytics/upstream.ts",
     "./analytics-endpoints": "./src/analytics/endpoints.ts",
-    "./analytics-client": "./src/analytics/client.tsx"
+    "./analytics-client": "./src/analytics/client.tsx",
+    "./analytics-config": "./src/analytics/config.ts"
   }
 }

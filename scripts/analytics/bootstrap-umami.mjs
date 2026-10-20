@@ -20,7 +20,7 @@ import {
 const names = {
   team: "ArtVenn Analytics",
   funnel: "ArtVenn: 曝光 → 打开 → 收藏",
-  board: "ArtVenn: 内容行为与地域",
+  board: "ArtVenn: 内容行为与省市",
 };
 
 function funnelEvents(environment) {
@@ -60,10 +60,10 @@ export function bootstrapPlan(environment, selected) {
 
 /** Native Board parameters, pinned to v3.4.0's boardComponentRegistry. */
 export function boardParameters(websiteId, funnelId) {
-  const column = (id, type, props = {}) => ({
+  const column = (id, type, props = {}, heading = {}) => ({
     id,
     size: 1,
-    component: { type, props },
+    component: { type, ...heading, props },
   });
   return {
     websiteId,
@@ -73,23 +73,32 @@ export function boardParameters(websiteId, funnelId) {
         size: 1,
         columns: [column("metrics", "WebsiteMetricsBar")],
       },
-      { id: "trend", size: 2, columns: [column("visitors", "WebsiteChart")] },
-      {
-        id: "geography",
-        size: 2,
-        columns: [
-          column("map", "WorldMap"),
-          column("countries", "MetricsTable", { type: "country", limit: 10 }),
-        ],
-      },
       {
         id: "regions",
         size: 2,
         columns: [
-          column("region", "MetricsTable", { type: "region", limit: 10 }),
-          column("city", "MetricsTable", { type: "city", limit: 10 }),
+          column(
+            "region",
+            "MetricsTable",
+            { type: "region", limit: 20, metric: "访问会话" },
+            {
+              title: "省份 / 地区",
+              description:
+                "IP 近似位置；点击省份筛选城市，位置缺失不计入排行。",
+            },
+          ),
+          column(
+            "city",
+            "MetricsTable",
+            { type: "city", limit: 20, metric: "访问会话" },
+            {
+              title: "城市",
+              description: "按所选省份查看；仅统计已解析城市的访问会话。",
+            },
+          ),
         ],
       },
+      { id: "trend", size: 2, columns: [column("visitors", "WebsiteChart")] },
       {
         id: "events",
         size: 2,
@@ -315,7 +324,7 @@ export async function bootstrapUmami(environment, selected, options = {}) {
       type: "website",
       name: names.board,
       description:
-        "Umami 原生内容行为与近似地域看板；Owner、测试与开发活动在采集前排除。",
+        "Umami 原生内容行为与省市看板；IP 仅表示近似网络出口，Owner、测试与开发活动在采集前排除。",
       teamId,
       parameters,
     });

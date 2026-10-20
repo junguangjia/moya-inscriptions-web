@@ -1,6 +1,6 @@
 # Umami 私有分析工作台部署与验收包
 
-本期复用 Umami 原生网站、事件、地域、漏斗、留存和 Board。Payload 只提供 Owner 入口及受控反向代理，不另写图表系统。此文档是待验收、待批准的部署包；文件存在、mock 通过或镜像构建成功都不代表生产部署或 Owner 界面验收完成。
+本期复用 Umami 原生网站、事件、省市地域、漏斗、留存和 Board。Payload 只提供 Owner 入口及受控反向代理，不另写图表系统。默认工作台直接进入省份、城市排行，不放世界地图；国家保留为筛选条件。此文档是待验收、待批准的部署包；文件存在、mock 通过或镜像构建成功都不代表生产部署或 Owner 界面验收完成。
 
 ## 固定版本与运行边界
 
@@ -108,9 +108,17 @@ Bootstrap 用 v3.4.0 原生 API 创建/复用：
 - 独立网站且不创建公开分享；专用团队；`view-only` 用户和 `team-view-only`
   团队成员。
 - 60 分钟窗口的 `content_impression → content_open → favorite` 保存漏斗。
-- 含访客汇总/趋势、世界地图、国家/省市表、事件趋势和保存漏斗的原生 Board。
+- 含访客汇总、优先显示的省份/城市排行、访问趋势、事件趋势和保存漏斗的原生 Board；不创建 WorldMap 组件或主国家排行。
 - 用只读身份验证网站、Board 与原生 retention
   GET 接口。留存页是原生独立视图，没有杜撰不存在的 retention Board 组件。
+
+将返回的 `boardId` 写入 Admin 私有配置的 `UMAMI_BOARD_ID`，与 website
+ID 一样验证 UUID；缺少时显示未配置，不退回带地图的网站概览。r3 使用新名称
+`ArtVenn: 内容行为与省市`
+创建/复用 Board，保留旧版 Board，不覆盖用户已经修改的报告。
+
+省份、城市表统计原生
+`count(distinct session_id)`，标注“访问会话”；不是精确人数或浏览量。点击省份后，全局 region 筛选会作用到城市排行。同名城市在全局视图按城市名与国家聚合，需要先筛选省份再解释。原生查询不把缺失省市计入相应排行，排行占比也不能解释为全体访问占比。工作台保留实际未知值，不用国家、注册地址或省会猜补。原生省份/城市名称可能为英文，不宣称仅设置中文界面就会得到中文城市名。
 
 结果仅含版本、ID、状态，不输出响应全文、用户名、密码、Bearer token 或 collection
 cache。漏斗是同一访客会话中的事件顺序；默认没有强制相同
@@ -118,7 +126,7 @@ cache。漏斗是同一访客会话中的事件顺序；默认没有强制相同
 
 ## Owner 私有原生 UI 代理
 
-Admin 运行配置只持有 `UMAMI_ORIGIN`、`UMAMI_WEBSITE_ID`、专用
+Admin 运行配置只持有 `UMAMI_ORIGIN`、`UMAMI_WEBSITE_ID`、`UMAMI_BOARD_ID`、专用
 `UMAMI_VIEWER_USERNAME/PASSWORD`。所有工作台 HTML、RSC、静态资源和 API 都经过现有 Owner 权限检查。代理丢弃客户端 Umami
 Authorization，服务端登录并替换为短期缓存的专用只读 token；不得返回登录接口或将 token 写进浏览器 localStorage。Owner 权限检查只读取 Payload 会话 Cookie，先移除原生客户端自己的 Authorization，避免它遮蔽后台会话。`/api/me`、团队和网站读取仅投影必要字段，不透传认证上下文、团队邀请 accessCode 或网站 shareId。设备退出接口按已验证的
 `CMS_PUBLIC_URL` 公网 origin 检查来源，避免 Next 内部 HTTP origin 导致误拒绝。
@@ -153,6 +161,27 @@ resolver 地址作为合成地址 fixture；并非真实访客或真实用户位
 
 原生 collect
 API 不是幂等事件 upsert；seed 每个全新 disposable 数据库只执行一次，不自动重试。它只报告接收数量和 stats 接口可读性，不能替代浏览器验收。
+
+## 城市级离线定位与精度边界
+
+现有固定 Umami 的 `getLocation` 支持本地 MaxMind-compatible City MMDB，读取
+`country.iso_code`、`subdivisions[0].iso_code`、`city.names.en`。本项目 Worker 明确传可信
+`payload.ip`，使用本地查库，不按每次访问调用外部定位 API；支持 IPv4/IPv6，不新增常驻服务或数据库查询。数据本身可能缺失或不准确，移动网络/VPN 通常表示运营商/代理出口，不能保证是用户实际所在城市，也不产生 GPS 定位。
+
+本次实际 linux/amd64 交付包里的 `GeoLite2-City.mmdb` 为 50,901,339
+bytes，数据构建时间 `2026-10-16T18:58:36Z`，SHA256
+`fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029`。只读离线 fixture 核验得到
+`223.5.5.5 → CN-ZJ / Hangzhou`、
+`1.12.12.12 → CN-GD / Guangzhou`、`2400:3200::1 → CN-ZJ / Hangzhou`；
+`114.114.114.114` 与 `180.76.76.76`
+仅有国家，没有省市。这些都是公开 DNS 地址的合成测试，绝不是实际访客或其物理位置的证明。
+
+当前归档身份已经固定；上游的 GeoIP 构建下载地址本身随时间变化，不能仅凭 Umami 源码版本宣称未来构建也得到同一份定位数据。后续更新时记录新数据的日期、哈希和 fixture 结果，按受控发布替换，重启 native
+reader 后再验证；不静默热换或引入付费 API。
+
+依据：[固定定位源码](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/src/lib/detect.ts)、
+[固定构建脚本](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/scripts/build-geo.js)、
+[MaxMind 定位精度说明](https://support.maxmind.com/knowledge-base/articles/maxmind-geolocation-accuracy)。
 
 验收须记录：任务数据库/网站归属、固定 image
 ID、初始化结果 ID、原生 overview/Board/漏斗/retention/地域页面截图、只读导航及匿名/非 Owner/伪造 Bearer 等负例。用真实浏览器打开 Payload 的受保护工作台；确认指标为合成活动且无重复前端 tracker。测量原生进程空闲/看板加载峰值、PG 连接数、主站接口响应和容器 OOM/限额情况。未实际运行的检查标为未验收。

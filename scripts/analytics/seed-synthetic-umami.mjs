@@ -21,13 +21,13 @@ export function syntheticEvents(environment, now = Date.now()) {
   const runId = uuid(requireSetting(environment, "UMAMI_SYNTHETIC_RUN_ID"));
   const events = [];
   for (let day = 1; day >= 0; day--) {
-    ["8.8.8.8", "1.1.1.1", "114.114.114.114"].forEach((ip, visitor) => {
+    ["223.5.5.5", "1.12.12.12", "114.114.114.114"].forEach((ip, visitor) => {
       const base =
         Math.floor((now - day * 86400000 - 3600000) / 1000) + visitor * 60;
       const payload = {
         website: plan.websiteId,
         hostname: plan.domain,
-        language: visitor === 2 ? "zh-CN" : "en-US",
+        language: "zh-CN",
         url: "/works/synthetic-preview",
         title: "Synthetic analytics acceptance",
         screen: "390x844",

@@ -74,7 +74,7 @@ export const AnalyticsClient = ({
       <header className={styles.header}>
         <div>
           <h1>数据分析</h1>
-          <p>访问、地域和用户行为 · Umami 只读工作台</p>
+          <p>省市分布、访问和用户行为 · Umami 只读工作台</p>
         </div>
         <button onClick={() => setRevision((value) => value + 1)} type="button">
           刷新状态
@@ -109,7 +109,8 @@ export const AnalyticsClient = ({
         workspacePath ? (
           <>
             <p className={styles.note}>
-              在工作台中切换日期、来源、国家、地区和城市，查看事件、漏斗与留存。
+              默认显示省份与城市排行；点击省份可筛选城市，国家保留为筛选条件。
+              位置缺失不计入对应排行，不代表没有访问。省市为原生定位库名称，可能显示英文。
               <a href={workspacePath} rel="noreferrer" target="_blank">
                 全屏打开
               </a>
@@ -123,8 +124,8 @@ export const AnalyticsClient = ({
           </>
         ) : (
           <p role="status">
-            Umami
-            尚未配置。完成独立数据库、只读账号和网站初始化后，这里将显示实际看板。
+            Umami 尚未配置。完成独立数据库、只读账号及省市看板初始化并配置 Board
+            后，这里将显示实际看板。
           </p>
         )
       ) : null}
