@@ -17,7 +17,10 @@ import { URL, fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { test } from "node:test";
 
-import { UMAMI_WORKSPACE_IDENTITY } from "./common.mjs";
+import {
+  UMAMI_WORKSPACE_IDENTITY,
+  UMAMI_PG_TLS_HOST_SHA256,
+} from "./common.mjs";
 
 const imageId = `sha256:${"a".repeat(64)}`;
 const labels = {
@@ -30,6 +33,7 @@ const labels = {
   "com.artvenn.umami.pool-max": "3",
   "com.artvenn.umami.locale": "zh-CN",
   "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
+  "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
   "com.artvenn.umami.geography": "cn-province-v1",
   "com.artvenn.umami.geo-sha256":
     "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029",
