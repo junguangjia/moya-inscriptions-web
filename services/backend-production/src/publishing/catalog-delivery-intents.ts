@@ -105,6 +105,7 @@ export const parseCatalogPrepareDatabaseConfig = (
 import {
   inspectCatalogDelivery,
   parseCatalogPrepareRows,
+  catalogBlockListedSql,
   type PostgresMediaPublicationAdapter,
 } from "@moya/community-postgres";
 import type { createPostgresPool } from "@moya/catalog-postgres";
@@ -334,10 +335,11 @@ export const createCatalogPublicationAuthority = (
         master_width: number;
         master_height: number;
       }>(
-        `SELECT r.id,a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height FROM jsonb_to_recordset($1::jsonb) p("mediaId" text,"objectKey" text) JOIN community.catalog_media_assets a ON a.media_id=p."mediaId" AND a.source_object_key=p."objectKey" AND a.state='ready' JOIN community.media_renditions r ON r.catalog_asset_id=a.id AND r.state='ready' JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' WHERE r.edit_key='base' AND r.role IN ('thumb','cover','display','viewer','full')`,
+        `SELECT DISTINCT r.id,a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height FROM jsonb_to_recordset($1::jsonb) p("mediaId" text,"objectKey" text) JOIN community.catalog_media_assets a ON a.media_id=p."mediaId" AND a.source_object_key=p."objectKey" AND a.state='ready' JOIN community.media_renditions r ON r.catalog_asset_id=a.id AND r.state='ready' JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' WHERE r.edit_key='base' AND (r.role IN ('thumb','cover','display','viewer','full') OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")})) LIMIT 40001`,
         [JSON.stringify(snapshot.publishedSources)],
       )
     ).rows;
+    if (publicReady.length > 40000) throw new Error("Catalog selector invalid");
     for (const source of snapshot.publishedSources) {
       const matches = publicReady.filter(
         (r) =>
@@ -347,6 +349,10 @@ export const createCatalogPublicationAuthority = (
       const ids = matches
         .filter(
           (r) =>
+            // Blocks have already passed the shared active-master/cell SQL.
+            // Only current public CMS pairs reach this branch; private B
+            // continues to authorize its four ordinary immutable pins only.
+            /^block-[0-9]{2}$/u.test(r.role) ||
             !source.objectKey.startsWith("editorial/") ||
             (r.master_width &&
               r.master_height &&

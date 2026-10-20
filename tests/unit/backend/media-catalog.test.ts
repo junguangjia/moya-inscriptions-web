@@ -47,9 +47,13 @@ import { inProcessSandbox } from "./publishing-sandbox-fixture.js";
 import {
   currentCatalogRecipePolicy,
   catalogExpectedRenditions,
+  createCatalogPublicationAuthority,
   parseCatalogPrepareDatabaseConfig,
 } from "@moya/backend-production/internal/catalog-delivery";
-import { readCatalogDeliveryProjection } from "@moya/community-postgres";
+import {
+  readCatalogDeliveryProjection,
+  catalogBlockListedSql,
+} from "@moya/community-postgres";
 import {
   catalogRecipeManifestSchema,
   catalogRecipePolicySchema,
@@ -194,6 +198,267 @@ describe("live Catalog delivery locator identity", () => {
       ),
     ).rejects.toThrow("Catalog delivery batch too large");
     expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe("Catalog publication authority with active-master blocks", () => {
+  const rid = (n: number) =>
+    `media-rendition-${n.toString(16).padStart(32, "0")}`;
+  const fixture = (privateState?: "prepared" | "release_requested") => {
+    const source = {
+      media_id: "synthetic-live-a",
+      object_key: "editorial/synthetic/live-a.jpg",
+      width: 4096,
+      height: 2731,
+    };
+    const privateSource = {
+      media_id: "synthetic-private-b",
+      object_key: "editorial/synthetic/private-b.jpg",
+      width: 4096,
+      height: 2731,
+    };
+    const policy = currentCatalogRecipePolicy().recipeManifestSha256;
+    const ordinary = (member: typeof source, start: number) =>
+      catalogExpectedRenditions(member.width, member.height).map((want, i) => ({
+        id: rid(start + i),
+        media_id: member.media_id,
+        source_object_key: member.object_key,
+        object_key: member.object_key,
+        role: want.role,
+        recipe_version: want.version,
+        recipe_digest: want.digest,
+        width: want.width,
+        height: want.height,
+        master_width: member.width,
+        master_height: member.height,
+      }));
+    const ordinaryA = ordinary(source, 1);
+    const ordinaryB = ordinary(privateSource, 20);
+    const block = {
+      ...ordinaryA[0]!,
+      id: rid(100),
+      role: "block-00",
+      width: 1026,
+      height: 1026,
+    };
+    let publicRows = [...ordinaryA, block];
+    let live = true;
+    const privateRows = privateState
+      ? [
+          {
+            intent_id: "00000000-0000-4000-8000-000000000001",
+            catalog_document_id: 1,
+            catalog_id: "synthetic-private-b",
+            draft_revision: 1,
+            draft_fingerprint: "a".repeat(64),
+            media_manifest_sha256: "b".repeat(64),
+            recipe_manifest_sha256: policy,
+            state: privateState,
+            state_version: 1,
+            media_count: 1,
+            expires_at: "2126-10-20T00:00:00.000Z",
+            media_ordinal: 1,
+            media_id: privateSource.media_id,
+            object_key: privateSource.object_key,
+            source_sha256: "c".repeat(64),
+            width: privateSource.width,
+            height: privateSource.height,
+          },
+        ]
+      : [];
+    const publishedQuery = vi.fn(async (sql: string) => {
+      if (sql.includes("clock_timestamp()"))
+        return { rows: [{ at: new Date("2026-10-20T00:00:00.000Z") }] };
+      if (sql.includes("pg_export_snapshot()"))
+        return { rows: [{ id: "aaa-bbb-ccc" }] };
+      if (sql.includes("FROM catalog_media"))
+        return { rows: live ? [source] : [] };
+      if (["BEGIN", "ROLLBACK"].some((prefix) => sql.startsWith(prefix)))
+        return { rows: [] };
+      throw new Error("UNEXPECTED_AUTHORITY_PUBLIC_SQL");
+    });
+    const published = {
+      query: publishedQuery,
+      connect: async () => ({ query: publishedQuery, release: vi.fn() }),
+    } as unknown as Parameters<typeof createCatalogPublicationAuthority>[0];
+    const privateQuery = vi.fn(async (sql: string) => {
+      if (sql.includes("FROM public.catalog_delivery_prepare_media"))
+        return { rows: privateRows };
+      if (
+        ["BEGIN", "ROLLBACK", "SET TRANSACTION"].some((p) => sql.startsWith(p))
+      )
+        return { rows: [] };
+      throw new Error("UNEXPECTED_AUTHORITY_PRIVATE_SQL");
+    });
+    const prepare = privateState
+      ? ({
+          connect: async () => ({ query: privateQuery, release: vi.fn() }),
+        } as unknown as NonNullable<
+          Parameters<typeof createCatalogPublicationAuthority>[1]
+        >)
+      : null;
+    const appQuery = vi.fn(async (sql: string) => {
+      if (sql.startsWith("SELECT DISTINCT r.id")) return { rows: publicRows };
+      if (sql.startsWith("SELECT DISTINCT intent_id")) return { rows: [] };
+      if (sql.startsWith("SELECT p.rendition_id,m.media_id"))
+        return { rows: ordinaryB.map((r) => ({ ...r, rendition_id: r.id })) };
+      throw new Error("UNEXPECTED_AUTHORITY_APP_SQL");
+    });
+    const inspectQuery = vi.fn(
+      async (sql: string, values?: readonly unknown[]) => {
+        if (sql.startsWith("SELECT * FROM community.catalog_delivery_prepares"))
+          return {
+            rows: [
+              {
+                manifest_sha256: "b".repeat(64),
+                recipe_manifest_sha256: policy,
+                media_count: 1,
+                observed_live: true,
+                ended_at: null,
+              },
+            ],
+          };
+        if (sql.startsWith("SELECT a.id FROM community.catalog_media_assets"))
+          return { rows: [{ id: "synthetic-private-b-asset" }] };
+        if (sql.startsWith("SELECT * FROM community.catalog_media_assets"))
+          return {
+            rows: [
+              {
+                id: "synthetic-private-b-asset",
+                state: "ready",
+                master_sha256: "c".repeat(64),
+                master_width: privateSource.width,
+                master_height: privateSource.height,
+              },
+            ],
+          };
+        if (sql.startsWith("SELECT r.id,r.role"))
+          return {
+            rows: ordinaryB.map((r) => ({
+              ...r,
+              blob_id: `blob-${r.id}`,
+              sha256: "d".repeat(64),
+              byte_size: 100,
+              storage_key: `blobs/${r.id}`,
+            })),
+          };
+        if (sql.startsWith("SELECT p.* FROM community.media_publications"))
+          return { rows: [] };
+        if (
+          sql.startsWith(
+            "SELECT * FROM community.catalog_delivery_rendition_pins",
+          )
+        ) {
+          const row = ordinaryB.find((r) => r.role === values?.[2])!;
+          return {
+            rows: [
+              {
+                rendition_id: row.id,
+                recipe_version: row.recipe_version,
+                recipe_digest: row.recipe_digest,
+                public_generation_id: null,
+              },
+            ],
+          };
+        }
+        if (
+          [
+            "BEGIN",
+            "COMMIT",
+            "ROLLBACK",
+            "INSERT INTO community.catalog_delivery_rendition_pins",
+          ].some((p) => sql.startsWith(p))
+        )
+          return { rows: [] };
+        throw new Error("UNEXPECTED_AUTHORITY_INSPECT_SQL");
+      },
+    );
+    const app = {
+      query: appQuery,
+      connect: async () => ({ query: inspectQuery, release: vi.fn() }),
+    } as unknown as Parameters<typeof createCatalogPublicationAuthority>[2];
+    return {
+      authority: createCatalogPublicationAuthority(published, prepare, app),
+      source,
+      privateSource,
+      ordinaryA,
+      ordinaryB,
+      block,
+      appQuery,
+      setRows: (rows: typeof publicRows) => {
+        publicRows = rows;
+      },
+      withdraw: () => {
+        live = false;
+      },
+      assetId: `catalog-asset-${createHash("md5").update(`${source.media_id}:${source.object_key}`).digest("hex")}`,
+    };
+  };
+
+  it("unions exact live A blocks with ordinary recipes and captures them for the job", async () => {
+    const f = fixture();
+    expect(await f.authority.copyRenditionIds()).toEqual([
+      ...f.ordinaryA.map((r) => r.id),
+      f.block.id,
+    ]);
+    const lease = await f.authority.acquire(f.assetId);
+    try {
+      expect(lease.renditionIds).toContain(f.block.id);
+      expect(await lease.authorized()).toBe(true);
+    } finally {
+      await lease.release();
+    }
+    const sql = f.appQuery.mock.calls.find(([q]) =>
+      q.startsWith("SELECT DISTINCT r.id"),
+    )![0];
+    expect(sql).toContain(catalogBlockListedSql("r"));
+    expect(sql).toContain("r.catalog_master_id IS NOT NULL");
+    expect(sql).toContain("LIMIT 40001");
+    expect(sql).not.toContain("unreferenced_since");
+  });
+
+  it.each(["prepared", "release_requested"] as const)(
+    "never adds blocks of private B merely because its intent is %s",
+    async (state) => {
+      const f = fixture(state);
+      const privateBlock = {
+        ...f.block,
+        id: rid(200),
+        media_id: f.privateSource.media_id,
+        source_object_key: f.privateSource.object_key,
+      };
+      f.setRows([...f.ordinaryA, f.block, privateBlock]);
+      const ids = await f.authority.copyRenditionIds();
+      expect(ids).toContain(f.block.id);
+      expect(ids).not.toContain(privateBlock.id);
+      for (const r of f.ordinaryB)
+        expect(ids.includes(r.id)).toBe(state === "release_requested");
+    },
+  );
+
+  it("retains strict block role grammar and ordinary full exclusion", async () => {
+    const f = fixture();
+    f.setRows([
+      f.block,
+      ...["block-7", "block-100", "full"].map((role, i) => ({
+        ...f.block,
+        id: rid(300 + i),
+        role,
+      })),
+    ]);
+    expect(await f.authority.copyRenditionIds()).toEqual([f.block.id]);
+    f.withdraw();
+    expect(await f.authority.copyRenditionIds()).toEqual([]);
+  });
+
+  it("refuses the bounded overflow rather than silently truncating block IDs", async () => {
+    const f = fixture();
+    f.setRows(
+      Array.from({ length: 40001 }, (_, i) => ({ ...f.block, id: rid(i) })),
+    );
+    await expect(f.authority.copyRenditionIds()).rejects.toThrow(
+      "Catalog selector invalid",
+    );
   });
 });
 

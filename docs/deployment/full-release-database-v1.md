@@ -109,6 +109,20 @@ for discovery cards. Apply both before starting a Backend of that release: its
 Catalog readers and discovery cards join the view, and startup stops when the
 public read connection or the App connection cannot read it.
 
+Catalog deep zoom (catalog-deep-zoom-v1, community migration `20261020010000`,
+the expand release) adds three named grants and nothing else.
+`grant-runtime.sql` gives the App role `SELECT` and `INSERT` on
+`community.catalog_display_masters` with `UPDATE` only on `ended_at` and
+`end_reason` (no table-level `UPDATE`), `UPDATE` on the nullable usage columns
+`day_start`, `day_requests`, `day_bytes` and `day_observed_at` of
+`community.media_request_usage` beside its existing column list, and `SELECT` on
+the `security_barrier` view `community.catalog_media_zoom_blocks`.
+`infra/development/catalog-media/grant-public-read.sql` gives the public read
+role `SELECT` on that view only. Block renditions, block publications and master
+blobs need no new privilege: the existing table-level `INSERT` and named column
+`UPDATE` lists cover them. Apply both files after the migration and before
+starting a Backend or media worker of that release.
+
 CMS grants name current native tables, child/version tables, sequences and
 published views. They permit native child replacement and version retention,
 without primary content/user hard deletion, ledger mutation, sequence reset,

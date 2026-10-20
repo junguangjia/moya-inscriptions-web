@@ -314,6 +314,18 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
         "0b587658175940c52e3c87a0333db235910789a364101269e0a89475f5c36b56",
     }),
     Object.freeze({
+      migrationId: "20261019020000",
+      filename: "20261019020000_upload_timing_instrumentation.sql",
+      checksum:
+        "12352f71f9638fa14c341b355d18a1c706342e30ca0d2dd0f875a097baceb1cf",
+    }),
+    Object.freeze({
+      migrationId: "20261020010000",
+      filename: "20261020010000_catalog_zoom_blocks.sql",
+      checksum:
+        "20c67764f5d17dba94153796a2b565273d37e5fcb2977e8ee0ac78aab6f5d71c",
+    }),
+    Object.freeze({
       migrationId: "20261020160000",
       filename: "20261020160000_catalog_delivery_prepares.sql",
       checksum:

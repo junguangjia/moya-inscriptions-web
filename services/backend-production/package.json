@@ -90,6 +90,10 @@
       "types": "./src/worker-composition.ts",
       "import": "./dist/worker-composition.js"
     },
+    "./internal/catalog-master": {
+      "types": "./src/catalog-master/index.ts",
+      "import": "./dist/catalog-master/index.js"
+    },
     "./internal/auth": {
       "types": "./src/auth/index.ts",
       "import": "./dist/auth/index.js"
@@ -121,6 +125,7 @@
     "start": "node dist/main.js",
     "worker": "node dist/worker-main.js",
     "pilot": "node dist/pilot-cli.js",
+    "catalog-master": "node dist/catalog-master-cli.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/main.ts",
     "dev:worker": "tsx src/worker-main.ts"

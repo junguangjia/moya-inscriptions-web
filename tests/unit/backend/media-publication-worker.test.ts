@@ -264,6 +264,11 @@ function fixture(bytes = BYTES) {
       events.push("failPurge");
       return true;
     }),
+    blockPurgesSince: vi.fn(async () => 0),
+    deferBlockWithdrawal: vi.fn(async () => {
+      events.push("deferBlockWithdrawal");
+      return true;
+    }),
     release: vi.fn(async () => {
       events.push("release");
     }),
