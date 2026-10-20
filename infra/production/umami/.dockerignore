@@ -1,0 +1,6 @@
+**
+!Dockerfile
+!.dockerignore
+!pool-limit.patch
+!upstream-pool.sha256
+!patched-pool.sha256

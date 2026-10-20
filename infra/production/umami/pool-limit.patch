@@ -1,0 +1,20 @@
+--- a/src/lib/prisma.ts
++++ b/src/lib/prisma.ts
+@@ -867,7 +867,7 @@
+ 
+   const schema = getSchema();
+ 
+-  const baseAdapter = new PrismaPg({ connectionString: url }, { schema });
++  const baseAdapter = new PrismaPg({ connectionString: url, max: 3 }, { schema });
+ 
+   const baseClient = new PrismaClient({
+     adapter: baseAdapter,
+@@ -885,7 +885,7 @@
+     return baseClient;
+   }
+ 
+-  const replicaAdapter = new PrismaPg({ connectionString: replicaUrl }, { schema });
++  const replicaAdapter = new PrismaPg({ connectionString: replicaUrl, max: 3 }, { schema });
+ 
+   const replicaClient = new PrismaClient({
+     adapter: replicaAdapter,

@@ -1,4 +1,6 @@
 "use client";
+
+import { trackAnalytics } from "../analytics/client";
 import { StudioName } from "./user-identity";
 import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 import { Icon } from "@moya/ui";
@@ -1014,6 +1016,13 @@ const ScopedAuthorProfile = ({
                             targetId: profile.id,
                             enabled: !profile.following,
                           });
+                          if (!profile.following)
+                            trackAnalytics({
+                              name: "follow",
+                              surface: "profile",
+                              targetType: "profile",
+                              targetId: profile.id,
+                            });
                           save();
                           author.mutate();
                         } catch (e) {

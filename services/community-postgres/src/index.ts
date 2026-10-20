@@ -167,3 +167,5 @@ export {
 
 export { PostgresMediaPublicationAdapter } from "./publishing/publication.js";
 export type { PublicationSyncOptions } from "./publishing/publication-sync.js";
+
+export { PostgresAnalyticsAdapter } from "./analytics-adapter.js";

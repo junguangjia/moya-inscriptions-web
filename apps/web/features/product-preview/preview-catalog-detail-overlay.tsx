@@ -6,6 +6,7 @@ import { CatalogDetailExperience } from "../detail/catalog-detail-experience";
 import { useProductShell } from "../product-shell/product-shell";
 import { useOptionalAuthors } from "../authors/author-context";
 import { useAuthReturn } from "../auth/auth-return";
+import { useContentAnalytics } from "../analytics/product-analytics";
 
 import type { ReactNode, RefObject } from "react";
 import type { ContentIdentity } from "@moya/contracts";
@@ -72,6 +73,7 @@ export const PreviewCatalogDetailOverlay = ({
   const [state, setState] = useState<CatalogDetailPresentationState>({
     state: "loading",
   });
+  useContentAnalytics(targetType, targetId, state.state === "loaded");
 
   useEffect(() => {
     const controller = new AbortController();

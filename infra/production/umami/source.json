@@ -1,0 +1,17 @@
+{
+  "version": "3.4.0",
+  "repository": "https://github.com/umami-software/umami",
+  "commit": "ec0ff50388c264ed8ce46f00967e92f7e71476ae",
+  "archiveSha256": "dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a",
+  "nodeImage": "node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402",
+  "pnpmVersion": "12.3.4",
+  "basePath": "/admin/analytics-workspace",
+  "downstreamPatch": {
+    "file": "pool-limit.patch",
+    "scope": "PrismaPg primary and optional replica PoolConfig max: 3 only",
+    "upstreamFileSha256": "904b84ec6695eb40691f844dacec66551757619453054a6297a225f4e2eb507e",
+    "patchedFileSha256": "aa9f6d5bb6f3a405c301868cf937ece7fee7c38856c392e9960ef784e6d8bd30"
+  },
+  "standaloneBaseImage": "node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5",
+  "standaloneTarget": "linux glibc, matching host architecture, existing Node 24"
+}

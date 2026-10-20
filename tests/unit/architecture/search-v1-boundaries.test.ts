@@ -23,7 +23,8 @@ describe("formal Search V1 boundaries", () => {
     expect(formal).toContain(
       "navigationAction={<CatalogSearchNavigationAction",
     );
-    expect(formal).toContain("productUtility={<CatalogSearch");
+    expect(formal).toMatch(/productUtility=\{\s*<>\s*<CatalogSearch\s*\/>/u);
+    expect(formal).toContain("<ProductAnalytics");
     expect(search).toContain("openCatalog(record.id, opener)");
     expect(search).not.toMatch(
       /history\.(?:pushState|replaceState)|localStorage|sessionStorage|indexedDB|\.sort\(/u,

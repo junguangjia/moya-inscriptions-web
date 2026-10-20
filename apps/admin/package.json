@@ -78,6 +78,10 @@
     "./community-article-client": "./src/community/article-submissions-client.tsx",
     "./community-article-preview": "./src/community/article-submission-preview.tsx",
     "./users": "./src/users.ts",
-    "./initial-owner": "./src/editorial/provision-owner.ts"
+    "./initial-owner": "./src/editorial/provision-owner.ts",
+    "./analytics-proxy": "./src/analytics/proxy.ts",
+    "./analytics-upstream": "./src/analytics/upstream.ts",
+    "./analytics-endpoints": "./src/analytics/endpoints.ts",
+    "./analytics-client": "./src/analytics/client.tsx"
   }
 }
