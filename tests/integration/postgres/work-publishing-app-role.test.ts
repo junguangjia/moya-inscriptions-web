@@ -1174,6 +1174,91 @@ describe.each(["clean", "phase4-upgrade", "legacy-grants-upgrade"] as const)(
         "SELECT 1 FROM community.agent_connection_wrappers LIMIT 1",
       ])
         await expect(app.query(sql)).resolves.toBeDefined();
+
+      // upload-timing-instrumentation-v1: begin, abort, commit timing and the
+      // refusal note update only their granted component columns.
+      const uploadSession = await publishing.createSession(
+        actor,
+        { ...commandId(), workId: null },
+        now,
+      );
+      const timed = await publishing.registerItem(
+        actor,
+        {
+          ...commandId(),
+          holder: { sessionId: uploadSession.id },
+          kind: "static",
+          qualityMode: "standard",
+          processingProfile: "standard-image-v1",
+          components: [
+            {
+              role: "still",
+              byteSize: 1024,
+              contentType: "image/jpeg",
+              standardOutcome: "optimized",
+            },
+          ],
+        },
+        now,
+      );
+      const timedComponent = timed.components[0]!;
+      const timedStart = () => ({
+        attempt: randomUUID(),
+        contentLength: 1024,
+        supersede: false,
+      });
+      await publishing.abortComponentUpload(
+        await publishing.beginComponentUpload(
+          actor,
+          timedComponent.id,
+          timedStart(),
+          now,
+        ),
+        now,
+      );
+      const timedFence = await publishing.beginComponentUpload(
+        actor,
+        timedComponent.id,
+        timedStart(),
+        now,
+      );
+      const timedKey = randomBytes(16).toString("hex");
+      expect(
+        await publishing.commitComponentUpload(
+          timedFence,
+          {
+            storageKey: `blobs/${timedKey.slice(0, 2)}/${timedKey.slice(2, 4)}/${timedKey}`,
+            byteSize: 1024,
+            sha256: createHash("sha256").update(timedKey).digest("hex"),
+          },
+          now,
+          { firstByteAt: now, lastByteAt: now },
+        ),
+      ).toMatchObject({ status: "committed" });
+      expect(
+        await publishing.noteUploadRefusedAfterCommit(
+          actor,
+          timedComponent.id,
+          now,
+        ),
+      ).toEqual(now);
+      expect(
+        (
+          await setup.query(
+            `SELECT upload_attempts, upload_first_byte_at IS NOT NULL AS first_byte,
+                    upload_last_byte_at IS NOT NULL AS last_byte, upload_refusals_after_commit
+             FROM community.media_components WHERE id=$1`,
+            [timedComponent.id],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          upload_attempts: 2,
+          first_byte: true,
+          last_byte: true,
+          upload_refusals_after_commit: 1,
+        },
+      ]);
     });
   },
 );

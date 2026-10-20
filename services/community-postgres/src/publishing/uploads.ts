@@ -10,6 +10,7 @@ import type {
   PublishingUploadCommit,
   PublishingUploadFence,
   PublishingUploadStart,
+  PublishingUploadTiming,
 } from "@moya/api";
 import type { Pool } from "pg";
 
@@ -153,7 +154,11 @@ export const beginComponentUpload = async (
     if (start.contentLength !== declared) throw new CommunityInputError();
     if (!held) throw new CommunityConflictError("The upload holder has ended");
     await db.query(
-      "UPDATE community.media_components SET state='receiving', upload_attempt=$2::uuid, received_bytes=0, updated_at=$3::timestamptz WHERE id=$1",
+      `UPDATE community.media_components
+       SET state='receiving', upload_attempt=$2::uuid, received_bytes=0, updated_at=$3::timestamptz,
+           upload_attempts=COALESCE(upload_attempts, 0) + 1,
+           upload_first_started_at=COALESCE(upload_first_started_at, $3::timestamptz)
+       WHERE id=$1`,
       [component.id, start.attempt, nowParam(now)],
     );
     return {
@@ -188,12 +193,25 @@ const committedResult = async (
 const sameAttempt = (stored: string | null, fence: string): boolean =>
   stored !== null && stored.toLowerCase() === fence.toLowerCase();
 
+/** Valid, ordered transfer timing as parameters; anything else records nothing. */
+const timingParams = (
+  timing: PublishingUploadTiming | undefined,
+): readonly [string | null, string | null] => {
+  if (timing === undefined) return [null, null];
+  const first = timing.firstByteAt.getTime();
+  const last = timing.lastByteAt.getTime();
+  if (!Number.isFinite(first) || !Number.isFinite(last) || last < first)
+    return [null, null];
+  return [nowParam(timing.firstByteAt), nowParam(timing.lastByteAt)];
+};
+
 /** WorkPublishingPort.commitComponentUpload */
 export const commitComponentUpload = async (
   pool: Pool,
   fence: PublishingUploadFence,
   blob: PublishingMediaWriteResult,
   now: Date,
+  timing?: PublishingUploadTiming,
 ): Promise<PublishingUploadCommit> =>
   actorTransaction(pool, fence.ownerId, async (db) => {
     const at = nowParam(now);
@@ -280,12 +298,23 @@ export const commitComponentUpload = async (
     );
     const reserved = safeInteger(component.reserved_bytes);
     const moved = Math.min(declared, reserved);
+    const [firstByteAt, lastByteAt] = timingParams(timing);
     await db.query(
       `UPDATE community.media_components
        SET state='received', upload_attempt=NULL, received_bytes=$2, sha256=$3, blob_id=$4,
-           reserved_bytes=reserved_bytes - $5::bigint, updated_at=$6::timestamptz
+           reserved_bytes=reserved_bytes - $5::bigint, updated_at=$6::timestamptz,
+           upload_first_byte_at=$7::timestamptz, upload_last_byte_at=$8::timestamptz
        WHERE id=$1`,
-      [component.id, blob.byteSize, blob.sha256, blobId, moved, at],
+      [
+        component.id,
+        blob.byteSize,
+        blob.sha256,
+        blobId,
+        moved,
+        at,
+        firstByteAt,
+        lastByteAt,
+      ],
     );
     await adjustCapacity(
       db,
@@ -325,4 +354,28 @@ export const abortComponentUpload = async (
       [fence.componentId, fence.itemId, fence.attempt, nowParam(now)],
     ),
   );
+};
+
+/** WorkPublishingPort.noteUploadRefusedAfterCommit */
+export const noteUploadRefusedAfterCommit = async (
+  pool: Pool,
+  actorId: string,
+  componentId: string,
+  now: Date,
+): Promise<Date | null> => {
+  // Measurement only: one component row, no actor or holder lock, and
+  // updated_at stays as it was (expiry and sweeps read it).
+  const noted = await writeTransaction(pool, (db) =>
+    db.query<{ committed_at: Date }>(
+      `UPDATE community.media_components c
+       SET upload_refusals_after_commit=COALESCE(c.upload_refusals_after_commit, 0) + 1,
+           upload_first_refusal_after_commit_at=COALESCE(c.upload_first_refusal_after_commit_at, $3::timestamptz)
+       FROM community.media_blobs b
+       WHERE c.id=$1 AND c.owner_id=$2 AND c.state IN ('received','verified')
+         AND b.id=c.blob_id AND b.owner_id=c.owner_id
+       RETURNING b.created_at AS committed_at`,
+      [componentId, actorId, nowParam(now)],
+    ),
+  );
+  return noted.rows[0]?.committed_at ?? null;
 };

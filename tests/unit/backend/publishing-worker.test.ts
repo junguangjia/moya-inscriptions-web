@@ -17,6 +17,7 @@ import {
   PUBLISHING_STAGING_SWEEP_SUBJECT,
   PUBLISHING_STORE_RECONCILE_SUBJECT,
   createPublishingJobHandlers,
+  jobTimingLine,
 } from "@moya/backend-production/internal/publishing-job-handlers";
 import {
   FilesystemPublishingMediaStore,
@@ -620,6 +621,60 @@ const started = (h: Harness) => {
 
 afterEach(async () => {
   for (const worker of running.splice(0)) void worker.stop();
+});
+
+describe("publishing worker timing line", () => {
+  it("logs one content-free timing line per processed Work job and nothing without a measurement", async () => {
+    const h = started(harness());
+    const job = h.port.addItem(1);
+    const quiet = h.port.addItem(2);
+    await h.timers.advance(0);
+    const call = h.processor.calls[0]!;
+    call.input.onTiming?.({
+      readMs: 812,
+      sandboxMs: 3_904,
+      prepareMs: 1_190,
+      roles: { thumb: 402, cover: 288, display: 655 },
+      storeMs: 377,
+      sourceBytes: 11_744_051,
+      inputPixels: 24_385_536,
+    });
+    call.result.resolve(h.processor.processed(1));
+    await h.timers.advance(0);
+    await h.timers.advance(PUBLISHING_WORKER_DEFAULTS.pollIntervalMs);
+    h.processor.calls[1]!.result.resolve(h.processor.processed(2));
+    await h.timers.advance(0);
+    const timing = h.lines.filter((line) => line.includes(" job timing "));
+    expect(timing).toHaveLength(1);
+    expect(timing[0]).toMatch(
+      /^\[publishing-worker\] job timing kind=process_item lane=preview attempt=1 outcome=processed source_mib=11\.2 input_mp=24\.4 read_ms=812 sandbox_ms=3904 prepare_ms=1190 thumb_ms=402 cover_ms=288 display_ms=655 store_ms=377 commit_ms=\d+ total_ms=\d+$/u,
+    );
+    for (const id of [job.id, job.subjectId, quiet.id, quiet.subjectId])
+      expect(timing[0]).not.toContain(id);
+  });
+
+  it("names the lane and keeps only role-shaped keys", () => {
+    const line = jobTimingLine(
+      "derive_edit",
+      "hd",
+      2,
+      "derived",
+      {
+        readMs: 1,
+        sandboxMs: 2,
+        prepareMs: null,
+        roles: { viewer: 3, full: 4, "avatar-128": 5, "../x": 6 },
+        storeMs: 7,
+        sourceBytes: 0,
+        inputPixels: null,
+      },
+      8,
+      9,
+    );
+    expect(line).toBe(
+      "[publishing-worker] job timing kind=derive_edit lane=hd attempt=2 outcome=derived source_mib=0.0 input_mp=- read_ms=1 sandbox_ms=2 prepare_ms=- viewer_ms=3 full_ms=4 avatar_128_ms=5 store_ms=7 commit_ms=8 total_ms=9",
+    );
+  });
 });
 
 describe("publishing worker lease and concurrency bound", () => {

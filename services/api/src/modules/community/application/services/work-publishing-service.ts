@@ -335,7 +335,26 @@ export interface WorkPublishingServiceOptions {
   readonly clock?: (() => Date) | undefined;
   /** Upload idle timeout and refusal read window; defaults 120 s and 5 s. */
   readonly transferPolicy?: Partial<PublishingTransferPolicy> | undefined;
+  /** Receives the content-free upload attempt lines; defaults to `console`. */
+  readonly logger?: PublishingUploadLogger | undefined;
 }
+
+/**
+ * One line per upload attempt that reached the fence, and per refused
+ * attempt: outcome, role, size and Backend-side milliseconds only. Lines
+ * never carry ids, names, keys, URLs, headers or bytes.
+ */
+export interface PublishingUploadLogger {
+  info(line: string): void;
+}
+
+/** Milliseconds between two clock readings, or `-` when one is missing. */
+const elapsedMs = (from: Date | null, to: Date | null): string =>
+  from === null || to === null
+    ? "-"
+    : String(Math.max(0, Math.round(to.getTime() - from.getTime())));
+
+const mebibytes = (bytes: number): string => (bytes / 1_048_576).toFixed(1);
 
 const positiveMilliseconds = (value: number, name: string): number => {
   if (!Number.isSafeInteger(value) || value <= 0)
@@ -349,6 +368,7 @@ export class WorkPublishingService {
   private readonly store: PublishingMediaStorePort | undefined;
   private readonly processor: PublishingMediaProcessorPort | undefined;
   private readonly clock: () => Date;
+  private readonly logger: PublishingUploadLogger;
 
   constructor(
     private readonly port: WorkPublishingPort,
@@ -358,6 +378,7 @@ export class WorkPublishingService {
     this.processor = options.processor;
     this.transfers = options.transfers ?? new PublishingTransferRegistry();
     this.clock = options.clock ?? (() => new Date());
+    this.logger = options.logger ?? console;
     const policy = { ...defaultTransferPolicy, ...options.transferPolicy };
     this.transferPolicy = {
       idleTimeoutMs: positiveMilliseconds(
@@ -636,6 +657,10 @@ export class WorkPublishingService {
           : { status: "aborted" };
     const { idleTimeoutMs } = this.transferPolicy;
     const source = transfer.source;
+    // Backend-side transfer timing: when the store took the first chunk and
+    // when the body ended, both read from the service clock.
+    let firstByteAt: Date | null = null;
+    let lastByteAt: Date | null = null;
     const idleBounded: AsyncIterable<Uint8Array> = {
       [Symbol.asyncIterator]: () => {
         const iterator = source[Symbol.asyncIterator]();
@@ -646,7 +671,10 @@ export class WorkPublishingService {
               controller.abort();
             }, idleTimeoutMs);
             try {
-              return await iterator.next();
+              const next = await iterator.next();
+              if (next.done) lastByteAt ??= this.clock();
+              else firstByteAt ??= this.clock();
+              return next;
             } finally {
               clearTimeout(idleTimer);
             }
@@ -659,17 +687,31 @@ export class WorkPublishingService {
       },
     };
 
-    try {
-      const fence = await this.beginTransfer(
-        actorId,
-        componentId,
-        transfer,
-        claim,
+    let fence: PublishingUploadFence | undefined;
+    let fencedAt: Date | null = null;
+    let storedAt: Date | null = null;
+    let committedAt: Date | null = null;
+    const logged = (
+      outcome: PublishingComponentUploadOutcome,
+    ): PublishingComponentUploadOutcome => {
+      this.logAttempt(
+        outcome.status,
+        fence,
+        fencedAt,
+        firstByteAt,
+        lastByteAt,
+        storedAt,
+        committedAt,
       );
+      return outcome;
+    };
+    try {
+      fence = await this.beginTransfer(actorId, componentId, transfer, claim);
+      fencedAt = this.clock();
       claim.markStreaming();
       if (controller.signal.aborted) {
         await this.abortQuietly(fence);
-        return ended();
+        return logged(ended());
       }
 
       let blob: PublishingMediaWriteResult;
@@ -684,18 +726,21 @@ export class WorkPublishingService {
         );
       } catch (error) {
         await this.abortQuietly(fence);
-        if (controller.signal.aborted) return ended();
+        if (controller.signal.aborted) return logged(ended());
         const code = storeFailureCode(error);
-        if (code === "size_limit_exceeded") return { status: "too_large" };
+        if (code === "size_limit_exceeded")
+          return logged({ status: "too_large" });
         if (code === "size_mismatch" || code === "empty_content")
-          return { status: "incomplete" };
+          return logged({ status: "incomplete" });
+        this.logAttempt("error", fence, fencedAt, firstByteAt, lastByteAt);
         throw error;
       }
+      storedAt = this.clock();
 
       if (stopped) {
         await this.removeQuietly(store, blob.storageKey);
         await this.abortQuietly(fence);
-        return { status: "cancelled" };
+        return logged({ status: "cancelled" });
       }
 
       let commit: PublishingUploadCommit;
@@ -703,20 +748,34 @@ export class WorkPublishingService {
         commit = await this.port.commitComponentUpload(
           fence,
           blob,
-          this.clock(),
+          storedAt,
+          firstByteAt !== null && lastByteAt !== null
+            ? { firstByteAt, lastByteAt }
+            : undefined,
         );
       } catch (error) {
         // The outcome is unknown: the row may exist although the answer was
         // lost, so the blob stays. Capacity reconciliation removes it after
         // the grace period only when no row records it.
         await this.abortQuietly(fence);
+        this.logAttempt(
+          "commit_unknown",
+          fence,
+          fencedAt,
+          firstByteAt,
+          lastByteAt,
+          storedAt,
+        );
         throw error;
       }
-      if (commit.status === "committed") return commit;
+      committedAt = this.clock();
+      if (commit.status === "committed") return logged(commit);
       await this.removeQuietly(store, blob.storageKey);
-      return commit.status === "size_mismatch"
-        ? { status: "too_large" }
-        : { status: commit.status };
+      return logged(
+        commit.status === "size_mismatch"
+          ? { status: "too_large" }
+          : { status: commit.status },
+      );
     } finally {
       clearTimeout(idleTimer);
       transfer.signal.removeEventListener("abort", onClientAbort);
@@ -751,9 +810,72 @@ export class WorkPublishingService {
       return await begin(false);
     } catch (error) {
       // A conflict comes after the ownership check: the actor owns it.
-      if (!isCommunityConflictError(error) || claim.othersStreaming())
+      if (!isCommunityConflictError(error)) throw error;
+      if (claim.othersStreaming()) {
+        await this.noteRefusal(actorId, componentId, "busy");
         throw error;
-      return begin(true);
+      }
+    }
+    try {
+      return await begin(true);
+    } catch (error) {
+      if (isCommunityConflictError(error))
+        await this.noteRefusal(actorId, componentId, "conflict");
+      throw error;
+    }
+  }
+
+  /**
+   * Measurement only: a refused transfer of a component that already
+   * committed is a resend after a lost answer. It is counted on the
+   * component and logged; any failure here leaves the refusal unchanged.
+   */
+  private async noteRefusal(
+    actorId: string,
+    componentId: string,
+    reason: "busy" | "conflict",
+  ): Promise<void> {
+    const now = this.clock();
+    let committedAt: Date | null = null;
+    try {
+      committedAt = await this.port.noteUploadRefusedAfterCommit(
+        actorId,
+        componentId,
+        now,
+      );
+    } catch {
+      // The refusal stands without its measurement.
+    }
+    this.writeLog(
+      committedAt === null
+        ? `[publishing-upload] attempt outcome=refused reason=${reason}`
+        : `[publishing-upload] attempt outcome=refused reason=after_commit since_commit_ms=${elapsedMs(committedAt, now)}`,
+    );
+  }
+
+  /** One content-free line per fenced upload attempt (see `PublishingUploadLogger`). */
+  private logAttempt(
+    outcome: string,
+    fence: PublishingUploadFence | undefined,
+    fencedAt: Date | null,
+    firstByteAt: Date | null,
+    lastByteAt: Date | null,
+    storedAt: Date | null = null,
+    committedAt: Date | null = null,
+  ): void {
+    if (fence === undefined) return;
+    this.writeLog(
+      `[publishing-upload] attempt outcome=${outcome} role=${fence.role} mib=${mebibytes(fence.byteSize)}` +
+        ` first_byte_ms=${elapsedMs(fencedAt, firstByteAt)} last_byte_ms=${elapsedMs(fencedAt, lastByteAt)}` +
+        ` store_ms=${elapsedMs(lastByteAt, storedAt)} commit_ms=${elapsedMs(storedAt, committedAt)}`,
+    );
+  }
+
+  private writeLog(line: string): void {
+    try {
+      this.logger.info(line);
+    } catch {
+      // Logging never changes an upload outcome.
     }
   }
 

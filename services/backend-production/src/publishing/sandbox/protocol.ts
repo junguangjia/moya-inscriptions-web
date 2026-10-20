@@ -274,6 +274,17 @@ export interface SandboxBoundsFacts {
   readonly errorCode: string | null;
 }
 
+/**
+ * Renderer-side milliseconds of one `process` or `derive` job, for
+ * content-free measurement only: never an input to any decision.
+ */
+export interface SandboxTimings {
+  /** Input split, container checks, pairing, still decode and motion probe. */
+  readonly prepareMs: number;
+  /** Render time of each produced output role, including its file write. */
+  readonly roles: Readonly<Record<string, number>>;
+}
+
 /** The first stdout line (at most 256 KiB). */
 export interface SandboxManifest {
   readonly protocol: 1;
@@ -304,6 +315,8 @@ export interface SandboxManifest {
   readonly selfCheck: SandboxIsolationFacts | null;
   /** Present exactly when `bounds`. */
   readonly bounds?: SandboxBoundsFacts;
+  /** Optional, and only when `processed` or `derived`. */
+  readonly timings?: SandboxTimings;
 }
 
 /** True for a Catalog block role (`block-00` … `block-99`). */
@@ -941,6 +954,26 @@ const boundsFacts = (value: unknown): boolean => {
   );
 };
 
+/** A day bounds every reported duration. */
+const MAX_TIMING_MS = 86_400_000;
+
+/** Bounded integer milliseconds, keyed only by roles the manifest produced. */
+const timings = (
+  value: unknown,
+  outputs: readonly SandboxOutput[],
+): boolean => {
+  if (value === undefined) return true;
+  const fields = strict(value, ["prepareMs", "roles"]);
+  if (!fields || !integer(fields.prepareMs, 0, MAX_TIMING_MS)) return false;
+  const roles = fields.roles;
+  if (typeof roles !== "object" || roles === null || Array.isArray(roles))
+    return false;
+  const produced = new Set<string>(outputs.map((entry) => entry.role));
+  return Object.entries(roles).every(
+    ([role, ms]) => produced.has(role) && integer(ms, 0, MAX_TIMING_MS),
+  );
+};
+
 /**
  * Coordinator side: parses and strictly validates the manifest line (without
  * its newline). Throws `SandboxProtocolError("manifest_invalid")`.
@@ -969,7 +1002,7 @@ export function parseSandboxManifest(line: string): SandboxManifest {
       "outputs",
       "selfCheck",
     ],
-    ["bounds"],
+    ["bounds", "timings"],
   );
   if (
     !fields ||
@@ -1015,6 +1048,13 @@ export function parseSandboxManifest(line: string): SandboxManifest {
       fields.status === "self-check" ||
       fields.status === "bounds") &&
     names.length > 0
+  )
+    throw new SandboxProtocolError("manifest_invalid");
+  if (
+    !timings(fields.timings, fields.outputs as SandboxOutput[]) ||
+    (fields.timings !== undefined &&
+      fields.status !== "processed" &&
+      fields.status !== "derived")
   )
     throw new SandboxProtocolError("manifest_invalid");
   return fields as unknown as SandboxManifest;

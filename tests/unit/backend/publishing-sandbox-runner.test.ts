@@ -1405,6 +1405,33 @@ describe("media sandbox protocol", () => {
       expect(() => parseSandboxManifest(JSON.stringify(invalid))).toThrow(
         SandboxProtocolError,
       );
+    // Renderer timings are optional, bounded and name only produced roles.
+    const timed: SandboxManifest = {
+      ...manifest,
+      timings: { prepareMs: 812, roles: { thumb: 40, cover: 0, display: 95 } },
+    };
+    expect(parseSandboxManifest(JSON.stringify(timed))).toEqual(timed);
+    for (const invalid of [
+      { ...timed, timings: { prepareMs: -1, roles: {} } },
+      { ...timed, timings: { prepareMs: 1.5, roles: {} } },
+      { ...timed, timings: { prepareMs: 86_400_001, roles: {} } },
+      { ...timed, timings: { prepareMs: 1, roles: { viewer: 3 } } },
+      { ...timed, timings: { prepareMs: 1, roles: { thumb: "3" } } },
+      { ...timed, timings: { prepareMs: 1, roles: [] } },
+      { ...timed, timings: { prepareMs: 1, roles: {}, path: "/tmp" } },
+      { ...timed, timings: { prepareMs: 1 } },
+      { ...probed, timings: { prepareMs: 1, roles: {} } },
+      {
+        ...timed,
+        status: "rejected",
+        failureCode: "decode_failed",
+        outputs: [],
+        timings: { prepareMs: 1, roles: {} },
+      },
+    ])
+      expect(() => parseSandboxManifest(JSON.stringify(invalid))).toThrow(
+        SandboxProtocolError,
+      );
     expect(() => parseSandboxManifest("{")).toThrow(SandboxProtocolError);
     expect(parseFrameHeader('{"end":true,"count":2}')).toEqual({
       kind: "end",

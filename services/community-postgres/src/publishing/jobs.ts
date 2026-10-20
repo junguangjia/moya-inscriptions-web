@@ -383,7 +383,7 @@ export const claimJobs = async (
        UPDATE community.publishing_jobs j
        SET state='running', attempts=j.attempts + 1, lease_owner=$3,
            lease_expires_at=$1::timestamptz + $4::double precision * interval '1 millisecond',
-           updated_at=$1::timestamptz, finished_at=NULL
+           updated_at=$1::timestamptz, started_at=$1::timestamptz, finished_at=NULL
        FROM next WHERE j.id=next.id
        RETURNING j.id,j.kind,j.subject_id,j.payload,j.attempts,j.max_attempts,j.run_after,j.lease_owner,j.lease_expires_at,
          ${claimClassSql("j")} AS background_priority`,
