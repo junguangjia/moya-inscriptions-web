@@ -349,14 +349,14 @@ describe("task routing follows the complete changed-path set", () => {
       { web: true, cms: true, scope: "smoke" },
     ],
     [["packages/search/README.md", "services/api/README.md"], {}],
-    [["services/public-api/src/openapi.ts"], { contracts: true }],
+    [["services/public-api/src/openapi.ts"], { cms: true, contracts: true }],
     [
       ["services/backend-runtime/src/community/session.ts"],
-      { web: true, contracts: true, scope: "smoke" },
+      { web: true, cms: true, contracts: true, scope: "smoke" },
     ],
     [
       ["services/backend-runtime/src/community/auth.ts"],
-      { web: true, contracts: true, scope: "smoke" },
+      { web: true, cms: true, contracts: true, scope: "smoke" },
     ],
     [
       ["packages/contracts/src/internal/editorial.ts"],
@@ -3315,7 +3315,7 @@ describe("semantic workspace selection and cumulative coverage", () => {
     assert.doesNotMatch(workflow, /path: \.turbo\/cache/u);
     assert.equal(
       JSON.parse(read("package.json")).scripts.test,
-      "pnpm test:confidentiality && turbo run test --cache-dir=.turbo/library-cache --cache=local:r",
+      "pnpm test:confidentiality && turbo run test --cache-dir=.turbo/library-cache --cache=local:r && pnpm test:catalog-workflow-client",
     );
     const scopedTest = verificationCommands(
       verificationPlan("test", ["--workspaces", "@moya/tests"]),

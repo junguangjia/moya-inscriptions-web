@@ -431,3 +431,40 @@ GRANT UPDATE (ended_at, end_reason) ON TABLE community.catalog_display_masters T
 GRANT UPDATE (day_start, day_requests, day_bytes, day_observed_at)
 ON TABLE community.media_request_usage TO :"app_role";
 GRANT SELECT ON community.catalog_media_zoom_blocks TO :"app_role";
+
+-- Catalog prepare/release mirrors (migration 20261020160000). Older upgrade
+-- fixtures may stop before this whole family exists; a partial family is an
+-- inconsistent migration state and must fail before granting any of its ACLs.
+-- Immutable manifests and rendition identities are insert-only, as in the
+-- canonical Development App grant. No DELETE or table-level UPDATE is added.
+DO $$
+DECLARE
+  catalog_delivery_table_count integer;
+BEGIN
+  SELECT count(*) INTO catalog_delivery_table_count
+  FROM (VALUES
+    ('community.catalog_delivery_prepares'),
+    ('community.catalog_delivery_media_refs'),
+    ('community.catalog_delivery_rendition_pins'),
+    ('community.catalog_delivery_snapshot_watermark')
+  ) AS required(relation_name)
+  WHERE to_regclass(required.relation_name) IS NOT NULL;
+  IF catalog_delivery_table_count = 0 THEN
+    RETURN;
+  END IF;
+  IF catalog_delivery_table_count <> 4 THEN
+    RAISE EXCEPTION 'Catalog delivery runtime grants require the complete relation family';
+  END IF;
+  EXECUTE format(
+    'GRANT SELECT, INSERT ON TABLE community.catalog_delivery_prepares, community.catalog_delivery_media_refs, community.catalog_delivery_rendition_pins, community.catalog_delivery_snapshot_watermark TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (source_state, source_state_version, observed_at, observed_live, ended_at, updated_at) ON TABLE community.catalog_delivery_prepares TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (public_generation_id, public_generation_version) ON TABLE community.catalog_delivery_rendition_pins TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (observed_at) ON TABLE community.catalog_delivery_snapshot_watermark TO %I',
+    current_setting('moya.runtime_app_role'));
+END $$;

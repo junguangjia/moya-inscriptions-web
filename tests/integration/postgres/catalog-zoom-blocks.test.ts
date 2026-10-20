@@ -1268,6 +1268,8 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
     // The existing dedicated SQL fixture's published source table is read by
     // setup; all rendition and publication queries still use the real App role.
     // This is authority/SQL integration, not a second dual-DB Native E2E test.
+    const malformedImage = await catalogImage();
+    const malformedMaster = await attached(malformedImage);
     const malformedBlob = `media-blob-${hex()}`;
     const malformedBlock = `media-rendition-${hex()}`;
     await setup.query(
@@ -1275,15 +1277,20 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
       [malformedBlob, blobKey(), sha(malformedBlob), t0],
     );
     // Width 1 satisfies the bounded column CHECK, but not this cell's width.
-    // A distinct recipe identity keeps the valid block row immutable.
+    // A separate published asset avoids the ready-role uniqueness constraint
+    // without changing the original asset's 24 valid blocks.
     await setup.query(
       "INSERT INTO community.media_renditions(id,catalog_asset_id,catalog_master_id,edit_key,role,recipe_version,recipe_digest,blob_id,width,height,content_type,created_at) VALUES($1,$2,$3,'base','block-00',2,'3333333333333333',$4,1,$5,'image/jpeg',$6)",
       [
         malformedBlock,
-        image.assetId,
-        master.masterId,
+        malformedImage.assetId,
+        malformedMaster.masterId,
         malformedBlob,
-        catalogBlockCell(frame.width, frame.height, 0).height,
+        catalogBlockCell(
+          malformedMaster.frameWidth,
+          malformedMaster.frameHeight,
+          0,
+        ).height,
         t0,
       ],
     );

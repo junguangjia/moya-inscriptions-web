@@ -110,7 +110,7 @@ const cmsTestTarget = new Set([
 // existing UI asset export, so UI and its design-token dependency join that
 // closure and must retain CMS coverage when their shared resources change.
 const cmsBuiltPackage =
-  /^(?:packages\/(?:contracts|design-tokens|image|search|ui)|services\/(?:api|catalog-postgres|community-postgres))\/(?:src\/|(?:package|tsconfig)\.json$)/u;
+  /^(?:packages\/(?:contracts|design-tokens|image|search|ui)|services\/(?:api|agent-authorization|backend-production|backend-runtime|catalog-importer|catalog-postgres|community-postgres|public-api))\/(?:src\/|(?:package|tsconfig)\.json$)/u;
 const publicBoundary = (file) =>
   (file.startsWith("packages/contracts/") &&
     !file.startsWith("packages/contracts/src/internal/")) ||

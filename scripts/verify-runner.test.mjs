@@ -264,7 +264,7 @@ describe("affected workspace command boundaries", () => {
     );
     assert.equal(
       scripts.test,
-      "pnpm test:confidentiality && turbo run test --cache-dir=.turbo/library-cache --cache=local:r",
+      "pnpm test:confidentiality && turbo run test --cache-dir=.turbo/library-cache --cache=local:r && pnpm test:catalog-workflow-client",
     );
     assert.ok(!commands[0].some((argument) => argument.startsWith("--cache=")));
     assert.deepEqual(

@@ -589,6 +589,7 @@ export const CMS_LIBRARY_WORKSPACES = Object.freeze([
   "@moya/catalog-postgres",
   "@moya/image",
   "@moya/community-postgres",
+  "@moya/backend-production",
 ]);
 export function cmsLibraryBuildArgs() {
   return [
