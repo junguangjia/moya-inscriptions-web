@@ -33,6 +33,10 @@ import {
   type ProfileMediaFamily,
 } from "./media-delivery.ts";
 export {
+  CATALOG_ZOOM_BLOCK_EDGE,
+  CATALOG_ZOOM_BLOCK_OVERLAP,
+  CATALOG_ZOOM_BLOCKS_MAXIMUM,
+  CATALOG_ZOOM_MAX_LONG_EDGE,
   MEDIA_RENDITIONS_MAXIMUM,
   PROFILE_MEDIA_RENDITION_ROLES,
   addMediaRenditionAnchorIssues,

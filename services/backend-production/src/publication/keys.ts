@@ -3,7 +3,7 @@ import type { PublishedUnit } from "./provider.js";
 
 const hex32 = "[0-9a-f]{32}";
 const editKey = `(?:base|${hex32})`;
-const roles = "(?:thumb|cover|display|viewer|full|motion)";
+const roles = "(?:thumb|cover|display|viewer|full|motion|block-[0-9]{2})";
 const fileKey = new RegExp(
   `^v1/${hex32}/${hex32}/${editKey}/${roles}\\.r([1-9][0-9]{0,9})\\.(?:webp|jpg|mp4)$`,
   "u",

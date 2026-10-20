@@ -239,6 +239,23 @@ export type {
   CatalogRenditionRole,
 } from "./modules/community/application/ports/catalog-media-asset-port.js";
 export type {
+  CatalogBlockGuardCounts,
+  CatalogBlockJobPayload,
+  CatalogBlockReadTarget,
+  CatalogDisplayMasterPort,
+  CatalogMasterAttach,
+  CatalogMasterAttached,
+  CatalogMasterCandidate,
+  CatalogMasterDerivation,
+  CatalogMasterEndReason,
+  CatalogMasterHeader,
+  CatalogMasterRefusal,
+  CatalogMasterResult,
+  CatalogMasterStatus,
+  CatalogMasterStatusRow,
+  CatalogMasterStorage,
+} from "./modules/community/application/ports/catalog-display-master-port.js";
+export type {
   ProfileMediaAssetPort,
   ProfileRenderOutcome,
   ProfileRenderPlan,

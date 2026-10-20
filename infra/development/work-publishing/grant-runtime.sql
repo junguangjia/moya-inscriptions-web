@@ -416,3 +416,18 @@ GRANT SELECT, INSERT, DELETE ON TABLE
 TO :"app_role";
 GRANT UPDATE (forwarded_at) ON TABLE community.analytics_events TO :"app_role";
 GRANT UPDATE (attempts, next_attempt_at, failed_at) ON TABLE community.analytics_outbox TO :"app_role";
+
+-- catalog-deep-zoom-v1 (migration 20261020010000): private Catalog display
+-- masters, written only by the catalog-master command (same role as the
+-- worker): rows are inserted and only ever ended, never rewritten. The
+-- breaker's day-to-date usage columns are written by the worker's usage
+-- step. The relay and the command read the published-blocks view. Block
+-- renditions, block publications and master blobs use the column lists above
+-- (catalog_master_id is covered by the table-level INSERT; erasing a master
+-- uses the existing state, tombstoned_at and retention_hold columns).
+REVOKE UPDATE ON TABLE community.catalog_display_masters FROM :"app_role";
+GRANT SELECT, INSERT ON TABLE community.catalog_display_masters TO :"app_role";
+GRANT UPDATE (ended_at, end_reason) ON TABLE community.catalog_display_masters TO :"app_role";
+GRANT UPDATE (day_start, day_requests, day_bytes, day_observed_at)
+ON TABLE community.media_request_usage TO :"app_role";
+GRANT SELECT ON community.catalog_media_zoom_blocks TO :"app_role";

@@ -48,6 +48,7 @@ import type {
   PublishingBlobContentType,
   PublishingMediaWriteResult,
 } from "./publishing-media-store-port.js";
+import type { CatalogBlockJobPayload } from "./catalog-display-master-port.js";
 
 /*
  * Work publishing persistence (work-publishing-v1, design.md §2-§5, §9-§10).
@@ -338,6 +339,13 @@ export interface PublishingJobClaimOptions {
   readonly leaseMs: number;
   /** Restrict the claim to these kinds; all kinds when omitted. */
   readonly kinds?: readonly PublishingJobKind[];
+  /**
+   * Claim Catalog block jobs (`catalog_render` with payload variant
+   * `blocks`, catalog-deep-zoom-v1): only a worker whose block render switch
+   * is on passes true, and then only on an idle queue. Default false: block
+   * jobs stay queued, never failed.
+   */
+  readonly catalogBlocks?: boolean;
 }
 
 /** `retry_scheduled`: queued again with backoff. `lease_lost`: the claim was no longer held; nothing changed. */
@@ -352,7 +360,9 @@ export interface PublishingJobEnqueue {
   readonly kind: PublishingJobKind;
   /** `^[a-z0-9][a-z0-9-]{0,127}$`, as the operator job DTO requires. */
   readonly subjectId: string;
-  readonly payload?: PublishingDeriveEditPayload | null;
+  /** A `derive_edit` payload, or a Catalog block job's (catalog-deep-zoom-v1). */
+  readonly payload?:
+    PublishingDeriveEditPayload | CatalogBlockJobPayload | null;
   /** Defaults to `now`. */
   readonly runAfter?: Date;
   /** 1..1000; the table default when omitted. */

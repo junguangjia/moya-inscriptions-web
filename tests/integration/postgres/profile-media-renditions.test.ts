@@ -411,6 +411,7 @@ describe("profile media renditions migration on a dedicated synthetic database",
         "20261016010000",
         "20261019010000",
         "20261019020000",
+        "20261020010000",
       ]);
       await verifyCommunityMigrationLedger(pool);
       const after = await snapshot(pool);
@@ -420,11 +421,19 @@ describe("profile media renditions migration on a dedicated synthetic database",
       ]);
       // A later migration's claim time starts unrecorded on existing jobs.
       expect(after.jobs.map((row) => row.started_at)).toEqual([null, null]);
+      // Later migrations add nullable columns only (catalog-deep-zoom-v1:
+      // media_renditions.catalog_master_id).
+      expect(after.renditions.map((row) => row.catalog_master_id)).toEqual([
+        null,
+        null,
+      ]);
       expect({
         ...after,
         renditions: after.renditions.map((row) =>
           Object.fromEntries(
-            Object.entries(row).filter(([key]) => key !== "user_media_id"),
+            Object.entries(row).filter(
+              ([key]) => key !== "user_media_id" && key !== "catalog_master_id",
+            ),
           ),
         ),
         jobs: after.jobs.map((row) =>

@@ -36,6 +36,10 @@ export interface PublicationUnit {
   readonly sweepTaskIds: readonly string[];
   readonly sweepAttempts: number;
   readonly sweepStartedAt: Date | null;
+  /** When a withdrawal deleted the origin object; null before. */
+  readonly originDeletedAt?: Date | null;
+  /** The forced edge TTL a deferred block withdrawal waits for; null otherwise. */
+  readonly fallbackTtlSeconds?: number | null;
 }
 
 export interface PublicationFence {
@@ -89,6 +93,19 @@ export interface PublicationRepository {
     unitIds: readonly string[],
     errorCode: string,
     now: Date,
+  ): Promise<boolean>;
+  /** Block URLs submitted for purge since `since` (the daily block budget). */
+  blockPurgesSince(since: Date): Promise<number>;
+  /**
+   * Puts withdrawing block units whose origin object is deleted on the TTL
+   * path: no purge, gone from warmed edges within `ttlSeconds`.
+   */
+  deferBlockWithdrawal(
+    fence: PublicationFence,
+    unitIds: readonly string[],
+    ttlSeconds: number,
+    now: Date,
+    code?: "block_budget_deferred" | "block_purge_unconfirmed",
   ): Promise<boolean>;
   release(fence: PublicationFence, now: Date): Promise<void>;
   reconcile(
@@ -149,6 +166,10 @@ export interface PublicationJobHandlerOptions {
   readonly clock?: () => Date;
   readonly logger?: PublishingWorkerLogger;
   readonly limit?: number;
+  /** Block URL purges per quota day; defaults to the recorded budget. */
+  readonly blockPurgeBudget?: number;
+  /** The image host's forced edge TTL; defaults to the recorded value. */
+  readonly blockFallbackTtlSeconds?: number;
 }
 
 export const PUBLICATION_WITHDRAW_JOB_KINDS = [
@@ -168,6 +189,27 @@ export const PUBLICATION_RECONCILE_INTERVAL_MS = 60_000;
 export const PUBLICATION_SWEEP_INTERVAL_MS = 3_600_000;
 export const PUBLICATION_USAGE_INTERVAL_MS = 86_400_000;
 export const PUBLICATION_EDGE_FALLBACK_TTL_SECONDS = 3_600;
+/**
+ * Block URL purges per purge-quota day (catalog-deep-zoom-v1, OD-4): 25 % of
+ * the zone's daily `purge_url` quota as read at P0, and 0 while no figure is
+ * recorded. Every block withdrawal beyond it takes the TTL path: the origin
+ * object is deleted and warmed edges drop it within the forced edge TTL.
+ */
+export const CATALOG_BLOCK_PURGE_BUDGET_PER_DAY = 0;
+
+/** The purge quota's day: from 00:00 Asia/Shanghai (UTC+8), until P0 says otherwise. */
+export const purgeQuotaDayStart = (now: Date): Date => {
+  const shanghai = 8 * 60 * 60 * 1_000;
+  const day = 24 * 60 * 60 * 1_000;
+  return new Date(
+    Math.floor((now.getTime() + shanghai) / day) * day - shanghai,
+  );
+};
+
+const BLOCK_ROLE = /^block-[0-9]{2}$/u;
+/** A Catalog block publication (catalog-deep-zoom-v1). */
+export const isBlockUnit = (unit: Pick<PublicationUnit, "role">): boolean =>
+  BLOCK_ROLE.test(unit.role);
 
 const MAX_PURGE_ATTEMPTS = 3;
 const VERIFY_DELAY_MS = 10_000;
@@ -175,6 +217,10 @@ const VERIFY_POLL_MS = 30_000;
 const MAX_WITHDRAWAL_WAIT_MS = 10 * 60_000;
 const MAX_UNITS = 500;
 const PURGE_BATCH_SIZE = 100;
+/** A deferred block group finishes this long after its TTL elapsed. */
+const BLOCK_TTL_MARGIN_MS = 5 * 60_000;
+/** The queue's longest deferral. */
+const MAX_DEFER_MS = 300_000;
 const STREAM_FENCE_BYTES = 1024 * 1024;
 const STREAM_FENCE_MS = 1_000;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -414,44 +460,77 @@ export function createPublicationJobHandlers(
     }
   };
 
-  const alert = (errorCode: string) =>
+  const blockBudget =
+    options.blockPurgeBudget ?? CATALOG_BLOCK_PURGE_BUDGET_PER_DAY;
+  const blockTtlSeconds =
+    options.blockFallbackTtlSeconds ?? PUBLICATION_EDGE_FALLBACK_TTL_SECONDS;
+  if (
+    !Number.isSafeInteger(blockBudget) ||
+    blockBudget < 0 ||
+    !Number.isSafeInteger(blockTtlSeconds) ||
+    blockTtlSeconds < 60 ||
+    blockTtlSeconds > 86_400
+  ) {
+    throw new Error("Media publication block withdrawal options are invalid");
+  }
+
+  // A block group falls back to the block TTL T, every other group to the
+  // ordinary edge TTL.
+  const alert = (
+    errorCode: string,
+    ttlSeconds: number = PUBLICATION_EDGE_FALLBACK_TTL_SECONDS,
+  ) =>
     logger.error(
-      `publication.withdrawal code=${errorCode} fallback_ttl_seconds=${PUBLICATION_EDGE_FALLBACK_TTL_SECONDS}`,
+      `publication.withdrawal code=${errorCode} fallback_ttl_seconds=${ttlSeconds}`,
     );
 
-  const purgeFailure = async (
-    plan: Extract<PublicationPlan, { readonly status: "ready" }>,
+  /**
+   * The outcome of one purge group of a withdrawal plan: ordinary roles and
+   * Catalog blocks are purged, retried and failed separately, so a block
+   * group never holds back the take-down of the other roles.
+   */
+  type GroupOutcome =
+    | { readonly kind: "finished" }
+    | { readonly kind: "submitted" }
+    | { readonly kind: "wait"; readonly delayMs: number }
+    | { readonly kind: "lost" }
+    | { readonly kind: "failed"; readonly result: PublishingJobResult };
+  const LOST: GroupOutcome = { kind: "lost" };
+
+  const groupFailure = async (
+    fence: PublicationFence,
+    units: readonly PublicationUnit[],
     errorCode: string,
-  ): Promise<PublishingJobResult> => {
-    const held = await port.failPurge(
-      plan.fence,
-      ids(plan.units),
+  ): Promise<GroupOutcome> => {
+    const held = await port.failPurge(fence, ids(units), errorCode, clock());
+    if (!held) return LOST;
+    alert(
       errorCode,
-      clock(),
+      units.some(isBlockUnit)
+        ? blockTtlSeconds
+        : PUBLICATION_EDGE_FALLBACK_TTL_SECONDS,
     );
-    if (!held) return deferred();
-    alert(errorCode);
-    return failed(errorCode, attempts(plan.units) + 1 < MAX_PURGE_ATTEMPTS);
+    return {
+      kind: "failed",
+      result: failed(errorCode, attempts(units) + 1 < MAX_PURGE_ATTEMPTS),
+    };
   };
 
-  const submitPurge = async (
-    plan: Extract<PublicationPlan, { readonly status: "ready" }>,
-    claim: PublishingWorkerJobClaim,
+  /** Submits one group's URLs in purge tasks of at most 100 URLs. */
+  const submitGroup = async (
+    fence: PublicationFence,
+    units: readonly PublicationUnit[],
     signal: AbortSignal,
-  ): Promise<PublishingJobResult> => {
-    if (attempts(plan.units) >= MAX_PURGE_ATTEMPTS) {
-      return await purgeFailure(plan, "purge_failed");
+  ): Promise<GroupOutcome> => {
+    if (attempts(units) >= MAX_PURGE_ATTEMPTS) {
+      return await groupFailure(fence, units, "purge_failed");
     }
     try {
       const target = configuredProvider();
-      if (!(await current(plan.fence, signal))) return deferred();
-      for (
-        let start = 0;
-        start < plan.units.length;
-        start += PURGE_BATCH_SIZE
-      ) {
-        const batch = plan.units.slice(start, start + PURGE_BATCH_SIZE);
-        if (!(await current(plan.fence, signal))) return deferred();
+      if (!(await current(fence, signal))) return LOST;
+      for (let start = 0; start < units.length; start += PURGE_BATCH_SIZE) {
+        const batch = units.slice(start, start + PURGE_BATCH_SIZE);
+        if (!(await current(fence, signal))) return LOST;
         const taskId = await target.provider.purge(
           batch.map((unit) =>
             publishedObjectUrl(target.origin, unit.objectKey),
@@ -460,27 +539,231 @@ export function createPublicationJobHandlers(
           signal,
         );
         throwAborted(signal);
-        if (
-          !(await port.recordPurge(plan.fence, ids(batch), [taskId], clock()))
-        )
-          return deferred();
+        if (!(await port.recordPurge(fence, ids(batch), [taskId], clock())))
+          return LOST;
       }
-      await queue.enqueueJob(
-        {
-          kind: "verify_withdrawal",
-          subjectId: claim.subjectId,
-          runAfter: new Date(clock().getTime() + VERIFY_DELAY_MS),
-          maxAttempts: MAX_PURGE_ATTEMPTS,
-        },
-        clock(),
-      );
-      return claim.kind === "verify_withdrawal"
-        ? deferred(VERIFY_DELAY_MS)
-        : COMPLETE;
+      return { kind: "submitted" };
     } catch (error) {
       throwAborted(signal);
-      return await purgeFailure(plan, providerCode(error));
+      return await groupFailure(fence, units, providerCode(error));
     }
+  };
+
+  /** Ordinary roles: purge, confirm, verify every unit (up to 3 attempts). */
+  const withdrawOrdinary = async (
+    fence: PublicationFence,
+    units: readonly PublicationUnit[],
+    signal: AbortSignal,
+  ): Promise<readonly GroupOutcome[]> => {
+    const target = configuredProvider();
+    if (units.some((unit) => unit.purgeTaskIds.length === 0)) {
+      // A crash after one batch preserves that batch's tasks; missing units
+      // are submitted on restart before the group can finish verification.
+      return [
+        await submitGroup(
+          fence,
+          units.filter((unit) => unit.purgeTaskIds.length === 0),
+          signal,
+        ),
+      ];
+    }
+    const states: ("pending" | "succeeded" | "failed")[] = [];
+    for (const taskId of uniqueTasks(units)) {
+      if (!(await current(fence, signal))) return [LOST];
+      states.push(await target.provider.purgeStatus(taskId, signal));
+    }
+    if (states.includes("failed"))
+      return [await submitGroup(fence, units, signal)];
+    if (states.includes("pending")) {
+      if (
+        clock().getTime() - earliestRequestedAt(units, clock()) >=
+        MAX_WITHDRAWAL_WAIT_MS
+      ) {
+        return [await groupFailure(fence, units, "purge_unconfirmed")];
+      }
+      return [{ kind: "wait", delayMs: VERIFY_POLL_MS }];
+    }
+    for (const unit of units) {
+      if (!(await current(fence, signal))) return [LOST];
+      if (
+        !(await target.provider.verifyGone(
+          publishedObjectUrl(target.origin, unit.objectKey),
+          signal,
+        ))
+      ) {
+        if (attempts(units) >= MAX_PURGE_ATTEMPTS)
+          return [await groupFailure(fence, units, "withdrawal_still_served")];
+        return [await submitGroup(fence, units, signal)];
+      }
+    }
+    throwAborted(signal);
+    if (!(await port.finishWithdrawal(fence, ids(units), clock())))
+      return [LOST];
+    return [{ kind: "finished" }];
+  };
+
+  /** The first and last block of a group (by key): its sampled edge checks. */
+  const sampledBlocks = (units: readonly PublicationUnit[]) => {
+    const sorted = [...units].sort((left, right) =>
+      left.objectKey < right.objectKey
+        ? -1
+        : left.objectKey > right.objectKey
+          ? 1
+          : 0,
+    );
+    return sorted.length <= 2 ? sorted : [sorted[0]!, sorted.at(-1)!];
+  };
+
+  const allGone = async (
+    units: readonly PublicationUnit[],
+    fence: PublicationFence,
+    signal: AbortSignal,
+  ): Promise<boolean | null> => {
+    const target = configuredProvider();
+    for (const unit of sampledBlocks(units)) {
+      if (!(await current(fence, signal))) return null;
+      if (
+        !(await target.provider.verifyGone(
+          publishedObjectUrl(target.origin, unit.objectKey),
+          signal,
+        ))
+      )
+        return false;
+    }
+    return true;
+  };
+
+  /** One content-free error line per deferred block group (OD-4). */
+  const deferBlocks = async (
+    fence: PublicationFence,
+    units: readonly PublicationUnit[],
+    code: "block_budget_deferred" | "block_purge_unconfirmed",
+  ): Promise<readonly PublicationUnit[] | null> => {
+    if (
+      !(await port.deferBlockWithdrawal(
+        fence,
+        ids(units),
+        blockTtlSeconds,
+        clock(),
+        code,
+      ))
+    )
+      return null;
+    logger.error(
+      `publication.withdrawal code=${code} units=${units.length} ttl_seconds=${blockTtlSeconds}`,
+    );
+    return units.map((unit) => ({
+      ...unit,
+      purgeTaskIds: [],
+      fallbackTtlSeconds: blockTtlSeconds,
+    }));
+  };
+
+  /**
+   * Catalog blocks (catalog-deep-zoom-v1): one purge attempt within the daily
+   * block budget, sampled verification (first and last block), and otherwise
+   * the TTL path: the origin object is already deleted, and the group
+   * finishes once the forced edge TTL plus a margin has passed.
+   */
+  const withdrawBlocks = async (
+    fence: PublicationFence,
+    units: readonly PublicationUnit[],
+    signal: AbortSignal,
+  ): Promise<readonly GroupOutcome[]> => {
+    const target = configuredProvider();
+    const outcomes: GroupOutcome[] = [];
+    let ttl = units.filter(
+      (unit) =>
+        unit.purgeTaskIds.length === 0 &&
+        unit.fallbackTtlSeconds !== null &&
+        unit.fallbackTtlSeconds !== undefined,
+    );
+    const fresh = units.filter(
+      (unit) =>
+        unit.purgeTaskIds.length === 0 &&
+        (unit.fallbackTtlSeconds === null ||
+          unit.fallbackTtlSeconds === undefined),
+    );
+    const purged = units.filter((unit) => unit.purgeTaskIds.length > 0);
+    if (fresh.length > 0) {
+      const used =
+        blockBudget === 0
+          ? 0
+          : await port.blockPurgesSince(purgeQuotaDayStart(clock()));
+      if (blockBudget > 0 && used + fresh.length <= blockBudget) {
+        outcomes.push(await submitGroup(fence, fresh, signal));
+      } else {
+        const deferredUnits = await deferBlocks(
+          fence,
+          fresh,
+          "block_budget_deferred",
+        );
+        if (deferredUnits === null) return [LOST];
+        ttl = [...ttl, ...deferredUnits];
+      }
+    }
+    if (purged.length > 0) {
+      const states: ("pending" | "succeeded" | "failed")[] = [];
+      for (const taskId of uniqueTasks(purged)) {
+        if (!(await current(fence, signal))) return [LOST];
+        states.push(await target.provider.purgeStatus(taskId, signal));
+      }
+      let fallback = states.includes("failed");
+      if (!fallback && states.includes("pending")) {
+        if (
+          clock().getTime() - earliestRequestedAt(purged, clock()) <
+          MAX_WITHDRAWAL_WAIT_MS
+        )
+          outcomes.push({ kind: "wait", delayMs: VERIFY_POLL_MS });
+        else fallback = true;
+      } else if (!fallback) {
+        const gone = await allGone(purged, fence, signal);
+        if (gone === null) return [LOST];
+        if (gone) {
+          throwAborted(signal);
+          if (!(await port.finishWithdrawal(fence, ids(purged), clock())))
+            return [LOST];
+          outcomes.push({ kind: "finished" });
+        } else fallback = true;
+      }
+      if (fallback) {
+        const deferredUnits = await deferBlocks(
+          fence,
+          purged,
+          "block_purge_unconfirmed",
+        );
+        if (deferredUnits === null) return [LOST];
+        ttl = [...ttl, ...deferredUnits];
+      }
+    }
+    if (ttl.length > 0) {
+      const now = clock().getTime();
+      const deletedAt = Math.max(
+        ...ttl.map((unit) => unit.originDeletedAt?.getTime() ?? now),
+      );
+      const ttlMs =
+        Math.max(
+          ...ttl.map((unit) => unit.fallbackTtlSeconds ?? blockTtlSeconds),
+        ) * 1_000;
+      const wait = deletedAt + ttlMs + BLOCK_TTL_MARGIN_MS - now;
+      if (wait > 0) {
+        outcomes.push({ kind: "wait", delayMs: Math.min(MAX_DEFER_MS, wait) });
+      } else {
+        const gone = await allGone(ttl, fence, signal);
+        if (gone === null) return [LOST];
+        if (!gone) {
+          outcomes.push(
+            await groupFailure(fence, ttl, "withdrawal_still_served"),
+          );
+        } else {
+          throwAborted(signal);
+          if (!(await port.finishWithdrawal(fence, ids(ttl), clock())))
+            return [LOST];
+          outcomes.push({ kind: "finished" });
+        }
+      }
+    }
+    return outcomes;
   };
 
   const withdraw = async (
@@ -494,60 +777,76 @@ export function createPublicationJobHandlers(
     try {
       if (plan.units.length === 0) return COMPLETE;
       const target = configuredProvider();
-      for (const unit of plan.units) {
+      const blocks = plan.units.filter(isBlockUnit);
+      const ordinary = plan.units.filter((unit) => !isBlockUnit(unit));
+      // Every ordinary origin object is deleted on each run, as before; a
+      // block only until its deletion is recorded (a deferred block group
+      // is re-run every few minutes while its edge TTL passes).
+      const deleting = [
+        ...ordinary,
+        ...blocks.filter((unit) => !unit.originDeletedAt),
+      ];
+      for (const unit of deleting) {
         if (!(await current(plan.fence, signal))) return deferred();
         validatePublishedKey(unit.objectKey);
         await target.provider.remove(unit.objectKey, signal);
       }
       if (
-        !(await port.recordOriginDeleted(plan.fence, ids(plan.units), clock()))
+        deleting.length > 0 &&
+        !(await port.recordOriginDeleted(plan.fence, ids(deleting), clock()))
       )
         return deferred();
-      const taskIds = uniqueTasks(plan.units);
-      if (plan.units.some((unit) => unit.purgeTaskIds.length === 0)) {
-        // A crash after one batch preserves that batch's tasks; missing units
-        // are submitted on restart before the group can finish verification.
-        return await submitPurge(
-          {
-            ...plan,
-            units: plan.units.filter((unit) => unit.purgeTaskIds.length === 0),
-          },
-          claim,
-          signal,
-        );
-      }
-      const states: ("pending" | "succeeded" | "failed")[] = [];
-      for (const taskId of taskIds) {
-        if (!(await current(plan.fence, signal))) return deferred();
-        states.push(await target.provider.purgeStatus(taskId, signal));
-      }
-      if (states.includes("failed"))
-        return await submitPurge(plan, claim, signal);
-      if (states.includes("pending")) {
-        if (
-          clock().getTime() - earliestRequestedAt(plan.units, clock()) >=
-          MAX_WITHDRAWAL_WAIT_MS
-        ) {
-          return await purgeFailure(plan, "purge_unconfirmed");
+      const guarded = async (
+        units: readonly PublicationUnit[],
+        run: () => Promise<readonly GroupOutcome[]>,
+      ): Promise<readonly GroupOutcome[]> => {
+        try {
+          return await run();
+        } catch (error) {
+          throwAborted(signal);
+          if (
+            error instanceof MediaPublicationJobError &&
+            error.code === "provider_unavailable"
+          )
+            throw error;
+          return [await groupFailure(plan.fence, units, providerCode(error))];
         }
-        return deferred(VERIFY_POLL_MS);
-      }
-      for (const unit of plan.units) {
-        if (!(await current(plan.fence, signal))) return deferred();
-        if (
-          !(await target.provider.verifyGone(
-            publishedObjectUrl(target.origin, unit.objectKey),
-            signal,
-          ))
-        ) {
-          if (attempts(plan.units) >= MAX_PURGE_ATTEMPTS)
-            return await purgeFailure(plan, "withdrawal_still_served");
-          return await submitPurge(plan, claim, signal);
-        }
-      }
-      throwAborted(signal);
-      if (!(await port.finishWithdrawal(plan.fence, ids(plan.units), clock())))
+      };
+      // Ordinary roles first, in their own purge tasks.
+      const outcomes = [
+        ...(ordinary.length > 0
+          ? await guarded(ordinary, () =>
+              withdrawOrdinary(plan.fence, ordinary, signal),
+            )
+          : []),
+        ...(blocks.length > 0
+          ? await guarded(blocks, () =>
+              withdrawBlocks(plan.fence, blocks, signal),
+            )
+          : []),
+      ];
+      if (outcomes.some((outcome) => outcome.kind === "lost"))
         return deferred();
+      const failure = outcomes.find((outcome) => outcome.kind === "failed");
+      if (failure?.kind === "failed") return failure.result;
+      if (outcomes.some((outcome) => outcome.kind === "submitted")) {
+        await queue.enqueueJob(
+          {
+            kind: "verify_withdrawal",
+            subjectId: claim.subjectId,
+            runAfter: new Date(clock().getTime() + VERIFY_DELAY_MS),
+            maxAttempts: MAX_PURGE_ATTEMPTS,
+          },
+          clock(),
+        );
+        return claim.kind === "verify_withdrawal"
+          ? deferred(VERIFY_DELAY_MS)
+          : COMPLETE;
+      }
+      const waits = outcomes.flatMap((outcome) =>
+        outcome.kind === "wait" ? [outcome.delayMs] : [],
+      );
+      if (waits.length > 0) return deferred(Math.min(...waits));
       logger.info(`publication.withdrawal verified count=${plan.units.length}`);
       return COMPLETE;
     } catch (error) {
@@ -558,7 +857,12 @@ export function createPublicationJobHandlers(
       ) {
         return failed("publication_provider_unavailable", true);
       }
-      return await purgeFailure(plan, providerCode(error));
+      const outcome = await groupFailure(
+        plan.fence,
+        plan.units,
+        providerCode(error),
+      );
+      return outcome.kind === "failed" ? outcome.result : deferred();
     } finally {
       await port.release(plan.fence, clock());
     }
@@ -568,11 +872,48 @@ export function createPublicationJobHandlers(
     const candidates = await port.sweepCandidates(clock(), limit);
     if (candidates.length === 0) return COMPLETE;
     const target = configuredProvider();
+    // Catalog blocks are swept once: one origin HEAD each and two sampled
+    // edge checks per asset, never a purge (catalog-deep-zoom-v1).
+    const blocksByAsset = new Map<string, PublicationUnit[]>();
+    for (const unit of candidates.filter(isBlockUnit))
+      blocksByAsset.set(unit.assetId, [
+        ...(blocksByAsset.get(unit.assetId) ?? []),
+        unit,
+      ]);
+    const sampledIds = new Set(
+      [...blocksByAsset.values()].flatMap((units) =>
+        sampledBlocks(units).map((unit) => unit.id),
+      ),
+    );
     for (const unit of candidates) {
       throwAborted(signal);
       validatePublishedKey(unit.objectKey);
       const url = publishedObjectUrl(target.origin, unit.objectKey);
       try {
+        if (isBlockUnit(unit)) {
+          if (await target.provider.head(unit.objectKey, signal)) {
+            await target.provider.remove(unit.objectKey, signal);
+            alert("orphan_published_object");
+          }
+          if (
+            sampledIds.has(unit.id) &&
+            !(await target.provider.verifyGone(url, signal))
+          ) {
+            await port.recordSweepFailure(
+              [unit.id],
+              "withdrawal_still_served",
+              clock(),
+            );
+            alert("orphan_published_object");
+            return failed(
+              "orphan_published_object",
+              unit.sweepAttempts + 1 < MAX_PURGE_ATTEMPTS,
+            );
+          }
+          throwAborted(signal);
+          await port.recordSweep([unit.id], clock());
+          continue;
+        }
         let taskIds = unit.sweepTaskIds;
         if (taskIds.length === 0) {
           const head = await target.provider.head(unit.objectKey, signal);

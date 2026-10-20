@@ -65,6 +65,24 @@ export const jobBackoffMs = (attempts: number): number =>
     BACKOFF_MAX_MS,
   );
 
+/**
+ * SQL: job alias `job` is a block job of a Catalog display master, a
+ * `catalog_render` payload variant (catalog-deep-zoom-v1). The operator job
+ * kind list is unchanged. Always true or false, never NULL: a base Catalog
+ * render carries no payload, and `NOT` of a NULL test would drop it from
+ * every claim and from the idle gate.
+ */
+export const catalogBlockJobSql = (job: string): string =>
+  `(${job}.kind='catalog_render' AND COALESCE(${job}.payload->>'variant','')='blocks')`;
+
+/**
+ * SQL: the claim class of job alias `job`, claimed in ascending order:
+ * 0 previews and everything else, 1 HD (`derive_edit` of `full`), 2 base
+ * Catalog renders, 3 Catalog blocks.
+ */
+const claimClassSql = (job: string): string =>
+  `CASE WHEN ${catalogBlockJobSql(job)} THEN 3 WHEN ${job}.kind='catalog_render' THEN 2 WHEN ${job}.kind='derive_edit' AND ${job}.payload->'variants'='["full"]'::jsonb THEN 1 ELSE 0 END`;
+
 interface JobRow {
   id: string;
   kind: PublishingJobKind;
@@ -238,6 +256,20 @@ export const spendReservations = async (
   }
 };
 
+/**
+ * A block job of a Catalog display master (catalog-deep-zoom-v1). Only the
+ * catalog-master command retries or stops these; the operator's retry and
+ * abandon refuse them, so a content failure is never run again, at most two
+ * block sets stay open and an abandon never silently ends an image's zoom.
+ */
+export const isCatalogBlockJob = (
+  job: { readonly kind: string; readonly payload?: unknown } | undefined,
+): boolean =>
+  job?.kind === "catalog_render" &&
+  typeof job.payload === "object" &&
+  job.payload !== null &&
+  (job.payload as { readonly variant?: unknown }).variant === "blocks";
+
 /** The initial static HD continuation owns the remaining upload allowance. */
 export const isBaseHighResolutionJob = (
   job:
@@ -330,7 +362,21 @@ export const claimJobs = async (
                WHERE own.item_id=community.publishing_jobs.subject_id AND own.holder_kind IN ('session','draft')
                  AND sibling.item_id<>own.item_id AND pending.state IN ('awaiting_upload','processing')
              ))
-         ORDER BY CASE WHEN kind='derive_edit' AND payload->'variants'='["full"]'::jsonb THEN 1 ELSE 0 END, run_after, id
+           -- A block job runs only for a worker whose block render switch is
+           -- on, on an idle queue: no other claimable job due or running and
+           -- no upload in flight that changed within two minutes.
+           AND (NOT ${catalogBlockJobSql("community.publishing_jobs")} OR (
+             $6::boolean
+             AND NOT EXISTS (
+               SELECT 1 FROM community.publishing_jobs o
+               WHERE NOT ${catalogBlockJobSql("o")}
+                 AND ($5::text[] IS NULL OR o.kind = ANY($5::text[]))
+                 AND (o.state='running' OR (o.state='queued' AND o.run_after <= $1::timestamptz)))
+             AND NOT EXISTS (
+               SELECT 1 FROM community.media_items busy
+               WHERE busy.state IN ('awaiting_upload','processing')
+                 AND busy.updated_at > $1::timestamptz - interval '2 minutes')))
+         ORDER BY ${claimClassSql("community.publishing_jobs")}, run_after, id
          FOR UPDATE SKIP LOCKED
          LIMIT $2
        )
@@ -340,13 +386,14 @@ export const claimJobs = async (
            updated_at=$1::timestamptz, started_at=$1::timestamptz, finished_at=NULL
        FROM next WHERE j.id=next.id
        RETURNING j.id,j.kind,j.subject_id,j.payload,j.attempts,j.max_attempts,j.run_after,j.lease_owner,j.lease_expires_at,
-         CASE WHEN j.kind='derive_edit' AND j.payload->'variants'='["full"]'::jsonb THEN 1 ELSE 0 END AS background_priority`,
+         ${claimClassSql("j")} AS background_priority`,
       [
         at,
         options.limit,
         options.owner,
         options.leaseMs,
         options.kinds === undefined ? null : [...options.kinds],
+        options.catalogBlocks === true,
       ],
     ),
   );

@@ -1,4 +1,5 @@
 import type {
+  CatalogBlockReadTarget,
   CatalogMediaRenditionProjection,
   PublishingMediaReadTarget,
 } from "@moya/api";
@@ -102,37 +103,66 @@ export const mapCatalogMediaDelivery = (
 };
 
 /**
+ * The streamable facts of a committed block blob (catalog-deep-zoom-v1): a
+ * JPEG of the published-blocks view, or null. Its own target type keeps
+ * `mediaReadTarget` and every user-media relay WebP/MP4.
+ */
+export const catalogBlockReadTarget = (
+  row: MediaReadTargetRow | undefined,
+): CatalogBlockReadTarget | null => {
+  if (row === undefined || row.content_type !== "image/jpeg") return null;
+  const byteSize = Number(row.byte_size);
+  if (!Number.isSafeInteger(byteSize) || byteSize <= 0) return null;
+  return {
+    kind: "catalog_block",
+    storageKey: row.storage_key,
+    contentType: "image/jpeg",
+    byteSize,
+    sha256: row.sha256,
+  };
+};
+
+/**
  * The committed blob of a rendition the delivery view lists (ready, of a
- * ready Catalog asset within the public resolution bound), or null for any
- * other id. The separate Catalog read identity checks the current published
- * projection before bytes are served; withdrawal does not wait for worker
- * sync. Only the Development delivery route reads Catalog rendition bytes.
+ * ready Catalog asset within the public resolution bound), or else of a block
+ * the published-blocks view lists (a ready block of the asset's active
+ * master, exactly inside its frame), or null for any other id. The separate
+ * Catalog read identity checks the current published projection before bytes
+ * are served; withdrawal does not wait for worker sync. Only the Development
+ * delivery route reads Catalog rendition bytes.
  */
 export const resolveCatalogRenditionRead = async (
   pool: Pool,
   renditionId: string,
   catalogPool: Pool,
-): Promise<PublishingMediaReadTarget | null> => {
+): Promise<PublishingMediaReadTarget | CatalogBlockReadTarget | null> => {
   if (!RENDITION_ID.test(renditionId)) return null;
   return readTransaction(pool, async (db) => {
-    const row = (
-      await db.query<
-        MediaReadTargetRow & { media_id: string; object_key: string }
-      >(
+    const lookup = (view: string) =>
+      db.query<MediaReadTargetRow & { media_id: string; object_key: string }>(
         `SELECT b.storage_key,d.content_type,b.byte_size,b.sha256,d.media_id,d.object_key
-           FROM community.catalog_media_delivery d
+           FROM ${view} d
            JOIN community.media_renditions r ON r.id=d.delivery_key
            JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed'
            WHERE d.delivery_key=$1`,
         [renditionId],
-      )
-    ).rows[0];
+      );
+    const rendition = (await lookup("community.catalog_media_delivery"))
+      .rows[0];
+    const block =
+      rendition === undefined
+        ? (await lookup("community.catalog_media_zoom_blocks")).rows[0]
+        : undefined;
+    const row = rendition ?? block;
     if (row === undefined) return null;
     const published = await catalogPool.query(
       "SELECT 1 FROM catalog_media WHERE media_id=$1 AND object_key=$2 LIMIT 1",
       [row.media_id, row.object_key],
     );
-    return published.rows.length === 0 ? null : mediaReadTarget(row);
+    if (published.rows.length === 0) return null;
+    return rendition !== undefined
+      ? mediaReadTarget(rendition)
+      : catalogBlockReadTarget(block);
   });
 };
 

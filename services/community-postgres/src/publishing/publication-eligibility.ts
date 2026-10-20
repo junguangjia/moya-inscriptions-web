@@ -7,9 +7,34 @@ export const notHeldSql = (item: string): string =>
   `NOT EXISTS (SELECT 1 FROM community.media_item_holds h WHERE h.item_id=${item} AND h.released_at IS NULL)`;
 
 /**
+ * SQL: block rendition alias `r` (a `catalog_master_id`, on a committed blob
+ * the caller joined) belongs to its asset's active master, on a committed,
+ * held master blob, with the exact cell geometry inside the master's frame:
+ * the rule of the published-blocks view `community.catalog_media_zoom_blocks`
+ * (migration 20261020010000), spelled on the rendition row so one row is
+ * checked by key lookups instead of materializing the view
+ * (catalog-deep-zoom-v1).
+ */
+export const catalogBlockListedSql = (rendition: string): string => {
+  const cell = `(CASE WHEN ${rendition}.role ~ '^block-[0-9]{2}$' THEN substring(${rendition}.role FROM 7)::integer END)`;
+  const columns = "((zm.frame_width + 1023) / 1024)";
+  const rows = "((zm.frame_height + 1023) / 1024)";
+  return `EXISTS (
+    SELECT 1 FROM community.catalog_display_masters zm
+    JOIN community.media_blobs zb ON zb.id=zm.blob_id AND zb.state='committed' AND zb.retention_hold='catalog_master'
+    WHERE zm.id=${rendition}.catalog_master_id AND zm.catalog_asset_id=${rendition}.catalog_asset_id
+      AND zm.ended_at IS NULL
+      AND ${rendition}.content_type='image/jpeg' AND ${rendition}.edit_key='base'
+      AND ${cell} < ${columns} * ${rows}
+      AND ${rendition}.width = LEAST(1026, zm.frame_width - (${cell} % ${columns}) * 1024)
+      AND ${rendition}.height = LEAST(1026, zm.frame_height - (${cell} / ${columns}) * 1024))`;
+};
+
+/**
  * One anonymous desired set, recomputed in the transaction that commits public
- * references. No draft/history/profile/tiles eligibility. Current Catalog
- * projection is deliberately late-bound to keep migration families separate.
+ * references. No draft/history/profile/tiles eligibility; Catalog blocks only
+ * of an asset's active master. Current Catalog projection is deliberately
+ * late-bound to keep migration families separate.
  */
 export const desiredRenditionsSql = (catalogAvailable = true): string => `
   SELECT DISTINCT r.id AS rendition_id,r.item_id,r.catalog_asset_id,b.storage_key,
@@ -35,7 +60,8 @@ export const desiredRenditionsSql = (catalogAvailable = true): string => `
           AND ${publishedArticleItemSql("i.id", "NULL::text", "i.owner_id")})
       ))
       OR (ca.state='ready' AND ca.unreferenced_since IS NULL AND r.edit_key='base'
-        AND r.role IN ('thumb','cover','display','viewer','full')
+        AND (r.role IN ('thumb','cover','display','viewer','full')
+          OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")}))
         AND ${
           catalogAvailable
             ? `EXISTS (SELECT 1 FROM public.catalog_media cm
