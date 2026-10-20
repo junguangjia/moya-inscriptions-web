@@ -21,3 +21,7 @@ export {
 export { ownerDraftPage, ownerHistoryPage } from "./owner";
 
 export { EditorialIdentities } from "./identities";
+export {
+  readCurationMetadata,
+  saveCurationMetadata,
+} from "./curation-metadata";
