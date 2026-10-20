@@ -1,3 +1,6 @@
+import { parseAnalyticsConfiguration } from "./analytics/config.js";
+import { AnalyticsWorker } from "./analytics/worker.js";
+import { PostgresAnalyticsAdapter } from "@moya/community-postgres";
 import path from "node:path";
 
 import { PostgresNotificationAdapter } from "@moya/community-postgres";
@@ -208,6 +211,10 @@ export const prepareProductionBackend = async (
   dependencies: ProductionBackendDependencies = {},
 ): Promise<PreparedProductionBackend> => {
   const runtimeConfig = parseRuntimeConfig(environment);
+  const analyticsConfiguration = parseAnalyticsConfiguration(
+    environment,
+    runtimeConfig.nodeEnv,
+  );
   if (
     runtimeConfig.nodeEnv !== "production" &&
     runtimeConfig.nodeEnv !== "development"
@@ -551,6 +558,12 @@ export const prepareProductionBackend = async (
     ]);
     throw error;
   }
+  const analyticsPort = new PostgresAnalyticsAdapter(communityPool);
+  const analyticsWorker = new AnalyticsWorker(
+    analyticsPort,
+    analyticsConfiguration.umami,
+    analyticsConfiguration.policy.eventRetentionDays,
+  );
   const notificationSignals = new NotificationSignals();
   const notificationPort = new PostgresNotificationAdapter(communityPool);
   const notificationWorker = notificationPort
@@ -561,6 +574,7 @@ export const prepareProductionBackend = async (
   const closeResources = async (): Promise<void> => {
     // Running jobs finish or give their leases back before the pools close.
     await Promise.all([
+      analyticsWorker.stop(),
       notificationWorker?.stop(),
       publishingWorker?.stop(),
       ...publicationWorkers.map((lane) => lane.stop()),
@@ -674,6 +688,13 @@ export const prepareProductionBackend = async (
       publicationConfig,
       createBackendApplication({
         nodeEnv: runtimeConfig.nodeEnv,
+        analytics: {
+          port: analyticsPort,
+          policy: analyticsConfiguration.policy,
+          ...(analyticsConfiguration.source
+            ? { source: analyticsConfiguration.source }
+            : {}),
+        },
         productAccess,
         catalogQueryPort,
         catalogSearchQueryPort: catalogQueryPort,
@@ -823,6 +844,7 @@ export const prepareProductionBackend = async (
     startBackgroundWork: () => {
       publishingWorker?.start();
       publicationWorkers.forEach((lane) => lane.start());
+      if (runtimeConfig.nodeEnv === "production") analyticsWorker.start();
       notificationWorker?.start();
     },
   };

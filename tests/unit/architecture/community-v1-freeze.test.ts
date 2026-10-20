@@ -135,6 +135,8 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
     // content-community-completion-v1 (2026-09-22 amendment) adds the
     // published editorial content read module.
     expect(await visibleEntries("services/api/src/modules")).toEqual([
+      // umami-analytics-v1: Owner-authorized bounded first-party telemetry.
+      "analytics",
       "catalog",
       "community",
       "editorial",

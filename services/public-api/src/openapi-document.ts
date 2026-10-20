@@ -3,6 +3,7 @@ import { authorCommunityPaths } from "./author-community-openapi.js";
 import { articleAuthoringPaths } from "./article-authoring-openapi.js";
 import {
   authJsonSchemas,
+  analyticsJsonSchemas,
   authorCommunityJsonSchemas,
   workPublishingJsonSchemas,
   articleAuthoringJsonSchemas,
@@ -207,6 +208,39 @@ export const openApiDocument: JsonObject = {
       "Inscription-first, read-only access to the public Catalog, plus the Community V1 current-user identity. Operational health is unversioned; public contracts use /v1.",
   },
   paths: {
+    "/v1/analytics/events": {
+      post: {
+        operationId: "collectProductAnalyticsBatch",
+        summary:
+          "Bounded first-party product events through the trusted Web relay",
+        description:
+          "Called by the same-origin Web relay, not directly by browsers. Maximum 20 events and 32768 UTF-8 bytes; no query parameters. Client IP comes only from the independently verified ingress/relay and optional user identity from the Backend session. Client-provided IP or user identity fields are rejected. Development and disabled collection store nothing; Owner, configured test accounts and opted-out devices are excluded before persistence. This endpoint serves no product content and is independently admitted in closed-beta mode.",
+        security: [{ analyticsRelay: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/AnalyticsBatch" },
+            },
+          },
+        },
+        responses: {
+          "202": jsonResponse(
+            "Accepted or excluded without storing events.",
+            "AnalyticsBatchResult",
+          ),
+          "400": {
+            description: "Invalid envelope, timestamp, query or body size.",
+          },
+          "401": { description: "Untrusted analytics relay." },
+          "405": { description: "Only POST is supported." },
+          "500": {
+            description:
+              "Storage temporarily unavailable; the browser uses bounded retries.",
+          },
+        },
+      },
+    },
     ...authorCommunityPaths,
     ...articleAuthoringPaths,
     ...authPaths,
@@ -435,6 +469,13 @@ export const openApiDocument: JsonObject = {
   },
   components: {
     securitySchemes: {
+      analyticsRelay: {
+        type: "apiKey",
+        in: "header",
+        name: "X-Moya-Analytics-Relay",
+        description:
+          "Dedicated server-only relay admission marker; grants neither user nor Owner identity. Never sent to browser code.",
+      },
       session: {
         type: "http",
         scheme: "bearer",
@@ -443,6 +484,7 @@ export const openApiDocument: JsonObject = {
       },
     },
     schemas: {
+      ...analyticsJsonSchemas,
       ...componentSchemas(authorCommunityJsonSchemas),
       ...authJsonSchemas,
       ...workPublishingJsonSchemas,

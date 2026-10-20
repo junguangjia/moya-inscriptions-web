@@ -18,6 +18,7 @@ import { createRouter } from "./http/router.js";
 
 import {
   AgentAdministrationService,
+  AnalyticsService,
   ArticleAuthoringService,
   ArticlePublicationOperatorService,
   AuthorCommunityService,
@@ -37,6 +38,8 @@ import { MappedStorageUrlResolver } from "@moya/image";
 
 import type {
   AgentAdministrationPort,
+  AnalyticsPort,
+  AnalyticsPolicy,
   ArticleAuthoringPort,
   ArticlePublicationOperatorPort,
   AuthorCommunityPort,
@@ -71,6 +74,11 @@ import type { CommunityRouterDependencies } from "./http/router.js";
 import type { RequestListener } from "node:http";
 
 export interface BackendApplicationOptions {
+  readonly analytics?: {
+    readonly port: AnalyticsPort;
+    readonly policy: AnalyticsPolicy;
+    readonly source?: AuthRequestSource;
+  };
   /**
    * Who may reach product content and commands. Absent means `public`; the
    * production composition root always supplies an explicit policy.
@@ -443,6 +451,23 @@ export const createBackendApplication = (
     },
     createRouter({
       catalogReadService,
+      ...(options.analytics === undefined
+        ? {}
+        : {
+            analytics: {
+              service: new AnalyticsService(
+                options.analytics.port,
+                options.analytics.policy,
+              ),
+              ...(options.analytics.source === undefined
+                ? {}
+                : { source: options.analytics.source }),
+              ...(community?.sessionService === undefined
+                ? {}
+                : { sessions: community.sessionService }),
+              operatorCredential: options.communityOperatorCredential ?? "",
+            },
+          }),
       healthReadinessCheck:
         options.healthReadinessCheck ?? (async (): Promise<void> => undefined),
       ...(community === undefined ? {} : { community }),

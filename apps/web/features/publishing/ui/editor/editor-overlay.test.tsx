@@ -106,7 +106,7 @@ vi.mock("../media/media-section", () => ({
     <div data-media-section={sessionKey}>
       {onSkip ? (
         <button data-media-skip="" onClick={onSkip} type="button">
-          跳过，只发布文字
+          先写标题和正文
         </button>
       ) : null}
     </div>
@@ -201,7 +201,11 @@ import {
   uuid,
 } from "../../upload-manager.test-support";
 import { EditorOverlay } from "./editor-overlay";
-import { EditorSessionProvider } from "./editor-session-provider";
+import {
+  EditorSessionProvider,
+  useEditorSessionRegistry,
+  type EditorSessionRegistry,
+} from "./editor-session-provider";
 
 import type {
   PublishingClientPort,
@@ -359,8 +363,10 @@ const fn = (name: string) => client[name] as ReturnType<typeof vi.fn>;
 const staged: { current: ReturnType<typeof useStagedItems> | null } = {
   current: null,
 };
+let editorRegistry: EditorSessionRegistry;
 const StagingProbe = () => {
   staged.current = useStagedItems();
+  editorRegistry = useEditorSessionRegistry();
   return null;
 };
 
@@ -379,6 +385,7 @@ interface Harness {
   readonly timers: ReturnType<typeof manualTimers>;
 }
 
+let publicationTimers: ReturnType<typeof manualTimers>;
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
@@ -401,6 +408,7 @@ const renderEditor = async (
   const { services, transfer, timers, uploads } = makeServices(
     options.recovery ?? null,
   );
+  publicationTimers = timers;
   prepare();
   let guard: ProductShellEditorLeaveGuard | null = null;
   const controls = {
@@ -579,6 +587,52 @@ const goToPublish = async () => {
         : query("[data-media-skip]"),
     );
   expect(screen()).toBe("publish");
+};
+
+/** A ready retained photo for tests about submission rather than uploading. */
+const addPublicationPhoto = async () => {
+  const store = editorRegistry.current(ACCOUNT)!;
+  const id = `media-item-${"8".repeat(32)}`;
+  await act(async () => {
+    store.mergeServerItems([
+      {
+        id,
+        kind: "static",
+        qualityMode: "standard",
+        state: "ready",
+        failureCode: null,
+        components: [],
+        presentation: { width: 4, height: 3 },
+        media: {
+          thumbSrc: `/api/community/publishing/media/${id}/thumb/base`,
+          displaySrc: `/api/community/publishing/media/${id}/display/base`,
+        },
+      },
+    ]);
+    store.setMedia({
+      items: [
+        {
+          key: "required-photo",
+          itemId: id,
+          kind: "static",
+          qualityMode: "standard",
+          edit: { rotation: 0, crop: null },
+        },
+      ],
+      coverKey: null,
+      coverCrop: null,
+    });
+  });
+  await flush();
+  if (shell.platform !== "pc") await goToPublish();
+};
+
+/** A retained image must receive authoritative readiness before submission. */
+const advancePublication = async () => {
+  for (let round = 0; round < 4; round += 1) {
+    await act(async () => publicationTimers.fireAll());
+    await flush();
+  }
 };
 
 /** 编辑's current thumbnail: a tap opens its sheet (r4 D11). */
@@ -884,7 +938,7 @@ describe("Publishing editor", () => {
     expect(query("[data-editor-other-session]")).toBeNull();
   });
 
-  it("lets a text-only work skip 选择照片 and 编辑", async () => {
+  it("lets an author write before adding the required photo", async () => {
     await renderEditor({ type: "new" });
     expect(screen()).toBe("select");
     await click(query("[data-media-skip]"));
@@ -892,7 +946,7 @@ describe("Publishing editor", () => {
     expect(titleInput()).not.toBeNull();
     // The line above 发布 says why it cannot go yet.
     expect(query("[data-publish-reason]")?.textContent).toBe(
-      "标题、正文和图片不能都为空",
+      "请填写标题并至少添加一张图片",
     );
     // 发布 entered to write: 标题 takes focus.
     expect(document.activeElement).toBe(titleInput());
@@ -933,6 +987,7 @@ describe("Publishing editor", () => {
   it("preselects no 作品性质, lets the author clear one, and submits none as none", async () => {
     await renderEditor({ type: "new" });
     await goToPublish();
+    await addPublicationPhoto();
     const authorshipState = () =>
       query("[data-editor-authorship-state]")?.getAttribute(
         "data-editor-authorship-state",
@@ -968,6 +1023,7 @@ describe("Publishing editor", () => {
 
     await type(titleInput(), "未声明性质的作品");
     await click(query("[data-editor-submit]"));
+    await advancePublication();
     expect(fn("submit").mock.calls[0]![0]).toMatchObject({
       content: { title: "未声明性质的作品", authorship: null },
     });
@@ -1002,6 +1058,7 @@ describe("Publishing editor", () => {
     expect(screen()).toBe("edit");
     await click(query("[data-edit-next]"));
     expect(screen()).toBe("publish");
+    await type(titleInput(), "待上传作品");
     expect(query("[data-editor-readiness]")?.textContent).toBe(
       "1 项仍在上传，1 项失败。全部就绪或移除后才能发布",
     );
@@ -1203,6 +1260,7 @@ describe("Publishing editor", () => {
     const h = await renderEditor({ type: "new" });
     await setViewport("pc", 1280);
     await h.rerender();
+    await addPublicationPhoto();
     await type(titleInput(), "桌面作品");
     await click(query("[data-editor-open-confirmation]"));
     await click(query("[data-editor-submit]"));
@@ -1216,10 +1274,12 @@ describe("Publishing editor", () => {
   it("phone Publish closes immediately and confirms without opening a work page", async () => {
     const harness = await renderEditor({ type: "new" });
     await goToPublish();
+    await addPublicationPhoto();
     await type(titleInput(), "新作");
     await click(query("[data-editor-submit]"));
     expect(harness.controls.close).toHaveBeenCalledOnce();
     await leaveOverlay(harness);
+    await advancePublication();
     expect(fn("submit")).toHaveBeenCalledOnce();
     expect(fn("submit").mock.calls[0]![0]).toMatchObject({
       holder: { sessionId: SESSION_ID },
@@ -1305,9 +1365,11 @@ describe("Publishing editor", () => {
         }),
     );
     await goToPublish();
+    await addPublicationPhoto();
     await type(titleInput(), "保留标题");
     await click(query("[data-editor-submit]"));
     await leaveOverlay(h);
+    await advancePublication();
     await act(async () =>
       reject(
         Object.assign(new Error("标题不符合要求"), {
@@ -1399,9 +1461,11 @@ describe("Publishing editor", () => {
         }),
     );
     await goToPublish();
+    await addPublicationPhoto();
     await type(titleInput(), "等待回执");
     await click(query("[data-editor-submit]"));
     await leaveOverlay(h);
+    await advancePublication();
     await h.show(true);
     expect(
       query("[data-editor-background-publication]")?.textContent,
@@ -1439,10 +1503,13 @@ describe("Publishing editor", () => {
         }),
     );
     await goToPublish();
-    await type(bodyInput(), "只有正文");
+    await addPublicationPhoto();
+    await type(titleInput(), "测试作品");
+    await type(bodyInput(), "作品正文");
     await click(query("[data-editor-submit]"));
     expect(harness.controls.close).toHaveBeenCalledOnce();
     await leaveOverlay(harness);
+    await advancePublication();
     expect(fn("submit")).toHaveBeenCalledOnce();
     await act(async () => answerReceipt());
     await flush();
@@ -1460,8 +1527,10 @@ describe("Publishing editor", () => {
       }),
     );
     await goToPublish();
+    await addPublicationPhoto();
     await type(titleInput(), "标题");
     await click(query("[data-editor-submit]"));
+    await advancePublication();
     await click(buttonByText("前往查看"));
     expect(screen()).toBe("publish");
     await nextFrames();
@@ -1573,6 +1642,7 @@ describe("Publishing editor", () => {
       "编辑作品",
     );
     await goToPublish();
+    await addPublicationPhoto();
     expect(titleInput()?.value).toBe("旧作");
     const checked = query(
       '[data-editor-field="visibility"] [role="radio"][aria-checked="true"]',
@@ -1635,6 +1705,7 @@ describe("Publishing editor", () => {
       );
     });
     await goToPublish();
+    await addPublicationPhoto();
     expect(
       query("[data-editor-authorship-state]")?.getAttribute(
         "data-editor-authorship-state",
@@ -1792,8 +1863,10 @@ describe("Publishing editor", () => {
         }),
     );
     await goToPublish();
+    await addPublicationPhoto();
     await click(query("[data-editor-submit]"));
     await leaveOverlay(h);
+    await advancePublication();
     await act(async () =>
       reject(
         Object.assign(new Error("暂时无法发布"), {
@@ -2873,7 +2946,9 @@ describe("Publishing editor", () => {
         }),
     );
     await goToPublish();
-    await type(bodyInput(), "只有正文");
+    await addPublicationPhoto();
+    await type(titleInput(), "测试作品");
+    await type(bodyInput(), "作品正文");
     await click(query("[data-editor-submit]"));
     expect(query("[data-publish-reason]")?.textContent).toBe("正在确认结果…");
 
@@ -2887,10 +2962,10 @@ describe("Publishing editor", () => {
     ).toBe("正在确认结果…");
     await click(buttonByText("继续等待"));
 
-    // ‹, 添加照片 and Escape stay on 发布 too.
+    // ‹, the retained photo and Escape stay on 发布 too.
     await click(phoneBack());
     expect(screen()).toBe("publish");
-    await click(query("[data-publish-add] button"));
+    await click(query("[data-publish-strip] button"));
     expect(screen()).toBe("publish");
     await act(async () => heading()!.focus());
     await escape();

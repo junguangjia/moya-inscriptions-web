@@ -32,14 +32,17 @@ const canonicalIp = (value: string | null): string | null => {
 };
 
 /** Validate once before Production pools open. Never read generic forwarding headers. */
-export const createTrustedAuthRequestSource = (
+const createTrustedRequestSource = (
   credential: string | undefined,
+  relayHeader: string,
+  sourceHeader: string,
+  configurationLabel: string,
 ): AuthRequestSource => {
   if (credential === undefined || !/^[A-Za-z0-9_-]{43,128}$/u.test(credential))
-    throw new Error("AUTH_SOURCE_RELAY_TOKEN: invalid protected configuration");
+    throw new Error(`${configurationLabel}: invalid protected configuration`);
   const expected = Buffer.from(credential);
   return (request) => {
-    const token = singleHeader(request, "x-moya-auth-relay");
+    const token = singleHeader(request, relayHeader);
     if (token === null || !/^[A-Za-z0-9_-]{43,128}$/u.test(token)) return null;
     const supplied = Buffer.from(token);
     if (
@@ -47,6 +50,27 @@ export const createTrustedAuthRequestSource = (
       !timingSafeEqual(supplied, expected)
     )
       return null;
-    return canonicalIp(singleHeader(request, "x-moya-auth-source"));
+    return canonicalIp(singleHeader(request, sourceHeader));
   };
 };
+
+export const createTrustedAuthRequestSource = (
+  credential: string | undefined,
+): AuthRequestSource =>
+  createTrustedRequestSource(
+    credential,
+    "x-moya-auth-relay",
+    "x-moya-auth-source",
+    "AUTH_SOURCE_RELAY_TOKEN",
+  );
+
+/** Analytics forwarding conveys a source address, never a user or Owner role. */
+export const createTrustedAnalyticsRequestSource = (
+  credential: string | undefined,
+): AuthRequestSource =>
+  createTrustedRequestSource(
+    credential,
+    "x-moya-analytics-relay",
+    "x-moya-analytics-source",
+    "ANALYTICS_RELAY_TOKEN",
+  );

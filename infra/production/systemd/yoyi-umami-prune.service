@@ -1,0 +1,28 @@
+[Unit]
+Description=Yoyi private Umami 180-day activity retention
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/yoyi/umami-maintenance.env
+
+[Service]
+Type=oneshot
+User=yoyi-backend
+Group=yoyi-backend
+WorkingDirectory=/srv/yoyi/current
+# Configuration is dedicated to this website/database; no ambient app DB fallback.
+ExecStart=/usr/bin/env node scripts/analytics/prune-umami.mjs --config /etc/yoyi/umami-maintenance.env --environment production --execute
+TimeoutStartSec=135
+Nice=15
+CPUQuota=20%
+MemoryMax=192M
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=

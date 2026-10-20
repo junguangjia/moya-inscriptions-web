@@ -911,6 +911,11 @@ export const AuthFlow = ({
           >
             {title}
           </h1>
+          {mode === "sign-in" && step === "identifier" && !resetting && (
+            <p className={styles.subtitle}>
+              内测阶段暂不开放注册，无需登录即可浏览内容。
+            </p>
+          )}
         </header>
         {step === "avatar" ? (
           <RegistrationAvatar

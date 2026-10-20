@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -458,5 +458,31 @@ describe("stable e2e result gate", () => {
     expect(workflow).toContain("if-no-files-found: error");
     expect(workflow).not.toContain("continue-on-error");
     expect(workflow).not.toContain("schedule:");
+  });
+  it("builds the workspace packages full-regression specs import before listing", async () => {
+    const runner = await readFile(
+      root + "tests/e2e/support/e2e-ci.mjs",
+      "utf8",
+    );
+    const prepare = runner
+      .split('if (mode === "prepare") {')[1]
+      ?.split("const storedIdentity")[0];
+    expect(prepare).toBeDefined();
+    const built = new Set(
+      [...prepare!.matchAll(/"--filter=(@moya\/[\w-]+)"/gu)].map((m) => m[1]),
+    );
+    const imported = new Set<string>();
+    for (const file of await readdir(root + "tests/e2e", { recursive: true })) {
+      if (!/\.(?:ts|mjs)$/u.test(file)) continue;
+      const source = await readFile(root + "tests/e2e/" + file, "utf8");
+      // Type-only imports are erased; static and dynamic value imports resolve
+      // to the package's built dist when Playwright loads the file.
+      for (const match of source.matchAll(
+        /(?:\bimport\s+(?!type\b)[^;]*?\bfrom\s*|\bimport\(\s*)"(@moya\/[\w-]+)/gu,
+      ))
+        imported.add(match[1]!);
+    }
+    expect(imported).toContain("@moya/contracts");
+    expect([...imported].filter((name) => !built.has(name))).toEqual([]);
   });
 });

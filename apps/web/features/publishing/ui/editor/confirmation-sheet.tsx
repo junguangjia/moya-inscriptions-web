@@ -4,7 +4,7 @@ import { forwardRef } from "react";
 
 import { bodyRule, checkEditorText, titleRule } from "./editor-text";
 import { UNNAMED_WORK } from "./preview";
-import { recommendationText } from "./text-settings";
+import { publicationRequirement } from "./text-settings";
 import styles from "./editor.module.css";
 
 import type {
@@ -33,14 +33,6 @@ const excerptOf = (body: string): string => {
     ? points.join("")
     : `${points.slice(0, EXCERPT_POINTS).join("").trimEnd()}…`;
 };
-
-/** Nothing to submit: no title, no body text and no image. */
-const isEmptyConfirmation = (
-  state: Pick<EditorSessionState, "title" | "body" | "items">,
-): boolean =>
-  checkEditorText(state.title, titleRule).value === "" &&
-  excerptOf(state.body) === "" &&
-  state.items.length === 0;
 
 const isBusy = (submission: SubmissionState, resolving: boolean): boolean =>
   resolving ||
@@ -71,7 +63,7 @@ export const confirmationBlocked = ({
   resolving = false,
   background = false,
 }: ConfirmationGate): boolean =>
-  isEmptyConfirmation(state) ||
+  publicationRequirement(state) !== null ||
   (!background && (readiness.blocking > 0 || !readiness.confirmed)) ||
   issues.length > 0 ||
   isBusy(submission, resolving) ||
@@ -135,7 +127,6 @@ export const ConfirmationSheet = forwardRef<
 ) {
   const title = checkEditorText(state.title, titleRule).value;
   const excerpt = excerptOf(state.body);
-  const empty = isEmptyConfirmation(state);
   const busy = isBusy(submission, resolving);
   const blocked = confirmationBlocked({
     state,
@@ -146,7 +137,7 @@ export const ConfirmationSheet = forwardRef<
     background,
   });
   const primaryLabel = state.kind === "edit" ? "保存更新" : "发布";
-  const recommendation = recommendationText(state);
+  const requirement = publicationRequirement(state);
   const fieldErrors = Object.entries(state.fieldErrors).filter(
     (entry): entry is [EditorField, string] =>
       typeof entry[1] === "string" && entry[0] !== "general",
@@ -221,7 +212,7 @@ export const ConfirmationSheet = forwardRef<
                 <dt>图片</dt>
                 <dd>
                   {state.items.length === 0
-                    ? "无，将以文字展示"
+                    ? "未添加，至少需要一张图片"
                     : `${state.items.length} 项`}
                 </dd>
               </div>
@@ -265,13 +256,11 @@ export const ConfirmationSheet = forwardRef<
         </p>
       ) : null}
 
-      {empty ? (
-        <p className={styles.error} data-editor-empty="">
-          标题、正文和图片不能都为空
+      {requirement !== null ? (
+        <p className={styles.error} data-editor-requirement="">
+          {requirement}
         </p>
-      ) : recommendation === null ? null : (
-        <p className={styles.hint}>{recommendation}</p>
-      )}
+      ) : null}
 
       {issues.length + fieldErrors.length === 0 ? null : (
         <ul className={styles.issues} data-editor-issues="">

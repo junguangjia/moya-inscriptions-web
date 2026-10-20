@@ -52,6 +52,7 @@ describe("@moya/api server-only surface", () => {
       "AgentAdministrationService",
       "AgentForbiddenError",
       "AgentManifestError",
+      "AnalyticsService",
       "ArticleAuthoringService",
       "ArticlePublicationOperatorService",
       "AuthorCommunityService",

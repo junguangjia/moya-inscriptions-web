@@ -32,6 +32,8 @@ const collectRoutes = async (directory: string): Promise<string[]> => {
  * - `development` does not exist outside NODE_ENV=development;
  * - `asset`     serves design-system styles and brand files only;
  * - `redirect`  carries nothing but a location.
+ * - `analytics` receives bounded events through a separately verified ingress;
+ *               it serves no product content and Backend verifies its relay.
  */
 const routes: Readonly<Record<string, string>> = {
   "page.tsx": "page",
@@ -46,6 +48,7 @@ const routes: Readonly<Record<string, string>> = {
   "api/catalog/[catalogId]/comments/[commentId]/replies/route.ts": "session",
   "api/catalog-search/route.ts": "session",
   "api/community/[...path]/route.ts": "session",
+  "api/community/analytics/route.ts": "analytics",
   "api/community/media/[mediaId]/[rendition]/route.ts": "session",
   "api/community/notifications/stream/route.ts": "session",
   "api/community/publishing/media/[itemId]/[variant]/[editKey]/route.ts":
@@ -75,6 +78,7 @@ const routes: Readonly<Record<string, string>> = {
 };
 
 const proof: Readonly<Record<string, RegExp>> = {
+  analytics: /\brelayServerAnalytics\b/u,
   page: /\breadVisitorAccess\(\)/u,
   content: /\bisProductAccessGranted\(request\)/u,
   // Either the handler hands the session cookie on itself, or it uses a relay
@@ -127,6 +131,7 @@ describe("product access covers every Web entry point", () => {
     };
     expect(listed("openPaths")).toEqual([
       "/health",
+      "/v1/analytics/events",
       "/v1/me",
       "/v1/development/sign-in",
       "/v1/development/sign-out",

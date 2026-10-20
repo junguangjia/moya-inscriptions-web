@@ -244,6 +244,7 @@ describe("contracts package surface", () => {
     expect(Object.keys(manifest.exports ?? {}).sort()).toEqual(
       [
         ".",
+        "./analytics",
         "./internal/catalog-import",
         "./internal/community-operator",
         "./internal/editorial",

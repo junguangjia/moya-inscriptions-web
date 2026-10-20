@@ -187,3 +187,5 @@ export {
   enqueueMissingCatalogBlocks,
 } from "./publishing/catalog-zoom-blocks.js";
 export type { PublicationSyncOptions } from "./publishing/publication-sync.js";
+
+export { PostgresAnalyticsAdapter } from "./analytics-adapter.js";

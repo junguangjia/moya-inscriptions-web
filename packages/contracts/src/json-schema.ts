@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  analyticsBatchSchema,
+  analyticsBatchResultSchema,
+} from "./analytics.js";
 
 import {
   notificationPageSchema,
@@ -50,6 +54,12 @@ import {
 
 const toJsonSchema = (schema: z.ZodType) =>
   z.toJSONSchema(schema, { target: "draft-2020-12" });
+
+/** Only the collection envelope is public; Owner IP/status shapes stay separate. */
+export const analyticsJsonSchemas = {
+  AnalyticsBatch: toJsonSchema(analyticsBatchSchema),
+  AnalyticsBatchResult: toJsonSchema(analyticsBatchResultSchema),
+};
 
 /** Article tools keep reused definitions small and expose an object root. */
 export const articleAuthoringJsonSchema = (schema: z.ZodType) => {

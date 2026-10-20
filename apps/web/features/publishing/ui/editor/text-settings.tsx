@@ -13,18 +13,18 @@ import type {
 } from "./editor-session-state";
 import type { ReactNode } from "react";
 
-/** The non-blocking recommendation (C03): a title and an image are suggested, never required. */
-export const recommendationText = (
-  state: EditorSessionState,
+/** The title and photo required before a work can be published. */
+export const publicationRequirement = (
+  state: Pick<EditorSessionState, "title" | "items">,
 ): string | null => {
   const hasTitle = checkEditorText(state.title, titleRule).length > 0;
   const hasMedia = state.items.length > 0;
   if (hasTitle && hasMedia) return null;
   return !hasTitle && !hasMedia
-    ? "建议添加标题和图片"
+    ? "请填写标题并至少添加一张图片"
     : !hasTitle
-      ? "建议添加标题"
-      : "建议添加图片";
+      ? "请填写标题"
+      : "请至少添加一张图片";
 };
 
 export const TitleField = ({
@@ -42,7 +42,6 @@ export const TitleField = ({
     field="title"
     label="标题"
     onChange={store.setTitle}
-    optional
     placeholder="添加标题"
     rule={titleRule}
     value={state.title}
@@ -94,15 +93,15 @@ export const TextSettings = ({
   readonly progress?: ReactNode;
   readonly autoFocusTitle?: boolean;
 }) => {
-  const recommendation = recommendationText(state);
+  const requirement = publicationRequirement(state);
   return (
     <div className={styles.fields} data-editor-text-settings="">
       {progress}
       <TitleField autoFocus={autoFocusTitle} state={state} store={store} />
       <BodyField state={state} store={store} />
-      {recommendation === null ? null : (
-        <p className={styles.hint} data-editor-recommendation="">
-          {recommendation}
+      {requirement === null ? null : (
+        <p className={styles.hint} data-editor-requirement="">
+          {requirement}
         </p>
       )}
       <AuthorshipFields state={state} store={store} />

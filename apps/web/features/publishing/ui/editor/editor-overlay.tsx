@@ -1793,7 +1793,7 @@ const EditorWorkspace = ({
             start={start}
             // 标题 is never the opening's focus here: its keyboard would
             // hide 发布's bar and preview (the flow focuses 标题 only for
-            // 跳过，只发布文字).
+            // 先写标题和正文).
             textProps={{ state, store }}
             title={title}
           />

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import {
+  analyticsJsonSchemas,
   authJsonSchemas,
   authorCommunityJsonSchemas,
   workPublishingJsonSchemas,
@@ -124,6 +125,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     expect(Object.keys(paths).sort()).toEqual(
       [
         "/health",
+        "/v1/analytics/events",
         "/v1/catalog",
         "/v1/catalog/{catalogId}",
         "/v1/catalog/{catalogId}/comments",
@@ -290,7 +292,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     };
     for (const [name, pathItem] of Object.entries(paths)) {
       expect(Object.keys(asObject(pathItem))).toEqual(
-        authorMethods[name] ??
+        (name === "/v1/analytics/events" ? ["post"] : authorMethods[name]) ??
           (writePaths.has(name) ? ["get", "post"] : ["get"]),
       );
     }
@@ -335,6 +337,11 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     expect(
       asObject(asObject(openApiDocument.components).securitySchemes),
     ).toEqual({
+      analyticsRelay: expect.objectContaining({
+        type: "apiKey",
+        in: "header",
+        name: "X-Moya-Analytics-Relay",
+      }),
       session: expect.objectContaining({ type: "http", scheme: "bearer" }),
     });
     for (const operation of [
@@ -534,6 +541,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       ),
     ) as unknown;
     expect(standalone).toEqual({
+      ...analyticsJsonSchemas,
       ...authorCommunityJsonSchemas,
       ...authJsonSchemas,
       ...workPublishingJsonSchemas,

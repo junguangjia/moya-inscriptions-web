@@ -283,7 +283,7 @@ describe("SelectScreen (the start screen)", () => {
     expect(container.querySelector(START_FOCUS)).toBe(choose);
     expect(START_FOCUS).toBe("[data-media-picker] button");
 
-    expect(skip()!.textContent).toBe("跳过，只发布文字");
+    expect(skip()!.textContent).toBe("先写标题和正文");
     expect(names(skip()!)).toEqual(["skipBtn"]);
     await click(skip());
     expect(props.onSkipToText).toHaveBeenCalledOnce();
@@ -333,7 +333,7 @@ describe("SelectScreen (the start screen)", () => {
     const picker = container.querySelector("[data-media-picker]")!;
     expect(
       [...picker.querySelectorAll("button")].map((entry) => entry.textContent),
-    ).toEqual(["选择照片", "拍照", "跳过，只发布文字"]);
+    ).toEqual(["选择照片", "拍照", "先写标题和正文"]);
     const camera = option("camera")!;
     expect(camera.querySelector('svg[data-glyph="camera"]')).not.toBe(null);
     const input = picker.querySelector<HTMLInputElement>(

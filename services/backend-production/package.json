@@ -109,6 +109,10 @@
     "./internal/auth-transport": {
       "types": "./src/auth/transport.ts",
       "import": "./dist/auth/transport.js"
+    },
+    "./internal/analytics": {
+      "types": "./src/analytics/index.ts",
+      "import": "./dist/analytics/index.js"
     }
   },
   "scripts": {

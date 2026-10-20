@@ -1,5 +1,7 @@
 "use client";
 
+import { rememberAnalyticsContent } from "../analytics/client";
+
 import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 
 import {
@@ -1239,6 +1241,7 @@ export const ProductShell = ({
         return;
       saveCurrentEntry();
       const sourceDestination = activeDestinationRef.current;
+      rememberAnalyticsContent(target, opener);
       const saved = parseProductHistoryState(window.history.state);
       if (saved?.kind === "primary" && target.type === "catalog")
         window.history.replaceState(
