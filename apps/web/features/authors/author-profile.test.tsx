@@ -2,7 +2,7 @@
 import { act, createRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthorProfile } from "@moya/contracts";
+import type { AuthorProfile, UserWork } from "@moya/contracts";
 import type { Root } from "react-dom/client";
 const {
   profileRead,
@@ -17,7 +17,10 @@ const {
   shell,
   beforeCommit,
   settingsDeparture,
+  identity,
 } = vi.hoisted(() => ({
+  // Whom the author client reads for; an account change starts a new epoch.
+  identity: { account: null as string | null, epoch: 0 },
   beforeCommit: vi.fn(),
   settingsDeparture: {
     deferClose: false,
@@ -52,7 +55,13 @@ const {
 }));
 vi.mock("./author-data", async (original) => ({
   ...(await original<typeof import("./author-data")>()),
-  authorClient: { profile: profileRead, comments, command },
+  authorClient: {
+    profile: profileRead,
+    comments,
+    command,
+    account: () => identity.account,
+    accountEpoch: () => identity.epoch,
+  },
 }));
 vi.mock("../messages/direct-message-entry", () => ({
   useDirectMessageEntry: () => directEntry.value,
@@ -177,6 +186,12 @@ import {
   MyComments,
 } from "./author-profile";
 import presentation from "../user/user-presentation.module.css";
+import {
+  readWorkSnapshot,
+  recordWorkSnapshots,
+  resetWorkSnapshots,
+  workSnapshotToken,
+} from "./work-snapshots";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -247,6 +262,9 @@ beforeEach(() => {
   comments.mockResolvedValue({ items: [], page: 1, total: 0 });
   command.mockResolvedValue({});
   directEntry.value = null;
+  identity.account = OWNER;
+  identity.epoch = 1;
+  resetWorkSnapshots();
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -388,6 +406,66 @@ describe("Visitor profile actions", () => {
     expect(author.mutate).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
     confirm.mockRestore();
+  });
+
+  describe("blocking and held works", () => {
+    const held = (id: string, authorId: string): UserWork => ({
+      id,
+      authorId,
+      authorName: authorId === OWNER ? "作者" : "访客",
+      title: "合成作品",
+      text: "合成正文",
+      firstPublishedAt: "2026-09-01T00:00:00.000Z",
+      media: [],
+      version: 1,
+      canEdit: false,
+      available: true,
+    });
+    const blocked = `work-${"a".repeat(32)}`,
+      kept = `work-${"b".repeat(32)}`;
+    const block = async (node: HTMLElement) => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      try {
+        await act(async () => button(node, "更多操作")!.click());
+        await act(async () =>
+          node.querySelector<HTMLElement>('[role="menuitem"]')!.click(),
+        );
+      } finally {
+        confirm.mockRestore();
+      }
+    };
+
+    it("forgets the blocked author's works before the account refreshes", async () => {
+      const { node, close } = await visit();
+      identity.account = VISITOR;
+      recordWorkSnapshots(
+        [held(blocked, OWNER), held(kept, VISITOR)],
+        workSnapshotToken(),
+      );
+      let heldWhenRefreshed: UserWork | null | undefined;
+      author.mutate.mockImplementationOnce(() => {
+        heldWhenRefreshed = readWorkSnapshot(blocked);
+      });
+      await block(node);
+      expect(command).toHaveBeenCalledWith(
+        "relationships/block",
+        expect.objectContaining({ targetId: OWNER, enabled: true }),
+      );
+      expect(heldWhenRefreshed).toBeNull();
+      expect(readWorkSnapshot(blocked)).toBeNull();
+      expect(readWorkSnapshot(kept)).toEqual(held(kept, VISITOR));
+      expect(close).toHaveBeenCalled();
+    });
+
+    it("keeps the author's works when the block is refused", async () => {
+      const { node } = await visit();
+      identity.account = VISITOR;
+      recordWorkSnapshots([held(blocked, OWNER)], workSnapshotToken());
+      command.mockRejectedValueOnce(new Error("屏蔽未完成"));
+      await block(node);
+      expect(author.notify).toHaveBeenCalledWith("屏蔽未完成");
+      expect(readWorkSnapshot(blocked)).toEqual(held(blocked, OWNER));
+    });
   });
 
   it("closes the More menu when focus moves away, leaving Escape to others", async () => {

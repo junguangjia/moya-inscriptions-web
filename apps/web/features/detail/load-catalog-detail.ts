@@ -3,6 +3,7 @@ import { toCatalogDetailPresentation } from "./catalog-detail-presentation";
 
 import type { CatalogDetailTransportResult } from "../../lib/public-api/catalog-detail";
 import type {
+  CatalogDetailPresentation,
   CatalogDetailPresentationState,
   CatalogDetailSourceIdentity,
 } from "./catalog-detail-presentation";
@@ -16,6 +17,14 @@ export type CatalogDetailPresentationLoader = (
   catalogId: string,
   signal?: AbortSignal,
 ) => Promise<CatalogDetailPresentationState>;
+
+/**
+ * What a target's Detail can show at once while its loader reads, or null
+ * when nothing is known for it. Never reads or records.
+ */
+export type CatalogDetailPresentationPeek = (
+  id: string,
+) => CatalogDetailPresentation | null;
 
 export const loadCatalogDetailPresentation = async (
   catalogId: string,

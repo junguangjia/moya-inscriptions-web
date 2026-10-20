@@ -118,6 +118,12 @@ export interface PublishingServices {
   readonly timers?: UploadTimers;
   /** Background completion never navigates away from the reader's page. */
   readonly onBackgroundPublished?: () => void;
+  /**
+   * The work a confirmed submission published, however the confirmation
+   * arrived (answer, receipt, retry, background), reported before the
+   * session completes: what the page held of that work is out of date.
+   */
+  readonly onSubmissionConfirmed?: (workId: string) => void;
   /** Private metadata extraction (exifr in browsers). */
   readonly metadata?: UploadManagerOptions["metadata"];
 }
@@ -661,11 +667,14 @@ export class PublishingRuntime {
       pendingPublication: null,
       itemCount: (draft?.content ?? options.content)?.items.length ?? 0,
     };
-    // However the confirmation arrives (answer, receipt, explicit retry), the session completes.
+    // However the confirmation arrives (answer, receipt, explicit retry), the
+    // page learns which work changed, then the session completes.
     const stopSubmission = submission.store.subscribe(() => {
-      if (submission.store.get().status === "confirmed")
+      const state = submission.store.get();
+      if (state.status === "confirmed") {
+        this.services.onSubmissionConfirmed?.(state.receipt.workId);
         this.completeSession(account, record);
-      else this.publish();
+      } else this.publish();
     });
     const stopReadiness = record.readiness.store.subscribe(() => {
       this.publish();

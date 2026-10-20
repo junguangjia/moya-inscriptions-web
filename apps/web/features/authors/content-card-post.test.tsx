@@ -37,7 +37,7 @@ vi.mock("./content-actions", () => ({
   useContentActions: () => actions,
 }));
 vi.mock("./author-data", () => ({
-  authorClient: { work: readWork },
+  authorClient: { work: readWork, account: () => null, accountEpoch: () => 0 },
 }));
 // The phone single-column masonry slot.
 vi.mock("../home/catalog-masonry", async (importOriginal) => ({
@@ -64,6 +64,8 @@ vi.mock("./feed-post-author", () => ({
 }));
 
 import { ContentCard } from "./content-card";
+import { resetFeedPostClickGuard } from "./feed-post-click-guard";
+import { resetWorkSnapshots } from "./work-snapshots";
 import {
   clearDetailCommentsRequest,
   detailCommentsRequested,
@@ -134,6 +136,22 @@ const tapImage = (post: HTMLElement) =>
         new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }),
       );
   });
+/** A click as a pointer (detail > 0) or a keyboard (detail 0) sends it. */
+const press = (element: Element, detail = 1) =>
+  act(() => {
+    element.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, detail }),
+    );
+  });
+const bodyOpener = (post: HTMLElement) =>
+  post.querySelector<HTMLButtonElement>("[data-feed-post-body-open]");
+/** jsdom lays out no text: give the body three 24px lines that overflow. */
+const overflowBody = (post: HTMLElement) => {
+  const paragraph = post.querySelector<HTMLElement>("[data-card-excerpt]")!;
+  Object.defineProperty(paragraph, "clientWidth", { value: 300 });
+  paragraph.style.lineHeight = "24px";
+  act(() => window.dispatchEvent(new Event("resize")));
+};
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -142,6 +160,8 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
+  resetFeedPostClickGuard();
+  resetWorkSnapshots();
   colophons.length = 0;
   document.body.replaceChildren();
   vi.clearAllMocks();
@@ -302,9 +322,95 @@ describe("ContentCard as a phone single-column post", () => {
     expect(untitled.querySelector("[data-card-excerpt]")?.textContent).toBe(
       "短正文",
     );
+    // Either one's text opens Detail through the post's only 查看详情.
+    for (const each of [post, untitled]) {
+      const opener = bodyOpener(each)!;
+      expect(opener.getAttribute("aria-label")).toBe("查看详情");
+      expect(opener.closest("[data-feed-post-body-state]")).not.toBeNull();
+      expect(each.querySelectorAll('[aria-label="查看详情"]')).toHaveLength(1);
+      act(() => opener.click());
+      expect(shell.openContent).toHaveBeenLastCalledWith(
+        { type: "work", id: workId },
+        opener,
+      );
+    }
+    expect(shell.openContent).toHaveBeenCalledTimes(2);
   });
 
-  it("shows expansion only for overflow and keeps the preview after collapse", async () => {
+  it("opens Detail from the body text, collapsed and expanded", async () => {
+    const height = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(120);
+    const long = "临《兰亭》第三遍。".repeat(30);
+    readWork.mockResolvedValue({ available: true, text: long });
+    const post = render(work({ title: "", excerpt: long.slice(0, 160) }));
+    overflowBody(post);
+    act(() => bodyOpener(post)!.click());
+    expect(shell.openContent).toHaveBeenLastCalledWith(
+      { type: "work", id: workId },
+      bodyOpener(post),
+    );
+    // Opening never toggles the body.
+    expect(post.hasAttribute("data-feed-post-expanded")).toBe(false);
+    act(() => button(post, "展开正文")!.click());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(post.querySelector("[data-feed-post-body]")?.textContent).toBe(long);
+    const opener = bodyOpener(post)!;
+    act(() => opener.click());
+    expect(shell.openContent).toHaveBeenCalledTimes(2);
+    expect(shell.openContent).toHaveBeenLastCalledWith(
+      { type: "work", id: workId },
+      opener,
+    );
+    expect(post.getAttribute("data-feed-post-expanded")).toBe("true");
+    height.mockRestore();
+  });
+
+  it("ignores further pointer taps for 500 ms after the body opens Detail", () => {
+    const post = render(work({ excerpt: "短正文" }));
+    const opener = bodyOpener(post)!;
+    // A double tap on the text opens Detail once.
+    press(opener, 1);
+    press(opener, 2);
+    expect(shell.openContent).toHaveBeenCalledOnce();
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "work", id: workId },
+      opener,
+    );
+    // Nor does another tap meanwhile view, like or open.
+    tapImage(post);
+    tapImage(post);
+    press(button(post, "喜欢")!);
+    act(() => {
+      vi.advanceTimersByTime(499);
+    });
+    expect(shell.openFeedViewer).not.toHaveBeenCalled();
+    expect(actions.ensureLiked).not.toHaveBeenCalled();
+    expect(actions.environment.onAction).not.toHaveBeenCalled();
+    expect(shell.openContent).toHaveBeenCalledOnce();
+    // Keyboard and assistive activation pass at once.
+    press(button(post, "喜欢")!, 0);
+    expect(actions.environment.onAction).toHaveBeenCalledOnce();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    press(opener);
+    expect(shell.openContent).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps pointer taps working after a keyboard opens Detail", () => {
+    const post = render(work({ title: "有题", excerpt: "短正文" }));
+    // Keyboard activation (detail 0) of the body or the title arms no guard.
+    press(bodyOpener(post)!, 0);
+    press(button(post, "打开有题")!, 0);
+    expect(shell.openContent).toHaveBeenCalledTimes(2);
+    press(button(post, "喜欢")!);
+    expect(actions.environment.onAction).toHaveBeenCalledOnce();
+  });
+
+  it("expands and collapses only from its trailing action and keeps the preview after collapse", async () => {
     const height = vi
       .spyOn(HTMLElement.prototype, "scrollHeight", "get")
       .mockReturnValue(120);
@@ -315,24 +421,40 @@ describe("ContentCard as a phone single-column post", () => {
       "[data-feed-post-title] button",
     )!;
     // Browser line-height and layout are mocked because jsdom does not lay out text.
-    const paragraph = post.querySelector<HTMLElement>("[data-card-excerpt]")!;
-    Object.defineProperty(paragraph, "clientWidth", { value: 300 });
-    paragraph.style.lineHeight = "24px";
-    act(() => window.dispatchEvent(new Event("resize")));
-    expect(button(post, "展开正文")).not.toBeNull();
-    act(() => title.click());
-    expect(title.getAttribute("aria-expanded")).toBe("true");
+    overflowBody(post);
+    const bodyId = post.querySelector("[data-feed-post-body-state]")!.id;
+    const expand = button(post, "展开正文")!;
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    expect(expand.getAttribute("aria-controls")).toBe(bodyId);
+    act(() => expand.click());
+    expect(expand.getAttribute("aria-expanded")).toBe("true");
+    expect(post.getAttribute("data-feed-post-expanded")).toBe("true");
     await act(async () => {
       await Promise.resolve();
     });
     expect(post.querySelector("[data-feed-post-body]")?.textContent).toBe(long);
     act(() => button(post, "收起正文")!.click());
-    expect(title.getAttribute("aria-expanded")).toBe("false");
+    expect(button(post, "展开正文")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
     expect(
       post.querySelector("[data-feed-post-body-collapsed]"),
     ).not.toBeNull();
     expect(post.querySelector("[data-feed-post-body]")?.textContent).toBe(long);
     expect(shell.openContent).not.toHaveBeenCalled();
+    // The title of an overflowing body opens Detail and controls nothing.
+    expect(title.getAttribute("aria-label")).toBe("打开春日临帖");
+    expect(title.hasAttribute("aria-expanded")).toBe(false);
+    expect(title.hasAttribute("aria-controls")).toBe(false);
+    expect(title.hasAttribute("data-open-catalog")).toBe(false);
+    act(() => title.click());
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "work", id: workId },
+      title,
+    );
+    expect(
+      post.querySelector("[data-feed-post-body-collapsed]"),
+    ).not.toBeNull();
     height.mockRestore();
   });
 

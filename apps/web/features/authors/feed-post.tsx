@@ -11,6 +11,7 @@ import type { useContentActions } from "./content-actions";
 import { FeedColophon } from "./feed-colophon";
 import { FeedPostAuthor } from "./feed-post-author";
 import { FeedPostBody } from "./feed-post-body";
+import { suppressFollowingPointerClicks } from "./feed-post-click-guard";
 import { feedPostMedia } from "./feed-post-media";
 import { FeedPostStage } from "./feed-post-stage";
 import type { FeedPostStageHandle } from "./feed-post-stage";
@@ -40,9 +41,9 @@ const PostDate = ({ value }: { value: string | null }) => {
 
 /**
  * A phone single-column post: author, the right-to-left image stage with its
- * dots and its colophons past the last image, the title (a work's expands
- * its body in place, official content's opens Detail), the action row and
- * the publication day.
+ * dots and its colophons past the last image, the title and a work's body
+ * text (both open Detail; only the trailing action expands the body in
+ * place), the action row and the publication day.
  */
 export const FeedPost = ({
   item,
@@ -70,8 +71,12 @@ export const FeedPost = ({
   const work = item.target.type === "work";
   const hasBody = work && excerpt !== "";
   const expandable = hasBody && overflow;
-  const openContent = (opener: HTMLElement) =>
+  // `pointer` is false for keyboard and assistive activation (click detail 0).
+  const openContent = (opener: HTMLElement, pointer = true) => {
     shell.openContent(item.target, opener);
+    // The rest of the tap (a double tap's second click) would land on Detail.
+    if (pointer) suppressFollowingPointerClicks();
+  };
   // A post with a stage reads its comments as colophons; one without opens
   // Detail on its comments.
   const openComments = (opener: HTMLElement) => {
@@ -149,21 +154,14 @@ export const FeedPost = ({
         <button
           className={styles.postTitleButton}
           type="button"
-          {...(expandable
-            ? {
-                "aria-controls": bodyId,
-                "aria-expanded": expanded,
-                onClick: toggle,
-              }
-            : {
-                "aria-label": `打开${label}`,
-                // The Catalog opener, as on two-column cards.
-                ...(item.target.type === "catalog"
-                  ? { "data-open-catalog": "" }
-                  : {}),
-                onClick: (event: { currentTarget: HTMLButtonElement }) =>
-                  openContent(event.currentTarget),
-              })}
+          aria-label={`打开${label}`}
+          // The Catalog opener, as on two-column cards.
+          {...(item.target.type === "catalog"
+            ? { "data-open-catalog": "" }
+            : {})}
+          onClick={(event) =>
+            openContent(event.currentTarget, event.detail !== 0)
+          }
         >
           <span className={styles.postTitleText}>{item.title}</span>
         </button>
@@ -206,6 +204,7 @@ export const FeedPost = ({
             id={bodyId}
             preview={excerpt}
             onOverflowChange={setOverflow}
+            onOpen={openContent}
             workId={item.target.id}
           />
         ) : null}

@@ -104,6 +104,11 @@ export type CatalogDetailPresentation = DetailPresentationBase &
         readonly visibility?: WorkVisibility;
         /** Shown to every reader when the work carries it. */
         readonly authorship?: DetailAuthorshipPresentation;
+        /**
+         * Shown from a work record this account already received, until the
+         * read in progress confirms it.
+         */
+        readonly provisional?: true;
       }
   );
 

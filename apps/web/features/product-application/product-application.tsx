@@ -12,7 +12,11 @@ import {
 } from "../authors/author-profile";
 import { DiscoveryFeed, FilteredInscriptions } from "../authors/discovery-feed";
 import { DiscussionSection } from "../authors/discussion-section";
-import { DetailActions, loadWorkDetail } from "../authors/work-detail";
+import {
+  DetailActions,
+  loadWorkDetail,
+  peekWorkDetail,
+} from "../authors/work-detail";
 import { LiveCatalogCards } from "../authors/live-catalog-cards";
 import "../authors/author-styles.css";
 import { T02pProductPreview } from "../product-preview/t02p-product-preview";
@@ -204,6 +208,7 @@ const AuthorProduct = ({
                   <AuthorProfileOverlay {...properties} />
                 )}
                 workDetailLoader={loadWorkDetail}
+                workDetailPeek={peekWorkDetail}
                 renderDiscussion={(target) => (
                   <DiscussionSection
                     target={target}

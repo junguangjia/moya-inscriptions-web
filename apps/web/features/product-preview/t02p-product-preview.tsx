@@ -33,7 +33,10 @@ import type { ContentQuickActionEnvironment } from "../quick-actions/quick-actio
 import { TopicDetail } from "../topics/topic-detail";
 
 import type { T02pDevelopmentCatalogDestinationStates } from "./catalog-scenarios";
-import type { CatalogDetailPresentationLoader } from "../detail/load-catalog-detail";
+import type {
+  CatalogDetailPresentationLoader,
+  CatalogDetailPresentationPeek,
+} from "../detail/load-catalog-detail";
 import type {
   ArticleId,
   ContentIdentity,
@@ -89,6 +92,8 @@ export interface T02pProductPreviewProps {
     controls: ProductShellEditorOverlayControls,
   ) => ReactNode;
   readonly workDetailLoader?: CatalogDetailPresentationLoader;
+  /** A work's Detail shown at once from what this account already received. */
+  readonly workDetailPeek?: CatalogDetailPresentationPeek;
   readonly renderDiscussion?: (target: DiscussionTarget) => ReactNode;
   readonly renderColophon?: (
     target: ContentIdentity,
@@ -127,6 +132,7 @@ export const T02pProductPreview = ({
   renderEditorOverlay,
   articleEditorEnabled = false,
   workDetailLoader,
+  workDetailPeek,
   renderDiscussion,
   renderColophon,
   renderDetailActions,
@@ -228,6 +234,7 @@ export const T02pProductPreview = ({
                 ? (workDetailLoader ?? unavailableDetailLoader)
                 : catalogDetailLoader
             }
+            peek={target.type === "work" ? workDetailPeek : undefined}
             onClose={onClose}
             onScrollTopChange={onScrollTopChange}
           />

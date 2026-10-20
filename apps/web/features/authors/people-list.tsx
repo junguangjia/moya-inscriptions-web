@@ -7,6 +7,7 @@ import { AuthorDialog } from "./author-dialog";
 import { avatarThumbSrc } from "../media/profile-image";
 import { requestIdentity } from "../shell/request-identity";
 import { useProductShell } from "../product-shell/product-shell";
+import { forgetAuthorWorkSnapshots } from "./work-snapshots";
 type Page = Awaited<ReturnType<typeof authorClient.people>>;
 type Person = Page["items"][number];
 type Outcome = { id: string; name: string; message: string; success: boolean };
@@ -174,6 +175,8 @@ export const PeopleList = ({
               enabled: list === "followers",
             },
           );
+          // A blocked author's held works must no longer seed Detail or bodies.
+          if (list === "followers") forgetAuthorWorkSnapshots(person.id);
           if (!current()) break;
           results.push({
             id: person.id,

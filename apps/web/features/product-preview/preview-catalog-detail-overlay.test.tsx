@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { StrictMode, act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { authorFixture } = vi.hoisted(() => ({
+const { authorFixture, observed } = vi.hoisted(() => ({
   authorFixture: {
     current: null as null | {
       checking: boolean;
@@ -12,11 +12,35 @@ const { authorFixture } = vi.hoisted(() => ({
       viewer: { id: string } | null;
     },
   },
+  observed: {
+    track: vi.fn(),
+    /** Every state the Detail is given, in order. */
+    states: [] as CatalogDetailPresentationState[],
+  },
 }));
 vi.mock("../authors/author-context", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../authors/author-context")>();
   return { ...actual, useOptionalAuthors: () => authorFixture.current };
+});
+vi.mock("../analytics/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../analytics/client")>()),
+  trackAnalytics: observed.track,
+}));
+vi.mock("../detail/catalog-detail-experience", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../detail/catalog-detail-experience")
+    >();
+  return {
+    ...actual,
+    CatalogDetailExperience: (
+      props: Parameters<typeof actual.CatalogDetailExperience>[0],
+    ) => {
+      observed.states.push(props.state);
+      return <actual.CatalogDetailExperience {...props} />;
+    },
+  };
 });
 
 vi.mock("next/navigation", () => ({
@@ -31,15 +55,30 @@ import {
   useAuthReturn,
   useAuthReturnView,
 } from "../auth/auth-return";
-import { parseProductHistoryState } from "../product-shell/product-history";
+import {
+  parseProductHistoryState,
+  viewerHistoryState,
+  viewerLocation,
+} from "../product-shell/product-history";
 import { useBrowseOnly } from "../shell/browse-only-context";
+import { useCatalogDetailWithdrawal } from "../detail/catalog-detail-withdrawal";
 
 import type { Root } from "react-dom/client";
-import type { CatalogDetailPresentationLoader } from "../detail/load-catalog-detail";
+import type {
+  CatalogDetailPresentationLoader,
+  CatalogDetailPresentationPeek,
+} from "../detail/load-catalog-detail";
 import type { ProductShellContextValue } from "../product-shell/product-shell";
 import type { ContentIdentity } from "@moya/contracts";
-import type { CatalogDetailPresentationState } from "../detail/catalog-detail-presentation";
+import type {
+  CatalogDetailPresentation,
+  CatalogDetailPresentationState,
+} from "../detail/catalog-detail-presentation";
 import type { BrowseOnlyPolicy } from "../shell/browse-only";
+import type {
+  CatalogDetailWithdrawalNotice,
+  WithdrawCatalogDetail,
+} from "../detail/catalog-detail-withdrawal";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -84,17 +123,36 @@ const OverlayHost = () => {
   );
 };
 
+// A loaded Detail syncs its scroll offset into history through a 500 ms shell
+// timer that the shell does not clear on unmount. Clear what a test leaves
+// behind, so no callback runs after the jsdom window is gone.
+const pendingTimers = new Set<number>();
+const nativeSetTimeout = window.setTimeout.bind(window);
+
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
+  for (const id of pendingTimers) window.clearTimeout(id);
+  pendingTimers.clear();
   document.body.replaceChildren();
   window.history.replaceState(null, "", "/dev/t02p");
   vi.restoreAllMocks();
 });
 
 beforeEach(() => {
+  vi.spyOn(window, "setTimeout").mockImplementation(((
+    handler: TimerHandler,
+    timeout?: number,
+    ...args: unknown[]
+  ) => {
+    const id = nativeSetTimeout(handler, timeout, ...args);
+    pendingTimers.add(id);
+    return id;
+  }) as typeof window.setTimeout);
   returnState = null;
   shellState = null;
   authorFixture.current = null;
+  observed.track.mockClear();
+  observed.states.length = 0;
   document.documentElement.dataset.yoyiBootStarted = String(performance.now());
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -120,6 +178,7 @@ describe("PreviewCatalogDetailOverlay", () => {
     viewer = false,
     contentType: "catalog" | "work" = "catalog",
     checking = false,
+    seeded = false,
   ) => {
     const content: ContentIdentity = {
       type: contentType,
@@ -157,6 +216,13 @@ describe("PreviewCatalogDetailOverlay", () => {
           : { ...detailBase, kind: "inscription" },
     };
     const loader = vi.fn<CatalogDetailPresentationLoader>(async () => loaded);
+    // The work its first read returned, held for the return (seeded only).
+    let held: CatalogDetailPresentation | null = null;
+    const peek = seeded
+      ? vi.fn<CatalogDetailPresentationPeek>((id) =>
+          id === content.id ? held : null,
+        )
+      : undefined;
     const IdentityOpener = () => {
       const { openContent } = useProductShell();
       return (
@@ -210,6 +276,7 @@ describe("PreviewCatalogDetailOverlay", () => {
                     key={authorFixture.current?.viewer?.id ?? "guest"}
                     initialScrollTop={initialScrollTop}
                     loader={loader}
+                    peek={peek}
                     onClose={onClose}
                     onScrollTopChange={onScrollTopChange}
                   />
@@ -239,6 +306,12 @@ describe("PreviewCatalogDetailOverlay", () => {
     );
     expect(returnState?.hasSource()).toBe(true);
     await render(true);
+    if (
+      seeded &&
+      loaded.state === "loaded" &&
+      loaded.detail.contentType === "work"
+    )
+      held = { ...loaded.detail, provisional: true };
     loader.mockImplementation(async () => ({ state: response }));
     // A native traversal keeps the captured history ticket, without invoking
     // the provider's push/replace wrappers.
@@ -258,7 +331,7 @@ describe("PreviewCatalogDetailOverlay", () => {
         viewer: null,
       };
     await render(false);
-    return { container, back, push, render };
+    return { container, back, push, render, peek };
   };
 
   it.each([false, true])(
@@ -304,26 +377,49 @@ describe("PreviewCatalogDetailOverlay", () => {
     },
   );
 
-  it("uses the actual Work identity when an authentication source becomes inaccessible", async () => {
-    const { container, back, push } = await mountAuthJourney(
-      "not-found",
-      true,
-      "work",
-    );
-    expect(parseProductHistoryState(window.history.state)?.kind).toBe(
-      "primary",
-    );
-    expect(
-      container
-        .querySelector("[data-product-shell]")
-        ?.getAttribute("data-viewer-open"),
-    ).toBe("false");
-    expect(
-      container.querySelector("[data-auth-content-recovery]")?.textContent,
-    ).toContain("已返回原列表");
-    expect(back).not.toHaveBeenCalled();
-    expect(push).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "uses the actual Work identity when an authentication source becomes inaccessible, seeded=%s",
+    async (seeded) => {
+      if (seeded)
+        authorFixture.current = {
+          checking: false,
+          sessionError: false,
+          viewer: { id: "synthetic-reader" },
+        };
+      const { container, back, push, peek } = await mountAuthJourney(
+        "not-found",
+        true,
+        "work",
+        false,
+        seeded,
+      );
+      if (seeded) {
+        // The known work showed on return, before its read answered 404.
+        expect(peek).toHaveBeenCalledWith(`work-${"a".repeat(32)}`);
+        expect(
+          observed.states.some(
+            (state) =>
+              state.state === "loaded" &&
+              state.detail.contentType === "work" &&
+              state.detail.provisional === true,
+          ),
+        ).toBe(true);
+      }
+      expect(parseProductHistoryState(window.history.state)?.kind).toBe(
+        "primary",
+      );
+      expect(
+        container
+          .querySelector("[data-product-shell]")
+          ?.getAttribute("data-viewer-open"),
+      ).toBe("false");
+      expect(
+        container.querySelector("[data-auth-content-recovery]")?.textContent,
+      ).toContain("已返回原列表");
+      expect(back).not.toHaveBeenCalled();
+      expect(push).not.toHaveBeenCalled();
+    },
+  );
 
   it("waits through checking and a failed /me, retaining public filters for the confirmed-account re-key", async () => {
     const { container, back, push, render } = await mountAuthJourney(
@@ -519,6 +615,564 @@ describe("PreviewCatalogDetailOverlay", () => {
       }),
     );
     expect(container.textContent).toContain("当前详情");
+  });
+});
+
+describe("PreviewCatalogDetailOverlay from a known work (detail-entry-speed-v1)", () => {
+  const WORK = `work-${"e".repeat(32)}`;
+  const OTHER_WORK = `work-${"f".repeat(32)}`;
+  const READER = {
+    checking: false,
+    sessionError: false,
+    viewer: { id: "synthetic-reader" },
+  };
+  type WorkDetail = Extract<CatalogDetailPresentation, { contentType: "work" }>;
+  const media = (id: string) => ({
+    id,
+    src: `/${id}.jpg`,
+    alt: "Synthetic sample",
+    width: 100,
+    height: 100,
+  });
+  const work = (id: string, title: string): WorkDetail => ({
+    contentType: "work",
+    id,
+    authorId: `user-${"b".repeat(32)}`,
+    authorName: "Synthetic author",
+    available: true,
+    canEdit: false,
+    aliases: [],
+    facts: [],
+    media: [media("synthetic-media")],
+    sections: [{ key: "description", title: "正文", text: `${title} body` }],
+    source: "runtime",
+    sourceCitations: [],
+    title,
+  });
+  /** What peekWorkDetail gives for a work this account already received. */
+  const known = (id: string, title: string): WorkDetail => ({
+    ...work(id, title),
+    provisional: true,
+  });
+  const loaded = (
+    detail: CatalogDetailPresentation,
+  ): CatalogDetailPresentationState => ({ state: "loaded", detail });
+  interface HeldRead {
+    readonly resolve: (state: CatalogDetailPresentationState) => void;
+    readonly reject: (reason: unknown) => void;
+  }
+  /** Each read waits until the test answers it. */
+  const heldReads = () => {
+    const reads: HeldRead[] = [];
+    const loader = vi.fn<CatalogDetailPresentationLoader>(
+      () =>
+        new Promise((resolve, reject) => {
+          reads.push({ resolve, reject });
+        }),
+    );
+    return { loader, reads };
+  };
+  const phase = (state: CatalogDetailPresentationState) =>
+    state.state !== "loaded"
+      ? state.state
+      : `${
+          state.detail.contentType === "work" &&
+          state.detail.provisional === true
+            ? "seed"
+            : "loaded"
+        }:${state.detail.title}`;
+  /** The states the Detail was given, repeated renders folded. */
+  const phases = () =>
+    observed.states
+      .map(phase)
+      .filter((value, index, all) => index === 0 || value !== all[index - 1]);
+  const opens = () =>
+    observed.track.mock.calls.filter(
+      ([event]) => (event as { name?: string }).name === "content_open",
+    );
+  const ContentOpener = ({ target }: { readonly target: ContentIdentity }) => {
+    const { openContent } = useProductShell();
+    return (
+      <button
+        data-open-detail=""
+        onClick={(event) => openContent(target, event.currentTarget)}
+        type="button"
+      >
+        Open synthetic detail
+      </button>
+    );
+  };
+
+  beforeEach(() => {
+    class InertObserver {
+      disconnect() {}
+      observe() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("IntersectionObserver", InertObserver);
+    vi.stubGlobal("ResizeObserver", InertObserver);
+    authorFixture.current = READER;
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const mount = async ({
+    loader,
+    peek,
+    target = { type: "work", id: WORK },
+    strict = false,
+  }: {
+    readonly loader: CatalogDetailPresentationLoader;
+    readonly peek?: CatalogDetailPresentationPeek;
+    readonly target?: ContentIdentity;
+    readonly strict?: boolean;
+  }) => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    let refresh = () => {};
+    // What the actions use to remove the work from the open Detail (a delete).
+    let withdraw: WithdrawCatalogDetail | null = null;
+    const Withdrawal = () => {
+      withdraw = useCatalogDetailWithdrawal();
+      return null;
+    };
+    // The identity the open Detail reads; switching it keeps the same overlay.
+    let shown = target;
+    const tree = () => (
+      <ProductShell
+        user={<p>user</p>}
+        home={<ContentOpener target={target} />}
+        discussion={<p>discussion</p>}
+        initialPlatform="phone"
+        renderProfileOverlay={() => <p>Synthetic profile</p>}
+        renderDetailOverlay={({
+          backButtonRef,
+          initialScrollTop,
+          onClose,
+          onScrollTopChange,
+        }) => {
+          const overlay = (
+            <PreviewCatalogDetailOverlay
+              backButtonRef={backButtonRef}
+              catalogId={shown.id}
+              target={shown}
+              renderActions={(_detail, next) => {
+                refresh = next;
+                return (
+                  <div data-synthetic-actions="">
+                    <Withdrawal />
+                  </div>
+                );
+              }}
+              initialScrollTop={initialScrollTop}
+              loader={loader}
+              peek={peek}
+              onClose={onClose}
+              onScrollTopChange={onScrollTopChange}
+            />
+          );
+          return strict ? <StrictMode>{overlay}</StrictMode> : overlay;
+        }}
+      />
+    );
+    await act(async () => root.render(tree()));
+    const detail = () => container.querySelector("[data-detail-state]");
+    return {
+      container,
+      detail,
+      provisional: () => detail()?.hasAttribute("data-detail-provisional"),
+      skeleton: () => container.querySelector('[aria-label="正在加载资料"]'),
+      title: () => container.querySelector("[data-detail-title]"),
+      shell: (name: string) =>
+        container.querySelector("[data-product-shell]")?.getAttribute(name),
+      open: () =>
+        act(async () =>
+          container
+            .querySelector<HTMLButtonElement>("[data-open-detail]")
+            ?.click(),
+        ),
+      show: (next: ContentIdentity) => {
+        shown = next;
+        return act(async () => root.render(tree()));
+      },
+      refresh: () => act(async () => refresh()),
+      withdraw: (notice: CatalogDetailWithdrawalNotice) =>
+        act(async () => withdraw?.(shown.id, notice)),
+    };
+  };
+
+  it("opens a known work at once and confirms it in place, counting the open only then", async () => {
+    const { loader, reads } = heldReads();
+    const peek = vi.fn<CatalogDetailPresentationPeek>((id) =>
+      id === WORK ? known(WORK, "Known title") : null,
+    );
+    const view = await mount({ loader, peek });
+    await view.open();
+    // The first state is the known work: no skeleton, marked provisional.
+    expect(phases()).toEqual(["seed:Known title"]);
+    expect(view.skeleton()).toBeNull();
+    expect(view.detail()?.getAttribute("data-detail-state")).toBe("loaded");
+    expect(view.provisional()).toBe(true);
+    expect(view.title()?.textContent).toContain("Known title");
+    expect(view.container.querySelector("[data-synthetic-actions]")).not.toBe(
+      null,
+    );
+    // Every open still reads.
+    expect(loader).toHaveBeenCalledExactlyOnceWith(
+      WORK,
+      expect.any(AbortSignal),
+    );
+    expect(opens()).toHaveLength(0);
+    const section = view.detail();
+    const title = view.title();
+
+    await act(async () =>
+      reads[0]!.resolve(loaded(work(WORK, "Confirmed title"))),
+    );
+    expect(phases()).toEqual(["seed:Known title", "loaded:Confirmed title"]);
+    expect(view.provisional()).toBe(false);
+    // Replaced in place: the same nodes, now with the confirmed content.
+    expect(view.detail()).toBe(section);
+    expect(view.title()).toBe(title);
+    expect(title?.textContent).toContain("Confirmed title");
+    expect(opens()).toHaveLength(1);
+    expect(opens()[0]![0]).toMatchObject({
+      targetType: "work",
+      targetId: WORK,
+      surface: "detail",
+    });
+
+    // A refresh revalidates what is shown: no skeleton, no second open.
+    await view.refresh();
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(view.skeleton()).toBeNull();
+    await act(async () =>
+      reads[1]!.resolve(loaded(work(WORK, "Refreshed title"))),
+    );
+    expect(phases()).toEqual([
+      "seed:Known title",
+      "loaded:Confirmed title",
+      "loaded:Refreshed title",
+    ]);
+    expect(opens()).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "an unavailable answer",
+      (read: HeldRead) => read.resolve({ state: "unavailable" }),
+    ],
+    [
+      "an unexpected-error answer",
+      (read: HeldRead) => read.resolve({ state: "unexpected-error" }),
+    ],
+    [
+      "a failed read",
+      (read: HeldRead) => read.reject(new TypeError("Failed to fetch")),
+    ],
+  ])(
+    "keeps the known work, still provisional, after %s while it is still held",
+    async (_case, fail) => {
+      const { loader, reads } = heldReads();
+      const view = await mount({
+        loader,
+        peek: () => known(WORK, "Known title"),
+      });
+      await view.open();
+      await act(async () => fail(reads[0]!));
+      expect(phases()).toEqual(["seed:Known title"]);
+      expect(view.detail()?.getAttribute("data-detail-state")).toBe("loaded");
+      expect(view.provisional()).toBe(true);
+      expect(view.container.textContent).not.toMatch(/暂时无法/u);
+      expect(opens()).toHaveLength(0);
+    },
+  );
+
+  it("shows the read's unavailable answer once that read forgot the work (401, 403)", async () => {
+    const { loader, reads } = heldReads();
+    let held: CatalogDetailPresentation | null = known(WORK, "Known title");
+    const view = await mount({ loader, peek: () => held });
+    await view.open();
+    await act(async () => {
+      held = null;
+      reads[0]!.resolve({ state: "unavailable" });
+    });
+    expect(phases()).toEqual(["seed:Known title", "unavailable"]);
+    expect(view.detail()?.getAttribute("data-detail-state")).toBe(
+      "unavailable",
+    );
+    expect(view.provisional()).toBe(false);
+    expect(view.container.textContent).toContain("暂时无法加载资料");
+    expect(opens()).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      "a transport failure (unavailable)",
+      (read: HeldRead) => read.resolve({ state: "unavailable" }),
+      "unavailable",
+      "暂时无法加载资料",
+    ],
+    [
+      "an unexpected-error answer",
+      (read: HeldRead) => read.resolve({ state: "unexpected-error" }),
+      "unexpected-error",
+      "暂时无法显示此页面",
+    ],
+    [
+      "a failed read",
+      (read: HeldRead) => read.reject(new TypeError("Failed to fetch")),
+      "unexpected-error",
+      "暂时无法显示此页面",
+    ],
+  ] as const)(
+    "shows the answer of a Detail opened unseeded after %s, although a list read recorded the work meanwhile",
+    async (_case, fail, answer, message) => {
+      const { loader, reads } = heldReads();
+      let held: CatalogDetailPresentation | null = null;
+      const view = await mount({ loader, peek: () => held });
+      await view.open();
+      expect(view.skeleton()).not.toBeNull();
+      // A Works tab list read records the work while this read is held.
+      held = known(WORK, "Known title");
+      await act(async () => fail(reads[0]!));
+      expect(phases()).toEqual(["loading", answer]);
+      expect(view.detail()?.getAttribute("data-detail-state")).toBe(answer);
+      expect(view.provisional()).toBe(false);
+      expect(view.container.textContent).toContain(message);
+      expect(view.container.textContent).not.toContain("Known title");
+      expect(opens()).toHaveLength(0);
+    },
+  );
+
+  it("shows not-found when the read answers 404 after the known work", async () => {
+    const { loader, reads } = heldReads();
+    const view = await mount({
+      loader,
+      peek: () => known(WORK, "Known title"),
+    });
+    await view.open();
+    await act(async () => reads[0]!.resolve({ state: "not-found" }));
+    expect(phases()).toEqual(["seed:Known title", "not-found"]);
+    expect(view.detail()?.getAttribute("data-detail-state")).toBe("not-found");
+    expect(view.provisional()).toBe(false);
+    expect(view.container.textContent).toContain("未找到这项资料");
+    expect(opens()).toHaveLength(0);
+  });
+
+  it("keeps the deletion notice when the known work's read then answers 404, without a recovery", async () => {
+    const { loader, reads } = heldReads();
+    let held: CatalogDetailPresentation | null = known(WORK, "Known title");
+    const view = await mount({ loader, peek: () => held });
+    await view.open();
+    expect(view.provisional()).toBe(true);
+    const back = vi.spyOn(window.history, "back");
+    const push = vi.spyOn(window.history, "pushState");
+
+    // The owner deletes the work before its read answers; the delete forgets
+    // the record.
+    held = null;
+    await view.withdraw({
+      title: "作品已永久删除",
+      description: "此作品已无法恢复。",
+    });
+    const notice = view.container.querySelector("[data-detail-withdrawn]");
+    expect(notice?.textContent).toContain("作品已永久删除");
+    expect(view.provisional()).toBe(false);
+
+    // The read then answers 404 for the work just deleted.
+    await act(async () => reads[0]!.resolve({ state: "not-found" }));
+    expect(phases()).toEqual(["seed:Known title", "not-found"]);
+    expect(view.container.querySelector("[data-detail-withdrawn]")).toBe(
+      notice,
+    );
+    expect(view.container.textContent).not.toContain("未找到这项资料");
+    expect(view.detail()?.getAttribute("data-detail-state")).toBe("not-found");
+    // No recovery: the Detail stays open on its own entry.
+    expect(view.shell("data-detail-open")).toBe("true");
+    expect(parseProductHistoryState(window.history.state)?.kind).toBe("detail");
+    expect(
+      view.container.querySelector("[data-auth-content-recovery]"),
+    ).toBeNull();
+    expect(back).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+    expect(opens()).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      "a session error",
+      false,
+      {
+        checking: false,
+        sessionError: true,
+        viewer: { id: "synthetic-reader" },
+      },
+    ],
+    [
+      "a first check without a viewer",
+      false,
+      { checking: true, sessionError: false, viewer: null },
+    ],
+    ["no author context", false, null],
+    [
+      "a confirmed viewer's re-check",
+      true,
+      {
+        checking: true,
+        sessionError: false,
+        viewer: { id: "synthetic-reader" },
+      },
+    ],
+  ])(
+    "with %s, shows the known work at once: %s",
+    async (_case, seeded, author) => {
+      authorFixture.current = author;
+      const { loader, reads } = heldReads();
+      const peek = vi.fn<CatalogDetailPresentationPeek>(() =>
+        known(WORK, "Known title"),
+      );
+      const view = await mount({ loader, peek });
+      await view.open();
+      expect(view.skeleton() === null).toBe(seeded);
+      expect(view.provisional()).toBe(seeded);
+      // Nothing held is even read without a known account.
+      if (!seeded) expect(peek).not.toHaveBeenCalled();
+      await act(async () =>
+        reads[0]!.resolve(loaded(work(WORK, "Confirmed title"))),
+      );
+      expect(phases()).toEqual([
+        seeded ? "seed:Known title" : "loading",
+        "loaded:Confirmed title",
+      ]);
+    },
+  );
+
+  it.each([
+    ["holds", "synthetic-media", true],
+    ["lacks", "other-media", false],
+  ] as const)(
+    "seeds a Viewer entry only when the known work %s its media",
+    async (_case, mediaId, seeded) => {
+      const { loader, reads } = heldReads();
+      const view = await mount({
+        loader,
+        peek: () => known(WORK, "Known title"),
+      });
+      const target = { type: "work", id: WORK } as const;
+      const entry = viewerHistoryState(target, mediaId, "home", 0);
+      window.history.replaceState(
+        entry,
+        "",
+        viewerLocation(window.location, target, mediaId),
+      );
+      await act(async () =>
+        window.dispatchEvent(new PopStateEvent("popstate", { state: entry })),
+      );
+      expect(view.shell("data-detail-open")).toBe("true");
+      expect(view.skeleton() === null).toBe(seeded);
+      expect(view.provisional()).toBe(seeded);
+      // The read confirms a work holding that media: the Viewer shows it.
+      await act(async () =>
+        reads[0]!.resolve(
+          loaded({
+            ...work(WORK, "Confirmed title"),
+            media: [media("synthetic-media"), media("other-media")],
+          }),
+        ),
+      );
+      expect(phases()).toEqual([
+        seeded ? "seed:Known title" : "loading",
+        "loaded:Confirmed title",
+      ]);
+      expect(view.shell("data-viewer-open")).toBe("true");
+    },
+  );
+
+  it("never lets an earlier work's read replace the current one", async () => {
+    const { loader, reads } = heldReads();
+    const view = await mount({
+      loader,
+      peek: (id) => known(id, id === WORK ? "First known" : "Second known"),
+    });
+    await view.open();
+    await view.show({ type: "work", id: OTHER_WORK });
+    expect(view.title()?.textContent).toContain("Second known");
+    expect(loader.mock.calls.map(([id]) => id)).toEqual([WORK, OTHER_WORK]);
+
+    await act(async () => reads[0]!.resolve(loaded(work(WORK, "Stale first"))));
+    expect(view.container.textContent).not.toContain("Stale first");
+    expect(view.provisional()).toBe(true);
+    await act(async () =>
+      reads[1]!.resolve(loaded(work(OTHER_WORK, "Second confirmed"))),
+    );
+    expect(phases()).toEqual([
+      "seed:First known",
+      "seed:Second known",
+      "loaded:Second confirmed",
+    ]);
+    expect(opens()).toHaveLength(1);
+  });
+
+  it("keeps the current read's answer under StrictMode, whatever the discarded read answers", async () => {
+    const { loader, reads } = heldReads();
+    const view = await mount({
+      loader,
+      peek: () => known(WORK, "Known title"),
+      strict: true,
+    });
+    await view.open();
+    // StrictMode runs the read effect twice; the first read is aborted.
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(loader.mock.calls[0]![1]?.aborted).toBe(true);
+    expect(view.skeleton()).toBeNull();
+    expect(view.provisional()).toBe(true);
+
+    await act(async () =>
+      reads[1]!.resolve(loaded(work(WORK, "Current title"))),
+    );
+    await act(async () => reads[0]!.resolve(loaded(work(WORK, "Stale title"))));
+    expect(view.title()?.textContent).toContain("Current title");
+    expect(view.container.textContent).not.toContain("Stale title");
+    expect(phases()).toEqual(["seed:Known title", "loaded:Current title"]);
+    expect(opens()).toHaveLength(1);
+  });
+
+  it("keeps the Catalog without a peek: loading first, and a refresh passes through loading", async () => {
+    const { loader, reads } = heldReads();
+    const catalog = (title: string): CatalogDetailPresentation => ({
+      id: "catalog-a",
+      kind: "inscription",
+      aliases: [],
+      facts: [],
+      media: [],
+      source: "runtime",
+      sourceCitations: [],
+      title,
+    });
+    const view = await mount({
+      loader,
+      target: { type: "catalog", id: "catalog-a" },
+    });
+    await view.open();
+    expect(view.skeleton()).not.toBeNull();
+    await act(async () => reads[0]!.resolve(loaded(catalog("Catalog title"))));
+    expect(view.skeleton()).toBeNull();
+    await view.refresh();
+    expect(view.skeleton()).not.toBeNull();
+    await act(async () =>
+      reads[1]!.resolve(loaded(catalog("Catalog refreshed"))),
+    );
+    expect(phases()).toEqual([
+      "loading",
+      "loaded:Catalog title",
+      "loading",
+      "loaded:Catalog refreshed",
+    ]);
+    expect(view.container.querySelector("[data-detail-provisional]")).toBe(
+      null,
+    );
   });
 });
 

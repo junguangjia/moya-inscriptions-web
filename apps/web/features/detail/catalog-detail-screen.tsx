@@ -345,7 +345,7 @@ export const CatalogDetailScreen = ({
   withdrawn = null,
 }: CatalogDetailScreenProps) => {
   let body;
-  if (state.state === "loaded" && withdrawn !== null) {
+  if (withdrawn !== null) {
     // Media, actions and discussion are gone; only the neutral result stays.
     body = (
       <section
@@ -509,6 +509,16 @@ export const CatalogDetailScreen = ({
         state.state === "loaded" ? state.detail.source : undefined
       }
       data-detail-state={state.state}
+      // Shown from a work record already received, until its read confirms it;
+      // a withdrawal notice no longer shows that work.
+      data-detail-provisional={
+        withdrawn === null &&
+        state.state === "loaded" &&
+        state.detail.contentType === "work" &&
+        state.detail.provisional === true
+          ? ""
+          : undefined
+      }
       data-platform={platform}
       role="dialog"
     >

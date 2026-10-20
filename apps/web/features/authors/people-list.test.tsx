@@ -3,25 +3,28 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-const { people, command, openProfile, author, accountEpoch } = vi.hoisted(
-  () => ({
+const { people, command, openProfile, author, accountEpoch, forgetAuthor } =
+  vi.hoisted(() => ({
     people: vi.fn(),
     command: vi.fn(),
     openProfile: vi.fn(),
     accountEpoch: vi.fn(() => 0),
+    forgetAuthor: vi.fn(),
     author: {
       viewer: { id: "author" } as { id: string } | null,
       checking: false,
       sessionError: false,
       mutate: vi.fn(),
     },
-  }),
-);
+  }));
 vi.mock("./author-data", async (original) => ({
   ...(await original<typeof import("./author-data")>()),
   authorClient: { people, command, accountEpoch },
 }));
 vi.mock("./author-context", () => ({ useAuthors: () => author }));
+vi.mock("./work-snapshots", () => ({
+  forgetAuthorWorkSnapshots: forgetAuthor,
+}));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => ({ openProfile }),
 }));
@@ -192,6 +195,8 @@ it("records per-user results and keeps failed selections for retry", async () =>
   ).toContain("second：网络中断");
   expect(document.querySelectorAll("input:checked")).toHaveLength(1);
   expect(author.mutate).toHaveBeenCalledOnce();
+  // Unfollowing keeps the author's held works.
+  expect(forgetAuthor).not.toHaveBeenCalled();
 });
 it("blocks an owner follower with its row action and never exposes mutations on another profile", async () => {
   people.mockResolvedValue(page("follower"));
@@ -202,6 +207,7 @@ it("blocks an owner follower with its row action and never exposes mutations on 
     targetId: "user-follower",
     enabled: true,
   });
+  expect(forgetAuthor).toHaveBeenCalledExactlyOnceWith("user-follower");
   author.viewer = { id: "visitor" };
   await render("followers", 1, false);
   expect(button("拉黑")).toBeUndefined();

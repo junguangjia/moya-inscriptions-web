@@ -41,6 +41,8 @@ const mocks = vi.hoisted(() => {
     publishing: { setVisibility: vi.fn(), deleteWork: vi.fn() },
     work: vi.fn(),
     profile: vi.fn(async () => ({ avatar: null })),
+    // Whom the author client reads for; an account change starts a new epoch.
+    identity: { account: null as string | null, epoch: 0 },
   };
 });
 vi.mock("./author-context", () => ({ useAuthors: () => mocks.author }));
@@ -58,7 +60,12 @@ vi.mock("../publishing/publishing-data", () => ({
   PublishingRequestError: mocks.PublishingRequestError,
 }));
 vi.mock("./author-data", () => ({
-  authorClient: { work: mocks.work, profile: mocks.profile },
+  authorClient: {
+    work: mocks.work,
+    profile: mocks.profile,
+    account: () => mocks.identity.account,
+    accountEpoch: () => mocks.identity.epoch,
+  },
   AuthorRequestError: mocks.AuthorRequestError,
 }));
 vi.mock("./content-actions", () => ({
@@ -88,14 +95,30 @@ vi.mock("./author-dialog", () => ({
   ),
 }));
 
+import {
+  toWorkAuthorshipPresentation,
+  toWorkMediaPresentation,
+} from "../detail/catalog-detail-presentation";
 import { CatalogDetailWithdrawalContext } from "../detail/catalog-detail-withdrawal";
 import { recordLocalHistory } from "./local-library";
-import { resetOwnWorkAudiences } from "./own-work-audience";
-import { DetailActions, loadWorkDetail } from "./work-detail";
+import {
+  readOwnWorkAudience,
+  resetOwnWorkAudiences,
+} from "./own-work-audience";
+import {
+  DetailActions,
+  loadWorkDetail,
+  peekWorkDetail,
+  toWorkDetailPresentation,
+} from "./work-detail";
+import { readWorkSnapshot, resetWorkSnapshots } from "./work-snapshots";
 
 import type { UserWork } from "@moya/contracts";
 import type { Root } from "react-dom/client";
-import type { CatalogDetailPresentation } from "../detail/catalog-detail-presentation";
+import type {
+  CatalogDetailPresentation,
+  CatalogDetailPresentationState,
+} from "../detail/catalog-detail-presentation";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -164,6 +187,10 @@ const render = (
 
 beforeEach(() => {
   mocks.author.viewer = { id: AUTHOR };
+  mocks.identity.account = AUTHOR;
+  mocks.identity.epoch = 1;
+  resetWorkSnapshots();
+  resetOwnWorkAudiences();
   // Focus restoration waits a frame; run it at once.
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
     callback(0);
@@ -173,7 +200,6 @@ beforeEach(() => {
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   mocks.shell.browseOnly = undefined;
-  resetOwnWorkAudiences();
   // Answers queued for reads a test did not make never reach the next test.
   mocks.work.mockReset();
   document.body.replaceChildren();
@@ -930,5 +956,317 @@ describe("loadWorkDetail", () => {
     expect(without.state === "loaded" && "authorship" in without.detail).toBe(
       false,
     );
+  });
+
+  it("builds the Detail from the work record alone, exactly as the read shows it", async () => {
+    const item = `item-${"d".repeat(32)}`;
+    const media = [
+      {
+        id: item,
+        src: `/api/community/publishing/media/${item}/display/base`,
+        width: 800,
+        height: 600,
+        kind: "live",
+        motionSrc: `/api/community/publishing/media/${item}/motion/base`,
+        hasAudio: true,
+      },
+    ] satisfies UserWork["media"];
+    const authorship = {
+      kind: "copy_practice",
+      referenceTitle: "兰亭序",
+      originalAuthor: "  ",
+      sourceNote: "故宫博物院藏\n摹本",
+    } satisfies NonNullable<UserWork["authorship"]>;
+    const own = authorWork({
+      title: "",
+      authorStudioName: "临池斋",
+      media,
+      editedAt: "2026-09-12T08:00:00.000Z",
+      visibility: "self",
+      authorship,
+    });
+    expect(toWorkDetailPresentation(own)).toEqual({
+      contentType: "work",
+      id: WORK,
+      authorId: AUTHOR,
+      authorName: "临帖人",
+      authorStudioName: "临池斋",
+      canEdit: true,
+      available: true,
+      firstPublishedAt: "2026-09-10T08:00:00.000Z",
+      editedAt: "2026-09-12T08:00:00.000Z",
+      visibility: "self",
+      title: "",
+      aliases: [],
+      facts: [],
+      sections: [{ key: "description", title: "正文", text: "正文" }],
+      authorship: toWorkAuthorshipPresentation(authorship),
+      media: media.map((m) => toWorkMediaPresentation(m, "未命名作品")),
+      source: "runtime",
+      sourceCitations: [],
+    });
+    mocks.work.mockResolvedValueOnce(own);
+    expect(await loadWorkDetail(WORK, new AbortController().signal)).toEqual({
+      state: "loaded",
+      detail: toWorkDetailPresentation(own),
+    });
+
+    // A reader's view: no author-only fields, no text, never edited.
+    const reader: UserWork = {
+      id: WORK,
+      authorId: AUTHOR,
+      authorName: "临帖人",
+      title: "春日临帖",
+      text: "",
+      media: [],
+      firstPublishedAt: "2026-09-10T08:00:00.000Z",
+      version: 1,
+      canEdit: false,
+      available: true,
+    };
+    const presentation = toWorkDetailPresentation(reader);
+    expect(presentation).toMatchObject({
+      editedAt: null,
+      sections: [],
+      media: [],
+    });
+    expect("visibility" in presentation).toBe(false);
+    expect("authorship" in presentation).toBe(false);
+    expect("provisional" in presentation).toBe(false);
+  });
+});
+
+describe("Work Detail from a work this account already received (detail-entry-speed-v1)", () => {
+  const actions = (view: ReturnType<typeof render>) =>
+    view.container.querySelector("[data-content-actions]");
+  const note = (view: ReturnType<typeof render>) =>
+    view.container.querySelector("[data-work-notice]")?.textContent ?? null;
+  /** Holds the next read of the work until the test answers it. */
+  const heldRead = () => {
+    let answer: (work: UserWork) => void = () => undefined;
+    mocks.work.mockImplementationOnce(
+      () =>
+        new Promise<UserWork>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    return (work: UserWork) => answer(work);
+  };
+  const confirmed = (state: CatalogDetailPresentationState) => {
+    if (state.state !== "loaded") throw new Error("not loaded");
+    return state.detail;
+  };
+
+  it("keeps the work its read returned for the next open", async () => {
+    const work = authorWork();
+    await loaded(work);
+    expect(readWorkSnapshot(WORK)).toBe(work);
+    // The author's own view also records whether others can see it.
+    expect(readOwnWorkAudience(AUTHOR, WORK)).toEqual({
+      publiclyVisible: true,
+      visibility: "public",
+    });
+  });
+
+  it("forgets the work when the account may not read it, and keeps it after a transport failure", async () => {
+    for (const [status, state] of [
+      [401, "unavailable"],
+      [403, "unavailable"],
+      [404, "not-found"],
+    ] as const) {
+      await loaded(authorWork());
+      expect(readWorkSnapshot(WORK)).not.toBeNull();
+      mocks.work.mockRejectedValueOnce(
+        new mocks.AuthorRequestError(status, "内容不可用或此列表未公开"),
+      );
+      expect(await loadWorkDetail(WORK, new AbortController().signal)).toEqual({
+        state,
+      });
+      expect(readWorkSnapshot(WORK)).toBeNull();
+      expect(peekWorkDetail(WORK)).toBeNull();
+    }
+
+    // A server error, no network or the read's time limit: what is known stays.
+    const work = authorWork();
+    await loaded(work);
+    for (const failure of [
+      new mocks.AuthorRequestError(503, "暂时无法完成，请重试"),
+      new TypeError("Failed to fetch"),
+      new DOMException("The operation timed out.", "TimeoutError"),
+    ]) {
+      mocks.work.mockRejectedValueOnce(failure);
+      expect(await loadWorkDetail(WORK, new AbortController().signal)).toEqual({
+        state: "unavailable",
+      });
+      expect(readWorkSnapshot(WORK)).toBe(work);
+    }
+  });
+
+  it("peeks the known work as provisional, and never for another account or epoch", async () => {
+    expect(peekWorkDetail(WORK)).toBeNull();
+    const work = authorWork({ title: "", text: "临池正文" });
+    await loaded(work);
+    mocks.work.mockClear();
+    expect(peekWorkDetail(WORK)).toEqual({
+      ...toWorkDetailPresentation(work),
+      provisional: true,
+    });
+    // Peeking reads nothing.
+    expect(mocks.work).not.toHaveBeenCalled();
+
+    // Another account, then the same account again in a later epoch (A→B→A).
+    mocks.identity.account = OTHER;
+    mocks.identity.epoch++;
+    expect(peekWorkDetail(WORK)).toBeNull();
+    mocks.identity.account = AUTHOR;
+    mocks.identity.epoch++;
+    expect(peekWorkDetail(WORK)).toBeNull();
+
+    // A read that started before the account changed keeps nothing either.
+    const answer = heldRead();
+    const pending = loadWorkDetail(WORK, new AbortController().signal);
+    mocks.identity.epoch++;
+    answer(work);
+    await pending;
+    expect(peekWorkDetail(WORK)).toBeNull();
+  });
+
+  it("records no history while the work is provisional, and exactly once after its read confirms it", async () => {
+    for (const [viewer, work] of [
+      // A reader's view of the work.
+      [
+        OTHER,
+        {
+          ...authorWork({ canEdit: false }),
+          visibility: undefined,
+          trashedAt: undefined,
+          publiclyVisible: undefined,
+        } as unknown as UserWork,
+      ],
+      // The author's own public work others can see.
+      [AUTHOR, authorWork()],
+    ] as const) {
+      vi.mocked(recordLocalHistory).mockClear();
+      mocks.author.viewer = { id: viewer };
+      mocks.identity.account = viewer;
+      mocks.identity.epoch++;
+      await loaded(work);
+      const view = render(peekWorkDetail(WORK)!);
+      expect(recordLocalHistory).not.toHaveBeenCalled();
+
+      view.draw(toWorkDetailPresentation(work));
+      expect(recordLocalHistory).toHaveBeenCalledExactlyOnceWith(viewer, {
+        type: "work",
+        id: WORK,
+      });
+      view.draw(toWorkDetailPresentation(work));
+      expect(recordLocalHistory).toHaveBeenCalledOnce();
+      for (const root of roots.splice(0)) act(() => root.unmount());
+    }
+  });
+
+  it("keeps the author's management usable while the work is provisional", async () => {
+    await loaded(authorWork());
+    const view = render(peekWorkDetail(WORK)!);
+    for (const name of ["编辑", "永久删除", "公开"]) {
+      const control = view.button(name);
+      expect(control).toBeDefined();
+      expect(control!.hasAttribute("aria-disabled")).toBe(false);
+      expect(control!.disabled).toBe(false);
+    }
+    const edit = view.button("编辑")!;
+    act(() => edit.click());
+    expect(mocks.entry.openEditor).toHaveBeenCalledExactlyOnceWith(
+      { type: "work", id: WORK },
+      edit,
+    );
+  });
+
+  it("forgets the work once it is permanently deleted, also from a read in progress", async () => {
+    mocks.publishing.deleteWork.mockResolvedValue({ deleted: true });
+    const work = authorWork();
+    await loaded(work);
+    const view = render(peekWorkDetail(WORK)!, vi.fn());
+    const answer = heldRead();
+    const pending = loadWorkDetail(WORK, new AbortController().signal);
+    act(() => view.button("永久删除")!.click());
+    await act(async () =>
+      view.container
+        .querySelector<HTMLButtonElement>("[data-confirm-delete]")!
+        .click(),
+    );
+    expect(mocks.publishing.deleteWork).toHaveBeenCalledOnce();
+    expect(readWorkSnapshot(WORK)).toBeNull();
+
+    await act(async () => {
+      answer(work);
+      await pending;
+    });
+    expect(peekWorkDetail(WORK)).toBeNull();
+  });
+
+  it("keeps the audience a change to self-only set while the Detail's read runs, and offers no public interaction after its late answer", async () => {
+    mocks.publishing.setVisibility.mockResolvedValue({
+      workId: WORK,
+      visibility: "self",
+    });
+    // Public and seen by others when the list read it.
+    const before = authorWork();
+    await loaded(before);
+    const view = render(peekWorkDetail(WORK)!);
+    expect(actions(view)).not.toBeNull();
+    const answer = heldRead();
+    const pending = loadWorkDetail(WORK, new AbortController().signal);
+
+    await act(async () => view.button("公开")!.click());
+    const changed = { publiclyVisible: false, visibility: "self" };
+    expect(readOwnWorkAudience(AUTHOR, WORK)).toEqual(changed);
+    expect(actions(view)).toBeNull();
+
+    // The read answers with the work as it was before the change.
+    let state: CatalogDetailPresentationState = { state: "loading" };
+    await act(async () => {
+      answer(before);
+      state = await pending;
+    });
+    view.draw(confirmed(state));
+    expect(readOwnWorkAudience(AUTHOR, WORK)).toEqual(changed);
+    expect(actions(view)).toBeNull();
+    expect(note(view)).toBe("此作品当前仅你可见。");
+    expect(view.button("公开")?.getAttribute("aria-checked")).toBe("false");
+    expect(recordLocalHistory).not.toHaveBeenCalled();
+    // Nor is that answer shown on the next open.
+    expect(peekWorkDetail(WORK)).toBeNull();
+  });
+
+  it("keeps the audience pending after 公开 while the Detail's read runs, whatever its late answer says", async () => {
+    mocks.publishing.setVisibility.mockResolvedValue({
+      workId: WORK,
+      visibility: "public",
+    });
+    const before = authorWork({ visibility: "self", publiclyVisible: false });
+    await loaded(before);
+    const view = render(peekWorkDetail(WORK)!);
+    expect(note(view)).toBe("此作品当前仅你可见。");
+    const answer = heldRead();
+    const pending = loadWorkDetail(WORK, new AbortController().signal);
+    // The read-back after 公开 has not answered yet either.
+    heldRead();
+
+    await act(async () => view.button("公开")!.click());
+    const changed = { publiclyVisible: null, visibility: "public" };
+    expect(readOwnWorkAudience(AUTHOR, WORK)).toEqual(changed);
+
+    let state: CatalogDetailPresentationState = { state: "loading" };
+    await act(async () => {
+      answer(before);
+      state = await pending;
+    });
+    view.draw(confirmed(state));
+    // Nothing offered and nothing claimed until the read-back answers.
+    expect(readOwnWorkAudience(AUTHOR, WORK)).toEqual(changed);
+    expect(note(view)).toBeNull();
+    expect(actions(view)).toBeNull();
+    expect(recordLocalHistory).not.toHaveBeenCalled();
   });
 });
