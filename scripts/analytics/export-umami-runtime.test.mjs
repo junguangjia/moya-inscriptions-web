@@ -98,6 +98,7 @@ else if(command!=='rm')process.exit(13);\n`,
       manifest.archiveSha256,
     );
     assert.equal(manifest.workspaceIdentitySha256, UMAMI_WORKSPACE_IDENTITY);
+    assert.equal(manifest.postgresTlsHostSha256, UMAMI_PG_TLS_HOST_SHA256);
     assert.equal(manifest.locale, "zh-CN");
     assert.ok(
       gunzipSync(archive).includes(Buffer.from("synthetic fixture only")),
