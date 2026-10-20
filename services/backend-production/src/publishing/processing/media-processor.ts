@@ -8,6 +8,9 @@ import { PublishingMediaStoreError } from "../../storage/publishing-media-store.
 import {
   SANDBOX_PROTOCOL_VERSION,
   SandboxProtocolError,
+  itemDetectedTypes,
+  itemOutput,
+  itemRejection,
 } from "../sandbox/protocol.js";
 import { SANDBOX_JOB_LIMITS, sandboxNonce } from "../sandbox/sandbox-runner.js";
 import { openFileByteReader } from "./byte-reader.js";
@@ -46,7 +49,7 @@ import type {
   SandboxItemRequest,
   SandboxJob,
   SandboxManifest,
-  SandboxOutput,
+  ItemSandboxOutput,
   SandboxRenditionRequest,
 } from "../sandbox/protocol.js";
 import type {
@@ -594,7 +597,7 @@ export async function storeOutputFile(
 }
 
 /** The recipe identity of a received output. */
-export const outputRecipe = (output: SandboxOutput) =>
+export const outputRecipe = (output: ItemSandboxOutput) =>
   currentRecipe(output.role === "motion" ? "motion" : output.role);
 
 /** Content-free log line for a sandbox failure the coordinator rejects. */
@@ -743,13 +746,13 @@ async function processItem(
     });
     const manifest = result.manifest;
     if (manifest.status === "rejected") {
-      throw new MediaRejectedError(manifest.failureCode!);
+      throw itemRejection(manifest.failureCode);
     }
     validateSandboxManifest(manifest, request);
     await probeSandboxOutputs(result);
 
     const derivatives: ProcessorDerivative[] = [];
-    for (const output of manifest.outputs) {
+    for (const output of manifest.outputs.map(itemOutput)) {
       // A work item never has a profile rendition.
       if (isProfileRole(output.role)) throw violation("outputs_mismatch");
       const file = result.files.get(output.name)!;
@@ -790,7 +793,7 @@ async function processItem(
     }
     return {
       status: "processed",
-      detectedTypes: manifest.detectedTypes!,
+      detectedTypes: itemDetectedTypes(manifest.detectedTypes),
       presentation: manifest.presentation!,
       pairing: manifest.pairing,
       stillExifOrientation: manifest.stillExifOrientation,

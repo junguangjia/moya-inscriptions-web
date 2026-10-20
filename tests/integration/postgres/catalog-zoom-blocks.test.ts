@@ -1,8 +1,42 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { request as httpRequest } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CommunityConflictError } from "@moya/api";
+import {
+  APPROVAL_KIND,
+  parseCatalogMasterArguments,
+  runCatalogMasterCommand,
+} from "@moya/backend-production/internal/catalog-master";
+import {
+  createCatalogBlockRenderer,
+  catalogSyncIdentities,
+  createCatalogSync,
+  listPublishedCatalogSources,
+} from "@moya/backend-production/internal/publishing-catalog";
+import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
+import { FilesystemPublishingMediaStore } from "@moya/backend-production/internal/publishing-media-store";
+import {
+  createSandboxRunner,
+  defaultSandboxAppDist,
+} from "@moya/backend-production/internal/publishing-sandbox";
+import { PublishingWorker } from "@moya/backend-production/internal/publishing-worker";
+import {
+  createBackendApplication,
+  createDevelopmentCatalogFixtureQueryPort,
+  startBackendProcess,
+} from "@moya/backend-runtime";
 import {
   createPostgresPool,
   parsePostgresConfig,
@@ -18,7 +52,11 @@ import {
   resolveCatalogRenditionRead,
   runCommunityMigrations,
 } from "@moya/community-postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { UnconfiguredStorageUrlResolver } from "@moya/image";
+import sharp from "sharp";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { InMemoryCommunityIdentityPort } from "../../unit/backend/community-identity-fixture.js";
 
 import {
   assertSyntheticTestDatabaseUrl,
@@ -34,7 +72,9 @@ import type { CatalogMasterAttach, PublishingJobLease } from "@moya/api";
  * master custody and CHECKs (1–3), scheduling and the operator guard (5),
  * the block desired set, withdrawal budget and sweep-once (6–8), the
  * rollback guard (9), the Development relay lookup (14) and the live storage
- * bounds (25). Content is synthetic; no store or cloud I/O.
+ * bounds (25). Content is synthetic; no store or cloud I/O. The opt-in
+ * Development smoke (CATALOG_BLOCKS_SANDBOX_SMOKE=1) adds a private
+ * temporary filesystem store and the local media sandbox image.
  */
 
 type Pool = ReturnType<typeof createPostgresPool>;
@@ -1495,3 +1535,551 @@ describe("Expand-release rollback floor and database cost (criteria 9, 10)", () 
     SLOW,
   );
 });
+
+describe("Catalog block jobs in the store (PR B; criteria 3a, 5)", () => {
+  const works = new PostgresWorkPublishingAdapter(
+    new Proxy({} as Pool, {
+      get: (_target, property) => Reflect.get(app, property, app),
+    }),
+    { publication: { allowPublish: () => true, isPublic: () => true } },
+  );
+  const quiet = () =>
+    setup.query(
+      "UPDATE community.publishing_jobs SET state='abandoned', finished_at=$1, last_error_code='test_reset', lease_owner=NULL, lease_expires_at=NULL WHERE state IN ('queued','running')",
+      [t0],
+    );
+  const blockRecords = (
+    frame: { width: number; height: number },
+    cells: readonly number[],
+  ) =>
+    cells.map((cell) => {
+      const rect = catalogBlockCell(frame.width, frame.height, cell);
+      const key = blobKey();
+      return {
+        storageKey: key,
+        byteSize: 250_000,
+        sha256: sha(key),
+        cell,
+        recipeVersion: 1,
+        recipeDigest: "3333333333333333",
+        contentType: "image/jpeg" as const,
+        width: rect.width,
+        height: rect.height,
+      };
+    });
+
+  it("reads a block job's plan only for an active master of a ready, referenced asset", async () => {
+    const image = await catalogImage();
+    const master = await attached(image);
+    const payload = {
+      variant: "blocks",
+      masterId: master.masterId,
+      cells: [0, 15],
+    };
+    const plan = await works.readCatalogBlockPlan(image.assetId, payload);
+    expect(plan).toMatchObject({
+      assetId: image.assetId,
+      masterId: master.masterId,
+      master: {
+        contentType: "image/jpeg",
+        width: 6000,
+        height: 4000,
+        byteSize: 20_000_000,
+      },
+      frame: { width: 6000, height: 4000 },
+      reference: { width: 2048 },
+      cells: [0, 15],
+    });
+    expect(
+      await works.readCatalogBlockPlan(image.assetId, {
+        ...payload,
+        cells: [20, 24],
+      }),
+    ).toBeNull();
+    expect(
+      await works.readCatalogBlockPlan(image.assetId, { ...payload, extra: 1 }),
+    ).toBeNull();
+    await masters.detach({ mediaId: image.mediaId }, t0);
+    expect(await works.readCatalogBlockPlan(image.assetId, payload)).toBeNull();
+  });
+
+  it("records blocks with their master as the App role, discards a replay or an ended master's, and keeps one set per asset", async () => {
+    const image = await catalogImage();
+    const first = await attached(image);
+    const frame = { width: first.frameWidth, height: first.frameHeight };
+    const outcome = {
+      masterId: first.masterId!,
+      blocks: blockRecords(frame, [0, 1, 2]),
+    };
+    expect(await works.recordCatalogBlocks(image.assetId, outcome, t0)).toEqual(
+      { status: "recorded" },
+    );
+    const listed = await publicRead.query(
+      "SELECT cell, frame_width, frame_height, cells FROM community.catalog_media_zoom_blocks WHERE media_id=$1 ORDER BY cell",
+      [image.mediaId],
+    );
+    expect(listed.rows).toEqual(
+      [0, 1, 2].map((cell) => ({
+        cell,
+        frame_width: 6000,
+        frame_height: 4000,
+        cells: 24,
+      })),
+    );
+    // A replayed job records nothing twice.
+    const replay = await works.recordCatalogBlocks(
+      image.assetId,
+      { masterId: first.masterId!, blocks: blockRecords(frame, [0]) },
+      t0,
+    );
+    expect(replay.status).toBe("discarded");
+    // A block that does not fit its cell is refused.
+    await expect(
+      works.recordCatalogBlocks(
+        image.assetId,
+        {
+          masterId: first.masterId!,
+          blocks: [{ ...blockRecords(frame, [3])[0]!, width: 1000 }],
+        },
+        t0,
+      ),
+    ).rejects.toThrow(TypeError);
+    // After a limit change the old master's late job is discarded entirely.
+    const limited = await masters.setLimit(image.mediaId, 5500, "owner", t0);
+    const late = await works.recordCatalogBlocks(
+      image.assetId,
+      { masterId: first.masterId!, blocks: blockRecords(frame, [5]) },
+      t0,
+    );
+    expect(late.status).toBe("discarded");
+    expect(late.status === "discarded" ? late.storageKeys : []).toHaveLength(1);
+    const limitedId = limited.status === "done" ? limited.masterId! : "";
+    const newFrame = { width: 5500, height: 3667 };
+    expect(
+      await works.recordCatalogBlocks(
+        image.assetId,
+        { masterId: limitedId, blocks: blockRecords(newFrame, [0]) },
+        t0,
+      ),
+    ).toEqual({ status: "recorded" });
+    expect(
+      (
+        await setup.query(
+          "SELECT catalog_master_id, state FROM community.media_renditions WHERE catalog_asset_id=$1 AND role='block-00' ORDER BY state",
+          [image.assetId],
+        )
+      ).rows,
+    ).toEqual([
+      { catalog_master_id: limitedId, state: "ready" },
+      { catalog_master_id: first.masterId, state: "released" },
+    ]);
+  });
+
+  it("queues missing cells of at most two open sets, skipping complete, paused and content-failed sets", async () => {
+    await quiet();
+    await setup.query(
+      "UPDATE community.catalog_display_masters SET ended_at=$1, end_reason='detached' WHERE ended_at IS NULL",
+      [t0],
+    );
+    await setup.query(
+      "UPDATE community.media_renditions SET state='released', released_at=$1 WHERE catalog_master_id IS NOT NULL AND state='ready'",
+      [t0],
+    );
+    const images = await Promise.all([1, 2, 3, 4, 5].map(() => catalogImage()));
+    const ids: string[] = [];
+    for (const image of images) ids.push((await attached(image)).masterId!);
+    const frame = { width: 6000, height: 4000 };
+    // Image 1 is complete; image 2 failed on content; image 3 is paused.
+    await works.recordCatalogBlocks(
+      images[0]!.assetId,
+      {
+        masterId: ids[0]!,
+        blocks: blockRecords(
+          frame,
+          Array.from({ length: 16 }, (_, cell) => cell),
+        ),
+      },
+      t0,
+    );
+    await works.recordCatalogBlocks(
+      images[0]!.assetId,
+      {
+        masterId: ids[0]!,
+        blocks: blockRecords(
+          frame,
+          Array.from({ length: 8 }, (_, cell) => cell + 16),
+        ),
+      },
+      t0,
+    );
+    await blockJob(
+      images[1]!.assetId,
+      ids[1]!,
+      [0, 15],
+      "failed",
+      "master_mismatch",
+    );
+    await blockJob(
+      images[2]!.assetId,
+      ids[2]!,
+      [0, 15],
+      "failed",
+      "processing_timeout",
+    );
+    const result = await works.enqueueCatalogBlockSets(t0, 100);
+    expect(result).toEqual({ enqueued: 4 });
+    const open = (
+      await setup.query<{ master: string; cells: number[] }>(
+        "SELECT payload->>'masterId' AS master, payload->'cells' AS cells FROM community.publishing_jobs WHERE kind='catalog_render' AND payload->>'variant'='blocks' AND state='queued' ORDER BY payload->>'masterId', (payload->'cells'->>0)::int",
+      )
+    ).rows;
+    expect(new Set(open.map((row) => row.master))).toEqual(
+      new Set([ids[3], ids[4]]),
+    );
+    expect(
+      open.filter((row) => row.master === ids[3]).map((row) => row.cells),
+    ).toEqual([
+      [0, 15],
+      [16, 23],
+    ]);
+    // Two sets open: nothing more is queued.
+    expect(await works.enqueueCatalogBlockSets(t0, 100)).toEqual({
+      enqueued: 0,
+    });
+    // Only the Owner's requeue lifts the pause, under the same bound.
+    expect(await masters.requeue(images[2]!.mediaId, t0)).toMatchObject({
+      status: "refused",
+      code: "sets_busy",
+    });
+    await quiet();
+    expect(await masters.requeue(images[2]!.mediaId, t0)).toEqual({
+      status: "done",
+      jobs: 2,
+    });
+    expect(await masters.requeue(images[1]!.mediaId, t0)).toMatchObject({
+      status: "refused",
+      code: "content_failure",
+    });
+  });
+});
+
+/*
+ * Development smoke (PR B; opt-in, needs Docker and the local
+ * `yoyi-work-publishing-media-tools:v2` image from `pnpm dev:media-sandbox`):
+ * the `catalog-master attach` command uploads a synthetic master into a
+ * private filesystem store; one Catalog sync with the block step queues its
+ * set; the publishing worker with the block flag claims the job and cuts the
+ * blocks in the real sandbox container; the Development relay then serves a
+ * block as image/jpeg.
+ */
+describe.skipIf(process.env.CATALOG_BLOCKS_SANDBOX_SMOKE !== "1")(
+  "Development smoke: attach, one sync, sandbox blocks, relay",
+  () => {
+    it("cuts a real master in the sandbox container and serves a block as image/jpeg", async () => {
+      await setup.query(
+        "UPDATE community.publishing_jobs SET state='abandoned', finished_at=$1, last_error_code='test_reset', lease_owner=NULL, lease_expires_at=NULL WHERE state IN ('queued','running')",
+        [t0],
+      );
+      await setup.query(
+        "UPDATE community.catalog_display_masters SET ended_at=$1, end_reason='detached' WHERE ended_at IS NULL",
+        [t0],
+      );
+      const base = await realpath(
+        await mkdtemp(path.join(tmpdir(), "catalog-blocks-smoke-")),
+      );
+      const handles: { shutdown(): Promise<void> }[] = [];
+      try {
+        const directories = ["store", "work", "inbox"].map((name) =>
+          path.join(base, name),
+        );
+        for (const directory of directories) {
+          await mkdir(directory, { mode: 0o700 });
+          await chmod(directory, 0o700);
+        }
+        const [storeDirectory, work, inbox] = directories as [
+          string,
+          string,
+          string,
+        ];
+        const store = await FilesystemPublishingMediaStore.open(
+          storeDirectory,
+          { temporaryRoots: [] },
+        );
+        // A synthetic 3000 x 1960 master: frame 3000 x 1960, 3 x 2 cells.
+        const width = 3000;
+        const height = 1960;
+        const pixels = Buffer.alloc(width * height * 3);
+        for (let y = 0; y < height; y += 1)
+          for (let x = 0; x < width; x += 1) {
+            const offset = (y * width + x) * 3;
+            pixels[offset] = (x * 255) / width;
+            pixels[offset + 1] = (y * 255) / height;
+            pixels[offset + 2] =
+              128 + 100 * Math.sin(x / 23) * Math.cos(y / 31);
+          }
+        const master = await sharp(pixels, {
+          raw: { width, height, channels: 3 },
+        })
+          .jpeg({ quality: 95 })
+          .toBuffer();
+        await writeFile(path.join(inbox, "master.jpg"), master);
+        // The approved image is the master at 3/4 (blocks gain >= 1.25x),
+        // with current base renditions, so the sync queues no base render.
+        const image = await catalogImage({ width: 2250, height: 1470 });
+        for (const identity of catalogSyncIdentities())
+          await setup.query(
+            "UPDATE community.media_renditions SET recipe_version=$3, recipe_digest=$4 WHERE catalog_asset_id=$1 AND role=$2",
+            [image.assetId, identity.role, identity.version, identity.digest],
+          );
+        // The asset's display rendition with real bytes in the store.
+        const display = await sharp(master)
+          .resize({
+            width: 2048,
+            height: 2048,
+            fit: "inside",
+            kernel: "lanczos3",
+          })
+          .webp({ quality: 86, effort: 4, smartSubsample: false })
+          .toBuffer({ resolveWithObject: true });
+        const stored = await store.writeStream(
+          "catalog",
+          "derivative",
+          "image/webp",
+          display.data.byteLength,
+          (async function* () {
+            yield display.data;
+          })(),
+          { requireExactSize: true },
+        );
+        await setup.query(
+          `UPDATE community.media_blobs b SET storage_key=$2, byte_size=$3, sha256=$4
+             FROM community.media_renditions r
+             WHERE r.blob_id=b.id AND r.catalog_asset_id=$1 AND r.role='display'`,
+          [image.assetId, stored.storageKey, stored.byteSize, stored.sha256],
+        );
+        await setup.query(
+          "UPDATE community.media_renditions SET width=$2, height=$3 WHERE catalog_asset_id=$1 AND role='display'",
+          [image.assetId, display.info.width, display.info.height],
+        );
+
+        // 1. The Owner's attach, through the command and the App role.
+        const approval = path.join(base, "approval.json");
+        await writeFile(
+          approval,
+          JSON.stringify({
+            version: 1,
+            kind: APPROVAL_KIND,
+            catalogId: image.catalogId,
+            entries: [
+              {
+                mediaId: image.mediaId,
+                approvedSha256: image.approvedSha256,
+                masterFile: "master.jpg",
+                masterSha256: createHash("sha256").update(master).digest("hex"),
+                derivation: "submitted",
+              },
+            ],
+          }),
+        );
+        const lines: Record<string, unknown>[] = [];
+        const attachedOk = await runCatalogMasterCommand(
+          parseCatalogMasterArguments([
+            "attach",
+            "--media",
+            image.mediaId,
+            "--approval",
+            approval,
+            "--inbox",
+            inbox,
+          ]),
+          {
+            port: masters,
+            store: async () => store,
+            out: (line) => lines.push(line),
+            now: () => t0,
+          },
+        );
+        expect(
+          { attachedOk, line: lines.at(-1) },
+          JSON.stringify(lines),
+        ).toMatchObject({
+          attachedOk: true,
+          line: {
+            status: "attached",
+            frameWidth: width,
+            frameHeight: height,
+            cells: 6,
+          },
+        });
+
+        // 2. One Catalog sync with the block step queues the set.
+        const works = new PostgresWorkPublishingAdapter(app, {
+          publication: { allowPublish: () => true, isPublic: () => true },
+        });
+        const syncLog = { info: vi.fn(), error: vi.fn() };
+        await createCatalogSync({
+          listSources: () => listPublishedCatalogSources(setup),
+          port: works,
+          blocks: works,
+          logger: syncLog,
+        }).run(t0);
+        expect(syncLog.info).toHaveBeenCalledWith(
+          "[media-worker] catalog block sync enqueued=1",
+        );
+
+        // 3. The worker with the block flag cuts the set in the container.
+        const started = Date.now();
+        const clock = () =>
+          new Date(t0.getTime() + 60_000 + (Date.now() - started));
+        const renderLog = { info: vi.fn(), error: vi.fn() };
+        const silent = {
+          info: () => undefined,
+          error: () => undefined,
+          warn: () => undefined,
+        };
+        const worker = new PublishingWorker({
+          port: works,
+          handlers: createPublishingJobHandlers({
+            port: works,
+            store,
+            catalog: {
+              port: works,
+              renderer: {
+                render: async () => {
+                  throw new Error("The smoke runs no base render");
+                },
+              },
+              blocks: {
+                port: works,
+                renderer: createCatalogBlockRenderer({
+                  store,
+                  sandbox: await createSandboxRunner({
+                    image: "yoyi-work-publishing-media-tools:v2",
+                    workDirectory: work,
+                    appDist: defaultSandboxAppDist().appDist,
+                    temporaryRoots: [],
+                  }),
+                  logger: renderLog,
+                }),
+              },
+            },
+            clock,
+            logger: silent,
+          }),
+          owner: `catalog-blocks-smoke-${hex(6)}`,
+          kinds: ["catalog_render"],
+          catalogBlocks: true,
+          maintenance: false,
+          concurrency: 1,
+          pollIntervalMs: 200,
+          clock,
+          logger: silent,
+        });
+        worker.start();
+        try {
+          await vi.waitFor(
+            async () => {
+              const job = (
+                await setup.query<{
+                  variant: string;
+                  state: string;
+                  last_error_code: string | null;
+                }>(
+                  "SELECT COALESCE(payload->>'variant','base') AS variant, state, last_error_code FROM community.publishing_jobs WHERE subject_id=$1",
+                  [image.assetId],
+                )
+              ).rows;
+              expect(job).toEqual([
+                {
+                  variant: "blocks",
+                  state: "succeeded",
+                  last_error_code: null,
+                },
+              ]);
+            },
+            { timeout: 150_000, interval: 500 },
+          );
+        } finally {
+          await worker.stop();
+        }
+        expect(String(renderLog.info.mock.calls.at(-1)?.[0])).toMatch(
+          /^\[media-worker\] catalog blocks stage_ms=\d+ render_ms=\d+ cells=6 outcome=rendered$/u,
+        );
+        const listed = (
+          await publicRead.query<{
+            cell: number;
+            delivery_key: string;
+            width: number;
+            height: number;
+          }>(
+            "SELECT cell, delivery_key, width, height FROM community.catalog_media_zoom_blocks WHERE media_id=$1 ORDER BY cell",
+            [image.mediaId],
+          )
+        ).rows;
+        expect(listed.map((row) => [row.cell, row.width, row.height])).toEqual([
+          [0, 1026, 1026],
+          [1, 1026, 1026],
+          [2, 952, 1026],
+          [3, 1026, 936],
+          [4, 1026, 936],
+          [5, 952, 936],
+        ]);
+
+        // 4. The Development relay serves a block as image/jpeg.
+        const handle = await startBackendProcess({
+          listen: { host: "127.0.0.1", port: 0 },
+          requestListener: createBackendApplication({
+            nodeEnv: "development",
+            catalogQueryPort: createDevelopmentCatalogFixtureQueryPort(),
+            storageUrlResolver: new UnconfiguredStorageUrlResolver(),
+            communityIdentityPort: new InMemoryCommunityIdentityPort(),
+            developmentCatalogRenditions: {
+              resolve: (renditionId: string) =>
+                resolveCatalogRenditionRead(app, renditionId, setup),
+              store,
+            },
+          }),
+        });
+        handles.push(handle);
+        const response = await new Promise<{
+          status: number;
+          type: string | undefined;
+          body: Buffer;
+        }>((resolve, reject) => {
+          const outgoing = httpRequest(
+            {
+              host: "127.0.0.1",
+              port: handle.address.port,
+              path: `/v1/development/catalog-renditions/${listed[5]!.delivery_key}`,
+            },
+            (incoming) => {
+              const chunks: Buffer[] = [];
+              incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+              incoming.on("end", () =>
+                resolve({
+                  status: incoming.statusCode ?? 0,
+                  type: incoming.headers["content-type"],
+                  body: Buffer.concat(chunks),
+                }),
+              );
+              incoming.on("error", reject);
+            },
+          );
+          outgoing.on("error", reject);
+          outgoing.end();
+        });
+        expect(response.status).toBe(200);
+        expect(response.type).toBe("image/jpeg");
+        const served = await sharp(response.body).metadata();
+        expect([served.format, served.width, served.height]).toEqual([
+          "jpeg",
+          952,
+          936,
+        ]);
+      } finally {
+        for (const handle of handles) await handle.shutdown();
+        await rm(base, { recursive: true, force: true });
+      }
+    }, 240_000);
+  },
+);

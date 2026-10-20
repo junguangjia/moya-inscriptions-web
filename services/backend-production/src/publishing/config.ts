@@ -110,6 +110,28 @@ export const MEDIA_PROFILE_RENDER = "MEDIA_PROFILE_RENDER";
 /** Backend: emit profile image renditions on `AuthorMedia`. */
 export const MEDIA_PROFILE_RENDITIONS = "MEDIA_PROFILE_RENDITIONS";
 
+/** Media worker: claim and enqueue Catalog block jobs (catalog-deep-zoom-v1). */
+export const MEDIA_CATALOG_ZOOM_BLOCKS_RENDER =
+  "MEDIA_CATALOG_ZOOM_BLOCKS_RENDER";
+
+/**
+ * A Catalog deep-zoom switch (catalog-deep-zoom-v1), parsed exactly like the
+ * profile switches: `on` or `off`; missing or empty means on in Development
+ * and off in Production; any other value refuses startup.
+ */
+export const parseCatalogZoomSwitch = (
+  environment: Environment,
+  key: typeof MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
+  nodeEnv: "production" | "development",
+): boolean => {
+  const value = configured(environment, key);
+  if (value === null) return nodeEnv === "development";
+  if (value !== "on" && value !== "off") {
+    throw new Error(`${key} must be on or off`);
+  }
+  return value === "on";
+};
+
 /**
  * A profile image switch (unified media pipeline, increment 3a): exactly
  * `on` or `off`; missing or empty means on in Development and off in

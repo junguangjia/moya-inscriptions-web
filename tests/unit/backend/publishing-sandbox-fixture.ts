@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import {
   SANDBOX_JOB_FILE,
   parseSandboxJob,
+  renderSandboxBlocksJob,
   renderSandboxJob,
   sandboxManifest,
   writeSandboxStream,
@@ -206,11 +207,13 @@ export const inProcessSandbox = (options: InProcessSandboxOptions = {}) => {
           : sandboxManifest(
               job,
               sandboxRuntime(),
-              await renderSandboxJob(
-                job,
-                { input, work, output },
-                options.tools ?? noTools,
-              ),
+              job.operation === "blocks"
+                ? await renderSandboxBlocksJob(job, { input, work, output })
+                : await renderSandboxJob(
+                    job,
+                    { input, work, output },
+                    options.tools ?? noTools,
+                  ),
             );
       if (options.tamper) manifest = options.tamper(manifest);
       if (options.stream) {

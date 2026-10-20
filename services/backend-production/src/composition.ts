@@ -68,16 +68,19 @@ import {
 import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
   CATALOG_SYNC_INTERVAL_MS,
+  createCatalogBlockRenderer,
   createCatalogRenderer,
   createCatalogSync,
   listPublishedCatalogSources,
 } from "./publishing/catalog.js";
 import {
+  MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
   MEDIA_PROFILE_RENDER,
   MEDIA_PROFILE_RENDITIONS,
   openPublishingMedia,
   openPublishingStore,
   openProductionPublishingStore,
+  parseCatalogZoomSwitch,
   parseMediaWorkerMode,
   parseProfileMediaSwitch,
   parsePublishingMediaConfig,
@@ -299,6 +302,15 @@ export const prepareProductionBackend = async (
       MEDIA_PROFILE_RENDER,
       runtimeConfig.nodeEnv,
     );
+  // Catalog blocks (catalog-deep-zoom-v1): only an embedded worker
+  // (Development) cuts them here, behind MEDIA_CATALOG_ZOOM_BLOCKS_RENDER.
+  const blocksRender =
+    mediaWorkerMode === "embedded" &&
+    parseCatalogZoomSwitch(
+      environment,
+      MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
+      runtimeConfig.nodeEnv,
+    );
   const publishing = await (async (): Promise<{
     readonly store: PublishingMediaStoreRuntime;
     readonly media?: Awaited<ReturnType<typeof openPublishingMedia>>;
@@ -429,6 +441,7 @@ export const prepareProductionBackend = async (
               ...MEDIA_WORKER_JOB_KINDS,
               ...(profileRender ? PROFILE_RENDER_JOB_KINDS : []),
             ],
+            ...(blocksRender && catalogSources ? { catalogBlocks: true } : {}),
             concurrency: publishing.concurrency,
             extraMaintenance: [
               ...(catalogSources
@@ -439,6 +452,7 @@ export const prepareProductionBackend = async (
                       run: createCatalogSync({
                         listSources: () => listPublishedCatalogSources(pool),
                         port: workPublishingPort,
+                        ...(blocksRender ? { blocks: workPublishingPort } : {}),
                       }).run,
                     },
                   ]
@@ -467,6 +481,17 @@ export const prepareProductionBackend = async (
                         sandbox: publishingMedia.sandbox,
                         source: catalogSources,
                       }),
+                      ...(blocksRender
+                        ? {
+                            blocks: {
+                              port: workPublishingPort,
+                              renderer: createCatalogBlockRenderer({
+                                store: publishingMedia.store,
+                                sandbox: publishingMedia.sandbox,
+                              }),
+                            },
+                          }
+                        : {}),
                     },
                   }
                 : {}),
