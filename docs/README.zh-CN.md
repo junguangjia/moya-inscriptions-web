@@ -70,17 +70,18 @@ pnpm dev:all
 monorepo。Web 基于 Next.js 和 React；Payload
 CMS 管理编辑内容；Backend 通过 PostgreSQL 提供 HTTP API。
 
-| 路径                           | 内容                                       |
-| ------------------------------ | ------------------------------------------ |
-| `apps/web/`                    | 公开 Web 应用与同源 API 路由               |
-| `apps/admin/`                  | Payload CMS、编辑工作流与 CMS 数据库迁移   |
-| `apps/apple/`、`apps/harmony/` | 原生客户端工作区                           |
-| `services/`                    | 后端运行时、领域服务、数据库适配与导入工具 |
-| `packages/`                    | 共享契约、UI、设计 token、搜索与媒体工具   |
-| `database/migrations/`         | CMS 以外的数据库迁移                       |
-| `infra/`、`scripts/`           | 环境设置、开发、验证与发布工具             |
-| `tests/`                       | 共享单元、集成与浏览器测试                 |
-| `docs/`                        | 架构、指南、规格与项目状态                 |
+| 路径                             | 内容                                       |
+| -------------------------------- | ------------------------------------------ |
+| `apps/web/`                      | 公开 Web 应用与同源 API 路由               |
+| `apps/admin/`                    | Payload CMS、编辑工作流与 CMS 数据库迁移   |
+| `apps/apple/`、`apps/harmony/`   | 原生客户端工作区                           |
+| `services/`                      | 后端运行时、领域服务、数据库适配与导入工具 |
+| `packages/`                      | 共享契约、UI、设计 token、搜索与媒体工具   |
+| `database/migrations/`           | 旧 Catalog 内容源迁移                      |
+| `database/community-migrations/` | 社区数据库迁移                             |
+| `infra/`、`scripts/`             | 环境设置、开发、验证与发布工具             |
+| `tests/`                         | 共享单元、集成与浏览器测试                 |
+| `docs/`                          | 架构、指南、规格与项目状态                 |
 
 ## 文档导航
 
@@ -105,6 +106,7 @@ CMS 管理编辑内容；Backend 通过 PostgreSQL 提供 HTTP API。
 - 代码与普通技术文档采用 [Apache License 2.0](../LICENSE)。
 - 仓库内已签入的公开 fixture 内容采用
   [CC BY 4.0](../LICENSE-DATA)，适用范围以该文件为准。
-- 名称、徽标、字标与服务标识仍为保留品牌资产；单独标注的第三方材料遵循各自条款。
+- Yoyi
+  / 由艺名称、徽标、字标与服务标识仍为保留品牌资产；单独标注的第三方材料遵循各自条款。
 
 仓库不包含生产数据或私有研究证据。

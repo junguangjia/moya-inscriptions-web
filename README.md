@@ -82,17 +82,18 @@ This is a TypeScript monorepo managed with pnpm workspaces and Turborepo. The
 Web application uses Next.js and React; Payload CMS handles editorial content,
 and the Backend serves the HTTP API over PostgreSQL.
 
-| Path                           | Contents                                                         |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `apps/web/`                    | Public Web application and same-origin API routes                |
-| `apps/admin/`                  | Payload CMS, editorial workflows, and CMS migrations             |
-| `apps/apple/`, `apps/harmony/` | Native client workspaces                                         |
-| `services/`                    | Backend runtime, domain services, database adapters, and imports |
-| `packages/`                    | Shared contracts, UI, design tokens, search, and media utilities |
-| `database/migrations/`         | Non-CMS migration families                                       |
-| `infra/`, `scripts/`           | Environment setup, development, validation, and release tools    |
-| `tests/`                       | Shared unit, integration, and browser tests                      |
-| `docs/`                        | Architecture, guides, specifications, and project status         |
+| Path                             | Contents                                                         |
+| -------------------------------- | ---------------------------------------------------------------- |
+| `apps/web/`                      | Public Web application and same-origin API routes                |
+| `apps/admin/`                    | Payload CMS, editorial workflows, and CMS migrations             |
+| `apps/apple/`, `apps/harmony/`   | Native client workspaces                                         |
+| `services/`                      | Backend runtime, domain services, database adapters, and imports |
+| `packages/`                      | Shared contracts, UI, design tokens, search, and media utilities |
+| `database/migrations/`           | Legacy Catalog content-source migrations                         |
+| `database/community-migrations/` | Community database migrations                                    |
+| `infra/`, `scripts/`             | Environment setup, development, validation, and release tools    |
+| `tests/`                         | Shared unit, integration, and browser tests                      |
+| `docs/`                          | Architecture, guides, specifications, and project status         |
 
 ## Documentation
 
@@ -119,8 +120,8 @@ handoff, and release rules live there.
 - Code and ordinary technical documentation: [Apache License 2.0](LICENSE).
 - Checked-in public fixture content: [CC BY 4.0](LICENSE-DATA), within the scope
   described in that file.
-- Names, logos, wordmarks, and service identities remain reserved brand assets.
-  Third-party material retains its separately identified terms.
+- Yoyi / 由艺 names, logos, wordmarks, and service identities remain reserved
+  brand assets. Third-party material retains its separately identified terms.
 
 Production data and private research evidence are not included in this
 repository.
