@@ -90,12 +90,12 @@ const proof: Readonly<Record<string, RegExp>> = {
   operator: /\bfetchServerEditorialPreview\(/u,
   development: /NODE_ENV\s*!==\s*"development"/u,
   asset: /kind: "(?:demo-assets|design-tokens|ui-styles|ui-assets)"/u,
-  // Response.redirect needs an absolute URL; a relative Location is the same
-  // contentless 307 without trusting the proxied request origin.
-  // The relative form must be a fixed same-origin path (not "//host" and not
-  // built from request.url).
+  // A contentless 307 whose Location is a same-origin path: never "//host",
+  // and the file never reads request.url (behind the proxy that is the
+  // internal origin). Response.redirect needs an absolute URL, so it is not
+  // accepted here.
   redirect:
-    /Response\.redirect\(|status: 307,\s*headers: \{\s*Location: `\/(?!\/)/u,
+    /^(?![\s\S]*\brequest\.url\b)[\s\S]*status: 307,\s*headers: \{\s*Location: `\/(?!\/)/u,
 };
 
 describe("product access covers every Web entry point", () => {
