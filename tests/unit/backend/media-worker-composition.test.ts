@@ -478,17 +478,28 @@ describe("media worker composition", () => {
       },
       { logger: silent },
     );
-    expect(worker.catalog).toBe(false);
-    // Rendering is off, but live published metadata/withdrawal discovery must
-    // continue on its separate read-only CMS connection.
-    expect(createPostgresPool).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() => expect(queue.catalogSync).toHaveBeenCalledTimes(1));
-    expect(queue.catalogSync.mock.calls[0]![2].snapshot).toMatchObject({
-      publishedSources: [],
-    });
-    expect(queue.catalogSync.mock.calls[0]![2].snapshot).not.toHaveProperty(
-      "preparations",
-    );
-    await worker.stop();
+    try {
+      expect(worker.catalog).toBe(false);
+      // Rendering is off, but live published metadata/withdrawal discovery must
+      // continue on its separate read-only CMS connection.
+      expect(createPostgresPool).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() =>
+        expect(queue.catalogSync).toHaveBeenCalledTimes(1),
+      );
+      expect(queue.catalogSync.mock.calls[0]![2].snapshot).toMatchObject({
+        publishedSources: [],
+      });
+      expect(queue.catalogSync.mock.calls[0]![2].snapshot).not.toHaveProperty(
+        "preparations",
+      );
+      await vi.waitFor(() => expect(queue.claim).toHaveBeenCalled());
+      for (const [claim] of queue.claim.mock.calls) {
+        expect(claim.kinds).not.toContain("catalog_render");
+        expect(claim.catalogBlocks).toBeUndefined();
+      }
+      expect(queue.blockSync).not.toHaveBeenCalled();
+    } finally {
+      await worker.stop();
+    }
   });
 });

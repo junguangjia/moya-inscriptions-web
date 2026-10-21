@@ -1,4 +1,5 @@
 import type { CatalogZoomGate } from "./catalog-zoom-blocks.js";
+import type { Pool } from "pg";
 import type {
   CatalogMediaProjection,
   CatalogMediaRenditionProjection,
@@ -23,11 +24,17 @@ export interface CatalogReaderOptions {
    */
   readonly renditions?: boolean;
   /**
-   * catalog-deep-zoom-v1: read the published-blocks view (requires
-   * `renditions` and SELECT on the view) behind this gate. Without it the
-   * reader lists no frame and no block.
+   * catalog-deep-zoom-v1: read complete published block sets behind this gate.
+   * Same-pool reads require `renditions` and the view grant; split reads use
+   * the explicit App `zoomPool` below. Without this gate there are no reads.
    */
   readonly zoom?: CatalogZoomGate;
+  /**
+   * Read block facts from this existing App pool after selecting exact current
+   * published media pairs on the Catalog pool. Keeps CMS-only readers free of
+   * community joins while preserving the same zoom gate and complete-set view.
+   */
+  readonly zoomPool?: Pool;
 }
 
 /**

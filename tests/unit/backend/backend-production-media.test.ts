@@ -27,7 +27,8 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BackendProcessHandle } from "@moya/backend-runtime";
-import type { MediaId } from "@moya/contracts";
+import type { CatalogDetailProjection } from "@moya/api";
+import type { CatalogId, MediaId } from "@moya/contracts";
 
 const productionStore = vi.hoisted(() => ({
   writeStream: vi.fn(),
@@ -51,19 +52,19 @@ const database = vi.hoisted(() => ({
 vi.mock("@moya/catalog-postgres", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@moya/catalog-postgres")>();
-  const projection = () => {
+  const projection = (): CatalogDetailProjection => {
     const media = {
-      id: "media-unit-published",
+      id: "media-unit-published" as MediaId,
       position: 0,
       isRepresentative: true,
-      kind: "image",
+      kind: "image" as const,
       alt: "Synthetic public media",
       width: 1200,
       height: 800,
       objectKey: database.mediaKey,
     };
     return {
-      id: "catalog-unit-published",
+      id: "catalog-unit-published" as CatalogId,
       kind: "inscription",
       title: "Synthetic published projection",
       aliases: [],
@@ -98,7 +99,9 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
       }),
     })),
     assertPostgresStartupReady: vi.fn(async () => {}),
-    PostgresCatalogQueryAdapter: class {
+    PostgresCatalogQueryAdapter: class
+      extends actual.PostgresCatalogQueryAdapter
+    {
       async getById(id: string) {
         return database.published && id === "catalog-unit-published"
           ? projection()
@@ -1060,6 +1063,118 @@ describe("Work publishing composition", () => {
         "SELECT 1 FROM community.catalog_media_delivery LIMIT 0";
       expect(statements(appPool)).toContain(deliverySql);
       expect(statements(catalogPool)).not.toContain(deliverySql);
+      // The actual adapter constructor/zoom methods run. Only SQL I/O is mocked:
+      // current public pairs come from CMS, complete block facts from App.
+      let liveMedia = true;
+      let completeBlocks = true;
+      const blockKeys = Array.from(
+        { length: 24 },
+        (_, cell) =>
+          `media-rendition-${(cell + 100).toString(16).padStart(32, "0")}`,
+      );
+      const cmsQuery = vi.fn(
+        async (sql: string, values?: readonly unknown[]) => {
+          if (sql.includes("community."))
+            throw new Error("CMS_CROSS_DATABASE_READ");
+          return {
+            rows:
+              liveMedia &&
+              sql.includes("FROM catalog_media") &&
+              (values?.[1] == null || values[1] === "media-unit-published")
+                ? [
+                    {
+                      media_id: "media-unit-published",
+                      object_key: database.mediaKey,
+                    },
+                  ]
+                : [],
+          };
+        },
+      );
+      const appQuery = vi.fn(
+        async (sql: string, values?: readonly unknown[]) => {
+          if (sql.includes("community.catalog_media_zoom_blocks"))
+            expect(values).toEqual([
+              JSON.stringify([
+                {
+                  media_id: "media-unit-published",
+                  object_key: database.mediaKey,
+                },
+              ]),
+            ]);
+          return {
+            rows: !sql.includes("community.catalog_media_zoom_blocks")
+              ? []
+              : sql.includes("count(DISTINCT b.cell)")
+                ? [
+                    {
+                      media_id: "media-unit-published",
+                      frame_width: 6000,
+                      frame_height: 4000,
+                      cells: 24,
+                      listed: completeBlocks ? 24 : 23,
+                    },
+                  ]
+                : blockKeys
+                    .slice(0, completeBlocks ? 24 : 23)
+                    .map((delivery_key, cell) => ({
+                      cell,
+                      delivery_key,
+                      frame_width: 6000,
+                      frame_height: 4000,
+                      cells: 24,
+                    })),
+          };
+        },
+      );
+      const setClient = (pool: unknown, query: unknown) =>
+        (
+          pool as { connect: { mockResolvedValue(value: unknown): void } }
+        ).connect.mockResolvedValue({ query, release: vi.fn() });
+      setClient(catalogPool, cmsQuery);
+      setClient(appPool, appQuery);
+      const queryPort = application.catalogQueryPort;
+      if (!queryPort?.getZoomFrames || !queryPort.getZoomBlocks)
+        throw new Error("expected actual Catalog zoom read methods");
+      const catalogId = "catalog-unit-published" as CatalogId;
+      const mediaId = "media-unit-published" as MediaId;
+      if (mode === "development") {
+        expect(await queryPort.getZoomFrames(catalogId)).toEqual(
+          new Map([[mediaId, { width: 6000, height: 4000 }]]),
+        );
+        expect(await queryPort.getZoomBlocks(catalogId, mediaId)).toEqual({
+          width: 6000,
+          height: 4000,
+          keys: blockKeys,
+        });
+        expect(
+          cmsQuery.mock.calls.some(([sql]) => sql.includes("community.")),
+        ).toBe(false);
+        expect(
+          appQuery.mock.calls.some(([sql]) =>
+            sql.includes("community.catalog_media_zoom_blocks"),
+          ),
+        ).toBe(true);
+        expect(
+          appQuery.mock.calls.some(([sql]) =>
+            /FROM catalog_media\b/u.test(sql),
+          ),
+        ).toBe(false);
+        completeBlocks = false;
+        expect((await queryPort.getZoomFrames(catalogId)).size).toBe(0);
+        expect(await queryPort.getZoomBlocks(catalogId, mediaId)).toBeNull();
+        liveMedia = false;
+        const appReads = appQuery.mock.calls.length;
+        expect((await queryPort.getZoomFrames(catalogId)).size).toBe(0);
+        expect(await queryPort.getZoomBlocks(catalogId, mediaId)).toBeNull();
+        expect(appQuery).toHaveBeenCalledTimes(appReads);
+      } else {
+        // The existing Production switch/delivery gate remains closed by default.
+        expect((await queryPort.getZoomFrames(catalogId)).size).toBe(0);
+        expect(await queryPort.getZoomBlocks(catalogId, mediaId)).toBeNull();
+        expect(cmsQuery).not.toHaveBeenCalled();
+        expect(appQuery).not.toHaveBeenCalled();
+      }
       const renditionId = `media-rendition-${"7".repeat(32)}`;
       const named = await application.storageUrlResolver?.resolveKeys?.([
         renditionId,

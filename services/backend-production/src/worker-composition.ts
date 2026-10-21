@@ -368,12 +368,14 @@ export async function prepareMediaWorker(
         sweep: createProfileSweep({ port, logger }),
       }
     : null;
+  const mediaKinds =
+    catalog === null
+      ? MEDIA_WORKER_JOB_KINDS.filter((kind) => kind !== "catalog_render")
+      : MEDIA_WORKER_JOB_KINDS;
   const worker = new PublishingWorker({
     port,
     concurrency: mediaConfig.config.workerConcurrency,
-    kinds: profile
-      ? [...MEDIA_WORKER_JOB_KINDS, ...PROFILE_RENDER_JOB_KINDS]
-      : MEDIA_WORKER_JOB_KINDS,
+    kinds: profile ? [...mediaKinds, ...PROFILE_RENDER_JOB_KINDS] : mediaKinds,
     ...(blocks ? { catalogBlocks: true } : {}),
     // The Backend schedules and claims the staging sweep (W3); lease requeue
     // and cleanup scheduling are idempotent across both processes.

@@ -294,13 +294,9 @@ export const prepareProductionBackend = async (
     : runtimeConfig.nodeEnv === "development"
       ? createLocalStorageUrlResolver(environment, runtimeConfig)
       : new ProductionCosStorageUrlResolver(productionCosOptions(environment));
-  // Catalog readers on the published read connection join the community
-  // rendition delivery view (unified media pipeline, PR 1b) wherever the
-  // post-Community public read grant exists: every runtime except the Pilot,
-  // whose dedicated database and resolver deliver no rendition. Discovery
-  // cards join the view through the App role in every runtime, the Pilot
-  // included. Startup verifies both grants, so a missing grant stops startup
-  // instead of failing Catalog or discovery reads.
+  // CMS supplies only current published Catalog metadata. Rendition and block
+  // facts stay on the separate App connection; no CMS/community cross-DB join
+  // or extra CMS grant is needed. The Pilot still delivers no renditions.
   const catalogReaders = { renditions: false };
   // Where media processing runs (W2): Production always leaves it to the
   // separate media worker and opens only the COS store; Development hosts it
@@ -673,7 +669,9 @@ export const prepareProductionBackend = async (
     : undefined;
   const catalogQueryPort = new PostgresCatalogQueryAdapter(pool, {
     ...catalogReaders,
-    ...(catalogZoomGate === undefined ? {} : { zoom: catalogZoomGate }),
+    ...(catalogZoomGate === undefined || pilot
+      ? {}
+      : { zoom: catalogZoomGate, zoomPool: communityPool }),
   });
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,

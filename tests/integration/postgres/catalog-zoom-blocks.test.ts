@@ -1385,6 +1385,7 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
           .map((u) => u.renditionId!)
           .sort(),
       ).toEqual([...blockIds].sort());
+      expect(await withAuthority.finishPublish(plan.fence, t0)).toBe(true);
     } finally {
       await withAuthority.release(plan.fence, t0);
       await setup.query(
@@ -1392,9 +1393,37 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
         [job.id, t0],
       );
     }
+    // This is the authority lookup used by the real edge URL resolver, not
+    // the no-authority legacy path covered in the preceding case.
+    expect(
+      (await withAuthority.lookupPublishedCatalog(blockIds, t0)).size,
+    ).toBe(24);
+    expect(
+      await withAuthority.lookupPublishedCatalog([malformedBlock], t0),
+    ).toEqual(new Map());
+    await setup.query(
+      "UPDATE community.media_renditions SET width=1 WHERE id=$1",
+      [blockIds[0]],
+    );
+    const malformedLookup = await withAuthority.lookupPublishedCatalog(
+      blockIds,
+      t0,
+    );
+    expect(malformedLookup.size).toBe(23);
+    expect(malformedLookup.has(blockIds[0]!)).toBe(false);
+    await setup.query(
+      "UPDATE community.media_renditions SET width=$2 WHERE id=$1",
+      [blockIds[0], catalogBlockCell(frame.width, frame.height, 0).width],
+    );
+    expect(
+      (await withAuthority.lookupPublishedCatalog(blockIds, t0)).size,
+    ).toBe(24);
     await setup.query("DELETE FROM public.catalog_media WHERE media_id=$1", [
       image.mediaId,
     ]);
+    expect(
+      (await withAuthority.lookupPublishedCatalog(blockIds, t0)).size,
+    ).toBe(0);
     expect(
       (await authority.copyRenditionIds()).filter((id) =>
         blockIds.includes(id),
@@ -1413,6 +1442,9 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
     expect((await masters.detach({ mediaId: image.mediaId }, t0)).status).toBe(
       "done",
     );
+    expect(
+      (await withAuthority.lookupPublishedCatalog(blockIds, t0)).size,
+    ).toBe(0);
     expect(
       (await authority.copyRenditionIds()).filter((id) =>
         blockIds.includes(id),
@@ -2326,6 +2358,34 @@ describe("Catalog Detail deep-zoom reads (PR C; criteria 12, 13, 20)", () => {
     ).toEqual({ ...complete.frame, keys: complete.ids });
     expect(
       await reader().getZoomBlocks(
+        partial.image.catalogId as never,
+        partial.image.mediaId as never,
+      ),
+    ).toBeNull();
+    // Production composition keeps CMS media reads separate from App block
+    // facts. Exercise both real SQL branches with the existing distinct roles.
+    const splitReader = new PostgresCatalogQueryAdapter(
+      as(() => publicRead),
+      {
+        renditions: false,
+        zoomPool: as(() => app),
+        zoom: { isOpen: async () => open },
+      },
+    );
+    expect([
+      ...(await splitReader.getZoomFrames(complete.image.catalogId as never)),
+    ]).toEqual([[complete.image.mediaId, complete.frame]]);
+    expect(
+      await splitReader.getZoomBlocks(
+        complete.image.catalogId as never,
+        complete.image.mediaId as never,
+      ),
+    ).toEqual({ ...complete.frame, keys: complete.ids });
+    expect(
+      (await splitReader.getZoomFrames(partial.image.catalogId as never)).size,
+    ).toBe(0);
+    expect(
+      await splitReader.getZoomBlocks(
         partial.image.catalogId as never,
         partial.image.mediaId as never,
       ),

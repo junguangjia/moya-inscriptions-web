@@ -14,7 +14,10 @@ import {
   writeTransaction,
   type PublishingDb,
 } from "./db.js";
-import { desiredRenditionsSql } from "./publication-eligibility.js";
+import {
+  catalogBlockListedSql,
+  desiredRenditionsSql,
+} from "./publication-eligibility.js";
 import {
   refreshPublicationReferences,
   type PublicationSyncOptions,
@@ -936,7 +939,8 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
           JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' AND b.sha256=p.sha256 AND b.byte_size=p.byte_size
           JOIN community.catalog_media_assets a ON a.id=r.catalog_asset_id AND a.state='ready'
           WHERE p.state='published' AND p.rendition_id=ANY($1::text[]) AND ($2::text[] IS NULL OR a.id=ANY($2::text[]))
-          AND (a.source_object_key NOT LIKE 'editorial/%' OR r.role IN ('thumb','cover','display','viewer'))`,
+          AND ((r.catalog_master_id IS NULL AND NOT (${blockRowSql("r")}) AND (a.source_object_key NOT LIKE 'editorial/%' OR r.role IN ('thumb','cover','display','viewer')))
+            OR (r.state='ready' AND r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")}))`,
           [renditionIds, ids ?? null],
         )
       ).rows;
