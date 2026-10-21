@@ -650,6 +650,8 @@ export interface CatalogSyncPort {
     readonly created: number;
     readonly unreferenced: number;
     readonly enqueued: number;
+    /** Decoded intents the pass refused and tombstoned (present only then). */
+    readonly refusedIntentIds?: readonly string[];
   }>;
 }
 
@@ -703,6 +705,12 @@ export function createCatalogSync(options: {
       logger.error("[media-worker] catalog sync skipped: incomplete snapshot");
       return;
     }
+    // Each is granted nothing and its App mirror is left as it is, while
+    // every other intent still syncs.
+    if (snapshot?.undecodableIntentIds?.length)
+      logger.error(
+        `[media-worker] catalog sync undecodable intents=${snapshot.undecodableIntentIds.length} ids=${snapshot.undecodableIntentIds.slice(0, 5).join(",")}`,
+      );
     const sources = snapshot?.sources ?? (await options.listSources());
     if (sources === null) {
       logger.error("[media-worker] catalog sync skipped: list too large");
@@ -713,6 +721,12 @@ export function createCatalogSync(options: {
       renditions: catalogSyncIdentities(),
       ...(snapshot ? { snapshot } : {}),
     });
+    // A late release, a state regression or identity drift: the mirror (its
+    // approved and retention pins) is tombstoned, which an operator must see.
+    if (counts.refusedIntentIds?.length)
+      logger.error(
+        `[media-worker] catalog sync tombstoned intents=${counts.refusedIntentIds.length} ids=${counts.refusedIntentIds.slice(0, 5).join(",")}`,
+      );
     if (counts.created + counts.unreferenced + counts.enqueued > 0) {
       logger.info(
         `[media-worker] catalog sync referenced=${counts.referenced} skipped=${counts.skipped} created=${counts.created} unreferenced=${counts.unreferenced} enqueued=${counts.enqueued}`,

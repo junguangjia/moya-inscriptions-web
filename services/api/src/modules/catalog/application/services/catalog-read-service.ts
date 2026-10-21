@@ -101,9 +101,19 @@ export class CatalogReadService {
         : projection.items.flatMap((p) =>
             p.representativeMedia ? [p.representativeMedia] : [],
           );
-    const facts = await this.storageUrlResolver.catalogFacts(
-      images.map(mediaLocator),
-    );
+    // Rendition facts belong to media resolution: a failed lookup fails the
+    // read as unavailable (503), like `resolveMedia`, never as a 500.
+    let facts: Awaited<
+      ReturnType<NonNullable<StorageUrlResolver["catalogFacts"]>>
+    >;
+    try {
+      facts = await this.storageUrlResolver.catalogFacts(
+        images.map(mediaLocator),
+      );
+    } catch (error) {
+      if (error instanceof CatalogMediaResolutionError) throw error;
+      throw new CatalogMediaResolutionError({ cause: error });
+    }
     const media = (image: CatalogMediaProjection) => ({
       ...image,
       ...facts.get(JSON.stringify([image.id, image.objectKey])),

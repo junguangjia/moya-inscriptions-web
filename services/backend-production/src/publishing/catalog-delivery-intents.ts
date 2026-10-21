@@ -22,6 +22,9 @@ const sha256 = (value: string) =>
 type CatalogRecipePolicy = Awaited<
   ReturnType<NonNullable<BackendApplicationOptions["catalogRecipePolicy"]>>
 >;
+type CatalogPublishedRenditionsReader = NonNullable<
+  BackendApplicationOptions["catalogPublishedRenditions"]
+>;
 
 /** The actual immutable registry and actual geometry functions in this build.
  * Full's parameters are only the viewer comparison bound; full is never an
@@ -61,9 +64,19 @@ export const currentCatalogRecipePolicy = (): CatalogRecipePolicy => {
   };
 };
 
+/** Lease clients one authority holds at once: a publication fence keeps its
+ * client (and the Native document lock) until the job releases it, and the
+ * publish and withdraw lanes each run one job.
+ */
+export const CATALOG_PREPARE_LEASES = 2;
+/** Every lease client plus two for the short snapshot and readiness reads, so
+ * held fences never starve withdraw, sync, reconcile or readiness.
+ */
+export const CATALOG_PREPARE_POOL_MAX = CATALOG_PREPARE_LEASES + 2;
+
 /** Separate CMS authority. Absent means private preparing is not connected;
  * even Development cannot borrow the public or App role. The real connection
- * is opened by composition only, with a single bounded client in its pool.
+ * is opened by composition only, with a small bounded pool.
  */
 export const parseCatalogPrepareDatabaseConfig = (
   environment: Readonly<Record<string, string | undefined>>,
@@ -92,7 +105,7 @@ export const parseCatalogPrepareDatabaseConfig = (
       DATABASE_URL: url,
       ...(ca === undefined ? {} : { DATABASE_SSL_CA_FILE: ca }),
     });
-    return { ...config, max: 1 };
+    return { ...config, max: CATALOG_PREPARE_POOL_MAX };
   } catch {
     throw new Error(
       "Catalog private prepare database configuration is invalid",
@@ -105,6 +118,7 @@ export const parseCatalogPrepareDatabaseConfig = (
 import {
   inspectCatalogDelivery,
   parseCatalogPrepareRows,
+  partitionCatalogPrepareRows,
   catalogBlockListedSql,
   type PostgresMediaPublicationAdapter,
 } from "@moya/community-postgres";
@@ -139,6 +153,7 @@ export const readCatalogSourceSnapshot = async (
     const sources = await listPublishedCatalogSources(publicClient);
     if (sources === null) return null;
     let preparations: ReturnType<typeof parseCatalogPrepareRows> | undefined;
+    let undecodableIntentIds: string[] | undefined;
     if (prepare) {
       const snapshot = (
         await publicClient.query<{ id: string }>(
@@ -152,9 +167,13 @@ export const readCatalogSourceSnapshot = async (
         "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );
       await privateClient.query(`SET TRANSACTION SNAPSHOT '${snapshot}'`);
-      preparations = parseCatalogPrepareRows(
-        (await privateClient.query(privateRowsSql)).rows,
-      );
+      // One undecodable intent is left out (it is granted nothing, and the
+      // sync leaves its App mirror untouched), never the whole round for
+      // every other intent.
+      ({ intents: preparations, undecodableIntentIds } =
+        partitionCatalogPrepareRows(
+          (await privateClient.query(privateRowsSql)).rows,
+        ));
     }
     const union = new Map(
       sources.map((s) => [sourceAssetId(s.mediaId, s.objectKey), s]),
@@ -172,6 +191,7 @@ export const readCatalogSourceSnapshot = async (
       sources: [...union.values()],
       publishedSources: sources,
       ...(preparations ? { preparations } : {}),
+      ...(undecodableIntentIds?.length ? { undecodableIntentIds } : {}),
       observedAt,
     };
   } finally {
@@ -197,6 +217,25 @@ export const createCatalogPublicationAuthority = (
     const sources = await listPublishedCatalogSources(published);
     if (!sources) throw new Error("Catalog published source incomplete");
     return sources.map((s) => sourceAssetId(s.mediaId, s.objectKey));
+  };
+  // A fence keeps its client for the whole publication lease. Fences never
+  // take more than CATALOG_PREPARE_LEASES clients, so snapshot reads (sync,
+  // reconcile, plans) and the other lane always find one; a fence beyond the
+  // cap is busy (lock_not_available, as a contended document lock), so the job
+  // is deferred instead of failing an attempt on a pool timeout.
+  let fences = 0;
+  const connectFence = async (pool: CatalogPool) => {
+    if (fences >= CATALOG_PREPARE_LEASES)
+      throw Object.assign(new Error("Catalog document fence busy"), {
+        code: "55P03",
+      });
+    fences += 1;
+    try {
+      return await pool.connect();
+    } catch (error) {
+      fences -= 1;
+      throw error;
+    }
   };
   const plans = async () => {
     const snapshot = await readCatalogSourceSnapshot(published, prepare);
@@ -334,8 +373,13 @@ export const createCatalogPublicationAuthority = (
         height: number;
         master_width: number;
         master_height: number;
+        state: "ready" | "superseded" | "released";
+        published: boolean;
       }>(
-        `SELECT DISTINCT r.id,a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height FROM jsonb_to_recordset($1::jsonb) p("mediaId" text,"objectKey" text) JOIN community.catalog_media_assets a ON a.media_id=p."mediaId" AND a.source_object_key=p."objectKey" AND a.state='ready' JOIN community.media_renditions r ON r.catalog_asset_id=a.id AND r.state='ready' JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' WHERE r.edit_key='base' AND (r.role IN ('thumb','cover','display','viewer','full') OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")})) LIMIT 40001`,
+        // Ready renditions, plus an editorial set a re-render released (or
+        // superseded) that is still published on a committed blob: the
+        // projection serves it until its replacement is published.
+        `SELECT DISTINCT r.id,a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height,r.state,pub.published FROM jsonb_to_recordset($1::jsonb) p("mediaId" text,"objectKey" text) JOIN community.catalog_media_assets a ON a.media_id=p."mediaId" AND a.source_object_key=p."objectKey" AND a.state='ready' JOIN community.media_renditions r ON r.catalog_asset_id=a.id JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' CROSS JOIN LATERAL (SELECT r.role IN ('thumb','cover','display','viewer') AND EXISTS (SELECT 1 FROM community.media_publications pp WHERE pp.rendition_id=r.id AND pp.state='published' AND pp.sha256=b.sha256 AND pp.byte_size=b.byte_size AND pp.storage_key=b.storage_key AND pp.content_type=r.content_type AND pp.purpose='catalog_derivative') AS published) pub WHERE r.edit_key='base' AND (r.state='ready' OR (pub.published AND a.source_object_key LIKE 'editorial/%')) AND (r.role IN ('thumb','cover','display','viewer','full') OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")})) LIMIT 40001`,
         [JSON.stringify(snapshot.publishedSources)],
       )
     ).rows;
@@ -346,6 +390,38 @@ export const createCatalogPublicationAuthority = (
           r.media_id === source.mediaId &&
           r.source_object_key === source.objectKey,
       );
+      const current = (r: (typeof matches)[number]) =>
+        r.state === "ready" &&
+        !!r.master_width &&
+        !!r.master_height &&
+        catalogExpectedRenditions(r.master_width, r.master_height).some(
+          (want) =>
+            want.role === r.role &&
+            want.version === r.recipe_version &&
+            want.digest === r.recipe_digest &&
+            want.width === r.width &&
+            want.height === r.height,
+        );
+      const master = matches[0];
+      const plan =
+        master?.master_width && master.master_height
+          ? catalogExpectedRenditions(master.master_width, master.master_height)
+          : [];
+      // A recipe version bump re-renders at a bounded rate, and recording
+      // the new set releases the old rows before the new ones are copied.
+      // Until the current recipe's set is complete and published, the ready
+      // set (one ready rendition per slot, whatever its recipe) and every
+      // rendition still published stay desired, so reconcile copies the
+      // replacement and withdraws nothing it still serves; afterwards only the
+      // current set is desired and the old one is retired.
+      const replaced =
+        plan.length > 0 &&
+        plan.every(
+          (want) =>
+            matches.filter(
+              (r) => r.role === want.role && current(r) && r.published,
+            ).length === 1,
+        );
       const ids = matches
         .filter(
           (r) =>
@@ -354,16 +430,11 @@ export const createCatalogPublicationAuthority = (
             // continues to authorize its four ordinary immutable pins only.
             /^block-[0-9]{2}$/u.test(r.role) ||
             !source.objectKey.startsWith("editorial/") ||
-            (r.master_width &&
-              r.master_height &&
-              catalogExpectedRenditions(r.master_width, r.master_height).some(
-                (want) =>
-                  want.role === r.role &&
-                  want.version === r.recipe_version &&
-                  want.digest === r.recipe_digest &&
-                  want.width === r.width &&
-                  want.height === r.height,
-              )),
+            (replaced
+              ? current(r)
+              : plan.length > 0 &&
+                ["thumb", "cover", "display", "viewer"].includes(r.role) &&
+                (r.state === "ready" || r.published)),
         )
         .map((r) => r.id);
       // Existing live Native A needs no newly created B intent. A without an
@@ -444,17 +515,24 @@ export const createCatalogPublicationAuthority = (
             ]),
         );
       const capturedStamp = stamp(contexts);
+      // An intent left out of the snapshot because it does not decode grants
+      // nothing here, so its rows cannot change this fence's permissions.
+      const undecodable = new Set(captured.snapshot.undecodableIntentIds ?? []);
       const renditionIds = [
         ...new Set(permissions.flatMap((p) => p.renditionIds)),
       ];
-      const client = prepare ? await prepare.connect() : null;
+      const client = prepare ? await connectFence(prepare) : null;
       let finished = false;
       const release = async () => {
         if (!finished) {
           finished = true;
           if (client) {
             await client.query("ROLLBACK").catch(() => undefined);
-            client.release();
+            try {
+              client.release();
+            } finally {
+              fences -= 1;
+            }
           }
         }
       };
@@ -490,15 +568,17 @@ export const createCatalogPublicationAuthority = (
           return (
             capturedStamp ===
             stamp(
-              rows.map((p) => ({
-                intentId: p.intent_id,
-                documentId: p.catalog_document_id,
-                state: p.state,
-                stateVersion: p.state_version,
-                manifestSha256: p.media_manifest_sha256,
-                recipeManifestSha256: p.recipe_manifest_sha256,
-                expiresAt: new Date(p.expires_at).toISOString(),
-              })),
+              rows
+                .filter((p) => !undecodable.has(p.intent_id))
+                .map((p) => ({
+                  intentId: p.intent_id,
+                  documentId: p.catalog_document_id,
+                  state: p.state,
+                  stateVersion: p.state_version,
+                  manifestSha256: p.media_manifest_sha256,
+                  recipeManifestSha256: p.recipe_manifest_sha256,
+                  expiresAt: new Date(p.expires_at).toISOString(),
+                })),
             )
           );
         };
@@ -558,4 +638,63 @@ export const createCatalogReadiness =
       currentCatalogRecipePolicy().recipeManifestSha256,
       catalogExpectedRenditions,
     );
+  };
+
+/** Admin publish gate for media that is already live: is the exact CMS source
+ * (pair and bytes) a ready asset whose current-recipe set is complete, each
+ * rendition ready on a committed blob with exactly one published Catalog
+ * generation? The same whole-set facts the release proof requires, read with
+ * the Backend's own App role. Metadata only; nothing is pinned or written.
+ */
+export const createCatalogPublishedRenditions =
+  (app: CatalogPool) =>
+  async (
+    media: Parameters<CatalogPublishedRenditionsReader>[0],
+  ): ReturnType<CatalogPublishedRenditionsReader> => {
+    const rows = (
+      await app.query<{
+        media_id: string;
+        source_object_key: string;
+        master_width: number | null;
+        master_height: number | null;
+        role: string;
+        recipe_version: number;
+        recipe_digest: string;
+        width: number;
+        height: number;
+      }>(
+        `SELECT a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height FROM jsonb_to_recordset($1::jsonb) m("mediaId" text,"objectKey" text,"sourceSha256" text) JOIN community.catalog_media_assets a ON a.media_id=m."mediaId" AND a.source_object_key=m."objectKey" AND a.state='ready' AND a.source_sha256=m."sourceSha256" AND a.master_sha256=m."sourceSha256" JOIN community.media_renditions r ON r.catalog_asset_id=a.id AND r.state='ready' AND r.edit_key='base' AND r.content_type='image/webp' JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' JOIN community.media_publications p ON p.rendition_id=r.id AND p.state='published' AND p.sha256=b.sha256 AND p.byte_size=b.byte_size AND p.storage_key=b.storage_key AND p.content_type='image/webp' AND p.purpose='catalog_derivative' LIMIT 40001`,
+        [JSON.stringify(media)],
+      )
+    ).rows;
+    if (rows.length > 40000) throw new Error("Catalog selector invalid");
+    return {
+      media: media.map(({ mediaId, objectKey }) => {
+        const matches = rows.filter(
+          (r) => r.media_id === mediaId && r.source_object_key === objectKey,
+        );
+        const asset = matches[0];
+        const plan =
+          asset?.master_width && asset.master_height
+            ? catalogExpectedRenditions(asset.master_width, asset.master_height)
+            : [];
+        return {
+          mediaId,
+          objectKey,
+          complete:
+            plan.length > 0 &&
+            plan.every(
+              (want) =>
+                matches.filter(
+                  (r) =>
+                    r.role === want.role &&
+                    r.recipe_version === want.version &&
+                    r.recipe_digest === want.digest &&
+                    r.width === want.width &&
+                    r.height === want.height,
+                ).length === 1,
+            ),
+        };
+      }),
+    };
   };

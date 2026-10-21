@@ -226,7 +226,7 @@ export const catalogHooks: NonNullable<CollectionConfig["hooks"]> = {
         publishing: state.mode === "publish",
       });
       if (state.mode === "publish")
-        assertCatalogDeliveryPublication(candidate, req);
+        await assertCatalogDeliveryPublication(candidate, req);
       Object.assign(data, payloadContentData(candidate), {
         revision: state.nextRevision,
         lastEditedBy: req.user?.id,

@@ -29,13 +29,129 @@ import type { ApiErrorCode, CatalogId } from "@moya/contracts";
 import type { NodeEnvironment } from "@moya/backend-runtime";
 import type { Server } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import {
   handleOperatorRequest,
   type OperatorRouteDependencies,
 } from "@moya/backend-runtime/internal/community-operator";
 import { currentCatalogRecipePolicy } from "@moya/backend-production/internal/catalog-delivery";
+import { catalogPublishedRenditionsRequestSchema } from "@moya/contracts/internal/editorial";
 
 const servers = new Set<Server>();
+
+describe("Catalog published-renditions operator route", () => {
+  type Provider = NonNullable<
+    OperatorRouteDependencies["catalogPublishedRenditions"]
+  >;
+  const syntheticOperator = "EXPLICIT_SYNTHETIC_PLACEHOLDER";
+  const media = catalogPublishedRenditionsRequestSchema.parse({
+    media: [
+      {
+        mediaId: "synthetic-live-a",
+        objectKey: `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.jpg`,
+        sourceSha256: "c".repeat(64),
+      },
+    ],
+  }).media;
+  const invoke = async (
+    method: string,
+    authenticated: boolean,
+    provider?: Provider,
+    body: unknown = { media },
+  ) => {
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const request = Object.assign(
+      Readable.from([Buffer.from(JSON.stringify(body))]),
+      {
+        method,
+        headers: {
+          "content-type": "application/json",
+          ...(authenticated
+            ? { authorization: `Bearer ${syntheticOperator}` }
+            : {}),
+        },
+      },
+    ) as unknown as IncomingMessage;
+    const response = {
+      writeHead,
+      end,
+      headersSent: false,
+    } as unknown as ServerResponse;
+    await handleOperatorRequest(
+      request,
+      response,
+      "/internal/community/catalog-delivery/published-renditions",
+      {
+        moderationService: {},
+        operatorCredential: syntheticOperator,
+        ...(provider ? { catalogPublishedRenditions: provider } : {}),
+      } as unknown as OperatorRouteDependencies,
+    );
+    return {
+      status: writeHead.mock.calls[0]![0],
+      body: JSON.parse(String(end.mock.calls[0]![0])),
+    };
+  };
+
+  it("answers only the authenticated Admin with App facts for exact sources", async () => {
+    const provider = vi.fn<Provider>(async (asked) => ({
+      media: asked.map(({ mediaId, objectKey }) => ({
+        mediaId,
+        objectKey,
+        complete: true,
+      })),
+    }));
+    expect(await invoke("POST", false, provider)).toMatchObject({
+      status: 401,
+    });
+    expect(await invoke("GET", true, provider)).toMatchObject({ status: 405 });
+    expect(await invoke("POST", true)).toMatchObject({
+      status: 503,
+      body: { error: { code: "CATALOG_DELIVERY_NOT_CONFIGURED" } },
+    });
+    for (const body of [
+      { media: [] },
+      { media: [{ ...media[0], sourceSha256: "not-a-digest" }] },
+      { media, ready: true },
+    ])
+      expect(await invoke("POST", true, provider, body)).toMatchObject({
+        status: 400,
+        body: { error: { code: "INVALID_INPUT" } },
+      });
+    expect(provider).not.toHaveBeenCalled();
+    expect(await invoke("POST", true, provider)).toEqual({
+      status: 200,
+      body: {
+        media: [
+          {
+            mediaId: media[0]!.mediaId,
+            objectKey: media[0]!.objectKey,
+            complete: true,
+          },
+        ],
+      },
+    });
+    expect(provider).toHaveBeenCalledWith(media);
+  });
+
+  it("accepts a record with many images in one bounded request", async () => {
+    const many = Array.from({ length: 200 }, (_, index) => ({
+      ...media[0]!,
+      mediaId: `synthetic-live-${index}`,
+    }));
+    const provider = vi.fn<Provider>(async (asked) => ({
+      media: asked.map(({ mediaId, objectKey }) => ({
+        mediaId,
+        objectKey,
+        complete: false,
+      })),
+    }));
+    const answer = await invoke("POST", true, provider, { media: many });
+    expect(answer.status).toBe(200);
+    expect(answer.body.media).toHaveLength(200);
+  });
+});
 
 describe("real Catalog recipe policy operator route", () => {
   it("preserves authentication, method and configured-provider boundaries without public media requests", async () => {
@@ -754,5 +870,42 @@ describe("Catalog rendition delivery over HTTP (unified media pipeline, PR 1b)",
       );
       expect(JSON.stringify(error)).not.toContain("private");
     }
+  });
+
+  // catalog-delivery-release-hardening-v1 (F9): a failed rendition-fact lookup
+  // (App database blip, incomplete CMS source) is media resolution, so the
+  // documented 503 — never a 500 INTERNAL_ERROR.
+  it.each([
+    new Error("Catalog published source incomplete"),
+    Object.assign(new Error("private relation permission denied"), {
+      code: "42501",
+    }),
+    Object.assign(new Error("private connection terminated"), {
+      code: "57P01",
+    }),
+  ])("answers 503 when the rendition facts fail (%s)", async (failure) => {
+    const resolveMany = vi.fn(
+      async () =>
+        new Map([[mediaId, "https://media.example.invalid/approved.webp"]]),
+    );
+    const { baseUrl } = await startCatalogServer({
+      catalogQueryPort: port,
+      storageUrlResolver: {
+        resolveMany,
+        catalogFacts: async () => {
+          throw failure;
+        },
+      },
+    });
+    for (const path of ["/v1/catalog", `/v1/catalog/${catalogId}`]) {
+      const error = await parseApiError(
+        await fetch(`${baseUrl}${path}`),
+        503,
+        "SERVICE_UNAVAILABLE",
+      );
+      expect(JSON.stringify(error)).not.toContain("private");
+      expect(JSON.stringify(error)).not.toContain("incomplete");
+    }
+    expect(resolveMany).not.toHaveBeenCalled();
   });
 });

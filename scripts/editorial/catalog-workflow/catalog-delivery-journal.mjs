@@ -37,6 +37,9 @@ const ROUTES = {
   cancel: "cancel-catalog-delivery",
 };
 const TERMINAL = new Set(["cancelled", "superseded", "expired", "withdrawn"]);
+// Admin refuses these before it writes any intent; the operator needs the
+// reason, not a pending reconciliation (the attempt itself stays UNKNOWN).
+const PREPARE_REFUSALS = new Set(["CATALOG_DELIVERY_SOURCE_TOO_LARGE"]);
 const sha = (s) => typeof s === "string" && /^[a-f0-9]{64}$/.test(s);
 const positive = (n) => Number.isSafeInteger(n) && n > 0;
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -723,6 +726,13 @@ export function createCatalogDeliveryClient({
         a.status = "UNKNOWN";
       }
       await persist(clone(journal));
+      if (
+        operation === "prepare" &&
+        a.status !== "CONFIRMED" &&
+        response?.ok === false &&
+        PREPARE_REFUSALS.has(response.code)
+      )
+        fail(response.code);
       if (a.status === "CONFIRMED" && a.result.state === "released") {
         try {
           await confirmNative(recordId, a.result);

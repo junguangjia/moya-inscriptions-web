@@ -240,6 +240,15 @@ runtime. `admin.env` contains Payload's own DB role, secret, URLs and COS write
 configuration. Missing required production settings fail closed. Staging uses
 these same contracts with distinct database roles, origins and private bucket.
 
+Since `0a4ab863` (#312) the Backend's discovery (home feed browse, collections,
+cards and filter options) reads the published-only Payload view
+`public.catalog_discovery` through the published-read role (`DATABASE_URL`), not
+the App role. That role needs `SELECT` on the view and nothing beneath it;
+`infra/development/grant-public-read.sql` names it. Apply that grant with the
+setup role before restarting a Backend of that release: startup refuses with
+`Catalog discovery view is not readable` when the role cannot read the view
+([release grant step](../../docs/deployment/full-release-database-v1.md)).
+
 Wide screens (a PC, or a tablet at least 896 px wide) show the Web product as
 browse-only to visitors without an account, and `/login` and `/register` return
 them to Home. The optional `web.env` value `MOYA_WIDE_SCREEN_BROWSE_ONLY=off`
@@ -356,9 +365,9 @@ claims staging sweeps of an exclusive `ugc/publishing/<namespace>/`; the worker
 completes its own multipart writes well within the six-hour sweep age.
 
 The media worker uses the same UGC identity and App role as the Backend, the
-public read role for the published Catalog list, the Catalog read identity
-(`COS_*`) for Catalog source reads through the COS API endpoint, a local pinned
-`WORK_MEDIA_TOOLS_IMAGE` (the
+public read role for the published Catalog list, the dedicated Catalog
+source-read identity (`CATALOG_SOURCE_COS_*`) for Catalog source reads through
+the COS API endpoint, a local pinned `WORK_MEDIA_TOOLS_IMAGE` (the
 [media sandbox image](../development/work-publishing/README.md), built on the
 host from its pinned inputs) and its own 0700 `WORK_MEDIA_WORK_DIR`, owned by
 the worker's dedicated user. Each job runs in one no-network sandbox container
@@ -368,6 +377,28 @@ unit has `MemoryMax=512M`, `TasksMax=64` and `RestartPreventExitStatus=78`:
 startup exits 78 on a configuration or sandbox isolation mismatch (no restart)
 and 75 when the container daemon or image is unavailable (restarted). It opens
 no listener.
+
+The Catalog source keys were renamed from `COS_*` to `CATALOG_SOURCE_COS_*` in
+`0a4ab863` (#312); the worker no longer reads `COS_*` for Catalog sources.
+Without the whole `CATALOG_SOURCE_COS_*` namespace, or without `DATABASE_URL`,
+it starts with Catalog rendering off and does not claim `catalog_render` jobs.
+Startup then names the reason (setting names only) before the
+`[media-worker] ready … catalog=off …` line, for example
+`[media-worker] catalog=off reason=source_unset: CATALOG_SOURCE_COS_* is not set; catalog_render jobs are not claimed`.
+When only the retired `COS_*` keys are present the reason is
+`source_keys_renamed`, logged at error level. After each worker restart, check
+that the ready line says `catalog=on`.
+
+Worker rollback across the rename: a worker before `0a4ab863` (for example
+`c29dfd61`) reads Catalog sources only from `COS_BUCKET`, `COS_REGION`,
+`COS_SECRET_ID` and `COS_SECRET_KEY` (plus `COS_SECURITY_TOKEN` and
+`COS_CREDENTIAL_EXPIRES_AT` for temporary credentials). Without them it still
+claims `catalog_render` and fails each job as retryable `catalog_unavailable`,
+using up its attempts. Before rolling the worker back, put the same source-read
+identity under those `COS_*` names in `media-worker.env` and its staged copy, or
+keep the worker stopped. The current worker ignores `COS_*`, so both namespaces
+can stay side by side for the rollback window. When rolling forward again, keep
+`CATALOG_SOURCE_COS_*`, remove the `COS_*` copy, and check for `catalog=on`.
 
 Only the exact component upload route has8GiB ingress. It streams with request
 and response buffering/cache/retry disabled and130s body/send and75s response

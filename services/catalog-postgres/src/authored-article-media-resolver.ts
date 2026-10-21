@@ -80,12 +80,23 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
       catalogId: row.catalog_id as string,
       media: mapCatalogMediaRow(row),
     }));
-    const facts = await this.storage.catalogFacts?.(
-      projections.map(({ media }) => ({
-        mediaId: media.id,
-        objectKey: media.objectKey,
-      })),
-    );
+    // Rendition facts are media resolution: their failure is the same 503
+    // as a URL failure below (catalog-delivery-release-hardening-v1 F9).
+    let facts:
+      | Awaited<ReturnType<NonNullable<StorageUrlResolver["catalogFacts"]>>>
+      | undefined;
+    try {
+      facts = await this.storage.catalogFacts?.(
+        projections.map(({ media }) => ({
+          mediaId: media.id,
+          objectKey: media.objectKey,
+        })),
+      );
+    } catch (error) {
+      throw error instanceof CatalogMediaResolutionError
+        ? error
+        : new CatalogMediaResolutionError({ cause: error });
+    }
     if (facts)
       projections = projections.map((p) => ({
         ...p,

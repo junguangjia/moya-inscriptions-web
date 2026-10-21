@@ -24,6 +24,7 @@ export { EditorialIdentities } from "./identities";
 
 export {
   assertCatalogDeliveryPublication,
+  catalogDeliveryCapabilities,
   cancelCatalogDelivery,
   prepareCatalogDelivery,
   readCatalogDelivery,

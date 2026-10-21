@@ -460,6 +460,100 @@ describe("media worker composition", () => {
     await worker.stop();
   });
 
+  // catalog-delivery-release-hardening-v1 (N5): the COS_* → CATALOG_SOURCE_COS_*
+  // rename must never turn catalog_render off silently. Setting names only.
+  const withoutSource = {
+    CATALOG_SOURCE_COS_BUCKET: undefined,
+    CATALOG_SOURCE_COS_REGION: undefined,
+    CATALOG_SOURCE_COS_SECRET_ID: undefined,
+    CATALOG_SOURCE_COS_SECRET_KEY: undefined,
+  } as const;
+  const withoutRetiredKeys = {
+    COS_BUCKET: undefined,
+    COS_REGION: undefined,
+    COS_SECRET_ID: undefined,
+    COS_SECRET_KEY: undefined,
+  } as const;
+  it.each([
+    [
+      "only the retired COS_* source keys",
+      { ...production, ...withoutSource },
+      "error",
+      "[media-worker] catalog=off reason=source_keys_renamed: CATALOG_SOURCE_COS_* is not set and COS_* is no longer read for Catalog sources; catalog_render jobs are not claimed",
+    ],
+    [
+      "no Catalog source keys",
+      { ...production, ...withoutSource, ...withoutRetiredKeys },
+      "info",
+      "[media-worker] catalog=off reason=source_unset: CATALOG_SOURCE_COS_* is not set; catalog_render jobs are not claimed",
+    ],
+    [
+      "no published read connection",
+      { ...production, DATABASE_URL: undefined },
+      "info",
+      "[media-worker] catalog=off reason=database_unset: DATABASE_URL is not set; catalog_render jobs are not claimed",
+    ],
+    [
+      "neither source keys nor a local directory in Development",
+      { ...development, CMS_MEDIA_DIR: undefined, DATABASE_URL: undefined },
+      "info",
+      "[media-worker] catalog=off reason=source_unset,database_unset: neither CATALOG_SOURCE_COS_* nor CMS_MEDIA_DIR is set; DATABASE_URL is not set; catalog_render jobs are not claimed",
+    ],
+  ] as const)(
+    "names why Catalog rendering is off at startup with %s",
+    async (_case, environment, level, line) => {
+      quietQueue();
+      fakeMedia.sandbox.selfCheck.mockResolvedValue({
+        status: "ok",
+        runtime: sandboxRuntime(),
+        facts: isolatedFacts(),
+      });
+      const logger = { info: vi.fn(), error: vi.fn() };
+      const worker = await startMediaWorker(environment, { logger });
+      try {
+        expect(worker.catalog).toBe(false);
+        expect(logger[level]).toHaveBeenCalledWith(line);
+        const other = level === "error" ? logger.info : logger.error;
+        expect(
+          other.mock.calls.filter(([text]) =>
+            String(text).includes("catalog=off reason="),
+          ),
+        ).toEqual([]);
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.stringMatching(/^\[media-worker\] ready .* catalog=off /),
+        );
+        for (const [text] of [
+          ...logger.info.mock.calls,
+          ...logger.error.mock.calls,
+        ])
+          expect(String(text)).not.toMatch(/synthetic/);
+      } finally {
+        await worker.stop();
+      }
+    },
+  );
+
+  it("logs no Catalog-off reason while Catalog rendering is on", async () => {
+    quietQueue();
+    fakeMedia.sandbox.selfCheck.mockResolvedValue({
+      status: "ok",
+      runtime: sandboxRuntime(),
+      facts: isolatedFacts(),
+    });
+    const logger = { info: vi.fn(), error: vi.fn() };
+    const worker = await startMediaWorker(production, { logger });
+    try {
+      expect(worker.catalog).toBe(true);
+      for (const [text] of [
+        ...logger.info.mock.calls,
+        ...logger.error.mock.calls,
+      ])
+        expect(String(text)).not.toContain("catalog=off");
+    } finally {
+      await worker.stop();
+    }
+  });
+
   it("turns Production Catalog rendering off without source settings despite a public signer, UGC identity and local directory", async () => {
     const queue = quietQueue();
     fakeMedia.sandbox.selfCheck.mockResolvedValue({

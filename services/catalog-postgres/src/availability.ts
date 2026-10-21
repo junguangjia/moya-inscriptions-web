@@ -38,3 +38,15 @@ export const asPostgresOperationError = (
 
   return error;
 };
+
+/**
+ * For a read whose every failure means its published facts are unavailable
+ * (the Catalog rendition-fact lookup): the documented 503, never a 500,
+ * whatever the cause (catalog-delivery-release-hardening-v1 F9).
+ */
+export const asCatalogQueryUnavailableError = (
+  error: unknown,
+): CatalogQueryUnavailableError =>
+  error instanceof CatalogQueryUnavailableError
+    ? error
+    : new CatalogQueryUnavailableError({ cause: error });

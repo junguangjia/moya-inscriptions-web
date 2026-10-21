@@ -28,6 +28,22 @@ import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
  * are never written or deleted here; their renditions are owner-less blobs.
  */
 
+/**
+ * One sync pass as this store runs it: a complete snapshot may also name the
+ * intents it holds but could not decode, whose mirror rows are left untouched
+ * (catalog-delivery-release-hardening-v1 F7), and the pass reports the decoded
+ * intents it refused and tombstoned, only when there are any, for the
+ * caller's log (F3). Intent IDs are opaque UUIDs, never content.
+ */
+export type CatalogAssetSyncPassOptions = CatalogAssetSyncOptions & {
+  readonly snapshot?: NonNullable<CatalogAssetSyncOptions["snapshot"]> & {
+    readonly undecodableIntentIds?: readonly string[];
+  };
+};
+export type CatalogAssetSyncPassCounts = CatalogAssetSyncCounts & {
+  readonly refusedIntentIds?: readonly string[];
+};
+
 const MAX_SOURCES = 10_000;
 const MAX_BATCH = 1000;
 /**
@@ -159,8 +175,8 @@ export const syncCatalogAssets = async (
   pool: Pool,
   sources: readonly CatalogMediaSource[],
   now: Date,
-  options: CatalogAssetSyncOptions,
-): Promise<CatalogAssetSyncCounts> => {
+  options: CatalogAssetSyncPassOptions,
+): Promise<CatalogAssetSyncPassCounts> => {
   if (
     !Number.isSafeInteger(options.limit) ||
     options.limit < 1 ||
@@ -201,12 +217,14 @@ export const syncCatalogAssets = async (
       )
     : ids;
   return writeTransaction(pool, async (db) => {
-    if (options.snapshot)
-      await synchronizeCatalogDeliveryIntents(
-        db,
-        options.snapshot.preparations,
-        options.snapshot.observedAt,
-      );
+    const intents = options.snapshot
+      ? await synchronizeCatalogDeliveryIntents(
+          db,
+          options.snapshot.preparations,
+          options.snapshot.observedAt,
+          options.snapshot.undecodableIntentIds,
+        )
+      : undefined;
     const created = await db.query(
       `INSERT INTO community.catalog_media_assets(
          id, media_id, source_object_key, source_sha256, source_width, source_height,
@@ -323,6 +341,7 @@ export const syncCatalogAssets = async (
       created: created.rowCount ?? 0,
       unreferenced: unreferenced.rowCount ?? 0,
       enqueued: insertedCount + requeued,
+      ...(intents?.refused.length ? { refusedIntentIds: intents.refused } : {}),
     };
   });
 };

@@ -14,20 +14,48 @@ const terminal = (state: string) =>
 /** Private processing/reference pins never modify Catalog public references.
  * Call only with a complete CMS snapshot, in the same App transaction as the
  * one A∪B asset sync. A missing or truncated source must never call this method.
+ *
+ * One intent never fails the snapshot of every other intent and the asset sync:
+ * - an intent the snapshot holds but cannot decode (`undecodableIntentIds`, or
+ *   one that fails the schema here) is unknown, not absent: its local row is
+ *   left as it is, so a decoder/view skew that breaks every intent loses no
+ *   mirror state and recovers once it decodes again. It is granted nothing
+ *   meanwhile (plans and fences read only decoded intents);
+ * - a decoded intent that would revive or regress its local monotonic state
+ *   (a release committed after this mirror already expired it) or change its
+ *   immutable identity is refused: none of it is applied and its local row
+ *   keeps or becomes a tombstone, exactly like an absent intent.
+ * Both lists are returned for the caller's log.
  */
 export const synchronizeCatalogDeliveryIntents = async (
   db: PublishingDb,
   intents: readonly CatalogProcessingIntent[] | undefined,
   now: Date,
-): Promise<void> => {
+  undecodableIntentIds: readonly string[] = [],
+): Promise<{
+  readonly refused: readonly string[];
+  readonly undecodable: readonly string[];
+}> => {
   if (
     intents !== undefined &&
     (!Array.isArray(intents) || intents.length > 10_000)
   )
     throw new TypeError("Catalog intent snapshot exceeds its bound");
-  const parsed = (intents ?? []).map((intent) =>
-    catalogProcessingIntentSchema.parse(intent),
-  );
+  if (
+    !Array.isArray(undecodableIntentIds) ||
+    undecodableIntentIds.length > 20_000 ||
+    undecodableIntentIds.some((id) => typeof id !== "string")
+  )
+    throw new TypeError("Catalog undecodable intent list invalid");
+  const rejected: string[] = [];
+  const undecodable = new Set(undecodableIntentIds);
+  const parsed = (intents ?? []).flatMap((intent) => {
+    const result = catalogProcessingIntentSchema.safeParse(intent);
+    if (result.success) return [result.data];
+    const id = (intent as { intentId?: unknown } | null)?.intentId;
+    if (typeof id === "string") undecodable.add(id);
+    return [];
+  });
   if (new Set(parsed.map(({ intentId }) => intentId)).size !== parsed.length)
     throw new TypeError("Catalog intent snapshot repeats an identity");
   const at = nowParam(now);
@@ -51,7 +79,7 @@ export const synchronizeCatalogDeliveryIntents = async (
     [at],
   );
   // Unconfigured/incomplete private source is not an authoritative empty set.
-  if (intents === undefined) return;
+  if (intents === undefined) return { refused: [], undecodable: [] };
   const existing = new Map(
     (
       await db.query<{
@@ -73,6 +101,7 @@ export const synchronizeCatalogDeliveryIntents = async (
       )
     ).rows.map((row) => [row.intent_id, row]),
   );
+  const accepted: string[] = [];
   for (const intent of [...parsed].sort((a, b) =>
     a.intentId.localeCompare(b.intentId),
   )) {
@@ -82,19 +111,19 @@ export const synchronizeCatalogDeliveryIntents = async (
       new Date(intent.expiresAt).getTime() <= now.getTime()
         ? "expired"
         : intent.state;
-    if (previous) {
-      if (
-        previous.cms_document_id !== intent.documentId ||
+    // A prepared identity is immutable, and a local tombstone is never revived
+    // or regressed. Such an intent is refused alone: none of its snapshot is
+    // applied, and below it is tombstoned like an absent intent.
+    if (
+      previous &&
+      (previous.cms_document_id !== intent.documentId ||
         previous.catalog_id !== intent.catalogId ||
         previous.draft_revision !== intent.revision ||
         previous.draft_fingerprint !== intent.fingerprint ||
         previous.manifest_sha256 !== intent.manifestSha256 ||
         previous.recipe_manifest_sha256 !== intent.recipeManifestSha256 ||
         previous.media_count !== intent.mediaCount ||
-        previous.expires_at.toISOString() !== intent.expiresAt
-      )
-        throw new TypeError("Catalog prepared identity is immutable");
-      if (
+        previous.expires_at.toISOString() !== intent.expiresAt ||
         intent.stateVersion < previous.source_state_version ||
         previous.observed_at.getTime() > now.getTime() ||
         ((!previous.observed_live || terminal(previous.source_state)) &&
@@ -104,11 +133,40 @@ export const synchronizeCatalogDeliveryIntents = async (
           !(
             state === "expired" &&
             ["prepared", "release_requested"].includes(previous.source_state)
-          ))
-      )
-        throw new TypeError(
-          "Catalog prepare snapshot cannot revive or regress a tombstone",
-        );
+          )))
+    ) {
+      rejected.push(intent.intentId);
+      continue;
+    }
+    const members = intent.media.map((item) => ({
+      ordinal: item.ordinal,
+      media_id: item.mediaId,
+      object_key: item.objectKey,
+      source_sha256: item.sourceSha256,
+      width: item.width,
+      height: item.height,
+    }));
+    const stored =
+      previous && intent.media.length
+        ? (
+            await db.query<{
+              ordinal: number;
+              media_id: string;
+              object_key: string;
+              source_sha256: string;
+              width: number;
+              height: number;
+            }>(
+              "SELECT ordinal,media_id,object_key,source_sha256,width,height FROM community.catalog_delivery_media_refs WHERE intent_id=$1 ORDER BY ordinal",
+              [intent.intentId],
+            )
+          ).rows
+        : [];
+    if (stored.length && JSON.stringify(stored) !== JSON.stringify(members)) {
+      rejected.push(intent.intentId);
+      continue;
+    }
+    if (previous) {
       await db.query(
         `UPDATE community.catalog_delivery_prepares
         SET source_state=$2,source_state_version=$3,observed_at=$4::timestamptz,
@@ -141,49 +199,30 @@ export const synchronizeCatalogDeliveryIntents = async (
         ],
       );
     }
-    if (intent.media.length) {
-      const stored = (
-        await db.query<{
-          ordinal: number;
-          media_id: string;
-          object_key: string;
-          source_sha256: string;
-          width: number;
-          height: number;
-        }>(
-          "SELECT ordinal,media_id,object_key,source_sha256,width,height FROM community.catalog_delivery_media_refs WHERE intent_id=$1 ORDER BY ordinal",
-          [intent.intentId],
-        )
-      ).rows;
-      const members = intent.media.map((item) => ({
-        ordinal: item.ordinal,
-        media_id: item.mediaId,
-        object_key: item.objectKey,
-        source_sha256: item.sourceSha256,
-        width: item.width,
-        height: item.height,
-      }));
-      if (stored.length && JSON.stringify(stored) !== JSON.stringify(members))
-        throw new TypeError("Catalog prepared media manifest is immutable");
-      if (!stored.length)
-        await db.query(
-          `INSERT INTO community.catalog_delivery_media_refs
+    if (intent.media.length && !stored.length)
+      await db.query(
+        `INSERT INTO community.catalog_delivery_media_refs
         (intent_id,ordinal,media_id,object_key,source_sha256,width,height)
         SELECT $1::uuid,m.ordinal,m.media_id,m.object_key,m.source_sha256,m.width,m.height
         FROM jsonb_to_recordset($2::jsonb) AS m(ordinal integer,media_id text,object_key text,
           source_sha256 text,width integer,height integer)`,
-          [intent.intentId, JSON.stringify(members)],
-        );
-    }
+        [intent.intentId, JSON.stringify(members)],
+      );
+    accepted.push(intent.intentId);
   }
   // Absence from a complete authoritative snapshot is a local monotonic
   // tombstone, not a fabricated CMS state or permission with a freshness TTL.
+  // A refused intent is treated exactly as absent (fail closed); an
+  // undecodable one is present but unknown, so its row is left untouched
+  // (compared as text: its ID itself was never decoded).
   await db.query(
     `UPDATE community.catalog_delivery_prepares
     SET observed_live=false,observed_at=$2::timestamptz,ended_at=COALESCE(ended_at,$2::timestamptz),updated_at=$2::timestamptz
-    WHERE observed_live AND observed_at <= $2::timestamptz AND NOT(intent_id=ANY($1::uuid[]))`,
-    [parsed.map(({ intentId }) => intentId), at],
+    WHERE observed_live AND observed_at <= $2::timestamptz AND NOT(intent_id=ANY($1::uuid[]))
+      AND NOT(intent_id::text=ANY($3::text[]))`,
+    [accepted, at, [...undecodable].map((id) => id.toLowerCase())],
   );
+  return { refused: rejected.sort(), undecodable: [...undecodable].sort() };
 };
 
 /** SQL aliases are fixed by repository callers, never HTTP input. */
@@ -211,9 +250,12 @@ export const catalogPreparedBlobPinSql = (
 
 /** Decode the complete least-privilege CMS projection. A terminal header is
  * retained with no members; it must not be confused with missing/truncated rows.
+ * With `rejected`, an intent whose own rows do not decode is listed there and
+ * left out instead of failing the call.
  */
-export const parseCatalogPrepareRows = (
+const decodeCatalogPrepareRows = (
   rows: readonly Record<string, unknown>[],
+  rejected: string[] | null,
 ): CatalogProcessingIntent[] => {
   if (rows.length > 20_000)
     throw new TypeError("Catalog private source exceeds its bound");
@@ -225,7 +267,7 @@ export const parseCatalogPrepareRows = (
     list.push(row);
     groups.set(row.intent_id, list);
   }
-  return [...groups.values()].map((group) => {
+  const decode = (group: Record<string, unknown>[]) => {
     const first = group[0]!;
     const identity = (r: Record<string, unknown>) => [
       r.intent_id,
@@ -278,7 +320,38 @@ export const parseCatalogPrepareRows = (
       media,
       expiresAt: new Date(first.expires_at as string).toISOString(),
     });
-  });
+  };
+  const intents: CatalogProcessingIntent[] = [];
+  for (const [intentId, group] of groups)
+    if (!rejected) intents.push(decode(group));
+    else
+      try {
+        intents.push(decode(group));
+      } catch {
+        rejected.push(intentId);
+      }
+  return intents;
+};
+
+/** Strict: any intent that does not decode fails the call (one exact intent). */
+export const parseCatalogPrepareRows = (
+  rows: readonly Record<string, unknown>[],
+): CatalogProcessingIntent[] => decodeCatalogPrepareRows(rows, null);
+
+/** For a complete snapshot of every intent: an intent whose own rows do not
+ * decode (for example a source edge beyond the 65,535 px snapshot bound) is
+ * returned by ID and left out, instead of failing the sync, every plan and
+ * reconcile for all other intents. It is granted nothing, and its App mirror
+ * row is left untouched rather than tombstoned (see
+ * synchronizeCatalogDeliveryIntents). A malformed or oversized result as a
+ * whole still throws.
+ */
+export const partitionCatalogPrepareRows = (
+  rows: readonly Record<string, unknown>[],
+) => {
+  const undecodableIntentIds: string[] = [];
+  const intents = decodeCatalogPrepareRows(rows, undecodableIntentIds);
+  return { intents, undecodableIntentIds };
 };
 
 /** Pin only real committed rows, after checking the full conditional plan.
@@ -510,7 +583,13 @@ export const inspectCatalogDelivery = async (
 };
 
 /** Join App facts for exact live-CMS pairs; no CMS tables are presumed to
- * exist in App. Editorial images require the complete real published set.
+ * exist in App. Editorial images require the complete real published set: the
+ * approved pinned set, else the current recipe's set. Until the current
+ * recipe's set is complete and published (a recipe version bump re-renders at
+ * a bounded rate, and recording the new set releases the old rows before the
+ * new ones are copied), the last published set keeps serving instead of the
+ * image disappearing; the publication reconcile retires it only after its
+ * replacement is published (createCatalogPublicationAuthority plans).
  */
 export const readCatalogDeliveryProjection = async (
   pool: Pool,
@@ -541,7 +620,7 @@ export const readCatalogDeliveryProjection = async (
   ];
   const rows = (
     await pool.query(
-      `SELECT a.*,r.id AS rendition_id,r.role,r.recipe_version,r.recipe_digest,r.width,r.height,r.content_type,
+      `SELECT a.*,r.id AS rendition_id,r.state AS rendition_state,r.role,r.recipe_version,r.recipe_digest,r.width,r.height,r.content_type,
     b.id AS blob_id,p.id AS generation_id,approved.intent_id AS approved_intent,approved.draft_revision AS approved_revision,approved.source_state AS approved_state FROM jsonb_to_recordset($1::jsonb) AS pair("mediaId" text,"objectKey" text)
     JOIN community.catalog_media_assets a ON a.media_id=pair."mediaId" AND a.source_object_key=pair."objectKey" AND a.state='ready'
     JOIN community.media_renditions r ON r.catalog_asset_id=a.id AND r.edit_key='base'
@@ -550,6 +629,7 @@ export const readCatalogDeliveryProjection = async (
       AND p.byte_size=b.byte_size AND p.storage_key=b.storage_key AND p.content_type=r.content_type AND p.purpose='catalog_derivative'
     LEFT JOIN LATERAL (SELECT pi.intent_id,pi.draft_revision,pi.source_state FROM community.catalog_delivery_rendition_pins pp JOIN community.catalog_delivery_prepares pi ON pi.intent_id=pp.intent_id WHERE pp.rendition_id=r.id AND pp.public_generation_id=p.id AND pp.public_generation_version=p.version AND pi.observed_live AND pi.ended_at IS NULL AND pi.source_state IN ('release_requested','released') ORDER BY (pi.source_state='released') DESC,pi.draft_revision DESC LIMIT 1) approved ON true
     WHERE r.state='ready' OR approved.intent_id IS NOT NULL
+      OR (a.source_object_key LIKE 'editorial/%' AND r.role IN ('thumb','cover','display','viewer'))
     ORDER BY a.media_id,a.source_object_key,r.width,r.height`,
       [JSON.stringify(sources)],
     )
@@ -569,7 +649,12 @@ export const readCatalogDeliveryProjection = async (
     );
     if (!matches.length) continue;
     const asset = matches[0]!;
-    let ready = matches;
+    // Ready or approved-pinned rows; a released or superseded editorial row
+    // that is still published only ever serves the last published set below.
+    const recorded = matches.filter(
+      (row) => row.rendition_state === "ready" || row.approved_intent,
+    );
+    let ready = recorded;
     if (pair.objectKey.startsWith("editorial/")) {
       if (
         asset.master_sha256 !== asset.source_sha256 ||
@@ -577,7 +662,7 @@ export const readCatalogDeliveryProjection = async (
         !asset.master_height
       )
         continue;
-      const approvals = matches
+      const approvals = recorded
         .filter((row) => row.approved_intent)
         .sort(
           (a, b) =>
@@ -605,31 +690,62 @@ export const readCatalogDeliveryProjection = async (
         ready = approved;
       else {
         const plan = expected(asset.master_width, asset.master_height);
+        if (!plan.length) continue;
         if (
-          !plan.length ||
-          plan.some(
+          plan.every(
             (want) =>
-              matches.filter(
+              recorded.filter(
                 (row) =>
                   row.role === want.role &&
                   row.recipe_version === want.version &&
                   row.recipe_digest === want.digest &&
                   row.width === want.width &&
                   row.height === want.height,
-              ).length !== 1,
+              ).length === 1,
           )
         )
-          continue;
-        ready = matches.filter((row) =>
-          plan.some(
-            (want) =>
-              row.role === want.role &&
-              row.recipe_version === want.version &&
-              row.recipe_digest === want.digest &&
-              row.width === want.width &&
-              row.height === want.height,
-          ),
-        );
+          ready = recorded.filter((row) =>
+            plan.some(
+              (want) =>
+                row.role === want.role &&
+                row.recipe_version === want.version &&
+                row.recipe_digest === want.digest &&
+                row.width === want.width &&
+                row.height === want.height,
+            ),
+          );
+        else {
+          // The last published set: per slot its ready rendition (one per
+          // slot is the recording rule), else the newest recipe version still
+          // published, which a re-render released before its replacement was
+          // copied. Thumb, cover and display, viewer when it has one.
+          const previous: typeof matches = [];
+          for (const role of ["thumb", "cover", "display", "viewer"]) {
+            const slot = matches.filter((row) => row.role === role);
+            if (!slot.length) continue;
+            const newest = Math.max(
+              ...slot.map((row) => Number(row.recipe_version)),
+            );
+            const current = slot.filter(
+              (row) => row.rendition_state === "ready",
+            );
+            const chosen = current.length
+              ? current
+              : slot.filter((row) => Number(row.recipe_version) === newest);
+            if (chosen.length !== 1) {
+              previous.length = 0;
+              break;
+            }
+            previous.push(chosen[0]!);
+          }
+          if (
+            !["thumb", "cover", "display"].every((role) =>
+              previous.some((row) => row.role === role),
+            )
+          )
+            continue;
+          ready = previous;
+        }
       }
     }
     const renditions = ready

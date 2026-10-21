@@ -230,3 +230,44 @@ export const catalogDeliveryReadinessSchema = z.strictObject({
 export type CatalogDeliveryReadiness = z.output<
   typeof catalogDeliveryReadinessSchema
 >;
+
+/** Release tooling asks this before its first write. Any answer at all means
+ * this Admin serves the delivery and upload endpoints; `delivery` says whether
+ * its Backend can pin a recipe and prove readiness. No setting is reported.
+ */
+export const catalogDeliveryCapabilitiesRequestSchema = z.strictObject({});
+export const catalogDeliveryCapabilitiesSchema = z.strictObject({
+  delivery: z.enum(["AVAILABLE", "NOT_CONFIGURED", "UNAVAILABLE"]),
+});
+export type CatalogDeliveryCapabilities = z.output<
+  typeof catalogDeliveryCapabilitiesSchema
+>;
+
+const publishedRenditionSource = {
+  mediaId: editorialMediaSchema.shape.mediaId,
+  objectKey: editorialMediaSchema.shape.objectKey,
+};
+/** Admin publish gate, operator boundary only: the exact CMS sources of a
+ * record whose current, complete and published rendition sets are asked for.
+ */
+export const catalogPublishedRenditionsRequestSchema = z.strictObject({
+  media: z
+    .array(
+      z.strictObject({ ...publishedRenditionSource, sourceSha256: digest }),
+    )
+    .min(1)
+    .max(2000),
+});
+export const catalogPublishedRenditionsSchema = z.strictObject({
+  media: z
+    .array(
+      z.strictObject({ ...publishedRenditionSource, complete: z.boolean() }),
+    )
+    .max(2000),
+});
+export type CatalogPublishedRenditionsRequest = z.output<
+  typeof catalogPublishedRenditionsRequestSchema
+>;
+export type CatalogPublishedRenditions = z.output<
+  typeof catalogPublishedRenditionsSchema
+>;
