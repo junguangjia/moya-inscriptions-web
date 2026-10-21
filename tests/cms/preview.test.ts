@@ -70,7 +70,7 @@ describe.sequential("protected current draft preview", () => {
     vi.stubEnv("CMS_PUBLIC_URL", "https://cms.example.invalid");
     const mediaId = `preview-media-${suffix}`;
     const filename = `original-${suffix}.webp`;
-    const objectKey = `synthetic-preview/${suffix}/${filename}`;
+    const objectKey = `editorial/${"b".repeat(64)}/${filename}`;
     await payload.create({
       collection: "media",
       req: await reqFor(owner),
@@ -121,6 +121,14 @@ describe.sequential("protected current draft preview", () => {
     expect(detail.id).toBe(catalogId);
     expect(detail.title).toBe("Synthetic draft preview");
     expect(detail.transcription).toBe("虛構原文\n甲　乙〔缺〕");
+    expect(detail.media).toHaveLength(1);
+    expect(detail.media[0]).toMatchObject({
+      id: mediaId,
+      kind: "image",
+      width: 3,
+      height: 2,
+    });
+    expect(detail.representativeMedia).toEqual(detail.media[0]);
     expect(detail.media[0]?.src).toBe(
       `https://cms.example.invalid/api/media/file/${filename}`,
     );

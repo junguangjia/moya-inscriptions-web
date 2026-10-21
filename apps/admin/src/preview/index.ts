@@ -5,6 +5,10 @@ import {
   type ResolvedMediaUrl,
 } from "@moya/api";
 import type { MediaId } from "@moya/contracts";
+import {
+  catalogDetailSchema,
+  publicMediaSchema,
+} from "@moya/contracts/schemas";
 import { APIError, type Endpoint, type PayloadRequest } from "payload";
 
 import { readDraft } from "../editorial/operations";
@@ -93,16 +97,19 @@ export async function previewCatalogDetail(req: PayloadRequest, id: unknown) {
       }
     }
   }
-  const media = content.media.map((item) => ({
-    id: item.mediaId,
-    position: item.position,
-    isRepresentative: item.isRepresentative,
-    kind: "image" as const,
-    objectKey: item.objectKey,
-    width: item.width,
-    height: item.height,
-    alt: item.alt,
-  }));
+  // Authenticated draft originals use protected CMS URLs, not public delivery.
+  const media = content.media.map((item) => {
+    const src = resolved.get(item.mediaId as MediaId);
+    if (src === undefined) throw new APIError("PREVIEW_MEDIA_UNAVAILABLE", 503);
+    return publicMediaSchema.parse({
+      id: item.mediaId,
+      kind: "image",
+      src,
+      width: item.width,
+      height: item.height,
+      alt: item.alt,
+    });
+  });
   const periodLabel = deriveCatalogPeriodLabel({
     ...(content.dynasty === undefined ? {} : { dynasty: content.dynasty }),
     ...(content.dateText === undefined ? {} : { dateText: content.dateText }),
@@ -110,7 +117,8 @@ export async function previewCatalogDetail(req: PayloadRequest, id: unknown) {
       ? {}
       : { storedPeriodLabel: content.periodLabel }),
   });
-  const representative = media.find(({ isRepresentative }) => isRepresentative);
+  const representative =
+    media[content.media.findIndex(({ isRepresentative }) => isRepresentative)];
   const projection: CatalogDetailProjection = {
     id: content.catalogId,
     kind: content.kind,
@@ -118,9 +126,6 @@ export async function previewCatalogDetail(req: PayloadRequest, id: unknown) {
     aliases: content.aliases.map(({ alias }) => alias),
     ...(content.summary === undefined ? {} : { summary: content.summary }),
     ...(periodLabel === undefined ? {} : { periodLabel }),
-    ...(representative === undefined
-      ? {}
-      : { representativeMedia: representative }),
     ...(content.dynasty === undefined ? {} : { dynasty: content.dynasty }),
     ...(content.dateText === undefined ? {} : { dateText: content.dateText }),
     ...(content.province === undefined ? {} : { province: content.province }),
@@ -160,9 +165,15 @@ export async function previewCatalogDetail(req: PayloadRequest, id: unknown) {
         ? {}
         : { appliesTo: citation.appliesTo }),
     })),
-    media,
+    media: [],
   };
-  return mapCatalogDetail(projection, resolved);
+  return catalogDetailSchema.parse({
+    ...mapCatalogDetail(projection),
+    ...(representative === undefined
+      ? {}
+      : { representativeMedia: representative }),
+    media,
+  });
 }
 
 export const editorialPreviewEndpoint: Endpoint = {
