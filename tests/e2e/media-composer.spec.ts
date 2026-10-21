@@ -1323,7 +1323,9 @@ test("先写标题和正文 keeps reference edits, visibility, preview and expli
   );
   await click(publish.locator("[data-editor-submit]"));
   await expect
-    .poll(() => composer.fixture.submitted().length, { timeout: 15_000 })
+    .poll(() => composer.fixture.submitted().length, {
+      timeout: ACTION_TIMEOUT,
+    })
     .toBe(1);
   const command = composer.fixture.submitted()[0]!;
   expect(command.content).toMatchObject({
