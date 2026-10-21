@@ -90,12 +90,11 @@ const proof: Readonly<Record<string, RegExp>> = {
   operator: /\bfetchServerEditorialPreview\(/u,
   development: /NODE_ENV\s*!==\s*"development"/u,
   asset: /kind: "(?:demo-assets|design-tokens|ui-styles|ui-assets)"/u,
-  // A contentless 307 whose Location is a same-origin path: never "//host",
-  // and the file never reads request.url (behind the proxy that is the
-  // internal origin). Response.redirect needs an absolute URL, so it is not
-  // accepted here.
+  // A contentless 307 whose Location is the fixed same-origin template; no
+  // Response.redirect (absolute URLs only), so nothing is built from the
+  // proxied request origin. The route unit test pins the exact behavior.
   redirect:
-    /^(?![\s\S]*\brequest\.url\b)[\s\S]*status: 307,\s*headers: \{\s*Location: `\/(?!\/)/u,
+    /^(?![\s\S]*\bResponse\.redirect\()[\s\S]*status: 307,\s*headers: \{\s*Location: `\/\?catalogId=\$\{encodedCatalogId\}#detail-\$\{encodedCatalogId\}`/u,
 };
 
 describe("product access covers every Web entry point", () => {
