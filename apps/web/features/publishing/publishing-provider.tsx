@@ -13,6 +13,7 @@ import {
 
 import { authorClient } from "../authors/author-data";
 import { useAuthors } from "../authors/author-context";
+import { forgetWorkSnapshot } from "../authors/work-snapshots";
 import {
   detectDeviceClass,
   resolveRuntimePresentationPlatform,
@@ -104,6 +105,12 @@ export const PublishingProvider = ({
         onBackgroundPublished: () => {
           services?.onBackgroundPublished?.();
           notifyRef.current?.("作品已发布");
+        },
+        onSubmissionConfirmed: (id) => {
+          services?.onSubmissionConfirmed?.(id);
+          // The held record predates the submission: its Detail opens
+          // through loading again and its feed bodies read it again.
+          forgetWorkSnapshot(id);
         },
       }),
   );

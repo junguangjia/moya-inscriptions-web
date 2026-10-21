@@ -13,7 +13,10 @@ import type {
   CatalogMasterStatusRow,
   CatalogMasterStorage,
 } from "@moya/api";
-import { CATALOG_ZOOM_MAX_LONG_EDGE } from "@moya/contracts/schemas";
+import {
+  CATALOG_ZOOM_MAX_LONG_EDGE,
+  sameMediaFraming,
+} from "@moya/contracts/schemas";
 import type { Pool } from "pg";
 
 import {
@@ -223,6 +226,16 @@ const frameRefusal = (
   if (
     Math.abs(left - right) >
     CATALOG_MASTER_ASPECT_TOLERANCE * Math.max(left, right)
+  )
+    return "aspect_mismatch";
+  // The Detail carries a frame only when it shows the approved image's
+  // framing within the rounding of each side (the public contract), so a
+  // master whose frame cannot is refused here rather than cut and never shown.
+  if (
+    !sameMediaFraming(frame, {
+      width: asset.published_width,
+      height: asset.published_height,
+    })
   )
     return "aspect_mismatch";
   if (asset.viewer_long_edge === null) return "asset_not_ready";
@@ -697,10 +710,14 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
           frameHeight: active.frame_height,
         },
         now,
+        { resume: true },
       );
-      return queued.status === "queued"
-        ? { status: "done", jobs: queued.jobs }
-        : refused(queued.reason);
+      if (queued.status === "queued")
+        return { status: "done", jobs: queued.jobs };
+      // `resume` lifts the pause, so a paused set is never the reason here.
+      if (queued.reason === "set_paused")
+        throw new Error("A resumed set is not paused");
+      return refused(queued.reason);
     });
   }
 

@@ -40,6 +40,12 @@ export type { MigrationFile } from "./migrations/runner.js";
 export type { PostgresPoolOptions } from "./pool.js";
 // unified-media-pipeline-v1: readers join the Catalog rendition delivery view by option.
 export type { CatalogReaderOptions } from "./catalog-media-delivery.js";
+// catalog-deep-zoom-v1: the published-blocks reads behind the Backend's gate.
+export type { CatalogZoomGate } from "./catalog-zoom-blocks.js";
+export {
+  catalogZoomBlocksSql,
+  catalogZoomFramesSql,
+} from "./catalog-zoom-blocks.js";
 export type {
   CatalogAliasRow,
   CatalogCitationRow,

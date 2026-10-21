@@ -9,6 +9,7 @@ import { useCatalogDetailWithdrawal } from "./catalog-detail-withdrawal";
 
 import type { Root } from "react-dom/client";
 import type { MediaId } from "@moya/contracts";
+import type { CatalogDetailPresentationState } from "./catalog-detail-presentation";
 import type { WithdrawCatalogDetail } from "./catalog-detail-withdrawal";
 
 (
@@ -414,4 +415,110 @@ describe("CatalogDetailExperience", () => {
     expect(container.querySelector("[data-detail-withdrawn]")).toBeNull();
     expect(container.querySelector("[data-test-actions]")).not.toBeNull();
   });
+
+  it.each([
+    ["not-found", "未找到这项资料"],
+    ["unavailable", "暂时无法加载资料"],
+    ["unexpected-error", "暂时无法显示此页面"],
+  ] as const)(
+    "keeps the withdrawal notice when the read in progress then settles as %s",
+    (answer, message) => {
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+        (callback) => {
+          callback(performance.now());
+          return 1;
+        },
+      );
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: vi.fn(() => ({ matches: false })),
+      });
+      let withdraw: WithdrawCatalogDetail | null = null;
+      const Actions = () => {
+        withdraw = useCatalogDetailWithdrawal();
+        return <div data-test-actions="" />;
+      };
+      const loaded = (id: string) =>
+        ({
+          detail: {
+            aliases: [],
+            authorId: `user-${"a".repeat(32)}`,
+            authorName: "临帖人",
+            available: true,
+            canEdit: true,
+            contentType: "work",
+            facts: [],
+            id,
+            media: [],
+            provisional: true,
+            source: "runtime",
+            sourceCitations: [],
+            title: "春日临帖",
+          },
+          state: "loaded",
+        }) as const;
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      roots.push(root);
+      const render = (
+        catalogId: string,
+        state: CatalogDetailPresentationState,
+      ) =>
+        act(() =>
+          root.render(
+            <CatalogDetailExperience
+              activeViewerMediaId={null}
+              backButtonRef={createRef<HTMLButtonElement>()}
+              catalogId={catalogId}
+              detailActions={<Actions />}
+              initialScrollTop={0}
+              onBack={vi.fn()}
+              onCloseViewer={vi.fn()}
+              onOpenViewer={vi.fn()}
+              onScrollTopChange={vi.fn()}
+              onViewerMediaChange={vi.fn()}
+              orientation="portrait"
+              platform="phone"
+              state={state}
+            />,
+          ),
+        );
+      // Deleted from the known work while its own read is still running.
+      render("work-one", loaded("work-one"));
+      expect(container.querySelector("[data-detail-provisional]")).not.toBe(
+        null,
+      );
+      act(() =>
+        withdraw!("work-one", {
+          title: "作品已永久删除",
+          description: "此作品已无法恢复。",
+        }),
+      );
+      const notice = container.querySelector<HTMLElement>(
+        "[data-detail-withdrawn]",
+      );
+      expect(notice?.textContent).toContain("作品已永久删除");
+      expect(document.activeElement).toBe(notice);
+      // The notice is no longer the known work.
+      expect(container.querySelector("[data-detail-provisional]")).toBeNull();
+
+      // That read answers 404, or fails: the same notice stays, still focused.
+      render("work-one", { state: answer });
+      expect(container.querySelector("[data-detail-withdrawn]")).toBe(notice);
+      expect(document.activeElement).toBe(notice);
+      expect(container.textContent).not.toContain(message);
+      expect(
+        container
+          .querySelector("[data-detail-state]")
+          ?.getAttribute("data-detail-state"),
+      ).toBe(answer);
+
+      // Another Detail's answer is its own.
+      render("work-two", { state: answer });
+      expect(container.querySelector("[data-detail-withdrawn]")).toBeNull();
+      expect(container.textContent).toContain(message);
+    },
+  );
 });

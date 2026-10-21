@@ -51,6 +51,23 @@ export interface CatalogMediaProjection {
   readonly placeholderColor?: string;
 }
 
+/**
+ * catalog-deep-zoom-v1: the frame of a published image's complete block set
+ * (every block listed by the published-blocks view, in exact geometry).
+ */
+export interface CatalogZoomFrameProjection {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The opaque delivery keys of one published image's complete block set, in
+ * row-major order, with its frame.
+ */
+export interface CatalogZoomBlocksProjection extends CatalogZoomFrameProjection {
+  readonly keys: readonly string[];
+}
+
 export interface CatalogListItemProjection {
   readonly id: CatalogId;
   readonly kind: CatalogKind;

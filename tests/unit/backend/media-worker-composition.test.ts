@@ -170,6 +170,9 @@ const quietQueue = () => {
         requeued: 0,
         paused: false,
       }),
+    blockSync: vi
+      .spyOn(prototype, "enqueueCatalogBlockSets")
+      .mockResolvedValue({ enqueued: 0 }),
   };
 };
 
@@ -327,6 +330,10 @@ describe("media worker composition", () => {
             ? [...MEDIA_KINDS, "profile_render"]
             : MEDIA_KINDS,
       });
+      // Catalog blocks (catalog-deep-zoom-v1) default on in Development only.
+      expect(queue.claim.mock.calls[0]![0].catalogBlocks).toBe(
+        mode === "development" ? true : undefined,
+      );
       expect(queue.requeue).toHaveBeenCalledTimes(1);
       expect(queue.cleanup).toHaveBeenCalledTimes(1);
       // The Backend owns the staging sweep; the worker owns reconciliation.
@@ -334,6 +341,9 @@ describe("media worker composition", () => {
         "reconcile_capacity",
       ]);
       expect(queue.catalogSync).toHaveBeenCalledTimes(1);
+      expect(queue.blockSync).toHaveBeenCalledTimes(
+        mode === "development" ? 1 : 0,
+      );
       expect(queue.profileSweep).toHaveBeenCalledTimes(
         mode === "development" ? 1 : 0,
       );
@@ -343,7 +353,7 @@ describe("media worker composition", () => {
           maxOpen: 2,
         });
       expect(silent.info).toHaveBeenCalledWith(
-        `[media-worker] ready concurrency=1 sharp=${sandboxRuntime().sharp} vips=${sandboxRuntime().vips} catalog=on profile=${mode === "development" ? "on" : "off"}`,
+        `[media-worker] ready concurrency=1 sharp=${sandboxRuntime().sharp} vips=${sandboxRuntime().vips} catalog=on profile=${mode === "development" ? "on" : "off"} blocks=${mode === "development" ? "on" : "off"}`,
       );
       expect(silent.info).toHaveBeenCalledWith(
         "[media-worker] leftovers removed containers=2 job_directories=1",
@@ -384,7 +394,9 @@ describe("media worker composition", () => {
       );
       expect(queue.profileSweep).toHaveBeenCalledTimes(on ? 1 : 0);
       expect(silent.info).toHaveBeenCalledWith(
-        expect.stringMatching(on ? / profile=on$/ : / profile=off$/),
+        expect.stringMatching(
+          on ? / profile=on blocks=/ : / profile=off blocks=/,
+        ),
       );
       await worker.stop();
     },

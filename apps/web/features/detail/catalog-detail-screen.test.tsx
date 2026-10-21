@@ -507,4 +507,121 @@ describe("CatalogDetailScreen", () => {
     // The way back stays.
     expect(markup).toContain('aria-label="返回"');
   });
+
+  it("keeps the withdrawal notice when the read then answers not-found", () => {
+    const markup = renderToStaticMarkup(
+      <CatalogDetailScreen
+        activeMediaIndex={0}
+        backButtonRef={createRef<HTMLButtonElement>()}
+        onActiveMediaIndexChange={vi.fn()}
+        onBack={vi.fn()}
+        onOpenViewer={vi.fn()}
+        orientation="portrait"
+        platform="phone"
+        state={{ state: "not-found" }}
+        withdrawn={{
+          title: "作品已永久删除",
+          description: "此作品已无法恢复。",
+        }}
+      />,
+    );
+    expect(markup).toContain("data-detail-withdrawn");
+    expect(markup).toContain("作品已永久删除");
+    expect(markup).not.toContain("未找到这项资料");
+    expect(markup).toContain('data-detail-state="not-found"');
+  });
+
+  it("marks only a loaded provisional work as provisional", () => {
+    const work = {
+      aliases: [],
+      authorId: `user-${"a".repeat(32)}`,
+      authorName: "临帖人",
+      available: true,
+      canEdit: false,
+      contentType: "work" as const,
+      facts: [],
+      id: `work-${"a".repeat(32)}`,
+      media: [],
+      sections: [
+        { key: "description" as const, title: "正文", text: "临帖一通" },
+      ],
+      source: "runtime" as const,
+      sourceCitations: [],
+      title: "春日临帖",
+    };
+    const provisional = renderState({
+      detail: { ...work, provisional: true as const },
+      state: "loaded",
+    });
+    expect(provisional).toContain('data-detail-provisional=""');
+    expect(provisional).toContain('data-detail-state="loaded"');
+    // The known work reads exactly as a confirmed one.
+    expect(provisional).toContain("春日临帖");
+    expect(provisional).toContain("临帖一通");
+    expect(provisional.replace(' data-detail-provisional=""', "")).toBe(
+      renderState({ detail: work, state: "loaded" }),
+    );
+
+    for (const markup of [
+      renderState({ detail: work, state: "loaded" }),
+      renderState({
+        detail: {
+          aliases: [],
+          facts: [],
+          id: "catalog-provisional",
+          kind: "inscription",
+          media: [],
+          source: "runtime",
+          sourceCitations: [],
+          title: "碑刻",
+        },
+        state: "loaded",
+      }),
+      renderState({ state: "loading" }),
+      renderState({ state: "not-found" }),
+      renderState({ state: "unavailable" }),
+    ])
+      expect(markup).not.toContain("data-detail-provisional");
+  });
+
+  it("drops the provisional mark while a withdrawal notice replaces the known work", () => {
+    const markup = renderToStaticMarkup(
+      <CatalogDetailScreen
+        activeMediaIndex={0}
+        backButtonRef={createRef<HTMLButtonElement>()}
+        onActiveMediaIndexChange={vi.fn()}
+        onBack={vi.fn()}
+        onOpenViewer={vi.fn()}
+        orientation="portrait"
+        platform="phone"
+        state={{
+          detail: {
+            aliases: [],
+            authorId: `user-${"a".repeat(32)}`,
+            authorName: "临帖人",
+            available: true,
+            canEdit: true,
+            contentType: "work",
+            facts: [],
+            id: `work-${"a".repeat(32)}`,
+            media: [],
+            provisional: true,
+            sections: [],
+            source: "runtime",
+            sourceCitations: [],
+            title: "春日临帖",
+          },
+          state: "loaded",
+        }}
+        withdrawn={{
+          title: "作品已永久删除",
+          description: "此作品已无法恢复。",
+        }}
+      />,
+    );
+    expect(markup).toContain("data-detail-withdrawn");
+    expect(markup).toContain('data-detail-state="loaded"');
+    expect(markup).not.toContain("data-detail-provisional");
+    expect(markup).not.toContain("春日临帖");
+  });
 });

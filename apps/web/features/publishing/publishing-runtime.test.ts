@@ -40,6 +40,7 @@ import type {
   RegisterMediaItemCommand,
   WorkDraftContent,
   WorkDraftItem,
+  WorkSubmissionReceipt,
   WorkSubmissionResult,
 } from "@moya/contracts";
 
@@ -67,6 +68,7 @@ const setup = (
   const preprocessors: ReturnType<typeof fakePreprocess>[] = [];
   const recovery = recoveryDouble();
   const timers = manualTimers();
+  const onSubmissionConfirmed = vi.fn<(workId: string) => void>();
   let account: string | null = null;
   const client = {
     ...uploads.client,
@@ -102,7 +104,9 @@ const setup = (
         submittedAt: stamp,
       }),
     ),
-    submissionReceipt: vi.fn(async () => null),
+    submissionReceipt: vi.fn<
+      (requestId: string) => Promise<WorkSubmissionReceipt | null>
+    >(async () => null),
     createSession: vi.fn(async () => ({
       id: SESSION_ID,
       state: "active" as const,
@@ -153,12 +157,14 @@ const setup = (
     timers: timers.timers,
     metadata: absentMetadata,
     onBackgroundPublished: vi.fn(),
+    onSubmissionConfirmed,
   };
   const runtime = new PublishingRuntime(services);
   return {
     runtime,
     client,
     services,
+    onSubmissionConfirmed,
     uploads,
     transfers,
     preprocessors,
@@ -180,6 +186,30 @@ const content = (title: string): WorkDraftContent => ({
   coverKey: null,
   coverCrop: null,
 });
+
+/** The work every confirmed submission of `setup` publishes. */
+const PUBLISHED_WORK = `work-${"9".repeat(32)}`;
+
+/**
+ * What the runtime had done when it reported a confirmed work: whether the
+ * session was still open, and how often background completion was told.
+ */
+const watchConfirmation = (t: ReturnType<typeof setup>) => {
+  const seen: {
+    workId: string;
+    sessionOpen: boolean;
+    backgroundPublished: number;
+  }[] = [];
+  t.onSubmissionConfirmed.mockImplementation((workId) => {
+    seen.push({
+      workId,
+      sessionOpen: t.runtime.store.get().session !== null,
+      backgroundPublished: vi.mocked(t.services.onBackgroundPublished!).mock
+        .calls.length,
+    });
+  });
+  return seen;
+};
 
 describe("background publication", () => {
   const pick = async (t: ReturnType<typeof setup>) => {
@@ -248,6 +278,25 @@ describe("background publication", () => {
         items: [{ itemId: id }],
       },
     });
+    expect(t.services.onBackgroundPublished).toHaveBeenCalledOnce();
+    expect(t.runtime.store.get().session).toBeNull();
+    t.runtime.dispose();
+  });
+
+  it("reports the published work before completing a background publication", async () => {
+    const t = setup();
+    const seen = watchConfirmation(t);
+    const draft = await pick(t);
+    expect(t.runtime.queuePublication(draft)).toBe(true);
+    expect(await t.runtime.closeSession({ discard: false })).toBe("kept");
+    const id = await receive(t);
+    await ready(t, id);
+    expect(t.client.submit).toHaveBeenCalledOnce();
+    // Reported once, while the session was still open and before the
+    // reader's page heard of the publication.
+    expect(seen).toEqual([
+      { workId: PUBLISHED_WORK, sessionOpen: true, backgroundPublished: 0 },
+    ]);
     expect(t.services.onBackgroundPublished).toHaveBeenCalledOnce();
     expect(t.runtime.store.get().session).toBeNull();
     t.runtime.dispose();
@@ -1500,6 +1549,66 @@ describe("publishing runtime", () => {
     expect(test.client.saveDraft).toHaveBeenCalledTimes(saves);
     expect(await test.runtime.closeSession({ discard: false })).toBe("none");
     expect(test.recovery.clearDraft).toHaveBeenCalledWith(ACCOUNT, DRAFT_ID);
+  });
+
+  it("reports the published work before completing a directly confirmed submission", async () => {
+    const test = setup();
+    const seen = watchConfirmation(test);
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "saved" });
+    test.runtime.edit(content("题"));
+    const state = await test.runtime.submit(content("题"));
+    expect(state?.status).toBe("confirmed");
+    expect(seen).toEqual([
+      { workId: PUBLISHED_WORK, sessionOpen: true, backgroundPublished: 0 },
+    ]);
+    expect(test.runtime.store.get().session).toBeNull();
+  });
+
+  it("reports the published work before completing a submission its receipt confirms", async () => {
+    const test = setup();
+    const seen = watchConfirmation(test);
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "saved" });
+    test.runtime.edit(content("题"));
+    test.client.submit.mockRejectedValueOnce(
+      clientError(0, "lost answer", true),
+    );
+    test.client.submissionReceipt.mockImplementationOnce(async (requestId) => ({
+      state: "confirmed",
+      requestId,
+      workId: PUBLISHED_WORK,
+      revisionId: `work-revision-${"8".repeat(32)}`,
+      visibility: "public",
+      submittedAt: stamp,
+    }));
+    const state = await test.runtime.submit(content("题"));
+    expect(state?.status).toBe("confirmed");
+    expect(test.client.submit).toHaveBeenCalledOnce();
+    expect(test.client.submissionReceipt).toHaveBeenCalledOnce();
+    expect(seen).toEqual([
+      { workId: PUBLISHED_WORK, sessionOpen: true, backgroundPublished: 0 },
+    ]);
+    expect(test.runtime.store.get().session).toBeNull();
+  });
+
+  it("reports nothing for a submission that is refused or not confirmed", async () => {
+    const test = setup();
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "saved" });
+    test.runtime.edit(content("题"));
+    test.client.submit.mockRejectedValueOnce(
+      clientError(422, "内容不符合要求", false),
+    );
+    expect((await test.runtime.submit(content("题")))?.status).toBe("failed");
+    test.client.submit.mockRejectedValueOnce(
+      clientError(0, "lost answer", true),
+    );
+    expect((await test.runtime.submit(content("题")))?.status).toBe(
+      "unconfirmed",
+    );
+    expect(test.onSubmissionConfirmed).not.toHaveBeenCalled();
+    expect(test.runtime.store.get().session).not.toBeNull();
   });
 
   it("shows a submit that failed before sending in the submission state", async () => {

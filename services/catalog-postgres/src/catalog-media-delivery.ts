@@ -1,3 +1,4 @@
+import type { CatalogZoomGate } from "./catalog-zoom-blocks.js";
 import type {
   CatalogMediaProjection,
   CatalogMediaRenditionProjection,
@@ -21,6 +22,12 @@ export interface CatalogReaderOptions {
    * read grant).
    */
   readonly renditions?: boolean;
+  /**
+   * catalog-deep-zoom-v1: read the published-blocks view (requires
+   * `renditions` and SELECT on the view) behind this gate. Without it the
+   * reader lists no frame and no block.
+   */
+  readonly zoom?: CatalogZoomGate;
 }
 
 /**

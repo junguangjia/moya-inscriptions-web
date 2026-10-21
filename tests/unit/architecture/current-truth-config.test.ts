@@ -408,6 +408,7 @@ describe("current repository truth and local configuration", () => {
       WORK_MEDIA_WORKER_CONCURRENCY: "1",
       WORK_MEDIA_WORK_DIR: "/var/lib/yoyi-media/publishing-work",
       MEDIA_PROFILE_RENDER: "off",
+      MEDIA_CATALOG_ZOOM_BLOCKS_RENDER: "off",
     });
     expect(mediaWorker.WORK_MEDIA_STORE_DIR).toBeUndefined();
     for (const [name, value] of Object.entries(mediaWorker))
@@ -428,6 +429,8 @@ describe("current repository truth and local configuration", () => {
         "utf8",
       ),
     );
+    // catalog-deep-zoom-v1: the Backend's deep-zoom switch ships off.
+    expect(backend.MEDIA_CATALOG_ZOOM_BLOCKS).toBe("off");
     expect(backend.ARTICLE_AUTHORIZATION_DATABASE_URL).toBeUndefined();
     expect(backend.ARTICLE_AUTHORIZATION_SIGNING_JWKS_FILE).toBeUndefined();
     expect(issuer.APP_DATABASE_URL).toBeUndefined();

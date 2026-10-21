@@ -23,6 +23,7 @@ import {
   catalogContributorSchema,
   catalogDetailSchema,
   catalogIdSchema,
+  catalogZoomBlocksSchema,
   commentAuthorSchema,
   createCatalogCommentReplyRequestSchema,
   createCatalogCommentRequestSchema,
@@ -196,6 +197,9 @@ export const mediaIdJsonSchema = toJsonSchema(mediaIdSchema);
 export const publicMediaJsonSchema = toJsonSchema(publicMediaSchema);
 export const catalogSummaryJsonSchema = toJsonSchema(catalogSummarySchema);
 export const catalogDetailJsonSchema = toJsonSchema(catalogDetailSchema);
+export const catalogZoomBlocksJsonSchema = toJsonSchema(
+  catalogZoomBlocksSchema,
+);
 export const catalogListTransportQueryJsonSchema = toJsonSchema(
   catalogListTransportQuerySchema,
 );

@@ -22,6 +22,7 @@ import {
   catalogContributorJsonSchema,
   catalogContributorRoleJsonSchema,
   catalogDetailJsonSchema,
+  catalogZoomBlocksJsonSchema,
   catalogIdJsonSchema,
   commentAuthorJsonSchema,
   createCatalogCommentReplyRequestJsonSchema,
@@ -133,6 +134,11 @@ const catalogIdPathParameter = pathParameter(
   "catalogId",
   "CatalogId",
   "Opaque platform CatalogId of a currently published record.",
+);
+const mediaIdPathParameter = pathParameter(
+  "mediaId",
+  "MediaId",
+  "Opaque platform MediaId of one image of the record.",
 );
 const commentIdPathParameter = pathParameter(
   "commentId",
@@ -331,6 +337,28 @@ export const openApiDocument: JsonObject = {
         },
       },
     },
+    "/v1/catalog/{catalogId}/media/{mediaId}/zoom-blocks": {
+      get: {
+        operationId: "getCatalogMediaZoomBlocks",
+        summary: "Get the deep-zoom blocks of one Catalog image",
+        description:
+          "Answers only while the image's Catalog Detail entry carries a `zoom` frame: the frame, the block edge and overlap, and one URL per block in row-major order. A client derives each block's rectangle from its index; it never composes a URL. Any other image, or an image whose blocks cannot all be delivered now, answers 404. Accepts no query parameters.",
+        parameters: [catalogIdPathParameter, mediaIdPathParameter],
+        responses: {
+          "200": jsonResponse(
+            "The blocks of the requested image.",
+            "CatalogZoomBlocks",
+          ),
+          "400": apiErrorResponse("Invalid query", "INVALID_QUERY"),
+          "404": apiErrorResponse("No deliverable blocks", "ITEM_NOT_FOUND"),
+          "500": apiErrorResponse("Internal service error", "INTERNAL_ERROR"),
+          "503": apiErrorResponse(
+            "Service is temporarily unavailable",
+            "SERVICE_UNAVAILABLE",
+          ),
+        },
+      },
+    },
     "/v1/catalog/{catalogId}/comments": {
       get: {
         operationId: "listCatalogComments",
@@ -471,6 +499,7 @@ export const openApiDocument: JsonObject = {
       PublicSourceCitation: publicSourceCitationJsonSchema,
       CatalogSummary: catalogSummaryJsonSchema,
       CatalogDetail: catalogDetailJsonSchema,
+      CatalogZoomBlocks: catalogZoomBlocksJsonSchema,
       CatalogPage: catalogPageJsonSchema,
       CatalogSearchMatchKind: catalogSearchMatchKindJsonSchema,
       CatalogSearchItem: catalogSearchItemJsonSchema,

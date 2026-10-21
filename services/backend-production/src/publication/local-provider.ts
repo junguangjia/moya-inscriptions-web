@@ -226,5 +226,9 @@ export function createLocalPublicationProvider(
         signal,
       );
     },
+    // Synthetic, like the monthly figure: no edge, so no traffic.
+    async dayUsage(dayStart, _now, signal) {
+      return guarded(async () => ({ dayStart, requests: 0, bytes: 0 }), signal);
+    },
   };
 }

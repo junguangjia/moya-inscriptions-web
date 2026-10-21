@@ -626,6 +626,9 @@ describe("Work publishing composition", () => {
           requeued: 0,
           paused: false,
         }),
+      blockSync: vi
+        .spyOn(prototype, "enqueueCatalogBlockSets")
+        .mockResolvedValue({ enqueued: 0 }),
     };
   };
 
@@ -780,6 +783,8 @@ describe("Work publishing composition", () => {
                     "catalog_render",
                     "profile_render",
                   ],
+                  // Catalog blocks (catalog-deep-zoom-v1) default on here.
+                  catalogBlocks: true,
                 })
               : expect.objectContaining({
                   limit: 1,
@@ -800,6 +805,9 @@ describe("Work publishing composition", () => {
           mode === "development" ? 1 : 0,
         );
         expect(queue.profileSweep).toHaveBeenCalledTimes(
+          mode === "development" ? 1 : 0,
+        );
+        expect(queue.blockSync).toHaveBeenCalledTimes(
           mode === "development" ? 1 : 0,
         );
         if (mode === "development") {

@@ -19,6 +19,16 @@ export interface MonthlyPublicationUsage {
   readonly warning: boolean;
 }
 
+/**
+ * The image host's day-to-date usage (catalog-deep-zoom-v1): requests and
+ * the traffic the cap counts, from the start of the cap's day.
+ */
+export interface DailyPublicationUsage {
+  readonly dayStart: Date;
+  readonly requests: number;
+  readonly bytes: number;
+}
+
 /** Server-only port. A caller registers immutable keys before any object I/O. */
 export interface PublicationProvider {
   write(
@@ -45,6 +55,12 @@ export interface PublicationProvider {
     now: Date,
     signal?: AbortSignal,
   ): Promise<MonthlyPublicationUsage>;
+  /** catalog-deep-zoom-v1: today's requests and traffic since `dayStart`. */
+  dayUsage(
+    dayStart: Date,
+    now: Date,
+    signal?: AbortSignal,
+  ): Promise<DailyPublicationUsage>;
 }
 
 export class PublicationProviderError extends Error {
@@ -64,6 +80,12 @@ export class PublicationProviderError extends Error {
 
 export const PUBLICATION_CACHE_CONTROL = "public, max-age=300, must-revalidate";
 export const MONTHLY_REQUEST_WARNING = 2_000_000;
+/**
+ * The traffic metric the image host's daily cap counts (catalog-deep-zoom-v1
+ * breaker): EdgeOne's L7 response traffic, in bytes. Planned; P0 item 7
+ * settles it.
+ */
+export const CATALOG_ZOOM_TRAFFIC_METRIC = "l7Flow_outFlux";
 
 /** The billing month starts at 00:00 on the fourth in Asia/Shanghai (UTC+8). */
 export function publicationPlanMonth(now: Date): Date {

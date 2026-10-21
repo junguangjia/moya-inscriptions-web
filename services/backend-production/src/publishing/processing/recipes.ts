@@ -273,6 +273,95 @@ export const RECIPE_DIGESTS_V1: Readonly<Record<RenditionRole, string>> =
     "background-1600": "fdc0f14fbb0a2677",
   });
 
+/**
+ * Catalog blocks (catalog-deep-zoom-v1): one level of JPEG cells cut from a
+ * private display master scaled to its frame L (at most 8192 px on the long
+ * edge). Block roles are `block-00` … `block-99`, row-major; every block of a
+ * set carries the same recipe identity. The edge, overlap and cell bound
+ * mirror the public contract's `CATALOG_ZOOM_*` constants, which this package
+ * does not import (a unit test reconciles them).
+ */
+export const BLOCK_RECIPE_V1 = {
+  role: "block",
+  version: 1,
+  decode: STILL_INPUT_LIMITS,
+  orientation: "exif-once",
+  colour: "icc-to-srgb-untagged",
+  metadata: "strip-all",
+  alpha: "refuse",
+  kernel: "lanczos3",
+  frame: { maxLongEdge: 8192, upscale: false },
+  grid: { edge: 1024, overlap: 2, maxCells: 100, order: "row-major" },
+  encoder: {
+    format: "jpeg",
+    quality: 85,
+    chromaSubsampling: "4:4:4",
+    progressive: false,
+    optimiseCoding: true,
+  },
+} as const;
+
+/** Pinned digest of {@link BLOCK_RECIPE_V1}; a test recomputes it. */
+export const BLOCK_RECIPE_DIGEST_V1 = "cfd656eff0fbba40";
+
+/**
+ * The block job's check that a master is the approved image: the frame,
+ * resized to the asset's `display` rendition and both brought to a 512 px
+ * long edge, must match it within these bounds (luma PSNR in dB, largest
+ * per-channel mean difference in 8-bit levels), else the job fails with
+ * `master_mismatch`. The coarse compare ignores the display encoding's fine
+ * noise on dense rubbings, yet still refuses a frame shifted by 0.25 % of
+ * its size or another image. It decides only whether a set is cut, never a
+ * byte of it, so it is not in the digest. Calibrated on 125 local originals
+ * (genuine, 0.25 % and 0.5 % shifted, a different image) and 24 real master
+ * and approved pairs (catalog-deep-zoom-v1 PR B; the numbers are kept
+ * privately): the PSNR bound sits more than 2 dB from either side.
+ */
+export const BLOCK_ALIGNMENT = {
+  reference: "display",
+  compareLongEdge: 512,
+  minLumaPsnr: 40,
+  maxMeanDelta: 2,
+} as const;
+
+const BLOCK_ROLE = /^block-([0-9]{2})$/u;
+
+/** `block-NN` of a cell, or the cell of a block role (null for any other role). */
+export const blockRole = (cell: number): string =>
+  `block-${String(cell).padStart(2, "0")}`;
+export const blockCellOf = (role: string): number | null => {
+  const match = BLOCK_ROLE.exec(role);
+  return match?.[1] === undefined ? null : Number(match[1]);
+};
+
+/** Columns, rows and cells of a frame's one level of blocks. */
+export const blockGrid = (frameWidth: number, frameHeight: number) => {
+  const edge = BLOCK_RECIPE_V1.grid.edge;
+  const columns = Math.ceil(frameWidth / edge);
+  const rows = Math.ceil(frameHeight / edge);
+  return { columns, rows, cells: columns * rows };
+};
+
+/** The pixel region of one row-major cell, with the right and bottom overlap. */
+export const blockCellRegion = (
+  frameWidth: number,
+  frameHeight: number,
+  cell: number,
+): PixelRegion => {
+  const { edge, overlap } = BLOCK_RECIPE_V1.grid;
+  const { columns, cells } = blockGrid(frameWidth, frameHeight);
+  if (!Number.isSafeInteger(cell) || cell < 0 || cell >= cells)
+    throw new RangeError("A block cell lies inside its frame's grid");
+  const left = (cell % columns) * edge;
+  const top = Math.floor(cell / columns) * edge;
+  return {
+    left,
+    top,
+    width: Math.min(edge + overlap, frameWidth - left),
+    height: Math.min(edge + overlap, frameHeight - top),
+  };
+};
+
 export interface RecipeIdentity {
   readonly role: RenditionRole;
   /** Integer ≥ 1, bumped by hand whenever an output-affecting parameter changes. */

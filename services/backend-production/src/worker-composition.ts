@@ -19,12 +19,15 @@ import {
 import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
   CATALOG_SYNC_INTERVAL_MS,
+  createCatalogBlockRenderer,
   createCatalogRenderer,
   createCatalogSync,
   listPublishedCatalogSources,
 } from "./publishing/catalog.js";
 import {
+  MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
   MEDIA_PROFILE_RENDER,
+  parseCatalogZoomSwitch,
   openProductionPublishingMedia,
   openPublishingMedia,
   parseProductionPublishingMediaConfig,
@@ -108,6 +111,11 @@ export interface PreparedMediaWorker {
   readonly catalog: boolean;
   /** `MEDIA_PROFILE_RENDER`: claims `profile_render` and runs the sweep. */
   readonly profile: boolean;
+  /**
+   * `MEDIA_CATALOG_ZOOM_BLOCKS_RENDER` with Catalog processing configured:
+   * claims and enqueues Catalog block jobs (catalog-deep-zoom-v1).
+   */
+  readonly blocks: boolean;
   start(): void;
   /** Stops the worker (bounded) and closes its pools. Idempotent. */
   stop(): Promise<void>;
@@ -168,6 +176,11 @@ const parseWorkerConfiguration = (environment: Environment) => {
     MEDIA_PROFILE_RENDER,
     nodeEnv,
   );
+  const blocks = parseCatalogZoomSwitch(
+    environment,
+    MEDIA_CATALOG_ZOOM_BLOCKS_RENDER,
+    nodeEnv,
+  );
   return {
     nodeEnv,
     media,
@@ -177,6 +190,7 @@ const parseWorkerConfiguration = (environment: Environment) => {
     catalogPrepareDatabase,
     publication,
     profile,
+    blocks,
   };
 };
 
@@ -310,6 +324,17 @@ export async function prepareMediaWorker(
     await closePools();
     return configError(error);
   }
+  const blocks =
+    configuration.blocks && catalogSource !== null && catalogPool !== null
+      ? {
+          port,
+          renderer: createCatalogBlockRenderer({
+            store: media.store,
+            sandbox: media.sandbox,
+            logger,
+          }),
+        }
+      : null;
   const catalog =
     catalogSource !== null && catalogPool !== null
       ? {
@@ -327,6 +352,7 @@ export async function prepareMediaWorker(
         readSnapshot: () =>
           readCatalogSourceSnapshot(catalogPool, catalogPreparePool),
         port,
+        ...(blocks ? { blocks: port } : {}),
         logger,
       })
     : null;
@@ -348,6 +374,7 @@ export async function prepareMediaWorker(
     kinds: profile
       ? [...MEDIA_WORKER_JOB_KINDS, ...PROFILE_RENDER_JOB_KINDS]
       : MEDIA_WORKER_JOB_KINDS,
+    ...(blocks ? { catalogBlocks: true } : {}),
     // The Backend schedules and claims the staging sweep (W3); lease requeue
     // and cleanup scheduling are idempotent across both processes.
     maintenance: { requeue: true, cleanup: true, reconcile: true },
@@ -383,7 +410,15 @@ export async function prepareMediaWorker(
       port,
       store: media.store,
       processor: media.processor,
-      ...(catalog ? { catalog: { port, renderer: catalog.renderer } } : {}),
+      ...(catalog
+        ? {
+            catalog: {
+              port,
+              renderer: catalog.renderer,
+              ...(blocks ? { blocks } : {}),
+            },
+          }
+        : {}),
       ...(profile ? { profile: { port, renderer: profile.renderer } } : {}),
       logger,
     }),
@@ -395,6 +430,7 @@ export async function prepareMediaWorker(
     runtime: check.runtime,
     catalog: catalog !== null,
     profile: profile !== null,
+    blocks: blocks !== null,
     start: () => {
       worker.start();
       publicationWorkers.forEach((lane) => lane.start());
@@ -418,7 +454,7 @@ export async function startMediaWorker(
   const prepared = await prepareMediaWorker(environment, dependencies);
   prepared.start();
   logger.info(
-    `[media-worker] ready concurrency=${prepared.concurrency} sharp=${prepared.runtime.sharp} vips=${prepared.runtime.vips} catalog=${prepared.catalog ? "on" : "off"} profile=${prepared.profile ? "on" : "off"}`,
+    `[media-worker] ready concurrency=${prepared.concurrency} sharp=${prepared.runtime.sharp} vips=${prepared.runtime.vips} catalog=${prepared.catalog ? "on" : "off"} profile=${prepared.profile ? "on" : "off"} blocks=${prepared.blocks ? "on" : "off"}`,
   );
   return prepared;
 }

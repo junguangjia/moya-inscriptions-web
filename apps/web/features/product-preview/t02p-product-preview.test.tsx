@@ -279,3 +279,30 @@ describe("authentication source recovery adapters", () => {
     },
   );
 });
+
+describe("work Detail peek (detail-entry-speed-v1)", () => {
+  it.each([
+    ["work", true, true],
+    ["catalog", true, false],
+    ["work", false, false],
+  ] as const)(
+    "for a %s Detail, with the peek composed=%s, passes it=%s",
+    async (kind, composed, passed) => {
+      fixture.kind = kind;
+      const peek = vi.fn(() => null);
+      await act(async () =>
+        root.render(
+          <T02pProductPreview
+            initialPlatform="phone"
+            states={states}
+            {...(composed ? { workDetailPeek: peek } : {})}
+          />,
+        ),
+      );
+      expect(fixture.overlay?.target?.type).toBe(kind);
+      expect(fixture.overlay?.peek).toBe(passed ? peek : undefined);
+      // Passing it reads nothing.
+      expect(peek).not.toHaveBeenCalled();
+    },
+  );
+});

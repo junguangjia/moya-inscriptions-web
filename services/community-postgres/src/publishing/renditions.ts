@@ -127,11 +127,18 @@ export const unrecordedKeys = async (
   return keys.filter((key) => !known.has(key));
 };
 
+/** A Catalog block role, `block-00` … `block-99` (catalog-deep-zoom-v1). */
+export type CatalogBlockRole = `block-${string}`;
+const BLOCK_ROLE = /^block-[0-9]{2}$/u;
+export const isCatalogBlockRole = (value: unknown): value is CatalogBlockRole =>
+  typeof value === "string" && BLOCK_ROLE.test(value);
+
 /** One stored result to record, for either subject kind. */
 export interface RenditionRecordInput extends PublishingMediaWriteResult {
-  readonly role: RenditionRole;
+  readonly role: RenditionRole | CatalogBlockRole;
   readonly editKey: string;
-  readonly contentType: "image/webp" | "video/mp4";
+  /** JPEG only for a Catalog block. */
+  readonly contentType: "image/webp" | "video/mp4" | "image/jpeg";
   readonly width: number;
   readonly height: number;
   readonly durationMs: number | null;
@@ -145,7 +152,12 @@ export interface RenditionRecordInput extends PublishingMediaWriteResult {
  */
 export type RenditionSubject =
   | { readonly kind: "item"; readonly id: string; readonly ownerId: string }
-  | { readonly kind: "catalog"; readonly id: string }
+  /** With `masterId`, the blocks of that display master (catalog-deep-zoom-v1). */
+  | {
+      readonly kind: "catalog";
+      readonly id: string;
+      readonly masterId?: string;
+    }
   | { readonly kind: "profile"; readonly id: string };
 
 const SUBJECT_COLUMNS = {
@@ -186,9 +198,25 @@ const assertRecordShape = (
   subject: RenditionSubject,
   record: RenditionRecordInput,
 ): void => {
-  if (!isRenditionRole(record.role) || !EDIT_KEY.test(record.editKey))
+  const block = isCatalogBlockRole(record.role);
+  if (
+    (!isRenditionRole(record.role) && !block) ||
+    !EDIT_KEY.test(record.editKey)
+  )
     throw new TypeError("Unknown rendition role or edit key");
   recipeOf(record);
+  // Blocks belong to a display master of a Catalog asset, and only they do.
+  const master = subject.kind === "catalog" && subject.masterId !== undefined;
+  if (block !== master)
+    throw new TypeError("Catalog blocks are recorded with their master only");
+  if (
+    block &&
+    (record.editKey !== "base" ||
+      record.contentType !== "image/jpeg" ||
+      record.durationMs !== null)
+  )
+    throw new TypeError("Catalog blocks are unedited JPEG stills");
+  if (block) return;
   // Profile images hold the profile roles only, and only they hold them.
   if ((subject.kind === "profile") !== isProfileRenditionRole(record.role))
     throw new TypeError("Profile roles belong to profile images only");
@@ -329,8 +357,8 @@ export const recordRenditionRows = async (
     );
     const renditionId = opaqueId("media-rendition");
     await db.query(
-      `INSERT INTO community.media_renditions(id,${subjectColumn},edit_key,role,recipe_version,recipe_digest,blob_id,width,height,duration_ms,content_type,state,created_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'ready',$12::timestamptz)`,
+      `INSERT INTO community.media_renditions(id,${subjectColumn},edit_key,role,recipe_version,recipe_digest,blob_id,width,height,duration_ms,content_type,state,created_at,catalog_master_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'ready',$12::timestamptz,$13)`,
       [
         renditionId,
         subject.id,
@@ -344,6 +372,7 @@ export const recordRenditionRows = async (
         record.durationMs,
         record.contentType,
         at,
+        subject.kind === "catalog" ? (subject.masterId ?? null) : null,
       ],
     );
     ready.set(slot, {

@@ -152,6 +152,41 @@ describe("Catalog Detail presentation", () => {
   });
 });
 
+describe("Catalog Detail deep zoom (catalog-deep-zoom-v1)", () => {
+  it("carries an image's block frame with its record, and nothing for other images", () => {
+    const presentation = toCatalogDetailPresentation(
+      {
+        ...completeDetail,
+        media: [
+          {
+            ...completeDetail.media[0]!,
+            src: "https://example.test/display.webp",
+            width: 2048,
+            height: 1365,
+            renditions: [
+              {
+                src: "https://example.test/display.webp",
+                width: 2048,
+                height: 1365,
+                contentType: "image/webp",
+              },
+            ],
+            zoom: { width: 8192, height: 5461 },
+          },
+          { ...completeDetail.media[0]!, id: "media-plain" as MediaId },
+        ],
+      },
+      "runtime",
+    );
+    expect(presentation.media[0]?.deepZoom).toEqual({
+      width: 8192,
+      height: 5461,
+      catalogId: "catalog-complete",
+    });
+    expect(presentation.media[1]?.deepZoom).toBeUndefined();
+  });
+});
+
 describe("Work media presentation", () => {
   it("carries the full derivative for the Viewer only when the work names one", () => {
     const id = `media-item-${"2".repeat(32)}`;

@@ -96,10 +96,15 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
       "/v1/community/notifications",
     ]);
     // One Catalog detail route plus the two comment routes of Mission 2B,
-    // and (unified-media-pipeline-v1, PR 1b) the Development-only Catalog
-    // rendition route GET /v1/development/catalog-renditions/<rendition id>.
-    expect(router.match(/\.exec\(\s*pathname,?\s*\)/gu)).toHaveLength(4);
+    // (unified-media-pipeline-v1, PR 1b) the Development-only Catalog
+    // rendition route GET /v1/development/catalog-renditions/<rendition id>,
+    // and (catalog-deep-zoom-v1) the per-image block-list read
+    // GET /v1/catalog/<catalog id>/media/<media id>/zoom-blocks.
+    expect(router.match(/\.exec\(\s*pathname,?\s*\)/gu)).toHaveLength(5);
     expect(router).toContain("/^\\/v1\\/catalog\\/([^/]+)$/");
+    expect(router).toContain(
+      "/^\\/v1\\/catalog\\/([^/]+)\\/media\\/([^/]+)\\/zoom-blocks$/",
+    );
     expect(router).toContain("/^\\/v1\\/catalog\\/([^/]+)\\/comments$/");
     expect(router).toContain(
       "/^\\/v1\\/catalog\\/([^/]+)\\/comments\\/([^/]+)\\/replies$/",

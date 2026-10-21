@@ -136,8 +136,13 @@ export const CatalogDetailExperience = ({
       setWithdrawal({ id, notice }),
     [],
   );
+  // The notice stays when a read still in progress then settles without the
+  // content just removed (404, or a failed read).
   const withdrawn =
-    state.state === "loaded" && withdrawal?.id === state.detail.id
+    withdrawal !== null &&
+    (state.state === "loaded"
+      ? withdrawal.id === state.detail.id
+      : state.state !== "loading" && withdrawal.id === catalogId)
       ? withdrawal.notice
       : null;
   // A withdrawn Detail offers no media: the Viewer closes and nothing plays.

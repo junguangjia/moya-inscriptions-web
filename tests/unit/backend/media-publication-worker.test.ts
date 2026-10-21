@@ -213,6 +213,9 @@ function fixture(bytes = BYTES) {
     existing: false,
     existsAtEdge: false,
     taskState: "pending" as "pending" | "succeeded" | "failed",
+    dayRequests: 1_000,
+    dayBytes: 10_000_000,
+    dayRow: true,
     sourceChunks: [bytes] as readonly Uint8Array[],
     beforeChunk: (index: number) => {
       void index;
@@ -286,6 +289,10 @@ function fixture(bytes = BYTES) {
     recordRequestUsage: vi.fn(async () => {
       events.push("recordRequestUsage");
     }),
+    recordDayUsage: vi.fn(async () => {
+      events.push("recordDayUsage");
+      return state.dayRow;
+    }),
   };
   const source: PublicationSource = {
     openRead: vi.fn(async () => {
@@ -349,6 +356,11 @@ function fixture(bytes = BYTES) {
       end,
       requests: 2_000_000,
       warning: true,
+    })),
+    dayUsage: vi.fn(async (dayStart) => ({
+      dayStart,
+      requests: state.dayRequests,
+      bytes: state.dayBytes,
     })),
   };
   const logger = { info: vi.fn(), error: vi.fn() };
@@ -710,6 +722,48 @@ describe("public-mode media publication lifecycle (offline synthetic evidence)",
     expect(f.logger.error).toHaveBeenCalledWith(
       "publication.usage code=monthly_request_warning threshold=2000000",
     );
+  });
+
+  it("records the image host's day usage every 15 minutes, with content-free threshold lines (catalog-deep-zoom-v1)", async () => {
+    const f = fixture();
+    const steps = publicationMaintenanceSteps(f.queue, {
+      port: f.port,
+      provider: f.provider,
+      logger: f.logger,
+      allowPublish: () => f.state.allowed,
+    });
+    const day = steps.find((step) => step.label === "publication_day_usage")!;
+    expect(day.intervalMs).toBe(15 * 60 * 1_000);
+    await day.run(NOW);
+    // From 00:00 Asia/Shanghai of NOW's cap day.
+    const dayStart = new Date("2026-10-07T16:00:00.000Z");
+    expect(f.provider.dayUsage).toHaveBeenCalledWith(dayStart, NOW);
+    expect(f.port.recordDayUsage).toHaveBeenCalledWith(
+      { dayStart, requests: 1_000, bytes: 10_000_000 },
+      NOW,
+    );
+    expect(f.logger.error).not.toHaveBeenCalled();
+    f.state.dayRequests = 100_000;
+    await day.run(NOW);
+    expect(f.logger.error).toHaveBeenLastCalledWith(
+      "publication.usage code=day_usage_warning requests=100000 bytes=10000000",
+    );
+    f.state.dayBytes = 5_000_000_000;
+    await day.run(NOW);
+    expect(f.logger.error).toHaveBeenLastCalledWith(
+      "publication.usage code=day_usage_trip requests=100000 bytes=5000000000",
+    );
+    f.state.dayRow = false;
+    f.state.dayRequests = 10;
+    f.state.dayBytes = 10;
+    await day.run(NOW);
+    expect(f.logger.error).toHaveBeenLastCalledWith(
+      "publication.usage code=day_usage_no_row",
+    );
+    f.state.allowed = false;
+    vi.mocked(f.provider.dayUsage).mockClear();
+    await day.run(NOW);
+    expect(f.provider.dayUsage).not.toHaveBeenCalled();
   });
 
   it("does not assume the publisher role for scheduled usage reads during Beta/off", async () => {

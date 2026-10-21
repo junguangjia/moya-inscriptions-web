@@ -1,6 +1,8 @@
 import type {
   CatalogDetail,
+  CatalogDetailMedia,
   CatalogPage,
+  CatalogZoomBlocks,
   CatalogSearchPage,
   CatalogSummary,
   MediaId,
@@ -8,11 +10,15 @@ import type {
   PublicSourceCitation,
 } from "@moya/contracts";
 import {
+  CATALOG_ZOOM_BLOCK_EDGE,
+  CATALOG_ZOOM_BLOCK_OVERLAP,
   addMediaRenditionAnchorIssues,
+  catalogDetailMediaSchema,
   catalogDetailSchema,
   catalogPageSchema,
   catalogSearchPageSchema,
   catalogSummarySchema,
+  catalogZoomBlocksSchema,
   placeholderColorSchema,
   publicMediaRenditionListSchema,
   publicMediaSchema,
@@ -30,6 +36,7 @@ import type {
   CatalogMediaRenditionProjection,
   CatalogSourceCitationProjection,
   CatalogStatefulTextProjection,
+  CatalogZoomFrameProjection,
 } from "../catalog-read-projections.js";
 import type { CatalogSearchPageProjection } from "../ports/catalog-search-query-port.js";
 import type { ResolvedMediaUrl } from "../ports/storage-url-resolver.js";
@@ -209,6 +216,76 @@ export const mapCatalogPublicMedia = (
   return media.data;
 };
 
+/** Block frames by media id, as `CatalogQueryPort.getZoomFrames` answers. */
+export type CatalogZoomFrames = ReadonlyMap<
+  MediaId,
+  CatalogZoomFrameProjection
+>;
+
+const noZoomFrames: CatalogZoomFrames = new Map();
+
+/** How often one `[catalog-zoom]` warning code may repeat (catalog-deep-zoom-v1). */
+const CATALOG_ZOOM_WARNING_MS = 60_000;
+const catalogZoomWarnedAt = new Map<string, number>();
+
+/**
+ * A content-free `[catalog-zoom]` warning, at most once a minute per code,
+ * so one misfit image read on every Detail open cannot flood the journal.
+ */
+export const warnCatalogZoom = (
+  code: "frame_refused" | "blocks_refused" | "frame_unavailable",
+  now = Date.now(),
+): void => {
+  const last = catalogZoomWarnedAt.get(code);
+  if (last !== undefined && now - last < CATALOG_ZOOM_WARNING_MS) return;
+  catalogZoomWarnedAt.set(code, now);
+  console.warn(`[catalog-zoom] ${code}`);
+};
+
+/**
+ * catalog-deep-zoom-v1: a Detail image carries its block frame only when its
+ * rendition group resolved (never on the approved-`src` fallback) and the
+ * frame shows the image's framing in 2 to 100 blocks; otherwise the frame is
+ * left out with a content-free warning and the image is unchanged.
+ */
+export const withCatalogZoomFrame = (
+  media: PublicMedia,
+  frame: CatalogZoomFrameProjection | undefined,
+): CatalogDetailMedia => {
+  if (frame === undefined || media.renditions === undefined) return media;
+  const parsed = catalogDetailMediaSchema.safeParse({
+    ...media,
+    zoom: { width: frame.width, height: frame.height },
+  });
+  if (!parsed.success) {
+    warnCatalogZoom("frame_refused");
+    return media;
+  }
+  return parsed.data;
+};
+
+/**
+ * catalog-deep-zoom-v1: one image's block list, or null when the contract
+ * refuses it (content-free warning).
+ */
+export const mapCatalogZoomBlocks = (
+  frame: CatalogZoomFrameProjection,
+  srcs: readonly ResolvedMediaUrl[],
+): CatalogZoomBlocks | null => {
+  const parsed = catalogZoomBlocksSchema.safeParse({
+    width: frame.width,
+    height: frame.height,
+    edge: CATALOG_ZOOM_BLOCK_EDGE,
+    overlap: CATALOG_ZOOM_BLOCK_OVERLAP,
+    srcs,
+  });
+  if (!parsed.success) {
+    warnCatalogZoom("blocks_refused");
+    return null;
+  }
+  return parsed.data;
+};
+
 const mapCatalogSourceCitation = (
   projection: CatalogSourceCitationProjection,
 ): PublicSourceCitation => {
@@ -276,6 +353,7 @@ export const mapCatalogDetail = (
   projection: CatalogDetailProjection,
   resolvedMedia: ReadonlyMap<MediaId, ResolvedMediaUrl> = noResolvedMedia,
   renditionUrls: CatalogRenditionUrls = noRenditionUrls,
+  zoomFrames: CatalogZoomFrames = noZoomFrames,
 ): CatalogDetail => {
   const detail: CatalogDetail = {
     ...mapCatalogSummary(projection, resolvedMedia, renditionUrls),
@@ -287,7 +365,9 @@ export const mapCatalogDetail = (
         renditionUrls,
         "detail",
       );
-      return mapped ? [mapped] : [];
+      return mapped
+        ? [withCatalogZoomFrame(mapped, zoomFrames.get(media.id))]
+        : [];
     }),
   };
 

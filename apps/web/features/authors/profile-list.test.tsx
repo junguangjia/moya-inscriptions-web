@@ -5,20 +5,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Root } from "react-dom/client";
 
-const { works, author, draftsCard, cardItems } = vi.hoisted(() => ({
-  works: vi.fn(),
-  cardItems: [] as import("@moya/contracts").ContentCard[],
-  author: {
-    cache: new Map<string, unknown>(),
-    viewer: null as { id: string } | null,
-    revision: 1,
-    guestFavorites: [],
-  },
-  draftsCard: vi.fn(),
-}));
+const { works, collection, identity, author, draftsCard, cardItems } =
+  vi.hoisted(() => ({
+    works: vi.fn(),
+    collection: vi.fn(),
+    // Whom the author client reads for; an account change starts a new epoch.
+    identity: { account: null as string | null, epoch: 0 },
+    cardItems: [] as import("@moya/contracts").ContentCard[],
+    author: {
+      cache: new Map<string, unknown>(),
+      viewer: null as { id: string } | null,
+      revision: 1,
+      guestFavorites: [],
+    },
+    draftsCard: vi.fn(),
+  }));
 vi.mock("./author-data", async (original) => ({
   ...(await original<typeof import("./author-data")>()),
-  authorClient: { works, collection: vi.fn(), card: vi.fn() },
+  authorClient: {
+    works,
+    collection,
+    card: vi.fn(),
+    account: () => identity.account,
+    accountEpoch: () => identity.epoch,
+  },
 }));
 vi.mock("./author-context", () => ({ useAuthors: () => author }));
 vi.mock("../product-shell/product-shell", () => ({
@@ -38,6 +48,7 @@ vi.mock("../publishing/ui/drafts/drafts-card", () => ({
 }));
 
 import { ProfileList, workCard, workCardExcerpt } from "./profile-list";
+import { readWorkSnapshot, resetWorkSnapshots } from "./work-snapshots";
 
 import type { UserWork, WorkMedia } from "@moya/contracts";
 
@@ -115,6 +126,9 @@ const cards = (node: HTMLElement) =>
 beforeEach(() => {
   author.cache.clear();
   author.viewer = null;
+  identity.account = null;
+  identity.epoch = 0;
+  resetWorkSnapshots();
   works.mockResolvedValue({
     items: [work(1), work(2)],
     page: 1,
@@ -128,6 +142,7 @@ afterEach(async () => {
   cardItems.length = 0;
   document.body.replaceChildren();
   vi.clearAllMocks();
+  collection.mockReset();
 });
 
 describe("Profile works drafts card", () => {
@@ -424,4 +439,82 @@ describe("Profile works cards", () => {
       media: null,
     });
   });
+});
+
+describe("Profile works snapshots", () => {
+  const deferred = () => {
+    let resolve!: (value: unknown) => void;
+    const promise = new Promise((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  };
+  const page = (items: UserWork[]) => ({
+    items,
+    page: 1,
+    pageSize: 12,
+    total: items.length,
+  });
+
+  it("holds every work the Works tab read, the owner's unavailable ones included", async () => {
+    author.viewer = { id: OWNER };
+    identity.account = OWNER;
+    identity.epoch = 1;
+    const read = [
+      work(1, { text: "第一篇的全文" }),
+      work(2, { title: "", text: "无题的全文" }),
+      work(3, { available: false }),
+    ];
+    works.mockResolvedValue(page(read));
+    const node = await render({ authorId: OWNER, owner: true });
+    expect(cards(node)).toEqual(["drafts", ...read.map((item) => item.id)]);
+    for (const item of read) expect(readWorkSnapshot(item.id)).toEqual(item);
+  });
+
+  it("holds a visitor's works too, though their unavailable ones show no card", async () => {
+    author.viewer = { id: VISITOR };
+    identity.account = VISITOR;
+    identity.epoch = 1;
+    const read = [work(1), work(2, { available: false })];
+    works.mockResolvedValue(page(read));
+    const node = await render({ authorId: OWNER, owner: false });
+    expect(cards(node)).toEqual([work(1).id]);
+    for (const item of read) expect(readWorkSnapshot(item.id)).toEqual(item);
+  });
+
+  it("holds nothing when the list leaves before the read answers", async () => {
+    const pending = deferred();
+    works.mockReturnValue(pending.promise);
+    await render({ authorId: OWNER, owner: false });
+    await act(async () => root?.unmount());
+    root = null;
+    await act(async () => pending.resolve(page([work(1)])));
+    expect(readWorkSnapshot(work(1).id)).toBeNull();
+  });
+
+  it("holds nothing from a read that started under another account epoch", async () => {
+    const pending = deferred();
+    works.mockReturnValue(pending.promise);
+    await render({ authorId: OWNER, owner: false });
+    // A→B→A: the same account, but a new epoch, before the answer.
+    identity.epoch++;
+    await act(async () => pending.resolve(page([work(1)])));
+    expect(readWorkSnapshot(work(1).id)).toBeNull();
+  });
+
+  it.each(["favorites", "likes"] as const)(
+    "holds nothing from the %s tab",
+    async (tab) => {
+      collection.mockResolvedValue({
+        items: [workCard(work(1, { text: "收藏卡片的正文" }))],
+        page: 1,
+        pageSize: 12,
+        total: 1,
+      });
+      const node = await render({ authorId: OWNER, owner: false, tab });
+      expect(cards(node)).toEqual([work(1).id]);
+      expect(works).not.toHaveBeenCalled();
+      expect(readWorkSnapshot(work(1).id)).toBeNull();
+    },
+  );
 });

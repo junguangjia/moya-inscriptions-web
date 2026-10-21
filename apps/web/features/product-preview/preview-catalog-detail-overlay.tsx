@@ -10,7 +10,10 @@ import { useContentAnalytics } from "../analytics/product-analytics";
 
 import type { ReactNode, RefObject } from "react";
 import type { ContentIdentity } from "@moya/contracts";
-import type { CatalogDetailPresentationLoader } from "../detail/load-catalog-detail";
+import type {
+  CatalogDetailPresentationLoader,
+  CatalogDetailPresentationPeek,
+} from "../detail/load-catalog-detail";
 import type {
   CatalogDetailPresentation,
   CatalogDetailPresentationState,
@@ -29,6 +32,12 @@ export interface PreviewCatalogDetailOverlayProps {
   ) => ReactNode;
   readonly initialScrollTop: number;
   readonly loader: CatalogDetailPresentationLoader;
+  /**
+   * What the Detail shows at once while the loader reads (a work this account
+   * already received); the loader's answer then replaces it in place. Absent
+   * for the Catalog, which starts in loading.
+   */
+  readonly peek?: CatalogDetailPresentationPeek | undefined;
   readonly onClose: () => void;
   readonly onScrollTopChange: (top: number) => void;
 }
@@ -42,6 +51,7 @@ export const PreviewCatalogDetailOverlay = ({
   renderActions,
   initialScrollTop,
   loader,
+  peek,
   onClose,
   onScrollTopChange,
 }: PreviewCatalogDetailOverlayProps) => {
@@ -69,23 +79,86 @@ export const PreviewCatalogDetailOverlay = ({
   const calligraphy = platform !== "pc" && feedLayout === "single";
   const generationRef = useRef(0);
   const missingTargetRef = useRef<ContentIdentity | null>(null);
+  // A seed only for a known account: never during a session error or a first
+  // check without a viewer, and only when it holds the Viewer's media.
+  const seedFor = (id: string) => {
+    if (
+      peek === undefined ||
+      author === null ||
+      author.sessionError ||
+      (author.checking && author.viewer === null)
+    )
+      return null;
+    const seed = peek(id);
+    return seed !== null &&
+      (activeViewerMediaId === null ||
+        seed.media.some((item) => item.id === activeViewerMediaId))
+      ? seed
+      : null;
+  };
+  // The read effect sees the current gating without re-running on it.
+  const seedRef = useRef(seedFor);
+  seedRef.current = seedFor;
   const [revision, setRevision] = useState(0);
-  const [state, setState] = useState<CatalogDetailPresentationState>({
-    state: "loading",
+  const [state, setState] = useState<CatalogDetailPresentationState>(() => {
+    const seed = seedFor(catalogId);
+    return seed === null
+      ? { state: "loading" }
+      : { state: "loaded", detail: seed };
   });
-  useContentAnalytics(targetType, targetId, state.state === "loaded");
+  // A seed alone is not an open: content_open waits for the confirming read.
+  const provisional =
+    state.state === "loaded" &&
+    state.detail.contentType === "work" &&
+    state.detail.provisional === true;
+  useContentAnalytics(
+    targetType,
+    targetId,
+    state.state === "loaded" && !provisional,
+  );
 
   useEffect(() => {
     const controller = new AbortController();
     const generation = ++generationRef.current;
     missingTargetRef.current = null;
-    setState({ state: "loading" });
+    if (peek === undefined) setState({ state: "loading" });
+    else {
+      // What is shown stays while the read revalidates it: no skeleton.
+      const seed = seedRef.current(catalogId);
+      setState((current) =>
+        current.state === "loaded" && current.detail.id === catalogId
+          ? current
+          : seed === null
+            ? { state: "loading" }
+            : { state: "loaded", detail: seed },
+      );
+    }
+    // A failed read keeps the work already shown only while it is still held
+    // (a transport failure). A record forgotten by the read (401, 403) shows
+    // the answer, and so does a Detail that opened without a known work.
+    const settleFailure = (answer: CatalogDetailPresentationState) => {
+      missingTargetRef.current = null;
+      setState((current) =>
+        current.state === "loaded" &&
+        current.detail.id === catalogId &&
+        seedRef.current(catalogId) !== null
+          ? current
+          : answer,
+      );
+    };
     void loader(catalogId, controller.signal)
       .then((nextState) => {
         if (
           !controller.signal.aborted &&
           generationRef.current === generation
         ) {
+          if (
+            nextState.state === "unavailable" ||
+            nextState.state === "unexpected-error"
+          ) {
+            settleFailure(nextState);
+            return;
+          }
           missingTargetRef.current =
             nextState.state === "not-found"
               ? { type: targetType, id: targetId }
@@ -98,11 +171,11 @@ export const PreviewCatalogDetailOverlay = ({
           !controller.signal.aborted &&
           generationRef.current === generation
         ) {
-          setState({ state: "unexpected-error" });
+          settleFailure({ state: "unexpected-error" });
         }
       });
     return () => controller.abort();
-  }, [catalogId, loader, revision, targetType, targetId]);
+  }, [catalogId, loader, peek, revision, targetType, targetId]);
 
   useEffect(() => {
     // A confirmed /me can re-key source feeds and this Detail. Let that commit
