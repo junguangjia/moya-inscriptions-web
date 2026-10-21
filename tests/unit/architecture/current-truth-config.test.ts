@@ -642,12 +642,11 @@ describe("current repository truth and local configuration", () => {
       ),
     ).toBe(false);
 
-    for (const currentDocument of [
-      rootReadme,
-      webReadme,
-      architecture,
-      projectStatus,
-    ]) {
+    // The root README became a short public overview (#319); it must still
+    // not point at the retired route, while the working documents pin the
+    // Formal root.
+    expect(rootReadme).not.toContain("apps/web/app/route.ts");
+    for (const currentDocument of [webReadme, architecture, projectStatus]) {
       expect(currentDocument).toContain("apps/web/app/page.tsx");
       expect(currentDocument).not.toContain("apps/web/app/route.ts");
     }
@@ -755,7 +754,8 @@ describe("current repository truth and local configuration", () => {
       ),
     ]);
 
-    expect(rootReadme).toMatch(/最新\s+`origin\/main`/);
+    // #319 rewrote the root README in English ("Start from the latest `main`").
+    expect(rootReadme).toMatch(/最新\s+`origin\/main`|latest\s+`main`/);
     expect(security).toContain("current default branch, `main`");
     expect(contributing).toContain("Sync `main`");
     expect(contributing).toContain("Draft PR to `main`");
