@@ -2,12 +2,24 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { authorClient } from "./author-data";
 import { useOptionalAuthors } from "./author-context";
+import {
+  readWorkSnapshot,
+  recordWorkSnapshots,
+  useWorkSnapshot,
+  workSnapshotToken,
+} from "./work-snapshots";
+import type { WorkSnapshotToken } from "./work-snapshots";
 import styles from "../home/home-screen.module.css";
 
 type BodyState =
   | { readonly state: "loading" }
   | { readonly state: "loaded"; readonly text: string }
   | { readonly state: "error" };
+
+const sameToken = (a: WorkSnapshotToken, b: WorkSnapshotToken) =>
+  a.account === b.account &&
+  a.epoch === b.epoch &&
+  a.generation === b.generation;
 
 /** Range offsets use UTF-16; slice only at complete Unicode code points. */
 const collapsedOpening = (
@@ -45,45 +57,58 @@ const collapsedOpening = (
   return `${characters.slice(0, count).join("").trimEnd()}…`;
 };
 
-/** Preview the body immediately; read visible posts through the existing,
- * account-scoped work endpoint to determine whether three lines overflow. */
+/** Preview the body immediately; show the full text of a work this account
+ * already received (a Works tab list, an earlier body or Detail read), else
+ * read visible posts through the existing, account-scoped work endpoint to
+ * determine whether three lines overflow. With `onOpen`, the displayed text
+ * is covered by a transparent 查看详情 button. */
 export const FeedPostBody = ({
   workId,
   expanded,
   id,
   preview,
   onOverflowChange,
+  onOpen,
 }: {
   readonly workId: string;
   readonly expanded: boolean;
   readonly id: string;
   readonly preview?: string | undefined;
   readonly onOverflowChange?: ((overflow: boolean) => void) | undefined;
+  readonly onOpen?:
+    ((opener: HTMLButtonElement, pointer: boolean) => void) | undefined;
 }) => {
   const author = useOptionalAuthors();
-  const cache = author?.cache;
   const key = `work-body:${author?.viewer?.id ?? "guest"}:${workId}`;
   const checking = author?.checking ?? false;
   const sessionError = author?.sessionError ?? false;
-  const [snapshot, setSnapshot] = useState<{ key: string; body: BodyState }>(
-    () => {
-      const cached = cache?.get(key);
-      return {
-        key,
-        body:
-          typeof cached === "string"
-            ? { state: "loaded", text: cached }
-            : { state: "loading" },
-      };
-    },
-  );
+  // The work as this account last received it; an unavailable one is read
+  // again, so its error and 重试 stay this post's own.
+  const known = useWorkSnapshot(workId);
+  const knownText = known?.available ? known.text : null;
+  // Held, but no longer available to read (an operator hid it): never keep a
+  // copied text then; read again, so the post shows its own error and 重试.
+  const heldUnavailable = known !== null && !known.available;
+  // What this post shows of its own: a copy of the held text, or its read's
+  // answer. Loaded text carries whom it was current for and the forget
+  // generation it was current at, so text the bounded store merely dropped
+  // stays on screen while text something forgot is read again.
+  const [snapshot, setSnapshot] = useState<{
+    key: string;
+    body: BodyState;
+    token?: WorkSnapshotToken;
+  }>(() => ({ key, body: { state: "loading" } }));
   // Hide the old identity's snapshot in the render that changes identity,
   // before the effect starts its replacement read.
   const body: BodyState = sessionError
     ? { state: "error" }
-    : checking || snapshot.key !== key
+    : checking
       ? { state: "loading" }
-      : snapshot.body;
+      : knownText !== null
+        ? { state: "loaded", text: knownText }
+        : snapshot.key !== key
+          ? { state: "loading" }
+          : snapshot.body;
   const [attempt, setAttempt] = useState(0);
   const [previewOwner] = useState(author?.viewer?.id ?? "guest");
   const safePreview =
@@ -166,14 +191,48 @@ export const FeedPostBody = ({
     };
   }, [key, displayedText, body.state, expanded, onOverflowChange]);
   const shouldRead = expanded || (visible && onOverflowChange !== undefined);
-  useEffect(() => {
-    if (!shouldRead || checking || sessionError) return undefined;
-    const cached = cache?.get(key);
-    if (typeof cached === "string") {
-      setSnapshot({ key, body: { state: "loaded", text: cached } });
+  // A layout effect, so text something forgot is replaced before it paints.
+  // It looks at `snapshot` as this render shows it; a change to that alone
+  // never starts a read.
+  useLayoutEffect(() => {
+    if (checking || sessionError) return undefined;
+    if (knownText !== null) {
+      // Copied, so the text stays when the bounded store drops the record.
+      const token = workSnapshotToken();
+      setSnapshot((previous) =>
+        previous.key === key &&
+        previous.body.state === "loaded" &&
+        previous.body.text === knownText &&
+        previous.token !== undefined &&
+        sameToken(previous.token, token)
+          ? previous
+          : { key, body: { state: "loaded", text: knownText }, token },
+      );
       return undefined;
     }
+    const shown =
+      snapshot.key === key && snapshot.body.state === "loaded"
+        ? snapshot.token
+        : undefined;
+    let again = false;
+    if (shown !== undefined) {
+      // Not held (any more), but shown. It stays, and nothing is read, while
+      // the account is the same and nothing was forgotten since it was
+      // current: the store only dropped the record to stay bounded.
+      const now = workSnapshotToken();
+      if (sameToken(shown, now) && !heldUnavailable) return undefined;
+      // Something was forgotten since (an edit, a block, a refused Detail
+      // read; the store does not say which work). This post reads once more
+      // for itself only: recording that answer could push another post's
+      // record out and set that post reading too.
+      again = shown.generation !== now.generation;
+      if (!shouldRead) setSnapshot({ key, body: { state: "loading" } });
+    }
+    if (!shouldRead) return undefined;
     const controller = new AbortController();
+    // Taken before the read: a change of account, or a forget while it
+    // runs, keeps its answer out of the snapshots.
+    const token = workSnapshotToken();
     setSnapshot({ key, body: { state: "loading" } });
     authorClient
       .work(workId, controller.signal)
@@ -183,15 +242,41 @@ export const FeedPostBody = ({
           setSnapshot({ key, body: { state: "error" } });
           return;
         }
-        cache?.set(key, work.text);
-        setSnapshot({ key, body: { state: "loaded", text: work.text } });
+        if (!again && work.id === workId) {
+          recordWorkSnapshots([work], token);
+          const now = workSnapshotToken();
+          // Refused for the same account: the work was forgotten while this
+          // read ran, so its answer may predate the change. Read once more.
+          if (
+            readWorkSnapshot(workId) === null &&
+            now.account === token.account &&
+            now.epoch === token.epoch
+          ) {
+            setAttempt((value) => value + 1);
+            return;
+          }
+        }
+        setSnapshot({
+          key,
+          body: { state: "loaded", text: work.text },
+          token,
+        });
       })
       .catch(() => {
         if (!controller.signal.aborted)
           setSnapshot({ key, body: { state: "error" } });
       });
     return () => controller.abort();
-  }, [shouldRead, workId, attempt, key, cache, checking, sessionError]);
+  }, [
+    shouldRead,
+    workId,
+    attempt,
+    key,
+    checking,
+    sessionError,
+    knownText,
+    heldUnavailable,
+  ]);
   if (!expanded && onOverflowChange === undefined) return null;
   // CSS clipping does not shorten the accessibility tree. Keep the full text
   // for accurate visual measurement, but expose only an opening when collapsed.
@@ -207,27 +292,44 @@ export const FeedPostBody = ({
       data-feed-post-body-state={body.state}
       id={id}
     >
-      {body.state === "loaded" ? (
-        <p
-          ref={text}
-          className={styles.postBodyText}
-          data-feed-post-body=""
-          aria-hidden={!expanded ? true : undefined}
-        >
-          {body.text}
-        </p>
-      ) : safePreview === undefined || safePreview === "" ? null : (
-        <p
-          ref={text}
-          className={styles.postBodyText}
-          data-card-excerpt=""
-          aria-hidden={!expanded ? true : undefined}
-        >
-          {safePreview}
-        </p>
-      )}
-      {!expanded && accessibleText !== "" ? (
-        <p className="yoyi-visually-hidden">{accessibleText}</p>
+      {body.state === "loaded" ||
+      (safePreview !== undefined && safePreview !== "") ? (
+        // The opener covers only displayed text; the status row stays apart.
+        <div className={styles.postBodyFrame}>
+          {body.state === "loaded" ? (
+            <p
+              ref={text}
+              className={styles.postBodyText}
+              data-feed-post-body=""
+              aria-hidden={!expanded ? true : undefined}
+            >
+              {body.text}
+            </p>
+          ) : (
+            <p
+              ref={text}
+              className={styles.postBodyText}
+              data-card-excerpt=""
+              aria-hidden={!expanded ? true : undefined}
+            >
+              {safePreview}
+            </p>
+          )}
+          {!expanded && accessibleText !== "" ? (
+            <p className="yoyi-visually-hidden">{accessibleText}</p>
+          ) : null}
+          {onOpen === undefined || displayedText.trim() === "" ? null : (
+            <button
+              aria-label="查看详情"
+              className={styles.postBodyOpen}
+              data-feed-post-body-open=""
+              onClick={(event) =>
+                onOpen(event.currentTarget, event.detail !== 0)
+              }
+              type="button"
+            />
+          )}
+        </div>
       ) : null}
       {body.state === "loaded" ||
       (!expanded && body.state === "loading") ? null : body.state ===

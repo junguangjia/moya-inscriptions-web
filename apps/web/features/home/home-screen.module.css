@@ -651,6 +651,30 @@
   -webkit-line-clamp: 3;
 }
 
+/* The displayed text, with the 查看详情 opener over it, across the post. */
+.postBodyFrame {
+  position: relative;
+  margin-inline: calc(-1 * var(--yoyi-space-4));
+  padding-inline: var(--yoyi-space-4);
+}
+
+.postBodyOpen {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* The frame spans the panel's full width, so the ring stays inside it. */
+.postBodyOpen:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
 .postBodyStatus {
   display: flex;
   min-height: 44px;

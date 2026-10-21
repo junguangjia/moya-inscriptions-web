@@ -27,6 +27,7 @@ import { PeopleList } from "./people-list";
 import { ProfileBackgroundEditor } from "./profile-background-editor";
 import { coverCard, coverColors, decoded } from "./profile-cover-colors";
 import type { CoverBox, CoverCardLayout } from "./profile-cover-colors";
+import { forgetAuthorWorkSnapshots } from "./work-snapshots";
 import { requestIdentity } from "../shell/request-identity";
 import media from "../publishing/ui/media/media.module.css";
 import styles from "../user/user-presentation.module.css";
@@ -1069,6 +1070,9 @@ const ScopedAuthorProfile = ({
                             targetId: profile.id,
                             enabled: true,
                           });
+                          // Their works no longer open from what this
+                          // page holds, nor from reads still in progress.
+                          forgetAuthorWorkSnapshots(profile.id);
                           author.mutate();
                           onClose();
                         } catch (e) {

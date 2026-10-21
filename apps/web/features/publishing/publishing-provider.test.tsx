@@ -8,6 +8,12 @@ const { author } = vi.hoisted(() => ({
 }));
 vi.mock("../authors/author-context", () => ({ useAuthors: () => author }));
 
+import {
+  readWorkSnapshot,
+  recordWorkSnapshots,
+  resetWorkSnapshots,
+  workSnapshotToken,
+} from "../authors/work-snapshots";
 import { identifyFiles } from "./import-grouping";
 import { fileOf, jpeg } from "./parsers/synthetic-media.test-support";
 import {
@@ -39,6 +45,7 @@ import type {
   PublishingDraft,
   PublishingDraftConflict,
   SavePublishingDraftCommand,
+  UserWork,
   WorkDraftContent,
 } from "@moya/contracts";
 import type { Root } from "react-dom/client";
@@ -156,6 +163,7 @@ describe("PublishingProvider hooks", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
+    resetWorkSnapshots();
   });
 
   afterEach(() => {
@@ -414,5 +422,71 @@ describe("PublishingProvider hooks", () => {
       readiness: null,
     });
     expect(latest.current!.session.hasUnfinishedWork()).toBe(false);
+  });
+
+  it("forgets what the page holds of a work once its submission is confirmed", async () => {
+    const fake = services();
+    author.viewer = { id: ACCOUNT };
+    fake.account.id = ACCOUNT;
+    const published = `work-${"9".repeat(32)}`;
+    const untouched = `work-${"7".repeat(32)}`;
+    Object.assign(fake.services.client, {
+      submit: vi.fn(async (cmd: { requestId: string }) => ({
+        state: "confirmed" as const,
+        requestId: cmd.requestId,
+        workId: published,
+        revisionId: `work-revision-${"8".repeat(32)}`,
+        visibility: "public" as const,
+        submittedAt: stamp,
+      })),
+      discardSession: vi.fn(async () => ({ discarded: true as const })),
+    });
+    const held = (id: string): UserWork => ({
+      id,
+      authorId: ACCOUNT,
+      authorName: "作者",
+      title: "编辑前的标题",
+      text: "编辑前的正文",
+      firstPublishedAt: stamp,
+      media: [],
+      version: 1,
+      canEdit: false,
+      available: true,
+    });
+    // As a Works tab list or a Detail read held them for this page.
+    recordWorkSnapshots(
+      [held(published), held(untouched)],
+      workSnapshotToken(),
+    );
+    // The test's own services hear first, while the record is still held.
+    let heldWhenHeard: UserWork | null = null;
+    const onSubmissionConfirmed = vi.fn(() => {
+      heldWhenHeard = readWorkSnapshot(published);
+    });
+    await act(async () =>
+      root.render(
+        <PublishingProvider
+          services={{ ...fake.services, onSubmissionConfirmed }}
+        >
+          <Probe />
+        </PublishingProvider>,
+      ),
+    );
+    await act(async () => {
+      latest.current!.session.startSession({
+        target: { type: "work", id: published },
+        workId: published,
+        saveMode: "unsaved",
+      });
+    });
+    await act(async () => {
+      expect(
+        await latest.current!.submission.submit(contentOf("编辑后的标题")),
+      ).toMatchObject({ status: "confirmed" });
+    });
+    expect(onSubmissionConfirmed).toHaveBeenCalledExactlyOnceWith(published);
+    expect(heldWhenHeard).toEqual(held(published));
+    expect(readWorkSnapshot(published)).toBeNull();
+    expect(readWorkSnapshot(untouched)).toEqual(held(untouched));
   });
 });

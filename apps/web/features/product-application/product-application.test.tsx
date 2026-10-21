@@ -5,6 +5,7 @@ import { ProductApplication } from "./product-application";
 import { DiscoveryFeed, FilteredInscriptions } from "../authors/discovery-feed";
 import { MessageTrigger } from "../authors/message-center";
 import { DiscussionSection } from "../authors/discussion-section";
+import { loadWorkDetail, peekWorkDetail } from "../authors/work-detail";
 import { CreateWorkAction } from "../publishing/create-action";
 import { renderEditorOverlay } from "../publishing/ui/editor/editor-overlay";
 import {
@@ -103,6 +104,20 @@ describe("ProductApplication", () => {
     expect(section.props).toEqual({
       target: { type: "catalog", id: "catalog-one" },
     });
+  });
+
+  it("gives the work Detail its loader and the peek of known works", () => {
+    renderToStaticMarkup(
+      <ProductApplication
+        comments={{ signInHref: "/dev/community" }}
+        authorCommunity
+        initialPlatform="phone"
+        states={states}
+      />,
+    );
+    const { workDetailLoader, workDetailPeek } = lastPreviewProps();
+    expect(workDetailLoader).toBe(loadWorkDetail);
+    expect(workDetailPeek).toBe(peekWorkDetail);
   });
 
   it("gives the author composition the plus dock action, header Search, and the editor seam", () => {

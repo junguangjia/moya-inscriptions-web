@@ -12,6 +12,7 @@ import { resolveLocalContent } from "./local-content-list";
 import { CatalogMasonry } from "../home/catalog-masonry";
 import { useProductShell } from "../product-shell/product-shell";
 import { ContentCard } from "./content-card";
+import { recordWorkSnapshots, workSnapshotToken } from "./work-snapshots";
 import { DraftsCard } from "../publishing/ui/drafts/drafts-card";
 import {
   WORK_EXCERPT_MAXIMUM,
@@ -174,10 +175,15 @@ export const ProfileList = ({
   const readPage = async (q: Read) => {
     if (!authorId) throw new Error("账户列表不可用");
     if (tab === "works") {
+      // Taken before the read: an account change while it runs keeps its
+      // works out of the snapshots.
+      const token = workSnapshotToken();
       const result = await authorClient.works(authorId, q.page);
       return {
         items: result.items.filter((w) => w.available || owner).map(workCard),
         total: result.total,
+        works: result.items,
+        token,
       };
     }
     if (tab !== "favorites" && tab !== "likes")
@@ -216,6 +222,9 @@ export const ProfileList = ({
             }
           : await readPage({ ...q, page });
         if (run !== epoch.current) return;
+        // The full works, so their posts and Detail show without reading
+        // each again (the owner's unavailable ones included).
+        if ("works" in result) recordWorkSnapshots(result.works, result.token);
         items.push(...result.items);
         total = result.total;
       }

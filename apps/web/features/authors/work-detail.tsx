@@ -1,14 +1,17 @@
 "use client";
 import { UserIdentity } from "./user-identity";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { WorkVisibility } from "@moya/contracts";
+import type { UserWork, WorkVisibility } from "@moya/contracts";
 import {
   toWorkAuthorshipPresentation,
   toWorkMediaPresentation,
 } from "../detail/catalog-detail-presentation";
 import { useCatalogDetailWithdrawal } from "../detail/catalog-detail-withdrawal";
 import type { CatalogDetailPresentation } from "../detail/catalog-detail-presentation";
-import type { CatalogDetailPresentationLoader } from "../detail/load-catalog-detail";
+import type {
+  CatalogDetailPresentationLoader,
+  CatalogDetailPresentationPeek,
+} from "../detail/load-catalog-detail";
 import detailStyles from "../detail/catalog-detail.module.css";
 import {
   publishingClient,
@@ -32,48 +35,68 @@ import {
   setOwnWorkAudience,
   useOwnWorkAudience,
 } from "./own-work-audience";
+import {
+  forgetWorkSnapshot,
+  readWorkSnapshot,
+  recordWorkSnapshots,
+  workSnapshotToken,
+} from "./work-snapshots";
 
 /** The pause before the one repeated read of the author's work. */
 const READ_BACK_RETRY_MS = 2000;
+
+type WorkDetail = Extract<CatalogDetailPresentation, { contentType: "work" }>;
+
+/** A work's Detail as its record says. Pure: never reads or records. */
+export const toWorkDetailPresentation = (work: UserWork): WorkDetail => {
+  const label = work.title === "" ? UNTITLED_WORK_LABEL : work.title;
+  return {
+    contentType: "work",
+    id: work.id,
+    authorId: work.authorId,
+    authorName: work.authorName,
+    authorStudioName: work.authorStudioName,
+    canEdit: work.canEdit,
+    available: work.available,
+    firstPublishedAt: work.firstPublishedAt,
+    editedAt: work.editedAt ?? null,
+    ...(work.visibility === undefined ? {} : { visibility: work.visibility }),
+    title: work.title,
+    aliases: [],
+    facts: [],
+    sections: work.text
+      ? [{ key: "description", title: "正文", text: work.text }]
+      : [],
+    ...(work.authorship === undefined
+      ? {}
+      : { authorship: toWorkAuthorshipPresentation(work.authorship) }),
+    media: work.media.map((m) => toWorkMediaPresentation(m, label)),
+    source: "runtime",
+    sourceCitations: [],
+  };
+};
+
 export const loadWorkDetail: CatalogDetailPresentationLoader = async (
   id,
   signal,
 ) => {
+  // Taken before the read: a change of account, or a forget while it runs,
+  // keeps its answer out of the snapshots.
+  const token = workSnapshotToken();
   try {
     const work = await authorClient.work(id, signal);
-    // Whether others can see the author's own work now (author-only).
-    recordOwnWorkAudience(work);
-    const label = work.title === "" ? UNTITLED_WORK_LABEL : work.title;
-    return {
-      state: "loaded",
-      detail: {
-        contentType: "work",
-        id: work.id,
-        authorId: work.authorId,
-        authorName: work.authorName,
-        authorStudioName: work.authorStudioName,
-        canEdit: work.canEdit,
-        available: work.available,
-        firstPublishedAt: work.firstPublishedAt,
-        editedAt: work.editedAt ?? null,
-        ...(work.visibility === undefined
-          ? {}
-          : { visibility: work.visibility }),
-        title: work.title,
-        aliases: [],
-        facts: [],
-        sections: work.text
-          ? [{ key: "description", title: "正文", text: work.text }]
-          : [],
-        ...(work.authorship === undefined
-          ? {}
-          : { authorship: toWorkAuthorshipPresentation(work.authorship) }),
-        media: work.media.map((m) => toWorkMediaPresentation(m, label)),
-        source: "runtime",
-        sourceCitations: [],
-      },
-    };
+    // Kept for the next open; the author's own view also records whether
+    // others can see the work now (author-only).
+    recordWorkSnapshots([work], token);
+    return { state: "loaded", detail: toWorkDetailPresentation(work) };
   } catch (e) {
+    // The account may not read the work (any more): what was kept for it is
+    // never shown again. A transport failure keeps it.
+    if (
+      e instanceof AuthorRequestError &&
+      (e.status === 401 || e.status === 403 || e.status === 404)
+    )
+      forgetWorkSnapshot(id);
     return {
       state:
         e instanceof AuthorRequestError && e.status === 404
@@ -83,7 +106,17 @@ export const loadWorkDetail: CatalogDetailPresentationLoader = async (
   }
 };
 
-type WorkDetail = Extract<CatalogDetailPresentation, { contentType: "work" }>;
+/**
+ * The work as this account last received it, marked provisional until the
+ * Detail's own read confirms it; null when nothing is known. Never reads or
+ * records.
+ */
+export const peekWorkDetail: CatalogDetailPresentationPeek = (id) => {
+  const work = readWorkSnapshot(id);
+  return work === null
+    ? null
+    : { ...toWorkDetailPresentation(work), provisional: true };
+};
 
 type ManagementIntent =
   | { readonly kind: "visibility"; readonly visibility: WorkVisibility }
@@ -180,6 +213,8 @@ const WorkManagement = ({
     try {
       if (intent.kind === "delete") {
         await publishingClient.deleteWork(detail.id, { requestId });
+        // Never shown again, even from a read already in progress.
+        forgetWorkSnapshot(detail.id);
         if (!mounted.current) return;
         setUnconfirmed(null);
         // A toast of an earlier action (作品已提交) no longer describes this work.
@@ -525,9 +560,13 @@ export const DetailActions = ({
         detail.visibility === "public" &&
         detail.firstPublishedAt !== null &&
         detail.firstPublishedAt !== undefined;
+  // A provisional work is recorded once its own read confirms it.
   const recordable =
     detail.contentType !== "work" ||
-    (detail.available && !deleted && (!owner || ownerPublic));
+    (detail.provisional !== true &&
+      detail.available &&
+      !deleted &&
+      (!owner || ownerPublic));
   useEffect(() => {
     if (author.checking || author.sessionError || !recordable) return;
     try {
@@ -548,6 +587,9 @@ export const DetailActions = ({
    * decides whether others see it yet.
    */
   const followVisibility = (value: WorkVisibility) => {
+    // The fence: a Detail or list read already in progress answers with the
+    // work as it was and must not overwrite the audience set below.
+    forgetWorkSnapshot(detail.id);
     setVisibilityChange({ id: detail.id, value });
     if (ownerId === null) return;
     const run = ++readBack.current;
