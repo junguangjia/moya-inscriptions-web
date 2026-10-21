@@ -9,6 +9,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./internal/community-operator": {
+      "types": "./src/community/operator-handler.ts",
+      "import": "./dist/community/operator-handler.js"
     }
   },
   "scripts": {

@@ -21,3 +21,10 @@ export {
 export { ownerDraftPage, ownerHistoryPage } from "./owner";
 
 export { EditorialIdentities } from "./identities";
+
+export {
+  assertCatalogDeliveryPublication,
+  cancelCatalogDelivery,
+  prepareCatalogDelivery,
+  readCatalogDelivery,
+} from "./catalog-delivery";

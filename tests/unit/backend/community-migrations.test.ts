@@ -93,6 +93,7 @@ describe("community migration family", () => {
         "20261019010000_product_analytics.sql",
         "20261019020000_upload_timing_instrumentation.sql",
         "20261020010000_catalog_zoom_blocks.sql",
+        "20261020160000_catalog_delivery_prepares.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);

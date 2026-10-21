@@ -65,18 +65,23 @@ export class AuthorCommunityService {
         ]),
       ).values(),
     ];
+    const facts = await this.mediaResolver?.catalogFacts?.(locators);
+    const effective = catalogMedia.map((media) => ({
+      ...media,
+      ...facts?.get(JSON.stringify([media.id, media.objectKey])),
+    }));
     // Catalog cards are a card context: candidates up to the anchor.
     const renditionKeys = [
       ...new Set(
-        catalogMedia.flatMap((media) =>
-          catalogMediaRenditionKeys(media, "card"),
-        ),
+        effective.flatMap((media) => catalogMediaRenditionKeys(media, "card")),
       ),
     ];
     if (locators.length && !this.mediaResolver)
       throw new CommunityNotFoundError("Media unavailable");
     const [urls, renditionUrls] = await Promise.all([
-      this.mediaResolver?.resolveMany(locators),
+      this.mediaResolver?.resolveMany(
+        locators.filter(({ objectKey }) => !objectKey.startsWith("editorial/")),
+      ),
       renditionKeys.length === 0 ||
       this.mediaResolver?.resolveKeys === undefined
         ? noRenditionUrls
@@ -100,9 +105,25 @@ export class AuthorCommunityService {
             ? {}
             : { placeholderColor: m.placeholderColor }),
         };
-      const src = urls?.get(m.id);
+      const image = {
+        ...m,
+        ...facts?.get(JSON.stringify([m.id, m.objectKey])),
+      };
+      const entries = catalogMediaRenditionKeys(image, "card");
+      const anchor = image.renditions?.find(
+        (entry) => entry.level === "display",
+      );
+      const editorial = image.objectKey.startsWith("editorial/");
+      if (
+        editorial &&
+        (!anchor ||
+          !entries.length ||
+          entries.some((key) => !renditionUrls.has(key)))
+      )
+        return null;
+      const src = editorial ? renditionUrls.get(anchor!.key) : urls?.get(m.id);
       if (!src) return null;
-      const delivery = catalogMediaDelivery(m, src, renditionUrls, "card");
+      const delivery = catalogMediaDelivery(image, src, renditionUrls, "card");
       return {
         id: m.id,
         width: delivery.width,
@@ -121,7 +142,11 @@ export class AuthorCommunityService {
       const m = item.media;
       if (!m) return { ...card, media: null };
       const media = cardImage(m);
-      if (media === null) throw new CommunityNotFoundError("Media unavailable");
+      if (media === null) {
+        if (m.type === "catalog" && m.objectKey.startsWith("editorial/"))
+          return { ...card, media: null };
+        throw new CommunityNotFoundError("Media unavailable");
+      }
       // A gallery entry without an approved URL is left out (the card keeps
       // its total); a card left with no entry carries no gallery.
       const gallery = (galleryRecords ?? []).flatMap((entry) => {

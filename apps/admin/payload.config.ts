@@ -23,6 +23,7 @@ import { communityEndpoints } from "./src/community/endpoints";
 import { analyticsEndpoints } from "./src/analytics/endpoints";
 import { editorialMcp } from "./src/mcp";
 import { createMediaCollection } from "./src/media/collection";
+import { createResumableMediaEndpoints } from "./src/media/resumable-upload";
 import { createEditorialStoragePlugin } from "./src/media/storage";
 import {
   canEditCatalog,
@@ -238,6 +239,13 @@ export default buildConfig({
   ],
   endpoints: [
     ...editorialEndpoints,
+    ...createResumableMediaEndpoints({
+      directory: path.join(
+        path.dirname(requiredSetting("CMS_MEDIA_DIR")),
+        "editorial-upload-sessions",
+      ),
+      mediaDirectory: requiredSetting("CMS_MEDIA_DIR"),
+    }),
     ...communityEndpoints,
     ...analyticsEndpoints,
     // Empty unless the connection surface is composed at all; the gate is the

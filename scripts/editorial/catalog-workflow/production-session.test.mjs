@@ -1,0 +1,1020 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import https from "node:https";
+import { Buffer } from "node:buffer";
+import { URL } from "node:url";
+import http from "node:http";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, writeFile, rm, realpath } from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import { fixture, hash } from "./test-fixtures.mjs";
+import {
+  editorialDraftSchema,
+  MEDIA_UPLOAD_CHUNK_BYTES,
+  catalogDeliveryManifestSchema,
+} from "../../../packages/contracts/dist/internal/editorial/index.js";
+import { digest } from "./identity.mjs";
+import {
+  CATALOG_DELIVERY_CONTRACT_SHA256,
+  normalizePayloadBridgeBinding,
+} from "./catalog-delivery-journal.mjs";
+import { normalizeProductionAuthority } from "./production-authority.mjs";
+import { createProductionNativeHTTP } from "./local-native-http.mjs";
+import { openProductionTransportJournal } from "./payload-isolated-session.mjs";
+import {
+  productionLimits,
+  withProductionCatalogSession,
+} from "./production-session.mjs";
+import { runCommand, commandFailure } from "./cli.mjs";
+import { registeredProofDigest } from "./registered-media-proof.mjs";
+import { frozenSources } from "./historical-proof-fixture.mjs";
+import {
+  convertHistoricalProof,
+  historicalConversionReference,
+} from "./historical-proof-converter.mjs";
+
+const SYNTHETIC_HEADER = "users API-Key SYNTHETIC_ONLY_NOT_A_REAL_CREDENTIAL";
+const { queueMicrotask } = globalThis;
+const sha = (b) => createHash("sha256").update(b).digest("hex");
+function setup() {
+  const manifest = fixture();
+  manifest.target = {
+    instance: "production",
+    origin: "https://cms.example.invalid",
+    actorId: 1,
+    role: "owner",
+  };
+  const record = manifest.records[0],
+    asset = record.media[0];
+  const bytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9P8AAAAASUVORK5CYII=",
+    "base64",
+  );
+  Object.assign(asset, {
+    bytes: bytes.length,
+    uploadedSha256: sha(bytes),
+    width: 1,
+    height: 1,
+  });
+  const content = editorialDraftSchema.parse({
+    catalogId: record.catalogId,
+    sourceId: record.sourceId,
+    kind: "inscription",
+    title: "Synthetic selected B",
+    summary: "Synthetic",
+    media: [
+      {
+        mediaId: asset.mediaId,
+        objectKey: "editorial/synthetic-test.png",
+        width: 1,
+        height: 1,
+        alt: "Synthetic",
+        position: 0,
+        isRepresentative: true,
+      },
+    ],
+  });
+  const old = { ...content, title: "Synthetic prior A" };
+  record.contentSha256 = digest(content);
+  const before = {
+    id: 10,
+    revision: 2,
+    fingerprint: hash("d"),
+    contentSha256: digest(old),
+  };
+  const authority = {
+    version: 1,
+    kind: "production-native",
+    ...manifest.target,
+    manifestSha256: digest(manifest),
+    catalogId: record.catalogId,
+    nativeId: 10,
+    actions: ["upload", "run", "publish", "withdraw"],
+    authorityReferenceSha256: hash("a"),
+    serverDeploymentReference: hash("e"),
+    contractSha256: CATALOG_DELIVERY_CONTRACT_SHA256,
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    credentialExpiresAt: "2099-01-01T00:00:00.000Z",
+    credentialSaved: true,
+    permissionsConfirmed: true,
+    serverDeploymentConfirmed: true,
+    caps: {
+      requests: 256,
+      requestBodyPerRequest: 1048576,
+      acceptedRequestBodyTotal: 4194304,
+      responseBodyTotal: 16777216,
+    },
+  };
+  const media = {
+    id: 20,
+    mediaId: asset.mediaId,
+    catalogId: record.catalogId,
+    objectKey: content.media[0].objectKey,
+    sha256: asset.uploadedSha256,
+    mimeType: "image/png",
+    filesize: asset.bytes,
+    filename: "synthetic-test.png",
+    width: 1,
+    height: 1,
+    alt: "Synthetic",
+  };
+  const input = {
+    version: 1,
+    expectedNative: before,
+    conversions: [],
+    controlled: {
+      version: 1,
+      root: "/SYNTHETIC",
+      records: [
+        {
+          recordId: record.recordId,
+          nativeId: 10,
+          baselineStatus: "published",
+          content,
+          media: [
+            {
+              mediaId: asset.mediaId,
+              file: "test.png",
+              mimeType: "image/png",
+              alt: "Synthetic",
+              rights: null,
+              orderConfidence: null,
+            },
+          ],
+        },
+      ],
+    },
+  };
+  authority.inputSha256 = digest(input);
+  return { manifest, authority, input, content, old, media, bytes, before };
+}
+
+/** Only in-process HTTPS request-object substitution. Never opens a socket/server/bridge. */
+function fakeHTTPS(t, handler) {
+  const calls = [];
+  t.mock.method(http, "request", () => {
+    throw Error("HTTP_FALLBACK_FORBIDDEN");
+  });
+  t.mock.method(https, "request", (address, options) => {
+    const url = new URL(address);
+    assert.equal(url.origin, "https://cms.example.invalid");
+    assert.notEqual(options.rejectUnauthorized, false);
+    assert.equal(options.headers["x-catalog-fixture"], undefined);
+    const req = new EventEmitter(),
+      chunks = [];
+    let closed = false;
+    const close = () => {
+      if (!closed) {
+        closed = true;
+        req.emit("close");
+      }
+    };
+    req.write = (b, cb) => {
+      chunks.push(Buffer.from(b));
+      queueMicrotask(() => cb?.());
+      return true;
+    };
+    req.destroy = () => {
+      queueMicrotask(close);
+      return req;
+    };
+    req.end = () =>
+      queueMicrotask(() => {
+        const bodyBytes = Buffer.concat(chunks),
+          route = url.pathname + url.search;
+        const body =
+          options.headers["Content-Type"] === "application/octet-stream" ||
+          options.headers["content-type"] === "application/octet-stream"
+            ? bodyBytes
+            : bodyBytes.length
+              ? JSON.parse(bodyBytes)
+              : undefined;
+        const call = { route, method: options.method, body };
+        calls.push(call);
+        const result = handler(call);
+        if (result.drop) {
+          req.emit("error", Error("SYNTHETIC_DROP"));
+          close();
+          return;
+        }
+        const incoming = Readable.from([
+          Buffer.from(JSON.stringify(result.json)),
+        ]);
+        incoming.statusCode = result.status ?? 200;
+        incoming.headers = result.headers ?? {};
+        incoming.once("end", () => queueMicrotask(close));
+        req.emit("response", incoming);
+      });
+    return req;
+  });
+  return calls;
+}
+async function directory(t) {
+  const d = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), "catalog-production-seam-")),
+  );
+  t.after(() => rm(d, { recursive: true, force: true }));
+  return d;
+}
+function options(f, directory, command = "run") {
+  return {
+    ...f,
+    directory,
+    command,
+    assertBindingActive: async () => {},
+    authorization: async () => SYNTHETIC_HEADER,
+    limits: productionLimits(f.authority),
+    responseByteLimit: 65536,
+    deadline: Date.now() + 10000,
+    timeoutMs: 1000,
+  };
+}
+
+test("production authority refuses unconfirmed credentials/deployment/actions and fixture targets before provider dispatch", async (t) => {
+  const f = setup();
+  let reads = 0;
+  for (const key of [
+    "credentialSaved",
+    "permissionsConfirmed",
+    "serverDeploymentConfirmed",
+  ]) {
+    await assert.rejects(
+      () =>
+        withProductionCatalogSession(
+          {
+            ...options(f, "/SYNTHETIC_UNOPENED"),
+            authority: { ...f.authority, [key]: false },
+            authorization: async () => {
+              reads++;
+              return SYNTHETIC_HEADER;
+            },
+          },
+          () => {},
+        ),
+      { code: "PRODUCTION_AUTHORITY_NOT_CONFIRMED" },
+    );
+  }
+  assert.equal(reads, 0);
+  assert.equal(
+    commandFailure("publish", { code: "TRANSPORT_UNCERTAIN" }).networkRequests,
+    null,
+  );
+  assert.equal(
+    commandFailure("freeze", { code: "CLI_ARGUMENTS_INVALID" }).networkRequests,
+    0,
+  );
+  for (const actions of [["run"], ["run", "publish"], ["run", "upload"]])
+    await assert.rejects(
+      () =>
+        withProductionCatalogSession(
+          {
+            ...options(f, "/SYNTHETIC_UNOPENED"),
+            authority: { ...f.authority, actions },
+            authorization: async () => {
+              reads++;
+              return SYNTHETIC_HEADER;
+            },
+          },
+          () => {},
+        ),
+      { code: "PRODUCTION_ACTION_NOT_AUTHORIZED" },
+    );
+  await assert.rejects(
+    () =>
+      withProductionCatalogSession(
+        {
+          ...options(f, "/SYNTHETIC_UNOPENED"),
+          input: { ...f.input, expectedNative: { ...f.before, revision: 7 } },
+          authorization: async () => {
+            reads++;
+            return SYNTHETIC_HEADER;
+          },
+        },
+        () => {},
+      ),
+    { code: "PRODUCTION_INPUT_CHANGED" },
+  );
+  assert.equal(reads, 0);
+  assert.throws(() =>
+    normalizeProductionAuthority(
+      {
+        ...f.manifest,
+        target: { ...f.manifest.target, origin: "http://cms.example.invalid" },
+      },
+      f.authority,
+    ),
+  );
+  assert.throws(() => normalizePayloadBridgeBinding(f.manifest, f.authority));
+  const d = await directory(t);
+  const p = path.join(d, "manifest.json"),
+    a = path.join(d, "authority.json");
+  await writeFile(p, JSON.stringify(f.manifest), { mode: 0o600 });
+  await writeFile(
+    a,
+    JSON.stringify({ ...f.authority, credentialSaved: false }),
+    { mode: 0o600 },
+  );
+  await assert.rejects(
+    () =>
+      runCommand([
+        "run",
+        "--manifest",
+        p,
+        "--input",
+        "/SYNTHETIC_MISSING",
+        "--authority",
+        a,
+        "--credential-file",
+        "/SYNTHETIC_NEVER_READ",
+        "--state-dir",
+        path.join(d, "state"),
+      ]),
+    { code: "PRODUCTION_AUTHORITY_NOT_CONFIRMED" },
+  );
+});
+
+test("HTTPS principal, credential refresh and admission stay bound; persist failure sends zero requests", async (t) => {
+  const f = setup(),
+    binding = normalizeProductionAuthority(f.manifest, f.authority),
+    limits = productionLimits(binding);
+  const calls = fakeHTTPS(t, () => ({
+    json: {
+      user: { id: 1, role: "owner", collection: "users", scopeCatalogIds: [] },
+    },
+  }));
+  let header = SYNTHETIC_HEADER;
+  const journal = openProductionTransportJournal({
+    manifest: f.manifest,
+    binding,
+    limits,
+    responseByteLimit: 65536,
+  });
+  const client = createProductionNativeHTTP({
+    ...options(f, "/SYNTHETIC"),
+    binding,
+    journal,
+    persist: async () => {},
+    assertAdmission: async () => {},
+    assertRoute: () => {},
+    authorization: async () => header,
+  });
+  assert.equal(
+    (await client.verifyPrincipal()).scopeBasis,
+    "VERIFIED_OWNER_GLOBAL",
+  );
+  header = "users API-Key SYNTHETIC_CHANGED_NOT_A_REAL_CREDENTIAL";
+  await assert.rejects(
+    () => client.send("/api/editorial/read-draft", "POST", { id: 10 }),
+    { code: "PRODUCTION_CREDENTIAL_REVERIFY_REQUIRED" },
+  );
+  assert.equal(calls.length, 1);
+  await client.close();
+  const secondJournal = openProductionTransportJournal({
+    manifest: f.manifest,
+    binding,
+    limits,
+    responseByteLimit: 65536,
+  });
+  const blocked = createProductionNativeHTTP({
+    ...options(f, "/SYNTHETIC"),
+    binding,
+    journal: secondJournal,
+    persist: async () => {
+      throw Error("SYNTHETIC_PERSIST_FAILURE");
+    },
+    assertAdmission: async () => {},
+    assertRoute: () => {},
+  });
+  await assert.rejects(() => blocked.verifyPrincipal(), {
+    code: "CHECKPOINT_PERSIST_FAILED",
+  });
+  assert.equal(calls.length, 1);
+  await blocked.close();
+  assert.equal(
+    JSON.stringify(journal).includes("NOT_A_REAL_CREDENTIAL"),
+    false,
+  );
+});
+
+test("real HTTPS code path with a request-object seam stages once, publishes frozen B and reenters without another release or binary", async (t) => {
+  const f = setup(),
+    d = await directory(t);
+  f.input.controlled.root = d;
+  f.authority.inputSha256 = digest(f.input);
+  await writeFile(path.join(d, "test.png"), f.bytes);
+  let draft = {
+      id: 10,
+      revision: 2,
+      fingerprint: f.before.fingerprint,
+      content: f.old,
+    },
+    main = { id: 10, revision: 2, _status: "published", ...f.old },
+    uploaded = false,
+    received = false,
+    intent = null,
+    saveReceipt,
+    receiptAvailable = true;
+  const uploadId = hash("a");
+  const session = () => ({
+    uploadId,
+    state: received ? "ready" : "uploading",
+    chunkBytes: MEDIA_UPLOAD_CHUNK_BYTES,
+    chunkCount: 1,
+    receivedIndices: received ? [0] : [],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  const calls = fakeHTTPS(t, ({ route, body }) => {
+    if (route === "/api/users/me")
+      return {
+        json: {
+          user: {
+            id: 1,
+            role: "owner",
+            collection: "users",
+            scopeCatalogIds: [],
+          },
+        },
+      };
+    if (route === "/api/editorial/read-draft")
+      return { json: { ok: true, result: draft } };
+    if (route.startsWith("/api/catalogs/")) return { json: main };
+    if (route.startsWith("/api/media?"))
+      return {
+        json: { docs: uploaded ? [f.media] : [], totalDocs: uploaded ? 1 : 0 },
+      };
+    if (
+      route.endsWith("media-upload/start") ||
+      route.endsWith("media-upload/status")
+    )
+      return { json: { ok: true, result: session() } };
+    if (route.includes("media-upload/chunk/")) {
+      received = true;
+      return {
+        json: {
+          ok: true,
+          result: { uploadId, index: 0, bytes: body.length, sha256: sha(body) },
+        },
+      };
+    }
+    if (route.endsWith("media-upload/complete")) {
+      uploaded = true;
+      return {
+        json: {
+          ok: true,
+          result: {
+            media: f.media,
+            reused: false,
+            validatedBytes: f.bytes.length,
+            validatedSha256: sha(f.bytes),
+          },
+        },
+      };
+    }
+    if (route.endsWith("save-draft")) {
+      draft = {
+        id: 10,
+        revision: 3,
+        fingerprint: hash("e"),
+        content: body.content,
+      };
+      saveReceipt = body;
+      return {
+        json: {
+          ok: true,
+          result: { id: 10, revision: 3, fingerprint: draft.fingerprint },
+        },
+      };
+    }
+    if (route.startsWith("/api/editorial-receipts?")) {
+      // The actual ordered server receipt identity is independently derived by the client.
+      return {
+        json: {
+          docs: receiptAvailable ? [receiptFor(saveReceipt, draft)] : [],
+          totalDocs: receiptAvailable ? 1 : 0,
+        },
+      };
+    }
+    if (route.endsWith("prepare-catalog-delivery")) {
+      intent = {
+        intentId: "00000000-0000-4000-8000-000000000001",
+        id: 10,
+        catalogId: f.content.catalogId,
+        revision: 3,
+        fingerprint: hash("e"),
+        manifestSha256: sha(
+          JSON.stringify(
+            catalogDeliveryManifestSchema.parse(
+              f.content.media.map((m) => ({
+                ...m,
+                sourceSha256: f.manifest.records[0].media[0].uploadedSha256,
+              })),
+            ),
+          ),
+        ),
+        mediaCount: 1,
+        recipeManifestSha256: hash("b"),
+        state: "prepared",
+        stateVersion: 1,
+        readiness: "PENDING",
+        publicCopyAuthorized: false,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        replayed: false,
+      };
+      return { json: { ok: true, result: intent } };
+    }
+    if (route.endsWith("request-catalog-release")) {
+      intent = {
+        ...intent,
+        state: "release_requested",
+        stateVersion: 2,
+        readiness: "READY",
+        publicCopyAuthorized: true,
+      };
+      return { json: { ok: true, result: intent } };
+    }
+    if (route.endsWith("read-catalog-delivery"))
+      return { json: { ok: true, result: intent } };
+    if (route.endsWith("release-catalog-delivery")) {
+      intent = { ...intent, state: "released", stateVersion: 3 };
+      return { json: { ok: true, result: intent } };
+    }
+    throw Error("UNEXPECTED_SYNTHETIC_ROUTE:" + route);
+  });
+  const stateDir = path.join(d, "state");
+  await withProductionCatalogSession(options(f, stateDir), async (client) => {
+    await client.ensureMedia();
+    await client.saveDraft();
+  });
+  receiptAvailable = false;
+  await assert.rejects(
+    () =>
+      withProductionCatalogSession(options(f, stateDir, "publish"), (client) =>
+        client.publish(),
+      ),
+    { code: "NATIVE_RECONCILIATION_PENDING" },
+  );
+  assert.equal(
+    calls.some((c) => c.route.endsWith("prepare-catalog-delivery")),
+    false,
+  );
+  receiptAvailable = true;
+  const run = () =>
+    withProductionCatalogSession(options(f, stateDir), async (client) => {
+      if (!client.snapshot().frozen) {
+        await client.ensureMedia();
+        await client.saveDraft();
+      }
+      return client.publish();
+    });
+  await assert.rejects(run, { code: "NATIVE_PUBLICATION_UNVERIFIED" });
+  draft = { ...draft, revision: 4, fingerprint: hash("f") };
+  main = { id: 10, revision: 4, _status: "published", ...f.content };
+  const first = await run();
+  assert.equal(first.nativePublicationVerified, true);
+  const binary = calls.filter((c) => c.route.includes("/chunk/")).length;
+  const second = await run();
+  assert.equal(second.nativePublicationVerified, true);
+  assert.equal(
+    calls.filter((c) => c.route.endsWith("release-catalog-delivery")).length,
+    1,
+  );
+  assert.equal(calls.filter((c) => c.route.includes("/chunk/")).length, binary);
+  assert.equal(
+    JSON.stringify(
+      JSON.parse(
+        await readFile(path.join(stateDir, "production-native-journal.json")),
+      ),
+    ).includes("NOT_A_REAL_CREDENTIAL"),
+    false,
+  );
+  const statePath = path.join(stateDir, "production-state.json"),
+    stored = JSON.parse(await readFile(statePath));
+  const proof = stored.proofs[f.manifest.records[0].media[0].mediaId];
+  const original = JSON.parse(JSON.stringify(stored));
+  proof.sourceSha256 = hash("f");
+  proof.evidenceSha256 = registeredProofDigest(proof);
+  await writeFile(statePath, JSON.stringify(stored), { mode: 0o600 });
+  const beforeInvalidReload = calls.length;
+  await assert.rejects(run, { code: "PRODUCTION_MEDIA_PROOF_INVALID" });
+  assert.equal(calls.length, beforeInvalidReload);
+  original.save.result.revision = 7;
+  await writeFile(statePath, JSON.stringify(original), { mode: 0o600 });
+  await assert.rejects(run, { code: "PRODUCTION_SAVE_ACTION_CHANGED" });
+  assert.equal(calls.length, beforeInvalidReload);
+});
+
+function receiptFor(body, draft) {
+  const fields = Object.keys(body.content);
+  // body is schema-ordered and carries exactly the parsed editorial fields.
+  return {
+    deduplicationKey: sha(JSON.stringify([1, body.idempotencyKey])),
+    requestFingerprint: sha(
+      JSON.stringify({
+        operation: "save-draft",
+        ...body,
+        content: Object.fromEntries(fields.map((k) => [k, body.content[k]])),
+      }),
+    ),
+    actor: 1,
+    operation: "save-draft",
+    status: "completed",
+    catalog: 10,
+    revision: draft.revision,
+    fingerprint: draft.fingerprint,
+  };
+}
+
+test("withdrawal persists fresh Native revision/status/content/fingerprint and never repeats the PATCH", async (t) => {
+  const f = setup(),
+    d = await directory(t);
+  let revision = 2,
+    status = "published";
+  f.input.expectedNative.contentSha256 = digest(f.content);
+  f.authority.inputSha256 = digest(f.input);
+  const calls = fakeHTTPS(t, ({ route, method }) => {
+    if (route === "/api/users/me")
+      return { json: { user: { id: 1, role: "owner" } } };
+    if (route === "/api/editorial/read-draft")
+      return {
+        json: {
+          ok: true,
+          result: {
+            id: 10,
+            revision,
+            fingerprint: revision === 2 ? hash("d") : hash("e"),
+            content: f.content,
+          },
+        },
+      };
+    if (method === "PATCH") {
+      revision++;
+      status = "draft";
+      return { json: { doc: { id: 10, revision, _status: status } } };
+    }
+    return { json: { id: 10, revision, _status: status, ...f.content } };
+  });
+  const run = () =>
+    withProductionCatalogSession(
+      options(f, path.join(d, "state"), "withdraw"),
+      (client) => client.withdraw(),
+    );
+  for (let i = 0; i < 2; i++) {
+    const result = await run();
+    assert.equal(result.native.revision, 3);
+    assert.equal(result.native.status, "draft");
+    assert.equal(result.native.contentSha256, digest(f.content));
+    assert.equal(result.native.fingerprint, hash("e"));
+    assert.equal(result.anonymousWithdrawalVerified, false);
+  }
+  assert.equal(calls.filter((c) => c.method === "PATCH").length, 1);
+});
+
+test("held and reuse-only media cannot reach upload/save/release routes", async (t) => {
+  const f = setup(),
+    d = await directory(t);
+  f.manifest.records[0].reuseOnly = true;
+  f.input.expectedNative.contentSha256 = digest(f.content);
+  f.authority.inputSha256 = digest(f.input);
+  f.authority.manifestSha256 = digest(f.manifest);
+  const calls = fakeHTTPS(t, ({ route }) => {
+    if (route === "/api/users/me")
+      return { json: { user: { id: 1, role: "owner" } } };
+    if (route === "/api/editorial/read-draft")
+      return {
+        json: {
+          ok: true,
+          result: {
+            id: 10,
+            revision: 2,
+            fingerprint: hash("d"),
+            content: f.content,
+          },
+        },
+      };
+    if (route.startsWith("/api/media?"))
+      return { json: { docs: [f.media], totalDocs: 1 } };
+    return {
+      json: { id: 10, revision: 2, _status: "published", ...f.content },
+    };
+  });
+  await assert.rejects(
+    () =>
+      withProductionCatalogSession(
+        options(f, path.join(d, "reuse")),
+        (client) => client.ensureMedia(),
+      ),
+    { code: "REUSE_ONLY_PROOF_MISSING" },
+  );
+  f.manifest.records[0].protections.rightsHold = true;
+  f.authority.manifestSha256 = digest(f.manifest);
+  await assert.rejects(
+    () =>
+      withProductionCatalogSession(options(f, path.join(d, "held")), (client) =>
+        client.ensureMedia(),
+      ),
+    { code: "PROTECTED_RECORD" },
+  );
+  assert.equal(
+    calls.some(
+      (c) =>
+        c.route.includes("media-upload") ||
+        c.route.endsWith("save-draft") ||
+        c.route.endsWith("release-catalog-delivery"),
+    ),
+    false,
+  );
+});
+
+test("first adoption rejects same-content revision drift and a previously published baseline latches hidden state", async (t) => {
+  const f = setup(),
+    d = await directory(t);
+  f.input.expectedNative.contentSha256 = digest(f.content);
+  f.authority.inputSha256 = digest(f.input);
+  let revision = 7,
+    status = "published";
+  const calls = fakeHTTPS(t, ({ route }) => {
+    if (route === "/api/users/me")
+      return { json: { user: { id: 1, role: "owner" } } };
+    if (route === "/api/editorial/read-draft")
+      return {
+        json: {
+          ok: true,
+          result: {
+            id: 10,
+            revision,
+            fingerprint: revision === 2 ? hash("d") : hash("e"),
+            content: f.content,
+          },
+        },
+      };
+    return { json: { id: 10, revision, _status: status, ...f.content } };
+  });
+  await assert.rejects(
+    () =>
+      withProductionCatalogSession(
+        options(f, path.join(d, "drift"), "publish"),
+        (client) => client.publish(),
+      ),
+    { code: "NATIVE_PREFLIGHT_CHANGED" },
+  );
+  revision = 2;
+  status = "draft";
+  await assert.rejects(
+    () =>
+      withProductionCatalogSession(
+        options(f, path.join(d, "hidden"), "publish"),
+        (client) => client.publish(),
+      ),
+    { code: "PROTECTED_RECORD" },
+  );
+  assert.equal(
+    calls.some(
+      (c) =>
+        c.method === "PATCH" || c.route.endsWith("prepare-catalog-delivery"),
+    ),
+    false,
+  );
+  const draftManifest = {
+    ...f.manifest,
+    records: [{ ...f.manifest.records[0], disposition: "draft" }],
+  };
+  const authority = { ...f.authority, manifestSha256: digest(draftManifest) };
+  const before = calls.length;
+  await assert.rejects(
+    () =>
+      withProductionCatalogSession(
+        {
+          ...options(f, path.join(d, "draft"), "publish"),
+          manifest: draftManifest,
+          authority,
+        },
+        () => {},
+      ),
+    { code: "DRAFT_ONLY" },
+  );
+  assert.equal(calls.length, before);
+});
+
+test("historical Production reuse binds original Catalog ID and fresh key receipts without rewriting old unknown facts", async (t) => {
+  for (const scenario of ["wrong-catalog-id", "fresh-key", "changed-source"])
+    await t.test(scenario, async (t) => {
+      const f = setup(),
+        d = await directory(t);
+      const spec = await frozenSources(t, undefined, {
+        target: f.manifest.target,
+        observedRecordIndex: scenario === "fresh-key" ? 0 : 2,
+      });
+      const bundle = await convertHistoricalProof(spec),
+        entry = bundle.entries.find((e) => e.recordId === "TEST-3"),
+        e = entry.evidence;
+      const nativeId = scenario === "wrong-catalog-id" ? 4 : 3;
+      const content = editorialDraftSchema.parse({
+        catalogId: e.catalogId,
+        sourceId: e.sourceId,
+        kind: "inscription",
+        title: "Synthetic historical B",
+        summary: "Synthetic",
+        media: [
+          {
+            mediaId: e.mediaId,
+            objectKey: "editorial/synthetic-2.jpg",
+            width: e.width,
+            height: e.height,
+            position: 0,
+            isRepresentative: true,
+            alt: "Synthetic",
+          },
+        ],
+      });
+      f.manifest.records = [
+        {
+          recordId: "TEST-3",
+          catalogId: e.catalogId,
+          sourceId: e.sourceId,
+          contentSha256: digest(content),
+          disposition: "publish",
+          reuseOnly: true,
+          protections: entry.protections,
+          media: [
+            {
+              mediaId: e.mediaId,
+              sourceSha256: e.sourceSha256,
+              uploadedSha256: e.uploadedSha256,
+              bytes: e.bytes,
+              width: e.width,
+              height: e.height,
+              position: 0,
+              isRepresentative: true,
+            },
+          ],
+        },
+      ];
+      f.input = {
+        version: 1,
+        expectedNative: {
+          id: nativeId,
+          revision: 4,
+          fingerprint: hash("c"),
+          contentSha256: digest(content),
+        },
+        conversions: [
+          {
+            mediaId: e.mediaId,
+            reference: historicalConversionReference(bundle, entry.entryId),
+          },
+        ],
+        controlled: {
+          version: 1,
+          root: d,
+          records: [
+            {
+              recordId: "TEST-3",
+              nativeId,
+              baselineStatus: "published",
+              content,
+              media: [
+                {
+                  mediaId: e.mediaId,
+                  file: null,
+                  mimeType: "image/jpeg",
+                  alt: "Synthetic",
+                  rights: null,
+                  orderConfidence: null,
+                },
+              ],
+            },
+          ],
+        },
+      };
+      Object.assign(f.authority, {
+        nativeId,
+        catalogId: e.catalogId,
+        manifestSha256: digest(f.manifest),
+        inputSha256: digest(f.input),
+      });
+      const media = {
+        id: e.nativeId,
+        mediaId: e.mediaId,
+        catalogId: e.catalogId,
+        objectKey: "editorial/synthetic-2.jpg",
+        sha256: e.uploadedSha256,
+        filesize: e.bytes,
+        width: e.width,
+        height: e.height,
+        filename: "synthetic-2.jpg",
+        mimeType: "image/jpeg",
+        alt: "Synthetic",
+      };
+      let hasCurrentKey = scenario !== "fresh-key";
+      const calls = fakeHTTPS(t, ({ route }) => {
+        if (route === "/api/users/me")
+          return { json: { user: { id: 1, role: "owner" } } };
+        if (route === "/api/editorial/read-draft")
+          return {
+            json: {
+              ok: true,
+              result: {
+                id: nativeId,
+                revision: 4,
+                fingerprint: hash("c"),
+                content,
+              },
+            },
+          };
+        if (route.startsWith("/api/media?"))
+          return {
+            json: {
+              docs: [
+                { ...media, objectKey: hasCurrentKey ? media.objectKey : "" },
+              ],
+              totalDocs: 1,
+            },
+          };
+        if (route.startsWith("/api/catalogs/"))
+          return {
+            json: {
+              id: nativeId,
+              revision: 4,
+              _status: "published",
+              ...content,
+            },
+          };
+        throw Error("SYNTHETIC_MUTATION_MUST_NOT_DISPATCH");
+      });
+      if (scenario === "fresh-key") {
+        assert.equal(entry.objectKey, null);
+        const run = () =>
+          withProductionCatalogSession(
+            options(f, path.join(d, "state")),
+            async (client) => {
+              await client.ensureMedia();
+              return client.snapshot().proofs[e.mediaId];
+            },
+          );
+        await assert.rejects(run, { code: "TRANSPORT_UNCERTAIN" });
+        hasCurrentKey = true;
+        for (let i = 0; i < 2; i++) {
+          const proof = await run();
+          assert.equal(proof.audit.version, 2);
+          assert.equal(proof.media.objectKey, media.objectKey);
+          assert.equal(
+            proof.audit.currentCatalog.projection.sourceId,
+            e.sourceId,
+          );
+          assert.equal(
+            proof.audit.observedAt,
+            proof.audit.nativeReceipt.observedAt,
+          );
+          assert.equal(entry.objectKey, null);
+        }
+        const statePath = path.join(d, "state", "production-state.json"),
+          stored = JSON.parse(await readFile(statePath));
+        stored.proofs[e.mediaId].audit.currentCatalog.projection.sourceId =
+          "source-other";
+        stored.proofs[e.mediaId].evidenceSha256 = registeredProofDigest(
+          stored.proofs[e.mediaId],
+        );
+        await writeFile(statePath, JSON.stringify(stored), { mode: 0o600 });
+        const before = calls.length;
+        await assert.rejects(run, {
+          code: "CURRENT_CATALOG_METADATA_PROOF_INVALID",
+        });
+        assert.equal(calls.length, before);
+      } else
+        await assert.rejects(
+          () =>
+            withProductionCatalogSession(
+              options(f, path.join(d, "state")),
+              async (client) => {
+                await client.ensureMedia();
+                assert.equal(scenario, "changed-source");
+                await writeFile(
+                  spec.files.find((f) => f.role === "plan").path,
+                  "{}",
+                  { mode: 0o600 },
+                );
+                await client.publish();
+              },
+            ),
+          {
+            code: {
+              "wrong-catalog-id": "HISTORICAL_CATALOG_ID_CHANGED",
+              "changed-source": "HISTORICAL_SOURCE_CHANGED",
+            }[scenario],
+          },
+        );
+      assert.equal(
+        calls.some(
+          (c) =>
+            c.route.includes("media-upload") ||
+            c.route.endsWith("save-draft") ||
+            c.route.endsWith("prepare-catalog-delivery") ||
+            c.route.endsWith("release-catalog-delivery"),
+        ),
+        false,
+      );
+    });
+});

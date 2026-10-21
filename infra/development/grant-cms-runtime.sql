@@ -73,6 +73,16 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
 TO :"cms_role";
 
 -- Derived search is synchronized on publish/withdraw; first-publication is insert-only.
+-- Private B snapshots are immutable to the runtime. Only lifecycle/tombstone
+-- columns may change; neither this role nor the public reader owns the tables.
+GRANT SELECT, INSERT ON TABLE
+  public.catalog_delivery_intents,
+  public.catalog_delivery_receipts
+TO :"cms_role";
+GRANT UPDATE (state, state_version, release_requested_by, release_requested_at, release_proof_sha256,
+  ended_at, end_reason, updated_at)
+ON public.catalog_delivery_intents TO :"cms_role";
+
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.catalog_search_documents
 TO :"cms_role";

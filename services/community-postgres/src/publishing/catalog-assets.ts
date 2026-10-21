@@ -13,6 +13,10 @@ import type { Pool } from "pg";
 
 import { nowParam, readTransaction, writeTransaction } from "./db.js";
 import { RECIPE_DIGEST_PATTERN } from "./recipe-identity.js";
+import {
+  catalogPrivateProcessingReferenceSql,
+  synchronizeCatalogDeliveryIntents,
+} from "./catalog-delivery-intents.js";
 import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
 
 /*
@@ -191,7 +195,18 @@ export const syncCatalogAssets = async (
   }
   const ids = [...named.keys()].sort();
   const at = nowParam(now);
+  const publishedIds = options.snapshot
+    ? options.snapshot.publishedSources.map((source) =>
+        assetIdOf(source.mediaId, source.objectKey),
+      )
+    : ids;
   return writeTransaction(pool, async (db) => {
+    if (options.snapshot)
+      await synchronizeCatalogDeliveryIntents(
+        db,
+        options.snapshot.preparations,
+        options.snapshot.observedAt,
+      );
     const created = await db.query(
       `INSERT INTO community.catalog_media_assets(
          id, media_id, source_object_key, source_sha256, source_width, source_height,
@@ -214,13 +229,13 @@ export const syncCatalogAssets = async (
       `UPDATE community.catalog_media_assets
        SET unreferenced_since=NULL, updated_at=$2::timestamptz
        WHERE id=ANY($1::text[]) AND unreferenced_since IS NOT NULL`,
-      [ids, at],
+      [publishedIds, at],
     );
     const unreferenced = await db.query(
       `UPDATE community.catalog_media_assets
        SET unreferenced_since=$2::timestamptz, updated_at=$2::timestamptz
        WHERE unreferenced_since IS NULL AND NOT (id=ANY($1::text[]))`,
-      [ids, at],
+      [publishedIds, at],
     );
     // A named asset whose source was unreadable gets another render once the
     // retry delay passed (bounded per pass); other failures stay final.
@@ -229,7 +244,7 @@ export const syncCatalogAssets = async (
        SET state='pending', failure_code=NULL, updated_at=$2::timestamptz
        FROM (
          SELECT id FROM community.catalog_media_assets
-         WHERE id=ANY($1::text[]) AND unreferenced_since IS NULL
+         WHERE id=ANY($1::text[])
            AND state='failed' AND failure_code='source_unreadable'
            AND updated_at < $2::timestamptz - ${RETRY_DELAY_SQL}
          ORDER BY updated_at, id
@@ -251,7 +266,7 @@ export const syncCatalogAssets = async (
          'queued', 0, $2::timestamptz, $2::timestamptz, $2::timestamptz
        FROM (
          SELECT a.id FROM community.catalog_media_assets a
-         WHERE a.id=ANY($1::text[]) AND a.unreferenced_since IS NULL
+         WHERE a.id=ANY($1::text[])
            AND (a.state='pending' OR (a.state='ready' AND ${MISSING_IDENTITY_SQL}))
            AND NOT EXISTS (
              SELECT 1 FROM community.publishing_jobs j
@@ -285,7 +300,7 @@ export const syncCatalogAssets = async (
                  JOIN community.catalog_media_assets a ON a.id=f.subject_id
                  WHERE ${baseCatalogRenderJobSql("f")} AND f.state='failed'
                    AND ${endedAtSql("f")} < $2::timestamptz - ${RETRY_DELAY_SQL}
-                   AND a.id=ANY($1::text[]) AND a.unreferenced_since IS NULL
+                   AND a.id=ANY($1::text[])
                    AND a.state='ready' AND ${MISSING_IDENTITY_SQL}
                    AND NOT EXISTS (
                      SELECT 1 FROM community.publishing_jobs o
@@ -328,8 +343,13 @@ export const readCatalogRenderPlan = async (
         source_height: number | null;
         state: "pending" | "ready" | "failed";
         unreferenced_since: Date | null;
+        referenced: boolean;
+        master_sha256: string | null;
+        master_width: number | null;
+        master_height: number | null;
       }>(
-        `SELECT id, media_id, source_object_key, source_width, source_height, state, unreferenced_since
+        `SELECT id, media_id, source_object_key, source_width, source_height, state, unreferenced_since,master_sha256,master_width,master_height,
+          (unreferenced_since IS NULL OR ${catalogPrivateProcessingReferenceSql("id")}) AS referenced
          FROM community.catalog_media_assets WHERE id=$1`,
         [assetId],
       )
@@ -360,7 +380,10 @@ export const readCatalogRenderPlan = async (
       sourceWidth: asset.source_width,
       sourceHeight: asset.source_height,
       state: asset.state,
-      referenced: asset.unreferenced_since === null,
+      referenced: asset.referenced,
+      masterSha256: asset.master_sha256,
+      masterWidth: asset.master_width,
+      masterHeight: asset.master_height,
       ready: ready.rows.map((row) => ({
         role: row.role,
         version: row.recipe_version,

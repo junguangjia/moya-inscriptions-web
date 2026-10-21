@@ -1,3 +1,4 @@
+import type { CatalogProcessingIntent } from "@moya/contracts/internal/editorial";
 import type { PublishingMediaWriteResult } from "./publishing-media-store-port.js";
 import type { PublishingDerivativeCommit } from "./work-publishing-port.js";
 
@@ -43,6 +44,12 @@ export interface CatalogRenditionIdentity {
 export interface CatalogAssetSyncOptions {
   /** 1..1000 new assets and 1..1000 queued jobs per call. */
   readonly limit: number;
+  /** Complete consistent CMS snapshot; private members never become public refs. */
+  readonly snapshot?: {
+    readonly observedAt: Date;
+    readonly publishedSources: readonly CatalogMediaSource[];
+    readonly preparations?: readonly CatalogProcessingIntent[];
+  };
   /**
    * The current identity of every role each asset always receives. A ready
    * asset missing a ready rendition of one of these, on a committed blob, is
@@ -88,6 +95,9 @@ export interface CatalogRenderPlan {
   readonly sourceContentType: "image/jpeg" | "image/png" | "image/webp";
   readonly sourceWidth: number | null;
   readonly sourceHeight: number | null;
+  readonly masterSha256?: string | null;
+  readonly masterWidth?: number | null;
+  readonly masterHeight?: number | null;
   readonly state: "pending" | "ready";
   /** False while the published projection no longer names the asset. */
   readonly referenced: boolean;

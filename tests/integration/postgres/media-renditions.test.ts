@@ -337,6 +337,7 @@ describe("media_renditions migration on a dedicated synthetic database", () => {
         "20261019010000",
         "20261019020000",
         "20261020010000",
+        "20261020160000",
       ]);
       // The retained table is byte-identical.
       expect(await checksum()).toBe(before);
@@ -801,6 +802,9 @@ describe("media renditions, Catalog assets and the D7 hold on a dedicated synthe
         sourceContentType: "image/webp",
         sourceWidth: 3000,
         sourceHeight: 2000,
+        masterSha256: null,
+        masterWidth: null,
+        masterHeight: null,
         state: "pending",
         referenced: true,
         ready: [],

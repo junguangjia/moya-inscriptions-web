@@ -28,8 +28,69 @@ import type {
 import type { ApiErrorCode, CatalogId } from "@moya/contracts";
 import type { NodeEnvironment } from "@moya/backend-runtime";
 import type { Server } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import {
+  handleOperatorRequest,
+  type OperatorRouteDependencies,
+} from "@moya/backend-runtime/internal/community-operator";
+import { currentCatalogRecipePolicy } from "@moya/backend-production/internal/catalog-delivery";
 
 const servers = new Set<Server>();
+
+describe("real Catalog recipe policy operator route", () => {
+  it("preserves authentication, method and configured-provider boundaries without public media requests", async () => {
+    const syntheticOperator = "EXPLICIT_SYNTHETIC_PLACEHOLDER";
+    const policy = currentCatalogRecipePolicy();
+    const provider = vi.fn(async () => policy);
+    const invoke = async (
+      method: string,
+      authenticated: boolean,
+      configured: boolean,
+    ) => {
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      const request = {
+        method,
+        headers: authenticated
+          ? { authorization: `Bearer ${syntheticOperator}` }
+          : {},
+      } as IncomingMessage;
+      const response = {
+        writeHead,
+        end,
+        headersSent: false,
+      } as unknown as ServerResponse;
+      const dependencies = {
+        moderationService: {},
+        operatorCredential: syntheticOperator,
+        ...(configured ? { catalogRecipePolicy: provider } : {}),
+      } as unknown as OperatorRouteDependencies;
+      await handleOperatorRequest(
+        request,
+        response,
+        "/internal/community/catalog-delivery/recipe-policy",
+        dependencies,
+      );
+      return {
+        status: writeHead.mock.calls[0]![0],
+        body: JSON.parse(String(end.mock.calls[0]![0])),
+      };
+    };
+    expect(await invoke("GET", false, true)).toMatchObject({ status: 401 });
+    expect(provider).not.toHaveBeenCalled();
+    expect(await invoke("POST", true, true)).toMatchObject({ status: 405 });
+    expect(await invoke("GET", true, false)).toMatchObject({
+      status: 503,
+      body: { error: { code: "CATALOG_DELIVERY_NOT_CONFIGURED" } },
+    });
+    expect(provider).not.toHaveBeenCalled();
+    expect(await invoke("GET", true, true)).toEqual({
+      status: 200,
+      body: policy,
+    });
+    expect(provider).toHaveBeenCalledTimes(1);
+  });
+});
 
 const startCatalogServer = async (
   options: {

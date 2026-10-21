@@ -98,3 +98,27 @@ export const withIdentityAccess = async <T>(
     else Reflect.deleteProperty(req, identityAccessToken);
   }
 };
+
+const deliveryRequests = new WeakMap<
+  object,
+  { intentId: string; fingerprint: string }
+>();
+export const catalogDeliveryPublishProof = (req: PayloadRequest) => {
+  for (const ancestor of ancestors(req)) {
+    const proof = deliveryRequests.get(ancestor);
+    if (proof) return proof;
+  }
+  return undefined;
+};
+export const withCatalogDeliveryPublish = async <T>(
+  req: PayloadRequest,
+  proof: { intentId: string; fingerprint: string },
+  work: () => Promise<T>,
+): Promise<T> => {
+  deliveryRequests.set(req, proof);
+  try {
+    return await work();
+  } finally {
+    deliveryRequests.delete(req);
+  }
+};

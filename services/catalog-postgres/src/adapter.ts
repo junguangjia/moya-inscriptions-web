@@ -31,6 +31,9 @@ import {
 import {
   catalogZoomBlocksSql,
   catalogZoomFramesSql,
+  catalogZoomPublishedMediaSql,
+  catalogZoomFramesForMediaSql,
+  catalogZoomBlocksForMediaSql,
   mapCatalogZoomBlockRows,
   mapCatalogZoomFrameRows,
 } from "./catalog-zoom-blocks.js";
@@ -140,6 +143,7 @@ export class PostgresCatalogQueryAdapter
   private readonly representativeMediaSql: string;
   private readonly mediaSql: string;
   private readonly zoom: CatalogZoomGate | null;
+  private readonly zoomPool: Pool | null;
 
   constructor(
     private readonly pool: Pool,
@@ -152,9 +156,39 @@ export class PostgresCatalogQueryAdapter
       ? listCatalogMediaDeliverySql
       : listCatalogMediaSql;
     this.zoom =
-      options.renditions === true && options.zoom !== undefined
+      options.zoom !== undefined &&
+      (options.renditions === true || options.zoomPool !== undefined)
         ? options.zoom
         : null;
+    this.zoomPool = options.zoomPool ?? null;
+  }
+
+  private async publishedZoomMedia(
+    id: CatalogId,
+    mediaId: MediaId | null = null,
+  ) {
+    const rows = await withReadTransaction(
+      this.pool,
+      async (client) =>
+        (
+          await client.query<{ media_id: string; object_key: string }>(
+            catalogZoomPublishedMediaSql,
+            [id, mediaId],
+          )
+        ).rows,
+    );
+    if (
+      rows.length > 10_000 ||
+      rows.some(
+        (row) =>
+          typeof row.media_id !== "string" ||
+          row.media_id.length === 0 ||
+          typeof row.object_key !== "string" ||
+          row.object_key.length === 0,
+      )
+    )
+      throw new Error("Invalid published Catalog zoom media");
+    return rows;
   }
 
   /** catalog-deep-zoom-v1: frames of the record's complete sets (gated). */
@@ -162,6 +196,20 @@ export class PostgresCatalogQueryAdapter
     id: CatalogId,
   ): Promise<ReadonlyMap<MediaId, CatalogZoomFrameProjection>> {
     if (this.zoom === null || !(await this.zoom.isOpen())) return new Map();
+    if (this.zoomPool !== null) {
+      const media = await this.publishedZoomMedia(id);
+      if (media.length === 0) return new Map();
+      return withReadTransaction(this.zoomPool, async (client) =>
+        mapCatalogZoomFrameRows(
+          (
+            await client.query<CatalogZoomFrameRow>(
+              catalogZoomFramesForMediaSql,
+              [JSON.stringify(media)],
+            )
+          ).rows,
+        ),
+      );
+    }
     return withReadTransaction(this.pool, async (client) =>
       mapCatalogZoomFrameRows(
         (await client.query<CatalogZoomFrameRow>(catalogZoomFramesSql, [id]))
@@ -176,6 +224,20 @@ export class PostgresCatalogQueryAdapter
     mediaId: MediaId,
   ): Promise<CatalogZoomBlocksProjection | null> {
     if (this.zoom === null || !(await this.zoom.isOpen())) return null;
+    if (this.zoomPool !== null) {
+      const media = await this.publishedZoomMedia(id, mediaId);
+      if (media.length === 0) return null;
+      return withReadTransaction(this.zoomPool, async (client) =>
+        mapCatalogZoomBlockRows(
+          (
+            await client.query<CatalogZoomBlockRow>(
+              catalogZoomBlocksForMediaSql,
+              [JSON.stringify(media)],
+            )
+          ).rows,
+        ),
+      );
+    }
     return withReadTransaction(this.pool, async (client) =>
       mapCatalogZoomBlockRows(
         (

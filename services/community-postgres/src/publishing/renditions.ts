@@ -1,5 +1,6 @@
 import type { PublishingMediaWriteResult } from "@moya/api";
 
+import { catalogPreparedBlobPinSql } from "./catalog-delivery-intents.js";
 import { nowParam, opaqueId, type PublishingDb } from "./db.js";
 import {
   RECIPE_DIGEST_PATTERN,
@@ -59,6 +60,7 @@ export const retentionHoldSql = (blob: string): string =>
  * no longer count; Catalog and profile renditions count until released.
  */
 export const blobInUseSql = (blobId: string): string => `(
+  ${catalogPreparedBlobPinSql(blobId)} OR
   EXISTS (
     SELECT 1 FROM community.media_components c JOIN community.media_items ci ON ci.id=c.item_id
     WHERE c.blob_id=${blobId} AND ci.state <> 'purged')

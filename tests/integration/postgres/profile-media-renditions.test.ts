@@ -412,6 +412,7 @@ describe("profile media renditions migration on a dedicated synthetic database",
         "20261019010000",
         "20261019020000",
         "20261020010000",
+        "20261020160000",
       ]);
       await verifyCommunityMigrationLedger(pool);
       const after = await snapshot(pool);

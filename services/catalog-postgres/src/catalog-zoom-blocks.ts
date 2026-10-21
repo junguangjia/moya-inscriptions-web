@@ -64,6 +64,40 @@ export const catalogZoomBlocksSql = `
   ORDER BY z.cell ASC
 `;
 
+/** Current published pairs only; no community relation is read on this pool. */
+export const catalogZoomPublishedMediaSql = `
+  SELECT DISTINCT media_id, object_key
+  FROM catalog_media
+  WHERE catalog_id = $1 AND ($2::text IS NULL OR media_id = $2)
+  ORDER BY media_id, object_key
+  LIMIT 10001
+`;
+
+/** The same complete-set read, using only exact pairs from the CMS snapshot. */
+export const catalogZoomFramesForMediaSql = `
+  SELECT cm.media_id, z.frame_width, z.frame_height, z.cells, z.listed
+  FROM jsonb_to_recordset($1::jsonb) AS cm(media_id text, object_key text)
+  CROSS JOIN LATERAL (
+    SELECT b.frame_width, b.frame_height, b.cells,
+           count(DISTINCT b.cell)::integer AS listed
+    FROM community.catalog_media_zoom_blocks b
+    WHERE b.media_id = cm.media_id AND b.object_key = cm.object_key
+    GROUP BY b.frame_width, b.frame_height, b.cells
+  ) z
+`;
+
+/** Listed cells of those exact current pairs, with the existing view geometry. */
+export const catalogZoomBlocksForMediaSql = `
+  SELECT z.cell, z.delivery_key, z.frame_width, z.frame_height, z.cells
+  FROM jsonb_to_recordset($1::jsonb) AS cm(media_id text, object_key text)
+  CROSS JOIN LATERAL (
+    SELECT b.cell, b.delivery_key, b.frame_width, b.frame_height, b.cells
+    FROM community.catalog_media_zoom_blocks b
+    WHERE b.media_id = cm.media_id AND b.object_key = cm.object_key
+  ) z
+  ORDER BY z.cell ASC
+`;
+
 export interface CatalogZoomFrameRow extends QueryResultRow {
   readonly media_id: unknown;
   readonly frame_width: unknown;

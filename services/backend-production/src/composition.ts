@@ -2,6 +2,9 @@ import { parseAnalyticsConfiguration } from "./analytics/config.js";
 import { AnalyticsWorker } from "./analytics/worker.js";
 import { PostgresAnalyticsAdapter } from "@moya/community-postgres";
 import path from "node:path";
+import { createHash } from "node:crypto";
+const requireAssetHash = (mediaId: string, objectKey: string) =>
+  createHash("md5").update(`${mediaId}:${objectKey}`).digest("hex");
 
 import { PostgresNotificationAdapter } from "@moya/community-postgres";
 import { NotificationSignals } from "@moya/backend-runtime";
@@ -49,6 +52,7 @@ import {
   PostgresMediaPublicationAdapter,
   resolveCatalogRenditionRead,
   verifyCatalogDeliveryReadable,
+  readCatalogDeliveryProjection,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { loadProductAccess } from "./access/product-access.js";
@@ -105,6 +109,14 @@ import {
   createProfileSweep,
 } from "./publishing/profile.js";
 import { PublishingWorker } from "./publishing/worker.js";
+import {
+  parseCatalogPrepareDatabaseConfig,
+  readCatalogSourceSnapshot,
+  createCatalogPublicationAuthority,
+  catalogExpectedRenditions,
+  createCatalogReadiness,
+  currentCatalogRecipePolicy,
+} from "./publishing/catalog-delivery-intents.js";
 import { LocalCatalogSourceReader } from "./storage/catalog-source.js";
 import { createLocalStorageUrlResolver } from "./storage/local-media.js";
 import {
@@ -211,6 +223,8 @@ export const prepareProductionBackend = async (
   dependencies: ProductionBackendDependencies = {},
 ): Promise<PreparedProductionBackend> => {
   const runtimeConfig = parseRuntimeConfig(environment);
+  const catalogPrepareConfiguration =
+    parseCatalogPrepareDatabaseConfig(environment);
   const analyticsConfiguration = parseAnalyticsConfiguration(
     environment,
     runtimeConfig.nodeEnv,
@@ -280,14 +294,10 @@ export const prepareProductionBackend = async (
     : runtimeConfig.nodeEnv === "development"
       ? createLocalStorageUrlResolver(environment, runtimeConfig)
       : new ProductionCosStorageUrlResolver(productionCosOptions(environment));
-  // Catalog readers on the published read connection join the community
-  // rendition delivery view (unified media pipeline, PR 1b) wherever the
-  // post-Community public read grant exists: every runtime except the Pilot,
-  // whose dedicated database and resolver deliver no rendition. Discovery
-  // cards join the view through the App role in every runtime, the Pilot
-  // included. Startup verifies both grants, so a missing grant stops startup
-  // instead of failing Catalog or discovery reads.
-  const catalogReaders = { renditions: pilot === undefined };
+  // CMS supplies only current published Catalog metadata. Rendition and block
+  // facts stay on the separate App connection; no CMS/community cross-DB join
+  // or extra CMS grant is needed. The Pilot still delivers no renditions.
+  const catalogReaders = { renditions: false };
   // Where media processing runs (W2): Production always leaves it to the
   // separate media worker and opens only the COS store; Development hosts it
   // in this process by default (`embedded`) with the same sandbox runner.
@@ -394,10 +404,51 @@ export const prepareProductionBackend = async (
   const communityPool = createPostgresPool(communityPostgresConfig, {
     onUnexpectedIdleError,
   });
+  const catalogPreparePool = catalogPrepareConfiguration
+    ? createPostgresPool(catalogPrepareConfiguration, { onUnexpectedIdleError })
+    : null;
   const publicationPort = new PostgresMediaPublicationAdapter(communityPool, {
     allowPublish,
     isPublic,
+    catalogAuthority: createCatalogPublicationAuthority(
+      pool,
+      catalogPreparePool,
+      communityPool,
+    ),
   });
+  const upstreamCatalogResolver = catalogUrlResolver;
+  catalogUrlResolver = {
+    resolveMany: (locators) =>
+      upstreamCatalogResolver.resolveMany(
+        locators.filter(
+          (locator) => !locator.objectKey.startsWith("editorial/"),
+        ),
+      ),
+    ...(upstreamCatalogResolver.resolveKeys
+      ? { resolveKeys: (keys) => upstreamCatalogResolver.resolveKeys!(keys) }
+      : {}),
+    catalogFacts: async (locators) => {
+      const live = await createCatalogPublicationAuthority(
+        pool,
+        null,
+        communityPool,
+      ).publishedAssetIds(
+        locators.map(
+          (p) => `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
+        ),
+      );
+      const approved = new Set(live);
+      return readCatalogDeliveryProjection(
+        communityPool,
+        locators.filter((p) =>
+          approved.has(
+            `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
+          ),
+        ),
+        catalogExpectedRenditions,
+      );
+    },
+  };
   const deliveryOptions = {
     enabled: () => allowsEdgeDelivery(publicationConfig),
     ...(publicationConfig.origin ? { origin: publicationConfig.origin } : {}),
@@ -408,6 +459,9 @@ export const prepareProductionBackend = async (
   if (allowsEdgeDelivery(publicationConfig))
     catalogUrlResolver = {
       resolveMany: (locators) => existingCatalogResolver.resolveMany(locators),
+      ...(existingCatalogResolver.catalogFacts
+        ? { catalogFacts: existingCatalogResolver.catalogFacts }
+        : {}),
       async resolveKeys(keys) {
         if (!allowsEdgeDelivery(publicationConfig))
           return existingCatalogResolver.resolveKeys?.(keys) ?? new Map();
@@ -467,6 +521,8 @@ export const prepareProductionBackend = async (
                       intervalMs: CATALOG_SYNC_INTERVAL_MS,
                       run: createCatalogSync({
                         listSources: () => listPublishedCatalogSources(pool),
+                        readSnapshot: () =>
+                          readCatalogSourceSnapshot(pool, catalogPreparePool),
                         port: workPublishingPort,
                         ...(blocksRender ? { blocks: workPublishingPort } : {}),
                       }).run,
@@ -554,6 +610,7 @@ export const prepareProductionBackend = async (
     await Promise.all([
       closePostgresPool(pool),
       closePostgresPool(communityPool),
+      ...(catalogPreparePool ? [closePostgresPool(catalogPreparePool)] : []),
       ...(articleControlPool ? [closePostgresPool(articleControlPool)] : []),
     ]);
     throw error;
@@ -582,6 +639,7 @@ export const prepareProductionBackend = async (
     await Promise.all([
       closePostgresPool(pool),
       closePostgresPool(communityPool),
+      ...(catalogPreparePool ? [closePostgresPool(catalogPreparePool)] : []),
       ...(articleControlPool === undefined
         ? []
         : [closePostgresPool(articleControlPool)]),
@@ -611,7 +669,9 @@ export const prepareProductionBackend = async (
     : undefined;
   const catalogQueryPort = new PostgresCatalogQueryAdapter(pool, {
     ...catalogReaders,
-    ...(catalogZoomGate === undefined ? {} : { zoom: catalogZoomGate }),
+    ...(catalogZoomGate === undefined || pilot
+      ? {}
+      : { zoom: catalogZoomGate, zoomPool: communityPool }),
   });
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,
@@ -687,6 +747,15 @@ export const prepareProductionBackend = async (
     requestListener: createLocalPublicationReadHandler(
       publicationConfig,
       createBackendApplication({
+        catalogRecipePolicy: async () => currentCatalogRecipePolicy(),
+        ...(catalogPreparePool
+          ? {
+              catalogDeliveryReadiness: createCatalogReadiness(
+                catalogPreparePool,
+                communityPool,
+              ),
+            }
+          : {}),
         nodeEnv: runtimeConfig.nodeEnv,
         analytics: {
           port: analyticsPort,
@@ -740,7 +809,9 @@ export const prepareProductionBackend = async (
             { publication: { allowPublish, isPublic } },
           ),
           discoveryPort: withPublishedReads(
-            new PostgresCommunityDiscoveryAdapter(communityPool),
+            new PostgresCommunityDiscoveryAdapter(communityPool, {
+              catalogPool: pool,
+            }),
             ["browse", "collection", "card"],
             deliveryOptions,
           ),

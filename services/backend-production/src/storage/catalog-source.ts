@@ -14,13 +14,13 @@ import type { PublishingCosTransport } from "./publishing-cos-transport.js";
 
 /*
  * Server-side reads of published Catalog source objects for the media worker
- * (unified media pipeline, increment 1). Production reads with the existing
- * Catalog read identity (`COS_*`) through the COS API endpoint of the bucket's
- * region, never the public media domain: ranged GETs bound to the first
- * response's ETag, streamed into the job input while hashing. Development
- * reads the local Payload media directory. Only the two approved key forms
- * are ever read; each embeds the SHA-256 the bytes must have. Errors are
- * content-free codes.
+ * (unified media pipeline, increment 1). COS reads use the explicit source
+ * identity (`CATALOG_SOURCE_COS_*`) through the bucket region's COS API,
+ * never the public media domain: ranged GETs bound to the first response's
+ * ETag, streamed into the job input while hashing. Development may instead
+ * use its explicit local Payload media directory. Only the two approved key
+ * forms are ever read; each embeds the SHA-256 the bytes must have. Errors
+ * are content-free codes.
  */
 
 export type CatalogSourceErrorCode =
@@ -300,23 +300,27 @@ export interface CatalogSourceConfig {
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
-const CATALOG_COS_KEYS = [
-  "COS_BUCKET",
-  "COS_REGION",
-  "COS_SECRET_ID",
-  "COS_SECRET_KEY",
+const CATALOG_SOURCE_COS_KEYS = [
+  "CATALOG_SOURCE_COS_BUCKET",
+  "CATALOG_SOURCE_COS_REGION",
+  "CATALOG_SOURCE_COS_SECRET_ID",
+  "CATALOG_SOURCE_COS_SECRET_KEY",
+  "CATALOG_SOURCE_COS_SECURITY_TOKEN",
+  "CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT",
+  "CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS",
 ] as const;
 
 /**
- * The Catalog read identity for source reads (`COS_*`, the same keys the
- * Backend signs Catalog URLs with). `null` when none of the four required
- * keys is set (Catalog processing off); a partial or malformed value fails
- * with a message that names the key and never echoes its value.
+ * The explicit source-read identity, independent of public signing and UGC
+ * storage in every environment. `null` only when the entire source namespace
+ * is absent; partial, malformed or unpaired temporary credentials fail before
+ * startup I/O, naming only the setting and never its value.
  */
 export function parseCatalogSourceConfig(
   environment: Environment,
 ): CatalogSourceConfig | null {
-  if (CATALOG_COS_KEYS.every((key) => !environment[key])) return null;
+  if (CATALOG_SOURCE_COS_KEYS.every((key) => environment[key] === undefined))
+    return null;
   const required = (key: string): string => {
     const value = environment[key];
     if (!value || value.trim() !== value || /[\r\n\0]/.test(value))
@@ -331,26 +335,50 @@ export function parseCatalogSourceConfig(
       throw new Error(`Catalog source configuration invalid: ${key}`);
     return Number(value);
   };
-  const bucket = required("COS_BUCKET");
-  const region = required("COS_REGION");
-  const secretId = required("COS_SECRET_ID");
-  const secretKey = required("COS_SECRET_KEY");
+  const bucket = required("CATALOG_SOURCE_COS_BUCKET");
+  const region = required("CATALOG_SOURCE_COS_REGION");
+  const secretId = required("CATALOG_SOURCE_COS_SECRET_ID");
+  const secretKey = required("CATALOG_SOURCE_COS_SECRET_KEY");
+  if (!COS_BUCKET_PATTERN.test(bucket))
+    throw new Error(
+      "Catalog source configuration invalid: CATALOG_SOURCE_COS_BUCKET",
+    );
+  if (!COS_REGION_PATTERN.test(region))
+    throw new Error(
+      "Catalog source configuration invalid: CATALOG_SOURCE_COS_REGION",
+    );
   if (!/^[A-Za-z0-9_-]+$/.test(secretId))
-    throw new Error("Catalog source configuration invalid: COS_SECRET_ID");
+    throw new Error(
+      "Catalog source configuration invalid: CATALOG_SOURCE_COS_SECRET_ID",
+    );
+  if (
+    environment.CATALOG_SOURCE_COS_SECURITY_TOKEN === undefined &&
+    environment.CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT !== undefined
+  )
+    throw new Error(
+      "Catalog source configuration missing or invalid: CATALOG_SOURCE_COS_SECURITY_TOKEN",
+    );
   const temporary =
-    environment.COS_SECURITY_TOKEN === undefined
+    environment.CATALOG_SOURCE_COS_SECURITY_TOKEN === undefined
       ? {}
       : {
-          securityToken: required("COS_SECURITY_TOKEN"),
-          expiresAt: integer("COS_CREDENTIAL_EXPIRES_AT"),
+          securityToken: required("CATALOG_SOURCE_COS_SECURITY_TOKEN"),
+          expiresAt: integer("CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT"),
         };
+  if (
+    temporary.expiresAt !== undefined &&
+    temporary.expiresAt <= Math.floor(Date.now() / 1000) + 30
+  )
+    throw new Error(
+      "Catalog source configuration invalid: CATALOG_SOURCE_COS_CREDENTIAL_EXPIRES_AT",
+    );
   const requestTimeoutMs =
-    environment.COS_REQUEST_TIMEOUT_MS === undefined
+    environment.CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS === undefined
       ? 30_000
-      : integer("COS_REQUEST_TIMEOUT_MS");
+      : integer("CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS");
   if (requestTimeoutMs > 120_000)
     throw new Error(
-      "Catalog source configuration invalid: COS_REQUEST_TIMEOUT_MS",
+      "Catalog source configuration invalid: CATALOG_SOURCE_COS_REQUEST_TIMEOUT_MS",
     );
   return {
     bucket,

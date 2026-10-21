@@ -6,6 +6,13 @@ import {
   articlePageSchema,
 } from "@moya/contracts/schemas";
 import { describe, expect, it } from "vitest";
+import {
+  editorialMediaUploadSessionSchema,
+  editorialMediaUploadStartSchema,
+  MEDIA_UPLOAD_CHUNK_BYTES,
+  MEDIA_UPLOAD_STREAM_VERSION,
+  MAX_MEDIA_UPLOAD_BYTES,
+} from "@moya/contracts/internal/editorial";
 
 const id = `article-${"1".repeat(32)}`;
 const summary = {
@@ -74,5 +81,60 @@ describe("editorial content contracts (content-community-completion-v1)", () => 
         article: summary,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("Native resumable upload wire contract", () => {
+  const intent = {
+    transferId: "1".repeat(64),
+    catalogId: "synthetic-upload-catalog",
+    mediaId: "synthetic-upload-media",
+    sha256: "2".repeat(64),
+    bytes: MEDIA_UPLOAD_CHUNK_BYTES + 1,
+    mimeType: "image/png",
+    alt: "Synthetic image",
+  };
+  it("bounds immutable byte intent and keeps stream capability out of strict legacy JSON", () => {
+    expect(editorialMediaUploadStartSchema.parse(intent).existingOnly).toBe(
+      false,
+    );
+    for (const extra of [
+      { url: "https://example.invalid/image" },
+      { actorId: 1 },
+      { ready: true },
+    ])
+      expect(
+        editorialMediaUploadStartSchema.safeParse({ ...intent, ...extra })
+          .success,
+      ).toBe(false);
+    for (const bytes of [0, MAX_MEDIA_UPLOAD_BYTES + 1, 1.5])
+      expect(
+        editorialMediaUploadStartSchema.safeParse({ ...intent, bytes }).success,
+      ).toBe(false);
+    const session = {
+      uploadId: "3".repeat(64),
+      state: "uploading",
+      chunkBytes: MEDIA_UPLOAD_CHUNK_BYTES,
+      chunkCount: 2,
+      receivedIndices: [0],
+      expiresAt: "2026-10-21T00:00:00.000Z",
+    };
+    expect(editorialMediaUploadSessionSchema.safeParse(session).success).toBe(
+      true,
+    );
+    expect(MEDIA_UPLOAD_STREAM_VERSION).toBe("1");
+    expect(
+      editorialMediaUploadSessionSchema.safeParse({
+        ...session,
+        streamVersion: "1",
+      }).success,
+    ).toBe(false);
+    for (const receivedIndices of [[0, 0], [2], [-1]])
+      expect(
+        editorialMediaUploadSessionSchema.safeParse({
+          ...session,
+          receivedIndices,
+        }).success,
+      ).toBe(false);
   });
 });

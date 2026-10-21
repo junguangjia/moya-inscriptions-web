@@ -29,6 +29,7 @@ const roles = [
   `cms_release_upgrade_${suffix}`,
   `cms_release_public_${suffix}`,
   `cms_release_owner_${suffix}`,
+  `cms_prepare_reader_${suffix}`,
 ];
 const createdRoles: string[] = [];
 const password = randomBytes(32).toString("hex");
@@ -71,6 +72,37 @@ const acl = async (role: string) =>
       [role],
     )
   ).rows;
+
+const applyPrepareReader = async (role: string, approved = roles[4]!) => {
+  let sql = await readFile(
+    new URL(
+      "../../infra/development/catalog-media/grant-prepare-read.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  for (const [name, value] of Object.entries({
+    prepare_reader: role,
+    approved_prepare_reader: approved,
+    public_read_role: roles[2]!,
+    backend_read_role: roles[0]!,
+  })) {
+    sql = sql
+      .replaceAll(`:"${name}"`, `"${value}"`)
+      .replaceAll(`:'${name}'`, `'${value}'`);
+  }
+  const client = await setupPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(sql);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
 
 // Cluster-wide role creation is bounded to the marked local disposable target.
 // Existing remote synthetic CMS checks retain their separate emptiness proof.
@@ -185,6 +217,94 @@ describe
         )
       ).replaceAll(':"public_read_role"', `"${roles[2]}"`);
       await setupPool().query(articleRead);
+    });
+
+    it("grants only the explicitly approved private view reader and refuses shared public/backend identities or role reachability", async () => {
+      const privateRole = roles[4]!;
+      const refusal =
+        "Catalog prepare reader must be the approved private non-owner role";
+      await expect(applyPrepareReader(privateRole, roles[1]!)).rejects.toThrow(
+        refusal,
+      );
+      await expect(applyPrepareReader(roles[2]!, roles[2]!)).rejects.toThrow(
+        refusal,
+      );
+      await expect(applyPrepareReader(roles[0]!, roles[0]!)).rejects.toThrow(
+        refusal,
+      );
+      for (const [granted, member, options] of [
+        [privateRole, roles[2]!, "INHERIT FALSE, SET TRUE"],
+        [roles[2]!, privateRole, "INHERIT FALSE, SET TRUE"],
+        [privateRole, roles[0]!, "INHERIT TRUE, SET FALSE"],
+        [roles[0]!, privateRole, "INHERIT TRUE, SET FALSE"],
+      ]) {
+        await setupPool().query(
+          `GRANT "${granted}" TO "${member}" WITH ${options}`,
+        );
+        try {
+          await expect(applyPrepareReader(privateRole)).rejects.toThrow(
+            refusal,
+          );
+        } finally {
+          await setupPool().query(`REVOKE "${granted}" FROM "${member}"`);
+        }
+      }
+      await applyPrepareReader(privateRole);
+      const reader = runtimePool(privateRole).pool;
+      expect(
+        (
+          await reader.query(
+            "SELECT * FROM public.catalog_delivery_prepare_media LIMIT 0",
+          )
+        ).fields.map(({ name }) => name),
+      ).toEqual([
+        "intent_id",
+        "catalog_document_id",
+        "catalog_id",
+        "draft_revision",
+        "draft_fingerprint",
+        "media_manifest_sha256",
+        "recipe_manifest_sha256",
+        "state_version",
+        "state",
+        "media_count",
+        "expires_at",
+        "media_ordinal",
+        "media_id",
+        "object_key",
+        "source_sha256",
+        "width",
+        "height",
+      ]);
+      expect(
+        (
+          await reader.query(
+            "SELECT count(*)::int AS count FROM public.catalog_delivery_prepare_media",
+          )
+        ).rows[0].count,
+      ).toBeGreaterThanOrEqual(0);
+      for (const [privilege, allowed] of [
+        ["SELECT", true],
+        ["INSERT", false],
+        ["UPDATE", false],
+        ["DELETE", false],
+      ] as const)
+        expect(
+          (
+            await reader.query(
+              "SELECT has_table_privilege(current_user,'public.catalog_delivery_prepare_media',$1) AS allowed",
+              [privilege],
+            )
+          ).rows[0].allowed,
+        ).toBe(allowed);
+      for (const sql of [
+        "SELECT * FROM public.catalog_delivery_intents",
+        "SELECT * FROM public.catalog_entries",
+      ]) {
+        await expect(reader.query(sql)).rejects.toMatchObject({
+          code: "42501",
+        });
+      }
     });
 
     it.each(roles.slice(0, 2))(
@@ -346,6 +466,12 @@ describe
           "DELETE FROM public.users WHERE false",
           "DELETE FROM public.editorial_identities WHERE false",
           "DELETE FROM public.editorial_receipts WHERE false",
+          "DELETE FROM public.catalog_delivery_intents WHERE false",
+          "DELETE FROM public.catalog_delivery_receipts WHERE false",
+          "UPDATE public.catalog_delivery_receipts SET operation=operation WHERE false",
+          "UPDATE public.catalog_delivery_intents SET draft_snapshot=draft_snapshot WHERE false",
+          "UPDATE public.catalog_delivery_intents SET media_manifest=media_manifest WHERE false",
+          "UPDATE public.catalog_delivery_intents SET recipe_manifest_sha256=recipe_manifest_sha256 WHERE false",
           "UPDATE public.catalog_first_publications SET first_published_at=first_published_at WHERE false",
           "SELECT * FROM community.public_users",
           "INSERT INTO community.public_users(id) VALUES (null)",
@@ -367,6 +493,14 @@ describe
         await expect(
           publicPool.query("SELECT * FROM public.users"),
         ).rejects.toMatchObject({ code: "42501" });
+        for (const table of [
+          "catalog_delivery_intents",
+          "catalog_delivery_receipts",
+          "catalog_delivery_prepare_media",
+        ])
+          await expect(
+            publicPool.query(`SELECT * FROM public.${table}`),
+          ).rejects.toMatchObject({ code: "42501" });
         await expect(
           publicPool.query(
             "UPDATE public.catalogs SET title=title WHERE false",

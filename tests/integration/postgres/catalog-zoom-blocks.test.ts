@@ -54,6 +54,7 @@ import {
   resolveCatalogRenditionRead,
   runCommunityMigrations,
 } from "@moya/community-postgres";
+import { createCatalogPublicationAuthority } from "@moya/backend-production/internal/catalog-delivery";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -157,6 +158,9 @@ beforeAll(async () => {
         "utf8",
       )
     ).replaceAll(':"app_role"', `"${appRole}"`),
+  );
+  await setup.query(
+    `GRANT SELECT (intent_id, asset_id) ON TABLE community.catalog_delivery_media_refs TO "${appRole}"`,
   );
   await setup.query(
     (
@@ -1303,6 +1307,151 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
     expect(next.filter((unit) => ids.includes(unit.id))).toEqual([]);
   });
 
+  it("retains exact active-master blocks through the live CMS authority selector", async () => {
+    const image = await catalogImage();
+    const master = await attached(image);
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    const blockIds = await insertBlocks(
+      image,
+      master.masterId!,
+      frame,
+      allCells(frame),
+    );
+    // Deliberately stale App sync metadata must not override the live source.
+    await setup.query(
+      "UPDATE community.catalog_media_assets SET unreferenced_since=$2 WHERE id=$1",
+      [image.assetId, t0],
+    );
+    // The existing dedicated SQL fixture's published source table is read by
+    // setup; all rendition and publication queries still use the real App role.
+    // This is authority/SQL integration, not a second dual-DB Native E2E test.
+    const malformedImage = await catalogImage();
+    const malformedMaster = await attached(malformedImage);
+    const malformedBlob = `media-blob-${hex()}`;
+    const malformedBlock = `media-rendition-${hex()}`;
+    await setup.query(
+      "INSERT INTO community.media_blobs(id,owner_id,purpose,storage_key,byte_size,sha256,content_type,created_at) VALUES($1,NULL,'catalog_derivative',$2,1000,$3,'image/jpeg',$4)",
+      [malformedBlob, blobKey(), sha(malformedBlob), t0],
+    );
+    // Width 1 satisfies the bounded column CHECK, but not this cell's width.
+    // A separate published asset avoids the ready-role uniqueness constraint
+    // without changing the original asset's 24 valid blocks.
+    await setup.query(
+      "INSERT INTO community.media_renditions(id,catalog_asset_id,catalog_master_id,edit_key,role,recipe_version,recipe_digest,blob_id,width,height,content_type,created_at) VALUES($1,$2,$3,'base','block-00',2,'3333333333333333',$4,1,$5,'image/jpeg',$6)",
+      [
+        malformedBlock,
+        malformedImage.assetId,
+        malformedMaster.masterId,
+        malformedBlob,
+        catalogBlockCell(
+          malformedMaster.frameWidth,
+          malformedMaster.frameHeight,
+          0,
+        ).height,
+        t0,
+      ],
+    );
+    const authority = createCatalogPublicationAuthority(setup, null, app);
+    const selected = await authority.copyRenditionIds();
+    expect(selected).not.toContain(malformedBlock);
+    expect(selected.filter((id) => blockIds.includes(id)).sort()).toEqual(
+      [...blockIds].sort(),
+    );
+    const captured = await authority.acquire(image.assetId);
+    try {
+      expect(
+        captured.renditionIds.filter((id) => blockIds.includes(id)).sort(),
+      ).toEqual([...blockIds].sort());
+      expect(await captured.authorized()).toBe(true);
+    } finally {
+      await captured.release();
+    }
+    await setup.query(
+      "INSERT INTO community.media_public_assets(id,catalog_asset_id,desired_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3)",
+      [hex(), image.assetId, t0],
+    );
+    const withAuthority = new PostgresMediaPublicationAdapter(app, {
+      isPublic: () => true,
+      allowPublish: () => true,
+      catalogAuthority: authority,
+    });
+    const job = await lease(image.assetId, "publish_media");
+    const plan = await withAuthority.planPublish(image.assetId, job, t0);
+    if (plan.status !== "ready") throw new Error(plan.status);
+    try {
+      expect(
+        plan.units
+          .filter((u) => u.role.startsWith("block-"))
+          .map((u) => u.renditionId!)
+          .sort(),
+      ).toEqual([...blockIds].sort());
+      expect(await withAuthority.finishPublish(plan.fence, t0)).toBe(true);
+    } finally {
+      await withAuthority.release(plan.fence, t0);
+      await setup.query(
+        "UPDATE community.publishing_jobs SET state='succeeded',finished_at=$2,lease_owner=NULL,lease_expires_at=NULL WHERE id=$1 AND state='running'",
+        [job.id, t0],
+      );
+    }
+    // This is the authority lookup used by the real edge URL resolver, not
+    // the no-authority legacy path covered in the preceding case.
+    expect(
+      (await withAuthority.lookupPublishedCatalog(blockIds, t0)).size,
+    ).toBe(24);
+    expect(
+      await withAuthority.lookupPublishedCatalog([malformedBlock], t0),
+    ).toEqual(new Map());
+    await setup.query(
+      "UPDATE community.media_renditions SET width=1 WHERE id=$1",
+      [blockIds[0]],
+    );
+    const malformedLookup = await withAuthority.lookupPublishedCatalog(
+      blockIds,
+      t0,
+    );
+    expect(malformedLookup.size).toBe(23);
+    expect(malformedLookup.has(blockIds[0]!)).toBe(false);
+    await setup.query(
+      "UPDATE community.media_renditions SET width=$2 WHERE id=$1",
+      [blockIds[0], catalogBlockCell(frame.width, frame.height, 0).width],
+    );
+    expect(
+      (await withAuthority.lookupPublishedCatalog(blockIds, t0)).size,
+    ).toBe(24);
+    await setup.query("DELETE FROM public.catalog_media WHERE media_id=$1", [
+      image.mediaId,
+    ]);
+    expect(
+      (await withAuthority.lookupPublishedCatalog(blockIds, t0)).size,
+    ).toBe(0);
+    expect(
+      (await authority.copyRenditionIds()).filter((id) =>
+        blockIds.includes(id),
+      ),
+    ).toEqual([]);
+    await setup.query(
+      "INSERT INTO public.catalog_media(catalog_id,media_id,object_key,width,height,is_representative,position) VALUES($1,$2,$3,$4,$5,false,0)",
+      [
+        image.catalogId,
+        image.mediaId,
+        image.objectKey,
+        image.width,
+        image.height,
+      ],
+    );
+    expect((await masters.detach({ mediaId: image.mediaId }, t0)).status).toBe(
+      "done",
+    );
+    expect(
+      (await withAuthority.lookupPublishedCatalog(blockIds, t0)).size,
+    ).toBe(0);
+    expect(
+      (await authority.copyRenditionIds()).filter((id) =>
+        blockIds.includes(id),
+      ),
+    ).toEqual([]);
+  });
+
   it("lets the public read role read the blocks view and nothing else that is new", async () => {
     await expect(
       publicRead.query(
@@ -2209,6 +2358,34 @@ describe("Catalog Detail deep-zoom reads (PR C; criteria 12, 13, 20)", () => {
     ).toEqual({ ...complete.frame, keys: complete.ids });
     expect(
       await reader().getZoomBlocks(
+        partial.image.catalogId as never,
+        partial.image.mediaId as never,
+      ),
+    ).toBeNull();
+    // Production composition keeps CMS media reads separate from App block
+    // facts. Exercise both real SQL branches with the existing distinct roles.
+    const splitReader = new PostgresCatalogQueryAdapter(
+      as(() => publicRead),
+      {
+        renditions: false,
+        zoomPool: as(() => app),
+        zoom: { isOpen: async () => open },
+      },
+    );
+    expect([
+      ...(await splitReader.getZoomFrames(complete.image.catalogId as never)),
+    ]).toEqual([[complete.image.mediaId, complete.frame]]);
+    expect(
+      await splitReader.getZoomBlocks(
+        complete.image.catalogId as never,
+        complete.image.mediaId as never,
+      ),
+    ).toEqual({ ...complete.frame, keys: complete.ids });
+    expect(
+      (await splitReader.getZoomFrames(partial.image.catalogId as never)).size,
+    ).toBe(0);
+    expect(
+      await splitReader.getZoomBlocks(
         partial.image.catalogId as never,
         partial.image.mediaId as never,
       ),

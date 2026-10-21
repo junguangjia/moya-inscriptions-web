@@ -38,9 +38,34 @@ vi.mock(storage.module, async (importOriginal) => {
         config: {
           ...(options.config as Record<string, unknown>),
           requestHandler: {
-            async handle(request: { method: string; path: string }) {
+            async handle(request: {
+              method: string;
+              path: string;
+              body?: unknown;
+            }) {
               const key = decodeURIComponent(request.path.slice(1));
               storage.requests.push({ method: request.method, key });
+              if (request.method === "PUT") {
+                let uploaded: Buffer;
+                if (typeof request.body === "string")
+                  uploaded = Buffer.from(request.body);
+                else if (request.body instanceof Uint8Array)
+                  uploaded = Buffer.from(request.body);
+                else {
+                  const chunks: Buffer[] = [];
+                  for await (const chunk of request.body as AsyncIterable<Uint8Array>)
+                    chunks.push(Buffer.from(chunk));
+                  uploaded = Buffer.concat(chunks);
+                }
+                storage.objects.set(key, uploaded);
+                return {
+                  response: {
+                    statusCode: 200,
+                    headers: { etag: '"synthetic-original-upload"' },
+                    body: Readable.from([]),
+                  },
+                };
+              }
               const bytes = storage.objects.get(key);
               if (!bytes || !["HEAD", "GET"].includes(request.method))
                 throw new Error("UNEXPECTED_SYNTHETIC_S3_REQUEST");
@@ -163,6 +188,160 @@ beforeAll(async () => {
 afterAll(async () => {
   await payload?.destroy();
   vi.unstubAllEnvs();
+});
+
+it("completes resumable bytes through the real S3 adapter metadata hook and replays without another PUT", async () => {
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const post = (
+    route: string,
+    body: string | Uint8Array,
+    headers: Record<string, string>,
+  ) =>
+    handleEndpoints({
+      config,
+      request: new Request(
+        `http://localhost/api/editorial/media-upload/${route}`,
+        {
+          method: "POST",
+          headers: { Authorization: `JWT ${token}`, ...headers },
+          body: typeof body === "string" ? body : new Uint8Array(body),
+        },
+      ),
+    });
+  const json = (route: string, value: unknown) =>
+    post(route, JSON.stringify(value), { "content-type": "application/json" });
+  const intent = {
+    transferId: createHash("sha256").update(`cos-${suffix}`).digest("hex"),
+    catalogId: `cos-upload-catalog-${suffix}`,
+    mediaId: `cos-upload-media-${suffix}`,
+    sha256,
+    bytes: bytes.length,
+    mimeType: "image/webp",
+    alt: "Synthetic original S3 upload",
+    rights: "Synthetic fixture",
+    orderConfidence: "HIGH",
+  };
+  storage.requests.length = 0;
+  const started = await json("start", intent);
+  expect(started.status).toBe(200);
+  const { uploadId } = (await started.json()).result;
+  const chunk = await post(`chunk/${uploadId}/0`, bytes, {
+    "content-type": "application/octet-stream",
+    "x-editorial-chunk-sha256": sha256,
+  });
+  expect(chunk.status).toBe(200);
+  const complete = await json("complete", { uploadId });
+  expect(complete.status).toBe(200);
+  const result = (await complete.json()).result;
+  expect(result).toMatchObject({
+    reused: false,
+    validatedBytes: bytes.length,
+    validatedSha256: sha256,
+    media: {
+      mediaId: intent.mediaId,
+      catalogId: intent.catalogId,
+      sha256,
+      filesize: bytes.length,
+      width: 3,
+      height: 2,
+      rights: "Synthetic fixture",
+      orderConfidence: "HIGH",
+    },
+  });
+  expect(storage.requests.filter(({ method }) => method === "PUT")).toEqual([
+    { method: "PUT", key: result.media.objectKey },
+  ]);
+  expect(storage.objects.get(result.media.objectKey)).toEqual(bytes);
+  const putCount = storage.requests.filter(
+    ({ method }) => method === "PUT",
+  ).length;
+  const replay = await json("complete", { uploadId });
+  expect(replay.status).toBe(200);
+  expect((await replay.json()).result).toMatchObject({
+    reused: true,
+    media: { id: result.media.id },
+  });
+  expect(
+    storage.requests.filter(({ method }) => method === "PUT"),
+  ).toHaveLength(putCount);
+  expect(
+    (
+      await payload.find({
+        collection: "media",
+        overrideAccess: true,
+        where: { mediaId: { equals: intent.mediaId } },
+      })
+    ).totalDocs,
+  ).toBe(1);
+
+  const stageExistingOnly = async (
+    existingIntent: typeof intent & { existingOnly: true },
+  ) => {
+    const start = await json("start", existingIntent);
+    expect(start.status).toBe(200);
+    const session = (await start.json()).result;
+    const staged = await post(`chunk/${session.uploadId}/0`, bytes, {
+      "content-type": "application/octet-stream",
+      "x-editorial-chunk-sha256": sha256,
+    });
+    expect(staged.status).toBe(200);
+    return session.uploadId as string;
+  };
+  const existingUploadId = await stageExistingOnly({
+    ...intent,
+    transferId: createHash("sha256")
+      .update(`cos-existing-${suffix}`)
+      .digest("hex"),
+    existingOnly: true,
+  });
+  const existing = await json("complete", { uploadId: existingUploadId });
+  expect(existing.status).toBe(200);
+  expect((await existing.json()).result).toMatchObject({
+    reused: true,
+    validatedBytes: bytes.length,
+    validatedSha256: sha256,
+    media: { id: result.media.id, mediaId: intent.mediaId },
+  });
+  expect(
+    storage.requests.filter(({ method }) => method === "PUT"),
+  ).toHaveLength(putCount);
+  expect(
+    (
+      await payload.find({
+        collection: "media",
+        overrideAccess: true,
+        where: { mediaId: { equals: intent.mediaId } },
+      })
+    ).totalDocs,
+  ).toBe(1);
+
+  const absentMediaId = `cos-upload-absent-${suffix}`;
+  const absentUploadId = await stageExistingOnly({
+    ...intent,
+    transferId: createHash("sha256")
+      .update(`cos-absent-${suffix}`)
+      .digest("hex"),
+    mediaId: absentMediaId,
+    existingOnly: true,
+  });
+  const absent = await json("complete", { uploadId: absentUploadId });
+  expect(absent.status).toBe(409);
+  expect(await absent.json()).toMatchObject({
+    ok: false,
+    error: { code: "MEDIA_UPLOAD_EXISTING_REQUIRED" },
+  });
+  expect(
+    storage.requests.filter(({ method }) => method === "PUT"),
+  ).toHaveLength(putCount);
+  expect(
+    (
+      await payload.find({
+        collection: "media",
+        overrideAccess: true,
+        where: { mediaId: { equals: absentMediaId } },
+      })
+    ).totalDocs,
+  ).toBe(0);
 });
 
 it("includes and persists document prefix in the enabled COS schema and Owner projection", async () => {

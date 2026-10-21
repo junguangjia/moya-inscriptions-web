@@ -35,3 +35,20 @@ GRANT SELECT, UPDATE ON TABLE community.publication_setting TO yoyi_dev_app;
 GRANT SELECT, INSERT ON TABLE community.moderation_events TO yoyi_dev_app;
 -- Startup readiness verifies the community ledger read-only.
 GRANT SELECT ON TABLE community.schema_migrations TO yoyi_dev_app;
+
+-- Named private Catalog prepare state. This is still the shared App runtime,
+-- not a newly isolated worker role. Full manifests and rendition identities are
+-- insert-only; only observed lifecycle and the exact public-generation pin may
+-- advance. No DELETE/default privilege or CMS relation is granted here.
+GRANT SELECT, INSERT ON TABLE
+  community.catalog_delivery_prepares,
+  community.catalog_delivery_media_refs,
+  community.catalog_delivery_rendition_pins
+TO yoyi_dev_app;
+GRANT UPDATE (source_state, source_state_version, observed_at, observed_live, ended_at, updated_at)
+  ON community.catalog_delivery_prepares TO yoyi_dev_app;
+GRANT UPDATE (public_generation_id, public_generation_version)
+  ON community.catalog_delivery_rendition_pins TO yoyi_dev_app;
+
+GRANT SELECT, INSERT ON community.catalog_delivery_snapshot_watermark TO yoyi_dev_app;
+GRANT UPDATE(observed_at) ON community.catalog_delivery_snapshot_watermark TO yoyi_dev_app;
