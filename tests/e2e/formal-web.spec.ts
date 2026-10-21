@@ -545,7 +545,9 @@ test("Catalog redirect remains 307 and Formal Detail failures stay truthful", as
   expect(redirect.status()).toBe(307);
   const location = redirect.headers().location;
   expect(location).toBeDefined();
-  const destination = new URL(location!);
+  // Relative, so the browser keeps the public host it used (never the proxy's).
+  expect(location!.startsWith("/")).toBe(true);
+  const destination = new URL(location!, redirect.url());
   expect(destination.pathname).toBe("/");
   expect(destination.searchParams.get("catalogId")).toBe(runtimeIds.multiMedia);
   expect(destination.hash).toBe(`#detail-${runtimeIds.multiMedia}`);

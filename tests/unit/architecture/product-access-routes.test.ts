@@ -90,7 +90,9 @@ const proof: Readonly<Record<string, RegExp>> = {
   operator: /\bfetchServerEditorialPreview\(/u,
   development: /NODE_ENV\s*!==\s*"development"/u,
   asset: /kind: "(?:demo-assets|design-tokens|ui-styles|ui-assets)"/u,
-  redirect: /Response\.redirect\(/u,
+  // Response.redirect needs an absolute URL; a relative Location is the same
+  // contentless 307 without trusting the proxied request origin.
+  redirect: /Response\.redirect\(|status: 307,\s*headers: \{\s*Location:/u,
 };
 
 describe("product access covers every Web entry point", () => {
