@@ -25,10 +25,13 @@ const terminal = (state: string) =>
  *   (document, revision, fingerprint, manifests, media, expires_at) and that
  *   is still live is mismatched: none of it is applied and its local row is
  *   left as it is, neither ended nor revived, as before for that intent
- *   alone. One that is over (withdrawn, cancelled, superseded or expired,
- *   expired by the snapshot's expiry or by the stored one, whichever is
- *   earlier) is refused instead (below): a drift never keeps an ended
- *   mirror live;
+ *   alone. One that is over is refused instead (below): the snapshot says
+ *   withdrawn, cancelled, superseded or expired, the stored row is already
+ *   ended, or the stored row is prepared or release_requested and the
+ *   earlier of the stored and the snapshot expiry has passed. The lease is
+ *   read from the stored row, never from the contradicted snapshot's label,
+ *   so a drift never keeps an ended mirror live and never ends a released
+ *   one;
  * - a decoded intent that would revive or regress its local monotonic state
  *   (a release committed after this mirror already expired it, a
  *   state_version regression) is refused too: none of it is applied and its
@@ -149,10 +152,13 @@ export const synchronizeCatalogDeliveryIntents = async (
     // A prepared identity (header and stored media) is immutable. A snapshot
     // that disagrees with it is skipped alone, before any lifecycle check:
     // none of it is applied. While the intent is live its local row is left
-    // exactly as it is, like an undecodable intent's. Once it is over (a
-    // terminal state, or past the earlier of the snapshot's and the stored
-    // expiry, so a drifted expiry never extends it) it is refused and
-    // tombstoned like an absent intent: ending grants nothing.
+    // exactly as it is, like an undecodable intent's. Once it is over it is
+    // refused and tombstoned like an absent intent: ending grants nothing.
+    // Over: the snapshot says terminal, the stored row is ended, or the
+    // stored row still holds a lease (prepared or release_requested) and
+    // the earlier of both expiries has passed. The lease comes from the
+    // stored row, so a contradicted `released` label never extends it and a
+    // contradicted live label never ends a released mirror.
     if (
       previous &&
       (previous.cms_document_id !== intent.documentId ||
@@ -167,9 +173,13 @@ export const synchronizeCatalogDeliveryIntents = async (
           JSON.stringify(stored) !== JSON.stringify(members)))
     ) {
       const over =
-        terminal(state) ||
-        (["prepared", "release_requested"].includes(intent.state) &&
-          previous.expires_at.getTime() <= now.getTime());
+        terminal(intent.state) ||
+        terminal(previous.source_state) ||
+        (["prepared", "release_requested"].includes(previous.source_state) &&
+          Math.min(
+            previous.expires_at.getTime(),
+            new Date(intent.expiresAt).getTime(),
+          ) <= now.getTime());
       (over ? rejected : mismatched).push(intent.intentId);
       continue;
     }
