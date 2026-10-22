@@ -18,10 +18,11 @@ import { describe, expect, it, vi } from "vitest";
 
 /*
  * catalog-delivery-release-hardening-v1 (Issue #317), group g3:
- * N3 a recipe bump keeps the last published set desired and served until the
- *    current recipe's set is complete and published;
+ * N3 a recipe bump keeps the last published set desired and served, for every
+ *    role at once, until the current recipe's set is complete and published;
  * F3 an intent that would revive its local tombstone is refused alone, and the
- *    sync logs it;
+ *    sync logs it; one whose immutable identity drifted is skipped alone and
+ *    its mirror left as it is;
  * F7 one undecodable intent (an edge beyond 65,535 px) never fails the
  *    snapshot, plans or sync of the others, and an undecodable intent (even
  *    every intent at once) leaves its App mirror untouched;
@@ -312,15 +313,21 @@ describe("N3: a recipe bump keeps the last published set desired", () => {
     expect(sorted(await w.authority.copyRenditionIds())).toEqual(idsOf(fresh));
   });
 
-  it("serves the last published set until the current one is complete and published", async () => {
-    const plan = catalogExpectedRenditions(source.width, source.height);
+  // The previous set was rendered long ago; the re-render records the
+  // current set and releases (or supersedes) each slot's previous rendition
+  // in one transaction, at the same instant.
+  const RENDERED = "2026-10-01T00:00:00.000Z";
+  const BUMP = "2026-10-21T00:00:00.000Z";
+  const projection = () => {
     let rows: Row[] = [];
     const pool = {
       query: async () => ({ rows }),
     } as unknown as Parameters<typeof readCatalogDeliveryProjection>[0];
+    /** Published App rows of a set (the projection only reads published). */
     const asRows = (
       set: ReturnType<typeof renditionRows>,
       state: "ready" | "released" | "superseded" = "ready",
+      times: { readonly created?: string; readonly replaced?: string } = {},
     ): Row[] =>
       set.map((r) => ({
         media_id: source.media_id,
@@ -331,6 +338,12 @@ describe("N3: a recipe bump keeps the last published set desired", () => {
         master_height: source.height,
         rendition_id: r.id,
         rendition_state: state,
+        rendition_created_at: new Date(
+          times.created ??
+            (r.recipe_digest === PREVIOUS_DIGEST ? RENDERED : BUMP),
+        ),
+        rendition_replaced_at:
+          state === "ready" ? null : new Date(times.replaced ?? BUMP),
         role: r.role,
         recipe_version: r.recipe_version,
         recipe_digest: r.recipe_digest,
@@ -339,8 +352,9 @@ describe("N3: a recipe bump keeps the last published set desired", () => {
         content_type: "image/webp",
         approved_intent: null,
       }));
-    const read = async () =>
-      (
+    const read = async (set: Row[]) => {
+      rows = set;
+      return (
         await readCatalogDeliveryProjection(
           pool,
           [{ mediaId: source.media_id, objectKey: source.object_key }],
@@ -350,43 +364,118 @@ describe("N3: a recipe bump keeps the last published set desired", () => {
         .get(JSON.stringify([source.media_id, source.object_key]))
         ?.renditions?.map(({ key }) => key)
         .sort();
+    };
+    return { asRows, read };
+  };
+
+  it("serves the last published set until the current one is complete and published", async () => {
+    const plan = catalogExpectedRenditions(source.width, source.height);
+    const { asRows, read } = projection();
     const previous = renditionRows(source, 1, "previous");
-    rows = asRows(previous);
-    expect(await read()).toEqual(idsOf(previous));
+    expect(await read(asRows(previous))).toEqual(idsOf(previous));
     const current = renditionRows(source, 20, "current");
-    rows = asRows(current);
-    expect(await read()).toEqual(idsOf(current));
+    expect(await read(asRows(current))).toEqual(idsOf(current));
     expect(current).toHaveLength(plan.length);
     // Never a partial family.
-    rows = asRows(previous.filter((r) => r.role !== "display"));
-    expect(await read()).toBeUndefined();
+    expect(
+      await read(asRows(previous.filter((r) => r.role !== "display"))),
+    ).toBeUndefined();
     // The re-render released the previous set before its replacement was
     // copied (only published rows are read): it keeps serving.
-    rows = asRows(previous, "released");
-    expect(await read()).toEqual(idsOf(previous));
-    rows = [...asRows(previous, "released"), ...asRows(current)];
-    expect(await read()).toEqual(idsOf(current));
-    // A D7 superseded slot serves alike; per slot a ready rendition, else the
-    // newest recipe version still published, and never two of one slot.
-    rows = [
-      ...asRows(previous, "superseded").filter((r) => r.role !== "thumb"),
-      ...asRows(current.filter((r) => r.role === "thumb")),
-    ];
-    expect(await read()).toEqual(
+    expect(await read(asRows(previous, "released"))).toEqual(idsOf(previous));
+    expect(
+      await read([...asRows(previous, "released"), ...asRows(current)]),
+    ).toEqual(idsOf(current));
+    // A D7 superseded slot serves alike, beside a slot the bump left as it
+    // was (its ready rendition predates the re-render).
+    expect(
+      await read([
+        ...asRows(previous, "superseded").filter((r) => r.role !== "thumb"),
+        ...asRows(
+          current.filter((r) => r.role === "thumb"),
+          "ready",
+          { created: RENDERED },
+        ),
+      ]),
+    ).toEqual(
       sorted([
         ...previous.filter((r) => r.role !== "thumb").map((r) => r.id),
         current.find((r) => r.role === "thumb")!.id,
       ]),
     );
-    rows = [
-      ...asRows(previous, "released"),
-      ...asRows(previous, "released").map((row) => ({
-        ...row,
-        rendition_id: `${row.rendition_id as string}-again`,
-        recipe_digest: "1".repeat(16),
-      })),
-    ];
-    expect(await read()).toBeUndefined();
+  });
+
+  it("never serves an early-published replacement beside the previous set", async () => {
+    const { asRows, read } = projection();
+    const previous = renditionRows(source, 1, "previous");
+    const current = renditionRows(source, 20, "current");
+    const replaced = asRows(previous, "released");
+    // Reconcile copies each replacement as soon as it is desired: one, then
+    // three of the four roles are published, the previous set still is.
+    for (const roles of [["thumb"], ["thumb", "cover", "display"]])
+      expect(
+        await read([
+          ...replaced,
+          ...asRows(current.filter((r) => roles.includes(r.role))),
+        ]),
+      ).toEqual(idsOf(previous));
+    // Two re-renders in flight (cover bumped after thumb, its replacement not
+    // yet copied): still the set from before the first of them.
+    const later = "2026-10-21T01:00:00.000Z";
+    expect(
+      await read([
+        ...replaced.filter((r) => r.role === "thumb"),
+        ...asRows(
+          previous.filter((r) => r.role === "cover"),
+          "released",
+          { replaced: later },
+        ),
+        ...asRows(
+          previous.filter((r) => ["display", "viewer"].includes(r.role)),
+        ),
+        ...asRows(current.filter((r) => r.role === "thumb")),
+      ]),
+    ).toEqual(idsOf(previous));
+    // A role the current plan adds (a viewer the previous set never had) is
+    // not served before the set is complete either.
+    const withoutViewer = previous.filter((r) => r.role !== "viewer");
+    expect(
+      await read([
+        ...asRows(withoutViewer, "released"),
+        ...asRows(current.filter((r) => ["thumb", "viewer"].includes(r.role))),
+      ]),
+    ).toEqual(idsOf(withoutViewer));
+    // Complete and published: every role switches at once.
+    expect(await read([...replaced, ...asRows(current)])).toEqual(
+      idsOf(current),
+    );
+  });
+
+  it("keeps the previous rendition, deterministically, when a slot has two candidates", async () => {
+    const { asRows, read } = projection();
+    const previous = renditionRows(source, 1, "previous");
+    const current = renditionRows(source, 20, "current");
+    // Two ready renditions of one slot (the ready-slot unique index rules it
+    // out in App; were a replacement recorded before the previous one was
+    // released): the earlier, previous one keeps serving.
+    expect(
+      await read([
+        ...asRows(previous),
+        ...asRows(current.filter((r) => r.role === "thumb")),
+      ]),
+    ).toEqual(idsOf(previous));
+    // Two released renditions of one slot recorded at the same instant: one
+    // is kept by recipe version, then rendition ID, never the image dropped.
+    const twin = asRows(previous, "released").map((row) => ({
+      ...row,
+      rendition_id: `${row.rendition_id as string}-again`,
+      recipe_digest: "1".repeat(16),
+    }));
+    for (const set of [
+      [...asRows(previous, "released"), ...twin],
+      [...twin, ...asRows(previous, "released")],
+    ])
+      expect(await read(set)).toEqual(idsOf(previous));
   });
 });
 
@@ -491,7 +580,11 @@ describe("F7: one undecodable intent never fails the snapshot of the others", ()
       new Date("2026-10-21T00:05:00.000Z"),
       undecodableIntentIds,
     );
-    expect(result).toEqual({ refused: [], undecodable: [valid, oversized] });
+    expect(result).toEqual({
+      refused: [],
+      mismatched: [],
+      undecodable: [valid, oversized],
+    });
     const writes = statements.filter(({ sql }) =>
       /^\s*(UPDATE|INSERT INTO) community\.catalog_delivery_(prepares|media_refs)/u.test(
         sql,
@@ -511,7 +604,11 @@ describe("F7: one undecodable intent never fails the snapshot of the others", ()
       >[1],
       new Date("2026-10-21T00:10:00.000Z"),
     );
-    expect(undecoded).toEqual({ refused: [], undecodable: [valid] });
+    expect(undecoded).toEqual({
+      refused: [],
+      mismatched: [],
+      undecodable: [valid],
+    });
     expect(statements.at(-1)!.values[2]).toEqual([valid]);
   });
 });
@@ -652,7 +749,11 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
       ] as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[1],
       observed,
     );
-    expect(result).toEqual({ refused: [late], undecodable: [] });
+    expect(result).toEqual({
+      refused: [late],
+      mismatched: [],
+      undecodable: [],
+    });
     const updates = statements.filter(({ sql }) =>
       sql.trimStart().startsWith("UPDATE community.catalog_delivery_prepares"),
     );
@@ -690,6 +791,168 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
     }).run(observed);
     expect(logger.error).toHaveBeenCalledWith(
       `[media-worker] catalog sync tombstoned intents=1 ids=${late}`,
+    );
+  });
+
+  it("skips an intent whose identity drifted, leaving its live mirror as it is", async () => {
+    const drifted = "00000000-0000-4000-8000-00000000000c";
+    const later = "2026-10-22T00:00:00.000Z";
+    const prepared = { ...header(drifted, "prepared", 1), expiresAt: later };
+    for (const snapshot of [
+      { ...prepared, expiresAt: "2026-10-23T00:00:00.000Z" },
+      { ...prepared, fingerprint: "e".repeat(64) },
+      { ...prepared, documentId: 2 },
+      { ...prepared, media: [{ ...prepared.media[0]!, width: 3001 }] },
+    ]) {
+      const statements: { sql: string; values: readonly unknown[] }[] = [];
+      const db = {
+        query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+          statements.push({ sql, values });
+          if (
+            sql.startsWith("SELECT * FROM community.catalog_delivery_prepares")
+          )
+            return {
+              rows: [
+                {
+                  ...stored(drifted, "prepared", 1),
+                  expires_at: new Date(later),
+                },
+                stored(live, "release_requested", 1),
+              ],
+            };
+          if (sql.startsWith("SELECT ordinal,media_id"))
+            return {
+              rows: [
+                {
+                  ordinal: 1,
+                  media_id: member.media_id,
+                  object_key: member.object_key,
+                  source_sha256: "c".repeat(64),
+                  width: member.width,
+                  height: member.height,
+                },
+              ],
+            };
+          return { rows: [] };
+        }),
+      } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
+      const result = await synchronizeCatalogDeliveryIntents(
+        db,
+        [snapshot, header(live, "cancelled", 2)] as unknown as Parameters<
+          typeof synchronizeCatalogDeliveryIntents
+        >[1],
+        observed,
+      );
+      const writes = statements.filter(({ sql }) =>
+        /^\s*(UPDATE|INSERT INTO) community\.catalog_delivery_(prepares|media_refs)/u.test(
+          sql,
+        ),
+      );
+      // The other intent is applied; nothing at all is written for the
+      // drifted one, and the absence tombstone counts it as present.
+      expect(writes[0]!.values.slice(0, 3)).toEqual([live, "cancelled", 2]);
+      expect(writes.some(({ values }) => values[0] === drifted)).toBe(false);
+      const absence = writes.at(-1)!;
+      expect(absence.sql).toContain("observed_live=false");
+      expect(absence.values[0]).toEqual([live, drifted]);
+      expect(writes).toHaveLength(2);
+      expect(result).toEqual({
+        refused: [],
+        mismatched: [drifted],
+        undecodable: [],
+      });
+    }
+  });
+
+  it("skips an identity drift beside a regression alike, header or media", async () => {
+    const drifted = "00000000-0000-4000-8000-00000000000c";
+    const later = "2026-10-22T00:00:00.000Z";
+    // A state_version regression (2 -> 1) that also contradicts the identity.
+    const regressed = { ...header(drifted, "prepared", 1), expiresAt: later };
+    for (const snapshot of [
+      { ...regressed, fingerprint: "e".repeat(64) },
+      { ...regressed, media: [{ ...regressed.media[0]!, width: 3001 }] },
+    ]) {
+      const statements: { sql: string; values: readonly unknown[] }[] = [];
+      const db = {
+        query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+          statements.push({ sql, values });
+          if (
+            sql.startsWith("SELECT * FROM community.catalog_delivery_prepares")
+          )
+            return {
+              rows: [
+                {
+                  ...stored(drifted, "release_requested", 2),
+                  expires_at: new Date(later),
+                },
+              ],
+            };
+          if (sql.startsWith("SELECT ordinal,media_id"))
+            return {
+              rows: [
+                {
+                  ordinal: 1,
+                  media_id: member.media_id,
+                  object_key: member.object_key,
+                  source_sha256: "c".repeat(64),
+                  width: member.width,
+                  height: member.height,
+                },
+              ],
+            };
+          return { rows: [] };
+        }),
+      } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
+      const result = await synchronizeCatalogDeliveryIntents(
+        db,
+        [snapshot] as unknown as Parameters<
+          typeof synchronizeCatalogDeliveryIntents
+        >[1],
+        observed,
+      );
+      // Identity is checked first: never tombstoned, its mirror untouched.
+      expect(result).toEqual({
+        refused: [],
+        mismatched: [drifted],
+        undecodable: [],
+      });
+      const writes = statements.filter(({ sql }) =>
+        /^\s*(UPDATE|INSERT INTO) community\.catalog_delivery_(prepares|media_refs)/u.test(
+          sql,
+        ),
+      );
+      expect(writes).toHaveLength(1);
+      expect(writes[0]!.values[0]).toEqual([drifted]);
+    }
+  });
+
+  it("logs every intent a sync pass skipped for identity drift", async () => {
+    const drifted = "00000000-0000-4000-8000-00000000000c";
+    const logger = { info: vi.fn(), error: vi.fn() };
+    await createCatalogSync({
+      listSources: async () => [],
+      readSnapshot: async () => ({
+        sources: [],
+        publishedSources: [],
+        preparations: [],
+        observedAt: observed,
+      }),
+      port: {
+        syncCatalogAssets: async () => ({
+          referenced: 0,
+          skipped: 0,
+          created: 0,
+          unreferenced: 0,
+          enqueued: 0,
+          mismatchedIntentIds: [drifted],
+        }),
+      },
+      logger,
+    }).run(observed);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      `[media-worker] catalog sync mismatched intents=1 ids=${drifted}`,
     );
   });
 });
