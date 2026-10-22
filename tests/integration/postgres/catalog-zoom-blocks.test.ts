@@ -3056,6 +3056,36 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
       );
   });
 
+  it("takes the storage lock before the bounded check, so another process waits for it", async () => {
+    await quiet();
+    const image = await catalogImage();
+    const holder = await setup.connect();
+    try {
+      // Another catalog-master transaction holds the storage lock.
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('catalog-master-storage',0))",
+      );
+      let settled = false;
+      const attach = masters
+        .attach(
+          attachInput(image, {
+            source: { kind: "dry_run", byteSize: 1_000_000 },
+          }),
+          t0,
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(settled).toBe(false);
+      await holder.query("COMMIT");
+      expect(codeOf(await attach)).toBe("done");
+    } finally {
+      holder.release();
+    }
+  });
+
   it("serializes concurrent attaches, so two processes cannot both pass the slice cap", async () => {
     await quiet();
     const images = await Promise.all([1, 2].map(() => catalogImage()));

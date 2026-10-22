@@ -708,10 +708,19 @@ the increment-4 wording, for this slice only).
   at most 45 GB. Both measured figures also count the projected blocks (1 byte
   per frame pixel) of every active master whose set is not yet cut, because
   blocks are cut only on an idle queue and an `attach-batch` attaches far
-  faster; a partly cut set counts twice until it is complete, and a limit change
-  or re-attach leaves out the master it ends. (Issue #321 asked this for the
-  slice cap; the 45 GB task figure counts them too, because D4 refuses an attach
-  that would cross either bound.) A dry run writes nothing, so in an
+  faster; a partly cut set counts twice until it is complete; once a set is cut,
+  the published copy of every ready block without a live publication row stays
+  counted at its blob's size until that row exists; and a limit change or
+  re-attach leaves out the master it ends. (Issue #321 asked this for the slice
+  cap; the 45 GB task figure counts them too, because D4 refuses an attach that
+  would cross either bound.) Attach and limit changes take one advisory lock
+  before the check, so two `catalog-master` processes cannot both pass a bound.
+  The projection is above the activation plan's estimate (313 self-masters,
+  13,034 cells: about 13 GB at 1 byte per frame pixel against 6.3–8.4 GB of
+  private and published blocks), but it is an estimate: a frame whose blocks
+  weigh more than half a byte per frame pixel per copy finishes above its
+  projection, by that excess. Compare the real bytes per frame pixel of the
+  first batch before attaching more. A dry run writes nothing, so in an
   `attach-batch --dry-run` every entry sees only what exists now: its storage
   figures are per entry, not cumulative, and a real batch can stop at a bound
   that its dry run passed. The batch needs `status`'s `sliceBytes` (and
