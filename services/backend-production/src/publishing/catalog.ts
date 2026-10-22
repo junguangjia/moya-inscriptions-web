@@ -654,7 +654,9 @@ export interface CatalogSyncPort {
     readonly refusedIntentIds?: readonly string[];
     /** Decoded intents whose identity the snapshot contradicts while they are
      * still live; skipped and left untouched (present only then). One that is
-     * over (terminal, or its stored lease passed) is refused instead. */
+     * over (terminal in the snapshot or the stored row, or a stored lease
+     * whose earlier of the stored and snapshot expiry passed) is refused
+     * instead. */
     readonly mismatchedIntentIds?: readonly string[];
   }>;
 }
@@ -726,8 +728,9 @@ export function createCatalogSync(options: {
       ...(snapshot ? { snapshot } : {}),
     });
     // A late release, a state regression, or an identity drift of an intent
-    // that is over (terminal, or past its stored lease): the mirror (its
-    // approved and retention pins) is tombstoned, which an operator must see.
+    // that is over (terminal, or a stored lease past the earlier of both
+    // expiries): the mirror (its approved and retention pins) is tombstoned,
+    // which an operator must see.
     if (counts.refusedIntentIds?.length)
       logger.error(
         `[media-worker] catalog sync tombstoned intents=${counts.refusedIntentIds.length} ids=${counts.refusedIntentIds.slice(0, 5).join(",")}`,
