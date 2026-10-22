@@ -927,6 +927,80 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
     }
   });
 
+  it("tombstones an identity drift whose state is terminal", async () => {
+    const drifted = "00000000-0000-4000-8000-00000000000c";
+    const later = "2026-10-22T00:00:00.000Z";
+    const ended = (state: string) => ({
+      ...header(drifted, state, 2),
+      expiresAt: later,
+    });
+    for (const snapshot of [
+      { ...ended("withdrawn"), fingerprint: "e".repeat(64) },
+      { ...ended("cancelled"), expiresAt: "2026-10-23T00:00:00.000Z" },
+      { ...ended("superseded"), documentId: 2 },
+      { ...ended("expired"), mediaCount: 2 },
+      // Expired by its own (drifted) expiry, though the snapshot says prepared.
+      {
+        ...header(drifted, "prepared", 1),
+        expiresAt: "2026-10-21T00:01:00.000Z",
+      },
+    ]) {
+      const statements: { sql: string; values: readonly unknown[] }[] = [];
+      const db = {
+        query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+          statements.push({ sql, values });
+          if (
+            sql.startsWith("SELECT * FROM community.catalog_delivery_prepares")
+          )
+            return {
+              rows: [
+                {
+                  ...stored(drifted, "prepared", 1),
+                  expires_at: new Date(later),
+                },
+              ],
+            };
+          if (sql.startsWith("SELECT ordinal,media_id"))
+            return {
+              rows: [
+                {
+                  ordinal: 1,
+                  media_id: member.media_id,
+                  object_key: member.object_key,
+                  source_sha256: "c".repeat(64),
+                  width: member.width,
+                  height: member.height,
+                },
+              ],
+            };
+          return { rows: [] };
+        }),
+      } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
+      const result = await synchronizeCatalogDeliveryIntents(
+        db,
+        [snapshot] as unknown as Parameters<
+          typeof synchronizeCatalogDeliveryIntents
+        >[1],
+        observed,
+      );
+      // Refused, never frozen: nothing of the snapshot is applied, and the
+      // absence tombstone no longer counts the intent as present.
+      expect(result).toEqual({
+        refused: [drifted],
+        mismatched: [],
+        undecodable: [],
+      });
+      const writes = statements.filter(({ sql }) =>
+        /^\s*(UPDATE|INSERT INTO) community\.catalog_delivery_(prepares|media_refs)/u.test(
+          sql,
+        ),
+      );
+      expect(writes).toHaveLength(1);
+      expect(writes[0]!.sql).toContain("observed_live=false");
+      expect(writes[0]!.values[0]).toEqual([]);
+    }
+  });
+
   it("logs every intent a sync pass skipped for identity drift", async () => {
     const drifted = "00000000-0000-4000-8000-00000000000c";
     const logger = { info: vi.fn(), error: vi.fn() };
