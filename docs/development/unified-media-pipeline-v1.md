@@ -697,13 +697,59 @@ the increment-4 wording, for this slice only).
   `attach --existing-master` (re-attach without a second upload), `status`,
   `requeue`, `set-limit`, `detach`, `erase` and `guard`. Each Production run is
   an Owner run with the worker's environment. Attach refuses an image outside
-  the published projection, an unready asset, an approved image above 4096 px, a
-  SHA-256 mismatch, an aspect off by more than 0.2 % or a frame that does not
-  show the approved image's framing within the rounding of each side, a frame
-  below 1.25 × the viewer, a file above 128 MiB or 120 MP, anything but 8-bit
+  the published projection, an unready asset, an approved image above 4096 px
+  (unless the master is a self-master, below), a SHA-256 mismatch, an aspect off
+  by more than 0.2 % or a frame that does not show the approved image's framing
+  within the rounding of each side, a frame below 1.25 × the viewer, a base
+  below 0.45 × the frame, a file above 128 MiB or 120 MP, anything but 8-bit
   JPEG or opaque PNG, and an attach that would cross either storage bound,
-  measured live at that attach: masters plus blocks at most 10 GiB, and every
-  byte #206 created at most 45 GB. Output is content-free.
+  measured live at that attach: masters plus blocks at most 20 GiB (the slice
+  cap, `CATALOG_MASTER_SLICE_CAP`; it was 10 GiB), and every byte #206 created
+  at most 45 GB. Both measured figures also count the projected blocks (1 byte
+  per frame pixel) of every active master whose set is not yet cut, because
+  blocks are cut only on an idle queue and an `attach-batch` attaches far
+  faster; a partly cut set counts twice until it is complete, and a limit change
+  or re-attach leaves out the master it ends. (Issue #321 asked this for the
+  slice cap; the 45 GB task figure counts them too, because D4 refuses an attach
+  that would cross either bound.) A dry run writes nothing, so in an
+  `attach-batch --dry-run` every entry sees only what exists now: its storage
+  figures are per entry, not cumulative, and a real batch can stop at a bound
+  that its dry run passed. The batch needs `status`'s `sliceBytes` (and
+  `taskBytes`) plus the sum of the entries' `attachBytes`. Output is
+  content-free.
+- **Self-masters** (task `catalog-deep-zoom-self-master-v1`, Issue #321; the
+  RP-11 revision, the 20 GiB cap, the purge budget and the breaker bytes below
+  await the Owner's confirmation in #206 r23). The Catalog records #312
+  published carry their `editorial/` originals (6000–9504 px) as the approved
+  images, so the 4096 px bound (RP-11) would refuse every master. A published
+  `editorial/` original may therefore be its own master when all four hold: the
+  approved key is `editorial/`; the master's SHA-256 is the approved image's and
+  the one the asset's base render recorded (`master_sha256`); the master's
+  oriented size is the size that render decoded (`master_width`,
+  `master_height`; a rotated original whose recorded size is not oriented fails
+  closed); and the derivation is `submitted`. Any other master of an approved
+  image above 4096 px, `display/v1/` keys included, is still refused with
+  `approved_too_large`; every other check applies unchanged, and the public
+  still receives only the 1024 px blocks of a frame of at most 8192 px. `attach`
+  / `attach-batch --from-source` (with `--approval` and an empty private
+  `--inbox`; the approval entry names the approved bytes as the master,
+  `submitted`, else `not_self_master`) asks the store for the published original
+  (`not_published`, `asset_not_ready`, `not_editorial`, `already_attached`),
+  refuses a WebP original (`master_format`) before any read, copies the original
+  through the worker's read-only `CATALOG_SOURCE_COS_*` identity (Development:
+  `CMS_MEDIA_DIR`) into the inbox while checking the approved SHA-256
+  (`source_unreadable`, `source_too_large`, `source_hash_mismatch`,
+  `source_unavailable`), and attaches that file exactly like an Owner's (header,
+  128 MiB, 120 MP, alpha or 16-bit refusals, dry run, upload, attach). The copy
+  is removed on every path, so the inbox holds at most one original at a time;
+  no key, path or file name is printed. `manifest` drafts entries only from Mac
+  lineage and originals, so a self-master approval document is drafted from
+  `candidates --catalog <id>` instead: one entry per line with `assetState`
+  `ready`, an `approvedSha256` and no `activeMasterId` that the Owner approves,
+  with `mediaId` and `approvedSha256` copied, `masterSha256` equal to
+  `approvedSha256`, `derivation` `submitted`, and a unique `masterFile` such as
+  `<mediaId>.original` (only the name of the temporary inbox copy; the format
+  comes from the file's header). `maxLongEdge` and `note` stay optional.
 - **Blocks.** A block is a Catalog rendition `block-NN` (row-major, at most 100)
   of one master: an unedited JPEG of at most 1024 px plus a 2 px overlap on the
   right and bottom, named by `catalog_master_id`, on an owner-less
@@ -740,10 +786,12 @@ the increment-4 wording, for this slice only).
   lists; Work and Article branches never admit them. Keys follow the existing
   grammar (`…/base/block-NN.r1.jpg`). Withdrawal purges ordinary roles first, in
   their own tasks, with per-group attempts and failure. Block URLs use at most
-  the daily block purge budget (25 % of the zone's daily URL-purge quota read at
-  P0; 0 until a figure is recorded); beyond it a block group takes the TTL path:
-  its origin objects are deleted, it records the forced edge TTL and finishes
-  after that TTL plus 5 minutes, and one content-free error line
+  the daily block purge budget B (25 % of the zone's daily URL-purge quota,
+  which P0 read as 1,000,000: B = 250,000 per day,
+  `CATALOG_BLOCK_PURGE_BUDGET_PER_DAY`; it was 0 until that reading); beyond it
+  a block group takes the TTL path: its origin objects are deleted, it records
+  the forced edge TTL and finishes after that TTL plus 5 minutes, and one
+  content-free error line
   (`publication.withdrawal code=block_budget_deferred units=N ttl_seconds=T`)
   reports the deferral. Blocks are verified by two samples per set and swept
   once (one origin HEAD each and two sampled edge checks).
@@ -764,11 +812,13 @@ the increment-4 wording, for this slice only).
   delivery, or the Development relay) and while the breaker is closed. The
   worker stores the image host's day-to-date requests and response traffic
   (`l7Flow_request`, `l7Flow_outFlux`; P0 settles the metric) every 15 minutes
-  from 00:00 Asia/Shanghai, with content-free lines at 100,000 requests or 3 GB
-  (`publication.usage code=day_usage_warning`) and at 150,000 or 5 GB
-  (`code=day_usage_trip`). The Backend reads that row at most once a minute:
-  with edge delivery a missing or stale (> 1 h) reading, or a trip threshold,
-  hides every frame and answers 404 on the list until the cap's next day.
+  from 00:00 Asia/Shanghai, with content-free lines at 100,000 requests or 0.25
+  GB (`publication.usage code=day_usage_warning`) and at 150,000 or 0.4 GB
+  (`code=day_usage_trip`); the byte thresholds were 3 GB and 5 GB, and they
+  count the image host's whole response traffic, not blocks only. The Backend
+  reads that row at most once a minute: with edge delivery a missing or stale (>
+  1 h) reading, or a trip threshold, hides every frame and answers 404 on the
+  list until the cap's next day.
 - **Viewer.** Only a Catalog Detail image with a frame gets the block layer
   (Work Detail, the feed and Articles never do). It mounts once the zoom asks
   for more than 1.15 × the widest base candidate, unless more than 24 blocks
@@ -785,7 +835,11 @@ the increment-4 wording, for this slice only).
   never claims a block job. Once any block rendition, block job or block
   publication exists, code older than the expand release must not run:
   `catalog-master guard` (and the same three counts in SQL) is the release
-  toolkit's rollback pre-check.
+  toolkit's rollback pre-check. Withdrawing masters runs in this order:
+  `catalog-master detach` (one image, or `--all`), then wait until every block
+  publication of those masters is withdrawn (at once within B, else after the
+  forced edge TTL plus 5 minutes), and only then `catalog-master erase` for each
+  master, which refuses with `blocks_published` before that.
 
 ## Increments 2–4 (semantics)
 

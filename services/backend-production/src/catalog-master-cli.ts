@@ -11,6 +11,7 @@ import {
   runCatalogMasterManifest,
 } from "./catalog-master/commands.js";
 import { ApprovalDocumentError } from "./catalog-master/approval.js";
+import { openCatalogMasterSource } from "./catalog-master/source.js";
 import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
   openProductionPublishingStore,
@@ -20,12 +21,14 @@ import {
 } from "./publishing/config.js";
 
 import type { CatalogMasterStore } from "./catalog-master/commands.js";
+import type { CatalogSourceReader } from "./storage/catalog-source.js";
 
 /*
  * `catalog-master` (catalog-deep-zoom-v1): the Owner's command for private
  * Catalog display masters, run on the server with the media worker's
- * environment (the App role and the UGC store). Each Production run is an
- * Owner "run". `manifest` runs on the Owner's Mac and opens no connection.
+ * environment (the App role and the UGC store; with `--from-source` also the
+ * worker's read-only `CATALOG_SOURCE_COS_*` identity). Each Production run is
+ * an Owner "run". `manifest` runs on the Owner's Mac and opens no connection.
  * Output is content-free JSON lines; failures print one generic line,
  * because driver and provider errors can carry private endpoints.
  */
@@ -71,9 +74,11 @@ const main = async (): Promise<void> => {
   try {
     await verifyCommunityMigrationLedger(pool);
     let store: Promise<CatalogMasterStore> | undefined;
+    let source: Promise<CatalogSourceReader> | undefined;
     const ok = await runCatalogMasterCommand(parsed, {
       port: new PostgresCatalogDisplayMasterAdapter(pool),
       store: () => (store ??= openStore(environment)),
+      source: () => (source ??= openCatalogMasterSource(environment)),
       out,
       now: () => new Date(),
     });

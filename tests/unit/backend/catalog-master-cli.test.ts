@@ -3,6 +3,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   rm,
   stat,
   writeFile,
@@ -17,12 +18,18 @@ import {
   CatalogMasterUsageError,
   MasterHeaderError,
   draftApprovalDocument,
+  openCatalogMasterSource,
   parseApprovalDocument,
   parseCatalogMasterArguments,
   parseMasterHeader,
   runCatalogMasterCommand,
   runCatalogMasterManifest,
 } from "@moya/backend-production/internal/catalog-master";
+import {
+  CatalogSourceError,
+  CosCatalogSourceReader,
+  LocalCatalogSourceReader,
+} from "@moya/backend-production/internal/catalog-source";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -30,6 +37,7 @@ import type {
   CatalogMasterPort,
   CatalogMasterStore,
 } from "@moya/backend-production/internal/catalog-master";
+import type { CatalogSourceReader } from "@moya/backend-production/internal/catalog-source";
 
 /*
  * catalog-deep-zoom-v1 (Issue #295) criterion 1, command side: the header
@@ -385,6 +393,7 @@ const storage = {
 const context = (
   port: Partial<CatalogMasterPort>,
   store?: Partial<CatalogMasterStore>,
+  source?: CatalogSourceReader,
 ) => {
   const lines: Record<string, unknown>[] = [];
   const written: string[] = [];
@@ -410,6 +419,7 @@ const context = (
   const value: CatalogMasterContext = {
     port: port as CatalogMasterPort,
     store: async () => fullStore,
+    ...(source === undefined ? {} : { source: async () => source }),
     out: (line) => lines.push(line),
     now: () => new Date("2026-10-20T00:00:00Z"),
   };
@@ -640,5 +650,584 @@ describe("catalog-master attach", () => {
     ]);
     expect(await runCatalogMasterCommand(parsed, c.value)).toBe(false);
     expect(c.lines.map((line) => line.mediaId)).toEqual(["media-1", "media-2"]);
+  });
+});
+
+/*
+ * catalog-deep-zoom-self-master-v1 (Issue #321) criterion 3: `attach` and
+ * `attach-batch --from-source`. The published `editorial/` original is read
+ * through the worker's source reader (here the Development reader over a
+ * temporary media directory) into the empty private inbox, verified against
+ * the approved SHA-256 while it is copied, and attached exactly like an
+ * Owner's file. The copy never outlives its entry; output names no key, path
+ * or file name.
+ */
+const SOURCE_DIRECTORY = "e".repeat(64);
+const editorialKey = (approvedSha256: string, extension = "jpg") =>
+  `editorial/${SOURCE_DIRECTORY}/${"1".repeat(64)}-${approvedSha256}.${extension}`;
+
+const selfMasterEntry = (
+  mediaId: string,
+  approvedSha256: string,
+  extra: Record<string, unknown> = {},
+) => ({
+  mediaId,
+  approvedSha256,
+  masterFile: `${mediaId}.original`,
+  masterSha256: approvedSha256,
+  derivation: "submitted",
+  ...extra,
+});
+
+/** Originals in a media directory, an empty 0700 inbox and their approval document. */
+const fromSource = async (
+  originals: readonly {
+    readonly mediaId: string;
+    readonly bytes: Uint8Array;
+    readonly extension?: string;
+    /** What the source actually holds, when it differs from the approved bytes. */
+    readonly stored?: Uint8Array | null;
+    readonly entry?: Record<string, unknown>;
+  }[],
+) => {
+  const root = await temporary();
+  const media = path.join(root, "media");
+  const inbox = path.join(root, "inbox");
+  await mkdir(media);
+  await mkdir(inbox, { mode: 0o700 });
+  await chmod(inbox, 0o700);
+  const keys = new Map<string, string>();
+  for (const original of originals) {
+    const key = editorialKey(sha(original.bytes), original.extension);
+    keys.set(original.mediaId, key);
+    if (original.stored !== null)
+      await writeFile(
+        path.join(media, key.split("/").at(-1)!),
+        original.stored ?? original.bytes,
+      );
+  }
+  const approval = path.join(root, "approval.json");
+  await writeFile(
+    approval,
+    JSON.stringify({
+      version: 1,
+      kind: APPROVAL_KIND,
+      catalogId: "catalog-example",
+      entries: originals.map((original) =>
+        selfMasterEntry(original.mediaId, sha(original.bytes), original.entry),
+      ),
+    }),
+  );
+  const local = new LocalCatalogSourceReader(media);
+  const reads: {
+    readonly key: string;
+    readonly target: string;
+    readonly expectedSha256: string;
+    readonly maxBytes: number;
+    readonly inboxFiles: number;
+  }[] = [];
+  const reader: CatalogSourceReader = {
+    async read(key, target, options) {
+      try {
+        return await local.read(key, target, options);
+      } finally {
+        reads.push({
+          key,
+          target,
+          expectedSha256: options.expectedSha256,
+          maxBytes: options.maxBytes,
+          inboxFiles: (await readdir(inbox)).length,
+        });
+      }
+    },
+  };
+  const sourceOf = vi.fn(async (mediaId: string) => ({
+    status: "done" as const,
+    objectKey: keys.get(mediaId)!,
+    approvedSha256: sha(originals.find((o) => o.mediaId === mediaId)!.bytes),
+  }));
+  return { root, inbox, approval, reader, reads, sourceOf, keys };
+};
+
+const done = (input: Parameters<CatalogMasterPort["attach"]>[0]) => ({
+  status: "done" as const,
+  masterId:
+    input.source.kind === "upload" ? `catalog-master-${"1".repeat(32)}` : null,
+  frameWidth: 8192,
+  frameHeight: 5461,
+  cells: 48,
+  storage,
+});
+
+const fromSourceArgs = (
+  approval: string,
+  inbox: string,
+  mediaId = "media-1",
+  ...extra: string[]
+) =>
+  parseCatalogMasterArguments([
+    "attach",
+    "--media",
+    mediaId,
+    "--approval",
+    approval,
+    "--inbox",
+    inbox,
+    "--from-source",
+    ...extra,
+  ]);
+
+describe("catalog-master attach --from-source (self-masters)", () => {
+  it("reads the original through the source reader into the empty inbox, then checks, uploads and attaches it", async () => {
+    const bytes = jpeg(9504, 6336);
+    const f = await fromSource([{ mediaId: "media-1", bytes }]);
+    const attach = vi.fn(
+      async (input: Parameters<CatalogMasterPort["attach"]>[0]) => done(input),
+    );
+    const c = context({ attach, sourceOf: f.sourceOf }, undefined, f.reader);
+    expect(
+      await runCatalogMasterCommand(
+        fromSourceArgs(f.approval, f.inbox),
+        c.value,
+      ),
+    ).toBe(true);
+    expect(f.sourceOf).toHaveBeenCalledWith("media-1");
+    expect(f.reads).toEqual([
+      {
+        key: f.keys.get("media-1"),
+        target: path.join(f.inbox, "media-1.original"),
+        expectedSha256: sha(bytes),
+        maxBytes: 128 * 1024 ** 2,
+        inboxFiles: 1,
+      },
+    ]);
+    expect(attach.mock.calls.map(([input]) => input.source.kind)).toEqual([
+      "dry_run",
+      "upload",
+    ]);
+    expect(attach.mock.calls[1]![0]).toMatchObject({
+      approvedSha256: sha(bytes),
+      masterSha256: sha(bytes),
+      derivation: "submitted",
+      header: { contentType: "image/jpeg", width: 9504, height: 6336 },
+    });
+    expect(c.written).toHaveLength(1);
+    expect(c.lines).toEqual([
+      expect.objectContaining({
+        command: "attach",
+        mediaId: "media-1",
+        status: "attached",
+        cells: 48,
+      }),
+    ]);
+    expect(JSON.stringify(c.lines)).not.toMatch(
+      /editorial\/|\.original|blobs\/|inbox/u,
+    );
+    expect(await readdir(f.inbox)).toEqual([]);
+  });
+
+  it("reads and checks on --dry-run but never writes the store", async () => {
+    const bytes = jpeg(9504, 6336);
+    const f = await fromSource([{ mediaId: "media-1", bytes }]);
+    const attach = vi.fn(
+      async (input: Parameters<CatalogMasterPort["attach"]>[0]) => done(input),
+    );
+    const c = context({ attach, sourceOf: f.sourceOf }, undefined, f.reader);
+    expect(
+      await runCatalogMasterCommand(
+        fromSourceArgs(f.approval, f.inbox, "media-1", "--dry-run"),
+        c.value,
+      ),
+    ).toBe(true);
+    expect(f.reads).toHaveLength(1);
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(c.store.writeStream).not.toHaveBeenCalled();
+    expect(c.lines[0]).toMatchObject({ status: "dry_run", cells: 48 });
+    expect(await readdir(f.inbox)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a source whose bytes differ from the approved SHA-256",
+      jpeg(9504, 6336, { sof: 0xc2 }),
+      "source_hash_mismatch",
+    ],
+    ["a missing source", null, "source_unreadable"],
+  ] as const)(
+    "refuses %s with no attach or store call and an empty inbox",
+    async (_label, stored, code) => {
+      const bytes = jpeg(9504, 6336);
+      const f = await fromSource([{ mediaId: "media-1", bytes, stored }]);
+      const attach = vi.fn();
+      const c = context({ attach, sourceOf: f.sourceOf }, undefined, f.reader);
+      expect(
+        await runCatalogMasterCommand(
+          fromSourceArgs(f.approval, f.inbox),
+          c.value,
+        ),
+      ).toBe(false);
+      expect(f.reads).toHaveLength(1);
+      expect(attach).not.toHaveBeenCalled();
+      expect(c.store.writeStream).not.toHaveBeenCalled();
+      expect(c.lines).toEqual([
+        { command: "attach", mediaId: "media-1", status: "refused", code },
+      ]);
+      expect(await readdir(f.inbox)).toEqual([]);
+    },
+  );
+
+  it("passes on a reader's transient failure as source_unavailable", async () => {
+    const bytes = jpeg(9504, 6336);
+    const f = await fromSource([{ mediaId: "media-1", bytes }]);
+    const reader: CatalogSourceReader = {
+      read: vi.fn(async () => {
+        throw new CatalogSourceError("unavailable");
+      }),
+    };
+    const c = context(
+      { attach: vi.fn(), sourceOf: f.sourceOf },
+      undefined,
+      reader,
+    );
+    expect(
+      await runCatalogMasterCommand(
+        fromSourceArgs(f.approval, f.inbox),
+        c.value,
+      ),
+    ).toBe(false);
+    expect(c.lines[0]).toMatchObject({ code: "source_unavailable" });
+  });
+
+  it("refuses non-editorial and WebP sources before any read, and alpha or 16-bit sources after it", async () => {
+    const bytes = jpeg(9504, 6336);
+    const notEditorial = await fromSource([{ mediaId: "media-1", bytes }]);
+    const c1 = context(
+      {
+        attach: vi.fn(),
+        sourceOf: vi.fn(async () => ({
+          status: "refused" as const,
+          code: "not_editorial",
+        })),
+      },
+      undefined,
+      notEditorial.reader,
+    );
+    expect(
+      await runCatalogMasterCommand(
+        fromSourceArgs(notEditorial.approval, notEditorial.inbox),
+        c1.value,
+      ),
+    ).toBe(false);
+    expect(c1.lines[0]).toMatchObject({ code: "not_editorial" });
+    expect(notEditorial.reads).toEqual([]);
+
+    const webp = await fromSource([
+      { mediaId: "media-1", bytes, extension: "webp" },
+    ]);
+    const c2 = context(
+      { attach: vi.fn(), sourceOf: webp.sourceOf },
+      undefined,
+      webp.reader,
+    );
+    expect(
+      await runCatalogMasterCommand(
+        fromSourceArgs(webp.approval, webp.inbox),
+        c2.value,
+      ),
+    ).toBe(false);
+    expect(c2.lines[0]).toMatchObject({ code: "master_format" });
+    expect(webp.reads).toEqual([]);
+
+    for (const [original, code] of [
+      [png(9504, 6336, { colorType: 6 }), "master_has_alpha"],
+      [png(9504, 6336, { bitDepth: 16 }), "master_bit_depth"],
+    ] as const) {
+      const f = await fromSource([
+        { mediaId: "media-1", bytes: original, extension: "png" },
+      ]);
+      const attach = vi.fn();
+      const c = context({ attach, sourceOf: f.sourceOf }, undefined, f.reader);
+      expect(
+        await runCatalogMasterCommand(
+          fromSourceArgs(f.approval, f.inbox),
+          c.value,
+        ),
+      ).toBe(false);
+      expect(f.reads).toHaveLength(1);
+      expect(attach).not.toHaveBeenCalled();
+      expect(c.lines[0]).toMatchObject({ status: "refused", code });
+      expect(await readdir(f.inbox)).toEqual([]);
+    }
+  });
+
+  it("refuses an entry that is not the approved bytes themselves, or names another approved image, before any read", async () => {
+    const bytes = jpeg(9504, 6336);
+    for (const entry of [
+      { masterSha256: "b".repeat(64) },
+      { derivation: "edited-export" },
+    ]) {
+      const f = await fromSource([{ mediaId: "media-1", bytes, entry }]);
+      const c = context(
+        { attach: vi.fn(), sourceOf: f.sourceOf },
+        undefined,
+        f.reader,
+      );
+      expect(
+        await runCatalogMasterCommand(
+          fromSourceArgs(f.approval, f.inbox),
+          c.value,
+        ),
+      ).toBe(false);
+      expect(c.lines[0]).toMatchObject({ code: "not_self_master" });
+      expect(f.sourceOf).not.toHaveBeenCalled();
+      expect(f.reads).toEqual([]);
+    }
+    const f = await fromSource([{ mediaId: "media-1", bytes }]);
+    const c = context(
+      {
+        attach: vi.fn(),
+        sourceOf: vi.fn(async () => ({
+          status: "done" as const,
+          objectKey: editorialKey("c".repeat(64)),
+          approvedSha256: "c".repeat(64),
+        })),
+      },
+      undefined,
+      f.reader,
+    );
+    expect(
+      await runCatalogMasterCommand(
+        fromSourceArgs(f.approval, f.inbox),
+        c.value,
+      ),
+    ).toBe(false);
+    expect(c.lines[0]).toMatchObject({ code: "approved_mismatch" });
+    expect(f.reads).toEqual([]);
+  });
+
+  it("removes the upload when attach refuses after it, and the copy on every path, a thrown error included", async () => {
+    const bytes = jpeg(9504, 6336);
+    const refusedAfter = await fromSource([{ mediaId: "media-1", bytes }]);
+    const c1 = context(
+      {
+        attach: vi.fn(
+          async (input: Parameters<CatalogMasterPort["attach"]>[0]) =>
+            input.source.kind === "upload"
+              ? {
+                  status: "refused" as const,
+                  code: "storage_task_cap",
+                  storage,
+                }
+              : done(input),
+        ),
+        sourceOf: refusedAfter.sourceOf,
+      },
+      undefined,
+      refusedAfter.reader,
+    );
+    expect(
+      await runCatalogMasterCommand(
+        fromSourceArgs(refusedAfter.approval, refusedAfter.inbox),
+        c1.value,
+      ),
+    ).toBe(false);
+    expect(c1.written).toHaveLength(1);
+    expect(c1.removed).toEqual(c1.written);
+    expect(await readdir(refusedAfter.inbox)).toEqual([]);
+
+    const thrown = await fromSource([{ mediaId: "media-1", bytes }]);
+    const c2 = context(
+      {
+        attach: vi.fn(
+          async (input: Parameters<CatalogMasterPort["attach"]>[0]) => {
+            if (input.source.kind === "upload") throw new Error("pool lost");
+            return done(input);
+          },
+        ),
+        sourceOf: thrown.sourceOf,
+      },
+      undefined,
+      thrown.reader,
+    );
+    await expect(
+      runCatalogMasterCommand(
+        fromSourceArgs(thrown.approval, thrown.inbox),
+        c2.value,
+      ),
+    ).rejects.toThrow("pool lost");
+    expect(c2.removed).toEqual(c2.written);
+    expect(await readdir(thrown.inbox)).toEqual([]);
+  });
+
+  it("copies one original at a time in a batch and stops at a storage refusal", async () => {
+    const originals = [1, 2, 3].map((n) => ({
+      mediaId: `media-${n}`,
+      bytes: jpeg(9504, 6336 + n),
+    }));
+    const f = await fromSource(originals);
+    const attach = vi.fn(
+      async (input: Parameters<CatalogMasterPort["attach"]>[0]) =>
+        input.mediaId === "media-2"
+          ? { status: "refused" as const, code: "storage_slice_cap", storage }
+          : done(input),
+    );
+    const c = context({ attach, sourceOf: f.sourceOf }, undefined, f.reader);
+    const parsed = parseCatalogMasterArguments([
+      "attach-batch",
+      "--approval",
+      f.approval,
+      "--inbox",
+      f.inbox,
+      "--from-source",
+    ]);
+    expect(await runCatalogMasterCommand(parsed, c.value)).toBe(false);
+    expect(c.lines.map((line) => [line.mediaId, line.status])).toEqual([
+      ["media-1", "attached"],
+      ["media-2", "refused"],
+    ]);
+    expect(f.reads.map((read) => read.inboxFiles)).toEqual([1, 1]);
+    expect(await readdir(f.inbox)).toEqual([]);
+  });
+
+  it("needs --approval and an empty private --inbox, never --existing-master, and the source reader", async () => {
+    const bytes = jpeg(9504, 6336);
+    const f = await fromSource([{ mediaId: "media-1", bytes }]);
+    const c = context(
+      { attach: vi.fn(), sourceOf: f.sourceOf },
+      undefined,
+      f.reader,
+    );
+    for (const argv of [
+      ["status", "--from-source"],
+      ["attach-batch", "--inbox", f.inbox, "--from-source"],
+    ])
+      await expect(
+        (async () =>
+          runCatalogMasterCommand(
+            parseCatalogMasterArguments(argv),
+            c.value,
+          ))(),
+      ).rejects.toThrow(CatalogMasterUsageError);
+    await expect(
+      runCatalogMasterCommand(
+        parseCatalogMasterArguments([
+          "attach",
+          "--media",
+          "media-1",
+          "--approval",
+          f.approval,
+          "--existing-master",
+          `catalog-master-${"9".repeat(32)}`,
+          "--from-source",
+        ]),
+        c.value,
+      ),
+    ).rejects.toThrow(CatalogMasterUsageError);
+    await writeFile(path.join(f.inbox, "left-over.jpg"), bytes);
+    await expect(
+      runCatalogMasterCommand(fromSourceArgs(f.approval, f.inbox), c.value),
+    ).rejects.toThrow(/empty/u);
+    expect(f.sourceOf).not.toHaveBeenCalled();
+    await rm(path.join(f.inbox, "left-over.jpg"));
+    const withoutReader = context({ attach: vi.fn(), sourceOf: f.sourceOf });
+    await expect(
+      runCatalogMasterCommand(
+        fromSourceArgs(f.approval, f.inbox),
+        withoutReader.value,
+      ),
+    ).rejects.toThrow(CatalogMasterUsageError);
+  });
+});
+
+/*
+ * The CLI opens `--from-source`'s reader exactly as the media worker opens
+ * its Catalog source: the `CATALOG_SOURCE_COS_*` identity whenever any of
+ * that namespace is set, else only in Development the local Payload media
+ * directory. Synthetic settings; no cloud request.
+ */
+describe("catalog-master --from-source reader identity", () => {
+  const cos = {
+    CATALOG_SOURCE_COS_BUCKET: "synthetic-source-1250000000",
+    CATALOG_SOURCE_COS_REGION: "ap-guangzhou",
+    CATALOG_SOURCE_COS_SECRET_ID: "synthetic-source-id",
+    CATALOG_SOURCE_COS_SECRET_KEY: "synthetic-source-secret",
+  } as const;
+  const media = path.join(tmpdir(), "synthetic-payload-media");
+
+  it("takes the CATALOG_SOURCE_COS_* identity in Production and over a Development media directory", async () => {
+    for (const environment of [
+      { NODE_ENV: "production", ...cos },
+      { NODE_ENV: "production", CMS_MEDIA_DIR: media, ...cos },
+      { NODE_ENV: "development", CMS_MEDIA_DIR: media, ...cos },
+    ])
+      expect(await openCatalogMasterSource(environment)).toBeInstanceOf(
+        CosCatalogSourceReader,
+      );
+  });
+
+  it("uses the local media directory only in Development without the COS identity", async () => {
+    expect(
+      await openCatalogMasterSource({
+        NODE_ENV: "development",
+        CMS_MEDIA_DIR: media,
+      }),
+    ).toBeInstanceOf(LocalCatalogSourceReader);
+    await expect(
+      openCatalogMasterSource({ NODE_ENV: "production", CMS_MEDIA_DIR: media }),
+    ).rejects.toThrow(
+      new CatalogMasterUsageError("--from-source needs CATALOG_SOURCE_COS_*"),
+    );
+    await expect(
+      openCatalogMasterSource({ NODE_ENV: "development" }),
+    ).rejects.toThrow(
+      new CatalogMasterUsageError(
+        "--from-source needs CATALOG_SOURCE_COS_* or CMS_MEDIA_DIR",
+      ),
+    );
+  });
+
+  it("refuses a partial or malformed COS identity, naming the setting and never a value, even beside a media directory", async () => {
+    for (const [environment, setting] of [
+      [
+        {
+          NODE_ENV: "development",
+          CMS_MEDIA_DIR: media,
+          ...cos,
+          CATALOG_SOURCE_COS_SECRET_KEY: undefined,
+        },
+        "CATALOG_SOURCE_COS_SECRET_KEY",
+      ],
+      [
+        {
+          NODE_ENV: "production",
+          CATALOG_SOURCE_COS_SECRET_ID: cos.CATALOG_SOURCE_COS_SECRET_ID,
+        },
+        "CATALOG_SOURCE_COS_BUCKET",
+      ],
+      [
+        {
+          NODE_ENV: "production",
+          ...cos,
+          CATALOG_SOURCE_COS_BUCKET: "Synthetic_Bucket",
+        },
+        "CATALOG_SOURCE_COS_BUCKET",
+      ],
+    ] as const) {
+      const error = await openCatalogMasterSource(environment).then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(CatalogMasterUsageError);
+      const message = (error as Error).message;
+      expect(message).toContain(setting);
+      for (const value of [
+        cos.CATALOG_SOURCE_COS_SECRET_ID,
+        cos.CATALOG_SOURCE_COS_SECRET_KEY,
+        "Synthetic_Bucket",
+        media,
+      ])
+        expect(message).not.toContain(value);
+    }
   });
 });

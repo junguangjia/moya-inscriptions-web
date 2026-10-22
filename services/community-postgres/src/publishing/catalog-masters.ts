@@ -29,6 +29,7 @@ import {
 import { catalogBlockJobSql } from "./jobs.js";
 import {
   catalogBlockGrid,
+  catalogBlockSetIncompleteSql,
   catalogMasterFrame,
   enqueueMissingCatalogBlocks,
   readCatalogBlockSet,
@@ -37,21 +38,32 @@ import {
 /*
  * The store of the `catalog-master` command (catalog-deep-zoom-v1): attach,
  * re-attach, limit, detach and erase private Catalog display masters, requeue
- * a paused block set, and report status, storage and the rollback guard. Each
- * write is one transaction that locks the Catalog asset row first (the lock
- * order of Catalog renders), then master rows, blobs and jobs, and re-checks
- * every precondition there. Results are content-free.
+ * a paused block set, report status, storage and the rollback guard, and name
+ * the published original a self-master is read from
+ * (catalog-deep-zoom-self-master-v1). Each write is one transaction that
+ * locks the Catalog asset row first (the lock order of Catalog renders), then
+ * master rows, blobs and jobs, and re-checks every precondition there.
+ * Results are content-free.
  */
 
 /** The first pipeline release (Asia/Shanghai day start): bytes since count toward T0. */
 export const CATALOG_MASTER_TASK_SINCE = "2026-10-07T00:00:00+08:00";
-/** Masters plus blocks, private and published (the slice cap). */
-export const CATALOG_MASTER_SLICE_CAP = 10 * 1024 ** 3;
+/**
+ * Masters plus blocks, private and published (the slice cap). 20 GiB holds
+ * every self-master the activation plan counts (about 14–16 GB with blocks);
+ * it was 10 GiB. The value awaits the Owner's confirmation (#206 r23) and is
+ * set here only.
+ */
+export const CATALOG_MASTER_SLICE_CAP = 20 * 1024 ** 3;
 /** Every byte #206 created: 50 GB less a 5 GB margin (D4). */
 export const CATALOG_MASTER_TASK_CAP = 45 * 1000 ** 3;
 /** Projected bytes per frame pixel of a block set, private and published copies together. */
 export const CATALOG_BLOCK_PROJECTED_BYTES_PER_PIXEL = 1;
-/** The approved image stays at or below this long edge (RP-11). */
+/**
+ * The approved image stays at or below this long edge (RP-11), unless the
+ * master is a self-master (`isSelfMaster`; the RP-11 revision awaits the
+ * Owner's confirmation, #206 r23).
+ */
 export const CATALOG_APPROVED_MAX_LONG_EDGE = 4096;
 /** Blocks exist only where the frame gains at least this over the viewer. */
 export const CATALOG_BLOCK_MIN_GAIN = 1.25;
@@ -73,6 +85,13 @@ const EDITORIAL_KEY =
 const approvedSha = (key: string): string | null =>
   DISPLAY_KEY.exec(key)?.[1] ?? EDITORIAL_KEY.exec(key)?.[1] ?? null;
 
+/** SHA-256 of the approved image's bytes: the asset's, else its key's. */
+const approvedOf = (asset: {
+  readonly source_sha256: string | null;
+  readonly source_object_key: string;
+}): string | null =>
+  asset.source_sha256 ?? approvedSha(asset.source_object_key);
+
 const refused = (
   code: CatalogMasterRefusal,
   storage?: CatalogMasterStorage,
@@ -92,6 +111,10 @@ interface AssetRow {
   source_sha256: string | null;
   state: string;
   unreferenced_since: Date | null;
+  /** What the base render decoded: the source's SHA-256 and oriented size. */
+  master_sha256: string | null;
+  master_width: number | null;
+  master_height: number | null;
   published_width: number;
   published_height: number;
   viewer_long_edge: number | null;
@@ -119,12 +142,28 @@ interface MasterRow {
 const blockBlobSql = (blob: string): string =>
   `EXISTS (SELECT 1 FROM community.media_renditions br WHERE br.blob_id=${blob}.id AND br.catalog_master_id IS NOT NULL)`;
 
+/**
+ * The live storage figures. Besides the bytes that exist, both count the
+ * projected blocks of every active master whose set is not yet cut (all of
+ * its frame, so a partly cut set counts twice for a while): blocks are cut
+ * only on an idle queue, so an `attach-batch` attaches far faster than the
+ * cutting, and without them each attach would see none of the earlier
+ * attaches' blocks. The task figure counts them too: D4 refuses an attach
+ * that would pass either bound, and the same overshoot would pass the 45 GB
+ * one. `ending` names masters this transaction ends, whose projection the
+ * new frame replaces.
+ */
 const storageOf = async (
   db: PublishingDb,
   attachBytes: number,
+  ending: readonly string[] = [],
 ): Promise<CatalogMasterStorage> => {
   const row = (
-    await db.query<{ task_bytes: string; slice_bytes: string }>(
+    await db.query<{
+      task_bytes: string;
+      slice_bytes: string;
+      pending_bytes: string;
+    }>(
       `SELECT
          (SELECT COALESCE(sum(b.byte_size),0) FROM community.media_blobs b
           WHERE b.state='committed' AND (b.created_at >= $1::timestamptz OR b.retention_hold IS NOT NULL))
@@ -134,13 +173,23 @@ const storageOf = async (
           WHERE b.state='committed' AND (b.purpose='catalog_master' OR ${blockBlobSql("b")}))
          + (SELECT COALESCE(sum(p.byte_size),0) FROM community.media_publications p
             WHERE p.state <> 'withdrawn' AND p.role ~ '^block-[0-9]{2}$')
-           AS slice_bytes`,
-      [CATALOG_MASTER_TASK_SINCE],
+           AS slice_bytes,
+         (SELECT COALESCE(sum(m.frame_width::bigint * m.frame_height),0) * $2::bigint
+          FROM community.catalog_display_masters m
+          WHERE m.ended_at IS NULL AND NOT (m.id = ANY($3::text[]))
+            AND ${catalogBlockSetIncompleteSql("m")})
+           AS pending_bytes`,
+      [
+        CATALOG_MASTER_TASK_SINCE,
+        CATALOG_BLOCK_PROJECTED_BYTES_PER_PIXEL,
+        [...ending],
+      ],
     )
   ).rows[0]!;
+  const pending = safeInteger(row.pending_bytes);
   return {
-    taskBytes: safeInteger(row.task_bytes),
-    sliceBytes: safeInteger(row.slice_bytes),
+    taskBytes: safeInteger(row.task_bytes) + pending,
+    sliceBytes: safeInteger(row.slice_bytes) + pending,
     attachBytes,
     sliceCap: CATALOG_MASTER_SLICE_CAP,
     taskCap: CATALOG_MASTER_TASK_CAP,
@@ -160,10 +209,12 @@ const withinBounds = (
  * The published image a media id names and its asset, locked: the asset of
  * the approved key the published projection names right now, with the long
  * edge of its ready `viewer` (or `display` when the plan had no viewer).
+ * `sourceOf` reads the same rows in a read-only snapshot, without the lock.
  */
 const lockPublishedAsset = async (
   db: PublishingDb,
   mediaId: string,
+  lock = true,
 ): Promise<AssetRow | "not_published" | "asset_not_ready"> => {
   const published = await db.query<{
     object_key: string;
@@ -182,9 +233,10 @@ const lockPublishedAsset = async (
         "published_width" | "published_height" | "viewer_long_edge"
       >
     >(
-      `SELECT id, media_id, source_object_key, source_sha256, state, unreferenced_since
+      `SELECT id, media_id, source_object_key, source_sha256, state, unreferenced_since,
+         master_sha256, master_width, master_height
        FROM community.catalog_media_assets
-       WHERE media_id=$1 AND source_object_key=$2 FOR UPDATE`,
+       WHERE media_id=$1 AND source_object_key=$2${lock ? " FOR UPDATE" : ""}`,
       [mediaId, image.object_key],
     )
   ).rows[0];
@@ -211,14 +263,42 @@ const lockPublishedAsset = async (
   };
 };
 
+/**
+ * A self-master (catalog-deep-zoom-self-master-v1; the RP-11 revision awaits
+ * the Owner's confirmation, #206 r23): the published `editorial/` original is
+ * its own master. All four hold: the approved key is an `editorial/` key; the
+ * master's SHA-256 is the approved image's (the key's and the asset's) and the
+ * one the base render recorded; its oriented size is the one the base render
+ * decoded; and it is the submitted file. Only such a master lifts the 4096 px
+ * bound on the approved image; every other check still applies, and the
+ * public still receives only the 1024 px blocks of a frame of at most 8192 px.
+ * A rotated original whose recorded size is not oriented fails closed.
+ */
+const isSelfMaster = (
+  asset: AssetRow,
+  master: {
+    readonly sha256: string;
+    readonly width: number;
+    readonly height: number;
+    readonly derivation: CatalogMasterAttach["derivation"];
+  },
+): boolean =>
+  EDITORIAL_KEY.exec(asset.source_object_key)?.[1] === master.sha256 &&
+  approvedOf(asset) === master.sha256 &&
+  asset.master_sha256 === master.sha256 &&
+  asset.master_width === master.width &&
+  asset.master_height === master.height &&
+  master.derivation === "submitted";
+
 /** The checks every attach and limit change shares; null when they pass. */
 const frameRefusal = (
   asset: AssetRow,
   master: { readonly width: number; readonly height: number },
   frame: { readonly width: number; readonly height: number },
+  selfMaster: boolean,
 ): CatalogMasterRefusal | null => {
   const approvedLong = Math.max(asset.published_width, asset.published_height);
-  if (approvedLong > CATALOG_APPROVED_MAX_LONG_EDGE)
+  if (approvedLong > CATALOG_APPROVED_MAX_LONG_EDGE && !selfMaster)
     return "approved_too_large";
   // Oriented aspects within 0.2 %: |mw·ah − mh·aw| ≤ 0.002 · mw·ah.
   const left = master.width * asset.published_height;
@@ -395,6 +475,35 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
     });
   }
 
+  async sourceOf(mediaId: string): Promise<
+    CatalogMasterResult<{
+      readonly objectKey: string;
+      readonly approvedSha256: string;
+    }>
+  > {
+    if (!MEDIA_ID.test(mediaId)) throw new TypeError("Unknown media id");
+    return readTransaction(this.pool, async (db) => {
+      const asset = await lockPublishedAsset(db, mediaId, false);
+      if (typeof asset === "string") return refused(asset);
+      const approved = approvedOf(asset);
+      if (
+        approved === null ||
+        EDITORIAL_KEY.exec(asset.source_object_key)?.[1] !== approved
+      )
+        return refused("not_editorial");
+      const active = await db.query(
+        "SELECT 1 FROM community.catalog_display_masters WHERE catalog_asset_id=$1 AND ended_at IS NULL",
+        [asset.id],
+      );
+      if ((active.rowCount ?? 0) > 0) return refused("already_attached");
+      return {
+        status: "done",
+        objectKey: asset.source_object_key,
+        approvedSha256: approved,
+      };
+    });
+  }
+
   async attach(
     input: CatalogMasterAttach,
     now: Date,
@@ -404,9 +513,7 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
     return writeTransaction(this.pool, async (db) => {
       const asset = await lockPublishedAsset(db, input.mediaId);
       if (typeof asset === "string") return refused(asset);
-      const approved =
-        asset.source_sha256 ?? approvedSha(asset.source_object_key);
-      if (approved !== input.approvedSha256)
+      if (approvedOf(asset) !== input.approvedSha256)
         return refused("approved_mismatch");
       const active = (
         await db.query<{ id: string }>(
@@ -465,13 +572,29 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         header.height,
         input.maxLongEdge,
       );
-      const failure = frameRefusal(asset, header, frame);
+      const failure = frameRefusal(
+        asset,
+        header,
+        frame,
+        isSelfMaster(asset, {
+          sha256: input.masterSha256,
+          width: header.width,
+          height: header.height,
+          derivation: input.derivation,
+        }),
+      );
       if (failure !== null) return refused(failure);
       const projected =
         frame.width * frame.height * CATALOG_BLOCK_PROJECTED_BYTES_PER_PIXEL;
       const masterBytes =
         input.source.kind === "existing" ? 0 : input.source.byteSize;
-      const storage = await storageOf(db, masterBytes + projected);
+      const storage = await storageOf(
+        db,
+        masterBytes + projected,
+        previous !== undefined && previous.ended_at === null
+          ? [previous.id]
+          : [],
+      );
       const bound = withinBounds(storage);
       if (bound !== null) return refused(bound, storage);
       const cells = catalogBlockGrid(frame.width, frame.height).cells;
@@ -570,11 +693,21 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         master.height,
         maxLongEdge,
       );
-      const failure = frameRefusal(asset, master, frame);
+      const failure = frameRefusal(
+        asset,
+        master,
+        frame,
+        isSelfMaster(asset, {
+          sha256: active.master_sha256,
+          ...master,
+          derivation: active.derivation,
+        }),
+      );
       if (failure !== null) return refused(failure);
       const storage = await storageOf(
         db,
         frame.width * frame.height * CATALOG_BLOCK_PROJECTED_BYTES_PER_PIXEL,
+        [active.id],
       );
       const bound = withinBounds(storage);
       if (bound !== null) return refused(bound, storage);

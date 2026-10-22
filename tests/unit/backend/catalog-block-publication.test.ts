@@ -74,7 +74,8 @@ const blocks = (count: number, overrides: Partial<PublicationUnit> = {}) =>
     unit(100 + index, `block-${String(index).padStart(2, "0")}`, overrides),
   );
 
-function fixture(units: readonly PublicationUnit[], budget = 0) {
+/** `budget` null: no option, so the handlers use the recorded budget. */
+function fixture(units: readonly PublicationUnit[], budget: number | null = 0) {
   const state = {
     now: NOW,
     units: [...units],
@@ -206,7 +207,7 @@ function fixture(units: readonly PublicationUnit[], budget = 0) {
     allowPublish: () => true,
     clock: () => state.now,
     logger,
-    blockPurgeBudget: budget,
+    ...(budget === null ? {} : { blockPurgeBudget: budget }),
   });
   return {
     state,
@@ -223,8 +224,8 @@ function fixture(units: readonly PublicationUnit[], budget = 0) {
 const url = (entry: PublicationUnit) => `${ORIGIN}/${entry.objectKey}`;
 
 describe("Catalog block withdrawal (catalog-deep-zoom-v1)", () => {
-  it("records the expand release's constants: no block purge budget until P0, one-hour TTL", () => {
-    expect(CATALOG_BLOCK_PURGE_BUDGET_PER_DAY).toBe(0);
+  it("records the constants: B = 25 % of the 1,000,000 daily purge_url quota P0 read, one-hour TTL", () => {
+    expect(CATALOG_BLOCK_PURGE_BUDGET_PER_DAY).toBe(250_000);
     expect(PUBLICATION_EDGE_FALLBACK_TTL_SECONDS).toBe(3600);
     expect(purgeQuotaDayStart(new Date("2026-10-20T15:59:59Z"))).toEqual(
       new Date("2026-10-19T16:00:00Z"),
@@ -319,6 +320,26 @@ describe("Catalog block withdrawal (catalog-deep-zoom-v1)", () => {
     await beyond.handlers.run(claim(), beyond.signal);
     expect(beyond.calls.purges).toEqual([]);
     expect(beyond.calls.deferred).toHaveLength(1);
+  });
+
+  it("uses the recorded budget B = 250,000 when none is passed (catalog-deep-zoom-self-master-v1)", async () => {
+    const within = fixture(blocks(48), null);
+    within.state.usedToday = 250_000 - 48;
+    await within.handlers.run(claim(), within.signal);
+    expect(within.calls.purges).toEqual([blocks(48).map(url)]);
+    expect(within.calls.deferred).toEqual([]);
+    expect(within.logger.error).not.toHaveBeenCalled();
+
+    const beyond = fixture(blocks(48), null);
+    beyond.state.usedToday = 250_000 - 47;
+    await beyond.handlers.run(claim(), beyond.signal);
+    expect(beyond.calls.purges).toEqual([]);
+    expect(beyond.calls.deferred).toEqual([
+      blocks(48).map((entry) => entry.id),
+    ]);
+    expect(beyond.logger.error).toHaveBeenCalledWith(
+      "publication.withdrawal code=block_budget_deferred units=48 ttl_seconds=3600",
+    );
   });
 
   it("verifies purged blocks by two samples only, and defers them when a purge fails", async () => {

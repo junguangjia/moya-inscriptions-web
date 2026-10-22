@@ -1,7 +1,15 @@
 import { createReadStream } from "node:fs";
-import { lstat, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 
+import { CatalogSourceError } from "../storage/catalog-source.js";
 import {
   ApprovalDocumentError,
   draftApprovalDocument,
@@ -10,6 +18,7 @@ import {
 } from "./approval.js";
 import { MasterHeaderError, readMasterHeader } from "./header.js";
 
+import type { CatalogSourceReader } from "../storage/catalog-source.js";
 import type { ApprovalDocument, ApprovalEntry } from "./approval.js";
 
 /*
@@ -48,6 +57,12 @@ interface Attached {
  */
 export interface CatalogMasterPort {
   listCandidates(catalogId: string): Promise<readonly object[]>;
+  sourceOf(mediaId: string): Promise<
+    Result<{
+      readonly objectKey: string;
+      readonly approvedSha256: string;
+    }>
+  >;
   attach(
     input: {
       readonly mediaId: string;
@@ -130,6 +145,11 @@ export interface CatalogMasterContext {
   readonly port: CatalogMasterPort;
   /** Opened only by commands that write master bytes. */
   readonly store: () => Promise<CatalogMasterStore>;
+  /**
+   * The media worker's read-only Catalog source reader (`CATALOG_SOURCE_COS_*`
+   * in Production), opened only by `--from-source`.
+   */
+  readonly source?: () => Promise<CatalogSourceReader>;
   readonly out: (line: Record<string, unknown>) => void;
   readonly now: () => Date;
 }
@@ -144,8 +164,8 @@ export class CatalogMasterUsageError extends Error {
 export const CATALOG_MASTER_USAGE = `Usage: catalog-master <command> [options]
   candidates --catalog <id>
   manifest --catalog <id> --candidates <file> --lineage <dir> --originals <dir> --out <file>
-  attach --media <id> --approval <file> (--inbox <dir> | --existing-master <id>) [--dry-run] [--operator <label>]
-  attach-batch --approval <file> --inbox <dir> [--dry-run] [--operator <label>]
+  attach --media <id> --approval <file> (--inbox <dir> [--from-source] | --existing-master <id>) [--dry-run] [--operator <label>]
+  attach-batch --approval <file> --inbox <dir> [--from-source] [--dry-run] [--operator <label>]
   status [--catalog <id>]
   requeue --media <id>
   set-limit --media <id> --max-long-edge <N> [--operator <label>]
@@ -153,7 +173,7 @@ export const CATALOG_MASTER_USAGE = `Usage: catalog-master <command> [options]
   erase --master <id>
   guard`;
 
-const FLAGS = new Set(["--dry-run", "--all"]);
+const FLAGS = new Set(["--dry-run", "--all", "--from-source"]);
 const OPTIONS: Readonly<Record<string, readonly string[]>> = {
   candidates: ["--catalog"],
   manifest: ["--catalog", "--candidates", "--lineage", "--originals", "--out"],
@@ -162,10 +182,17 @@ const OPTIONS: Readonly<Record<string, readonly string[]>> = {
     "--approval",
     "--inbox",
     "--existing-master",
+    "--from-source",
     "--dry-run",
     "--operator",
   ],
-  "attach-batch": ["--approval", "--inbox", "--dry-run", "--operator"],
+  "attach-batch": [
+    "--approval",
+    "--inbox",
+    "--from-source",
+    "--dry-run",
+    "--operator",
+  ],
   status: ["--catalog"],
   requeue: ["--media"],
   "set-limit": ["--media", "--max-long-edge", "--operator"],
@@ -369,6 +396,78 @@ async function attachEntry(
   return "attached";
 }
 
+/** `--from-source` copies one original at a time into an empty inbox. */
+const assertEmptyInbox = async (inbox: string): Promise<void> => {
+  if ((await readdir(inbox)).length > 0)
+    throw new CatalogMasterUsageError(
+      "--inbox must be empty with --from-source",
+    );
+};
+
+/** Only an 8-bit JPEG or opaque PNG can be a master, never a WebP original. */
+const SOURCE_MASTER_KEY = /\.(?:jpg|png)$/u;
+
+/**
+ * `--from-source` (catalog-deep-zoom-self-master-v1): the published
+ * `editorial/` original is its own master. The entry must name the approved
+ * bytes as the master (`submitted`); the original is read through the media
+ * worker's read-only source identity into the empty private inbox (under the
+ * entry's `masterFile` name), checked against the approved SHA-256 while it
+ * is copied, and then attached exactly like an Owner's file (header, size,
+ * hash, dry run, upload, attach). The copy is removed on every path, so the
+ * inbox holds at most this one file.
+ */
+async function attachFromSource(
+  context: CatalogMasterContext,
+  entry: ApprovalEntry,
+  inbox: string,
+  dryRun: boolean,
+  operator: string,
+): Promise<EntryOutcome> {
+  const refuse = (code: string): EntryOutcome => {
+    context.out({
+      command: "attach",
+      mediaId: entry.mediaId,
+      status: "refused",
+      code,
+    });
+    return "refused";
+  };
+  if (
+    entry.masterSha256 !== entry.approvedSha256 ||
+    entry.derivation !== "submitted"
+  )
+    return refuse("not_self_master");
+  const source = await context.port.sourceOf(entry.mediaId);
+  if (source.status === "refused") return refuse(source.code);
+  if (source.approvedSha256 !== entry.approvedSha256)
+    return refuse("approved_mismatch");
+  if (!SOURCE_MASTER_KEY.test(source.objectKey)) return refuse("master_format");
+  if (context.source === undefined)
+    throw new CatalogMasterUsageError(
+      "--from-source needs the Catalog source reader",
+    );
+  const reader = await context.source();
+  await assertEmptyInbox(inbox);
+  const file = path.join(inbox, entry.masterFile);
+  try {
+    try {
+      await reader.read(source.objectKey, file, {
+        expectedSha256: entry.approvedSha256,
+        maxBytes: CATALOG_MASTER_MAX_BYTES,
+      });
+    } catch (error) {
+      if (!(error instanceof CatalogSourceError)) throw error;
+      return refuse(
+        error.code.startsWith("source_") ? error.code : "source_unavailable",
+      );
+    }
+    return await attachEntry(context, entry, { inbox }, dryRun, operator);
+  } finally {
+    await rm(file, { force: true });
+  }
+}
+
 const entryOf = (
   document: ApprovalDocument,
   mediaId: string,
@@ -399,16 +498,25 @@ export async function runCatalogMasterCommand(
       const entry = entryOf(document, required(parsed, "--media"));
       const existing = optional(parsed, "--existing-master");
       const inbox = optional(parsed, "--inbox");
-      if ((existing === undefined) === (inbox === undefined))
+      const fromSource = parsed.options.has("--from-source");
+      if (
+        (existing === undefined) === (inbox === undefined) ||
+        (fromSource && inbox === undefined)
+      )
         throw new CatalogMasterUsageError(CATALOG_MASTER_USAGE);
       if (inbox !== undefined) await assertPrivateInbox(inbox);
-      const outcome = await attachEntry(
-        context,
-        entry,
-        existing !== undefined ? { masterId: existing } : { inbox: inbox! },
-        parsed.options.has("--dry-run"),
-        operatorOf(parsed),
-      );
+      if (fromSource) await assertEmptyInbox(inbox!);
+      const operator = operatorOf(parsed);
+      const dryRun = parsed.options.has("--dry-run");
+      const outcome = fromSource
+        ? await attachFromSource(context, entry, inbox!, dryRun, operator)
+        : await attachEntry(
+            context,
+            entry,
+            existing !== undefined ? { masterId: existing } : { inbox: inbox! },
+            dryRun,
+            operator,
+          );
       return outcome === "attached" || outcome === "dry_run";
     }
     case "attach-batch": {
@@ -417,16 +525,15 @@ export async function runCatalogMasterCommand(
       );
       const inbox = required(parsed, "--inbox");
       await assertPrivateInbox(inbox);
+      const fromSource = parsed.options.has("--from-source");
+      if (fromSource) await assertEmptyInbox(inbox);
       const operator = operatorOf(parsed);
+      const dryRun = parsed.options.has("--dry-run");
       let ok = true;
       for (const entry of document.entries) {
-        const outcome = await attachEntry(
-          context,
-          entry,
-          { inbox },
-          parsed.options.has("--dry-run"),
-          operator,
-        );
+        const outcome = fromSource
+          ? await attachFromSource(context, entry, inbox, dryRun, operator)
+          : await attachEntry(context, entry, { inbox }, dryRun, operator);
         if (outcome === "refused") ok = false;
         // A storage bound refuses every later attach too: stop here.
         if (outcome === "storage_refused") return false;
