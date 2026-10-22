@@ -896,6 +896,48 @@ describe("F3: a release committed after local expiry never wedges the sync", () 
       expect(counts.mismatchedIntentIds).toBeUndefined();
       expect(await prepares([id])).toEqual([ended]);
     }
+    // A contradicted `released` label never extends the stored lease of a
+    // release_requested mirror.
+    const late = "00000000-0000-4000-8000-0000000000ea";
+    const lateIntent = intent(late, image, "release_requested", 1, at(152), 9);
+    await sync(at(150), [lateIntent]);
+    const lateCounts = await sync(at(155), [
+      {
+        ...lateIntent,
+        state: "released",
+        stateVersion: 2,
+        fingerprint: sha("drifted"),
+      },
+    ]);
+    expect(lateCounts.refusedIntentIds).toEqual([late]);
+    expect(await prepares([late])).toEqual([{ ...ended, intent_id: late }]);
+    // A contradicted live label never ends a released mirror, whose lease
+    // is long past in normal operation: it stays frozen as it was.
+    const kept = "00000000-0000-4000-8000-0000000000eb";
+    const keptIntent = intent(kept, image, "release_requested", 1, at(162), 10);
+    await sync(at(158), [keptIntent]);
+    await sync(at(159), [
+      { ...keptIntent, state: "released", stateVersion: 2 },
+    ]);
+    const keptCounts = await sync(at(165), [
+      {
+        ...keptIntent,
+        stateVersion: 2,
+        fingerprint: sha("drifted"),
+        expiresAt: at(24 * 60 + 600).toISOString(),
+      },
+    ]);
+    expect(keptCounts.mismatchedIntentIds).toEqual([kept]);
+    expect(keptCounts.refusedIntentIds).toBeUndefined();
+    expect(await prepares([kept])).toEqual([
+      {
+        intent_id: kept,
+        source_state: "released",
+        source_state_version: 2,
+        observed_live: true,
+        ended: false,
+      },
+    ]);
   });
 
   it("leaves the mirror of an undecodable intent untouched; only absence tombstones it", async () => {

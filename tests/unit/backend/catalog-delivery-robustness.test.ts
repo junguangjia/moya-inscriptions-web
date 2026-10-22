@@ -1034,6 +1034,15 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
           };
         })(),
       },
+      // Past the stored lease, a contradicted `released` label never extends
+      // a release_requested mirror.
+      {
+        mirror: stored(drifted, "release_requested", 1),
+        snapshot: {
+          ...header(drifted, "released", 2),
+          fingerprint: "e".repeat(64),
+        },
+      },
       // A released mirror (its retention pin ignores expiry) withdrawn with
       // a drifted fingerprint.
       {
@@ -1087,6 +1096,37 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
       expect(absence.values[0]).toEqual([live]);
       expect(writes).toHaveLength(2);
     }
+  });
+
+  it("never ends a released mirror for a drifted live label past its lease", async () => {
+    const drifted = "00000000-0000-4000-8000-00000000000c";
+    // A released row keeps its 24 h prepare lease, long past; the
+    // contradicted snapshot says release_requested with a later expiry.
+    const db = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.startsWith("SELECT * FROM community.catalog_delivery_prepares"))
+          return { rows: [stored(drifted, "released", 2)] };
+        return { rows: [] };
+      }),
+    } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
+    const result = await synchronizeCatalogDeliveryIntents(
+      db,
+      [
+        {
+          ...header(drifted, "release_requested", 2),
+          expiresAt: "2026-10-23T00:00:00.000Z",
+          fingerprint: "e".repeat(64),
+          media: [],
+          mediaCount: 0,
+        },
+      ] as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[1],
+      observed,
+    );
+    expect(result).toEqual({
+      refused: [],
+      mismatched: [drifted],
+      undecodable: [],
+    });
   });
 
   it("logs every intent a sync pass skipped for identity drift", async () => {
