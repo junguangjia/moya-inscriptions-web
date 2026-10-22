@@ -60,9 +60,11 @@ export const CATALOG_MASTER_SLICE_CAP = 20 * 1024 ** 3;
 export const CATALOG_MASTER_TASK_CAP = 45 * 1000 ** 3;
 /**
  * Projected bytes per frame pixel of a block set, private and published
- * copies together. Above the plan's estimate (13,034 cells of about 1 MP
- * would project about 13 GB against 6.3–8.4 GB), so an uncut set is never
- * under-counted.
+ * copies together. It is an estimate, above the activation plan's (13,034
+ * cells of about 1 MP project about 13 GB against 6.3–8.4 GB of private and
+ * published blocks). A set whose private blocks weigh T bytes finishes at
+ * about 2T; when T exceeds half a byte per frame pixel that is 2T − P above
+ * its projection P, and block recording does not re-check the bounds.
  */
 export const CATALOG_BLOCK_PROJECTED_BYTES_PER_PIXEL = 1;
 /**

@@ -3056,15 +3056,25 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
       );
   });
 
-  it("takes the storage lock before the bounded check, so another process waits for it", async () => {
+  it("takes the storage lock before the bounded check, so another process waits for it and sees its bytes", async () => {
     await quiet();
     const image = await catalogImage();
+    const before = (await masters.status(null)).storage.sliceBytes;
+    const filler = `media-blob-${hex()}`;
     const holder = await setup.connect();
+    let open = false;
     try {
-      // Another catalog-master transaction holds the storage lock.
+      // Another catalog-master transaction holds the storage lock and fills
+      // the slice to its cap; it commits only once the attach waits.
       await holder.query("BEGIN");
+      open = true;
       await holder.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('catalog-master-storage',0))",
+      );
+      await holder.query(
+        `INSERT INTO community.media_blobs(id,owner_id,purpose,storage_key,byte_size,sha256,content_type,retention_hold,created_at)
+         VALUES($1,NULL,'catalog_master',$2,$3,$4,'image/jpeg','catalog_master',$5)`,
+        [filler, blobKey(), CATALOG_MASTER_SLICE_CAP - before, sha(filler), t0],
       );
       let settled = false;
       const attach = masters
@@ -3080,9 +3090,17 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(settled).toBe(false);
       await holder.query("COMMIT");
-      expect(codeOf(await attach)).toBe("done");
+      open = false;
+      // The bounds are read after the wait: the committed filler refuses
+      // it. A bounds read before the lock would still have answered done.
+      expect(codeOf(await attach)).toBe("storage_slice_cap");
     } finally {
+      if (open) await holder.query("ROLLBACK");
       holder.release();
+      await setup.query(
+        "UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL WHERE id=$1",
+        [filler, t0],
+      );
     }
   });
 
