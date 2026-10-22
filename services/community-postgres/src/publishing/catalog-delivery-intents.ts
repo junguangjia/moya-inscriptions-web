@@ -22,14 +22,17 @@ const terminal = (state: string) =>
  *   mirror state and recovers once it decodes again. It is granted nothing
  *   meanwhile (plans and fences read only decoded intents);
  * - a decoded intent whose snapshot disagrees with its immutable identity
- *   (document, revision, fingerprint, manifests, media, expires_at) is
- *   mismatched, whatever its state: none of it is applied and its local row
- *   is left as it is, neither ended nor revived, as before for that intent
- *   alone;
- * - only a decoded intent that would revive or regress its local monotonic
- *   state (a release committed after this mirror already expired it, a
- *   state_version regression) is refused: none of it is applied and its local
- *   row keeps or becomes a tombstone, exactly like an absent intent.
+ *   (document, revision, fingerprint, manifests, media, expires_at) and that
+ *   is still live is mismatched: none of it is applied and its local row is
+ *   left as it is, neither ended nor revived, as before for that intent
+ *   alone. One that is over (withdrawn, cancelled, superseded or expired,
+ *   expired by the snapshot's expiry or by the stored one, whichever is
+ *   earlier) is refused instead (below): a drift never keeps an ended
+ *   mirror live;
+ * - a decoded intent that would revive or regress its local monotonic state
+ *   (a release committed after this mirror already expired it, a
+ *   state_version regression) is refused too: none of it is applied and its
+ *   local row keeps or becomes a tombstone, exactly like an absent intent.
  * All three lists are returned for the caller's log.
  */
 export const synchronizeCatalogDeliveryIntents = async (
@@ -145,8 +148,11 @@ export const synchronizeCatalogDeliveryIntents = async (
         : [];
     // A prepared identity (header and stored media) is immutable. A snapshot
     // that disagrees with it is skipped alone, before any lifecycle check:
-    // none of it is applied and, like an undecodable intent, its local row is
-    // left exactly as it is (never ended, never revived).
+    // none of it is applied. While the intent is live its local row is left
+    // exactly as it is, like an undecodable intent's. Once it is over (a
+    // terminal state, or past the earlier of the snapshot's and the stored
+    // expiry, so a drifted expiry never extends it) it is refused and
+    // tombstoned like an absent intent: ending grants nothing.
     if (
       previous &&
       (previous.cms_document_id !== intent.documentId ||
@@ -160,7 +166,11 @@ export const synchronizeCatalogDeliveryIntents = async (
         (stored.length > 0 &&
           JSON.stringify(stored) !== JSON.stringify(members)))
     ) {
-      mismatched.push(intent.intentId);
+      const over =
+        terminal(state) ||
+        (["prepared", "release_requested"].includes(intent.state) &&
+          previous.expires_at.getTime() <= now.getTime());
+      (over ? rejected : mismatched).push(intent.intentId);
       continue;
     }
     // A local tombstone is never revived or regressed. Such an intent is

@@ -32,8 +32,9 @@ import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
  * One sync pass as this store runs it: a complete snapshot may also name the
  * intents it holds but could not decode, whose mirror rows are left untouched
  * (catalog-delivery-release-hardening-v1 F7), and the pass reports the decoded
- * intents it refused and tombstoned (F3), and those whose immutable identity
- * the snapshot contradicts and whose mirror rows it left untouched, each only
+ * intents it refused and tombstoned (F3, including an identity drift of an
+ * intent that is over), and the live ones whose immutable identity the
+ * snapshot contradicts and whose mirror rows it left untouched, each only
  * when there are any, for the caller's log. Intent IDs are opaque UUIDs, never
  * content.
  */

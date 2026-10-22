@@ -37,8 +37,9 @@ import type { CatalogRenditionRole, PublishingJobLease } from "@moya/api";
  *    recording the replacement releases the old rows.
  * F3 a release committed after the mirror already expired its intent never
  *    wedges the asset sync of every other source and intent, and the pass
- *    reports it; an intent whose immutable identity drifted is skipped alone
- *    and its live mirror left as it is.
+ *    reports it; a live intent whose immutable identity drifted is skipped
+ *    alone and its mirror left as it is, while a drifted one that is over is
+ *    refused and tombstoned.
  * F7 an intent the snapshot holds but cannot decode leaves its mirror row
  *    untouched; only absence tombstones it.
  * Content is synthetic; no object store, CMS or network.
@@ -807,6 +808,93 @@ describe("F3: a release committed after local expiry never wedges the sync", () 
       expect(await prepares([drifted])).toEqual([
         { ...live, source_state: "release_requested", source_state_version: 2 },
       ]);
+    }
+  });
+
+  it("tombstones an identity-drifted intent whose state is terminal", async () => {
+    const image = editorialImage(3000, 2000);
+    const expires = at(24 * 60 + 300);
+    const sync = (when: Date, preparations: readonly unknown[]) =>
+      works().syncCatalogAssets([source(image)], when, {
+        limit: 100,
+        renditions: catalogSyncIdentities(),
+        snapshot: { observedAt: when, publishedSources: [], preparations },
+      } as unknown as Parameters<
+        PostgresWorkPublishingAdapter["syncCatalogAssets"]
+      >[2]);
+    // One intent per terminal state, each drifting in another identity field.
+    const cases = [
+      { state: "withdrawn", drift: { fingerprint: sha("drifted") } },
+      {
+        state: "cancelled",
+        drift: { expiresAt: at(24 * 60 + 400).toISOString() },
+      },
+      { state: "superseded", drift: { documentId: 16 } },
+      { state: "expired", drift: { mediaCount: 2 } },
+    ] as const;
+    for (const [index, { state, drift }] of cases.entries()) {
+      const id = `00000000-0000-4000-8000-0000000000e${index}`;
+      const exact = intent(id, image, "release_requested", 1, expires, 7);
+      await sync(at(130 + 2 * index), [exact]);
+      expect(await prepares([id])).toEqual([
+        {
+          intent_id: id,
+          source_state: "release_requested",
+          source_state_version: 1,
+          observed_live: true,
+          ended: false,
+        },
+      ]);
+      const counts = await sync(at(131 + 2 * index), [
+        { ...exact, state, stateVersion: 2, media: [], ...drift },
+      ]);
+      // Its approval and retention pins end with the mirror; the drifted
+      // snapshot itself (state, version) is never written.
+      expect(counts.refusedIntentIds).toEqual([id]);
+      expect(counts.mismatchedIntentIds).toBeUndefined();
+      expect(await prepares([id])).toEqual([
+        {
+          intent_id: id,
+          source_state: "release_requested",
+          source_state_version: 1,
+          observed_live: false,
+          ended: true,
+        },
+      ]);
+    }
+  });
+
+  it("tombstones a drifted intent past its stored expiry, and a repeated pass changes nothing", async () => {
+    const id = "00000000-0000-4000-8000-0000000000e9";
+    const image = editorialImage(3000, 2000);
+    const sync = (when: Date, preparations: readonly unknown[]) =>
+      works().syncCatalogAssets([source(image)], when, {
+        limit: 100,
+        renditions: catalogSyncIdentities(),
+        snapshot: { observedAt: when, publishedSources: [], preparations },
+      } as unknown as Parameters<
+        PostgresWorkPublishingAdapter["syncCatalogAssets"]
+      >[2]);
+    const exact = intent(id, image, "release_requested", 1, at(142), 8);
+    await sync(at(140), [exact]);
+    const ended = {
+      intent_id: id,
+      source_state: "release_requested",
+      source_state_version: 1,
+      observed_live: false,
+      ended: true,
+    };
+    expect(await prepares([id])).toEqual([
+      { ...ended, observed_live: true, ended: false },
+    ]);
+    // Past the stored expiry, a snapshot whose expiry drifted later would
+    // keep it live; the earlier expiry ends it instead.
+    const drifted = { ...exact, expiresAt: at(24 * 60 + 500).toISOString() };
+    for (const when of [at(145), at(146)]) {
+      const counts = await sync(when, [drifted]);
+      expect(counts.refusedIntentIds).toEqual([id]);
+      expect(counts.mismatchedIntentIds).toBeUndefined();
+      expect(await prepares([id])).toEqual([ended]);
     }
   });
 

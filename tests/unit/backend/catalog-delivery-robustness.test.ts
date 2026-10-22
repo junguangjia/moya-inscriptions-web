@@ -21,8 +21,9 @@ import { describe, expect, it, vi } from "vitest";
  * N3 a recipe bump keeps the last published set desired and served, for every
  *    role at once, until the current recipe's set is complete and published;
  * F3 an intent that would revive its local tombstone is refused alone, and the
- *    sync logs it; one whose immutable identity drifted is skipped alone and
- *    its mirror left as it is;
+ *    sync logs it; a live one whose immutable identity drifted is skipped
+ *    alone and its mirror left as it is, while a drifted one that is over is
+ *    refused and tombstoned;
  * F7 one undecodable intent (an edge beyond 65,535 px) never fails the
  *    snapshot, plans or sync of the others, and an undecodable intent (even
  *    every intent at once) leaves its App mirror untouched;
@@ -911,7 +912,8 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
         >[1],
         observed,
       );
-      // Identity is checked first: never tombstoned, its mirror untouched.
+      // Identity is checked first: a live drift is never tombstoned, its
+      // mirror untouched.
       expect(result).toEqual({
         refused: [],
         mismatched: [drifted],
@@ -924,6 +926,166 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
       );
       expect(writes).toHaveLength(1);
       expect(writes[0]!.values[0]).toEqual([drifted]);
+    }
+  });
+
+  it("tombstones an identity drift whose state is terminal", async () => {
+    const drifted = "00000000-0000-4000-8000-00000000000c";
+    const later = "2026-10-22T00:00:00.000Z";
+    const ended = (state: string) => ({
+      ...header(drifted, state, 2),
+      expiresAt: later,
+    });
+    for (const snapshot of [
+      { ...ended("withdrawn"), fingerprint: "e".repeat(64) },
+      { ...ended("cancelled"), expiresAt: "2026-10-23T00:00:00.000Z" },
+      { ...ended("superseded"), documentId: 2 },
+      { ...ended("expired"), mediaCount: 2 },
+      // Expired by its own (drifted) expiry, though the snapshot says prepared.
+      {
+        ...header(drifted, "prepared", 1),
+        expiresAt: "2026-10-21T00:01:00.000Z",
+      },
+    ]) {
+      const statements: { sql: string; values: readonly unknown[] }[] = [];
+      const db = {
+        query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+          statements.push({ sql, values });
+          if (
+            sql.startsWith("SELECT * FROM community.catalog_delivery_prepares")
+          )
+            return {
+              rows: [
+                {
+                  ...stored(drifted, "prepared", 1),
+                  expires_at: new Date(later),
+                },
+              ],
+            };
+          if (sql.startsWith("SELECT ordinal,media_id"))
+            return {
+              rows: [
+                {
+                  ordinal: 1,
+                  media_id: member.media_id,
+                  object_key: member.object_key,
+                  source_sha256: "c".repeat(64),
+                  width: member.width,
+                  height: member.height,
+                },
+              ],
+            };
+          return { rows: [] };
+        }),
+      } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
+      const result = await synchronizeCatalogDeliveryIntents(
+        db,
+        [snapshot] as unknown as Parameters<
+          typeof synchronizeCatalogDeliveryIntents
+        >[1],
+        observed,
+      );
+      // Refused, never frozen: nothing of the snapshot is applied, and the
+      // absence tombstone no longer counts the intent as present.
+      expect(result).toEqual({
+        refused: [drifted],
+        mismatched: [],
+        undecodable: [],
+      });
+      const writes = statements.filter(({ sql }) =>
+        /^\s*(UPDATE|INSERT INTO) community\.catalog_delivery_(prepares|media_refs)/u.test(
+          sql,
+        ),
+      );
+      expect(writes).toHaveLength(1);
+      expect(writes[0]!.sql).toContain("observed_live=false");
+      expect(writes[0]!.values[0]).toEqual([]);
+    }
+  });
+
+  it("tombstones a drift that is over by the stored expiry, a member drift past expiry and a released mirror, beside an applied intent", async () => {
+    const drifted = "00000000-0000-4000-8000-00000000000c";
+    const later = "2026-10-22T00:00:00.000Z";
+    const member0 = {
+      ordinal: 1,
+      media_id: member.media_id,
+      object_key: member.object_key,
+      source_sha256: "c".repeat(64),
+      width: member.width,
+      height: member.height,
+    };
+    for (const { mirror, snapshot } of [
+      // Stored expiry passed; the snapshot's drifted expiry would extend it.
+      {
+        mirror: stored(drifted, "release_requested", 1),
+        snapshot: {
+          ...header(drifted, "release_requested", 1),
+          expiresAt: later,
+        },
+      },
+      // A member drift on a snapshot past its own (unchanged) expiry.
+      {
+        mirror: stored(drifted, "prepared", 1),
+        snapshot: (() => {
+          const prepared = header(drifted, "prepared", 1);
+          return {
+            ...prepared,
+            media: [{ ...prepared.media[0]!, width: 3001 }],
+          };
+        })(),
+      },
+      // A released mirror (its retention pin ignores expiry) withdrawn with
+      // a drifted fingerprint.
+      {
+        mirror: {
+          ...stored(drifted, "released", 2),
+          expires_at: new Date(later),
+        },
+        snapshot: {
+          ...header(drifted, "withdrawn", 3),
+          expiresAt: later,
+          fingerprint: "e".repeat(64),
+        },
+      },
+    ]) {
+      const statements: { sql: string; values: readonly unknown[] }[] = [];
+      const db = {
+        query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+          statements.push({ sql, values });
+          if (
+            sql.startsWith("SELECT * FROM community.catalog_delivery_prepares")
+          )
+            return { rows: [mirror, stored(live, "release_requested", 1)] };
+          if (sql.startsWith("SELECT ordinal,media_id"))
+            return { rows: [member0] };
+          return { rows: [] };
+        }),
+      } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
+      const result = await synchronizeCatalogDeliveryIntents(
+        db,
+        [snapshot, header(live, "cancelled", 2)] as unknown as Parameters<
+          typeof synchronizeCatalogDeliveryIntents
+        >[1],
+        observed,
+      );
+      expect(result).toEqual({
+        refused: [drifted],
+        mismatched: [],
+        undecodable: [],
+      });
+      const writes = statements.filter(({ sql }) =>
+        /^\s*(UPDATE|INSERT INTO) community\.catalog_delivery_(prepares|media_refs)/u.test(
+          sql,
+        ),
+      );
+      // The other intent is applied; nothing of the drifted snapshot is, and
+      // the absence tombstone no longer counts it as present.
+      expect(writes[0]!.values.slice(0, 3)).toEqual([live, "cancelled", 2]);
+      expect(writes.some(({ values }) => values[0] === drifted)).toBe(false);
+      const absence = writes.at(-1)!;
+      expect(absence.sql).toContain("observed_live=false");
+      expect(absence.values[0]).toEqual([live]);
+      expect(writes).toHaveLength(2);
     }
   });
 
