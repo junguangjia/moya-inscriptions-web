@@ -582,8 +582,15 @@ describe("task records, templates and the Owner guide", () => {
     );
   });
 
-  it("the Owner quick start uses placeholders, separates Issue from PR numbers and documents dependency-aware rollback", () => {
-    const readme = read("README.md").replace(/\s+/gu, " ");
+  it("the README links current guidance and retains the historical Owner quick start", () => {
+    const currentReadme = read("README.md");
+    assert.match(currentReadme, /\]\(AGENTS\.md\)/u);
+    assert.match(currentReadme, /\]\(docs\/development\/task-workflow\.md\)/u);
+    const archive = "docs/history/agent-quick-start-2026-10-21.md";
+    const snapshot = read(archive);
+    assert.match(snapshot, /Historical snapshot/u);
+    assert.match(snapshot, /not current setup\s+instructions/u);
+    const readme = snapshot.replace(/\s+/gu, " ");
     for (const text of [
       "/yoyi-task plan",
       "$yoyi-task plan",
@@ -599,7 +606,7 @@ describe("task records, templates and the Owner guide", () => {
       "git revert",
     ])
       assert.ok(readme.includes(text), text);
-    const example = /```text\n([\s\S]*?)```/u.exec(read("README.md"))[1];
+    const example = /```text\n([\s\S]*?)```/u.exec(snapshot)[1];
     assert.doesNotMatch(
       example,
       /#\d+|review \d+/u,

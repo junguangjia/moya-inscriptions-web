@@ -24,18 +24,21 @@ import {
   requireSyntheticTestDatabaseUrl,
 } from "./synthetic-test-database.js";
 
-import type { PublishingJobLease } from "@moya/api";
+import type { CatalogRenditionRole, PublishingJobLease } from "@moya/api";
 
 /*
  * catalog-delivery-release-hardening-v1 (Issue #317), group g3, on a dedicated
  * synthetic database with its own App role, so every store command runs with
  * exactly the App grants:
  * N3 a Catalog recipe bump keeps the published editorial set desired and
- *    served; reconcile plans no withdrawal before its replacement is
- *    published, even though recording the replacement releases the old rows.
+ *    served, for every role at once (never a replacement copied early beside
+ *    it, even when the worker records a re-render in two passes); reconcile
+ *    plans no withdrawal before its replacement is published, even though
+ *    recording the replacement releases the old rows.
  * F3 a release committed after the mirror already expired its intent never
  *    wedges the asset sync of every other source and intent, and the pass
- *    reports it.
+ *    reports it; an intent whose immutable identity drifted is skipped alone
+ *    and its live mirror left as it is.
  * F7 an intent the snapshot holds but cannot decode leaves its mirror row
  *    untouched; only absence tombstones it.
  * Content is synthetic; no object store, CMS or network.
@@ -160,10 +163,16 @@ const editorialImage = (width = 4096, height = 2731): Image => {
   };
 };
 
-/** Ready renditions of the current recipe on committed blobs; returns their IDs. */
-const readyRenditions = async (image: Image, when: Date) => {
+/** Ready renditions of the current recipe on committed blobs (of the listed
+ * roles, else every planned role); returns their IDs. */
+const readyRenditions = async (
+  image: Image,
+  when: Date,
+  roles?: readonly string[],
+) => {
   const ids: string[] = [];
   for (const want of catalogExpectedRenditions(image.width, image.height)) {
+    if (roles && !roles.includes(want.role)) continue;
     const blob = `media-blob-${hex()}`;
     await setup.query(
       "INSERT INTO community.media_blobs(id,owner_id,purpose,storage_key,byte_size,sha256,content_type,created_at) VALUES($1,NULL,'catalog_derivative',$2,1000,$3,'image/webp',$4)",
@@ -307,12 +316,12 @@ describe("N3: a Catalog recipe bump never withdraws before replacement", () => {
         [assetId],
       )
     ).rows.map((r) => r.rendition_id);
-  const served = async (image: Image) =>
+  const served = async (image: Image, plan = catalogExpectedRenditions) =>
     (
       await readCatalogDeliveryProjection(
         app,
         [{ mediaId: image.mediaId, objectKey: image.objectKey }],
-        catalogExpectedRenditions,
+        plan,
       )
     )
       .get(JSON.stringify([image.mediaId, image.objectKey]))
@@ -398,6 +407,165 @@ describe("N3: a Catalog recipe bump never withdraws before replacement", () => {
     // Withdrawn, the previous set's blobs return to the existing purge.
     await cleanup(at(8));
     expect(await purgesScheduled(previous)).toBe(previous.length);
+  });
+
+  it("never serves a replacement published early beside the previous set", async () => {
+    const { image, renditions: previous } = await publishedImage();
+    expect(await adapter().reconcile(at(11), true, 500)).toMatchObject({
+      publish: 1,
+    });
+    expect(await publishQueued(image.assetId, at(12))).toEqual(previous);
+    expect(await served(image)).toEqual(previous);
+    const roleOf = async (ids: readonly string[]) =>
+      (
+        await setup.query<{ id: string; role: string }>(
+          "SELECT id,role FROM community.media_renditions WHERE id=ANY($1::text[]) ORDER BY id",
+          [ids],
+        )
+      ).rows;
+    const byRole = await roleOf(previous);
+    const previousOf = (roles: readonly string[]) =>
+      byRole.filter((r) => roles.includes(r.role)).map((r) => r.id);
+    const rest = ["cover", "display", "viewer"];
+    await setup.query(
+      "UPDATE community.media_renditions SET recipe_digest='0000000000000000' WHERE id=ANY($1::text[])",
+      [previous],
+    );
+    // The re-render records the thumb first: its previous rendition is
+    // released and its replacement is ready at the same instant.
+    await setup.query(
+      "UPDATE community.media_renditions SET state='released',superseded_at=$2,released_at=$2 WHERE id=ANY($1::text[])",
+      [previousOf(["thumb"]), at(14)],
+    );
+    const thumb = await readyRenditions(image, at(14), ["thumb"]);
+    expect(await adapter().reconcile(at(15), true, 500)).toEqual({
+      publish: 1,
+      withdraw: 0,
+    });
+    expect(await withdrawQueued(image.assetId, at(15))).toEqual([]);
+    // Reconcile copies the new thumb early; the public read still serves the
+    // previous set for every role, never the new thumb beside it.
+    expect(await publishQueued(image.assetId, at(16))).toEqual(thumb);
+    expect(await published(image.assetId)).toEqual(
+      [...previous, ...thumb].sort(),
+    );
+    expect(await served(image)).toEqual(previous);
+    // The rest of the set is recorded later, and is not yet copied.
+    await setup.query(
+      "UPDATE community.media_renditions SET state='released',superseded_at=$2,released_at=$2 WHERE id=ANY($1::text[])",
+      [previousOf(rest), at(20)],
+    );
+    const others = await readyRenditions(image, at(20), rest);
+    expect(await served(image)).toEqual(previous);
+    expect(await adapter().reconcile(at(21), true, 500)).toEqual({
+      publish: 1,
+      withdraw: 0,
+    });
+    expect(await withdrawQueued(image.assetId, at(21))).toEqual([]);
+    expect(await publishQueued(image.assetId, at(22))).toEqual(others);
+    // Complete and published: every role switches at once.
+    const replacement = [...thumb, ...others].sort();
+    expect(await served(image)).toEqual(replacement);
+    expect(await adapter().reconcile(at(23), true, 500)).toEqual({
+      publish: 0,
+      withdraw: 1,
+    });
+    expect(await withdrawQueued(image.assetId, at(23))).toEqual(previous);
+    expect(await served(image)).toEqual(replacement);
+  });
+
+  it("holds the previous set across a re-render the worker records in two passes", async () => {
+    const { image, renditions: previous } = await publishedImage();
+    expect(await adapter().reconcile(at(31), true, 500)).toMatchObject({
+      publish: 1,
+    });
+    expect(await publishQueued(image.assetId, at(32))).toEqual(previous);
+    // The next recipe version of every role; the projection reads against it
+    // while reconcile keeps the deployed registry (it copies every ready
+    // rendition early, whatever its recipe, and withdraws nothing).
+    const bumped = (width: number, height: number) =>
+      catalogExpectedRenditions(width, height).map((want) => ({
+        ...want,
+        version: want.version + 1,
+        digest: "fedcba9876543210",
+      }));
+    expect(await served(image, bumped)).toEqual(previous);
+    const works = new PostgresWorkPublishingAdapter(app, {
+      publication: { allowPublish: () => true, isPublic: () => true },
+    });
+    /** Records these roles of the bumped recipe through the worker's own
+     * recording path (recordCatalogRenditions); returns their IDs. */
+    const record = async (roles: readonly string[], when: Date) => {
+      expect(
+        await works.recordCatalogRenditions(
+          image.assetId,
+          {
+            masterSha256: sha(image.mediaId),
+            masterWidth: image.width,
+            masterHeight: image.height,
+            placeholderColor: null,
+            renditions: bumped(image.width, image.height)
+              .filter((want) => roles.includes(want.role))
+              .map((want) => ({
+                storageKey: blobKey(),
+                byteSize: 1000,
+                sha256: sha(hex()),
+                role: want.role as CatalogRenditionRole,
+                recipeVersion: want.version,
+                recipeDigest: want.digest,
+                contentType: "image/webp" as const,
+                width: want.width,
+                height: want.height,
+              })),
+          },
+          when,
+        ),
+      ).toEqual({ status: "recorded" });
+      return (
+        await setup.query<{ id: string }>(
+          "SELECT id FROM community.media_renditions WHERE catalog_asset_id=$1 AND state='ready' AND role=ANY($2::text[]) AND NOT(id=ANY($3::text[])) ORDER BY id",
+          [image.assetId, roles, previous],
+        )
+      ).rows.map((r) => r.id);
+    };
+    // The fallback relies on this recording rule: a replaced rendition
+    // leaves its slot at the very instant its successor is recorded.
+    const handover = async () =>
+      (
+        await setup.query<{ role: string; replaced: Date; created: Date }>(
+          "SELECT o.role,COALESCE(o.superseded_at,o.released_at) AS replaced,n.created_at AS created FROM community.media_renditions o JOIN community.media_renditions n ON n.catalog_asset_id=o.catalog_asset_id AND n.role=o.role AND n.edit_key=o.edit_key AND n.state='ready' WHERE o.catalog_asset_id=$1 AND o.state<>'ready' ORDER BY o.role",
+          [image.assetId],
+        )
+      ).rows;
+    const thumb = await record(["thumb"], at(34));
+    expect(await handover()).toEqual([
+      { role: "thumb", replaced: at(34), created: at(34) },
+    ]);
+    expect(await adapter().reconcile(at(35), true, 500)).toEqual({
+      publish: 1,
+      withdraw: 0,
+    });
+    expect(await withdrawQueued(image.assetId, at(35))).toEqual([]);
+    expect(await publishQueued(image.assetId, at(36))).toEqual(thumb);
+    // The new thumb is published, yet never served beside the previous set.
+    expect(await served(image, bumped)).toEqual(previous);
+    const rest = ["cover", "display", "viewer"];
+    const others = await record(rest, at(40));
+    expect(await handover()).toEqual(
+      ["cover", "display", "thumb", "viewer"].map((role) => {
+        const when = role === "thumb" ? at(34) : at(40);
+        return { role, replaced: when, created: when };
+      }),
+    );
+    expect(await served(image, bumped)).toEqual(previous);
+    expect(await adapter().reconcile(at(41), true, 500)).toEqual({
+      publish: 1,
+      withdraw: 0,
+    });
+    expect(await withdrawQueued(image.assetId, at(41))).toEqual([]);
+    expect(await publishQueued(image.assetId, at(42))).toEqual(others);
+    // Complete and published: every role switches at once.
+    expect(await served(image, bumped)).toEqual([...thumb, ...others].sort());
   });
 });
 
@@ -562,6 +730,84 @@ describe("F3: a release committed after local expiry never wedges the sync", () 
         )
       ).rowCount,
     ).toBe(1);
+  });
+
+  it("skips an intent whose identity drifted, leaving its live mirror as it is", async () => {
+    const drifted = "00000000-0000-4000-8000-0000000000f8";
+    const other = "00000000-0000-4000-8000-0000000000f9";
+    const image = editorialImage(3000, 2000);
+    const otherImage = editorialImage(3000, 2000);
+    const expires = at(24 * 60 + 100);
+    const sync = (when: Date, preparations: ReturnType<typeof intent>[]) =>
+      works().syncCatalogAssets([image, otherImage].map(source), when, {
+        limit: 100,
+        renditions: catalogSyncIdentities(),
+        snapshot: { observedAt: when, publishedSources: [], preparations },
+      } as unknown as Parameters<
+        PostgresWorkPublishingAdapter["syncCatalogAssets"]
+      >[2]);
+    const exact = intent(drifted, image, "prepared", 1, expires, 4);
+    await sync(at(100), [
+      exact,
+      intent(other, otherImage, "prepared", 1, expires, 5),
+    ]);
+    const live = {
+      intent_id: drifted,
+      source_state: "prepared",
+      source_state_version: 1,
+      observed_live: true,
+      ended: false,
+    };
+    expect(await prepares([drifted])).toEqual([live]);
+    // Each snapshot contradicts the immutable identity (expiry, fingerprint,
+    // document, media) while the other intent moves on.
+    const drifts = [
+      { ...exact, expiresAt: at(24 * 60 + 200).toISOString() },
+      { ...exact, fingerprint: sha("drifted") },
+      { ...exact, documentId: 6 },
+      { ...exact, media: [{ ...exact.media[0]!, width: 3001 }] },
+    ];
+    for (const [round, snapshot] of drifts.entries()) {
+      const counts = await sync(at(105 + round), [
+        snapshot,
+        intent(other, otherImage, "release_requested", 2 + round, expires, 5),
+      ]);
+      // Neither ended nor revived: the mirror stays exactly as it was.
+      expect(await prepares([drifted, other])).toEqual([
+        live,
+        {
+          intent_id: other,
+          source_state: "release_requested",
+          source_state_version: 2 + round,
+          observed_live: true,
+          ended: false,
+        },
+      ]);
+      // Reported for the operator's log, never as a tombstone.
+      expect(counts.mismatchedIntentIds).toEqual([drifted]);
+      expect(counts.refusedIntentIds).toBeUndefined();
+    }
+    // A snapshot that agrees again is applied as usual.
+    const agreed = await sync(at(120), [
+      intent(drifted, image, "release_requested", 2, expires, 4),
+    ]);
+    expect(agreed.mismatchedIntentIds).toBeUndefined();
+    expect(await prepares([drifted])).toEqual([
+      { ...live, source_state: "release_requested", source_state_version: 2 },
+    ]);
+    // A drift beside a state_version regression (2 -> 1) is still a drift,
+    // header or media alike: skipped, never tombstoned.
+    for (const [round, snapshot] of [
+      { ...exact, fingerprint: sha("drifted") },
+      { ...exact, media: [{ ...exact.media[0]!, width: 3001 }] },
+    ].entries()) {
+      const counts = await sync(at(125 + round), [snapshot]);
+      expect(counts.mismatchedIntentIds).toEqual([drifted]);
+      expect(counts.refusedIntentIds).toBeUndefined();
+      expect(await prepares([drifted])).toEqual([
+        { ...live, source_state: "release_requested", source_state_version: 2 },
+      ]);
+    }
   });
 
   it("leaves the mirror of an undecodable intent untouched; only absence tombstones it", async () => {

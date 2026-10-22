@@ -32,8 +32,10 @@ import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
  * One sync pass as this store runs it: a complete snapshot may also name the
  * intents it holds but could not decode, whose mirror rows are left untouched
  * (catalog-delivery-release-hardening-v1 F7), and the pass reports the decoded
- * intents it refused and tombstoned, only when there are any, for the
- * caller's log (F3). Intent IDs are opaque UUIDs, never content.
+ * intents it refused and tombstoned (F3), and those whose immutable identity
+ * the snapshot contradicts and whose mirror rows it left untouched, each only
+ * when there are any, for the caller's log. Intent IDs are opaque UUIDs, never
+ * content.
  */
 export type CatalogAssetSyncPassOptions = CatalogAssetSyncOptions & {
   readonly snapshot?: NonNullable<CatalogAssetSyncOptions["snapshot"]> & {
@@ -42,6 +44,7 @@ export type CatalogAssetSyncPassOptions = CatalogAssetSyncOptions & {
 };
 export type CatalogAssetSyncPassCounts = CatalogAssetSyncCounts & {
   readonly refusedIntentIds?: readonly string[];
+  readonly mismatchedIntentIds?: readonly string[];
 };
 
 const MAX_SOURCES = 10_000;
@@ -342,6 +345,9 @@ export const syncCatalogAssets = async (
       unreferenced: unreferenced.rowCount ?? 0,
       enqueued: insertedCount + requeued,
       ...(intents?.refused.length ? { refusedIntentIds: intents.refused } : {}),
+      ...(intents?.mismatched.length
+        ? { mismatchedIntentIds: intents.mismatched }
+        : {}),
     };
   });
 };
