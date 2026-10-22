@@ -50,14 +50,20 @@ import {
 export const CATALOG_MASTER_TASK_SINCE = "2026-10-07T00:00:00+08:00";
 /**
  * Masters plus blocks, private and published (the slice cap). 20 GiB holds
- * every self-master the activation plan counts (about 14–16 GB with blocks);
- * it was 10 GiB. The value awaits the Owner's confirmation (#206 r23) and is
- * set here only.
+ * every self-master the activation plan counts: 313 images, about 7.3 GB of
+ * master copies plus 6.3–8.4 GB of blocks (13,034 cells, private and
+ * published), so about 14–16 GB; it was 10 GiB. The value awaits the Owner's
+ * confirmation (#206 r23) and is set here only.
  */
 export const CATALOG_MASTER_SLICE_CAP = 20 * 1024 ** 3;
 /** Every byte #206 created: 50 GB less a 5 GB margin (D4). */
 export const CATALOG_MASTER_TASK_CAP = 45 * 1000 ** 3;
-/** Projected bytes per frame pixel of a block set, private and published copies together. */
+/**
+ * Projected bytes per frame pixel of a block set, private and published
+ * copies together. Above the plan's estimate (13,034 cells of about 1 MP
+ * would project about 13 GB against 6.3–8.4 GB), so an uncut set is never
+ * under-counted.
+ */
 export const CATALOG_BLOCK_PROJECTED_BYTES_PER_PIXEL = 1;
 /**
  * The approved image stays at or below this long edge (RP-11), unless the
@@ -148,10 +154,13 @@ const blockBlobSql = (blob: string): string =>
  * its frame, so a partly cut set counts twice for a while): blocks are cut
  * only on an idle queue, so an `attach-batch` attaches far faster than the
  * cutting, and without them each attach would see none of the earlier
- * attaches' blocks. The task figure counts them too: D4 refuses an attach
- * that would pass either bound, and the same overshoot would pass the 45 GB
- * one. `ending` names masters this transaction ends, whose projection the
- * new frame replaces.
+ * attaches' blocks. Once a set is cut, the published copy of every ready
+ * block that has no live publication yet stays counted at its blob's size:
+ * publication rows come in a later pass, and without it a later attach could
+ * take that room and both bounds would be passed when they land. The task
+ * figure counts them too: D4 refuses an attach that would pass either bound,
+ * and the same overshoot would pass the 45 GB one. `ending` names masters
+ * this transaction ends, whose projection the new frame replaces.
  */
 const storageOf = async (
   db: PublishingDb,
@@ -174,10 +183,16 @@ const storageOf = async (
          + (SELECT COALESCE(sum(p.byte_size),0) FROM community.media_publications p
             WHERE p.state <> 'withdrawn' AND p.role ~ '^block-[0-9]{2}$')
            AS slice_bytes,
-         (SELECT COALESCE(sum(m.frame_width::bigint * m.frame_height),0) * $2::bigint
+         (SELECT COALESCE(sum(CASE WHEN ${catalogBlockSetIncompleteSql("m")}
+            THEN m.frame_width::bigint * m.frame_height * $2::bigint
+            ELSE (SELECT COALESCE(sum(rb.byte_size),0) FROM community.media_renditions r
+              JOIN community.media_blobs rb ON rb.id=r.blob_id AND rb.state='committed'
+              WHERE r.catalog_master_id=m.id AND r.state='ready'
+                AND NOT EXISTS (SELECT 1 FROM community.media_publications p
+                  WHERE p.rendition_id=r.id AND p.state <> 'withdrawn'))
+            END),0)
           FROM community.catalog_display_masters m
-          WHERE m.ended_at IS NULL AND NOT (m.id = ANY($3::text[]))
-            AND ${catalogBlockSetIncompleteSql("m")})
+          WHERE m.ended_at IS NULL AND NOT (m.id = ANY($3::text[])))
            AS pending_bytes`,
       [
         CATALOG_MASTER_TASK_SINCE,
@@ -194,6 +209,18 @@ const storageOf = async (
     sliceCap: CATALOG_MASTER_SLICE_CAP,
     taskCap: CATALOG_MASTER_TASK_CAP,
   };
+};
+
+/**
+ * Serializes the bounded storage checks of concurrent `catalog-master`
+ * processes. Taken after the asset lock and before `storageOf`, it makes a
+ * second attach or limit read totals that include the first one's committed
+ * master, so two of them cannot both pass a bound.
+ */
+const lockStorage = async (db: PublishingDb): Promise<void> => {
+  await db.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended('catalog-master-storage',0))",
+  );
 };
 
 const withinBounds = (
@@ -588,6 +615,7 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         frame.width * frame.height * CATALOG_BLOCK_PROJECTED_BYTES_PER_PIXEL;
       const masterBytes =
         input.source.kind === "existing" ? 0 : input.source.byteSize;
+      await lockStorage(db);
       const storage = await storageOf(
         db,
         masterBytes + projected,
@@ -704,6 +732,7 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         }),
       );
       if (failure !== null) return refused(failure);
+      await lockStorage(db);
       const storage = await storageOf(
         db,
         frame.width * frame.height * CATALOG_BLOCK_PROJECTED_BYTES_PER_PIXEL,

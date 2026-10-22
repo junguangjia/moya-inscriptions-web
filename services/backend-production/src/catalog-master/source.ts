@@ -22,7 +22,19 @@ type Environment = Readonly<Record<string, string | undefined>>;
 export const openCatalogMasterSource = async (
   environment: Environment,
 ): Promise<CatalogSourceReader> => {
-  const config = parseCatalogSourceConfig(environment);
+  let config: ReturnType<typeof parseCatalogSourceConfig>;
+  try {
+    config = parseCatalogSourceConfig(environment);
+  } catch (error) {
+    // Its messages name the setting and never a value; as a usage error the
+    // command prints it instead of its generic line.
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Catalog source configuration ")
+    )
+      throw new CatalogMasterUsageError(error.message);
+    throw error;
+  }
   if (config !== null) return openCosCatalogSourceReader(config);
   if (environment.NODE_ENV === "development" && environment.CMS_MEDIA_DIR)
     return new LocalCatalogSourceReader(

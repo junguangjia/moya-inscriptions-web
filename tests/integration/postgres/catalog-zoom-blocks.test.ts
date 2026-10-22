@@ -2979,29 +2979,114 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
         sliceCap: CATALOG_MASTER_SLICE_CAP,
       },
     });
-    // Once a set is cut, its real block bytes replace its projection.
+    // Once a set is cut, its real block bytes replace its projection, and
+    // the published copy its blocks do not have yet stays counted.
     const frame = { width: first.frameWidth, height: first.frameHeight };
-    await insertBlocks(images[0]!, first.masterId!, frame, allCells(frame));
-    expect((await masters.status(null)).storage.sliceBytes).toBe(
-      before + 2 * masterBytes + projected + 24 * 250_000,
+    const cut = await insertBlocks(
+      images[0]!,
+      first.masterId!,
+      frame,
+      allCells(frame),
     );
-    // A dry run sees the same bound.
-    expect(
-      codeOf(
-        await masters.attach(
-          attachInput(images[2]!, {
-            source: { kind: "dry_run", byteSize: masterBytes },
-          }),
-          t0,
+    const settled = before + 2 * masterBytes + projected + 2 * 24 * 250_000;
+    expect((await masters.status(null)).storage.sliceBytes).toBe(settled);
+    // A dry run sees the same bound, also one sized into the room that
+    // forgetting the unpublished copy would leave.
+    for (const byteSize of [masterBytes, masterBytes - 24 * 250_000])
+      expect(
+        codeOf(
+          await masters.attach(
+            attachInput(images[2]!, {
+              source: { kind: "dry_run", byteSize },
+            }),
+            t0,
+          ),
         ),
-      ),
-    ).toBe("storage_slice_cap");
-    // Leave the slice for later suites: end both and release their blobs.
+      ).toBe("storage_slice_cap");
+    // When the publication rows land, the reservation becomes their bytes:
+    // the slice total does not move.
+    const publicAsset = hex();
+    await setup.query(
+      "INSERT INTO community.media_public_assets(id,catalog_asset_id,desired_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3)",
+      [publicAsset, images[0]!.assetId, t0],
+    );
+    for (const [cell, rendition] of cut.entries()) {
+      const blob = (
+        await setup.query<{ storage_key: string; sha256: string }>(
+          "SELECT b.storage_key, b.sha256 FROM community.media_renditions r JOIN community.media_blobs b ON b.id=r.blob_id WHERE r.id=$1",
+          [rendition],
+        )
+      ).rows[0]!;
+      const token = hex();
+      const role = `block-${String(cell).padStart(2, "0")}`;
+      await setup.query(
+        `INSERT INTO community.media_publications(id,public_asset_id,rendition_id,generation_token,object_key,storage_key,content_type,purpose,byte_size,sha256,role,edit_key,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,'image/jpeg','catalog_derivative',250000,$7,$8,'base',$9)`,
+        [
+          `media-publication-${hex()}`,
+          publicAsset,
+          rendition,
+          token,
+          `v1/${publicAsset}/${token}/base/${role}.r1.jpg`,
+          blob.storage_key,
+          blob.sha256,
+          role,
+          t0,
+        ],
+      );
+      if (cell === 11)
+        expect((await masters.status(null)).storage.sliceBytes).toBe(settled);
+    }
+    expect((await masters.status(null)).storage.sliceBytes).toBe(settled);
+    // Leave the slice for later suites: end both, release their blobs and
+    // withdraw the block publications.
     await masters.detach({ all: true }, t0);
     await setup.query(
       `UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL
        WHERE id IN (SELECT blob_id FROM community.catalog_display_masters WHERE id=ANY($1::text[]))`,
       [[first.masterId, second.masterId], t0],
+    );
+    for (const step of [
+      "state='withdrawing', withdraw_requested_at=$2",
+      "state='withdrawn', origin_deleted_at=$2, verified_at=$2",
+    ])
+      await setup.query(
+        `UPDATE community.media_publications SET ${step} WHERE public_asset_id=$1`,
+        [publicAsset, t0],
+      );
+  });
+
+  it("serializes concurrent attaches, so two processes cannot both pass the slice cap", async () => {
+    await quiet();
+    const images = await Promise.all([1, 2].map(() => catalogImage()));
+    const projected = 6000 * 4000;
+    const before = (await masters.status(null)).storage.sliceBytes;
+    // Either attach fits alone; the second one cannot fit beside the first.
+    const masterBytes =
+      Math.floor((CATALOG_MASTER_SLICE_CAP - before) / 2) - projected + 1;
+    const results = await Promise.all(
+      images.map((image) =>
+        masters.attach(
+          attachInput(image, {
+            source: {
+              kind: "upload",
+              storageKey: blobKey(),
+              byteSize: masterBytes,
+            },
+          }),
+          t0,
+        ),
+      ),
+    );
+    expect(results.map(codeOf).sort()).toEqual(["done", "storage_slice_cap"]);
+    const ids = results.flatMap((result) =>
+      result.status === "done" && result.masterId ? [result.masterId] : [],
+    );
+    await masters.detach({ all: true }, t0);
+    await setup.query(
+      `UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL
+       WHERE id IN (SELECT blob_id FROM community.catalog_display_masters WHERE id=ANY($1::text[]))`,
+      [ids, t0],
     );
   });
 

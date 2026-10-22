@@ -1186,7 +1186,7 @@ describe("catalog-master --from-source reader identity", () => {
     );
   });
 
-  it("refuses a partial or malformed COS identity, naming the setting and never a value, even beside a media directory", async () => {
+  it("refuses a partial or malformed COS identity as a usage error, naming the setting and never a value, even beside a media directory", async () => {
     for (const [environment, setting] of [
       [
         {
@@ -1217,8 +1217,8 @@ describe("catalog-master --from-source reader identity", () => {
         () => null,
         (thrown: unknown) => thrown,
       );
-      expect(error).toBeInstanceOf(Error);
-      expect(error).not.toBeInstanceOf(CatalogMasterUsageError);
+      // A usage error, so the command prints it instead of its generic line.
+      expect(error).toBeInstanceOf(CatalogMasterUsageError);
       const message = (error as Error).message;
       expect(message).toContain(setting);
       for (const value of [
