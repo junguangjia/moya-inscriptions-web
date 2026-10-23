@@ -5,6 +5,7 @@ import {
   createPostgresPool,
   parsePostgresConfig,
   PostgresAuthoredArticleCatalogMediaResolver,
+  PostgresCatalogQueryAdapter,
   PostgresCompositeEditorialAdapter,
 } from "@moya/catalog-postgres";
 import { ARTICLE_PAGE_SIZE_MAXIMUM } from "@moya/contracts/schemas";
@@ -32,13 +33,14 @@ import type { ArticleListQuery } from "@moya/contracts";
  * withdrawn, duplicate-media and missing rows; the count and several pages of
  * the index under each filter; with and without renditions; before and after
  * the M1 view shape), wherever a record keeps the publishing contract's one
- * representative image; one case pins the index's divergence where a record
- * has two. Before M1 a statement reads `catalogs_media` no more often than
- * #320 did (a LATERAL form read it once per pair or row), also for a news
- * page the planner estimates at one row; after M1 it reads no
- * `catalogs_media` row by Seq Scan, and an index page (the first or the one
- * halfway, unfiltered or under news) reads at most its covers' images, as
- * many at 768 index rows as at 96.
+ * representative image; where a record has two, an index page that holds an
+ * Article it covers fails, as the Catalog list fails on that record. Before
+ * M1 a statement reads `catalogs_media` no more often than #320 did (a
+ * LATERAL form read it once per pair or row), also for a news page the
+ * planner estimates at one row; after M1 it reads no `catalogs_media` row by
+ * Seq Scan, and an index page (the first or the one halfway, unfiltered or
+ * under news) reads at most its covers' images, as many at 768 index rows as
+ * at 96.
  *
  * Both readers name their relations `public.` (and the composite index and
  * the rendition join `community.`). This run's owned schema stands in for
@@ -203,14 +205,23 @@ const mediaRelations: ReadonlySet<unknown> = new Set([
 const mediaNodes = (root: PlanNode) =>
   nodes(root).filter((node) => mediaRelations.has(node["Relation Name"]));
 
+/** The plan's one subplan of that name (a materialized CTE is one). */
+const subplan = (root: PlanNode, name: string): PlanNode => {
+  const found = nodes(root).filter((node) => node["Subplan Name"] === name);
+  expect(found.map((node) => node["Subplan Name"])).toEqual([name]);
+  return found[0]!;
+};
+
 /*
  * The index statements' S5 shape. The count names no media relation and
  * reads none. The page statement names the published media view once (and
  * the rendition join once, with renditions), restricted by its own page's
- * cover ids, and every media read in its plan lies outside its one Limit:
- * the page is cut from the Article rows before any media is read. Every
- * read of the view lies in its one materialized `cover` CTE, which runs at
- * most once whatever the join above it.
+ * cover ids. In its plan the root of its materialized `page` CTE is the
+ * Limit that cuts the page, and that CTE reads no media relation: the page
+ * is cut from the Article rows before any media is read. Every read of the
+ * view lies in its materialized `cover` CTE, none elsewhere; that CTE runs
+ * at most once whatever the join above it. (Other Limit nodes, wherever the
+ * planner puts them, are not this shape's concern.)
  */
 const expectIndexShape = async (
   count: Recorded,
@@ -227,17 +238,18 @@ const expectIndexShape = async (
     /\bcm\.catalog_id=ANY\(ARRAY\(SELECT x\.cover_catalog_id FROM page x\b/u,
   );
   const plan = await planOf(page.sql, page.values);
-  const cuts = nodes(plan).filter((node) => node["Node Type"] === "Limit");
-  expect(cuts).toHaveLength(1);
-  expect(mediaNodes(cuts[0]!)).toEqual([]);
+  const pageCte = subplan(plan, "CTE page");
+  expect(pageCte["Node Type"]).toBe("Limit");
+  expect(mediaNodes(pageCte)).toEqual([]);
   const viewReads = (root: PlanNode) =>
     nodes(root).filter((node) => node["Relation Name"] === "catalogs_media");
-  const covers = nodes(plan).filter(
-    (node) => node["Subplan Name"] === "CTE cover",
-  );
-  expect(covers).toHaveLength(1);
-  expect(viewReads(plan)).not.toEqual([]);
-  expect(viewReads(covers[0]!)).toEqual(viewReads(plan));
+  const inCover = new Set(viewReads(subplan(plan, "CTE cover")));
+  expect(inCover.size).toBeGreaterThan(0);
+  expect(
+    viewReads(plan)
+      .filter((node) => !inCover.has(node))
+      .map((node) => node["Node Type"]),
+  ).toEqual([]);
 };
 
 /** Rows of the frozen #320 statement, run on the same data and values. */
@@ -409,7 +421,8 @@ const deliveryKey = (n: number) =>
  * publishing contract gives a media set exactly one (editorialPublishSchema),
  * and the index's equality with #320 rests on there being at most one (with
  * none, as in 6, an Article keeps one NULL cover row either way). A record
- * with two is made, and its divergence pinned, in a case of its own.
+ * with two is made, and the index's failure on it pinned, in a case of its
+ * own.
  */
 const seed = async () => {
   await clear();
@@ -655,35 +668,61 @@ const equalityCases = () =>
       });
     }
 
-    it("keeps both cover rows of an Article on its page when a record has two representative images", async () => {
+    it("fails an index page that holds an Article whose cover record has two representative images, as the Catalog list fails", async () => {
       // Outside the publishing contract: record 3 (the cover of Articles 2
-      // and 10) gets a second representative image. #320 counted and paged
-      // the joined rows; S5 counts and pages Articles, so each of the two
-      // Articles counts once and keeps both its cover rows on its page. The
-      // pages together still hold exactly #320's rows, in #320's order.
+      // and 10) gets a second representative image, so each of those
+      // Articles joins two cover rows (#320 counted and paged both). Index
+      // order of the 10 Articles, in pages of 4: 9 8 7 5 | 4 authored 3 10
+      // | 2 1.
+      const catalog = new PostgresCatalogQueryAdapter(pool);
+      const catalogPage = { page: 1, pageSize: 20 } as const;
+      expect((await catalog.list(catalogPage)).items).toHaveLength(6);
       await pool.query(
         "UPDATE catalogs_media SET is_representative = true WHERE id = 'row-c2'",
       );
-      const whole = await indexRead(false);
-      expect(whole.originalCount).toEqual([{ total: "12" }]);
-      expect(whole.count.rows).toEqual([{ total: "10" }]);
-      expect(whole.page.total).toBe(10);
-      expectSameRows(whole.rows.rows, whole.originalRows, [
-        "published_at",
-        "article_id",
-      ]);
-      const paged: Row[] = [];
-      const articles: number[] = [];
-      for (const page of [1, 2, 3]) {
-        const { rows } = await indexRead(false, { page, pageSize: 4 });
-        articles.push(
-          new Set(rows.rows.map(({ article_id }) => article_id)).size,
-        );
-        paged.push(...rows.rows);
+      const articleOf = (id: number) =>
+        `article-${id.toString(16).padStart(32, "0")}`;
+      for (const renditions of [false, true])
+        for (const [query, twice] of [
+          [{ page: 1, pageSize: ARTICLE_PAGE_SIZE_MAXIMUM }, [2, 10]],
+          [{ page: 2, pageSize: 4 }, [10]],
+          [{ page: 3, pageSize: 4 }, [2]],
+        ] as const) {
+          recorded = [];
+          await expect(
+            compositeOf(renditions).listArticles(query),
+          ).rejects.toThrow(
+            "Invalid PostgreSQL Article cover representative multiplicity",
+          );
+          // The page statement ran and joined exactly those Articles twice.
+          const ids = statement(/ORDER BY a\.published_at DESC/u).rows.map(
+            ({ article_id }) => article_id,
+          );
+          expect(ids.filter((id, at) => ids.indexOf(id) !== at).sort()).toEqual(
+            twice.map(articleOf).sort(),
+          );
+        }
+      // A page without either Article still reads #320's rows; its total
+      // counts Articles (#320 counted 12 joined rows).
+      for (const [query, total] of [
+        [{ page: 1, pageSize: 4 }, 10],
+        [{ page: 1, pageSize: 4, presentation: "news" }, 2],
+      ] as const) {
+        const read = await indexRead(false, query);
+        expect(read.page.total).toBe(total);
+        expect(read.originalCount).toEqual([
+          { total: String(query.presentation === undefined ? 12 : total) },
+        ]);
+        expectSameRows(read.rows.rows, read.originalRows, [
+          "published_at",
+          "article_id",
+        ]);
+        expect(read.page.items).toHaveLength(read.rows.rows.length);
       }
-      expect(articles).toEqual([4, 4, 2]);
-      expect(paged).toHaveLength(12);
-      expectSameRows(paged, whole.originalRows, ["published_at", "article_id"]);
+      // The Catalog list fails on the same record.
+      await expect(catalog.list(catalogPage)).rejects.toThrow(
+        "Invalid PostgreSQL Catalog Media representative multiplicity",
+      );
     });
 
     it("drops a withdrawn record from both reads on the next request, as #320 does", async () => {

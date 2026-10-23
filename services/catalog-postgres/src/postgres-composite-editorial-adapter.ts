@@ -107,12 +107,14 @@ interface AuthoredDetailRow extends QueryResultRow {
  * exactly one representative image (editorialPublishSchema), so the left join
  * keeps one row per Article, and cutting the page from the Articles is cutting
  * it from the joined rows. Same columns in the same order and the same order
- * of rows. (A record outside that contract, with two representative images,
- * gave #320 two rows to count and page for each Article it covers; here that
- * Article counts once and both its rows stay on its page, so the page holds
- * one item more than pageSize for each such Article. Past the 50 items
- * articlePageSchema allows, as at pageSize 50, the read service's response
- * check then fails the request, where #320's page of 50 rows passed it.)
+ * of rows. A record outside that contract, with two representative images,
+ * joins two rows to each Article it covers (#320 counted and paged both).
+ * A page that holds such an Article fails closed (`oneCoverRowPerArticle`),
+ * as the Catalog reads do on that record (mapRepresentativeMediaRows): never
+ * an Article twice, never more items than pageSize. Like theirs, the failure
+ * is per page: a page without such an Article reads as before, and its total
+ * counts Articles (#320's counted the joined rows, one more per such
+ * Article).
  */
 const articleRowsSql = `
 SELECT 'staff'::text AS source,a.article_id,a.presentation,a.title,a.subtitle,
@@ -147,6 +149,22 @@ LEFT JOIN cover cm ON cm.catalog_id=a.cover_catalog_id${renditions ? catalogMedi
 ORDER BY a.published_at DESC,a.article_id DESC`;
 const nullText = (value: string | null): string | null =>
   value?.trim() ? value : null;
+
+/**
+ * One row per staff Article (article_id is unique among them); a second one
+ * is a second representative image of its cover record.
+ */
+const oneCoverRowPerArticle = (rows: readonly IndexRow[]): void => {
+  const staff = new Set<string>();
+  for (const row of rows) {
+    if (row.source !== "staff") continue;
+    if (staff.has(row.article_id))
+      throw new Error(
+        "Invalid PostgreSQL Article cover representative multiplicity",
+      );
+    staff.add(row.article_id);
+  }
+};
 
 const authoredSummary = (row: IndexRow): PublishedAuthoredArticleSummary => {
   if (row.owner_id === null || row.version === null || row.fingerprint === null)
@@ -259,6 +277,7 @@ export class PostgresCompositeEditorialAdapter implements EditorialContentReadPo
         total: parseCatalogCount(count.rows[0]?.total),
       };
     });
+    oneCoverRowPerArticle(raw.rows);
     const items = await Promise.all(
       raw.rows.map((row) =>
         row.source === "authored"

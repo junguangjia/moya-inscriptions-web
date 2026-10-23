@@ -886,6 +886,77 @@ describe("Catalog rows and reader composition", () => {
       );
     }
   });
+
+  it("fails the composite Article index when one Article has two cover rows", async () => {
+    // A cover record with two representative images joins two rows to the
+    // Article: the page fails closed, as mapRepresentativeMediaRows does.
+    const indexRow = (articleId: string, mediaId: string) => ({
+      source: "staff",
+      article_id: articleId,
+      presentation: "academic",
+      title: "合成文章",
+      subtitle: null,
+      summary: null,
+      section: null,
+      issue: null,
+      byline: "合成编辑室",
+      first_published_at: new Date("2026-09-20T10:00:00.000Z"),
+      published_at: new Date("2026-09-21T10:00:00.000Z"),
+      updated_at: new Date("2026-09-21T10:00:00.000Z"),
+      owner_id: null,
+      version: null,
+      cover_ref_id: null,
+      cover_reference: null,
+      fingerprint: null,
+      media_id: mediaId,
+      object_key: `private/${mediaId}.webp`,
+      alt: "合成",
+      width: 4096,
+      height: 2731,
+    });
+    const first = indexRow(`article-${"b".repeat(32)}`, "media-row-1");
+    const second = indexRow(`article-${"c".repeat(32)}`, "media-row-1");
+    const adapterOf = (rows: readonly object[]) =>
+      new PostgresCompositeEditorialAdapter(
+        fakePool((sql) =>
+          /COUNT\(\*\)/u.test(sql)
+            ? [{ total: "2" }]
+            : /WITH page AS/u.test(sql)
+              ? rows
+              : [],
+        ).pool,
+        {} as EditorialContentReadPort,
+        { summary: vi.fn(), detail: vi.fn() },
+      );
+    const query = { page: 1, pageSize: 2 } as const;
+    // One record's image may cover two Articles, one row each.
+    expect(
+      (await adapterOf([first, second]).listArticles(query)).items.map(
+        ({ cover }) => cover?.id,
+      ),
+    ).toEqual(["media-row-1", "media-row-1"]);
+    const twice = [first, indexRow(first.article_id, "media-row-2"), second];
+    await expect(adapterOf(twice).listArticles(query)).rejects.toThrow(
+      "Invalid PostgreSQL Article cover representative multiplicity",
+    );
+    // Through the read service the editorial handler calls, it stays a plain
+    // Error (answered 500, as an invalid Article projection), neither
+    // availability signal the handler answers 503.
+    const failure: unknown = await new EditorialContentReadService(
+      adapterOf(twice),
+      {} as StorageUrlResolver,
+    )
+      .listArticles(query)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).constructor).toBe(Error);
+    expect((failure as Error).message).toBe(
+      "Invalid PostgreSQL Article cover representative multiplicity",
+    );
+  });
 });
 
 describe("startup check of the delivery view grant", () => {
