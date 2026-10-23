@@ -279,7 +279,7 @@ describe("the complete snapshot at the ceiling", () => {
       "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
       "SELECT clock_timestamp() AS at",
       expect.stringMatching(
-        /^DECLARE catalog_published_sources NO SCROLL CURSOR FOR\s+SELECT media_id, object_key, width, height\s+FROM catalog_media\s+ORDER BY media_id ASC, object_key ASC\s*$/u,
+        /^DECLARE catalog_published_sources NO SCROLL CURSOR FOR\s+SELECT media_id, object_key, width, height, catalog_id, position\s+FROM catalog_media\s+ORDER BY media_id ASC, object_key ASC\s*$/u,
       ),
     ]);
     expect(p.statements.private.slice(0, 3)).toEqual([
@@ -424,6 +424,7 @@ describe("the complete snapshot at the ceiling", () => {
           preparations: [],
           privateRows,
           observedAt: now,
+          recipeManifestSha256: policy,
         }),
         port,
         logger,

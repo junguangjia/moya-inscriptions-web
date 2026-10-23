@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { prepareProductionBackend as prepareProductionBackendImplementation } from "@moya/backend-production";
+import { currentCatalogRecipePolicy } from "@moya/backend-production/internal/catalog-delivery";
 import { ProductionCosStorageUrlResolver } from "@moya/backend-production/internal/production-cos";
 import {
   openPublishingMedia,
@@ -1580,6 +1581,9 @@ describe("Work publishing composition", () => {
             sources: [],
             publishedSources: [],
             observedAt: database.snapshotObservedAt,
+            // The policy the render order and grace follow (W9/W10).
+            recipeManifestSha256:
+              currentCatalogRecipePolicy().recipeManifestSha256,
           });
           expect(database.snapshotClients).toHaveLength(1);
           expect(database.snapshotClients[0]?.statements[0]).toBe(

@@ -7,6 +7,7 @@ import {
 } from "@moya/contracts/internal/editorial";
 
 import { writeTransaction, nowParam, type PublishingDb } from "./db.js";
+import { CATALOG_RENDER_GRACE_HOURS } from "./catalog-publication-dirty.js";
 import { CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS } from "./catalog-snapshot-ceiling.js";
 
 const terminal = (state: string) =>
@@ -360,6 +361,81 @@ export const catalogPrivateProcessingReferenceSql = (
   WHERE pr.asset_id=${asset} AND pi.observed_live AND pi.ended_at IS NULL
     AND pi.source_state IN ('prepared','release_requested') AND pi.expires_at>${at}
 )`;
+
+/**
+ * R as the App reads it (Owner decision D3): how long an intent whose lease
+ * expired, or that ended, stays in the CMS live private projection, so the
+ * mirror still observes it live. CMS migration M2 writes the same 96 hours
+ * (admin/published CATALOG_PREPARE_RETENTION_HOURS; the CMS is another
+ * package and database, so a test holds the two equal). Past R the sync
+ * tombstones the intent by absence.
+ */
+export const CATALOG_PREPARE_RETENTION_HOURS = 96;
+
+/** The least time render grace (G) ends before R. */
+export const CATALOG_RENDER_GRACE_MARGIN_HOURS = 24;
+
+// G <= R - 24 h: an intent in grace is still in the live projection, so its
+// mirror is observed live (and a newer intent of its document is mirrored)
+// for the whole grace, with a day to spare for a sync that cannot run.
+if (
+  CATALOG_RENDER_GRACE_HOURS >
+  CATALOG_PREPARE_RETENTION_HOURS - CATALOG_RENDER_GRACE_MARGIN_HOURS
+)
+  throw new Error(
+    "Catalog render grace must end at least 24 hours inside the prepare retention",
+  );
+
+/**
+ * SQL: mirror intent `intent` is in render grace at `at` (catalog-scale-v1
+ * W10): observed live, prepared or requested whose lease passed (expired,
+ * once a sync saw it lapse) within the last G hours, and the latest intent
+ * of its document the mirror observes (a later lease is a later prepare; a
+ * newer intent ends the grace whatever its state). A render-only condition:
+ * no permission reads it (blob pins, approvals, release requests and the
+ * publication fence all still require an unexpired lease), so a record whose
+ * renders sit behind a backlog when its 24-hour lease runs out is still
+ * rendered, and a re-prepare of the same images finds them ready.
+ */
+const catalogRenderGraceIntentSql = (intent: string, at: string) =>
+  `${intent}.observed_live
+    AND ${intent}.source_state IN ('prepared','release_requested','expired')
+    AND ${intent}.expires_at<=${at}
+    AND ${intent}.expires_at>${at} - interval '${CATALOG_RENDER_GRACE_HOURS} hours'
+    AND NOT EXISTS (
+      SELECT 1 FROM community.catalog_delivery_prepares newer
+      WHERE newer.observed_live AND newer.cms_document_id=${intent}.cms_document_id
+        AND (newer.expires_at, newer.intent_id) > (${intent}.expires_at, ${intent}.intent_id))`;
+
+/**
+ * Render grace as a reference of asset `asset` (W10), OR'ed into the render
+ * plan's `referenced` beside catalogPrivateProcessingReferenceSql: a job of
+ * an asset that only an intent in grace names still renders. Rendering only;
+ * never a permission.
+ */
+export const catalogRenderGraceReferenceSql = (
+  asset: string,
+  at = "now()",
+) => `EXISTS (
+  SELECT 1 FROM community.catalog_delivery_media_refs gr
+  JOIN community.catalog_delivery_prepares gi ON gi.intent_id=gr.intent_id
+  WHERE gr.asset_id=${asset} AND ${catalogRenderGraceIntentSql("gi", at)}
+)`;
+
+/**
+ * The members of the intents in render grace at `$1` whose recipe is the
+ * current policy `$2` (W10), from the App mirror: the CMS projection lists a
+ * lapsed intent as a header without members, so the sync names these from
+ * the members it stored while the intent was live (render tier T3, by
+ * expiry and record). Reads the observed-live mirror rows only.
+ */
+export const catalogRenderGraceSourcesSql = `
+  SELECT gr.asset_id, gr.media_id, gr.object_key, gr.width, gr.height, gr.ordinal,
+    gi.intent_id::text AS intent_id, gi.cms_document_id, gi.expires_at
+  FROM community.catalog_delivery_prepares gi
+  JOIN community.catalog_delivery_media_refs gr ON gr.intent_id=gi.intent_id
+  WHERE gi.recipe_manifest_sha256=$2 AND ${catalogRenderGraceIntentSql("gi", "$1::timestamptz")}
+  ORDER BY gi.expires_at, gi.cms_document_id, gi.intent_id, gr.ordinal`;
 
 /** Retain exact prepared bytes independently of rendition replacement. */
 export const catalogPreparedBlobPinSql = (

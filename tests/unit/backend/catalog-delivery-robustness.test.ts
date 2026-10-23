@@ -1002,6 +1002,7 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
         publishedSources: [],
         preparations: [],
         observedAt: observed,
+        recipeManifestSha256: policy,
       }),
       port: {
         syncCatalogAssets: async () => ({
@@ -1321,6 +1322,7 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
         publishedSources: [],
         preparations: [],
         observedAt: observed,
+        recipeManifestSha256: policy,
       }),
       port: {
         syncCatalogAssets: async () => ({

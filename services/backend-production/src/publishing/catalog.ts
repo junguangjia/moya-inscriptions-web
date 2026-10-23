@@ -93,6 +93,13 @@ export interface CatalogWorkerSource {
   readonly objectKey: string;
   readonly width: number | null;
   readonly height: number | null;
+  /**
+   * The record (catalog id) and position a published row names, which the
+   * store's render order follows so a record's images render together
+   * (catalog-scale-v1 W9). Read by the published listing only.
+   */
+  readonly catalogId?: string | null;
+  readonly position?: number | null;
 }
 
 /** Mirror of `CatalogRenderPlan`. */
@@ -663,6 +670,7 @@ export interface CatalogSyncPort {
         readonly version: number;
         readonly digest: string;
       }[];
+      readonly renderQueueTarget?: number;
     },
   ): Promise<{
     readonly referenced: number;
@@ -678,11 +686,23 @@ export interface CatalogSyncPort {
      * whose earlier of the stored and snapshot expiry passed) is refused
      * instead. */
     readonly mismatchedIntentIds?: readonly string[];
+    /** The committed pass could not record its render backlog (W9; present
+     * only then): the pass stands, the recorded backlog is an older one. */
+    readonly renderBacklogRecorded?: false;
   }>;
 }
 
-/** New assets and queued jobs per sync pass. */
+/** New assets per sync pass (and queued jobs without a queue target). */
 export const CATALOG_SYNC_BATCH = 100;
+/**
+ * The render queue's target (catalog-scale-v1 W9): a sync pass queues base
+ * `catalog_render` jobs only while fewer are queued, at most the difference,
+ * in render tier order. About 40 minutes of renders at about 7 a minute, so
+ * a newly published image waits behind no more than that, and a recipe
+ * re-render (always the last tier) never starves a prepared record. The
+ * per-tier backlog the pass records counts what the queue does not hold.
+ */
+export const CATALOG_RENDER_QUEUE_TARGET = 300;
 /** Sync cadence in the worker maintenance (spec: every 5 minutes). */
 export const CATALOG_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -756,6 +776,7 @@ export function createCatalogSync(options: {
     const counts = await options.port.syncCatalogAssets(sources, now, {
       limit,
       renditions: catalogSyncIdentities(),
+      renderQueueTarget: CATALOG_RENDER_QUEUE_TARGET,
       ...(snapshot ? { snapshot } : {}),
     });
     // A late release, a state regression, or an identity drift of an intent
@@ -773,6 +794,10 @@ export function createCatalogSync(options: {
       logger.error(
         `[media-worker] catalog sync mismatched intents=${counts.mismatchedIntentIds.length} ids=${counts.mismatchedIntentIds.slice(0, 5).join(",")}`,
       );
+    // The pass committed, but its per-tier backlog (the pacing's input) was
+    // not recorded; the next pass records a newer one.
+    if (counts.renderBacklogRecorded === false)
+      logger.error("[media-worker] catalog sync render backlog not recorded");
     if (counts.created + counts.unreferenced + counts.enqueued > 0) {
       logger.info(
         `[media-worker] catalog sync referenced=${counts.referenced} skipped=${counts.skipped} created=${counts.created} unreferenced=${counts.unreferenced} enqueued=${counts.enqueued}`,
@@ -1097,10 +1122,11 @@ export function createCatalogMembershipWatch(options: {
 /**
  * The published Catalog media list, read through the read-only Catalog
  * connection (the public read role) in cursor batches (catalog-scale-v1 W3).
- * No LIMIT: the cursor stops one row past the snapshot ceiling.
+ * No LIMIT: the cursor stops one row past the snapshot ceiling. Each row's
+ * record and position order its render (W9).
  */
 export const listPublishedCatalogSourcesSql = `
-  SELECT media_id, object_key, width, height
+  SELECT media_id, object_key, width, height, catalog_id, position
   FROM catalog_media
   ORDER BY media_id ASC, object_key ASC
 `;
@@ -1119,6 +1145,8 @@ export async function readPublishedCatalogSources(client: {
     object_key: string;
     width: number | null;
     height: number | null;
+    catalog_id?: string | null;
+    position?: number | null;
   }>(
     client,
     "catalog_published_sources",
@@ -1131,6 +1159,8 @@ export async function readPublishedCatalogSources(client: {
       objectKey: row.object_key,
       width: row.width,
       height: row.height,
+      catalogId: row.catalog_id ?? null,
+      position: row.position ?? null,
     })) ?? null
   );
 }

@@ -6,7 +6,10 @@ import {
   currentCatalogRecipePolicy,
   readCatalogSourceSnapshot,
 } from "@moya/backend-production/internal/catalog-delivery";
-import { createCatalogSync } from "@moya/backend-production/internal/publishing-catalog";
+import {
+  CATALOG_RENDER_QUEUE_TARGET,
+  createCatalogSync,
+} from "@moya/backend-production/internal/publishing-catalog";
 import {
   createPostgresPool,
   parsePostgresConfig,
@@ -380,8 +383,9 @@ describe.sequential("Catalog sync at 25,000 published images", () => {
       console.info(
         `[catalog-scale-sync] first pass ${ms}ms: ${appStatements.length} App statements`,
       );
+      // The render queue fills to its target in one pass (W9).
       expect(logs).toEqual([
-        `[media-worker] catalog sync referenced=${PUBLISHED + LIVE * MEMBERS} skipped=0 created=${2 * MISSING} unreferenced=${STALE + MISSING} enqueued=100`,
+        `[media-worker] catalog sync referenced=${PUBLISHED + LIVE * MEMBERS} skipped=0 created=${2 * MISSING} unreferenced=${STALE + MISSING} enqueued=${CATALOG_RENDER_QUEUE_TARGET}`,
       ]);
       // Referenced: exactly the 25,000 published images, re-referenced ones
       // included; every other asset (private, stale, just created private) is
@@ -414,7 +418,7 @@ describe.sequential("Catalog sync at 25,000 published images", () => {
             "SELECT count(*)::integer AS jobs FROM community.publishing_jobs",
           )
         ).rows[0]!.jobs,
-      ).toBe(before.rows[0]!.jobs + 100);
+      ).toBe(before.rows[0]!.jobs + CATALOG_RENDER_QUEUE_TARGET);
       // The mirror holds every intent of the snapshot beside the history, with
       // the members of the live ones, written in one statement per kind.
       expect(

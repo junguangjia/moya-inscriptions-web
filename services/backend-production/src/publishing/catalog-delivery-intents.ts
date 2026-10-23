@@ -208,11 +208,11 @@ export const readCatalogSourceSnapshot = async (
     const union = new Map(
       sources.map((s) => [sourceAssetId(s.mediaId, s.objectKey), s]),
     );
+    const policy = currentCatalogRecipePolicy().recipeManifestSha256;
     for (const intent of preparations ?? [])
       if (
         ["prepared", "release_requested"].includes(intent.state) &&
-        intent.recipeManifestSha256 ===
-          currentCatalogRecipePolicy().recipeManifestSha256
+        intent.recipeManifestSha256 === policy
       )
         for (const media of intent.media)
           union.set(sourceAssetId(media.mediaId, media.objectKey), media);
@@ -222,6 +222,9 @@ export const readCatalogSourceSnapshot = async (
       publishedSources: sources,
       ...(preparations ? { preparations } : {}),
       ...(undecodableIntentIds?.length ? { undecodableIntentIds } : {}),
+      // The policy the store orders renders by and names render grace for
+      // (catalog-scale-v1 W9/W10): only this recipe's intents count.
+      recipeManifestSha256: policy,
       // Live private rows read, for the sync's ceiling warning.
       ...(privateRows === undefined ? {} : { privateRows }),
       observedAt,

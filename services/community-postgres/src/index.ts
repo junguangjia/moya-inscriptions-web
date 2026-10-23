@@ -36,6 +36,24 @@ export {
   inspectCatalogDelivery,
   readCatalogDeliveryProjection,
 } from "./publishing/catalog-delivery-intents.js";
+// catalog-scale-v1 (W9/W10): the render tiers, the queue's backlog for the
+// later pacing, and render grace (R as the App reads it, G's margin inside
+// it, the render-only reference and the sync's grace members).
+export {
+  CATALOG_PREPARE_RETENTION_HOURS,
+  CATALOG_RENDER_GRACE_MARGIN_HOURS,
+  catalogRenderGraceReferenceSql,
+  catalogRenderGraceSourcesSql,
+} from "./publishing/catalog-delivery-intents.js";
+export {
+  CATALOG_RENDER_TIERS,
+  catalogRenderBacklogWriteSql,
+  readCatalogRenderBacklog,
+} from "./publishing/catalog-assets.js";
+export type {
+  CatalogRenderBacklog,
+  CatalogRenderTier,
+} from "./publishing/catalog-assets.js";
 // catalog-scale-v1 (W3): the one ceiling of a complete Catalog snapshot,
 // shared by the worker's cursor reads and the store's bounds.
 export {

@@ -21,6 +21,7 @@ import {
   parseCatalogSourceConfig,
 } from "@moya/backend-production/internal/catalog-source";
 import {
+  CATALOG_RENDER_QUEUE_TARGET,
   catalogSyncIdentities,
   createCatalogRenderer,
   createCatalogSync,
@@ -1144,7 +1145,10 @@ describe("Catalog sync", () => {
     expect(port.syncCatalogAssets).toHaveBeenCalledWith(sources, now, {
       limit: 100,
       renditions: catalogSyncIdentities(),
+      // catalog-scale-v1 W9: the queue holds about the target, no more.
+      renderQueueTarget: CATALOG_RENDER_QUEUE_TARGET,
     });
+    expect(CATALOG_RENDER_QUEUE_TARGET).toBe(300);
     expect(catalogSyncIdentities().map((identity) => identity.role)).toEqual([
       "thumb",
       "cover",
@@ -1168,6 +1172,36 @@ describe("Catalog sync", () => {
     );
   });
 
+  it("logs a committed pass whose render backlog was not recorded, with its tombstoned intents and counts", async () => {
+    // catalog-scale-v1 W9: the backlog is written after the pass commits;
+    // a failed write is flagged, never a failed pass.
+    const port = {
+      syncCatalogAssets: vi.fn(async () => ({
+        referenced: 3,
+        skipped: 0,
+        created: 1,
+        unreferenced: 0,
+        enqueued: 1,
+        refusedIntentIds: ["00000000-0000-4000-8000-000000000001"],
+        renderBacklogRecorded: false as const,
+      })),
+    };
+    const lines: string[] = [];
+    await createCatalogSync({
+      listSources: async () => [],
+      port,
+      logger: {
+        info: (line) => lines.push(`info ${line}`),
+        error: (line) => lines.push(`error ${line}`),
+      },
+    }).run(new Date("2026-10-23T12:00:00.000Z"));
+    expect(lines).toEqual([
+      "error [media-worker] catalog sync tombstoned intents=1 ids=00000000-0000-4000-8000-000000000001",
+      "error [media-worker] catalog sync render backlog not recorded",
+      "info [media-worker] catalog sync referenced=3 skipped=0 created=1 unreferenced=0 enqueued=1",
+    ]);
+  });
+
   it("reads the published projection through a cursor in its own snapshot, refusing a list beyond the ceiling", async () => {
     const rows = (count: number) =>
       Array.from({ length: count }, (_, index) => ({
@@ -1175,6 +1209,8 @@ describe("Catalog sync", () => {
         object_key: `k${index}`,
         width: 1,
         height: null,
+        catalog_id: `c${index}`,
+        position: index,
       }));
     const pool = (count: number) => {
       const fetches: CursorFetch[] = [];
@@ -1201,9 +1237,24 @@ describe("Catalog sync", () => {
       };
     };
     const small = pool(2);
+    // Each row's record and position order its render (W9).
     expect(await listPublishedCatalogSources(small as never)).toEqual([
-      { mediaId: "m0", objectKey: "k0", width: 1, height: null },
-      { mediaId: "m1", objectKey: "k1", width: 1, height: null },
+      {
+        mediaId: "m0",
+        objectKey: "k0",
+        width: 1,
+        height: null,
+        catalogId: "c0",
+        position: 0,
+      },
+      {
+        mediaId: "m1",
+        objectKey: "k1",
+        width: 1,
+        height: null,
+        catalogId: "c1",
+        position: 1,
+      },
     ]);
     // One REPEATABLE READ snapshot, one cursor over the whole ordered view
     // (no LIMIT), closed and rolled back, the client released.
@@ -1211,7 +1262,7 @@ describe("Catalog sync", () => {
       "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
     );
     expect(small.statements[1]).toMatch(
-      /^DECLARE catalog_published_sources NO SCROLL CURSOR FOR\s+SELECT media_id, object_key, width, height\s+FROM catalog_media\s+ORDER BY media_id ASC, object_key ASC\s*$/u,
+      /^DECLARE catalog_published_sources NO SCROLL CURSOR FOR\s+SELECT media_id, object_key, width, height, catalog_id, position\s+FROM catalog_media\s+ORDER BY media_id ASC, object_key ASC\s*$/u,
     );
     expect(small.statements.slice(-2)).toEqual([
       "CLOSE catalog_published_sources",

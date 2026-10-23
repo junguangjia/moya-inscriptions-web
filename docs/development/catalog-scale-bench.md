@@ -60,6 +60,20 @@ test.
 - `tests/integration/postgres/catalog-dirty-lock-order.test.ts` (the wave C
   integration) holds one writer of the dirty queue where the other lock order
   would wait on it, and requires both to commit (no 40P01).
+- `tests/integration/postgres/catalog-render-queue.test.ts` (W9) runs the render
+  tiers on the fixture's roles in CI: one pass's claim order, the queue target,
+  a backlog write that fails after the commit, W-AC10's 50 records (leases a
+  minute apart, all in the snapshot from the first pass), and records that
+  arrive pass by pass behind re-renders already queued. With
+  `MOYA_CATALOG_RENDER_IMAGES=25200` it also runs its 25k gate: one sync pass
+  through the worker's snapshot, every App statement planned as it ran (EXPLAIN
+  ANALYZE, rolled back), none JIT-compiled, each under a cost of 100,000 and 2 s
+  (about 40 seconds with the seed).
+- `tests/integration/postgres/catalog-render-grace.test.ts` (W10) runs render
+  grace on the real clock (W-AC9), and that a cancelled, superseded or withdrawn
+  intent is never in grace and a newer intent ends it whatever its state, and
+  `tests/unit/backend/catalog-render-grace.test.ts` holds G at least 24 hours
+  inside R, and the App's R equal to the R of CMS migration M2.
 
 ## Run
 
@@ -486,3 +500,100 @@ aggregate per side in one CMS snapshot and lists buckets only after a change.
   on the published read pool, so it runs the step then too, even without
   `CMS_MEDIA_DIR` (no sync, no render): a takedown or a passed lease or render
   grace is still marked within a minute rather than left to the sweep.
+
+## Render tiers and render grace at wave D (W9, W10)
+
+A sync pass now queues the Catalog's renders in tier order and records the
+backlog per tier:
+
+- **Tiers.** t0 a published image with no rendition yet, in its record's order
+  (catalog id, then position: the published listing reads both); t1 an image of
+  a live release_requested intent; t2 one of a live prepared intent, soonest
+  lease first; t3 one of an intent in render grace (below); t4 a ready image
+  missing a current recipe identity (a recipe re-render, which N3 keeps serving
+  its old set meanwhile). An image several records name takes its highest tier;
+  within t1–t3 an intent's images follow its lease, document, intent and
+  ordinal, so a record renders together. New assets are created in the same
+  order, a bounded number a pass.
+- **Claim order.** Each job runs after the pass's time plus its rank in
+  milliseconds (`run_after = at + rank × 1 ms`). Claims order one class by
+  run_after, then by the random job id, so without the rank a pass's jobs ran in
+  random order. A later pass's jobs follow an earlier pass's; user jobs keep
+  their claim class.
+- **Queue target.** The worker passes `CATALOG_RENDER_QUEUE_TARGET` (300, about
+  40 minutes at about 7 renders a minute): a pass queues base renders only into
+  the room below it. Pending images (t0–t3) are queued first. Re-renders (t4),
+  and the daily retry of a failed re-render, enter the queue only when no image
+  of a higher tier waits at that pass: every pending one is queued and every
+  named one has its asset. A recipe bump of the whole Catalog therefore never
+  takes a place a published, requested, prepared or grace image of the same pass
+  could take. Claims follow the passes in turn, so a t0–t3 image that arrives at
+  a later pass waits behind at most the re-renders already queued: about the
+  target (300, about 40 minutes).
+- **Backlog.** Per tier, the named images still to render (not created yet,
+  pending, or in t4 ready but missing an identity), written to
+  `catalog_reconcile_state.render_backlog` after the pass commits, in a
+  transaction of its own (the lock order never takes the state row after an
+  asset or dirty row). `readCatalogRenderBacklog` reads it with the queued and
+  running base renders, for the pacing of increment 2. A write that fails (a
+  lost connection, the state row missing) never fails the committed pass: its
+  counts come back with `renderBacklogRecorded: false`, the worker still logs
+  its tombstoned and mismatched intents and its counts, adds one line
+  (`catalog sync render backlog not recorded`), and the next pass writes anew.
+- **Render grace (G = 72 h, R = 96 h).** For G hours after a prepared or
+  requested intent's lease passed, its images are still rendered: the render
+  plan counts them as referenced, and the sync names the members the mirror
+  stored while the intent was live (the CMS lists a lapsed intent without its
+  members) as t3. Only a prepared, requested or expired intent is in grace (a
+  cancelled, superseded or withdrawn one never is), only while the mirror
+  observes it live, and only while it is its document's latest intent: a newer
+  intent of the document ends the grace whatever its state. The sync names only
+  an intent of the current recipe policy; the render plan's `referenced` does
+  not check the policy (its port passes none, and the private processing
+  reference beside it does not check one either), so it only keeps a job that is
+  already queued rendering. It is rendering only; blob pins, approvals, release
+  requests and the publication fence still require an unexpired lease. The
+  sync's `referenced=` log count now includes the t3 members it names.
+  `G ≤ R − 24 h` is a named relation in community-postgres (it refuses to load
+  otherwise), and a unit test holds the App's R equal to CMS migration M2's.
+
+### One sync pass at 25k
+
+`catalog-render-queue.test.ts`'s 25k gate on PG18.4 and on PG16.15 (a disposable
+container, removed afterwards), single runs: the 25k fixture with the live
+intents' images rendered, 200 published images under an older recipe (50 of them
+with a failed re-render older than a day) and 5,000 failed renders of other
+subjects. The pass queued 150 re-renders and the 50 retries (`enqueued=200`) in
+1.1 s (PG16: 1.2 s); every statement it ran, planned as it ran (EXPLAIN ANALYZE,
+rolled back), with no JIT on either major. Costs and times are the same on both
+within a few percent (PG16 in parentheses where they differ):
+
+| Statement (App role)                                    | Cost   | Time          |
+| ------------------------------------------------------- | ------ | ------------- |
+| the grace members (t3), observed-live mirror rows       | 2,041  | 1.2 ms        |
+| the first uncreated images, in render order (limit + 1) | 139    | 29 ms         |
+| the queued base renders, against the target             | 6      | 0.0 ms        |
+| the pending images' jobs (t0–t3), ranked                | 2,847  | 5.3 ms        |
+| the re-renders' jobs (t4), ranked after them            | 9,727  | 192 ms        |
+| the failed re-renders queued again, ranked last         | 4,170  | 10 ms (12 ms) |
+| the backlog by tier                                     | 15,248 | 145 ms        |
+| the backlog write (its own transaction)                 | 1      | 0.1 ms        |
+
+The sync's other statements are unchanged from wave C (at most 11,844, or 11,332
+on PG16: the stored members' read).
+
+- **Which images miss an identity is one set-based read.** The assets holding a
+  ready rendition of every current identity (`current`, one aggregate of the
+  ready renditions per pass) replace the per-asset subquery of the old job
+  insert for every named asset. That subquery is priced per asset: as the
+  backlog count it cost 87,465 at 25k (162 ms), close to `jit_above_cost`
+  (100,000), and it grows with the Catalog toward `jit_optimize_above_cost`
+  (500,000); the set-based count costs 15,248.
+- **Anti-joins are hashed subplans (`NOT IN`).** Left-joined to `current`, the
+  re-render insert was planned for the few rows the aggregate is estimated at: a
+  nested loop over the materialized set, cost 5,949–6,617, which ran 16–21 s at
+  25k. `a.id NOT IN (SELECT … FROM current)` runs as one hashed subplan in about
+  190 ms whatever the estimate (with the left join back, the gate fails on its 2
+  s bound). The open-job check is one too: as `NOT EXISTS` it was a nested loop
+  over the materialized open jobs (101 ms with 5,300 of them, growing with jobs
+  × candidates); as `NOT IN`, 20 ms. Neither column is ever NULL.
