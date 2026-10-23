@@ -807,11 +807,13 @@ export const CATALOG_PUBLISHED_PAIRS_MAX = 10_000;
  * projection names now, read through the read-only Catalog connection (the
  * public read role) for a public read (catalog-scale-v1 1A). Both conditions
  * are restrictions on the view, never a join, so once the view is no longer
- * fenced (CMS migration M1) its (media_id, object_key) index can serve them;
- * until then each check is one filtered scan of the view, with no listing,
- * sort or ceiling. The answer may hold a published cross-product pair nobody
- * asked for; the exact-pair filter drops it. No order, no bound and no
- * community relation (the App is another database).
+ * fenced (CMS migration M1) its index on media_id alone
+ * (catalogs_media_media_id_lookup_idx) finds the requested media ids' rows
+ * and object_key filters those few; until then each check is one filtered
+ * scan of the view, with no listing, sort or ceiling. The answer may hold a
+ * published cross-product pair nobody asked for; the exact-pair filter drops
+ * it. No order, no bound and no community relation (the App is another
+ * database).
  */
 export const publishedCatalogPairsSql = `
   SELECT DISTINCT media_id, object_key

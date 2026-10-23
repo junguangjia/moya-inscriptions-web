@@ -21,16 +21,24 @@ import type {
 import type { ArticleListQuery } from "@moya/contracts";
 
 /*
- * catalog-scale-v1 S5: the Article Catalog resolver and the composite
- * editorial index keep their PR #320 joins and add one restriction on
- * `catalog_media` alone (the bound media ids; the cover ids gathered once).
- * On cloned Payload tables with the real published views, each statement a
- * reader sends is the frozen #320 text plus that one restriction, byte for
- * byte, and returns exactly the #320 rows (published, draft, withdrawn,
- * duplicate-media and missing rows; before and after the M1 view shape).
- * Before M1 a statement reads `catalogs_media` no more often than #320 did
- * (a LATERAL form read it once per pair or Article); after M1 it reads no
- * `catalogs_media` row by Seq Scan.
+ * catalog-scale-v1 S5. The Article Catalog resolver keeps its PR #320 join
+ * and adds one restriction on `catalog_media` alone (the bound media ids):
+ * its statement is the frozen #320 text plus that restriction, byte for byte.
+ * The composite editorial index counts its Article rows without the published
+ * media view, and cuts its page before it reads that view, once, for the
+ * page's covers only: its count names no media relation, and its page reads
+ * media only outside the cut. On cloned Payload tables with the real published
+ * views, every statement returns exactly the #320 rows (published, draft,
+ * withdrawn, duplicate-media and missing rows; the count and several pages of
+ * the index under each filter; with and without renditions; before and after
+ * the M1 view shape), wherever a record keeps the publishing contract's one
+ * representative image; one case pins the index's divergence where a record
+ * has two. Before M1 a statement reads `catalogs_media` no more often than
+ * #320 did (a LATERAL form read it once per pair or row), also for a news
+ * page the planner estimates at one row; after M1 it reads no
+ * `catalogs_media` row by Seq Scan, and an index page (the first or the one
+ * halfway, unfiltered or under news) reads at most its covers' images, as
+ * many at 768 index rows as at 96.
  *
  * Both readers name their relations `public.` (and the composite index and
  * the rendition join `community.`). This run's owned schema stands in for
@@ -144,11 +152,9 @@ const countSql320 = `SELECT COUNT(*)::text AS total FROM (${indexSql320(false)})
 const pageSql320 = (renditions: boolean) =>
   `SELECT * FROM (${indexSql320(renditions)}) a WHERE ($1::text IS NULL OR a.presentation=$1) ORDER BY a.published_at DESC,a.article_id DESC LIMIT $2::integer OFFSET $3::bigint`;
 
-// The one restriction S5 adds to each statement, as the readers write it.
+// The one restriction S5 adds to the resolver statement, as it is written.
 const pairRestriction = `
           AND cm.media_id=ANY($2::text[])`;
-const coverRestriction = `
-  AND cm.catalog_id=ANY(ARRAY(SELECT x.cover_catalog_id FROM public.article_entries x WHERE x.cover_catalog_id IS NOT NULL))`;
 
 /** The statement is the frozen #320 text plus exactly one S5 restriction. */
 const expectS5Form = (
@@ -159,6 +165,79 @@ const expectS5Form = (
   const parts = captured.sql.split(redirect(restriction));
   expect(parts).toHaveLength(2);
   expect(parts.join("")).toBe(redirect(frozen));
+};
+
+interface PlanNode {
+  readonly "Node Type": string;
+  readonly "Subplan Name"?: string;
+  readonly "Relation Name"?: string;
+  readonly "Actual Loops"?: number;
+  readonly "Actual Rows"?: number;
+  readonly "Rows Removed by Filter"?: number;
+  readonly "Shared Hit Blocks"?: number;
+  readonly "Shared Read Blocks"?: number;
+  readonly Plans?: readonly PlanNode[];
+}
+const nodes = (node: PlanNode): PlanNode[] => [
+  node,
+  ...(node.Plans ?? []).flatMap(nodes),
+];
+/** The plan's root node (EXPLAIN without ANALYZE runs nothing). */
+const planOf = async (
+  sql: string,
+  values: readonly unknown[],
+  options = "FORMAT JSON",
+): Promise<PlanNode> =>
+  (
+    await pool.query<{ "QUERY PLAN": { Plan: PlanNode }[] }>(
+      `EXPLAIN (${options}) ${sql}`,
+      [...values],
+    )
+  ).rows[0]!["QUERY PLAN"][0]!.Plan;
+// `catalogs_media` is the published media view's base table; the delivery
+// stand-in is the rendition join's relation.
+const mediaRelations: ReadonlySet<unknown> = new Set([
+  "catalogs_media",
+  "catalog_media_delivery",
+]);
+const mediaNodes = (root: PlanNode) =>
+  nodes(root).filter((node) => mediaRelations.has(node["Relation Name"]));
+
+/*
+ * The index statements' S5 shape. The count names no media relation and
+ * reads none. The page statement names the published media view once (and
+ * the rendition join once, with renditions), restricted by its own page's
+ * cover ids, and every media read in its plan lies outside its one Limit:
+ * the page is cut from the Article rows before any media is read. Every
+ * read of the view lies in its one materialized `cover` CTE, which runs at
+ * most once whatever the join above it.
+ */
+const expectIndexShape = async (
+  count: Recorded,
+  page: Recorded,
+  renditions: boolean,
+) => {
+  expect(count.sql).not.toMatch(/catalog_media/u);
+  expect(mediaNodes(await planOf(count.sql, count.values))).toEqual([]);
+  expect(page.sql.match(/\.catalog_media\s/gu)).toHaveLength(1);
+  expect(page.sql.match(/\.catalog_media_delivery\s/gu) ?? []).toHaveLength(
+    renditions ? 1 : 0,
+  );
+  expect(page.sql).toMatch(
+    /\bcm\.catalog_id=ANY\(ARRAY\(SELECT x\.cover_catalog_id FROM page x\b/u,
+  );
+  const plan = await planOf(page.sql, page.values);
+  const cuts = nodes(plan).filter((node) => node["Node Type"] === "Limit");
+  expect(cuts).toHaveLength(1);
+  expect(mediaNodes(cuts[0]!)).toEqual([]);
+  const viewReads = (root: PlanNode) =>
+    nodes(root).filter((node) => node["Relation Name"] === "catalogs_media");
+  const covers = nodes(plan).filter(
+    (node) => node["Subplan Name"] === "CTE cover",
+  );
+  expect(covers).toHaveLength(1);
+  expect(viewReads(plan)).not.toEqual([]);
+  expect(viewReads(covers[0]!)).toEqual(viewReads(plan));
 };
 
 /** Rows of the frozen #320 statement, run on the same data and values. */
@@ -325,8 +404,12 @@ const deliveryKey = (n: number) =>
 /*
  * Published records (1-3, 6, 7), a draft (4), a record withdrawn mid-test (5),
  * a media id repeated in one record with two object keys (1), one media id in
- * two records (2, 3), two representative images in one record (3), a record
- * with no representative image (6) and one with no image at all (7).
+ * two records (2, 3), a record with no representative image (6) and one with
+ * no image at all (7). No record has two representative images: the
+ * publishing contract gives a media set exactly one (editorialPublishSchema),
+ * and the index's equality with #320 rests on there being at most one (with
+ * none, as in 6, an Article keeps one NULL cover row either way). A record
+ * with two is made, and its divergence pinned, in a case of its own.
  */
 const seed = async () => {
   await clear();
@@ -357,7 +440,7 @@ const seed = async () => {
     objectKey("reads-media-shared", "-b"),
   );
   await insertMedia("row-c1", 3, 1, "reads-media-c1", true);
-  await insertMedia("row-c2", 3, 2, "reads-media-c2", true);
+  await insertMedia("row-c2", 3, 2, "reads-media-c2", false);
   await insertMedia(
     "row-c-shared",
     3,
@@ -453,8 +536,14 @@ const indexRead = async (
   const page = await compositeOf(renditions).listArticles(query);
   const count = statement(/COUNT\(\*\)/u);
   const rows = statement(/ORDER BY a\.published_at DESC/u);
-  expectS5Form(count, countSql320, coverRestriction);
-  expectS5Form(rows, pageSql320(renditions), coverRestriction);
+  await expectIndexShape(count, rows, renditions);
+  // The same values as #320 bound: the filter, then the page's size and offset.
+  expect(count.values).toEqual([query.presentation ?? null]);
+  expect(rows.values).toEqual([
+    query.presentation ?? null,
+    query.pageSize,
+    (query.page - 1) * query.pageSize,
+  ]);
   return {
     page,
     count,
@@ -526,26 +615,75 @@ const equalityCases = () =>
             )
             .map(({ media_id }) => media_id as string | null)
             .sort();
-        // The fixture reaches each cover case: two representative images
-        // (duplicate rows), a draft or empty or image-less cover (one NULL
-        // row), no cover, and a draft Article (absent).
-        expect(coverOf(2)).toEqual(["reads-media-c1", "reads-media-c2"]);
+        // The fixture reaches each cover case: a representative image (one
+        // row; record 3's other image is not representative), a draft or
+        // empty or image-less cover (one NULL row), no cover, and a draft
+        // Article (absent).
+        expect(coverOf(2)).toEqual(["reads-media-c1"]);
+        expect(coverOf(10)).toEqual(["reads-media-c1"]);
         for (const id of [3, 4, 5, 9]) expect(coverOf(id)).toEqual([null]);
         expect(coverOf(6)).toEqual([]);
         expect(rows.rows.some(({ source }) => source === "authored")).toBe(
           true,
         );
       });
+
+      it(`pages and counts the composite index past its first page exactly as #320 did (${variant})`, async () => {
+        // Ten index rows (eight academic, two news) in pages of three, up to
+        // an empty page past the end of each filter.
+        const sizes: Record<string, number[]> = {};
+        for (const presentation of [undefined, "academic", "news"] as const)
+          for (const page of [1, 2, 3, 4, 5]) {
+            const read = await indexRead(renditions, {
+              page,
+              pageSize: 3,
+              ...(presentation === undefined ? {} : { presentation }),
+            });
+            expectSameRows(read.count.rows, read.originalCount, ["total"]);
+            expectSameRows(read.rows.rows, read.originalRows, [
+              "published_at",
+              "article_id",
+            ]);
+            expect(read.page.total).toBe(Number(read.originalCount[0]!.total));
+            (sizes[presentation ?? "all"] ??= []).push(read.rows.rows.length);
+          }
+        expect(sizes).toEqual({
+          all: [3, 3, 3, 1, 0],
+          academic: [3, 3, 2, 0, 0],
+          news: [2, 0, 0, 0, 0],
+        });
+      });
     }
 
-    it("pages the composite index past its first page exactly as #320 did", async () => {
+    it("keeps both cover rows of an Article on its page when a record has two representative images", async () => {
+      // Outside the publishing contract: record 3 (the cover of Articles 2
+      // and 10) gets a second representative image. #320 counted and paged
+      // the joined rows; S5 counts and pages Articles, so each of the two
+      // Articles counts once and keeps both its cover rows on its page. The
+      // pages together still hold exactly #320's rows, in #320's order.
+      await pool.query(
+        "UPDATE catalogs_media SET is_representative = true WHERE id = 'row-c2'",
+      );
+      const whole = await indexRead(false);
+      expect(whole.originalCount).toEqual([{ total: "12" }]);
+      expect(whole.count.rows).toEqual([{ total: "10" }]);
+      expect(whole.page.total).toBe(10);
+      expectSameRows(whole.rows.rows, whole.originalRows, [
+        "published_at",
+        "article_id",
+      ]);
+      const paged: Row[] = [];
+      const articles: number[] = [];
       for (const page of [1, 2, 3]) {
-        const read = await indexRead(true, { page, pageSize: 4 });
-        expectSameRows(read.rows.rows, read.originalRows, [
-          "published_at",
-          "article_id",
-        ]);
+        const { rows } = await indexRead(false, { page, pageSize: 4 });
+        articles.push(
+          new Set(rows.rows.map(({ article_id }) => article_id)).size,
+        );
+        paged.push(...rows.rows);
       }
+      expect(articles).toEqual([4, 4, 2]);
+      expect(paged).toHaveLength(12);
+      expectSameRows(paged, whole.originalRows, ["published_at", "article_id"]);
     });
 
     it("drops a withdrawn record from both reads on the next request, as #320 does", async () => {
@@ -576,43 +714,96 @@ const equalityCases = () =>
     });
   });
 
-interface PlanNode {
-  readonly "Node Type": string;
-  readonly "Relation Name"?: string;
-  readonly "Actual Loops"?: number;
-  readonly Plans?: readonly PlanNode[];
-}
-const nodes = (node: PlanNode): PlanNode[] => [
-  node,
-  ...(node.Plans ?? []).flatMap(nodes),
-];
 /** The executed plan's nodes on `catalogs_media` (EXPLAIN ANALYZE; a read). */
-const mediaScans = async (sql: string, values: readonly unknown[]) => {
-  const plan = await pool.query<{ "QUERY PLAN": { Plan: PlanNode }[] }>(
-    `EXPLAIN (ANALYZE, TIMING OFF, FORMAT JSON) ${sql}`,
-    [...values],
-  );
-  return nodes(plan.rows[0]!["QUERY PLAN"][0]!.Plan).filter(
-    (node) => node["Relation Name"] === "catalogs_media",
-  );
-};
+const mediaScans = async (
+  sql: string,
+  values: readonly unknown[],
+): Promise<PlanNode[]> =>
+  nodes(
+    await planOf(sql, values, "ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON"),
+  ).filter((node) => node["Relation Name"] === "catalogs_media");
 const loops = (scans: readonly PlanNode[]) =>
   scans.reduce((sum, node) => sum + (node["Actual Loops"] ?? 0), 0);
 const seqScans = (scans: readonly PlanNode[]) =>
   scans.filter((node) => node["Node Type"].endsWith("Seq Scan"));
+/*
+ * What those scans read: rows (returned and filtered out; EXPLAIN gives both
+ * per loop) and shared buffers (hit or read; a scan node's are its own).
+ */
+const mediaRead = (scans: readonly PlanNode[]) => ({
+  rows: scans.reduce(
+    (sum, node) =>
+      sum +
+      Math.round(
+        ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) *
+          (node["Actual Loops"] ?? 0),
+      ),
+    0,
+  ),
+  buffers: scans.reduce(
+    (sum, node) =>
+      sum +
+      (node["Shared Hit Blocks"] ?? 0) +
+      (node["Shared Read Blocks"] ?? 0),
+    0,
+  ),
+});
+
+/*
+ * `blocks` × 24 published index rows, newest first an hour apart, alike in
+ * every block of 24 slots: slots 7 and 19 are authored Articles (academic,
+ * no cover); the other slots are staff Articles, news on even slots and
+ * academic on odd ones; slot 3 has no cover, slots 5 and 10 a draft record's
+ * (record 30), and every other staff Article a published record of its own
+ * (3 × slot + 1, never a multiple of 30), so the cover records grow with the
+ * Articles. An index page of 24 at a multiple of 24 is one block unfiltered
+ * and two blocks' news Articles under `news`: the same make-up at any size.
+ */
+const scaleArticles = async (blocks: number) => {
+  await pool.query("DELETE FROM articles");
+  await pool.query("DELETE FROM published_authored_articles");
+  await pool.query(
+    `INSERT INTO articles
+       (id, article_id, presentation, title, byline, cover_catalog_id,
+        first_published_at, published_at, updated_at, _status)
+     SELECT n, 'article-' || lpad(to_hex(n), 32, '0'),
+       (CASE WHEN n % 2 = 0 THEN 'news' ELSE 'academic' END)::enum_articles_presentation,
+       '合成文章' || n, '合成编辑室',
+       CASE n % 24 WHEN 3 THEN NULL WHEN 5 THEN 30 WHEN 10 THEN 30 ELSE 3 * n + 1 END,
+       now() - n * interval '1 hour', now() - n * interval '1 hour', now(),
+       'published'
+     FROM generate_series(1, $1::integer) AS n
+     WHERE n % 24 NOT IN (7, 19)`,
+    [blocks * 24],
+  );
+  await pool.query(
+    `INSERT INTO published_authored_articles
+       (article_id, owner_id, version, title, fingerprint, byline,
+        first_published_at, published_at, updated_at)
+     SELECT 'article-' || lpad(to_hex(n), 32, '0'), 'user-scale', 1,
+       '合成作者文章' || n, repeat('f', 64), '合成作者',
+       now() - n * interval '1 hour', now() - n * interval '1 hour', now()
+     FROM generate_series(1, $1::integer) AS n
+     WHERE n % 24 IN (7, 19)`,
+    [blocks * 24],
+  );
+  await pool.query("ANALYZE articles, published_authored_articles");
+};
 
 /*
  * The plan of each statement on about 20,000 images. On the fenced #320 view
  * a statement reads `catalogs_media` no more often than the frozen #320
- * statement (one pass); after M1 it reads no `catalogs_media` row by Seq
- * Scan, while the #320 statement still does.
+ * statement (one pass), and the index count not at all; after M1 it reads no
+ * `catalogs_media` row by Seq Scan, while the #320 statement still does, and
+ * an index page (the first or the one halfway, unfiltered or under news)
+ * reads at most its covers' images, as many at 768 index rows as at 96.
  */
 const planCases = (phase: "fenced" | "M1") =>
   describe("plans at about 20,000 images", () => {
     beforeAll(async () => {
       await clear();
       // 3,000 records (every 30th a draft) × 7 images = 21,000 media rows,
-      // and 50 Articles with covers, as R7 sizes the Payload clone.
+      // as R7 sizes the Payload clone; each case sets its own Articles.
       await pool.query(
         `INSERT INTO catalogs (id, catalog_id, source_id, kind, title, _status)
          SELECT n, 'scale-catalog-' || n, 'scale-source-' || n, 'inscription',
@@ -628,17 +819,12 @@ const planCases = (phase: "fenced" | "M1") =>
            '合成图片', k - 1, k = 1
          FROM generate_series(1, 3000) AS c CROSS JOIN generate_series(1, 7) AS k`,
       );
+      await scaleArticles(4);
+      // Vacuumed now, so that no autovacuum of the records changes their
+      // plans between two reads compared below.
+      await pool.query("VACUUM (ANALYZE) catalogs, catalogs_media");
       await pool.query(
-        `INSERT INTO articles
-           (id, article_id, presentation, title, byline, cover_catalog_id,
-            first_published_at, published_at, updated_at, _status)
-         SELECT n, 'article-' || lpad(to_hex(n), 32, '0'), 'academic', '合成文章' || n,
-           '合成编辑室', n * 37, now() - n * interval '1 hour',
-           now() - n * interval '1 hour', now(), 'published'
-         FROM generate_series(1, 50) AS n`,
-      );
-      await pool.query(
-        "ANALYZE catalogs, catalogs_media, articles, published_authored_articles, catalog_media_delivery",
+        "ANALYZE articles, published_authored_articles, catalog_media_delivery",
       );
     }, 60_000);
 
@@ -662,6 +848,39 @@ const planCases = (phase: "fenced" | "M1") =>
         expect(seqScans(scans320)).not.toEqual([]);
       }
     };
+
+    /** A full index page of 24 over `blocks` blocks, with #320's rows. */
+    const scaledIndexRead = async (
+      renditions: boolean,
+      blocks: number,
+      query: Pick<ArticleListQuery, "page" | "presentation">,
+    ) => {
+      const read = await indexRead(renditions, { ...query, pageSize: 24 });
+      // A block is 24 index rows, 12 of them news.
+      expect(read.page.total).toBe(
+        blocks * (query.presentation === "news" ? 12 : 24),
+      );
+      expect(read.rows.rows).toHaveLength(24);
+      expectSameRows(read.count.rows, read.originalCount, ["total"]);
+      expectSameRows(read.rows.rows, read.originalRows, [
+        "published_at",
+        "article_id",
+      ]);
+      return read;
+    };
+
+    /*
+     * The first page and the one halfway through the index, unfiltered and
+     * under news. The planner estimates a news page at about one row (the
+     * filter is on the view's text cast of the column).
+     */
+    const pagesOf = (blocks: number) =>
+      [
+        { page: 1 },
+        { page: blocks / 2 + 1 },
+        { page: 1, presentation: "news" },
+        { page: blocks / 4 + 1, presentation: "news" },
+      ] as const;
 
     for (const renditions of [false, true]) {
       const variant = renditions ? "with renditions" : "without renditions";
@@ -687,12 +906,59 @@ const planCases = (phase: "fenced" | "M1") =>
         }
       });
 
-      it(`reads catalogs_media for the index covers (${phase}, ${variant})`, async () => {
-        const read = await indexRead(renditions, { page: 1, pageSize: 24 });
-        expect(read.page.total).toBe(50);
-        await expectPlan(read.count, read.frozenCount, read.count.values);
-        await expectPlan(read.rows, read.frozenRows, read.rows.values);
+      it(`reads catalogs_media for the index page's covers only (${phase}, ${variant})`, async () => {
+        await scaleArticles(4);
+        for (const query of pagesOf(4)) {
+          const read = await scaledIndexRead(renditions, 4, query);
+          // The count reads no media; the #320 count read the view.
+          expect(await mediaScans(read.count.sql, read.count.values)).toEqual(
+            [],
+          );
+          expect(
+            loops(
+              await mediaScans(redirect(read.frozenCount), read.count.values),
+            ),
+          ).toBeGreaterThan(0);
+          await expectPlan(read.rows, read.frozenRows, read.rows.values);
+        }
       });
+
+      if (phase === "M1")
+        it(`reads no more catalogs_media for an index page at 768 index rows than at 96 (${variant})`, async () => {
+          // Eight times the Articles and their cover records. The first pages
+          // hold the newest Articles, the same at both sizes; the pages
+          // halfway hold other Articles of the same make-up.
+          const reads: ReturnType<typeof mediaRead>[][] = [];
+          for (const blocks of [4, 32]) {
+            await scaleArticles(blocks);
+            const atSize: ReturnType<typeof mediaRead>[] = [];
+            for (const query of pagesOf(blocks)) {
+              const read = await scaledIndexRead(renditions, blocks, query);
+              expect(read.count.sql).not.toMatch(/catalog_media/u);
+              const scans = await mediaScans(read.rows.sql, read.rows.values);
+              expect(seqScans(scans)).toEqual([]);
+              atSize.push(mediaRead(scans));
+            }
+            reads.push(atSize);
+          }
+          const [small, large] = reads as [
+            ReturnType<typeof mediaRead>[],
+            ReturnType<typeof mediaRead>[],
+          ];
+          for (const [index, read] of small.entries()) {
+            // Bounded by the page: at most its 24 cover records' 7 images
+            // each, once.
+            expect(read.rows).toBeGreaterThan(0);
+            expect(read.rows).toBeLessThanOrEqual(24 * 7);
+            expect(large[index]!.rows).toBe(read.rows);
+            expect(read.buffers).toBeGreaterThan(0);
+          }
+          // The same first pages read no more buffers at 768 than at 96.
+          for (const index of [0, 2])
+            expect(large[index]!.buffers).toBeLessThanOrEqual(
+              small[index]!.buffers,
+            );
+        });
     }
   });
 
