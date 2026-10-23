@@ -12,6 +12,8 @@ import {
   operatorFeaturedQuerySchema,
   operatorUsersQuerySchema,
   operatorUserPageSchema,
+  operatorFeedbackQuerySchema,
+  operatorFeedbackPageSchema,
   recommendUserCommandSchema,
   adminModerateWorkRequestSchema,
   featuredMutationSchema,
@@ -206,6 +208,14 @@ export type CommunityOperation = (
 export const communityOperations = (
   call: OperatorCall,
 ): Readonly<Record<string, CommunityOperation>> => ({
+  "read-feedback": async (_req, input) =>
+    checked(
+      operatorFeedbackPageSchema,
+      await call(
+        "GET",
+        `feedback${toQuery(parse(operatorFeedbackQuerySchema, input))}`,
+      ),
+    ),
   "read-works": async (_req, input) =>
     call("GET", `works${toQuery(parse(operatorWorksQuerySchema, input))}`),
   "read-users": async (_req, input) =>

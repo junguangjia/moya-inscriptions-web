@@ -482,3 +482,6 @@ export type {
   AnalyticsDelivery,
   AnalyticsWriteContext,
 } from "./modules/analytics/analytics-port.js";
+
+export { FeedbackService } from "./modules/community/application/services/feedback-service.js";
+export type { FeedbackPort } from "./modules/community/application/ports/feedback-port.js";

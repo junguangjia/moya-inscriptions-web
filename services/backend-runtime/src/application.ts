@@ -31,6 +31,7 @@ import {
   EditorialContentReadService,
   PublishingOperatorService,
   ThreadService,
+  FeedbackService,
   PublishingTransferRegistry,
   WorkPublishingService,
 } from "@moya/api";
@@ -55,6 +56,7 @@ import type {
   DirectMessagePort,
   EditorialContentReadPort,
   ThreadPort,
+  FeedbackPort,
   PublishingMediaProcessorPort,
   PublishingMediaStorePort,
   PublishingOperatorPort,
@@ -148,6 +150,8 @@ export interface BackendApplicationOptions {
   readonly editorialContentPort?: EditorialContentReadPort;
   /** Threads over Works. */
   readonly threadPort?: ThreadPort;
+  /** Private settings feedback. */
+  readonly feedbackPort?: FeedbackPort;
   /** Direct messages. */
   readonly directMessagePort?: DirectMessagePort;
   /** Injected clock for publishing commands; defaults to the system clock. */
@@ -263,6 +267,10 @@ const resolveCommunity = (
     options.threadPort !== undefined
       ? new ThreadService(options.threadPort)
       : undefined;
+  const feedbackService =
+    options.feedbackPort === undefined
+      ? undefined
+      : new FeedbackService(options.feedbackPort);
   const directMessageService =
     options.directMessagePort !== undefined
       ? new DirectMessageService(options.directMessagePort)
@@ -352,6 +360,7 @@ const resolveCommunity = (
         }
       : {}),
     ...(threadService === undefined ? {} : { threadService }),
+    ...(feedbackService === undefined ? {} : { feedbackService }),
     ...(directMessageService === undefined ? {} : { directMessageService }),
     // Publishing reuses the existing services and their access checks.
     ...publishing,

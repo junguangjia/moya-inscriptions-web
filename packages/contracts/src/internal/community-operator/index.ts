@@ -341,3 +341,14 @@ export type {
   ArticlePendingPreview,
   ArticlePendingMediaQuery,
 } from "./article-operator-schemas.ts";
+
+export {
+  operatorFeedbackQuerySchema,
+  operatorFeedbackSchema,
+  operatorFeedbackPageSchema,
+} from "./feedback-schemas.js";
+export type {
+  OperatorFeedbackQuery,
+  OperatorFeedback,
+  OperatorFeedbackPage,
+} from "./feedback-schemas.js";

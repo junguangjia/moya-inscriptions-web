@@ -1995,3 +1995,16 @@ export {
   articleConnectionRevocationSchema,
   articleConsentDecisionSchema,
 } from "./article-delegation.ts";
+
+// settings-feedback-v1: only a submission command and saved receipt are public.
+export const feedbackIdSchema = z.string().regex(/^feedback-[0-9a-f]{32}$/u);
+export const submitFeedbackRequestSchema = z.strictObject({
+  submissionId: z.uuid(),
+  message: z.string().trim().min(1).max(5000),
+});
+export type SubmitFeedbackRequest = z.infer<typeof submitFeedbackRequestSchema>;
+export const feedbackReceiptSchema = z.strictObject({
+  id: feedbackIdSchema,
+  createdAt: z.iso.datetime(),
+});
+export type FeedbackReceipt = z.infer<typeof feedbackReceiptSchema>;

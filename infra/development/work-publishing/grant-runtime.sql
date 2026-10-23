@@ -514,3 +514,15 @@ BEGIN
     'GRANT UPDATE (sweep_cursor, policy_digest, public_count, public_sum, public_observed_at, private_count, private_sum, private_observed_at, render_backlog, render_backlog_at, updated_at) ON TABLE community.catalog_reconcile_state TO %I',
     current_setting('moya.runtime_app_role'));
 END $$;
+
+-- Private feedback submissions and Owner reads; feedback is append-only.
+-- Historical upgrade fixtures can precede this table; real Backend startup
+-- still requires the current migration ledger before serving any request.
+DO $$
+BEGIN
+  IF to_regclass('community.feedback') IS NOT NULL THEN
+    EXECUTE format(
+      'GRANT SELECT, INSERT ON TABLE community.feedback TO %I',
+      current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;

@@ -43,6 +43,8 @@ import {
   authPasswordResetRequestSchema,
   authPasswordResetResultSchema,
   healthResponseSchema,
+  submitFeedbackRequestSchema,
+  feedbackReceiptSchema,
   productAccessSchema,
   mediaIdSchema,
   noQueryTransportSchema,
@@ -476,4 +478,9 @@ export const workPublishingJsonSchemas = {
   WorkVisibilityCommand: toJsonSchema(workVisibilityCommandSchema),
   WorkVisibilityResult: toJsonSchema(workVisibilityResultSchema),
   PublishingLimits: toJsonSchema(publishingLimitsSchema),
+};
+
+export const feedbackJsonSchemas = {
+  SubmitFeedbackRequest: toJsonSchema(submitFeedbackRequestSchema),
+  FeedbackReceipt: toJsonSchema(feedbackReceiptSchema),
 };

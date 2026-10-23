@@ -371,3 +371,27 @@ button.row {
     transform: none;
   }
 }
+
+.feedbackForm {
+  display: grid;
+}
+.feedbackLabel {
+  font-weight: 600;
+}
+.feedbackForm textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 12rem;
+  resize: vertical;
+  padding: var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-page);
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  font-size: max(16px, var(--yoyi-type-body-size));
+}
+.feedbackForm textarea:focus-visible {
+  outline: 2px solid var(--yoyi-color-seal-red);
+  outline-offset: 2px;
+}

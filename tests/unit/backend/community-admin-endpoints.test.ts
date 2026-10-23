@@ -2165,3 +2165,77 @@ describe("Agent administration Owner envelopes (Development)", () => {
     ).toBe(false);
   });
 });
+
+describe("Owner feedback read boundary", () => {
+  const feedbackPage = {
+    items: [
+      {
+        id: "feedback-" + "a".repeat(32),
+        message: "设置中的反馈正文",
+        user: { id: userId, displayName: "测试用户" },
+        createdAt: "2026-10-23T12:00:00.000Z",
+      },
+    ],
+    total: 21,
+    page: 2,
+    pageSize: 20,
+  };
+
+  it.each(["development", "production"])(
+    "forwards only validated pagination and contract-checks the answer in %s",
+    async (nodeEnv) => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      try {
+        const call = vi.fn(async () => feedbackPage) as unknown as OperatorCall;
+        const endpoints = createCommunityEndpoints(call);
+        expect(
+          await invoke(
+            endpoints,
+            "read-feedback",
+            request({ page: 2, pageSize: 20 }),
+          ),
+        ).toEqual({
+          status: 200,
+          body: { ok: true, result: feedbackPage },
+        });
+        expect(call).toHaveBeenCalledWith("GET", "feedback?page=2&pageSize=20");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("refuses non-Owners and extra query fields before reading any feedback", async () => {
+    const { call, calls } = recorder();
+    const endpoints = createCommunityEndpoints(call);
+    for (const role of [null, "automation"] as const)
+      expect(
+        (await invoke(endpoints, "read-feedback", request({}, role))).status,
+      ).toBe(403);
+    for (const input of [
+      { page: 0 },
+      { pageSize: 51 },
+      { userId },
+      { search: "测试" },
+    ])
+      expect(
+        (await invoke(endpoints, "read-feedback", request(input))).status,
+      ).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
+  it("does not expose or log an answer outside the feedback contract", async () => {
+    const call = vi.fn(async () => ({
+      ...feedbackPage,
+      privateField: "unexpected content",
+    })) as unknown as OperatorCall;
+    const req = request({ page: 1, pageSize: 20 });
+    expect(
+      await invoke(createCommunityEndpoints(call), "read-feedback", req),
+    ).toEqual({
+      status: 502,
+      body: { ok: false, error: { code: "OPERATOR_RESPONSE_INVALID" } },
+    });
+    expect(req.payload.logger.error).not.toHaveBeenCalled();
+  });
+});
