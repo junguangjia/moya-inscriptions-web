@@ -6,13 +6,17 @@ import {
   openProductionPublishingStore,
 } from "@moya/backend-production/internal/publishing-config";
 import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
+import { CATALOG_SYNC_MAX_SOURCES } from "@moya/backend-production/internal/publishing-catalog";
+import { CatalogQueryUnavailableError } from "@moya/api";
 import {
   createBackendApplication,
   startBackendProcess,
 } from "@moya/backend-runtime";
 import {
   assertPostgresStartupReady,
+  CanonicalAuthoredArticleProjector,
   createPostgresPool,
+  PostgresAuthoredArticleCatalogMediaResolver,
 } from "@moya/catalog-postgres";
 import {
   PostgresAuthorCommunityAdapter,
@@ -21,14 +25,22 @@ import {
   PostgresMediaPublicationAdapter,
 } from "@moya/community-postgres";
 import {
+  apiErrorSchema,
+  articleAuthoringDocumentSchema,
   catalogDetailSchema,
   catalogPageSchema,
 } from "@moya/contracts/schemas";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BackendProcessHandle } from "@moya/backend-runtime";
-import type { CatalogDetailProjection } from "@moya/api";
-import type { CatalogId, MediaId } from "@moya/contracts";
+import type {
+  ArticleDetailRecord,
+  AuthorCommunityPort,
+  CatalogDetailProjection,
+  EditorialContentReadPort,
+  PublishedAuthoredArticle,
+} from "@moya/api";
+import type { ArticleId, CatalogId, MediaId } from "@moya/contracts";
 
 const productionStore = vi.hoisted(() => ({
   writeStream: vi.fn(),
@@ -457,6 +469,264 @@ describe("non-Pilot production public media composition", () => {
     );
     expect(list.items).toEqual([]);
     expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  // catalog-delivery-release-hardening-v1 (F9): the composed rendition-fact
+  // lookup reads the live CMS listing and the App delivery facts. Its failure
+  // is Catalog unavailability for every reader that shares it (Catalog,
+  // editorial Article and Collection, authored Article bodies, author cards):
+  // the documented 503, never a 500 INTERNAL_ERROR.
+  it("answers 503 for Catalog, editorial and authored Article reads when the rendition facts fail", async () => {
+    const pools = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareProductionBackend(environment);
+    const [application] = vi
+      .mocked(createBackendApplication)
+      .mock.calls.at(-1)!;
+    type QueryMock = ReturnType<
+      typeof vi.fn<(sql: string) => Promise<{ rows: readonly unknown[] }>>
+    >;
+    const created = vi
+      .mocked(createPostgresPool)
+      .mock.calls.slice(pools)
+      .map(([config], index) => ({
+        config,
+        pool: vi.mocked(createPostgresPool).mock.results[pools + index]!
+          .value as { query: QueryMock },
+      }));
+    const cmsPool = created.find(
+      ({ config }) => config.connectionString === environment.DATABASE_URL,
+    )!.pool;
+    const appPool = created.find(
+      ({ config }) => config.connectionString === environment.APP_DATABASE_URL,
+    )!.pool;
+    const resolver = application.storageUrlResolver!;
+    expect(resolver.catalogFacts).toBeDefined();
+    const source = {
+      media_id: "media-unit-published",
+      object_key: database.mediaKey,
+      width: 1200,
+      height: 800,
+    };
+    const unreadable = Object.assign(
+      new Error("synthetic private relation denied"),
+      { code: "42501" },
+    );
+    const terminated = Object.assign(
+      new Error("synthetic private connection terminated"),
+      { code: "57P01" },
+    );
+    const failures = [
+      {
+        name: "CMS listing refused",
+        cause: unreadable,
+        arm() {
+          cmsPool.query.mockImplementation(async (sql) => {
+            if (sql.includes("FROM catalog_media")) throw unreadable;
+            return { rows: [] };
+          });
+        },
+      },
+      {
+        name: "CMS listing incomplete",
+        cause: undefined,
+        arm() {
+          cmsPool.query.mockImplementation(async (sql) => ({
+            rows: sql.includes("FROM catalog_media")
+              ? Array.from({ length: CATALOG_SYNC_MAX_SOURCES + 1 }, () => ({
+                  ...source,
+                }))
+              : [],
+          }));
+        },
+      },
+      {
+        name: "App delivery facts unavailable",
+        cause: terminated,
+        arm() {
+          cmsPool.query.mockImplementation(async (sql) => ({
+            rows: sql.includes("FROM catalog_media") ? [source] : [],
+          }));
+          appPool.query.mockImplementation(async (sql) => {
+            if (sql.includes("community.catalog_media_assets"))
+              throw terminated;
+            return { rows: [] };
+          });
+        },
+      },
+    ];
+
+    // Published Article reads over the same composed resolver: a staff
+    // Article with a Catalog cover and an authored Article whose body cites
+    // a Catalog image (the authored projection and its exact-pair resolver).
+    const articleId = `article-${"a".repeat(32)}` as ArticleId;
+    const authoredId = `article-${"5".repeat(32)}` as ArticleId;
+    const cover = {
+      id: "media-unit-published" as MediaId,
+      objectKey: database.mediaKey,
+      alt: "Synthetic cover",
+      width: 1200,
+      height: 800,
+    };
+    const staffArticle: ArticleDetailRecord = {
+      id: articleId,
+      presentation: "academic",
+      title: "Synthetic Article",
+      subtitle: null,
+      summary: null,
+      section: null,
+      issue: null,
+      byline: "Synthetic desk",
+      cover,
+      firstPublishedAt: "2026-10-20T00:00:00.000Z",
+      publishedAt: "2026-10-20T00:00:00.000Z",
+      updatedAt: "2026-10-20T00:00:00.000Z",
+      intro: null,
+      sections: [],
+      citations: [],
+    };
+    const authoredCatalogId = `catalog-${"3".repeat(32)}`;
+    const authoredMediaId = `media-${"4".repeat(32)}`;
+    const authored: PublishedAuthoredArticle = {
+      id: authoredId as PublishedAuthoredArticle["id"],
+      ownerId: `user-${"6".repeat(32)}` as PublishedAuthoredArticle["ownerId"],
+      version: 1,
+      title: "Synthetic authored Article",
+      coverRefId: null,
+      document: articleAuthoringDocumentSchema.parse({
+        format: "blocknote",
+        version: 1,
+        blocks: [
+          {
+            id: "body-image",
+            type: "managedImage",
+            props: { refId: "body", caption: "", alt: "" },
+            children: [],
+          },
+        ],
+        references: {
+          body: {
+            type: "catalog",
+            catalogId: authoredCatalogId,
+            mediaId: authoredMediaId,
+          },
+        },
+        galleries: {},
+      }),
+      fingerprint: "a".repeat(64),
+      byline: "Synthetic author",
+      firstPublishedAt: "2026-10-20T00:00:00.000Z",
+      publishedAt: "2026-10-20T00:00:00.000Z",
+      updatedAt: "2026-10-20T00:00:00.000Z",
+    };
+    // The exact-pair CMS read of the authored reference answers its row.
+    const pairPool = {
+      connect: async () => ({
+        query: async (sql: string) => ({
+          rows: sql.includes("jsonb_to_recordset")
+            ? [
+                {
+                  catalog_id: authoredCatalogId,
+                  media_id: authoredMediaId,
+                  position: 0,
+                  is_representative: true,
+                  kind: "image",
+                  alt_text: "Synthetic body image",
+                  width: 1200,
+                  height: 800,
+                  object_key: database.mediaKey,
+                },
+              ]
+            : [],
+        }),
+        release: () => undefined,
+      }),
+    } as unknown as ConstructorParameters<
+      typeof PostgresAuthoredArticleCatalogMediaResolver
+    >[0];
+    const pairs = new PostgresAuthoredArticleCatalogMediaResolver(
+      pairPool,
+      resolver,
+    );
+    const projector = new CanonicalAuthoredArticleProjector({
+      resolveManaged: async () => new Map(),
+      resolveCatalog: (requested) => pairs.resolveCatalog(requested),
+    });
+    const editorialPort: EditorialContentReadPort = {
+      listArticles: async (query) => ({
+        items: [staffArticle],
+        total: 1,
+        page: query.page,
+        pageSize: query.pageSize,
+      }),
+      findArticle: async (id) =>
+        id === articleId
+          ? staffArticle
+          : id === authoredId
+            ? projector.detail(authored)
+            : null,
+      isArticlePublished: async (id) => id === articleId || id === authoredId,
+      listCollections: async (query) => ({
+        items: [],
+        total: 0,
+        page: query.page,
+        pageSize: query.pageSize,
+      }),
+      findCollection: async () => null,
+    };
+    const listen = { host: "127.0.0.1", port: 0 };
+    const catalogHandle = await startBackendProcess({
+      closeResources: prepared.closeResources,
+      listen,
+      requestListener: prepared.requestListener,
+    });
+    handles.add(catalogHandle);
+    const editorialHandle = await startBackendProcess({
+      listen,
+      requestListener: createBackendApplication({
+        nodeEnv: "production",
+        catalogQueryPort: application.catalogQueryPort!,
+        communityIdentityPort: application.communityIdentityPort!,
+        // Editorial reads never touch the author port; the branch only needs it.
+        authorCommunityPort: {} as unknown as AuthorCommunityPort,
+        storageUrlResolver: resolver,
+        editorialContentPort: editorialPort,
+      }),
+    });
+    handles.add(editorialHandle);
+    const origin = (handle: BackendProcessHandle) =>
+      `http://${handle.address.address}:${handle.address.port}`;
+    const editorial = `${origin(editorialHandle)}/v1/community/editorial`;
+    const reads = [
+      `${origin(catalogHandle)}/v1/catalog`,
+      `${origin(catalogHandle)}/v1/catalog/catalog-unit-published`,
+      `${editorial}/articles`,
+      `${editorial}/articles/${articleId}`,
+      `${editorial}/articles/${authoredId}`,
+    ];
+
+    for (const failure of failures) {
+      failure.arm();
+      const error = await resolver.catalogFacts!([
+        {
+          mediaId: "media-unit-published" as MediaId,
+          objectKey: database.mediaKey,
+        },
+      ]).then(
+        () => undefined,
+        (rejected: unknown) => rejected,
+      );
+      expect(error, failure.name).toBeInstanceOf(CatalogQueryUnavailableError);
+      if (failure.cause !== undefined)
+        expect((error as Error).cause, failure.name).toBe(failure.cause);
+      for (const url of reads) {
+        const response = await fetch(url);
+        expect(response.status, `${failure.name}: ${url}`).toBe(503);
+        const body = apiErrorSchema.parse(await response.json());
+        expect(body.error.code).toBe("SERVICE_UNAVAILABLE");
+        expect(JSON.stringify(body)).not.toContain("private");
+        expect(JSON.stringify(body)).not.toContain("incomplete");
+      }
+    }
   });
 });
 
@@ -1048,10 +1318,13 @@ describe("Work publishing composition", () => {
       expect(appPool).toBeDefined();
       expect(appPool).not.toBe(catalogPool);
       expect(assertPostgresStartupReady).toHaveBeenCalledTimes(1);
+      // Discovery reads `public.catalog_discovery` through this public read
+      // pool, so startup checks its grant there (catalog-delivery-release-
+      // hardening-v1 N1).
       expect(assertPostgresStartupReady).toHaveBeenCalledWith(
         catalogPool,
         "payload",
-        { renditions: false },
+        { renditions: false, discovery: true },
       );
       // CMS supplies live public metadata; only the independent App pool may
       // inspect its delivery view. Swapping the two pools must fail this test.

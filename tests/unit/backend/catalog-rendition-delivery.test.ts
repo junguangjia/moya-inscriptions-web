@@ -954,3 +954,77 @@ describe("startup check of the delivery view grant", () => {
     ).rejects.toThrow(/^PostgreSQL startup validation failed$/);
   });
 });
+
+/*
+ * catalog-delivery-release-hardening-v1 (N1): since #312 the Backend's
+ * discovery reads `public.catalog_discovery` through the public read role, so
+ * a missing view or SELECT grant must stop startup with a clear message
+ * instead of failing every browse, collection and card read with 42501.
+ */
+describe("startup check of the discovery view grant", () => {
+  const probeSql = "SELECT 1 FROM public.catalog_discovery LIMIT 0";
+  /** A Payload-ready read connection whose discovery probe fails with `code`. */
+  const discoveryPool = (probe: string | null) => {
+    const statements: string[] = [];
+    const query = async (sql: string) => {
+      statements.push(sql);
+      if (sql.includes("catalog_discovery")) {
+        if (probe !== null)
+          throw Object.assign(new Error("synthetic probe failure"), {
+            code: probe,
+          });
+        return { rows: [] };
+      }
+      if (sql.includes("SHOW server_version_num"))
+        return { rows: [{ server_version_num: "160004" }] };
+      if (sql.includes("view_count"))
+        return {
+          rows: [
+            { view_count: "6", view_migration: true, search_migration: true },
+          ],
+        };
+      return { rows: [{ incomplete: false }] };
+    };
+    const pool = {
+      connect: async () => ({ query, release: () => undefined }),
+      query,
+    } as unknown as Pool;
+    return { pool, statements };
+  };
+
+  it("probes the view only when discovery reads through this connection", async () => {
+    const without = discoveryPool(null);
+    await assertPostgresStartupReady(without.pool, "payload", {
+      renditions: false,
+    });
+    expect(without.statements).not.toContain(probeSql);
+    const enabled = discoveryPool(null);
+    await assertPostgresStartupReady(enabled.pool, "payload", {
+      renditions: false,
+      discovery: true,
+    });
+    expect(enabled.statements.at(-1)).toBe(probeSql);
+  });
+
+  it.each(["42501", "42P01", "3F000"])(
+    "stops startup when the view is not readable (%s)",
+    async (code) => {
+      await expect(
+        assertPostgresStartupReady(discoveryPool(code).pool, "payload", {
+          renditions: false,
+          discovery: true,
+        }),
+      ).rejects.toThrow(
+        /^Catalog discovery view is not readable: grant SELECT on public\.catalog_discovery to the public read role$/,
+      );
+    },
+  );
+
+  it("keeps other failures as the generic startup failure", async () => {
+    await expect(
+      assertPostgresStartupReady(discoveryPool("08006").pool, "payload", {
+        discovery: true,
+      }),
+    ).rejects.toThrow(/^PostgreSQL startup validation failed$/);
+  });
+});

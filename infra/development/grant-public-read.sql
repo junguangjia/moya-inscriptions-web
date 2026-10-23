@@ -27,3 +27,9 @@ TO :"public_read_role";
 
 -- Readiness checks only migration names, never the complete CMS ledger.
 GRANT SELECT (name) ON TABLE public.payload_migrations TO :"public_read_role";
+
+-- catalog-delivery-release-hardening-v1 (N1): since #312 the Backend's
+-- discovery (browse, collection, card, filter options) reads the
+-- published-only discovery view through this role, and startup checks it.
+-- The view only: never catalogs, catalog_first_publications or a write.
+GRANT SELECT ON TABLE public.catalog_discovery TO :"public_read_role";

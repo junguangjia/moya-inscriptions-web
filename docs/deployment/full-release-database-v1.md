@@ -99,6 +99,30 @@ Community** phase; the early Payload read grant does not grant that view. The
 consolidated App grant already replaces the older Community baseline grant; keep
 its named columns, receipt privileges and function permissions intact.
 
+Catalog discovery through the public read role
+(catalog-delivery-release-hardening-v1, Issue #317): since `0a4ab863` (#312) the
+Backend's discovery (home feed browse, collections, cards and filter options)
+reads the published-only Payload view `public.catalog_discovery` through
+`DATABASE_URL`, the public read role, instead of the App role.
+`grant-public-read.sql` now gives that role `SELECT` on the view and nothing
+else: not the `catalogs` or `catalog_first_publications` tables beneath it, no
+write and no wildcard. Production step, before starting a Backend at or after
+that commit: in the protected setup-role `psql` session, re-apply
+`grant-public-read.sql` as above (idempotent), or only its new statement:
+
+```sql
+GRANT SELECT ON TABLE public.catalog_discovery TO "<public read role>";
+```
+
+Then confirm with
+`SELECT has_table_privilege('<public read role>', 'public.catalog_discovery', 'SELECT')`
+(`true`). Backend startup checks it and refuses with
+`Catalog discovery view is not readable: grant SELECT on public.catalog_discovery to the public read role`;
+without the grant `0a4ab863` started cleanly and then failed every discovery
+read with `42501`, so the home feed answered 503. The App role keeps its own
+`SELECT` on the view from `grant-runtime.sql` (reaction state, operator and
+notification reads).
+
 Catalog rendition delivery (unified-media-pipeline-v1, PR 1b) is a second
 post-Community public read phase: after community migration `20261004020000`,
 `infra/development/catalog-media/grant-public-read.sql` grants the public read

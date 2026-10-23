@@ -650,6 +650,14 @@ export interface CatalogSyncPort {
     readonly created: number;
     readonly unreferenced: number;
     readonly enqueued: number;
+    /** Decoded intents the pass refused and tombstoned (present only then). */
+    readonly refusedIntentIds?: readonly string[];
+    /** Decoded intents whose identity the snapshot contradicts while they are
+     * still live; skipped and left untouched (present only then). One that is
+     * over (terminal in the snapshot or the stored row, or a stored lease
+     * whose earlier of the stored and snapshot expiry passed) is refused
+     * instead. */
+    readonly mismatchedIntentIds?: readonly string[];
   }>;
 }
 
@@ -703,6 +711,12 @@ export function createCatalogSync(options: {
       logger.error("[media-worker] catalog sync skipped: incomplete snapshot");
       return;
     }
+    // Each is granted nothing and its App mirror is left as it is, while
+    // every other intent still syncs.
+    if (snapshot?.undecodableIntentIds?.length)
+      logger.error(
+        `[media-worker] catalog sync undecodable intents=${snapshot.undecodableIntentIds.length} ids=${snapshot.undecodableIntentIds.slice(0, 5).join(",")}`,
+      );
     const sources = snapshot?.sources ?? (await options.listSources());
     if (sources === null) {
       logger.error("[media-worker] catalog sync skipped: list too large");
@@ -713,6 +727,21 @@ export function createCatalogSync(options: {
       renditions: catalogSyncIdentities(),
       ...(snapshot ? { snapshot } : {}),
     });
+    // A late release, a state regression, or an identity drift of an intent
+    // that is over (terminal, or a stored lease past the earlier of both
+    // expiries): the mirror (its approved and retention pins) is tombstoned,
+    // which an operator must see.
+    if (counts.refusedIntentIds?.length)
+      logger.error(
+        `[media-worker] catalog sync tombstoned intents=${counts.refusedIntentIds.length} ids=${counts.refusedIntentIds.slice(0, 5).join(",")}`,
+      );
+    // Identity drift of an intent that is still live: its snapshot is not
+    // applied and its mirror is left as it was, while every other intent
+    // still syncs.
+    if (counts.mismatchedIntentIds?.length)
+      logger.error(
+        `[media-worker] catalog sync mismatched intents=${counts.mismatchedIntentIds.length} ids=${counts.mismatchedIntentIds.slice(0, 5).join(",")}`,
+      );
     if (counts.created + counts.unreferenced + counts.enqueued > 0) {
       logger.info(
         `[media-worker] catalog sync referenced=${counts.referenced} skipped=${counts.skipped} created=${counts.created} unreferenced=${counts.unreferenced} enqueued=${counts.enqueued}`,

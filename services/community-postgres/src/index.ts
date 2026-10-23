@@ -32,6 +32,7 @@ export { PostgresWorkPublishingAdapter } from "./work-publishing-adapter.js";
 export {
   synchronizeCatalogDeliveryIntents,
   parseCatalogPrepareRows,
+  partitionCatalogPrepareRows,
   inspectCatalogDelivery,
   readCatalogDeliveryProjection,
 } from "./publishing/catalog-delivery-intents.js";

@@ -16,7 +16,11 @@ import {
   catalogRecipePolicySchema,
   catalogDeliveryReadinessRequestSchema,
   catalogDeliveryReadinessSchema,
+  catalogPublishedRenditionsRequestSchema,
+  catalogPublishedRenditionsSchema,
   type CatalogDeliveryReadiness,
+  type CatalogPublishedRenditions,
+  type CatalogPublishedRenditionsRequest,
   type CatalogRecipePolicy,
 } from "@moya/contracts/internal/editorial";
 
@@ -48,6 +52,12 @@ export interface OperatorRouteDependencies {
     | undefined;
   readonly catalogRecipePolicy?:
     (() => Promise<CatalogRecipePolicy>) | undefined;
+  /** Admin publish gate: App facts only, read with the Backend's own role. */
+  readonly catalogPublishedRenditions?:
+    | ((
+        media: CatalogPublishedRenditionsRequest["media"],
+      ) => Promise<CatalogPublishedRenditions>)
+    | undefined;
   readonly articlePublicationOperatorService?:
     ArticlePublicationOperatorService | undefined;
   readonly moderationService: CommunityModerationService;
@@ -187,6 +197,7 @@ export const handleOperatorRequest = async (
     moderationService,
     catalogRecipePolicy,
     catalogDeliveryReadiness,
+    catalogPublishedRenditions,
     operatorCredential,
     contentOperatorPort,
     discussionPort,
@@ -222,6 +233,31 @@ export const handleOperatorRequest = async (
       if (!result)
         return sendOperatorError(response, 404, "CATALOG_DELIVERY_NOT_FOUND");
       sendJson(response, 200, catalogDeliveryReadinessSchema.parse(result));
+      return;
+    }
+    if (
+      pathname === "/internal/community/catalog-delivery/published-renditions"
+    ) {
+      if (method !== "POST") return methodNotAllowed();
+      if (!catalogPublishedRenditions)
+        return sendOperatorError(
+          response,
+          503,
+          "CATALOG_DELIVERY_NOT_CONFIGURED",
+        );
+      // A record may name up to 2,000 media; editorial keys are ~200 bytes.
+      const input = catalogPublishedRenditionsRequestSchema.safeParse(
+        await readJsonBody(request, 1_048_576),
+      );
+      if (!input.success)
+        return sendOperatorError(response, 400, "INVALID_INPUT");
+      sendJson(
+        response,
+        200,
+        catalogPublishedRenditionsSchema.parse(
+          await catalogPublishedRenditions(input.data.media),
+        ),
+      );
       return;
     }
     if (pathname === "/internal/community/catalog-delivery/recipe-policy") {

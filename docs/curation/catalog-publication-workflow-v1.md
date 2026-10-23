@@ -95,8 +95,14 @@ The required platform sequence is:
    contract with frozen intent/state/revision/fingerprint binding. Persist
    pending before dispatch and reconcile the original target on uncertainty.
    Never select a new revision or replay a non-idempotent PATCH. Direct Owner
-   publish PATCH must not bypass the preparation guard.
-   Missing/unimplemented/503 release is HOLD.
+   publish PATCH must not bypass the preparation guard. The guard admits a
+   direct publish only when every `editorial/` image of B already has its
+   complete, current-recipe and published rendition set, as the Backend reports
+   from its own App facts over the existing operator boundary (for example a
+   text-only edit of a live record). Any image without that set, or an
+   unconnected Backend, still answers 409
+   `CATALOG_DELIVERY_PREPARATION_REQUIRED`. Missing/unimplemented/503 release is
+   HOLD.
 5. Verify anonymous Catalog API and advertised image delivery independently.
    Partial images, signed-source fallback or queue succeeded does not suffice.
 6. Hide/withdrawal fences A and B, stale processing and pending publication.
@@ -293,12 +299,36 @@ documents must be private owned files; the checkpoint directory is private,
 owned, locked and atomically persisted. Native HTTPS journals use their own
 execution kind and cannot resume a local/synthetic journal.
 
-| Command    | Real CMS behavior                                                                                                                                                                                                                                                                     |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `upload`   | Reuse-only imports recomputed historical proof plus fresh Native metadata without opening the image or staging. New selected images use the existing resumable start/status/chunk/complete protocol and measured Native body writer.                                                  |
-| `run`      | Verifies media, adopts the existing ID, saves with exact expected revision/content/idempotency binding, then performs bounded delivery progression. A frozen delivery checkpoint resumes that delivery directly.                                                                      |
-| `publish`  | Checks current media proofs and frozen content, performs prepare/read/request/read/release, and verifies fresh Native B+1. Whole-set READY is required; pending work returns `WAITING_FOR_READY` without an unbounded poll or direct publish fallback.                                |
-| `withdraw` | Owner-only fresh Native preflight, one revision-CAS PATCH to draft, then separate fresh revision+1/status/content/fingerprint persistence. Reentry never repeats PATCH. A lost reply can establish observed draft state while retaining unknown attribution of the original mutation. |
+| Command    | Real CMS behavior                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upload`   | Reuse-only imports recomputed historical proof plus fresh Native metadata without opening the image or staging. New selected images use the existing resumable start/status/chunk/complete protocol and measured Native body writer.                                                                                                                                                                                                  |
+| `run`      | Verifies media, adopts the existing ID, saves with exact expected revision/content/idempotency binding, then performs bounded delivery progression. A frozen delivery checkpoint resumes that delivery directly.                                                                                                                                                                                                                      |
+| `publish`  | Checks current media proofs and frozen content, performs prepare/read/request/read/release, and verifies fresh Native B+1. Whole-set READY is required; pending work returns `WAITING_FOR_READY` without an unbounded poll or direct publish fallback. An intent that ended stops with `DELIVERY_INTENT_EXPIRED`, `_SUPERSEDED`, `_CANCELLED` or `_WITHDRAWN`; it never becomes ready, so a new delivery needs a new state directory. |
+| `withdraw` | Owner-only fresh Native preflight, one revision-CAS PATCH to draft, then separate fresh revision+1/status/content/fingerprint persistence. Reentry never repeats a PATCH that may have been applied. A lost reply can establish observed draft state while retaining unknown attribution of the original mutation.                                                                                                                    |
+
+Before its first write (an upload, a draft save or a delivery intent), `upload`,
+`run` and `publish` ask the authenticated, read-only
+`POST /api/editorial/catalog-delivery-capabilities`. An Admin without the
+delivery and upload endpoints stops with `ADMIN_CAPABILITY_MISSING`. A
+publication also needs a Backend that can pin a recipe and prove readiness;
+otherwise it stops with `BACKEND_DELIVERY_NOT_CONFIGURED` or
+`BACKEND_DELIVERY_UNAVAILABLE`. Nothing has been written at that point. A
+reuse-only draft `run` needs neither and asks nothing. Admin's operator client
+turns every Backend 503 into one code, so a readiness route that answers 503
+reads as `BACKEND_DELIVERY_NOT_CONFIGURED`. That is usually a Backend without
+its prepare reader (`CATALOG_PREPARE_DATABASE_URL`), but a passing store outage
+(`STORE_UNAVAILABLE`) answers the same. Run once more before changing
+configuration.
+
+A draft save or withdrawal that Native refused (a complete 4xx answer), or that
+an admission, authority or credential check refused before dispatch, changed
+nothing. While the record is still at its pre-action state, the next run from
+the same state directory sends it again. Those checks run before the attempt is
+recorded, so such a refusal records no attempt. Once the attempt is recorded it
+counts as possibly sent, even if the run deadline passes or the process stops
+before dispatch. A transport-uncertain or 5xx attempt may also have been
+applied. Both only reconcile, so a withdrawal left that way needs the Admin
+withdraw control.
 
 Historical provenance remains Production. The converter's pinned raw files are
 recomputed once per source bundle per locked session and each entry and original

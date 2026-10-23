@@ -44,6 +44,10 @@ export {
   catalogProcessingIntentSchema,
   catalogDeliveryReadinessRequestSchema,
   catalogDeliveryReadinessSchema,
+  catalogDeliveryCapabilitiesRequestSchema,
+  catalogDeliveryCapabilitiesSchema,
+  catalogPublishedRenditionsRequestSchema,
+  catalogPublishedRenditionsSchema,
 } from "./catalog-delivery.js";
 export type {
   CatalogDeliveryMedia,
@@ -52,6 +56,9 @@ export type {
   CatalogRecipePolicy,
   CatalogProcessingIntent,
   CatalogDeliveryReadiness,
+  CatalogDeliveryCapabilities,
+  CatalogPublishedRenditionsRequest,
+  CatalogPublishedRenditions,
 } from "./catalog-delivery.js";
 export type {
   EditorialApproveBatchRequest,

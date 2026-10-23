@@ -301,4 +301,79 @@ describe("CatalogReadService", () => {
       ).rejects.toBeInstanceOf(CatalogMediaResolutionError);
     }
   });
+
+  // catalog-delivery-release-hardening-v1 (F9): rendition facts are part of
+  // media resolution; their failure is the 503 signal, never a raw error (500).
+  it("classifies rendition-fact failures on list, detail and search", async () => {
+    const media = {
+      id: mediaIdSchema.parse("media-service-facts"),
+      position: 0,
+      isRepresentative: true,
+      kind: "image" as const,
+      alt: "事实失败测试图",
+      width: 800,
+      height: 600,
+      objectKey: "private/facts.jpg",
+    };
+    const item = {
+      id: catalogId,
+      kind: "inscription" as const,
+      title: "Facts failure",
+      aliases: [],
+      representativeMedia: media,
+    };
+    const port: CatalogQueryPort = {
+      async list({ page, pageSize }) {
+        return { items: [item], total: 1, page, pageSize, totalPages: 1 };
+      },
+      async getById(id) {
+        return id === catalogId
+          ? { ...item, sourceCitations: [], media: [media] }
+          : null;
+      },
+    };
+    const searchPort: CatalogSearchQueryPort = {
+      async search(query) {
+        return {
+          items: [{ ...item, matchKind: "body" as const }],
+          total: 1,
+          page: query.page,
+          pageSize: query.pageSize,
+          totalPages: 1,
+        };
+      },
+    };
+    const passedThrough = new CatalogMediaResolutionError();
+    for (const failure of [
+      new Error("Catalog published source incomplete"),
+      Object.assign(new Error("permission denied"), { code: "42501" }),
+      passedThrough,
+    ]) {
+      const { calls, resolver } = recordingResolver();
+      const service = new CatalogReadService(
+        port,
+        {
+          ...resolver,
+          catalogFacts: async () => {
+            throw failure;
+          },
+        },
+        searchPort,
+      );
+      for (const read of [
+        () => service.list({ page: 1, pageSize: 20 }),
+        () => service.getById(catalogId),
+        () => service.search({ q: "合成", page: 1, pageSize: 20 }),
+      ]) {
+        const error = await read().then(
+          () => undefined,
+          (rejected: unknown) => rejected,
+        );
+        expect(error).toBeInstanceOf(CatalogMediaResolutionError);
+        if (failure === passedThrough) expect(error).toBe(passedThrough);
+        else expect((error as Error).cause).toBe(failure);
+      }
+      expect(calls).toEqual([]);
+    }
+  });
 });
