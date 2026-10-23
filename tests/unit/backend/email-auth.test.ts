@@ -737,6 +737,7 @@ describe("email and phone authentication", () => {
         minutes: 5,
       }),
     ).toEqual({
+      TriggerType: 1,
       FromEmailAddress: "auth@example.com",
       Destination: ["person@example.com"],
       Subject: "由于艺验证码",

@@ -14,6 +14,7 @@ import type {
   AuthEnvironmentName,
   StoredPasswordCredential,
   StoredPasswordResetReceipt,
+  StoredInvitation,
 } from "@moya/api";
 import type { Pool, PoolClient } from "pg";
 
@@ -78,6 +79,7 @@ interface ChallengeRow {
   expected_version: number | null;
   identity_id: string | null;
   credential_version: number | null;
+  invitation_id: string | null;
   reauth_hash: string | null;
   provider_correlation: string | null;
   expires_at: Date;
@@ -120,6 +122,7 @@ const mapChallenge = (row: ChallengeRow): StoredChallenge => ({
   expectedVersion: row.expected_version,
   identityId: row.identity_id,
   credentialVersion: row.credential_version,
+  invitationId: row.invitation_id,
   reauthHash: row.reauth_hash,
   providerCorrelation: row.provider_correlation,
   expiresAt: iso(row.expires_at),
@@ -160,6 +163,27 @@ const mapReceipt = (row: ReceiptRow) => ({
   credentialVersion: row.credential_version,
 });
 
+interface InvitationRow {
+  id: string;
+  digest: string;
+  environment: AuthEnvironmentName;
+  max_uses: number;
+  used_count: number;
+  created_at: Date;
+  expires_at: Date;
+  revoked_at: Date | null;
+}
+const mapInvitation = (row: InvitationRow): StoredInvitation => ({
+  id: row.id,
+  digest: row.digest,
+  environment: row.environment,
+  maxUses: row.max_uses,
+  usedCount: row.used_count,
+  createdAt: iso(row.created_at),
+  expiresAt: iso(row.expires_at),
+  revokedAt: nullableIso(row.revoked_at),
+});
+
 const mapHandoff = (row: {
   id: string;
   token_hash: string;
@@ -174,6 +198,7 @@ const mapHandoff = (row: {
   expected_version: number | null;
   identity_id: string | null;
   credential_version: number | null;
+  invitation_id: string | null;
   expires_at: Date;
   consumed_at: Date | null;
 }): StoredHandoff => ({
@@ -190,6 +215,7 @@ const mapHandoff = (row: {
   expectedVersion: row.expected_version,
   identityId: row.identity_id,
   credentialVersion: row.credential_version,
+  invitationId: row.invitation_id,
   expiresAt: iso(row.expires_at),
   consumedAt: nullableIso(row.consumed_at),
 });
@@ -256,6 +282,27 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
       }
     };
     return {
+      findInvitationByDigest: async (digest, environment) => {
+        const rows = await query<InvitationRow>(
+          "SELECT * FROM community.registration_invitations WHERE digest=$1 AND environment=$2",
+          [digest, environment],
+        );
+        return rows[0] === undefined ? null : mapInvitation(rows[0]);
+      },
+      lockInvitation: async (id) => {
+        const rows = await query<InvitationRow>(
+          "SELECT * FROM community.lock_registration_invitation($1)",
+          [id],
+        );
+        return rows[0] === undefined ? null : mapInvitation(rows[0]);
+      },
+      redeemInvitation: async (id, userId, atIso, handoffId) => {
+        const rows = await query<{ redeemed: boolean }>(
+          "SELECT community.redeem_registration_invitation($1,$2,$3,$4) AS redeemed",
+          [id, userId, atIso, handoffId],
+        );
+        return rows[0]?.redeemed === true;
+      },
       findProvisionedPasswordUser: async (handle, environment) => {
         const rows = await query<{ user_id: string }>(
           `SELECT p.user_id FROM community.operator_password_accounts p
@@ -428,9 +475,9 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               verification_strategy, provider_mode, environment, user_id, session_hash,
               continuation_hash, expected_version, reauth_hash, provider_correlation,
               expires_at, attempts, resend_available_at, superseded_at, completed_at,
-              invalidated_at, delivery_state, idempotency_hash, created_at, identity_id, credential_version
+              invalidated_at, delivery_state, idempotency_hash, created_at, identity_id, credential_version, invitation_id
             ) VALUES(
-              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
+              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27
             )`,
             [
               row.id,
@@ -459,6 +506,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               row.createdAt,
               row.identityId ?? null,
               row.credentialVersion ?? null,
+              row.invitationId ?? null,
             ],
           );
           return "ok" as const;
@@ -551,8 +599,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
         await query(
           `INSERT INTO community.auth_handoffs(
             id, token_hash, purpose, channel, target_digest, ciphertext, provider_mode,
-            environment, user_id, session_hash, expected_version, expires_at, consumed_at, identity_id, credential_version
-          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+            environment, user_id, session_hash, expected_version, expires_at, consumed_at, identity_id, credential_version, invitation_id
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [
             row.id,
             row.tokenHash,
@@ -569,6 +617,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
             row.consumedAt,
             row.identityId ?? null,
             row.credentialVersion ?? null,
+            row.invitationId ?? null,
           ],
         );
       },

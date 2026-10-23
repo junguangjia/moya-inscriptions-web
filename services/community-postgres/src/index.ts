@@ -2,6 +2,7 @@ export { PostgresCommunityIdentityAdapter } from "./adapter.js";
 export { PostgresArticleAuthoringAdapter } from "./article-authoring/postgres-article-authoring-adapter.js";
 export type { PostgresArticleAuthoringOptions } from "./article-authoring/postgres-article-authoring-adapter.js";
 export { PostgresCommunityAuthAdapter } from "./auth-adapter.js";
+export { createPostgresBetaAccountAccess } from "./beta-account-access.js";
 export { asCommunityOperationError } from "./availability.js";
 export { PostgresCommunityCommentAdapter } from "./comment-adapter.js";
 export {

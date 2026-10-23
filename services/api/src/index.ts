@@ -82,6 +82,7 @@ export type {
   AuthEnvironmentName,
   AuthPurposeName,
   AuthUnitOfWork,
+  StoredInvitation,
   CommunityAuthPort,
   StoredChallenge,
   StoredHandoff,

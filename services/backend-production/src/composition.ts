@@ -54,6 +54,7 @@ import {
   verifyCatalogDeliveryReadable,
   readCatalogDeliveryProjection,
   verifyCommunityMigrationLedger,
+  createPostgresBetaAccountAccess,
 } from "@moya/community-postgres";
 import { loadProductAccess } from "./access/product-access.js";
 import {
@@ -238,7 +239,7 @@ export const prepareProductionBackend = async (
     );
   }
   // Who may reach product content is decided before anything is opened.
-  const productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv);
+  let productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv);
   const publicationConfig = parsePublicationConfig(
     environment,
     runtimeConfig.nodeEnv,
@@ -649,6 +650,9 @@ export const prepareProductionBackend = async (
     await verifyCommunityMigrationLedger(communityPool);
     // Discovery cards join the Catalog rendition delivery view (PR 1b).
     await verifyCatalogDeliveryReadable(communityPool);
+    productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv, {
+      betaAccountAccess: createPostgresBetaAccountAccess(communityPool),
+    });
   } catch (error) {
     await closeResources();
     throw error;

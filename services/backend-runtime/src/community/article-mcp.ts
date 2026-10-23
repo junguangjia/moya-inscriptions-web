@@ -108,7 +108,7 @@ export interface ArticleMcpDependencies {
    * The product access policy for the account a grant represents, asked at
    * admission and again before every operation. Absent admits every account.
    */
-  readonly admitsAccount?: (userId: string) => boolean;
+  readonly admitsAccount?: (userId: string) => Promise<boolean>;
   readApproval(
     actor: DelegatedActor,
     candidate: Omit<ArticleApprovalCandidate, "connectionId">,
@@ -467,7 +467,15 @@ export const createArticleMcpHandler =
     }
     // A current grant for an account the product does not admit: signing in
     // again cannot help, so this is not an authentication challenge.
-    if (dependencies.admitsAccount?.(actor.userId) === false) {
+    let accountAdmitted: boolean | undefined;
+    try {
+      accountAdmitted = await dependencies.admitsAccount?.(actor.userId);
+    } catch {
+      response.writeHead(503, { "cache-control": "private, no-store" });
+      response.end();
+      return;
+    }
+    if (accountAdmitted === false) {
       response.writeHead(403, { "cache-control": "private, no-store" });
       response.end();
       return;
@@ -499,7 +507,16 @@ export const createArticleMcpHandler =
           ErrorCode.InvalidRequest,
           "Authorization has expired",
         );
-      if (dependencies.admitsAccount?.(actor.userId) === false)
+      let admitted: boolean | undefined;
+      try {
+        admitted = await dependencies.admitsAccount?.(actor.userId);
+      } catch {
+        throw new McpError(
+          ErrorCode.InternalError,
+          "Service temporarily unavailable",
+        );
+      }
+      if (admitted === false)
         throw new McpError(ErrorCode.InvalidRequest, "Access is restricted");
       await dependencies.assertCurrent(actor);
     };

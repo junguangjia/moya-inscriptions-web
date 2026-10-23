@@ -351,6 +351,15 @@ GRANT INSERT (studio_name, studio_name_suffix) ON TABLE community.public_users T
 GRANT UPDATE (studio_name, studio_name_suffix) ON TABLE community.public_users TO :"app_role";
 GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_challenges TO :"app_role";
 GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_handoffs TO :"app_role";
+-- App may inspect and redeem a valid invitation only through the fixed atomic
+-- function. It cannot create/revoke codes or write arbitrary account admission.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE community.registration_invitations,
+  community.registration_invitation_redemptions, community.beta_account_access FROM :"app_role";
+GRANT SELECT ON TABLE community.registration_invitations,
+  community.registration_invitation_redemptions, community.beta_account_access TO :"app_role";
+GRANT INSERT (invitation_id) ON TABLE community.auth_challenges, community.auth_handoffs TO :"app_role";
+GRANT EXECUTE ON FUNCTION community.lock_registration_invitation(TEXT),
+  community.redeem_registration_invitation(TEXT,TEXT,TIMESTAMPTZ,TEXT) TO :"app_role";
 
 -- production-deployment-v3: offline operator authority, never runtime provisionable.
 -- The list names every non-SELECT table privilege of PostgreSQL 16. MAINTAIN

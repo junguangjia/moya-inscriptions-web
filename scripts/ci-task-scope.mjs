@@ -325,7 +325,7 @@ export function classifyTask(paths, event = "pull_request") {
       // check-browser-baseline.mjs and its spec; only the test job's Vitest
       // policy test loads ci-e2e-scope.mjs. validation-profiles.mjs supplies
       // the stage and smoke ceilings those commands import.
-      /^scripts\/(?:migrate(?:-community)?|generate-catalog-import-template|confidentiality-scan|install-confidentiality-hooks|disposable-test-target|test-target|verify|validation-profiles|ci-e2e-(?:scope|smoke)|check-browser-baseline(?:\.spec)?|materialize-phase4-fixtures|seed-phase4-acceptance|seed-phase4-support|email-auth-acceptance|provision-password-account)\.mjs$/u.test(
+      /^scripts\/(?:migrate(?:-community)?|generate-catalog-import-template|confidentiality-scan|install-confidentiality-hooks|disposable-test-target|test-target|verify|validation-profiles|ci-e2e-(?:scope|smoke)|check-browser-baseline(?:\.spec)?|materialize-phase4-fixtures|seed-phase4-acceptance|seed-phase4-support|email-auth-acceptance|provision-password-account|manage-registration-invitations)\.mjs$/u.test(
         file,
       )
     ) {

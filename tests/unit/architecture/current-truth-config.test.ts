@@ -642,12 +642,11 @@ describe("current repository truth and local configuration", () => {
       ),
     ).toBe(false);
 
-    for (const currentDocument of [
-      rootReadme,
-      webReadme,
-      architecture,
-      projectStatus,
-    ]) {
+    // The product README delegates implementation milestones to project-status;
+    // architectural paths remain pinned in their owning technical documents.
+    expect(rootReadme).toContain("[Project status](docs/project-status.md)");
+    expect(rootReadme).not.toContain("apps/web/app/route.ts");
+    for (const currentDocument of [webReadme, architecture, projectStatus]) {
       expect(currentDocument).toContain("apps/web/app/page.tsx");
       expect(currentDocument).not.toContain("apps/web/app/route.ts");
     }
@@ -755,7 +754,7 @@ describe("current repository truth and local configuration", () => {
       ),
     ]);
 
-    expect(rootReadme).toMatch(/最新\s+`origin\/main`/);
+    expect(rootReadme).toContain("[contributor guide](CONTRIBUTING.md)");
     expect(security).toContain("current default branch, `main`");
     expect(contributing).toContain("Sync `main`");
     expect(contributing).toContain("Draft PR to `main`");
