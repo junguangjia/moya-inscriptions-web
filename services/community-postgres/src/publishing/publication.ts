@@ -26,7 +26,7 @@ import { insertJob } from "./jobs.js";
 import {
   lockCatalogPublicationDirty,
   markCatalogPublicationDirty,
-  type CatalogPublicationDirtyReason,
+  type CatalogPublicationDirtyMark,
 } from "./catalog-publication-dirty.js";
 
 const hex = (): string => randomUUID().replaceAll("-", "");
@@ -110,15 +110,26 @@ const activeJobSql = (s: string): string =>
 
 /**
  * catalog-scale-v1 (Issue #323) 1B W7: the Catalog assets one reconcile pass
- * plans at most (K). Its scope is, in order: a tenth of K (at least) from
- * the rolling sweep over every Catalog asset, the assets with publications
- * in flight the pass acts on, the dirty assets oldest mark first, and the
+ * plans at most (K). Its scope is the assets it must plan now (the priority
+ * part: urgent marks first, then the assets with publications in flight the
+ * pass acts on, then the other marks, each class oldest mark first), a tenth
+ * of K (at least) from the rolling sweep over every Catalog asset, and the
  * rest of K from the sweep. While both wait, in flight and dirty each get at
- * least half of the room after the sweep's share. So a pass costs about K,
- * never the Catalog, a dirty asset waits behind at most the earlier marks,
- * and a whole round of the sweep bounds the time any asset waits.
+ * least half of the room after the sweep's share. Planned in the order: the
+ * priority part's first CATALOG_RECONCILE_RESERVED, the sweep's share, the
+ * rest of the priority part, the rest of the sweep. So a pass costs about K,
+ * never the Catalog, an urgent mark (a takedown) waits behind at most the
+ * earlier urgent ones, any other behind the earlier marks and every urgent
+ * one, and a whole round of the sweep bounds the time any asset waits.
  */
 export const CATALOG_RECONCILE_SCOPE = 1_000;
+/** The first assets of the priority part, and of the sweep's share, that a
+ * pass attempts whatever its budget: one batch of the authority's planning
+ * (CATALOG_SCOPE_BATCH) each. A slow batch, of either part, thus never keeps
+ * a pass from planning the oldest urgent marks or from moving the sweep on;
+ * the pass then ends at most about one batch past its budget (a failed
+ * reserved batch is retried asset by asset only that far, planScope). */
+export const CATALOG_RECONCILE_RESERVED = 100;
 /** How long one pass plans its scope. With its reads before and its
  * transaction after, a pass ends within about 15 s: well inside the 120 s
  * lease of the withdraw lane it runs in, so takedown jobs never wait long
@@ -141,15 +152,22 @@ const pendingMarkSql = (s: string): string =>
  * not plan leaves this part, and a fixed run of ids never holds it. `$1` is
  * the limit. */
 const CATALOG_IN_FLIGHT_SQL = `SELECT DISTINCT a.catalog_asset_id AS id FROM community.media_publications p JOIN community.media_public_assets a ON a.id=p.public_asset_id WHERE p.state IN ('publishing','withdrawing','purge_failed') AND ((p.state='publishing' AND NOT $2::boolean) OR (p.state<>'publishing' AND p.purge_attempts<3)) AND a.catalog_asset_id IS NOT NULL AND NOT ${pendingMarkSql("a.catalog_asset_id")} AND NOT ${activeJobSql("a.catalog_asset_id")} ORDER BY 1 LIMIT $1`;
-/** The scope's dirty assets, oldest mark first, through A1's partial index;
- * `$1` is the limit. None is in the in-flight part, which leaves out every
- * asset with a pending mark (the two reads share a snapshot). */
-const CATALOG_PENDING_SQL = `SELECT d.asset_id AS id FROM community.catalog_publication_dirty d WHERE d.mark_seq>d.cleared_seq AND NOT ${activeJobSql("d.asset_id")} ORDER BY d.marked_at,d.asset_id LIMIT $1`;
+/** The scope's dirty assets, urgent marks first and each class oldest mark
+ * first, through A1's partial index; `$1` is the limit. None is in the
+ * in-flight part, which leaves out every asset with a pending mark (the two
+ * reads share a snapshot). */
+const CATALOG_PENDING_SQL = `SELECT d.asset_id AS id,d.urgent FROM community.catalog_publication_dirty d WHERE d.mark_seq>d.cleared_seq AND NOT ${activeJobSql("d.asset_id")} ORDER BY d.urgent DESC,d.marked_at,d.asset_id LIMIT $1`;
 
 /** One pass's Catalog scope, read before it is planned. */
 interface CatalogScope {
-  /** Planning order: the sweep's share, in flight, dirty, the sweep's rest. */
+  /** Planning order: the priority part's first CATALOG_RECONCILE_RESERVED
+   * (urgent marks, in flight, other marks), the sweep's share, the rest of
+   * the priority part, the sweep's rest. */
   readonly order: readonly string[];
+  /** The leading assets of `order` planned whatever the budget: the
+   * priority part's first and the sweep share's first
+   * CATALOG_RECONCILE_RESERVED. */
+  readonly reserved: number;
   /** The sweep's assets in its order, from the cursor (then from the start
    * when the end came first). */
   readonly sweep: readonly string[];
@@ -838,17 +856,23 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
   }
   /**
    * The Catalog scope of one reconcile pass (catalog-scale-v1 W7), read
-   * before it is planned. Up to K assets: the sweep's share (a tenth of K)
-   * comes first in the planning order, so the time budget never starves the
-   * sweep; then the assets with publications in flight the pass acts on
-   * (`allow` is whether it may publish), then the dirty assets oldest mark
-   * first, then the rest of K from the sweep. In flight and dirty share the
-   * room after the sweep's share: each gets at least half of it while the
-   * other fills its own half, and whatever one leaves unused. An asset whose
-   * publication job is queued or running is left for after the job (in
-   * flight or dirty; a dirty one keeps its mark and its place). The sweep
-   * reads asset ids after its cursor, from the start again once it reaches
-   * the end, skipping the assets already in the scope.
+   * before it is planned. Up to K assets: the priority part, which is the
+   * urgent marks, then the assets with publications in flight the pass acts
+   * on (`allow` is whether it may publish), then the other marks, each class
+   * oldest mark first; the sweep's share (a tenth of K); and the rest of K
+   * from the sweep. In flight and dirty share the room after the sweep's
+   * share: each gets at least half of it while the other fills its own half,
+   * and whatever one leaves unused. The planning order puts the priority
+   * part's first CATALOG_RECONCILE_RESERVED first and the sweep's share
+   * next; those and the share's first CATALOG_RECONCILE_RESERVED (the
+   * reserved part) are attempted whatever the time budget, a failed batch
+   * among them asset by asset until about one batch past it (planScope): a
+   * slow batch never keeps a takedown waiting for the sweep to reach it, and
+   * a priority backlog never starves the sweep. An asset whose publication
+   * job is queued or running is left for after the job (in flight or dirty;
+   * a dirty one keeps its mark and its place). The sweep reads asset ids
+   * after its cursor, from the start again once it reaches the end, skipping
+   * the assets already in the scope.
    */
   private async catalogScope(
     max: number,
@@ -868,10 +892,16 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
         );
       const shared = max - share;
       const inFlight = await ids(CATALOG_IN_FLIGHT_SQL, [shared, allow]);
-      const dirty = await ids(CATALOG_PENDING_SQL, [
-        shared - Math.min(inFlight.length, Math.floor(shared / 2)),
-      ]);
-      const priority = [...inFlight.slice(0, shared - dirty.length), ...dirty];
+      const dirty = (
+        await db.query<{ id: string; urgent: boolean }>(CATALOG_PENDING_SQL, [
+          shared - Math.min(inFlight.length, Math.floor(shared / 2)),
+        ])
+      ).rows;
+      const priority = [
+        ...dirty.filter((row) => row.urgent).map((row) => row.id),
+        ...inFlight.slice(0, shared - dirty.length),
+        ...dirty.filter((row) => !row.urgent).map((row) => row.id),
+      ];
       const room = max - priority.length;
       const first = await ids(
         from === null
@@ -887,9 +917,11 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
             )
           : [];
       const sweep = [...first, ...wrap];
+      const head = priority.slice(0, CATALOG_RECONCILE_RESERVED);
       const order = [
+        ...head,
         ...sweep.slice(0, share),
-        ...priority,
+        ...priority.slice(head.length),
         ...sweep.slice(share),
       ];
       const marks = new Map(
@@ -904,6 +936,9 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       );
       return {
         order,
+        reserved:
+          head.length +
+          Math.min(share, sweep.length, CATALOG_RECONCILE_RESERVED),
         sweep,
         sweepFrom: from,
         sweepDone:
@@ -922,13 +957,15 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
    * (the old set retired after a replacement is published (N3), its intents'
    * public generations recorded, a failed job tried again); every other one
    * has exactly the mark it had before planning cleared. An asset whose plan
-   * failed stays marked. Every mark the pass leaves goes to the back of the
-   * queue, at the pass's time, behind every mark made before the pass: a
-   * re-plan after a job never runs ahead of a newer takedown, so a queue of
-   * first marks drains at the dirty share of K a pass. One the budget did not
-   * reach is left as it is. The sweep cursor moves past the sweep assets
-   * attempted, to the start of a new round once every asset was, and also
-   * when the recipe policy changed; unless another pass moved it meanwhile.
+   * failed stays marked. Every mark the pass leaves goes to the back of its
+   * class, at the pass's time, behind every mark of that class made before
+   * the pass: a re-plan after a job never runs ahead of a newer takedown, so
+   * a queue of first marks drains at the dirty share of K a pass. A mark it
+   * leaves is normal unless it was urgent: A1's mark never downgrades a
+   * pending urgent mark. One the budget did not reach is left as it is. The
+   * sweep cursor moves past the sweep assets attempted, to the start of a new
+   * round once every asset was, and also when the recipe policy changed;
+   * unless another pass moved it meanwhile.
    */
   private async settleCatalogScope(
     db: PublishingDb,
@@ -972,13 +1009,13 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       );
     await markCatalogPublicationDirty(
       db,
-      new Map<string, CatalogPublicationDirtyReason>(
-        keep.map((id) => [id, "publication"]),
+      new Map<string, CatalogPublicationDirtyMark>(
+        keep.map((id) => [id, { reason: "publication", urgent: false }]),
       ),
       now,
     );
-    // A mark that stays pending keeps its place (A1's mark), so the ones
-    // this pass leaves are moved to the back here.
+    // A mark that stays pending keeps its place and its class (A1's mark),
+    // so the ones this pass leaves are moved to the back here.
     const back = [...keep, ...requeue].sort();
     if (back.length)
       await db.query(
@@ -1041,6 +1078,7 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       const planned = await authority.planScope(scope.order, {
         budgetMs:
           this.options.catalogScope?.budgetMs ?? CATALOG_RECONCILE_BUDGET_MS,
+        reserved: scope.reserved,
       });
       const ordered = new Set(scope.order);
       for (const [id, ids] of planned.plans)

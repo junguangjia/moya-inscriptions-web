@@ -1374,6 +1374,95 @@ describe("W7: a scoped reconcile pass plans its scope as each asset's own captur
     expect([...plans.keys()]).toEqual(ids.slice(0, 2 * CATALOG_SCOPE_BATCH));
   });
 
+  it("attempts the reserved assets whatever the budget, then stops as before", async () => {
+    // Each clock reading is 10 ms later: a budget of 15 ms admits one batch
+    // alone. With 150 reserved assets the first two batches run, and the
+    // third does not start.
+    let ms = 0;
+    const clock = () => (ms += 10);
+    const { plans, failed } = await planCatalogScope(
+      poolsOf(world),
+      ids,
+      readsOf(world),
+      policy,
+      { budgetMs: 15, reserved: CATALOG_SCOPE_BATCH + 50, clock },
+    );
+    expect(failed).toEqual([]);
+    expect([...plans.keys()]).toEqual(ids.slice(0, 2 * CATALOG_SCOPE_BATCH));
+  });
+
+  it("retries a failed reserved batch asset by asset past the budget, but only about one batch past it", async () => {
+    // The clock moves only as the App reads a capture's assets (its first
+    // statement), by `cost` of how many it names, which then fails with
+    // `error` when one is given.
+    let ms = 0;
+    const clock = () => ms;
+    const timed = (
+      cost: (assets: number) => number,
+      options: {
+        readonly fail?: { readonly pool: string; readonly text: string };
+        readonly error?: Error;
+      },
+    ) => {
+      const pools = poolsOf(world, { fail: options.fail });
+      const appQuery = (
+        pools.app as unknown as {
+          query(sql: string, values?: unknown[]): Promise<unknown>;
+        }
+      ).query;
+      const app = {
+        query: async (sql: string, values: unknown[] = []) => {
+          if (
+            sql.startsWith(
+              "SELECT id,media_id,source_object_key FROM community.catalog_media_assets",
+            )
+          ) {
+            ms += cost((values[0] as string[]).length);
+            if (options.error) throw options.error;
+          }
+          return appQuery(sql, values);
+        },
+      } as unknown as typeof pools.app;
+      return { ...pools, app };
+    };
+    // A reserved batch whose capture takes 1,000 ms (past the 150 ms budget)
+    // and throws once is captured again asset by asset, each in 1 ms (its
+    // intents' facts were read once this pass): all of it, within the budget
+    // plus that batch.
+    const retried = await planCatalogScope(
+      timed((assets) => (assets === 1 ? 1 : 10 * assets), {
+        fail: { pool: "prepare", text: "intent_id=ANY(" },
+      }),
+      ids.slice(0, CATALOG_SCOPE_BATCH),
+      readsOf(world),
+      policy,
+      { budgetMs: 150, reserved: CATALOG_SCOPE_BATCH, clock },
+    );
+    expect(retried.failed).toEqual([]);
+    expect([...retried.plans.keys()]).toEqual(
+      ids.slice(0, CATALOG_SCOPE_BATCH),
+    );
+    expect(ms).toBe(10 * CATALOG_SCOPE_BATCH + CATALOG_SCOPE_BATCH);
+    // An outage: every capture fails after 10 ms (a connect that times out).
+    // The two reserved batches are not retried 200 times: the first batch's
+    // retries go on past the 50 ms budget by about that batch and end the
+    // pass, which fails as every asset it attempted did.
+    ms = 0;
+    await expect(
+      planCatalogScope(
+        timed(() => 10, {
+          error: new Error("timeout exceeded when trying to connect"),
+        }),
+        ids,
+        readsOf(world),
+        policy,
+        { budgetMs: 50, reserved: 2 * CATALOG_SCOPE_BATCH, clock },
+      ),
+    ).rejects.toThrow("timeout exceeded when trying to connect");
+    expect(ms).toBeGreaterThan(50);
+    expect(ms).toBeLessThanOrEqual(50 + 10 + 10);
+  });
+
   it("refuses an asset id or a budget it cannot plan", async () => {
     await expect(
       planCatalogScope(
@@ -1389,6 +1478,13 @@ describe("W7: a scoped reconcile pass plans its scope as each asset's own captur
         budgetMs: 0,
       }),
     ).rejects.toThrow(TypeError);
+    for (const reserved of [-1, 1.5, Number.NaN])
+      await expect(
+        planCatalogScope(poolsOf(world), ids, readsOf(world), policy, {
+          ...BUDGET,
+          reserved,
+        }),
+      ).rejects.toThrow(TypeError);
     // Nothing named, nothing read.
     const statements: { pool: string; sql: string; values: unknown[] }[] = [];
     expect(

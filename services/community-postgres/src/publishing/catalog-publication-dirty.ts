@@ -23,9 +23,10 @@ import { nowParam, writeTransaction, type PublishingDb } from "./db.js";
  *   read and diffed against the App; the assets that differ are marked, with
  *   the new fingerprint, in one App transaction. A minute without a change
  *   reads two aggregates and writes the state row. The same step marks the
- *   time-driven boundaries the CMS never writes: a prepared or requested
- *   lease, and the render grace after it, that passed since the last
- *   observation;
+ *   time-driven boundary the CMS never writes: a prepared or requested lease
+ *   that passed since the last observation (render grace, which only decides
+ *   whether an image renders, changes no publication plan and marks
+ *   nothing);
  * - the Catalog sync (catalog-assets.ts), for the mirror changes and the
  *   reference flips it applies itself: the step compares the CMS with the
  *   mirror, so an intent change the sync applies first would otherwise leave
@@ -37,19 +38,45 @@ import { nowParam, writeTransaction, type PublishingDb } from "./db.js";
  *   accepted rather than tying the sync's marks to the step's;
  * - a recorded render (catalog-assets.ts), whose new renditions the
  *   reconcile must copy;
+ * - the block sets of display masters ('rendition'): a recorded block set,
+ *   which releases any other master's blocks (catalog-zoom-blocks.ts), and a
+ *   master ended by a detach, a re-attach or a new limit, whose blocks leave
+ *   the plan (catalog-masters.ts);
  * - the scoped reconcile itself (publication.ts, W7), for the assets a pass
  *   leaves for the next one ('publication').
  * This module is the one writer of marks: markCatalogPublicationDirty and
  * its one statement (catalogPublicationDirtyMarkSql), A1's mark. A mark
  * raises mark_seq, and a row that is pending keeps its marked_at (its place
- * in the FIFO queue) while a cleared one takes the mark's time; so a mark
- * made while the reconcile plans an asset keeps it pending after the
- * reconcile clears with cleared_seq = the mark_seq it read. Nothing is
- * deleted.
+ * in the queue) while a cleared one takes the mark's time; so a mark made
+ * while the reconcile plans an asset keeps it pending after the reconcile
+ * clears with cleared_seq = the mark_seq it read. Nothing is deleted.
+ *
+ * Each mark has a class (W-AC5). An urgent mark is a change that can only
+ * remove public or private-B exposure: an asset the Catalog no longer
+ * publishes that serves a publication no live release request pins (the
+ * step's public diff, which counts a request's pins only once the App holds
+ * a pin for each of its members and the CMS confirms it in the same
+ * observation; one such requests alone serve, which their plans keep
+ * wherever a prepare reader is configured, is not marked at all, and
+ * applyCatalogMembership names the one residual), the end of an intent that
+ * may have granted exposure (endsCatalogGrant: the step's private diff, the
+ * sync's mirror changes, F3's tombstones), a requested intent whose lease
+ * passed (the step's boundaries), and an asset the sync flips to
+ * unreferenced. Every other mark is normal: an asset to copy, an intent
+ * requested, prepared or released, the end or lapse of an intent the App saw
+ * prepared and the CMS shows was never requested since, a recorded render or
+ * block set, and the reconcile's own carried-over marks. The reconcile reads
+ * pending urgent marks before every normal one, each class oldest first, so
+ * a takedown waits only behind earlier marks that remove exposure too, never
+ * behind publish-side work or the no-op re-marks of a release wave, however
+ * much of either is queued. A pending row stays urgent whatever normal mark
+ * lands on it, and a pending normal row becomes urgent (keeping its place)
+ * when an urgent one lands.
  *
  * Lock order, binding for every transaction that marks or clears (the sync,
- * a recorded render, the membership step here, the scoped reconcile, and the
- * render tiers that build on them):
+ * a recorded render, a recorded block set and an ended master
+ * (catalog-zoom-blocks.ts, catalog-masters.ts), the membership step here,
+ * the scoped reconcile, and the render tiers that build on them):
  * 1. the catalog_reconcile_state row first, by a transaction that writes it
  *    (a reconcile pass: SELECT … FOR UPDATE; the membership step: its
  *    UPDATE … WHERE id), before any dirty row;
@@ -81,13 +108,66 @@ export const CATALOG_PUBLICATION_DIRTY_REASONS = [
 export type CatalogPublicationDirtyReason =
   (typeof CATALOG_PUBLICATION_DIRTY_REASONS)[number];
 
+/** One mark of an asset: the reason (content-free; the row keeps the
+ * latest) and the class (urgent: the change can only remove public or
+ * private-B exposure, see above). */
+export interface CatalogPublicationDirtyMark {
+  readonly reason: CatalogPublicationDirtyReason;
+  readonly urgent: boolean;
+}
+
+/** The intent states that end what an intent grants. */
+const ENDED_STATES: ReadonlySet<string> = new Set([
+  "cancelled",
+  "superseded",
+  "expired",
+  "withdrawn",
+]);
+
+/** An intent's lifecycle as the App mirror or the CMS holds it. */
+interface CatalogIntentLifecycle {
+  readonly state: string;
+  readonly version: number;
+}
+
+/**
+ * Whether an intent's change can only end what it granted (an urgent mark):
+ * it ends (an ended state, or the live projection or the mirror no longer
+ * lists it: `next` undefined) an intent that may have granted exposure as
+ * the App last saw it (`previous`; undefined when the App did not know it).
+ * A requested intent grants private B, a released one its public
+ * generations. A prepared one grants nothing a takedown removes (nothing to
+ * a pair that is not public; to a public one only pins its public permission
+ * already selects), so its end is normal, but only when the CMS shows that no
+ * request came between: at the version the App saw (its lease lapsed, as the
+ * projection reads it), or one transition later in a state other than
+ * expired (a cancellation, supersession or withdrawal; every CMS transition
+ * raises the version by one). The reconcile plans from the CMS, so a request
+ * the mirror never saw may have been copied: an expiry one version later
+ * (which may end such a request) and a prepared intent leaving unseen stay
+ * urgent. An intent the App last saw ended grants nothing more.
+ */
+const endsCatalogGrant = (
+  previous: CatalogIntentLifecycle | undefined,
+  next: CatalogIntentLifecycle | undefined,
+): boolean => {
+  if (next !== undefined && !ENDED_STATES.has(next.state)) return false;
+  if (previous === undefined) return true;
+  if (ENDED_STATES.has(previous.state)) return false;
+  if (previous.state !== "prepared" || next === undefined) return true;
+  return !(
+    next.version === previous.version ||
+    (next.version === previous.version + 1 && next.state !== "expired")
+  );
+};
+
 /**
  * G (Owner decision D3): how long after its lease an intent's images still
- * render (catalog-scale-v1 W10's render grace). The membership step marks an
- * intent's assets when its lease and when this grace pass. G stays at least
- * 24 hours shorter than R (CATALOG_PREPARE_RETENTION_HOURS, 96, in
- * admin/published), so an intent in grace is still in the live projection
- * and observed live in the mirror.
+ * render (catalog-scale-v1 W10's render grace). Rendering only: no
+ * publication input reads it, so neither its start nor its end marks
+ * anything. G stays at least 24 hours shorter than R
+ * (CATALOG_PREPARE_RETENTION_HOURS, 96, in admin/published), so an intent in
+ * grace is still in the live projection and observed live in the mirror.
  */
 export const CATALOG_RENDER_GRACE_HOURS = 72;
 
@@ -98,37 +178,47 @@ const ASSET_ID = /^catalog-asset-[0-9a-f]{32}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const BUCKET = /^[0-9a-f]{2}$/u;
 const SUM = /^[0-9]{1,40}$/u;
+const POLICY = /^[0-9a-f]{64}$/u;
 const REASONS: ReadonlySet<string> = new Set(CATALOG_PUBLICATION_DIRTY_REASONS);
 
 /** The A1 mark: a new row at 1, or one more on a pending or cleared row; a
- * row that becomes pending again is queued as of this mark. */
+ * row that becomes pending again is queued as of this mark, in the mark's
+ * class. A pending row keeps its place and stays urgent once it is. */
 export const catalogPublicationDirtyMarkSql = `
-  INSERT INTO community.catalog_publication_dirty AS d (asset_id, mark_seq, reason, marked_at)
-  SELECT m.asset_id, 1, m.reason, $3::timestamptz
-  FROM unnest($1::text[], $2::text[]) AS m(asset_id, reason)
+  INSERT INTO community.catalog_publication_dirty AS d (asset_id, mark_seq, reason, urgent, marked_at)
+  SELECT m.asset_id, 1, m.reason, m.urgent, $4::timestamptz
+  FROM unnest($1::text[], $2::text[], $3::boolean[]) AS m(asset_id, reason, urgent)
   ORDER BY m.asset_id
   ON CONFLICT (asset_id) DO UPDATE SET mark_seq = d.mark_seq + 1, reason = EXCLUDED.reason,
+    urgent = EXCLUDED.urgent OR (d.mark_seq > d.cleared_seq AND d.urgent),
     marked_at = CASE WHEN d.mark_seq > d.cleared_seq THEN d.marked_at ELSE EXCLUDED.marked_at END`;
 
 /**
- * Marks Catalog assets for the scoped reconcile, one reason each, in the
- * caller's transaction: one statement, in asset id order. No mark, no
- * statement. An invalid id or reason throws before any statement.
+ * Marks Catalog assets for the scoped reconcile, one reason and class each,
+ * in the caller's transaction: one statement, in asset id order. No mark, no
+ * statement. An invalid id, reason or class throws before any statement.
  */
 export const markCatalogPublicationDirty = async (
   db: Pick<PublishingDb, "query">,
-  marks: ReadonlyMap<string, CatalogPublicationDirtyReason>,
+  marks: ReadonlyMap<string, CatalogPublicationDirtyMark>,
   now: Date,
 ): Promise<number> => {
-  for (const [assetId, reason] of marks)
-    if (!ASSET_ID.test(assetId) || !REASONS.has(reason))
+  for (const [assetId, mark] of marks)
+    if (
+      !ASSET_ID.test(assetId) ||
+      typeof mark !== "object" ||
+      mark === null ||
+      !REASONS.has(mark.reason) ||
+      typeof mark.urgent !== "boolean"
+    )
       throw new TypeError("Catalog publication mark invalid");
   if (!marks.size) return 0;
   const at = nowParam(now);
   const ids = [...marks.keys()].sort();
   await db.query(catalogPublicationDirtyMarkSql, [
     ids,
-    ids.map((id) => marks.get(id)!),
+    ids.map((id) => marks.get(id)!.reason),
+    ids.map((id) => marks.get(id)!.urgent),
     at,
   ]);
   return ids.length;
@@ -269,15 +359,18 @@ const SERVING_ASSETS_SQL = `SELECT pa.catalog_asset_id
  * The App's record of the public membership, by bucket: the Catalog assets
  * it serves, and the ones the last complete sync found published
  * (unreferenced_since IS NULL) that cannot be served yet (pending or
- * failed). Settled, this is exactly the published set (each published asset
- * is either served or not renderable), so only the buckets of a recent
- * change differ. It follows what the reconcile did, not only what the sync
- * saw: a record taken down, withdrawn and published again before any sync
- * differs again. An asset id is `catalog-asset-` and the md5 of its pair,
- * so its bucket and hash are read from the id, as the CMS side computes
- * them from the pair. Read only without the step's own last observation (a
- * start, or a stored row another process advanced); it is linear in the
- * live publications (cost about 16k at 25k).
+ * failed). Settled, this is the published set (each published asset is
+ * either served or not renderable) plus the assets private B serves while
+ * their records are not published yet, so only the buckets of a recent
+ * change, or of such an asset (which the members read below does not mark
+ * while private B alone serves it), differ. It follows what the reconcile
+ * did, not only what the sync saw: a record taken down, withdrawn and
+ * published again before any sync differs again. An asset id is
+ * `catalog-asset-` and the md5 of its pair, so its bucket and hash are read
+ * from the id, as the CMS side computes them from the pair. Read only
+ * without the step's own last observation (a start, or a stored row another
+ * process advanced); it is linear in the live publications (cost about 16k
+ * at 25k).
  */
 export const catalogPublicMembershipAppBucketsSql = `
   SELECT substr(s.id, 15, 2) AS bucket, count(*)::integer AS count,
@@ -304,23 +397,72 @@ export const catalogPrivateMembershipAppBucketsSql = `
   GROUP BY 1`;
 
 /**
- * The App assets of the given buckets: whether each is ready and served (as
+ * The App assets of the given buckets: whether each is ready, served (as
  * SERVING_ASSETS_SQL: its own public asset, by the unique catalog_asset_id,
- * with a publishing or published publication). The served test is a semi
- * join inside the outer join, so the planner looks each listed asset up by
- * index when few buckets are listed (cost about 6k at 25k for 7 buckets)
- * and hashes the publications once for all 256 (about 13k), where a
- * correlated subquery in the select list was priced at about 320k and
- * compiled with JIT. The assets themselves are one scan of
+ * with a publishing or published publication), and exposed: served by a
+ * publication that no confirmed release request pins. A pin counts only for
+ * one of the requests the step confirmed in the CMS for this observation
+ * ($4: of catalogMembershipHoldsSql's, each holding a pin for every
+ * member), and only while the mirror agrees ($2, $3: release_requested,
+ * observed live, not ended, its lease after $2, of the current recipe
+ * policy $3). Such a request's plan (private B) keeps its pins, so an asset
+ * served by those alone has nothing to withdraw while its record is not
+ * published. With no confirmed request (none in $4, or $3 NULL) no pin
+ * counts, and every served asset is exposed. Each test is a semi join
+ * inside an outer join, so the planner looks each listed asset up by index
+ * when few buckets are listed and hashes the publications once for all 256,
+ * where a correlated subquery in the select list was priced at about 320k
+ * and compiled with JIT. The assets themselves are one scan of
  * catalog_media_assets (the bucket is an expression of the id).
  */
 export const catalogPublicMembershipAppMembersSql = `
-  SELECT a.id, a.state = 'ready' AS ready, pa.id IS NOT NULL AS serving
+  SELECT a.id, a.state = 'ready' AS ready, pa.id IS NOT NULL AS serving,
+    x.id IS NOT NULL AS exposed
   FROM community.catalog_media_assets a
   LEFT JOIN community.media_public_assets pa ON pa.catalog_asset_id = a.id
     AND EXISTS (SELECT 1 FROM community.media_publications p
       WHERE p.public_asset_id = pa.id AND p.state IN ('publishing', 'published'))
+  LEFT JOIN community.media_public_assets x ON x.catalog_asset_id = a.id
+    AND EXISTS (SELECT 1 FROM community.media_publications p
+      WHERE p.public_asset_id = x.id AND p.state IN ('publishing', 'published')
+        AND NOT EXISTS (SELECT 1 FROM community.catalog_delivery_rendition_pins h
+          JOIN community.catalog_delivery_prepares i ON i.intent_id = h.intent_id
+          WHERE h.rendition_id = p.rendition_id AND i.intent_id = ANY($4::uuid[])
+            AND i.source_state = 'release_requested' AND i.observed_live
+            AND i.ended_at IS NULL AND i.expires_at > $2::timestamptz
+            AND i.recipe_manifest_sha256 = $3::text))
   WHERE substr(a.id, 15, 2) = ANY($1::text[])`;
+
+/**
+ * The release requests whose pins may keep a served asset of the given
+ * buckets unmarked, each once: the mirror's intents that are
+ * release_requested, observed live, not ended, leased past the observation
+ * ($2) and of the current recipe policy ($3), that name an asset of those
+ * buckets (a superset of those whose pins serve one: inspect pins only its
+ * members' own renditions, and a request that names one but pins nothing
+ * there only widens the confirmation), and that hold a pin for each of
+ * their members. Inspect pins every member that is ready, and reports the
+ * request private-ready only when all are: a request with a member it could
+ * not pin (still rendering, or failed) is granted nothing by its plan
+ * (planCatalogAsset), so its pins keep nothing unmarked. The mirror lags the
+ * CMS by up to a sync (a request the CMS cancelled or superseded still reads
+ * as requested here), so the step confirms these in the CMS before their
+ * pins count (the members read's $4). It reads the mirror's unended leases
+ * (catalog_delivery_prepares_active), their members and their pins by key,
+ * so it is bounded by the live requests, not by the listed buckets nor the
+ * Catalog size.
+ */
+export const catalogMembershipHoldsSql = `
+  SELECT DISTINCT i.intent_id::text AS intent_id
+  FROM community.catalog_delivery_prepares i
+  JOIN community.catalog_delivery_media_refs r ON r.intent_id = i.intent_id
+  WHERE i.source_state = 'release_requested' AND i.observed_live
+    AND i.ended_at IS NULL AND i.expires_at > $2::timestamptz
+    AND i.recipe_manifest_sha256 = $3::text
+    AND substr(r.asset_id, 15, 2) = ANY($1::text[])
+    AND i.media_count = (SELECT count(DISTINCT h.ordinal)
+      FROM community.catalog_delivery_rendition_pins h WHERE h.intent_id = i.intent_id)
+  ORDER BY 1`;
 
 /** The mirror's live intents of the given buckets. */
 export const catalogPrivateMembershipAppMembersSql = `
@@ -328,35 +470,55 @@ export const catalogPrivateMembershipAppMembersSql = `
   FROM community.catalog_delivery_prepares p
   WHERE p.observed_live AND substr(p.intent_id::text, 1, 2) = ANY($1::text[])`;
 
-/** The assets App mirror members name for the given intents. */
+/** The assets App mirror members name for the given intents ($1), each once,
+ * and whether one of the intents of $2 (those whose change ends what they
+ * granted, a subset of $1) names it. */
 export const catalogIntentAssetsSql = `
-  SELECT DISTINCT r.asset_id
+  SELECT r.asset_id, bool_or(r.intent_id = ANY($2::uuid[])) AS urgent
   FROM community.catalog_delivery_media_refs r
   WHERE r.intent_id = ANY($1::uuid[])
+  GROUP BY r.asset_id
   ORDER BY r.asset_id`;
+
+/** The assets the given intents name, each with whether an intent whose
+ * change ends what it granted names it (an urgent mark). */
+const intentAssets = async (
+  db: Pick<PublishingDb, "query">,
+  changed: ReadonlyMap<string, boolean>,
+): Promise<ReadonlyMap<string, boolean>> => {
+  if (!changed.size) return new Map();
+  const ids = [...changed.keys()].sort();
+  return new Map(
+    (
+      await db.query<{ asset_id: string; urgent: boolean }>(
+        catalogIntentAssetsSql,
+        [ids, ids.filter((id) => changed.get(id))],
+      )
+    ).rows.map((row) => [row.asset_id, row.urgent]),
+  );
+};
 
 /**
  * The time-driven scope: the assets of the mirror's live intents whose
- * prepared or requested lease ($1, $2], or whose render grace ($3 hours
- * after the lease, prepared, requested or expired), passed in the window.
- * The CMS writes nothing when a lease passes, so no fingerprint of the
- * mirror changes then. Each branch reads its own index: the unended rows'
- * expiry (catalog_delivery_prepares_active) and the live rows (A1's
- * catalog_delivery_prepares_observed_live).
+ * prepared or requested lease passed in the window ($1, $2], each with
+ * whether a requested one names it (urgent: its lease ends private B). A
+ * prepared lease grants nothing a takedown removes (endsCatalogGrant), so
+ * its assets are marked normal; one the CMS requested before the mirror saw
+ * it also changes the CMS projection then, whose diff marks it urgent in the
+ * same observation. The CMS writes nothing when a lease passes, so no
+ * fingerprint of the mirror changes then. It reads the unended rows' expiry
+ * (catalog_delivery_prepares_active). The render grace after a lease is
+ * rendering only (W10): its end changes no publication plan, so it marks
+ * nothing.
  */
 export const catalogMembershipBoundariesSql = `
-  SELECT DISTINCT r.asset_id
+  SELECT r.asset_id, bool_or(p.source_state = 'release_requested') AS urgent
   FROM community.catalog_delivery_media_refs r
-  WHERE r.intent_id IN (
-    SELECT p.intent_id FROM community.catalog_delivery_prepares p
-    WHERE p.ended_at IS NULL AND p.observed_live
-      AND p.source_state IN ('prepared', 'release_requested')
-      AND p.expires_at > $1::timestamptz AND p.expires_at <= $2::timestamptz
-    UNION
-    SELECT p.intent_id FROM community.catalog_delivery_prepares p
-    WHERE p.observed_live AND p.source_state IN ('prepared', 'release_requested', 'expired')
-      AND p.expires_at > $1::timestamptz - make_interval(hours => $3::integer)
-      AND p.expires_at <= $2::timestamptz - make_interval(hours => $3::integer))
+  JOIN community.catalog_delivery_prepares p ON p.intent_id = r.intent_id
+  WHERE p.ended_at IS NULL AND p.observed_live
+    AND p.source_state IN ('prepared', 'release_requested')
+    AND p.expires_at > $1::timestamptz AND p.expires_at <= $2::timestamptz
+  GROUP BY r.asset_id
   ORDER BY r.asset_id`;
 
 /** The stored fingerprints (one row, which startup guarantees). */
@@ -409,6 +571,32 @@ export const readCatalogMembershipState = async (
   };
 };
 
+/** The release requests whose pins may keep an asset of the given buckets
+ * unmarked (catalogMembershipHoldsSql), in id order, for the step to
+ * confirm in the CMS. No bucket, no read; an invalid bucket or policy throws
+ * before any. */
+export const readCatalogMembershipHolds = async (
+  db: Pick<Pool, "query">,
+  buckets: readonly string[],
+  observedAt: Date,
+  policy: string,
+): Promise<string[]> => {
+  if (
+    buckets.some((bucket) => !BUCKET.test(bucket)) ||
+    typeof policy !== "string" ||
+    !POLICY.test(policy)
+  )
+    throw new TypeError("Catalog membership observation invalid");
+  if (!buckets.length) return [];
+  return (
+    await db.query<{ intent_id: string }>(catalogMembershipHoldsSql, [
+      buckets,
+      nowParam(observedAt),
+      policy,
+    ])
+  ).rows.map((row) => row.intent_id);
+};
+
 /** The App's record of one membership, by bucket. */
 export const readCatalogMembershipAppBuckets = async (
   db: Pick<Pool, "query">,
@@ -455,6 +643,20 @@ export interface CatalogMembershipObservation {
   readonly previous: CatalogMembershipState;
   readonly public: CatalogMembershipSide<string>;
   readonly private: CatalogMembershipSide<CatalogMembershipIntent> | null;
+  /**
+   * With a prepare reader and listed public buckets: the release requests
+   * whose pins keep a served asset the Catalog does not publish unmarked.
+   * Of the mirror's live requests that name an asset of the listed buckets
+   * and hold a pin for each of their members (catalogMembershipHoldsSql, a
+   * superset of those whose pins serve one), those the live projection
+   * reports in the observation's own snapshot as release_requested, leased
+   * past `observedAt` and of `policy`, the current recipe policy. Absent
+   * (no confirmation, or one that failed), no pin keeps an asset unmarked.
+   */
+  readonly requests?: {
+    readonly policy: string;
+    readonly intentIds: readonly string[];
+  };
 }
 
 /** What one observation marked, by cause (an asset counts once per cause). */
@@ -469,20 +671,23 @@ const ms = (date: Date) => date.getTime();
 /**
  * Applies one observation in one App transaction: marks the assets whose
  * public or private membership differs from the App's record in the
- * observation's listed buckets, and the assets of intents whose lease or
- * render grace passed since the stored private observation, and stores the
+ * observation's listed buckets, and the assets of intents whose lease passed
+ * since the stored private observation, each in its class, and stores the
  * new fingerprints. The reads take no lock; the state row is then written
  * before the marks (the lock order above: a reconcile pass holds that row
  * while it settles its marks), and only while it still holds the
  * fingerprints the observation was compared with; a missing row, or one
  * that another process advanced meanwhile, throws before any mark (the next
  * observation compares with what is stored). Only an asset the reconcile
- * can act on is marked: a published one that is ready and not served, and a
- * served one the Catalog does not publish. A CMS member the App has no ready
- * asset for is not: the reconcile could not copy anything for it, and the
- * render that makes it ready marks it. An intent change marks the assets
- * App mirror members name for the intent; an intent App does not know
- * grants nothing until a sync mirrors (and marks) it.
+ * can act on is marked: a published one that is ready and not served, and
+ * an exposed one the Catalog does not publish: with a prepare reader, served
+ * by a publication no release request of `observation.requests` pins (the
+ * requests the CMS confirmed for this observation, each holding a pin for
+ * every member), and without one, any served one. A CMS member the App has
+ * no ready asset for is not: the reconcile could not copy anything for it,
+ * and the render that makes it ready marks it. An intent change marks the
+ * assets App mirror members name for the intent; an intent App does not
+ * know grants nothing until a sync mirrors (and marks) it.
  */
 export const applyCatalogMembership = async (
   pool: Pool,
@@ -491,6 +696,7 @@ export const applyCatalogMembership = async (
 ): Promise<CatalogMembershipMarks> => {
   const at = nowParam(now);
   const observedAt = nowParam(observation.observedAt);
+  const requests = observation.requests;
   for (const side of [observation.public, observation.private])
     if (
       side !== null &&
@@ -500,46 +706,92 @@ export const applyCatalogMembership = async (
         side.diff?.buckets.some((bucket) => !BUCKET.test(bucket)))
     )
       throw new TypeError("Catalog membership observation invalid");
+  if (
+    requests !== undefined &&
+    (typeof requests.policy !== "string" ||
+      !POLICY.test(requests.policy) ||
+      !Array.isArray(requests.intentIds) ||
+      requests.intentIds.some((id) => typeof id !== "string" || !UUID.test(id)))
+  )
+    throw new TypeError("Catalog membership observation invalid");
   return writeTransaction(pool, async (db) => {
-    const marks = new Map<string, CatalogPublicationDirtyReason>();
+    const marks = new Map<string, CatalogPublicationDirtyMark>();
     const counts = { public: 0, private: 0, boundaries: 0 };
+    // An asset keeps the reason of its first cause, and is urgent when any
+    // of its causes is.
     const mark = (
-      ids: Iterable<string>,
+      ids: Iterable<readonly [string, boolean]>,
       reason: CatalogPublicationDirtyReason,
     ) => {
       let n = 0;
-      for (const id of ids) {
+      for (const [id, urgent] of ids) {
         n += 1;
-        if (!marks.has(id)) marks.set(id, reason);
+        const prior = marks.get(id);
+        marks.set(id, {
+          reason: prior?.reason ?? reason,
+          urgent: urgent || prior?.urgent === true,
+        });
       }
       return n;
     };
     // A published asset that is ready and not served is to be copied; an
-    // asset served while the Catalog does not publish it is to be withdrawn
-    // (or is held by a requested private intent, which its plan keeps).
+    // asset the Catalog does not publish that is exposed is to be withdrawn,
+    // an urgent mark. Exposed: served by a publication that no release
+    // request pins which holds a pin for each of its members and which the
+    // CMS confirmed in this observation as requested, unexpired and of the
+    // current recipe policy (observation.requests). One that such requests
+    // alone serve is not marked, however often its bucket is listed (a
+    // release wave lists about half the buckets each minute): its plan keeps
+    // every such pin, and the end of its request marks it (the private diff,
+    // the sync, a passed lease). A request the CMS has ended, which the
+    // mirror holds as requested until the next sync, keeps nothing: a record
+    // withdrawn after its pending request was cancelled is marked in that
+    // same observation, as is one whose images only an earlier policy's
+    // request pins (its plan grants such a request nothing), or only a
+    // request with a member still rendering (not private-ready: its plan
+    // grants it nothing either). Inspect can still fail on a request that
+    // pinned every member (a planned role without its one ready rendition):
+    // its plan then keeps nothing, and an image only its pins serve, shared
+    // with a record just withdrawn, waits for the next sync's unreferenced
+    // flip (up to 5 minutes). Without a prepare reader (no private side) the
+    // reconcile reads no intent and keeps no pin, so every such served asset
+    // is to be withdrawn.
+    const privateB = observation.private !== null;
     const publicDiff = observation.public.diff;
     if (publicDiff?.buckets.length) {
       const published = new Set(publicDiff.members);
-      const changed: string[] = [];
+      const changed: (readonly [string, boolean])[] = [];
       for (const row of (
-        await db.query<{ id: string; ready: boolean; serving: boolean }>(
-          catalogPublicMembershipAppMembersSql,
-          [publicDiff.buckets],
-        )
+        await db.query<{
+          id: string;
+          ready: boolean;
+          serving: boolean;
+          exposed: boolean;
+        }>(catalogPublicMembershipAppMembersSql, [
+          publicDiff.buckets,
+          observedAt,
+          requests?.policy ?? null,
+          requests?.intentIds ?? [],
+        ])
       ).rows)
-        if (published.has(row.id) ? row.ready && !row.serving : row.serving)
-          changed.push(row.id);
+        if (published.has(row.id)) {
+          if (row.ready && !row.serving) changed.push([row.id, false]);
+        } else if (privateB ? row.exposed : row.serving)
+          changed.push([row.id, true]);
       counts.public = mark(changed, "public_membership");
     }
     const privateDiff = observation.private?.diff;
     if (privateDiff?.buckets.length) {
-      const live = new Map(
+      const members = new Map(
         privateDiff.members.map((m) => [
           m.intentId,
-          `${m.state}:${m.stateVersion}`,
+          { state: m.state, version: m.stateVersion },
         ]),
       );
-      const changed = new Set<string>();
+      // Each changed intent, and whether its change can only end what it
+      // granted (urgent, endsCatalogGrant): the mirror holds what the App
+      // last saw, the projection what the CMS holds now.
+      const changed = new Map<string, boolean>();
       const mirrored = new Set<string>();
       for (const row of (
         await db.query<{
@@ -549,24 +801,26 @@ export const applyCatalogMembership = async (
         }>(catalogPrivateMembershipAppMembersSql, [privateDiff.buckets])
       ).rows) {
         mirrored.add(row.intent_id);
+        const next = members.get(row.intent_id);
         if (
-          live.get(row.intent_id) !==
-          `${row.source_state}:${row.source_state_version}`
+          next?.state !== row.source_state ||
+          next.version !== row.source_state_version
         )
-          changed.add(row.intent_id);
+          changed.set(
+            row.intent_id,
+            endsCatalogGrant(
+              { state: row.source_state, version: row.source_state_version },
+              next,
+            ),
+          );
       }
-      for (const intentId of live.keys())
+      for (const [intentId, next] of members)
         if (!mirrored.has(intentId) && UUID.test(intentId))
-          changed.add(intentId);
-      if (changed.size)
-        counts.private = mark(
-          (
-            await db.query<{ asset_id: string }>(catalogIntentAssetsSql, [
-              [...changed].sort(),
-            ])
-          ).rows.map((row) => row.asset_id),
-          "private_membership",
-        );
+          changed.set(intentId, endsCatalogGrant(undefined, next));
+      counts.private = mark(
+        await intentAssets(db, changed),
+        "private_membership",
+      );
     }
     if (observation.private !== null) {
       const to = ms(observation.observedAt);
@@ -574,18 +828,16 @@ export const applyCatalogMembership = async (
         observation.previous.private === null
           ? to - CATALOG_MEMBERSHIP_FIRST_WINDOW_MINUTES * 60_000
           : ms(observation.previous.private.observedAt);
+      // A requested lease that passed ends private B: urgent. A prepared one
+      // ends nothing a takedown removes: normal.
       if (from < to)
         counts.boundaries = mark(
           (
-            await db.query<{ asset_id: string }>(
+            await db.query<{ asset_id: string; urgent: boolean }>(
               catalogMembershipBoundariesSql,
-              [
-                new Date(from).toISOString(),
-                observedAt,
-                CATALOG_RENDER_GRACE_HOURS,
-              ],
+              [new Date(from).toISOString(), observedAt],
             )
-          ).rows.map((row) => row.asset_id),
+          ).rows.map((row) => [row.asset_id, row.urgent] as const),
           "private_membership",
         );
     }
@@ -639,6 +891,11 @@ export const catalogMembershipStore = (pool: Pool) => ({
   readCatalogMembershipState: () => readCatalogMembershipState(pool),
   readCatalogMembershipAppBuckets: (side: "public" | "private") =>
     readCatalogMembershipAppBuckets(pool, side),
+  readCatalogMembershipHolds: (
+    buckets: readonly string[],
+    observedAt: Date,
+    policy: string,
+  ) => readCatalogMembershipHolds(pool, buckets, observedAt, policy),
   applyCatalogMembership: (
     observation: CatalogMembershipObservation,
     now: Date,
@@ -652,10 +909,17 @@ export const catalogMirrorStatesSql = `
   FROM community.catalog_delivery_prepares p
   WHERE p.intent_id = ANY($1::uuid[])`;
 
+/** One mirror row as a sync compares it: its state, version and liveness. */
+export interface CatalogMirrorState {
+  readonly state: string;
+  readonly version: string;
+  readonly live: boolean;
+}
+
 export const readCatalogMirrorStates = async (
   db: Pick<PublishingDb, "query">,
   intentIds: readonly string[],
-): Promise<ReadonlyMap<string, string>> => {
+): Promise<ReadonlyMap<string, CatalogMirrorState>> => {
   const ids = [
     ...new Set(
       intentIds.map((id) => id.toLowerCase()).filter((id) => UUID.test(id)),
@@ -672,22 +936,43 @@ export const readCatalogMirrorStates = async (
       }>(catalogMirrorStatesSql, [ids])
     ).rows.map((row) => [
       row.intent_id,
-      `${row.source_state}:${row.source_state_version}:${row.observed_live}`,
+      {
+        state: row.source_state,
+        version: String(row.source_state_version),
+        live: row.observed_live,
+      },
     ]),
   );
 };
 
-/** The assets of the intents whose mirror state differs between two reads. */
+/** A mirror row as endsCatalogGrant reads it: undefined unless observed
+ * live (a tombstone, F3's included, no longer lists the intent). */
+const mirroredLifecycle = (
+  row: CatalogMirrorState | undefined,
+): CatalogIntentLifecycle | undefined =>
+  row?.live ? { state: row.state, version: Number(row.version) } : undefined;
+
+/** The assets of the intents whose mirror state differs between two reads,
+ * each with whether a change that can only end what its intent granted
+ * (endsCatalogGrant, from the row before to the row after: an ended state,
+ * or a row no longer observed live, F3's tombstone) names it. */
 export const changedCatalogIntentAssets = async (
   db: Pick<PublishingDb, "query">,
-  before: ReadonlyMap<string, string>,
-  after: ReadonlyMap<string, string>,
-): Promise<string[]> => {
-  const changed = [...after.keys()]
-    .filter((id) => before.get(id) !== after.get(id))
-    .sort();
-  if (!changed.length) return [];
-  return (
-    await db.query<{ asset_id: string }>(catalogIntentAssetsSql, [changed])
-  ).rows.map((row) => row.asset_id);
+  before: ReadonlyMap<string, CatalogMirrorState>,
+  after: ReadonlyMap<string, CatalogMirrorState>,
+): Promise<ReadonlyMap<string, boolean>> => {
+  const changed = new Map<string, boolean>();
+  for (const [id, now] of after) {
+    const was = before.get(id);
+    if (
+      was?.state !== now.state ||
+      was.version !== now.version ||
+      was.live !== now.live
+    )
+      changed.set(
+        id,
+        endsCatalogGrant(mirroredLifecycle(was), mirroredLifecycle(now)),
+      );
+  }
+  return intentAssets(db, changed);
 };

@@ -2,9 +2,9 @@
 -- scoped Catalog publication reconcile. Two new tables, three partial indexes
 -- and one plain index; no existing row or column is rewritten. The reconcile
 -- plans only a bounded scope of Catalog assets per pass (in-flight
--- publications, dirty assets in FIFO order, membership fingerprint
--- differences, time-driven entries and a keyset sweep) instead of the whole
--- Catalog.
+-- publications, dirty assets in order, urgent marks first, membership
+-- fingerprint differences, time-driven entries and a keyset sweep) instead
+-- of the whole Catalog.
 --
 -- Forward-only, like every migration of this family: the runner has no down
 -- path and an applied file never changes (README). Nothing needs undoing for
@@ -20,26 +20,32 @@
 -- applied) and be re-run instead of queueing those writes.
 SET LOCAL lock_timeout = '5s';
 
--- Catalog assets the reconcile must plan again, oldest mark first. A mark
--- raises mark_seq (inserting the row at 1 the first time); a pass that planned
--- the asset completely sets cleared_seq to the mark_seq it read, in the same
--- transaction as its publication writes, so a mark made meanwhile keeps the
--- row pending. Rows are never deleted (the App role holds no DELETE), so the
--- table is bounded by the number of Catalog assets. marked_at is the time the
--- row last became pending; the reason is the latest mark's, content-free.
--- There is no foreign key to catalog_media_assets on purpose: a mark must
--- never take a lock on the asset row that the Catalog sync locks FOR UPDATE.
+-- Catalog assets the reconcile must plan again, urgent marks first, each
+-- class oldest mark first. A mark raises mark_seq (inserting the row at 1 the
+-- first time); a pass that planned the asset completely sets cleared_seq to
+-- the mark_seq it read, in the same transaction as its publication writes, so
+-- a mark made meanwhile keeps the row pending. Rows are never deleted (the
+-- App role holds no DELETE), so the table is bounded by the number of Catalog
+-- assets. marked_at is the time the row last became pending; the reason is
+-- the latest mark's, content-free. urgent is the mark's class: a change that
+-- can only remove public or private exposure (a takedown, an intent that
+-- ended or whose lease passed); a pending row stays urgent while it is
+-- marked again, and a normal one becomes urgent with an urgent mark. There
+-- is no foreign key to catalog_media_assets on purpose: a mark must never
+-- take a lock on the asset row that the Catalog sync locks FOR UPDATE.
 CREATE TABLE community.catalog_publication_dirty (
   asset_id text PRIMARY KEY CHECK (asset_id ~ '^catalog-asset-[0-9a-f]{32}$'),
   mark_seq bigint NOT NULL CHECK (mark_seq > 0),
   cleared_seq bigint NOT NULL DEFAULT 0 CHECK (cleared_seq >= 0 AND cleared_seq <= mark_seq),
   reason text NOT NULL CHECK (reason IN
     ('reference', 'intent', 'rendition', 'publication', 'public_membership', 'private_membership')),
+  urgent boolean NOT NULL DEFAULT false,
   marked_at timestamptz NOT NULL
 );
--- The FIFO read of pending marks; cleared rows leave the index.
+-- The read of pending marks, urgent ones first and each class oldest first;
+-- cleared rows leave the index.
 CREATE INDEX catalog_publication_dirty_pending
-  ON community.catalog_publication_dirty (marked_at, asset_id)
+  ON community.catalog_publication_dirty (urgent DESC, marked_at, asset_id)
   WHERE mark_seq > cleared_seq;
 
 -- The reconcile's own position, one row created here (the App role never

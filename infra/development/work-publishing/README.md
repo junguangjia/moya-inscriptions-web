@@ -53,7 +53,7 @@ removed blindly. `pnpm dev:migrate` applies this script after the bootstrap.
 
 Since catalog-scale-v1 (App migration `20261024010000`) the script also grants
 the scoped Catalog reconcile's dirty queue and state row: `SELECT, INSERT` and
-`UPDATE (mark_seq, cleared_seq, reason, marked_at)` on
+`UPDATE (mark_seq, cleared_seq, reason, urgent, marked_at)` on
 `community.catalog_publication_dirty`, `SELECT` and `UPDATE` of every column but
 `id` on the one row of `community.catalog_reconcile_state`, and no `DELETE`.
 Applied before that migration it grants nothing on them, so apply it again

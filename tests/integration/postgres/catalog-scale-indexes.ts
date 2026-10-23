@@ -291,17 +291,18 @@ describe("catalog-scale-v1 W6: A1 and M2 index plans at 25k (local only)", () =>
       );
       expect(inFlight.jit).toBe(false);
 
-      // Every asset marked once and cleared, and 1,000 pending: the FIFO read
-      // walks the pending rows in order, without a sort or the cleared ones.
+      // Every asset marked once and cleared, and 1,000 pending, a tenth of
+      // them urgent: the read walks the pending rows in order, urgent ones
+      // first, without a sort or the cleared ones.
       try {
         const queue = record(
           "reconcile pending marks",
           await rolledBack(fixture.setup, async (client) => {
             await client.query(
-              `INSERT INTO community.catalog_publication_dirty (asset_id, mark_seq, cleared_seq, reason, marked_at)
-               SELECT id, 1, CASE WHEN row_number() OVER (ORDER BY id) <= 1000 THEN 0 ELSE 1 END,
-                 'reference', now() - make_interval(secs => row_number() OVER (ORDER BY id))
-               FROM community.catalog_media_assets`,
+              `INSERT INTO community.catalog_publication_dirty (asset_id, mark_seq, cleared_seq, reason, urgent, marked_at)
+               SELECT id, 1, CASE WHEN n <= 1000 THEN 0 ELSE 1 END, 'reference', n % 10 = 0,
+                 now() - make_interval(secs => n)
+               FROM (SELECT id, row_number() OVER (ORDER BY id) AS n FROM community.catalog_media_assets) a`,
             );
             await client.query("ANALYZE community.catalog_publication_dirty");
             return plan(client, statements.pending, [1_000], {

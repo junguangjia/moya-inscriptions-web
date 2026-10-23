@@ -531,11 +531,11 @@ export const prepareProductionBackend = async (
               // publication lanes below, whenever publishing media is set,
               // with the authority always on the published read pool), the
               // per-minute membership step marks its dirty assets (a
-              // takedown between syncs or with no sync at all, a lease or
-              // render grace that passed), from the published read pool, on
-              // the App pool. It follows the reconcile, not the sync: without
-              // CMS_MEDIA_DIR there is no sync, and the reconcile would
-              // otherwise reach a takedown only on the sweep. One instance
+              // takedown between syncs or with no sync at all, a lease that
+              // passed), from the published read pool, on the App pool. It
+              // follows the reconcile, not the sync: without CMS_MEDIA_DIR
+              // there is no sync, and the reconcile would otherwise reach a
+              // takedown only on the sweep. One instance
               // per process: its memory of its own last observation limits
               // the marks.
               {
@@ -544,6 +544,7 @@ export const prepareProductionBackend = async (
                 run: createCatalogMembershipWatch({
                   published: pool,
                   prepare: catalogPreparePool,
+                  policy: currentCatalogRecipePolicy().recipeManifestSha256,
                   port: catalogMembershipStore(communityPool),
                 }).run,
                 detached: true,

@@ -496,7 +496,7 @@ BEGIN
     'GRANT SELECT, INSERT ON TABLE community.catalog_publication_dirty TO %I',
     current_setting('moya.runtime_app_role'));
   EXECUTE format(
-    'GRANT UPDATE (mark_seq, cleared_seq, reason, marked_at) ON TABLE community.catalog_publication_dirty TO %I',
+    'GRANT UPDATE (mark_seq, cleared_seq, reason, urgent, marked_at) ON TABLE community.catalog_publication_dirty TO %I',
     current_setting('moya.runtime_app_role'));
   EXECUTE format(
     'GRANT SELECT ON TABLE community.catalog_reconcile_state TO %I',

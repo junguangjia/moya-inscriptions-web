@@ -550,11 +550,17 @@ migration of that checkout.
    It builds the index on `catalog_delivery_intents` and replaces or creates the
    two private views under the same 5 s `lock_timeout`; repeat it after a
    `55P03`.
-4. Re-run `infra/development/catalog-media/grant-prepare-read.sql` with
-   `--single-transaction` and its four identity variables, as for #320. It now
-   also grants the prepare reader `SELECT` on the live projection. Check that
+4. Only where `CATALOG_PREPARE_DATABASE_URL` is set, or is about to be set, for
+   the media worker or the Backend (the prepare reader is optional, and both
+   Production env examples leave it unset): re-run
+   `infra/development/catalog-media/grant-prepare-read.sql` with
+   `--single-transaction` and its four identity variables. It refuses unless the
+   prepare reader role exists and is the approved one, and it now also grants
+   that reader `SELECT` on the live projection. Check that
    `SELECT has_table_privilege('<prepare reader>', 'public.catalog_delivery_live_prepare_media', 'SELECT')`
-   is `true`.
+   is `true`. Without a prepare reader, skip this step: nothing reads either
+   private view, and the startup check of the views runs only with
+   `CATALOG_PREPARE_DATABASE_URL` set.
 5. A1, with the migration role: `pnpm db:migrate:community` with its
    `APP_MIGRATION_DATABASE_URL`, as above. Its index builds briefly block writes
    to `community.catalog_delivery_prepares` and `community.media_publications`;
@@ -562,10 +568,11 @@ migration of that checkout.
    and is repeated. It is forward-only, like every App migration.
 6. Re-apply `infra/development/work-publishing/grant-runtime.sql` with
    `app_role` and `--single-transaction` (idempotent). It grants the App role
-   `SELECT`, `INSERT` and `UPDATE (mark_seq, cleared_seq, reason, marked_at)` on
-   the dirty queue, and `SELECT` and `UPDATE` of the state columns (not `id`) on
-   the state row; never `DELETE`. Run before step 5 it grants nothing on these
-   tables, so it must follow A1. Check that
+   `SELECT`, `INSERT` and
+   `UPDATE (mark_seq, cleared_seq, reason, urgent, marked_at)` on the dirty
+   queue, and `SELECT` and `UPDATE` of the state columns (not `id`) on the state
+   row; never `DELETE`. Run before step 5 it grants nothing on these tables, so
+   it must follow A1. Check that
    `SELECT has_table_privilege('<App role>', 'community.catalog_publication_dirty', 'INSERT')`
    is `true`.
 7. Only then start the media worker and the Backend of 1B, in the activation
@@ -578,8 +585,11 @@ its ledger check reads only the migration IDs it knows, and M1 and M2 keep the
 rows and columns of the views it reads. A1 stays in place. To undo M2 or M1
 itself, use `payload migrate:down` only while that migration is the latest batch
 and a batch of its own (steps 2 and 3 make it so); otherwise run its exported
-downgrade SQL and delete its `payload_migrations` row in one transaction. A
-rollback restores #320's listing bounds, so until 1B has run stably keep the
-Catalog within them: fewer than about 8,800 published images (with live
-prepares, the 10,000 published-plus-prepared pair bound), fewer than 10,000
-prepare intents in all, and fewer than 18,000 rows in the private prepare view.
+downgrade SQL and delete its `payload_migrations` row in one transaction. After
+M2 is undone, the current `grant-prepare-read.sql` fails (it grants `SELECT` on
+the live projection M2 creates), so any later re-grant of the prepare reader
+must use the #320 version of that script. A rollback restores #320's listing
+bounds, so until 1B has run stably keep the Catalog within them: fewer than
+about 8,800 published images (with live prepares, the 10,000
+published-plus-prepared pair bound), fewer than 10,000 prepare intents in all,
+and fewer than 18,000 rows in the private prepare view.

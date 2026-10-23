@@ -18,6 +18,7 @@ import {
   parseCatalogPrepareDatabaseConfig,
   readCatalogSourceSnapshot,
   createCatalogPublicationAuthority,
+  currentCatalogRecipePolicy,
 } from "./publishing/catalog-delivery-intents.js";
 import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
@@ -430,6 +431,7 @@ export async function prepareMediaWorker(
     ? createCatalogMembershipWatch({
         published: catalogPool,
         prepare: catalogPreparePool,
+        policy: currentCatalogRecipePolicy().recipeManifestSha256,
         port: catalogMembershipStore(communityPool),
         logger,
       })

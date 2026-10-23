@@ -48,14 +48,18 @@ export interface MediaPublicationPort {
      * reconcile pass (catalog-scale-v1 W7), never a whole-Catalog plan. The
      * assets are planned in the given order, in batches, each from its own
      * facts, within `budgetMs`, so the ones attempted are a prefix of
-     * `assetIds`. `plans` holds the desired Catalog rendition IDs of each
-     * asset planned completely (none when it is to serve nothing); `failed`
-     * the assets whose plan threw; every other asset was not reached.
-     * `policy` is the recipe policy digest the plans were made under.
+     * `assetIds`; the first `reserved` (none by default) are attempted
+     * whatever the budget, until a failed batch among them, retried asset by
+     * asset, reaches about one batch past it: the pass may pass its budget
+     * by about one batch. `plans` holds the desired Catalog rendition IDs of
+     * each asset planned completely (none when it is to serve nothing);
+     * `failed` the assets whose plan threw; every other asset was not
+     * reached. `policy` is the recipe policy digest the plans were made
+     * under.
      */
     planScope(
       assetIds: readonly string[],
-      options: { readonly budgetMs: number },
+      options: { readonly budgetMs: number; readonly reserved?: number },
     ): Promise<{
       readonly policy: string;
       readonly plans: ReadonlyMap<string, readonly string[]>;

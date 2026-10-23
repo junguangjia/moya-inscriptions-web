@@ -1031,6 +1031,71 @@ export const bumpCatalogScaleRecipe = async (
   }
 };
 
+/**
+ * Private B holding the images of published records `first`..`last` while
+ * the records are not published (a release wave before its release, W-AC5):
+ * each record leaves the published Catalog (draft), its released intent is a
+ * live release request again (the next state version, a 24-hour lease from
+ * the database clock), and the App follows as a sync leaves it: the mirror
+ * row requested at that version and lease, the assets unreferenced. The
+ * intent keeps its approved pins, which name every published generation of
+ * its images (the fixture renders the four pinned roles only), so the
+ * request's plan keeps all that the images serve. Each record must have a
+ * released intent, mirrored. Returns the held asset ids, sorted.
+ */
+export const holdCatalogScaleRecords = async (
+  fixture: Pick<CatalogScaleDatabase, "setup">,
+  records: { readonly first: number; readonly last: number },
+): Promise<string[]> => {
+  const client = await connect(fixture.setup);
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "UPDATE public.catalogs SET _status = 'draft' WHERE id BETWEEN $1 AND $2",
+      [records.first, records.last],
+    );
+    const intents = (
+      await client.query<{ id: string }>(
+        `UPDATE public.catalog_delivery_intents SET state = 'release_requested',
+           state_version = state_version + 1, release_proof_sha256 = NULL,
+           expires_at = now() + interval '24 hours', updated_at = now()
+         WHERE catalog_document_id BETWEEN $1 AND $2 AND state = 'released'
+         RETURNING id`,
+        [records.first, records.last],
+      )
+    ).rows.map((row) => row.id);
+    const mirrored = await client.query(
+      `UPDATE community.catalog_delivery_prepares p SET source_state = i.state,
+         source_state_version = i.state_version, expires_at = i.expires_at,
+         observed_at = now(), updated_at = now()
+       FROM public.catalog_delivery_intents i
+       WHERE i.id = p.intent_id AND p.intent_id = ANY($1::uuid[]) AND p.observed_live`,
+      [intents],
+    );
+    if (
+      intents.length !== records.last - records.first + 1 ||
+      mirrored.rowCount !== intents.length
+    )
+      throw new Error("Each held record needs a mirrored released intent");
+    const held = (
+      await client.query<{ id: string }>(
+        `UPDATE community.catalog_media_assets a SET unreferenced_since = now(), updated_at = now()
+         FROM community.catalog_delivery_media_refs r
+         WHERE r.intent_id = ANY($1::uuid[]) AND a.id = r.asset_id
+         RETURNING a.id`,
+        [intents],
+      )
+    ).rows.map((row) => row.id);
+    await client.query("COMMIT");
+    return held.sort();
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 /** One statement a recorded pool or one of its clients ran. */
 export interface RecordedQuery {
   readonly pool: string;
@@ -1305,5 +1370,5 @@ export const catalogScaleIndexedStatements = Object.freeze({
     "SELECT DISTINCT a.catalog_asset_id AS id FROM community.media_publications p JOIN community.media_public_assets a ON a.id=p.public_asset_id WHERE p.state IN ('publishing','withdrawing','purge_failed') AND ((p.state='publishing' AND NOT $2::boolean) OR (p.state<>'publishing' AND p.purge_attempts<3)) AND a.catalog_asset_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM community.catalog_publication_dirty d WHERE d.asset_id=a.catalog_asset_id AND d.mark_seq>d.cleared_seq) AND NOT EXISTS (SELECT 1 FROM community.publishing_jobs j WHERE j.subject_id=a.catalog_asset_id AND j.kind IN ('publish_media','withdraw_media','verify_withdrawal') AND j.state IN ('queued','running')) ORDER BY 1 LIMIT $1",
   /** $1: the limit. */
   pending:
-    "SELECT d.asset_id AS id FROM community.catalog_publication_dirty d WHERE d.mark_seq>d.cleared_seq AND NOT EXISTS (SELECT 1 FROM community.publishing_jobs j WHERE j.subject_id=d.asset_id AND j.kind IN ('publish_media','withdraw_media','verify_withdrawal') AND j.state IN ('queued','running')) ORDER BY d.marked_at,d.asset_id LIMIT $1",
+    "SELECT d.asset_id AS id,d.urgent FROM community.catalog_publication_dirty d WHERE d.mark_seq>d.cleared_seq AND NOT EXISTS (SELECT 1 FROM community.publishing_jobs j WHERE j.subject_id=d.asset_id AND j.kind IN ('publish_media','withdraw_media','verify_withdrawal') AND j.state IN ('queued','running')) ORDER BY d.urgent DESC,d.marked_at,d.asset_id LIMIT $1",
 });

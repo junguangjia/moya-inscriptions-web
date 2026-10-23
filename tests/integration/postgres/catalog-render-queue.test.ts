@@ -15,6 +15,7 @@ import {
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
 import {
+  catalogRenderGraceReferenceSql,
   PostgresWorkPublishingAdapter,
   readCatalogRenderBacklog,
 } from "@moya/community-postgres";
@@ -46,6 +47,12 @@ import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
  * - The queue target bounds the queued base renders: a pass queues only the
  *   room below it, and user and block jobs neither count nor lose their
  *   claim class.
+ * - After a recipe change, an intent's image ready under the older recipe is
+ *   re-rendered in the intent's tier with the pending images, and counted
+ *   there: a prepared record's before more published re-renders than the
+ *   target, a published image a requested intent names in t1, a grace
+ *   member in t3, an intent's failed re-render queued again before the
+ *   gate. A re-render only the published list names stays t4 behind it.
  * - W-AC10: 50 records of 7 images whose leases run in turn a minute apart,
  *   all in the snapshot from the first pass, beside 20 published re-renders,
  *   rendered at 35 a pass: record k finishes before any image of record k+2
@@ -118,9 +125,11 @@ interface Shown {
   readonly position: number;
 }
 
+/** An intent as the live projection lists it: live with its members, or one
+ * whose lease passed as an expired header (W10). */
 const intent = (
   documentId: number,
-  state: "prepared" | "release_requested",
+  state: "prepared" | "release_requested" | "expired",
   expiresAt: Date,
   images: readonly Image[],
 ) => ({
@@ -134,14 +143,17 @@ const intent = (
   state,
   stateVersion: state === "release_requested" ? 2 : 1,
   mediaCount: images.length,
-  media: images.map((item, index) => ({
-    ordinal: index + 1,
-    mediaId: item.mediaId,
-    objectKey: item.objectKey,
-    sourceSha256: item.sourceSha256,
-    width: item.width,
-    height: item.height,
-  })),
+  media:
+    state === "expired"
+      ? []
+      : images.map((item, index) => ({
+          ordinal: index + 1,
+          mediaId: item.mediaId,
+          objectKey: item.objectKey,
+          sourceSha256: item.sourceSha256,
+          width: item.width,
+          height: item.height,
+        })),
   expiresAt: expiresAt.toISOString(),
 });
 type Intent = ReturnType<typeof intent>;
@@ -493,6 +505,223 @@ describe("W9: one pass queues its renders in tier order", () => {
   });
 });
 
+describe("W9: an intent's image ready under an older recipe renders in the intent's tier", () => {
+  const OLDER = "0000000000000000";
+  /** A failed base render of `item` that ended `minutes` before at(0). */
+  const failedRender = (item: Image, minutes: number) =>
+    fixture.setup.query(
+      `INSERT INTO community.publishing_jobs(id,kind,subject_id,state,attempts,run_after,last_error_code,created_at,updated_at,finished_at)
+       VALUES($1,'catalog_render',$2,'failed',5,$3,'processing_failed',$3,$3,$3)`,
+      [`publishing-job-${hex(16)}`, item.assetId, at(-minutes)],
+    );
+  /** The queued base renders in claim order, each with its run_after
+   * offset from `when` in milliseconds. */
+  const queuedJobs = async (when: Date, images: readonly Image[]) =>
+    (
+      await fixture.setup.query<{ subject_id: string; offset: number }>(
+        `SELECT subject_id, (extract(epoch FROM run_after - $1::timestamptz) * 1000)::integer AS offset
+         FROM community.publishing_jobs
+         WHERE kind='catalog_render' AND payload IS NULL AND state='queued' ORDER BY run_after, id`,
+        [when],
+      )
+    ).rows.map((job) => ({
+      label: label(job.subject_id, images),
+      offset: job.offset,
+    }));
+
+  it("claims a prepared record's images ready under the older recipe (t2) before more published re-renders than the target", async () => {
+    const TARGET = 10;
+    // After a recipe change: 25 published images, more than the target,
+    // and two of a prepared record's three images are ready only under the
+    // older recipe (the third is new).
+    const published = Array.from({ length: 25 }, (_, position) => ({
+      image: image(`old-${position}`),
+      catalogId: "catalog-old",
+      position,
+    }));
+    const record = [image("x1-older"), image("x2-new"), image("x3-older")];
+    for (const item of [
+      ...published.map((row) => row.image),
+      record[0]!,
+      record[2]!,
+    ])
+      await render(item, at(-HOUR), OLDER);
+    const intents = [intent(21, "prepared", at(20 * HOUR), record)];
+    const all = [...published.map((row) => row.image), ...record];
+    expect((await sync(at(0), published, intents, TARGET)).enqueued).toBe(
+      TARGET,
+    );
+    // The record renders first, in its order; the published re-renders
+    // (t4) take the room left.
+    const order = [
+      "x1-older",
+      "x2-new",
+      "x3-older",
+      ...published.slice(0, TARGET - 3).map((row) => row.image.label),
+    ];
+    expect((await queuedJobs(at(0), all)).map((job) => job.offset)).toEqual(
+      order.map((_, rank) => rank),
+    );
+    expect(
+      (await claim(at(1))).map((job) => label(job.subjectId, all)),
+    ).toEqual(order);
+    expect(await readCatalogRenderBacklog(fixture.app)).toEqual({
+      tiers: { t0: 0, t1: 0, t2: 3, t3: 0, t4: 25 },
+      countedAt: at(0),
+      queued: 0,
+      running: TARGET,
+    });
+  });
+
+  it("keeps a re-render only the published list names behind the gate (t4), while an intent's and its failed one are queued", async () => {
+    // More new published images than a pass creates (100): the gate stays
+    // closed at the first pass, with room left below the target.
+    const fresh = Array.from({ length: 101 }, (_, position) => ({
+      image: image(`new-${position}`),
+      catalogId: "catalog-new",
+      position,
+    }));
+    const published = image("s-published");
+    const publishedFailed = image("d-published-failed");
+    const named = image("p-prepared");
+    const namedFailed = image("f-prepared-failed");
+    for (const item of [published, publishedFailed, named, namedFailed])
+      await render(item, at(-3 * 24 * HOUR), OLDER);
+    await failedRender(publishedFailed, 26 * HOUR);
+    await failedRender(namedFailed, 26 * HOUR);
+    const shown: Shown[] = [
+      ...fresh,
+      { image: published, catalogId: "catalog-s", position: 0 },
+      { image: publishedFailed, catalogId: "catalog-d", position: 0 },
+    ];
+    const intents = [
+      intent(22, "prepared", at(20 * HOUR), [named, namedFailed]),
+    ];
+    const all = [
+      ...fresh.map((row) => row.image),
+      published,
+      publishedFailed,
+      named,
+      namedFailed,
+    ];
+    // The first pass: 100 new images (t0), then the intent's re-render
+    // (t2), then its failed one queued again; none of the published ones.
+    expect((await sync(at(0), shown, intents)).enqueued).toBe(102);
+    const first = [
+      ...fresh.slice(0, 100).map((row) => row.image.label),
+      "p-prepared",
+      "f-prepared-failed",
+    ];
+    expect(await queuedJobs(at(0), all)).toEqual(
+      first.map((name, offset) => ({ label: name, offset })),
+    );
+    expect((await readCatalogRenderBacklog(fixture.app)).tiers).toEqual({
+      t0: 101,
+      t1: 0,
+      t2: 2,
+      t3: 0,
+      t4: 2,
+    });
+    // The next pass creates the last new image: nothing of a higher tier
+    // waits, so the published re-render and its failed one follow it.
+    expect((await sync(at(5), shown, intents)).enqueued).toBe(3);
+    expect((await queuedJobs(at(5), all)).slice(first.length)).toEqual([
+      { label: "new-100", offset: 0 },
+      { label: "s-published", offset: 1 },
+      { label: "d-published-failed", offset: 2 },
+    ]);
+  });
+
+  it("ranks a published image a requested intent names t1 and a grace member t3, the failed one after them and the published re-renders last", async () => {
+    const shownNew = image("q-published-new");
+    const requested = image("p-published-requested");
+    const preparedNew = image("n-prepared-new");
+    const preparedFailed = image("r-prepared-failed");
+    const lapsed = image("w-grace");
+    const published = image("s-published");
+    const publishedFailed = image("d-published-failed");
+    const all = [
+      shownNew,
+      requested,
+      preparedNew,
+      preparedFailed,
+      lapsed,
+      published,
+      publishedFailed,
+    ];
+    for (const item of [
+      requested,
+      preparedFailed,
+      lapsed,
+      published,
+      publishedFailed,
+    ])
+      await render(item, at(-3 * 24 * HOUR), OLDER);
+    await failedRender(publishedFailed, 30 * HOUR);
+    await failedRender(preparedFailed, 26 * HOUR);
+    const shown: Shown[] = [
+      { image: shownNew, catalogId: "catalog-a", position: 0 },
+      { image: requested, catalogId: "catalog-a", position: 1 },
+      { image: published, catalogId: "catalog-b", position: 0 },
+      { image: publishedFailed, catalogId: "catalog-c", position: 0 },
+    ];
+    // A record prepared while the queue was full, whose lease passed an
+    // hour ago: the mirror keeps its member for render grace (t3).
+    const blocker = `publishing-job-${hex(16)}`;
+    await fixture.setup.query(
+      "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after,created_at,updated_at) VALUES($1,'catalog_render',$2,'queued',$3,$3,$3)",
+      [blocker, `catalog-asset-${hex(16)}`, at(-3 * HOUR)],
+    );
+    expect(
+      (
+        await sync(
+          at(-2 * HOUR),
+          shown,
+          [intent(33, "prepared", at(-HOUR), [lapsed])],
+          1,
+        )
+      ).enqueued,
+    ).toBe(0);
+    await fixture.setup.query(
+      "DELETE FROM community.publishing_jobs WHERE id=$1",
+      [blocker],
+    );
+    const intents = [
+      intent(31, "release_requested", at(30 * HOUR), [requested]),
+      intent(32, "prepared", at(20 * HOUR), [preparedNew, preparedFailed]),
+      intent(33, "expired", at(-HOUR), [lapsed]),
+    ];
+    expect((await sync(at(0), shown, intents)).enqueued).toBe(7);
+    const order = [
+      // t0, then the published image the requested intent names (t1), the
+      // prepared record (t2) and the grace member (t3).
+      "q-published-new",
+      "p-published-requested",
+      "n-prepared-new",
+      "w-grace",
+      // The prepared record's failed re-render, queued again after the
+      // tiered jobs, before the gate.
+      "r-prepared-failed",
+      // t4: the published re-render, then its failed one queued again.
+      "s-published",
+      "d-published-failed",
+    ];
+    expect(await queuedJobs(at(0), all)).toEqual(
+      order.map((name, offset) => ({ label: name, offset })),
+    );
+    expect(
+      (await claim(at(1))).map((job) => label(job.subjectId, all)),
+    ).toEqual(order);
+    expect((await readCatalogRenderBacklog(fixture.app)).tiers).toEqual({
+      t0: 1,
+      t1: 1,
+      t2: 2,
+      t3: 1,
+      t4: 2,
+    });
+  });
+});
+
 describe("W-AC10: prepared records render record by record", () => {
   it(
     "finishes record k before record k+2 starts, runs re-renders last and never queues more than the target",
@@ -675,22 +904,45 @@ describe.skipIf(!LOCAL_25K)(
         liveAssets: "ready",
       });
       const counts = catalogScaleCounts(CATALOG_SCALE_25K);
-      // 200 published images under an older recipe (t4), 50 of them with a
-      // failed re-render older than a day: 150 are queued, then the 50
-      // again, so every statement of the pass runs.
-      await fixture.setup.query(
-        `UPDATE community.media_renditions SET recipe_digest='0000000000000000'
-         WHERE catalog_asset_id IN (SELECT id FROM community.catalog_media_assets
-           WHERE state='ready' AND unreferenced_since IS NULL ORDER BY id LIMIT 200)`,
-      );
-      await fixture.setup.query(
-        `INSERT INTO community.publishing_jobs(id,kind,subject_id,state,attempts,run_after,last_error_code,created_at,updated_at,finished_at)
-         SELECT 'publishing-job-' || md5('w9-failed:' || a.id), 'catalog_render', a.id, 'failed', 5,
-           now() - interval '30 hours', 'processing_failed', now() - interval '30 hours',
-           now() - interval '30 hours', now() - interval '30 hours'
-         FROM community.catalog_media_assets a
-         WHERE a.state='ready' AND a.unreferenced_since IS NULL ORDER BY a.id LIMIT 50`,
-      );
+      // 200 published images no live unreleased intent names, under an
+      // older recipe (t4), 50 of them with a failed re-render older than a
+      // day; 20 published images a recent expired intent in grace names,
+      // under it (t3 beside their t0, so the tiered list holds each twice);
+      // and 60 live intents' images under it (t1, t2), 20 of them with a
+      // failed re-render older than a day: the 40 intents' images and the
+      // 20 grace members are queued with the pending ones, the 20 failed
+      // again before the gate, then 150 re-renders and the 50 again, so
+      // every statement of the pass runs.
+      for (const [where, images, failed] of [
+        [
+          `a.unreferenced_since IS NULL AND NOT EXISTS (
+            SELECT 1 FROM community.catalog_delivery_media_refs f
+            JOIN community.catalog_delivery_prepares i ON i.intent_id=f.intent_id
+            WHERE f.asset_id=a.id AND i.observed_live AND i.source_state<>'released')`,
+          200,
+          50,
+        ],
+        [
+          `a.unreferenced_since IS NULL AND ${catalogRenderGraceReferenceSql("a.id")}`,
+          20,
+          0,
+        ],
+        ["a.unreferenced_since IS NOT NULL", 60, 20],
+      ] as const) {
+        const assets = `community.catalog_media_assets a
+          WHERE a.state='ready' AND ${where} ORDER BY a.id`;
+        await fixture.setup.query(
+          `UPDATE community.media_renditions SET recipe_digest='0000000000000000'
+           WHERE catalog_asset_id IN (SELECT a.id FROM ${assets} LIMIT ${images})`,
+        );
+        await fixture.setup.query(
+          `INSERT INTO community.publishing_jobs(id,kind,subject_id,state,attempts,run_after,last_error_code,created_at,updated_at,finished_at)
+           SELECT 'publishing-job-' || md5('w9-failed:' || a.id), 'catalog_render', a.id, 'failed', 5,
+             now() - interval '30 hours', 'processing_failed', now() - interval '30 hours',
+             now() - interval '30 hours', now() - interval '30 hours'
+           FROM ${assets} LIMIT ${failed}`,
+        );
+      }
       // 5,000 failed renders of other subjects, which every named asset is
       // checked against.
       await fixture.setup.query(
@@ -721,7 +973,24 @@ describe.skipIf(!LOCAL_25K)(
         `sync pass ${Math.round(passMs)} ms, ${recorder.queries.length} App statements: ${lines.join(" | ")}`,
       );
       expect(passMs).toBeLessThan(10_000);
-      expect(lines).toEqual([expect.stringMatching(/ enqueued=200$/u)]);
+      expect(lines).toEqual([expect.stringMatching(/ enqueued=280$/u)]);
+      // The live intents' 40 (t1, t2), the 20 grace members (t3) and the
+      // live intents' 20 failed again run before every published re-render
+      // (t4).
+      expect(
+        (
+          await fixture.setup.query<{ published: boolean }>(
+            `SELECT a.unreferenced_since IS NULL AS published FROM community.publishing_jobs j
+             JOIN community.catalog_media_assets a ON a.id=j.subject_id
+             WHERE j.state='queued' AND j.kind='catalog_render' ORDER BY j.run_after, j.id`,
+          )
+        ).rows.map((row) => row.published),
+      ).toEqual([
+        ...new Array<boolean>(40).fill(false),
+        ...new Array<boolean>(20).fill(true),
+        ...new Array<boolean>(20).fill(false),
+        ...new Array<boolean>(200).fill(true),
+      ]);
       const own = recorder.queries.filter(
         (q) => !q.failed && /^\s*(SELECT|WITH|UPDATE|INSERT)/u.test(q.sql),
       );
@@ -742,8 +1011,9 @@ describe.skipIf(!LOCAL_25K)(
       }
       const backlog = await readCatalogRenderBacklog(fixture.app);
       report.push(`backlog ${JSON.stringify(backlog)}`);
-      expect(backlog.tiers).toMatchObject({ t0: 0, t4: 200 });
-      expect(backlog.queued).toBe(200);
+      expect(backlog.tiers).toMatchObject({ t0: 0, t3: 20, t4: 200 });
+      expect(backlog.tiers!.t1 + backlog.tiers!.t2).toBe(60);
+      expect(backlog.queued).toBe(280);
       expect(counts.publishedImages).toBe(25_200);
       console.log(report.join("\n"));
     });

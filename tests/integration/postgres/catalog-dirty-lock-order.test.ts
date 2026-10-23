@@ -201,7 +201,7 @@ describe(
         ).rows[0]!.pid;
         await markCatalogPublicationDirty(
           marker,
-          new Map([[lower, "reference"]]),
+          new Map([[lower, { reason: "reference", urgent: false }]]),
           new Date(),
         );
         pass = settled(adapter().reconcile(new Date(), true, 500));
@@ -212,7 +212,7 @@ describe(
         const higherMark = await settled(
           markCatalogPublicationDirty(
             marker,
-            new Map([[higher, "reference"]]),
+            new Map([[higher, { reason: "reference", urgent: false }]]),
             new Date(),
           ),
         );

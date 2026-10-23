@@ -1,8 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { readCatalogSourceSnapshot } from "@moya/backend-production/internal/catalog-delivery";
+import {
+  currentCatalogRecipePolicy,
+  readCatalogSourceSnapshot,
+} from "@moya/backend-production/internal/catalog-delivery";
 import {
   CATALOG_MEMBERSHIP_INTERVAL_MS,
+  catalogMembershipRequestsSql,
   catalogPrivateMembershipBucketsSql,
   catalogPrivateMembershipMembersSql,
   catalogPublicMembershipBucketsSql,
@@ -22,6 +26,7 @@ import {
   PostgresWorkPublishingAdapter,
   catalogIntentAssetsSql,
   catalogMembershipBoundariesSql,
+  catalogMembershipHoldsSql,
   catalogMembershipStateSql,
   catalogMembershipStore,
   catalogMirrorStatesSql,
@@ -36,6 +41,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   CATALOG_SCALE_25K,
+  analyzeCatalogScale,
   catalogScaleCounts,
   catalogScaleImage,
   catalogScaleIntentId,
@@ -44,6 +50,7 @@ import {
   createCatalogScaleDatabase,
   createQueryRecorder,
   explainCatalogScaleOn,
+  holdCatalogScaleRecords,
   rolledBackCatalogScale,
   seedCatalogScale,
   type CatalogScaleDatabase,
@@ -69,14 +76,35 @@ import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
  * - a difference that lasts (served but no longer published) is marked
  *   again only with a change in its own buckets, except once by a step
  *   without its own stored observation (restarted, or overtaken by another);
+ * - an asset that private B alone serves (every publication a pin of a
+ *   release request that holds a pin for each of its members and that the
+ *   CMS confirms in the same snapshot as requested, unexpired and of the
+ *   current recipe policy, whose plan keeps it) is never marked when its
+ *   buckets are listed; one that serves more than its pins is a takedown,
+ *   as is one whose request the CMS has already ended while the App mirror
+ *   still holds it (marked in the observation that sees the takedown), one
+ *   whose request is of an earlier policy or has a member inspect could not
+ *   pin, and every such asset for a step whose confirmation fails or that
+ *   has no prepare reader (the reconcile then reads no intent);
  * - a private intent's request, cancellation or withdrawal marks exactly its
  *   App-known assets, and a change the Catalog sync applies first is marked
  *   by the sync (as are a refusal that only tombstones, the reference flips
  *   it applies both ways, and a recorded render); a lasting private
  *   difference (a refused intent) is marked again only with its own bucket;
  * - a published row without a media id or object key is left out;
- * - a lease, and the render grace after it, that passed since the last
- *   observation mark their intents' assets; others do not;
+ * - a lease that passed since the last observation marks its intent's
+ *   assets; the end of render grace after it marks nothing (grace is
+ *   rendering only), nor does a lease still running; a lapse the CMS
+ *   projection reports (expired at the same state version) is marked by the
+ *   private diff and then the sync, normal for a prepared intent and urgent
+ *   for a request;
+ * - each mark has its class: urgent for a takedown (an asset the Catalog no
+ *   longer publishes that serves more than the confirmed requests' pins, a
+ *   reference flip to unreferenced), the end or refusal of an intent that
+ *   may have granted exposure (requested or released, or prepared but
+ *   possibly requested since the App saw it), and a passed requested lease;
+ *   normal for a return, a request, a recorded render, and the end or lapse
+ *   of an intent the App saw prepared and the CMS shows was never requested;
  * - a missing state row, or one another observation advanced, fails clearly
  *   and rolls every mark back;
  * - every statement plans below JIT's threshold (cost under 100,000) with no
@@ -150,11 +178,15 @@ const fresh = async () => {
   await seedCatalogScale(fixture, SHAPE);
 };
 
-/** The membership step on the fixture's three roles. */
+/** The recipe policy of this build, which the fixture's intents carry. */
+const POLICY = currentCatalogRecipePolicy().recipeManifestSha256;
+
+/** The membership step on the fixture's three roles (or without a prepare
+ * reader), under this build's recipe policy unless another is given. */
 const watch = (
   pools: {
     readonly published: CatalogScaleDatabase["publicRead"];
-    readonly prepare: CatalogScaleDatabase["prepare"];
+    readonly prepare: CatalogScaleDatabase["prepare"] | null;
     readonly app: CatalogScaleDatabase["app"];
   } = {
     published: fixture.publicRead,
@@ -162,33 +194,53 @@ const watch = (
     app: fixture.app,
   },
   port: Partial<ReturnType<typeof catalogMembershipStore>> = {},
+  policy = POLICY,
 ) =>
   createCatalogMembershipWatch({
     published: pools.published,
     prepare: pools.prepare,
+    policy,
     port: { ...catalogMembershipStore(pools.app), ...port },
     logger: silent,
   });
 
-/** Pending marks (asset id and reason), by asset id. */
+/** Pending marks (asset id, reason and class), by asset id. */
 const pending = async () =>
   (
-    await fixture.setup.query<{ asset_id: string; reason: string }>(
-      "SELECT asset_id, reason FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY asset_id",
+    await fixture.setup.query<{
+      asset_id: string;
+      reason: string;
+      urgent: boolean;
+    }>(
+      "SELECT asset_id, reason, urgent FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY asset_id",
     )
   ).rows;
+/** The pending marks expected for groups of assets, each group with its
+ * class (urgent or not), as pending() lists them. */
+const marked = (
+  reason: string,
+  ...groups: (readonly [readonly string[], boolean])[]
+) =>
+  groups
+    .flatMap(([ids, urgent]) =>
+      ids.map((asset_id) => ({ asset_id, reason, urgent })),
+    )
+    .sort((a, b) =>
+      a.asset_id < b.asset_id ? -1 : a.asset_id > b.asset_id ? 1 : 0,
+    );
 const pendingIds = async () => (await pending()).map((row) => row.asset_id);
 
 /** A stub of the scoped reconcile's consumer, as the App role: each pass
- * takes the oldest 0.9 K pending marks (a tenth of K stays the sweep's) and
- * clears the mark_seq it read (A1's clear). */
+ * takes 0.9 K pending marks, urgent ones first and each class oldest first
+ * (a tenth of K stays the sweep's), and clears the mark_seq it read (A1's
+ * clear). */
 const drain = async (k: number) => {
   const take = Math.floor(0.9 * k);
   const drained: string[] = [];
   for (let passes = 0; ; passes += 1) {
     const batch = (
       await fixture.app.query<{ asset_id: string; mark_seq: string }>(
-        "SELECT asset_id, mark_seq FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY marked_at, asset_id LIMIT $1",
+        "SELECT asset_id, mark_seq FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY urgent DESC, marked_at, asset_id LIMIT $1",
         [take],
       )
     ).rows;
@@ -304,11 +356,9 @@ describe("Catalog membership fingerprints", () => {
       await setPublished([2], false);
       recorder.reset();
       await step.run(now());
+      // A takedown: the assets were served, so each mark is urgent.
       expect(await pending()).toEqual(
-        imagesOf(2).map((asset_id) => ({
-          asset_id,
-          reason: "public_membership",
-        })),
+        marked("public_membership", [imagesOf(2), true]),
       );
       // Only the changed buckets were listed (a record's 7 images fall in
       // at most 7 of the 256), on both sides, and the App's record was not
@@ -353,11 +403,9 @@ describe("Catalog membership fingerprints", () => {
       await drain(K);
       await setPublished([2], true);
       await step.run(now());
+      // A return is publish-side work: normal marks.
       expect(await pending()).toEqual(
-        imagesOf(2).map((asset_id) => ({
-          asset_id,
-          reason: "public_membership",
-        })),
+        marked("public_membership", [imagesOf(2), false]),
       );
       await drain(K);
       await setPublished([2], false);
@@ -366,10 +414,7 @@ describe("Catalog membership fingerprints", () => {
       await setPublished([2], true);
       await watch().run(now());
       expect(await pending()).toEqual(
-        imagesOf(2).map((asset_id) => ({
-          asset_id,
-          reason: "public_membership",
-        })),
+        marked("public_membership", [imagesOf(2), false]),
       );
     },
     SLOW,
@@ -387,9 +432,9 @@ describe("Catalog membership fingerprints", () => {
         app: recorder.wrap("app", fixture.app),
       });
       await step.run(now());
-      // Records 10..29 are taken off but stay served, as the private-B
-      // assets of new pairs a release_requested intent holds are (their plan
-      // keeps them): a difference between the CMS and the App that lasts.
+      // Records 10..29 are taken off but stay served (the stub consumer
+      // withdraws nothing, and no release request holds them): a difference
+      // between the CMS and the App that lasts until they are withdrawn.
       const held = Array.from({ length: 20 }, (_, i) => i + 10);
       const lasting = new Set(held.flatMap(imagesOf));
       await setPublished(held, false);
@@ -442,6 +487,268 @@ describe("Catalog membership fingerprints", () => {
   );
 
   it(
+    "never marks an asset that private B alone serves when its buckets are listed, and takes down one serving more than its pins",
+    async () => {
+      await fresh();
+      const bucketOf = (assetId: string) => assetId.slice(14, 16);
+      // A release wave before its release: records 10..29 are not
+      // published, and their release requests (private B) serve every
+      // published generation of their images, which their plans keep.
+      const held = await holdCatalogScaleRecords(fixture, {
+        first: 10,
+        last: 29,
+      });
+      expect(held).toEqual(
+        Array.from({ length: 20 }, (_, i) => i + 10)
+          .flatMap(imagesOf)
+          .sort(),
+      );
+      const recorder = createQueryRecorder();
+      const step = watch({
+        published: fixture.publicRead,
+        prepare: fixture.prepare,
+        app: recorder.wrap("app", fixture.app),
+      });
+      /** The buckets the step listed since the recorder's last reset. */
+      const listed = () =>
+        new Set(
+          recorder.queries
+            .filter(
+              (query) => query.sql === catalogPublicMembershipAppMembersSql,
+            )
+            .flatMap((query) => query.values![0] as string[]),
+        );
+      // The first observation compares every bucket with the App's record,
+      // in which the held images are served: all their buckets are listed,
+      // and none of them is marked.
+      await step.run(now());
+      expect(held.filter((id) => !listed().has(bucketOf(id)))).toEqual([]);
+      expect(await pending()).toEqual([]);
+      // A later change lists its own buckets again, some of them shared with
+      // held images: the takedown marks its own images only.
+      recorder.reset();
+      await setPublished([2], false);
+      await step.run(now());
+      expect(held.some((id) => listed().has(bucketOf(id)))).toBe(true);
+      expect(await pending()).toEqual(
+        marked("public_membership", [imagesOf(2), true]),
+      );
+      await drain(K);
+      await withdraw(imagesOf(2));
+      // A held image that also serves a publication its request does not
+      // pin (here, a pin removed) has something to withdraw: a takedown,
+      // found by a restarted step, which lists every differing bucket.
+      const extra = held[0]!;
+      await fixture.setup.query(
+        `DELETE FROM community.catalog_delivery_rendition_pins h
+         USING community.media_renditions r
+         WHERE r.id = h.rendition_id AND r.catalog_asset_id = $1 AND r.role = 'viewer'`,
+        [extra],
+      );
+      await setPublished([3], false);
+      await watch().run(now());
+      expect(await pending()).toEqual(
+        marked("public_membership", [[extra, ...imagesOf(3)], true]),
+      );
+      await drain(K);
+      // A step that cannot confirm the requests in the CMS (here the App
+      // read of the requests holding the listed assets fails) counts no
+      // pin: a restarted one takes every held image down, with record 3
+      // (still served) and the next takedown.
+      await setPublished([4], false);
+      await watch(undefined, {
+        readCatalogMembershipHolds: () =>
+          Promise.reject(new Error("synthetic")),
+      }).run(now());
+      expect(await pending()).toEqual(
+        marked("public_membership", [
+          [...held, ...imagesOf(3), ...imagesOf(4)],
+          true,
+        ]),
+      );
+      await drain(K);
+      // Without a prepare reader the reconcile reads no intent, so private B
+      // keeps nothing: a step without one takes every held image down too.
+      await setPublished([5], false);
+      await watch({
+        published: fixture.publicRead,
+        prepare: null,
+        app: fixture.app,
+      }).run(now());
+      expect(await pending()).toEqual(
+        marked("public_membership", [
+          [...held, ...imagesOf(3), ...imagesOf(4), ...imagesOf(5)],
+          true,
+        ]),
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "marks a takedown urgent in the observation that sees it when the CMS has already ended the request the App mirror still holds",
+    async () => {
+      await fresh();
+      const bucketOf = (assetId: string) => assetId.slice(14, 16);
+      // Record 1 is published and serves its images, and a release request
+      // X names them (here its own intent, requested again, as a new
+      // revision's request would be) and pins every publication they serve.
+      const record = 1;
+      const images = await holdCatalogScaleRecords(fixture, {
+        first: record,
+        last: record,
+      });
+      expect(images).toEqual(imagesOf(record));
+      await setPublished([record], true);
+      const recorder = createQueryRecorder();
+      const step = watch({
+        published: fixture.publicRead,
+        prepare: recorder.wrap("prepare", fixture.prepare),
+        app: recorder.wrap("app", fixture.app),
+      });
+      await step.run(now());
+      expect(await pending()).toEqual([]);
+      // The editor cancels X. Only the sync writes the App mirror, so until
+      // the next one (up to 5 minutes) the mirror still holds X requested,
+      // observed live, leased and pinning those publications.
+      await fixture.setup.query(
+        `UPDATE public.catalog_delivery_intents SET state = 'cancelled',
+           state_version = state_version + 1, ended_at = now(), end_reason = 'synthetic',
+           updated_at = now()
+         WHERE catalog_document_id = $1 AND state = 'release_requested'`,
+        [record],
+      );
+      await step.run(now());
+      expect(await pending()).toEqual(
+        marked("private_membership", [images, true]),
+      );
+      // The reconcile plans them while the record is public (nothing to
+      // withdraw): the marks drain.
+      await drain(K);
+      // Then the record is withdrawn, before any sync. The withdrawal ends no
+      // intent (X has already ended), and the private total is unchanged, so
+      // only the public diff can see it: X's mirror pins cover every served
+      // publication, but the CMS no longer confirms X, so the takedown is
+      // marked, urgent, in this same observation.
+      await setPublished([record], false);
+      recorder.reset();
+      await step.run(now());
+      expect(await pending()).toEqual(
+        marked("public_membership", [images, true]),
+      );
+      // The mirror's requests naming an asset of the listed buckets and
+      // holding a pin for each member (X alone: the fixture's other live
+      // requests pin nothing) were read and confirmed in the same CMS
+      // snapshot, by intent id; X was not confirmed, so its pins did not
+      // count.
+      const ran = (pool: string, sql: string) =>
+        recorder.queries.filter(
+          (query) => query.pool === pool && query.sql === sql,
+        );
+      const x = catalogScaleIntentId("released", record);
+      const listed = [...new Set(images.map(bucketOf))].sort();
+      const [holds, ...moreHolds] = ran("app", catalogMembershipHoldsSql);
+      expect(moreHolds).toEqual([]);
+      expect(holds!.values![0]).toEqual(listed);
+      const [confirm, ...moreConfirms] = ran(
+        "prepare",
+        catalogMembershipRequestsSql,
+      );
+      expect(moreConfirms).toEqual([]);
+      expect(confirm!.values![0]).toEqual([x]);
+      expect(confirm!.rows).toBe(0);
+      const [members] = ran("app", catalogPublicMembershipAppMembersSql);
+      expect(members!.values![3]).toEqual([]);
+    },
+    SLOW,
+  );
+
+  it(
+    "marks a takedown urgent when only a release request of an earlier recipe policy pins what its images serve",
+    async () => {
+      await fresh();
+      // Records 1 and 2 are published, and their release requests (of this
+      // build's policy) pin every publication their images serve.
+      const images = await holdCatalogScaleRecords(fixture, {
+        first: 1,
+        last: 2,
+      });
+      await setPublished([1, 2], true);
+      const step = watch();
+      await step.run(now());
+      // Record 1 is withdrawn: its request is confirmed, its plan keeps
+      // every pin, so there is nothing to withdraw and nothing is marked.
+      await setPublished([1], false);
+      await step.run(now());
+      expect(await pending()).toEqual([]);
+      // A deploy changes the recipe policy while both requests are live:
+      // neither can be released now, and their plans grant them nothing, so
+      // their pins keep nothing. Record 2's takedown is marked, urgent, and
+      // so is record 1, still served (the restarted step compares with the
+      // App's record).
+      const deployed = watch(
+        undefined,
+        {},
+        sha256("synthetic later recipe policy"),
+      );
+      await setPublished([2], false);
+      await deployed.run(now());
+      expect(await pending()).toEqual(
+        marked("public_membership", [images, true]),
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "marks a takedown urgent when the release request pinning what its images serve has a member inspect could not pin",
+    async () => {
+      await fresh();
+      // Records 1 and 2 are published, and release requests (each standing
+      // for another record's request, which the withdrawals below do not
+      // end) pin every publication their images serve.
+      await holdCatalogScaleRecords(fixture, { first: 1, last: 2 });
+      await setPublished([1, 2], true);
+      // One member of record 2's request is still rendering: its asset is
+      // pending and serves nothing, and inspect pinned only the others. Inspect
+      // reports the request not private-ready, so its plan grants it nothing.
+      const [rendering, ...pinned] = imagesOf(2);
+      await withdraw([rendering!]);
+      await fixture.setup.query(
+        `UPDATE community.catalog_media_assets SET state = 'pending', updated_at = now()
+         WHERE id = $1`,
+        [rendering],
+      );
+      const unpinned = await fixture.setup.query(
+        `DELETE FROM community.catalog_delivery_rendition_pins h
+         USING community.catalog_delivery_media_refs r
+         WHERE r.intent_id = h.intent_id AND r.ordinal = h.ordinal AND r.asset_id = $1
+           AND h.intent_id = $2::uuid`,
+        [rendering, catalogScaleIntentId("released", 2)],
+      );
+      expect(unpinned.rowCount).toBeGreaterThan(0);
+      const step = watch();
+      await step.run(now());
+      expect(await pending()).toEqual([]);
+      // Record 1 is withdrawn: its request pins a member each, is confirmed,
+      // and its plan keeps every pin, so nothing is marked.
+      await setPublished([1], false);
+      await step.run(now());
+      expect(await pending()).toEqual([]);
+      // Record 2 is withdrawn: the CMS confirms its request too, but the
+      // request does not hold a pin for each member, so its pins keep
+      // nothing, and the images they serve are marked, urgent, in this same
+      // observation (not at the next sync's unreferenced flip).
+      await setPublished([2], false);
+      await step.run(now());
+      expect(await pending()).toEqual(
+        marked("public_membership", [pinned, true]),
+      );
+    },
+    SLOW,
+  );
+
+  it(
     "queues a takedown of every released record whole and drains it in ceil(n / 0.9K) passes",
     async () => {
       await fresh();
@@ -460,12 +767,13 @@ describe("Catalog membership fingerprints", () => {
       // pass clears the mark_seq it read.
       const first = (
         await fixture.app.query<{ asset_id: string; mark_seq: string }>(
-          "SELECT asset_id, mark_seq FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY marked_at, asset_id LIMIT 1",
+          "SELECT asset_id, mark_seq FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY urgent DESC, marked_at, asset_id LIMIT 1",
         )
       ).rows[0]!;
       await fixture.app.query(catalogPublicationDirtyMarkSql, [
         [first.asset_id],
         ["publication"],
+        [false],
         now().toISOString(),
       ]);
       await fixture.app.query(
@@ -495,8 +803,6 @@ describe("Catalog membership fingerprints", () => {
       await step.run(now());
       const live = (k: number) => catalogScaleIntentId("live", k);
       const released = (k: number) => catalogScaleIntentId("released", k);
-      const marked = (ids: readonly string[], reason: string) =>
-        [...ids].sort().map((asset_id) => ({ asset_id, reason }));
       // Requested every SHAPE.requestedEvery-th live intent; the others are
       // prepared.
       expect(SHAPE.requestedEvery).toBe(5);
@@ -508,28 +814,38 @@ describe("Catalog membership fingerprints", () => {
            WHERE id = $1`,
           [live(k)],
         );
+      const end = (intentId: string, state: string) =>
+        fixture.setup.query(
+          `UPDATE public.catalog_delivery_intents SET state = $2, state_version = state_version + 1,
+             ended_at = now(), end_reason = 'synthetic', updated_at = now()
+           WHERE id = $1`,
+          [intentId, state],
+        );
       await request(1);
-      await fixture.setup.query(
-        `UPDATE public.catalog_delivery_intents SET state = $2, state_version = state_version + 1,
-           ended_at = now(), end_reason = 'synthetic', updated_at = now()
-         WHERE id = $1`,
-        [live(5), "cancelled"],
-      );
-      await fixture.setup.query(
-        `UPDATE public.catalog_delivery_intents SET state = $2, state_version = state_version + 1,
-           ended_at = now(), end_reason = 'synthetic', updated_at = now()
-         WHERE id = $1`,
-        [released(3), "withdrawn"],
-      );
+      await end(live(5), "cancelled");
+      await end(released(3), "withdrawn");
+      // Intents the mirror holds prepared: one cancelled, one requested and
+      // then cancelled before any sync, and one the CMS expired itself (one
+      // version later, as a request that then lapsed reads too).
+      await end(live(2), "cancelled");
+      await request(3);
+      await end(live(3), "cancelled");
+      await end(live(4), "expired");
       await step.run(now());
+      // A request is normal; a cancellation and a withdrawal end what their
+      // intents granted, so their marks are urgent. A prepared intent grants
+      // nothing a takedown removes, so its cancellation is normal, but not
+      // where the CMS may have held a request the mirror never saw (and the
+      // reconcile, which plans from the CMS, copied for).
       expect(await pending()).toEqual(
         marked(
-          [
-            ...imagesOf(liveRecord(1)),
-            ...imagesOf(liveRecord(5)),
-            ...imagesOf(3),
-          ],
           "private_membership",
+          [imagesOf(liveRecord(1)), false],
+          [imagesOf(liveRecord(2)), false],
+          [imagesOf(liveRecord(3)), true],
+          [imagesOf(liveRecord(4)), true],
+          [imagesOf(liveRecord(5)), true],
+          [imagesOf(3), true],
         ),
       );
       await drain(K);
@@ -551,27 +867,30 @@ describe("Catalog membership fingerprints", () => {
       await sync();
       expect(await pending()).toEqual(
         marked(
-          [
-            ...imagesOf(liveRecord(1)),
-            ...imagesOf(liveRecord(5)),
-            ...imagesOf(liveRecord(6)),
-            ...imagesOf(3),
-          ],
           "intent",
+          [imagesOf(liveRecord(1)), false],
+          [imagesOf(liveRecord(2)), false],
+          [imagesOf(liveRecord(3)), true],
+          [imagesOf(liveRecord(4)), true],
+          [imagesOf(liveRecord(5)), true],
+          [imagesOf(liveRecord(6)), false],
+          [imagesOf(3), true],
         ),
       );
       await drain(K);
       await step.run(now());
       expect(await pending()).toEqual([]);
       // The sync marks the reference flips it applies, too: a record taken
-      // down, and its return.
+      // down (urgent), and its return (normal).
       await setPublished([4], false);
       await sync();
-      expect(await pending()).toEqual(marked(imagesOf(4), "reference"));
+      expect(await pending()).toEqual(marked("reference", [imagesOf(4), true]));
       await drain(K);
       await setPublished([4], true);
       await sync();
-      expect(await pending()).toEqual(marked(imagesOf(4), "reference"));
+      expect(await pending()).toEqual(
+        marked("reference", [imagesOf(4), false]),
+      );
       await drain(K);
       // An intent the sync refuses under F3 (its state version went back)
       // only changes liveness: it is tombstoned like an absent one, which
@@ -584,16 +903,17 @@ describe("Catalog membership fingerprints", () => {
       );
       await sync();
       expect(await pending()).toEqual(
-        marked(imagesOf(liveRecord(10)), "intent"),
+        marked("intent", [imagesOf(liveRecord(10)), true]),
       );
       await drain(K);
       // The refusal lasts: the CMS lists the intent and the mirror no longer
-      // observes it. The step marks it once, as its bucket changed since the
-      // step's last observation; after that only a change in its own bucket
-      // marks it again, not another intent's change.
+      // observes it. The step marks it once (normal: the CMS still lists it
+      // as requested), as its bucket changed since the step's last
+      // observation; after that only a change in its own bucket marks it
+      // again, not another intent's change.
       await step.run(now());
       expect(await pending()).toEqual(
-        marked(imagesOf(liveRecord(10)), "private_membership"),
+        marked("private_membership", [imagesOf(liveRecord(10)), false]),
       );
       await drain(K);
       const bucketOf = (intentId: string) => intentId.slice(0, 2);
@@ -604,35 +924,45 @@ describe("Catalog membership fingerprints", () => {
       await request(other);
       await step.run(now());
       expect(await pending()).toEqual(
-        marked(imagesOf(liveRecord(other)), "private_membership"),
+        marked("private_membership", [imagesOf(liveRecord(other)), false]),
       );
     },
     SLOW,
   );
 
   it(
-    "marks the assets of intents whose lease or render grace passed since the last observation",
+    "marks the assets of intents whose lease passed since the last observation, urgent for a request, and not when their render grace ends",
     async () => {
       await fresh();
       await watch().run(now());
       const live = (k: number) => catalogScaleIntentId("live", k);
       // In the App mirror only: the CMS projection (and so the private
       // fingerprint) does not change, so only the time-driven scope can
-      // mark them. Prepared intents 2, 3 and 4.
+      // mark them. Prepared intents 2, 3 and 4 and requested intent 5: the
+      // leases of 2 and 5 pass in the window, 3's render grace ends in it
+      // (its lease passed G hours ago), 4's lease is still running.
+      expect(5 % SHAPE.requestedEvery).toBe(0);
       await fixture.setup.query(
         `UPDATE community.catalog_delivery_prepares SET expires_at = CASE intent_id
            WHEN $1::uuid THEN clock_timestamp()
+           WHEN $5::uuid THEN clock_timestamp()
            WHEN $2::uuid THEN clock_timestamp() - make_interval(hours => $4::integer)
            ELSE clock_timestamp() + interval '1 hour' END
-         WHERE intent_id IN ($1::uuid, $2::uuid, $3::uuid)`,
-        [live(2), live(3), live(4), CATALOG_RENDER_GRACE_HOURS],
+         WHERE intent_id IN ($1::uuid, $2::uuid, $3::uuid, $5::uuid)`,
+        [live(2), live(3), live(4), CATALOG_RENDER_GRACE_HOURS, live(5)],
       );
       await new Promise((resolve) => setTimeout(resolve, 20));
       await watch().run(now());
+      // A passed request lease ends private B: urgent. A passed prepared
+      // lease ends nothing a takedown removes: normal. The end of render
+      // grace changes no publication plan (no publication input reads grace;
+      // it decides only whether an image renders), so it marks nothing.
       expect(await pending()).toEqual(
-        [...imagesOf(liveRecord(2)), ...imagesOf(liveRecord(3))]
-          .sort()
-          .map((asset_id) => ({ asset_id, reason: "private_membership" })),
+        marked(
+          "private_membership",
+          [imagesOf(liveRecord(2)), false],
+          [imagesOf(liveRecord(5)), true],
+        ),
       );
       // Once marked, the same boundaries are behind the next window.
       await drain(K);
@@ -644,6 +974,78 @@ describe("Catalog membership fingerprints", () => {
       expect(CATALOG_RENDER_GRACE_HOURS).toBeLessThanOrEqual(
         CATALOG_PREPARE_RETENTION_HOURS - 24,
       );
+    },
+    SLOW,
+  );
+
+  it(
+    "keeps the lapse of a prepared intent normal as the CMS projection reports it, at the same state version, and a lapsed request urgent",
+    async () => {
+      await fresh();
+      const step = watch();
+      await step.run(now());
+      const live = (k: number) => catalogScaleIntentId("live", k);
+      // Prepared intent 2 and requested intent 5 lapse in the CMS: the live
+      // projection now reads each as expired at its own state version (the
+      // CMS writes nothing when a lease passes). The App mirror carries the
+      // same expiry (the sync copies it and refuses another), an hour ago:
+      // before the step's last observation, so no lease boundary falls in
+      // its window, and only the private diff (then the sync) marks them.
+      expect(5 % SHAPE.requestedEvery).toBe(0);
+      const lapsed = [live(2), live(5)];
+      await fixture.setup.query(
+        `UPDATE public.catalog_delivery_intents SET expires_at = now() - interval '1 hour', updated_at = now()
+         WHERE id = ANY($1::uuid[]) AND state IN ('prepared', 'release_requested')`,
+        [lapsed],
+      );
+      await fixture.setup.query(
+        `UPDATE community.catalog_delivery_prepares p SET expires_at = i.expires_at
+         FROM public.catalog_delivery_intents i
+         WHERE i.id = p.intent_id AND p.intent_id = ANY($1::uuid[])`,
+        [lapsed],
+      );
+      await step.run(now());
+      // The App saw intent 2 prepared, and the CMS shows it expired at that
+      // same version: no request came between, so its end is normal. A
+      // lapsed request ends private B: urgent.
+      expect(await pending()).toEqual(
+        marked(
+          "private_membership",
+          [imagesOf(liveRecord(2)), false],
+          [imagesOf(liveRecord(5)), true],
+        ),
+      );
+      await drain(K);
+      // The sync copies the same change into the mirror (expired, at the
+      // same version): its marks have the same classes.
+      await createCatalogSync({
+        listSources: () => listPublishedCatalogSources(fixture.publicRead),
+        readSnapshot: () =>
+          readCatalogSourceSnapshot(fixture.publicRead, fixture.prepare),
+        port: new PostgresWorkPublishingAdapter(fixture.app, {
+          publication: { allowPublish: () => true, isPublic: () => true },
+        }),
+        logger: silent,
+      }).run(now());
+      expect(await pending()).toEqual(
+        marked(
+          "intent",
+          [imagesOf(liveRecord(2)), false],
+          [imagesOf(liveRecord(5)), true],
+        ),
+      );
+      expect(
+        (
+          await fixture.setup.query<{ source_state: string }>(
+            "SELECT source_state FROM community.catalog_delivery_prepares WHERE intent_id = ANY($1::uuid[]) ORDER BY intent_id",
+            [lapsed],
+          )
+        ).rows.map((row) => row.source_state),
+      ).toEqual(["expired", "expired"]);
+      // Mirror and CMS agree again: the next minute marks nothing.
+      await drain(K);
+      await step.run(now());
+      expect(await pending()).toEqual([]);
     },
     SLOW,
   );
@@ -756,9 +1158,9 @@ describe("Catalog membership fingerprints", () => {
           now(),
         ),
       ).toEqual({ status: "recorded" });
-      expect(await pending()).toEqual([
-        { asset_id: image.assetId, reason: "rendition" },
-      ]);
+      expect(await pending()).toEqual(
+        marked("rendition", [[image.assetId], false]),
+      );
     },
     SLOW,
   );
@@ -843,19 +1245,31 @@ describe("Catalog membership fingerprints", () => {
           "app public members, every bucket",
           fixture.app,
           catalogPublicMembershipAppMembersSql,
-          [allBuckets],
+          [allBuckets, at.toISOString(), POLICY, []],
         ],
         [
           "app public members, 7 buckets",
           fixture.app,
           catalogPublicMembershipAppMembersSql,
-          [allBuckets.slice(0, 7)],
+          [allBuckets.slice(0, 7), at.toISOString(), POLICY, []],
         ],
         [
           "app public members, one bucket",
           fixture.app,
           catalogPublicMembershipAppMembersSql,
-          [allBuckets.slice(0, 1)],
+          [allBuckets.slice(0, 1), at.toISOString(), POLICY, []],
+        ],
+        [
+          "app holds, every bucket",
+          fixture.app,
+          catalogMembershipHoldsSql,
+          [allBuckets, at.toISOString(), POLICY],
+        ],
+        [
+          "app holds, 7 buckets",
+          fixture.app,
+          catalogMembershipHoldsSql,
+          [allBuckets.slice(0, 7), at.toISOString(), POLICY],
         ],
         [
           "app private members, every bucket",
@@ -864,19 +1278,24 @@ describe("Catalog membership fingerprints", () => {
           [allBuckets],
         ],
         [
-          "app intent assets, every live intent",
+          "app intent assets, every live intent, half of them ended",
           fixture.app,
           catalogIntentAssetsSql,
-          [liveIntents],
+          [liveIntents, liveIntents.filter((_, i) => i % 2 === 0)],
         ],
         [
           "app boundaries, one minute",
           fixture.app,
           catalogMembershipBoundariesSql,
+          [new Date(at.getTime() - 60_000).toISOString(), at.toISOString()],
+        ],
+        [
+          "app boundaries, every live lease at once",
+          fixture.app,
+          catalogMembershipBoundariesSql,
           [
-            new Date(at.getTime() - 60_000).toISOString(),
             at.toISOString(),
-            CATALOG_RENDER_GRACE_HOURS,
+            new Date(at.getTime() + 25 * 3_600_000).toISOString(),
           ],
         ],
         [
@@ -892,23 +1311,83 @@ describe("Catalog membership fingerprints", () => {
           [
             published.sort(),
             published.map(() => "public_membership"),
+            published.map(() => true),
             at.toISOString(),
           ],
         ],
       ];
       const lines: string[] = [];
-      for (const [label, pool, sql, values] of statements) {
-        const plan = await rolledBackCatalogScale(pool, (client) =>
+      const plan = async (
+        label: string,
+        pool: CatalogScaleDatabase["setup"],
+        sql: string,
+        values: readonly unknown[],
+      ) => {
+        const planned = await rolledBackCatalogScale(pool, (client) =>
           explainCatalogScaleOn(client, sql, values, {
             analyze: true,
             buffers: true,
           }),
         );
         lines.push(
-          `${label}: cost ${Math.round(plan.cost)}, ${plan.executionMs?.toFixed(1)} ms, ${plan.sharedBlocks} blocks, JIT ${plan.jit ? `${plan.jitMs?.toFixed(1)} ms` : "no"}; ${plan.nodes.join(" > ")}`,
+          `${label}: cost ${Math.round(planned.cost)}, ${planned.executionMs?.toFixed(1)} ms, ${planned.sharedBlocks} blocks, JIT ${planned.jit ? `${planned.jitMs?.toFixed(1)} ms` : "no"}; ${planned.nodes.join(" > ")}`,
         );
-        expect(plan.cost, label).toBeLessThan(JIT_ABOVE_COST);
-        expect(plan.jit, label).toBe(false);
+        expect(planned.cost, label).toBeLessThan(JIT_ABOVE_COST);
+        expect(planned.jit, label).toBe(false);
+      };
+      for (const [label, pool, sql, values] of statements)
+        await plan(label, pool, sql, values);
+      // A release wave before its release: private B serves the images of
+      // the records whose requests it holds (700 at 25k, about 4,900
+      // images, the wave of W-AC5's scenario), so the holds read finds
+      // those requests for the listed buckets, the CMS confirms them by id,
+      // and the exposed test of the App members finds their pins for each
+      // listed image.
+      const held = AT_25K ? 700 : Math.ceil(SHAPE.releasedIntents / 5);
+      await holdCatalogScaleRecords(fixture, { first: 1, last: held });
+      await analyzeCatalogScale(fixture);
+      const heldAt = new Date().toISOString();
+      const store = catalogMembershipStore(fixture.app);
+      for (const [label, buckets] of [
+        ["every bucket", allBuckets],
+        ["7 buckets", allBuckets.slice(0, 7)],
+      ] as const) {
+        // The requests the step reads for these buckets, all of which the
+        // CMS still confirms: the held ones. The fixture's other live
+        // requests name images nothing serves yet and pin nothing (as
+        // inspect leaves a request whose members are still rendering), so
+        // the read leaves them out, after reading their pins.
+        const requests = await store.readCatalogMembershipHolds(
+          buckets,
+          new Date(heldAt),
+          POLICY,
+        );
+        if (buckets === allBuckets) expect(requests).toHaveLength(held);
+        await plan(
+          `app holds, ${label}, ${held} records held by private B`,
+          fixture.app,
+          catalogMembershipHoldsSql,
+          [buckets, heldAt, POLICY],
+        );
+        await plan(
+          `cms requests, ${label}, ${requests.length} read with ${held} records held by private B`,
+          fixture.prepare,
+          catalogMembershipRequestsSql,
+          [requests, heldAt, POLICY],
+        );
+        const confirmed = (
+          await fixture.prepare.query<{ intent_id: string }>(
+            catalogMembershipRequestsSql,
+            [requests, heldAt, POLICY],
+          )
+        ).rows.map((row) => row.intent_id);
+        expect(confirmed.sort()).toEqual(requests);
+        await plan(
+          `app public members, ${label}, ${held} records held by private B, ${confirmed.length} confirmed`,
+          fixture.app,
+          catalogPublicMembershipAppMembersSql,
+          [buckets, heldAt, POLICY, confirmed],
+        );
       }
       if (AT_25K)
         console.info(

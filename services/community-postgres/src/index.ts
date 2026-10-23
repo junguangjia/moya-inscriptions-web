@@ -79,6 +79,7 @@ export {
   catalogMembershipBuckets,
   catalogMembershipChanged,
   catalogMembershipHashSql,
+  catalogMembershipHoldsSql,
   catalogMembershipStateSql,
   catalogMembershipStore,
   catalogMembershipTotal,
@@ -93,6 +94,7 @@ export {
   lockCatalogPublicationDirty,
   markCatalogPublicationDirty,
   readCatalogMembershipAppBuckets,
+  readCatalogMembershipHolds,
   readCatalogMembershipState,
 } from "./publishing/catalog-publication-dirty.js";
 export type {
@@ -104,6 +106,8 @@ export type {
   CatalogMembershipObservation,
   CatalogMembershipSide,
   CatalogMembershipState,
+  CatalogMirrorState,
+  CatalogPublicationDirtyMark,
   CatalogPublicationDirtyReason,
 } from "./publishing/catalog-publication-dirty.js";
 // unified-media-pipeline-v1: the recorded form of rendition recipe

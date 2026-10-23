@@ -1641,8 +1641,8 @@ describe("Work publishing composition", () => {
   // catalog-scale-v1 (W8 in the media worker, here for the embedded
   // Development worker): wherever the Backend runs the Catalog sync and the
   // scoped reconcile, it also runs the per-minute membership step that marks
-  // the reconcile's dirty assets (takedowns between syncs, lease and render
-  // grace boundaries), on the App pool, from the published read pool.
+  // the reconcile's dirty assets (takedowns between syncs, a passed lease),
+  // on the App pool, from the published read pool.
   it("Development runs the Catalog membership step beside the sync, on the App pool", async () => {
     quietQueue();
     const membership = {
@@ -1651,6 +1651,7 @@ describe("Work publishing composition", () => {
         private: null,
       })),
       readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+      readCatalogMembershipHolds: vi.fn(async () => []),
       applyCatalogMembership: vi.fn(async () => ({
         public: 0,
         private: 0,
@@ -1714,8 +1715,8 @@ describe("Work publishing composition", () => {
   // worker (one condition for both there). Without CMS_MEDIA_DIR the
   // embedded Backend runs no Catalog sync and no render, but its publication
   // lanes still reconcile with the Catalog authority on the published read
-  // pool, so the step still marks takedowns and passed lease or render grace
-  // rather than leaving them to the sweep alone.
+  // pool, so the step still marks takedowns and a passed lease rather than
+  // leaving them to the sweep alone.
   it("Development without CMS_MEDIA_DIR still runs the Catalog membership step beside the scoped reconcile, with no sync", async () => {
     const queue = quietQueue();
     const membership = {
@@ -1724,6 +1725,7 @@ describe("Work publishing composition", () => {
         private: null,
       })),
       readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+      readCatalogMembershipHolds: vi.fn(async () => []),
       applyCatalogMembership: vi.fn(async () => ({
         public: 0,
         private: 0,

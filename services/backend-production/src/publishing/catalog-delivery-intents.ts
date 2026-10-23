@@ -1145,12 +1145,13 @@ export const captureCatalogAssets = async (
  * batch is one CMS snapshot, one App read of its assets' rows and intents,
  * and one selector statement (below CATALOG_PLAN_SELECTOR_BATCH), so a pass
  * of K assets takes about K / 100 snapshots, and the pass's budget is kept
- * to within about one batch's time. A snapshot per batch, not one per scope
- * (the design's wording), is what lets the budget stop between batches and a
- * failed batch be captured again asset by asset. Two batches may see
- * different CMS states; each asset is still planned from one snapshot, its
- * job re-plans it from the live CMS, and a mark made meanwhile outlives the
- * pass (the mark_seq clear). */
+ * to within about one batch's time. The reconcile's reserved parts
+ * (community-postgres CATALOG_RECONCILE_RESERVED) are one batch each. A
+ * snapshot per batch, not one per scope (the design's wording), is what lets
+ * the budget stop between batches and a failed batch be captured again asset
+ * by asset. Two batches may see different CMS states; each asset is still
+ * planned from one snapshot, its job re-plans it from the live CMS, and a
+ * mark made meanwhile outlives the pass (the mark_seq clear). */
 export const CATALOG_SCOPE_BATCH = 100;
 
 /** Plan reads that read each intent's App facts once per pass, however many
@@ -1200,9 +1201,16 @@ const memoizedPlanReads = (reads: CatalogPlanReads): CatalogPlanReads => {
  * every intent of a planned asset that may grant it something has them
  * recorded again. A batch starts only while the longest batch so far still
  * fits in `budgetMs`, so the assets attempted are a prefix of the order and
- * the pass ends within its budget. A batch that throws is captured again
+ * the pass ends within its budget; the first `reserved` assets (the
+ * reconcile's oldest urgent marks and its sweep's share) are attempted
+ * whatever the budget, so a slow batch can stretch the pass by about one
+ * batch but never keep them out. A batch that throws is captured again
  * asset by asset: an asset whose plan throws is `failed` alone and the others
- * are planned; none is ever planned from a partial read. When every asset
+ * are planned; none is ever planned from a partial read. Those retries, and
+ * the pass with them, stop at the budget, a reserved batch's at the budget
+ * plus the slowest batch capture so far, so captures that all fail slowly (an
+ * outage) also stretch the pass by about one batch, never by a capture per
+ * asset, and the assets attempted stay a prefix. When every asset
  * attempted failed, the failure is the pass's (the CMS or App is unavailable)
  * and is thrown, as a whole-Catalog plan threw. A plan is the asset's desired
  * Catalog rendition IDs, the union of its permissions'.
@@ -1212,12 +1220,22 @@ export const planCatalogScope = async (
   assetIds: readonly string[],
   reads: CatalogPlanReads,
   policy: string,
-  options: { readonly budgetMs: number; readonly clock?: () => number },
+  options: {
+    readonly budgetMs: number;
+    readonly reserved?: number;
+    readonly clock?: () => number;
+  },
 ): Promise<{
   readonly plans: ReadonlyMap<string, readonly string[]>;
   readonly failed: readonly string[];
 }> => {
-  if (!Number.isFinite(options.budgetMs) || options.budgetMs <= 0)
+  const reserved = options.reserved ?? 0;
+  if (
+    !Number.isFinite(options.budgetMs) ||
+    options.budgetMs <= 0 ||
+    !Number.isSafeInteger(reserved) ||
+    reserved < 0
+  )
     throw new TypeError("Catalog scope budget invalid");
   const ids = [...new Set(assetIds)];
   for (const id of ids)
@@ -1226,9 +1244,14 @@ export const planCatalogScope = async (
   const clock = options.clock ?? Date.now;
   const started = clock();
   // A batch starts only while the longest one so far still fits, so the
-  // pass ends within its budget instead of one batch past it.
+  // pass ends within its budget instead of one batch past it; the reserved
+  // assets are attempted whatever the budget. `slowest` is the longest batch
+  // capture alone (a failed one's retries left out): how far past the budget
+  // a reserved batch's assets are still retried one by one.
   let longest = 0;
-  const spent = (at: number) => at - started + longest >= options.budgetMs;
+  let slowest = 0;
+  const spent = (at: number, index: number) =>
+    index >= reserved && at - started + longest >= options.budgetMs;
   const memo = memoizedPlanReads(reads);
   const plans = new Map<string, readonly string[]>();
   const failed: string[] = [];
@@ -1246,13 +1269,20 @@ export const planCatalogScope = async (
   };
   scope: for (let at = 0; at < ids.length; at += CATALOG_SCOPE_BATCH) {
     const begun = clock();
-    if (spent(begun)) break;
+    if (spent(begun, at)) break;
     const batch = ids.slice(at, at + CATALOG_SCOPE_BATCH);
+    let retried = false;
     try {
       await capture(batch);
     } catch {
-      for (const id of batch) {
-        if (clock() - started >= options.budgetMs) break scope;
+      // Asset by asset while the budget lasts, a reserved asset until about
+      // one batch past it: captures that all fail slowly (an outage) end the
+      // pass there instead of holding the withdraw lane asset after asset.
+      retried = true;
+      slowest = Math.max(slowest, clock() - begun);
+      for (const [index, id] of batch.entries()) {
+        const limit = options.budgetMs + (at + index < reserved ? slowest : 0);
+        if (clock() - started >= limit) break scope;
         try {
           await capture([id]);
         } catch (error) {
@@ -1261,7 +1291,9 @@ export const planCatalogScope = async (
         }
       }
     }
-    longest = Math.max(longest, clock() - begun);
+    const took = clock() - begun;
+    longest = Math.max(longest, took);
+    if (!retried) slowest = Math.max(slowest, took);
   }
   if (failed.length && !plans.size) throw failure;
   return { plans, failed };

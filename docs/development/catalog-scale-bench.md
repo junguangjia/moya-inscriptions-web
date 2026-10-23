@@ -63,8 +63,12 @@ test.
 - `tests/integration/postgres/catalog-render-queue.test.ts` (W9) runs the render
   tiers on the fixture's roles in CI: one pass's claim order, the queue target,
   a backlog write that fails after the commit, W-AC10's 50 records (leases a
-  minute apart, all in the snapshot from the first pass), and records that
-  arrive pass by pass behind re-renders already queued. With
+  minute apart, all in the snapshot from the first pass), records that arrive
+  pass by pass behind re-renders already queued, and an intent's images ready
+  under an older recipe: re-rendered in the intent's tier (a prepared record's
+  before more published re-renders than the target, a published image a
+  requested intent names in t1, a grace member in t3), while a re-render only
+  the published list names stays behind the gate (t4). With
   `MOYA_CATALOG_RENDER_IMAGES=25200` it also runs its 25k gate: one sync pass
   through the worker's snapshot, every App statement planned as it ran (EXPLAIN
   ANALYZE, rolled back), none JIT-compiled, each under a cost of 100,000 and 2 s
@@ -440,8 +444,16 @@ rolled back), with no JIT:
   intent of the assets it plans. So with nothing else to do a whole sweep round
   at 25k takes about 50 passes. A set-based inspect (the design's follow-up)
   would about double the rate. Marked takedowns do not wait for the sweep: 900
-  were planned and scheduled in one 3.2 s pass, and a queue of N marks drains in
-  ⌈N / 900⌉ passes with the jobs running between passes.
+  were planned and scheduled in one 3.2 s pass. Since the review fixes below, a
+  takedown waits only behind the urgent marks made before it, each of which
+  removes exposure itself: never behind publish-side work, nor behind the images
+  private B alone serves during a release wave, which the membership step no
+  longer marks (the integration review below). A queue of N urgent marks drains
+  in ⌈N / 900⌉ passes with the jobs running between passes (⌈N / 450⌉ at worst,
+  while as many in-flight assets take their half): urgent marks are read first,
+  and the first 100 are planned whatever the budget. Normal marks drain at most
+  900 a pass, and only about as fast as the sweep (about 500 a pass at 25k) when
+  their plans inspect.
 - **The in-flight read at its worst.** With every published generation
   withdrawing (a mass takedown whose jobs all failed after planning), the
   in-flight read takes 371 ms with the statistics of before (cost estimate 19: a
@@ -478,9 +490,11 @@ aggregate per side in one CMS snapshot and lists buckets only after a change.
 - **A correlated `EXISTS` for the members' served flag was rejected.** At 256
   buckets it was priced at 318,591 and compiled with JIT; the semi join inside
   the outer join uses index lookups for a few buckets and one hash of the
-  publications for all 256.
+  publications for all 256. The integration review's exposed flag (below) is a
+  second such join, and about doubles both costs.
 - **A mass takedown is queued as a whole.** On the 25k fixture a 21,000-image
-  takedown is marked by one observation and drains in 24 passes of 900.
+  takedown is marked by one observation and drains in 24 passes of 900. Its
+  marks are urgent, so it drains at that rate behind no publish-side mark.
 - **Two reads stay linear in the Catalog each minute.** The CMS public aggregate
   (a scan and an md5 per published row) and, on a change minute, the scan of
   `catalog_media_assets` in the App members read (the bucket is an expression of
@@ -498,8 +512,281 @@ aggregate per side in one CMS snapshot and lists buckets only after a change.
   reconcile's authority (the published read pool). The Development embedded
   Backend reconciles whenever publishing media is set, with its authority always
   on the published read pool, so it runs the step then too, even without
-  `CMS_MEDIA_DIR` (no sync, no render): a takedown or a passed lease or render
-  grace is still marked within a minute rather than left to the sweep.
+  `CMS_MEDIA_DIR` (no sync, no render): a takedown or a passed lease is still
+  marked within a minute rather than left to the sweep.
+
+### Review fixes: takedowns first, a reserved part, block marks (W7, W8)
+
+The 1B cross-wave review found four gaps, fixed before the PR:
+
+- **Takedowns waited behind publish-side marks (W-AC5).** The queue was one
+  FIFO, so a takedown marked after a release wave of requested intents or public
+  assets waited until every earlier mark was planned, at the budget's rate when
+  those plans inspect (about 500 a pass at 25k): many passes, not 2. A1, amended
+  in place (unreleased; ledger checksum `82fab0de…`), gives each dirty row a
+  class, `urgent boolean NOT NULL DEFAULT false`, and the pending index is now
+  `(urgent DESC, marked_at, asset_id) WHERE mark_seq > cleared_seq`. The App
+  role's column grant and the startup check include `UPDATE (urgent)`. A change
+  that can only remove public or private-B exposure marks urgent: the membership
+  step's served-but-not-published assets, an intent that became cancelled,
+  superseded, expired or withdrawn or left the live projection, a passed lease,
+  the sync's flips to unreferenced and the intents it ends or tombstones (F3).
+  Every other mark is normal: an asset to copy, an intent requested, prepared or
+  released, a recorded render or block set, and the settle's carried-over marks.
+  (The integration review below narrowed the step's assets, the ended intents
+  and the passed leases to the changes that can remove exposure.) A pending
+  urgent row stays urgent under a normal mark (the settle's `publication` marks
+  included), and a pending normal row becomes urgent, keeping its place, under
+  an urgent one. The pending read is
+  `ORDER BY urgent DESC, marked_at, asset_id`, and the scope's priority part is
+  urgent marks, then in flight, then normal marks. In CI, behind 2,093
+  publish-side marks whose plans inspect (300 records with released intents), a
+  7-image takedown marked last is planned first in the first pass (a FIFO needed
+  more than 2 passes: 2,093 > 2 × 900).
+- **A slow first batch could block every marked asset.** The sweep's share (100,
+  one planning batch at K = 1,000) was planned first, and a batch starts only
+  while twice the longest batch so far fits the 14 s budget, so a first batch of
+  7 s or more (records of about 20 images, or about 3 times the local
+  per-statement latency) ended every pass before any marked or in-flight asset.
+  The planning order is now the priority part's first 100
+  (`CATALOG_RECONCILE_RESERVED`), the sweep's share, the rest of the priority
+  part and the rest of the sweep, and `planScope` takes `reserved`: the priority
+  part's first 100 and the share's first 100 are attempted whatever the budget,
+  so a pass can end about one batch past its budget. A failed batch among them
+  is captured again asset by asset only until the budget plus the slowest batch
+  capture so far, and the pass ends there (any other failed batch's retries stop
+  at the budget, as before): when every capture fails slowly (an outage, a 5 s
+  connect timeout), a pass ends about one batch past its budget instead of
+  retrying 200 assets one by one (about 17 minutes in the withdraw lane). In CI,
+  with every batch taking 60% of the budget (an injected clock), a pass plans
+  the 7 marked takedown assets, schedules their withdrawals and moves the sweep
+  193 assets on; a unit test retries a failed reserved batch in full past its
+  budget and stops an outage's retries one batch past it.
+- **Block sets marked nothing.** `recordCatalogBlocks` and a detach, a new limit
+  or a re-attach (which end a master and release its blocks) now mark their
+  asset (normal, reason `rendition`) as the transaction's last write, after the
+  asset rows. A scoped pass that plans no sweep asset publishes a recorded set
+  and withdraws a detached master's published blocks; before, both waited for
+  the sweep (about 50 passes at 25k).
+- **Render grace marked its end.** No publication input reads render grace (it
+  decides only whether an image renders), so the boundaries statement keeps the
+  lease branch only: a passed lease is marked (urgent; since the integration
+  review, a prepared one normal), the end of grace is not.
+
+The changed statements at the 25k fixture, planned as they ran (EXPLAIN ANALYZE,
+rolled back), on PG18.4 and on PG16.15 in a disposable container (single runs on
+a shared machine), none JIT-compiled, each far below a cost of 100,000:
+
+| Statement (role App), 25k                                  | PG18.4         | PG16.15       | Plan                                                                    |
+| ---------------------------------------------------------- | -------------- | ------------- | ----------------------------------------------------------------------- |
+| pending marks, 1,000 of 25,200 pending, a tenth urgent     | 148, 0.3 ms    | 148, 0.2 ms   | Index Only Scan on `catalog_publication_dirty_pending`, no Sort         |
+| pending marks in a sweep pass (empty queue)                | 45, 0.0 ms     | 45, 0.0 ms    | the same                                                                |
+| pending marks in a dirty pass (1,001 urgent marks)         | 155, 0.4 ms    | 155, 0.5 ms   | Seq Scan of the 1,001-row table                                         |
+| the settle's `publication` marks (900 kept, urgent stays)  | 58, 12.2 ms    | 58, 11.4 ms   | ModifyTable over the sorted `unnest`                                    |
+| the mark at its largest: 25,200 urgent (membership gate)   | 2,220, 282 ms  | 2,220, 209 ms | the same                                                                |
+| an intent change's assets with their class (3,700 intents) | 9,860, 27.5 ms | 10,161, 33 ms | PG18 Bitmap Index Scan on the refs' key, PG16 Seq Scan; Aggregate, Sort |
+| lease boundaries of one minute (grace branch dropped)      | 40, 0.0 ms     | 40, 0.0 ms    | Index Scan on `catalog_delivery_prepares_active`, refs by index         |
+
+The passes themselves: a dirty pass of 1,001 urgent takedown marks planned 1,000
+of 1,000 (900 marks, 100 swept) and scheduled 900 withdrawals in 3.2 s (PG16 3.1
+s); a sweep pass (no mark, its reserved part the share's 100) planned 500 of
+1,000 in 12.2 s (PG16 11.9 s), 44,786 App statements, as before. The membership
+step's first observation took 117 ms (PG16 126 ms), a minute without a change 39
+ms (46 ms). The render gate (`catalog-render-queue.test.ts` at 25k, PG18) still
+plans every sync statement without JIT (largest 15,992, the tiered insert of the
+render section below); its fixed-point sync issues neither the mark nor the
+intent-assets statement, which the membership gate plans at their largest above.
+
+### Integration review: what is urgent (W8)
+
+The integration review of the fixes above found two kinds of no-op that the
+class still counted as takedowns:
+
+- **The images private B alone serves.** During a release wave (takedown-1's
+  increment-2 scenario: about 700 requests holding about 5,000 images, released
+  over about 20 minutes) the public total changes each minute and about half of
+  the 256 buckets are listed. The App members read flagged every served image
+  the Catalog does not publish, so each held image in a listed bucket was marked
+  urgent every minute, though its plan keeps its pins and plans as a no-op (an
+  inspection each): at about 500 such plans a pass, a takedown marked mid-wave
+  waited about 5 to 8 passes. The members read now also returns `exposed`:
+  served by a publication that no live release request pins (a
+  `catalog_delivery_rendition_pins` row of a mirror row that is
+  `release_requested`, observed live, not ended, and leased past the
+  observation). Only an exposed image the Catalog does not publish is marked,
+  urgent; one private B alone serves is not marked at all, and the end of its
+  request marks it (the private diff, the sync, a passed lease). A step without
+  a prepare reader (whose reconcile reads no intent, so keeps no pin) still
+  marks every served image the Catalog does not publish. (This read the
+  request's state from the App mirror, which lags the CMS by up to a sync; the
+  delta review below found takedowns it left unmarked, and a pin now counts only
+  for a request that pins each of its members and that the CMS confirms in the
+  same observation.) In CI, after a release of 40 records lists 164 buckets
+  holding 281 images that 60 requests serve (K is 100 there, so a pass plans at
+  most 90 marks), a takedown marked the next minute is scheduled in the first
+  pass; without the exposed test it is not scheduled after two (281 urgent marks
+  ahead of it).
+- **The end of a prepared intent.** A prepared intent grants nothing a takedown
+  removes (nothing to a pair that is not public; to a public one only pins its
+  public permission already selects), yet its end, lapse and passed lease were
+  urgent: a bulk prepare whose 24-hour leases lapse together (700 intents, about
+  5,000 images) queued about 5,000 urgent no-op marks, about 6 passes ahead of a
+  takedown. The class now follows the state the App last saw (the mirror row, in
+  the step's diff and in the sync): an ending is normal when the App saw the
+  intent prepared and the CMS shows no request since, at the same state version
+  (a lapse, as the projection reads it) or one transition later in a state other
+  than expired (a cancellation, supersession or withdrawal; every CMS transition
+  raises the version by one). The reconcile plans from the CMS, so a request the
+  mirror never saw may have been copied: an expiry one version later (which may
+  end such a request), a prepared intent that leaves the projection unseen, and
+  one the App did not know stay urgent. An intent the App last saw ended grants
+  nothing more, so its leaving the projection R later is normal too. The
+  boundaries statement returns per asset whether a requested lease passed
+  (urgent) or only a prepared one (normal); a request the mirror never saw also
+  changes the CMS projection at that lease, whose diff marks it urgent in the
+  same observation.
+
+The changed statements at the 25k fixture (the membership gate), planned as they
+ran (EXPLAIN ANALYZE, rolled back), on PG18.4 and on PG16.15 in a disposable
+container, none JIT-compiled:
+
+| Statement (role App), 25k                         | PG18.4        | PG16.15       | Plan                                                                                         |
+| ------------------------------------------------- | ------------- | ------------- | -------------------------------------------------------------------------------------------- |
+| App public members, all 256 buckets               | 24,428, 81 ms | 24,428, 84 ms | the publications hashed for each test; the held pins from `catalog_delivery_prepares_active` |
+| App public members, 7 buckets                     | 11,533, 10 ms | 11,187, 11 ms | per listed asset: its public asset, publications, pins by rendition, the mirror row memoized |
+| App public members, one bucket                    | 4,817, 4 ms   | 4,767, 5 ms   | the same                                                                                     |
+| the same, all 256 buckets, 700 records held       | 24,864, 97 ms | 24,855, 91 ms | as all 256 buckets                                                                           |
+| the same, 7 buckets, 700 records held             | 11,841, 10 ms | 11,495, 12 ms | as 7 buckets                                                                                 |
+| lease boundaries of one minute, a class per asset | 40, 0.0 ms    | 40, 0.0 ms    | Index Scan on `catalog_delivery_prepares_active`, refs by index; Sort, Aggregate             |
+| lease boundaries, every live lease at once (500)  | 68, 6.5 ms    | 68, 7.0 ms    | the same                                                                                     |
+
+The exposed test about doubles the members read (12,559 and 5,995 before), a
+quarter of the threshold. The step's first observation took 113 ms (PG16 120
+ms), a minute without a change 38 ms (39 ms).
+
+### Delta review: only requests the CMS confirms keep an image (W8)
+
+The review of the integration fixes above found that the exposed test trusted
+the App mirror, which only the sync writes (every 5 minutes):
+
+- **A request the CMS had ended still held its images.** A published record's
+  image is served by its four current renditions, which a pending release
+  request X also pins (the record's own new revision, or another record's
+  request). The editor cancels X, or saves a draft, which supersedes it; the
+  next step marks the image urgent (the private diff), and the reconcile, which
+  plans it while the record is public, clears the mark. When the record is
+  withdrawn a minute or two later, before the next sync, nothing ends: X has
+  ended already, and the record has no released intent, as after a text-only
+  republish. So the private total does not change. The public diff listed the
+  image's bucket, but X's mirror row still read as a live request pinning every
+  served publication, and the image was not marked. Its takedown waited for the
+  next sync (up to 5 minutes), against W-AC5's two reconciles.
+- **The pins of an earlier recipe policy's request counted.** After a deploy
+  that changes the policy, a live request of the earlier one can no longer be
+  released, and its plan grants it nothing (`planCatalogAsset`), yet its pins
+  kept its images unmarked.
+- **A request with a member still rendering held its other images** (found by
+  the review of this fix). Inspect pins every member that is ready and reports
+  the request private-ready only when all are, and the plan grants a request
+  that is not private-ready nothing. A request of a draft record whose member J
+  is still rendering (a render backlog can last hours) or failed still pins the
+  four current renditions of its other members. When such a member I is also a
+  published record's image, and no live intent of that record names it (a legacy
+  record, or after a text-only republish), withdrawing the record ends nothing,
+  and the request's pins covered every publication I serves. I waited for the
+  next sync's unreferenced flip (up to 5 minutes).
+
+A pin now counts only for a request that holds a pin for each of its members and
+that the CMS itself reports, in the observation's own snapshot, as
+`release_requested`, leased past the observation and of the current recipe
+policy. After the public members are listed, the step reads the App mirror's
+live requests of the current policy that name an asset of the listed buckets and
+hold a pin for each member (`catalogMembershipHoldsSql`: from the mirror's
+unended leases, their members and their pins by key, so it is bounded by the
+live requests, not by the listed buckets). That set is a superset of the
+requests whose pins serve a listed image: a request that names one but pins
+nothing there only widens the confirmation. The step then confirms them by
+intent id through the prepare reader in the same snapshot, as that reader's last
+statement (`catalogMembershipRequestsSql`). The members read counts only the
+pins of confirmed requests whose mirror row still agrees (requested, observed
+live, not ended, leased, the current policy). A confirmation that fails, in the
+App or in the CMS, confirms none and logs
+`catalog membership requests unconfirmed`. Every served image of the listed
+buckets that the Catalog does not publish is then marked, urgent, as by a step
+without a prepare reader. In CI, the reviewer's sequence marks the record's
+images urgent in the observation that sees the withdrawal: cancel X, drain its
+marks while the record is public, then withdraw the record before any sync. With
+the mirror-only test (the previous behaviour), it marks nothing. A step under a
+changed policy marks a takedown whose images only earlier-policy requests pin,
+and so does a step whose confirmation fails. A takedown whose images only a
+request with an unpinned member (its asset pending, its pins gone) pins is
+marked in the observation that sees it; without the pin check it marks nothing.
+
+One residual remains. Inspect can also fail on a request that pinned every
+member, when a planned role has no one ready rendition (a missing or duplicated
+row; the per-member count cannot see which roles a size plans, since the viewer
+role is skipped for small images). Its plan then keeps nothing, and an image
+that only its pins serve, shared with a record just withdrawn, still waits for
+the next sync's unreferenced flip (up to 5 minutes).
+
+The same review found no test of a prepared intent's lapse as the CMS projection
+reports it: expired at the same state version, the branch of `endsCatalogGrant`
+that keeps a bulk lapse normal. A test now lapses a prepared intent and a
+request in the CMS and the mirror alike, an hour before the step's window, so no
+lease boundary marks them. The step's private diff marks the prepared intent
+normal and the request urgent, and so does the sync's mirror change after it.
+Dropping the same-version disjunct makes the prepared lapse urgent, and the test
+fails.
+
+The changed and new statements at the 25k fixture (the membership gate), planned
+as they ran (EXPLAIN ANALYZE, rolled back), on PG18.4 and on PG16.15 in a
+disposable container, none JIT-compiled. The held rows are a release wave's 700
+requests, each pinning every member. The fixture's 100 other live requests pin
+nothing, so the holds read returns the 700 for all 256 buckets and 134 for 7,
+and the CMS confirms them all:
+
+| Statement, 25k                                             | PG18.4        | PG16.15       | Plan                                                                                                                                                                                     |
+| ---------------------------------------------------------- | ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App holds, all 256 buckets                                 | 2,594, 0.8 ms | 2,594, 0.9 ms | BitmapAnd of `catalog_delivery_prepares_active` and `_observed_live`; per request its pins by `catalog_delivery_rendition_pins_pkey` (Sort, Aggregate), its members by key; Sort, Unique |
+| App holds, 7 buckets                                       | 2,593, 0.3 ms | 2,593, 0.3 ms | the same                                                                                                                                                                                 |
+| App holds, all 256 buckets, 700 records held               | 5,480, 11 ms  | 5,480, 11 ms  | the same; 11,543 blocks                                                                                                                                                                  |
+| App holds, 7 buckets, 700 records held                     | 5,479, 7.2 ms | 5,479, 7.2 ms | the same; 11,543 blocks                                                                                                                                                                  |
+| CMS requests (prepare reader), 700 ids                     | 529, 2.9 ms   | 981, 2.5 ms   | BitmapAnd of the live projection's condition (BitmapOr of `catalog_delivery_intents_state_ended` and `_expiry`) and `catalog_delivery_intents_pkey`                                      |
+| CMS requests (prepare reader), 134 ids                     | 244, 0.8 ms   | 478, 0.7 ms   | the same                                                                                                                                                                                 |
+| App public members, all 256 buckets (none confirmed)       | 24,393, 79 ms | 24,403, 79 ms | as before                                                                                                                                                                                |
+| App public members, 7 buckets                              | 11,549, 10 ms | 11,206, 11 ms | as before                                                                                                                                                                                |
+| App public members, one bucket                             | 4,819, 4 ms   | 4,770, 4 ms   | as before                                                                                                                                                                                |
+| the same, all 256 buckets, 700 records held, 700 confirmed | 24,741, 87 ms | 24,759, 86 ms | as before; the confirmed requests' unended leases, their pins by key                                                                                                                     |
+| the same, 7 buckets, 700 records held, 134 confirmed       | 15,974, 11 ms | 17,676, 44 ms | PG18 per listed asset, as 7 buckets; PG16 a hash plan: Seq Scans of `media_public_assets` and `media_publications`, the held pins from `catalog_delivery_prepares_active`                |
+
+- **Reading the holds through the pins was rejected.** It found the same
+  requests, but looked up a publication and a public asset for each of the
+  wave's 19,600 pins: priced at 182, it visited 165,098 blocks (66 ms with 700
+  held requests). The read through the members visited 3,718 before the pin
+  check.
+- **The pin check reads each live request's pins.** The planner puts the count
+  on the scan of the requests, before the bucket test, so it runs for every live
+  request whatever the buckets: with the wave held, the holds read visits 11,543
+  blocks and takes 7 to 11 ms on both engines (2.3 to 5.1 ms without it), at
+  about a twentieth of the threshold.
+- **The confirmed ids make a takedown minute dearer during a release wave.**
+  With the wave in its buckets, the 7-bucket members read (a single-record
+  takedown) costs 11,841 and takes 10 ms on PG18 before, 15,974 and 11 ms now,
+  per listed asset as before. PG16 (Production's engine) leaves that plan once
+  requests are confirmed: 11,495 and 12 ms before, 17,676 and 44 ms now, with a
+  hash plan that scans `media_public_assets` and `media_publications` whole.
+  Both are under a fifth of the threshold at 25k. Both plans are linear in the
+  Catalog (PG18's scans `catalog_media_assets` and probes the listed buckets'
+  assets, 7/256 of them; PG16's also scans the public assets and publications),
+  so near the 200,000-source ceiling (about 7.9 times this fixture) such a
+  minute extrapolates to about 127,000 on PG18 and 140,000 on PG16 (about 94,000
+  and 91,000 before): basic JIT, still far below `jit_optimize_above_cost`
+  (500,000), as for the App public buckets aggregate (above) and the members
+  read on any minute that lists many buckets. These are linear extrapolations,
+  not measurements.
+
+The step's first observation took 121 ms (PG16 129 ms), a minute without a
+change 38 ms (40 ms).
 
 ## Render tiers and render grace at wave D (W9, W10)
 
@@ -510,11 +797,15 @@ backlog per tier:
   (catalog id, then position: the published listing reads both); t1 an image of
   a live release_requested intent; t2 one of a live prepared intent, soonest
   lease first; t3 one of an intent in render grace (below); t4 a ready image
-  missing a current recipe identity (a recipe re-render, which N3 keeps serving
-  its old set meanwhile). An image several records name takes its highest tier;
-  within t1–t3 an intent's images follow its lease, document, intent and
-  ordinal, so a record renders together. New assets are created in the same
-  order, a bounded number a pass.
+  missing a current recipe identity that no intent of t1–t3 names (a recipe
+  re-render of a published image, which N3 keeps serving its old set meanwhile).
+  An image several records name takes its highest tier; within t1–t3 an intent's
+  images follow its lease, document, intent and ordinal, so a record renders
+  together. A ready image missing a current identity that an intent of t1–t3
+  names is re-rendered in that intent's tier, even when it is published too: no
+  old set serves the intent (readiness wants the current recipe). The sync
+  keeps, per named image, its best intent rank beside its best rank. New assets
+  are created in the same order, a bounded number a pass.
 - **Claim order.** Each job runs after the pass's time plus its rank in
   milliseconds (`run_after = at + rank × 1 ms`). Claims order one class by
   run_after, then by the random job id, so without the rank a pass's jobs ran in
@@ -522,16 +813,24 @@ backlog per tier:
   their claim class.
 - **Queue target.** The worker passes `CATALOG_RENDER_QUEUE_TARGET` (300, about
   40 minutes at about 7 renders a minute): a pass queues base renders only into
-  the room below it. Pending images (t0–t3) are queued first. Re-renders (t4),
-  and the daily retry of a failed re-render, enter the queue only when no image
-  of a higher tier waits at that pass: every pending one is queued and every
-  named one has its asset. A recipe bump of the whole Catalog therefore never
-  takes a place a published, requested, prepared or grace image of the same pass
-  could take. Claims follow the passes in turn, so a t0–t3 image that arrives at
-  a later pass waits behind at most the re-renders already queued: about the
-  target (300, about 40 minutes).
-- **Backlog.** Per tier, the named images still to render (not created yet,
-  pending, or in t4 ready but missing an identity), written to
+  the room below it. The tiered images (t0–t3) are queued first, in one ranked
+  statement: every pending one, and every ready one missing an identity that an
+  intent names, at that intent's rank. The daily retry of an intent's failed
+  re-render follows them whatever the gate below, ranked after the pass's tiered
+  jobs (a retry comes at most once a day, so it is not interleaved by tier).
+  Re-renders that no intent names (t4), and their daily retries, enter the queue
+  only when no image of a higher tier waits at that pass: every tiered one is
+  queued and every named one has its asset. A recipe bump of the published
+  Catalog therefore never takes a place a published, requested, prepared or
+  grace image of the same pass could take, an intent's image ready under the
+  older recipe included (such an image used to be t4: queued after every
+  published re-render, about 48 hours at 20,000 images, past its 24-hour lease).
+  Claims follow the passes in turn, so a t0–t3 image that arrives at a later
+  pass waits behind at most the re-renders already queued: about the target
+  (300, about 40 minutes).
+- **Backlog.** Per tier, the named images still to render (not created yet or
+  pending, in their tier; ready but missing an identity, in the tier of the best
+  intent that names them, else in t4), written to
   `catalog_reconcile_state.render_backlog` after the pass commits, in a
   transaction of its own (the lock order never takes the state row after an
   asset or dirty row). `readCatalogRenderBacklog` reads it with the queued and
@@ -561,34 +860,48 @@ backlog per tier:
 
 `catalog-render-queue.test.ts`'s 25k gate on PG18.4 and on PG16.15 (a disposable
 container, removed afterwards), single runs: the 25k fixture with the live
-intents' images rendered, 200 published images under an older recipe (50 of them
-with a failed re-render older than a day) and 5,000 failed renders of other
-subjects. The pass queued 150 re-renders and the 50 retries (`enqueued=200`) in
-1.1 s (PG16: 1.2 s); every statement it ran, planned as it ran (EXPLAIN ANALYZE,
-rolled back), with no JIT on either major. Costs and times are the same on both
-within a few percent (PG16 in parentheses where they differ):
+intents' images rendered; 200 published images that no live unreleased intent
+names under an older recipe (50 of them with a failed re-render older than a
+day); 20 published images that a recent expired intent in render grace names
+under it (each twice in the tiered list: t0 as published, t3 as the intent's);
+60 live intents' images under it (20 of them with a failed re-render older than
+a day); and 5,000 failed renders of other subjects. The pass queued the 40 live
+intents' re-renders and the 20 grace members' with the pending images, the 20
+retries, then 150 published re-renders and their 50 retries (`enqueued=280`,
+every intent job ranked before every t4 one; backlog t1 9, t2 51, t3 20, t4 200)
+in 1.7 s on both majors. Every statement it ran was planned as it ran (EXPLAIN
+ANALYZE, rolled back), with no JIT on either major. The costs below are the same
+on both, the times within about 10% (PG16 in parentheses where they differ):
 
-| Statement (App role)                                    | Cost   | Time          |
-| ------------------------------------------------------- | ------ | ------------- |
-| the grace members (t3), observed-live mirror rows       | 2,041  | 1.2 ms        |
-| the first uncreated images, in render order (limit + 1) | 139    | 29 ms         |
-| the queued base renders, against the target             | 6      | 0.0 ms        |
-| the pending images' jobs (t0–t3), ranked                | 2,847  | 5.3 ms        |
-| the re-renders' jobs (t4), ranked after them            | 9,727  | 192 ms        |
-| the failed re-renders queued again, ranked last         | 4,170  | 10 ms (12 ms) |
-| the backlog by tier                                     | 15,248 | 145 ms        |
-| the backlog write (its own transaction)                 | 1      | 0.1 ms        |
+| Statement (App role)                                         | Cost   | Time             |
+| ------------------------------------------------------------ | ------ | ---------------- |
+| the grace members (t3), observed-live mirror rows            | 2,041  | 1.3 ms           |
+| the first uncreated images, in render order (limit + 1)      | 139    | 33 ms (32 ms)    |
+| the queued base renders, against the target                  | 6      | 0.1 ms           |
+| the tiered jobs (t0–t3: pending, intents' re-renders) ranked | 15,992 | 228 ms (231 ms)  |
+| the intents' failed re-renders queued again, before the gate | 2,065  | 0.5 ms (0.6 ms)  |
+| the re-renders' jobs (t4), ranked after them                 | 9,623  | 238 ms (234 ms)  |
+| the failed t4 re-renders queued again, ranked last           | 4,125  | 9.9 ms (10.7 ms) |
+| the backlog by tier                                          | 15,268 | 165 ms (163 ms)  |
+| the backlog write (its own transaction)                      | 1      | 0.1 ms (0.0 ms)  |
 
-The sync's other statements are unchanged from wave C (at most 11,844, or 11,332
-on PG16: the stored members' read).
+The sync's other statements are unchanged from wave C (here at most 11,844, or
+11,362 on PG16: the stored members' read).
 
+- **The tiered insert reads `current` too.** An intent's image that is ready but
+  misses an identity is found by the same hashed `NOT IN` subplan as the t4
+  insert, evaluated only for the ready rows an intent names. The insert's cost
+  went from 2,847 (5 ms, pending images only) to 15,992 (about 230 ms): one more
+  aggregate of the ready renditions per pass, never a loop over it. Its array
+  holds every named image once and a published one an intent names once more (so
+  at most the intents' members more), as the 20 grace members above.
 - **Which images miss an identity is one set-based read.** The assets holding a
   ready rendition of every current identity (`current`, one aggregate of the
   ready renditions per pass) replace the per-asset subquery of the old job
   insert for every named asset. That subquery is priced per asset: as the
   backlog count it cost 87,465 at 25k (162 ms), close to `jit_above_cost`
   (100,000), and it grows with the Catalog toward `jit_optimize_above_cost`
-  (500,000); the set-based count costs 15,248.
+  (500,000); the set-based count costs about 15,250.
 - **Anti-joins are hashed subplans (`NOT IN`).** Left-joined to `current`, the
   re-render insert was planned for the few rows the aggregate is estimated at: a
   nested loop over the materialized set, cost 5,949–6,617, which ran 16–21 s at

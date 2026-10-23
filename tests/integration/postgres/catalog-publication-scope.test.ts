@@ -403,7 +403,7 @@ describe("App migration A1, its grants and the startup checks", () => {
       {
         indexname: "catalog_publication_dirty_pending",
         indexdef:
-          "CREATE INDEX catalog_publication_dirty_pending ON community.catalog_publication_dirty USING btree (marked_at, asset_id) WHERE (mark_seq > cleared_seq)",
+          "CREATE INDEX catalog_publication_dirty_pending ON community.catalog_publication_dirty USING btree (urgent DESC, marked_at, asset_id) WHERE (mark_seq > cleared_seq)",
       },
       {
         indexname: "catalog_publication_dirty_pkey",
@@ -442,6 +442,7 @@ describe("App migration A1, its grants and the startup checks", () => {
         "catalog_publication_dirty.mark_seq|UPDATE",
         "catalog_publication_dirty.marked_at|UPDATE",
         "catalog_publication_dirty.reason|UPDATE",
+        "catalog_publication_dirty.urgent|UPDATE",
         "catalog_publication_dirty|INSERT",
         "catalog_publication_dirty|SELECT",
         "catalog_reconcile_state.policy_digest|UPDATE",
@@ -462,28 +463,44 @@ describe("App migration A1, its grants and the startup checks", () => {
     );
 
     // What the reconcile does, as the App role: mark (insert, then raise the
-    // same row, keeping its place in the queue), read the queue in order,
-    // clear exactly the mark it read, and advance the state row.
+    // same row, keeping its place in the queue and its class), read the
+    // queue in order, urgent marks first, clear exactly the mark it read, and
+    // advance the state row.
     await rolledBack(fresh.app, async (client) => {
-      const mark = (asset: string, reason: string) =>
-        client.query<{ mark_seq: string; marked_at: Date }>(
-          `INSERT INTO community.catalog_publication_dirty AS d (asset_id, mark_seq, reason, marked_at)
-           VALUES ($1, 1, $2, clock_timestamp())
+      const mark = (asset: string, reason: string, urgent: boolean) =>
+        client.query<{ mark_seq: string; marked_at: Date; urgent: boolean }>(
+          `INSERT INTO community.catalog_publication_dirty AS d (asset_id, mark_seq, reason, urgent, marked_at)
+           VALUES ($1, 1, $2, $3, clock_timestamp())
            ON CONFLICT (asset_id) DO UPDATE SET mark_seq = d.mark_seq + 1, reason = EXCLUDED.reason,
+             urgent = EXCLUDED.urgent OR (d.mark_seq > d.cleared_seq AND d.urgent),
              marked_at = CASE WHEN d.mark_seq > d.cleared_seq THEN d.marked_at ELSE EXCLUDED.marked_at END
-           RETURNING mark_seq, marked_at`,
-          [asset, reason],
+           RETURNING mark_seq, marked_at, urgent`,
+          [asset, reason, urgent],
         );
-      const first = (await mark(ASSET(1), "reference")).rows[0]!;
-      await mark(ASSET(2), "intent");
-      const again = (await mark(ASSET(1), "rendition")).rows[0]!;
-      expect(again).toEqual({ mark_seq: "2", marked_at: first.marked_at });
+      const first = (await mark(ASSET(1), "reference", false)).rows[0]!;
+      await mark(ASSET(2), "intent", false);
+      await mark(ASSET(4), "public_membership", true);
+      const again = (await mark(ASSET(1), "rendition", false)).rows[0]!;
+      expect(again).toEqual({
+        mark_seq: "2",
+        marked_at: first.marked_at,
+        urgent: false,
+      });
       const queue =
-        "SELECT asset_id, mark_seq FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY marked_at, asset_id LIMIT 10";
+        "SELECT asset_id, mark_seq FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY urgent DESC, marked_at, asset_id LIMIT 10";
       expect((await client.query(queue)).rows).toEqual([
+        { asset_id: ASSET(4), mark_seq: "1" },
         { asset_id: ASSET(1), mark_seq: "2" },
         { asset_id: ASSET(2), mark_seq: "1" },
       ]);
+      expect(
+        (
+          await client.query(
+            "UPDATE community.catalog_publication_dirty SET cleared_seq = $2 WHERE asset_id = $1 AND mark_seq = $2",
+            [ASSET(4), 1],
+          )
+        ).rowCount,
+      ).toBe(1);
       expect(
         (
           await client.query(
@@ -575,6 +592,10 @@ describe("App migration A1, its grants and the startup checks", () => {
         [
           `REVOKE UPDATE (cleared_seq) ON community.catalog_publication_dirty FROM "${appRole}"`,
           "UPDATE (cleared_seq) on community.catalog_publication_dirty",
+        ],
+        [
+          `REVOKE UPDATE (urgent) ON community.catalog_publication_dirty FROM "${appRole}"`,
+          "UPDATE (urgent) on community.catalog_publication_dirty",
         ],
         [
           `REVOKE INSERT ON community.catalog_publication_dirty FROM "${appRole}"`,
@@ -752,14 +773,15 @@ describe("A1 and M2 indexes over a long intent history", () => {
     expect(inFlight.nodes).not.toContainEqual("Seq Scan on media_publications");
     expect(inFlight.jit).toBe(false);
 
-    // 20,000 marks, 1,000 of them pending: the FIFO read walks the pending
-    // rows in order, without a sort or the cleared ones.
+    // 20,000 marks, 1,000 of them pending and a tenth of those urgent: the
+    // read walks the pending rows in order, urgent ones first, without a
+    // sort or the cleared ones.
     try {
       const queue = await rolledBack(fixture.setup, async (client) => {
         await client.query(
-          `INSERT INTO community.catalog_publication_dirty (asset_id, mark_seq, cleared_seq, reason, marked_at)
+          `INSERT INTO community.catalog_publication_dirty (asset_id, mark_seq, cleared_seq, reason, urgent, marked_at)
            SELECT 'catalog-asset-' || lpad(to_hex(g), 32, '0'), 1, CASE WHEN g <= 1000 THEN 0 ELSE 1 END,
-             'reference', now() - make_interval(secs => g)
+             'reference', g % 10 = 0, now() - make_interval(secs => g)
            FROM generate_series(1, 20000) AS g`,
         );
         await client.query("ANALYZE community.catalog_publication_dirty");

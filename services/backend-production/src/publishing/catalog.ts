@@ -698,9 +698,14 @@ export const CATALOG_SYNC_BATCH = 100;
  * The render queue's target (catalog-scale-v1 W9): a sync pass queues base
  * `catalog_render` jobs only while fewer are queued, at most the difference,
  * in render tier order. About 40 minutes of renders at about 7 a minute, so
- * a newly published image waits behind no more than that, and a recipe
- * re-render (always the last tier) never starves a prepared record. The
- * per-tier backlog the pass records counts what the queue does not hold.
+ * a newly published image waits behind no more than that. A recipe
+ * re-render is the last tier (t4) only for an image no live or grace intent
+ * names (its old set keeps serving); an intent's image ready under an older
+ * recipe is re-rendered in the intent's tier, so a recipe bump holds a
+ * prepared record behind at most the re-renders already queued. The
+ * per-tier backlog the pass records counts every named image still to
+ * render, queued or not; `readCatalogRenderBacklog` adds the queued and
+ * running base renders.
  */
 export const CATALOG_RENDER_QUEUE_TARGET = 300;
 /** Sync cadence in the worker maintenance (spec: every 5 minutes). */
@@ -869,6 +874,25 @@ export const catalogPrivateMembershipMembersSql = `
   WHERE (v.media_ordinal IS NULL OR v.media_ordinal = 1)
     AND substr(v.intent_id::text, 1, 2) = ANY($1::text[])`;
 
+/**
+ * Of the given intents (the App mirror's live release requests that name a
+ * listed asset and hold a pin for each of their members, a superset of
+ * those whose pins serve one), those the live private projection reports,
+ * through the prepare reader in the observation's snapshot, as
+ * release_requested (the view reads a lapsed lease as expired), leased past
+ * the observation ($2) and of the current recipe policy ($3): the requests
+ * whose plans keep their pins (planCatalogAsset), as long as inspect still
+ * finds each member's planned renditions. One row per intent (its first
+ * member, or its header row); the ids' bitmap on the primary key is ANDed
+ * with the live projection's own condition.
+ */
+export const catalogMembershipRequestsSql = `
+  SELECT v.intent_id::text AS intent_id
+  FROM public.catalog_delivery_live_prepare_media v
+  WHERE v.intent_id = ANY($1::uuid[]) AND (v.media_ordinal IS NULL OR v.media_ordinal = 1)
+    AND v.state = 'release_requested' AND v.expires_at > $2::timestamptz
+    AND v.recipe_manifest_sha256 = $3::text`;
+
 /** `catalog-asset-` + md5(media id ':' key), as the App derives an asset id. */
 const catalogAssetIdOf = (mediaId: string, objectKey: string) =>
   `catalog-asset-${createHash("md5").update(`${mediaId}:${objectKey}`, "utf8").digest("hex")}`;
@@ -880,6 +904,11 @@ export interface CatalogMembershipPort {
   readCatalogMembershipAppBuckets(
     side: "public" | "private",
   ): Promise<CatalogMembershipBuckets>;
+  readCatalogMembershipHolds(
+    buckets: readonly string[],
+    observedAt: Date,
+    policy: string,
+  ): Promise<readonly string[]>;
   applyCatalogMembership(
     observation: CatalogMembershipObservation,
     now: Date,
@@ -902,25 +931,49 @@ type CatalogClient = Awaited<ReturnType<typeof connectCatalog>>;
  * listed on both sides, and the assets whose membership differs there are
  * marked dirty with the new fingerprints in one App transaction, so a
  * takedown of any size is queued as a whole, and the reconcile reacts within
- * a minute or two at any Catalog size. The same transaction marks the
- * intents whose lease or render grace passed since the last observation. A
+ * a minute or two at any Catalog size; a takedown's marks are urgent, read
+ * before any publish-side mark. The same transaction marks the intents whose
+ * lease passed since the last observation: urgent for a requested lease,
+ * normal for a prepared one (it granted nothing a takedown removes). A
  * minute without a change reads two aggregates and writes the state row.
+ *
+ * With a prepare reader, an asset the Catalog does not publish that only
+ * release requests serve (each served publication one of their pins) is not
+ * marked: their plans keep those pins. Only requests that hold a pin for
+ * each of their members (inspect pins every ready member, so one with a
+ * member still rendering or failed is not private-ready, and its plan keeps
+ * nothing) and that the CMS itself reports in the same snapshot as
+ * release_requested, leased past the observation and of the current recipe
+ * policy count: after the public members are listed, the App mirror's live
+ * requests that name an asset of the listed buckets (a superset of those
+ * whose pins serve one) and hold such pins are read (bounded by the live
+ * requests, whatever the buckets) and confirmed by intent id through the
+ * prepare reader. The mirror lags the CMS by up to a sync, so a request the
+ * CMS has cancelled or superseded keeps nothing, and a record withdrawn
+ * after that is marked urgent in the same observation. A confirmation that
+ * fails confirms none (each such asset is then marked, urgent), and is
+ * logged. One residual remains: inspect can fail on a request that pinned
+ * every member (a planned role without its one ready rendition), and its
+ * plan then keeps nothing; an image only such a request's pins serve,
+ * shared with a record just withdrawn, waits for the next sync's
+ * unreferenced flip (up to 5 minutes).
  *
  * The buckets that changed are those that differ from this step's last
  * committed observation of the side, kept in memory while the stored
  * fingerprint is still that observation's (its count, sum and time). A
- * difference that lasts (an asset served while a requested intent holds it,
- * a published one that cannot be copied yet, a refused intent) is then
- * marked again only when the CMS changes one of its buckets, not on every
- * minute in which the CMS changes at all. Without such an observation (the
- * first after a start, or once another process, or a commit this step could
- * not confirm, advanced the stored row) the CMS buckets are compared with
- * the App's own record of the side, aggregated the same way, which marks
- * every lasting difference once. Within the listed buckets the marks are the
- * same either way: a bucket in which the App's record matches the CMS holds
- * nothing to mark. Above a snapshot ceiling the step writes nothing, as the
- * sync does. Any read error throws, and nothing is written or kept. Logs
- * are content-free counts.
+ * difference that lasts (a published asset that cannot be copied yet, an
+ * unpublished one still served, a refused intent) is then marked again only
+ * when the CMS changes one of its buckets, not on every minute in which the
+ * CMS changes at all; one that confirmed requests alone serve is not marked
+ * at all. Without such an observation (the first after a start, or once
+ * another process, or a commit this step could not confirm, advanced the
+ * stored row) the CMS buckets are compared with the App's own record of the
+ * side, aggregated the same way, which marks every lasting difference once.
+ * Within the listed buckets the marks are the same either way: a bucket in
+ * which the App's record matches the CMS holds nothing to mark. Above a
+ * snapshot ceiling the step writes nothing, as the sync does. Any other read
+ * error throws, and nothing is written or kept. Logs are content-free
+ * counts.
  */
 export function createCatalogMembershipWatch(options: {
   readonly published: Pick<ReturnType<typeof createPostgresPool>, "connect">;
@@ -928,6 +981,10 @@ export function createCatalogMembershipWatch(options: {
     ReturnType<typeof createPostgresPool>,
     "connect"
   > | null;
+  /** The current recipe policy (the manifest digest of
+   * currentCatalogRecipePolicy): a release request of an earlier one is
+   * granted nothing by its plan, so its pins keep nothing unmarked. */
+  readonly policy: string;
   readonly port: CatalogMembershipPort;
   readonly logger?: {
     info(message: string): void;
@@ -1068,12 +1125,42 @@ export function createCatalogMembershipWatch(options: {
                 })),
             )
           : null;
+      // The release requests whose pins may keep a listed asset unmarked:
+      // the App mirror's, confirmed by id in this snapshot (the prepare
+      // reader's last statement). A failure confirms none, so each such
+      // asset is marked rather than its takedown left to a later minute.
+      let requests: CatalogMembershipObservation["requests"];
+      const listed = publicSide.diff?.buckets ?? [];
+      if (reader && listed.length)
+        try {
+          const holds = await options.port.readCatalogMembershipHolds(
+            listed,
+            observedAt,
+            options.policy,
+          );
+          requests = {
+            policy: options.policy,
+            intentIds: holds.length
+              ? (
+                  await reader.query<{ intent_id: string }>(
+                    catalogMembershipRequestsSql,
+                    [holds, observedAt.toISOString(), options.policy],
+                  )
+                ).rows.map((row) => row.intent_id)
+              : [],
+          };
+        } catch {
+          logger.error(
+            "[media-worker] catalog membership requests unconfirmed",
+          );
+        }
       return {
         observation: {
           observedAt,
           previous,
           public: publicSide,
           private: privateSide,
+          ...(requests ? { requests } : {}),
         },
         buckets: new Map([
           ["public", publicBuckets],

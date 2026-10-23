@@ -25,7 +25,7 @@ import {
   changedCatalogIntentAssets,
   markCatalogPublicationDirty,
   readCatalogMirrorStates,
-  type CatalogPublicationDirtyReason,
+  type CatalogPublicationDirtyMark,
 } from "./catalog-publication-dirty.js";
 import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
 
@@ -95,18 +95,24 @@ type CatalogSyncSource = CatalogMediaSource & {
  * - t1: an image of a live release_requested intent;
  * - t2: an image of a live prepared intent, soonest lease first;
  * - t3: an image of an intent in render grace (W10), soonest lease first;
- * - t4: a ready image missing a current recipe identity (a recipe re-render;
- *   its earlier set keeps serving, N3), last in a pass, and queued only
- *   while no image of a higher tier waits (see the queue target).
- * An image several records name takes its highest tier. Within t0 images
+ * - t4: a ready image missing a current recipe identity that no intent of
+ *   t1-t3 names (a recipe re-render of a published image; its earlier set
+ *   keeps serving, N3), last in a pass, and queued only while no image of a
+ *   higher tier waits (see the queue target).
+ * An image several records name takes its highest tier. A ready image
+ * missing a current identity that an intent of t1-t3 names is re-rendered in
+ * that intent's tier, even when it is published too: no earlier set serves
+ * the intent (readiness wants the current recipe), so a recipe bump never
+ * holds a prepare behind the published images' re-renders. Within t0 images
  * follow their record (catalog id, then position), within t1-t3 their
  * intent (lease, document, intent, ordinal), so one record's images render
  * together.
  */
 export const CATALOG_RENDER_TIERS = ["t0", "t1", "t2", "t3", "t4"] as const;
 export type CatalogRenderTier = (typeof CATALOG_RENDER_TIERS)[number];
-/** Per tier, the images a sync pass named that still need a render (not
- * created yet, pending, or, in t4, ready but missing a current identity). */
+/** Per tier, the images a sync pass named that still need a render: not
+ * created yet or pending, in their tier; ready but missing a current
+ * identity, in the tier of the best intent that names them, else in t4. */
 export type CatalogRenderBacklog = Readonly<Record<CatalogRenderTier, number>>;
 
 const MAX_BATCH = 1000;
@@ -280,8 +286,9 @@ interface NamedSource {
  */
 const NAMED_SQL = `EXISTS (SELECT 1 FROM unnest($1::text[]) AS named(id) WHERE named.id=a.id)`;
 
-/** A named image's render tier (0..3; t4 is decided by the App's asset row)
- * and its place within the tier: a tuple compared element by element. */
+/** A named image's render tier (0..3; t4 is decided by the App's asset row
+ * and the intents naming it) and its place within the tier: a tuple
+ * compared element by element. */
 interface RenderRank {
   readonly tier: 0 | 1 | 2 | 3;
   readonly key: readonly (string | number)[];
@@ -306,6 +313,13 @@ const compareKeys = (
 };
 const compareRanks = (left: RenderRank, right: RenderRank): number =>
   left.tier - right.tier || compareKeys(left.key, right.key);
+/** Ranked ids in render order: by rank, then by id. */
+const compareRanked = (
+  left: { readonly id: string; readonly rank: RenderRank },
+  right: { readonly id: string; readonly rank: RenderRank },
+): number =>
+  compareRanks(left.rank, right.rank) ||
+  (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 /** A finite number, or `fallback`. */
 const finite = (value: unknown, fallback: number): number =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -384,11 +398,16 @@ export const syncCatalogAssets = async (
   // the list without a snapshot is the published list. Each live intent of
   // the current policy ranks its images t1 (requested) or t2 (prepared) by
   // its lease; the members of intents in grace (t3) are added in the pass.
+  // Each named id keeps its best rank and, apart, its best intent rank
+  // (t1-t3), which a re-render of the image takes even when it is published.
   const ranks = new Map<string, RenderRank>();
+  const intentRanks = new Map<string, RenderRank>();
   const rank = (id: string, candidate: RenderRank) => {
-    const current = ranks.get(id);
-    if (current === undefined || compareRanks(candidate, current) < 0)
-      ranks.set(id, candidate);
+    for (const best of candidate.tier === 0 ? [ranks] : [ranks, intentRanks]) {
+      const current = best.get(id);
+      if (current === undefined || compareRanks(candidate, current) < 0)
+        best.set(id, candidate);
+    }
   };
   const published = new Set<string>();
   for (const source of (options.snapshot?.publishedSources ??
@@ -433,7 +452,11 @@ export const syncCatalogAssets = async (
     // The mirror rows of the snapshot's intents before and after the pass
     // applies them (catalog-scale-v1 W8): an intent whose state, version or
     // liveness the pass changes (a new, advanced or refused one) marks its
-    // assets for the scoped reconcile. The membership step compares the CMS
+    // assets for the scoped reconcile, urgent when the change can only end
+    // what the intent granted (an ended state, or F3's tombstone, of an
+    // intent that may have granted exposure as the mirror held it before:
+    // not the lapse or cancellation of one it held prepared, see
+    // changedCatalogIntentAssets). The membership step compares the CMS
     // with this mirror, so a change applied here first leaves it nothing to
     // find. An intent absent from the snapshot ended or lapsed more than R
     // ago and grants nothing, so its tombstone marks nothing.
@@ -454,14 +477,14 @@ export const syncCatalogAssets = async (
           options.snapshot.undecodableIntentIds,
         )
       : undefined;
-    const marks = new Map<string, CatalogPublicationDirtyReason>();
+    const marks = new Map<string, CatalogPublicationDirtyMark>();
     if (mirrorBefore)
-      for (const id of await changedCatalogIntentAssets(
+      for (const [id, urgent] of await changedCatalogIntentAssets(
         db,
         mirrorBefore,
         await readCatalogMirrorStates(db, intentIds),
       ))
-        marks.set(id, "intent");
+        marks.set(id, { reason: "intent", urgent });
     // Render grace (W10): the images of the current policy's intents whose
     // lease passed within G, as the mirror stored them while the intent was
     // live (the CMS lists a lapsed intent without its members), are named
@@ -506,12 +529,31 @@ export const syncCatalogAssets = async (
     // Every named id in render order, with its tier (t0..t3).
     const ordered = ids
       .map((id) => ({ id, rank: ranks.get(id) ?? UNRANKED }))
-      .sort(
-        (left, right) =>
-          compareRanks(left.rank, right.rank) ||
-          (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
-      );
+      .sort(compareRanked);
     const order = ordered.map(({ id }) => id);
+    // The queue order of the tiered jobs (t0..t3). Each named id at its rank
+    // is queued there while pending and, when that rank is an intent's, also
+    // while ready but missing a listed identity. A published id an intent
+    // also names comes again at its intent rank, for the second case only.
+    // An asset is pending or ready, so it is queued at most once.
+    const tiered = [
+      ...ordered.map(({ id, rank: own }) => ({
+        id,
+        rank: own,
+        pending: true,
+        stale: own.tier > 0 && intentRanks.has(id),
+      })),
+      ...ordered.flatMap(({ id, rank: own }) => {
+        const intent = intentRanks.get(id);
+        return own.tier === 0 && intent !== undefined
+          ? [{ id, rank: intent, pending: false, stale: true }]
+          : [];
+      }),
+    ].sort(compareRanked);
+    // The named ids an intent names, and the others in render order, whose
+    // re-renders are t4.
+    const intentNamedIds = ids.filter((id) => intentRanks.has(id));
+    const rerenderOrder = order.filter((id) => !intentRanks.has(id));
     // The first `limit` named ids without an asset (anti-join), in render
     // order, then only their complete rows, as typed arrays. One more is
     // read to learn whether any is left for a later pass.
@@ -578,7 +620,8 @@ export const syncCatalogAssets = async (
     // the complete published list only: never from a partial one, which the
     // snapshot reader refuses as a whole (null) before this is called. Each
     // flip marks its asset for the scoped reconcile (W8): a re-published one
-    // may copy its renditions again, a taken-down one must be withdrawn.
+    // may copy its renditions again, a taken-down one must be withdrawn (an
+    // urgent mark).
     const rereferenced = await db.query<{ id: string }>(
       `UPDATE community.catalog_media_assets a
        SET unreferenced_since=NULL, updated_at=$2::timestamptz
@@ -595,8 +638,13 @@ export const syncCatalogAssets = async (
        RETURNING a.id`,
       [publishedIds, at],
     );
-    for (const { id } of [...rereferenced.rows, ...unreferenced.rows])
-      marks.set(id, "reference");
+    for (const { id } of rereferenced.rows)
+      marks.set(id, {
+        reason: "reference",
+        urgent: marks.get(id)?.urgent === true,
+      });
+    for (const { id } of unreferenced.rows)
+      marks.set(id, { reason: "reference", urgent: true });
     // A named asset whose source was unreadable gets another render once the
     // retry delay passed (bounded per pass); other failures stay final.
     await db.query(
@@ -640,78 +688,57 @@ export const syncCatalogAssets = async (
     // the jobs of one class by run_after, then by their random id, so
     // without the rank one pass's jobs would run in random order (W9). A
     // later pass's jobs run after this pass's, and user jobs keep their
-    // claim class. First every pending image (t0..t3).
-    const pendingQueued =
+    // claim class. First the tiered images (t0..t3) in the queue order:
+    // every pending one, and every ready one missing a listed identity that
+    // an intent names, in that intent's tier.
+    const tieredQueued =
       bound === 0
         ? 0
         : ((
             await db.query(
-              `INSERT INTO community.publishing_jobs(id,kind,subject_id,state,attempts,run_after,created_at,updated_at)
+              `WITH current AS (${CURRENT_ASSETS_SQL})
+               INSERT INTO community.publishing_jobs(id,kind,subject_id,state,attempts,run_after,created_at,updated_at)
                SELECT 'publishing-job-' || replace(gen_random_uuid()::text, '-', ''), 'catalog_render', c.id,
                  'queued', 0, $2::timestamptz + (c.rank - 1) * interval '1 millisecond', $2::timestamptz, $2::timestamptz
                FROM (
                  SELECT due.id, row_number() OVER (ORDER BY due.ord) AS rank
                  FROM (
                    SELECT a.id, named.ord
-                   FROM unnest($1::text[]) WITH ORDINALITY AS named(id, ord)
+                   FROM unnest($1::text[], $4::boolean[], $5::boolean[]) WITH ORDINALITY
+                     AS named(id, pending, stale, ord)
                    JOIN community.catalog_media_assets a ON a.id=named.id
-                   WHERE a.state='pending' AND ${NO_RENDER_JOB_SQL}
+                   WHERE ((named.pending AND a.state='pending') OR (named.stale AND ${RERENDER_SQL}))
+                     AND ${NO_RENDER_JOB_SQL}
                    ORDER BY named.ord
-                   LIMIT $3
+                   LIMIT $6
                  ) due
                ) c
                ORDER BY c.rank
                ON CONFLICT (kind, subject_id, md5(COALESCE(payload, '{}'::jsonb)::text)) WHERE state IN ('queued', 'running') DO NOTHING
                RETURNING id`,
-              [order, at, bound],
+              [
+                tiered.map(({ id }) => id),
+                at,
+                wanted,
+                tiered.map(({ pending }) => pending),
+                tiered.map(({ stale }) => stale),
+                bound,
+              ],
             )
           ).rowCount ?? 0);
-    // Then the re-renders (t4), only when no image of a higher tier waits at
-    // this pass: every pending one is queued (room was left) and every named
-    // one has its asset (created a bounded number a pass). A recipe bump of
-    // the whole Catalog (its old set keeps serving, N3) thus never takes a
-    // place a published, requested, prepared or grace image of this pass
-    // could take; one that arrives at a later pass waits behind at most the
-    // re-renders already queued (the target, about 40 minutes), since claims
-    // follow the passes in turn.
-    const rerendering =
-      pendingQueued < bound && uncreated.length <= options.limit;
-    const rerendersQueued = !rerendering
-      ? 0
-      : ((
-          await db.query(
-            `WITH current AS (${CURRENT_ASSETS_SQL})
-             INSERT INTO community.publishing_jobs(id,kind,subject_id,state,attempts,run_after,created_at,updated_at)
-             SELECT 'publishing-job-' || replace(gen_random_uuid()::text, '-', ''), 'catalog_render', c.id,
-               'queued', 0, $2::timestamptz + ($5::integer + c.rank - 1) * interval '1 millisecond',
-               $2::timestamptz, $2::timestamptz
-             FROM (
-               SELECT due.id, row_number() OVER (ORDER BY due.ord) AS rank
-               FROM (
-                 SELECT a.id, named.ord
-                 FROM unnest($1::text[]) WITH ORDINALITY AS named(id, ord)
-                 JOIN community.catalog_media_assets a ON a.id=named.id
-                 WHERE ${RERENDER_SQL} AND ${NO_RENDER_JOB_SQL}
-                 ORDER BY named.ord
-                 LIMIT $4
-               ) due
-             ) c
-             ORDER BY c.rank
-             ON CONFLICT (kind, subject_id, md5(COALESCE(payload, '{}'::jsonb)::text)) WHERE state IN ('queued', 'running') DO NOTHING
-             RETURNING id`,
-            [order, at, wanted, bound - pendingQueued, pendingQueued],
-          )
-        ).rowCount ?? 0);
-    const insertedCount = pendingQueued + rerendersQueued;
     // A ready asset still missing a listed identity whose latest render job
     // failed (its re-render was rejected, or its attempts were used up) keeps
     // its ready renditions; that job is queued again, with fresh attempts,
     // once the retry delay passed since it failed, so a rejection is retried
     // daily instead of on every pass. An abandoned job (the operator's stop)
-    // still blocks. A re-render too (t4): within the same per-pass bound as
-    // new jobs, ranked after them.
-    const requeued =
-      !rerendering || insertedCount >= bound
+    // still blocks. Only an asset of `namedIds`, at most `room` jobs, ranked
+    // after the `offset` jobs this pass queued before, by when they failed.
+    const requeueFailed = async (
+      namedIds: readonly string[],
+      room: number,
+      offset: number,
+    ): Promise<number> =>
+      room <= 0 || namedIds.length === 0
         ? 0
         : ((
             await db.query(
@@ -742,12 +769,65 @@ export const syncCatalogAssets = async (
                ) due
                WHERE j.id=due.id AND j.state='failed'
                RETURNING j.id`,
-              [ids, at, wanted, bound - insertedCount, insertedCount],
+              [namedIds, at, wanted, room, offset],
             )
           ).rowCount ?? 0);
+    // Next the failed re-renders of the images an intent names, whether the
+    // gate below opens or not: the same daily retry within the same bound,
+    // ranked after the pass's tiered jobs (a retry comes at most once a day,
+    // so it is not interleaved with them by tier).
+    const intentRequeued = await requeueFailed(
+      intentNamedIds,
+      bound - tieredQueued,
+      tieredQueued,
+    );
+    const tieredCount = tieredQueued + intentRequeued;
+    // Then the re-renders (t4) of the images no intent names, only when no
+    // image of a higher tier waits at this pass: every tiered one is queued
+    // (room was left) and every named one has its asset (created a bounded
+    // number a pass). A recipe bump of the published Catalog (its old set
+    // keeps serving, N3) thus never takes a place a published, requested,
+    // prepared or grace image of this pass could take, an intent's image
+    // ready under the older recipe included; one that arrives at a later
+    // pass waits behind at most the re-renders already queued (the target,
+    // about 40 minutes), since claims follow the passes in turn.
+    const rerendering =
+      tieredCount < bound && uncreated.length <= options.limit;
+    const rerendersQueued = !rerendering
+      ? 0
+      : ((
+          await db.query(
+            `WITH current AS (${CURRENT_ASSETS_SQL})
+             INSERT INTO community.publishing_jobs(id,kind,subject_id,state,attempts,run_after,created_at,updated_at)
+             SELECT 'publishing-job-' || replace(gen_random_uuid()::text, '-', ''), 'catalog_render', c.id,
+               'queued', 0, $2::timestamptz + ($5::integer + c.rank - 1) * interval '1 millisecond',
+               $2::timestamptz, $2::timestamptz
+             FROM (
+               SELECT due.id, row_number() OVER (ORDER BY due.ord) AS rank
+               FROM (
+                 SELECT a.id, named.ord
+                 FROM unnest($1::text[]) WITH ORDINALITY AS named(id, ord)
+                 JOIN community.catalog_media_assets a ON a.id=named.id
+                 WHERE ${RERENDER_SQL} AND ${NO_RENDER_JOB_SQL}
+                 ORDER BY named.ord
+                 LIMIT $4
+               ) due
+             ) c
+             ORDER BY c.rank
+             ON CONFLICT (kind, subject_id, md5(COALESCE(payload, '{}'::jsonb)::text)) WHERE state IN ('queued', 'running') DO NOTHING
+             RETURNING id`,
+            [rerenderOrder, at, wanted, bound - tieredCount, tieredCount],
+          )
+        ).rowCount ?? 0);
+    const queuedCount = tieredCount + rerendersQueued;
+    // Last their failed re-renders (t4), ranked after the t4 jobs.
+    const requeued = !rerendering
+      ? 0
+      : await requeueFailed(rerenderOrder, bound - queuedCount, queuedCount);
     // The backlog by tier after the pass (W9): every named image not
     // created yet or pending, in its tier, and every ready one missing a
-    // listed identity, in t4. Read only; written below, after the commit.
+    // listed identity, in its best intent's tier, else t4. Read only;
+    // written below, after the commit.
     const backlog = Object.fromEntries(
       CATALOG_RENDER_TIERS.map((tier) => [tier, 0]),
     ) as Record<CatalogRenderTier, number>;
@@ -755,12 +835,17 @@ export const syncCatalogAssets = async (
       await db.query<{ tier: number | null; assets: number }>(
         `WITH current AS (${CURRENT_ASSETS_SQL})
          SELECT CASE WHEN a.id IS NULL OR a.state='pending' THEN named.tier
-             WHEN ${RERENDER_SQL} THEN 4 END AS tier,
+             WHEN ${RERENDER_SQL} THEN COALESCE(named.intent_tier, 4) END AS tier,
            count(*)::integer AS assets
-         FROM unnest($1::text[], $2::integer[]) AS named(id, tier)
+         FROM unnest($1::text[], $2::integer[], $4::integer[]) AS named(id, tier, intent_tier)
          LEFT JOIN community.catalog_media_assets a ON a.id=named.id
          GROUP BY 1`,
-        [order, ordered.map(({ rank }) => rank.tier), wanted],
+        [
+          order,
+          ordered.map(({ rank }) => rank.tier),
+          wanted,
+          ordered.map(({ id }) => intentRanks.get(id)?.tier ?? null),
+        ],
       )
     ).rows) {
       const tier =
@@ -778,7 +863,7 @@ export const syncCatalogAssets = async (
         skipped,
         created: created.rowCount ?? 0,
         unreferenced: unreferenced.rowCount ?? 0,
-        enqueued: insertedCount + requeued,
+        enqueued: queuedCount + requeued,
         ...(intents?.refused.length
           ? { refusedIntentIds: intents.refused }
           : {}),
@@ -1044,7 +1129,7 @@ export const recordCatalogRenditions = async (
     // it is the last write, after the asset row's lock.
     await markCatalogPublicationDirty(
       db,
-      new Map([[assetId, "rendition"]]),
+      new Map([[assetId, { reason: "rendition", urgent: false }]]),
       now,
     );
     return duplicates.length === 0

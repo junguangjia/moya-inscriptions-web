@@ -238,11 +238,13 @@ const missingPrivileges = async (
 const catalogPublicationScopePrivileges: readonly RequiredPrivilege[] = [
   { relation: "community.catalog_publication_dirty", privilege: "SELECT" },
   { relation: "community.catalog_publication_dirty", privilege: "INSERT" },
-  ...["mark_seq", "cleared_seq", "reason", "marked_at"].map((column) => ({
-    relation: "community.catalog_publication_dirty",
-    privilege: "UPDATE" as const,
-    column,
-  })),
+  ...["mark_seq", "cleared_seq", "reason", "urgent", "marked_at"].map(
+    (column) => ({
+      relation: "community.catalog_publication_dirty",
+      privilege: "UPDATE" as const,
+      column,
+    }),
+  ),
   { relation: "community.catalog_reconcile_state", privilege: "SELECT" },
   ...[
     "sweep_cursor",

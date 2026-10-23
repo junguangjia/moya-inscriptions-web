@@ -3,7 +3,9 @@ import { randomBytes } from "node:crypto";
 import {
   catalogExpectedRenditions,
   createCatalogPublicationAuthority,
+  currentCatalogRecipePolicy,
 } from "@moya/backend-production/internal/catalog-delivery";
+import { createCatalogMembershipWatch } from "@moya/backend-production/internal/publishing-catalog";
 import {
   createPostgresPool,
   parsePostgresConfig,
@@ -11,8 +13,10 @@ import {
 import {
   PostgresMediaPublicationAdapter,
   PostgresWorkPublishingAdapter,
+  catalogMembershipStore,
   catalogPublicationDirtyLockSql,
   catalogPublicationDirtyMarkSql,
+  markCatalogPublicationDirty,
   readCatalogDeliveryProjection,
 } from "@moya/community-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -31,6 +35,7 @@ import {
   createCatalogScaleDatabase,
   createQueryRecorder,
   explainCatalogScaleOn,
+  holdCatalogScaleRecords,
   rolledBackCatalogScale,
   seedCatalogScale,
   type CatalogScaleDatabase,
@@ -67,6 +72,14 @@ import type { CatalogRenditionRole, PublishingJobLease } from "@moya/api";
  * - The sweep keeps its share of K under a saturated queue, wraps, and
  *   starts a new round when the recipe policy changes; a pass's statements
  *   follow K, not the Catalog.
+ * - Takedowns first (W-AC5): an urgent mark stays urgent under a normal
+ *   one, a normal one becomes urgent in its place, and a pass never
+ *   downgrades one it carries over; a takedown queued behind more than K
+ *   publish-side marks that inspect is scheduled within two passes, and so
+ *   is one the membership step marks right after a release wave lists the
+ *   buckets of more than two passes of images private B serves (their
+ *   requests inspect); and a pass whose every batch takes more than half
+ *   its budget still plans the oldest urgent marks and moves the sweep on.
  * - A rendition recorded for an asset outside the sweep is published by the
  *   next pass, a purge that failed with attempts left is retried from the
  *   in-flight part of the scope, and an intent's public generations are
@@ -175,16 +188,29 @@ const clearJobs = () =>
   fixture.setup.query(
     "DELETE FROM community.publishing_jobs WHERE kind IN ('publish_media','withdraw_media','verify_withdrawal')",
   );
-/** A1's mark, as the other writers of marks make it. */
-const mark = (ids: readonly string[], reason = "public_membership") =>
+/** A1's mark, as the other writers of marks make it (normal unless
+ * `urgent`). */
+const mark = (
+  ids: readonly string[],
+  reason = "public_membership",
+  urgent = false,
+) =>
   fixture.setup.query(
-    `INSERT INTO community.catalog_publication_dirty AS d (asset_id,mark_seq,reason,marked_at)
-     SELECT m.id,1,$2,clock_timestamp() FROM unnest($1::text[]) AS m(id) ORDER BY m.id
+    `INSERT INTO community.catalog_publication_dirty AS d (asset_id,mark_seq,reason,urgent,marked_at)
+     SELECT m.id,1,$2,$3,clock_timestamp() FROM unnest($1::text[]) AS m(id) ORDER BY m.id
      ON CONFLICT (asset_id) DO UPDATE SET mark_seq=d.mark_seq+1,reason=EXCLUDED.reason,
+       urgent=EXCLUDED.urgent OR (d.mark_seq>d.cleared_seq AND d.urgent),
        marked_at=CASE WHEN d.mark_seq>d.cleared_seq THEN d.marked_at ELSE EXCLUDED.marked_at END`,
-    [[...ids].sort(), reason],
+    [[...ids].sort(), reason, urgent],
   );
-/** Every mark row: asset, mark_seq, whether pending, marked_at. */
+/** One asset's mark through the module's own statement, as the App role. */
+const writeMark = (id: string, reason: string, urgent: boolean) =>
+  markCatalogPublicationDirty(
+    fixture.app,
+    new Map([[id, { reason: reason as "rendition", urgent }]]),
+    new Date(),
+  );
+/** Every mark row: asset, mark_seq, whether pending and urgent, marked_at. */
 const marks = async () =>
   new Map(
     (
@@ -192,9 +218,10 @@ const marks = async () =>
         asset_id: string;
         mark_seq: string;
         pending: boolean;
+        urgent: boolean;
         marked_at: Date;
       }>(
-        "SELECT asset_id,mark_seq,mark_seq>cleared_seq AS pending,marked_at FROM community.catalog_publication_dirty",
+        "SELECT asset_id,mark_seq,mark_seq>cleared_seq AS pending,urgent,marked_at FROM community.catalog_publication_dirty",
       )
     ).rows.map((row) => [row.asset_id, row]),
   );
@@ -799,28 +826,92 @@ describe(
     });
 
     it("leaves the assets the budget did not reach as they were, the sweep included", async () => {
-      await reseed(plain(140));
+      await reseed(plain(350));
       const all = await assetIds();
-      await mark(all.slice(100, 140));
+      // 150 marks, oldest first in id order; K = 300 plans the first 100 and
+      // the sweep's share (30) whatever its budget.
+      await mark(all.slice(200, 350));
       const before = await marks();
       const inner = authority();
-      // The budget stops the pass after its first 25 assets: the sweep's
-      // share (5) and 20 of the 40 marked.
+      // The budget stops the pass right after its reserved part: the first
+      // 100 marks and the sweep's share.
       const stopped = {
         ...inner,
         planScope: (
           ids: readonly string[],
-          options: { readonly budgetMs: number },
-        ) => inner.planScope(ids.slice(0, 25), options),
+          options: { readonly budgetMs: number; readonly reserved?: number },
+        ) => {
+          expect(options.reserved).toBe(130);
+          return inner.planScope(ids.slice(0, options.reserved), options);
+        },
       };
-      await adapter({ max: 50 }, stopped).reconcile(new Date(), true, 500);
+      await adapter({ max: 300 }, stopped).reconcile(new Date(), true, 500);
       const after = await marks();
-      const attempted = new Set(all.slice(100, 120));
-      for (const id of all.slice(100, 140))
+      const attempted = new Set(all.slice(200, 300));
+      for (const id of all.slice(200, 350))
         if (attempted.has(id)) expect(after.get(id)!.pending, id).toBe(false);
         else expect(after.get(id), id).toEqual(before.get(id));
       // The sweep moved past its share only.
-      expect((await state())[0]!.sweep_cursor).toBe(all[4]);
+      expect((await state())[0]!.sweep_cursor).toBe(all[29]);
+    });
+
+    it("keeps a pending mark urgent under a normal one, raises a pending normal one to urgent in its place, and never lets a pass downgrade one it carries over", async () => {
+      await reseed(plain(140));
+      const all = await assetIds();
+      const [a, b, c] = all.slice(120, 123) as [string, string, string];
+      const markNow = (id: string, urgent: boolean) =>
+        writeMark(id, urgent ? "public_membership" : "rendition", urgent);
+      await markNow(a, true);
+      await markNow(b, false);
+      await markNow(c, false);
+      const placed = await marks();
+      // A normal mark on a pending urgent row leaves it urgent; an urgent
+      // mark on a pending normal row makes it urgent; both keep their place.
+      await markNow(a, false);
+      await markNow(b, true);
+      const raised = await marks();
+      for (const id of [a, b]) {
+        expect(raised.get(id)!.urgent, id).toBe(true);
+        expect(raised.get(id)!.marked_at, id).toEqual(
+          placed.get(id)!.marked_at,
+        );
+      }
+      expect(raised.get(c)!.urgent).toBe(false);
+      // A cleared row takes the class of the mark that makes it pending.
+      await fixture.setup.query(
+        "UPDATE community.catalog_publication_dirty SET cleared_seq=mark_seq WHERE asset_id=$1",
+        [a],
+      );
+      await markNow(a, false);
+      expect((await marks()).get(a)!.urgent).toBe(false);
+      // A pass reads urgent marks first, then the others.
+      await fixture.setup.query(
+        "UPDATE community.catalog_publication_dirty SET cleared_seq=mark_seq",
+      );
+      await takeDown(1, 1);
+      const down = recordAssets(1, 1);
+      await mark([c], "rendition");
+      await mark(down, "public_membership", true);
+      const passes = recording();
+      await adapter({ max: 20 }, passes.authority).reconcile(
+        new Date(Date.now() + 60_000),
+        true,
+        500,
+      );
+      expect(passes.passes[0]!.order.slice(0, 8)).toEqual([
+        ...[...down].sort(),
+        c,
+      ]);
+      // The pass scheduled each withdrawal and keeps each mark for the pass
+      // after its job: still urgent, at the back of its class.
+      expect(await queuedJobs()).toEqual(
+        down.map((id) => `withdraw_media ${id}`).sort(),
+      );
+      const kept = await marks();
+      for (const id of down) {
+        expect(kept.get(id)!.pending, id).toBe(true);
+        expect(kept.get(id)!.urgent, id).toBe(true);
+      }
     });
 
     it("runs two passes at once without losing or duplicating a job or mark", async () => {
@@ -881,7 +972,8 @@ describe("W7: the sweep and a pass's cost", { timeout: SLOW }, () => {
       return passes.passes[0]!;
     };
     const first = await pass();
-    expect(first.order.slice(0, 2)).toEqual(all.slice(0, 2));
+    // The sweep's share follows the queue's first batch (18 marks here).
+    expect(first.order.slice(18, 20)).toEqual(all.slice(0, 2));
     expect(first.planned).toHaveLength(20);
     expect((await state())[0]!.sweep_cursor).toBe(all[1]);
     await pass();
@@ -889,7 +981,7 @@ describe("W7: the sweep and a pass's cost", { timeout: SLOW }, () => {
     // At the end of the ids the sweep continues from the start.
     await setCursor(all.at(-2)!);
     const wrapped = await pass();
-    expect(wrapped.order.slice(0, 2)).toEqual([all.at(-1), all[0]]);
+    expect(wrapped.order.slice(18, 20)).toEqual([all.at(-1), all[0]]);
     expect((await state())[0]!.sweep_cursor).toBe(all[0]);
     // A changed recipe policy starts a new round.
     await fixture.setup.query(
@@ -1025,8 +1117,8 @@ describe("W7: what marks a pass's work", { timeout: SLOW }, () => {
       500,
     );
     const [pass] = passes.passes;
-    // In flight: planned right after the sweep's share.
-    expect(pass!.order[2]).toBe(retried);
+    // In flight: planned first, as no mark is pending.
+    expect(pass!.order[0]).toBe(retried);
     expect(pass!.order).not.toContain(exhausted);
     // Its withdrawal is tried again, and its still-desired cover copied again.
     expect(await queuedJobs()).toEqual([
@@ -1136,9 +1228,9 @@ describe("W7: the scope's in-flight part", { timeout: SLOW }, () => {
       await adapter({ max: 20 }, on.authority).reconcile(new Date(), true, 500),
     ).toEqual({ publish: 0, withdraw: down.length });
     // A publishing generation counts as present, as the whole-Catalog
-    // reconcile counted it: none is in flight, every mark is planned right
-    // after the sweep's share, and the takedown is scheduled in this pass.
-    expect(on.passes[0]!.order.slice(2, 2 + down.length).sort()).toEqual(
+    // reconcile counted it: none is in flight, every mark is planned first,
+    // and the takedown is scheduled in this pass.
+    expect(on.passes[0]!.order.slice(0, down.length).sort()).toEqual(
       [...down].sort(),
     );
     expect(await queuedJobs()).toEqual(
@@ -1160,8 +1252,8 @@ describe("W7: the scope's in-flight part", { timeout: SLOW }, () => {
       500,
     );
     const { order } = off.passes[0]!;
-    expect(order.slice(2, 11)).toEqual(stuck.slice(0, 9));
-    expect(order.slice(11, 20)).toEqual(later.slice(0, 9));
+    expect(order.slice(0, 9)).toEqual(stuck.slice(0, 9));
+    expect(order.slice(9, 18)).toEqual(later.slice(0, 9));
     expect(result.publish).toBe(0);
     expect(await queuedJobs()).toEqual(
       expect.arrayContaining(
@@ -1219,15 +1311,185 @@ describe("W7: the scope's in-flight part", { timeout: SLOW }, () => {
     const at = (minutes: number) => new Date(Date.now() + minutes * 60_000);
     await adapter({ max: 20 }, passes.authority).reconcile(at(1), true, 500);
     const [first] = passes.passes;
-    expect(first!.order[2]).toBe(broken);
+    expect(first!.order[0]).toBe(broken);
     expect(first!.failed).toEqual([broken]);
     // It is marked now, at the back of the queue: the next pass plans the
     // 13 marks left from before first, and it after them.
     await adapter({ max: 20 }, passes.authority).reconcile(at(2), true, 500);
     const second = passes.passes[1]!;
-    expect(second.order.slice(2, 15)).toEqual(queued.slice(17));
-    expect(second.order[15]).toBe(broken);
+    expect(second.order.slice(0, 13)).toEqual(queued.slice(17));
+    expect(second.order[13]).toBe(broken);
     expect((await marks()).get(broken)!.pending).toBe(true);
+  });
+});
+
+describe("W-AC5: takedowns first", { timeout: SLOW }, () => {
+  it("schedules a takedown within two passes behind more than K publish-side marks that inspect", async () => {
+    // 300 published records of 7 images, each with a released intent: the
+    // plan of every public asset inspects its record's intent (the work a
+    // release wave queues).
+    await reseed(
+      catalogScaleShape(2_100, {
+        releasedIntents: 300,
+        draftRecords: 0,
+        endedIntents: 0,
+        recentEndedIntents: 0,
+        livePrepares: 0,
+      }),
+    );
+    const all = await assetIds();
+    const record = 150;
+    const down = recordAssets(record, record);
+    const others = all.filter((id) => !down.includes(id));
+    // In FIFO order the takedown would wait for more than two passes of
+    // marks (each plans at most 0.9 K).
+    expect(others.length).toBeGreaterThan(2 * 900);
+    // Every other asset queued first, as normal marks (publish-side work),
+    // then the takedown, as the membership step marks it: urgent.
+    await mark(others, "intent");
+    await takeDown(record, record);
+    await mark(down, "public_membership", true);
+    // A short budget: a pass plans little more than its reserved part. The
+    // passes' clocks, after the marks (the database's clock).
+    const scheduled = (jobs: readonly string[]) =>
+      down.every((id) => jobs.includes(`withdraw_media ${id}`));
+    const recorded = recording();
+    let passes = 0;
+    for (; passes < 2 && !scheduled(await queuedJobs()); passes += 1)
+      await adapter({ budgetMs: 2_000 }, recorded.authority).reconcile(
+        new Date(Date.now() + (passes + 1) * 60_000),
+        true,
+        500,
+      );
+    // The first pass read the urgent marks before every normal one and
+    // planned them first, inside its reserved part.
+    expect(recorded.passes[0]!.order.slice(0, down.length)).toEqual(
+      [...down].sort(),
+    );
+    expect(recorded.passes[0]!.planned).toEqual(expect.arrayContaining(down));
+    // Its withdrawals were queued by that first pass (the loop stops once
+    // they are), not the second.
+    expect(scheduled(await queuedJobs())).toBe(true);
+    expect(passes).toBe(1);
+  });
+
+  it("schedules a takedown within two passes when a release wave has just listed the buckets of images private B serves", async () => {
+    // 200 published records of 7 images, the first 100 with a released
+    // intent. Records 1..60 are the wave's requests, not released yet:
+    // private B serves their images (their plans inspect). Records 101..140
+    // are the wave's releases, served nowhere before.
+    await reseed(
+      catalogScaleShape(1_400, {
+        releasedIntents: 100,
+        draftRecords: 0,
+        endedIntents: 0,
+        recentEndedIntents: 0,
+        livePrepares: 0,
+      }),
+    );
+    const held = await holdCatalogScaleRecords(fixture, { first: 1, last: 60 });
+    const released = recordAssets(101, 140);
+    await takeDown(101, 140);
+    for (const [state, extra] of [
+      ["withdrawing", "withdraw_requested_at = now()"],
+      ["withdrawn", "origin_deleted_at = now(), verified_at = now()"],
+    ] as const)
+      await fixture.setup.query(
+        `UPDATE community.media_publications p SET state = '${state}', ${extra}, version = version + 1
+         FROM community.media_public_assets pa
+         WHERE pa.id = p.public_asset_id AND pa.catalog_asset_id = ANY($1::text[])`,
+        [released],
+      );
+    // The membership step, once a minute: its first observation, whose
+    // marks the reconcile has planned; the release; then a takedown.
+    const step = createCatalogMembershipWatch({
+      published: fixture.publicRead,
+      prepare: fixture.prepare,
+      policy: currentCatalogRecipePolicy().recipeManifestSha256,
+      port: catalogMembershipStore(fixture.app),
+      logger: { info: () => undefined, error: () => undefined },
+    });
+    await step.run(new Date());
+    await fixture.setup.query(
+      "UPDATE community.catalog_publication_dirty SET cleared_seq = mark_seq",
+    );
+    await fixture.setup.query(
+      "UPDATE public.catalogs SET _status='published' WHERE id BETWEEN 101 AND 140",
+    );
+    await step.run(new Date());
+    const record = 150;
+    const down = recordAssets(record, record);
+    await takeDown(record, record);
+    await step.run(new Date());
+    // The release listed the buckets of more held images than two passes
+    // plan (each plans at most 0.9 K marks).
+    const K = 100;
+    const bucketOf = (id: string) => id.slice(14, 16);
+    const listed = new Set(released.map(bucketOf));
+    expect(
+      held.filter((id) => listed.has(bucketOf(id))).length,
+    ).toBeGreaterThan(2 * 0.9 * K);
+    const queued = new Map(
+      [...(await marks()).values()]
+        .filter((row) => row.pending)
+        .map((row) => [row.asset_id, row.urgent]),
+    );
+    const scheduled = (jobs: readonly string[]) =>
+      down.every((id) => jobs.includes(`withdraw_media ${id}`));
+    let passes = 0;
+    for (; passes < 2 && !scheduled(await queuedJobs()); passes += 1)
+      await adapter({ max: K }).reconcile(
+        new Date(Date.now() + (passes + 1) * 60_000),
+        true,
+        500,
+      );
+    expect(scheduled(await queuedJobs())).toBe(true);
+    expect(passes).toBe(1);
+    // The takedown was the one urgent mark; the released images were marked
+    // to be copied, and no held image was marked at all.
+    expect(queued).toEqual(
+      new Map([
+        ...released.map((id) => [id, false] as const),
+        ...down.map((id) => [id, true] as const),
+      ]),
+    );
+  });
+
+  it("plans the oldest urgent marks and moves the sweep on, whatever a slow batch leaves of the budget", async () => {
+    await reseed(plain(350));
+    await takeDown(1, 1);
+    const down = recordAssets(1, 1);
+    await mark(down, "public_membership", true);
+    const swept = (await assetIds()).filter((id) => !down.includes(id));
+    // Each clock reading of the planning is 60% of the budget later, so
+    // every batch, the sweep's included, takes more than half of it: the
+    // budget alone admits one batch a pass.
+    const budgetMs = 14_000;
+    let ms = 0;
+    const inner = authority();
+    const slow = recording({
+      ...inner,
+      planScope: (ids, options) =>
+        inner.planScope(
+          ids,
+          Object.assign({}, options, { clock: () => (ms += 0.6 * budgetMs) }),
+        ),
+    });
+    const result = await adapter({ budgetMs }, slow.authority).reconcile(
+      new Date(Date.now() + 60_000),
+      true,
+      500,
+    );
+    // The reserved part: the takedown (7) and the sweep's share (100), in
+    // two batches; then the budget stops the pass.
+    const [pass] = slow.passes;
+    expect(pass!.order.slice(0, 7)).toEqual([...down].sort());
+    expect(pass!.planned).toHaveLength(200);
+    expect(result.withdraw).toBe(down.length);
+    expect(await queuedJobs()).toEqual(
+      down.map((id) => `withdraw_media ${id}`).sort(),
+    );
+    expect((await state())[0]!.sweep_cursor).toBe(swept[192]);
   });
 });
 
@@ -1243,8 +1505,9 @@ describe.skipIf(!LOCAL_25K)(
       const report: string[] = [];
       for (const label of ["sweep", "dirty"] as const) {
         if (label === "dirty") {
+          // Taken down, as the membership step marks it: urgent.
           await takeDown(1, 143);
-          await mark(recordAssets(1, 143));
+          await mark(recordAssets(1, 143), "public_membership", true);
         }
         const recorder = createQueryRecorder();
         const passes = recording(
