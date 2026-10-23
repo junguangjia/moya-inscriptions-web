@@ -1,10 +1,4 @@
 import { describeProductAccess, loadProductAccess } from "./product-access.js";
-import { closePostgresPool, createPostgresPool } from "@moya/catalog-postgres";
-import {
-  createPostgresBetaAccountAccess,
-  verifyCommunityMigrationLedger,
-} from "@moya/community-postgres";
-import { parseCommunityPostgresConfig } from "../community-postgres-config.js";
 
 /**
  * Validates the product access configuration the Backend would start with,
@@ -39,12 +33,27 @@ const main = async (): Promise<void> => {
   const nodeEnv =
     process.env.NODE_ENV === "development" ? "development" : "production";
   let policy = loadProductAccess(environment, nodeEnv);
-  const pool =
-    file === undefined && account !== undefined && policy.mode === "closed_beta"
-      ? createPostgresPool(parseCommunityPostgresConfig(process.env))
-      : undefined;
+  let closeDatabase: (() => Promise<void>) | undefined;
   try {
-    if (pool !== undefined) {
+    if (
+      file === undefined &&
+      account !== undefined &&
+      policy.mode === "closed_beta"
+    ) {
+      // File/configuration checks must not load the database application graph.
+      const [
+        { closePostgresPool, createPostgresPool },
+        { createPostgresBetaAccountAccess, verifyCommunityMigrationLedger },
+        { parseCommunityPostgresConfig },
+      ] = await Promise.all([
+        import("@moya/catalog-postgres"),
+        import("@moya/community-postgres"),
+        import("../community-postgres-config.js"),
+      ]);
+      const pool = createPostgresPool(
+        parseCommunityPostgresConfig(process.env),
+      );
+      closeDatabase = () => closePostgresPool(pool);
       await verifyCommunityMigrationLedger(pool);
       policy = loadProductAccess(environment, nodeEnv, {
         betaAccountAccess: createPostgresBetaAccountAccess(pool),
@@ -67,7 +76,7 @@ const main = async (): Promise<void> => {
       }),
     );
   } finally {
-    if (pool !== undefined) await closePostgresPool(pool);
+    await closeDatabase?.();
   }
 };
 
