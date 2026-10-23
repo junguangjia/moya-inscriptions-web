@@ -21,7 +21,6 @@ import {
   parseCatalogSourceConfig,
 } from "@moya/backend-production/internal/catalog-source";
 import {
-  CATALOG_SYNC_MAX_SOURCES,
   catalogSyncIdentities,
   createCatalogRenderer,
   createCatalogSync,
@@ -43,6 +42,10 @@ import {
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  snapshotCursors,
+  type CursorFetch,
+} from "./catalog-snapshot-cursor.js";
 import { inProcessSandbox } from "./publishing-sandbox-fixture.js";
 import {
   currentCatalogRecipePolicy,
@@ -52,6 +55,8 @@ import {
   parseCatalogPrepareDatabaseConfig,
 } from "@moya/backend-production/internal/catalog-delivery";
 import {
+  CATALOG_SNAPSHOT_FETCH_ROWS,
+  CATALOG_SNAPSHOT_MAX_SOURCES,
   readCatalogDeliveryProjection,
   catalogBlockListedSql,
 } from "@moya/community-postgres";
@@ -349,7 +354,12 @@ describe("Catalog publication authority with active-master blocks", () => {
           },
         ]
       : [];
+    const publicCursors = snapshotCursors((sql) =>
+      sql.includes("FROM catalog_media") ? (live ? [source] : []) : undefined,
+    );
     const publishedQuery = vi.fn(async (sql: string) => {
+      const cursor = publicCursors(sql);
+      if (cursor) return cursor;
       if (sql.includes("clock_timestamp()"))
         return { rows: [{ at: new Date("2026-10-20T00:00:00.000Z") }] };
       if (sql.includes("pg_export_snapshot()"))
@@ -364,8 +374,15 @@ describe("Catalog publication authority with active-master blocks", () => {
       query: publishedQuery,
       connect: async () => ({ query: publishedQuery, release: vi.fn() }),
     } as unknown as Parameters<typeof createCatalogPublicationAuthority>[0];
+    const privateCursors = snapshotCursors((sql) =>
+      sql.includes("FROM public.catalog_delivery_live_prepare_media")
+        ? privateRows
+        : undefined,
+    );
     const privateQuery = vi.fn(async (sql: string) => {
-      if (sql.includes("FROM public.catalog_delivery_prepare_media"))
+      const cursor = privateCursors(sql);
+      if (cursor) return cursor;
+      if (sql.includes("FROM public.catalog_delivery_live_prepare_media"))
         return { rows: privateRows };
       if (
         ["BEGIN", "ROLLBACK", "SET TRANSACTION"].some((p) => sql.startsWith(p))
@@ -1120,7 +1137,7 @@ describe("Catalog sync", () => {
     );
   });
 
-  it("reads the published projection, refusing a list beyond the bound", async () => {
+  it("reads the published projection through a cursor in its own snapshot, refusing a list beyond the ceiling", async () => {
     const rows = (count: number) =>
       Array.from({ length: count }, (_, index) => ({
         media_id: `m${index}`,
@@ -1128,21 +1145,72 @@ describe("Catalog sync", () => {
         width: 1,
         height: null,
       }));
-    const pool = (count: number) => ({
-      query: vi.fn(async () => ({ rows: rows(count) })),
-    });
+    const pool = (count: number) => {
+      const fetches: CursorFetch[] = [];
+      const statements: string[] = [];
+      const listed = rows(count);
+      const cursors = snapshotCursors(
+        (sql) => (sql.includes("FROM catalog_media") ? listed : undefined),
+        fetches,
+      );
+      const query = vi.fn(async (sql: string) => {
+        statements.push(sql);
+        const cursor = cursors(sql);
+        if (cursor) return cursor;
+        if (["BEGIN", "ROLLBACK"].some((prefix) => sql.startsWith(prefix)))
+          return { rows: [] };
+        throw new Error("UNEXPECTED_LIST_SQL");
+      });
+      const release = vi.fn();
+      return {
+        connect: async () => ({ query, release }),
+        fetches,
+        statements,
+        release,
+      };
+    };
     const small = pool(2);
     expect(await listPublishedCatalogSources(small as never)).toEqual([
       { mediaId: "m0", objectKey: "k0", width: 1, height: null },
       { mediaId: "m1", objectKey: "k1", width: 1, height: null },
     ]);
-    expect(String((small.query.mock.calls[0] as unknown[])[0])).toMatch(
-      /FROM catalog_media\s+ORDER BY media_id ASC, object_key ASC\s+LIMIT 10001/,
+    // One REPEATABLE READ snapshot, one cursor over the whole ordered view
+    // (no LIMIT), closed and rolled back, the client released.
+    expect(small.statements[0]).toBe(
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
     );
-    expect(
-      await listPublishedCatalogSources(
-        pool(CATALOG_SYNC_MAX_SOURCES + 1) as never,
-      ),
-    ).toBeNull();
+    expect(small.statements[1]).toMatch(
+      /^DECLARE catalog_published_sources NO SCROLL CURSOR FOR\s+SELECT media_id, object_key, width, height\s+FROM catalog_media\s+ORDER BY media_id ASC, object_key ASC\s*$/u,
+    );
+    expect(small.statements.slice(-2)).toEqual([
+      "CLOSE catalog_published_sources",
+      "ROLLBACK",
+    ]);
+    expect(small.release).toHaveBeenCalledTimes(1);
+
+    // Exactly the ceiling is complete; one row more is refused as a whole.
+    // Batches never exceed the fetch size, and no more than ceiling + 1 rows
+    // are ever read.
+    const full = pool(CATALOG_SNAPSHOT_MAX_SOURCES);
+    expect(await listPublishedCatalogSources(full as never)).toHaveLength(
+      CATALOG_SNAPSHOT_MAX_SOURCES,
+    );
+    const over = pool(CATALOG_SNAPSHOT_MAX_SOURCES + 2);
+    expect(await listPublishedCatalogSources(over as never)).toBeNull();
+    for (const { fetches } of [full, over]) {
+      expect(
+        Math.max(...fetches.map(({ wanted }) => wanted)),
+      ).toBeLessThanOrEqual(CATALOG_SNAPSHOT_FETCH_ROWS);
+      expect(fetches.reduce((sum, { returned }) => sum + returned, 0)).toBe(
+        fetches === over.fetches
+          ? CATALOG_SNAPSHOT_MAX_SOURCES + 1
+          : CATALOG_SNAPSHOT_MAX_SOURCES,
+      );
+    }
+    expect(over.statements.slice(-2)).toEqual([
+      "CLOSE catalog_published_sources",
+      "ROLLBACK",
+    ]);
+    expect(CATALOG_SNAPSHOT_MAX_SOURCES).toBeGreaterThanOrEqual(10 * 20_000);
   });
 });

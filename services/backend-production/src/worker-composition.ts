@@ -435,12 +435,16 @@ export async function prepareMediaWorker(
     // and cleanup scheduling are idempotent across both processes.
     maintenance: { requeue: true, cleanup: true, reconcile: true },
     extraMaintenance: [
+      // Detached (catalog-scale-v1 W4): a sync of a large Catalog never holds
+      // the tick and its job claims; stop() waits for it before the pools
+      // close.
       ...(catalogSync
         ? [
             {
               label: "catalog sync",
               intervalMs: CATALOG_SYNC_INTERVAL_MS,
               run: catalogSync.run,
+              detached: true,
             },
           ]
         : []),

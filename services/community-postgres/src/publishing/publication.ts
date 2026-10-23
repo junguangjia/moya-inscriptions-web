@@ -186,29 +186,32 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       ).rowCount === 1
     );
   }
+  /** The desired set as SQL, and the values it binds after the caller's own
+   * (`$${at}` on). With a Catalog authority its selected rendition IDs are
+   * one text[] parameter: never spliced into the SQL as literals, so the
+   * selector has no count ceiling (catalog-scale-v1 W1). A malformed ID is
+   * still refused before any query. */
   private async desiredSql(
     db: PublishingDb,
+    at: number,
     catalogIds?: readonly string[],
-  ): Promise<string> {
+  ): Promise<{ sql: string; values: unknown[] }> {
     if (this.options.catalogAuthority) {
       const ids =
         catalogIds ?? (await this.options.catalogAuthority.copyRenditionIds());
-      if (
-        ids.length > 40000 ||
-        ids.some((id) => !/^media-rendition-[a-f0-9]{32}$/.test(id))
-      )
+      if (ids.some((id) => !/^media-rendition-[a-f0-9]{32}$/.test(id)))
         throw new Error("Catalog selector invalid");
-      return desiredRenditionsSql(
-        false,
-        `r.id=ANY(ARRAY[${ids.map((id) => `'${id}'`).join(",")}]::text[])`,
-      );
+      return {
+        sql: desiredRenditionsSql(false, `r.id=ANY($${at}::text[])`),
+        values: [[...ids]],
+      };
     }
     const exists = (
       await db.query<{ available: boolean }>(
         "SELECT to_regclass('public.catalog_media') IS NOT NULL AS available",
       )
     ).rows[0]!.available;
-    return desiredRenditionsSql(exists);
+    return { sql: desiredRenditionsSql(exists), values: [] };
   }
   private async desired(
     db: PublishingDb,
@@ -222,10 +225,19 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       // uses a fresh metadata-only selector solely to schedule existing jobs.
       if (lease && !(await lease.authorized())) return [];
     }
+    const desired = await this.desiredSql(
+      db,
+      3,
+      asset.catalog_asset_id && this.catalogSubjects.has(asset.catalog_asset_id)
+        ? this.catalogSubjects.get(asset.catalog_asset_id)!.renditionIds
+        : asset.item_id
+          ? []
+          : undefined,
+    );
     return (
       await db.query<Desired>(
-        `SELECT d.* FROM (${await this.desiredSql(db, asset.catalog_asset_id && this.catalogSubjects.has(asset.catalog_asset_id) ? this.catalogSubjects.get(asset.catalog_asset_id)!.renditionIds : asset.item_id ? [] : undefined)}) d WHERE d.item_id=$1 OR d.catalog_asset_id=$2 ORDER BY d.rendition_id`,
-        [asset.item_id, asset.catalog_asset_id],
+        `SELECT d.* FROM (${desired.sql}) d WHERE d.item_id=$1 OR d.catalog_asset_id=$2 ORDER BY d.rendition_id`,
+        [asset.item_id, asset.catalog_asset_id, ...desired.values],
       )
     ).rows;
   }
@@ -690,8 +702,11 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       const allow =
         allowPublish && this.options.isPublic() && this.options.allowPublish();
       const desired = this.options.isPublic()
-        ? await this.desiredSql(db, catalogDesiredIds)
-        : `SELECT r.id AS rendition_id,r.item_id,r.catalog_asset_id FROM community.media_renditions r WHERE false`;
+        ? await this.desiredSql(db, 3, catalogDesiredIds)
+        : {
+            sql: `SELECT r.id AS rendition_id,r.item_id,r.catalog_asset_id FROM community.media_renditions r WHERE false`,
+            values: [],
+          };
       const rows = (
         await db.query<{
           subject_id: string;
@@ -701,13 +716,13 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
           withdraw: boolean;
           fence_change: boolean;
         }>(
-          `WITH desired AS (${desired}), wanted AS (SELECT DISTINCT COALESCE(d.item_id,d.catalog_asset_id) AS subject_id,d.item_id,d.catalog_asset_id FROM desired d), subjects AS (
+          `WITH desired AS (${desired.sql}), wanted AS (SELECT DISTINCT COALESCE(d.item_id,d.catalog_asset_id) AS subject_id,d.item_id,d.catalog_asset_id FROM desired d), subjects AS (
         SELECT w.subject_id,w.item_id,w.catalog_asset_id FROM wanted w UNION SELECT ${subjects},a.item_id,a.catalog_asset_id FROM community.media_public_assets a
       ) , candidates AS (SELECT s.*, EXISTS(SELECT 1 FROM desired d WHERE COALESCE(d.item_id,d.catalog_asset_id)=s.subject_id AND NOT EXISTS(SELECT 1 FROM community.media_publications p WHERE p.rendition_id=d.rendition_id AND p.state IN ('publishing','published'))) AS publish,
         EXISTS(SELECT 1 FROM community.media_public_assets a JOIN community.media_publications p ON p.public_asset_id=a.id WHERE ${subjects}=s.subject_id AND ((p.state IN ('publishing','published') AND (NOT EXISTS(SELECT 1 FROM desired d WHERE d.rendition_id=p.rendition_id) OR (p.state='publishing' AND NOT $2::boolean))) OR (p.state IN ('withdrawing','purge_failed') AND p.purge_attempts<3))) AS withdraw,
         EXISTS(SELECT 1 FROM community.media_public_assets a JOIN community.media_publications p ON p.public_asset_id=a.id WHERE ${subjects}=s.subject_id AND p.state IN ('publishing','published') AND (NOT EXISTS(SELECT 1 FROM desired d WHERE d.rendition_id=p.rendition_id) OR (p.state='publishing' AND NOT $2::boolean))) AS fence_change
       FROM subjects s WHERE NOT EXISTS(SELECT 1 FROM community.publishing_jobs j WHERE j.subject_id=s.subject_id AND j.kind IN ('publish_media','withdraw_media','verify_withdrawal') AND j.state IN ('queued','running'))) SELECT * FROM candidates WHERE ($2::boolean AND publish) OR withdraw ORDER BY subject_id LIMIT $1`,
-          [take(limit), allow],
+          [take(limit), allow, ...desired.values],
         )
       ).rows;
       const publishing =
@@ -884,6 +899,7 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     void _now; // Eligibility is the current database projection.
     if (!this.options.isPublic() || !itemIds.length) return new Map();
     return readTransaction(this.pool, async (db) => {
+      const desired = await this.desiredSql(db, 2, []);
       const rows = (
         await db.query<{
           item_id: string;
@@ -891,8 +907,8 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
           edit_key: string;
           object_key: string;
         }>(
-          `SELECT a.item_id,p.role,p.edit_key,p.object_key FROM community.media_publications p JOIN community.media_public_assets a ON a.id=p.public_asset_id JOIN (${await this.desiredSql(db, [])}) d ON d.rendition_id=p.rendition_id WHERE p.state='published' AND a.item_id=ANY($1::text[])`,
-          [itemIds],
+          `SELECT a.item_id,p.role,p.edit_key,p.object_key FROM community.media_publications p JOIN community.media_public_assets a ON a.id=p.public_asset_id JOIN (${desired.sql}) d ON d.rendition_id=p.rendition_id WHERE p.state='published' AND a.item_id=ANY($1::text[])`,
+          [itemIds, ...desired.values],
         )
       ).rows;
       return this.options.isPublic()
@@ -913,10 +929,11 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     if (!this.options.isPublic() || !renditionIds.length) return new Map();
     if (!this.options.catalogAuthority)
       return readTransaction(this.pool, async (db) => {
+        const desired = await this.desiredSql(db, 2);
         const rows = (
           await db.query<{ rendition_id: string; object_key: string }>(
-            `SELECT p.rendition_id,p.object_key FROM community.media_publications p JOIN (${await this.desiredSql(db)}) d ON d.rendition_id=p.rendition_id WHERE p.state='published' AND p.rendition_id=ANY($1::text[]) AND d.catalog_asset_id IS NOT NULL`,
-            [renditionIds],
+            `SELECT p.rendition_id,p.object_key FROM community.media_publications p JOIN (${desired.sql}) d ON d.rendition_id=p.rendition_id WHERE p.state='published' AND p.rendition_id=ANY($1::text[]) AND d.catalog_asset_id IS NOT NULL`,
+            [renditionIds, ...desired.values],
           )
         ).rows;
         return new Map(rows.map((row) => [row.rendition_id, row.object_key]));

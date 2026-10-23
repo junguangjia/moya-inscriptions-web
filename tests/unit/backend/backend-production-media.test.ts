@@ -10,7 +10,6 @@ import {
 import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
 import {
   CATALOG_PUBLISHED_PAIRS_MAX,
-  CATALOG_SYNC_MAX_SOURCES,
   publishedCatalogPairsSql,
 } from "@moya/backend-production/internal/publishing-catalog";
 import { CatalogQueryUnavailableError } from "@moya/api";
@@ -897,7 +896,8 @@ describe("non-Pilot production public media composition", () => {
       objectKey: `display/v1/media_${"c".repeat(32)}/${"d".repeat(64)}.webp`,
     };
     const filler = Array.from(
-      { length: CATALOG_SYNC_MAX_SOURCES + 1 },
+      // One more than the old 10,000-image listing ceiling.
+      { length: 10_001 },
       (_, n) => ({
         media_id: `media-unit-filler-${n}`,
         object_key: `display/v1/media_${n.toString(16).padStart(32, "0")}/${"e".repeat(64)}.webp`,

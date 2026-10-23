@@ -119,11 +119,14 @@ export const parseCatalogPrepareDatabaseConfig = (
 // All data below is metadata. No source reader, publication provider or HTTP
 // request is involved. CMS identity and App facts remain separate connections.
 import {
+  CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS,
+  CATALOG_SNAPSHOT_MAX_SOURCES,
   inspectCatalogDelivery,
   parseCatalogPrepareRows,
   partitionCatalogPrepareRows,
   catalogBlockListedSql,
   readCatalogDeliveryProjection,
+  readCatalogSnapshotCursor,
   type PostgresMediaPublicationAdapter,
 } from "@moya/community-postgres";
 import type { createPostgresPool } from "@moya/catalog-postgres";
@@ -131,6 +134,7 @@ import {
   CATALOG_PUBLISHED_PAIRS_MAX,
   listPublishedCatalogSources,
   publishedCatalogPairs,
+  readPublishedCatalogSources,
 } from "./catalog.js";
 
 type CatalogPool = ReturnType<typeof createPostgresPool>;
@@ -144,11 +148,20 @@ type CatalogDeliveryFacts = NonNullable<
 >;
 const sourceAssetId = (mediaId: string, objectKey: string) =>
   `catalog-asset-${createHash("md5").update(`${mediaId}:${objectKey}`).digest("hex")}`;
-const privateRowsSql = `SELECT * FROM public.catalog_delivery_prepare_media ORDER BY intent_id,media_ordinal NULLS FIRST LIMIT 20001`;
+// The live private projection (CMS migration M2): every released intent and
+// every other intent that ended or expired within its retention. An older one
+// is absent, and the sync tombstones its App mirror by absence.
+const privateRowsSql = `SELECT * FROM public.catalog_delivery_live_prepare_media ORDER BY intent_id,media_ordinal NULLS FIRST`;
 
 /** Both roles import exactly the same CMS MVCC snapshot, or refuse the entire
  * round. A local promise serializes capture+apply, while App's durable watermark
  * rejects an older complete snapshot from another process.
+ *
+ * Each side is read through a cursor in batches (catalog-scale-v1 W3), never
+ * past one row beyond the snapshot ceiling (`@moya/community-postgres`
+ * CATALOG_SNAPSHOT_*): the published list, the live private rows, or their
+ * union above it is `null`, never a partial list, and the sync then writes
+ * nothing. A failed FETCH throws, and the sync writes nothing either.
  */
 export const readCatalogSourceSnapshot = async (
   published: CatalogPool,
@@ -161,10 +174,11 @@ export const readCatalogSourceSnapshot = async (
     const observedAt = (
       await publicClient.query<{ at: Date }>("SELECT clock_timestamp() AS at")
     ).rows[0]!.at;
-    const sources = await listPublishedCatalogSources(publicClient);
+    const sources = await readPublishedCatalogSources(publicClient);
     if (sources === null) return null;
     let preparations: ReturnType<typeof parseCatalogPrepareRows> | undefined;
     let undecodableIntentIds: string[] | undefined;
+    let privateRows: number | undefined;
     if (prepare) {
       const snapshot = (
         await publicClient.query<{ id: string }>(
@@ -178,13 +192,19 @@ export const readCatalogSourceSnapshot = async (
         "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );
       await privateClient.query(`SET TRANSACTION SNAPSHOT '${snapshot}'`);
+      const rows = await readCatalogSnapshotCursor<Record<string, unknown>>(
+        privateClient,
+        "catalog_private_snapshot",
+        privateRowsSql,
+        CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS,
+      );
+      if (rows === null) return null;
+      privateRows = rows.length;
       // One undecodable intent is left out (it is granted nothing, and the
       // sync leaves its App mirror untouched), never the whole round for
-      // every other intent.
+      // every other intent. Every page is read before any is decoded.
       ({ intents: preparations, undecodableIntentIds } =
-        partitionCatalogPrepareRows(
-          (await privateClient.query(privateRowsSql)).rows,
-        ));
+        partitionCatalogPrepareRows(rows));
     }
     const union = new Map(
       sources.map((s) => [sourceAssetId(s.mediaId, s.objectKey), s]),
@@ -197,12 +217,14 @@ export const readCatalogSourceSnapshot = async (
       )
         for (const media of intent.media)
           union.set(sourceAssetId(media.mediaId, media.objectKey), media);
-    if (union.size > 10000) return null;
+    if (union.size > CATALOG_SNAPSHOT_MAX_SOURCES) return null;
     return {
       sources: [...union.values()],
       publishedSources: sources,
       ...(preparations ? { preparations } : {}),
       ...(undecodableIntentIds?.length ? { undecodableIntentIds } : {}),
+      // Live private rows read, for the sync's ceiling warning.
+      ...(privateRows === undefined ? {} : { privateRows }),
       observedAt,
     };
   } finally {
@@ -248,221 +270,23 @@ export const createCatalogPublicationAuthority = (
       throw error;
     }
   };
+  // The whole Catalog's plan from one complete snapshot: each asset's plan
+  // (planCatalogAsset) over rows grouped once by pair, so it costs O(S + R),
+  // never S x R. Its permissions are grouped by asset, each asset's in the
+  // order it always had (copy permissions are a set; the fence reads only its
+  // own asset's).
   const plans = async () => {
     const snapshot = await readCatalogSourceSnapshot(published, prepare);
     if (!snapshot) throw new Error("Catalog complete source unavailable");
-    const publicPairs = new Set(
-      snapshot.publishedSources.map((s) =>
-        JSON.stringify([s.mediaId, s.objectKey]),
-      ),
-    );
     const policy = currentCatalogRecipePolicy().recipeManifestSha256;
-    const permissions: {
-      assetId: string;
-      documentId: number | null;
-      intentId: string | null;
-      stateVersion: number;
-      manifestSha256: string;
-      policy: string;
-      published: boolean;
-      renditionIds: string[];
-    }[] = [];
-    for (const intent of snapshot.preparations ?? []) {
-      const requested =
-        intent.state === "release_requested" &&
-        new Date(intent.expiresAt).getTime() > Date.now();
-      if (
-        !requested &&
-        !intent.media.some((m) =>
-          publicPairs.has(JSON.stringify([m.mediaId, m.objectKey])),
-        )
-      )
-        continue;
-      if (intent.recipeManifestSha256 !== policy) {
-        if (intent.state === "released") {
-          const prior = (
-            await app.query<{
-              rendition_id: string;
-              media_id: string;
-              object_key: string;
-            }>(
-              `SELECT pp.rendition_id,m.media_id,m.object_key FROM community.catalog_delivery_rendition_pins pp JOIN community.catalog_delivery_prepares i ON i.intent_id=pp.intent_id JOIN community.catalog_delivery_media_refs m ON m.intent_id=pp.intent_id AND m.ordinal=pp.ordinal JOIN community.media_renditions r ON r.id=pp.rendition_id JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' JOIN community.media_publications p ON p.id=pp.public_generation_id AND p.version=pp.public_generation_version AND p.rendition_id=r.id AND p.state='published' AND p.sha256=b.sha256 AND p.byte_size=b.byte_size AND p.storage_key=b.storage_key WHERE pp.intent_id=$1 AND i.manifest_sha256=$2 AND i.recipe_manifest_sha256=$3 ORDER BY pp.ordinal,pp.role`,
-              [
-                intent.intentId,
-                intent.manifestSha256,
-                intent.recipeManifestSha256,
-              ],
-            )
-          ).rows;
-          for (const media of intent.media)
-            if (
-              publicPairs.has(JSON.stringify([media.mediaId, media.objectKey]))
-            )
-              permissions.push({
-                assetId: sourceAssetId(media.mediaId, media.objectKey),
-                documentId: intent.documentId,
-                intentId: null,
-                stateVersion: intent.stateVersion,
-                manifestSha256: intent.manifestSha256,
-                policy: intent.recipeManifestSha256,
-                published: true,
-                renditionIds: prior
-                  .filter(
-                    (p) =>
-                      p.media_id === media.mediaId &&
-                      p.object_key === media.objectKey,
-                  )
-                  .map((p) => p.rendition_id),
-              });
-        }
-        continue;
-      }
-      const facts = await inspectCatalogDelivery(
-        app,
-        intent,
+    return {
+      permissions: await planCatalogPermissions(
+        snapshot,
+        catalogPlanReads(app, policy),
         policy,
-        catalogExpectedRenditions,
-      );
-      if (!facts.privateReady) continue;
-      const pins = (
-        await app.query<{
-          rendition_id: string;
-          media_id: string;
-          object_key: string;
-          role: string;
-          recipe_version: number;
-          recipe_digest: string;
-          width: number;
-          height: number;
-          master_width: number;
-          master_height: number;
-        }>(
-          `SELECT p.rendition_id,m.media_id,m.object_key,p.role,p.recipe_version,p.recipe_digest,r.width,r.height,a.master_width,a.master_height FROM community.catalog_delivery_rendition_pins p JOIN community.catalog_delivery_media_refs m ON m.intent_id=p.intent_id AND m.ordinal=p.ordinal JOIN community.media_renditions r ON r.id=p.rendition_id JOIN community.catalog_media_assets a ON a.id=r.catalog_asset_id WHERE p.intent_id=$1 ORDER BY p.ordinal,p.role`,
-          [intent.intentId],
-        )
-      ).rows;
-      for (const media of intent.media) {
-        const isPublished = publicPairs.has(
-          JSON.stringify([media.mediaId, media.objectKey]),
-        );
-        if (!requested && !isPublished) continue;
-        permissions.push({
-          assetId: sourceAssetId(media.mediaId, media.objectKey),
-          documentId: intent.documentId,
-          intentId: requested ? intent.intentId : null,
-          stateVersion: intent.stateVersion,
-          manifestSha256: intent.manifestSha256,
-          policy,
-          published: isPublished,
-          renditionIds: pins
-            .filter(
-              (p) =>
-                p.media_id === media.mediaId &&
-                p.object_key === media.objectKey &&
-                catalogExpectedRenditions(p.master_width, p.master_height).some(
-                  (want) =>
-                    want.role === p.role &&
-                    want.version === p.recipe_version &&
-                    want.digest === p.recipe_digest &&
-                    want.width === p.width &&
-                    want.height === p.height,
-                ),
-            )
-            .map((p) => p.rendition_id),
-        });
-      }
-    }
-    const publicReady = (
-      await app.query<{
-        id: string;
-        media_id: string;
-        source_object_key: string;
-        role: string;
-        recipe_version: number;
-        recipe_digest: string;
-        width: number;
-        height: number;
-        master_width: number;
-        master_height: number;
-        state: "ready" | "superseded" | "released";
-        published: boolean;
-      }>(
-        // Ready renditions, plus an editorial set a re-render released (or
-        // superseded) that is still published on a committed blob: the
-        // projection serves it until its replacement is published.
-        `SELECT DISTINCT r.id,a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height,r.state,pub.published FROM jsonb_to_recordset($1::jsonb) p("mediaId" text,"objectKey" text) JOIN community.catalog_media_assets a ON a.media_id=p."mediaId" AND a.source_object_key=p."objectKey" AND a.state='ready' JOIN community.media_renditions r ON r.catalog_asset_id=a.id JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' CROSS JOIN LATERAL (SELECT r.role IN ('thumb','cover','display','viewer') AND EXISTS (SELECT 1 FROM community.media_publications pp WHERE pp.rendition_id=r.id AND pp.state='published' AND pp.sha256=b.sha256 AND pp.byte_size=b.byte_size AND pp.storage_key=b.storage_key AND pp.content_type=r.content_type AND pp.purpose='catalog_derivative') AS published) pub WHERE r.edit_key='base' AND (r.state='ready' OR (pub.published AND a.source_object_key LIKE 'editorial/%')) AND (r.role IN ('thumb','cover','display','viewer','full') OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")})) LIMIT 40001`,
-        [JSON.stringify(snapshot.publishedSources)],
-      )
-    ).rows;
-    if (publicReady.length > 40000) throw new Error("Catalog selector invalid");
-    for (const source of snapshot.publishedSources) {
-      const matches = publicReady.filter(
-        (r) =>
-          r.media_id === source.mediaId &&
-          r.source_object_key === source.objectKey,
-      );
-      const current = (r: (typeof matches)[number]) =>
-        r.state === "ready" &&
-        !!r.master_width &&
-        !!r.master_height &&
-        catalogExpectedRenditions(r.master_width, r.master_height).some(
-          (want) =>
-            want.role === r.role &&
-            want.version === r.recipe_version &&
-            want.digest === r.recipe_digest &&
-            want.width === r.width &&
-            want.height === r.height,
-        );
-      const master = matches[0];
-      const plan =
-        master?.master_width && master.master_height
-          ? catalogExpectedRenditions(master.master_width, master.master_height)
-          : [];
-      // A recipe version bump re-renders at a bounded rate, and recording
-      // the new set releases the old rows before the new ones are copied.
-      // Until the current recipe's set is complete and published, the ready
-      // set (one ready rendition per slot, whatever its recipe) and every
-      // rendition still published stay desired, so reconcile copies the
-      // replacement and withdraws nothing it still serves; afterwards only the
-      // current set is desired and the old one is retired.
-      const replaced =
-        plan.length > 0 &&
-        plan.every(
-          (want) =>
-            matches.filter(
-              (r) => r.role === want.role && current(r) && r.published,
-            ).length === 1,
-        );
-      const ids = matches
-        .filter(
-          (r) =>
-            // Blocks have already passed the shared active-master/cell SQL.
-            // Only current public CMS pairs reach this branch; private B
-            // continues to authorize its four ordinary immutable pins only.
-            /^block-[0-9]{2}$/u.test(r.role) ||
-            !source.objectKey.startsWith("editorial/") ||
-            (replaced
-              ? current(r)
-              : plan.length > 0 &&
-                ["thumb", "cover", "display", "viewer"].includes(r.role) &&
-                (r.state === "ready" || r.published)),
-        )
-        .map((r) => r.id);
-      // Existing live Native A needs no newly created B intent. A without an
-      // intent/document ID retains live-public pre-copy/commit checks; only
-      // private requested B claims the stronger CMS document lease boundary.
-      permissions.push({
-        assetId: sourceAssetId(source.mediaId, source.objectKey),
-        documentId: null,
-        intentId: null,
-        stateVersion: 0,
-        manifestSha256: "",
-        policy: "",
-        published: true,
-        renditionIds: ids,
-      });
-    }
-    return { permissions, snapshot };
+      ),
+      snapshot,
+    };
   };
   return {
     // The public read path (resolveKeys): the requested assets' exact pairs,
@@ -597,9 +421,11 @@ export const createCatalogPublicationAuthority = (
         const current = async () => {
           if (finished) return false;
           if (!client) return true; // Legacy live A retains its weaker live-public fence.
+          // The same live projection as the captured snapshot, so an intent
+          // past retention (never a grant) is absent from both stamps.
           const rows = (
             await client.query(
-              `SELECT DISTINCT intent_id,catalog_document_id,state,state_version,media_manifest_sha256,recipe_manifest_sha256,expires_at FROM public.catalog_delivery_prepare_media WHERE intent_id=ANY($1::uuid[]) OR (media_ordinal IS NOT NULL AND 'catalog-asset-'||md5(media_id||':'||object_key)=$2) ORDER BY intent_id`,
+              `SELECT DISTINCT intent_id,catalog_document_id,state,state_version,media_manifest_sha256,recipe_manifest_sha256,expires_at FROM public.catalog_delivery_live_prepare_media WHERE intent_id=ANY($1::uuid[]) OR (media_ordinal IS NOT NULL AND 'catalog-asset-'||md5(media_id||':'||object_key)=$2) ORDER BY intent_id`,
               [
                 [
                   ...new Set([
@@ -666,6 +492,408 @@ export const catalogExpectedRenditions = (width: number, height: number) =>
     const size = plannedStillSize(role, { width, height }, "catalog");
     return size ? [{ ...currentRecipe(role), ...size }] : [];
   });
+
+/** A decoded private intent, as the complete snapshot lists it. */
+export type CatalogPlanIntent = ReturnType<
+  typeof parseCatalogPrepareRows
+>[number];
+
+/** One permission of an asset's plan: the renditions a publication of the
+ * asset may copy, and the authority it rests on. `intentId` is set only for a
+ * release_requested intent (private B); the live public permission has no
+ * document, intent or policy. */
+export interface CatalogAssetPermission {
+  readonly assetId: string;
+  readonly documentId: number | null;
+  readonly intentId: string | null;
+  readonly stateVersion: number;
+  readonly manifestSha256: string;
+  readonly policy: string;
+  readonly published: boolean;
+  readonly renditionIds: readonly string[];
+}
+
+/** An App rendition the publication selector reads for a public pair: ready,
+ * or an editorial one a re-render released or superseded while it is still
+ * published. */
+export interface CatalogSelectorRendition {
+  readonly id: string;
+  readonly media_id: string;
+  readonly source_object_key: string;
+  readonly role: string;
+  readonly recipe_version: number;
+  readonly recipe_digest: string;
+  readonly width: number;
+  readonly height: number;
+  readonly master_width: number;
+  readonly master_height: number;
+  readonly state: "ready" | "superseded" | "released";
+  readonly published: boolean;
+}
+
+/** A rendition pin of an intent of the current recipe policy. */
+export interface CatalogIntentPin {
+  readonly rendition_id: string;
+  readonly media_id: string;
+  readonly object_key: string;
+  readonly role: string;
+  readonly recipe_version: number;
+  readonly recipe_digest: string;
+  readonly width: number;
+  readonly height: number;
+  readonly master_width: number;
+  readonly master_height: number;
+}
+
+/** A pin of a released intent of an earlier recipe policy whose public
+ * generation is still published. */
+export interface CatalogPriorPin {
+  readonly rendition_id: string;
+  readonly media_id: string;
+  readonly object_key: string;
+}
+
+/** What App holds for one intent, read once per intent: for a released
+ * intent of an earlier policy its still-published pins; for one of the
+ * current policy inspect's verdict and, only when it is private-ready, its
+ * pins. Pins may name the intent's other pairs; a plan keeps its own. */
+export type CatalogIntentFacts =
+  | { readonly kind: "prior"; readonly pins: readonly CatalogPriorPin[] }
+  | {
+      readonly kind: "current";
+      readonly privateReady: boolean;
+      readonly pins: readonly CatalogIntentPin[];
+    };
+
+/** Everything one asset's plan reads. `intents` are the decoded intents that
+ * name the pair (as their member `ordinal`), in snapshot order, each with its
+ * App facts. Facts may be left out only where the plan needs none: an intent
+ * that is not a live release request while the pair is not public, or one of
+ * an earlier policy that is not released. `renditions` are the pair's
+ * selector rows; they count only while the pair is public. Requested intents
+ * expire against `now`. */
+export interface CatalogAssetPlanInput {
+  readonly mediaId: string;
+  readonly objectKey: string;
+  readonly public: boolean;
+  readonly policy: string;
+  readonly now: number;
+  readonly intents: readonly {
+    readonly intent: CatalogPlanIntent;
+    readonly ordinal: number;
+    readonly facts?: CatalogIntentFacts;
+  }[];
+  readonly renditions: readonly CatalogSelectorRendition[];
+}
+
+/**
+ * The publication plan of one Catalog asset (one exact CMS pair), with no
+ * database, clock or other I/O, so a whole-Catalog plan, a single job and a
+ * scoped reconcile share one rule (catalog-scale-v1 W1). Per intent naming
+ * the pair: a release_requested one before its expiry (private B), or any
+ * one while the pair is public; of an earlier recipe policy only a released
+ * one, with its still-published pins; of the current policy only a
+ * private-ready one, with its pins of the current recipe. Then, only while
+ * the pair is public, the live public permission over the selector rows
+ * (N3). A pair that is not public gets no live public permission whatever is
+ * rendered for it: a taken-down asset's ready renditions are not desired, so
+ * its withdrawal is scheduled. Missing facts, or a member that is not this
+ * pair, throw; they are never read as "nothing permitted".
+ */
+export const planCatalogAsset = (
+  input: CatalogAssetPlanInput,
+): CatalogAssetPermission[] => {
+  const { mediaId, objectKey, policy } = input;
+  const assetId = sourceAssetId(mediaId, objectKey);
+  const own = (p: { media_id: string; object_key: string }) =>
+    p.media_id === mediaId && p.object_key === objectKey;
+  const permissions: CatalogAssetPermission[] = [];
+  for (const { intent, ordinal, facts } of input.intents) {
+    const member = intent.media[ordinal - 1];
+    if (member?.mediaId !== mediaId || member.objectKey !== objectKey)
+      throw new Error("Catalog plan member invalid");
+    const requested =
+      intent.state === "release_requested" &&
+      new Date(intent.expiresAt).getTime() > input.now;
+    if (!requested && !input.public) continue;
+    if (intent.recipeManifestSha256 !== policy) {
+      if (intent.state !== "released") continue;
+      if (facts?.kind !== "prior")
+        throw new Error("Catalog plan facts unavailable");
+      permissions.push({
+        assetId,
+        documentId: intent.documentId,
+        intentId: null,
+        stateVersion: intent.stateVersion,
+        manifestSha256: intent.manifestSha256,
+        policy: intent.recipeManifestSha256,
+        published: true,
+        renditionIds: facts.pins.filter(own).map((p) => p.rendition_id),
+      });
+      continue;
+    }
+    if (facts?.kind !== "current")
+      throw new Error("Catalog plan facts unavailable");
+    if (!facts.privateReady) continue;
+    permissions.push({
+      assetId,
+      documentId: intent.documentId,
+      intentId: requested ? intent.intentId : null,
+      stateVersion: intent.stateVersion,
+      manifestSha256: intent.manifestSha256,
+      policy,
+      published: input.public,
+      renditionIds: facts.pins
+        .filter(
+          (p) =>
+            own(p) &&
+            catalogExpectedRenditions(p.master_width, p.master_height).some(
+              (want) =>
+                want.role === p.role &&
+                want.version === p.recipe_version &&
+                want.digest === p.recipe_digest &&
+                want.width === p.width &&
+                want.height === p.height,
+            ),
+        )
+        .map((p) => p.rendition_id),
+    });
+  }
+  if (!input.public) return permissions;
+  const matches = input.renditions.filter(
+    (r) => r.media_id === mediaId && r.source_object_key === objectKey,
+  );
+  const current = (r: CatalogSelectorRendition) =>
+    r.state === "ready" &&
+    !!r.master_width &&
+    !!r.master_height &&
+    catalogExpectedRenditions(r.master_width, r.master_height).some(
+      (want) =>
+        want.role === r.role &&
+        want.version === r.recipe_version &&
+        want.digest === r.recipe_digest &&
+        want.width === r.width &&
+        want.height === r.height,
+    );
+  const master = matches[0];
+  const plan =
+    master?.master_width && master.master_height
+      ? catalogExpectedRenditions(master.master_width, master.master_height)
+      : [];
+  // A recipe version bump re-renders at a bounded rate, and recording the
+  // new set releases the old rows before the new ones are copied. Until the
+  // current recipe's set is complete and published, the ready set (one ready
+  // rendition per slot, whatever its recipe) and every rendition still
+  // published stay desired, so reconcile copies the replacement and withdraws
+  // nothing it still serves; afterwards only the current set is desired and
+  // the old one is retired.
+  const replaced =
+    plan.length > 0 &&
+    plan.every(
+      (want) =>
+        matches.filter((r) => r.role === want.role && current(r) && r.published)
+          .length === 1,
+    );
+  const ids = matches
+    .filter(
+      (r) =>
+        // Blocks have already passed the shared active-master/cell SQL. Only
+        // current public CMS pairs reach this branch; private B continues to
+        // authorize its four ordinary immutable pins only.
+        /^block-[0-9]{2}$/u.test(r.role) ||
+        !objectKey.startsWith("editorial/") ||
+        (replaced
+          ? current(r)
+          : plan.length > 0 &&
+            ["thumb", "cover", "display", "viewer"].includes(r.role) &&
+            (r.state === "ready" || r.published)),
+    )
+    .map((r) => r.id);
+  // Existing live Native A needs no newly created B intent. A without an
+  // intent/document ID retains live-public pre-copy/commit checks; only
+  // private requested B claims the stronger CMS document lease boundary.
+  permissions.push({
+    assetId,
+    documentId: null,
+    intentId: null,
+    stateVersion: 0,
+    manifestSha256: "",
+    policy: "",
+    published: true,
+    renditionIds: ids,
+  });
+  return permissions;
+};
+
+/** The App reads a Catalog plan makes, kept apart so planning stays pure. */
+export interface CatalogPlanReads {
+  /** inspectCatalogDelivery of an intent of the current policy; it pins the
+   * intent's exact ready renditions. */
+  inspect(
+    intent: CatalogPlanIntent,
+  ): Promise<{ readonly privateReady: boolean }>;
+  pins(intent: CatalogPlanIntent): Promise<readonly CatalogIntentPin[]>;
+  priorPins(intent: CatalogPlanIntent): Promise<readonly CatalogPriorPin[]>;
+  /** The selector rows of these public pairs, or a throw, never a prefix. */
+  renditions(
+    sources: readonly {
+      readonly mediaId: string;
+      readonly objectKey: string;
+    }[],
+  ): Promise<readonly CatalogSelectorRendition[]>;
+}
+
+/** The App reads of a whole-Catalog plan, with the App role. The selector
+ * read keeps its 40,000-row refusal until per-asset and scoped reads replace
+ * the whole-Catalog plan on the job and reconcile paths (catalog-scale-v1 W5,
+ * W7). */
+export const catalogPlanReads = (
+  app: CatalogPool,
+  policy: string,
+): CatalogPlanReads => ({
+  inspect: (intent) =>
+    inspectCatalogDelivery(app, intent, policy, catalogExpectedRenditions),
+  pins: async (intent) =>
+    (
+      await app.query<CatalogIntentPin>(
+        `SELECT p.rendition_id,m.media_id,m.object_key,p.role,p.recipe_version,p.recipe_digest,r.width,r.height,a.master_width,a.master_height FROM community.catalog_delivery_rendition_pins p JOIN community.catalog_delivery_media_refs m ON m.intent_id=p.intent_id AND m.ordinal=p.ordinal JOIN community.media_renditions r ON r.id=p.rendition_id JOIN community.catalog_media_assets a ON a.id=r.catalog_asset_id WHERE p.intent_id=$1 ORDER BY p.ordinal,p.role`,
+        [intent.intentId],
+      )
+    ).rows,
+  priorPins: async (intent) =>
+    (
+      await app.query<CatalogPriorPin>(
+        `SELECT pp.rendition_id,m.media_id,m.object_key FROM community.catalog_delivery_rendition_pins pp JOIN community.catalog_delivery_prepares i ON i.intent_id=pp.intent_id JOIN community.catalog_delivery_media_refs m ON m.intent_id=pp.intent_id AND m.ordinal=pp.ordinal JOIN community.media_renditions r ON r.id=pp.rendition_id JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' JOIN community.media_publications p ON p.id=pp.public_generation_id AND p.version=pp.public_generation_version AND p.rendition_id=r.id AND p.state='published' AND p.sha256=b.sha256 AND p.byte_size=b.byte_size AND p.storage_key=b.storage_key WHERE pp.intent_id=$1 AND i.manifest_sha256=$2 AND i.recipe_manifest_sha256=$3 ORDER BY pp.ordinal,pp.role`,
+        [intent.intentId, intent.manifestSha256, intent.recipeManifestSha256],
+      )
+    ).rows,
+  async renditions(sources) {
+    const rows = (
+      await app.query<CatalogSelectorRendition>(
+        // Ready renditions, plus an editorial set a re-render released (or
+        // superseded) that is still published on a committed blob: the
+        // projection serves it until its replacement is published.
+        `SELECT DISTINCT r.id,a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height,r.state,pub.published FROM jsonb_to_recordset($1::jsonb) p("mediaId" text,"objectKey" text) JOIN community.catalog_media_assets a ON a.media_id=p."mediaId" AND a.source_object_key=p."objectKey" AND a.state='ready' JOIN community.media_renditions r ON r.catalog_asset_id=a.id JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' CROSS JOIN LATERAL (SELECT r.role IN ('thumb','cover','display','viewer') AND EXISTS (SELECT 1 FROM community.media_publications pp WHERE pp.rendition_id=r.id AND pp.state='published' AND pp.sha256=b.sha256 AND pp.byte_size=b.byte_size AND pp.storage_key=b.storage_key AND pp.content_type=r.content_type AND pp.purpose='catalog_derivative') AS published) pub WHERE r.edit_key='base' AND (r.state='ready' OR (pub.published AND a.source_object_key LIKE 'editorial/%')) AND (r.role IN ('thumb','cover','display','viewer','full') OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")})) LIMIT 40001`,
+        [JSON.stringify(sources)],
+      )
+    ).rows;
+    if (rows.length > 40000) throw new Error("Catalog selector invalid");
+    return rows;
+  },
+});
+
+/**
+ * The plan of every asset a complete snapshot names: each published pair,
+ * and each member of a release_requested intent. App is read as before: per
+ * intent in snapshot order, only for one that is requested or names a
+ * public pair, then the selector rows of the published pairs once. Every row
+ * is grouped by pair once and each asset is planned by planCatalogAsset over
+ * its own rows: O(S + R) for S sources and R rows, never S x R. A pair the
+ * published list names twice (two records) is one asset with one live
+ * public permission. Permissions are grouped by asset, published pairs
+ * first; each asset's come in intent order, then the public one. One clock
+ * reading (`now`) serves the whole plan.
+ */
+export const planCatalogPermissions = async (
+  snapshot: {
+    readonly publishedSources: readonly {
+      readonly mediaId: string;
+      readonly objectKey: string;
+    }[];
+    readonly preparations?: readonly CatalogPlanIntent[];
+  },
+  reads: CatalogPlanReads,
+  policy: string,
+  now = Date.now(),
+): Promise<CatalogAssetPermission[]> => {
+  const pairKey = (mediaId: string, objectKey: string) =>
+    JSON.stringify([mediaId, objectKey]);
+  const group = <T>(rows: readonly T[], key: (row: T) => string) => {
+    const groups = new Map<string, T[]>();
+    for (const row of rows) {
+      const k = key(row);
+      const list = groups.get(k);
+      if (list) list.push(row);
+      else groups.set(k, [row]);
+    }
+    return groups;
+  };
+  const assets = new Map<
+    string,
+    {
+      readonly mediaId: string;
+      readonly objectKey: string;
+      readonly intents: CatalogAssetPlanInput["intents"][number][];
+    }
+  >();
+  const assetOf = (mediaId: string, objectKey: string) => {
+    const key = pairKey(mediaId, objectKey);
+    let asset = assets.get(key);
+    if (!asset) {
+      asset = { mediaId, objectKey, intents: [] };
+      assets.set(key, asset);
+    }
+    return asset;
+  };
+  const publicPairs = new Set<string>();
+  for (const s of snapshot.publishedSources) {
+    publicPairs.add(pairKey(s.mediaId, s.objectKey));
+    assetOf(s.mediaId, s.objectKey);
+  }
+  for (const intent of snapshot.preparations ?? []) {
+    const requested =
+      intent.state === "release_requested" &&
+      new Date(intent.expiresAt).getTime() > now;
+    // The members this intent may grant something. An intent that is not
+    // requested and names no public pair is not read; a requested one is,
+    // even with an empty manifest, as it always was.
+    const granted = intent.media.filter(
+      (m) => requested || publicPairs.has(pairKey(m.mediaId, m.objectKey)),
+    );
+    if (!requested && !granted.length) continue;
+    let facts: (key: string) => CatalogIntentFacts;
+    if (intent.recipeManifestSha256 !== policy) {
+      if (intent.state !== "released") continue;
+      const prior = group(await reads.priorPins(intent), (p) =>
+        pairKey(p.media_id, p.object_key),
+      );
+      facts = (key) => ({ kind: "prior", pins: prior.get(key) ?? [] });
+    } else if (!(await reads.inspect(intent)).privateReady)
+      facts = () => ({ kind: "current", privateReady: false, pins: [] });
+    else {
+      const pins = group(await reads.pins(intent), (p) =>
+        pairKey(p.media_id, p.object_key),
+      );
+      facts = (key) => ({
+        kind: "current",
+        privateReady: true,
+        pins: pins.get(key) ?? [],
+      });
+    }
+    for (const m of granted)
+      assetOf(m.mediaId, m.objectKey).intents.push({
+        intent,
+        ordinal: m.ordinal,
+        facts: facts(pairKey(m.mediaId, m.objectKey)),
+      });
+  }
+  const renditions = group(
+    await reads.renditions(snapshot.publishedSources),
+    (r) => pairKey(r.media_id, r.source_object_key),
+  );
+  const permissions: CatalogAssetPermission[] = [];
+  for (const [key, asset] of assets)
+    permissions.push(
+      ...planCatalogAsset({
+        ...asset,
+        public: publicPairs.has(key),
+        policy,
+        now,
+        renditions: renditions.get(key) ?? [],
+      }),
+    );
+  return permissions;
+};
 
 /**
  * The public rendition-fact lookup (`catalogFacts`) every reader shares

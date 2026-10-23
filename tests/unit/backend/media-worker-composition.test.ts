@@ -340,9 +340,14 @@ describe("media worker composition", () => {
       expect(queue.enqueue.mock.calls.map(([job]) => job.kind)).toEqual([
         "reconcile_capacity",
       ]);
-      expect(queue.catalogSync).toHaveBeenCalledTimes(1);
-      expect(queue.blockSync).toHaveBeenCalledTimes(
-        mode === "development" ? 1 : 0,
+      // The Catalog sync runs detached from the tick (catalog-scale-v1 W4).
+      await vi.waitFor(() =>
+        expect(queue.catalogSync).toHaveBeenCalledTimes(1),
+      );
+      await vi.waitFor(() =>
+        expect(queue.blockSync).toHaveBeenCalledTimes(
+          mode === "development" ? 1 : 0,
+        ),
       );
       expect(queue.profileSweep).toHaveBeenCalledTimes(
         mode === "development" ? 1 : 0,
@@ -366,6 +371,58 @@ describe("media worker composition", () => {
       expect(queue.claim.mock.calls.length).toBe(claims);
     },
   );
+
+  it("keeps claiming while a long Catalog sync runs, and closes the pools only after it ends", async () => {
+    const queue = quietQueue();
+    let finish: (() => void) | undefined;
+    queue.catalogSync.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              referenced: 0,
+              skipped: 0,
+              created: 0,
+              unreferenced: 0,
+              enqueued: 0,
+            });
+        }),
+    );
+    fakeMedia.sandbox.selfCheck.mockResolvedValue({
+      status: "ok",
+      runtime: sandboxRuntime(),
+      facts: isolatedFacts(),
+    });
+    const worker = await startMediaWorker(production, { logger: silent });
+    try {
+      await vi.waitFor(() =>
+        expect(queue.catalogSync).toHaveBeenCalledTimes(1),
+      );
+      // The sync has not returned, and the media worker (not only the
+      // publication lanes on the same queue) still claims, poll after poll.
+      const mediaClaims = () =>
+        queue.claim.mock.calls.filter(([options]) =>
+          options.kinds?.includes("catalog_render"),
+        ).length;
+      await vi.waitFor(() => expect(mediaClaims()).toBeGreaterThanOrEqual(2), {
+        timeout: 5_000,
+      });
+      let stopped = false;
+      const stopping = worker.stop().then(() => {
+        stopped = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(stopped).toBe(false);
+      expect(database.end).not.toHaveBeenCalled();
+      finish!();
+      await stopping;
+      expect(database.end).toHaveBeenCalledTimes(2);
+      expect(queue.catalogSync).toHaveBeenCalledTimes(1);
+    } finally {
+      finish?.();
+      await worker.stop();
+    }
+  });
 
   it.each([
     ["production", "on"],

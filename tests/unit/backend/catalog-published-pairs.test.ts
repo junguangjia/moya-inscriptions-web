@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { createCatalogPublicationAuthority } from "@moya/backend-production/internal/catalog-delivery";
 import {
   CATALOG_PUBLISHED_PAIRS_MAX,
-  CATALOG_SYNC_MAX_SOURCES,
   publishedCatalogPairs,
   publishedCatalogPairsSql,
 } from "@moya/backend-production/internal/publishing-catalog";
@@ -232,7 +231,8 @@ describe("the authority's publishedAssetIds (the resolveKeys gate)", () => {
     // A Catalog far beyond the old ceiling: an unbounded listing would be
     // incomplete, while the exact check reads only the requested pairs.
     const filler = Array.from(
-      { length: CATALOG_SYNC_MAX_SOURCES + 1 },
+      // One more than the old 10,000-image listing ceiling.
+      { length: 10_001 },
       (_, n) => editorial(`filler-${n}`),
     );
     const cms = cmsOf([...filler, a, b]);

@@ -44,6 +44,13 @@ import {
 } from "./sandbox/protocol.js";
 import { SANDBOX_JOB_LIMITS, sandboxNonce } from "./sandbox/sandbox-runner.js";
 
+import {
+  CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS,
+  CATALOG_SNAPSHOT_MAX_SOURCES,
+  nearCatalogSnapshotCeiling,
+  readCatalogSnapshotCursor,
+} from "@moya/community-postgres";
+
 import type { createPostgresPool } from "@moya/catalog-postgres";
 import type { CatalogSourceReader } from "../storage/catalog-source.js";
 import type { ProcessorLogger } from "./processing/media-processor.js";
@@ -661,8 +668,6 @@ export interface CatalogSyncPort {
   }>;
 }
 
-/** Largest published list one sync accepts (the store's bound). */
-export const CATALOG_SYNC_MAX_SOURCES = 10_000;
 /** New assets and queued jobs per sync pass. */
 export const CATALOG_SYNC_BATCH = 100;
 /** Sync cadence in the worker maintenance (spec: every 5 minutes). */
@@ -670,8 +675,10 @@ export const CATALOG_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * One Catalog sync step for the worker maintenance: reads the complete
- * published list (`null` when it exceeds the bound, so nothing is marked
- * unreferenced from a partial list) and hands it to the store.
+ * published list (`null` above the snapshot ceiling, so nothing is marked
+ * unreferenced from a partial list) and hands it to the store. From 80% of a
+ * ceiling (`@moya/community-postgres` CATALOG_SNAPSHOT_*) each pass logs the
+ * counts, so the Catalog's growth is seen long before a pass is skipped.
  */
 export function createCatalogSync(options: {
   readonly listSources: () => Promise<readonly CatalogWorkerSource[] | null>;
@@ -722,6 +729,17 @@ export function createCatalogSync(options: {
       logger.error("[media-worker] catalog sync skipped: list too large");
       return;
     }
+    const privateRows = snapshot?.privateRows ?? 0;
+    if (
+      nearCatalogSnapshotCeiling(
+        sources.length,
+        CATALOG_SNAPSHOT_MAX_SOURCES,
+      ) ||
+      nearCatalogSnapshotCeiling(privateRows, CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS)
+    )
+      logger.error(
+        `[media-worker] catalog sync near ceiling sources=${sources.length}/${CATALOG_SNAPSHOT_MAX_SOURCES} private_rows=${privateRows}/${CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS}`,
+      );
     const counts = await options.port.syncCatalogAssets(sources, now, {
       limit,
       renditions: catalogSyncIdentities(),
@@ -767,33 +785,62 @@ export function createCatalogSync(options: {
 }
 
 /**
- * Reads the published Catalog media list through the read-only Catalog
- * connection (the public read role). At most one row more than the bound is
- * read, so an oversized list is detected without loading it.
+ * The published Catalog media list, read through the read-only Catalog
+ * connection (the public read role) in cursor batches (catalog-scale-v1 W3).
+ * No LIMIT: the cursor stops one row past the snapshot ceiling.
  */
 export const listPublishedCatalogSourcesSql = `
   SELECT media_id, object_key, width, height
   FROM catalog_media
   ORDER BY media_id ASC, object_key ASC
-  LIMIT ${CATALOG_SYNC_MAX_SOURCES + 1}
 `;
 
-export async function listPublishedCatalogSources(
-  pool: Pick<ReturnType<typeof createPostgresPool>, "query">,
-): Promise<readonly CatalogWorkerSource[] | null> {
-  const result = await pool.query<{
+/**
+ * The complete published list inside the caller's open transaction on
+ * `client` (the complete snapshot's REPEATABLE READ transaction), or null
+ * above CATALOG_SNAPSHOT_MAX_SOURCES rows; at most one row past the ceiling
+ * is ever read, and never a partial list is returned.
+ */
+export async function readPublishedCatalogSources(client: {
+  query(sql: string): Promise<{ readonly rows: readonly unknown[] }>;
+}): Promise<readonly CatalogWorkerSource[] | null> {
+  const rows = await readCatalogSnapshotCursor<{
     media_id: string;
     object_key: string;
     width: number | null;
     height: number | null;
-  }>(listPublishedCatalogSourcesSql);
-  if (result.rows.length > CATALOG_SYNC_MAX_SOURCES) return null;
-  return result.rows.map((row) => ({
-    mediaId: row.media_id,
-    objectKey: row.object_key,
-    width: row.width,
-    height: row.height,
-  }));
+  }>(
+    client,
+    "catalog_published_sources",
+    listPublishedCatalogSourcesSql,
+    CATALOG_SNAPSHOT_MAX_SOURCES,
+  );
+  return (
+    rows?.map((row) => ({
+      mediaId: row.media_id,
+      objectKey: row.object_key,
+      width: row.width,
+      height: row.height,
+    })) ?? null
+  );
+}
+
+/**
+ * The same complete list on its own connection, in its own REPEATABLE READ
+ * READ ONLY transaction: the fallback list of the sync and the publication
+ * authority's whole-list check.
+ */
+export async function listPublishedCatalogSources(
+  pool: Pick<ReturnType<typeof createPostgresPool>, "connect">,
+): Promise<readonly CatalogWorkerSource[] | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    return await readPublishedCatalogSources(client);
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+  }
 }
 
 /** Largest de-duplicated pair batch one exact check accepts: the bound of one

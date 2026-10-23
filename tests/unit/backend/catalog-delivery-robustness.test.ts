@@ -16,6 +16,8 @@ import {
 } from "@moya/community-postgres";
 import { describe, expect, it, vi } from "vitest";
 
+import { snapshotCursors } from "./catalog-snapshot-cursor.js";
+
 /*
  * catalog-delivery-release-hardening-v1 (Issue #317), group g3:
  * N3 a recipe bump keeps the last published set desired and served, for every
@@ -27,7 +29,9 @@ import { describe, expect, it, vi } from "vitest";
  * F7 one undecodable intent (an edge beyond 65,535 px) never fails the
  *    snapshot, plans or sync of the others, and an undecodable intent (even
  *    every intent at once) leaves its App mirror untouched;
- * F6 held publication fences never starve snapshot reads or the other lane.
+ * F6 held publication fences never starve snapshot reads or the other lane;
+ * W3 (catalog-scale-v1) a fence re-reads the live projection its snapshot was
+ *    captured from, so an intent past retention never makes it busy.
  * Synthetic metadata only; no database, object store or network.
  */
 
@@ -123,10 +127,20 @@ const intentRows = (
 const world = (options: {
   readonly published: readonly Source[];
   readonly privateRows?: readonly Row[];
+  /** Rows of intents that ended past retention R: in the full prepare view
+   * only, never in the live projection (CMS migration M2). */
+  readonly retiredRows?: readonly Row[];
+  /** The intents App mirror members still name, by asset. */
+  readonly appIntentIds?: Readonly<Record<string, readonly string[]>>;
   readonly prepareMax?: number | null;
 }) => {
   let publicRows: Row[] = [];
+  const publicCursors = snapshotCursors((sql) =>
+    sql.includes("FROM catalog_media") ? options.published : undefined,
+  );
   const publishedQuery = vi.fn(async (sql: string) => {
+    const cursor = publicCursors(sql);
+    if (cursor) return cursor;
     if (sql.includes("clock_timestamp()"))
       return { rows: [{ at: new Date("2026-10-21T00:00:00.000Z") }] };
     if (sql.includes("pg_export_snapshot()"))
@@ -142,13 +156,28 @@ const world = (options: {
     connect: async () => ({ query: publishedQuery, release: () => undefined }),
   } as unknown as Parameters<Authority>[0];
   const privateRows = options.privateRows ?? [];
+  const privateCursors = snapshotCursors((sql) =>
+    sql.startsWith("SELECT * FROM public.catalog_delivery_live_prepare_media")
+      ? privateRows
+      : undefined,
+  );
   const privateQuery = async (sql: string, values?: readonly unknown[]) => {
-    if (sql.startsWith("SELECT * FROM public.catalog_delivery_prepare_media"))
-      return { rows: privateRows };
+    const cursor = privateCursors(sql);
+    if (cursor) return cursor;
     if (sql.startsWith("SELECT DISTINCT intent_id")) {
       const [ids, assetId] = values as [string[], string];
+      // The fence's re-read names its view: the live projection holds the
+      // snapshot's rows, the full view every retired intent beside them.
+      const viewRows = sql.includes(
+        " FROM public.catalog_delivery_live_prepare_media ",
+      )
+        ? privateRows
+        : sql.includes(" FROM public.catalog_delivery_prepare_media ")
+          ? [...privateRows, ...(options.retiredRows ?? [])]
+          : undefined;
+      if (viewRows === undefined) throw new Error("UNEXPECTED_PRIVATE_SQL");
       const headers = new Map<string, Row>();
-      for (const row of privateRows)
+      for (const row of viewRows)
         if (
           ids.includes(row.intent_id as string) ||
           (row.media_ordinal !== null &&
@@ -196,9 +225,14 @@ const world = (options: {
             };
           },
         } as unknown as NonNullable<Parameters<Authority>[1]>);
-  const appQuery = vi.fn(async (sql: string) => {
+  const appQuery = vi.fn(async (sql: string, values?: readonly unknown[]) => {
     if (sql.startsWith("SELECT DISTINCT r.id")) return { rows: publicRows };
-    if (sql.startsWith("SELECT DISTINCT intent_id")) return { rows: [] };
+    if (sql.startsWith("SELECT DISTINCT intent_id"))
+      return {
+        rows: (options.appIntentIds?.[values![0] as string] ?? []).map(
+          (intent_id) => ({ intent_id }),
+        ),
+      };
     throw new Error("UNEXPECTED_APP_SQL");
   });
   const app = { query: appQuery } as unknown as Parameters<Authority>[2];
@@ -666,6 +700,65 @@ describe("F6: held fences never starve snapshot reads or the other lane", () => 
   });
 });
 
+describe("W3: a fence re-reads the projection its snapshot was captured from", () => {
+  const live = editorialSource("fence-live", 4096, 2731);
+  const privateB = editorialSource("fence-private", 3000, 2000);
+  const prepared = "00000000-0000-4000-8000-0000000000d1";
+  const retiredLive = "00000000-0000-4000-8000-0000000000d2";
+  const retiredPrivate = "00000000-0000-4000-8000-0000000000d3";
+  /** The header row (no member) of an intent withdrawn longer ago than R. */
+  const retired = (intentId: string, documentId: number): Row => ({
+    ...intentRows(intentId, "withdrawn", [live], documentId)[0]!,
+    state_version: 3,
+    media_ordinal: null,
+    media_id: null,
+    object_key: null,
+    source_sha256: null,
+    width: null,
+    height: null,
+  });
+
+  it("never makes a fence busy for an App-known intent past retention, which grants nothing", async () => {
+    const liveAsset = assetOf(live.media_id, live.object_key);
+    const privateAsset = assetOf(privateB.media_id, privateB.object_key);
+    const privateRows = intentRows(prepared, "prepared", [privateB], 3);
+    // App mirror members still name both retired intents; the full view
+    // still lists them, the live projection the snapshot reads does not.
+    const w = world({
+      published: [live],
+      privateRows,
+      retiredRows: [retired(retiredLive, 1), retired(retiredPrivate, 2)],
+      appIntentIds: {
+        [liveAsset]: [retiredLive],
+        [privateAsset]: [retiredPrivate, prepared],
+      },
+    });
+    w.setRows(renditionRows(live, 1, "current"));
+    const snapshot = await readCatalogSourceSnapshot(w.published, w.prepare);
+    expect(snapshot?.preparations?.map((i) => i.intentId)).toEqual([prepared]);
+    // A published asset: the stamps agree, and the public permission grants.
+    const publish = await w.authority.acquire(liveAsset);
+    try {
+      expect(await publish.current()).toBe(true);
+      expect(await publish.authorized()).toBe(true);
+    } finally {
+      await publish.release();
+    }
+    // A private one: the stamps agree, and only a live intent could grant
+    // (this one is prepared, not requested), never the retired one.
+    const fence = await w.authority.acquire(privateAsset);
+    try {
+      expect(await fence.current()).toBe(true);
+      expect(await fence.authorized()).toBe(false);
+      // The fence still follows the live intents it captured.
+      for (const row of privateRows) row.state_version = 2;
+      expect(await fence.current()).toBe(false);
+    } finally {
+      await fence.release();
+    }
+  });
+});
+
 describe("F3: an intent that would revive its tombstone is refused alone", () => {
   const live = "00000000-0000-4000-8000-00000000000a";
   const late = "00000000-0000-4000-8000-00000000000b";
@@ -711,6 +804,26 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
     expires_at: new Date("2026-10-21T00:00:00.000Z"),
     observed_at: new Date("2026-10-21T00:00:01.000Z"),
   });
+  // The stored member of each intent the batched member read names
+  // (catalog-scale-v1 W4: one read for every snapshot intent with a mirror).
+  const storedMembers = (values: readonly unknown[]) => ({
+    rows: (values[0] as string[]).map((intentId) => ({
+      intent_id: intentId,
+      ordinal: 1,
+      media_id: member.media_id,
+      object_key: member.object_key,
+      source_sha256: "c".repeat(64),
+      width: member.width,
+      height: member.height,
+    })),
+  });
+  // The rows of the one lifecycle UPDATE as [intent, state, version].
+  const lifecycle = (write: { readonly values: readonly unknown[] }) =>
+    (write.values[0] as string[]).map((intentId, i) => [
+      intentId,
+      (write.values[1] as string[])[i],
+      (write.values[2] as number[])[i],
+    ]);
 
   it("keeps the expired mirror of a late release and still applies every other intent", async () => {
     const statements: { sql: string; values: readonly unknown[] }[] = [];
@@ -726,19 +839,8 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
               stored(live, "release_requested", 1),
             ],
           };
-        if (sql.startsWith("SELECT ordinal,media_id"))
-          return {
-            rows: [
-              {
-                ordinal: 1,
-                media_id: member.media_id,
-                object_key: member.object_key,
-                source_sha256: "c".repeat(64),
-                width: member.width,
-                height: member.height,
-              },
-            ],
-          };
+        if (sql.startsWith("SELECT intent_id,ordinal,media_id"))
+          return storedMembers(values);
         return { rows: [] };
       }),
     } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
@@ -760,12 +862,113 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
     );
     // The other intent's lifecycle is applied; nothing is written for the
     // refused one except the shared fail-closed absence tombstone.
-    expect(updates[0]!.values.slice(0, 3)).toEqual([live, "cancelled", 2]);
-    expect(updates.some(({ values }) => values[0] === late)).toBe(false);
+    expect(lifecycle(updates[0]!)).toEqual([[live, "cancelled", 2]]);
+    expect(updates).toHaveLength(2);
     const absence = updates.at(-1)!;
     expect(absence.sql).toContain("observed_live=false");
     expect(absence.values[0]).toEqual([live]);
     expect(absence.values[2]).toEqual([]);
+  });
+
+  it("ends a mirror whose lease lapsed at the same state_version, so a later release is refused", async () => {
+    const lapsed = "00000000-0000-4000-8000-00000000000d";
+    // A stateful mirror: what one pass writes is what the next one reads.
+    const rows = new Map<
+      string,
+      ReturnType<typeof stored> & { ended_at: Date | null }
+    >([[lapsed, { ...stored(lapsed, "prepared", 1), ended_at: null }]]);
+    const statements: { sql: string; values: readonly unknown[] }[] = [];
+    const db = {
+      query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+        statements.push({ sql, values });
+        if (sql.startsWith("SELECT * FROM community.catalog_delivery_prepares"))
+          return {
+            rows: [...rows.values()]
+              .filter(
+                (row) =>
+                  row.observed_live ||
+                  (values[0] as string[]).includes(row.intent_id),
+              )
+              .map((row) => ({ ...row })),
+          };
+        if (sql.startsWith("SELECT intent_id,ordinal,media_id"))
+          return storedMembers(values);
+        if (
+          sql
+            .trimStart()
+            .startsWith("UPDATE community.catalog_delivery_prepares p")
+        ) {
+          const [ids, states, versions, ended, at] = values as [
+            string[],
+            string[],
+            number[],
+            boolean[],
+            string,
+          ];
+          ids.forEach((id, i) => {
+            const row = rows.get(id)!;
+            row.source_state = states[i]!;
+            row.source_state_version = versions[i]!;
+            row.observed_at = new Date(at);
+            if (ended[i]) row.ended_at ??= new Date(at);
+          });
+        } else if (sql.includes("observed_live=false")) {
+          const [present, at] = values as [string[], string];
+          for (const row of rows.values())
+            if (row.observed_live && !present.includes(row.intent_id)) {
+              row.observed_live = false;
+              row.ended_at ??= new Date(at);
+            }
+        }
+        return { rows: [] };
+      }),
+    } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
+    const lifecycles = () =>
+      statements
+        .filter(({ sql }) =>
+          sql
+            .trimStart()
+            .startsWith("UPDATE community.catalog_delivery_prepares p"),
+        )
+        .map(lifecycle);
+    // The lease passed (expires_at 00:00) with no CMS change: the snapshot
+    // still says prepared at state_version 1, and the mirror ends it.
+    expect(
+      await synchronizeCatalogDeliveryIntents(
+        db,
+        [header(lapsed, "prepared", 1)] as unknown as Parameters<
+          typeof synchronizeCatalogDeliveryIntents
+        >[1],
+        observed,
+      ),
+    ).toEqual({ refused: [], mismatched: [], undecodable: [] });
+    expect(lifecycles()).toEqual([[[lapsed, "expired", 1]]]);
+    expect(rows.get(lapsed)).toMatchObject({
+      source_state: "expired",
+      source_state_version: 1,
+      observed_live: true,
+      ended_at: observed,
+    });
+    // A release the CMS commits after that expiry is refused and tombstoned,
+    // never applied.
+    statements.length = 0;
+    const later = new Date("2026-10-21T00:10:00.000Z");
+    expect(
+      await synchronizeCatalogDeliveryIntents(
+        db,
+        [header(lapsed, "released", 2)] as unknown as Parameters<
+          typeof synchronizeCatalogDeliveryIntents
+        >[1],
+        later,
+      ),
+    ).toEqual({ refused: [lapsed], mismatched: [], undecodable: [] });
+    expect(lifecycles()).toEqual([]);
+    expect(rows.get(lapsed)).toMatchObject({
+      source_state: "expired",
+      source_state_version: 1,
+      observed_live: false,
+      ended_at: observed,
+    });
   });
 
   it("logs every intent a sync pass tombstoned", async () => {
@@ -821,19 +1024,8 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
                 stored(live, "release_requested", 1),
               ],
             };
-          if (sql.startsWith("SELECT ordinal,media_id"))
-            return {
-              rows: [
-                {
-                  ordinal: 1,
-                  media_id: member.media_id,
-                  object_key: member.object_key,
-                  source_sha256: "c".repeat(64),
-                  width: member.width,
-                  height: member.height,
-                },
-              ],
-            };
+          if (sql.startsWith("SELECT intent_id,ordinal,media_id"))
+            return storedMembers(values);
           return { rows: [] };
         }),
       } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
@@ -851,8 +1043,7 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
       );
       // The other intent is applied; nothing at all is written for the
       // drifted one, and the absence tombstone counts it as present.
-      expect(writes[0]!.values.slice(0, 3)).toEqual([live, "cancelled", 2]);
-      expect(writes.some(({ values }) => values[0] === drifted)).toBe(false);
+      expect(lifecycle(writes[0]!)).toEqual([[live, "cancelled", 2]]);
       const absence = writes.at(-1)!;
       expect(absence.sql).toContain("observed_live=false");
       expect(absence.values[0]).toEqual([live, drifted]);
@@ -889,19 +1080,8 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
                 },
               ],
             };
-          if (sql.startsWith("SELECT ordinal,media_id"))
-            return {
-              rows: [
-                {
-                  ordinal: 1,
-                  media_id: member.media_id,
-                  object_key: member.object_key,
-                  source_sha256: "c".repeat(64),
-                  width: member.width,
-                  height: member.height,
-                },
-              ],
-            };
+          if (sql.startsWith("SELECT intent_id,ordinal,media_id"))
+            return storedMembers(values);
           return { rows: [] };
         }),
       } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
@@ -962,19 +1142,8 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
                 },
               ],
             };
-          if (sql.startsWith("SELECT ordinal,media_id"))
-            return {
-              rows: [
-                {
-                  ordinal: 1,
-                  media_id: member.media_id,
-                  object_key: member.object_key,
-                  source_sha256: "c".repeat(64),
-                  width: member.width,
-                  height: member.height,
-                },
-              ],
-            };
+          if (sql.startsWith("SELECT intent_id,ordinal,media_id"))
+            return storedMembers(values);
           return { rows: [] };
         }),
       } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
@@ -1006,14 +1175,6 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
   it("tombstones a drift that is over by the stored expiry, a member drift past expiry and a released mirror, beside an applied intent", async () => {
     const drifted = "00000000-0000-4000-8000-00000000000c";
     const later = "2026-10-22T00:00:00.000Z";
-    const member0 = {
-      ordinal: 1,
-      media_id: member.media_id,
-      object_key: member.object_key,
-      source_sha256: "c".repeat(64),
-      width: member.width,
-      height: member.height,
-    };
     for (const { mirror, snapshot } of [
       // Stored expiry passed; the snapshot's drifted expiry would extend it.
       {
@@ -1065,8 +1226,8 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
             sql.startsWith("SELECT * FROM community.catalog_delivery_prepares")
           )
             return { rows: [mirror, stored(live, "release_requested", 1)] };
-          if (sql.startsWith("SELECT ordinal,media_id"))
-            return { rows: [member0] };
+          if (sql.startsWith("SELECT intent_id,ordinal,media_id"))
+            return storedMembers(values);
           return { rows: [] };
         }),
       } as unknown as Parameters<typeof synchronizeCatalogDeliveryIntents>[0];
@@ -1089,8 +1250,7 @@ describe("F3: an intent that would revive its tombstone is refused alone", () =>
       );
       // The other intent is applied; nothing of the drifted snapshot is, and
       // the absence tombstone no longer counts it as present.
-      expect(writes[0]!.values.slice(0, 3)).toEqual([live, "cancelled", 2]);
-      expect(writes.some(({ values }) => values[0] === drifted)).toBe(false);
+      expect(lifecycle(writes[0]!)).toEqual([[live, "cancelled", 2]]);
       const absence = writes.at(-1)!;
       expect(absence.sql).toContain("observed_live=false");
       expect(absence.values[0]).toEqual([live]);

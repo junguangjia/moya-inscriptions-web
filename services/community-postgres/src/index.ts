@@ -36,6 +36,16 @@ export {
   inspectCatalogDelivery,
   readCatalogDeliveryProjection,
 } from "./publishing/catalog-delivery-intents.js";
+// catalog-scale-v1 (W3): the one ceiling of a complete Catalog snapshot,
+// shared by the worker's cursor reads and the store's bounds.
+export {
+  CATALOG_SNAPSHOT_FETCH_ROWS,
+  CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS,
+  CATALOG_SNAPSHOT_MAX_SOURCES,
+  CATALOG_SNAPSHOT_WARN_RATIO,
+  nearCatalogSnapshotCeiling,
+  readCatalogSnapshotCursor,
+} from "./publishing/catalog-snapshot-ceiling.js";
 // unified-media-pipeline-v1: the recorded form of rendition recipe
 // identities (the registry itself lives with the processor) and the D7 hold.
 export {

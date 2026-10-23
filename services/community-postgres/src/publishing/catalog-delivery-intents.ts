@@ -7,6 +7,7 @@ import {
 } from "@moya/contracts/internal/editorial";
 
 import { writeTransaction, nowParam, type PublishingDb } from "./db.js";
+import { CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS } from "./catalog-snapshot-ceiling.js";
 
 const terminal = (state: string) =>
   ["cancelled", "superseded", "expired", "withdrawn"].includes(state);
@@ -37,6 +38,15 @@ const terminal = (state: string) =>
  *   state_version regression) is refused too: none of it is applied and its
  *   local row keeps or becomes a tombstone, exactly like an absent intent.
  * All three lists are returned for the caller's log.
+ *
+ * Only the mirror rows a pass can change are read: each snapshot intent's
+ * row (a tombstone included, so it is never revived) and each row still
+ * observed live (absence ends it). The stored members of every snapshot
+ * intent are read in one query. Only the rows that change (a new or advanced
+ * state, a new intent, an absent live one) are locked, by the one statement
+ * of each kind that writes them, so a pass that changes nothing writes only
+ * the watermark and blocks no readiness or release inspection
+ * (catalog-scale-v1 W4). The bounds are the snapshot ceiling's (W3).
  */
 export const synchronizeCatalogDeliveryIntents = async (
   db: PublishingDb,
@@ -50,12 +60,13 @@ export const synchronizeCatalogDeliveryIntents = async (
 }> => {
   if (
     intents !== undefined &&
-    (!Array.isArray(intents) || intents.length > 10_000)
+    (!Array.isArray(intents) ||
+      intents.length > CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS)
   )
     throw new TypeError("Catalog intent snapshot exceeds its bound");
   if (
     !Array.isArray(undecodableIntentIds) ||
-    undecodableIntentIds.length > 20_000 ||
+    undecodableIntentIds.length > CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS ||
     undecodableIntentIds.some((id) => typeof id !== "string")
   )
     throw new TypeError("Catalog undecodable intent list invalid");
@@ -94,6 +105,14 @@ export const synchronizeCatalogDeliveryIntents = async (
   // Unconfigured/incomplete private source is not an authoritative empty set.
   if (intents === undefined)
     return { refused: [], mismatched: [], undecodable: [] };
+  type Members = {
+    ordinal: number;
+    media_id: string;
+    object_key: string;
+    source_sha256: string;
+    width: number;
+    height: number;
+  }[];
   const existing = new Map(
     (
       await db.query<{
@@ -110,12 +129,39 @@ export const synchronizeCatalogDeliveryIntents = async (
         observed_live: boolean;
         expires_at: Date;
         observed_at: Date;
+        ended_at: Date | null;
       }>(
-        "SELECT * FROM community.catalog_delivery_prepares ORDER BY intent_id FOR UPDATE",
+        "SELECT * FROM community.catalog_delivery_prepares WHERE observed_live OR intent_id=ANY($1::uuid[]) ORDER BY intent_id",
+        [parsed.map(({ intentId }) => intentId)],
       )
     ).rows.map((row) => [row.intent_id, row]),
   );
+  const storedMembers = new Map<string, Members>();
+  const withMembers = parsed
+    .filter((intent) => existing.has(intent.intentId) && intent.media.length)
+    .map(({ intentId }) => intentId);
+  if (withMembers.length)
+    for (const row of (
+      await db.query<Members[number] & { intent_id: string }>(
+        "SELECT intent_id,ordinal,media_id,object_key,source_sha256,width,height FROM community.catalog_delivery_media_refs WHERE intent_id=ANY($1::uuid[]) ORDER BY intent_id,ordinal",
+        [withMembers],
+      )
+    ).rows) {
+      const list = storedMembers.get(row.intent_id) ?? [];
+      list.push({
+        ordinal: row.ordinal,
+        media_id: row.media_id,
+        object_key: row.object_key,
+        source_sha256: row.source_sha256,
+        width: row.width,
+        height: row.height,
+      });
+      storedMembers.set(row.intent_id, list);
+    }
   const accepted: string[] = [];
+  const advanced: { intentId: string; state: string; version: number }[] = [];
+  const added: { intent: CatalogProcessingIntent; state: string }[] = [];
+  const addedMembers: { intentId: string; members: Members }[] = [];
   for (const intent of [...parsed].sort((a, b) =>
     a.intentId.localeCompare(b.intentId),
   )) {
@@ -125,7 +171,7 @@ export const synchronizeCatalogDeliveryIntents = async (
       new Date(intent.expiresAt).getTime() <= now.getTime()
         ? "expired"
         : intent.state;
-    const members = intent.media.map((item) => ({
+    const members: Members = intent.media.map((item) => ({
       ordinal: item.ordinal,
       media_id: item.mediaId,
       object_key: item.objectKey,
@@ -135,19 +181,7 @@ export const synchronizeCatalogDeliveryIntents = async (
     }));
     const stored =
       previous && intent.media.length
-        ? (
-            await db.query<{
-              ordinal: number;
-              media_id: string;
-              object_key: string;
-              source_sha256: string;
-              width: number;
-              height: number;
-            }>(
-              "SELECT ordinal,media_id,object_key,source_sha256,width,height FROM community.catalog_delivery_media_refs WHERE intent_id=$1 ORDER BY ordinal",
-              [intent.intentId],
-            )
-          ).rows
+        ? (storedMembers.get(intent.intentId) ?? [])
         : [];
     // A prepared identity (header and stored media) is immutable. A snapshot
     // that disagrees with it is skipped alone, before any lifecycle check:
@@ -202,49 +236,90 @@ export const synchronizeCatalogDeliveryIntents = async (
       rejected.push(intent.intentId);
       continue;
     }
-    if (previous) {
-      await db.query(
-        `UPDATE community.catalog_delivery_prepares
-        SET source_state=$2,source_state_version=$3,observed_at=$4::timestamptz,
-          ended_at=CASE WHEN $5::boolean THEN COALESCE(ended_at,$4::timestamptz) ELSE ended_at END,
-          updated_at=$4::timestamptz WHERE intent_id=$1`,
-        [intent.intentId, state, intent.stateVersion, at, terminal(state)],
-      );
-    } else {
-      await db.query(
-        `INSERT INTO community.catalog_delivery_prepares
-        (intent_id,cms_document_id,catalog_id,draft_revision,draft_fingerprint,manifest_sha256,
-         recipe_manifest_sha256,media_count,source_state,source_state_version,expires_at,observed_at,
-         ended_at,created_at,updated_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::timestamptz,$12::timestamptz,
-          CASE WHEN $13::boolean THEN $12::timestamptz ELSE NULL END,$12::timestamptz,$12::timestamptz)`,
-        [
-          intent.intentId,
-          intent.documentId,
-          intent.catalogId,
-          intent.revision,
-          intent.fingerprint,
-          intent.manifestSha256,
-          intent.recipeManifestSha256,
-          intent.mediaCount,
-          state,
-          intent.stateVersion,
-          intent.expiresAt,
-          at,
-          terminal(state),
-        ],
-      );
-    }
+    // An unchanged row (same state and version, and ended once terminal) is
+    // neither locked nor written: only what changes is.
+    if (
+      previous &&
+      (state !== previous.source_state ||
+        intent.stateVersion !== previous.source_state_version ||
+        (terminal(state) && !previous.ended_at))
+    )
+      advanced.push({
+        intentId: intent.intentId,
+        state,
+        version: intent.stateVersion,
+      });
+    if (!previous) added.push({ intent, state });
     if (intent.media.length && !stored.length)
-      await db.query(
-        `INSERT INTO community.catalog_delivery_media_refs
-        (intent_id,ordinal,media_id,object_key,source_sha256,width,height)
-        SELECT $1::uuid,m.ordinal,m.media_id,m.object_key,m.source_sha256,m.width,m.height
-        FROM jsonb_to_recordset($2::jsonb) AS m(ordinal integer,media_id text,object_key text,
-          source_sha256 text,width integer,height integer)`,
-        [intent.intentId, JSON.stringify(members)],
-      );
+      addedMembers.push({ intentId: intent.intentId, members });
     accepted.push(intent.intentId);
+  }
+  // Each statement below locks only the rows it changes; the sync is the
+  // only writer of these rows, and the advisory lock above serializes it.
+  if (advanced.length)
+    await db.query(
+      `UPDATE community.catalog_delivery_prepares p
+      SET source_state=c.state,source_state_version=c.version,observed_at=$5::timestamptz,
+        ended_at=CASE WHEN c.ended THEN COALESCE(p.ended_at,$5::timestamptz) ELSE p.ended_at END,
+        updated_at=$5::timestamptz
+      FROM unnest($1::uuid[],$2::text[],$3::integer[],$4::boolean[]) AS c(intent_id,state,version,ended)
+      WHERE p.intent_id=c.intent_id`,
+      [
+        advanced.map(({ intentId }) => intentId),
+        advanced.map(({ state }) => state),
+        advanced.map(({ version }) => version),
+        advanced.map(({ state }) => terminal(state)),
+        at,
+      ],
+    );
+  if (added.length)
+    await db.query(
+      `INSERT INTO community.catalog_delivery_prepares
+      (intent_id,cms_document_id,catalog_id,draft_revision,draft_fingerprint,manifest_sha256,
+       recipe_manifest_sha256,media_count,source_state,source_state_version,expires_at,observed_at,
+       ended_at,created_at,updated_at)
+      SELECT c.intent_id,c.document_id,c.catalog_id,c.revision,c.fingerprint,c.manifest,
+        c.recipe,c.media_count,c.state,c.version,c.expires_at,$13::timestamptz,
+        CASE WHEN c.ended THEN $13::timestamptz ELSE NULL END,$13::timestamptz,$13::timestamptz
+      FROM unnest($1::uuid[],$2::integer[],$3::text[],$4::integer[],$5::text[],$6::text[],
+        $7::text[],$8::integer[],$9::text[],$10::integer[],$11::timestamptz[],$12::boolean[])
+        AS c(intent_id,document_id,catalog_id,revision,fingerprint,manifest,recipe,media_count,
+          state,version,expires_at,ended)`,
+      [
+        added.map(({ intent }) => intent.intentId),
+        added.map(({ intent }) => intent.documentId),
+        added.map(({ intent }) => intent.catalogId),
+        added.map(({ intent }) => intent.revision),
+        added.map(({ intent }) => intent.fingerprint),
+        added.map(({ intent }) => intent.manifestSha256),
+        added.map(({ intent }) => intent.recipeManifestSha256),
+        added.map(({ intent }) => intent.mediaCount),
+        added.map(({ state }) => state),
+        added.map(({ intent }) => intent.stateVersion),
+        added.map(({ intent }) => intent.expiresAt),
+        added.map(({ state }) => terminal(state)),
+        at,
+      ],
+    );
+  if (addedMembers.length) {
+    const rows = addedMembers.flatMap(({ intentId, members }) =>
+      members.map((member) => ({ intentId, ...member })),
+    );
+    await db.query(
+      `INSERT INTO community.catalog_delivery_media_refs
+      (intent_id,ordinal,media_id,object_key,source_sha256,width,height)
+      SELECT * FROM unnest($1::uuid[],$2::integer[],$3::text[],$4::text[],$5::text[],
+        $6::integer[],$7::integer[])`,
+      [
+        rows.map((row) => row.intentId),
+        rows.map((row) => row.ordinal),
+        rows.map((row) => row.media_id),
+        rows.map((row) => row.object_key),
+        rows.map((row) => row.source_sha256),
+        rows.map((row) => row.width),
+        rows.map((row) => row.height),
+      ],
+    );
   }
   // Absence from a complete authoritative snapshot is a local monotonic
   // tombstone, not a fabricated CMS state or permission with a freshness TTL.
@@ -302,7 +377,7 @@ const decodeCatalogPrepareRows = (
   rows: readonly Record<string, unknown>[],
   rejected: string[] | null,
 ): CatalogProcessingIntent[] => {
-  if (rows.length > 20_000)
+  if (rows.length > CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS)
     throw new TypeError("Catalog private source exceeds its bound");
   const groups = new Map<string, Record<string, unknown>[]>();
   for (const row of rows) {

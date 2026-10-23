@@ -17,6 +17,7 @@ import {
   catalogPrivateProcessingReferenceSql,
   synchronizeCatalogDeliveryIntents,
 } from "./catalog-delivery-intents.js";
+import { CATALOG_SNAPSHOT_MAX_SOURCES } from "./catalog-snapshot-ceiling.js";
 import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
 
 /*
@@ -48,7 +49,6 @@ export type CatalogAssetSyncPassCounts = CatalogAssetSyncCounts & {
   readonly mismatchedIntentIds?: readonly string[];
 };
 
-const MAX_SOURCES = 10_000;
 const MAX_BATCH = 1000;
 /**
  * How long a failed render waits before the sync tries it again. A pending
@@ -174,6 +174,16 @@ interface NamedSource {
   readonly height: number | null;
 }
 
+/**
+ * SQL: asset alias `a` is named by the pass, the typed `text[]` bind `$1`.
+ * Each statement of the sync joins or anti-joins that one array (never a
+ * temporary table, which the App role may not create, and never a DELETE),
+ * so a pass at the snapshot ceiling binds each id once per statement and
+ * sends complete source rows only for the assets it creates
+ * (catalog-scale-v1 W4).
+ */
+const NAMED_SQL = `EXISTS (SELECT 1 FROM unnest($1::text[]) AS named(id) WHERE named.id=a.id)`;
+
 /** CatalogMediaAssetPort.syncCatalogAssets */
 export const syncCatalogAssets = async (
   pool: Pool,
@@ -188,8 +198,17 @@ export const syncCatalogAssets = async (
   )
     throw new TypeError("A Catalog sync takes 1..1000 assets per pass");
   assertIdentities(options.renditions);
-  if (!Array.isArray(sources) || sources.length > MAX_SOURCES)
-    throw new TypeError("A Catalog sync takes at most 10,000 sources");
+  if (
+    !Array.isArray(sources) ||
+    sources.length > CATALOG_SNAPSHOT_MAX_SOURCES ||
+    (options.snapshot !== undefined &&
+      (!Array.isArray(options.snapshot.publishedSources) ||
+        options.snapshot.publishedSources.length >
+          CATALOG_SNAPSHOT_MAX_SOURCES))
+  )
+    throw new TypeError(
+      "A Catalog sync takes at most the snapshot ceiling of sources",
+    );
   const named = new Map<string, NamedSource>();
   let skipped = 0;
   for (const source of sources) {
@@ -216,9 +235,13 @@ export const syncCatalogAssets = async (
   const ids = [...named.keys()].sort();
   const at = nowParam(now);
   const publishedIds = options.snapshot
-    ? options.snapshot.publishedSources.map((source) =>
-        assetIdOf(source.mediaId, source.objectKey),
-      )
+    ? [
+        ...new Set(
+          options.snapshot.publishedSources.map((source) =>
+            assetIdOf(source.mediaId, source.objectKey),
+          ),
+        ),
+      ].sort()
     : ids;
   return writeTransaction(pool, async (db) => {
     const intents = options.snapshot
@@ -229,34 +252,79 @@ export const syncCatalogAssets = async (
           options.snapshot.undecodableIntentIds,
         )
       : undefined;
-    const created = await db.query(
-      `INSERT INTO community.catalog_media_assets(
-         id, media_id, source_object_key, source_sha256, source_width, source_height,
-         source_content_type, state, created_at, updated_at)
-       SELECT s.id, s.media_id, s.object_key, s.source_sha256, s.width, s.height,
-         s.source_content_type, 'pending', $2::timestamptz, $2::timestamptz
-       FROM (
-         SELECT s.* FROM jsonb_to_recordset($1::jsonb) AS s(
-           id text, media_id text, object_key text, source_sha256 text,
-           source_content_type text, width integer, height integer)
-         WHERE NOT EXISTS (SELECT 1 FROM community.catalog_media_assets a WHERE a.id=s.id)
-         ORDER BY s.id
-         LIMIT $3
-       ) s
-       ON CONFLICT (media_id, source_object_key) DO NOTHING
-       RETURNING id`,
-      [JSON.stringify([...named.values()]), at, options.limit],
-    );
+    // The first `limit` named ids without an asset (anti-join), then only
+    // their complete rows, as typed arrays.
+    const missing = (
+      await db.query<{ id: string }>(
+        `SELECT named.id FROM unnest($1::text[]) AS named(id)
+         WHERE NOT EXISTS (SELECT 1 FROM community.catalog_media_assets a WHERE a.id=named.id)
+         ORDER BY named.id
+         LIMIT $2`,
+        [ids, options.limit],
+      )
+    ).rows.map((row) => named.get(row.id)!);
+    const created = missing.length
+      ? await db.query(
+          `INSERT INTO community.catalog_media_assets(
+             id, media_id, source_object_key, source_sha256, source_width, source_height,
+             source_content_type, state, created_at, updated_at)
+           SELECT s.id, s.media_id, s.object_key, s.source_sha256, s.width, s.height,
+             s.source_content_type, 'pending', $8::timestamptz, $8::timestamptz
+           FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
+             $6::integer[], $7::integer[])
+             AS s(id, media_id, object_key, source_sha256, source_content_type, width, height)
+           ORDER BY s.id
+           ON CONFLICT (media_id, source_object_key) DO NOTHING
+           RETURNING id`,
+          [
+            missing.map((source) => source.id),
+            missing.map((source) => source.media_id),
+            missing.map((source) => source.object_key),
+            missing.map((source) => source.source_sha256),
+            missing.map((source) => source.source_content_type),
+            missing.map((source) => source.width),
+            missing.map((source) => source.height),
+            at,
+          ],
+        )
+      : { rowCount: 0 };
+    // Every existing asset row the statements below change is locked first,
+    // by one statement in id order: each row whose reference state flips and
+    // each unreadable source due for a retry. That is the sorted asset lock
+    // order readiness inspection and render recording take, so an inspection
+    // running beside this pass (no lock of every mirror row holds it back
+    // any more) waits for the pass or the pass for it, never each for the
+    // other (40P01). The statements below then wait on no asset row: only
+    // this pass writes reference state, and a row falls due only by a write
+    // older than the retry delay.
     await db.query(
-      `UPDATE community.catalog_media_assets
+      `SELECT count(*)::integer AS locked FROM (
+         SELECT a.id FROM community.catalog_media_assets a
+         LEFT JOIN unnest($3::text[]) AS published(id) ON published.id=a.id
+         WHERE (published.id IS NOT NULL) = (a.unreferenced_since IS NOT NULL)
+           OR (a.state='failed' AND a.failure_code='source_unreadable'
+             AND a.updated_at < $2::timestamptz - ${RETRY_DELAY_SQL}
+             AND ${NAMED_SQL})
+         ORDER BY a.id
+         FOR UPDATE OF a
+       ) changing`,
+      [ids, at, publishedIds],
+    );
+    // Re-referenced (join) and newly unreferenced (anti-join) assets, from
+    // the complete published list only: never from a partial one, which the
+    // snapshot reader refuses as a whole (null) before this is called.
+    await db.query(
+      `UPDATE community.catalog_media_assets a
        SET unreferenced_since=NULL, updated_at=$2::timestamptz
-       WHERE id=ANY($1::text[]) AND unreferenced_since IS NOT NULL`,
+       FROM unnest($1::text[]) AS published(id)
+       WHERE a.id=published.id AND a.unreferenced_since IS NOT NULL`,
       [publishedIds, at],
     );
     const unreferenced = await db.query(
-      `UPDATE community.catalog_media_assets
+      `UPDATE community.catalog_media_assets a
        SET unreferenced_since=$2::timestamptz, updated_at=$2::timestamptz
-       WHERE unreferenced_since IS NULL AND NOT (id=ANY($1::text[]))`,
+       WHERE a.unreferenced_since IS NULL
+         AND NOT EXISTS (SELECT 1 FROM unnest($1::text[]) AS published(id) WHERE published.id=a.id)`,
       [publishedIds, at],
     );
     // A named asset whose source was unreadable gets another render once the
@@ -265,13 +333,13 @@ export const syncCatalogAssets = async (
       `UPDATE community.catalog_media_assets a
        SET state='pending', failure_code=NULL, updated_at=$2::timestamptz
        FROM (
-         SELECT id FROM community.catalog_media_assets
-         WHERE id=ANY($1::text[])
-           AND state='failed' AND failure_code='source_unreadable'
-           AND updated_at < $2::timestamptz - ${RETRY_DELAY_SQL}
-         ORDER BY updated_at, id
+         SELECT a.id FROM community.catalog_media_assets a
+         WHERE a.state='failed' AND a.failure_code='source_unreadable'
+           AND a.updated_at < $2::timestamptz - ${RETRY_DELAY_SQL}
+           AND ${NAMED_SQL}
+         ORDER BY a.updated_at, a.id
          LIMIT $3
-         FOR UPDATE
+         FOR UPDATE OF a
        ) due
        WHERE a.id=due.id`,
       [ids, at, options.limit],
@@ -288,7 +356,7 @@ export const syncCatalogAssets = async (
          'queued', 0, $2::timestamptz, $2::timestamptz, $2::timestamptz
        FROM (
          SELECT a.id FROM community.catalog_media_assets a
-         WHERE a.id=ANY($1::text[])
+         WHERE ${NAMED_SQL}
            AND (a.state='pending' OR (a.state='ready' AND ${MISSING_IDENTITY_SQL}))
            AND NOT EXISTS (
              SELECT 1 FROM community.publishing_jobs j
@@ -322,7 +390,7 @@ export const syncCatalogAssets = async (
                  JOIN community.catalog_media_assets a ON a.id=f.subject_id
                  WHERE ${baseCatalogRenderJobSql("f")} AND f.state='failed'
                    AND ${endedAtSql("f")} < $2::timestamptz - ${RETRY_DELAY_SQL}
-                   AND a.id=ANY($1::text[])
+                   AND ${NAMED_SQL}
                    AND a.state='ready' AND ${MISSING_IDENTITY_SQL}
                    AND NOT EXISTS (
                      SELECT 1 FROM community.publishing_jobs o
