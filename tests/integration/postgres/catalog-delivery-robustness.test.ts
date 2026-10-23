@@ -982,4 +982,43 @@ describe("F3: a release committed after local expiry never wedges the sync", () 
       { ...live, observed_live: false, ended: true },
     ]);
   });
+
+  it("ends a mirror whose lease lapses with no CMS change, and refuses a later release", async () => {
+    const lapsed = "00000000-0000-4000-8000-0000000000f6";
+    const image = editorialImage(3000, 2000);
+    const sync = (when: Date, preparations: ReturnType<typeof intent>[]) =>
+      works().syncCatalogAssets([source(image)], when, {
+        limit: 100,
+        renditions: catalogSyncIdentities(),
+        snapshot: { observedAt: when, publishedSources: [], preparations },
+      } as unknown as Parameters<
+        PostgresWorkPublishingAdapter["syncCatalogAssets"]
+      >[2]);
+    const prepared = intent(lapsed, image, "prepared", 1, at(222), 11);
+    await sync(at(220), [prepared]);
+    const expired = {
+      intent_id: lapsed,
+      source_state: "expired",
+      source_state_version: 1,
+      observed_live: true,
+      ended: true,
+    };
+    expect(await prepares([lapsed])).toEqual([
+      { ...expired, source_state: "prepared", ended: false },
+    ]);
+    // The lease passes and the CMS changes nothing (same state_version): a
+    // pass that writes only what changes still ends the mirror.
+    const lapse = await sync(at(225), [prepared]);
+    expect(lapse.refusedIntentIds).toBeUndefined();
+    expect(await prepares([lapsed])).toEqual([expired]);
+    // A release the CMS commits after that expiry is refused and tombstoned,
+    // never applied.
+    const late = await sync(at(230), [
+      { ...prepared, state: "released", stateVersion: 2 },
+    ]);
+    expect(late.refusedIntentIds).toEqual([lapsed]);
+    expect(await prepares([lapsed])).toEqual([
+      { ...expired, observed_live: false },
+    ]);
+  });
 });

@@ -1,4 +1,7 @@
+import { createHash, randomUUID } from "node:crypto";
+
 import { prepareProductionBackend as prepareProductionBackendImplementation } from "@moya/backend-production";
+import { currentCatalogRecipePolicy } from "@moya/backend-production/internal/catalog-delivery";
 import { ProductionCosStorageUrlResolver } from "@moya/backend-production/internal/production-cos";
 import {
   openPublishingMedia,
@@ -6,29 +9,38 @@ import {
   openProductionPublishingStore,
 } from "@moya/backend-production/internal/publishing-config";
 import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
-import { CATALOG_SYNC_MAX_SOURCES } from "@moya/backend-production/internal/publishing-catalog";
+import {
+  CATALOG_PUBLISHED_PAIRS_MAX,
+  catalogPublicMembershipBucketsSql,
+  publishedCatalogPairsSql,
+} from "@moya/backend-production/internal/publishing-catalog";
 import { CatalogQueryUnavailableError } from "@moya/api";
 import {
   createBackendApplication,
   startBackendProcess,
 } from "@moya/backend-runtime";
 import {
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   assertPostgresStartupReady,
   CanonicalAuthoredArticleProjector,
   createPostgresPool,
   PostgresAuthoredArticleCatalogMediaResolver,
+  PostgresStartupError,
 } from "@moya/catalog-postgres";
 import {
   PostgresAuthorCommunityAdapter,
   PostgresWorkPublishingAdapter,
   PostgresNotificationAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
 } from "@moya/community-postgres";
 import {
   apiErrorSchema,
   articleAuthoringDocumentSchema,
   catalogDetailSchema,
   catalogPageSchema,
+  discoveryPageSchema,
 } from "@moya/contracts/schemas";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -37,6 +49,8 @@ import type {
   ArticleDetailRecord,
   AuthorCommunityPort,
   CatalogDetailProjection,
+  CommunityDiscoveryPort,
+  DiscoveryCardRecord,
   EditorialContentReadPort,
   PublishedAuthoredArticle,
 } from "@moya/api";
@@ -53,6 +67,8 @@ const productionStore = vi.hoisted(() => ({
 const database = vi.hoisted(() => ({
   published: true,
   mediaKey: `display/v1/media_${"a".repeat(32)}/${"b".repeat(64)}.webp`,
+  // Further published images of the Detail, each its own pair.
+  extraMedia: 0,
   snapshotObservedAt: new Date("2026-10-20T00:00:00.000Z"),
   snapshotClients: [] as { statements: string[]; released: boolean }[],
   snapshotsReleasedAtSync: null as boolean | null,
@@ -82,7 +98,15 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
       aliases: [],
       sourceCitations: [],
       representativeMedia: media,
-      media: [media],
+      media: [
+        media,
+        ...Array.from({ length: database.extraMedia }, (_, n) => ({
+          ...media,
+          id: `media-unit-extra-${n}` as MediaId,
+          position: n + 1,
+          isRepresentative: false,
+        })),
+      ],
     };
   };
   return {
@@ -111,6 +135,10 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
       }),
     })),
     assertPostgresStartupReady: vi.fn(async () => {}),
+    // catalog-scale-v1 W6: the Catalog grant checks are PostgreSQL I/O too;
+    // their pools and refusals are observed below.
+    assertCatalogPublicationScopeReady: vi.fn(async () => {}),
+    assertCatalogPrepareReaderReady: vi.fn(async () => {}),
     PostgresCatalogQueryAdapter: class
       extends actual.PostgresCatalogQueryAdapter
     {
@@ -134,13 +162,15 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
 
 // The community ledger check is read-only PostgreSQL I/O as well; the App-role
 // adapter is unused by these media compositions. The author adapter's
-// options (the profile rendition switch) are observed.
+// options (the profile rendition switch) and the App side of the Catalog
+// membership step (catalog-scale-v1 W8) are observed.
 vi.mock("@moya/community-postgres", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@moya/community-postgres")>();
   return {
     ...actual,
     verifyCommunityMigrationLedger: vi.fn(async () => {}),
+    catalogMembershipStore: vi.fn(actual.catalogMembershipStore),
     PostgresAuthorCommunityAdapter: vi.fn(function (
       ...args: ConstructorParameters<
         typeof actual.PostgresAuthorCommunityAdapter
@@ -265,6 +295,7 @@ afterEach(async () => {
     handles.clear();
     database.published = true;
     database.mediaKey = `display/v1/media_${"a".repeat(32)}/${"b".repeat(64)}.webp`;
+    database.extraMedia = 0;
     database.snapshotClients = [];
     database.snapshotsReleasedAtSync = null;
     vi.restoreAllMocks();
@@ -472,11 +503,12 @@ describe("non-Pilot production public media composition", () => {
   });
 
   // catalog-delivery-release-hardening-v1 (F9): the composed rendition-fact
-  // lookup reads the live CMS listing and the App delivery facts. Its failure
+  // lookup reads the live CMS pairs and the App delivery facts. Its failure
   // is Catalog unavailability for every reader that shares it (Catalog,
   // editorial Article and Collection, authored Article bodies, author cards):
-  // the documented 503, never a 500 INTERNAL_ERROR.
-  it("answers 503 for Catalog, editorial and authored Article reads when the rendition facts fail", async () => {
+  // the documented 503, never a 500 INTERNAL_ERROR. catalog-scale-v1 1A: the
+  // CMS read is the exact pair check, and an oversized batch is refused.
+  it("answers 503 for Catalog, editorial, authored Article and author-card reads when the rendition facts fail", async () => {
     const pools = vi.mocked(createPostgresPool).mock.results.length;
     const prepared = await prepareProductionBackend(environment);
     const [application] = vi
@@ -515,36 +547,69 @@ describe("non-Pilot production public media composition", () => {
       new Error("synthetic private connection terminated"),
       { code: "57P01" },
     );
-    const failures = [
+    const timedOut = Object.assign(new Error("synthetic statement timeout"), {
+      code: "57014",
+    });
+    const cmsFailure = (cause: Error) => () => {
+      cmsPool.query.mockImplementation(async (sql) => {
+        if (sql.includes("FROM catalog_media")) throw cause;
+        return { rows: [] };
+      });
+    };
+    const failures: {
+      readonly name: string;
+      readonly cause: unknown;
+      readonly arm: () => void;
+      /** The batch handed to the facts lookup (one live pair otherwise). */
+      readonly locators?: readonly { mediaId: MediaId; objectKey: string }[];
+      /** The reads that carry the failing batch (every read otherwise). */
+      readonly only?: "detail";
+    }[] = [
       {
-        name: "CMS listing refused",
+        name: "CMS pair check refused",
         cause: unreadable,
-        arm() {
-          cmsPool.query.mockImplementation(async (sql) => {
-            if (sql.includes("FROM catalog_media")) throw unreadable;
-            return { rows: [] };
-          });
-        },
+        arm: cmsFailure(unreadable),
       },
       {
-        name: "CMS listing incomplete",
-        cause: undefined,
+        name: "CMS pair check terminated",
+        cause: terminated,
+        arm: cmsFailure(terminated),
+      },
+      {
+        name: "CMS pair check timed out",
+        cause: timedOut,
+        arm: cmsFailure(timedOut),
+      },
+      {
+        // More distinct pairs than one exact check (and one App projection)
+        // accepts: refused before any read. Only a Detail carries that many.
+        name: "more than 10,000 pairs",
+        cause: TypeError,
+        locators: Array.from(
+          { length: CATALOG_PUBLISHED_PAIRS_MAX + 1 },
+          (_, n) => ({
+            mediaId: `media-unit-extra-${n}` as MediaId,
+            objectKey: database.mediaKey,
+          }),
+        ),
+        only: "detail",
         arm() {
-          cmsPool.query.mockImplementation(async (sql) => ({
-            rows: sql.includes("FROM catalog_media")
-              ? Array.from({ length: CATALOG_SYNC_MAX_SOURCES + 1 }, () => ({
-                  ...source,
-                }))
-              : [],
-          }));
+          database.extraMedia = CATALOG_PUBLISHED_PAIRS_MAX;
+          cmsPool.query.mockImplementation(async () => ({ rows: [] }));
+          appPool.query.mockImplementation(async () => ({ rows: [] }));
         },
       },
       {
         name: "App delivery facts unavailable",
         cause: terminated,
         arm() {
+          database.extraMedia = 0;
+          // Both cited images are published, so each read asks the App (a
+          // pair that is not live never reaches it).
           cmsPool.query.mockImplementation(async (sql) => ({
-            rows: sql.includes("FROM catalog_media") ? [source] : [],
+            rows: sql.includes("FROM catalog_media")
+              ? [source, { ...source, media_id: authoredMediaId }]
+              : [],
           }));
           appPool.query.mockImplementation(async (sql) => {
             if (sql.includes("community.catalog_media_assets"))
@@ -673,6 +738,41 @@ describe("non-Pilot production public media composition", () => {
       }),
       findCollection: async () => null,
     };
+    // Author cards over the same composed resolver: the feed, one card and an
+    // author's collection each show the published Catalog image.
+    const catalogCard: DiscoveryCardRecord = {
+      target: { type: "catalog", id: "catalog-unit-published" },
+      title: "Synthetic published projection",
+      aliases: [],
+      kind: "inscription",
+      authorId: null,
+      firstPublishedAt: "2026-10-20T00:00:00.000Z",
+      media: {
+        type: "catalog",
+        id: "media-unit-published" as MediaId,
+        objectKey: database.mediaKey,
+        width: 1200,
+        height: 800,
+      },
+    };
+    const discoveryPort: Pick<
+      CommunityDiscoveryPort,
+      "browse" | "card" | "collection"
+    > = {
+      browse: async () => ({
+        items: [catalogCard],
+        sequence: randomUUID(),
+        nextAfter: 1,
+        hasMore: false,
+      }),
+      card: async () => catalogCard,
+      collection: async (_owner, _viewer, _list, query) => ({
+        items: [catalogCard],
+        total: 1,
+        page: query.page,
+        pageSize: query.pageSize,
+      }),
+    };
     const listen = { host: "127.0.0.1", port: 0 };
     const catalogHandle = await startBackendProcess({
       closeResources: prepared.closeResources,
@@ -686,8 +786,10 @@ describe("non-Pilot production public media composition", () => {
         nodeEnv: "production",
         catalogQueryPort: application.catalogQueryPort!,
         communityIdentityPort: application.communityIdentityPort!,
-        // Editorial reads never touch the author port; the branch only needs it.
+        // Editorial and card reads never touch the author port; the branch
+        // only needs it.
         authorCommunityPort: {} as unknown as AuthorCommunityPort,
+        discoveryPort: discoveryPort as CommunityDiscoveryPort,
         storageUrlResolver: resolver,
         editorialContentPort: editorialPort,
       }),
@@ -695,30 +797,45 @@ describe("non-Pilot production public media composition", () => {
     handles.add(editorialHandle);
     const origin = (handle: BackendProcessHandle) =>
       `http://${handle.address.address}:${handle.address.port}`;
-    const editorial = `${origin(editorialHandle)}/v1/community/editorial`;
+    const community = `${origin(editorialHandle)}/v1/community`;
+    const editorial = `${community}/editorial`;
+    const cards = [
+      `${community}/discover`,
+      `${community}/content/catalog/catalog-unit-published/card`,
+      `${community}/authors/user-${"6".repeat(32)}/favorites`,
+    ];
     const reads = [
       `${origin(catalogHandle)}/v1/catalog`,
       `${origin(catalogHandle)}/v1/catalog/catalog-unit-published`,
       `${editorial}/articles`,
       `${editorial}/articles/${articleId}`,
       `${editorial}/articles/${authoredId}`,
+      ...cards,
     ];
+    // The card routes answer while the lookup does (nothing is live yet), so
+    // their 503 below is the failing lookup's.
+    for (const url of cards) expect((await fetch(url)).status, url).toBe(200);
 
     for (const failure of failures) {
       failure.arm();
-      const error = await resolver.catalogFacts!([
-        {
-          mediaId: "media-unit-published" as MediaId,
-          objectKey: database.mediaKey,
-        },
-      ]).then(
+      const cmsReads = cmsPool.query.mock.calls.length;
+      const error = await resolver.catalogFacts!(
+        failure.locators ?? [
+          {
+            mediaId: "media-unit-published" as MediaId,
+            objectKey: database.mediaKey,
+          },
+        ],
+      ).then(
         () => undefined,
         (rejected: unknown) => rejected,
       );
       expect(error, failure.name).toBeInstanceOf(CatalogQueryUnavailableError);
-      if (failure.cause !== undefined)
-        expect((error as Error).cause, failure.name).toBe(failure.cause);
-      for (const url of reads) {
+      if (failure.cause === TypeError) {
+        expect((error as Error).cause, failure.name).toBeInstanceOf(TypeError);
+        expect(cmsPool.query.mock.calls.length, failure.name).toBe(cmsReads);
+      } else expect((error as Error).cause, failure.name).toBe(failure.cause);
+      for (const url of failure.only === "detail" ? [reads[1]!] : reads) {
         const response = await fetch(url);
         expect(response.status, `${failure.name}: ${url}`).toBe(503);
         const body = apiErrorSchema.parse(await response.json());
@@ -727,6 +844,381 @@ describe("non-Pilot production public media composition", () => {
         expect(JSON.stringify(body)).not.toContain("incomplete");
       }
     }
+  });
+
+  // catalog-scale-v1 (Issue #323) 1B, W6: the Backend may run publication
+  // workers and the reconcile, and its publication authority reads the
+  // private prepare views, so startup checks the scoped reconcile's grants on
+  // the App pool and, only with a prepare database, the prepare reader's
+  // grants on that pool. Either refusal stops startup with every pool closed.
+  it("checks the Catalog scope and prepare grants on their own pools at startup and refuses without them", async () => {
+    const withPrepare = {
+      ...environment,
+      CATALOG_PREPARE_DATABASE_URL:
+        "postgresql://synthetic-prepare@127.0.0.1:1/synthetic_published",
+    };
+    const opened = (from: number) =>
+      vi
+        .mocked(createPostgresPool)
+        .mock.calls.slice(from)
+        .map(([config], index) => ({
+          url: config.connectionString,
+          pool: vi.mocked(createPostgresPool).mock.results[from + index]!
+            .value as unknown,
+        }));
+    const poolOf = (from: number, url: string) =>
+      opened(from).find((pool) => pool.url === url)!.pool;
+
+    let from = vi.mocked(createPostgresPool).mock.results.length;
+    const plain = await prepareProductionBackend(environment);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledWith(
+      poolOf(from, environment.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).not.toHaveBeenCalled();
+    await plain.closeResources();
+
+    from = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareProductionBackend(withPrepare);
+    expect(opened(from)).toHaveLength(3);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenLastCalledWith(
+      poolOf(from, withPrepare.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledWith(
+      poolOf(from, withPrepare.CATALOG_PREPARE_DATABASE_URL),
+    );
+    await prepared.closeResources();
+
+    for (const check of [
+      assertCatalogPublicationScopeReady,
+      assertCatalogPrepareReaderReady,
+    ]) {
+      const refusal = new PostgresStartupError("Synthetic missing grant");
+      vi.mocked(check).mockRejectedValueOnce(refusal);
+      database.end.mockClear();
+      from = vi.mocked(createPostgresPool).mock.results.length;
+      await expect(prepareProductionBackend(withPrepare)).rejects.toBe(refusal);
+      expect(opened(from)).toHaveLength(3);
+      expect(database.end).toHaveBeenCalledTimes(3);
+    }
+  });
+
+  // catalog-scale-v1 (Issue #323) 1A: rendition facts and rendition URLs ask
+  // the live published projection about the read's own exact pairs only, on
+  // the public read pool. A Catalog beyond the old 10,000-image listing reads
+  // like any other, no Catalog image reads nothing, and neither path ever
+  // touches the prepare pool, although the authority behind resolveKeys holds
+  // it.
+  it("reads facts and rendition URLs by exact pairs beyond 10,000 published images, never through the prepare pool", async () => {
+    const edge = {
+      ...environment,
+      CATALOG_PREPARE_DATABASE_URL:
+        "postgresql://synthetic-prepare@127.0.0.1:1/synthetic_published",
+      MEDIA_PUBLIC_DELIVERY: "edge",
+      MEDIA_PUBLISHED_ORIGIN: "https://published.synthetic.test",
+      MEDIA_PUBLISHED_COS_BUCKET: "synthetic-published-12345",
+      MEDIA_PUBLISHED_COS_REGION: "ap-guangzhou",
+      MEDIA_PUBLISHER_ROLE_ARN:
+        "qcs::cam::uin/12345:roleName/synthetic-publisher",
+      MEDIA_EDGE_ZONE_ID: "zone-synthetic",
+    };
+    const pools = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareProductionBackend(edge);
+    const [application] = vi
+      .mocked(createBackendApplication)
+      .mock.calls.at(-1)!;
+    type Rows = { rows: readonly unknown[] };
+    type PoolMock = {
+      query: ReturnType<
+        typeof vi.fn<
+          (sql: string, values?: readonly unknown[]) => Promise<Rows>
+        >
+      >;
+      connect: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
+    };
+    const created = vi
+      .mocked(createPostgresPool)
+      .mock.calls.slice(pools)
+      .map(([config], index) => ({
+        config,
+        pool: vi.mocked(createPostgresPool).mock.results[pools + index]!
+          .value as PoolMock,
+      }));
+    const poolOf = (url: string) =>
+      created.find(({ config }) => config.connectionString === url)!.pool;
+    const cmsPool = poolOf(edge.DATABASE_URL);
+    const appPool = poolOf(edge.APP_DATABASE_URL);
+    const preparePool = poolOf(edge.CATALOG_PREPARE_DATABASE_URL);
+    expect(new Set([cmsPool, appPool, preparePool]).size).toBe(3);
+    const resolver = application.storageUrlResolver!;
+
+    // The published projection holds more images than the old listing
+    // ceiling. The restriction form answers the rows whose media id and
+    // object key are both bound; any other read lists the whole Catalog (and
+    // would make the old read path 503).
+    const live = {
+      mediaId: "media-unit-published" as MediaId,
+      objectKey: database.mediaKey,
+    };
+    const withdrawn = {
+      mediaId: "media-unit-withdrawn" as MediaId,
+      objectKey: `display/v1/media_${"c".repeat(32)}/${"d".repeat(64)}.webp`,
+    };
+    const filler = Array.from(
+      // One more than the old 10,000-image listing ceiling.
+      { length: 10_001 },
+      (_, n) => ({
+        media_id: `media-unit-filler-${n}`,
+        object_key: `display/v1/media_${n.toString(16).padStart(32, "0")}/${"e".repeat(64)}.webp`,
+        width: 1200,
+        height: 800,
+      }),
+    );
+    let published = true;
+    const catalog = () => [
+      ...filler,
+      ...(published
+        ? [
+            {
+              media_id: live.mediaId,
+              object_key: live.objectKey,
+              width: 1200,
+              height: 800,
+            },
+          ]
+        : []),
+    ];
+    cmsPool.query.mockImplementation(async (sql, values) => {
+      if (sql.includes("community."))
+        throw new Error("CMS_CROSS_DATABASE_READ");
+      if (!sql.includes("FROM catalog_media")) return { rows: [] };
+      const [mediaIds, objectKeys] = values ?? [];
+      return {
+        rows:
+          Array.isArray(mediaIds) && Array.isArray(objectKeys)
+            ? catalog()
+                .filter(
+                  (row) =>
+                    mediaIds.includes(row.media_id) &&
+                    objectKeys.includes(row.object_key),
+                )
+                .map(({ media_id, object_key }) => ({ media_id, object_key }))
+            : catalog(),
+      };
+    });
+    // App: the live pair's asset and one published rendition of it.
+    const assetId = `catalog-asset-${createHash("md5")
+      .update(`${live.mediaId}:${live.objectKey}`)
+      .digest("hex")}`;
+    const renditionId = `media-rendition-${"7".repeat(32)}`;
+    const publishedKey = `v1/${"1".repeat(32)}/${"2".repeat(32)}/base/display.r1.webp`;
+    const projected: unknown[] = [];
+    appPool.query.mockImplementation(async (sql, values) => {
+      const [first] = values ?? [];
+      if (sql.includes('jsonb_to_recordset($1::jsonb) AS pair("mediaId"'))
+        projected.push(JSON.parse(first as string));
+      if (sql.startsWith("SELECT DISTINCT catalog_asset_id"))
+        return {
+          rows: (first as string[]).includes(renditionId)
+            ? [{ catalog_asset_id: assetId }]
+            : [],
+        };
+      if (sql.startsWith("SELECT id,media_id,source_object_key"))
+        return {
+          rows: (first as string[]).includes(assetId)
+            ? [
+                {
+                  id: assetId,
+                  media_id: live.mediaId,
+                  source_object_key: live.objectKey,
+                },
+              ]
+            : [],
+        };
+      return { rows: [] };
+    });
+    const publicationReads = vi.fn(async (sql: string) => ({
+      rows: sql.includes("FROM community.media_publications p")
+        ? [{ rendition_id: renditionId, object_key: publishedKey }]
+        : [],
+    }));
+    appPool.connect.mockImplementation(async () => ({
+      query: publicationReads,
+      release: vi.fn(),
+    }));
+    const cmsReads = () =>
+      cmsPool.query.mock.calls.map(([sql, values]) => ({ sql, values }));
+    // Startup checks are covered elsewhere; count the reads from here on.
+    cmsPool.query.mockClear();
+    appPool.query.mockClear();
+
+    // A work-only feed page names no Catalog image and reads neither
+    // database; a page with one Catalog card makes the one exact check.
+    const workItem = `media-item-${"9".repeat(32)}`;
+    const workCard: DiscoveryCardRecord = {
+      target: { type: "work", id: `work-${"9".repeat(32)}` },
+      title: "Synthetic work",
+      aliases: [],
+      kind: null,
+      authorId: `user-${"6".repeat(32)}`,
+      firstPublishedAt: "2026-10-20T00:00:00.000Z",
+      media: {
+        type: "work",
+        id: workItem,
+        src: `/api/community/publishing/media/${workItem}/display/base`,
+        width: 1200,
+        height: 800,
+      },
+    };
+    const catalogCard: DiscoveryCardRecord = {
+      target: { type: "catalog", id: "catalog-unit-published" },
+      title: "Synthetic published projection",
+      aliases: [],
+      kind: "inscription",
+      authorId: null,
+      firstPublishedAt: "2026-10-20T00:00:00.000Z",
+      media: {
+        type: "catalog",
+        id: live.mediaId,
+        objectKey: live.objectKey,
+        width: 1200,
+        height: 800,
+      },
+    };
+    let feed = [workCard];
+    const browse: Pick<CommunityDiscoveryPort, "browse"> = {
+      browse: async () => ({
+        items: feed,
+        sequence: randomUUID(),
+        nextAfter: feed.length,
+        hasMore: false,
+      }),
+    };
+    const feedHandle = await startBackendProcess({
+      listen: { host: "127.0.0.1", port: 0 },
+      requestListener: createBackendApplication({
+        nodeEnv: "production",
+        catalogQueryPort: application.catalogQueryPort!,
+        communityIdentityPort: application.communityIdentityPort!,
+        // Feed reads never touch the author port; the branch only needs it.
+        authorCommunityPort: {} as unknown as AuthorCommunityPort,
+        discoveryPort: browse as CommunityDiscoveryPort,
+        storageUrlResolver: resolver,
+      }),
+    });
+    handles.add(feedHandle);
+    const discover = `http://${feedHandle.address.address}:${feedHandle.address.port}/v1/community/discover`;
+    const connects = [cmsPool, appPool].map(
+      (pool) => pool.connect.mock.calls.length,
+    );
+    const workOnly = await fetch(discover);
+    expect(workOnly.status).toBe(200);
+    expect(
+      discoveryPageSchema
+        .parse(await workOnly.json())
+        .items.map(({ target }) => target),
+    ).toEqual([workCard.target]);
+    expect(cmsPool.query).not.toHaveBeenCalled();
+    expect(appPool.query).not.toHaveBeenCalled();
+    expect(
+      [cmsPool, appPool].map((pool) => pool.connect.mock.calls.length),
+    ).toEqual(connects);
+    feed = [workCard, catalogCard];
+    expect((await fetch(discover)).status).toBe(200);
+    expect(cmsReads()).toEqual([
+      {
+        sql: publishedCatalogPairsSql,
+        values: [[live.mediaId], [live.objectKey]],
+      },
+    ]);
+    cmsPool.query.mockClear();
+    appPool.query.mockClear();
+    projected.length = 0;
+
+    // No Catalog image: neither database is read.
+    expect(await resolver.catalogFacts!([])).toEqual(new Map());
+    expect(cmsPool.query).not.toHaveBeenCalled();
+    expect(appPool.query).not.toHaveBeenCalled();
+
+    // Facts: one exact check of the de-duplicated pairs; only the live pair
+    // reaches the App projection.
+    expect(await resolver.catalogFacts!([live, live, withdrawn])).toEqual(
+      new Map(),
+    );
+    expect(cmsReads()).toEqual([
+      {
+        sql: publishedCatalogPairsSql,
+        values: [
+          [live.mediaId, withdrawn.mediaId],
+          [live.objectKey, withdrawn.objectKey],
+        ],
+      },
+    ]);
+    expect(projected).toEqual([[live]]);
+    // Nothing live: the App is not asked.
+    expect(await resolver.catalogFacts!([withdrawn])).toEqual(new Map());
+    expect(projected).toHaveLength(1);
+    // A Detail of exactly 10,000 images names its representative image
+    // twice: each live pair reaches the App projection once, within its bound.
+    const detail = Array.from(
+      { length: CATALOG_PUBLISHED_PAIRS_MAX },
+      (_, n) => ({
+        mediaId: `media-unit-many-${n}` as MediaId,
+        objectKey: live.objectKey,
+      }),
+    );
+    cmsPool.query.mockImplementationOnce(async (_sql, values) => ({
+      rows: (values![0] as string[]).map((media_id) => ({
+        media_id,
+        object_key: live.objectKey,
+      })),
+    }));
+    expect(await resolver.catalogFacts!([detail[0]!, ...detail])).toEqual(
+      new Map(),
+    );
+    expect(projected.at(-1)).toEqual(detail);
+
+    // Rendition URLs: the App names the asset, the same exact check confirms
+    // its pair is published now.
+    const origin = edge.MEDIA_PUBLISHED_ORIGIN;
+    expect(await resolver.resolveKeys!([renditionId])).toEqual(
+      new Map([[renditionId, `${origin}/${publishedKey}`]]),
+    );
+    expect(cmsReads().at(-1)).toEqual({
+      sql: publishedCatalogPairsSql,
+      values: [[live.mediaId], [live.objectKey]],
+    });
+    // A key with no Catalog asset reads nothing from the CMS.
+    const before = cmsPool.query.mock.calls.length;
+    expect(
+      await resolver.resolveKeys!([`media-rendition-${"8".repeat(32)}`]),
+    ).toEqual(new Map());
+    expect(cmsPool.query).toHaveBeenCalledTimes(before);
+    // Withdrawn from the CMS while its App publication is still published:
+    // the next read resolves nothing and reads no publication.
+    published = false;
+    const publications = publicationReads.mock.calls.length;
+    expect(await resolver.resolveKeys!([renditionId])).toEqual(new Map());
+    expect(publicationReads).toHaveBeenCalledTimes(publications);
+    published = true;
+
+    // The public reads themselves succeed at this Catalog size.
+    const handle = await startBackendProcess({
+      closeResources: prepared.closeResources,
+      listen: { host: "127.0.0.1", port: 0 },
+      requestListener: prepared.requestListener,
+    });
+    handles.add(handle);
+    const base = `http://${handle.address.address}:${handle.address.port}`;
+    for (const path of ["/v1/catalog", "/v1/catalog/catalog-unit-published"])
+      expect((await fetch(`${base}${path}`)).status, path).toBe(200);
+
+    // Every CMS read was the exact check; nothing listed the Catalog.
+    for (const { sql } of cmsReads())
+      expect(sql).toBe(publishedCatalogPairsSql);
+    expect(preparePool.query).not.toHaveBeenCalled();
+    expect(preparePool.connect).not.toHaveBeenCalled();
   });
 });
 
@@ -1089,6 +1581,9 @@ describe("Work publishing composition", () => {
             sources: [],
             publishedSources: [],
             observedAt: database.snapshotObservedAt,
+            // The policy the render order and grace follow (W9/W10).
+            recipeManifestSha256:
+              currentCatalogRecipePolicy().recipeManifestSha256,
           });
           expect(database.snapshotClients).toHaveLength(1);
           expect(database.snapshotClients[0]?.statements[0]).toBe(
@@ -1142,6 +1637,190 @@ describe("Work publishing composition", () => {
     },
     15_000,
   );
+
+  // catalog-scale-v1 (W8 in the media worker, here for the embedded
+  // Development worker): wherever the Backend runs the Catalog sync and the
+  // scoped reconcile, it also runs the per-minute membership step that marks
+  // the reconcile's dirty assets (takedowns between syncs, a passed lease),
+  // on the App pool, from the published read pool.
+  it("Development runs the Catalog membership step beside the sync, on the App pool", async () => {
+    quietQueue();
+    const membership = {
+      readCatalogMembershipState: vi.fn(async () => ({
+        public: null,
+        private: null,
+      })),
+      readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+      readCatalogMembershipHolds: vi.fn(async () => []),
+      applyCatalogMembership: vi.fn(async () => ({
+        public: 0,
+        private: 0,
+        boundaries: 0,
+      })),
+    };
+    vi.mocked(catalogMembershipStore).mockReturnValueOnce(membership);
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const from = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareProductionBackend({
+      ...local,
+      ...publishingKeys,
+    });
+    const poolOf = (url: string) =>
+      vi.mocked(createPostgresPool).mock.results[
+        from +
+          vi
+            .mocked(createPostgresPool)
+            .mock.calls.slice(from)
+            .findIndex(([config]) => config.connectionString === url)
+      ]!.value as {
+        connect: ReturnType<typeof vi.fn>;
+      };
+    try {
+      expect(catalogMembershipStore).toHaveBeenCalledTimes(1);
+      expect(catalogMembershipStore).toHaveBeenCalledWith(
+        poolOf(local.APP_DATABASE_URL),
+      );
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1),
+      );
+      // The published pool's aggregate, with no prepare reader here: no
+      // private side.
+      expect(
+        (membership.applyCatalogMembership.mock.calls[0] as unknown[])[0],
+      ).toMatchObject({
+        public: { count: 0, sum: "0", diff: { buckets: [], members: [] } },
+        private: null,
+      });
+      const clients = (await Promise.all(
+        poolOf(local.DATABASE_URL).connect.mock.results.map(
+          (result) => result.value as Promise<unknown>,
+        ),
+      )) as { query: ReturnType<typeof vi.fn> }[];
+      expect(
+        clients.some((client) =>
+          client.query.mock.calls.some(
+            ([sql]) => sql === catalogPublicMembershipBucketsSql,
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      await prepared.closeResources();
+    }
+  });
+
+  // The step follows the scoped reconcile, not the sync, as in the media
+  // worker (one condition for both there). Without CMS_MEDIA_DIR the
+  // embedded Backend runs no Catalog sync and no render, but its publication
+  // lanes still reconcile with the Catalog authority on the published read
+  // pool, so the step still marks takedowns and a passed lease rather than
+  // leaving them to the sweep alone.
+  it("Development without CMS_MEDIA_DIR still runs the Catalog membership step beside the scoped reconcile, with no sync", async () => {
+    const queue = quietQueue();
+    const membership = {
+      readCatalogMembershipState: vi.fn(async () => ({
+        public: null,
+        private: null,
+      })),
+      readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+      readCatalogMembershipHolds: vi.fn(async () => []),
+      applyCatalogMembership: vi.fn(async () => ({
+        public: 0,
+        private: 0,
+        boundaries: 0,
+      })),
+    };
+    vi.mocked(catalogMembershipStore).mockReturnValueOnce(membership);
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const prepared = await prepareProductionBackend({
+      ...local,
+      CMS_MEDIA_DIR: undefined,
+      ...publishingKeys,
+    });
+    try {
+      expect(catalogMembershipStore).toHaveBeenCalledTimes(1);
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1),
+      );
+      // The publication lanes (the scoped reconcile's) run their maintenance.
+      await vi.waitFor(() =>
+        expect(
+          PostgresMediaPublicationAdapter.prototype.hasRegisteredPublications,
+        ).toHaveBeenCalled(),
+      );
+      expect(queue.catalogSync).not.toHaveBeenCalled();
+    } finally {
+      await prepared.closeResources();
+    }
+  });
+
+  // catalog-scale-v1 (W4 in the media worker, here for the embedded
+  // Development worker): the Catalog sync runs detached from the tick.
+  it("Development keeps claiming while a long Catalog sync runs, and closes the pools only after it ends", async () => {
+    const queue = quietQueue();
+    let finish: (() => void) | undefined;
+    queue.catalogSync.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              referenced: 0,
+              skipped: 0,
+              created: 0,
+              unreferenced: 0,
+              enqueued: 0,
+            });
+        }),
+    );
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const prepared = await prepareProductionBackend({
+      ...local,
+      ...publishingKeys,
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      const [handlers] = vi
+        .mocked(createPublishingJobHandlers)
+        .mock.calls.at(-1)!;
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(queue.catalogSync).toHaveBeenCalledTimes(1),
+      );
+      // The sync has not returned, and the embedded media worker (not only
+      // the publication lanes on the same queue) still claims, poll after
+      // poll.
+      const ownClaims = () =>
+        queue.claim.mock.calls.filter(
+          ([options], call) =>
+            queue.claim.mock.contexts[call] === handlers.port &&
+            options.kinds?.includes("catalog_render"),
+        ).length;
+      await vi.waitFor(() => expect(ownClaims()).toBeGreaterThanOrEqual(2), {
+        timeout: 5_000,
+      });
+      let closed = false;
+      closing = prepared.closeResources().then(() => {
+        closed = true;
+      });
+      await pause(100);
+      expect(closed).toBe(false);
+      expect(database.end).not.toHaveBeenCalled();
+      finish!();
+      await closing;
+      expect(database.end).toHaveBeenCalledTimes(2);
+      expect(queue.catalogSync).toHaveBeenCalledTimes(1);
+    } finally {
+      finish?.();
+      await (closing ?? prepared.closeResources());
+    }
+  }, 15_000);
 
   it.each(["development", "production"] as const)(
     "%s shares one upload registry between upload and worker session expiry",
@@ -1345,6 +2024,10 @@ describe("Work publishing composition", () => {
         (_, cell) =>
           `media-rendition-${(cell + 100).toString(16).padStart(32, "0")}`,
       );
+      // The zoom reads bind (record, media id or null); the exact pair check
+      // of the rendition facts binds arrays of media ids and object keys.
+      const names = (value: unknown, wanted: string) =>
+        Array.isArray(value) ? value.includes(wanted) : value === wanted;
       const cmsQuery = vi.fn(
         async (sql: string, values?: readonly unknown[]) => {
           if (sql.includes("community."))
@@ -1353,7 +2036,11 @@ describe("Work publishing composition", () => {
             rows:
               liveMedia &&
               sql.includes("FROM catalog_media") &&
-              (values?.[1] == null || values[1] === "media-unit-published")
+              (Array.isArray(values?.[0])
+                ? names(values[0], "media-unit-published") &&
+                  names(values[1], database.mediaKey)
+                : values?.[1] == null ||
+                  names(values[1], "media-unit-published"))
                 ? [
                     {
                       media_id: "media-unit-published",
@@ -1448,6 +2135,41 @@ describe("Work publishing composition", () => {
         expect(cmsQuery).not.toHaveBeenCalled();
         expect(appQuery).not.toHaveBeenCalled();
       }
+      // The rendition facts ask the same CMS, on the pool itself, about the
+      // exact pair only; a pair that is not live never reaches the App.
+      const poolQuery = (pool: unknown) =>
+        (
+          pool as {
+            query: ReturnType<
+              typeof vi.fn<
+                (
+                  sql: string,
+                  values?: readonly unknown[],
+                ) => Promise<{ rows: readonly unknown[] }>
+              >
+            >;
+          }
+        ).query;
+      poolQuery(catalogPool).mockImplementation(cmsQuery);
+      const projections = () =>
+        poolQuery(appPool).mock.calls.filter(([sql]) =>
+          sql.includes("community.catalog_media_assets"),
+        );
+      const pair = { mediaId, objectKey: database.mediaKey };
+      liveMedia = true;
+      const cmsReads = cmsQuery.mock.calls.length;
+      await application.storageUrlResolver!.catalogFacts!([pair]);
+      expect(cmsQuery.mock.calls.slice(cmsReads)).toEqual([
+        [publishedCatalogPairsSql, [[mediaId], [database.mediaKey]]],
+      ]);
+      expect(projections().map(([, values]) => values)).toEqual([
+        [JSON.stringify([pair])],
+      ]);
+      liveMedia = false;
+      expect(
+        await application.storageUrlResolver!.catalogFacts!([pair]),
+      ).toEqual(new Map());
+      expect(projections()).toHaveLength(1);
       const renditionId = `media-rendition-${"7".repeat(32)}`;
       const named = await application.storageUrlResolver?.resolveKeys?.([
         renditionId,

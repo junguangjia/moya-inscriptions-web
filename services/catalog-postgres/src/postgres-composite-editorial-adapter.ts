@@ -80,25 +80,91 @@ interface AuthoredDetailRow extends QueryResultRow {
   updated_at: Date;
 }
 
-// Both sources are ordered and paged together. No full body is selected here.
-// With renditions, a staff cover also carries its rendition delivery facts.
-const indexSqlOf = (renditions: boolean) => `
+/*
+ * The Article index (catalog-scale-v1 S5). Both sources are filtered, ordered
+ * and paged together as Article rows, each staff row with its cover record id
+ * and cover alt; no full body and no media are read for them. The count is
+ * taken over these rows alone and never names the published media view. The
+ * page is cut first (`page`). Then `cover` reads that view once, restricted
+ * alone by the page's cover ids, gathered once from the page, and to
+ * representative images; the page's rows join those few rows, and the
+ * rendition delivery facts are joined for the page's rows only. After M1 (an
+ * unfenced security_barrier view) that restriction enters the view, so only
+ * the page's cover records' images are read, by index, however many Articles
+ * and covers exist (every image of each cover record: the representative
+ * flag is a filter there, not an index key). A fenced view (before M1, or
+ * after its down) is read once by the page statement, as by each PR #320
+ * statement, and no longer by the count. `cover` is materialized so that it
+ * is read once whatever join the planner picks: under a presentation filter
+ * on a small index (the filter is on the view's text cast of the column, so
+ * the planner uses a default selectivity) it can estimate the page at about
+ * one row, and a join to the view itself would then read the media again for
+ * each page row (the whole fenced view each time), as a LATERAL subquery
+ * would.
+ *
+ * Same rows as the PR #320 statements, which joined every Article to its
+ * cover before counting and paging: the publishing contract gives a media set
+ * exactly one representative image (editorialPublishSchema), so the left join
+ * keeps one row per Article, and cutting the page from the Articles is cutting
+ * it from the joined rows. Same columns in the same order and the same order
+ * of rows. A record outside that contract, with two representative images,
+ * joins two rows to each Article it covers (#320 counted and paged both).
+ * A page that holds such an Article fails closed (`oneCoverRowPerArticle`),
+ * as the Catalog reads do on that record (mapRepresentativeMediaRows): never
+ * an Article twice, never more items than pageSize. Like theirs, the failure
+ * is per page: a page without such an Article reads as before, and its total
+ * counts Articles (#320's counted the joined rows, one more per such
+ * Article).
+ */
+const articleRowsSql = `
 SELECT 'staff'::text AS source,a.article_id,a.presentation,a.title,a.subtitle,
   a.summary,a.section,a.issue,a.byline,a.first_published_at,a.published_at,a.updated_at,
   NULL::text AS owner_id,NULL::integer AS version,NULL::text AS cover_ref_id,
   NULL::jsonb AS cover_reference,NULL::text AS fingerprint,
-  cm.media_id,cm.object_key,CASE WHEN BTRIM(a.cover_alt)<>'' THEN a.cover_alt ELSE cm.alt_text END AS alt,cm.width,cm.height${renditions ? ",delivery.renditions,delivery.placeholder_color" : ""}
+  a.cover_catalog_id,a.cover_alt
 FROM public.article_entries a
-LEFT JOIN public.catalog_media cm ON cm.catalog_id=a.cover_catalog_id AND cm.is_representative${renditions ? catalogMediaDeliveryJoinSql("cm") : ""}
 UNION ALL
 SELECT 'authored'::text,a.article_id,'academic'::text,a.title,NULL::text,
   NULL::text,NULL::text,NULL::text,a.byline,a.first_published_at,a.published_at,a.updated_at,
   a.owner_id,a.version,a.cover_ref_id,a.cover_reference,a.fingerprint,
-  NULL::text,NULL::text,NULL::text,NULL::integer,NULL::integer${renditions ? ",NULL::jsonb,NULL::text" : ""}
+  NULL::text,NULL::text
 FROM community.published_authored_articles a`;
-const indexSql = indexSqlOf(false);
+const countSql = `SELECT COUNT(*)::text AS total FROM (${articleRowsSql}) a WHERE ($1::text IS NULL OR a.presentation=$1)`;
+const pageSqlOf = (renditions: boolean) => `
+WITH page AS MATERIALIZED (
+  SELECT * FROM (${articleRowsSql}) a WHERE ($1::text IS NULL OR a.presentation=$1)
+  ORDER BY a.published_at DESC,a.article_id DESC LIMIT $2::integer OFFSET $3::bigint
+),cover AS MATERIALIZED (
+  SELECT cm.catalog_id,cm.media_id,cm.object_key,cm.alt_text,cm.width,cm.height
+  FROM public.catalog_media cm
+  WHERE cm.is_representative
+    AND cm.catalog_id=ANY(ARRAY(SELECT x.cover_catalog_id FROM page x WHERE x.cover_catalog_id IS NOT NULL))
+)
+SELECT a.source,a.article_id,a.presentation,a.title,a.subtitle,
+  a.summary,a.section,a.issue,a.byline,a.first_published_at,a.published_at,a.updated_at,
+  a.owner_id,a.version,a.cover_ref_id,a.cover_reference,a.fingerprint,
+  cm.media_id,cm.object_key,CASE WHEN BTRIM(a.cover_alt)<>'' THEN a.cover_alt ELSE cm.alt_text END AS alt,cm.width,cm.height${renditions ? ",delivery.renditions,delivery.placeholder_color" : ""}
+FROM page a
+LEFT JOIN cover cm ON cm.catalog_id=a.cover_catalog_id${renditions ? catalogMediaDeliveryJoinSql("cm") : ""}
+ORDER BY a.published_at DESC,a.article_id DESC`;
 const nullText = (value: string | null): string | null =>
   value?.trim() ? value : null;
+
+/**
+ * One row per staff Article (article_id is unique among them); a second one
+ * is a second representative image of its cover record.
+ */
+const oneCoverRowPerArticle = (rows: readonly IndexRow[]): void => {
+  const staff = new Set<string>();
+  for (const row of rows) {
+    if (row.source !== "staff") continue;
+    if (staff.has(row.article_id))
+      throw new Error(
+        "Invalid PostgreSQL Article cover representative multiplicity",
+      );
+    staff.add(row.article_id);
+  }
+};
 
 const authoredSummary = (row: IndexRow): PublishedAuthoredArticleSummary => {
   if (row.owner_id === null || row.version === null || row.fingerprint === null)
@@ -173,7 +239,7 @@ export class PostgresCompositeEditorialAdapter implements EditorialContentReadPo
     private readonly authored: AuthoredArticleReadProjector,
     options: CatalogReaderOptions = {},
   ) {
-    this.pageSql = options.renditions === true ? indexSqlOf(true) : indexSql;
+    this.pageSql = pageSqlOf(options.renditions === true);
   }
 
   private async read<T>(run: (db: PoolClient) => Promise<T>): Promise<T> {
@@ -200,19 +266,18 @@ export class PostgresCompositeEditorialAdapter implements EditorialContentReadPo
   ): Promise<EditorialPageRecord<ArticleSummaryRecord>> {
     const raw = await this.read(async (db) => {
       const filter = query.presentation ?? null;
-      const count = await db.query<{ total: string }>(
-        `SELECT COUNT(*)::text AS total FROM (${indexSql}) a WHERE ($1::text IS NULL OR a.presentation=$1)`,
-        [filter],
-      );
-      const rows = await db.query<IndexRow>(
-        `SELECT * FROM (${this.pageSql}) a WHERE ($1::text IS NULL OR a.presentation=$1) ORDER BY a.published_at DESC,a.article_id DESC LIMIT $2::integer OFFSET $3::bigint`,
-        [filter, query.pageSize, (query.page - 1) * query.pageSize],
-      );
+      const count = await db.query<{ total: string }>(countSql, [filter]);
+      const rows = await db.query<IndexRow>(this.pageSql, [
+        filter,
+        query.pageSize,
+        (query.page - 1) * query.pageSize,
+      ]);
       return {
         rows: rows.rows,
         total: parseCatalogCount(count.rows[0]?.total),
       };
     });
+    oneCoverRowPerArticle(raw.rows);
     const items = await Promise.all(
       raw.rows.map((row) =>
         row.source === "authored"

@@ -2,9 +2,6 @@ import { parseAnalyticsConfiguration } from "./analytics/config.js";
 import { AnalyticsWorker } from "./analytics/worker.js";
 import { PostgresAnalyticsAdapter } from "@moya/community-postgres";
 import path from "node:path";
-import { createHash } from "node:crypto";
-const requireAssetHash = (mediaId: string, objectKey: string) =>
-  createHash("md5").update(`${mediaId}:${objectKey}`).digest("hex");
 
 import { PostgresNotificationAdapter } from "@moya/community-postgres";
 import { NotificationSignals } from "@moya/backend-runtime";
@@ -26,8 +23,9 @@ import {
   startBackendProcess,
 } from "@moya/backend-runtime";
 import {
-  asCatalogQueryUnavailableError,
   asPostgresOperationError,
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   assertPostgresStartupReady,
   checkPostgresReadiness,
   closePostgresPool,
@@ -51,9 +49,9 @@ import {
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
   resolveCatalogRenditionRead,
   verifyCatalogDeliveryReadable,
-  readCatalogDeliveryProjection,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { loadProductAccess } from "./access/product-access.js";
@@ -76,8 +74,10 @@ import {
 } from "./article-authoring/delegation-composition.js";
 import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
+  CATALOG_MEMBERSHIP_INTERVAL_MS,
   CATALOG_SYNC_INTERVAL_MS,
   createCatalogBlockRenderer,
+  createCatalogMembershipWatch,
   createCatalogRenderer,
   createCatalogSync,
   listPublishedCatalogSources,
@@ -114,7 +114,7 @@ import {
   parseCatalogPrepareDatabaseConfig,
   readCatalogSourceSnapshot,
   createCatalogPublicationAuthority,
-  catalogExpectedRenditions,
+  createCatalogDeliveryFacts,
   createCatalogReadiness,
   createCatalogPublishedRenditions,
   currentCatalogRecipePolicy,
@@ -435,34 +435,12 @@ export const prepareProductionBackend = async (
       ? { resolveKeys: (keys) => upstreamCatalogResolver.resolveKeys!(keys) }
       : {}),
     // Every reader shares this lookup (Catalog, editorial, authored Article
-    // bodies, author cards): a failed CMS listing or App delivery-fact read
-    // is Catalog unavailability, the documented 503, never a 500
-    // (catalog-delivery-release-hardening-v1 F9).
-    catalogFacts: async (locators) => {
-      try {
-        const live = await createCatalogPublicationAuthority(
-          pool,
-          null,
-          communityPool,
-        ).publishedAssetIds(
-          locators.map(
-            (p) => `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
-          ),
-        );
-        const approved = new Set(live);
-        return await readCatalogDeliveryProjection(
-          communityPool,
-          locators.filter((p) =>
-            approved.has(
-              `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
-            ),
-          ),
-          catalogExpectedRenditions,
-        );
-      } catch (error) {
-        throw asCatalogQueryUnavailableError(error);
-      }
-    },
+    // bodies, author cards): the exact check of only the read's own pairs on
+    // the public read pool, never the prepare pool and never a listing of
+    // the Catalog (catalog-scale-v1 1A). A failed or refused check or App
+    // delivery-fact read is Catalog unavailability, the documented 503,
+    // never a 500 (catalog-delivery-release-hardening-v1 F9).
+    catalogFacts: createCatalogDeliveryFacts(pool, communityPool),
   };
   const deliveryOptions = {
     enabled: () => allowsEdgeDelivery(publicationConfig),
@@ -529,6 +507,9 @@ export const prepareProductionBackend = async (
             ...(blocksRender && catalogSources ? { catalogBlocks: true } : {}),
             concurrency: publishing.concurrency,
             extraMaintenance: [
+              // Detached, as in the media worker (catalog-scale-v1 W4): a sync
+              // of a large Catalog never holds the tick and its job claims;
+              // stopping waits for it before the pools close.
               ...(catalogSources
                 ? [
                     {
@@ -541,9 +522,33 @@ export const prepareProductionBackend = async (
                         port: workPublishingPort,
                         ...(blocksRender ? { blocks: workPublishingPort } : {}),
                       }).run,
+                      detached: true,
                     },
                   ]
                 : []),
+              // catalog-scale-v1 W8, as in the media worker: wherever the
+              // scoped reconcile runs with a Catalog authority (here the
+              // publication lanes below, whenever publishing media is set,
+              // with the authority always on the published read pool), the
+              // per-minute membership step marks its dirty assets (a
+              // takedown between syncs or with no sync at all, a lease that
+              // passed), from the published read pool, on the App pool. It
+              // follows the reconcile, not the sync: without CMS_MEDIA_DIR
+              // there is no sync, and the reconcile would otherwise reach a
+              // takedown only on the sweep. One instance
+              // per process: its memory of its own last observation limits
+              // the marks.
+              {
+                label: "catalog membership",
+                intervalMs: CATALOG_MEMBERSHIP_INTERVAL_MS,
+                run: createCatalogMembershipWatch({
+                  published: pool,
+                  prepare: catalogPreparePool,
+                  policy: currentCatalogRecipePolicy().recipeManifestSha256,
+                  port: catalogMembershipStore(communityPool),
+                }).run,
+                detached: true,
+              },
               ...(profileRender
                 ? [
                     {
@@ -664,6 +669,14 @@ export const prepareProductionBackend = async (
     await verifyCommunityMigrationLedger(communityPool);
     // Discovery cards join the Catalog rendition delivery view (PR 1b).
     await verifyCatalogDeliveryReadable(communityPool);
+    // catalog-scale-v1 W6: the Backend may run publication workers and the
+    // reconcile, and its publication authority reads the prepare views: the
+    // scoped reconcile's tables and grants (App migration 20261024010000)
+    // and, where configured, the prepare reader's grant on both private
+    // views (CMS migration M2) are checked as in the media worker.
+    await assertCatalogPublicationScopeReady(communityPool);
+    if (catalogPreparePool)
+      await assertCatalogPrepareReaderReady(catalogPreparePool);
   } catch (error) {
     await closeResources();
     throw error;

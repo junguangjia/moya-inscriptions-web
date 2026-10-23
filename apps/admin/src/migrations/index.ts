@@ -9,6 +9,8 @@ import * as migration_20260922_014939_editorial_content from "./20260922_014939_
 import * as migration_20260922_015000_editorial_content_views from "./20260922_015000_editorial_content_views";
 import * as migration_20260922_021836_editorial_article_approvals from "./20260922_021836_editorial_article_approvals";
 import * as migration_20261020_160000_catalog_delivery_intents from "./20261020_160000_catalog_delivery_intents";
+import * as migration_20261023_000000_catalog_media_keyed_reads from "./20261023_000000_catalog_media_keyed_reads";
+import * as migration_20261024_000000_catalog_delivery_live_prepare from "./20261024_000000_catalog_delivery_live_prepare";
 
 export const migrations = [
   {
@@ -65,5 +67,15 @@ export const migrations = [
     up: migration_20261020_160000_catalog_delivery_intents.up,
     down: migration_20261020_160000_catalog_delivery_intents.down,
     name: "20261020_160000_catalog_delivery_intents",
+  },
+  {
+    up: migration_20261023_000000_catalog_media_keyed_reads.up,
+    down: migration_20261023_000000_catalog_media_keyed_reads.down,
+    name: "20261023_000000_catalog_media_keyed_reads",
+  },
+  {
+    up: migration_20261024_000000_catalog_delivery_live_prepare.up,
+    down: migration_20261024_000000_catalog_delivery_live_prepare.down,
+    name: "20261024_000000_catalog_delivery_live_prepare",
   },
 ];

@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CommunityConflictError } from "@moya/api";
+import { createCatalogPublicationAuthority } from "@moya/backend-production/internal/catalog-delivery";
 import {
   APPROVAL_KIND,
   parseCatalogMasterArguments,
@@ -58,11 +59,11 @@ import {
   resolveCatalogRenditionRead,
   runCommunityMigrations,
 } from "@moya/community-postgres";
-import { createCatalogPublicationAuthority } from "@moya/backend-production/internal/catalog-delivery";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { catalogAuthorityWithCopySet } from "../../unit/backend/catalog-copy-set.js";
 import { InMemoryCommunityIdentityPort } from "../../unit/backend/community-identity-fixture.js";
 
 import {
@@ -80,7 +81,11 @@ import type { CatalogSourceReader } from "@moya/backend-production/internal/cata
  * master custody and CHECKs (1–3), scheduling and the operator guard (5),
  * the block desired set, withdrawal budget and sweep-once (6–8), the
  * rollback guard (9), the Development relay lookup (14) and the live storage
- * bounds (25). Content is synthetic; no store or cloud I/O. The opt-in
+ * bounds (25); and (catalog-scale-v1 1B) that every change of an asset's
+ * block set marks the asset, so a scoped reconcile pass whose sweep share is
+ * empty still publishes a recorded set and withdraws a detached one, a
+ * self-master's (catalog-deep-zoom-self-master-v1) included.
+ * Content is synthetic; no store or cloud I/O. The opt-in
  * Development smoke (CATALOG_BLOCKS_SANDBOX_SMOKE=1) adds a private
  * temporary filesystem store and the local media sandbox image.
  */
@@ -211,7 +216,8 @@ interface CatalogImage {
   readonly height: number;
 }
 
-/** A published, rendered Catalog image (thumb, cover, display and viewer). */
+/** A published, rendered Catalog image (thumb, cover, display and viewer);
+ * with `mediaId`, a replacement image of that media id. */
 const catalogImage = async (
   options: {
     readonly width?: number;
@@ -1402,7 +1408,7 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
         t0,
       ],
     );
-    const authority = createCatalogPublicationAuthority(setup, null, app);
+    const authority = catalogAuthorityWithCopySet(setup, null, app);
     const selected = await authority.copyRenditionIds();
     expect(selected).not.toContain(malformedBlock);
     expect(selected.filter((id) => blockIds.includes(id)).sort()).toEqual(
@@ -2929,7 +2935,10 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
         image.mediaId as never,
       ),
     ).toEqual({ ...frame, keys: blockIds });
-    const authority = createCatalogPublicationAuthority(setup, null, app);
+    // The whole Catalog's copy set, the tests' oracle since catalog-scale-v1
+    // W7 (a scoped pass publishing a self-master's set is tested with the
+    // block-set marks below).
+    const authority = catalogAuthorityWithCopySet(setup, null, app);
     expect(
       (await authority.copyRenditionIds()).filter((id) =>
         blockIds.includes(id),
@@ -3511,5 +3520,420 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
     } finally {
       await rm(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe("catalog-scale-v1: a block set's change marks its asset for the scoped reconcile", () => {
+  const authority = createCatalogPublicationAuthority(
+    lazyPool(() => setup),
+    null,
+    lazyPool(() => app),
+  );
+  /** The real authority, planning only the assets with a pending mark: a
+   * scoped pass with an empty sweep share, so only a mark brings an asset
+   * into it. */
+  const markedOnly: typeof authority = {
+    ...authority,
+    async planScope(ids, options) {
+      const marked = new Set(
+        (
+          await setup.query<{ asset_id: string }>(
+            "SELECT asset_id FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq",
+          )
+        ).rows.map((row) => row.asset_id),
+      );
+      const kept = ids.filter((id) => marked.has(id));
+      return authority.planScope(kept, { ...options, reserved: kept.length });
+    },
+  };
+  const publication = new PostgresMediaPublicationAdapter(
+    lazyPool(() => app),
+    {
+      isPublic: () => true,
+      allowPublish: () => true,
+      catalogAuthority: markedOnly,
+    },
+  );
+  const works = new PostgresWorkPublishingAdapter(
+    lazyPool(() => app),
+    {
+      publication: { allowPublish: () => true, isPublic: () => true },
+    },
+  );
+  /** Every earlier mark cleared: only what the test does marks. */
+  const clearMarks = () =>
+    setup.query(
+      "UPDATE community.catalog_publication_dirty SET cleared_seq = mark_seq",
+    );
+  const pendingMark = async (assetId: string) =>
+    (
+      await setup.query<{ reason: string; urgent: boolean }>(
+        "SELECT reason, urgent FROM community.catalog_publication_dirty WHERE asset_id=$1 AND mark_seq > cleared_seq",
+        [assetId],
+      )
+    ).rows[0] ?? null;
+  const queued = async (assetId: string) =>
+    (
+      await setup.query<{ kind: string }>(
+        "SELECT kind FROM community.publishing_jobs WHERE subject_id=$1 AND kind IN ('publish_media','withdraw_media') AND state='queued' ORDER BY kind",
+        [assetId],
+      )
+    ).rows.map((row) => row.kind);
+  /** Runs the asset's queued publish and withdraw jobs, and those they
+   * queue (a publish queues the withdrawal of what it replaced), to
+   * completion. */
+  const runJobs = async (assetId: string): Promise<void> => {
+    const jobs = (
+      await setup.query<{ id: string; kind: string }>(
+        "SELECT id, kind FROM community.publishing_jobs WHERE subject_id=$1 AND kind IN ('publish_media','withdraw_media') AND state='queued' ORDER BY kind DESC",
+        [assetId],
+      )
+    ).rows;
+    if (!jobs.length) return;
+    for (const job of jobs) {
+      const owner = hex(8);
+      await setup.query(
+        "UPDATE community.publishing_jobs SET state='running', attempts=attempts+1, lease_owner=$2, lease_expires_at=$3::timestamptz + interval '1 hour' WHERE id=$1",
+        [job.id, owner, t0],
+      );
+      const lease = { id: job.id, leaseOwner: owner };
+      const plan =
+        job.kind === "publish_media"
+          ? await publication.planPublish(assetId, lease, t0)
+          : await publication.planWithdrawal(assetId, lease, t0);
+      if (plan.status !== "ready")
+        throw new Error(`${job.kind} ${plan.status}`);
+      try {
+        const ids = plan.units.map((unit) => unit.id);
+        if (job.kind === "publish_media")
+          expect(await publication.finishPublish(plan.fence, t0)).toBe(true);
+        else if (ids.length) {
+          expect(
+            await publication.recordOriginDeleted(plan.fence, ids, t0),
+          ).toBe(true);
+          expect(await publication.finishWithdrawal(plan.fence, ids, t0)).toBe(
+            true,
+          );
+        }
+      } finally {
+        await publication.release(plan.fence, t0);
+      }
+      await setup.query(
+        "UPDATE community.publishing_jobs SET state='succeeded', finished_at=$2, lease_owner=NULL, lease_expires_at=NULL WHERE id=$1",
+        [job.id, t0],
+      );
+    }
+    await runJobs(assetId);
+  };
+  /** The live (publishing or published) publications of the asset's blocks. */
+  const liveBlocks = async (assetId: string) =>
+    (
+      await setup.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM community.media_publications p
+         JOIN community.media_renditions r ON r.id=p.rendition_id
+         WHERE r.catalog_asset_id=$1 AND r.role ~ '^block-' AND p.state IN ('publishing','published')`,
+        [assetId],
+      )
+    ).rows[0]!.n;
+  /** A published image (a default one, or `served`) with an active master
+   * (attached with `overrides`) and its base set copied. */
+  const servedWithMaster = async (
+    served?: CatalogImage,
+    overrides: Partial<CatalogMasterAttach> = {},
+  ) => {
+    const image = served ?? (await catalogImage());
+    const master = await attached(image, overrides);
+    await clearMarks();
+    await setup.query(
+      `INSERT INTO community.catalog_publication_dirty (asset_id, mark_seq, reason, marked_at)
+       VALUES ($1, 1, 'public_membership', $2)
+       ON CONFLICT (asset_id) DO UPDATE SET mark_seq = community.catalog_publication_dirty.mark_seq + 1`,
+      [image.assetId, t0],
+    );
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toEqual(["publish_media"]);
+    await runJobs(image.assetId);
+    await clearMarks();
+    return { image, master };
+  };
+
+  it("publishes a recorded block set in the next pass, which plans no sweep asset", async () => {
+    const { image, master } = await servedWithMaster();
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    const recorded = await works.recordCatalogBlocks(
+      image.assetId,
+      {
+        masterId: master.masterId!,
+        blocks: [0, 1, 2].map((cell) => {
+          const rect = catalogBlockCell(frame.width, frame.height, cell);
+          const key = blobKey();
+          return {
+            storageKey: key,
+            byteSize: 250_000,
+            sha256: sha(key),
+            cell,
+            recipeVersion: 1,
+            recipeDigest: "3333333333333333",
+            contentType: "image/jpeg" as const,
+            width: rect.width,
+            height: rect.height,
+          };
+        }),
+      },
+      t0,
+    );
+    expect(recorded).toEqual({ status: "recorded" });
+    const marked = await pendingMark(image.assetId);
+    // The pass copies the new generation (and, as for any new generation,
+    // queues the withdrawal of what it replaces).
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toContain("publish_media");
+    // A normal mark brought it in: the new blocks are publish-side work.
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(3);
+  });
+
+  it("withdraws a detached master's published blocks in the next pass, and a new limit or a re-attach marks too", async () => {
+    const { image, master } = await servedWithMaster();
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    await insertBlocks(image, master.masterId!, frame, allCells(frame));
+    await setup.query(
+      `INSERT INTO community.catalog_publication_dirty (asset_id, mark_seq, reason, marked_at)
+       VALUES ($1, 1, 'rendition', $2)
+       ON CONFLICT (asset_id) DO UPDATE SET mark_seq = community.catalog_publication_dirty.mark_seq + 1`,
+      [image.assetId, t0],
+    );
+    expect((await publication.reconcile(t0, true, 500)).publish).toBe(1);
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(24);
+    await clearMarks();
+    expect(await masters.detach({ mediaId: image.mediaId }, t0)).toEqual({
+      status: "done",
+      ended: 1,
+    });
+    const marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toEqual(["withdraw_media"]);
+    // A normal mark brought it in: the blocks of a still-public image.
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(0);
+
+    // A new limit ends the active master, so it marks the asset too.
+    const limited = await catalogImage();
+    await attached(limited);
+    await clearMarks();
+    expect(
+      (await masters.setLimit(limited.mediaId, 5500, "owner", t0)).status,
+    ).toBe("done");
+    expect(await pendingMark(limited.assetId)).toEqual({
+      reason: "rendition",
+      urgent: false,
+    });
+
+    // So does a re-attach that ends a master still active on the asset of
+    // an image replaced in Admin (the projection names a new pair).
+    const replaced = await catalogImage();
+    const previous = await attached(replaced);
+    await setup.query("DELETE FROM public.catalog_media WHERE media_id=$1", [
+      replaced.mediaId,
+    ]);
+    await setup.query(
+      "UPDATE community.catalog_media_assets SET unreferenced_since=$2 WHERE id=$1",
+      [replaced.assetId, t0],
+    );
+    const replacement = await catalogImage({ mediaId: replaced.mediaId });
+    await clearMarks();
+    expect(
+      await masters.attach(
+        attachInput(replacement, {
+          source: { kind: "existing", masterId: previous.masterId! },
+        }),
+        t0,
+      ),
+    ).toMatchObject({ status: "done" });
+    expect(
+      (
+        await setup.query(
+          "SELECT end_reason FROM community.catalog_display_masters WHERE id=$1",
+          [previous.masterId],
+        )
+      ).rows[0],
+    ).toEqual({ end_reason: "reattached" });
+    expect(await pendingMark(replaced.assetId)).toEqual({
+      reason: "rendition",
+      urgent: false,
+    });
+  });
+
+  /*
+   * Self-masters (catalog-deep-zoom-self-master-v1) change a block set only
+   * through the same writes: a recorded set, a new limit, a detach and a
+   * re-attach. Each brings the asset into a pass that plans no sweep asset.
+   */
+  /** A published 9504 x 6336 `editorial/` original (viewer 4096) and the
+   * attach of its own approved bytes as its master: a self-master. */
+  const selfOriginal = async (
+    options: Parameters<typeof catalogImage>[0] = {},
+  ) => {
+    const image = await catalogImage({
+      width: 9504,
+      height: 6336,
+      viewerLong: 4096,
+      ...options,
+    });
+    const self: Partial<CatalogMasterAttach> = {
+      masterSha256: image.approvedSha256,
+      header: { contentType: "image/jpeg", width: 9504, height: 6336 },
+    };
+    return { image, self };
+  };
+  /** Records the cells of a master's set as one block job would. */
+  const recordCells = (
+    image: CatalogImage,
+    master: { readonly masterId: string | null },
+    frame: { readonly width: number; readonly height: number },
+    cells: readonly number[],
+  ) =>
+    works.recordCatalogBlocks(
+      image.assetId,
+      {
+        masterId: master.masterId!,
+        blocks: cells.map((cell) => {
+          const rect = catalogBlockCell(frame.width, frame.height, cell);
+          const key = blobKey();
+          return {
+            storageKey: key,
+            byteSize: 250_000,
+            sha256: sha(key),
+            cell,
+            recipeVersion: 1,
+            recipeDigest: "3333333333333333",
+            contentType: "image/jpeg" as const,
+            width: rect.width,
+            height: rect.height,
+          };
+        }),
+      },
+      t0,
+    );
+  /** Cells `from` to `to`, inclusive. */
+  const cellRange = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, index) => from + index);
+
+  it("publishes a self-master's recorded set and withdraws it after a new limit and after a detach, each in a pass that plans no sweep asset", async () => {
+    const { image, self } = await selfOriginal();
+    const { master } = await servedWithMaster(image, self);
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    expect(frame).toEqual({ width: 8192, height: 5461 });
+    // The last two rows of the 8 x 6 grid, its edge cells included.
+    expect(await recordCells(image, master, frame, cellRange(32, 47))).toEqual({
+      status: "recorded",
+    });
+    let marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toContain("publish_media");
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(16);
+
+    // A new limit ends the self-master: its blocks leave the plan.
+    await clearMarks();
+    const limited = await masters.setLimit(image.mediaId, 6144, "owner", t0);
+    expect(limited).toMatchObject({
+      status: "done",
+      frameWidth: 6144,
+      frameHeight: 4096,
+      cells: 24,
+    });
+    marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toEqual(["withdraw_media"]);
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(0);
+
+    // The limited set is recorded and published, then detached.
+    const limitedFrame = { width: 6144, height: 4096 };
+    await clearMarks();
+    expect(
+      await recordCells(
+        image,
+        limited as { readonly masterId: string },
+        limitedFrame,
+        cellRange(0, 15),
+      ),
+    ).toEqual({ status: "recorded" });
+    await publication.reconcile(t0, true, 500);
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(16);
+    await clearMarks();
+    expect(await masters.detach({ mediaId: image.mediaId }, t0)).toEqual({
+      status: "done",
+      ended: 1,
+    });
+    marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toEqual(["withdraw_media"]);
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(0);
+  });
+
+  it("withdraws the published blocks of a self-master re-attached to its image's replacement in the next pass", async () => {
+    const { image, self } = await selfOriginal();
+    const { master } = await servedWithMaster(image, self);
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    expect(await recordCells(image, master, frame, cellRange(0, 15))).toEqual({
+      status: "recorded",
+    });
+    await publication.reconcile(t0, true, 500);
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(16);
+    // The same original moves to another record in Admin: the projection
+    // names a new pair of the media id, and the old asset is unreferenced
+    // (set here without the sync's own mark).
+    const replacement = await catalogImage({
+      mediaId: image.mediaId,
+      approvedSha256: image.approvedSha256,
+      width: 9504,
+      height: 6336,
+      viewerLong: 4096,
+    });
+    await setup.query(
+      "DELETE FROM public.catalog_media WHERE media_id=$1 AND object_key=$2",
+      [image.mediaId, image.objectKey],
+    );
+    await setup.query(
+      "UPDATE community.catalog_media_assets SET unreferenced_since=$2 WHERE id=$1",
+      [image.assetId, t0],
+    );
+    await clearMarks();
+    // Still its own master on the replacement: the re-attach ends the
+    // master still active on the old asset and marks that asset.
+    expect(
+      await masters.attach(
+        attachInput(replacement, {
+          ...self,
+          source: { kind: "existing", masterId: master.masterId! },
+        }),
+        t0,
+      ),
+    ).toMatchObject({ status: "done", frameWidth: 8192, frameHeight: 5461 });
+    expect(
+      (
+        await setup.query(
+          "SELECT end_reason FROM community.catalog_display_masters WHERE id=$1",
+          [master.masterId],
+        )
+      ).rows[0],
+    ).toEqual({ end_reason: "reattached" });
+    const marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toEqual(["withdraw_media"]);
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(0);
   });
 });

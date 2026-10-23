@@ -20,6 +20,7 @@ import {
   type PublishingDb,
 } from "./db.js";
 import { catalogBlockJobSql, insertJob } from "./jobs.js";
+import { markCatalogPublicationDirty } from "./catalog-publication-dirty.js";
 import {
   recordRenditionRows,
   unrecordedKeys,
@@ -499,6 +500,14 @@ export const recordCatalogBlocks = async (
       db,
       { kind: "catalog", id: assetId, masterId: outcome.masterId },
       records,
+      now,
+    );
+    // The new set is copied, and any released one withdrawn, only by a
+    // reconcile that plans the asset (catalog-scale-v1): a normal mark, the
+    // last write, after the asset row's lock.
+    await markCatalogPublicationDirty(
+      db,
+      new Map([[assetId, { reason: "rendition", urgent: false }]]),
       now,
     );
     return duplicates.length === 0

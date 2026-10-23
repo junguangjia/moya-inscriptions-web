@@ -1,6 +1,8 @@
 import path from "node:path";
 
 import {
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   closePostgresPool,
   createPostgresPool,
   parsePostgresConfig,
@@ -8,6 +10,7 @@ import {
 import {
   PostgresWorkPublishingAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 
@@ -15,11 +18,14 @@ import {
   parseCatalogPrepareDatabaseConfig,
   readCatalogSourceSnapshot,
   createCatalogPublicationAuthority,
+  currentCatalogRecipePolicy,
 } from "./publishing/catalog-delivery-intents.js";
 import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
+  CATALOG_MEMBERSHIP_INTERVAL_MS,
   CATALOG_SYNC_INTERVAL_MS,
   createCatalogBlockRenderer,
+  createCatalogMembershipWatch,
   createCatalogRenderer,
   createCatalogSync,
   listPublishedCatalogSources,
@@ -246,7 +252,8 @@ const catalogOffReasons = (
 /**
  * Parses and opens everything, runs the sandbox self-check, removes orphaned
  * sandbox containers and stale job directories, opens the pools and verifies
- * the community migration ledger (read-only). Starts nothing.
+ * the community migration ledger and the Catalog grants (read-only). Starts
+ * nothing.
  */
 export async function prepareMediaWorker(
   environment: Environment,
@@ -335,6 +342,13 @@ export async function prepareMediaWorker(
     ]).then(() => undefined);
   try {
     await verifyCommunityMigrationLedger(communityPool);
+    // catalog-scale-v1 W6: the scoped reconcile's tables and their grants
+    // (App migration 20261024010000), and, where configured, the prepare
+    // reader's grant on both private views (CMS migration M2). Either missing
+    // stops startup with a message naming it.
+    await assertCatalogPublicationScopeReady(communityPool);
+    if (catalogPreparePool)
+      await assertCatalogPrepareReaderReady(catalogPreparePool);
   } catch (error) {
     await closePools();
     throw error;
@@ -410,6 +424,18 @@ export async function prepareMediaWorker(
         logger,
       })
     : null;
+  // catalog-scale-v1 W8: the per-minute membership fingerprints that mark
+  // the scoped reconcile's dirty assets, wherever the reconcile has a
+  // Catalog authority (the published read pool).
+  const catalogMembership = catalogPool
+    ? createCatalogMembershipWatch({
+        published: catalogPool,
+        prepare: catalogPreparePool,
+        policy: currentCatalogRecipePolicy().recipeManifestSha256,
+        port: catalogMembershipStore(communityPool),
+        logger,
+      })
+    : null;
   // Profile jobs share the one sandbox and the worker concurrency with work
   // processing; the sweep yields to uploads, edits and Catalog renders.
   const profile = configuration.profile
@@ -435,12 +461,28 @@ export async function prepareMediaWorker(
     // and cleanup scheduling are idempotent across both processes.
     maintenance: { requeue: true, cleanup: true, reconcile: true },
     extraMaintenance: [
+      // Detached (catalog-scale-v1 W4): a sync of a large Catalog never holds
+      // the tick and its job claims; stop() waits for it before the pools
+      // close.
       ...(catalogSync
         ? [
             {
               label: "catalog sync",
               intervalMs: CATALOG_SYNC_INTERVAL_MS,
               run: catalogSync.run,
+              detached: true,
+            },
+          ]
+        : []),
+      // Detached as well: a minute without a change reads two aggregates,
+      // but the diff after a mass takedown reads the whole Catalog once.
+      ...(catalogMembership
+        ? [
+            {
+              label: "catalog membership",
+              intervalMs: CATALOG_MEMBERSHIP_INTERVAL_MS,
+              run: catalogMembership.run,
+              detached: true,
             },
           ]
         : []),
