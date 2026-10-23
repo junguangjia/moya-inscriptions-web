@@ -48,6 +48,7 @@ export {
   catalogDeliveryCapabilitiesSchema,
   catalogPublishedRenditionsRequestSchema,
   catalogPublishedRenditionsSchema,
+  catalogRenderBacklogSchema,
 } from "./catalog-delivery.js";
 export type {
   CatalogDeliveryMedia,
@@ -59,6 +60,7 @@ export type {
   CatalogDeliveryCapabilities,
   CatalogPublishedRenditionsRequest,
   CatalogPublishedRenditions,
+  CatalogRenderBacklogReport,
 } from "./catalog-delivery.js";
 export type {
   EditorialApproveBatchRequest,
@@ -96,3 +98,29 @@ export type {
   EditorialUploadedMedia,
   EditorialMediaUploadCompleteResult,
 } from "./upload.js";
+
+export {
+  CATALOG_INGEST_STAGING_TAGGING,
+  CATALOG_ORIGINAL_MAX_BYTES,
+  CATALOG_ORIGINAL_MAX_DECODED_BYTES,
+  CATALOG_ORIGINAL_MAX_EDGE,
+  CATALOG_ORIGINAL_MAX_PIXELS,
+  editorialRegisteredMediaSchema,
+  editorialMediaIngestStartSchema,
+  editorialMediaIngestStartResultSchema,
+  editorialMediaIngestRequestSchema,
+  editorialMediaIngestCompleteResultSchema,
+  editorialMediaIngestAbandonResultSchema,
+  editorialMediaIngestVerifyRequestSchema,
+  editorialMediaIngestVerifyResultSchema,
+} from "./ingest.js";
+export type {
+  EditorialRegisteredMedia,
+  EditorialMediaIngestStart,
+  EditorialMediaIngestStartResult,
+  EditorialMediaIngestRequest,
+  EditorialMediaIngestCompleteResult,
+  EditorialMediaIngestAbandonResult,
+  EditorialMediaIngestVerifyRequest,
+  EditorialMediaIngestVerifyResult,
+} from "./ingest.js";

@@ -271,3 +271,37 @@ export type CatalogPublishedRenditionsRequest = z.output<
 export type CatalogPublishedRenditions = z.output<
   typeof catalogPublishedRenditionsSchema
 >;
+
+const backlogCount = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER);
+/** Operator boundary only, read-only, for the pacing of bulk Catalog work:
+ * per render tier, the images the last sync pass counted as still needing a
+ * render and when it counted them (both null before the first pass), and the
+ * base Catalog render jobs queued and running now. Counts only: no record,
+ * image or key crosses it.
+ */
+export const catalogRenderBacklogSchema = z
+  .strictObject({
+    tiers: z
+      .strictObject({
+        t0: backlogCount,
+        t1: backlogCount,
+        t2: backlogCount,
+        t3: backlogCount,
+        t4: backlogCount,
+      })
+      .nullable(),
+    countedAt: z.iso.datetime().nullable(),
+    queued: backlogCount,
+    running: backlogCount,
+  })
+  .refine((value) => (value.tiers === null) === (value.countedAt === null), {
+    path: ["countedAt"],
+    message: "A counted backlog carries its time, and only a counted one.",
+  });
+export type CatalogRenderBacklogReport = z.output<
+  typeof catalogRenderBacklogSchema
+>;
