@@ -90,7 +90,11 @@ const proof: Readonly<Record<string, RegExp>> = {
   operator: /\bfetchServerEditorialPreview\(/u,
   development: /NODE_ENV\s*!==\s*"development"/u,
   asset: /kind: "(?:demo-assets|design-tokens|ui-styles|ui-assets)"/u,
-  redirect: /Response\.redirect\(/u,
+  // A contentless 307 whose Location is the fixed same-origin template; no
+  // Response.redirect (absolute URLs only), so nothing is built from the
+  // proxied request origin. The route unit test pins the exact behavior.
+  redirect:
+    /^(?![\s\S]*\bResponse\.redirect\()[\s\S]*status: 307,\s*headers: \{\s*Location: `\/\?catalogId=\$\{encodedCatalogId\}#detail-\$\{encodedCatalogId\}`/u,
 };
 
 describe("product access covers every Web entry point", () => {
