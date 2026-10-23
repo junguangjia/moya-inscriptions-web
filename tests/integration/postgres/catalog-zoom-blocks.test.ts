@@ -302,12 +302,23 @@ const catalogImage = async (
   };
 };
 
-const masters = new PostgresCatalogDisplayMasterAdapter(
-  // Bound lazily: the App pool exists only after beforeAll.
+/**
+ * The pool `pool()` names, bound lazily: the pools exist only after
+ * beforeAll. Its methods run bound to that pool, not to the proxy: pg-pool's
+ * own methods reassign its client list (an idle client's removal does), and
+ * with the proxy as `this` the new list would land on the proxy's empty
+ * target, so the pool's `end()` in afterAll would wait for a removed client.
+ */
+const lazyPool = (pool: () => Pool): Pool =>
   new Proxy({} as Pool, {
-    get: (_target, property) => Reflect.get(app, property, app),
-  }),
-);
+    get: (_target, property) => {
+      const target = pool();
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+const masters = new PostgresCatalogDisplayMasterAdapter(lazyPool(() => app));
 
 const attachInput = (
   image: CatalogImage,
@@ -1243,9 +1254,7 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
     return { id, leaseOwner: owner };
   };
   const publication = new PostgresMediaPublicationAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
     { isPublic: () => true, allowPublish: () => true },
   );
 
@@ -1516,9 +1525,7 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
 
 describe("Expand-release rollback floor and database cost (criteria 9, 10)", () => {
   const publication = new PostgresMediaPublicationAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
     { isPublic: () => true, allowPublish: () => true },
   );
 
@@ -1746,9 +1753,7 @@ describe("Expand-release rollback floor and database cost (criteria 9, 10)", () 
 
 describe("Catalog block jobs in the store (PR B; criteria 3a, 5)", () => {
   const works = new PostgresWorkPublishingAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
     { publication: { allowPublish: () => true, isPublic: () => true } },
   );
   const quiet = () =>
@@ -2349,10 +2354,7 @@ describe.skipIf(process.env.CATALOG_BLOCKS_SANDBOX_SMOKE !== "1")(
 );
 
 describe("Catalog Detail deep-zoom reads (PR C; criteria 12, 13, 20)", () => {
-  const as = (pool: () => Pool) =>
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(pool(), property, pool()),
-    });
+  const as = lazyPool;
   const publication = new PostgresMediaPublicationAdapter(
     as(() => app),
     { isPublic: () => true, allowPublish: () => true },
@@ -2644,9 +2646,7 @@ describe("PR A review fixes (B1, B2, S2, S3, S5)", () => {
  */
 describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
   const works = new PostgresWorkPublishingAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
     { publication: { allowPublish: () => true, isPublic: () => true } },
   );
   const quiet = async () => {
@@ -2917,10 +2917,7 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
     ).rows.map((row) => row.id);
     expect(blockIds).toHaveLength(48);
     const reader = new PostgresCatalogQueryAdapter(
-      new Proxy({} as Pool, {
-        get: (_target, property) =>
-          Reflect.get(publicRead, property, publicRead),
-      }),
+      lazyPool(() => publicRead),
       { renditions: true, zoom: { isOpen: async () => true } },
     );
     expect([...(await reader.getZoomFrames(image.catalogId as never))]).toEqual(
@@ -3207,6 +3204,96 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
         [filler, t0],
       );
     }
+  });
+
+  it("counts a block with a live and a withdrawing publication once, so a partly cut set stays projected", async () => {
+    await quiet();
+    const images = await Promise.all([1, 2].map(() => catalogImage()));
+    // A default master: a 20,000,000-byte upload and a 6000 x 4000 frame.
+    const masterBytes = 20_000_000;
+    const projected = 6000 * 4000;
+    const before = (await masters.status(null)).storage.sliceBytes;
+    const first = await attached(images[0]!);
+    const frame = { width: first.frameWidth, height: first.frameHeight };
+    // Every cell but the last is cut: the set is not complete, so its whole
+    // frame stays projected beside the cut blocks' bytes.
+    const cut = await insertBlocks(
+      images[0]!,
+      first.masterId!,
+      frame,
+      allCells(frame).slice(0, -1),
+    );
+    const partly = before + masterBytes + cut.length * 250_000 + projected;
+    expect((await masters.status(null)).storage.sliceBytes).toBe(partly);
+    // The first cut block is published under a new generation while its old
+    // one is still withdrawing: two publication rows that are not withdrawn
+    // for one rendition (the live-rendition index covers only publishing and
+    // published). Both rows' bytes count, but the block counts once: the set
+    // stays not cut and projected, rather than looking cut with only its
+    // other blocks' unpublished copies left.
+    const publicAsset = hex();
+    await setup.query(
+      "INSERT INTO community.media_public_assets(id,catalog_asset_id,desired_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3)",
+      [publicAsset, images[0]!.assetId, t0],
+    );
+    const blob = (
+      await setup.query<{ storage_key: string; sha256: string }>(
+        "SELECT b.storage_key, b.sha256 FROM community.media_renditions r JOIN community.media_blobs b ON b.id=r.blob_id WHERE r.id=$1",
+        [cut[0]],
+      )
+    ).rows[0]!;
+    for (const state of ["withdrawing", "published"] as const) {
+      const token = hex();
+      await setup.query(
+        `INSERT INTO community.media_publications(id,public_asset_id,rendition_id,generation_token,object_key,storage_key,content_type,purpose,byte_size,sha256,role,edit_key,state,published_at,withdraw_requested_at,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,'image/jpeg','catalog_derivative',250000,$7,'block-00','base',$8,$9,$10,$9)`,
+        [
+          `media-publication-${hex()}`,
+          publicAsset,
+          cut[0],
+          token,
+          `v1/${publicAsset}/${token}/base/block-00.r1.jpg`,
+          blob.storage_key,
+          blob.sha256,
+          state,
+          t0,
+          state === "withdrawing" ? t0 : null,
+        ],
+      );
+    }
+    const settled = partly + 2 * 250_000;
+    expect((await masters.status(null)).storage.sliceBytes).toBe(settled);
+    // So an attach sized into the room that counting the block twice would
+    // leave is refused.
+    const room = CATALOG_MASTER_SLICE_CAP - settled - projected;
+    expect(
+      await masters.attach(
+        attachInput(images[1]!, {
+          source: { kind: "dry_run", byteSize: room + 1 },
+        }),
+        t0,
+      ),
+    ).toMatchObject({
+      status: "refused",
+      code: "storage_slice_cap",
+      storage: { sliceBytes: settled, attachBytes: room + 1 + projected },
+    });
+    // Leave the slice for later suites: end the master, release its blob and
+    // withdraw the block publications.
+    await masters.detach({ all: true }, t0);
+    await setup.query(
+      `UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL
+       WHERE id IN (SELECT blob_id FROM community.catalog_display_masters WHERE id=$1)`,
+      [first.masterId, t0],
+    );
+    for (const step of [
+      "state='withdrawing', withdraw_requested_at=$2",
+      "state='withdrawn', origin_deleted_at=$2, verified_at=$2",
+    ])
+      await setup.query(
+        `UPDATE community.media_publications SET ${step} WHERE public_asset_id=$1`,
+        [publicAsset, t0],
+      );
   });
 
   it("leaves out the projection of the master a limit change or a re-attach ends (review R2)", async () => {

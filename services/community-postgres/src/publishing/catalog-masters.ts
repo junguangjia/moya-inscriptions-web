@@ -29,7 +29,7 @@ import {
 import { catalogBlockJobSql } from "./jobs.js";
 import {
   catalogBlockGrid,
-  catalogBlockSetIncompleteSql,
+  catalogBlockSetCellsSql,
   catalogMasterFrame,
   enqueueMissingCatalogBlocks,
   readCatalogBlockSet,
@@ -163,6 +163,12 @@ const blockBlobSql = (blob: string): string =>
  * figure counts them too: D4 refuses an attach that would pass either bound,
  * and the same overshoot would pass the 45 GB one. `ending` names masters
  * this transaction ends, whose projection the new frame replaces.
+ *
+ * The pending figure reads every active master's ready blocks in one grouped
+ * pass, not in subqueries per master: their planned cost grew with the
+ * master rows the planner expects and, past PostgreSQL's JIT optimization
+ * threshold, made each attach compile the statement (about 0.4 s) for a few
+ * milliseconds of work.
  */
 const storageOf = async (
   db: PublishingDb,
@@ -185,15 +191,21 @@ const storageOf = async (
          + (SELECT COALESCE(sum(p.byte_size),0) FROM community.media_publications p
             WHERE p.state <> 'withdrawn' AND p.role ~ '^block-[0-9]{2}$')
            AS slice_bytes,
-         (SELECT COALESCE(sum(CASE WHEN ${catalogBlockSetIncompleteSql("m")}
+         (SELECT COALESCE(sum(CASE WHEN COALESCE(s.ready_blocks,0) < ${catalogBlockSetCellsSql("m")}
             THEN m.frame_width::bigint * m.frame_height * $2::bigint
-            ELSE (SELECT COALESCE(sum(rb.byte_size),0) FROM community.media_renditions r
-              JOIN community.media_blobs rb ON rb.id=r.blob_id AND rb.state='committed'
-              WHERE r.catalog_master_id=m.id AND r.state='ready'
-                AND NOT EXISTS (SELECT 1 FROM community.media_publications p
-                  WHERE p.rendition_id=r.id AND p.state <> 'withdrawn'))
+            ELSE COALESCE(s.unpublished_bytes,0)
             END),0)
           FROM community.catalog_display_masters m
+          LEFT JOIN (
+            SELECT r.catalog_master_id AS master_id, count(*) AS ready_blocks,
+              sum(rb.byte_size) FILTER (WHERE live.rendition_id IS NULL) AS unpublished_bytes
+            FROM community.media_renditions r
+            JOIN community.media_blobs rb ON rb.id=r.blob_id AND rb.state='committed'
+            LEFT JOIN (SELECT DISTINCT p.rendition_id FROM community.media_publications p
+              WHERE p.state <> 'withdrawn') live ON live.rendition_id=r.id
+            WHERE r.catalog_master_id IS NOT NULL AND r.state='ready'
+            GROUP BY r.catalog_master_id
+          ) s ON s.master_id=m.id
           WHERE m.ended_at IS NULL AND NOT (m.id = ANY($3::text[])))
            AS pending_bytes`,
       [

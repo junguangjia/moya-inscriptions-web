@@ -101,16 +101,13 @@ export const catalogBlockCell = (
 };
 
 /**
- * SQL: the master row alias has fewer ready blocks on committed blobs than
- * its frame has cells, so its set is not yet cut. The storage bounds count
- * the projected bytes of every active master that matches
- * (catalog-deep-zoom-self-master-v1).
+ * SQL: the cells of the frame of the master row alias, as `catalogBlockGrid`
+ * counts them. A master with fewer ready blocks on committed blobs has a set
+ * not yet cut; the storage bounds count the projected bytes of every active
+ * master whose set is not cut (catalog-deep-zoom-self-master-v1).
  */
-export const catalogBlockSetIncompleteSql = (master: string): string =>
-  `(SELECT count(*) FROM community.media_renditions r
-     JOIN community.media_blobs rb ON rb.id=r.blob_id AND rb.state='committed'
-     WHERE r.catalog_master_id=${master}.id AND r.state='ready'
-   ) < ceil(${master}.frame_width / ${CATALOG_ZOOM_BLOCK_EDGE}.0) * ceil(${master}.frame_height / ${CATALOG_ZOOM_BLOCK_EDGE}.0)`;
+export const catalogBlockSetCellsSql = (master: string): string =>
+  `ceil(${master}.frame_width / ${CATALOG_ZOOM_BLOCK_EDGE}.0) * ceil(${master}.frame_height / ${CATALOG_ZOOM_BLOCK_EDGE}.0)`;
 
 /** `block-NN` of a cell index (00..99). */
 export const catalogBlockRole = (cell: number): string => {
