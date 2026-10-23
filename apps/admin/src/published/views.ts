@@ -153,3 +153,103 @@ OFFSET 0;
 ALTER VIEW catalog_media RESET (security_barrier);
 DROP INDEX catalogs_media_media_id_lookup_idx;
 `;
+
+/*
+ * catalog-scale-v1 (M2): the private prepare projections. They are never
+ * published: no public or Backend read role is granted either view, only the
+ * approved prepare reader (infra/development/catalog-media/
+ * grant-prepare-read.sql). Defined here, next to the published views, so the
+ * upgrade and downgrade share one text of the original select.
+ */
+
+/**
+ * R (Owner decision D3): how long an intent that ended, or whose prepared or
+ * requested lease expired, stays in the live private projection. The worker's
+ * complete snapshot reads only that projection, so an older intent leaves it
+ * and the App mirror tombstones it by absence; nothing is deleted on either
+ * side. Render grace (G) must stay at least 24 hours shorter.
+ */
+export const CATALOG_PREPARE_RETENTION_HOURS = 96;
+
+/**
+ * One row per member of a live intent and one header row (no member) per
+ * other intent, as migration 20261020_160000 created the view. With `guarded`,
+ * each integer cast of a manifest member value is guarded by the view's own
+ * row condition, as catalog_media guards its casts (M1). The result is
+ * unchanged. Members exist only for rows the view keeps (the member list is a
+ * LATERAL function of its intent), so this is defence in depth: a caller's
+ * comparison on width or height never casts a value outside the view,
+ * wherever the planner places it.
+ */
+const catalogDeliveryPrepareMediaSelectSql = (guarded: boolean) => {
+  const cast = (field: string) =>
+    guarded
+      ? `CASE WHEN i.recipe_manifest_sha256 IS NOT NULL THEN (m.value->>'${field}')::integer END`
+      : `(m.value->>'${field}')::integer`;
+  return `SELECT i.id AS intent_id, i.catalog_document_id, i.catalog_id, i.draft_revision,
+  i.draft_fingerprint, i.media_manifest_sha256,
+  i.recipe_manifest_sha256, i.state_version,
+  CASE WHEN i.state IN ('prepared', 'release_requested') AND i.expires_at <= now()
+    THEN 'expired' ELSE i.state END AS state,
+  jsonb_array_length(i.media_manifest)::integer AS media_count,
+  i.expires_at, m.ordinal::integer AS media_ordinal,
+  m.value->>'mediaId' AS media_id, m.value->>'objectKey' AS object_key,
+  m.value->>'sourceSha256' AS source_sha256,
+  ${cast("width")} AS width, ${cast("height")} AS height
+FROM catalog_delivery_intents i
+LEFT JOIN LATERAL jsonb_array_elements(CASE
+  WHEN i.state = 'released' OR (i.state IN ('prepared', 'release_requested') AND i.expires_at > now())
+  THEN i.media_manifest ELSE '[]'::jsonb END) WITH ORDINALITY AS m(value, ordinal) ON true
+WHERE i.recipe_manifest_sha256 IS NOT NULL`;
+};
+
+/*
+ * catalog_delivery_prepare_media keeps every row and column and becomes a
+ * security_barrier view without the OFFSET 0 fence, so readiness reads one
+ * intent by its primary key instead of expanding every intent ever prepared.
+ * catalog_delivery_live_prepare_media has the same columns and only the rows
+ * the worker's complete snapshot needs: every released intent, and every
+ * other intent whose lease or end is younger than R. A released intent ends
+ * only by a later withdraw or publish, so the snapshot follows live content,
+ * not history. CREATE OR REPLACE keeps the old view's OID, owner and grant;
+ * the new view is granted by the grant script only. lock_timeout as in M1.
+ *
+ * The live projection's own condition is indexed, so its reads (the
+ * snapshot's cursor, the fence) visit only the intents it lists, not every
+ * intent ever prepared: the released branch and the ended branch read
+ * catalog_delivery_intents_state_ended, the prepared and requested branch the
+ * existing catalog_delivery_intents_expiry. Measured at the 25k fixture
+ * (18,500 intents, 3,700 listed) on PG18: a BitmapOr over 926 heap pages
+ * instead of a Seq Scan over 4,625, and still about 950 blocks against
+ * 19,425 with four times the old ended intents (docs/development/
+ * catalog-scale-bench.md). The index is built first, so the views' ACCESS
+ * EXCLUSIVE locks are held only briefly.
+ */
+export const upgradeCatalogDeliveryPrepareViewsSql = `
+SET LOCAL lock_timeout = '5s';
+CREATE INDEX catalog_delivery_intents_state_ended
+  ON catalog_delivery_intents USING btree (state, ended_at);
+CREATE OR REPLACE VIEW catalog_delivery_prepare_media WITH (security_barrier = true) AS
+${catalogDeliveryPrepareMediaSelectSql(true)};
+CREATE VIEW catalog_delivery_live_prepare_media WITH (security_barrier = true) AS
+${catalogDeliveryPrepareMediaSelectSql(true)}
+  AND (i.state = 'released'
+    OR (i.state IN ('prepared', 'release_requested')
+      AND i.expires_at > now() - interval '${CATALOG_PREPARE_RETENTION_HOURS} hours')
+    OR (i.state IN ('cancelled', 'superseded', 'expired', 'withdrawn')
+      AND i.ended_at > now() - interval '${CATALOG_PREPARE_RETENTION_HOURS} hours'));
+`;
+
+/** Drops the live view, restores the original view text and options, and
+ * drops the index. IF EXISTS for the index only: a task or dev CMS database
+ * that ran this migration before the index was added to it (never released)
+ * lacks it, and can still be migrated down and up again to get it. */
+export const downgradeCatalogDeliveryPrepareViewsSql = `
+SET LOCAL lock_timeout = '5s';
+DROP VIEW catalog_delivery_live_prepare_media;
+CREATE OR REPLACE VIEW catalog_delivery_prepare_media AS
+${catalogDeliveryPrepareMediaSelectSql(false)}
+OFFSET 0;
+ALTER VIEW catalog_delivery_prepare_media RESET (security_barrier);
+DROP INDEX IF EXISTS catalog_delivery_intents_state_ended;
+`;

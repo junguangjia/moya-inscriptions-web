@@ -67,6 +67,15 @@ export interface PublishingWorkerExtraStep {
   readonly label: string;
   readonly intervalMs: number;
   run(now: Date): Promise<unknown>;
+  /**
+   * Started without being awaited, so a long run (the Catalog sync of a
+   * large Catalog) never holds the tick and its job claims. A failure logs
+   * one content-free line and leaves the queue's health and backoff as they
+   * are; a step still running when it is due again is not started twice; and
+   * `stop` waits for a running one (up to the shutdown grace) before it
+   * resolves, so the caller never closes pools under it. Default false.
+   */
+  readonly detached?: boolean;
 }
 
 export interface PublishingWorkerOptions {
@@ -225,6 +234,8 @@ export class PublishingWorker {
   private readonly extraSteps: readonly {
     readonly step: PublishingWorkerExtraStep;
     nextAt: number;
+    /** A detached run that has not settled yet. */
+    running: Promise<void> | undefined;
   }[];
   private readonly clock: () => Date;
   private readonly timers: PublishingWorkerTimers;
@@ -288,7 +299,7 @@ export class PublishingWorker {
       if (!/^[a-z][a-z0-9 _-]{0,63}$/.test(step.label)) {
         throw new Error("Publishing worker maintenance step label is invalid");
       }
-      return { step, nextAt: 0 };
+      return { step, nextAt: 0, running: undefined };
     });
     this.clock = options.clock ?? (() => new Date());
     this.timers = options.timers ?? defaultPublishingWorkerTimers;
@@ -390,6 +401,9 @@ export class PublishingWorker {
       ...(this.ticking ? [this.ticking] : []),
       ...[...this.runs.values()].map((run) => run.done),
       ...this.releases,
+      ...this.extraSteps.flatMap((extra) =>
+        extra.running ? [extra.running] : [],
+      ),
     ];
     await this.within(Promise.allSettled(inFlight()), this.shutdownGraceMs);
     if (this.runs.size > 0) {
@@ -594,6 +608,25 @@ export class PublishingWorker {
       );
     }
     for (const extra of this.extraSteps) {
+      if (extra.step.detached) {
+        if (at < extra.nextAt) continue;
+        extra.nextAt = at + extra.step.intervalMs;
+        if (extra.running || this.state !== "running") continue;
+        const { label } = extra.step;
+        const running = Promise.resolve()
+          .then(() => extra.step.run(now))
+          .then(
+            () => undefined,
+            () => {
+              this.logger.error(`[publishing-worker] ${label} failed`);
+            },
+          )
+          .finally(() => {
+            extra.running = undefined;
+          });
+        extra.running = running;
+        continue;
+      }
       await step(
         extra.nextAt,
         extra.step.intervalMs,

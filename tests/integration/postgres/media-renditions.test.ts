@@ -340,6 +340,7 @@ describe("media_renditions migration on a dedicated synthetic database", () => {
         "20261020160000",
         "20261023010000",
         "20261023020000",
+        "20261024010000",
       ]);
       // The retained table is byte-identical.
       expect(await checksum()).toBe(before);

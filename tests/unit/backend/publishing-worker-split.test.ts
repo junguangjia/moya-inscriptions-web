@@ -205,6 +205,111 @@ describe("publishing queue split between the Backend and the media worker", () =
     ).toThrow("label");
   });
 
+  // catalog-scale-v1 W4: the Catalog sync of a large Catalog runs detached
+  // from the tick, so it never holds job claims.
+  it("claims jobs while a detached step runs, never runs it twice at once, and logs one line when it fails", async () => {
+    const timers = new ManualTimers();
+    const port = queuePort();
+    const runs: { resolve: () => void; reject: (error: Error) => void }[] = [];
+    const sync = vi.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          runs.push({ resolve, reject });
+        }),
+    );
+    const logger = { info: vi.fn(), error: vi.fn() };
+    const worker = new PublishingWorker({
+      port: port as unknown as PublishingWorkerPort,
+      handlers: { run: vi.fn() },
+      kinds: UPLOAD_COUPLED_JOB_KINDS,
+      maintenance: false,
+      extraMaintenance: [
+        {
+          label: "catalog sync",
+          intervalMs: 300_000,
+          run: sync,
+          detached: true,
+        },
+      ],
+      timers,
+      clock: timers.clock,
+      logger,
+    });
+    worker.start();
+    await timers.advance(0);
+    // The first tick started the sync and claimed without waiting for it.
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(port.claimJobs).toHaveBeenCalledTimes(1);
+    await timers.advance(1_000);
+    expect(port.claimJobs).toHaveBeenCalledTimes(2);
+    // Due again while it still runs: not started a second time.
+    await timers.advance(299_000);
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(port.claimJobs).toHaveBeenCalledTimes(301);
+    runs[0]!.resolve();
+    await timers.advance(300_000);
+    expect(sync).toHaveBeenCalledTimes(2);
+    // A failure logs one content-free line, and claims keep the poll
+    // interval: the queue's health and backoff are not the sync's.
+    const claims = port.claimJobs.mock.calls.length;
+    runs[1]!.reject(new Error("synthetic sync failure"));
+    await timers.advance(5_000);
+    expect(logger.error.mock.calls).toEqual([
+      ["[publishing-worker] catalog sync failed"],
+    ]);
+    expect(port.claimJobs.mock.calls.length).toBe(claims + 5);
+    await timers.advance(300_000);
+    expect(sync).toHaveBeenCalledTimes(3);
+    runs[2]!.resolve();
+    await worker.stop();
+  });
+
+  it("stops only after a running detached step ends, within the shutdown grace", async () => {
+    for (const ends of [true, false]) {
+      const timers = new ManualTimers();
+      const port = queuePort();
+      let finish: (() => void) | undefined;
+      const sync = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const worker = new PublishingWorker({
+        port: port as unknown as PublishingWorkerPort,
+        handlers: { run: vi.fn() },
+        maintenance: false,
+        extraMaintenance: [
+          {
+            label: "catalog sync",
+            intervalMs: 300_000,
+            run: sync,
+            detached: true,
+          },
+        ],
+        shutdownGraceMs: 30_000,
+        timers,
+        clock: timers.clock,
+        logger: silent,
+      });
+      worker.start();
+      await timers.advance(0);
+      expect(sync).toHaveBeenCalledTimes(1);
+      let stopped = false;
+      const stopping = worker.stop().then(() => {
+        stopped = true;
+      });
+      await timers.advance(10_000);
+      // The caller closes its pools after stop(): never under the sync.
+      expect(stopped).toBe(false);
+      if (ends) finish!();
+      await timers.advance(ends ? 0 : 20_000);
+      expect(stopped).toBe(true);
+      await stopping;
+      expect(port.claimJobs).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("fails processing claims retryably when the handlers have no processor", async () => {
     const handlers = createPublishingJobHandlers({
       port: {} as PublishingWorkerPort,

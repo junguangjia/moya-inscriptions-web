@@ -21,7 +21,7 @@ import {
   parseCatalogSourceConfig,
 } from "@moya/backend-production/internal/catalog-source";
 import {
-  CATALOG_SYNC_MAX_SOURCES,
+  CATALOG_RENDER_QUEUE_TARGET,
   catalogSyncIdentities,
   createCatalogRenderer,
   createCatalogSync,
@@ -43,6 +43,11 @@ import {
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { catalogAuthorityWithCopySet } from "./catalog-copy-set.js";
+import {
+  snapshotCursors,
+  type CursorFetch,
+} from "./catalog-snapshot-cursor.js";
 import { inProcessSandbox } from "./publishing-sandbox-fixture.js";
 import {
   currentCatalogRecipePolicy,
@@ -52,6 +57,8 @@ import {
   parseCatalogPrepareDatabaseConfig,
 } from "@moya/backend-production/internal/catalog-delivery";
 import {
+  CATALOG_SNAPSHOT_FETCH_ROWS,
+  CATALOG_SNAPSHOT_MAX_SOURCES,
   readCatalogDeliveryProjection,
   catalogBlockListedSql,
 } from "@moya/community-postgres";
@@ -349,7 +356,12 @@ describe("Catalog publication authority with active-master blocks", () => {
           },
         ]
       : [];
+    const publicCursors = snapshotCursors((sql) =>
+      sql.includes("FROM catalog_media") ? (live ? [source] : []) : undefined,
+    );
     const publishedQuery = vi.fn(async (sql: string) => {
+      const cursor = publicCursors(sql);
+      if (cursor) return cursor;
       if (sql.includes("clock_timestamp()"))
         return { rows: [{ at: new Date("2026-10-20T00:00:00.000Z") }] };
       if (sql.includes("pg_export_snapshot()"))
@@ -364,8 +376,15 @@ describe("Catalog publication authority with active-master blocks", () => {
       query: publishedQuery,
       connect: async () => ({ query: publishedQuery, release: vi.fn() }),
     } as unknown as Parameters<typeof createCatalogPublicationAuthority>[0];
+    const privateCursors = snapshotCursors((sql) =>
+      sql.includes("FROM public.catalog_delivery_live_prepare_media")
+        ? privateRows
+        : undefined,
+    );
     const privateQuery = vi.fn(async (sql: string) => {
-      if (sql.includes("FROM public.catalog_delivery_prepare_media"))
+      const cursor = privateCursors(sql);
+      if (cursor) return cursor;
+      if (sql.includes("FROM public.catalog_delivery_live_prepare_media"))
         return { rows: privateRows };
       if (
         ["BEGIN", "ROLLBACK", "SET TRANSACTION"].some((p) => sql.startsWith(p))
@@ -380,9 +399,25 @@ describe("Catalog publication authority with active-master blocks", () => {
           Parameters<typeof createCatalogPublicationAuthority>[1]
         >)
       : null;
-    const appQuery = vi.fn(async (sql: string) => {
+    const appQuery = vi.fn(async (sql: string, values?: readonly unknown[]) => {
       if (sql.startsWith("SELECT DISTINCT r.id")) return { rows: publicRows };
-      if (sql.startsWith("SELECT DISTINCT intent_id")) return { rows: [] };
+      // A job's capture (catalog-scale-v1 W5): its asset's App row, and no
+      // App-known intent.
+      if (
+        sql.startsWith(
+          "SELECT id,media_id,source_object_key FROM community.catalog_media_assets",
+        )
+      )
+        return {
+          rows: [source, privateSource].flatMap((s) => {
+            const id = `catalog-asset-${createHash("md5").update(`${s.media_id}:${s.object_key}`).digest("hex")}`;
+            return (values![0] as string[]).includes(id)
+              ? [{ id, media_id: s.media_id, source_object_key: s.object_key }]
+              : [];
+          }),
+        };
+      if (sql.startsWith("SELECT DISTINCT asset_id,intent_id"))
+        return { rows: [] };
       if (sql.startsWith("SELECT p.rendition_id,m.media_id"))
         return { rows: ordinaryB.map((r) => ({ ...r, rendition_id: r.id })) };
       throw new Error("UNEXPECTED_AUTHORITY_APP_SQL");
@@ -461,7 +496,7 @@ describe("Catalog publication authority with active-master blocks", () => {
       connect: async () => ({ query: inspectQuery, release: vi.fn() }),
     } as unknown as Parameters<typeof createCatalogPublicationAuthority>[2];
     return {
-      authority: createCatalogPublicationAuthority(published, prepare, app),
+      authority: catalogAuthorityWithCopySet(published, prepare, app),
       source,
       privateSource,
       ordinaryA,
@@ -496,7 +531,9 @@ describe("Catalog publication authority with active-master blocks", () => {
     )![0];
     expect(sql).toContain(catalogBlockListedSql("r"));
     expect(sql).toContain("r.catalog_master_id IS NOT NULL");
-    expect(sql).toContain("LIMIT 40001");
+    // No row ceiling (catalog-scale-v1 W5, W-AC7): the selector reads every
+    // row of its batch of pairs; #320 stopped at LIMIT 40001.
+    expect(sql).not.toContain("LIMIT");
     expect(sql).not.toContain("unreferenced_since");
   });
 
@@ -534,14 +571,26 @@ describe("Catalog publication authority with active-master blocks", () => {
     expect(await f.authority.copyRenditionIds()).toEqual([]);
   });
 
-  it("refuses the bounded overflow rather than silently truncating block IDs", async () => {
+  // #320 refused the bounded overflow here ('Catalog selector invalid' past
+  // 40,000 rows). catalog-scale-v1 W5 (W-AC7) removes that ceiling: every
+  // row is still read and kept, never a truncated prefix, for the whole
+  // Catalog and for a job alike.
+  it("selects every block ID past the 40,000 rows #320 refused, never a prefix", async () => {
     const f = fixture();
-    f.setRows(
-      Array.from({ length: 40001 }, (_, i) => ({ ...f.block, id: rid(i) })),
+    const rows = Array.from({ length: 40001 }, (_, i) => ({
+      ...f.block,
+      id: rid(i),
+    }));
+    f.setRows(rows);
+    expect([...(await f.authority.copyRenditionIds())].sort()).toEqual(
+      rows.map((r) => r.id).sort(),
     );
-    await expect(f.authority.copyRenditionIds()).rejects.toThrow(
-      "Catalog selector invalid",
-    );
+    const lease = await f.authority.acquire(f.assetId);
+    try {
+      expect(lease.renditionIds).toHaveLength(40001);
+    } finally {
+      await lease.release();
+    }
   });
 });
 
@@ -1096,7 +1145,10 @@ describe("Catalog sync", () => {
     expect(port.syncCatalogAssets).toHaveBeenCalledWith(sources, now, {
       limit: 100,
       renditions: catalogSyncIdentities(),
+      // catalog-scale-v1 W9: the queue holds about the target, no more.
+      renderQueueTarget: CATALOG_RENDER_QUEUE_TARGET,
     });
+    expect(CATALOG_RENDER_QUEUE_TARGET).toBe(300);
     expect(catalogSyncIdentities().map((identity) => identity.role)).toEqual([
       "thumb",
       "cover",
@@ -1120,29 +1172,127 @@ describe("Catalog sync", () => {
     );
   });
 
-  it("reads the published projection, refusing a list beyond the bound", async () => {
+  it("logs a committed pass whose render backlog was not recorded, with its tombstoned intents and counts", async () => {
+    // catalog-scale-v1 W9: the backlog is written after the pass commits;
+    // a failed write is flagged, never a failed pass.
+    const port = {
+      syncCatalogAssets: vi.fn(async () => ({
+        referenced: 3,
+        skipped: 0,
+        created: 1,
+        unreferenced: 0,
+        enqueued: 1,
+        refusedIntentIds: ["00000000-0000-4000-8000-000000000001"],
+        renderBacklogRecorded: false as const,
+      })),
+    };
+    const lines: string[] = [];
+    await createCatalogSync({
+      listSources: async () => [],
+      port,
+      logger: {
+        info: (line) => lines.push(`info ${line}`),
+        error: (line) => lines.push(`error ${line}`),
+      },
+    }).run(new Date("2026-10-23T12:00:00.000Z"));
+    expect(lines).toEqual([
+      "error [media-worker] catalog sync tombstoned intents=1 ids=00000000-0000-4000-8000-000000000001",
+      "error [media-worker] catalog sync render backlog not recorded",
+      "info [media-worker] catalog sync referenced=3 skipped=0 created=1 unreferenced=0 enqueued=1",
+    ]);
+  });
+
+  it("reads the published projection through a cursor in its own snapshot, refusing a list beyond the ceiling", async () => {
     const rows = (count: number) =>
       Array.from({ length: count }, (_, index) => ({
         media_id: `m${index}`,
         object_key: `k${index}`,
         width: 1,
         height: null,
+        catalog_id: `c${index}`,
+        position: index,
       }));
-    const pool = (count: number) => ({
-      query: vi.fn(async () => ({ rows: rows(count) })),
-    });
+    const pool = (count: number) => {
+      const fetches: CursorFetch[] = [];
+      const statements: string[] = [];
+      const listed = rows(count);
+      const cursors = snapshotCursors(
+        (sql) => (sql.includes("FROM catalog_media") ? listed : undefined),
+        fetches,
+      );
+      const query = vi.fn(async (sql: string) => {
+        statements.push(sql);
+        const cursor = cursors(sql);
+        if (cursor) return cursor;
+        if (["BEGIN", "ROLLBACK"].some((prefix) => sql.startsWith(prefix)))
+          return { rows: [] };
+        throw new Error("UNEXPECTED_LIST_SQL");
+      });
+      const release = vi.fn();
+      return {
+        connect: async () => ({ query, release }),
+        fetches,
+        statements,
+        release,
+      };
+    };
     const small = pool(2);
+    // Each row's record and position order its render (W9).
     expect(await listPublishedCatalogSources(small as never)).toEqual([
-      { mediaId: "m0", objectKey: "k0", width: 1, height: null },
-      { mediaId: "m1", objectKey: "k1", width: 1, height: null },
+      {
+        mediaId: "m0",
+        objectKey: "k0",
+        width: 1,
+        height: null,
+        catalogId: "c0",
+        position: 0,
+      },
+      {
+        mediaId: "m1",
+        objectKey: "k1",
+        width: 1,
+        height: null,
+        catalogId: "c1",
+        position: 1,
+      },
     ]);
-    expect(String((small.query.mock.calls[0] as unknown[])[0])).toMatch(
-      /FROM catalog_media\s+ORDER BY media_id ASC, object_key ASC\s+LIMIT 10001/,
+    // One REPEATABLE READ snapshot, one cursor over the whole ordered view
+    // (no LIMIT), closed and rolled back, the client released.
+    expect(small.statements[0]).toBe(
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
     );
-    expect(
-      await listPublishedCatalogSources(
-        pool(CATALOG_SYNC_MAX_SOURCES + 1) as never,
-      ),
-    ).toBeNull();
+    expect(small.statements[1]).toMatch(
+      /^DECLARE catalog_published_sources NO SCROLL CURSOR FOR\s+SELECT media_id, object_key, width, height, catalog_id, position\s+FROM catalog_media\s+ORDER BY media_id ASC, object_key ASC\s*$/u,
+    );
+    expect(small.statements.slice(-2)).toEqual([
+      "CLOSE catalog_published_sources",
+      "ROLLBACK",
+    ]);
+    expect(small.release).toHaveBeenCalledTimes(1);
+
+    // Exactly the ceiling is complete; one row more is refused as a whole.
+    // Batches never exceed the fetch size, and no more than ceiling + 1 rows
+    // are ever read.
+    const full = pool(CATALOG_SNAPSHOT_MAX_SOURCES);
+    expect(await listPublishedCatalogSources(full as never)).toHaveLength(
+      CATALOG_SNAPSHOT_MAX_SOURCES,
+    );
+    const over = pool(CATALOG_SNAPSHOT_MAX_SOURCES + 2);
+    expect(await listPublishedCatalogSources(over as never)).toBeNull();
+    for (const { fetches } of [full, over]) {
+      expect(
+        Math.max(...fetches.map(({ wanted }) => wanted)),
+      ).toBeLessThanOrEqual(CATALOG_SNAPSHOT_FETCH_ROWS);
+      expect(fetches.reduce((sum, { returned }) => sum + returned, 0)).toBe(
+        fetches === over.fetches
+          ? CATALOG_SNAPSHOT_MAX_SOURCES + 1
+          : CATALOG_SNAPSHOT_MAX_SOURCES,
+      );
+    }
+    expect(over.statements.slice(-2)).toEqual([
+      "CLOSE catalog_published_sources",
+      "ROLLBACK",
+    ]);
+    expect(CATALOG_SNAPSHOT_MAX_SOURCES).toBeGreaterThanOrEqual(10 * 20_000);
   });
 });

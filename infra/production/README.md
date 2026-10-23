@@ -504,3 +504,92 @@ turn the switches on, one at a time, each as a separately approved operation:
    sign-off, real-device checks, and at least 95% of profile images rendered
    with every failure explained). Setting it back to `off` restores the previous
    answers.
+
+## Catalog scale: database steps of increment 1B (catalog-scale-v1)
+
+Increment 1B of Issue #323 adds CMS migration
+`20261024_000000_catalog_delivery_live_prepare` (M2: the private prepare view
+becomes `security_barrier`, the live projection
+`catalog_delivery_live_prepare_media` and its index
+`catalog_delivery_intents_state_ended` are created) and App migration
+`20261024010000_catalog_publication_scope` (A1: the scoped reconcile's dirty
+queue `community.catalog_publication_dirty`, its one-row state
+`community.catalog_reconcile_state`, three partial indexes and the index
+`media_publications_rendition` that a Catalog job's inspection reads
+publications by). It follows 1A's CMS migration
+`20261023_000000_catalog_media_keyed_reads` (M1).
+
+A media worker or Backend of 1B starts only after both migrations and their
+grants. At startup each checks, read-only, that the App role holds every
+privilege the reconcile uses on A1's tables, that A1's one state row exists,
+and, where `CATALOG_PREPARE_DATABASE_URL` is set, that the prepare reader can
+read both private prepare views. Otherwise it refuses and names what is missing
+(relation, column and privilege names only), for example
+`[media-worker] startup failed: Catalog publication scope is not ready for the App role (missing SELECT on community.catalog_publication_dirty, …)`
+or
+`[backend-production] startup failed: Catalog prepare reader cannot read public.catalog_delivery_live_prepare_media: …`.
+Its ledger check also refuses while A1 is missing.
+
+The Owner runs each step separately, in this order, in the protected migration
+or setup session the sections above describe. Payload migrations run through
+`pnpm db:migrate` from the named release checkout, with `MOYA_CONTENT_SOURCE`
+set to `payload` and the migration-privileged `CMS_DATABASE_URL` (Explicit
+migration routing above); `payload migrate` applies every pending migration as
+one batch, so a migration is a batch of its own only when it is the one pending
+migration of that checkout.
+
+1. Only if `20261020_160000_catalog_delivery_intents` has not run in Production
+   yet: run the Payload migrations once from the #320 checkout, so it is a batch
+   of its own.
+2. M1, as a batch of its own: run the Payload migrations from the 1A checkout,
+   which holds M1 but not M2 (skip this step if a 1A release already applied
+   it). Run it at low traffic: the view swap waits at most 5 s (`lock_timeout`)
+   behind a long reader, and a run that fails with `55P03` left nothing behind
+   and is simply repeated.
+3. M2, as a batch of its own: run the Payload migrations from the 1B checkout.
+   It builds the index on `catalog_delivery_intents` and replaces or creates the
+   two private views under the same 5 s `lock_timeout`; repeat it after a
+   `55P03`.
+4. Only where `CATALOG_PREPARE_DATABASE_URL` is set, or is about to be set, for
+   the media worker or the Backend (the prepare reader is optional, and both
+   Production env examples leave it unset): re-run
+   `infra/development/catalog-media/grant-prepare-read.sql` with
+   `--single-transaction` and its four identity variables. It refuses unless the
+   prepare reader role exists and is the approved one, and it now also grants
+   that reader `SELECT` on the live projection. Check that
+   `SELECT has_table_privilege('<prepare reader>', 'public.catalog_delivery_live_prepare_media', 'SELECT')`
+   is `true`. Without a prepare reader, skip this step: nothing reads either
+   private view, and the startup check of the views runs only with
+   `CATALOG_PREPARE_DATABASE_URL` set.
+5. A1, with the migration role: `pnpm db:migrate:community` with its
+   `APP_MIGRATION_DATABASE_URL`, as above. Its index builds briefly block writes
+   to `community.catalog_delivery_prepares` and `community.media_publications`;
+   under its 5 s `lock_timeout` a busy run fails with `55P03`, applies nothing
+   and is repeated. It is forward-only, like every App migration.
+6. Re-apply `infra/development/work-publishing/grant-runtime.sql` with
+   `app_role` and `--single-transaction` (idempotent). It grants the App role
+   `SELECT`, `INSERT` and
+   `UPDATE (mark_seq, cleared_seq, reason, urgent, marked_at)` on the dirty
+   queue, and `SELECT` and `UPDATE` of the state columns (not `id`) on the state
+   row; never `DELETE`. Run before step 5 it grants nothing on these tables, so
+   it must follow A1. Check that
+   `SELECT has_table_privilege('<App role>', 'community.catalog_publication_dirty', 'INSERT')`
+   is `true`.
+7. Only then start the media worker and the Backend of 1B, in the activation
+   order above. Check that both start and that the worker's ready line says
+   `catalog=on`.
+
+Rollback: a worker or Backend before 1B (#320, main or `c29dfd61`) runs on the
+migrated databases without any migration down. It never names A1's relations,
+its ledger check reads only the migration IDs it knows, and M1 and M2 keep the
+rows and columns of the views it reads. A1 stays in place. To undo M2 or M1
+itself, use `payload migrate:down` only while that migration is the latest batch
+and a batch of its own (steps 2 and 3 make it so); otherwise run its exported
+downgrade SQL and delete its `payload_migrations` row in one transaction. After
+M2 is undone, the current `grant-prepare-read.sql` fails (it grants `SELECT` on
+the live projection M2 creates), so any later re-grant of the prepare reader
+must use the #320 version of that script. A rollback restores #320's listing
+bounds, so until 1B has run stably keep the Catalog within them: fewer than
+about 8,800 published images (with live prepares, the 10,000
+published-plus-prepared pair bound), fewer than 10,000 prepare intents in all,
+and fewer than 18,000 rows in the private prepare view.

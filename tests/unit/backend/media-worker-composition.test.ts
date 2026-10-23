@@ -8,10 +8,16 @@ import {
   prepareMediaWorker,
   startMediaWorker,
 } from "@moya/backend-production/internal/media-worker";
-import { createPostgresPool } from "@moya/catalog-postgres";
+import {
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
+  createPostgresPool,
+  PostgresStartupError,
+} from "@moya/catalog-postgres";
 import {
   PostgresWorkPublishingAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -47,8 +53,26 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
         connect: async () => ({ query, release: vi.fn() }),
       };
     }),
+    // catalog-scale-v1 W6: the Catalog grant checks are PostgreSQL I/O too;
+    // their pools and refusals are observed below.
+    assertCatalogPublicationScopeReady: vi.fn(async () => {}),
+    assertCatalogPrepareReaderReady: vi.fn(async () => {}),
   };
 });
+
+// catalog-scale-v1 W8: the App side of the per-minute membership step.
+const membership = vi.hoisted(() => ({
+  readCatalogMembershipState: vi.fn(async () => ({
+    public: null,
+    private: null,
+  })),
+  readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+  applyCatalogMembership: vi.fn(async () => ({
+    public: 0,
+    private: 0,
+    boundaries: 0,
+  })),
+}));
 
 vi.mock("@moya/community-postgres", async (importOriginal) => {
   const actual =
@@ -56,6 +80,7 @@ vi.mock("@moya/community-postgres", async (importOriginal) => {
   return {
     ...actual,
     verifyCommunityMigrationLedger: vi.fn(async () => {}),
+    catalogMembershipStore: vi.fn(() => membership),
   };
 });
 
@@ -340,9 +365,26 @@ describe("media worker composition", () => {
       expect(queue.enqueue.mock.calls.map(([job]) => job.kind)).toEqual([
         "reconcile_capacity",
       ]);
-      expect(queue.catalogSync).toHaveBeenCalledTimes(1);
-      expect(queue.blockSync).toHaveBeenCalledTimes(
-        mode === "development" ? 1 : 0,
+      // The Catalog sync runs detached from the tick (catalog-scale-v1 W4).
+      await vi.waitFor(() =>
+        expect(queue.catalogSync).toHaveBeenCalledTimes(1),
+      );
+      // So does the membership step (W8), on the App pool, from the
+      // published pool's aggregate (no prepare reader here: no private side).
+      expect(catalogMembershipStore).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() =>
+        expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1),
+      );
+      expect(
+        (membership.applyCatalogMembership.mock.calls[0] as unknown[])[0],
+      ).toMatchObject({
+        public: { count: 0, sum: "0", diff: { buckets: [], members: [] } },
+        private: null,
+      });
+      await vi.waitFor(() =>
+        expect(queue.blockSync).toHaveBeenCalledTimes(
+          mode === "development" ? 1 : 0,
+        ),
       );
       expect(queue.profileSweep).toHaveBeenCalledTimes(
         mode === "development" ? 1 : 0,
@@ -366,6 +408,167 @@ describe("media worker composition", () => {
       expect(queue.claim.mock.calls.length).toBe(claims);
     },
   );
+
+  // catalog-scale-v1 (Issue #323) 1B, W6: the worker checks the scoped
+  // reconcile's grants on the App pool and, only with a prepare database, the
+  // prepare reader's grants on that pool, after the ledger and before it
+  // claims anything. Either refusal stops startup with every pool closed.
+  it("checks the Catalog scope and prepare grants on their own pools at startup and refuses without them", async () => {
+    const queue = quietQueue();
+    fakeMedia.sandbox.selfCheck.mockResolvedValue({
+      status: "ok",
+      runtime: sandboxRuntime(),
+      facts: isolatedFacts(),
+    });
+    const withPrepare = {
+      ...production,
+      CATALOG_PREPARE_DATABASE_URL:
+        "postgresql://synthetic-prepare@127.0.0.1:1/synthetic_published",
+    };
+    const opened = (from: number) =>
+      vi
+        .mocked(createPostgresPool)
+        .mock.calls.slice(from)
+        .map(([config], index) => ({
+          url: config.connectionString,
+          pool: vi.mocked(createPostgresPool).mock.results[from + index]!
+            .value as unknown,
+        }));
+    const poolOf = (from: number, url: string) =>
+      opened(from).find((pool) => pool.url === url)!.pool;
+
+    let from = vi.mocked(createPostgresPool).mock.results.length;
+    const plain = await prepareMediaWorker(production, { logger: silent });
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledWith(
+      poolOf(from, production.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).not.toHaveBeenCalled();
+    await plain.stop();
+
+    from = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareMediaWorker(withPrepare, { logger: silent });
+    expect(opened(from)).toHaveLength(3);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenLastCalledWith(
+      poolOf(from, withPrepare.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledWith(
+      poolOf(from, withPrepare.CATALOG_PREPARE_DATABASE_URL),
+    );
+    await prepared.stop();
+
+    for (const check of [
+      assertCatalogPublicationScopeReady,
+      assertCatalogPrepareReaderReady,
+    ]) {
+      const refusal = new PostgresStartupError("Synthetic missing grant");
+      vi.mocked(check).mockRejectedValueOnce(refusal);
+      database.end.mockClear();
+      from = vi.mocked(createPostgresPool).mock.results.length;
+      await expect(
+        startMediaWorker(withPrepare, { logger: silent }),
+      ).rejects.toBe(refusal);
+      expect(opened(from)).toHaveLength(3);
+      expect(database.end).toHaveBeenCalledTimes(3);
+    }
+    expect(queue.claim).not.toHaveBeenCalled();
+  });
+
+  it("keeps claiming while a long Catalog sync runs, and closes the pools only after it ends", async () => {
+    const queue = quietQueue();
+    let finish: (() => void) | undefined;
+    queue.catalogSync.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              referenced: 0,
+              skipped: 0,
+              created: 0,
+              unreferenced: 0,
+              enqueued: 0,
+            });
+        }),
+    );
+    fakeMedia.sandbox.selfCheck.mockResolvedValue({
+      status: "ok",
+      runtime: sandboxRuntime(),
+      facts: isolatedFacts(),
+    });
+    const worker = await startMediaWorker(production, { logger: silent });
+    try {
+      await vi.waitFor(() =>
+        expect(queue.catalogSync).toHaveBeenCalledTimes(1),
+      );
+      // The sync has not returned, and the media worker (not only the
+      // publication lanes on the same queue) still claims, poll after poll.
+      const mediaClaims = () =>
+        queue.claim.mock.calls.filter(([options]) =>
+          options.kinds?.includes("catalog_render"),
+        ).length;
+      await vi.waitFor(() => expect(mediaClaims()).toBeGreaterThanOrEqual(2), {
+        timeout: 5_000,
+      });
+      let stopped = false;
+      const stopping = worker.stop().then(() => {
+        stopped = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(stopped).toBe(false);
+      expect(database.end).not.toHaveBeenCalled();
+      finish!();
+      await stopping;
+      expect(database.end).toHaveBeenCalledTimes(2);
+      expect(queue.catalogSync).toHaveBeenCalledTimes(1);
+    } finally {
+      finish?.();
+      await worker.stop();
+    }
+  });
+
+  it("keeps claiming while a membership step runs, and closes the pools only after it ends", async () => {
+    const queue = quietQueue();
+    let finish: (() => void) | undefined;
+    membership.applyCatalogMembership.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ public: 0, private: 0, boundaries: 0 });
+        }),
+    );
+    fakeMedia.sandbox.selfCheck.mockResolvedValue({
+      status: "ok",
+      runtime: sandboxRuntime(),
+      facts: isolatedFacts(),
+    });
+    const worker = await startMediaWorker(production, { logger: silent });
+    try {
+      await vi.waitFor(() =>
+        expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1),
+      );
+      const mediaClaims = () =>
+        queue.claim.mock.calls.filter(([options]) =>
+          options.kinds?.includes("catalog_render"),
+        ).length;
+      await vi.waitFor(() => expect(mediaClaims()).toBeGreaterThanOrEqual(2), {
+        timeout: 5_000,
+      });
+      let stopped = false;
+      const stopping = worker.stop().then(() => {
+        stopped = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(stopped).toBe(false);
+      expect(database.end).not.toHaveBeenCalled();
+      finish!();
+      await stopping;
+      expect(database.end).toHaveBeenCalledTimes(2);
+      expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1);
+    } finally {
+      finish?.();
+      await worker.stop();
+    }
+  });
 
   it.each([
     ["production", "on"],

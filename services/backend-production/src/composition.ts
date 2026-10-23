@@ -24,6 +24,8 @@ import {
 } from "@moya/backend-runtime";
 import {
   asPostgresOperationError,
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   assertPostgresStartupReady,
   checkPostgresReadiness,
   closePostgresPool,
@@ -47,6 +49,7 @@ import {
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
   resolveCatalogRenditionRead,
   verifyCatalogDeliveryReadable,
   verifyCommunityMigrationLedger,
@@ -72,8 +75,10 @@ import {
 } from "./article-authoring/delegation-composition.js";
 import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
+  CATALOG_MEMBERSHIP_INTERVAL_MS,
   CATALOG_SYNC_INTERVAL_MS,
   createCatalogBlockRenderer,
+  createCatalogMembershipWatch,
   createCatalogRenderer,
   createCatalogSync,
   listPublishedCatalogSources,
@@ -503,6 +508,9 @@ export const prepareProductionBackend = async (
             ...(blocksRender && catalogSources ? { catalogBlocks: true } : {}),
             concurrency: publishing.concurrency,
             extraMaintenance: [
+              // Detached, as in the media worker (catalog-scale-v1 W4): a sync
+              // of a large Catalog never holds the tick and its job claims;
+              // stopping waits for it before the pools close.
               ...(catalogSources
                 ? [
                     {
@@ -515,9 +523,33 @@ export const prepareProductionBackend = async (
                         port: workPublishingPort,
                         ...(blocksRender ? { blocks: workPublishingPort } : {}),
                       }).run,
+                      detached: true,
                     },
                   ]
                 : []),
+              // catalog-scale-v1 W8, as in the media worker: wherever the
+              // scoped reconcile runs with a Catalog authority (here the
+              // publication lanes below, whenever publishing media is set,
+              // with the authority always on the published read pool), the
+              // per-minute membership step marks its dirty assets (a
+              // takedown between syncs or with no sync at all, a lease that
+              // passed), from the published read pool, on the App pool. It
+              // follows the reconcile, not the sync: without CMS_MEDIA_DIR
+              // there is no sync, and the reconcile would otherwise reach a
+              // takedown only on the sweep. One instance
+              // per process: its memory of its own last observation limits
+              // the marks.
+              {
+                label: "catalog membership",
+                intervalMs: CATALOG_MEMBERSHIP_INTERVAL_MS,
+                run: createCatalogMembershipWatch({
+                  published: pool,
+                  prepare: catalogPreparePool,
+                  policy: currentCatalogRecipePolicy().recipeManifestSha256,
+                  port: catalogMembershipStore(communityPool),
+                }).run,
+                detached: true,
+              },
               ...(profileRender
                 ? [
                     {
@@ -638,6 +670,14 @@ export const prepareProductionBackend = async (
     await verifyCommunityMigrationLedger(communityPool);
     // Discovery cards join the Catalog rendition delivery view (PR 1b).
     await verifyCatalogDeliveryReadable(communityPool);
+    // catalog-scale-v1 W6: the Backend may run publication workers and the
+    // reconcile, and its publication authority reads the prepare views: the
+    // scoped reconcile's tables and grants (App migration 20261024010000)
+    // and, where configured, the prepare reader's grant on both private
+    // views (CMS migration M2) are checked as in the media worker.
+    await assertCatalogPublicationScopeReady(communityPool);
+    if (catalogPreparePool)
+      await assertCatalogPrepareReaderReady(catalogPreparePool);
     productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv, {
       betaAccountAccess: createPostgresBetaAccountAccess(communityPool),
     });
