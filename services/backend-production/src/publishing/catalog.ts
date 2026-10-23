@@ -795,3 +795,67 @@ export async function listPublishedCatalogSources(
     height: row.height,
   }));
 }
+
+/** Largest de-duplicated pair batch one exact check accepts: the bound of one
+ * App delivery-projection read (`readCatalogDeliveryProjection`), which is
+ * handed the same de-duplicated pairs. A per-request batch bound (one Detail's
+ * images at most), not a ceiling on the Catalog. */
+export const CATALOG_PUBLISHED_PAIRS_MAX = 10_000;
+
+/**
+ * Which requested (media id, object key) pairs the published Catalog
+ * projection names now, read through the read-only Catalog connection (the
+ * public read role) for a public read (catalog-scale-v1 1A). Both conditions
+ * are restrictions on the view, never a join, so once the view is no longer
+ * fenced (CMS migration M1) its index on media_id alone
+ * (catalogs_media_media_id_lookup_idx) finds the requested media ids' rows
+ * and object_key filters those few; until then each check is one filtered
+ * scan of the view, with no listing, sort or ceiling. The answer may hold a
+ * published cross-product pair nobody asked for; the exact-pair filter drops
+ * it. No order, no bound and no community relation (the App is another
+ * database).
+ */
+export const publishedCatalogPairsSql = `
+  SELECT DISTINCT media_id, object_key
+  FROM catalog_media
+  WHERE media_id = ANY($1::text[]) AND object_key = ANY($2::text[])
+`;
+
+/**
+ * The live published subset of `pairs`, keyed as the delivery facts map is
+ * (`JSON.stringify([mediaId, objectKey])`). Read on every call with no cache,
+ * so a withdrawn record loses its pairs on the next read. No pair reads
+ * nothing; an invalid pair or an oversized batch throws before any query.
+ */
+export async function publishedCatalogPairs(
+  published: Pick<ReturnType<typeof createPostgresPool>, "query">,
+  pairs: readonly { readonly mediaId: string; readonly objectKey: string }[],
+): Promise<ReadonlySet<string>> {
+  const requested = new Map<string, { mediaId: string; objectKey: string }>();
+  for (const { mediaId, objectKey } of pairs) {
+    if (
+      typeof mediaId !== "string" ||
+      mediaId.length === 0 ||
+      typeof objectKey !== "string" ||
+      objectKey.length === 0
+    )
+      throw new TypeError("Catalog published pair invalid");
+    requested.set(JSON.stringify([mediaId, objectKey]), { mediaId, objectKey });
+  }
+  if (requested.size === 0) return new Set();
+  if (requested.size > CATALOG_PUBLISHED_PAIRS_MAX)
+    throw new TypeError("Catalog published pair batch too large");
+  const result = await published.query<{
+    media_id: string;
+    object_key: string;
+  }>(publishedCatalogPairsSql, [
+    [...new Set([...requested.values()].map((pair) => pair.mediaId))],
+    [...new Set([...requested.values()].map((pair) => pair.objectKey))],
+  ]);
+  const live = new Set<string>();
+  for (const row of result.rows) {
+    const key = JSON.stringify([row.media_id, row.object_key]);
+    if (requested.has(key)) live.add(key);
+  }
+  return live;
+}

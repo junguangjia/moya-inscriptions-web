@@ -931,6 +931,9 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
           ).rows.map((r) => r.catalog_asset_id),
         )
       : undefined;
+    // No live Catalog asset among them: nothing can resolve, so the App is
+    // not read again (catalog-scale-v1 1A).
+    if (ids?.length === 0) return new Map();
     return readTransaction(this.pool, async (db) => {
       const rows = (
         await db.query<{ rendition_id: string; object_key: string }>(
