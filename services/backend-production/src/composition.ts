@@ -26,6 +26,7 @@ import {
   startBackendProcess,
 } from "@moya/backend-runtime";
 import {
+  asCatalogQueryUnavailableError,
   asPostgresOperationError,
   assertPostgresStartupReady,
   checkPostgresReadiness,
@@ -116,6 +117,7 @@ import {
   createCatalogPublicationAuthority,
   catalogExpectedRenditions,
   createCatalogReadiness,
+  createCatalogPublishedRenditions,
   currentCatalogRecipePolicy,
 } from "./publishing/catalog-delivery-intents.js";
 import { LocalCatalogSourceReader } from "./storage/catalog-source.js";
@@ -394,7 +396,12 @@ export const prepareProductionBackend = async (
     : createPostgresPool(postgresConfig, { onUnexpectedIdleError });
 
   try {
-    await assertPostgresStartupReady(pool, contentSource, catalogReaders);
+    // Discovery reads the published Payload discovery view through this
+    // public read connection (catalog-delivery-release-hardening-v1 N1).
+    await assertPostgresStartupReady(pool, contentSource, {
+      ...catalogReaders,
+      discovery: contentSource === "payload",
+    });
   } catch (error) {
     await closePostgresPool(pool);
     throw error;
@@ -428,26 +435,34 @@ export const prepareProductionBackend = async (
     ...(upstreamCatalogResolver.resolveKeys
       ? { resolveKeys: (keys) => upstreamCatalogResolver.resolveKeys!(keys) }
       : {}),
+    // Every reader shares this lookup (Catalog, editorial, authored Article
+    // bodies, author cards): a failed CMS listing or App delivery-fact read
+    // is Catalog unavailability, the documented 503, never a 500
+    // (catalog-delivery-release-hardening-v1 F9).
     catalogFacts: async (locators) => {
-      const live = await createCatalogPublicationAuthority(
-        pool,
-        null,
-        communityPool,
-      ).publishedAssetIds(
-        locators.map(
-          (p) => `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
-        ),
-      );
-      const approved = new Set(live);
-      return readCatalogDeliveryProjection(
-        communityPool,
-        locators.filter((p) =>
-          approved.has(
-            `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
+      try {
+        const live = await createCatalogPublicationAuthority(
+          pool,
+          null,
+          communityPool,
+        ).publishedAssetIds(
+          locators.map(
+            (p) => `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
           ),
-        ),
-        catalogExpectedRenditions,
-      );
+        );
+        const approved = new Set(live);
+        return await readCatalogDeliveryProjection(
+          communityPool,
+          locators.filter((p) =>
+            approved.has(
+              `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
+            ),
+          ),
+          catalogExpectedRenditions,
+        );
+      } catch (error) {
+        throw asCatalogQueryUnavailableError(error);
+      }
     },
   };
   const deliveryOptions = {
@@ -752,6 +767,9 @@ export const prepareProductionBackend = async (
       publicationConfig,
       createBackendApplication({
         catalogRecipePolicy: async () => currentCatalogRecipePolicy(),
+        // App facts only: no prepare reader and no CMS connection is needed.
+        catalogPublishedRenditions:
+          createCatalogPublishedRenditions(communityPool),
         ...(catalogPreparePool
           ? {
               catalogDeliveryReadiness: createCatalogReadiness(

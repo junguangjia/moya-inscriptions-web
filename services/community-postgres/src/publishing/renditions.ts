@@ -57,7 +57,11 @@ export const retentionHoldSql = (blob: string): string =>
 /**
  * SQL (blob id expression): true while a live component or a rendition that
  * is not released uses the blob. A purged item's components and renditions
- * no longer count; Catalog and profile renditions count until released.
+ * no longer count; Catalog and profile renditions count until released. A
+ * released Catalog rendition still counts while a generation of it is live:
+ * a recipe bump keeps that set desired and served until its replacement is
+ * published (catalog-delivery-release-hardening-v1 N3), and the withdrawal
+ * that retires it frees the blob for the existing purge.
  */
 export const blobInUseSql = (blobId: string): string => `(
   ${catalogPreparedBlobPinSql(blobId)} OR
@@ -67,6 +71,10 @@ export const blobInUseSql = (blobId: string): string => `(
   OR EXISTS (
     SELECT 1 FROM community.media_renditions r LEFT JOIN community.media_items ri ON ri.id=r.item_id
     WHERE r.blob_id=${blobId} AND r.state <> 'released' AND (r.item_id IS NULL OR ri.state <> 'purged'))
+  OR EXISTS (
+    SELECT 1 FROM community.media_renditions cr
+    JOIN community.media_publications cp ON cp.rendition_id=cr.id AND cp.state IN ('publishing','published')
+    WHERE cr.blob_id=${blobId} AND cr.catalog_asset_id IS NOT NULL)
 )`;
 
 /**

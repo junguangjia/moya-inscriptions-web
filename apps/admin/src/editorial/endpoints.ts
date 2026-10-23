@@ -8,6 +8,7 @@ import {
   requestCatalogRelease,
   releaseCatalogDelivery,
   cancelCatalogDelivery,
+  catalogDeliveryCapabilities,
 } from "./catalog-delivery";
 
 import { EditorialError, safeEditorialFailure } from "./errors";
@@ -66,6 +67,7 @@ export const editorialEndpoints: Endpoint[] = [
   endpoint("request-catalog-release", requestCatalogRelease),
   endpoint("release-catalog-delivery", releaseCatalogDelivery),
   endpoint("cancel-catalog-delivery", cancelCatalogDelivery),
+  endpoint("catalog-delivery-capabilities", catalogDeliveryCapabilities),
   // content-community-completion-v1: the same mechanism for Articles.
   endpoint("save-article-draft", saveArticleDraft),
   endpoint("approve-article-batch", approveArticleBatch),

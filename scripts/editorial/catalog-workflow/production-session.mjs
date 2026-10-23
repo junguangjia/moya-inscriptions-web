@@ -6,6 +6,7 @@ import { open, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { privateJSON } from "../../curation/adapter.mjs";
 import {
+  catalogDeliveryCapabilitiesSchema,
   editorialDraftSchema,
   editorialContentFromDocument,
   editorialSaveDraftSchema,
@@ -19,7 +20,10 @@ import {
 } from "./production-authority.mjs";
 import { withNativeHTTPSCheckpointStore } from "./checkpoint-store.mjs";
 import { openProductionTransportJournal } from "./payload-isolated-session.mjs";
-import { createProductionNativeHTTP } from "./local-native-http.mjs";
+import {
+  createProductionNativeHTTP,
+  definitivelyRejected,
+} from "./local-native-http.mjs";
 import {
   createCatalogDeliveryClient,
   openCatalogDeliveryJournal,
@@ -45,6 +49,13 @@ import {
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const bytesHash = (x) => createHash("sha256").update(x).digest("hex");
+const CAPABILITIES_ROUTE = "/api/editorial/catalog-delivery-capabilities";
+const TERMINAL_INTENT_CODES = Object.freeze({
+  cancelled: "DELIVERY_INTENT_CANCELLED",
+  superseded: "DELIVERY_INTENT_SUPERSEDED",
+  expired: "DELIVERY_INTENT_EXPIRED",
+  withdrawn: "DELIVERY_INTENT_WITHDRAWN",
+});
 const positive = (x) => Number.isSafeInteger(x) && x > 0;
 const hash = (x) => typeof x === "string" && /^[a-f0-9]{64}$/.test(x);
 async function maybe(file) {
@@ -212,6 +223,20 @@ export async function withProductionCatalogSession(options, work) {
               }))
         )
           fail("PRODUCTION_RECEIPT_MISMATCH");
+      };
+      // A Native write may be sent again only when the transport journal shows
+      // that none of its attempts can have been applied: none was recorded, or
+      // Native answered each one with a refusal.
+      const unapplied = (route, method, bodyText) => {
+        const logicalKey = digest({
+          scope: journal.scopeSha256,
+          route,
+          method,
+          bodySha256: bytesHash(bodyText),
+        });
+        return journal.requests
+          .filter((row) => row.logicalKey === logicalKey)
+          .every(definitivelyRejected);
       };
       const conversionCache = new Map();
       const verifyConversion = async (reference) => {
@@ -385,6 +410,13 @@ export async function withProductionCatalogSession(options, work) {
         )
           return;
         if (
+          method === "POST" &&
+          route === CAPABILITIES_ROUTE &&
+          ["upload", "run", "publish"].includes(command) &&
+          JSON.stringify(body) === "{}"
+        )
+          return;
+        if (
           method === "GET" &&
           state.save &&
           route ===
@@ -471,6 +503,7 @@ export async function withProductionCatalogSession(options, work) {
                 "/api/editorial/read-draft",
                 "/api/editorial/read-catalog-delivery",
                 "/api/editorial/media-upload/status",
+                CAPABILITIES_ROUTE,
               ].includes(route))
           )
             await verifySourceFiles();
@@ -498,6 +531,38 @@ export async function withProductionCatalogSession(options, work) {
         const result = await request(...args);
         if (!result.ok) fail(result.code);
         return result.result;
+      };
+      // Asked once, before this command's first write (upload, draft save or
+      // delivery intent): an Admin without the endpoints the command uses, or
+      // a publication whose Backend cannot pin a recipe and prove readiness,
+      // stops here with nothing written.
+      const needsDelivery =
+        command === "publish" ||
+        (command === "run" && record.disposition === "publish");
+      const needsUpload =
+        ["upload", "run"].includes(command) && !record.reuseOnly;
+      let capabilities = null;
+      const preflight = async () => {
+        if ((!needsDelivery && !needsUpload) || capabilities) return;
+        const response = await request(CAPABILITIES_ROUTE, "POST", {});
+        if (!response.ok)
+          fail(
+            response.httpStatus === 404
+              ? "ADMIN_CAPABILITY_MISSING"
+              : response.code,
+          );
+        const parsed = catalogDeliveryCapabilitiesSchema.safeParse(
+          response.result?.result,
+        );
+        if (response.result?.ok !== true || !parsed.success)
+          fail("ADMIN_CAPABILITY_INVALID");
+        if (needsDelivery && parsed.data.delivery !== "AVAILABLE")
+          fail(
+            parsed.data.delivery === "NOT_CONFIGURED"
+              ? "BACKEND_DELIVERY_NOT_CONFIGURED"
+              : "BACKEND_DELIVERY_UNAVAILABLE",
+          );
+        capabilities = parsed.data;
       };
       const protect = () => {
         if (
@@ -651,6 +716,7 @@ export async function withProductionCatalogSession(options, work) {
             continue;
           }
           if (record.reuseOnly) fail("REUSE_ONLY_PROOF_MISSING");
+          await preflight();
           const bytes = await imageBytes(controlled.root, mediaMapping, asset),
             { body, requestHash } = uploadProofInputs(
               record,
@@ -781,6 +847,17 @@ export async function withProductionCatalogSession(options, work) {
           )
             fail("REUSE_ONLY_PROOF_MISSING");
         }
+        if (
+          state.save &&
+          state.save.status !== "CONFIRMED" &&
+          digest(baseline(current.draft)) ===
+            digest(options.input.expectedNative) &&
+          unapplied("/api/editorial/save-draft", "POST", state.save.bodyText)
+        ) {
+          // Rejected or never sent, and Native is unchanged: send it again.
+          state.save = null;
+          await saveState();
+        }
         if (state.save) return reconcileSavedDraft(current.draft);
         if (
           digest(baseline(current.draft)) !==
@@ -789,6 +866,7 @@ export async function withProductionCatalogSession(options, work) {
           fail("NATIVE_PREFLIGHT_CHANGED");
         if (digest(current.draft.content) === record.contentSha256)
           return current.draft;
+        await preflight();
         const body = editorialSaveDraftSchema.parse({
           id: binding.nativeId,
           expectedRevision: current.draft.revision,
@@ -806,6 +884,14 @@ export async function withProductionCatalogSession(options, work) {
           "POST",
           body,
         );
+        if (
+          !response.ok &&
+          unapplied("/api/editorial/save-draft", "POST", state.save.bodyText)
+        ) {
+          state.save = null;
+          await saveState();
+          fail(response.code);
+        }
         state.save.status = "UNKNOWN";
         await saveState();
         if (!response.ok) fail("NATIVE_RECONCILIATION_PENDING");
@@ -932,6 +1018,10 @@ export async function withProductionCatalogSession(options, work) {
             operation,
             input,
           );
+          // An ended intent never becomes ready again, and this state
+          // directory cannot open another one: report the end, not a wait.
+          if (Object.hasOwn(TERMINAL_INTENT_CODES, result.result?.state ?? ""))
+            fail(TERMINAL_INTENT_CODES[result.result.state]);
           if (
             result.status === "UNKNOWN" ||
             result.status === "HOLD" ||
@@ -946,6 +1036,7 @@ export async function withProductionCatalogSession(options, work) {
             fail("NATIVE_PUBLICATION_UNVERIFIED");
           return result;
         };
+        await preflight();
         let result = await action("prepare", {
           id: binding.nativeId,
           expectedRevision: state.frozen.revision,
@@ -981,7 +1072,21 @@ export async function withProductionCatalogSession(options, work) {
         const current = await inspect();
         if (binding.role !== "owner") fail("OWNER_AUTHORITY_REQUIRED");
         const d = current.draft,
-          main = current.main;
+          main = current.main,
+          route = `/api/catalogs/${binding.nativeId}?draft=false&depth=0`;
+        if (
+          state.withdraw &&
+          !state.withdraw.nativeReceipt &&
+          main.status === "published" &&
+          main.revision === state.withdraw.before.revision &&
+          digest(baseline(d)) === digest(state.withdraw.before) &&
+          digest(main.content) === state.withdraw.before.contentSha256 &&
+          unapplied(route, "PATCH", state.withdraw.bodyText)
+        ) {
+          // Rejected or never sent, and still published: send it again.
+          state.withdraw = null;
+          await saveState();
+        }
         if (state.withdraw) {
           const old = state.withdraw.before;
           if (
@@ -1030,16 +1135,24 @@ export async function withProductionCatalogSession(options, work) {
         };
         await saveState();
         const response = await request(
-          `/api/catalogs/${binding.nativeId}?draft=false&depth=0`,
+          route,
           "PATCH",
           JSON.parse(state.withdraw.bodyText),
         );
+        if (
+          !response.ok &&
+          unapplied(route, "PATCH", state.withdraw.bodyText)
+        ) {
+          state.withdraw = null;
+          await saveState();
+          fail(response.code);
+        }
         state.withdraw.status = "UNKNOWN";
         await saveState();
         if (!response.ok) fail("WITHDRAWAL_RECONCILIATION_PENDING");
         rowReceipt(
           response.nativeReceipt,
-          `/api/catalogs/${binding.nativeId}?draft=false&depth=0`,
+          route,
           "PATCH",
           state.withdraw.bodyText,
           digest(response.result),

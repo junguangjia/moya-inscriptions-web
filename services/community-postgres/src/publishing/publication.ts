@@ -935,10 +935,14 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       const rows = (
         await db.query<{ rendition_id: string; object_key: string }>(
           `SELECT p.rendition_id,p.object_key FROM community.media_publications p
-          JOIN community.media_renditions r ON r.id=p.rendition_id AND (r.state='ready' OR EXISTS(SELECT 1 FROM community.catalog_delivery_rendition_pins pin WHERE pin.rendition_id=r.id AND pin.public_generation_id=p.id AND pin.public_generation_version=p.version))
+          JOIN community.media_renditions r ON r.id=p.rendition_id
           JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' AND b.sha256=p.sha256 AND b.byte_size=p.byte_size
           JOIN community.catalog_media_assets a ON a.id=r.catalog_asset_id AND a.state='ready'
           WHERE p.state='published' AND p.rendition_id=ANY($1::text[]) AND ($2::text[] IS NULL OR a.id=ANY($2::text[]))
+          -- An editorial set a re-render released keeps resolving while it is
+          -- still published: the projection serves it until its replacement is.
+          AND (r.state='ready' OR EXISTS(SELECT 1 FROM community.catalog_delivery_rendition_pins pin WHERE pin.rendition_id=r.id AND pin.public_generation_id=p.id AND pin.public_generation_version=p.version)
+            OR (a.source_object_key LIKE 'editorial/%' AND r.role IN ('thumb','cover','display','viewer')))
           AND ((r.catalog_master_id IS NULL AND NOT (${blockRowSql("r")}) AND (a.source_object_key NOT LIKE 'editorial/%' OR r.role IN ('thumb','cover','display','viewer')))
             OR (r.state='ready' AND r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")}))`,
           [renditionIds, ids ?? null],

@@ -80,6 +80,7 @@ const sendRouteError = (
 export interface CommunityRouterDependencies {
   readonly catalogRecipePolicy?: BackendApplicationOptions["catalogRecipePolicy"];
   readonly catalogDeliveryReadiness?: BackendApplicationOptions["catalogDeliveryReadiness"];
+  readonly catalogPublishedRenditions?: BackendApplicationOptions["catalogPublishedRenditions"];
   /** Separate user-owned Article operations. */
   readonly articleAuthoringService?: ArticleAuthoringService;
   readonly articleDelegation?: BackendApplicationOptions["articleDelegation"];
@@ -463,6 +464,7 @@ export const createRouter =
           moderationService,
           catalogRecipePolicy: community?.catalogRecipePolicy,
           catalogDeliveryReadiness: community?.catalogDeliveryReadiness,
+          catalogPublishedRenditions: community?.catalogPublishedRenditions,
           articlePublicationOperatorService:
             community?.articlePublicationOperatorService,
           contentOperatorPort: community?.contentOperatorPort,

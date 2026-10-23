@@ -195,6 +195,55 @@ const parseWorkerConfiguration = (environment: Environment) => {
 };
 
 /**
+ * Catalog source keys a worker before 0a4ab863 (#312) read. This worker never
+ * reads them: only the `CATALOG_SOURCE_COS_*` namespace names the source.
+ */
+const RETIRED_CATALOG_SOURCE_KEYS = [
+  "COS_BUCKET",
+  "COS_REGION",
+  "COS_SECRET_ID",
+  "COS_SECRET_KEY",
+] as const;
+
+/**
+ * Why Catalog processing is off, by setting name only (never a value), so a
+ * worker that does not claim `catalog_render` says so at startup instead of
+ * dropping Catalog renders silently (catalog-delivery-release-hardening-v1).
+ */
+const catalogOffReasons = (
+  environment: Environment,
+  configuration: ReturnType<typeof parseWorkerConfiguration>,
+): { readonly misconfigured: boolean; readonly text: string } => {
+  const codes: string[] = [];
+  const details: string[] = [];
+  let misconfigured = false;
+  if (configuration.catalogSource === null) {
+    if (RETIRED_CATALOG_SOURCE_KEYS.some((key) => environment[key])) {
+      misconfigured = true;
+      codes.push("source_keys_renamed");
+      details.push(
+        "CATALOG_SOURCE_COS_* is not set and COS_* is no longer read for Catalog sources",
+      );
+    } else {
+      codes.push("source_unset");
+      details.push(
+        configuration.nodeEnv === "development"
+          ? "neither CATALOG_SOURCE_COS_* nor CMS_MEDIA_DIR is set"
+          : "CATALOG_SOURCE_COS_* is not set",
+      );
+    }
+  }
+  if (configuration.catalogDatabase === null) {
+    codes.push("database_unset");
+    details.push("DATABASE_URL is not set");
+  }
+  return {
+    misconfigured,
+    text: `[media-worker] catalog=off reason=${codes.join(",")}: ${details.join("; ")}; catalog_render jobs are not claimed`,
+  };
+};
+
+/**
  * Parses and opens everything, runs the sandbox self-check, removes orphaned
  * sandbox containers and stale job directories, opens the pools and verifies
  * the community migration ledger (read-only). Starts nothing.
@@ -346,6 +395,11 @@ export async function prepareMediaWorker(
           }),
         }
       : null;
+  if (catalog === null) {
+    const off = catalogOffReasons(environment, configuration);
+    if (off.misconfigured) logger.error(off.text);
+    else logger.info(off.text);
+  }
   const catalogSync = catalogPool
     ? createCatalogSync({
         listSources: () => listPublishedCatalogSources(catalogPool),

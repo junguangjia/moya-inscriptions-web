@@ -45,16 +45,33 @@ export const checkPostgresReadiness = async (pool: Pool): Promise<void> => {
   }
 };
 
+/** What the published read connection serves besides the Catalog readers. */
+export interface PostgresStartupOptions extends CatalogReaderOptions {
+  /**
+   * The Backend's discovery (browse, collection, card, filter options) reads
+   * the published `public.catalog_discovery` view through this connection,
+   * which needs SELECT on it (`grant-public-read.sql`).
+   */
+  readonly discovery?: boolean;
+}
+
+const unreadableCodes: ReadonlySet<unknown> = new Set([
+  "3F000",
+  "42P01",
+  "42501",
+]);
+
 /**
  * Read-only startup validation of the published read connection. Readers
  * composed with `renditions` also require the Catalog rendition delivery
- * view and its SELECT grant (the post-Community public read phase), so a
- * missing grant stops startup instead of failing Catalog reads.
+ * view and its SELECT grant (the post-Community public read phase), and
+ * `discovery` requires the published discovery view and its SELECT grant, so
+ * a missing grant stops startup instead of failing Catalog or discovery reads.
  */
 export const assertPostgresStartupReady = async (
   pool: Pool,
   source: "legacy" | "payload" = "legacy",
-  options: CatalogReaderOptions = {},
+  options: PostgresStartupOptions = {},
 ): Promise<void> => {
   try {
     const client = await acquireClient(pool);
@@ -126,9 +143,23 @@ export const assertPostgresStartupReady = async (
       } catch (error) {
         // Missing schema or view, or no SELECT grant for this role.
         const code = (error as { readonly code?: unknown } | null)?.code;
-        if (code === "3F000" || code === "42P01" || code === "42501")
+        if (unreadableCodes.has(code))
           throw new PostgresStartupError(
             "Catalog rendition delivery view is not readable",
+            error,
+          );
+        throw error;
+      }
+    }
+    if (options.discovery === true) {
+      try {
+        await pool.query("SELECT 1 FROM public.catalog_discovery LIMIT 0");
+      } catch (error) {
+        // Missing view, or no SELECT grant for this role.
+        const code = (error as { readonly code?: unknown } | null)?.code;
+        if (unreadableCodes.has(code))
+          throw new PostgresStartupError(
+            "Catalog discovery view is not readable: grant SELECT on public.catalog_discovery to the public read role",
             error,
           );
         throw error;

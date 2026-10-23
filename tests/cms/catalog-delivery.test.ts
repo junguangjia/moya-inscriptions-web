@@ -177,15 +177,17 @@ describe("Catalog delivery internal boundary", () => {
     );
   });
 
-  it("requires delivery for editorial originals while retaining qualified legacy and text-only publication", () => {
+  it("requires delivery for editorial originals while retaining qualified legacy and text-only publication", async () => {
     const content = editorialDraftSchema.parse({
       catalogId: "synthetic-guard",
       sourceId: "synthetic-guard-source",
       kind: "calligraphy",
       media: [],
     });
-    expect(() => assertCatalogDeliveryPublication(content)).not.toThrow();
-    expect(() =>
+    await expect(
+      assertCatalogDeliveryPublication(content),
+    ).resolves.toBeUndefined();
+    await expect(
       assertCatalogDeliveryPublication({
         ...content,
         media: [
@@ -195,13 +197,13 @@ describe("Catalog delivery internal boundary", () => {
           },
         ],
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       assertCatalogDeliveryPublication({
         ...content,
         media: [syntheticMedia("synthetic-private")],
       }),
-    ).toThrow("CATALOG_DELIVERY_PREPARATION_REQUIRED");
+    ).rejects.toThrow("CATALOG_DELIVERY_PREPARATION_REQUIRED");
   });
 });
 
@@ -217,9 +219,51 @@ describe
     let outside: TypedUser;
     let ownerSession: string;
     let automationSession: string;
-    const ids = ["http", "prune", "race", "expiry", "bypass", "pinned"].map(
-      (name) => `synthetic-delivery-${name}-${run}`,
-    );
+    const ids = [
+      "http",
+      "prune",
+      "race",
+      "expiry",
+      "bypass",
+      "pinned",
+      "live",
+    ].map((name) => `synthetic-delivery-${name}-${run}`);
+    /** A loopback operator boundary with the real handler and stub facts. */
+    const syntheticOperatorBoundary = async (
+      dependencies: Partial<OperatorRouteDependencies>,
+    ) => {
+      const credential = randomUUID();
+      const server = createServer((request, response) => {
+        void handleOperatorRequest(
+          request,
+          response,
+          new URL(request.url!, "http://127.0.0.1").pathname,
+          {
+            moderationService: {},
+            operatorCredential: credential,
+            ...dependencies,
+          } as OperatorRouteDependencies,
+        );
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, "127.0.0.1", resolve),
+      );
+      const address = server.address();
+      if (!address || typeof address === "string")
+        throw new Error("Synthetic operator address missing");
+      vi.stubEnv(
+        "COMMUNITY_OPERATOR_BASE_URL",
+        `http://127.0.0.1:${address.port}`,
+      );
+      vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", credential);
+      return async () => {
+        vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", "");
+        vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", "");
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      };
+    };
     const reqFor = (user: TypedUser | null = owner) =>
       createLocalReq(user ? { user } : {}, payload);
     const post = (name: string, input: unknown, session = ownerSession) =>
@@ -818,5 +862,131 @@ describe
         overrideAccess: false,
       });
       expect(primary.title).toBe("Synthetic published A");
+    });
+
+    it("publishes editorial originals that already have complete published sets, and still refuses one that lacks its set", async () => {
+      const complete = new Set<string>();
+      const asked: { mediaId: string; objectKey: string }[][] = [];
+      const close = await syntheticOperatorBoundary({
+        catalogPublishedRenditions: async (media) => {
+          asked.push(media);
+          return {
+            media: media.map(({ mediaId, objectKey }) => ({
+              mediaId,
+              objectKey,
+              complete: complete.has(mediaId),
+            })),
+          };
+        },
+      });
+      try {
+        const { draft, contentB } = await draftB(ids[6]!, 2);
+        const publish = async (revision: number) =>
+          payload.update({
+            collection: "catalogs",
+            id: draft.id,
+            req: await reqFor(),
+            overrideAccess: false,
+            data: { revision, _status: "published" },
+          });
+        complete.add(contentB.media[0]!.mediaId);
+        await expect(publish(draft.revision)).rejects.toThrow(
+          "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+        );
+        const registered = await payload.find({
+          collection: "media",
+          req: await reqFor(),
+          overrideAccess: false,
+          where: {
+            mediaId: { in: contentB.media.map(({ mediaId }) => mediaId) },
+          },
+        });
+        expect(asked.at(-1)).toEqual(
+          contentB.media.map(({ mediaId, objectKey }) => ({
+            mediaId,
+            objectKey,
+            sourceSha256: registered.docs.find(
+              (doc) => doc.mediaId === mediaId,
+            )!.sha256,
+          })),
+        );
+        complete.add(contentB.media[1]!.mediaId);
+        const published = await publish(draft.revision);
+        expect(published).toMatchObject({
+          _status: "published",
+          title: "Synthetic private B",
+        });
+        // A later text-only edit of the live record publishes the same way.
+        const edited = await saveDraft(await reqFor(automation), {
+          id: draft.id,
+          expectedRevision: Number(published.revision),
+          idempotencyKey: `${run}:live-text`,
+          content: { ...contentB, title: "Synthetic text-only edit" },
+        });
+        expect((await publish(edited.revision)).title).toBe(
+          "Synthetic text-only edit",
+        );
+        expect(
+          (
+            await payload.db.pool.query(
+              "SELECT count(*)::int AS count FROM catalog_delivery_intents WHERE catalog_document_id = $1",
+              [draft.id],
+            )
+          ).rows[0].count,
+        ).toBe(0);
+        // An image without its set (a new upload) still needs preparation.
+        complete.delete(contentB.media[1]!.mediaId);
+        const again = await saveDraft(await reqFor(automation), {
+          id: draft.id,
+          expectedRevision: edited.revision + 1,
+          idempotencyKey: `${run}:live-text-2`,
+          content: { ...contentB, title: "Synthetic second edit" },
+        });
+        await expect(publish(again.revision)).rejects.toThrow(
+          "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+        );
+      } finally {
+        await close();
+      }
+    });
+
+    it("reports delivery capability to release tooling without reading or writing records", async () => {
+      const capability = async (session = ownerSession) => {
+        const response = await post(
+          "catalog-delivery-capabilities",
+          {},
+          session,
+        );
+        return { status: response.status, body: await response.json() };
+      };
+      expect((await capability("")).status).toBe(403);
+      expect(await capability()).toMatchObject({
+        status: 200,
+        body: { ok: true, result: { delivery: "NOT_CONFIGURED" } },
+      });
+      for (const [dependencies, delivery] of [
+        [{}, "UNAVAILABLE"],
+        [
+          { catalogRecipePolicy: async () => currentCatalogRecipePolicy() },
+          "NOT_CONFIGURED",
+        ],
+        [
+          {
+            catalogRecipePolicy: async () => currentCatalogRecipePolicy(),
+            catalogDeliveryReadiness: async () => null,
+          },
+          "AVAILABLE",
+        ],
+      ] as const) {
+        const close = await syntheticOperatorBoundary(dependencies);
+        try {
+          expect((await capability(automationSession)).body).toEqual({
+            ok: true,
+            result: { delivery },
+          });
+        } finally {
+          await close();
+        }
+      }
     });
   });
