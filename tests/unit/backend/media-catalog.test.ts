@@ -48,6 +48,7 @@ import {
   currentCatalogRecipePolicy,
   catalogExpectedRenditions,
   createCatalogPublicationAuthority,
+  createCatalogPublishedRenditions,
   parseCatalogPrepareDatabaseConfig,
 } from "@moya/backend-production/internal/catalog-delivery";
 import {
@@ -55,9 +56,13 @@ import {
   catalogBlockListedSql,
 } from "@moya/community-postgres";
 import {
+  catalogPublishedRenditionsRequestSchema,
   catalogRecipeManifestSchema,
   catalogRecipePolicySchema,
+  type CatalogPublishedRenditionsRequest,
 } from "@moya/contracts/internal/editorial";
+
+type Source = CatalogPublishedRenditionsRequest["media"][number];
 
 import type { CatalogWorkerRenderPlan } from "@moya/backend-production/internal/publishing-catalog";
 import type { PublishingCosTransport } from "@moya/backend-production/internal/publishing-media-store";
@@ -100,6 +105,9 @@ describe("live Catalog delivery locator identity", () => {
             master_width: 640,
             master_height: 480,
             rendition_id: `${source.mediaId}:${source.objectKey}:${rendition.role}`,
+            rendition_state: "ready",
+            rendition_created_at: new Date("2026-10-01T00:00:00.000Z"),
+            rendition_replaced_at: null,
             role: rendition.role,
             recipe_version: rendition.version,
             recipe_digest: rendition.digest,
@@ -201,6 +209,78 @@ describe("live Catalog delivery locator identity", () => {
   });
 });
 
+describe("Admin publish gate: complete published sets of live sources", () => {
+  const [source, other] = catalogPublishedRenditionsRequestSchema.parse({
+    media: ["synthetic-live-a", "synthetic-live-b"].map((mediaId) => ({
+      mediaId,
+      objectKey: `editorial/${CATALOG_HASH}/${MEDIA_HASH}-${"d".repeat(64)}.jpg`,
+      sourceSha256: "d".repeat(64),
+    })),
+  }).media as [Source, Source];
+  const plan = catalogExpectedRenditions(4096, 2731);
+  const rowsFor = (of: Source, wants = plan) =>
+    wants.map((want) => ({
+      media_id: of.mediaId,
+      source_object_key: of.objectKey,
+      master_width: 4096,
+      master_height: 2731,
+      role: want.role,
+      recipe_version: want.version,
+      recipe_digest: want.digest,
+      width: want.width,
+      height: want.height,
+    }));
+  const ask = async (rows: ReturnType<typeof rowsFor>) => {
+    const query = vi.fn(async () => ({ rows }));
+    const answer = await createCatalogPublishedRenditions({
+      query,
+    } as unknown as Parameters<typeof createCatalogPublishedRenditions>[0])([
+      source,
+      other,
+    ]);
+    return { query, complete: answer.media.map((item) => item.complete) };
+  };
+
+  it("is complete only for the whole current set, one published row per role", async () => {
+    const { query, complete } = await ask([
+      ...rowsFor(source),
+      ...rowsFor(other),
+    ]);
+    expect(complete).toEqual([true, true]);
+    const [sql, values] = query.mock.calls[0] as unknown as [string, string[]];
+    expect(JSON.parse(values[0]!)).toEqual([source, other]);
+    for (const fact of [
+      "a.state='ready'",
+      'a.master_sha256=m."sourceSha256"',
+      "r.state='ready'",
+      "b.state='committed'",
+      "p.state='published'",
+      "p.purpose='catalog_derivative'",
+    ])
+      expect(sql).toContain(fact);
+    // A missing role, an earlier recipe, a second row for one role or no
+    // ready asset at all is no proof for that image alone.
+    expect(
+      (await ask([...rowsFor(source, plan.slice(1)), ...rowsFor(other)]))
+        .complete,
+    ).toEqual([false, true]);
+    const [first, ...rest] = rowsFor(source);
+    expect(
+      (
+        await ask([
+          { ...first!, recipe_digest: "0".repeat(16) },
+          ...rest,
+          ...rowsFor(other),
+        ])
+      ).complete,
+    ).toEqual([false, true]);
+    expect(
+      (await ask([...rowsFor(source), first!, ...rowsFor(other)])).complete,
+    ).toEqual([false, true]);
+    expect((await ask(rowsFor(other))).complete).toEqual([false, true]);
+  });
+});
+
 describe("Catalog publication authority with active-master blocks", () => {
   const rid = (n: number) =>
     `media-rendition-${n.toString(16).padStart(32, "0")}`;
@@ -231,6 +311,9 @@ describe("Catalog publication authority with active-master blocks", () => {
         height: want.height,
         master_width: member.width,
         master_height: member.height,
+        // The plan's selector reads each rendition's state and publication.
+        state: "ready" as const,
+        published: true,
       }));
     const ordinaryA = ordinary(source, 1);
     const ordinaryB = ordinary(privateSource, 20);
@@ -535,7 +618,7 @@ describe("actual Catalog recipe policy and private database authority", () => {
         DATABASE_URL: publicUrl,
         CATALOG_PREPARE_DATABASE_URL: privateUrl,
       }),
-    ).toMatchObject({ max: 1, connectionTimeoutMillis: 5000 });
+    ).toMatchObject({ max: 4, connectionTimeoutMillis: 5000 });
     for (const patch of [
       { CATALOG_PREPARE_DATABASE_SSL_CA_FILE: "REPLACE_ME_CA" },
       { CATALOG_PREPARE_DATABASE_URL: "" },

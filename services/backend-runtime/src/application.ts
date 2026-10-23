@@ -77,6 +77,7 @@ import type { RequestListener } from "node:http";
 export interface BackendApplicationOptions {
   readonly catalogRecipePolicy?: () => Promise<CatalogRecipePolicy>;
   readonly catalogDeliveryReadiness?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogDeliveryReadiness"];
+  readonly catalogPublishedRenditions?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogPublishedRenditions"];
   readonly analytics?: {
     readonly port: AnalyticsPort;
     readonly policy: AnalyticsPolicy;
@@ -406,6 +407,7 @@ const resolveCommunity = (
       : {}),
     catalogRecipePolicy: options.catalogRecipePolicy,
     catalogDeliveryReadiness: options.catalogDeliveryReadiness,
+    catalogPublishedRenditions: options.catalogPublishedRenditions,
     operatorCredential: options.communityOperatorCredential ?? "",
   };
 };

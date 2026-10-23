@@ -347,3 +347,34 @@ test("durable admission, journal scope, original body and result digest are chec
   h.binding.environmentMarker = "synthetic-other";
   assert.throws(h.client, { code: "DELIVERY_JOURNAL_INVALID" });
 });
+
+test("a prepare Admin refuses for an oversized source stops with that category", async () => {
+  const h = deliveryFixture();
+  h.send = async (route) => {
+    assert.ok(route.endsWith("prepare-catalog-delivery"));
+    h.commands.push({ route });
+    return {
+      ok: false,
+      retryable: false,
+      code: "CATALOG_DELIVERY_SOURCE_TOO_LARGE",
+    };
+  };
+  await assert.rejects(h.client().execute(recordId, "prepare", h.prepare), {
+    code: "CATALOG_DELIVERY_SOURCE_TOO_LARGE",
+  });
+  assert.equal(h.commands.length, 1);
+  // The attempt is journaled conservatively; nothing was confirmed.
+  const action = h.saved.actions[`${recordId}:prepare`];
+  assert.equal(action.status, "UNKNOWN");
+  assert.deepEqual(
+    action.attempts.map((a) => a.status),
+    ["UNKNOWN"],
+  );
+  // Any other refusal still reads as an unknown result to reconcile.
+  const other = deliveryFixture();
+  other.send = async () => ({ ok: false, code: "NATIVE_REQUEST_REJECTED" });
+  assert.equal(
+    (await other.client().execute(recordId, "prepare", other.prepare)).status,
+    "UNKNOWN",
+  );
+});

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import {
   cancelCatalogDeliverySchema,
+  catalogDeliveryCapabilitiesRequestSchema,
+  catalogDeliveryCapabilitiesSchema,
   catalogDeliveryManifestSchema,
   catalogDeliveryResultSchema,
   prepareCatalogDeliverySchema,
@@ -19,6 +21,8 @@ import type { PayloadRequest } from "payload";
 import { canEditCatalog, isOwner, requireActor } from "./access";
 import {
   catalogDeliveryReadiness,
+  probeCatalogDeliveryBackend,
+  readCatalogPublishedRenditions,
   readCatalogRecipePolicy,
   requireCatalogDeliveryBackend,
   readCatalogReadiness,
@@ -245,11 +249,14 @@ const currentDraft = async (req: PayloadRequest, row: IntentRow) => {
   return latest;
 };
 
-const manifestFor = async (req: PayloadRequest, content: EditorialDraft) => {
-  await validateCatalogMedia(req, content, { publishing: false });
+/** Registered source hashes of the selected media, read with the caller's access. */
+const sourceHashes = async (
+  req: PayloadRequest,
+  selected: readonly { mediaId: string }[],
+) => {
   const hashes = new Map<string, string>();
-  for (let offset = 0; offset < content.media.length; offset += 100) {
-    const slice = content.media.slice(offset, offset + 100);
+  for (let offset = 0; offset < selected.length; offset += 100) {
+    const slice = selected.slice(offset, offset + 100);
     const result = await req.payload.find({
       collection: "media",
       overrideAccess: false,
@@ -261,6 +268,12 @@ const manifestFor = async (req: PayloadRequest, content: EditorialDraft) => {
     });
     for (const media of result.docs) hashes.set(media.mediaId, media.sha256);
   }
+  return hashes;
+};
+
+const manifestFor = async (req: PayloadRequest, content: EditorialDraft) => {
+  await validateCatalogMedia(req, content, { publishing: false });
+  const hashes = await sourceHashes(req, content.media);
   return parse(
     catalogDeliveryManifestSchema,
     content.media.map((media) => ({
@@ -268,6 +281,28 @@ const manifestFor = async (req: PayloadRequest, content: EditorialDraft) => {
       sourceSha256: hashes.get(media.mediaId),
     })),
   );
+};
+
+/** The private processing snapshot (`catalogProcessingIntentSchema`) and the
+ * App `catalog_delivery_media_refs` CHECK bound each source edge at 65,535 px,
+ * while Admin accepts any upload up to 80 MP. A longer edge is refused here,
+ * before any intent is written, instead of becoming an undecodable intent.
+ */
+const CATALOG_DELIVERY_MAX_SOURCE_EDGE = 65_535;
+
+const assertCatalogDeliverySourceEdges = (
+  media: readonly Pick<CatalogDeliveryMedia, "width" | "height">[],
+) => {
+  if (
+    media.some(
+      ({ width, height }) =>
+        width > CATALOG_DELIVERY_MAX_SOURCE_EDGE ||
+        height > CATALOG_DELIVERY_MAX_SOURCE_EDGE,
+    )
+  )
+    throw new EditorialError("CATALOG_DELIVERY_SOURCE_TOO_LARGE", 422, [
+      "media",
+    ]);
 };
 
 export const prepareCatalogDelivery = async (
@@ -291,6 +326,8 @@ export const prepareCatalogDelivery = async (
     if (!canEditCatalog(req, content.catalogId))
       throw new EditorialError("RECORD_UNAVAILABLE", 404);
     const manifest = await manifestFor(req, content);
+    // manifestFor verified the registered dimensions; nothing is written yet.
+    assertCatalogDeliverySourceEdges(content.media);
     const manifestSha256 = requestFingerprint(manifest);
     const primary = await req.payload.findByID({
       collection: "catalogs",
@@ -527,7 +564,11 @@ export const invalidateCatalogDelivery = async (
   `);
 };
 
-export const assertCatalogDeliveryPublication = (
+/** Editorial originals are published by the release path, or when every one
+ * of them already has its complete, current and published rendition set (a
+ * text-only edit of a live record). Anything less still needs preparation.
+ */
+export const assertCatalogDeliveryPublication = async (
   content: EditorialDraft,
   req?: PayloadRequest,
 ) => {
@@ -537,6 +578,45 @@ export const assertCatalogDeliveryPublication = (
       contentFingerprint(content)
   )
     return;
-  if (content.media.some(({ objectKey }) => objectKey.startsWith("editorial/")))
-    throw new EditorialError("CATALOG_DELIVERY_PREPARATION_REQUIRED", 409);
+  const editorial = content.media.filter(({ objectKey }) =>
+    objectKey.startsWith("editorial/"),
+  );
+  if (!editorial.length) return;
+  if (req) {
+    const hashes = await sourceHashes(req, editorial);
+    const media = editorial.map(({ mediaId, objectKey }) => ({
+      mediaId,
+      objectKey,
+      sourceSha256: hashes.get(mediaId) ?? "",
+    }));
+    const proof = media.every(({ sourceSha256 }) =>
+      /^[a-f0-9]{64}$/.test(sourceSha256),
+    )
+      ? await readCatalogPublishedRenditions(media)
+      : null;
+    if (
+      proof &&
+      proof.media.length === media.length &&
+      media.every(
+        (item, index) =>
+          proof.media[index]!.mediaId === item.mediaId &&
+          proof.media[index]!.objectKey === item.objectKey &&
+          proof.media[index]!.complete,
+      )
+    )
+      return;
+  }
+  throw new EditorialError("CATALOG_DELIVERY_PREPARATION_REQUIRED", 409);
+};
+
+/** Release tooling's preflight before any write; it reads and changes nothing. */
+export const catalogDeliveryCapabilities = async (
+  req: PayloadRequest,
+  input: unknown,
+) => {
+  requireActor(req);
+  parse(catalogDeliveryCapabilitiesRequestSchema, input);
+  return catalogDeliveryCapabilitiesSchema.parse({
+    delivery: await probeCatalogDeliveryBackend(),
+  });
 };

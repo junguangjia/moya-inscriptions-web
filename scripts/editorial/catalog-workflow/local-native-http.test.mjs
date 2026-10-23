@@ -672,6 +672,34 @@ test("503 release remains HOLD without Native publication fallback", async (t) =
   assert.equal(f.state.saves, 0);
 });
 
+test("a prepare refused for an oversized source keeps its category, not a retry", async (t) => {
+  const f = await localHTTPFixture();
+  t.after(() => f.close());
+  const { client } = lowLevel(f);
+  t.after(() => client.close());
+  assert.equal((await client.handshake()).ok, true);
+  f.state.responseOverride = async (req, res) => {
+    if (req.url !== "/api/editorial/prepare-catalog-delivery") return false;
+    res.statusCode = 422;
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: { code: "CATALOG_DELIVERY_SOURCE_TOO_LARGE", fields: ["media"] },
+      }),
+    );
+    return true;
+  };
+  const refused = await client.send(
+    "/api/editorial/prepare-catalog-delivery",
+    "POST",
+    { id: 10, expectedRevision: 2, expectedFingerprint: hash("d") },
+  );
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, "CATALOG_DELIVERY_SOURCE_TOO_LARGE");
+  assert.equal(refused.retryable, false);
+});
+
 function lowLevel(f, responseByteLimit = 1024, overrides = {}) {
   const options = f.adapterOptions(),
     scopeSha256 = hash("a");
@@ -908,4 +936,48 @@ test("late successful write callback is included after uncertain response drains
   assert.equal(client.metrics().knownActualUploadBytes, row.requestBodyBytes);
   assert.equal(row.drained, true);
   assert.equal(client.metrics().activeRequests, 0);
+});
+
+test("a refused withdrawal leaves its single attempt; an admission refusal records none", async (t) => {
+  const f = await localHTTPFixture();
+  t.after(() => f.close());
+  let refuseAdmission = false;
+  const { client, journal } = lowLevel(f, 1024, {
+    assertAdmission: async ({ route } = {}) => {
+      if (refuseAdmission && route?.startsWith("/api/catalogs/"))
+        throw Object.assign(new Error("SYNTHETIC_ADMISSION"), {
+          code: "CHECKPOINT_STORE_LOCK_CHANGED",
+        });
+    },
+  });
+  t.after(() => client.close());
+  await client.handshake();
+  let status = 409;
+  f.state.responseOverride = async (req, res) => {
+    if (req.method !== "PATCH") return false;
+    for await (const part of req) assert.ok(part.length > 0);
+    res.statusCode = status;
+    res.end(JSON.stringify({ errors: [{ message: "SYNTHETIC" }] }));
+    return true;
+  };
+  const route = "/api/catalogs/10?draft=false&depth=0",
+    body = { revision: 2, _status: "draft" };
+  refuseAdmission = true;
+  await rejects(
+    () => client.send(route, "PATCH", body),
+    "CHECKPOINT_STORE_LOCK_CHANGED",
+  );
+  assert.equal(journal.requests.filter((r) => r.route === route).length, 0);
+  refuseAdmission = false;
+  const refused = await client.send(route, "PATCH", body);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.httpStatus, 409);
+  // A 5xx may have been applied: it consumes the only attempt.
+  status = 500;
+  assert.equal((await client.send(route, "PATCH", body)).httpStatus, 500);
+  assert.equal(
+    (await client.send(route, "PATCH", body)).code,
+    "NATIVE_REQUEST_ATTEMPT_LIMIT",
+  );
+  assert.equal(f.state.requests.filter((r) => r.method === "PATCH").length, 2);
 });

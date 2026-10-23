@@ -541,6 +541,8 @@ test("real HTTPS code path with a request-object seam stages once, publishes fro
       intent = { ...intent, state: "released", stateVersion: 3 };
       return { json: { ok: true, result: intent } };
     }
+    if (route === "/api/editorial/catalog-delivery-capabilities")
+      return { json: { ok: true, result: { delivery: "AVAILABLE" } } };
     throw Error("UNEXPECTED_SYNTHETIC_ROUTE:" + route);
   });
   const stateDir = path.join(d, "state");
@@ -621,7 +623,7 @@ function receiptFor(body, draft) {
     actor: 1,
     operation: "save-draft",
     status: "completed",
-    catalog: 10,
+    catalog: body.id,
     revision: draft.revision,
     fingerprint: draft.fingerprint,
   };
@@ -1017,4 +1019,536 @@ test("historical Production reuse binds original Catalog ID and fresh key receip
         false,
       );
     });
+});
+
+/** The answers of the staged-publication test above, as one reusable Native
+ * with per-test overrides. Still only the in-process request-object seam.
+ */
+function syntheticNative(t, f, override = () => undefined) {
+  const { id, revision } = f.before;
+  const n = {
+    draft: { id, revision, fingerprint: f.before.fingerprint, content: f.old },
+    main: { id, revision, _status: "published", ...f.old },
+    // A reuse-only record's media is already in Native.
+    uploaded: f.manifest.records[0].reuseOnly === true,
+    received: false,
+    intent: null,
+    saveReceipt: null,
+  };
+  const uploadId = hash("a");
+  const session = () => ({
+    uploadId,
+    state: n.received ? "ready" : "uploading",
+    chunkBytes: MEDIA_UPLOAD_CHUNK_BYTES,
+    chunkCount: 1,
+    receivedIndices: n.received ? [0] : [],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  n.calls = fakeHTTPS(t, (call) => {
+    const answer = override(call, n);
+    if (answer) return answer;
+    const { route, body, method } = call;
+    if (route === "/api/users/me")
+      return {
+        json: {
+          user: {
+            id: 1,
+            role: "owner",
+            collection: "users",
+            scopeCatalogIds: [],
+          },
+        },
+      };
+    if (route === "/api/editorial/read-draft")
+      return { json: { ok: true, result: n.draft } };
+    if (route.startsWith("/api/catalogs/") && method === "PATCH") {
+      n.main = { ...n.main, revision: n.main.revision + 1, _status: "draft" };
+      n.draft = {
+        ...n.draft,
+        revision: n.main.revision,
+        fingerprint: hash("e"),
+      };
+      return { json: { doc: n.main } };
+    }
+    if (route.startsWith("/api/catalogs/")) return { json: n.main };
+    if (route.startsWith("/api/media?"))
+      return {
+        json: {
+          docs: n.uploaded ? [f.media] : [],
+          totalDocs: n.uploaded ? 1 : 0,
+        },
+      };
+    if (
+      route.endsWith("media-upload/start") ||
+      route.endsWith("media-upload/status")
+    )
+      return { json: { ok: true, result: session() } };
+    if (route.includes("media-upload/chunk/")) {
+      n.received = true;
+      return {
+        json: {
+          ok: true,
+          result: { uploadId, index: 0, bytes: body.length, sha256: sha(body) },
+        },
+      };
+    }
+    if (route.endsWith("media-upload/complete")) {
+      n.uploaded = true;
+      return {
+        json: {
+          ok: true,
+          result: {
+            media: f.media,
+            reused: false,
+            validatedBytes: f.bytes.length,
+            validatedSha256: sha(f.bytes),
+          },
+        },
+      };
+    }
+    if (route.endsWith("save-draft")) {
+      n.draft = {
+        id,
+        revision: n.draft.revision + 1,
+        fingerprint: hash("e"),
+        content: body.content,
+      };
+      n.saveReceipt = body;
+      return {
+        json: {
+          ok: true,
+          result: {
+            id,
+            revision: n.draft.revision,
+            fingerprint: n.draft.fingerprint,
+          },
+        },
+      };
+    }
+    if (route.startsWith("/api/editorial-receipts?"))
+      return {
+        json: { docs: [receiptFor(n.saveReceipt, n.draft)], totalDocs: 1 },
+      };
+    if (route.endsWith("prepare-catalog-delivery")) {
+      n.intent = {
+        intentId: "00000000-0000-4000-8000-000000000001",
+        id,
+        catalogId: f.content.catalogId,
+        revision: n.draft.revision,
+        fingerprint: n.draft.fingerprint,
+        manifestSha256: sha(
+          JSON.stringify(
+            catalogDeliveryManifestSchema.parse(
+              f.content.media.map((m) => ({
+                ...m,
+                sourceSha256: f.manifest.records[0].media[0].uploadedSha256,
+              })),
+            ),
+          ),
+        ),
+        mediaCount: 1,
+        recipeManifestSha256: hash("b"),
+        state: "prepared",
+        stateVersion: 1,
+        readiness: "PENDING",
+        publicCopyAuthorized: false,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        replayed: false,
+      };
+      return { json: { ok: true, result: n.intent } };
+    }
+    if (route.endsWith("request-catalog-release")) {
+      n.intent = { ...n.intent, state: "release_requested", stateVersion: 2 };
+      return { json: { ok: true, result: n.intent } };
+    }
+    if (route.endsWith("read-catalog-delivery"))
+      return { json: { ok: true, result: n.intent } };
+    if (route === "/api/editorial/catalog-delivery-capabilities")
+      return { json: { ok: true, result: { delivery: "AVAILABLE" } } };
+    throw Error("UNEXPECTED_SYNTHETIC_ROUTE:" + route);
+  });
+  return n;
+}
+async function stagedRun(t, f) {
+  const d = await directory(t);
+  f.input.controlled.root = d;
+  f.authority.inputSha256 = digest(f.input);
+  await writeFile(path.join(d, "test.png"), f.bytes);
+  const stateDir = path.join(d, "state");
+  return (command = "run", extra = {}) =>
+    withProductionCatalogSession(
+      { ...options(f, stateDir, command), ...extra },
+      // The production CLI's dispatch (production-cli.mjs).
+      async (client) => {
+        if (command === "withdraw") return client.withdraw();
+        const fresh = !client.snapshot().frozen;
+        if (command === "upload" || (command === "run" && fresh))
+          await client.ensureMedia();
+        if (command === "upload") return client.snapshot().proofs;
+        if (command === "run" && fresh) await client.saveDraft();
+        return client.publish();
+      },
+    );
+}
+const writes = (calls) =>
+  calls.filter(
+    (c) =>
+      c.method === "PATCH" ||
+      /media-upload\/(start|chunk|stream|complete)|save-draft|(prepare|request|release|cancel)-catalog/.test(
+        c.route,
+      ),
+  );
+const count = (calls, suffix) =>
+  calls.filter((c) => c.route.endsWith(suffix)).length;
+/** An Admin from before the delivery release: Payload's own 404 for every
+ * route it does not serve, and the old endpoints still answering.
+ */
+const oldAdmin = ({ route }) => {
+  if (/catalog-delivery|catalog-release|media-upload/.test(route))
+    return { status: 404, json: { message: `Route not found "${route}"` } };
+};
+const backendNotConfigured = ({ route }) => {
+  if (route === "/api/editorial/catalog-delivery-capabilities")
+    return { json: { ok: true, result: { delivery: "NOT_CONFIGURED" } } };
+};
+
+/** DEP-4's reuse-only record (TEST-3 of the historical fixture): its media
+ * proof is imported from Production evidence without any write. With
+ * `edited`, the live draft holds an earlier text, so `run` first writes at
+ * save-draft; otherwise the draft is already B and `publish` first writes at
+ * prepare-catalog-delivery.
+ */
+async function reuseOnlySetup(t, { edited = true } = {}) {
+  const f = setup();
+  const spec = await frozenSources(t, undefined, {
+    target: f.manifest.target,
+    observedRecordIndex: 2,
+  });
+  const bundle = await convertHistoricalProof(spec),
+    entry = bundle.entries.find((x) => x.recordId === "TEST-3"),
+    e = entry.evidence,
+    nativeId = 3,
+    objectKey = "editorial/synthetic-2.jpg";
+  f.content = editorialDraftSchema.parse({
+    catalogId: e.catalogId,
+    sourceId: e.sourceId,
+    kind: "inscription",
+    title: "Synthetic historical B",
+    summary: "Synthetic",
+    media: [
+      {
+        mediaId: e.mediaId,
+        objectKey,
+        width: e.width,
+        height: e.height,
+        position: 0,
+        isRepresentative: true,
+        alt: "Synthetic",
+      },
+    ],
+  });
+  f.old = edited
+    ? { ...f.content, title: "Synthetic historical A" }
+    : f.content;
+  f.before = {
+    id: nativeId,
+    revision: 4,
+    fingerprint: hash("c"),
+    contentSha256: digest(f.old),
+  };
+  f.media = {
+    id: e.nativeId,
+    mediaId: e.mediaId,
+    catalogId: e.catalogId,
+    objectKey,
+    sha256: e.uploadedSha256,
+    filesize: e.bytes,
+    width: e.width,
+    height: e.height,
+    filename: "synthetic-2.jpg",
+    mimeType: "image/jpeg",
+    alt: "Synthetic",
+  };
+  f.manifest.records = [
+    {
+      recordId: "TEST-3",
+      catalogId: e.catalogId,
+      sourceId: e.sourceId,
+      contentSha256: digest(f.content),
+      disposition: "publish",
+      reuseOnly: true,
+      protections: entry.protections,
+      media: [
+        {
+          mediaId: e.mediaId,
+          sourceSha256: e.sourceSha256,
+          uploadedSha256: e.uploadedSha256,
+          bytes: e.bytes,
+          width: e.width,
+          height: e.height,
+          position: 0,
+          isRepresentative: true,
+        },
+      ],
+    },
+  ];
+  f.input = {
+    version: 1,
+    expectedNative: f.before,
+    conversions: [
+      {
+        mediaId: e.mediaId,
+        reference: historicalConversionReference(bundle, entry.entryId),
+      },
+    ],
+    controlled: {
+      version: 1,
+      root: "/SYNTHETIC",
+      records: [
+        {
+          recordId: "TEST-3",
+          nativeId,
+          baselineStatus: "published",
+          content: f.content,
+          media: [
+            {
+              mediaId: e.mediaId,
+              file: null,
+              mimeType: "image/jpeg",
+              alt: "Synthetic",
+              rights: null,
+              orderConfidence: null,
+            },
+          ],
+        },
+      ],
+    },
+  };
+  Object.assign(f.authority, {
+    nativeId,
+    catalogId: e.catalogId,
+    manifestSha256: digest(f.manifest),
+  });
+  return f;
+}
+
+test("an intent that ended reports its terminal category, never WAITING_FOR_READY", async (t) => {
+  for (const ended of ["expired", "cancelled", "superseded", "withdrawn"])
+    await t.test(ended, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }, n) => {
+        // The intent ends between prepare and the first read.
+        if (route.endsWith("read-catalog-delivery"))
+          return {
+            json: {
+              ok: true,
+              result: { ...n.intent, state: ended, stateVersion: 2 },
+            },
+          };
+      });
+      const run = await stagedRun(t, f);
+      const code = `DELIVERY_INTENT_${ended.toUpperCase()}`;
+      await assert.rejects(run, { code });
+      // The same state directory keeps reporting the end without new writes.
+      const before = writes(native.calls).length;
+      await assert.rejects(() => run("publish"), { code });
+      assert.equal(writes(native.calls).length, before);
+      assert.equal(
+        native.calls.some((c) => c.route.endsWith("request-catalog-release")),
+        false,
+      );
+    });
+});
+
+test("a withdrawal Native refused is sent again from the same state directory", async (t) => {
+  const f = setup();
+  f.input.expectedNative.contentSha256 = digest(f.content);
+  let refuse = true;
+  const native = syntheticNative(t, f, ({ method }) => {
+    if (method === "PATCH" && refuse) {
+      refuse = false;
+      return {
+        status: 409,
+        json: { errors: [{ message: "CONCURRENT_OPERATION_BUSY" }] },
+      };
+    }
+  });
+  native.draft.content = f.content;
+  native.main = { id: 10, revision: 2, _status: "published", ...f.content };
+  const run = await stagedRun(t, f);
+  await assert.rejects(() => run("withdraw"), { code: "REVISION_CONFLICT" });
+  const result = await run("withdraw");
+  assert.equal(result.status, "NATIVE_WITHDRAWAL_CONFIRMED");
+  assert.equal(result.native.status, "draft");
+  assert.equal(native.calls.filter((c) => c.method === "PATCH").length, 2);
+  // Confirmed: a later run reconciles and never sends a third PATCH.
+  await run("withdraw");
+  assert.equal(native.calls.filter((c) => c.method === "PATCH").length, 2);
+});
+
+test("a withdrawal refused before dispatch records no attempt and is sent on the next run", async (t) => {
+  const f = setup();
+  f.input.expectedNative.contentSha256 = digest(f.content);
+  let armed = false,
+    tripped = false;
+  const native = syntheticNative(t, f, ({ route, method }) => {
+    if (method === "GET" && route.startsWith("/api/catalogs/") && !tripped)
+      armed = true;
+  });
+  native.draft.content = f.content;
+  native.main = { id: 10, revision: 2, _status: "published", ...f.content };
+  const run = await stagedRun(t, f);
+  const assertBindingActive = async () => {
+    if (armed && !tripped) {
+      tripped = true;
+      throw Object.assign(new Error("SYNTHETIC_BINDING_RECHECK"), {
+        code: "PRODUCTION_INPUT_CHANGED",
+      });
+    }
+  };
+  await assert.rejects(() => run("withdraw", { assertBindingActive }), {
+    code: "PRODUCTION_INPUT_CHANGED",
+  });
+  assert.equal(native.calls.filter((c) => c.method === "PATCH").length, 0);
+  const result = await run("withdraw", { assertBindingActive });
+  assert.equal(result.status, "NATIVE_WITHDRAWAL_CONFIRMED");
+  assert.equal(native.calls.filter((c) => c.method === "PATCH").length, 1);
+});
+
+test("a draft save Native refused is sent again from the same state directory", async (t) => {
+  const f = setup();
+  let refuse = true;
+  const native = syntheticNative(t, f, ({ route }) => {
+    if (route.endsWith("save-draft") && refuse) {
+      refuse = false;
+      return {
+        status: 409,
+        json: { ok: false, error: { code: "CONCURRENT_OPERATION_BUSY" } },
+      };
+    }
+  });
+  const run = await stagedRun(t, f);
+  await assert.rejects(run, { code: "CONCURRENT_OPERATION_BUSY" });
+  assert.equal(native.draft.revision, 2);
+  const outcome = await run();
+  assert.equal(outcome.status, "WAITING_FOR_READY");
+  assert.equal(
+    native.calls.filter((c) => c.route.endsWith("save-draft")).length,
+    2,
+  );
+  assert.equal(native.draft.revision, 3);
+});
+
+test("run and upload stop before the first upload when the Admin lacks the delivery endpoints", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f, oldAdmin);
+  const run = await stagedRun(t, f);
+  await assert.rejects(run, { code: "ADMIN_CAPABILITY_MISSING" });
+  await assert.rejects(() => run("upload"), {
+    code: "ADMIN_CAPABILITY_MISSING",
+  });
+  assert.deepEqual(writes(native.calls), []);
+  assert.equal(native.draft.revision, 2);
+});
+
+test("a publication stops before any write when the Backend cannot pin a recipe or prove readiness", async (t) => {
+  for (const [delivery, code] of [
+    ["NOT_CONFIGURED", "BACKEND_DELIVERY_NOT_CONFIGURED"],
+    ["UNAVAILABLE", "BACKEND_DELIVERY_UNAVAILABLE"],
+  ])
+    await t.test(delivery, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }) => {
+        if (route === "/api/editorial/catalog-delivery-capabilities")
+          return { json: { ok: true, result: { delivery } } };
+      });
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, { code });
+      assert.deepEqual(writes(native.calls), []);
+      // An upload alone needs no Backend: it proceeds past the same probe.
+      const uploaded = await withProductionCatalogSession(
+        options(f, path.join(f.input.controlled.root, "upload"), "upload"),
+        async (client) => {
+          await client.ensureMedia();
+          return client.snapshot().proofs;
+        },
+      );
+      assert.equal(Object.keys(uploaded).length, 1);
+      assert.equal(
+        writes(native.calls).every((c) => c.route.includes("media-upload")),
+        true,
+      );
+    });
+});
+
+test("a reuse-only run stops before its draft save, and publish before its intent, when delivery is absent", async (t) => {
+  for (const [name, absent, code] of [
+    ["old Admin", oldAdmin, "ADMIN_CAPABILITY_MISSING"],
+    [
+      "Backend not configured",
+      backendNotConfigured,
+      "BACKEND_DELIVERY_NOT_CONFIGURED",
+    ],
+  ])
+    await t.test(name, async (t) => {
+      await t.test("run of a text-only edit", async (t) => {
+        const f = await reuseOnlySetup(t);
+        const native = syntheticNative(t, f, absent);
+        const run = await stagedRun(t, f);
+        await assert.rejects(run, { code });
+        // The media proof was imported without any write; the save is the
+        // first write and it was never sent.
+        assert.equal(count(native.calls, "catalog-delivery-capabilities"), 1);
+        assert.equal(count(native.calls, "save-draft"), 0);
+        assert.deepEqual(writes(native.calls), []);
+        assert.equal(native.draft.revision, 4);
+        assert.equal(native.draft.content.title, "Synthetic historical A");
+      });
+      await t.test("publish of a saved draft", async (t) => {
+        const f = await reuseOnlySetup(t, { edited: false });
+        const native = syntheticNative(t, f, absent);
+        const run = await stagedRun(t, f);
+        assert.equal(Object.keys(await run("upload")).length, 1);
+        assert.deepEqual(
+          native.calls.filter(
+            (c) => c.method !== "GET" && !/read-draft$/.test(c.route),
+          ),
+          [],
+        );
+        await assert.rejects(() => run("publish"), { code });
+        assert.equal(count(native.calls, "catalog-delivery-capabilities"), 1);
+        assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+        assert.deepEqual(writes(native.calls), []);
+      });
+    });
+});
+
+test("a draft save refused before dispatch records no attempt and is sent on the next run", async (t) => {
+  const f = await reuseOnlySetup(t);
+  let armed = false,
+    tripped = false;
+  const native = syntheticNative(t, f, ({ route }) => {
+    // The capability probe is the last request before the draft save.
+    if (route === "/api/editorial/catalog-delivery-capabilities" && !tripped)
+      armed = true;
+  });
+  const run = await stagedRun(t, f);
+  const assertBindingActive = async () => {
+    if (armed && !tripped) {
+      tripped = true;
+      throw Object.assign(new Error("SYNTHETIC_BINDING_RECHECK"), {
+        code: "PRODUCTION_INPUT_CHANGED",
+      });
+    }
+  };
+  await assert.rejects(() => run("run", { assertBindingActive }), {
+    code: "PRODUCTION_INPUT_CHANGED",
+  });
+  assert.equal(tripped, true);
+  assert.equal(count(native.calls, "save-draft"), 0);
+  assert.equal(native.draft.revision, 4);
+  const outcome = await run("run", { assertBindingActive });
+  assert.equal(outcome.status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "save-draft"), 1);
+  assert.equal(native.draft.revision, 5);
 });

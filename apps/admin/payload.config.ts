@@ -39,6 +39,10 @@ import {
 } from "./src/runtime-settings";
 assertCmsProductionEnvironment();
 const dirname = path.dirname(fileURLToPath(import.meta.url));
+// A relative value, as in the local template, names a directory relative to
+// the Admin workspace the process starts in, exactly as Payload already reads
+// a relative upload directory. One absolute path serves every consumer.
+const mediaDirectory = path.resolve(requiredSetting("CMS_MEDIA_DIR"));
 export default buildConfig({
   secret: requiredSetting("CMS_SECRET"),
   admin: {
@@ -227,7 +231,7 @@ export default buildConfig({
       read: ({ req }) => catalogScopeAccess(req),
       canWrite: canEditCatalog,
       canRegister: isOwner,
-      localDirectory: requiredSetting("CMS_MEDIA_DIR"),
+      localDirectory: mediaDirectory,
     }),
     EditorialIdentities,
     EditorialApprovals,
@@ -241,10 +245,10 @@ export default buildConfig({
     ...editorialEndpoints,
     ...createResumableMediaEndpoints({
       directory: path.join(
-        path.dirname(requiredSetting("CMS_MEDIA_DIR")),
+        path.dirname(mediaDirectory),
         "editorial-upload-sessions",
       ),
-      mediaDirectory: requiredSetting("CMS_MEDIA_DIR"),
+      mediaDirectory,
     }),
     ...communityEndpoints,
     ...analyticsEndpoints,

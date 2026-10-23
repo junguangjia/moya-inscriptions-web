@@ -33,8 +33,6 @@ import type {
   WorkPublishingSettings,
 } from "@moya/contracts/internal/community-operator";
 import type {
-  CatalogAssetSyncCounts,
-  CatalogAssetSyncOptions,
   CatalogBlockOutcome,
   CatalogBlockPlan,
   CatalogBlockPort,
@@ -500,8 +498,8 @@ export class PostgresWorkPublishingAdapter
   syncCatalogAssets(
     sources: readonly CatalogMediaSource[],
     now: Date,
-    options: CatalogAssetSyncOptions,
-  ): Promise<CatalogAssetSyncCounts> {
+    options: catalogAssets.CatalogAssetSyncPassOptions,
+  ): Promise<catalogAssets.CatalogAssetSyncPassCounts> {
     return catalogAssets.syncCatalogAssets(this.pool, sources, now, options);
   }
   readCatalogRenderPlan(assetId: string): Promise<CatalogRenderPlan | null> {

@@ -35,9 +35,21 @@ const hash = (value) =>
 const ALLOWED_CODES = new Set([
   "CATALOG_DELIVERY_NOT_CONFIGURED",
   "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+  // Admin refuses a source edge beyond the 65,535 px delivery bound (422).
+  "CATALOG_DELIVERY_SOURCE_TOO_LARGE",
   "REVISION_CONFLICT",
   "CONCURRENT_OPERATION_BUSY",
 ]);
+const REFUSAL_RETRYABLE = new Set(["save-draft", "native-withdraw"]);
+
+/** A recorded attempt the server answered in full with a refusal (4xx): the
+ * request reached Native and was not applied, so it may be sent again.
+ */
+export const definitivelyRejected = (row) =>
+  row.status === "COMPLETE" &&
+  Number.isSafeInteger(row.httpStatus) &&
+  row.httpStatus >= 400 &&
+  row.httpStatus < 500;
 
 export function validateLocalFixture(manifest, fixture) {
   let url;
@@ -102,6 +114,11 @@ export function nativeRouteClass(route, method) {
     )
   )
     return "delivery";
+  if (
+    method === "POST" &&
+    route === "/api/editorial/catalog-delivery-capabilities"
+  )
+    return "capabilities";
   if (
     method === "POST" &&
     /^\/api\/editorial\/media-upload\/(start|status|complete)$/.test(route)
@@ -218,11 +235,24 @@ function createBoundedNativeHTTP(
         "media-metadata",
         "native-main",
         "native-draft",
+        "capabilities",
       ].includes(routeClass) ||
       route.endsWith("/status") ||
       route.endsWith("/read-catalog-delivery");
+    // Every check that can still refuse the request runs before its attempt is
+    // recorded: a request refused here was never sent, so it must not leave a
+    // pending attempt that blocks the caller's retry.
+    await assertAdmission({ route, method });
+    active(signal);
+    const authorization = await boundary.authorization({ route, method });
+    await assertAdmission({ route, method });
+    active(signal);
+    // A save or withdrawal the server definitively refused changed nothing;
+    // only attempts that may have been applied count against its limit.
     const prior = journal.requests.filter(
-      (row) => row.logicalKey === logicalKey,
+      (row) =>
+        row.logicalKey === logicalKey &&
+        !(REFUSAL_RETRYABLE.has(routeClass) && definitivelyRejected(row)),
     );
     const logicalAttempt = freshRead ? 1 : prior.length + 1;
     const attemptLimit =
@@ -270,10 +300,6 @@ function createBoundedNativeHTTP(
       // hard admission: observers never decide whether transmission may start
       return { ok: false, code: "CHECKPOINT_PERSIST_FAILED", retryable: false };
     }
-    await assertAdmission({ route, method });
-    active(signal);
-    const authorization = await boundary.authorization({ route, method });
-    await assertAdmission({ route, method });
     active(signal);
     let actualUploadBytes = 0,
       actualDownloadBytes = 0,
@@ -511,6 +537,7 @@ function createBoundedNativeHTTP(
           }
         : {
             ok: false,
+            httpStatus: response.status,
             retryable:
               response.status === 429 ||
               response.status >= 500 ||
