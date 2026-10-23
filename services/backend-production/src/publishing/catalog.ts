@@ -44,7 +44,27 @@ import {
 } from "./sandbox/protocol.js";
 import { SANDBOX_JOB_LIMITS, sandboxNonce } from "./sandbox/sandbox-runner.js";
 
+import {
+  CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS,
+  CATALOG_SNAPSHOT_MAX_SOURCES,
+  catalogMembershipBuckets,
+  catalogMembershipChanged,
+  catalogMembershipHashSql,
+  catalogMembershipTotal,
+  differingCatalogMembershipBuckets,
+  nearCatalogSnapshotCeiling,
+  readCatalogSnapshotCursor,
+} from "@moya/community-postgres";
+
 import type { createPostgresPool } from "@moya/catalog-postgres";
+import type {
+  CatalogMembershipBuckets,
+  CatalogMembershipIntent,
+  CatalogMembershipMarks,
+  CatalogMembershipObservation,
+  CatalogMembershipSide,
+  CatalogMembershipState,
+} from "@moya/community-postgres";
 import type { CatalogSourceReader } from "../storage/catalog-source.js";
 import type { ProcessorLogger } from "./processing/media-processor.js";
 import type { SandboxJob, SandboxManifest } from "./sandbox/protocol.js";
@@ -73,6 +93,13 @@ export interface CatalogWorkerSource {
   readonly objectKey: string;
   readonly width: number | null;
   readonly height: number | null;
+  /**
+   * The record (catalog id) and position a published row names, which the
+   * store's render order follows so a record's images render together
+   * (catalog-scale-v1 W9). Read by the published listing only.
+   */
+  readonly catalogId?: string | null;
+  readonly position?: number | null;
 }
 
 /** Mirror of `CatalogRenderPlan`. */
@@ -643,6 +670,7 @@ export interface CatalogSyncPort {
         readonly version: number;
         readonly digest: string;
       }[];
+      readonly renderQueueTarget?: number;
     },
   ): Promise<{
     readonly referenced: number;
@@ -658,20 +686,37 @@ export interface CatalogSyncPort {
      * whose earlier of the stored and snapshot expiry passed) is refused
      * instead. */
     readonly mismatchedIntentIds?: readonly string[];
+    /** The committed pass could not record its render backlog (W9; present
+     * only then): the pass stands, the recorded backlog is an older one. */
+    readonly renderBacklogRecorded?: false;
   }>;
 }
 
-/** Largest published list one sync accepts (the store's bound). */
-export const CATALOG_SYNC_MAX_SOURCES = 10_000;
-/** New assets and queued jobs per sync pass. */
+/** New assets per sync pass (and queued jobs without a queue target). */
 export const CATALOG_SYNC_BATCH = 100;
+/**
+ * The render queue's target (catalog-scale-v1 W9): a sync pass queues base
+ * `catalog_render` jobs only while fewer are queued, at most the difference,
+ * in render tier order. About 40 minutes of renders at about 7 a minute, so
+ * a newly published image waits behind no more than that. A recipe
+ * re-render is the last tier (t4) only for an image no live or grace intent
+ * names (its old set keeps serving); an intent's image ready under an older
+ * recipe is re-rendered in the intent's tier, so a recipe bump holds a
+ * prepared record behind at most the re-renders already queued. The
+ * per-tier backlog the pass records counts every named image still to
+ * render, queued or not; `readCatalogRenderBacklog` adds the queued and
+ * running base renders.
+ */
+export const CATALOG_RENDER_QUEUE_TARGET = 300;
 /** Sync cadence in the worker maintenance (spec: every 5 minutes). */
 export const CATALOG_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * One Catalog sync step for the worker maintenance: reads the complete
- * published list (`null` when it exceeds the bound, so nothing is marked
- * unreferenced from a partial list) and hands it to the store.
+ * published list (`null` above the snapshot ceiling, so nothing is marked
+ * unreferenced from a partial list) and hands it to the store. From 80% of a
+ * ceiling (`@moya/community-postgres` CATALOG_SNAPSHOT_*) each pass logs the
+ * counts, so the Catalog's growth is seen long before a pass is skipped.
  */
 export function createCatalogSync(options: {
   readonly listSources: () => Promise<readonly CatalogWorkerSource[] | null>;
@@ -722,9 +767,21 @@ export function createCatalogSync(options: {
       logger.error("[media-worker] catalog sync skipped: list too large");
       return;
     }
+    const privateRows = snapshot?.privateRows ?? 0;
+    if (
+      nearCatalogSnapshotCeiling(
+        sources.length,
+        CATALOG_SNAPSHOT_MAX_SOURCES,
+      ) ||
+      nearCatalogSnapshotCeiling(privateRows, CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS)
+    )
+      logger.error(
+        `[media-worker] catalog sync near ceiling sources=${sources.length}/${CATALOG_SNAPSHOT_MAX_SOURCES} private_rows=${privateRows}/${CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS}`,
+      );
     const counts = await options.port.syncCatalogAssets(sources, now, {
       limit,
       renditions: catalogSyncIdentities(),
+      renderQueueTarget: CATALOG_RENDER_QUEUE_TARGET,
       ...(snapshot ? { snapshot } : {}),
     });
     // A late release, a state regression, or an identity drift of an intent
@@ -742,6 +799,10 @@ export function createCatalogSync(options: {
       logger.error(
         `[media-worker] catalog sync mismatched intents=${counts.mismatchedIntentIds.length} ids=${counts.mismatchedIntentIds.slice(0, 5).join(",")}`,
       );
+    // The pass committed, but its per-tier backlog (the pacing's input) was
+    // not recorded; the next pass records a newer one.
+    if (counts.renderBacklogRecorded === false)
+      logger.error("[media-worker] catalog sync render backlog not recorded");
     if (counts.created + counts.unreferenced + counts.enqueued > 0) {
       logger.info(
         `[media-worker] catalog sync referenced=${counts.referenced} skipped=${counts.skipped} created=${counts.created} unreferenced=${counts.unreferenced} enqueued=${counts.enqueued}`,
@@ -766,34 +827,447 @@ export function createCatalogSync(options: {
   };
 }
 
+/** Membership fingerprint cadence (Owner decision D2: once a minute). */
+export const CATALOG_MEMBERSHIP_INTERVAL_MS = 60 * 1000;
+
 /**
- * Reads the published Catalog media list through the read-only Catalog
- * connection (the public read role). At most one row more than the bound is
- * read, so an oversized list is detected without loading it.
+ * The published membership by bucket (catalog-scale-v1 W8), through the
+ * public read role: each distinct pair once (a pair two records show is one
+ * asset), hashed by the md5 of `media_id:object_key`, which is the App asset
+ * id's digest, so the App's record of the same set hashes alike. One
+ * aggregate of the view, with no listing, order or row transfer: a scan of
+ * the published list and an md5 per row each minute (about 30 ms at 25k).
+ * A row without a media id or object key (both nullable in the CMS; only
+ * Payload requires them) is no pair and never an App asset, as the sync
+ * skips it; counted, its NULL hash would fail every observation.
+ */
+export const catalogPublicMembershipBucketsSql = `
+  SELECT substr(m.h, 1, 2) AS bucket, count(*)::integer AS count,
+    sum(${catalogMembershipHashSql("m.h", 3)})::text AS sum
+  FROM (SELECT DISTINCT md5(media_id || ':' || object_key) AS h FROM catalog_media
+    WHERE media_id IS NOT NULL AND object_key IS NOT NULL) m
+  GROUP BY 1`;
+
+/** The published pairs of the given buckets (only after a change). */
+export const catalogPublicMembershipMembersSql = `
+  SELECT DISTINCT media_id, object_key FROM catalog_media
+  WHERE media_id IS NOT NULL AND object_key IS NOT NULL
+    AND substr(md5(media_id || ':' || object_key), 1, 2) = ANY($1::text[])`;
+
+/**
+ * The live private projection's intents by bucket, through the prepare
+ * reader: one row per intent (its first member, or its header row), hashed
+ * with its state (a lapsed lease reads as expired) and state version, as
+ * the App mirror records them.
+ */
+export const catalogPrivateMembershipBucketsSql = `
+  SELECT substr(v.intent_id::text, 1, 2) AS bucket, count(*)::integer AS count,
+    sum(${catalogMembershipHashSql("md5(v.intent_id::text || ':' || v.state || ':' || v.state_version)", 1)})::text AS sum
+  FROM public.catalog_delivery_live_prepare_media v
+  WHERE v.media_ordinal IS NULL OR v.media_ordinal = 1
+  GROUP BY 1`;
+
+/** The live projection's intents of the given buckets (only after a change). */
+export const catalogPrivateMembershipMembersSql = `
+  SELECT v.intent_id::text AS intent_id, v.state, v.state_version
+  FROM public.catalog_delivery_live_prepare_media v
+  WHERE (v.media_ordinal IS NULL OR v.media_ordinal = 1)
+    AND substr(v.intent_id::text, 1, 2) = ANY($1::text[])`;
+
+/**
+ * Of the given intents (the App mirror's live release requests that name a
+ * listed asset and hold a pin for each of their members, a superset of
+ * those whose pins serve one), those the live private projection reports,
+ * through the prepare reader in the observation's snapshot, as
+ * release_requested (the view reads a lapsed lease as expired), leased past
+ * the observation ($2) and of the current recipe policy ($3): the requests
+ * whose plans keep their pins (planCatalogAsset), as long as inspect still
+ * finds each member's planned renditions. One row per intent (its first
+ * member, or its header row); the ids' bitmap on the primary key is ANDed
+ * with the live projection's own condition.
+ */
+export const catalogMembershipRequestsSql = `
+  SELECT v.intent_id::text AS intent_id
+  FROM public.catalog_delivery_live_prepare_media v
+  WHERE v.intent_id = ANY($1::uuid[]) AND (v.media_ordinal IS NULL OR v.media_ordinal = 1)
+    AND v.state = 'release_requested' AND v.expires_at > $2::timestamptz
+    AND v.recipe_manifest_sha256 = $3::text`;
+
+/** `catalog-asset-` + md5(media id ':' key), as the App derives an asset id. */
+const catalogAssetIdOf = (mediaId: string, objectKey: string) =>
+  `catalog-asset-${createHash("md5").update(`${mediaId}:${objectKey}`, "utf8").digest("hex")}`;
+
+/** The App side of the membership step (community-postgres
+ * catalog-publication-dirty, bound to the App pool). */
+export interface CatalogMembershipPort {
+  readCatalogMembershipState(): Promise<CatalogMembershipState>;
+  readCatalogMembershipAppBuckets(
+    side: "public" | "private",
+  ): Promise<CatalogMembershipBuckets>;
+  readCatalogMembershipHolds(
+    buckets: readonly string[],
+    observedAt: Date,
+    policy: string,
+  ): Promise<readonly string[]>;
+  applyCatalogMembership(
+    observation: CatalogMembershipObservation,
+    now: Date,
+  ): Promise<CatalogMembershipMarks>;
+}
+
+const connectCatalog = (
+  pool: Pick<ReturnType<typeof createPostgresPool>, "connect">,
+) => pool.connect();
+type CatalogClient = Awaited<ReturnType<typeof connectCatalog>>;
+
+/**
+ * The per-minute membership step of the scoped reconcile (catalog-scale-v1
+ * W8). In one CMS snapshot (the public read role's REPEATABLE READ
+ * transaction, its snapshot exported to the prepare reader, as the complete
+ * snapshot reads both), it reads one aggregate of each membership: the
+ * published pairs and, with a prepare reader, the live private intents, each
+ * as a count and a sum of element hashes in 256 buckets. A side whose total
+ * equals the stored one is done. Otherwise only the buckets that changed are
+ * listed on both sides, and the assets whose membership differs there are
+ * marked dirty with the new fingerprints in one App transaction, so a
+ * takedown of any size is queued as a whole, and the reconcile reacts within
+ * a minute or two at any Catalog size; a takedown's marks are urgent, read
+ * before any publish-side mark. The same transaction marks the intents whose
+ * lease passed since the last observation: urgent for a requested lease,
+ * normal for a prepared one (it granted nothing a takedown removes). A
+ * minute without a change reads two aggregates and writes the state row.
+ *
+ * With a prepare reader, an asset the Catalog does not publish that only
+ * release requests serve (each served publication one of their pins) is not
+ * marked: their plans keep those pins. Only requests that hold a pin for
+ * each of their members (inspect pins every ready member, so one with a
+ * member still rendering or failed is not private-ready, and its plan keeps
+ * nothing) and that the CMS itself reports in the same snapshot as
+ * release_requested, leased past the observation and of the current recipe
+ * policy count: after the public members are listed, the App mirror's live
+ * requests that name an asset of the listed buckets (a superset of those
+ * whose pins serve one) and hold such pins are read (bounded by the live
+ * requests, whatever the buckets) and confirmed by intent id through the
+ * prepare reader. The mirror lags the CMS by up to a sync, so a request the
+ * CMS has cancelled or superseded keeps nothing, and a record withdrawn
+ * after that is marked urgent in the same observation. A confirmation that
+ * fails confirms none (each such asset is then marked, urgent), and is
+ * logged. One residual remains: inspect can fail on a request that pinned
+ * every member (a planned role without its one ready rendition), and its
+ * plan then keeps nothing; an image only such a request's pins serve,
+ * shared with a record just withdrawn, waits for the next sync's
+ * unreferenced flip (up to 5 minutes).
+ *
+ * The buckets that changed are those that differ from this step's last
+ * committed observation of the side, kept in memory while the stored
+ * fingerprint is still that observation's (its count, sum and time). A
+ * difference that lasts (a published asset that cannot be copied yet, an
+ * unpublished one still served, a refused intent) is then marked again only
+ * when the CMS changes one of its buckets, not on every minute in which the
+ * CMS changes at all; one that confirmed requests alone serve is not marked
+ * at all. Without such an observation (the first after a start, or once
+ * another process, or a commit this step could not confirm, advanced the
+ * stored row) the CMS buckets are compared with the App's own record of the
+ * side, aggregated the same way, which marks every lasting difference once.
+ * Within the listed buckets the marks are the same either way: a bucket in
+ * which the App's record matches the CMS holds nothing to mark. Above a
+ * snapshot ceiling the step writes nothing, as the sync does. Any other read
+ * error throws, and nothing is written or kept. Logs are content-free
+ * counts.
+ */
+export function createCatalogMembershipWatch(options: {
+  readonly published: Pick<ReturnType<typeof createPostgresPool>, "connect">;
+  readonly prepare: Pick<
+    ReturnType<typeof createPostgresPool>,
+    "connect"
+  > | null;
+  /** The current recipe policy (the manifest digest of
+   * currentCatalogRecipePolicy): a release request of an earlier one is
+   * granted nothing by its plan, so its pins keep nothing unmarked. */
+  readonly policy: string;
+  readonly port: CatalogMembershipPort;
+  readonly logger?: {
+    info(message: string): void;
+    error(message: string): void;
+  };
+}): { run(now: Date): Promise<void> } {
+  const logger = options.logger ?? console;
+  /** This step's last committed observation, by side: its CMS buckets and
+   * the time it was read at, which the stored fingerprint then carries. */
+  const committed = new Map<
+    "public" | "private",
+    { readonly at: number; readonly buckets: CatalogMembershipBuckets }
+  >();
+  const buckets = async (client: CatalogClient, sql: string) =>
+    catalogMembershipBuckets(
+      (await client.query<{ bucket: string; count: number; sum: string }>(sql))
+        .rows,
+    );
+  /** One side: its total and, when that differs from the stored one, the CMS
+   * members of the buckets that changed since this step's committed
+   * observation while it is the stored one, or else of the buckets in which
+   * the CMS differs from the App's record. */
+  const side = async <Member>(
+    observed: CatalogMembershipBuckets,
+    stored: CatalogMembershipState["public"],
+    kind: "public" | "private",
+    members: (buckets: readonly string[]) => Promise<readonly Member[]>,
+  ): Promise<CatalogMembershipSide<Member>> => {
+    const total = catalogMembershipTotal(observed);
+    if (!catalogMembershipChanged(stored, total))
+      return { ...total, diff: null };
+    const own = committed.get(kind);
+    const stillStored =
+      own !== undefined &&
+      stored !== null &&
+      own.at === stored.observedAt.getTime() &&
+      !catalogMembershipChanged(stored, catalogMembershipTotal(own.buckets));
+    const differing = differingCatalogMembershipBuckets(
+      observed,
+      stillStored
+        ? own.buckets
+        : await options.port.readCatalogMembershipAppBuckets(kind),
+    );
+    return {
+      ...total,
+      diff: {
+        buckets: differing,
+        members: differing.length ? await members(differing) : [],
+      },
+    };
+  };
+  /** One observation, compared with `previous`, with the CMS buckets it
+   * read; null above a ceiling. */
+  const observe = async (
+    previous: CatalogMembershipState,
+  ): Promise<{
+    readonly observation: CatalogMembershipObservation;
+    readonly buckets: ReadonlyMap<
+      "public" | "private",
+      CatalogMembershipBuckets
+    >;
+  } | null> => {
+    const publicClient = await connectCatalog(options.published);
+    let privateClient: CatalogClient | undefined;
+    try {
+      await publicClient.query(
+        "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const observedAt = (
+        await publicClient.query<{ at: Date }>("SELECT clock_timestamp() AS at")
+      ).rows[0]!.at;
+      const publicBuckets = await buckets(
+        publicClient,
+        catalogPublicMembershipBucketsSql,
+      );
+      let privateBuckets: CatalogMembershipBuckets | undefined;
+      if (options.prepare) {
+        const snapshot = (
+          await publicClient.query<{ id: string }>(
+            "SELECT pg_export_snapshot() AS id",
+          )
+        ).rows[0]!.id;
+        if (!/^[a-f0-9]+-[a-f0-9]+-[a-f0-9]+$/i.test(snapshot))
+          throw new Error("Catalog snapshot identifier invalid");
+        privateClient = await connectCatalog(options.prepare);
+        await privateClient.query(
+          "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        );
+        await privateClient.query(`SET TRANSACTION SNAPSHOT '${snapshot}'`);
+        privateBuckets = await buckets(
+          privateClient,
+          catalogPrivateMembershipBucketsSql,
+        );
+      }
+      const publicCount = catalogMembershipTotal(publicBuckets).count;
+      const privateCount = privateBuckets
+        ? catalogMembershipTotal(privateBuckets).count
+        : 0;
+      if (
+        publicCount > CATALOG_SNAPSHOT_MAX_SOURCES ||
+        privateCount > CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS
+      ) {
+        logger.error(
+          `[media-worker] catalog membership skipped: above ceiling sources=${publicCount}/${CATALOG_SNAPSHOT_MAX_SOURCES} intents=${privateCount}/${CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS}`,
+        );
+        return null;
+      }
+      const publicSide = await side(
+        publicBuckets,
+        previous.public,
+        "public",
+        async (list) =>
+          (
+            await publicClient.query<{ media_id: string; object_key: string }>(
+              catalogPublicMembershipMembersSql,
+              [list],
+            )
+          ).rows.map((row) => catalogAssetIdOf(row.media_id, row.object_key)),
+      );
+      const reader = privateClient;
+      const privateSide =
+        privateBuckets && reader
+          ? await side<CatalogMembershipIntent>(
+              privateBuckets,
+              previous.private,
+              "private",
+              async (list) =>
+                (
+                  await reader.query<{
+                    intent_id: string;
+                    state: string;
+                    state_version: number;
+                  }>(catalogPrivateMembershipMembersSql, [list])
+                ).rows.map((row) => ({
+                  intentId: row.intent_id,
+                  state: row.state,
+                  stateVersion: row.state_version,
+                })),
+            )
+          : null;
+      // The release requests whose pins may keep a listed asset unmarked:
+      // the App mirror's, confirmed by id in this snapshot (the prepare
+      // reader's last statement). A failure confirms none, so each such
+      // asset is marked rather than its takedown left to a later minute.
+      let requests: CatalogMembershipObservation["requests"];
+      const listed = publicSide.diff?.buckets ?? [];
+      if (reader && listed.length)
+        try {
+          const holds = await options.port.readCatalogMembershipHolds(
+            listed,
+            observedAt,
+            options.policy,
+          );
+          requests = {
+            policy: options.policy,
+            intentIds: holds.length
+              ? (
+                  await reader.query<{ intent_id: string }>(
+                    catalogMembershipRequestsSql,
+                    [holds, observedAt.toISOString(), options.policy],
+                  )
+                ).rows.map((row) => row.intent_id)
+              : [],
+          };
+        } catch {
+          logger.error(
+            "[media-worker] catalog membership requests unconfirmed",
+          );
+        }
+      return {
+        observation: {
+          observedAt,
+          previous,
+          public: publicSide,
+          private: privateSide,
+          ...(requests ? { requests } : {}),
+        },
+        buckets: new Map([
+          ["public", publicBuckets],
+          ...(privateBuckets ? [["private", privateBuckets] as const] : []),
+        ]),
+      };
+    } finally {
+      if (privateClient) {
+        await privateClient.query("ROLLBACK").catch(() => undefined);
+        privateClient.release();
+      }
+      await publicClient.query("ROLLBACK").catch(() => undefined);
+      publicClient.release();
+    }
+  };
+  let active: Promise<void> | undefined;
+  const run = async (now: Date) => {
+    const observed = await observe(
+      await options.port.readCatalogMembershipState(),
+    );
+    if (observed === null) return;
+    const marked = await options.port.applyCatalogMembership(
+      observed.observation,
+      now,
+    );
+    // Committed: the stored fingerprints are now this observation's.
+    const at = observed.observation.observedAt.getTime();
+    for (const [kind, read] of observed.buckets)
+      committed.set(kind, { at, buckets: read });
+    if (marked.public + marked.private + marked.boundaries > 0)
+      logger.info(
+        `[media-worker] catalog membership marked public=${marked.public} private=${marked.private} boundaries=${marked.boundaries}`,
+      );
+  };
+  return {
+    run(now) {
+      if (active) return active;
+      active = run(now).finally(() => {
+        active = undefined;
+      });
+      return active;
+    },
+  };
+}
+
+/**
+ * The published Catalog media list, read through the read-only Catalog
+ * connection (the public read role) in cursor batches (catalog-scale-v1 W3).
+ * No LIMIT: the cursor stops one row past the snapshot ceiling. Each row's
+ * record and position order its render (W9).
  */
 export const listPublishedCatalogSourcesSql = `
-  SELECT media_id, object_key, width, height
+  SELECT media_id, object_key, width, height, catalog_id, position
   FROM catalog_media
   ORDER BY media_id ASC, object_key ASC
-  LIMIT ${CATALOG_SYNC_MAX_SOURCES + 1}
 `;
 
-export async function listPublishedCatalogSources(
-  pool: Pick<ReturnType<typeof createPostgresPool>, "query">,
-): Promise<readonly CatalogWorkerSource[] | null> {
-  const result = await pool.query<{
+/**
+ * The complete published list inside the caller's open transaction on
+ * `client` (the complete snapshot's REPEATABLE READ transaction), or null
+ * above CATALOG_SNAPSHOT_MAX_SOURCES rows; at most one row past the ceiling
+ * is ever read, and never a partial list is returned.
+ */
+export async function readPublishedCatalogSources(client: {
+  query(sql: string): Promise<{ readonly rows: readonly unknown[] }>;
+}): Promise<readonly CatalogWorkerSource[] | null> {
+  const rows = await readCatalogSnapshotCursor<{
     media_id: string;
     object_key: string;
     width: number | null;
     height: number | null;
-  }>(listPublishedCatalogSourcesSql);
-  if (result.rows.length > CATALOG_SYNC_MAX_SOURCES) return null;
-  return result.rows.map((row) => ({
-    mediaId: row.media_id,
-    objectKey: row.object_key,
-    width: row.width,
-    height: row.height,
-  }));
+    catalog_id?: string | null;
+    position?: number | null;
+  }>(
+    client,
+    "catalog_published_sources",
+    listPublishedCatalogSourcesSql,
+    CATALOG_SNAPSHOT_MAX_SOURCES,
+  );
+  return (
+    rows?.map((row) => ({
+      mediaId: row.media_id,
+      objectKey: row.object_key,
+      width: row.width,
+      height: row.height,
+      catalogId: row.catalog_id ?? null,
+      position: row.position ?? null,
+    })) ?? null
+  );
+}
+
+/**
+ * The same complete list on its own connection, in its own REPEATABLE READ
+ * READ ONLY transaction: the fallback list of the sync and the publication
+ * authority's whole-list check.
+ */
+export async function listPublishedCatalogSources(
+  pool: Pick<ReturnType<typeof createPostgresPool>, "connect">,
+): Promise<readonly CatalogWorkerSource[] | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    return await readPublishedCatalogSources(client);
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+  }
 }
 
 /** Largest de-duplicated pair batch one exact check accepts: the bound of one

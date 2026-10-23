@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { prepareProductionBackend as prepareProductionBackendImplementation } from "@moya/backend-production";
+import { currentCatalogRecipePolicy } from "@moya/backend-production/internal/catalog-delivery";
 import { ProductionCosStorageUrlResolver } from "@moya/backend-production/internal/production-cos";
 import {
   openPublishingMedia,
@@ -10,7 +11,7 @@ import {
 import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
 import {
   CATALOG_PUBLISHED_PAIRS_MAX,
-  CATALOG_SYNC_MAX_SOURCES,
+  catalogPublicMembershipBucketsSql,
   publishedCatalogPairsSql,
 } from "@moya/backend-production/internal/publishing-catalog";
 import { CatalogQueryUnavailableError } from "@moya/api";
@@ -19,16 +20,20 @@ import {
   startBackendProcess,
 } from "@moya/backend-runtime";
 import {
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   assertPostgresStartupReady,
   CanonicalAuthoredArticleProjector,
   createPostgresPool,
   PostgresAuthoredArticleCatalogMediaResolver,
+  PostgresStartupError,
 } from "@moya/catalog-postgres";
 import {
   PostgresAuthorCommunityAdapter,
   PostgresWorkPublishingAdapter,
   PostgresNotificationAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
 } from "@moya/community-postgres";
 import {
   apiErrorSchema,
@@ -130,6 +135,10 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
       }),
     })),
     assertPostgresStartupReady: vi.fn(async () => {}),
+    // catalog-scale-v1 W6: the Catalog grant checks are PostgreSQL I/O too;
+    // their pools and refusals are observed below.
+    assertCatalogPublicationScopeReady: vi.fn(async () => {}),
+    assertCatalogPrepareReaderReady: vi.fn(async () => {}),
     PostgresCatalogQueryAdapter: class
       extends actual.PostgresCatalogQueryAdapter
     {
@@ -153,13 +162,15 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
 
 // The community ledger check is read-only PostgreSQL I/O as well; the App-role
 // adapter is unused by these media compositions. The author adapter's
-// options (the profile rendition switch) are observed.
+// options (the profile rendition switch) and the App side of the Catalog
+// membership step (catalog-scale-v1 W8) are observed.
 vi.mock("@moya/community-postgres", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@moya/community-postgres")>();
   return {
     ...actual,
     verifyCommunityMigrationLedger: vi.fn(async () => {}),
+    catalogMembershipStore: vi.fn(actual.catalogMembershipStore),
     PostgresAuthorCommunityAdapter: vi.fn(function (
       ...args: ConstructorParameters<
         typeof actual.PostgresAuthorCommunityAdapter
@@ -835,6 +846,64 @@ describe("non-Pilot production public media composition", () => {
     }
   });
 
+  // catalog-scale-v1 (Issue #323) 1B, W6: the Backend may run publication
+  // workers and the reconcile, and its publication authority reads the
+  // private prepare views, so startup checks the scoped reconcile's grants on
+  // the App pool and, only with a prepare database, the prepare reader's
+  // grants on that pool. Either refusal stops startup with every pool closed.
+  it("checks the Catalog scope and prepare grants on their own pools at startup and refuses without them", async () => {
+    const withPrepare = {
+      ...environment,
+      CATALOG_PREPARE_DATABASE_URL:
+        "postgresql://synthetic-prepare@127.0.0.1:1/synthetic_published",
+    };
+    const opened = (from: number) =>
+      vi
+        .mocked(createPostgresPool)
+        .mock.calls.slice(from)
+        .map(([config], index) => ({
+          url: config.connectionString,
+          pool: vi.mocked(createPostgresPool).mock.results[from + index]!
+            .value as unknown,
+        }));
+    const poolOf = (from: number, url: string) =>
+      opened(from).find((pool) => pool.url === url)!.pool;
+
+    let from = vi.mocked(createPostgresPool).mock.results.length;
+    const plain = await prepareProductionBackend(environment);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledWith(
+      poolOf(from, environment.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).not.toHaveBeenCalled();
+    await plain.closeResources();
+
+    from = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareProductionBackend(withPrepare);
+    expect(opened(from)).toHaveLength(3);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenLastCalledWith(
+      poolOf(from, withPrepare.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledWith(
+      poolOf(from, withPrepare.CATALOG_PREPARE_DATABASE_URL),
+    );
+    await prepared.closeResources();
+
+    for (const check of [
+      assertCatalogPublicationScopeReady,
+      assertCatalogPrepareReaderReady,
+    ]) {
+      const refusal = new PostgresStartupError("Synthetic missing grant");
+      vi.mocked(check).mockRejectedValueOnce(refusal);
+      database.end.mockClear();
+      from = vi.mocked(createPostgresPool).mock.results.length;
+      await expect(prepareProductionBackend(withPrepare)).rejects.toBe(refusal);
+      expect(opened(from)).toHaveLength(3);
+      expect(database.end).toHaveBeenCalledTimes(3);
+    }
+  });
+
   // catalog-scale-v1 (Issue #323) 1A: rendition facts and rendition URLs ask
   // the live published projection about the read's own exact pairs only, on
   // the public read pool. A Catalog beyond the old 10,000-image listing reads
@@ -897,7 +966,8 @@ describe("non-Pilot production public media composition", () => {
       objectKey: `display/v1/media_${"c".repeat(32)}/${"d".repeat(64)}.webp`,
     };
     const filler = Array.from(
-      { length: CATALOG_SYNC_MAX_SOURCES + 1 },
+      // One more than the old 10,000-image listing ceiling.
+      { length: 10_001 },
       (_, n) => ({
         media_id: `media-unit-filler-${n}`,
         object_key: `display/v1/media_${n.toString(16).padStart(32, "0")}/${"e".repeat(64)}.webp`,
@@ -1511,6 +1581,9 @@ describe("Work publishing composition", () => {
             sources: [],
             publishedSources: [],
             observedAt: database.snapshotObservedAt,
+            // The policy the render order and grace follow (W9/W10).
+            recipeManifestSha256:
+              currentCatalogRecipePolicy().recipeManifestSha256,
           });
           expect(database.snapshotClients).toHaveLength(1);
           expect(database.snapshotClients[0]?.statements[0]).toBe(
@@ -1564,6 +1637,190 @@ describe("Work publishing composition", () => {
     },
     15_000,
   );
+
+  // catalog-scale-v1 (W8 in the media worker, here for the embedded
+  // Development worker): wherever the Backend runs the Catalog sync and the
+  // scoped reconcile, it also runs the per-minute membership step that marks
+  // the reconcile's dirty assets (takedowns between syncs, a passed lease),
+  // on the App pool, from the published read pool.
+  it("Development runs the Catalog membership step beside the sync, on the App pool", async () => {
+    quietQueue();
+    const membership = {
+      readCatalogMembershipState: vi.fn(async () => ({
+        public: null,
+        private: null,
+      })),
+      readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+      readCatalogMembershipHolds: vi.fn(async () => []),
+      applyCatalogMembership: vi.fn(async () => ({
+        public: 0,
+        private: 0,
+        boundaries: 0,
+      })),
+    };
+    vi.mocked(catalogMembershipStore).mockReturnValueOnce(membership);
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const from = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareProductionBackend({
+      ...local,
+      ...publishingKeys,
+    });
+    const poolOf = (url: string) =>
+      vi.mocked(createPostgresPool).mock.results[
+        from +
+          vi
+            .mocked(createPostgresPool)
+            .mock.calls.slice(from)
+            .findIndex(([config]) => config.connectionString === url)
+      ]!.value as {
+        connect: ReturnType<typeof vi.fn>;
+      };
+    try {
+      expect(catalogMembershipStore).toHaveBeenCalledTimes(1);
+      expect(catalogMembershipStore).toHaveBeenCalledWith(
+        poolOf(local.APP_DATABASE_URL),
+      );
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1),
+      );
+      // The published pool's aggregate, with no prepare reader here: no
+      // private side.
+      expect(
+        (membership.applyCatalogMembership.mock.calls[0] as unknown[])[0],
+      ).toMatchObject({
+        public: { count: 0, sum: "0", diff: { buckets: [], members: [] } },
+        private: null,
+      });
+      const clients = (await Promise.all(
+        poolOf(local.DATABASE_URL).connect.mock.results.map(
+          (result) => result.value as Promise<unknown>,
+        ),
+      )) as { query: ReturnType<typeof vi.fn> }[];
+      expect(
+        clients.some((client) =>
+          client.query.mock.calls.some(
+            ([sql]) => sql === catalogPublicMembershipBucketsSql,
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      await prepared.closeResources();
+    }
+  });
+
+  // The step follows the scoped reconcile, not the sync, as in the media
+  // worker (one condition for both there). Without CMS_MEDIA_DIR the
+  // embedded Backend runs no Catalog sync and no render, but its publication
+  // lanes still reconcile with the Catalog authority on the published read
+  // pool, so the step still marks takedowns and a passed lease rather than
+  // leaving them to the sweep alone.
+  it("Development without CMS_MEDIA_DIR still runs the Catalog membership step beside the scoped reconcile, with no sync", async () => {
+    const queue = quietQueue();
+    const membership = {
+      readCatalogMembershipState: vi.fn(async () => ({
+        public: null,
+        private: null,
+      })),
+      readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+      readCatalogMembershipHolds: vi.fn(async () => []),
+      applyCatalogMembership: vi.fn(async () => ({
+        public: 0,
+        private: 0,
+        boundaries: 0,
+      })),
+    };
+    vi.mocked(catalogMembershipStore).mockReturnValueOnce(membership);
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const prepared = await prepareProductionBackend({
+      ...local,
+      CMS_MEDIA_DIR: undefined,
+      ...publishingKeys,
+    });
+    try {
+      expect(catalogMembershipStore).toHaveBeenCalledTimes(1);
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1),
+      );
+      // The publication lanes (the scoped reconcile's) run their maintenance.
+      await vi.waitFor(() =>
+        expect(
+          PostgresMediaPublicationAdapter.prototype.hasRegisteredPublications,
+        ).toHaveBeenCalled(),
+      );
+      expect(queue.catalogSync).not.toHaveBeenCalled();
+    } finally {
+      await prepared.closeResources();
+    }
+  });
+
+  // catalog-scale-v1 (W4 in the media worker, here for the embedded
+  // Development worker): the Catalog sync runs detached from the tick.
+  it("Development keeps claiming while a long Catalog sync runs, and closes the pools only after it ends", async () => {
+    const queue = quietQueue();
+    let finish: (() => void) | undefined;
+    queue.catalogSync.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              referenced: 0,
+              skipped: 0,
+              created: 0,
+              unreferenced: 0,
+              enqueued: 0,
+            });
+        }),
+    );
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const prepared = await prepareProductionBackend({
+      ...local,
+      ...publishingKeys,
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      const [handlers] = vi
+        .mocked(createPublishingJobHandlers)
+        .mock.calls.at(-1)!;
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(queue.catalogSync).toHaveBeenCalledTimes(1),
+      );
+      // The sync has not returned, and the embedded media worker (not only
+      // the publication lanes on the same queue) still claims, poll after
+      // poll.
+      const ownClaims = () =>
+        queue.claim.mock.calls.filter(
+          ([options], call) =>
+            queue.claim.mock.contexts[call] === handlers.port &&
+            options.kinds?.includes("catalog_render"),
+        ).length;
+      await vi.waitFor(() => expect(ownClaims()).toBeGreaterThanOrEqual(2), {
+        timeout: 5_000,
+      });
+      let closed = false;
+      closing = prepared.closeResources().then(() => {
+        closed = true;
+      });
+      await pause(100);
+      expect(closed).toBe(false);
+      expect(database.end).not.toHaveBeenCalled();
+      finish!();
+      await closing;
+      expect(database.end).toHaveBeenCalledTimes(2);
+      expect(queue.catalogSync).toHaveBeenCalledTimes(1);
+    } finally {
+      finish?.();
+      await (closing ?? prepared.closeResources());
+    }
+  }, 15_000);
 
   it.each(["development", "production"] as const)(
     "%s shares one upload registry between upload and worker session expiry",

@@ -15,6 +15,9 @@ export { parsePostgresConfig } from "./config.js";
 export { catalogPageOffset } from "./pagination.js";
 export { closePostgresPool, createPostgresPool } from "./pool.js";
 export {
+  // catalog-scale-v1 W6: worker and Backend startup grant checks.
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   assertPostgresStartupReady,
   checkPostgresReadiness,
   PostgresStartupError,

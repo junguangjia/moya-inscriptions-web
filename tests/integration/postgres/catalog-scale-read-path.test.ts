@@ -8,7 +8,6 @@ import {
   createCatalogPublicationAuthority,
 } from "@moya/backend-production/internal/catalog-delivery";
 import {
-  CATALOG_SYNC_MAX_SOURCES,
   listPublishedCatalogSources,
   publishedCatalogPairs,
   publishedCatalogPairsSql,
@@ -434,7 +433,7 @@ describe("catalog-scale-v1 1A: public reads at 20,300 published images", () => {
     );
   }, SLOW);
 
-  it("holds more published images than the old listing ceiling, which reads it as incomplete", async () => {
+  it("holds more published images than the old 10,000-image listing ceiling, and the cursor listing reads them all", async () => {
     const count = (
       await publicRead.query<{ n: number }>(
         "SELECT count(*)::integer AS n FROM catalog_media",
@@ -442,10 +441,10 @@ describe("catalog-scale-v1 1A: public reads at 20,300 published images", () => {
     ).rows[0]!.n;
     expect(count).toBe(RECORDS * IMAGES_PER_RECORD + 7);
     expect(count).toBeGreaterThan(20_000);
-    expect(count).toBeGreaterThan(CATALOG_SYNC_MAX_SOURCES);
-    // The listing the read path used to take: null here, which every public
-    // read answered as 503.
-    expect(await listPublishedCatalogSources(publicRead)).toBeNull();
+    // The listing the read path used to take returned null here, which every
+    // public read answered as 503. The read path no longer lists the Catalog,
+    // and the worker's cursor listing (catalog-scale-v1 W3) is complete.
+    expect(await listPublishedCatalogSources(publicRead)).toHaveLength(count);
   });
 
   it("serves complete editorial renditions of exact published pairs with one CMS check per read", async () => {

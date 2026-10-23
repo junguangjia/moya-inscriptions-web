@@ -1,4 +1,8 @@
--- The existing approved internal reader may receive this one private view.
+-- The existing approved internal reader may receive the two private views:
+-- catalog_delivery_prepare_media and, from CMS migration 20261024_000000
+-- (catalog-scale-v1 M2), catalog_delivery_live_prepare_media, which the
+-- worker's complete snapshot reads. Re-run after that migration and before
+-- deploying a worker that reads it; an absent view is a hard failure.
 -- Apply only after the CMS migration with all four explicit identity inputs:
 -- prepare_reader, approved_prepare_reader, public_read_role, backend_read_role.
 -- All identify existing roles; the approved target comes from the separate
@@ -27,10 +31,12 @@ BEGIN
     OR has_schema_privilege(target, 'public', 'CREATE')
     OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relname IN
-        ('catalog_delivery_intents', 'catalog_delivery_receipts', 'catalog_delivery_prepare_media')
+        ('catalog_delivery_intents', 'catalog_delivery_receipts', 'catalog_delivery_prepare_media',
+          'catalog_delivery_live_prepare_media')
         AND (pg_has_role(target, c.relowner, 'USAGE') OR pg_has_role(target, c.relowner, 'SET'))) THEN
     RAISE EXCEPTION 'Catalog prepare reader must be the approved private non-owner role, isolated from public readers';
   END IF;
 END $$;
 GRANT USAGE ON SCHEMA public TO :"prepare_reader";
 GRANT SELECT ON public.catalog_delivery_prepare_media TO :"prepare_reader";
+GRANT SELECT ON public.catalog_delivery_live_prepare_media TO :"prepare_reader";
