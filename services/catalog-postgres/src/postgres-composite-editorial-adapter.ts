@@ -82,6 +82,12 @@ interface AuthoredDetailRow extends QueryResultRow {
 
 // Both sources are ordered and paged together. No full body is selected here.
 // With renditions, a staff cover also carries its rendition delivery facts.
+// The cover ids, gathered once per statement, also restrict the published
+// media view alone. The cover join implies that restriction, so no row
+// changes; unlike a join qual it enters a view that allows it (catalog-scale-v1
+// M1), so only the covers' rows are read, by index. A fenced view (before M1,
+// or after its down) is still read once, as before; a LATERAL subquery would
+// read it once per Article (catalog-scale-v1 S5).
 const indexSqlOf = (renditions: boolean) => `
 SELECT 'staff'::text AS source,a.article_id,a.presentation,a.title,a.subtitle,
   a.summary,a.section,a.issue,a.byline,a.first_published_at,a.published_at,a.updated_at,
@@ -89,7 +95,8 @@ SELECT 'staff'::text AS source,a.article_id,a.presentation,a.title,a.subtitle,
   NULL::jsonb AS cover_reference,NULL::text AS fingerprint,
   cm.media_id,cm.object_key,CASE WHEN BTRIM(a.cover_alt)<>'' THEN a.cover_alt ELSE cm.alt_text END AS alt,cm.width,cm.height${renditions ? ",delivery.renditions,delivery.placeholder_color" : ""}
 FROM public.article_entries a
-LEFT JOIN public.catalog_media cm ON cm.catalog_id=a.cover_catalog_id AND cm.is_representative${renditions ? catalogMediaDeliveryJoinSql("cm") : ""}
+LEFT JOIN public.catalog_media cm ON cm.catalog_id=a.cover_catalog_id AND cm.is_representative
+  AND cm.catalog_id=ANY(ARRAY(SELECT x.cover_catalog_id FROM public.article_entries x WHERE x.cover_catalog_id IS NOT NULL))${renditions ? catalogMediaDeliveryJoinSql("cm") : ""}
 UNION ALL
 SELECT 'authored'::text,a.article_id,'academic'::text,a.title,NULL::text,
   NULL::text,NULL::text,NULL::text,a.byline,a.first_published_at,a.published_at,a.updated_at,
