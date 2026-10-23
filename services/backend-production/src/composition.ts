@@ -2,9 +2,6 @@ import { parseAnalyticsConfiguration } from "./analytics/config.js";
 import { AnalyticsWorker } from "./analytics/worker.js";
 import { PostgresAnalyticsAdapter } from "@moya/community-postgres";
 import path from "node:path";
-import { createHash } from "node:crypto";
-const requireAssetHash = (mediaId: string, objectKey: string) =>
-  createHash("md5").update(`${mediaId}:${objectKey}`).digest("hex");
 
 import { PostgresNotificationAdapter } from "@moya/community-postgres";
 import { NotificationSignals } from "@moya/backend-runtime";
@@ -26,7 +23,6 @@ import {
   startBackendProcess,
 } from "@moya/backend-runtime";
 import {
-  asCatalogQueryUnavailableError,
   asPostgresOperationError,
   assertPostgresStartupReady,
   checkPostgresReadiness,
@@ -53,7 +49,6 @@ import {
   PostgresMediaPublicationAdapter,
   resolveCatalogRenditionRead,
   verifyCatalogDeliveryReadable,
-  readCatalogDeliveryProjection,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { loadProductAccess } from "./access/product-access.js";
@@ -114,7 +109,7 @@ import {
   parseCatalogPrepareDatabaseConfig,
   readCatalogSourceSnapshot,
   createCatalogPublicationAuthority,
-  catalogExpectedRenditions,
+  createCatalogDeliveryFacts,
   createCatalogReadiness,
   createCatalogPublishedRenditions,
   currentCatalogRecipePolicy,
@@ -435,34 +430,12 @@ export const prepareProductionBackend = async (
       ? { resolveKeys: (keys) => upstreamCatalogResolver.resolveKeys!(keys) }
       : {}),
     // Every reader shares this lookup (Catalog, editorial, authored Article
-    // bodies, author cards): a failed CMS listing or App delivery-fact read
-    // is Catalog unavailability, the documented 503, never a 500
-    // (catalog-delivery-release-hardening-v1 F9).
-    catalogFacts: async (locators) => {
-      try {
-        const live = await createCatalogPublicationAuthority(
-          pool,
-          null,
-          communityPool,
-        ).publishedAssetIds(
-          locators.map(
-            (p) => `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
-          ),
-        );
-        const approved = new Set(live);
-        return await readCatalogDeliveryProjection(
-          communityPool,
-          locators.filter((p) =>
-            approved.has(
-              `catalog-asset-${requireAssetHash(p.mediaId, p.objectKey)}`,
-            ),
-          ),
-          catalogExpectedRenditions,
-        );
-      } catch (error) {
-        throw asCatalogQueryUnavailableError(error);
-      }
-    },
+    // bodies, author cards): the exact check of only the read's own pairs on
+    // the public read pool, never the prepare pool and never a listing of
+    // the Catalog (catalog-scale-v1 1A). A failed or refused check or App
+    // delivery-fact read is Catalog unavailability, the documented 503,
+    // never a 500 (catalog-delivery-release-hardening-v1 F9).
+    catalogFacts: createCatalogDeliveryFacts(pool, communityPool),
   };
   const deliveryOptions = {
     enabled: () => allowsEdgeDelivery(publicationConfig),
