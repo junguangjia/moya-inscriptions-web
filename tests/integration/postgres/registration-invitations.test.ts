@@ -40,6 +40,8 @@ const access = createPostgresBetaAccountAccess(app);
 const opaque = (prefix: string) =>
   `${prefix}-${randomBytes(16).toString("hex")}`;
 const digest = () => randomBytes(32).toString("hex");
+const redemptionSignature =
+  "community.redeem_registration_invitation(text,text,timestamp with time zone,text)";
 let directory: string;
 let fileIndex = 0;
 const cli = await import(
@@ -144,6 +146,155 @@ afterAll(async () => {
 });
 
 describe("registration invitation PostgreSQL authority", () => {
+  it("uses PostgreSQL's native xid8 cast to retain the low 32 bits across epochs", async () => {
+    const result = await owner.query<{ low_xid: string }>(
+      "SELECT value::xid8::xid::text AS low_xid FROM unnest($1::text[]) AS input(value)",
+      [["4294967295", "4294967296", "4294967297", "8589934595"]],
+    );
+    expect(result.rows.map((row) => row.low_xid)).toEqual([
+      "4294967295",
+      "0",
+      "1",
+      "3",
+    ]);
+    await expect(
+      owner.query("SELECT '4294967296'::xid8::text::xid"),
+    ).rejects.toMatchObject({ code: "22003" });
+  });
+
+  it("applies the forward correction without changing function identity, owner, ACL or security settings", async () => {
+    const initial = await readFile(
+      join(
+        root,
+        "database/community-migrations/20261023010000_registration_invitations.sql",
+      ),
+      "utf8",
+    );
+    const start = initial.indexOf(
+      "CREATE FUNCTION community.redeem_registration_invitation(",
+    );
+    const end = initial.indexOf("$function$;", start) + "$function$;".length;
+    const original = initial
+      .slice(start, end)
+      .replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION");
+    const correction = await readFile(
+      join(
+        root,
+        "database/community-migrations/20261023020000_registration_invitation_xid_cast.sql",
+      ),
+      "utf8",
+    );
+    const client = await owner.connect();
+    const authority = () =>
+      client.query(
+        `SELECT oid::text AS identity, proowner::text AS owner, proacl::text AS acl,
+          prosecdef AS security_definer, proconfig AS settings
+         FROM pg_proc WHERE oid=$1::regprocedure`,
+        [redemptionSignature],
+      );
+    try {
+      await client.query("BEGIN");
+      await client.query(original);
+      const before = (await authority()).rows[0];
+      await client.query(correction);
+      const after = (await authority()).rows[0];
+      expect(after).toEqual(before);
+      expect(after?.security_definer).toBe(true);
+      expect(after?.settings).toEqual(["search_path=pg_catalog, community"]);
+    } finally {
+      // Restore the already-migrated definition; no applied ledger is rewritten.
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
+  it("redeems with a synthetic nonzero epoch using the installed function's real xmin guards", async () => {
+    const definition = (
+      await owner.query<{ definition: string }>(
+        "SELECT pg_get_functiondef($1::regprocedure) AS definition",
+        [redemptionSignature],
+      )
+    ).rows[0]!.definition;
+    expect(definition.match(/pg_current_xact_id\(\)::xid\b/gu)).toHaveLength(2);
+    // Alter only the current-xid expression in this suite's disposable database.
+    // Adding an epoch preserves the real transaction's low 32 bits; it never
+    // advances or rewrites the cluster's transaction-id counter.
+    const syntheticEpoch = (sql: string) =>
+      sql.replaceAll(
+        "pg_current_xact_id()",
+        "((pg_current_xact_id()::text::numeric + 4294967296)::text::xid8)",
+      );
+    const invitation = await create();
+    const rejectedUser = opaque("user");
+    const acceptedUser = opaque("user");
+    try {
+      await owner.query(
+        syntheticEpoch(
+          definition.replaceAll(
+            "pg_current_xact_id()::xid",
+            "pg_current_xact_id()::text::xid",
+          ),
+        ),
+      );
+      await expect(
+        adapter.transaction(async (tx) => {
+          const { at, handoffId } = await insertRegistration(
+            tx,
+            invitation.id,
+            rejectedUser,
+          );
+          return tx.redeemInvitation(
+            invitation.id,
+            rejectedUser,
+            at,
+            handoffId,
+          );
+        }),
+      ).rejects.toMatchObject({ code: "22003" });
+      expect(
+        (
+          await owner.query(
+            "SELECT count(*)::int AS total FROM community.public_users WHERE id=$1",
+            [rejectedUser],
+          )
+        ).rows[0]?.total,
+      ).toBe(0);
+      await owner.query(syntheticEpoch(definition));
+      expect(
+        await adapter.transaction(async (tx) => {
+          const { at, handoffId } = await insertRegistration(
+            tx,
+            invitation.id,
+            acceptedUser,
+          );
+          return tx.redeemInvitation(
+            invitation.id,
+            acceptedUser,
+            at,
+            handoffId,
+          );
+        }),
+      ).toBe(true);
+      expect(await access.read(acceptedUser)).toBe("granted");
+      expect(
+        (await adapter.transaction((tx) => tx.lockInvitation(invitation.id)))
+          ?.usedCount,
+      ).toBe(1);
+      expect(
+        (
+          await owner.query(
+            `SELECT count(*)::int AS total
+             FROM community.registration_invitation_redemptions
+             WHERE user_id=$1 AND invitation_id=$2`,
+            [acceptedUser, invitation.id],
+          )
+        ).rows[0]?.total,
+      ).toBe(1);
+    } finally {
+      await owner.query(definition);
+    }
+  });
+
   it("uses hash-only operator creation, maps invitation lookup and denies runtime management/DML", async () => {
     const invitation = await create();
     const selected = await adapter.transaction((tx) =>

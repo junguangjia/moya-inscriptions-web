@@ -89,9 +89,15 @@ revocation does not recall bytes or signed media links already issued.
 ## Acceptance and rollback
 
 Before rollout, apply only the missing forward migrations with the independent
-migration role and the named App grants. Verify the migration ledger, effective
-runtime configuration and Nginx -> Web -> Backend source-proof chain. The
-migration runner performs DDL; it is not a read-only inventory command.
+migration role and the named App grants. The forward correction
+`20261023020000_registration_invitation_xid_cast.sql` replaces the invitation
+redemption function so nonzero transaction epochs compare correctly with 32-bit
+row `xmin`. Apply it even when the initial invitation migration is already
+recorded; keep that original migration and its checksum unchanged. The
+replacement preserves the function owner and existing grants. Verify the
+migration ledger, effective runtime configuration and Nginx -> Web -> Backend
+source-proof chain. The migration runner performs DDL; it is not a read-only
+inventory command.
 
 Use task-owned disposable databases for automated quota, concurrency,
 transaction rollback, idempotency, invalid invitation and admission-failure
