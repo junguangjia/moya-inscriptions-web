@@ -717,10 +717,11 @@ the increment-4 wording, for this slice only).
   before the check, so two `catalog-master` processes cannot both pass a bound.
   The projection is above the activation plan's estimate (313 self-masters,
   13,034 cells: about 13 GB at 1 byte per frame pixel against 6.3–8.4 GB of
-  private and published blocks), but it is an estimate: a frame whose blocks
-  weigh more than half a byte per frame pixel per copy finishes above its
-  projection, by that excess. Compare the real bytes per frame pixel of the
-  first batch before attaching more. A dry run writes nothing, so in an
+  private and published blocks), but it is an estimate: a set whose private
+  blocks weigh T bytes finishes at about 2T, so when T is more than half a byte
+  per frame pixel it ends 2T − P above its projection P (block recording does
+  not re-check the bounds). Compare the real bytes per frame pixel of the first
+  batch before attaching more. A dry run writes nothing, so in an
   `attach-batch --dry-run` every entry sees only what exists now: its storage
   figures are per entry, not cumulative, and a real batch can stop at a bound
   that its dry run passed. The batch needs `status`'s `sliceBytes` (and

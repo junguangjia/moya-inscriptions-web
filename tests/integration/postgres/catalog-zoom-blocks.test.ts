@@ -3063,6 +3063,7 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
     const filler = `media-blob-${hex()}`;
     const holder = await setup.connect();
     let open = false;
+    let attach: Promise<unknown> | undefined;
     try {
       // Another catalog-master transaction holds the storage lock and fills
       // the slice to its cap; it commits only once the attach waits.
@@ -3077,7 +3078,7 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
         [filler, blobKey(), CATALOG_MASTER_SLICE_CAP - before, sha(filler), t0],
       );
       let settled = false;
-      const attach = masters
+      attach = masters
         .attach(
           attachInput(image, {
             source: { kind: "dry_run", byteSize: 1_000_000 },
@@ -3087,15 +3088,38 @@ describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
         .finally(() => {
           settled = true;
         });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // The attach waits on this very key (not on a slow preamble): another
+      // backend's request for the storage lock is queued, not granted.
+      let waiting = false;
+      for (let poll = 0; poll < 100 && !waiting && !settled; poll += 1) {
+        waiting =
+          (
+            await setup.query(
+              `SELECT 1 FROM pg_locks l,
+                 (SELECT hashtextextended('catalog-master-storage',0) AS k) key
+               WHERE l.locktype='advisory' AND NOT l.granted AND l.objsubid=1
+                 AND l.database=(SELECT oid FROM pg_database WHERE datname=current_database())
+                 AND l.classid=((key.k >> 32) & 4294967295)::oid
+                 AND l.objid=(key.k & 4294967295)::oid`,
+            )
+          ).rowCount === 1;
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       expect(settled).toBe(false);
+      expect(waiting).toBe(true);
       await holder.query("COMMIT");
       open = false;
       // The bounds are read after the wait: the committed filler refuses
       // it. A bounds read before the lock would still have answered done.
-      expect(codeOf(await attach)).toBe("storage_slice_cap");
+      expect(
+        codeOf(
+          (await attach) as { readonly status: string; readonly code?: string },
+        ),
+      ).toBe("storage_slice_cap");
     } finally {
       if (open) await holder.query("ROLLBACK");
+      // On a failed assertion the attach finishes once the lock is free.
+      await attach?.catch(() => undefined);
       holder.release();
       await setup.query(
         "UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL WHERE id=$1",
