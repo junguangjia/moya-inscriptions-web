@@ -397,9 +397,25 @@ describe("Catalog publication authority with active-master blocks", () => {
           Parameters<typeof createCatalogPublicationAuthority>[1]
         >)
       : null;
-    const appQuery = vi.fn(async (sql: string) => {
+    const appQuery = vi.fn(async (sql: string, values?: readonly unknown[]) => {
       if (sql.startsWith("SELECT DISTINCT r.id")) return { rows: publicRows };
-      if (sql.startsWith("SELECT DISTINCT intent_id")) return { rows: [] };
+      // A job's capture (catalog-scale-v1 W5): its asset's App row, and no
+      // App-known intent.
+      if (
+        sql.startsWith(
+          "SELECT id,media_id,source_object_key FROM community.catalog_media_assets",
+        )
+      )
+        return {
+          rows: [source, privateSource].flatMap((s) => {
+            const id = `catalog-asset-${createHash("md5").update(`${s.media_id}:${s.object_key}`).digest("hex")}`;
+            return (values![0] as string[]).includes(id)
+              ? [{ id, media_id: s.media_id, source_object_key: s.object_key }]
+              : [];
+          }),
+        };
+      if (sql.startsWith("SELECT DISTINCT asset_id,intent_id"))
+        return { rows: [] };
       if (sql.startsWith("SELECT p.rendition_id,m.media_id"))
         return { rows: ordinaryB.map((r) => ({ ...r, rendition_id: r.id })) };
       throw new Error("UNEXPECTED_AUTHORITY_APP_SQL");
@@ -513,7 +529,9 @@ describe("Catalog publication authority with active-master blocks", () => {
     )![0];
     expect(sql).toContain(catalogBlockListedSql("r"));
     expect(sql).toContain("r.catalog_master_id IS NOT NULL");
-    expect(sql).toContain("LIMIT 40001");
+    // No row ceiling (catalog-scale-v1 W5, W-AC7): the selector reads every
+    // row of its batch of pairs; #320 stopped at LIMIT 40001.
+    expect(sql).not.toContain("LIMIT");
     expect(sql).not.toContain("unreferenced_since");
   });
 
@@ -551,14 +569,26 @@ describe("Catalog publication authority with active-master blocks", () => {
     expect(await f.authority.copyRenditionIds()).toEqual([]);
   });
 
-  it("refuses the bounded overflow rather than silently truncating block IDs", async () => {
+  // #320 refused the bounded overflow here ('Catalog selector invalid' past
+  // 40,000 rows). catalog-scale-v1 W5 (W-AC7) removes that ceiling: every
+  // row is still read and kept, never a truncated prefix, for the whole
+  // Catalog and for a job alike.
+  it("selects every block ID past the 40,000 rows #320 refused, never a prefix", async () => {
     const f = fixture();
-    f.setRows(
-      Array.from({ length: 40001 }, (_, i) => ({ ...f.block, id: rid(i) })),
+    const rows = Array.from({ length: 40001 }, (_, i) => ({
+      ...f.block,
+      id: rid(i),
+    }));
+    f.setRows(rows);
+    expect([...(await f.authority.copyRenditionIds())].sort()).toEqual(
+      rows.map((r) => r.id).sort(),
     );
-    await expect(f.authority.copyRenditionIds()).rejects.toThrow(
-      "Catalog selector invalid",
-    );
+    const lease = await f.authority.acquire(f.assetId);
+    try {
+      expect(lease.renditionIds).toHaveLength(40001);
+    } finally {
+      await lease.release();
+    }
   });
 });
 

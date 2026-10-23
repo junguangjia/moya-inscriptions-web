@@ -468,3 +468,40 @@ BEGIN
     'GRANT UPDATE (observed_at) ON TABLE community.catalog_delivery_snapshot_watermark TO %I',
     current_setting('moya.runtime_app_role'));
 END $$;
+
+-- catalog-scale-v1 (migration 20261024010000): the scoped Catalog reconcile's
+-- dirty queue and its single state row, used by the worker and the Backend
+-- (same role). A mark is inserted once and then only advanced or cleared,
+-- never deleted and never re-keyed; the state row is created by the migration
+-- and only updated. Worker and Backend startup check exactly these
+-- privileges. As above, a database without the pair grants nothing here and a
+-- partial pair is refused. No DELETE or table-level UPDATE is added.
+DO $$
+DECLARE
+  scope_table_count integer;
+BEGIN
+  SELECT count(*) INTO scope_table_count
+  FROM (VALUES
+    ('community.catalog_publication_dirty'),
+    ('community.catalog_reconcile_state')
+  ) AS required(relation_name)
+  WHERE to_regclass(required.relation_name) IS NOT NULL;
+  IF scope_table_count = 0 THEN
+    RETURN;
+  END IF;
+  IF scope_table_count <> 2 THEN
+    RAISE EXCEPTION 'Catalog publication scope runtime grants require both relations';
+  END IF;
+  EXECUTE format(
+    'GRANT SELECT, INSERT ON TABLE community.catalog_publication_dirty TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (mark_seq, cleared_seq, reason, marked_at) ON TABLE community.catalog_publication_dirty TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT SELECT ON TABLE community.catalog_reconcile_state TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (sweep_cursor, policy_digest, public_count, public_sum, public_observed_at, private_count, private_sum, private_observed_at, render_backlog, render_backlog_at, updated_at) ON TABLE community.catalog_reconcile_state TO %I',
+    current_setting('moya.runtime_app_role'));
+END $$;

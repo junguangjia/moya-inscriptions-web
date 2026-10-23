@@ -132,7 +132,6 @@ import {
 import type { createPostgresPool } from "@moya/catalog-postgres";
 import {
   CATALOG_PUBLISHED_PAIRS_MAX,
-  listPublishedCatalogSources,
   publishedCatalogPairs,
   readPublishedCatalogSources,
 } from "./catalog.js";
@@ -240,17 +239,20 @@ export const readCatalogSourceSnapshot = async (
 /** Exact live CMS permission. The same document lock as Native writes is held
  * until the existing queue/publication fence is released. No App mirror is an
  * authority; expiry is re-evaluated on every streaming/commit check.
+ *
+ * A job reads only its own asset (catalog-scale-v1 W5): acquire captures the
+ * asset's plan from its App-known intents and its exact pair
+ * (captureCatalogAssets), the fence re-reads exactly those intents, and
+ * authorized() checks exactly that pair, so a job, a fence check and an
+ * authorization cost the same at any Catalog size and never read the
+ * published list or a whole private view. Every read error throws; none is
+ * read as "not public" or "nothing permitted".
  */
 export const createCatalogPublicationAuthority = (
   published: CatalogPool,
   prepare: CatalogPool | null,
   app: CatalogPool,
 ): CatalogAuthority => {
-  const publicIds = async () => {
-    const sources = await listPublishedCatalogSources(published);
-    if (!sources) throw new Error("Catalog published source incomplete");
-    return sources.map((s) => sourceAssetId(s.mediaId, s.objectKey));
-  };
   // A fence keeps its client for the whole publication lease. Fences never
   // take more than CATALOG_PREPARE_LEASES clients, so snapshot reads (sync,
   // reconcile, plans) and the other lane always find one; a fence beyond the
@@ -272,9 +274,9 @@ export const createCatalogPublicationAuthority = (
   };
   // The whole Catalog's plan from one complete snapshot: each asset's plan
   // (planCatalogAsset) over rows grouped once by pair, so it costs O(S + R),
-  // never S x R. Its permissions are grouped by asset, each asset's in the
-  // order it always had (copy permissions are a set; the fence reads only its
-  // own asset's).
+  // never S x R. Only the reconcile's copy set reads it, until the scoped
+  // reconcile (catalog-scale-v1 W7) plans its scope with captureCatalogAssets;
+  // no job, fence or desired set does.
   const plans = async () => {
     const snapshot = await readCatalogSourceSnapshot(published, prepare);
     if (!snapshot) throw new Error("Catalog complete source unavailable");
@@ -328,6 +330,9 @@ export const createCatalogPublicationAuthority = (
       );
       return ids.filter((id) => approved.has(id));
     },
+    // The reconcile's copy set (its only caller until W7 scopes it). The
+    // selector is read in batches of pairs with no row ceiling, so it works
+    // past the 40,000 rows #320 refused (catalog-scale-v1 W5, W-AC7).
     async copyRenditionIds() {
       return [
         ...new Set((await plans()).permissions.flatMap((p) => p.renditionIds)),
@@ -337,57 +342,21 @@ export const createCatalogPublicationAuthority = (
       if (!/^catalog-asset-[a-f0-9]{32}$/.test(assetId))
         throw new Error("Catalog source identity invalid");
       // Resolve immutable App facts before holding a CMS connection. No App row
-      // lock is held while acquiring the shared Native document lock.
-      const captured = await plans();
-      const permissions = captured.permissions.filter(
-        (p) => p.assetId === assetId,
-      );
-      const knownIntentIds = (
-        await app.query<{ intent_id: string }>(
-          "SELECT DISTINCT intent_id FROM community.catalog_delivery_media_refs WHERE asset_id=$1",
+      // lock is held while acquiring the shared Native document lock. The
+      // capture reads only this asset: its App row and App-known intents, its
+      // exact CMS pair and those intents' live rows (one CMS snapshot), and
+      // App facts of only those intents and this pair.
+      const policy = currentCatalogRecipePolicy().recipeManifestSha256;
+      const captured = (
+        await captureCatalogAssets(
+          { published, prepare, app },
           [assetId],
+          catalogPlanReads(app, policy),
+          policy,
         )
-      ).rows.map((r) => r.intent_id);
-      const contexts = (captured.snapshot.preparations ?? []).filter(
-        (p) =>
-          knownIntentIds.includes(p.intentId) ||
-          p.media.some(
-            (m) => sourceAssetId(m.mediaId, m.objectKey) === assetId,
-          ),
-      );
-      const stamp = (
-        rows: readonly {
-          intentId: string;
-          documentId: number;
-          state: string;
-          stateVersion: number;
-          manifestSha256: string;
-          recipeManifestSha256: string;
-          expiresAt: string;
-        }[],
-      ) =>
-        JSON.stringify(
-          [...rows]
-            .sort((a, b) => a.intentId.localeCompare(b.intentId))
-            .map((p) => [
-              p.intentId,
-              p.documentId,
-              p.state === "released"
-                ? p.state
-                : new Date(p.expiresAt).getTime() <= Date.now() &&
-                    ["prepared", "release_requested"].includes(p.state)
-                  ? "expired"
-                  : p.state,
-              p.stateVersion,
-              p.manifestSha256,
-              p.recipeManifestSha256,
-              p.expiresAt,
-            ]),
-        );
-      const capturedStamp = stamp(contexts);
-      // An intent left out of the snapshot because it does not decode grants
-      // nothing here, so its rows cannot change this fence's permissions.
-      const undecodable = new Set(captured.snapshot.undecodableIntentIds ?? []);
+      ).get(assetId)!;
+      const { permissions, pair } = captured;
+      const capturedStamp = catalogIntentStamp(captured.live, Date.now());
       const renditionIds = [
         ...new Set(permissions.flatMap((p) => p.renditionIds)),
       ];
@@ -410,8 +379,11 @@ export const createCatalogPublicationAuthority = (
         if (client) {
           await client.query("BEGIN READ ONLY");
           await client.query("SET LOCAL lock_timeout='5s'");
+          // The documents of the live intents App knows for this asset. An
+          // intent App does not know grants nothing (inspect needs its App
+          // header, a release its proof), so it needs no lock.
           for (const documentId of [
-            ...new Set(contexts.map((p) => p.documentId)),
+            ...new Set(captured.live.intents.map((p) => p.documentId)),
           ].sort((a, b) => a - b))
             await client.query(
               "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -421,36 +393,15 @@ export const createCatalogPublicationAuthority = (
         const current = async () => {
           if (finished) return false;
           if (!client) return true; // Legacy live A retains its weaker live-public fence.
-          // The same live projection as the captured snapshot, so an intent
-          // past retention (never a grant) is absent from both stamps.
-          const rows = (
-            await client.query(
-              `SELECT DISTINCT intent_id,catalog_document_id,state,state_version,media_manifest_sha256,recipe_manifest_sha256,expires_at FROM public.catalog_delivery_live_prepare_media WHERE intent_id=ANY($1::uuid[]) OR (media_ordinal IS NOT NULL AND 'catalog-asset-'||md5(media_id||':'||object_key)=$2) ORDER BY intent_id`,
-              [
-                [
-                  ...new Set([
-                    ...knownIntentIds,
-                    ...contexts.map((p) => p.intentId),
-                  ]),
-                ],
-                assetId,
-              ],
-            )
-          ).rows;
+          // Exactly the capture's read of exactly its intents, by primary
+          // key: an intent past retention or ended (never a grant) is absent
+          // from both stamps, and a live one that changes state or version,
+          // ends or expires changes this one.
           return (
             capturedStamp ===
-            stamp(
-              rows
-                .filter((p) => !undecodable.has(p.intent_id))
-                .map((p) => ({
-                  intentId: p.intent_id,
-                  documentId: p.catalog_document_id,
-                  state: p.state,
-                  stateVersion: p.state_version,
-                  manifestSha256: p.media_manifest_sha256,
-                  recipeManifestSha256: p.recipe_manifest_sha256,
-                  expiresAt: new Date(p.expires_at).toISOString(),
-                })),
+            catalogIntentStamp(
+              await readLiveCatalogIntents(client, captured.intentIds),
+              Date.now(),
             )
           );
         };
@@ -459,8 +410,14 @@ export const createCatalogPublicationAuthority = (
           release,
           current,
           async authorized() {
-            if (!(await current()) || !permissions.length) return false;
-            const publicLive = (await publicIds()).includes(assetId);
+            if (!(await current()) || !permissions.length || !pair)
+              return false;
+            // The exact pair on the public read pool, as a read checks it; a
+            // failed check throws (a job retries), never "not public", which
+            // would withdraw everything the asset serves.
+            const publicLive = (
+              await publishedCatalogPairs(published, [pair])
+            ).has(pairKey(pair.mediaId, pair.objectKey));
             for (const permission of permissions) {
               if (permission.published && publicLive) return true;
               if (!permission.intentId || !client) continue;
@@ -743,10 +700,21 @@ export interface CatalogPlanReads {
   ): Promise<readonly CatalogSelectorRendition[]>;
 }
 
-/** The App reads of a whole-Catalog plan, with the App role. The selector
- * read keeps its 40,000-row refusal until per-asset and scoped reads replace
- * the whole-Catalog plan on the job and reconcile paths (catalog-scale-v1 W5,
- * W7). */
+/** Pairs per selector statement: a batch bound of one read (about four rows
+ * a pair, eight mid recipe bump, plus listed blocks), not a ceiling on the
+ * Catalog. At the 25k fixture 250 assets plan as primary-key and index
+ * lookups at a cost of about 33,000, below JIT's threshold (100,000); from
+ * about 400 the planner hashes a whole scan of the committed blobs. */
+export const CATALOG_PLAN_SELECTOR_BATCH = 250;
+
+/** The App reads of a Catalog plan, with the App role: one asset's (a job's
+ * capture), a scope's, or the whole Catalog's (the reconcile's copy set
+ * until W7). The selector rows are read CATALOG_PLAN_SELECTOR_BATCH pairs at
+ * a time, every row of each pair, with no row ceiling (catalog-scale-v1 W5,
+ * W-AC7): #320 refused the whole Catalog above 40,000 rows, about 10,000
+ * published images. Each pair is read by its App asset's primary key (the id
+ * derives from the pair by a CHECK), so a job's single pair never scans the
+ * assets, at any Catalog size (W-AC3). */
 export const catalogPlanReads = (
   app: CatalogPool,
   policy: string,
@@ -768,19 +736,71 @@ export const catalogPlanReads = (
       )
     ).rows,
   async renditions(sources) {
-    const rows = (
-      await app.query<CatalogSelectorRendition>(
-        // Ready renditions, plus an editorial set a re-render released (or
-        // superseded) that is still published on a committed blob: the
-        // projection serves it until its replacement is published.
-        `SELECT DISTINCT r.id,a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height,r.state,pub.published FROM jsonb_to_recordset($1::jsonb) p("mediaId" text,"objectKey" text) JOIN community.catalog_media_assets a ON a.media_id=p."mediaId" AND a.source_object_key=p."objectKey" AND a.state='ready' JOIN community.media_renditions r ON r.catalog_asset_id=a.id JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' CROSS JOIN LATERAL (SELECT r.role IN ('thumb','cover','display','viewer') AND EXISTS (SELECT 1 FROM community.media_publications pp WHERE pp.rendition_id=r.id AND pp.state='published' AND pp.sha256=b.sha256 AND pp.byte_size=b.byte_size AND pp.storage_key=b.storage_key AND pp.content_type=r.content_type AND pp.purpose='catalog_derivative') AS published) pub WHERE r.edit_key='base' AND (r.state='ready' OR (pub.published AND a.source_object_key LIKE 'editorial/%')) AND (r.role IN ('thumb','cover','display','viewer','full') OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")})) LIMIT 40001`,
-        [JSON.stringify(sources)],
-      )
-    ).rows;
-    if (rows.length > 40000) throw new Error("Catalog selector invalid");
-    return rows;
+    // Each asset once (a pair two records show is listed twice), so no row
+    // is read twice across batches.
+    const ids = [
+      ...new Set(sources.map((s) => sourceAssetId(s.mediaId, s.objectKey))),
+    ];
+    const batches: (readonly CatalogSelectorRendition[])[] = [];
+    for (let at = 0; at < ids.length; at += CATALOG_PLAN_SELECTOR_BATCH)
+      batches.push(
+        (
+          await app.query<CatalogSelectorRendition>(
+            // Ready renditions, plus an editorial set a re-render released (or
+            // superseded) that is still published on a committed blob: the
+            // projection serves it until its replacement is published.
+            `SELECT DISTINCT r.id,a.media_id,a.source_object_key,a.master_width,a.master_height,r.role,r.recipe_version,r.recipe_digest,r.width,r.height,r.state,pub.published FROM community.catalog_media_assets a JOIN community.media_renditions r ON r.catalog_asset_id=a.id JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed' CROSS JOIN LATERAL (SELECT r.role IN ('thumb','cover','display','viewer') AND EXISTS (SELECT 1 FROM community.media_publications pp WHERE pp.rendition_id=r.id AND pp.state='published' AND pp.sha256=b.sha256 AND pp.byte_size=b.byte_size AND pp.storage_key=b.storage_key AND pp.content_type=r.content_type AND pp.purpose='catalog_derivative') AS published) pub WHERE a.id=ANY($1::text[]) AND a.state='ready' AND r.edit_key='base' AND (r.state='ready' OR (pub.published AND a.source_object_key LIKE 'editorial/%')) AND (r.role IN ('thumb','cover','display','viewer','full') OR (r.catalog_master_id IS NOT NULL AND ${catalogBlockListedSql("r")}))`,
+            [ids.slice(at, at + CATALOG_PLAN_SELECTOR_BATCH)],
+          )
+        ).rows,
+      );
+    // One batch (a job's single pair) is returned as read.
+    return batches.length === 1 ? batches[0]! : batches.flat();
   },
 });
+
+const pairKey = (mediaId: string, objectKey: string) =>
+  JSON.stringify([mediaId, objectKey]);
+
+const groupBy = <T>(rows: readonly T[], key: (row: T) => string) => {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const k = key(row);
+    const list = groups.get(k);
+    if (list) list.push(row);
+    else groups.set(k, [row]);
+  }
+  return groups;
+};
+
+/** What App holds for one intent, read once and shared by every pair of it
+ * a plan needs: for an earlier policy's released intent its still-published
+ * pins, for a current one inspect's verdict and (only when private-ready) its
+ * pins, keyed by pair. `null` for an earlier policy's intent that is not
+ * released: it grants nothing and nothing of it is read. */
+const readIntentFacts = async (
+  intent: CatalogPlanIntent,
+  reads: CatalogPlanReads,
+  policy: string,
+): Promise<((key: string) => CatalogIntentFacts) | null> => {
+  if (intent.recipeManifestSha256 !== policy) {
+    if (intent.state !== "released") return null;
+    const prior = groupBy(await reads.priorPins(intent), (p) =>
+      pairKey(p.media_id, p.object_key),
+    );
+    return (key) => ({ kind: "prior", pins: prior.get(key) ?? [] });
+  }
+  if (!(await reads.inspect(intent)).privateReady)
+    return () => ({ kind: "current", privateReady: false, pins: [] });
+  const pins = groupBy(await reads.pins(intent), (p) =>
+    pairKey(p.media_id, p.object_key),
+  );
+  return (key) => ({
+    kind: "current",
+    privateReady: true,
+    pins: pins.get(key) ?? [],
+  });
+};
 
 /**
  * The plan of every asset a complete snapshot names: each published pair,
@@ -806,18 +826,6 @@ export const planCatalogPermissions = async (
   policy: string,
   now = Date.now(),
 ): Promise<CatalogAssetPermission[]> => {
-  const pairKey = (mediaId: string, objectKey: string) =>
-    JSON.stringify([mediaId, objectKey]);
-  const group = <T>(rows: readonly T[], key: (row: T) => string) => {
-    const groups = new Map<string, T[]>();
-    for (const row of rows) {
-      const k = key(row);
-      const list = groups.get(k);
-      if (list) list.push(row);
-      else groups.set(k, [row]);
-    }
-    return groups;
-  };
   const assets = new Map<
     string,
     {
@@ -851,25 +859,8 @@ export const planCatalogPermissions = async (
       (m) => requested || publicPairs.has(pairKey(m.mediaId, m.objectKey)),
     );
     if (!requested && !granted.length) continue;
-    let facts: (key: string) => CatalogIntentFacts;
-    if (intent.recipeManifestSha256 !== policy) {
-      if (intent.state !== "released") continue;
-      const prior = group(await reads.priorPins(intent), (p) =>
-        pairKey(p.media_id, p.object_key),
-      );
-      facts = (key) => ({ kind: "prior", pins: prior.get(key) ?? [] });
-    } else if (!(await reads.inspect(intent)).privateReady)
-      facts = () => ({ kind: "current", privateReady: false, pins: [] });
-    else {
-      const pins = group(await reads.pins(intent), (p) =>
-        pairKey(p.media_id, p.object_key),
-      );
-      facts = (key) => ({
-        kind: "current",
-        privateReady: true,
-        pins: pins.get(key) ?? [],
-      });
-    }
+    const facts = await readIntentFacts(intent, reads, policy);
+    if (!facts) continue;
     for (const m of granted)
       assetOf(m.mediaId, m.objectKey).intents.push({
         intent,
@@ -877,7 +868,7 @@ export const planCatalogPermissions = async (
         facts: facts(pairKey(m.mediaId, m.objectKey)),
       });
   }
-  const renditions = group(
+  const renditions = groupBy(
     await reads.renditions(snapshot.publishedSources),
     (r) => pairKey(r.media_id, r.source_object_key),
   );
@@ -893,6 +884,262 @@ export const planCatalogPermissions = async (
       }),
     );
   return permissions;
+};
+
+/** The live rows of the given intents in the live private projection (CMS
+ * migration M2), by primary key, and only rows that name a member: the view
+ * gives members only to an intent that is released, or prepared or requested
+ * within its lease. A job's capture and each of its fence checks run exactly
+ * this read (catalog-scale-v1 W5), so their stamps compare like with like. */
+export const catalogLiveIntentRowsSql = `SELECT * FROM public.catalog_delivery_live_prepare_media WHERE intent_id=ANY($1::uuid[]) AND media_ordinal IS NOT NULL ORDER BY intent_id,media_ordinal`;
+
+/** Intents as the live projection holds them: the ones that decode, in id
+ * order, and the ones that do not (F7: each is granted nothing). */
+export interface CatalogLiveIntents {
+  readonly intents: readonly CatalogPlanIntent[];
+  readonly undecodableIntentIds: readonly string[];
+}
+
+/** The live intents among `intentIds` (catalogLiveIntentRowsSql). No intent,
+ * no read. A failed read throws. */
+const readLiveCatalogIntents = async (
+  client: Pick<CatalogPool, "query">,
+  intentIds: readonly string[],
+): Promise<CatalogLiveIntents> =>
+  intentIds.length
+    ? partitionCatalogPrepareRows(
+        (
+          await client.query<Record<string, unknown>>(
+            catalogLiveIntentRowsSql,
+            [intentIds],
+          )
+        ).rows,
+      )
+    : { intents: [], undecodableIntentIds: [] };
+
+/** A fence stamp: each live intent's document, lifecycle (a prepared or
+ * requested one whose lease has passed reads as expired, as the mirror and
+ * the view call it), version and manifests, and the intents that do not
+ * decode. Capture and fence compare two stamps of the same read. */
+const catalogIntentStamp = (live: CatalogLiveIntents, now: number) =>
+  JSON.stringify([
+    [...live.intents]
+      .sort((a, b) => a.intentId.localeCompare(b.intentId))
+      .map((p) => [
+        p.intentId,
+        p.documentId,
+        ["prepared", "release_requested"].includes(p.state) &&
+        new Date(p.expiresAt).getTime() <= now
+          ? "expired"
+          : p.state,
+        p.stateVersion,
+        p.manifestSha256,
+        p.recipeManifestSha256,
+        p.expiresAt,
+      ]),
+    [...live.undecodableIntentIds].sort(),
+  ]);
+
+/** One Catalog asset as a job (or a scope) captures it: its plan, and what
+ * its fence re-reads. */
+export interface CatalogAssetCapture {
+  readonly assetId: string;
+  /** The exact CMS pair, from the asset's App row (whose id the pair derives
+   * by a CHECK); null without one, and then nothing is planned. */
+  readonly pair: {
+    readonly mediaId: string;
+    readonly objectKey: string;
+  } | null;
+  /** Whether the published Catalog names the pair. */
+  readonly public: boolean;
+  /** Every intent App mirror members name for the asset, in id order. */
+  readonly intentIds: readonly string[];
+  /** Those of them the live projection holds as live. */
+  readonly live: CatalogLiveIntents;
+  readonly permissions: readonly CatalogAssetPermission[];
+}
+
+/**
+ * The publication plans of the named Catalog assets, each from its own facts
+ * only (catalog-scale-v1 W5): a job's acquire names one asset; a scoped
+ * reconcile (W7) may name its scope. Per call:
+ * - App: the assets' rows (each pair, by primary key) and the intents App
+ *   mirror members name for them (`catalog_delivery_media_refs` by asset);
+ * - CMS, in one exported snapshot as the complete snapshot reads it: the
+ *   exact check of only these pairs (publishedCatalogPairs, as a public read
+ *   checks it), and only those intents' live rows by primary key
+ *   (catalogLiveIntentRowsSql);
+ * - App facts of only those intents, each read once whatever number of the
+ *   assets it names, and the selector rows of only the public pairs.
+ * Each asset is then planned by planCatalogAsset, as the whole-Catalog plan
+ * plans it. An intent App does not know is not read: it grants nothing there
+ * either (inspect needs its App header, an earlier policy's pins join its
+ * App mirror). So the cost follows the assets named and their own intents,
+ * never the Catalog, and no listing ceiling applies. Every read error
+ * throws; no asset is ever planned from a partial read.
+ */
+export const captureCatalogAssets = async (
+  pools: {
+    readonly published: CatalogPool;
+    readonly prepare: CatalogPool | null;
+    readonly app: CatalogPool;
+  },
+  assetIds: readonly string[],
+  reads: CatalogPlanReads,
+  policy: string,
+  now = Date.now(),
+): Promise<ReadonlyMap<string, CatalogAssetCapture>> => {
+  const ids = [...new Set(assetIds)];
+  for (const id of ids)
+    if (typeof id !== "string" || !/^catalog-asset-[a-f0-9]{32}$/.test(id))
+      throw new TypeError("Catalog source identity invalid");
+  const captures = new Map<string, CatalogAssetCapture>();
+  if (!ids.length) return captures;
+  const pairs = new Map(
+    (
+      await pools.app.query<{
+        id: string;
+        media_id: string;
+        source_object_key: string;
+      }>(
+        "SELECT id,media_id,source_object_key FROM community.catalog_media_assets WHERE id=ANY($1::text[])",
+        [ids],
+      )
+    ).rows.map((row) => [
+      row.id,
+      { mediaId: row.media_id, objectKey: row.source_object_key },
+    ]),
+  );
+  // Without a prepare reader no intent is read, and none grants anything
+  // (as a complete snapshot without one holds none).
+  const known = new Map<string, string[]>();
+  if (pools.prepare && pairs.size)
+    for (const row of (
+      await pools.app.query<{ asset_id: string; intent_id: string }>(
+        "SELECT DISTINCT asset_id,intent_id FROM community.catalog_delivery_media_refs WHERE asset_id=ANY($1::text[]) ORDER BY asset_id,intent_id",
+        [[...pairs.keys()]],
+      )
+    ).rows) {
+      const list = known.get(row.asset_id);
+      if (list) list.push(row.intent_id);
+      else known.set(row.asset_id, [row.intent_id]);
+    }
+  const intentIds = [...new Set([...known.values()].flat())];
+  const checkPairs = async (client: Pick<CatalogPool, "query">) => {
+    const list = [...pairs.values()];
+    const live = new Set<string>();
+    for (let at = 0; at < list.length; at += CATALOG_PUBLISHED_PAIRS_MAX)
+      for (const key of await publishedCatalogPairs(
+        client,
+        list.slice(at, at + CATALOG_PUBLISHED_PAIRS_MAX),
+      ))
+        live.add(key);
+    return live;
+  };
+  let publicPairs: ReadonlySet<string> = new Set();
+  let live: CatalogLiveIntents = { intents: [], undecodableIntentIds: [] };
+  if (pools.prepare && intentIds.length) {
+    const publicClient = await pools.published.connect();
+    let privateClient;
+    try {
+      await publicClient.query(
+        "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      publicPairs = await checkPairs(publicClient);
+      const snapshot = (
+        await publicClient.query<{ id: string }>(
+          "SELECT pg_export_snapshot() AS id",
+        )
+      ).rows[0]!.id;
+      if (!/^[a-f0-9]+-[a-f0-9]+-[a-f0-9]+$/i.test(snapshot))
+        throw new Error("Catalog snapshot identifier invalid");
+      privateClient = await pools.prepare.connect();
+      await privateClient.query(
+        "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      await privateClient.query(`SET TRANSACTION SNAPSHOT '${snapshot}'`);
+      live = await readLiveCatalogIntents(privateClient, intentIds);
+    } finally {
+      if (privateClient) {
+        await privateClient.query("ROLLBACK").catch(() => undefined);
+        privateClient.release();
+      }
+      await publicClient.query("ROLLBACK").catch(() => undefined);
+      publicClient.release();
+    }
+  } else if (pairs.size) publicPairs = await checkPairs(pools.published);
+  const decoded = new Map(live.intents.map((i) => [i.intentId, i]));
+  const undecodable = new Set(live.undecodableIntentIds);
+  const facts = new Map<string, ((key: string) => CatalogIntentFacts) | null>();
+  const planned: {
+    readonly id: string;
+    readonly pair: CatalogAssetCapture["pair"];
+    readonly isPublic: boolean;
+    readonly own: readonly string[];
+    readonly intents: CatalogAssetPlanInput["intents"][number][];
+  }[] = [];
+  for (const id of ids) {
+    const pair = pairs.get(id) ?? null;
+    const own = known.get(id) ?? [];
+    const key = pair ? pairKey(pair.mediaId, pair.objectKey) : "";
+    const isPublic = !!pair && publicPairs.has(key);
+    const intents: CatalogAssetPlanInput["intents"][number][] = [];
+    if (pair)
+      for (const intentId of own) {
+        const intent = decoded.get(intentId);
+        // A live intent that no longer names this pair grants it nothing.
+        const members =
+          intent?.media.filter(
+            (m) => m.mediaId === pair.mediaId && m.objectKey === pair.objectKey,
+          ) ?? [];
+        if (!intent || !members.length) continue;
+        const requested =
+          intent.state === "release_requested" &&
+          new Date(intent.expiresAt).getTime() > now;
+        // Read only what the plan needs, as the whole-Catalog plan reads it:
+        // a requested intent, or any intent of a public pair.
+        if ((requested || isPublic) && !facts.has(intentId))
+          facts.set(intentId, await readIntentFacts(intent, reads, policy));
+        const read = facts.get(intentId);
+        for (const m of members)
+          intents.push({
+            intent,
+            ordinal: m.ordinal,
+            ...(read ? { facts: read(key) } : {}),
+          });
+      }
+    planned.push({ id, pair, isPublic, own, intents });
+  }
+  const selected = planned.flatMap((p) =>
+    p.isPublic && p.pair ? [p.pair] : [],
+  );
+  const renditions = groupBy(
+    selected.length ? await reads.renditions(selected) : [],
+    (r) => pairKey(r.media_id, r.source_object_key),
+  );
+  for (const { id, pair, isPublic, own, intents } of planned)
+    captures.set(id, {
+      assetId: id,
+      pair,
+      public: isPublic,
+      intentIds: own,
+      live: {
+        intents: own.flatMap((i) => decoded.get(i) ?? []),
+        undecodableIntentIds: own.filter((i) => undecodable.has(i)),
+      },
+      permissions: pair
+        ? planCatalogAsset({
+            ...pair,
+            public: isPublic,
+            policy,
+            now,
+            intents,
+            renditions:
+              renditions.get(pairKey(pair.mediaId, pair.objectKey)) ?? [],
+          })
+        : [],
+    });
+  return captures;
 };
 
 /**

@@ -8,7 +8,12 @@ import {
   prepareMediaWorker,
   startMediaWorker,
 } from "@moya/backend-production/internal/media-worker";
-import { createPostgresPool } from "@moya/catalog-postgres";
+import {
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
+  createPostgresPool,
+  PostgresStartupError,
+} from "@moya/catalog-postgres";
 import {
   PostgresWorkPublishingAdapter,
   PostgresMediaPublicationAdapter,
@@ -47,6 +52,10 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
         connect: async () => ({ query, release: vi.fn() }),
       };
     }),
+    // catalog-scale-v1 W6: the Catalog grant checks are PostgreSQL I/O too;
+    // their pools and refusals are observed below.
+    assertCatalogPublicationScopeReady: vi.fn(async () => {}),
+    assertCatalogPrepareReaderReady: vi.fn(async () => {}),
   };
 });
 
@@ -371,6 +380,72 @@ describe("media worker composition", () => {
       expect(queue.claim.mock.calls.length).toBe(claims);
     },
   );
+
+  // catalog-scale-v1 (Issue #323) 1B, W6: the worker checks the scoped
+  // reconcile's grants on the App pool and, only with a prepare database, the
+  // prepare reader's grants on that pool, after the ledger and before it
+  // claims anything. Either refusal stops startup with every pool closed.
+  it("checks the Catalog scope and prepare grants on their own pools at startup and refuses without them", async () => {
+    const queue = quietQueue();
+    fakeMedia.sandbox.selfCheck.mockResolvedValue({
+      status: "ok",
+      runtime: sandboxRuntime(),
+      facts: isolatedFacts(),
+    });
+    const withPrepare = {
+      ...production,
+      CATALOG_PREPARE_DATABASE_URL:
+        "postgresql://synthetic-prepare@127.0.0.1:1/synthetic_published",
+    };
+    const opened = (from: number) =>
+      vi
+        .mocked(createPostgresPool)
+        .mock.calls.slice(from)
+        .map(([config], index) => ({
+          url: config.connectionString,
+          pool: vi.mocked(createPostgresPool).mock.results[from + index]!
+            .value as unknown,
+        }));
+    const poolOf = (from: number, url: string) =>
+      opened(from).find((pool) => pool.url === url)!.pool;
+
+    let from = vi.mocked(createPostgresPool).mock.results.length;
+    const plain = await prepareMediaWorker(production, { logger: silent });
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledWith(
+      poolOf(from, production.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).not.toHaveBeenCalled();
+    await plain.stop();
+
+    from = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareMediaWorker(withPrepare, { logger: silent });
+    expect(opened(from)).toHaveLength(3);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenLastCalledWith(
+      poolOf(from, withPrepare.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledWith(
+      poolOf(from, withPrepare.CATALOG_PREPARE_DATABASE_URL),
+    );
+    await prepared.stop();
+
+    for (const check of [
+      assertCatalogPublicationScopeReady,
+      assertCatalogPrepareReaderReady,
+    ]) {
+      const refusal = new PostgresStartupError("Synthetic missing grant");
+      vi.mocked(check).mockRejectedValueOnce(refusal);
+      database.end.mockClear();
+      from = vi.mocked(createPostgresPool).mock.results.length;
+      await expect(
+        startMediaWorker(withPrepare, { logger: silent }),
+      ).rejects.toBe(refusal);
+      expect(opened(from)).toHaveLength(3);
+      expect(database.end).toHaveBeenCalledTimes(3);
+    }
+    expect(queue.claim).not.toHaveBeenCalled();
+  });
 
   it("keeps claiming while a long Catalog sync runs, and closes the pools only after it ends", async () => {
     const queue = quietQueue();

@@ -24,6 +24,8 @@ import {
 } from "@moya/backend-runtime";
 import {
   asPostgresOperationError,
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   assertPostgresStartupReady,
   checkPostgresReadiness,
   closePostgresPool,
@@ -502,6 +504,9 @@ export const prepareProductionBackend = async (
             ...(blocksRender && catalogSources ? { catalogBlocks: true } : {}),
             concurrency: publishing.concurrency,
             extraMaintenance: [
+              // Detached, as in the media worker (catalog-scale-v1 W4): a sync
+              // of a large Catalog never holds the tick and its job claims;
+              // stopping waits for it before the pools close.
               ...(catalogSources
                 ? [
                     {
@@ -514,6 +519,7 @@ export const prepareProductionBackend = async (
                         port: workPublishingPort,
                         ...(blocksRender ? { blocks: workPublishingPort } : {}),
                       }).run,
+                      detached: true,
                     },
                   ]
                 : []),
@@ -637,6 +643,14 @@ export const prepareProductionBackend = async (
     await verifyCommunityMigrationLedger(communityPool);
     // Discovery cards join the Catalog rendition delivery view (PR 1b).
     await verifyCatalogDeliveryReadable(communityPool);
+    // catalog-scale-v1 W6: the Backend may run publication workers and the
+    // reconcile, and its publication authority reads the prepare views: the
+    // scoped reconcile's tables and grants (App migration 20261024010000)
+    // and, where configured, the prepare reader's grant on both private
+    // views (CMS migration M2) are checked as in the media worker.
+    await assertCatalogPublicationScopeReady(communityPool);
+    if (catalogPreparePool)
+      await assertCatalogPrepareReaderReady(catalogPreparePool);
   } catch (error) {
     await closeResources();
     throw error;

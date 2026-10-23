@@ -51,21 +51,37 @@ const byText = (a: unknown, b: unknown) =>
 const hex = (n: number) => n.toString(16).padStart(12, "0");
 const intentId = (n: number) => `00000000-0000-4000-8000-${hex(n)}`;
 
-/** The view text migration 20261020_160000 created, from that file. */
-const originalViewSql = async () => {
-  const migration = await readFile(
+/** The text of migration 20261020_160000, which created the intents. */
+const intentsMigration = () =>
+  readFile(
     new URL(
       "../../apps/admin/src/migrations/20261020_160000_catalog_delivery_intents.ts",
       import.meta.url,
     ),
     "utf8",
   );
+
+/** The view text migration 20261020_160000 created, from that file. */
+const originalViewSql = async () => {
   const view =
     /CREATE VIEW catalog_delivery_prepare_media AS[\s\S]*?OFFSET 0;/u.exec(
-      migration,
+      await intentsMigration(),
     );
   if (!view) throw new Error("Original prepare view text not found");
   return view[0];
+};
+
+/** The intent table's indexes migration 20261020_160000 created (M2 adds
+ * one), from that file; the clone takes its primary key separately. */
+const originalIndexSql = async () => {
+  const indexes = [
+    ...(await intentsMigration()).matchAll(
+      /CREATE (?:UNIQUE )?INDEX catalog_delivery_intents_\w+\s+ON catalog_delivery_intents[^;]*;/gu,
+    ),
+  ].map(([statement]) => statement);
+  if (indexes.length !== 2)
+    throw new Error("Original intent indexes not found");
+  return indexes.join("\n");
 };
 
 interface Intent {
@@ -195,6 +211,23 @@ const viewState = async (client: Client, view: string) => {
 const rowsOf = async (client: Client, view: string) =>
   (await client.query(`SELECT * FROM ${view}`)).rows.sort(byText);
 
+/** The intent table's indexes in this schema, schema name left out. */
+const intentIndexes = async (client: Client) =>
+  (
+    await client.query<{ name: string; definition: string }>(
+      `SELECT indexname AS name, replace(indexdef, $1 || '.', '') AS definition
+       FROM pg_indexes WHERE schemaname = $1 AND tablename = 'catalog_delivery_intents'
+       ORDER BY 1`,
+      [schema],
+    )
+  ).rows;
+/** The index M2 adds for the live projection's released and ended rows. */
+const liveIndex = {
+  name: "catalog_delivery_intents_state_ended",
+  definition:
+    "CREATE INDEX catalog_delivery_intents_state_ended ON catalog_delivery_intents USING btree (state, ended_at)",
+};
+
 interface PlanNode {
   readonly "Node Type": string;
   readonly "Relation Name"?: string;
@@ -220,10 +253,15 @@ const intentScans = async (client: Client, view: string) =>
 
 beforeAll(async () => {
   await adminPool.query(`CREATE SCHEMA "${schema}"`);
+  // The intent table as 20261020_160000 left it: columns, defaults and
+  // checks of the migrated table, but only that migration's indexes (the
+  // migrated public table also carries the index M2 adds).
   await pool.query(
     `CREATE TABLE "${schema}".catalog_delivery_intents
-       (LIKE public.catalog_delivery_intents INCLUDING ALL)`,
+       (LIKE public.catalog_delivery_intents INCLUDING ALL EXCLUDING INDEXES)`,
   );
+  await pool.query("ALTER TABLE catalog_delivery_intents ADD PRIMARY KEY (id)");
+  await pool.query(await originalIndexSql());
   await pool.query(await originalViewSql());
   for (const intent of fixture) await insertIntent(pool, intent);
   // 3,000 intents withdrawn long ago, so a whole-view read is the costly plan.
@@ -290,6 +328,21 @@ describe("catalog delivery live prepare migration (M2)", () => {
       )
     ).rows;
     expect(applied.map(({ name }) => name)).toEqual([...views].sort());
+    expect(
+      (
+        await adminPool.query(
+          "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1",
+          [liveIndex.name],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        indexdef: liveIndex.definition.replace(
+          " ON catalog_delivery_intents ",
+          " ON public.catalog_delivery_intents ",
+        ),
+      },
+    ]);
     for (const view of applied) {
       expect(view.options).toEqual(["security_barrier=true"]);
       expect(view.definition).not.toMatch(/OFFSET/u);
@@ -310,7 +363,7 @@ describe("catalog delivery live prepare migration (M2)", () => {
     ).toHaveLength(2);
   });
 
-  it("keeps the old view's rows, columns, OID, owner and grant across up, down and up", async () => {
+  it("keeps the old view's rows, columns, OID, owner and grant, and the intent table's indexes, across up, down and up", async () => {
     await rolledBack(async (client) => {
       const role = `cms_live_reader_${randomUUID().replaceAll("-", "")}`;
       await client.query(`CREATE ROLE "${role}" NOLOGIN`);
@@ -322,6 +375,12 @@ describe("catalog delivery live prepare migration (M2)", () => {
       expect(today.options).toBeNull();
       expect(today.definition).toMatch(/\n\s*OFFSET 0;$/u);
       expect(await viewState(client, views[1])).toBeNull();
+      const indexes = await intentIndexes(client);
+      expect(indexes.map(({ name }) => name)).toEqual([
+        "catalog_delivery_intents_expiry",
+        "catalog_delivery_intents_one_active",
+        "catalog_delivery_intents_pkey",
+      ]);
       // 3 members for each of intents 1-3, one header for each other intent
       // with a recipe (9 of the fixture's and the 3,000 withdrawn ones).
       expect(rows).toHaveLength(9 + 9 + 3_000);
@@ -340,6 +399,7 @@ describe("catalog delivery live prepare migration (M2)", () => {
           acl: today.acl,
         });
         expect(await rowsOf(client, views[0])).toEqual(rows);
+        expect(await intentIndexes(client)).toEqual([...indexes, liveIndex]);
         const live = (await viewState(client, views[1]))!;
         expect(live.options).toEqual(["security_barrier=true"]);
         expect(live.columns).toEqual(today.columns);
@@ -365,6 +425,20 @@ describe("catalog delivery live prepare migration (M2)", () => {
       expect(await viewState(client, views[0])).toEqual(today);
       expect(await viewState(client, views[1])).toBeNull();
       expect(await rowsOf(client, views[0])).toEqual(rows);
+      expect(await intentIndexes(client)).toEqual(indexes);
+      await client.query(upgradeCatalogDeliveryPrepareViewsSql);
+      await expectUpgraded();
+
+      // A task or dev database that ran M2 before M2 built the index (never
+      // released): the down still restores the old state, and the next up
+      // adds the index. Only the clone is on the path here, so the migrated
+      // public table's index cannot stand in for the missing one.
+      await client.query(`SET LOCAL search_path = "${schema}"`);
+      await client.query(`DROP INDEX ${liveIndex.name}`);
+      await client.query(downgradeCatalogDeliveryPrepareViewsSql);
+      expect(await viewState(client, views[0])).toEqual(today);
+      expect(await viewState(client, views[1])).toBeNull();
+      expect(await intentIndexes(client)).toEqual(indexes);
       await client.query(upgradeCatalogDeliveryPrepareViewsSql);
       await expectUpgraded();
     });
@@ -402,6 +476,22 @@ describe("catalog delivery live prepare migration (M2)", () => {
         [intentId(9)]: "superseded",
         [intentId(10)]: "expired",
       });
+    });
+  });
+
+  it("lists the live projection through its index, not by reading every intent", async () => {
+    await rolledBack(async (client) => {
+      await client.query(upgradeCatalogDeliveryPrepareViewsSql);
+      await client.query("ANALYZE catalog_delivery_intents");
+      const scans = planNodes(
+        (
+          await client.query<{ "QUERY PLAN": [{ Plan: PlanNode }] }>(
+            `EXPLAIN (FORMAT JSON) SELECT * FROM ${views[1]}`,
+          )
+        ).rows[0]!["QUERY PLAN"][0].Plan,
+      ).map((node) => `${node["Node Type"]}:${node["Index Name"] ?? ""}`);
+      expect(scans).not.toContain("Seq Scan:");
+      expect(scans).toContain(`Bitmap Index Scan:${liveIndex.name}`);
     });
   });
 
@@ -555,6 +645,9 @@ describe("catalog delivery live prepare migration (M2)", () => {
       expect(state.options).toBeNull();
       expect(state.definition).toMatch(/\n\s*OFFSET 0;$/u);
       expect(await viewState(client, views[1])).toBeNull();
+      expect(
+        (await intentIndexes(client)).map(({ name }) => name),
+      ).not.toContain(liveIndex.name);
     });
   }, 30_000);
 });

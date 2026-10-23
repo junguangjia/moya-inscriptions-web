@@ -697,7 +697,17 @@ describe("W1: plan cost grows linearly with the Catalog", () => {
       })),
     );
     const visits = { rows: 0 };
-    const counted = counting(rows, visits);
+    // The selector is read in batches of assets (W5): each statement answers
+    // the rows of its own assets, counted as they are visited.
+    const selected = (assetIds: readonly string[]) => {
+      const wanted = new Set(assetIds);
+      return counting(
+        rows.filter((r) =>
+          wanted.has(assetOf(r.media_id, r.source_object_key)),
+        ),
+        visits,
+      );
+    };
     // The complete published list is read through a cursor (W3).
     const cursors = snapshotCursors((sql) =>
       sql.includes("FROM catalog_media") ? sources : undefined,
@@ -717,8 +727,9 @@ describe("W1: plan cost grows linearly with the Catalog", () => {
       connect: async () => ({ query: publishedQuery, release: () => {} }),
     } as unknown as Parameters<typeof createCatalogPublicationAuthority>[0];
     const app = {
-      query: async (sql: string) => {
-        if (sql.startsWith("SELECT DISTINCT r.id")) return { rows: counted };
+      query: async (sql: string, values?: readonly unknown[]) => {
+        if (sql.startsWith("SELECT DISTINCT r.id"))
+          return { rows: selected(values![0] as string[]) };
         throw new Error("UNEXPECTED_APP_SQL");
       },
     } as unknown as Parameters<typeof createCatalogPublicationAuthority>[2];

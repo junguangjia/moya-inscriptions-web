@@ -4,6 +4,7 @@ import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
+  catalogLiveIntentRowsSql,
   createCatalogDeliveryFacts,
   createCatalogPublicationAuthority,
   createCatalogReadiness,
@@ -888,6 +889,22 @@ const workerStep = async (scenario: ScenarioReport, full: boolean) => {
     (result) => result,
   );
   scenario.ops.acquire = strip(acquired);
+  // The capture's own reads (catalog-scale-v1 W5): the asset's App row and
+  // App-known intents, and its selector rows, each keyed by the asset.
+  for (const [name, prefix] of [
+    [
+      "acquire.assetRow",
+      "SELECT id,media_id,source_object_key FROM community.catalog_media_assets WHERE id=ANY(",
+    ],
+    [
+      "acquire.knownIntents",
+      "SELECT DISTINCT asset_id,intent_id FROM community.catalog_delivery_media_refs",
+    ],
+    ["acquire.selector", "SELECT DISTINCT r.id,a.media_id,a.source_object_key"],
+  ] as const) {
+    const read = firstStatement(acquired.recorder.queries, prefix);
+    await explain(scenario.explain, name, fixture.app, read?.sql, read?.values);
+  }
   if (!lease) return;
   const held = lease;
   try {
@@ -897,10 +914,8 @@ const workerStep = async (scenario: ScenarioReport, full: boolean) => {
       REPEAT,
     );
     scenario.ops["fence.current"] = current.measured;
-    const check = firstStatement(
-      current.queries,
-      "SELECT DISTINCT intent_id,catalog_document_id,state,state_version",
-    );
+    // The same read of the asset's App-known intents as the capture's (W5).
+    const check = firstStatement(current.queries, catalogLiveIntentRowsSql);
     await explain(
       scenario.explain,
       "fence.current",

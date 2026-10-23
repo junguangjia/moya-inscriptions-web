@@ -43,6 +43,12 @@ test.
   at 25k; the full view holds 18,500 in 39,500).
 - `tests/integration/postgres/catalog-scale-bench.ts` and
   `catalog-scale-bench.config.mts` are the bench. No suite collects them.
+- `tests/integration/postgres/catalog-scale-indexes.ts` (W6) plans, at the 25k
+  fixture, the statements that App migration A1 and CMS migration M2 index, and
+  asserts their plans. The bench config runs it too; no suite collects it. CI
+  plans the same statements in `catalog-publication-scope.test.ts`, on a
+  700-image Catalog with 20,000 ended intents, where the planner picks each
+  index itself in about 7 seconds.
 
 ## Run
 
@@ -53,6 +59,10 @@ cd tests
 MOYA_CATALOG_SCALE_BENCH_OUTPUT=/absolute/path/bench.json \
   pnpm exec vitest run --config integration/postgres/catalog-scale-bench.config.mts
 ```
+
+Add a file name filter to run one file: `catalog-scale-bench` for the bench,
+`catalog-scale-indexes` for the index plans (about 45 seconds, no output file;
+it prints its plans when it ends).
 
 Options:
 
@@ -71,7 +81,7 @@ ever 0. This can mean the statement did not run, or that a later wave rewrote
 it. In the second case, update the matcher in `catalog-scale-bench.ts` along
 with the statement. A statement that ran and changed no row reads 0.
 
-The matchers as of the wave A integration (W1–W4):
+The matchers as of wave B (W1–W6):
 
 | Detail or plan                  | Statement                                                                                                        |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -86,7 +96,18 @@ The matchers as of the wave A integration (W1–W4):
 | plan `plans.publicReady`        | `SELECT DISTINCT r.id,a.media_id,a.source_object_key`                                                            |
 | `reconcile` detail and plan     | `WITH desired AS (`                                                                                              |
 | plan `readiness`                | `SELECT * FROM public.catalog_delivery_prepare_media`                                                            |
-| plan `fence.current`            | `SELECT DISTINCT intent_id,catalog_document_id,state,state_version`                                              |
+| plan `acquire.assetRow`         | `SELECT id,media_id,source_object_key FROM community.catalog_media_assets WHERE id=ANY(`                         |
+| plan `acquire.knownIntents`     | `SELECT DISTINCT asset_id,intent_id FROM community.catalog_delivery_media_refs`                                  |
+| plan `acquire.selector`         | `SELECT DISTINCT r.id,a.media_id,a.source_object_key`, in the acquire's own statements                           |
+| plan `fence.current`            | `catalogLiveIntentRowsSql`: `SELECT * FROM public.catalog_delivery_live_prepare_media WHERE intent_id=ANY(`      |
+
+`plans` measures `copyRenditionIds()`, the whole-Catalog plan; since W5 only
+reconcile still runs it (W7 replaces it). A job's `acquire` plans its own asset
+(`captureCatalogAssets`), so its three `acquire.*` plans and its `fence.current`
+read are keyed by the asset and its App-known intents. The `fence.current`
+statement is the capture's own private read; the
+`SELECT DISTINCT intent_id,catalog_document_id,state,state_version` read it
+replaced no longer runs.
 
 The two cursor plans are EXPLAINed as the `DECLARE` the code runs, so the select
 is planned as a cursor (for fast start, `cursor_tuple_fraction`), and EXPLAIN
@@ -109,10 +130,12 @@ At `d51114c5` a full run took about 15 minutes on an Apple-silicon Mac, most of
 it `plans()` in the 5k, 8k and `rows=20000` scenarios. At the wave A integration
 the 10k–40k scenarios no longer stop at the old bounds, so their `plans()`,
 reconcile and `acquire` each run every inspection first: the 25k scenario alone
-took 59 minutes. Watch the run for stalls; each scenario's timeout is one hour,
-which the 40k scenario may exceed. Vitest prints a scenario's result only when
-the file ends, so watch the database (for example `pg_stat_database.xact_commit`
-of the `csbench_*` database) rather than the log.
+took 59 minutes. Since W5 a job's `acquire` inspects only its own asset's
+intents; `plans()` and reconcile still inspect every one. Watch the run for
+stalls; each scenario's timeout is one hour, which the 40k scenario may exceed.
+Vitest prints a scenario's result only when the file ends, so watch the database
+(for example `pg_stat_database.xact_commit` of the `csbench_*` database) rather
+than the log.
 
 ## Baseline at `d51114c5` (the 1A head)
 
@@ -239,3 +262,98 @@ its FETCHes.
 
 The listing and snapshot ceilings are now 200,000 sources and 400,000 live
 private rows. No scenario reaches them; the unit suites cover them.
+
+## A job's authority at wave B (W5 and A1's rendition index)
+
+W5 plans a Catalog job's asset alone: its `acquire`, `current()` and
+`authorized()` issue the same statements per role at 1k, 5k and 25k images
+(`catalog-scale-authority.test.ts`, which also gates their plans). One job's
+`acquire` for a released record's image (7 images, so 28 pinned roles), in local
+runs:
+
+| Measured by                                                  | 5k     | 25k                                                      |
+| ------------------------------------------------------------ | ------ | -------------------------------------------------------- |
+| W5, before A1's `media_publications_rendition` (PG18 / PG16) | 115 ms | 297 / 450 ms                                             |
+| wave B integration, with the index (PG18 / PG16)             | –      | 44–45 / 43 ms (medians of 5 warm runs)                   |
+| the same seed with the index dropped (PG18 / PG16)           | –      | 251–261 / 299 ms; the same 146 statements (with release) |
+
+The PG18 ranges are two runs of the same seed; PG16 is PG16.15 in a disposable
+container on the same Mac.
+
+- **The capture and fence read by key.** The asset's row, its App-known intents,
+  its exact pair and those intents' live rows cost 8–59 each, with no JIT, on
+  both majors (W5's probe). The selector reads in batches of 250 assets: at 25k
+  one batch costs about 33,700 on index lookups and takes 4.6 ms on PG16; 2,000
+  pairs take 8 statements and 79 ms.
+- **Inspection read every publication per pinned role until A1 indexed
+  `rendition_id`.** `inspectCatalogDelivery` reads each pinned rendition's
+  publications by `rendition_id` alone, 28 times per `acquire` here, and the
+  partial live index (`media_publications_live_rendition`) holds only the
+  publishing and published rows. It was a Seq Scan: cost 1,585 at 5k and 7,980
+  at 25k (6.8 ms on PG18, 9.3 ms on PG16). With A1's plain index it is an Index
+  Scan, cost 8, 0.1 ms and 10 shared blocks at 25k on both majors, with no JIT
+  (6,722 blocks without it), so that `acquire` drops from about 250–260 ms to
+  about 45 ms on PG18 and from about 300 ms to about 43 ms on PG16.
+- **Inspection's sorted media lock is the one Seq Scan left, and bounded.** It
+  scans `catalog_media_assets` below about 10k images (cost 454 at 5k) and
+  probes `catalog_media_assets_identity_unique` above (about 824 at 25k).
+- **Reconcile still plans the whole Catalog.** It no longer throws at 25k: W5
+  measured about 1,033 s and about 3,100 inspection transactions for one pass,
+  before the rendition index (not measured again). W7 bounds it.
+
+## Index plans of W6 (A1 and M2)
+
+`catalog-scale-indexes.ts` at the 25k fixture, on PG18.4 with JIT on (an
+Apple-silicon Mac, Docker). Single runs; blocks are shared blocks hit or read,
+children included. On PG16.15 every plan, cost and block count is the same
+within a few percent, except the mirror read with 20,000 more tombstones
+(below); the cursor took 72–91 ms there and the App reads at most 5.3 ms. The
+two rows of the inspection's rendition read were measured at the wave B
+integration; on PG16.15 they have the same plans, costs and blocks (0.1 ms with
+the index, 11.0 ms without). The index names are those of App migration
+`20261024010000_catalog_publication_scope` (A1) and CMS migration
+`20261024_000000_catalog_delivery_live_prepare` (M2).
+
+| Statement (role)                                   | Plan                                                           | Cost    | Time   | Blocks | JIT    |
+| -------------------------------------------------- | -------------------------------------------------------------- | ------- | ------ | ------ | ------ |
+| snapshot private cursor (prepare reader)           | BitmapOr: `…_intents_state_ended`, `…_intents_expiry`          | 165,680 | 76 ms  | 952    | 8.5 ms |
+| the same without M2's index                        | Seq Scan on `catalog_delivery_intents`                         | 166,389 | 68 ms  | 4,625  | 5.8 ms |
+| the cursor, 59,200 more old ended intents (77,700) | BitmapOr, as above                                             | 169,840 | 66 ms  | 946    | 7.5 ms |
+| the same without M2's index                        | Seq Scan                                                       | 183,514 | 86 ms  | 19,425 | 6.0 ms |
+| sync tombstone (App)                               | Bitmap Index Scan on `catalog_delivery_prepares_observed_live` | 950     | 1.2 ms | 178    | no     |
+| sync mirror read (App)                             | Seq Scan on `catalog_delivery_prepares` (772 pages)            | 1,498   | 3.7 ms | 775    | no     |
+| the read, 20,000 more tombstones                   | BitmapOr: `…_observed_live`, `…_prepares_pkey`                 | 2,567   | 1.9 ms | 370    | no     |
+| reconcile in-flight, 3 withdrawing (App)           | Index Only Scan on `media_publications_in_flight`              | 17      | 0.0 ms | 14     | no     |
+| reconcile pending marks, 1,000 of 25,200 (App)     | Index Scan on `catalog_publication_dirty_pending`, no Sort     | 102     | 0.1 ms | 33     | no     |
+| inspection's rendition publications read (App)     | Index Scan using `media_publications_rendition`                | 8       | 0.1 ms | 10     | no     |
+| the same without A1's rendition index              | Seq Scan on `media_publications`                               | 7,981   | 7.1 ms | 6,722  | no     |
+
+- **The cursor's read of the intents follows the live set.** M2's index makes
+  the cursor visit the 3,700 listed intents' pages (about 950 blocks) instead of
+  every intent ever prepared, and keeps that flat as the ended history grows:
+  with four times the old ended intents the Seq Scan reads 19,425 blocks and
+  takes 86 ms, the indexed read 946 blocks and 66 ms. At the 25k fixture itself
+  the time is about the same either way (66–76 ms): most of it is the cursor's
+  sort of the 24,700 member rows and JIT, not the scan (inferred, since five
+  times fewer blocks take as long).
+- **The cursor still JIT-compiles.** Its cost (about 166,000) is above
+  `jit_above_cost` (100,000) and below `jit_optimize_above_cost` (500,000), so
+  JIT runs without optimization: 6–9 ms of each run. The cost is the sort,
+  estimated at 100 members per intent (about 7 actual). It grows with the live
+  intents, so it would reach `jit_optimize_above_cost` at about three times the
+  25k live set. Ordering in the worker or reading in keyset pages by `intent_id`
+  (W3) removes it.
+- **The sync reads tombstones only at scale.** The tombstone statement reads the
+  observed-live rows through A1's partial index already at 25k. For the mirror
+  read, `observed_live OR intent_id = ANY(…)`, a scan of the 772-page table is
+  the planner's cheaper choice at 25k (about 4 ms); with 20,000 more tombstones
+  PG18 switches to the indexes and reads half the blocks. PG16 keeps the scan
+  there (1,605 blocks, 4.7 ms), so on PG16 the read still grows with history,
+  slowly. Splitting it into the observed-live index read and the primary key
+  lookup would use both indexes on either major.
+- **A job's inspection reads one rendition's publications, history included,
+  through A1's plain index.** The 100,800 seeded generations are about 6,700
+  pages that the read scanned 28 times per `acquire` without it.
+- **The reconcile's scope reads are index-only or bounded by their limit.** The
+  in-flight read and the FIFO read of pending marks touch only the rows they
+  return.

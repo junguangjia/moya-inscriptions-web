@@ -164,10 +164,14 @@ const world = (options: {
   const privateQuery = async (sql: string, values?: readonly unknown[]) => {
     const cursor = privateCursors(sql);
     if (cursor) return cursor;
-    if (sql.startsWith("SELECT DISTINCT intent_id")) {
-      const [ids, assetId] = values as [string[], string];
-      // The fence's re-read names its view: the live projection holds the
-      // snapshot's rows, the full view every retired intent beside them.
+    // A job's capture and its fence read the App-known intents' rows by id
+    // (catalog-scale-v1 W5). The read names its view: the live projection
+    // holds the snapshot's rows, the full view every retired intent beside
+    // them.
+    if (
+      /^SELECT \* FROM public\.catalog_delivery_\w+ WHERE intent_id=/u.test(sql)
+    ) {
+      const [ids] = values as [string[]];
       const viewRows = sql.includes(
         " FROM public.catalog_delivery_live_prepare_media ",
       )
@@ -176,24 +180,14 @@ const world = (options: {
           ? [...privateRows, ...(options.retiredRows ?? [])]
           : undefined;
       if (viewRows === undefined) throw new Error("UNEXPECTED_PRIVATE_SQL");
-      const headers = new Map<string, Row>();
-      for (const row of viewRows)
-        if (
-          ids.includes(row.intent_id as string) ||
-          (row.media_ordinal !== null &&
-            assetOf(row.media_id as string, row.object_key as string) ===
-              assetId)
-        )
-          headers.set(row.intent_id as string, {
-            intent_id: row.intent_id,
-            catalog_document_id: row.catalog_document_id,
-            state: row.state,
-            state_version: row.state_version,
-            media_manifest_sha256: row.media_manifest_sha256,
-            recipe_manifest_sha256: row.recipe_manifest_sha256,
-            expires_at: row.expires_at,
-          });
-      return { rows: [...headers.values()] };
+      return {
+        rows: viewRows.filter(
+          (row) =>
+            ids.includes(row.intent_id as string) &&
+            (!sql.includes("media_ordinal IS NOT NULL") ||
+              row.media_ordinal !== null),
+        ),
+      };
     }
     if (
       ["BEGIN", "ROLLBACK", "SET ", "SELECT pg_advisory_xact_lock"].some(
@@ -225,12 +219,39 @@ const world = (options: {
             };
           },
         } as unknown as NonNullable<Parameters<Authority>[1]>);
+  // The App row of every pair this world names (published, or a member of
+  // an intent), by asset id, as the sync creates them.
+  const assetRows = new Map<string, Row>();
+  for (const pair of [
+    ...options.published,
+    ...[...privateRows, ...(options.retiredRows ?? [])].filter(
+      (row) => row.media_ordinal !== null,
+    ),
+  ] as readonly Row[]) {
+    const id = assetOf(pair.media_id as string, pair.object_key as string);
+    assetRows.set(id, {
+      id,
+      media_id: pair.media_id,
+      source_object_key: pair.object_key,
+    });
+  }
   const appQuery = vi.fn(async (sql: string, values?: readonly unknown[]) => {
     if (sql.startsWith("SELECT DISTINCT r.id")) return { rows: publicRows };
-    if (sql.startsWith("SELECT DISTINCT intent_id"))
+    if (
+      sql.startsWith(
+        "SELECT id,media_id,source_object_key FROM community.catalog_media_assets WHERE id=ANY(",
+      )
+    )
       return {
-        rows: (options.appIntentIds?.[values![0] as string] ?? []).map(
-          (intent_id) => ({ intent_id }),
+        rows: (values![0] as string[]).flatMap((id) => assetRows.get(id) ?? []),
+      };
+    // The intents App mirror members name, by asset.
+    if (sql.startsWith("SELECT DISTINCT asset_id,intent_id"))
+      return {
+        rows: (values![0] as string[]).flatMap((asset_id) =>
+          [...(options.appIntentIds?.[asset_id] ?? [])]
+            .sort()
+            .map((intent_id) => ({ asset_id, intent_id })),
         ),
       };
     throw new Error("UNEXPECTED_APP_SQL");

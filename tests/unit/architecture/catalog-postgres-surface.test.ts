@@ -38,6 +38,9 @@ describe("@moya/catalog-postgres package boundary", () => {
       // catalog-delivery-release-hardening-v1 (F9): rendition-fact failures.
       "asCatalogQueryUnavailableError",
       "asPostgresOperationError",
+      // catalog-scale-v1 W6: worker and Backend startup grant checks.
+      "assertCatalogPrepareReaderReady",
+      "assertCatalogPublicationScopeReady",
       "assertMigrationTarget",
       "assertPostgresStartupReady",
       "authoredArticleCatalogPairKey",

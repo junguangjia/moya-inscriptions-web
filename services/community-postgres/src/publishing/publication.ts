@@ -109,18 +109,12 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     },
   ) {}
 
-  private readonly catalogSubjects = new Map<
-    string,
-    {
-      readonly renditionIds: readonly string[];
-      current(): Promise<boolean>;
-      authorized(): Promise<boolean>;
-      release(): Promise<void>;
-    }
-  >();
+  /** Each Catalog job's source fence (its asset's capture), by job lease,
+   * with the subject it was acquired for. */
   private readonly catalogLeases = new Map<
     string,
     {
+      readonly subject: string;
       readonly renditionIds: readonly string[];
       current(): Promise<boolean>;
       authorized(): Promise<boolean>;
@@ -138,8 +132,13 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
       throw new Error("Catalog job already holds a source fence");
     try {
       const lease = await this.options.catalogAuthority.acquire(subject);
-      this.catalogLeases.set(key, lease);
-      this.catalogSubjects.set(subject, lease);
+      this.catalogLeases.set(key, {
+        subject,
+        renditionIds: lease.renditionIds,
+        current: () => lease.current(),
+        authorized: () => lease.authorized(),
+        release: () => lease.release(),
+      });
       return true;
     } catch (error) {
       if ((error as { code?: unknown })?.code === "55P03") return false;
@@ -150,8 +149,6 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     const key = this.jobKey(job);
     const lease = this.catalogLeases.get(key);
     this.catalogLeases.delete(key);
-    for (const [subject, holder] of this.catalogSubjects)
-      if (holder === lease) this.catalogSubjects.delete(subject);
     await lease?.release();
   }
   private async catalogCurrent(
@@ -189,21 +186,23 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
   /** The desired set as SQL, and the values it binds after the caller's own
    * (`$${at}` on). With a Catalog authority its selected rendition IDs are
    * one text[] parameter: never spliced into the SQL as literals, so the
-   * selector has no count ceiling (catalog-scale-v1 W1). A malformed ID is
-   * still refused before any query. */
+   * selector has no count ceiling (catalog-scale-v1 W1). The caller names
+   * them (a job its own capture's, the reconcile its copy set); there is no
+   * whole-Catalog fallback (W5). A malformed ID is still refused before any
+   * query. */
   private async desiredSql(
     db: PublishingDb,
     at: number,
     catalogIds?: readonly string[],
   ): Promise<{ sql: string; values: unknown[] }> {
     if (this.options.catalogAuthority) {
-      const ids =
-        catalogIds ?? (await this.options.catalogAuthority.copyRenditionIds());
-      if (ids.some((id) => !/^media-rendition-[a-f0-9]{32}$/.test(id)))
+      if (catalogIds === undefined)
+        throw new Error("Catalog selection unavailable");
+      if (catalogIds.some((id) => !/^media-rendition-[a-f0-9]{32}$/.test(id)))
         throw new Error("Catalog selector invalid");
       return {
         sql: desiredRenditionsSql(false, `r.id=ANY($${at}::text[])`),
-        values: [[...ids]],
+        values: [[...catalogIds]],
       };
     }
     const exists = (
@@ -217,23 +216,26 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     db: PublishingDb,
     asset: Asset,
     allow: boolean,
+    job: PublishingJobLease,
   ): Promise<Desired[]> {
     if (!allow) return [];
-    if (asset.catalog_asset_id && this.options.catalogAuthority) {
-      const lease = this.catalogSubjects.get(asset.catalog_asset_id);
-      // The per-job current check additionally binds its own lease. Reconcile
-      // uses a fresh metadata-only selector solely to schedule existing jobs.
-      if (lease && !(await lease.authorized())) return [];
+    let catalogIds: readonly string[] | undefined;
+    if (this.options.catalogAuthority) {
+      catalogIds = [];
+      if (asset.catalog_asset_id) {
+        // A Catalog subject's desired set is its own job's capture, bound to
+        // its fence, and nothing else: no whole-Catalog plan stands in for a
+        // missing one (catalog-scale-v1 W5). Without it the job fails this
+        // attempt and retries. Reconcile uses its own copy set solely to
+        // schedule jobs.
+        const lease = this.catalogLeases.get(this.jobKey(job));
+        if (lease?.subject !== asset.catalog_asset_id)
+          throw new Error("Catalog subject holds no source fence");
+        if (!(await lease.authorized())) return [];
+        catalogIds = lease.renditionIds;
+      }
     }
-    const desired = await this.desiredSql(
-      db,
-      3,
-      asset.catalog_asset_id && this.catalogSubjects.has(asset.catalog_asset_id)
-        ? this.catalogSubjects.get(asset.catalog_asset_id)!.renditionIds
-        : asset.item_id
-          ? []
-          : undefined,
-    );
+    const desired = await this.desiredSql(db, 3, catalogIds);
     return (
       await db.query<Desired>(
         `SELECT d.* FROM (${desired.sql}) d WHERE d.item_id=$1 OR d.catalog_asset_id=$2 ORDER BY d.rendition_id`,
@@ -339,7 +341,12 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
         !(await this.catalogLeases.get(this.jobKey(fence.job))?.authorized())
       )
         return null;
-      const desired = await this.desired(db, a, this.options.isPublic());
+      const desired = await this.desired(
+        db,
+        a,
+        this.options.isPublic(),
+        fence.job,
+      );
       const present = (
         await db.query<{ rendition_id: string }>(
           "SELECT rendition_id FROM community.media_publications WHERE id=ANY($1::text[]) AND public_asset_id=$2 AND state IN ('publishing','published')",
@@ -382,7 +389,7 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
           const a = await this.acquire(db, subjectId, job, now, "publish");
           if (a === "busy") return { status: "busy" };
           if (!a) return { status: "missing" };
-          const desired = await this.desired(db, a, true);
+          const desired = await this.desired(db, a, true, job);
           if (!(await this.catalogCurrent(a.catalog_asset_id, job)))
             throw CATALOG_CONTEXT_STALE;
           const token = hex();
@@ -464,7 +471,12 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
           const a = await this.acquire(db, subjectId, job, now, "withdraw");
           if (a === "busy") return { status: "busy" };
           if (!a) return { status: "missing" };
-          const desired = await this.desired(db, a, this.options.isPublic());
+          const desired = await this.desired(
+            db,
+            a,
+            this.options.isPublic(),
+            job,
+          );
           if (!(await this.catalogCurrent(a.catalog_asset_id, job)))
             throw CATALOG_CONTEXT_STALE;
           await db.query(
@@ -515,7 +527,12 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     return writeTransaction(this.pool, async (db) => {
       const a = await this.current(db, fence, now);
       if (!a || fence.intent !== "publish") return false;
-      const desired = await this.desired(db, a, this.options.isPublic());
+      const desired = await this.desired(
+        db,
+        a,
+        this.options.isPublic(),
+        fence.job,
+      );
       const rows = (
         await db.query<UnitRow>(
           "SELECT * FROM community.media_publications WHERE public_asset_id=$1 AND id=ANY($2::text[]) AND state='publishing' FOR UPDATE",
@@ -695,6 +712,10 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
     allowPublish: boolean,
     limit: number,
   ): Promise<{ publish: number; withdraw: number }> {
+    // The whole Catalog's copy set, read before the transaction: the last
+    // whole-Catalog plan, here only, until the scoped reconcile
+    // (catalog-scale-v1 W7) plans a bounded scope instead. Jobs never use it;
+    // each plans its own asset when it runs.
     const catalogDesiredIds = this.options.catalogAuthority
       ? await this.options.catalogAuthority.copyRenditionIds()
       : undefined;

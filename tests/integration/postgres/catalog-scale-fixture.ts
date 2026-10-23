@@ -417,13 +417,16 @@ const LABEL = /^[a-z][a-z0-9_]{0,15}$/u;
  * opened by the caller's `openPool`, so a suite's guard visibly precedes its
  * connections (tests/unit/architecture/postgres-test-database-guard.test.ts).
  * The published view starts `keyed` (CMS migration M1 applied, as this head
- * ships it) unless `view` says `fenced`.
+ * ships it) unless `view` says `fenced`. `communityThrough` stops the App
+ * migrations at that migration ID, for an upgrade test that seeds first and
+ * applies the rest itself (the runtime grants are applied either way).
  */
 export const createCatalogScaleDatabase = async (options: {
   readonly target: string;
   readonly openPool: (url: string) => Pool;
   readonly label?: string;
   readonly view?: CatalogMediaView;
+  readonly communityThrough?: string;
 }): Promise<CatalogScaleDatabase> => {
   const label = options.label ?? "catscale";
   if (!LABEL.test(label)) throw new TypeError("Catalog scale label invalid");
@@ -498,6 +501,9 @@ export const createCatalogScaleDatabase = async (options: {
     await runCommunityMigrations(
       setup,
       `${root}/database/community-migrations`,
+      options.communityThrough === undefined
+        ? {}
+        : { through: options.communityThrough },
     );
     await setup.query(cmsTablesSql);
     await setup.query(fencedCatalogMediaViewSql);
@@ -1111,14 +1117,19 @@ export const createQueryRecorder = () => {
 export type QueryRecorder = ReturnType<typeof createQueryRecorder>;
 
 /** The shape of a plan: node labels ("Index Scan using … on …"), the
- * relations read by a Seq Scan, the indexes used and, with ANALYZE, the
- * execution time. */
+ * relations read by a Seq Scan, the indexes used, the planner's total cost
+ * (JIT compiles a plan from jit_above_cost, 100,000 by default, and
+ * optimizes it from jit_optimize_above_cost, 500,000) and, with ANALYZE,
+ * the execution time and any JIT time. */
 export interface CatalogScalePlan {
   readonly nodes: readonly string[];
   readonly seqScans: readonly string[];
   readonly indexes: readonly string[];
   readonly executionMs: number | null;
   readonly planRows: number | null;
+  readonly totalCost: number | null;
+  /** JIT's total time with ANALYZE; null when the plan was not compiled. */
+  readonly jitMs: number | null;
 }
 
 /** EXPLAIN (FORMAT JSON) of one statement, with ANALYZE when asked, in a
@@ -1139,6 +1150,7 @@ export const explainCatalogScale = async (
     const [explained] = result.rows[0]!["QUERY PLAN"] as {
       Plan: Record<string, unknown>;
       "Execution Time"?: number;
+      JIT?: { Timing?: { Total?: number } };
     }[];
     const nodes: string[] = [];
     const seqScans = new Set<string>();
@@ -1162,9 +1174,119 @@ export const explainCatalogScale = async (
       indexes: [...indexes].sort(),
       executionMs: explained!["Execution Time"] ?? null,
       planRows: (explained!.Plan["Plan Rows"] as number | undefined) ?? null,
+      totalCost: (explained!.Plan["Total Cost"] as number | undefined) ?? null,
+      jitMs: explained!.JIT?.Timing?.Total ?? null,
     };
   } finally {
     await client.query("ROLLBACK").catch(() => undefined);
     client.release();
   }
 };
+
+/** Runs `check` on one connection of `pool` inside a transaction that is
+ * always rolled back, so DDL, extra rows and the EXPLAIN ANALYZE of a write
+ * are never kept. */
+export const rolledBackCatalogScale = async <T>(
+  pool: Pool,
+  check: (client: Client) => Promise<T>,
+): Promise<T> => {
+  const client = await connect(pool);
+  try {
+    await client.query("BEGIN");
+    return await check(client);
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+  }
+};
+
+/** A plan read on one connection: node labels as in `CatalogScalePlan`, the
+ * top node's total cost and, with ANALYZE, its actual rows, the execution
+ * time, the JIT time and, with BUFFERS too, the shared blocks it hit or read
+ * (children included). `jit` says whether the plan is JIT-compiled (it
+ * crossed jit_above_cost with JIT available); `jitMs` is null without it or
+ * without ANALYZE. */
+export interface CatalogScaleCostedPlan {
+  readonly nodes: readonly string[];
+  readonly cost: number;
+  readonly rows: number | null;
+  readonly executionMs: number | null;
+  readonly jit: boolean;
+  readonly jitMs: number | null;
+  readonly sharedBlocks: number | null;
+}
+
+/** EXPLAIN (FORMAT JSON) of one statement on `client`, inside the caller's
+ * transaction (so it sees that transaction's own changes and settings). */
+export const explainCatalogScaleOn = async (
+  client: Pick<Client, "query">,
+  sql: string,
+  values: readonly unknown[] = [],
+  options: { readonly analyze?: boolean; readonly buffers?: boolean } = {},
+): Promise<CatalogScaleCostedPlan> => {
+  const result = await client.query<{ "QUERY PLAN": unknown }>(
+    `EXPLAIN (FORMAT JSON${options.analyze ? `, ANALYZE${options.buffers ? ", BUFFERS" : ""}` : ""}) ${sql}`,
+    [...values],
+  );
+  const [explained] = result.rows[0]!["QUERY PLAN"] as {
+    Plan: Record<string, unknown>;
+    "Execution Time"?: number;
+    JIT?: { Timing?: { Total?: number } };
+  }[];
+  const nodes: string[] = [];
+  const walk = (node: Record<string, unknown>) => {
+    const index = node["Index Name"] as string | undefined;
+    const relation = node["Relation Name"] as string | undefined;
+    nodes.push(
+      `${String(node["Node Type"])}${index ? ` using ${index}` : ""}${relation ? ` on ${relation}` : ""}`,
+    );
+    for (const child of (node.Plans as Record<string, unknown>[]) ?? [])
+      walk(child);
+  };
+  walk(explained!.Plan);
+  return {
+    nodes,
+    cost: explained!.Plan["Total Cost"] as number,
+    rows: (explained!.Plan["Actual Rows"] as number | undefined) ?? null,
+    executionMs: explained!["Execution Time"] ?? null,
+    jit: explained!.JIT !== undefined,
+    jitMs: explained!.JIT?.Timing?.Total ?? null,
+    sharedBlocks:
+      options.analyze && options.buffers
+        ? Number(explained!.Plan["Shared Hit Blocks"] ?? 0) +
+          Number(explained!.Plan["Shared Read Blocks"] ?? 0)
+        : null,
+  };
+};
+
+/**
+ * The statements whose plans App migration A1 and CMS migration M2 index,
+ * as they run against the fixture (catalog-publication-scope.test.ts plans
+ * them in CI over a long history, catalog-scale-indexes.ts at 25k). Copies:
+ * the snapshot's private cursor is backend-production
+ * catalog-delivery-intents `privateRowsSql`, declared as the prepare reader
+ * declares it; the mirror read and tombstone are community-postgres
+ * catalog-delivery-intents' sync statements, and the publications read is
+ * its inspectCatalogDelivery's read of a pinned rendition's publications
+ * (catalog-scale-authority.test.ts gates the statement as the acquire
+ * issues it); the in-flight and pending reads are the scoped reconcile's
+ * (W7) first two scope parts. A rewrite there updates them here.
+ */
+export const catalogScaleIndexedStatements = Object.freeze({
+  privateCursor:
+    "DECLARE catalog_private_snapshot NO SCROLL CURSOR FOR SELECT * FROM public.catalog_delivery_live_prepare_media ORDER BY intent_id,media_ordinal NULLS FIRST",
+  /** $1: the snapshot's intent ids. */
+  mirrorRead:
+    "SELECT * FROM community.catalog_delivery_prepares WHERE observed_live OR intent_id=ANY($1::uuid[]) ORDER BY intent_id",
+  /** $1: the snapshot's intent ids, $2: the observation time. */
+  tombstone:
+    "UPDATE community.catalog_delivery_prepares SET observed_live=false,observed_at=$2::timestamptz,ended_at=COALESCE(ended_at,$2::timestamptz),updated_at=$2::timestamptz WHERE observed_live AND observed_at <= $2::timestamptz AND NOT(intent_id=ANY($1::uuid[]))",
+  /** $1: a pinned rendition's id. */
+  renditionPublications:
+    "SELECT p.* FROM community.media_publications p WHERE p.rendition_id=$1 ORDER BY p.id FOR SHARE",
+  inFlight: `SELECT DISTINCT pa.catalog_asset_id FROM community.media_publications p
+JOIN community.media_public_assets pa ON pa.id = p.public_asset_id
+WHERE p.state IN ('publishing', 'withdrawing', 'purge_failed') AND pa.catalog_asset_id IS NOT NULL`,
+  pending:
+    "SELECT asset_id, mark_seq FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY marked_at, asset_id LIMIT 1000",
+});

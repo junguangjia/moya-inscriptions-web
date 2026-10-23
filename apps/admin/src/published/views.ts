@@ -213,9 +213,22 @@ WHERE i.recipe_manifest_sha256 IS NOT NULL`;
  * only by a later withdraw or publish, so the snapshot follows live content,
  * not history. CREATE OR REPLACE keeps the old view's OID, owner and grant;
  * the new view is granted by the grant script only. lock_timeout as in M1.
+ *
+ * The live projection's own condition is indexed, so its reads (the
+ * snapshot's cursor, the fence) visit only the intents it lists, not every
+ * intent ever prepared: the released branch and the ended branch read
+ * catalog_delivery_intents_state_ended, the prepared and requested branch the
+ * existing catalog_delivery_intents_expiry. Measured at the 25k fixture
+ * (18,500 intents, 3,700 listed) on PG18: a BitmapOr over 926 heap pages
+ * instead of a Seq Scan over 4,625, and still about 950 blocks against
+ * 19,425 with four times the old ended intents (docs/development/
+ * catalog-scale-bench.md). The index is built first, so the views' ACCESS
+ * EXCLUSIVE locks are held only briefly.
  */
 export const upgradeCatalogDeliveryPrepareViewsSql = `
 SET LOCAL lock_timeout = '5s';
+CREATE INDEX catalog_delivery_intents_state_ended
+  ON catalog_delivery_intents USING btree (state, ended_at);
 CREATE OR REPLACE VIEW catalog_delivery_prepare_media WITH (security_barrier = true) AS
 ${catalogDeliveryPrepareMediaSelectSql(true)};
 CREATE VIEW catalog_delivery_live_prepare_media WITH (security_barrier = true) AS
@@ -227,7 +240,10 @@ ${catalogDeliveryPrepareMediaSelectSql(true)}
       AND i.ended_at > now() - interval '${CATALOG_PREPARE_RETENTION_HOURS} hours'));
 `;
 
-/** Drops the live view and restores the original view text and options. */
+/** Drops the live view, restores the original view text and options, and
+ * drops the index. IF EXISTS for the index only: a task or dev CMS database
+ * that ran this migration before the index was added to it (never released)
+ * lacks it, and can still be migrated down and up again to get it. */
 export const downgradeCatalogDeliveryPrepareViewsSql = `
 SET LOCAL lock_timeout = '5s';
 DROP VIEW catalog_delivery_live_prepare_media;
@@ -235,4 +251,5 @@ CREATE OR REPLACE VIEW catalog_delivery_prepare_media AS
 ${catalogDeliveryPrepareMediaSelectSql(false)}
 OFFSET 0;
 ALTER VIEW catalog_delivery_prepare_media RESET (security_barrier);
+DROP INDEX IF EXISTS catalog_delivery_intents_state_ended;
 `;

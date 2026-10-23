@@ -18,10 +18,13 @@ import {
   startBackendProcess,
 } from "@moya/backend-runtime";
 import {
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   assertPostgresStartupReady,
   CanonicalAuthoredArticleProjector,
   createPostgresPool,
   PostgresAuthoredArticleCatalogMediaResolver,
+  PostgresStartupError,
 } from "@moya/catalog-postgres";
 import {
   PostgresAuthorCommunityAdapter,
@@ -129,6 +132,10 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
       }),
     })),
     assertPostgresStartupReady: vi.fn(async () => {}),
+    // catalog-scale-v1 W6: the Catalog grant checks are PostgreSQL I/O too;
+    // their pools and refusals are observed below.
+    assertCatalogPublicationScopeReady: vi.fn(async () => {}),
+    assertCatalogPrepareReaderReady: vi.fn(async () => {}),
     PostgresCatalogQueryAdapter: class
       extends actual.PostgresCatalogQueryAdapter
     {
@@ -831,6 +838,64 @@ describe("non-Pilot production public media composition", () => {
         expect(JSON.stringify(body)).not.toContain("private");
         expect(JSON.stringify(body)).not.toContain("incomplete");
       }
+    }
+  });
+
+  // catalog-scale-v1 (Issue #323) 1B, W6: the Backend may run publication
+  // workers and the reconcile, and its publication authority reads the
+  // private prepare views, so startup checks the scoped reconcile's grants on
+  // the App pool and, only with a prepare database, the prepare reader's
+  // grants on that pool. Either refusal stops startup with every pool closed.
+  it("checks the Catalog scope and prepare grants on their own pools at startup and refuses without them", async () => {
+    const withPrepare = {
+      ...environment,
+      CATALOG_PREPARE_DATABASE_URL:
+        "postgresql://synthetic-prepare@127.0.0.1:1/synthetic_published",
+    };
+    const opened = (from: number) =>
+      vi
+        .mocked(createPostgresPool)
+        .mock.calls.slice(from)
+        .map(([config], index) => ({
+          url: config.connectionString,
+          pool: vi.mocked(createPostgresPool).mock.results[from + index]!
+            .value as unknown,
+        }));
+    const poolOf = (from: number, url: string) =>
+      opened(from).find((pool) => pool.url === url)!.pool;
+
+    let from = vi.mocked(createPostgresPool).mock.results.length;
+    const plain = await prepareProductionBackend(environment);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenCalledWith(
+      poolOf(from, environment.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).not.toHaveBeenCalled();
+    await plain.closeResources();
+
+    from = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareProductionBackend(withPrepare);
+    expect(opened(from)).toHaveLength(3);
+    expect(assertCatalogPublicationScopeReady).toHaveBeenLastCalledWith(
+      poolOf(from, withPrepare.APP_DATABASE_URL),
+    );
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledTimes(1);
+    expect(assertCatalogPrepareReaderReady).toHaveBeenCalledWith(
+      poolOf(from, withPrepare.CATALOG_PREPARE_DATABASE_URL),
+    );
+    await prepared.closeResources();
+
+    for (const check of [
+      assertCatalogPublicationScopeReady,
+      assertCatalogPrepareReaderReady,
+    ]) {
+      const refusal = new PostgresStartupError("Synthetic missing grant");
+      vi.mocked(check).mockRejectedValueOnce(refusal);
+      database.end.mockClear();
+      from = vi.mocked(createPostgresPool).mock.results.length;
+      await expect(prepareProductionBackend(withPrepare)).rejects.toBe(refusal);
+      expect(opened(from)).toHaveLength(3);
+      expect(database.end).toHaveBeenCalledTimes(3);
     }
   });
 
@@ -1564,6 +1629,69 @@ describe("Work publishing composition", () => {
     },
     15_000,
   );
+
+  // catalog-scale-v1 (W4 in the media worker, here for the embedded
+  // Development worker): the Catalog sync runs detached from the tick.
+  it("Development keeps claiming while a long Catalog sync runs, and closes the pools only after it ends", async () => {
+    const queue = quietQueue();
+    let finish: (() => void) | undefined;
+    queue.catalogSync.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              referenced: 0,
+              skipped: 0,
+              created: 0,
+              unreferenced: 0,
+              enqueued: 0,
+            });
+        }),
+    );
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const prepared = await prepareProductionBackend({
+      ...local,
+      ...publishingKeys,
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      const [handlers] = vi
+        .mocked(createPublishingJobHandlers)
+        .mock.calls.at(-1)!;
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(queue.catalogSync).toHaveBeenCalledTimes(1),
+      );
+      // The sync has not returned, and the embedded media worker (not only
+      // the publication lanes on the same queue) still claims, poll after
+      // poll.
+      const ownClaims = () =>
+        queue.claim.mock.calls.filter(
+          ([options], call) =>
+            queue.claim.mock.contexts[call] === handlers.port &&
+            options.kinds?.includes("catalog_render"),
+        ).length;
+      await vi.waitFor(() => expect(ownClaims()).toBeGreaterThanOrEqual(2), {
+        timeout: 5_000,
+      });
+      let closed = false;
+      closing = prepared.closeResources().then(() => {
+        closed = true;
+      });
+      await pause(100);
+      expect(closed).toBe(false);
+      expect(database.end).not.toHaveBeenCalled();
+      finish!();
+      await closing;
+      expect(database.end).toHaveBeenCalledTimes(2);
+      expect(queue.catalogSync).toHaveBeenCalledTimes(1);
+    } finally {
+      finish?.();
+      await (closing ?? prepared.closeResources());
+    }
+  }, 15_000);
 
   it.each(["development", "production"] as const)(
     "%s shares one upload registry between upload and worker session expiry",

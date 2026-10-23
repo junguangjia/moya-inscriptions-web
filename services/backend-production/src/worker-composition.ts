@@ -1,6 +1,8 @@
 import path from "node:path";
 
 import {
+  assertCatalogPrepareReaderReady,
+  assertCatalogPublicationScopeReady,
   closePostgresPool,
   createPostgresPool,
   parsePostgresConfig,
@@ -246,7 +248,8 @@ const catalogOffReasons = (
 /**
  * Parses and opens everything, runs the sandbox self-check, removes orphaned
  * sandbox containers and stale job directories, opens the pools and verifies
- * the community migration ledger (read-only). Starts nothing.
+ * the community migration ledger and the Catalog grants (read-only). Starts
+ * nothing.
  */
 export async function prepareMediaWorker(
   environment: Environment,
@@ -335,6 +338,13 @@ export async function prepareMediaWorker(
     ]).then(() => undefined);
   try {
     await verifyCommunityMigrationLedger(communityPool);
+    // catalog-scale-v1 W6: the scoped reconcile's tables and their grants
+    // (App migration 20261024010000), and, where configured, the prepare
+    // reader's grant on both private views (CMS migration M2). Either missing
+    // stops startup with a message naming it.
+    await assertCatalogPublicationScopeReady(communityPool);
+    if (catalogPreparePool)
+      await assertCatalogPrepareReaderReady(catalogPreparePool);
   } catch (error) {
     await closePools();
     throw error;

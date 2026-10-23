@@ -51,6 +51,18 @@ entries together with the table-level one). Nothing else is revoked; residue
 beyond that set on a retained role is listed for an Owner decision, never
 removed blindly. `pnpm dev:migrate` applies this script after the bootstrap.
 
+Since catalog-scale-v1 (App migration `20261024010000`) the script also grants
+the scoped Catalog reconcile's dirty queue and state row: `SELECT, INSERT` and
+`UPDATE (mark_seq, cleared_seq, reason, marked_at)` on
+`community.catalog_publication_dirty`, `SELECT` and `UPDATE` of every column but
+`id` on the one row of `community.catalog_reconcile_state`, and no `DELETE`.
+Applied before that migration it grants nothing on them, so apply it again
+afterwards. The Backend and the media worker check exactly these privileges at
+startup, and, with `CATALOG_PREPARE_DATABASE_URL` set, the prepare reader's
+`SELECT` on both private prepare views
+(`infra/development/catalog-media/grant-prepare-read.sql`); either missing stops
+startup with a message that names the relation, column and privilege.
+
 For this publishing environment, this is the complete task-scoped runtime grant
 path; the older `infra/development/grant-community-app.sql` covers the initial
 comment/session domain only and is insufficient for Phase 4/publishing. Backend
