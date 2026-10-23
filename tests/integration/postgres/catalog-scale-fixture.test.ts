@@ -34,6 +34,7 @@ import {
   catalogScaleShape,
   clearCatalogScale,
   createCatalogScaleDatabase,
+  createCatalogScaleTemplates,
   createQueryRecorder,
   explainCatalogScale,
   seedCatalogScale,
@@ -54,8 +55,11 @@ import type { MediaId } from "@moya/contracts";
  * sync of the live prepare projection (M2) changes no mirror row but its
  * observation time (the old ended intents are already its tombstones) and
  * writes no asset or job, and the authority desires exactly the published
- * generations, so reconcile schedules nothing. The tests share one seed and
- * run in order (the last ones change it). Content is synthetic.
+ * generations, so reconcile schedules nothing. Every relation it fills has
+ * planner statistics. A seeded template's copies hold its rows, statistics
+ * and grants, each its own database granted to the three roles alone, and
+ * closing them leaves nothing behind. The tests share one seed and run in
+ * order (the last ones change it). Content is synthetic.
  */
 
 const SLOW = 120_000;
@@ -120,15 +124,74 @@ const appRows = async (pool: CatalogScaleDatabase["setup"]) => {
   return rows;
 };
 
+/** Every relation the fixture fills, as the seed analyzes it. */
+const FILLED = [
+  "public.catalog_delivery_receipts",
+  "public.catalog_delivery_intents",
+  "public.catalogs_media",
+  "public.catalogs",
+  "public.users",
+  "community.catalog_delivery_rendition_pins",
+  "community.catalog_delivery_media_refs",
+  "community.catalog_delivery_prepares",
+  "community.catalog_delivery_snapshot_watermark",
+  "community.media_publications",
+  "community.media_public_assets",
+  "community.media_renditions",
+  "community.catalog_media_assets",
+  "community.media_blobs",
+  "community.publishing_jobs",
+];
+/** The filled relations without planner statistics (reltuples is -1 until
+ * a relation is first analyzed or vacuumed). */
+const unanalyzed = async (pool: CatalogScaleDatabase["setup"]) =>
+  (
+    await pool.query<{ relation: string }>(
+      "SELECT c.oid::regclass::text AS relation FROM pg_class c WHERE c.oid = ANY($1::regclass[]) AND c.reltuples < 0 ORDER BY 1",
+      [FILLED],
+    )
+  ).rows.map((row) => row.relation);
+/** Each identity reads only its own relations; the App role has no
+ * TEMPORARY and no DELETE on the asset table. */
+const ownRelationsOnly = async ({
+  app,
+  publicRead,
+  prepare,
+}: CatalogScaleDatabase) => {
+  const refused = { code: "42501" };
+  await expect(
+    publicRead.query("SELECT 1 FROM public.catalog_delivery_prepare_media"),
+  ).rejects.toMatchObject(refused);
+  await expect(
+    publicRead.query("SELECT 1 FROM community.catalog_media_assets"),
+  ).rejects.toMatchObject(refused);
+  await expect(
+    prepare.query("SELECT 1 FROM public.catalog_media"),
+  ).rejects.toMatchObject(refused);
+  await expect(
+    app.query("SELECT 1 FROM public.catalog_delivery_intents"),
+  ).rejects.toMatchObject(refused);
+  await expect(
+    app.query("SELECT 1 FROM public.catalog_delivery_prepare_media"),
+  ).rejects.toMatchObject(refused);
+  await expect(
+    app.query("CREATE TEMP TABLE scale_probe (id text)"),
+  ).rejects.toMatchObject(refused);
+  await expect(
+    app.query("DELETE FROM community.catalog_media_assets WHERE false"),
+  ).rejects.toMatchObject(refused);
+};
+
 // The suite's disposable target, refused before any connection.
 const target = requireSyntheticTestDatabaseUrl();
+const openPool = (url: string) =>
+  createPostgresPool(parsePostgresConfig({ DATABASE_URL: url }));
 let fixture: CatalogScaleDatabase;
 
 beforeAll(async () => {
   fixture = await createCatalogScaleDatabase({
     target,
-    openPool: (url) =>
-      createPostgresPool(parsePostgresConfig({ DATABASE_URL: url })),
+    openPool,
     label: "csfix",
   });
   await seedCatalogScale(fixture, SHAPE);
@@ -440,30 +503,109 @@ describe(
     });
 
     it("keeps each identity to its own relations", async () => {
-      const { app, publicRead, prepare } = fixture;
-      const refused = { code: "42501" };
-      await expect(
-        publicRead.query("SELECT 1 FROM public.catalog_delivery_prepare_media"),
-      ).rejects.toMatchObject(refused);
-      await expect(
-        publicRead.query("SELECT 1 FROM community.catalog_media_assets"),
-      ).rejects.toMatchObject(refused);
-      await expect(
-        prepare.query("SELECT 1 FROM public.catalog_media"),
-      ).rejects.toMatchObject(refused);
-      await expect(
-        app.query("SELECT 1 FROM public.catalog_delivery_intents"),
-      ).rejects.toMatchObject(refused);
-      await expect(
-        app.query("SELECT 1 FROM public.catalog_delivery_prepare_media"),
-      ).rejects.toMatchObject(refused);
-      // The App role has no TEMPORARY and no DELETE on the asset table.
-      await expect(
-        app.query("CREATE TEMP TABLE scale_probe (id text)"),
-      ).rejects.toMatchObject(refused);
-      await expect(
-        app.query("DELETE FROM community.catalog_media_assets WHERE false"),
-      ).rejects.toMatchObject(refused);
+      await ownRelationsOnly(fixture);
+      // The seed leaves planner statistics on every relation it fills.
+      expect(await unanalyzed(fixture.setup)).toEqual([]);
+    });
+
+    it("copies a seeded template with its rows, statistics and grants, each copy its own database", async () => {
+      const templates = await createCatalogScaleTemplates({
+        target,
+        openPool,
+        label: "csfixtpl",
+      });
+      const databases = async () =>
+        (
+          await fixture.setup.query<{ name: string; connections: boolean }>(
+            "SELECT datname AS name, datallowconn AS connections FROM pg_database WHERE datname LIKE 'csfixtpl\\_%' ORDER BY datallowconn, datname",
+          )
+        ).rows;
+      try {
+        await templates.prepare(SHAPE);
+        expect(await databases()).toHaveLength(2);
+        const first = await templates.seeded(SHAPE);
+        const second = await templates.seeded(SHAPE, {
+          liveAssets: "pending",
+        });
+        // An empty template and one seeded template, which no session may
+        // connect to, and the two copies; a prepared template and equal
+        // options share it.
+        expect(
+          (await databases()).map((database) => database.connections),
+        ).toEqual([false, false, true, true]);
+        expect(
+          (await databases())
+            .filter((database) => database.connections)
+            .map((database) => database.name)
+            .sort(),
+        ).toEqual([first.database, second.database].sort());
+        // The rows of the seed, the same in both copies, and as many as the
+        // seed above holds; statistics included.
+        const rows = await appRows(first.setup);
+        expect(await appRows(second.setup)).toEqual(rows);
+        const seeded = await appRows(fixture.setup);
+        for (const [name, list] of Object.entries(seeded))
+          expect(rows[name], name).toHaveLength(list.length);
+        expect(
+          await count(
+            first.publicRead,
+            "SELECT count(*) AS n FROM catalog_media",
+          ),
+        ).toBe(counts.publishedImages);
+        expect(await unanalyzed(first.setup)).toEqual([]);
+        // Each copy grants CONNECT to the three roles alone, and keeps each
+        // identity to its own relations.
+        const roles = await Promise.all(
+          [first.app, first.publicRead, first.prepare].map(async (pool) =>
+            String(
+              (
+                await pool.query<{ role: string }>(
+                  "SELECT current_user AS role",
+                )
+              ).rows[0]!.role,
+            ),
+          ),
+        );
+        for (const copy of [first, second]) {
+          expect(
+            (
+              await fixture.setup.query<{ grantee: string; privilege: string }>(
+                `SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee, a.privilege_type AS privilege
+                 FROM pg_database d, aclexplode(d.datacl) a
+                 WHERE d.datname = $1 AND a.grantee <> d.datdba ORDER BY 1, 2`,
+                [copy.database],
+              )
+            ).rows,
+          ).toEqual(
+            [...roles]
+              .sort()
+              .map((grantee) => ({ grantee, privilege: "CONNECT" })),
+          );
+          await ownRelationsOnly(copy);
+        }
+        // A copy is a database of its own, and closing it drops it.
+        await first.setup.query("DELETE FROM community.publishing_jobs");
+        expect(
+          await count(
+            second.setup,
+            "SELECT count(*) AS n FROM community.publishing_jobs",
+          ),
+        ).toBe(rows.jobs!.length);
+        await first.close();
+        expect(
+          (await databases()).filter((database) => database.connections),
+        ).toEqual([{ name: second.database, connections: true }]);
+      } finally {
+        await templates.close();
+      }
+      // Closing the templates drops every database they made and the roles.
+      expect(await databases()).toEqual([]);
+      expect(
+        await count(
+          fixture.setup,
+          "SELECT count(*) AS n FROM pg_roles WHERE rolname LIKE 'csfixtpl\\_%'",
+        ),
+      ).toBe(0);
     });
 
     it("is a fixed point of this head's sync, authority and reconcile", async () => {

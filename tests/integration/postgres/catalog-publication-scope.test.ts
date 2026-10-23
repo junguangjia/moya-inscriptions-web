@@ -176,6 +176,41 @@ const startupRefusal = async (check: Promise<unknown>) => {
 const ASSET = (n: number) =>
   `catalog-asset-${n.toString(16).padStart(32, "0")}`;
 
+// 700 published images (100 records) with the ended history of a Catalog
+// larger than the 25k fixture: 20,000 ended intents, all but the 6 recent
+// ones outside the live projection and mirror tombstones. The live set is
+// small beside them, so the planner picks each index itself, as it does at
+// 25k once history outgrows the live set; this shape seeds in seconds.
+const HISTORY = catalogScaleShape(700, { endedIntents: 20_000 });
+let history: Promise<CatalogScaleDatabase> | undefined;
+/** The long-history database of the index plans (the last describe), built
+ * once from the first hook on: its seed overlaps the A1 run that waits out
+ * its lock_timeout. A failure is kept for the describe that awaits it. */
+const historyDatabase = () => {
+  if (!history) {
+    history = (async () => {
+      const fixture = await createCatalogScaleDatabase({
+        target,
+        openPool,
+        label: "csscope_hist",
+      });
+      try {
+        await seedCatalogScale(fixture, HISTORY);
+      } catch (error) {
+        await fixture.close().catch(() => undefined);
+        throw error;
+      }
+      return fixture;
+    })();
+    history.catch(() => undefined);
+  }
+  return history;
+};
+
+afterAll(async () => {
+  await (await history?.catch(() => undefined))?.close();
+}, SLOW);
+
 describe("App migration A1, its grants and the startup checks", () => {
   // Seeded through the migration before A1, then upgraded by the test.
   let upgraded: CatalogScaleDatabase;
@@ -184,6 +219,7 @@ describe("App migration A1, its grants and the startup checks", () => {
   const shape = catalogScaleShape(140);
 
   beforeAll(async () => {
+    void historyDatabase();
     upgraded = await createCatalogScaleDatabase({
       target,
       openPool,
@@ -670,26 +706,11 @@ describe("App migration A1, its grants and the startup checks", () => {
 });
 
 describe("A1 and M2 indexes over a long intent history", () => {
-  // 700 published images (100 records) with the ended history of a Catalog
-  // larger than the 25k fixture: 20,000 ended intents, all but the 6 recent
-  // ones outside the live projection and mirror tombstones. The live set is
-  // small beside them, so the planner picks each index itself, as it does
-  // at 25k once history outgrows the live set; this shape seeds in seconds.
-  const shape = catalogScaleShape(700, { endedIntents: 20_000 });
-  const counts = catalogScaleCounts(shape);
+  const counts = catalogScaleCounts(HISTORY);
   let fixture: CatalogScaleDatabase;
 
   beforeAll(async () => {
-    fixture = await createCatalogScaleDatabase({
-      target,
-      openPool,
-      label: "csscope_hist",
-    });
-    await seedCatalogScale(fixture, shape);
-  }, SLOW);
-
-  afterAll(async () => {
-    await fixture?.close();
+    fixture = await historyDatabase();
   }, SLOW);
 
   it("reads the live prepare projection through M2's index, not every intent ever prepared", async () => {

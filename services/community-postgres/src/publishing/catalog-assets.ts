@@ -570,7 +570,7 @@ export const syncCatalogAssets = async (
       .slice(0, options.limit)
       .map((row) => named.get(row.id)!);
     const created = missing.length
-      ? await db.query(
+      ? await db.query<{ id: string }>(
           `INSERT INTO community.catalog_media_assets(
              id, media_id, source_object_key, source_sha256, source_width, source_height,
              source_content_type, state, created_at, updated_at)
@@ -593,7 +593,10 @@ export const syncCatalogAssets = async (
             at,
           ],
         )
-      : { rowCount: 0 };
+      : { rowCount: 0, rows: [] };
+    // The assets this pass created: the insert returns only the rows it
+    // inserted, never one that existed (or that another pass inserted).
+    const createdIds = new Set(created.rows.map((row) => row.id));
     // Every existing asset row the statements below change is locked first,
     // by one statement in id order: each row whose reference state flips and
     // each unreadable source due for a retry. That is the sorted asset lock
@@ -621,7 +624,17 @@ export const syncCatalogAssets = async (
     // snapshot reader refuses as a whole (null) before this is called. Each
     // flip marks its asset for the scoped reconcile (W8): a re-published one
     // may copy its renditions again, a taken-down one must be withdrawn (an
-    // urgent mark).
+    // urgent mark). An asset this pass created and flips at once (an image
+    // only a private intent or render grace names) was never published:
+    // whatever could serve it (a public asset or a rendition, and through
+    // them a publication or a pin) references its row, which did not exist
+    // before this pass, so the flip removes nothing. Its mark is normal: an
+    // urgent one would put publish-side or no-op work in the takedown class,
+    // where it could fill a pass's reserved part ahead of a later takedown.
+    // It is still marked, as every flip is, so the reconcile never depends
+    // on that reading; a normal mark plans as a no-op behind every urgent
+    // one. Either flip keeps an urgent mark of this pass (an intent's end)
+    // urgent.
     const rereferenced = await db.query<{ id: string }>(
       `UPDATE community.catalog_media_assets a
        SET unreferenced_since=NULL, updated_at=$2::timestamptz
@@ -644,7 +657,10 @@ export const syncCatalogAssets = async (
         urgent: marks.get(id)?.urgent === true,
       });
     for (const { id } of unreferenced.rows)
-      marks.set(id, { reason: "reference", urgent: true });
+      marks.set(id, {
+        reason: "reference",
+        urgent: !createdIds.has(id) || marks.get(id)?.urgent === true,
+      });
     // A named asset whose source was unreadable gets another render once the
     // retry delay passed (bounded per pass); other failures stay final.
     await db.query(

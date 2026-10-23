@@ -118,17 +118,22 @@ const activeJobSql = (s: string): string =>
  * least half of the room after the sweep's share. Planned in the order: the
  * priority part's first CATALOG_RECONCILE_RESERVED, the sweep's share, the
  * rest of the priority part, the rest of the sweep. So a pass costs about K,
- * never the Catalog, an urgent mark (a takedown) waits behind at most the
- * earlier urgent ones, any other behind the earlier marks and every urgent
- * one, and a whole round of the sweep bounds the time any asset waits.
+ * never the Catalog; an urgent mark (a takedown) waits behind the earlier
+ * urgent ones and, past the first CATALOG_RECONCILE_RESERVED of them, also
+ * behind the sweep's share; any other behind the earlier marks and every
+ * urgent one; and a whole round of the sweep bounds the time any asset
+ * waits.
  */
 export const CATALOG_RECONCILE_SCOPE = 1_000;
 /** The first assets of the priority part, and of the sweep's share, that a
  * pass attempts whatever its budget: one batch of the authority's planning
  * (CATALOG_SCOPE_BATCH) each. A slow batch, of either part, thus never keeps
- * a pass from planning the oldest urgent marks or from moving the sweep on;
- * the pass then ends at most about one batch past its budget (a failed
- * reserved batch is retried asset by asset only that far, planScope). */
+ * a pass from planning the oldest urgent marks or from moving the sweep on.
+ * The pass then plans until about the later of its budget and the end of
+ * those two batches: two slow ones that succeed take it past the budget by
+ * both their times less the budget (a failed reserved batch is retried asset
+ * by asset only until the budget plus the slowest capture so far,
+ * planScope). */
 export const CATALOG_RECONCILE_RESERVED = 100;
 /** How long one pass plans its scope. With its reads before and its
  * transaction after, a pass ends within about 15 s: well inside the 120 s
@@ -866,9 +871,11 @@ export class PostgresMediaPublicationAdapter implements MediaPublicationPort {
    * part's first CATALOG_RECONCILE_RESERVED first and the sweep's share
    * next; those and the share's first CATALOG_RECONCILE_RESERVED (the
    * reserved part) are attempted whatever the time budget, a failed batch
-   * among them asset by asset until about one batch past it (planScope): a
-   * slow batch never keeps a takedown waiting for the sweep to reach it, and
-   * a priority backlog never starves the sweep. An asset whose publication
+   * among them asset by asset only until the budget plus the slowest capture
+   * so far (planScope): a slow batch never keeps the oldest urgent marks
+   * waiting for the sweep to reach them, and a priority backlog never starves
+   * the sweep. Urgent marks past the first CATALOG_RECONCILE_RESERVED come
+   * after the sweep's share. An asset whose publication
    * job is queued or running is left for after the job (in flight or dirty;
    * a dirty one keeps its mark and its place). The sweep reads asset ids
    * after its cursor, from the start again once it reaches the end, skipping

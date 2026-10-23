@@ -301,7 +301,7 @@ private rows. No scenario reaches them; the unit suites cover them.
 ## A job's authority at wave B (W5 and A1's rendition index)
 
 W5 plans a Catalog job's asset alone: its `acquire`, `current()` and
-`authorized()` issue the same statements per role at 1k, 5k and 25k images
+`authorized()` issue the same statements per role at 245, 2,100 and 25k images
 (`catalog-scale-authority.test.ts`, which also gates their plans). One job's
 `acquire` for a released record's image (7 images, so 28 pinned roles), in local
 runs:
@@ -445,8 +445,12 @@ rolled back), with no JIT:
   at 25k takes about 50 passes. A set-based inspect (the design's follow-up)
   would about double the rate. Marked takedowns do not wait for the sweep: 900
   were planned and scheduled in one 3.2 s pass. Since the review fixes below, a
-  takedown waits only behind the urgent marks made before it, each of which
-  removes exposure itself: never behind publish-side work, nor behind the images
+  takedown with fewer than 100 pending urgent marks ahead of it waits only
+  behind those, each of which removes exposure itself (and behind its own
+  asset's publication job, when one is queued or running); one further back is
+  planned after the sweep's share (100 sweep assets, publish-side work included,
+  attempted whatever the budget) and only while the budget lasts. Apart from
+  that share it never waits behind publish-side work, nor behind the images
   private B alone serves during a release wave, which the membership step no
   longer marks (the integration review below). A queue of N urgent marks drains
   in ⌈N / 900⌉ passes with the jobs running between passes (⌈N / 450⌉ at worst,
@@ -530,7 +534,9 @@ The 1B cross-wave review found four gaps, fixed before the PR:
   that can only remove public or private-B exposure marks urgent: the membership
   step's served-but-not-published assets, an intent that became cancelled,
   superseded, expired or withdrawn or left the live projection, a passed lease,
-  the sync's flips to unreferenced and the intents it ends or tombstones (F3).
+  the sync's flips to unreferenced (since the PR review, only of an asset that
+  existed before the pass: an asset the pass itself created was never published,
+  and its flip is a normal mark) and the intents it ends or tombstones (F3).
   Every other mark is normal: an asset to copy, an intent requested, prepared or
   released, a recorded render or block set, and the settle's carried-over marks.
   (The integration review below narrowed the step's assets, the ended intents
@@ -539,10 +545,10 @@ The 1B cross-wave review found four gaps, fixed before the PR:
   included), and a pending normal row becomes urgent, keeping its place, under
   an urgent one. The pending read is
   `ORDER BY urgent DESC, marked_at, asset_id`, and the scope's priority part is
-  urgent marks, then in flight, then normal marks. In CI, behind 2,093
-  publish-side marks whose plans inspect (300 records with released intents), a
-  7-image takedown marked last is planned first in the first pass (a FIFO needed
-  more than 2 passes: 2,093 > 2 × 900).
+  urgent marks, then in flight, then normal marks. In CI, at K = 100 (a pass
+  plans at most 90 marks), behind 287 publish-side marks whose plans inspect (42
+  records with released intents), a 7-image takedown marked last is planned
+  first in the first pass (a FIFO needed more than 2 passes: 287 > 2 × 90).
 - **A slow first batch could block every marked asset.** The sweep's share (100,
   one planning batch at K = 1,000) was planned first, and a batch starts only
   while twice the longest batch so far fits the 14 s budget, so a first batch of
@@ -552,7 +558,10 @@ The 1B cross-wave review found four gaps, fixed before the PR:
   (`CATALOG_RECONCILE_RESERVED`), the sweep's share, the rest of the priority
   part and the rest of the sweep, and `planScope` takes `reserved`: the priority
   part's first 100 and the share's first 100 are attempted whatever the budget,
-  so a pass can end about one batch past its budget. A failed batch among them
+  back to back however long each takes, so a pass ends at about the later of its
+  budget and their end: two slow ones that succeed take it past the budget by
+  both their times less the budget, which is more than one batch whenever either
+  of them alone takes longer than the entire budget. A failed batch among them
   is captured again asset by asset only until the budget plus the slowest batch
   capture so far, and the pass ends there (any other failed batch's retries stop
   at the budget, as before): when every capture fails slowly (an outage, a 5 s
@@ -621,10 +630,10 @@ class still counted as takedowns:
   request's state from the App mirror, which lags the CMS by up to a sync; the
   delta review below found takedowns it left unmarked, and a pin now counts only
   for a request that pins each of its members and that the CMS confirms in the
-  same observation.) In CI, after a release of 40 records lists 164 buckets
-  holding 281 images that 60 requests serve (K is 100 there, so a pass plans at
+  same observation.) In CI, after a release of 40 records lists 168 buckets
+  holding 251 images that 60 requests serve (K is 100 there, so a pass plans at
   most 90 marks), a takedown marked the next minute is scheduled in the first
-  pass; without the exposed test it is not scheduled after two (281 urgent marks
+  pass; without the exposed test it is not scheduled after two (251 urgent marks
   ahead of it).
 - **The end of a prepared intent.** A prepared intent grants nothing a takedown
   removes (nothing to a pair that is not public; to a public one only pins its

@@ -46,15 +46,14 @@ import {
   catalogScaleImage,
   catalogScaleIntentId,
   catalogScaleShape,
-  clearCatalogScale,
-  createCatalogScaleDatabase,
+  createCatalogScaleTemplates,
   createQueryRecorder,
   explainCatalogScaleOn,
   holdCatalogScaleRecords,
   rolledBackCatalogScale,
-  seedCatalogScale,
   type CatalogScaleDatabase,
   type CatalogScaleShape,
+  type CatalogScaleTemplates,
 } from "./catalog-scale-fixture.js";
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 
@@ -129,6 +128,7 @@ const K = AT_25K ? 1_000 : 100;
 /** JIT compiles a plan from jit_above_cost (100,000 by default). */
 const JIT_ABOVE_COST = 100_000;
 
+let templates: CatalogScaleTemplates;
 let fixture: CatalogScaleDatabase;
 const silent = { info: () => undefined, error: () => undefined };
 const now = () => new Date();
@@ -152,7 +152,7 @@ const imagesOf = (record: number) =>
 const liveRecord = (k: number) => COUNTS.records + k;
 
 beforeAll(async () => {
-  fixture = await createCatalogScaleDatabase({
+  templates = await createCatalogScaleTemplates({
     target,
     openPool: (url) =>
       createPostgresPool(parsePostgresConfig({ DATABASE_URL: url })),
@@ -161,21 +161,15 @@ beforeAll(async () => {
 }, SLOW);
 
 afterAll(async () => {
-  await fixture?.close();
+  await templates?.close();
 }, SLOW);
 
-/** A freshly seeded Catalog with an empty queue and no stored fingerprint. */
+/** A freshly seeded Catalog with an empty queue and no stored fingerprint
+ * (A1's state row as it creates it): a copy of the one seeded template, the
+ * previous test's copy dropped. */
 const fresh = async () => {
-  await clearCatalogScale(fixture);
-  await fixture.setup.query(
-    `TRUNCATE community.catalog_publication_dirty;
-     INSERT INTO community.catalog_reconcile_state (id, updated_at) VALUES (true, now())
-       ON CONFLICT (id) DO NOTHING;
-     UPDATE community.catalog_reconcile_state SET public_count = NULL, public_sum = NULL,
-       public_observed_at = NULL, private_count = NULL, private_sum = NULL,
-       private_observed_at = NULL, updated_at = now() WHERE id`,
-  );
-  await seedCatalogScale(fixture, SHAPE);
+  await fixture?.close();
+  fixture = await templates.seeded(SHAPE);
 };
 
 /** The recipe policy of this build, which the fixture's intents carry. */

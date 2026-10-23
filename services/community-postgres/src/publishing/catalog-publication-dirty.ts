@@ -61,17 +61,37 @@ import { nowParam, writeTransaction, type PublishingDb } from "./db.js";
  * applyCatalogMembership names the one residual), the end of an intent that
  * may have granted exposure (endsCatalogGrant: the step's private diff, the
  * sync's mirror changes, F3's tombstones), a requested intent whose lease
- * passed (the step's boundaries), and an asset the sync flips to
- * unreferenced. Every other mark is normal: an asset to copy, an intent
- * requested, prepared or released, the end or lapse of an intent the App saw
- * prepared and the CMS shows was never requested since, a recorded render or
- * block set, and the reconcile's own carried-over marks. The reconcile reads
- * pending urgent marks before every normal one, each class oldest first, so
- * a takedown waits only behind earlier marks that remove exposure too, never
- * behind publish-side work or the no-op re-marks of a release wave, however
- * much of either is queued. A pending row stays urgent whatever normal mark
- * lands on it, and a pending normal row becomes urgent (keeping its place)
- * when an urgent one lands.
+ * passed (the step's boundaries), and an asset that existed before a sync
+ * pass and that the pass flips to unreferenced. Every other mark is normal:
+ * an asset to copy, an intent requested, prepared or released, the end or
+ * lapse of an intent the App saw prepared and the CMS shows was never
+ * requested since, an asset a sync pass created and flips at once (it was
+ * never published), a recorded render or block set, and the reconcile's own
+ * carried-over marks. The reconcile reads pending urgent marks before every
+ * normal one, each class oldest first, and a pass plans in batches of 100:
+ * the first CATALOG_RECONCILE_RESERVED (100) of its priority part (urgent
+ * marks, then in flight, then normal marks), then its sweep's share (a tenth
+ * of K: 100 assets of the rolling sweep, whatever their work, publish-side
+ * included), then the rest of the priority part and of the sweep
+ * (publication.ts). Those first 100 and the share (at most two batches) are
+ * the reserved part, attempted whatever the budget; the rest only while it
+ * lasts. So a takedown with fewer than 100 pending urgent marks ahead of it
+ * is attempted in the first batch of the next pass, behind those only,
+ * unless its own asset has a publication job queued or running: a pass
+ * leaves that asset (its mark and place kept) for after the job. One
+ * further back is planned after the sweep's share, and only while the
+ * budget lasts: when the reserved part takes the budget it waits for a
+ * later pass, each of which attempts the 100 oldest pending urgent marks
+ * first. Apart from the sweep's share, a takedown never waits behind
+ * publish-side work or the no-op re-marks of a release wave, however much
+ * of either is queued. The two reserved batches run back to back however
+ * long each takes, so a pass plans until about the later of its budget and
+ * their end: two slow ones that succeed take it past the budget by both
+ * their times less the budget, more than one batch when either alone
+ * outlasts the budget (a failed reserved batch is retried asset by asset
+ * only until the budget plus the slowest capture so far). A pending row
+ * stays urgent whatever normal mark lands on it, and a pending normal row
+ * becomes urgent (keeping its place) when an urgent one lands.
  *
  * Lock order, binding for every transaction that marks or clears (the sync,
  * a recorded render, a recorded block set and an ended master

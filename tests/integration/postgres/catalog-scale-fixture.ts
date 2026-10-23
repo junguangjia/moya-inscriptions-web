@@ -48,7 +48,9 @@ import type { createPostgresPool } from "@moya/catalog-postgres";
  * because the private views evaluate them with now(): the live intents'
  * expiry, the end of the recently ended intents (which keeps them inside R),
  * and the mirror's observation time, which a real-time sync must follow.
- * Content is synthetic; no object store, real CMS or network.
+ * A suite that needs one seeded shape in many tests copies it from a
+ * template seeded once (createCatalogScaleTemplates) instead of seeding it
+ * again. Content is synthetic; no object store, real CMS or network.
  */
 
 type Pool = ReturnType<typeof createPostgresPool>;
@@ -292,7 +294,8 @@ export type CatalogMediaView = "fenced" | "keyed";
 /**
  * One synthetic CMS + App database with its three identities. `setup` owns
  * every relation (fixture writes, DDL, EXPLAIN as owner); the others connect
- * as their role. `close` ends the pools and drops the database and roles.
+ * as their role. `close` ends the pools and drops the database, and the
+ * roles unless they are its templates' (createCatalogScaleTemplates).
  */
 export interface CatalogScaleDatabase {
   readonly database: string;
@@ -410,6 +413,195 @@ const grantScript = async (path: string, roles: Record<string, string>) => {
 
 const LABEL = /^[a-z][a-z0-9_]{0,15}$/u;
 
+/** A guarded target with the fixture's three login roles on it. */
+interface CatalogScaleCluster {
+  readonly administration: Pool;
+  readonly roles: {
+    readonly app: string;
+    readonly publicRead: string;
+    readonly prepare: string;
+  };
+  /** A new database name, `<label>_<hex>_synthetic_test`. */
+  name(): string;
+  /** The URL of a database on the target, as its owner or as a role. */
+  url(database: string, role?: string): string;
+  /** As infra/development/init-roles.sql: CONNECT for the three roles only
+   * (no TEMPORARY). A database ACL is not copied from a template, so every
+   * database is granted its own. */
+  grantConnect(database: string): Promise<void>;
+  /** Drops the roles (every database granting them must be gone) and ends
+   * the administration pool. */
+  close(): Promise<void>;
+}
+
+/** Checks the target (the suite's guarded TEST_DATABASE_URL, which must also
+ * be loopback and carry the disposable marker) and creates the roles. */
+const openCatalogScaleCluster = async (options: {
+  readonly target: string;
+  readonly openPool: (url: string) => Pool;
+  readonly label?: string;
+}): Promise<CatalogScaleCluster> => {
+  const label = options.label ?? "catscale";
+  if (!LABEL.test(label)) throw new TypeError("Catalog scale label invalid");
+  const targetUrl = options.target;
+  const targetDatabase = assertSyntheticTestDatabaseUrl(targetUrl);
+  const endpoint = new URL(targetUrl);
+  if (
+    !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname) ||
+    endpoint.search ||
+    endpoint.hash
+  )
+    throw new Error(
+      "Catalog scale fixtures require a loopback disposable target",
+    );
+  const administration = options.openPool(targetUrl);
+  const suffix = hex(6);
+  const roles = {
+    app: `${label}_app_${suffix}`,
+    publicRead: `${label}_public_${suffix}`,
+    prepare: `${label}_prepare_${suffix}`,
+  };
+  const created = new Set<string>();
+  const close = async () => {
+    for (const role of Object.values(roles))
+      if (created.has(role))
+        await administration.query(`DROP ROLE IF EXISTS ${role}`);
+    await administration.end();
+  };
+  const passwords = new Map<string, string>();
+  try {
+    const probe = await administration.query(
+      guard.disposableTestTargetProbeSql,
+    );
+    guard.assertDisposableTestTarget(probe.rows, targetDatabase);
+    for (const role of Object.values(roles)) {
+      const password = hex(32);
+      passwords.set(role, password);
+      await administration.query(
+        `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`,
+      );
+      created.add(role);
+    }
+    // A read-only public reader, as infra/development/init-roles.sql.
+    await administration.query(
+      `ALTER ROLE ${roles.publicRead} SET default_transaction_read_only = on`,
+    );
+  } catch (error) {
+    await close().catch(() => undefined);
+    throw error;
+  }
+  return {
+    administration,
+    roles,
+    name: () => `${label}_${hex(6)}_synthetic_test`,
+    url: (database, role) => {
+      const value = new URL(targetUrl);
+      value.pathname = `/${database}`;
+      if (role !== undefined) {
+        value.username = role;
+        value.password = passwords.get(role)!;
+      }
+      return value.toString();
+    },
+    grantConnect: async (database) => {
+      await administration.query(
+        `REVOKE ALL ON DATABASE ${database} FROM PUBLIC;
+         GRANT CONNECT ON DATABASE ${database} TO ${Object.values(roles).join(", ")}`,
+      );
+    },
+    close,
+  };
+};
+
+/** Every relation, view and grant of an empty fixture, on its new database
+ * as the owner. */
+const buildCatalogScaleSchema = async (
+  cluster: CatalogScaleCluster,
+  setup: Pool,
+  options: {
+    readonly view?: CatalogMediaView;
+    readonly communityThrough?: string;
+  },
+) => {
+  const { roles } = cluster;
+  // As infra/development/init-roles.sql: no CREATE on public.
+  await setup.query("REVOKE CREATE ON SCHEMA public FROM PUBLIC");
+  await runCommunityMigrations(
+    setup,
+    `${root}/database/community-migrations`,
+    options.communityThrough === undefined
+      ? {}
+      : { through: options.communityThrough },
+  );
+  await setup.query(cmsTablesSql);
+  await setup.query(fencedCatalogMediaViewSql);
+  await inTransaction(
+    setup,
+    await cmsMigrationUpSql("20261020_160000_catalog_delivery_intents"),
+  );
+  // CMS migration M1 (20261023_000000) runs exactly this export.
+  if ((options.view ?? "keyed") === "keyed")
+    await inTransaction(setup, upgradePublishedCatalogMediaViewSql);
+  // CMS migration M2 (20261024_000000) runs exactly this export: the live
+  // prepare view the worker's snapshot reads, which the prepare grant
+  // script names.
+  await inTransaction(setup, upgradeCatalogDeliveryPrepareViewsSql);
+  await setup.query(
+    await grantScript("infra/development/work-publishing/grant-runtime.sql", {
+      app_role: roles.app,
+    }),
+  );
+  // The App reads the intent ids and the stored asset id of its own media
+  // references, as the other Catalog delivery suites grant it.
+  await setup.query(
+    `GRANT SELECT (intent_id, asset_id) ON TABLE community.catalog_delivery_media_refs TO "${roles.app}"`,
+  );
+  await setup.query(
+    `GRANT SELECT ON public.catalog_media TO "${roles.publicRead}"`,
+  );
+  await inTransaction(
+    setup,
+    await grantScript(
+      "infra/development/catalog-media/grant-prepare-read.sql",
+      {
+        prepare_reader: roles.prepare,
+        approved_prepare_reader: roles.prepare,
+        public_read_role: roles.publicRead,
+        backend_read_role: roles.publicRead,
+      },
+    ),
+  );
+};
+
+/** The fixture database on `database`: its setup pool and one pool per
+ * role. `close` ends them, then runs `drop`. */
+const openCatalogScaleDatabase = (
+  cluster: CatalogScaleCluster,
+  openPool: (url: string) => Pool,
+  database: string,
+  setup: Pool,
+  drop: () => Promise<void>,
+): CatalogScaleDatabase => {
+  const app = openPool(cluster.url(database, cluster.roles.app));
+  const publicRead = openPool(cluster.url(database, cluster.roles.publicRead));
+  const prepare = openPool(cluster.url(database, cluster.roles.prepare));
+  let closed: Promise<void> | undefined;
+  return {
+    database,
+    setup,
+    app,
+    publicRead,
+    prepare,
+    close: () =>
+      (closed ??= (async () => {
+        await Promise.all(
+          [setup, app, publicRead, prepare].map((p) => p.end()),
+        );
+        await drop();
+      })()),
+  };
+};
+
 /**
  * Creates the database (`<label>_<hex>_synthetic_test` on `target`, the
  * suite's guarded TEST_DATABASE_URL, which must also be loopback and carry
@@ -428,130 +620,201 @@ export const createCatalogScaleDatabase = async (options: {
   readonly view?: CatalogMediaView;
   readonly communityThrough?: string;
 }): Promise<CatalogScaleDatabase> => {
-  const label = options.label ?? "catscale";
-  if (!LABEL.test(label)) throw new TypeError("Catalog scale label invalid");
-  const targetUrl = options.target;
-  const targetDatabase = assertSyntheticTestDatabaseUrl(targetUrl);
-  const endpoint = new URL(targetUrl);
-  if (
-    !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname) ||
-    endpoint.search ||
-    endpoint.hash
-  )
-    throw new Error(
-      "Catalog scale fixtures require a loopback disposable target",
-    );
-  const poolFor = options.openPool;
-  const administration = poolFor(targetUrl);
-  const suffix = hex(6);
-  const database = `${label}_${suffix}_synthetic_test`;
-  const roles = {
-    app: `${label}_app_${suffix}`,
-    publicRead: `${label}_public_${suffix}`,
-    prepare: `${label}_prepare_${suffix}`,
-  };
-  const created = new Set<string>();
-  const pools: Pool[] = [];
-  const close = async () => {
-    await Promise.all(pools.map((pool) => pool.end()));
-    if (created.has(database))
+  const cluster = await openCatalogScaleCluster(options);
+  const { administration } = cluster;
+  const database = cluster.name();
+  let created = false;
+  let setup: Pool | undefined;
+  const drop = async () => {
+    if (created)
       await administration.query(
         `DROP DATABASE IF EXISTS ${database} WITH (FORCE)`,
       );
-    for (const role of Object.values(roles))
-      if (created.has(role))
-        await administration.query(`DROP ROLE IF EXISTS ${role}`);
-    await administration.end();
+    await cluster.close();
   };
   try {
-    const probe = await administration.query(
-      guard.disposableTestTargetProbeSql,
-    );
-    guard.assertDisposableTestTarget(probe.rows, targetDatabase);
-    const passwords = new Map<string, string>();
-    for (const role of Object.values(roles)) {
-      const password = hex(32);
-      passwords.set(role, password);
-      await administration.query(
-        `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`,
-      );
-      created.add(role);
-    }
     await administration.query(`CREATE DATABASE ${database}`);
-    created.add(database);
-    const url = (role?: string) => {
-      const value = new URL(targetUrl);
-      value.pathname = `/${database}`;
-      if (role !== undefined) {
-        value.username = role;
-        value.password = passwords.get(role)!;
-      }
-      return value.toString();
-    };
-    const setup = poolFor(url());
-    pools.push(setup);
-    // As infra/development/init-roles.sql: CONNECT only (no TEMPORARY), no
-    // CREATE on public, and a read-only public reader.
-    await setup.query(
-      `REVOKE ALL ON DATABASE ${database} FROM PUBLIC;
-       REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-       GRANT CONNECT ON DATABASE ${database} TO ${Object.values(roles).join(", ")};
-       ALTER ROLE ${roles.publicRead} SET default_transaction_read_only = on`,
-    );
-    await runCommunityMigrations(
+    created = true;
+    await cluster.grantConnect(database);
+    setup = options.openPool(cluster.url(database));
+    await buildCatalogScaleSchema(cluster, setup, options);
+    return openCatalogScaleDatabase(
+      cluster,
+      options.openPool,
+      database,
       setup,
-      `${root}/database/community-migrations`,
-      options.communityThrough === undefined
-        ? {}
-        : { through: options.communityThrough },
+      drop,
     );
-    await setup.query(cmsTablesSql);
-    await setup.query(fencedCatalogMediaViewSql);
-    await inTransaction(
-      setup,
-      await cmsMigrationUpSql("20261020_160000_catalog_delivery_intents"),
-    );
-    // CMS migration M1 (20261023_000000) runs exactly this export.
-    if ((options.view ?? "keyed") === "keyed")
-      await inTransaction(setup, upgradePublishedCatalogMediaViewSql);
-    // CMS migration M2 (20261024_000000) runs exactly this export: the live
-    // prepare view the worker's snapshot reads, which the prepare grant
-    // script names.
-    await inTransaction(setup, upgradeCatalogDeliveryPrepareViewsSql);
-    await setup.query(
-      await grantScript("infra/development/work-publishing/grant-runtime.sql", {
-        app_role: roles.app,
-      }),
-    );
-    // The App reads the intent ids and the stored asset id of its own media
-    // references, as the other Catalog delivery suites grant it.
-    await setup.query(
-      `GRANT SELECT (intent_id, asset_id) ON TABLE community.catalog_delivery_media_refs TO "${roles.app}"`,
-    );
-    await setup.query(
-      `GRANT SELECT ON public.catalog_media TO "${roles.publicRead}"`,
-    );
-    await inTransaction(
-      setup,
-      await grantScript(
-        "infra/development/catalog-media/grant-prepare-read.sql",
-        {
-          prepare_reader: roles.prepare,
-          approved_prepare_reader: roles.prepare,
-          public_read_role: roles.publicRead,
-          backend_read_role: roles.publicRead,
-        },
-      ),
-    );
-    const app = poolFor(url(roles.app));
-    const publicRead = poolFor(url(roles.publicRead));
-    const prepare = poolFor(url(roles.prepare));
-    pools.push(app, publicRead, prepare);
-    return { database, setup, app, publicRead, prepare, close };
   } catch (error) {
-    await close().catch(() => undefined);
+    await setup?.end().catch(() => undefined);
+    await drop().catch(() => undefined);
     throw error;
   }
+};
+
+/**
+ * Seeded fixture databases copied from templates, so that a suite which
+ * needs the same seeded Catalog in many tests seeds it once. The empty
+ * schema is built once (as createCatalogScaleDatabase builds it), and each
+ * shape with its seed options is seeded once into a copy of it; every
+ * `seeded` call then returns a new database copied from that template
+ * (CREATE DATABASE ... TEMPLATE, which copies every row, index, statistic
+ * and grant but the database's own ACL, granted again). No client session
+ * connects to a template once it is built (ALLOW_CONNECTIONS false); an
+ * autovacuum worker that does is ended by CREATE DATABASE, so a copy never
+ * races one. The templates and copies of one call are its own (unique
+ * names, one set of roles), so parallel suites never share one. A copy's
+ * times that follow the database clock are its template's seed time
+ * (seedCatalogScale), not the copy's.
+ */
+export interface CatalogScaleTemplates {
+  /** A new database holding `shape` as seedCatalogScale seeds an empty
+   * fixture with `options`; its `close` ends its pools and drops it. */
+  seeded(
+    shape: CatalogScaleShape,
+    options?: CatalogScaleSeedOptions,
+  ): Promise<CatalogScaleDatabase>;
+  /** Seeds the template of `shape` with `options` (once) without copying
+   * it, so a suite can seed a template it needs later while its other tests
+   * run; a failure also rejects `seeded` for it. */
+  prepare(
+    shape: CatalogScaleShape,
+    options?: CatalogScaleSeedOptions,
+  ): Promise<void>;
+  /** Drops every database these templates made, copies first, and the
+   * roles. */
+  close(): Promise<void>;
+}
+
+export const createCatalogScaleTemplates = async (options: {
+  readonly target: string;
+  readonly openPool: (url: string) => Pool;
+  readonly label?: string;
+  readonly view?: CatalogMediaView;
+}): Promise<CatalogScaleTemplates> => {
+  const cluster = await openCatalogScaleCluster(options);
+  const { administration } = cluster;
+  const copies = new Set<CatalogScaleDatabase>();
+  const templates: string[] = [];
+  const seeds = new Map<string, Promise<string>>();
+  /** Ends the setup pool and closes the template to every session. */
+  const freeze = async (database: string, setup: Pool) => {
+    await setup.end();
+    await administration.query(
+      `ALTER DATABASE ${database} WITH ALLOW_CONNECTIONS false`,
+    );
+  };
+  /** A new template (from `from`, or empty), built by `build` as the owner. */
+  const template = async (
+    from: string | null,
+    build: (setup: Pool) => Promise<unknown>,
+  ) => {
+    const database = cluster.name();
+    await administration.query(
+      `CREATE DATABASE ${database}${from === null ? "" : ` TEMPLATE ${from}`}`,
+    );
+    templates.push(database);
+    const setup = options.openPool(cluster.url(database));
+    try {
+      await build(setup);
+    } catch (error) {
+      await setup.end().catch(() => undefined);
+      throw error;
+    }
+    await freeze(database, setup);
+    return database;
+  };
+  let empty: Promise<string> | undefined;
+  const close = async () => {
+    await Promise.all([...copies].map((copy) => copy.close()));
+    await Promise.allSettled([empty, ...seeds.values()]);
+    for (const database of templates.splice(0))
+      await administration.query(
+        `DROP DATABASE IF EXISTS ${database} WITH (FORCE)`,
+      );
+    await cluster.close();
+  };
+  /** The template of a shape and its seed options, seeded once. */
+  const templateOf = (
+    input: CatalogScaleShape,
+    seedOptions: CatalogScaleSeedOptions,
+  ) => {
+    const shape = validShape(input);
+    // Equal shapes and options seed equal rows: one template for every
+    // spelling of them.
+    const settled = {
+      app: seedOptions.app ?? true,
+      liveAssets: seedOptions.liveAssets ?? "pending",
+      mirror: seedOptions.mirror ?? true,
+      liveExpiresIn: seedOptions.liveExpiresIn ?? "24 hours",
+      analyze: seedOptions.analyze ?? true,
+    } satisfies Required<CatalogScaleSeedOptions>;
+    const key = JSON.stringify([
+      shape.publishedImages,
+      shape.imagesPerRecord,
+      shape.draftRecords,
+      shape.releasedIntents,
+      shape.endedIntents,
+      shape.recentEndedIntents,
+      shape.livePrepares,
+      shape.requestedEvery,
+      settled.app,
+      settled.liveAssets,
+      settled.mirror,
+      settled.liveExpiresIn,
+      settled.analyze,
+    ]);
+    let seed = seeds.get(key);
+    if (!seed) {
+      empty ??= template(null, (setup) =>
+        buildCatalogScaleSchema(cluster, setup, options),
+      );
+      const from = empty;
+      seed = from.then((base) =>
+        template(base, (setup) => seedCatalogScale({ setup }, shape, settled)),
+      );
+      seeds.set(key, seed);
+    }
+    return seed;
+  };
+  return {
+    async prepare(shape, seedOptions = {}) {
+      await templateOf(shape, seedOptions);
+    },
+    async seeded(shape, seedOptions = {}) {
+      const from = await templateOf(shape, seedOptions);
+      const database = cluster.name();
+      await administration.query(
+        `CREATE DATABASE ${database} TEMPLATE ${from}`,
+      );
+      let setup: Pool | undefined;
+      try {
+        await cluster.grantConnect(database);
+        setup = options.openPool(cluster.url(database));
+        const copy = openCatalogScaleDatabase(
+          cluster,
+          options.openPool,
+          database,
+          setup,
+          async () => {
+            copies.delete(copy);
+            await administration.query(
+              `DROP DATABASE IF EXISTS ${database} WITH (FORCE)`,
+            );
+          },
+        );
+        copies.add(copy);
+        return copy;
+      } catch (error) {
+        await setup?.end().catch(() => undefined);
+        await administration
+          .query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)
+          .catch(() => undefined);
+        throw error;
+      }
+    },
+    close,
+  };
 };
 
 /** Whether catalog_media is the fenced (pre-M1) or keyed view. */
@@ -737,6 +1000,7 @@ export const seedCatalogScale = async (
   const policy = currentCatalogRecipePolicy();
   const client = await connect(fixture.setup);
   const ms = { cms: 0, app: 0, analyze: 0 };
+  const analyzed = new Set<string>();
   try {
     const existing = (
       await client.query<{ n: number }>(
@@ -843,7 +1107,7 @@ export const seedCatalogScale = async (
     );
     ms.cms = performance.now() - started;
     started = performance.now();
-    if (options.app ?? true) await seedApp(client, options);
+    if (options.app ?? true) await seedApp(client, options, analyzed);
     ms.app = performance.now() - started;
     await client.query("COMMIT");
   } catch (error) {
@@ -854,19 +1118,30 @@ export const seedCatalogScale = async (
   }
   if (options.analyze ?? true) {
     const started = performance.now();
-    await analyzeCatalogScale(fixture);
+    // A relation the seed analyzed in its transaction (ANALYZE samples the
+    // rows its own transaction wrote, and the seed writes none of them
+    // after) keeps those statistics.
+    for (const relation of [...cmsRelations, ...appRelations])
+      if (!analyzed.has(relation))
+        await fixture.setup.query(`ANALYZE ${relation}`);
     ms.analyze = performance.now() - started;
   }
   return { shape, counts, ms };
 };
 
-const seedApp = async (client: Client, options: CatalogScaleSeedOptions) => {
+const seedApp = async (
+  client: Client,
+  options: CatalogScaleSeedOptions,
+  analyzed: Set<string>,
+) => {
   const plans = plansJson();
   // Each step joins rows this transaction just wrote: without statistics a
   // planner can loop over whole tables (PG16 spent minutes on the publication
   // insert trigger at 20k images), so each step's inputs are analyzed first.
-  const analyze = (relations: readonly string[]) =>
-    client.query(`ANALYZE ${relations.join(", ")}`);
+  const analyze = (relations: readonly string[]) => {
+    for (const relation of relations) analyzed.add(relation);
+    return client.query(`ANALYZE ${relations.join(", ")}`);
+  };
   await analyze([
     "public.catalogs",
     "public.catalogs_media",

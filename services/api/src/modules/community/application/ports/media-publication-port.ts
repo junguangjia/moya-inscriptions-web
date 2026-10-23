@@ -49,9 +49,10 @@ export interface MediaPublicationPort {
      * assets are planned in the given order, in batches, each from its own
      * facts, within `budgetMs`, so the ones attempted are a prefix of
      * `assetIds`; the first `reserved` (none by default) are attempted
-     * whatever the budget, until a failed batch among them, retried asset by
-     * asset, reaches about one batch past it: the pass may pass its budget
-     * by about one batch. `plans` holds the desired Catalog rendition IDs of
+     * whatever the budget (a failed batch among them is retried asset by
+     * asset only until the budget plus the slowest capture so far), so slow
+     * reserved batches can take the pass past its budget by their own time
+     * less the budget. `plans` holds the desired Catalog rendition IDs of
      * each asset planned completely (none when it is to serve nothing);
      * `failed` the assets whose plan threw; every other asset was not
      * reached. `policy` is the recipe policy digest the plans were made

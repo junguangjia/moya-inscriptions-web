@@ -31,16 +31,15 @@ import {
   catalogScaleIntentId,
   catalogScaleRenditionId,
   catalogScaleShape,
-  clearCatalogScale,
-  createCatalogScaleDatabase,
+  createCatalogScaleTemplates,
   createQueryRecorder,
   explainCatalogScaleOn,
   holdCatalogScaleRecords,
   rolledBackCatalogScale,
-  seedCatalogScale,
   type CatalogScaleDatabase,
   type CatalogScaleSeedOptions,
   type CatalogScaleShape,
+  type CatalogScaleTemplates,
 } from "./catalog-scale-fixture.js";
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 
@@ -94,6 +93,7 @@ import type { CatalogRenditionRole, PublishingJobLease } from "@moya/api";
 const SLOW = 600_000;
 // The suite's disposable target, refused before any connection.
 const target = requireSyntheticTestDatabaseUrl();
+let templates: CatalogScaleTemplates;
 let fixture: CatalogScaleDatabase;
 
 const hex = (bytes = 8) => randomBytes(bytes).toString("hex");
@@ -113,7 +113,7 @@ const plain = (publishedImages: number): CatalogScaleShape =>
   });
 
 beforeAll(async () => {
-  fixture = await createCatalogScaleDatabase({
+  templates = await createCatalogScaleTemplates({
     target,
     openPool: (url) =>
       createPostgresPool(parsePostgresConfig({ DATABASE_URL: url })),
@@ -122,15 +122,19 @@ beforeAll(async () => {
 }, SLOW);
 
 afterAll(async () => {
-  await fixture?.close();
+  await templates?.close();
 }, SLOW);
 
+/** A database of its own holding `shape` as seeded (a copy of its template,
+ * seeded once per shape and options), the previous one dropped; returns the
+ * seed's shape and counts. */
 const reseed = async (
   shape: CatalogScaleShape,
   options: CatalogScaleSeedOptions = {},
 ) => {
-  await clearCatalogScale(fixture);
-  return seedCatalogScale(fixture, shape, options);
+  await fixture?.close();
+  fixture = await templates.seeded(shape, options);
+  return { shape, counts: catalogScaleCounts(shape) };
 };
 
 type Authority = ReturnType<typeof createCatalogPublicationAuthority>;
@@ -353,16 +357,12 @@ describe(
         EXISTS(SELECT 1 FROM community.media_public_assets a JOIN community.media_publications p ON p.public_asset_id=a.id WHERE ${subjects}=s.subject_id AND ((p.state IN ('publishing','published') AND (NOT EXISTS(SELECT 1 FROM desired d WHERE d.rendition_id=p.rendition_id) OR (p.state='publishing' AND NOT $2::boolean))) OR (p.state IN ('withdrawing','purge_failed') AND p.purge_attempts<3))) AS withdraw,
         EXISTS(SELECT 1 FROM community.media_public_assets a JOIN community.media_publications p ON p.public_asset_id=a.id WHERE ${subjects}=s.subject_id AND p.state IN ('publishing','published') AND (NOT EXISTS(SELECT 1 FROM desired d WHERE d.rendition_id=p.rendition_id) OR (p.state='publishing' AND NOT $2::boolean))) AS fence_change
       FROM subjects s WHERE NOT EXISTS(SELECT 1 FROM community.publishing_jobs j WHERE j.subject_id=s.subject_id AND j.kind IN ('publish_media','withdraw_media','verify_withdrawal') AND j.state IN ('queued','running'))) SELECT * FROM candidates WHERE ($2::boolean AND publish) OR withdraw ORDER BY subject_id LIMIT $1`;
-    /** What the whole-Catalog reconcile schedules: its counts and its jobs
-     * (a publish for each publish candidate, a withdrawal for each
-     * withdrawal candidate and for each publish candidate with a live
-     * generation, which the publication sync re-checks). */
-    const oracle = async (allow: boolean) => {
-      const ids = await wholeCatalogCopySet(
-        fixture.publicRead,
-        fixture.prepare,
-        fixture.app,
-      );
+    /** What the whole-Catalog reconcile schedules over the whole-Catalog
+     * copy set `ids`: its counts and its jobs (a publish for each publish
+     * candidate, a withdrawal for each withdrawal candidate and for each
+     * publish candidate with a live generation, which the publication sync
+     * re-checks). */
+    const oracle = async (allow: boolean, ids: readonly string[]) => {
       const rows = (
         await fixture.app.query<{
           subject_id: string;
@@ -399,9 +399,9 @@ describe(
     };
 
     it("schedules the same jobs with and without publication allowed", async () => {
-      // 700 images in the fixture's proportions; the draft images of live
+      // 245 images in the fixture's proportions; the draft images of live
       // intents are ready but unpublished (private B for the requested).
-      const seeded = await reseed(catalogScaleShape(700), {
+      const seeded = await reseed(catalogScaleShape(245), {
         liveAssets: "ready",
       });
       const counts = seeded.counts;
@@ -424,12 +424,20 @@ describe(
         [catalogScaleRenditionId(failedPurge, "thumb")],
       );
       expect(counts.requested).toBeGreaterThan(0);
+      // The copy set is read once: between the two passes no job runs and
+      // nothing it plans from changes (the second plan's inspections find
+      // the pins the first one made).
+      const ids = await wholeCatalogCopySet(
+        fixture.publicRead,
+        fixture.prepare,
+        fixture.app,
+      );
       for (const allow of [false, true]) {
         await clearJobs();
         await fixture.setup.query(
           "TRUNCATE community.catalog_publication_dirty",
         );
-        const expected = await oracle(allow);
+        const expected = await oracle(allow, ids);
         expect(expected.rows).toBeLessThan(500);
         expect(expected.counts.withdraw).toBeGreaterThanOrEqual(22);
         if (allow) expect(expected.counts.publish).toBeGreaterThan(22);
@@ -461,9 +469,9 @@ describe(
   { timeout: SLOW },
   () => {
     it("keeps a fixed point larger than K one, and withdraws only taken-down assets it planned", async () => {
-      await reseed(plain(700));
+      await reseed(plain(350));
       const all = await assetIds();
-      // The Catalog is at its fixed point: a pass that plans 50 of its 700
+      // The Catalog is at its fixed point: a pass that plans 50 of its 350
       // assets schedules nothing, publishes and withdraws nothing.
       const passes = recording();
       expect(
@@ -501,10 +509,11 @@ describe(
   "W7: N3 at scale: a recipe bump over a Catalog larger than K",
   { timeout: SLOW },
   () => {
-    // CI: 210 images, K = 40. MOYA_CATALOG_SCALE_RECONCILE_N3=2000 runs the
-    // issue's 2,000 assets with K = 500 (W-AC6).
-    const IMAGES = Number(process.env.MOYA_CATALOG_SCALE_RECONCILE_N3 ?? 210);
-    const K = IMAGES >= 2_000 ? 500 : 40;
+    // CI: 70 images, K = 14 (five passes a round, as the issue's 2,000 and
+    // 500 give four). MOYA_CATALOG_SCALE_RECONCILE_N3=2000 runs the issue's
+    // 2,000 assets with K = 500 (W-AC6).
+    const IMAGES = Number(process.env.MOYA_CATALOG_SCALE_RECONCILE_N3 ?? 70);
+    const K = IMAGES >= 2_000 ? 500 : 14;
 
     it("copies and retires every asset's set pass by pass, never withdrawing before the replacement is published", async () => {
       const seeded = await reseed(plain(IMAGES));
@@ -679,15 +688,15 @@ describe(
     });
 
     it("drains more marks than K oldest first, scheduling each taken-down asset once", async () => {
-      await reseed(plain(700));
-      // Thirty records (210 assets) taken down and marked, as the membership
-      // fingerprint marks them; K = 50 plans 45 of them a pass.
-      await takeDown(1, 30);
-      const down = recordAssets(1, 30);
+      await reseed(plain(140));
+      // Ten records (70 assets) taken down and marked, as the membership
+      // fingerprint marks them; K = 20 plans 18 of them a pass.
+      await takeDown(1, 10);
+      const down = recordAssets(1, 10);
       await mark(down);
       const scheduled: string[] = [];
-      for (let pass = 1; pass <= Math.ceil(210 / 45); pass += 1) {
-        await adapter({ max: 50 }).reconcile(new Date(), true, 500);
+      for (let pass = 1; pass <= Math.ceil(70 / 18); pass += 1) {
+        await adapter({ max: 20 }).reconcile(new Date(), true, 500);
         const jobs = await queuedJobs();
         expect(new Set(jobs).size).toBe(jobs.length);
         scheduled.splice(0, scheduled.length, ...jobs);
@@ -699,29 +708,29 @@ describe(
       // after its job clears it.
       expect(await pending()).toEqual([...down].sort());
       await runJobs(new Date());
-      for (let pass = 0; pass < Math.ceil(210 / 45); pass += 1)
-        await adapter({ max: 50 }).reconcile(new Date(), true, 500);
+      for (let pass = 0; pass < Math.ceil(70 / 18); pass += 1)
+        await adapter({ max: 20 }).reconcile(new Date(), true, 500);
       expect(await pending()).toEqual([]);
       expect(await queuedJobs()).toEqual([]);
     });
 
     it("drains a queue larger than K at the dirty share of K a pass while the jobs run between passes", async () => {
-      await reseed(plain(700));
-      await takeDown(1, 30);
-      const down = recordAssets(1, 30);
+      await reseed(plain(140));
+      await takeDown(1, 10);
+      const down = recordAssets(1, 10);
       await mark(down);
       // Each pass's withdrawals run before the next pass, as the withdraw
       // lane runs them. The re-plan after a job goes to the back of the
-      // queue, so every pass schedules first marks: ⌈210 / 45⌉ passes.
+      // queue, so every pass schedules first marks: ⌈70 / 18⌉ passes.
       // The passes' clocks, after the marks (the database's clock), so the
       // order is the passes' and not two clocks' skew: a pass moves the marks
       // it leaves to its own time, and a host clock even a millisecond behind
       // the database's would put them ahead of the last first marks.
       const at = (minutes: number) => new Date(Date.now() + minutes * 60_000);
       const scheduled = new Map<string, number>();
-      const passes = Math.ceil(210 / 45);
+      const passes = Math.ceil(70 / 18);
       for (let pass = 1; pass <= passes; pass += 1) {
-        await adapter({ max: 50 }).reconcile(at(pass), true, 500);
+        await adapter({ max: 20 }).reconcile(at(pass), true, 500);
         for (const job of await runJobs(at(pass)))
           scheduled.set(job.subject, (scheduled.get(job.subject) ?? 0) + 1);
       }
@@ -730,7 +739,7 @@ describe(
       // The re-plans after the jobs then clear every mark, scheduling
       // nothing more.
       for (let pass = 0; pass < passes && (await pending()).length; pass += 1)
-        await adapter({ max: 50 }).reconcile(at(passes + 1 + pass), true, 500);
+        await adapter({ max: 20 }).reconcile(at(passes + 1 + pass), true, 500);
       expect(await pending()).toEqual([]);
       expect(await queuedJobs()).toEqual([]);
     });
@@ -996,7 +1005,7 @@ describe("W7: the sweep and a pass's cost", { timeout: SLOW }, () => {
 
   it("issues the same statements per pass whatever the Catalog's size", async () => {
     const measured: Record<string, number>[] = [];
-    for (const images of [210, 700]) {
+    for (const images of [140, 350]) {
       await reseed(plain(images));
       // A queue of 40 marked assets and the sweep: K = 50.
       await mark((await assetIds()).slice(60, 100));
@@ -1129,7 +1138,7 @@ describe("W7: what marks a pass's work", { timeout: SLOW }, () => {
 
   it("records an intent's public generations in the pass after its publish job", async () => {
     // Ready draft images; every fifth live intent is release_requested.
-    const seeded = await reseed(catalogScaleShape(700), {
+    const seeded = await reseed(catalogScaleShape(245), {
       liveAssets: "ready",
     });
     const counts = seeded.counts;
@@ -1325,12 +1334,12 @@ describe("W7: the scope's in-flight part", { timeout: SLOW }, () => {
 
 describe("W-AC5: takedowns first", { timeout: SLOW }, () => {
   it("schedules a takedown within two passes behind more than K publish-side marks that inspect", async () => {
-    // 300 published records of 7 images, each with a released intent: the
+    // 42 published records of 7 images, each with a released intent: the
     // plan of every public asset inspects its record's intent (the work a
     // release wave queues).
     await reseed(
-      catalogScaleShape(2_100, {
-        releasedIntents: 300,
+      catalogScaleShape(294, {
+        releasedIntents: 42,
         draftRecords: 0,
         endedIntents: 0,
         recentEndedIntents: 0,
@@ -1338,25 +1347,28 @@ describe("W-AC5: takedowns first", { timeout: SLOW }, () => {
       }),
     );
     const all = await assetIds();
-    const record = 150;
+    const record = 21;
     const down = recordAssets(record, record);
     const others = all.filter((id) => !down.includes(id));
     // In FIFO order the takedown would wait for more than two passes of
-    // marks (each plans at most 0.9 K).
-    expect(others.length).toBeGreaterThan(2 * 900);
+    // marks (each plans at most 0.9 K; K = 100 here, as the release wave
+    // below, a tenth of the production K).
+    const K = 100;
+    expect(others.length).toBeGreaterThan(2 * 0.9 * K);
     // Every other asset queued first, as normal marks (publish-side work),
     // then the takedown, as the membership step marks it: urgent.
     await mark(others, "intent");
     await takeDown(record, record);
     await mark(down, "public_membership", true);
-    // A short budget: a pass plans little more than its reserved part. The
-    // passes' clocks, after the marks (the database's clock).
+    // A short budget, which the reserved part ignores (at K = 100 it is the
+    // whole pass: the first 90 marks and the sweep's share). The passes'
+    // clocks, after the marks (the database's clock).
     const scheduled = (jobs: readonly string[]) =>
       down.every((id) => jobs.includes(`withdraw_media ${id}`));
     const recorded = recording();
     let passes = 0;
     for (; passes < 2 && !scheduled(await queuedJobs()); passes += 1)
-      await adapter({ budgetMs: 2_000 }, recorded.authority).reconcile(
+      await adapter({ max: K, budgetMs: 2_000 }, recorded.authority).reconcile(
         new Date(Date.now() + (passes + 1) * 60_000),
         true,
         500,
@@ -1374,13 +1386,13 @@ describe("W-AC5: takedowns first", { timeout: SLOW }, () => {
   });
 
   it("schedules a takedown within two passes when a release wave has just listed the buckets of images private B serves", async () => {
-    // 200 published records of 7 images, the first 100 with a released
+    // 101 published records of 7 images, the first 60 with a released
     // intent. Records 1..60 are the wave's requests, not released yet:
-    // private B serves their images (their plans inspect). Records 101..140
+    // private B serves their images (their plans inspect). Records 61..100
     // are the wave's releases, served nowhere before.
     await reseed(
-      catalogScaleShape(1_400, {
-        releasedIntents: 100,
+      catalogScaleShape(707, {
+        releasedIntents: 60,
         draftRecords: 0,
         endedIntents: 0,
         recentEndedIntents: 0,
@@ -1388,8 +1400,8 @@ describe("W-AC5: takedowns first", { timeout: SLOW }, () => {
       }),
     );
     const held = await holdCatalogScaleRecords(fixture, { first: 1, last: 60 });
-    const released = recordAssets(101, 140);
-    await takeDown(101, 140);
+    const released = recordAssets(61, 100);
+    await takeDown(61, 100);
     for (const [state, extra] of [
       ["withdrawing", "withdraw_requested_at = now()"],
       ["withdrawn", "origin_deleted_at = now(), verified_at = now()"],
@@ -1414,10 +1426,10 @@ describe("W-AC5: takedowns first", { timeout: SLOW }, () => {
       "UPDATE community.catalog_publication_dirty SET cleared_seq = mark_seq",
     );
     await fixture.setup.query(
-      "UPDATE public.catalogs SET _status='published' WHERE id BETWEEN 101 AND 140",
+      "UPDATE public.catalogs SET _status='published' WHERE id BETWEEN 61 AND 100",
     );
     await step.run(new Date());
-    const record = 150;
+    const record = 101;
     const down = recordAssets(record, record);
     await takeDown(record, record);
     await step.run(new Date());

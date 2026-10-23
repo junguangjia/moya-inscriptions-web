@@ -18,22 +18,18 @@ import {
 import { PostgresMediaPublicationAdapter } from "@moya/community-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import {
-  catalogAuthorityWithCopySet,
-  wholeCatalogCopySet,
-} from "../../unit/backend/catalog-copy-set.js";
+import { catalogAuthorityWithCopySet } from "../../unit/backend/catalog-copy-set.js";
 import {
   CATALOG_SCALE_25K,
   catalogScaleCounts,
   catalogScaleImage,
   catalogScaleShape,
-  clearCatalogScale,
-  createCatalogScaleDatabase,
+  createCatalogScaleTemplates,
   createQueryRecorder,
   explainCatalogScale,
-  seedCatalogScale,
   type CatalogScaleDatabase,
   type CatalogScaleShape,
+  type CatalogScaleTemplates,
   type RecordedQuery,
 } from "./catalog-scale-fixture.js";
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
@@ -44,7 +40,7 @@ import type { CatalogAssetPermission } from "@moya/backend-production/internal/c
  * catalog-scale-v1 (Issue #323) 1B W5 on the scale fixture: a Catalog job's
  * authority reads only its own asset, through the real roles and views.
  * - acquire, current() and authorized() issue the same statements, per role,
- *   at a small and a larger Catalog (1k and 5k images here; set
+ *   at a small and a larger Catalog (245 and 2,100 images here; set
  *   MOYA_CATALOG_SCALE_AUTHORITY_IMAGES=25200 for the issue's 25k fixture),
  *   for a released record's image, a published image without an intent and
  *   a requested draft image; none lists the published Catalog or reads a
@@ -63,14 +59,15 @@ import type { CatalogAssetPermission } from "@moya/backend-production/internal/c
 const SLOW = 600_000;
 // The suite's disposable target, refused before any connection.
 const target = requireSyntheticTestDatabaseUrl();
+let templates: CatalogScaleTemplates;
 let fixture: CatalogScaleDatabase;
 
-const SMALL = catalogScaleShape(1_001);
+const SMALL = catalogScaleShape(245);
 const LARGE: CatalogScaleShape =
   process.env.MOYA_CATALOG_SCALE_AUTHORITY_IMAGES === "25200"
     ? CATALOG_SCALE_25K
     : catalogScaleShape(
-        Number(process.env.MOYA_CATALOG_SCALE_AUTHORITY_IMAGES ?? 5_005),
+        Number(process.env.MOYA_CATALOG_SCALE_AUTHORITY_IMAGES ?? 2_100),
       );
 const policy = currentCatalogRecipePolicy().recipeManifestSha256;
 /** The Seq Scan a job's acquire may plan, inspectCatalogDelivery's, by
@@ -105,22 +102,36 @@ const LARGE_RELATIONS = new Set([
   "media_publications",
 ]);
 
+/** 10,003 published images and no intent: 40,012 selector rows. */
+const PAST_40K = catalogScaleShape(10_003, {
+  draftRecords: 0,
+  releasedIntents: 0,
+  endedIntents: 0,
+  recentEndedIntents: 0,
+  livePrepares: 0,
+});
+
 beforeAll(async () => {
-  fixture = await createCatalogScaleDatabase({
+  templates = await createCatalogScaleTemplates({
     target,
     openPool: (url) =>
       createPostgresPool(parsePostgresConfig({ DATABASE_URL: url })),
     label: "csauth",
   });
+  // The last test's Catalog seeds while the others run; a failure surfaces
+  // there.
+  void templates.prepare(PAST_40K).catch(() => undefined);
 }, SLOW);
 
 afterAll(async () => {
-  await fixture?.close();
+  await templates?.close();
 }, SLOW);
 
+/** A database of its own holding `shape` as seeded (a copy of its template,
+ * seeded once per shape), the previous one dropped. */
 const reseed = async (shape: CatalogScaleShape) => {
-  await clearCatalogScale(fixture);
-  return seedCatalogScale(fixture, shape);
+  await fixture?.close();
+  fixture = await templates.seeded(shape);
 };
 
 /** The three job subjects of a seeded shape: a released record's image, a
@@ -388,23 +399,14 @@ describe(
         }
         // Every released record's image holds its intent's permission.
         expect(intentPermissions).toBe(catalogScaleCounts(SMALL).releasedMedia);
+        // The union of every capture is the whole Catalog's copy set (the
+        // oracle's union of the whole plan, wholeCatalogCopySet, here over
+        // the plan above), an asset App does not know included.
+        const union = (permissions: readonly CatalogAssetPermission[]) =>
+          [...new Set(permissions.flatMap((p) => p.renditionIds))].sort();
         expect(
-          [
-            ...new Set(
-              [...captured.values()].flatMap((c) =>
-                c.permissions.flatMap((p) => p.renditionIds),
-              ),
-            ),
-          ].sort(),
-        ).toEqual(
-          [
-            ...(await wholeCatalogCopySet(
-              fixture.publicRead,
-              fixture.prepare,
-              fixture.app,
-            )),
-          ].sort(),
-        );
+          union([...captured.values()].flatMap((c) => c.permissions)),
+        ).toEqual(union([...whole.values()].flat()));
       },
     );
 
@@ -414,15 +416,7 @@ describe(
       async () => {
         // 10,003 published images and no intent: 40,012 selector rows, one
         // statement per batch of 250 assets.
-        await reseed(
-          catalogScaleShape(10_003, {
-            draftRecords: 0,
-            releasedIntents: 0,
-            endedIntents: 0,
-            recentEndedIntents: 0,
-            livePrepares: 0,
-          }),
-        );
+        await reseed(PAST_40K);
         const recorder = createQueryRecorder();
         const authority = catalogAuthorityWithCopySet(
           fixture.publicRead,

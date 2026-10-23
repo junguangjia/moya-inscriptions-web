@@ -1145,8 +1145,9 @@ export const captureCatalogAssets = async (
  * batch is one CMS snapshot, one App read of its assets' rows and intents,
  * and one selector statement (below CATALOG_PLAN_SELECTOR_BATCH), so a pass
  * of K assets takes about K / 100 snapshots, and the pass's budget is kept
- * to within about one batch's time. The reconcile's reserved parts
- * (community-postgres CATALOG_RECONCILE_RESERVED) are one batch each. A
+ * to within about one batch's time, apart from the reconcile's reserved
+ * parts (community-postgres CATALOG_RECONCILE_RESERVED), one batch each,
+ * which are attempted whatever the budget (planCatalogScope). A
  * snapshot per batch, not one per scope (the design's wording), is what lets
  * the budget stop between batches and a failed batch be captured again asset
  * by asset. Two batches may see different CMS states; each asset is still
@@ -1203,8 +1204,9 @@ const memoizedPlanReads = (reads: CatalogPlanReads): CatalogPlanReads => {
  * fits in `budgetMs`, so the assets attempted are a prefix of the order and
  * the pass ends within its budget; the first `reserved` assets (the
  * reconcile's oldest urgent marks and its sweep's share) are attempted
- * whatever the budget, so a slow batch can stretch the pass by about one
- * batch but never keep them out. A batch that throws is captured again
+ * whatever the budget, so slow reserved batches stretch the pass (two that
+ * succeed slowly, by both their times less the budget) but never keep them
+ * out. A batch that throws is captured again
  * asset by asset: an asset whose plan throws is `failed` alone and the others
  * are planned; none is ever planned from a partial read. Those retries, and
  * the pass with them, stop at the budget, a reserved batch's at the budget

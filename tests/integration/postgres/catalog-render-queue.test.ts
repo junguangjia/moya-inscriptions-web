@@ -61,6 +61,10 @@ import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
  * - Records that arrive pass by pass: a re-render is queued only while no
  *   higher tier waits, so a record prepared later waits behind at most the
  *   re-renders already queued (the target), and still renders together.
+ * - The pass's unreferenced flips: an asset it creates for a prepared
+ *   intent or for render grace, never published, is marked normal, so it
+ *   never joins the takedowns; an existing asset leaving the published set,
+ *   and one created beside an urgent intent mark of the same pass, urgent.
  * - Locally, at the 25k fixture (MOYA_CATALOG_RENDER_IMAGES=25200): no
  *   statement of a sync pass is JIT-compiled.
  * Content is synthetic; no object store, real CMS or network.
@@ -126,10 +130,11 @@ interface Shown {
 }
 
 /** An intent as the live projection lists it: live with its members, or one
- * whose lease passed as an expired header (W10). */
+ * whose lease passed as an expired header (W10), or a request the Owner
+ * cancelled as a header (its third transition). */
 const intent = (
   documentId: number,
-  state: "prepared" | "release_requested" | "expired",
+  state: "prepared" | "release_requested" | "expired" | "cancelled",
   expiresAt: Date,
   images: readonly Image[],
 ) => ({
@@ -141,10 +146,11 @@ const intent = (
   manifestSha256: sha(`manifest:${documentId}`),
   recipeManifestSha256: policy,
   state,
-  stateVersion: state === "release_requested" ? 2 : 1,
+  stateVersion:
+    state === "release_requested" ? 2 : state === "cancelled" ? 3 : 1,
   mediaCount: images.length,
   media:
-    state === "expired"
+    state === "expired" || state === "cancelled"
       ? []
       : images.map((item, index) => ({
           ordinal: index + 1,
@@ -161,12 +167,14 @@ type Intent = ReturnType<typeof intent>;
 const works = () => new PostgresWorkPublishingAdapter(fixture.app);
 
 /** One sync pass as the worker hands it over: the union of the published
- * rows and the live intents' members, with the snapshot. */
+ * rows and the live intents' members, with the snapshot; it creates at most
+ * `limit` assets. */
 const sync = (
   when: Date,
   shown: readonly Shown[],
   intents: readonly Intent[],
   renderQueueTarget: number | undefined = CATALOG_RENDER_QUEUE_TARGET,
+  limit = 100,
 ) => {
   const publishedSources = shown.map((row) => ({
     mediaId: row.image.mediaId,
@@ -197,7 +205,7 @@ const sync = (
     })),
     when,
     {
-      limit: 100,
+      limit,
       renditions: catalogSyncIdentities(),
       ...(renderQueueTarget === undefined ? {} : { renderQueueTarget }),
       snapshot: {
@@ -718,6 +726,85 @@ describe("W9: an intent's image ready under an older recipe renders in the inten
       t2: 2,
       t3: 1,
       t4: 2,
+    });
+  });
+});
+
+describe("W-AC5: only an asset that existed before the pass is an urgent unreferenced flip", () => {
+  /** The pending marks by image, each with its reason and class. */
+  const pending = async (images: readonly Image[]) =>
+    Object.fromEntries(
+      (
+        await fixture.setup.query<{
+          asset_id: string;
+          reason: string;
+          urgent: boolean;
+        }>(
+          "SELECT asset_id, reason, urgent FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq",
+        )
+      ).rows.map((row) => [
+        label(row.asset_id, images),
+        { reason: row.reason, urgent: row.urgent },
+      ]),
+    );
+
+  it("marks the never-published assets a pass creates for a prepared intent or for grace normal, and an existing asset leaving the published set urgent", async () => {
+    const taken = image("p-taken-down");
+    const kept = image("k-kept");
+    const lapsed = image("l-grace");
+    const prepared = image("n-prepared");
+    const requested = image("m-requested");
+    const all = [taken, kept, lapsed, prepared, requested];
+    const shownKept: Shown = {
+      image: kept,
+      catalogId: "catalog-k",
+      position: 0,
+    };
+    // Two hours before: two published records, a prepared intent whose
+    // lease passes an hour later and a release request. At two creations a
+    // pass only the published images get their assets (t0 first); the
+    // mirror stores the intents' members.
+    expect(
+      await sync(
+        at(-2 * HOUR),
+        [shownKept, { image: taken, catalogId: "catalog-p", position: 0 }],
+        [
+          intent(41, "prepared", at(-HOUR), [lapsed]),
+          intent(42, "release_requested", at(20 * HOUR), [requested]),
+        ],
+        CATALOG_RENDER_QUEUE_TARGET,
+        2,
+      ),
+    ).toMatchObject({ created: 2, unreferenced: 0 });
+    // The reconcile planned that pass's marks (the new intents', normal).
+    await fixture.setup.query(
+      "UPDATE community.catalog_publication_dirty SET cleared_seq = mark_seq",
+    );
+    // Now record p is taken down, the prepared lease passed an hour ago
+    // (render grace), the Owner cancelled the request, and another record's
+    // new intent prepares its image beside a new one.
+    const counts = await sync(
+      at(0),
+      [shownKept],
+      [
+        intent(41, "expired", at(-HOUR), [lapsed]),
+        intent(42, "cancelled", at(20 * HOUR), [requested]),
+        intent(43, "prepared", at(20 * HOUR), [prepared, requested]),
+      ],
+    );
+    // The pass creates the three images no published record names and
+    // flips them to unreferenced at once, beside the taken-down image.
+    expect(counts).toMatchObject({ created: 3, unreferenced: 4 });
+    expect(await pending(all)).toEqual({
+      // Existed before the pass and may be served: a takedown.
+      "p-taken-down": { reason: "reference", urgent: true },
+      // Created in the pass, for grace (t3) and for a prepared intent (t2):
+      // never published, so nothing to withdraw.
+      "l-grace": { reason: "reference", urgent: false },
+      "n-prepared": { reason: "reference", urgent: false },
+      // Created in the pass too, but the cancelled request names it: its
+      // urgent intent mark stays urgent.
+      "m-requested": { reason: "reference", urgent: true },
     });
   });
 });
