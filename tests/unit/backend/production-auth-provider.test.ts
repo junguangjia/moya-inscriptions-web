@@ -301,8 +301,14 @@ describe("signed provider request contract", () => {
     const email = JSON.parse(requests[0]!.body) as {
       Template: { TemplateData: string };
       Destination: string[];
+      TriggerType: number;
     };
-    expect(JSON.parse(email.Template.TemplateData).code === code).toBe(true);
+    expect(email.TriggerType).toBe(1);
+    expect(email.Destination).toEqual(["synthetic@example.invalid"]);
+    expect(JSON.parse(email.Template.TemplateData)).toEqual({
+      code,
+      minutes: "5",
+    });
     const sms = new URLSearchParams(requests[1]!.body);
     expect(sms.get("ReturnVerifyCode")).toBe("false");
     expect(sms.get("TemplateParam")).toBe('{"code":"##code##","min":"5"}');

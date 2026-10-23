@@ -56,11 +56,13 @@ const authRegistrationCapabilitySchema = z.discriminatedUnion("available", [
     available: z.literal(true),
     agreement: authRegistrationAgreementSchema,
     reason: z.null(),
+    invitationRequired: z.boolean().optional(),
   }),
   z.strictObject({
     available: z.literal(false),
     agreement: z.null(),
     reason: z.string().min(1).max(200).nullable(),
+    invitationRequired: z.boolean().optional(),
   }),
 ]);
 
@@ -205,6 +207,12 @@ export const authChallengeRequestSchema = z.strictObject({
   identifier: z.string().min(1).max(254).optional(),
   idempotencyKey: idempotencyKeySchema,
   reauthToken: continuationTokenSchema.optional(),
+  /** Registration authorization only. Never returned, logged or persisted as plaintext. */
+  invitationCode: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{22}$/u)
+    .optional(),
 });
 
 export const authChallengeAcceptedSchema = z.strictObject({

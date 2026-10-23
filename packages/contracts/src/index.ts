@@ -151,6 +151,7 @@ export type {
   AuthRegistrationAgreement,
   AuthFactor,
 } from "./auth-schemas.ts";
+export type { BetaAccountAccessPort } from "./types.js";
 export type { MentionReference } from "./mention-references.js";
 
 export type {

@@ -345,6 +345,11 @@ for (const environment of ["development", "production"] as const)
       if (control === undefined) throw Error("Control pool not prepared");
       return control;
     },
+    get invitationSetupPool() {
+      if (setup === undefined)
+        throw Error("Invitation setup pool not prepared");
+      return setup;
+    },
     get issuerPool() {
       if (issuer === undefined) throw Error("Issuer pool not prepared");
       return issuer;

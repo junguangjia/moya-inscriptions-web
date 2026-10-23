@@ -1,5 +1,10 @@
 import type { z } from "zod";
 
+/** Server-only account admission port; no credential or database row crosses it. */
+export interface BetaAccountAccessPort {
+  read(userId: string): Promise<"granted" | "revoked" | "none">;
+}
+
 import type {
   apiErrorCodeSchema,
   apiErrorSchema,

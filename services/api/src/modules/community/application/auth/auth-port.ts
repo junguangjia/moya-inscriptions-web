@@ -9,6 +9,17 @@ export type AuthPurposeName =
 export type VerificationMode = "local_capture" | "simulated" | "provider";
 export type AuthEnvironmentName = "development" | "production";
 
+export interface StoredInvitation {
+  readonly id: string;
+  readonly digest: string;
+  readonly environment: AuthEnvironmentName;
+  readonly maxUses: number;
+  readonly usedCount: number;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly revokedAt: string | null;
+}
+
 export interface StoredUser {
   readonly id: string;
   readonly handle: string;
@@ -47,6 +58,7 @@ export interface StoredChallenge {
   readonly expectedVersion: number | null;
   readonly identityId?: string | null;
   readonly credentialVersion?: number | null;
+  readonly invitationId?: string | null;
   readonly reauthHash: string | null;
   readonly providerCorrelation: string | null;
   readonly expiresAt: string;
@@ -74,6 +86,7 @@ export interface StoredHandoff {
   readonly expectedVersion: number | null;
   readonly identityId?: string | null;
   readonly credentialVersion?: number | null;
+  readonly invitationId?: string | null;
   readonly expiresAt: string;
   readonly consumedAt: string | null;
 }
@@ -127,6 +140,18 @@ export interface StoredSession {
 
 /** Persistence for one authentication transaction. Business rules stay in the service. */
 export interface AuthUnitOfWork {
+  findInvitationByDigest(
+    digest: string,
+    environment: AuthEnvironmentName,
+  ): Promise<StoredInvitation | null>;
+  lockInvitation(id: string): Promise<StoredInvitation | null>;
+  /** Quota, redemption and beta grant are committed with the new account. */
+  redeemInvitation(
+    id: string,
+    userId: string,
+    atIso: string,
+    handoffId: string,
+  ): Promise<boolean>;
   findUser(id: string): Promise<StoredUser | null>;
   /** Read-only operator authority; the runtime cannot provision this record. */
   findProvisionedPasswordUser(

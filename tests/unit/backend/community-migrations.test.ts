@@ -94,6 +94,8 @@ describe("community migration family", () => {
         "20261019020000_upload_timing_instrumentation.sql",
         "20261020010000_catalog_zoom_blocks.sql",
         "20261020160000_catalog_delivery_prepares.sql",
+        "20261023010000_registration_invitations.sql",
+        "20261023020000_registration_invitation_xid_cast.sql",
         "20261024010000_catalog_publication_scope.sql",
       ],
     );

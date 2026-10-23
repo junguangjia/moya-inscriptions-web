@@ -12218,6 +12218,9 @@
                         "const": true,
                         "type": "boolean"
                       },
+                      "invitationRequired": {
+                        "type": "boolean"
+                      },
                       "reason": {
                         "type": "null"
                       }
@@ -12233,6 +12236,9 @@
                       },
                       "available": {
                         "const": false,
+                        "type": "boolean"
+                      },
+                      "invitationRequired": {
                         "type": "boolean"
                       },
                       "reason": {
@@ -12450,6 +12456,9 @@
                     "const": true,
                     "type": "boolean"
                   },
+                  "invitationRequired": {
+                    "type": "boolean"
+                  },
                   "reason": {
                     "type": "null"
                   }
@@ -12465,6 +12474,9 @@
                   },
                   "available": {
                     "const": false,
+                    "type": "boolean"
+                  },
+                  "invitationRequired": {
                     "type": "boolean"
                   },
                   "reason": {
@@ -12505,6 +12517,10 @@
           "identifier": {
             "maxLength": 254,
             "minLength": 1,
+            "type": "string"
+          },
+          "invitationCode": {
+            "pattern": "^[A-Za-z0-9_-]{22}$",
             "type": "string"
           },
           "purpose": {
@@ -34315,7 +34331,7 @@
     },
     "/v1/community/auth/capabilities": {
       "get": {
-        "description": "Server-owned email and phone availability. A client cannot enable simulation or live delivery. Production does not mount this route in this task.",
+        "description": "Server-owned channel and registration capabilities, invitation requirement and approved agreement. A client cannot enable registration, simulation or live delivery. Production requires explicit server configuration.",
         "operationId": "getAuthCapabilities",
         "responses": {
           "200": {
@@ -34364,7 +34380,7 @@
     },
     "/v1/community/auth/passwords/login": {
       "post": {
-        "description": "Existing same-origin relay receives a server-only Session grant and sets HttpOnly Cookie. Production mounting is unchanged. Missing credentials and wrong passwords have the same response.",
+        "description": "The same-origin relay receives a server-only Session grant and sets an HttpOnly Cookie. Runtime capabilities select supported identifiers, including explicitly enabled provisioned handles. Missing credentials and wrong passwords have the same response.",
         "operationId": "passwordSignIn",
         "requestBody": {
           "content": {
@@ -34428,10 +34444,10 @@
                 }
               }
             },
-            "description": "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
           }
         },
-        "summary": "Development password sign-in for an existing public account"
+        "summary": "Password sign-in for an existing public account"
       }
     },
     "/v1/community/auth/passwords/reset": {
@@ -34507,7 +34523,7 @@
                 }
               }
             },
-            "description": "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
           }
         },
         "summary": "Consume a password_reset proof and replace an existing account's password"

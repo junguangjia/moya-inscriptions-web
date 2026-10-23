@@ -866,6 +866,40 @@ describe("Password reset and stale authentication cookie recovery", () => {
       },
       body: "{}",
     });
+  it("forwards the invitation registration challenge in the request body without adding it to a URL or cookie", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ accepted: true }));
+    vi.stubGlobal("fetch", fetcher);
+    const syntheticInvitation = "j".repeat(22);
+    const payload = {
+      channel: "email",
+      purpose: "register",
+      identifier: "tester@example.com",
+      invitationCode: syntheticInvitation,
+      idempotencyKey: "synthetic-invite-registration",
+    };
+    const response = await relayServerCommunityAuth(
+      new Request("http://127.0.0.1:3410/api/community/auth/challenges", {
+        method: "POST",
+        headers: {
+          origin: "http://127.0.0.1:3410",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(
+      payload,
+    );
+    expect(String(fetcher.mock.calls[0]?.[0])).not.toContain(
+      syntheticInvitation,
+    );
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
   it("clears the signed browser cookie after successful reset without creating a Session", async () => {
     vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
     const fetcher = vi

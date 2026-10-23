@@ -11,6 +11,7 @@ import type {
   StoredUser,
   StoredPasswordCredential,
   StoredPasswordResetReceipt,
+  StoredInvitation,
 } from "./auth-port.js";
 
 interface MemorySession extends StoredSession {
@@ -18,6 +19,9 @@ interface MemorySession extends StoredSession {
 }
 
 interface MemoryState {
+  invitations: StoredInvitation[];
+  invitationRedemptions: { invitationId: string; userId: string }[];
+  betaAccess: { userId: string; state: "granted" | "revoked" }[];
   users: StoredUser[];
   operatorPasswordAccounts: {
     userId: string;
@@ -44,6 +48,9 @@ interface MemoryState {
 }
 
 const emptyState = (): MemoryState => ({
+  invitations: [],
+  invitationRedemptions: [],
+  betaAccess: [],
   users: [],
   operatorPasswordAccounts: [],
   credentials: [],
@@ -67,6 +74,33 @@ const clone = (state: MemoryState): MemoryState => structuredClone(state);
 export class MemoryCommunityAuthPort implements CommunityAuthPort {
   private state: MemoryState = emptyState();
   private queue: Promise<void> = Promise.resolve();
+
+  /** Synthetic setup seam; production invitation management uses a separate CLI role. */
+  provisionInvitation(invitation: StoredInvitation): void {
+    if (
+      this.state.invitations.some(
+        (row) => row.id === invitation.id || row.digest === invitation.digest,
+      )
+    )
+      throw new Error("Synthetic invitation conflict");
+    this.state.invitations.push({ ...invitation });
+  }
+
+  /** Synthetic revocation seam for races with registration. */
+  revokeInvitation(id: string, atIso: string): void {
+    this.state.invitations = this.state.invitations.map((row) =>
+      row.id === id ? { ...row, revokedAt: atIso } : row,
+    );
+  }
+
+  async readBetaAccess(
+    userId: string,
+  ): Promise<"granted" | "revoked" | "none"> {
+    return (
+      this.state.betaAccess.find((row) => row.userId === userId)?.state ??
+      "none"
+    );
+  }
 
   /** Test seam for suspension races. Not part of the application port. */
   setStatus(userId: string, status: "active" | "suspended"): void {
@@ -119,6 +153,47 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
   private unit(): AuthUnitOfWork {
     const state = this.state;
     return {
+      findInvitationByDigest: async (digest, environment) =>
+        state.invitations.find(
+          (row) => row.digest === digest && row.environment === environment,
+        ) ?? null,
+      lockInvitation: async (id) =>
+        state.invitations.find((row) => row.id === id) ?? null,
+      redeemInvitation: async (id, userId, atIso, handoffId) => {
+        const index = state.invitations.findIndex((row) => row.id === id);
+        const invitation = state.invitations[index];
+        const handoff = state.handoffs.find((row) => row.id === handoffId);
+        if (
+          handoff === undefined ||
+          handoff.invitationId !== id ||
+          handoff.purpose !== "register_confirm" ||
+          handoff.consumedAt !== null ||
+          !after(handoff.expiresAt, atIso) ||
+          handoff.environment !== invitation?.environment ||
+          !state.identities.some(
+            (row) =>
+              row.userId === userId &&
+              row.lookupDigest === handoff.targetDigest &&
+              row.kind === handoff.channel &&
+              row.environment === handoff.environment &&
+              row.verificationMode === handoff.providerMode,
+          ) ||
+          invitation === undefined ||
+          invitation.revokedAt !== null ||
+          !after(invitation.expiresAt, atIso) ||
+          invitation.usedCount >= invitation.maxUses ||
+          state.invitationRedemptions.some((row) => row.userId === userId) ||
+          !state.users.some((row) => row.id === userId)
+        )
+          return false;
+        state.invitations[index] = {
+          ...invitation,
+          usedCount: invitation.usedCount + 1,
+        };
+        state.invitationRedemptions.push({ invitationId: id, userId });
+        state.betaAccess.push({ userId, state: "granted" });
+        return true;
+      },
       findProvisionedPasswordUser: async (handle, environment) => {
         const authority = state.operatorPasswordAccounts.find(
           (row) =>
