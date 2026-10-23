@@ -18,6 +18,12 @@ import {
   synchronizeCatalogDeliveryIntents,
 } from "./catalog-delivery-intents.js";
 import { CATALOG_SNAPSHOT_MAX_SOURCES } from "./catalog-snapshot-ceiling.js";
+import {
+  changedCatalogIntentAssets,
+  markCatalogPublicationDirty,
+  readCatalogMirrorStates,
+  type CatalogPublicationDirtyReason,
+} from "./catalog-publication-dirty.js";
 import { recordRenditionRows, unrecordedKeys } from "./renditions.js";
 
 /*
@@ -244,6 +250,22 @@ export const syncCatalogAssets = async (
       ].sort()
     : ids;
   return writeTransaction(pool, async (db) => {
+    // The mirror rows of the snapshot's intents before and after the pass
+    // applies them (catalog-scale-v1 W8): an intent whose state, version or
+    // liveness the pass changes (a new, advanced or refused one) marks its
+    // assets for the scoped reconcile. The membership step compares the CMS
+    // with this mirror, so a change applied here first leaves it nothing to
+    // find. An intent absent from the snapshot ended or lapsed more than R
+    // ago and grants nothing, so its tombstone marks nothing.
+    const snapshotIntentIds = (options.snapshot?.preparations ?? []).map(
+      (intent) => (intent as { intentId?: unknown }).intentId,
+    );
+    const intentIds = snapshotIntentIds.filter(
+      (id): id is string => typeof id === "string",
+    );
+    const mirrorBefore = options.snapshot?.preparations
+      ? await readCatalogMirrorStates(db, intentIds)
+      : undefined;
     const intents = options.snapshot
       ? await synchronizeCatalogDeliveryIntents(
           db,
@@ -252,6 +274,14 @@ export const syncCatalogAssets = async (
           options.snapshot.undecodableIntentIds,
         )
       : undefined;
+    const marks = new Map<string, CatalogPublicationDirtyReason>();
+    if (mirrorBefore)
+      for (const id of await changedCatalogIntentAssets(
+        db,
+        mirrorBefore,
+        await readCatalogMirrorStates(db, intentIds),
+      ))
+        marks.set(id, "intent");
     // The first `limit` named ids without an asset (anti-join), then only
     // their complete rows, as typed arrays.
     const missing = (
@@ -312,21 +342,27 @@ export const syncCatalogAssets = async (
     );
     // Re-referenced (join) and newly unreferenced (anti-join) assets, from
     // the complete published list only: never from a partial one, which the
-    // snapshot reader refuses as a whole (null) before this is called.
-    await db.query(
+    // snapshot reader refuses as a whole (null) before this is called. Each
+    // flip marks its asset for the scoped reconcile (W8): a re-published one
+    // may copy its renditions again, a taken-down one must be withdrawn.
+    const rereferenced = await db.query<{ id: string }>(
       `UPDATE community.catalog_media_assets a
        SET unreferenced_since=NULL, updated_at=$2::timestamptz
        FROM unnest($1::text[]) AS published(id)
-       WHERE a.id=published.id AND a.unreferenced_since IS NOT NULL`,
+       WHERE a.id=published.id AND a.unreferenced_since IS NOT NULL
+       RETURNING a.id`,
       [publishedIds, at],
     );
-    const unreferenced = await db.query(
+    const unreferenced = await db.query<{ id: string }>(
       `UPDATE community.catalog_media_assets a
        SET unreferenced_since=$2::timestamptz, updated_at=$2::timestamptz
        WHERE a.unreferenced_since IS NULL
-         AND NOT EXISTS (SELECT 1 FROM unnest($1::text[]) AS published(id) WHERE published.id=a.id)`,
+         AND NOT EXISTS (SELECT 1 FROM unnest($1::text[]) AS published(id) WHERE published.id=a.id)
+       RETURNING a.id`,
       [publishedIds, at],
     );
+    for (const { id } of [...rereferenced.rows, ...unreferenced.rows])
+      marks.set(id, "reference");
     // A named asset whose source was unreadable gets another render once the
     // retry delay passed (bounded per pass); other failures stay final.
     await db.query(
@@ -407,6 +443,10 @@ export const syncCatalogAssets = async (
               [ids, at, wanted, options.limit - insertedCount],
             )
           ).rowCount ?? 0);
+    // The marks are the pass's last write, one statement in asset id order
+    // after every asset and job row it writes (the lock order of
+    // catalog-publication-dirty): the dirty rows are held only to commit.
+    await markCatalogPublicationDirty(db, marks, now);
     return {
       referenced: ids.length,
       skipped,
@@ -564,6 +604,16 @@ export const recordCatalogRenditions = async (
         outcome.placeholderColor,
         at,
       ],
+    );
+    // New renditions are copied only by a reconcile that plans the asset: a
+    // first render of a published image, or a recipe re-render whose set
+    // replaces the one serving (N3). The mark puts the asset in the next
+    // scoped pass (catalog-scale-v1 W7/W8) instead of waiting for the sweep;
+    // it is the last write, after the asset row's lock.
+    await markCatalogPublicationDirty(
+      db,
+      new Map([[assetId, "rendition"]]),
+      now,
     );
     return duplicates.length === 0
       ? { status: "recorded" }

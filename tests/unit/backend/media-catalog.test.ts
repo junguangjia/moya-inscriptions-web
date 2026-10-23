@@ -42,6 +42,7 @@ import {
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { catalogAuthorityWithCopySet } from "./catalog-copy-set.js";
 import {
   snapshotCursors,
   type CursorFetch,
@@ -494,7 +495,7 @@ describe("Catalog publication authority with active-master blocks", () => {
       connect: async () => ({ query: inspectQuery, release: vi.fn() }),
     } as unknown as Parameters<typeof createCatalogPublicationAuthority>[2];
     return {
-      authority: createCatalogPublicationAuthority(published, prepare, app),
+      authority: catalogAuthorityWithCopySet(published, prepare, app),
       source,
       privateSource,
       ordinaryA,

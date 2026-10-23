@@ -8,8 +8,9 @@ import type { PublishingJobLease } from "@moya/api";
  * Catalog authority's selected rendition IDs as one text[] parameter of its
  * desired-set SQL (the reconcile, a job's own desired set and the item
  * lookup), never as SQL literals, so the selector has no 40,000 ceiling. A
- * malformed ID is still refused before the desired set is read. Synthetic
- * statements only; no database.
+ * malformed ID is still refused before the desired set is read. Since W7 the
+ * reconcile's IDs are its scope's plans (planScope), bound beside the scope.
+ * Synthetic statements only; no database.
  */
 
 const NOW = new Date("2126-10-22T00:00:00.000Z");
@@ -39,7 +40,25 @@ const harness = (selected: readonly string[] = SELECTED) => {
               lease_expires_at: null,
             },
           ]
-        : [];
+        : // The scoped reconcile (W7): its state, a sweep of one asset, and
+          // that asset's flags.
+          sql.startsWith("SELECT sweep_cursor")
+          ? [{ sweep_cursor: null, policy_digest: "c".repeat(64) }]
+          : sql.startsWith("SELECT a.id FROM community.catalog_media_assets")
+            ? [{ id: subject }]
+            : sql.startsWith("WITH desired AS")
+              ? [
+                  {
+                    subject_id: subject,
+                    item_id: null,
+                    catalog_asset_id: subject,
+                    publish: false,
+                    withdraw: false,
+                    fence_change: false,
+                    active: false,
+                  },
+                ]
+              : [];
     return { rows, rowCount: rows.length };
   });
   const pool = {
@@ -54,7 +73,11 @@ const harness = (selected: readonly string[] = SELECTED) => {
       isPublic: () => true,
       allowPublish: () => true,
       catalogAuthority: {
-        copyRenditionIds: async () => selected,
+        planScope: async (assetIds) => ({
+          policy: "c".repeat(64),
+          plans: new Map(assetIds.map((id) => [id, selected])),
+          failed: [],
+        }),
         publishedAssetIds: async () => [],
         acquire: async () => ({
           renditionIds: selected,
@@ -84,7 +107,7 @@ describe("W1: the Catalog desired set binds its selected IDs", () => {
     )!;
     expect(reconcile.sql).toContain("r.id=ANY($3::text[])");
     expect(reconcile.sql).not.toMatch(LITERAL);
-    expect(reconcile.values).toEqual([10, true, SELECTED]);
+    expect(reconcile.values).toEqual([10, true, SELECTED, [h.subject]]);
   });
 
   it("binds a job's own captured IDs in its desired set", async () => {

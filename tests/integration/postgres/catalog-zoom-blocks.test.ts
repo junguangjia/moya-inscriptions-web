@@ -54,11 +54,11 @@ import {
   resolveCatalogRenditionRead,
   runCommunityMigrations,
 } from "@moya/community-postgres";
-import { createCatalogPublicationAuthority } from "@moya/backend-production/internal/catalog-delivery";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { catalogAuthorityWithCopySet } from "../../unit/backend/catalog-copy-set.js";
 import { InMemoryCommunityIdentityPort } from "../../unit/backend/community-identity-fixture.js";
 
 import {
@@ -1351,7 +1351,7 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
         t0,
       ],
     );
-    const authority = createCatalogPublicationAuthority(setup, null, app);
+    const authority = catalogAuthorityWithCopySet(setup, null, app);
     const selected = await authority.copyRenditionIds();
     expect(selected).not.toContain(malformedBlock);
     expect(selected.filter((id) => blockIds.includes(id)).sort()).toEqual(

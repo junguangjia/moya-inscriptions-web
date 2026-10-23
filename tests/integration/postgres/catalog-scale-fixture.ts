@@ -616,6 +616,20 @@ export const clearCatalogScale = async (
     await fixture.setup.query(
       `TRUNCATE ${relations.join(", ")} RESTART IDENTITY CASCADE`,
     );
+  // The scoped reconcile's marks go, and its single state row (A1) stays
+  // with its sweep and fingerprints started over (when A1 is applied).
+  if (scope.app ?? true)
+    await fixture.setup.query(
+      `DO $$ BEGIN
+         IF to_regclass('community.catalog_reconcile_state') IS NOT NULL THEN
+           TRUNCATE community.catalog_publication_dirty;
+           UPDATE community.catalog_reconcile_state SET sweep_cursor=NULL, policy_digest=NULL,
+             public_count=NULL, public_sum=NULL, public_observed_at=NULL,
+             private_count=NULL, private_sum=NULL, private_observed_at=NULL,
+             render_backlog=NULL, render_backlog_at=NULL, updated_at=now() WHERE id;
+         END IF;
+       END $$`,
+    );
 };
 
 /** Planner statistics for every relation the fixture fills. */
@@ -1270,23 +1284,26 @@ export const explainCatalogScaleOn = async (
  * its inspectCatalogDelivery's read of a pinned rendition's publications
  * (catalog-scale-authority.test.ts gates the statement as the acquire
  * issues it); the in-flight and pending reads are the scoped reconcile's
- * (W7) first two scope parts. A rewrite there updates them here.
+ * (W7, community-postgres publication.ts) in-flight and dirty scope reads,
+ * which catalog-scale-reconcile.test.ts checks a pass issues verbatim. A
+ * rewrite there updates them here.
  */
 export const catalogScaleIndexedStatements = Object.freeze({
   privateCursor:
     "DECLARE catalog_private_snapshot NO SCROLL CURSOR FOR SELECT * FROM public.catalog_delivery_live_prepare_media ORDER BY intent_id,media_ordinal NULLS FIRST",
   /** $1: the snapshot's intent ids. */
   mirrorRead:
-    "SELECT * FROM community.catalog_delivery_prepares WHERE observed_live OR intent_id=ANY($1::uuid[]) ORDER BY intent_id",
+    "SELECT * FROM community.catalog_delivery_prepares WHERE observed_live UNION ALL SELECT * FROM community.catalog_delivery_prepares WHERE intent_id=ANY($1::uuid[]) AND NOT observed_live ORDER BY intent_id",
   /** $1: the snapshot's intent ids, $2: the observation time. */
   tombstone:
     "UPDATE community.catalog_delivery_prepares SET observed_live=false,observed_at=$2::timestamptz,ended_at=COALESCE(ended_at,$2::timestamptz),updated_at=$2::timestamptz WHERE observed_live AND observed_at <= $2::timestamptz AND NOT(intent_id=ANY($1::uuid[]))",
   /** $1: a pinned rendition's id. */
   renditionPublications:
     "SELECT p.* FROM community.media_publications p WHERE p.rendition_id=$1 ORDER BY p.id FOR SHARE",
-  inFlight: `SELECT DISTINCT pa.catalog_asset_id FROM community.media_publications p
-JOIN community.media_public_assets pa ON pa.id = p.public_asset_id
-WHERE p.state IN ('publishing', 'withdrawing', 'purge_failed') AND pa.catalog_asset_id IS NOT NULL`,
+  /** $1: the limit, $2: whether the pass may publish. */
+  inFlight:
+    "SELECT DISTINCT a.catalog_asset_id AS id FROM community.media_publications p JOIN community.media_public_assets a ON a.id=p.public_asset_id WHERE p.state IN ('publishing','withdrawing','purge_failed') AND ((p.state='publishing' AND NOT $2::boolean) OR (p.state<>'publishing' AND p.purge_attempts<3)) AND a.catalog_asset_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM community.catalog_publication_dirty d WHERE d.asset_id=a.catalog_asset_id AND d.mark_seq>d.cleared_seq) AND NOT EXISTS (SELECT 1 FROM community.publishing_jobs j WHERE j.subject_id=a.catalog_asset_id AND j.kind IN ('publish_media','withdraw_media','verify_withdrawal') AND j.state IN ('queued','running')) ORDER BY 1 LIMIT $1",
+  /** $1: the limit. */
   pending:
-    "SELECT asset_id, mark_seq FROM community.catalog_publication_dirty WHERE mark_seq > cleared_seq ORDER BY marked_at, asset_id LIMIT 1000",
+    "SELECT d.asset_id AS id FROM community.catalog_publication_dirty d WHERE d.mark_seq>d.cleared_seq AND NOT EXISTS (SELECT 1 FROM community.publishing_jobs j WHERE j.subject_id=d.asset_id AND j.kind IN ('publish_media','withdraw_media','verify_withdrawal') AND j.state IN ('queued','running')) ORDER BY d.marked_at,d.asset_id LIMIT $1",
 });

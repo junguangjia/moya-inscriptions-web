@@ -19,6 +19,7 @@ import {
 } from "@moya/community-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { catalogAuthorityWithCopySet } from "../../unit/backend/catalog-copy-set.js";
 import {
   CATALOG_SCALE_25K,
   CATALOG_SCALE_EPOCH,
@@ -26,6 +27,7 @@ import {
   catalogMediaView,
   catalogScaleCounts,
   catalogScaleImage,
+  catalogScaleIndexedStatements,
   catalogScaleIntentId,
   catalogScaleRecord,
   catalogScaleRenditionId,
@@ -504,9 +506,11 @@ describe(
       ).toBe(false);
       expect(snapshot!.undecodableIntentIds).toBeUndefined();
 
-      const port = new PostgresWorkPublishingAdapter(app, {
-        publication: { allowPublish: () => true, isPublic: () => true },
-      });
+      const recorder = createQueryRecorder();
+      const port = new PostgresWorkPublishingAdapter(
+        recorder.wrap("app", app),
+        { publication: { allowPublish: () => true, isPublic: () => true } },
+      );
       const passes: unknown[] = [];
       const lines: string[] = [];
       await createCatalogSync({
@@ -528,6 +532,10 @@ describe(
           error: (line) => lines.push(line),
         },
       }).run(new Date());
+      // The sync's mirror read is the copy the index plans check, verbatim.
+      expect(recorder.queries.map((q) => q.sql)).toContain(
+        catalogScaleIndexedStatements.mirrorRead,
+      );
       expect(passes).toEqual([
         {
           referenced: counts.unionSources,
@@ -541,11 +549,7 @@ describe(
       // Nothing but the mirror's observation times may change.
       expect(await appRows(setup)).toEqual(seeded);
 
-      const authority = createCatalogPublicationAuthority(
-        publicRead,
-        prepare,
-        app,
-      );
+      const authority = catalogAuthorityWithCopySet(publicRead, prepare, app);
       const published = (
         await setup.query<{ rendition_id: string }>(
           "SELECT rendition_id FROM community.media_publications WHERE state = 'published' ORDER BY rendition_id",

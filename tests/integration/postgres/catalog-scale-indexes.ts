@@ -175,7 +175,7 @@ describe("catalog-scale-v1 W6: A1 and M2 index plans at 25k (local only)", () =>
   );
 
   it(
-    "tombstones through A1's partial index at 25k, and reads the mirror through it once history outgrows the live rows (PG17+)",
+    "tombstones through A1's partial index at 25k, and reads the mirror through it once history outgrows the live rows",
     async () => {
       const snapshotIds = (
         await fixture.setup.query<{ ids: string[] }>(
@@ -186,8 +186,10 @@ describe("catalog-scale-v1 W6: A1 and M2 index plans at 25k (local only)", () =>
       const at = new Date();
 
       // At the 25k shape (14,800 tombstones beside 3,700 live rows) the
-      // tombstone pass reads the live rows only, while for the read a scan of
-      // the 772-page table is the planner's cheaper choice.
+      // tombstone pass reads the live rows only. The read, as one
+      // `observed_live OR intent_id=ANY(…)` scan, read the whole 772-page
+      // table on both majors; as two disjoint reads (W7) it takes the indexes
+      // (about 430 blocks on PG18).
       const tombstone = record(
         "sync tombstone",
         await rolledBack(fixture.app, (client) =>
@@ -217,20 +219,11 @@ describe("catalog-scale-v1 W6: A1 and M2 index plans at 25k (local only)", () =>
       expect(read.jit).toBe(false);
 
       // With the history of one more such period (20,000 more tombstones)
-      // PG18 reads the live rows and the snapshot's ids through the indexes,
-      // leaving the tombstones alone. PG16's planner keeps the scan (about
-      // 1,600 blocks, 5 ms), so there the read still grows with history,
-      // slowly. Splitting the read into the observed-live index read and the
-      // primary key lookup would make it use both indexes on either major.
-      const major = Math.floor(
-        Number(
-          (
-            await fixture.setup.query<{ server_version_num: string }>(
-              "SHOW server_version_num",
-            )
-          ).rows[0]!.server_version_num,
-        ) / 10_000,
-      );
+      // the read takes the live rows through the observed-live index and the
+      // snapshot's ids by primary key, leaving the tombstones alone, on
+      // either major: it is two disjoint reads (W7). As one
+      // `observed_live OR intent_id=ANY(…)` scan, PG16's planner kept a scan
+      // of the whole table (about 1,600 blocks, 5 ms), growing with history.
       try {
         const grown = record(
           "sync mirror read, 20,000 more tombstones",
@@ -252,14 +245,14 @@ describe("catalog-scale-v1 W6: A1 and M2 index plans at 25k (local only)", () =>
           }),
         );
         expect(grown.rows).toBe(counts.liveIntents);
-        if (major >= 17) {
-          expect(grown.nodes).toContainEqual(
-            "Bitmap Index Scan using catalog_delivery_prepares_observed_live",
-          );
-          expect(grown.nodes).not.toContainEqual(
-            "Seq Scan on catalog_delivery_prepares",
-          );
-        }
+        expect(grown.nodes).toContainEqual(
+          expect.stringMatching(
+            /Index Scan using catalog_delivery_prepares_observed_live/u,
+          ),
+        );
+        expect(grown.nodes).not.toContainEqual(
+          "Seq Scan on catalog_delivery_prepares",
+        );
         expect(grown.jit).toBe(false);
       } finally {
         // ANALYZE's page and row counts are not rolled back.
@@ -283,7 +276,7 @@ describe("catalog-scale-v1 W6: A1 and M2 index plans at 25k (local only)", () =>
             `UPDATE community.media_publications SET state = 'withdrawing', withdraw_requested_at = now()
              WHERE id IN (SELECT id FROM community.media_publications ORDER BY id LIMIT 3)`,
           );
-          return plan(client, statements.inFlight, [], {
+          return plan(client, statements.inFlight, [1_000, true], {
             analyze: true,
             buffers: true,
           });
@@ -311,7 +304,7 @@ describe("catalog-scale-v1 W6: A1 and M2 index plans at 25k (local only)", () =>
                FROM community.catalog_media_assets`,
             );
             await client.query("ANALYZE community.catalog_publication_dirty");
-            return plan(client, statements.pending, [], {
+            return plan(client, statements.pending, [1_000], {
               analyze: true,
               buffers: true,
             });
@@ -319,7 +312,9 @@ describe("catalog-scale-v1 W6: A1 and M2 index plans at 25k (local only)", () =>
         );
         expect(queue.rows).toBe(1000);
         expect(queue.nodes).toContainEqual(
-          "Index Scan using catalog_publication_dirty_pending on catalog_publication_dirty",
+          expect.stringMatching(
+            /^Index (Only )?Scan using catalog_publication_dirty_pending on catalog_publication_dirty$/u,
+          ),
         );
         expect(queue.nodes).not.toContainEqual(expect.stringMatching(/Sort/u));
         expect(queue.jit).toBe(false);

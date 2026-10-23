@@ -710,8 +710,12 @@ describe("A1 and M2 indexes over a long intent history", () => {
         plan(client, sql, values, { analyze: true }),
       );
       expect(read.rows, sql).toBe(rows);
+      // A bitmap or a plain index scan of the live rows (the mirror read is
+      // two disjoint reads, the other by primary key).
       expect(read.nodes, sql).toContainEqual(
-        "Bitmap Index Scan using catalog_delivery_prepares_observed_live",
+        expect.stringMatching(
+          /Index Scan using catalog_delivery_prepares_observed_live/u,
+        ),
       );
       expect(read.nodes, sql).not.toContainEqual(
         "Seq Scan on catalog_delivery_prepares",
@@ -737,7 +741,9 @@ describe("A1 and M2 indexes over a long intent history", () => {
         `UPDATE community.media_publications SET state = 'withdrawing', withdraw_requested_at = now()
          WHERE id IN (SELECT id FROM community.media_publications ORDER BY id LIMIT 3)`,
       );
-      return plan(client, statements.inFlight, [], { analyze: true });
+      return plan(client, statements.inFlight, [1_000, true], {
+        analyze: true,
+      });
     });
     expect(inFlight.rows).toBe(3);
     expect(inFlight.nodes).toContainEqual(
@@ -757,11 +763,13 @@ describe("A1 and M2 indexes over a long intent history", () => {
            FROM generate_series(1, 20000) AS g`,
         );
         await client.query("ANALYZE community.catalog_publication_dirty");
-        return plan(client, statements.pending, [], { analyze: true });
+        return plan(client, statements.pending, [1_000], { analyze: true });
       });
       expect(queue.rows).toBe(1000);
       expect(queue.nodes).toContainEqual(
-        "Index Scan using catalog_publication_dirty_pending on catalog_publication_dirty",
+        expect.stringMatching(
+          /^Index (Only )?Scan using catalog_publication_dirty_pending on catalog_publication_dirty$/u,
+        ),
       );
       expect(queue.nodes).not.toContainEqual(expect.stringMatching(/Sort/u));
       expect(queue.jit).toBe(false);

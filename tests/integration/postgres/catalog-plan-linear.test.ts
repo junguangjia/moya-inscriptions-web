@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import {
   catalogExpectedRenditions,
   catalogPlanReads,
-  createCatalogPublicationAuthority,
   currentCatalogRecipePolicy,
   planCatalogPermissions,
   readCatalogSourceSnapshot,
@@ -20,6 +19,7 @@ import {
 } from "@moya/community-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { catalogAuthorityWithCopySet } from "../../unit/backend/catalog-copy-set.js";
 import {
   previousCatalogPlan,
   previousCatalogPlanReads,
@@ -559,7 +559,7 @@ describe("W1: the grouped plan equals the #320 plan on a real Catalog", () => {
         );
         expect(byAsset(actual), `round ${round}`).toEqual(byAsset(expected));
 
-        const authority = createCatalogPublicationAuthority(setup, setup, app);
+        const authority = catalogAuthorityWithCopySet(setup, setup, app);
         expect(await authority.copyRenditionIds()).toHaveLength(
           copySet(expected).length,
         );
@@ -608,7 +608,7 @@ describe("W1: the grouped plan equals the #320 plan on a real Catalog", () => {
     "reconciles with a selector beyond 40,000 IDs, bound as one parameter",
     { timeout: SLOW },
     async () => {
-      const authority = createCatalogPublicationAuthority(setup, setup, app);
+      const authority = catalogAuthorityWithCopySet(setup, setup, app);
       const selected = await authority.copyRenditionIds();
       // Well-formed IDs of no rendition: they select nothing, but the inline
       // literal selector refused more than 40,000 IDs. They go first, so a
@@ -630,12 +630,24 @@ describe("W1: the grouped plan equals the #320 plan on a real Catalog", () => {
       );
       expect(publish.length).toBeGreaterThan(0);
       expect(withdraw.length).toBeGreaterThan(0);
+      // The scoped pass (W7) plans this whole Catalog (it is smaller than
+      // K); the padding goes first in the plan of its first asset.
       const adapter = new PostgresMediaPublicationAdapter(app, {
         isPublic: () => true,
         allowPublish: () => true,
         catalogAuthority: {
           ...authority,
-          copyRenditionIds: async () => [...padding, ...selected],
+          async planScope(assetIds, options) {
+            const planned = await authority.planScope(assetIds, options);
+            const [first] = planned.plans.keys();
+            return {
+              ...planned,
+              plans: new Map([
+                ...planned.plans,
+                [first!, [...padding, ...planned.plans.get(first!)!]],
+              ]),
+            };
+          },
         },
       });
       expect(await adapter.reconcile(new Date(), true, 500)).toEqual({

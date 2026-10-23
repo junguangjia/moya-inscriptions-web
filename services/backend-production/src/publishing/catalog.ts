@@ -47,11 +47,24 @@ import { SANDBOX_JOB_LIMITS, sandboxNonce } from "./sandbox/sandbox-runner.js";
 import {
   CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS,
   CATALOG_SNAPSHOT_MAX_SOURCES,
+  catalogMembershipBuckets,
+  catalogMembershipChanged,
+  catalogMembershipHashSql,
+  catalogMembershipTotal,
+  differingCatalogMembershipBuckets,
   nearCatalogSnapshotCeiling,
   readCatalogSnapshotCursor,
 } from "@moya/community-postgres";
 
 import type { createPostgresPool } from "@moya/catalog-postgres";
+import type {
+  CatalogMembershipBuckets,
+  CatalogMembershipIntent,
+  CatalogMembershipMarks,
+  CatalogMembershipObservation,
+  CatalogMembershipSide,
+  CatalogMembershipState,
+} from "@moya/community-postgres";
 import type { CatalogSourceReader } from "../storage/catalog-source.js";
 import type { ProcessorLogger } from "./processing/media-processor.js";
 import type { SandboxJob, SandboxManifest } from "./sandbox/protocol.js";
@@ -772,6 +785,303 @@ export function createCatalogSync(options: {
           `[media-worker] catalog block sync enqueued=${blocks.enqueued}`,
         );
     }
+  };
+  return {
+    run(now) {
+      if (active) return active;
+      active = run(now).finally(() => {
+        active = undefined;
+      });
+      return active;
+    },
+  };
+}
+
+/** Membership fingerprint cadence (Owner decision D2: once a minute). */
+export const CATALOG_MEMBERSHIP_INTERVAL_MS = 60 * 1000;
+
+/**
+ * The published membership by bucket (catalog-scale-v1 W8), through the
+ * public read role: each distinct pair once (a pair two records show is one
+ * asset), hashed by the md5 of `media_id:object_key`, which is the App asset
+ * id's digest, so the App's record of the same set hashes alike. One
+ * aggregate of the view, with no listing, order or row transfer: a scan of
+ * the published list and an md5 per row each minute (about 30 ms at 25k).
+ * A row without a media id or object key (both nullable in the CMS; only
+ * Payload requires them) is no pair and never an App asset, as the sync
+ * skips it; counted, its NULL hash would fail every observation.
+ */
+export const catalogPublicMembershipBucketsSql = `
+  SELECT substr(m.h, 1, 2) AS bucket, count(*)::integer AS count,
+    sum(${catalogMembershipHashSql("m.h", 3)})::text AS sum
+  FROM (SELECT DISTINCT md5(media_id || ':' || object_key) AS h FROM catalog_media
+    WHERE media_id IS NOT NULL AND object_key IS NOT NULL) m
+  GROUP BY 1`;
+
+/** The published pairs of the given buckets (only after a change). */
+export const catalogPublicMembershipMembersSql = `
+  SELECT DISTINCT media_id, object_key FROM catalog_media
+  WHERE media_id IS NOT NULL AND object_key IS NOT NULL
+    AND substr(md5(media_id || ':' || object_key), 1, 2) = ANY($1::text[])`;
+
+/**
+ * The live private projection's intents by bucket, through the prepare
+ * reader: one row per intent (its first member, or its header row), hashed
+ * with its state (a lapsed lease reads as expired) and state version, as
+ * the App mirror records them.
+ */
+export const catalogPrivateMembershipBucketsSql = `
+  SELECT substr(v.intent_id::text, 1, 2) AS bucket, count(*)::integer AS count,
+    sum(${catalogMembershipHashSql("md5(v.intent_id::text || ':' || v.state || ':' || v.state_version)", 1)})::text AS sum
+  FROM public.catalog_delivery_live_prepare_media v
+  WHERE v.media_ordinal IS NULL OR v.media_ordinal = 1
+  GROUP BY 1`;
+
+/** The live projection's intents of the given buckets (only after a change). */
+export const catalogPrivateMembershipMembersSql = `
+  SELECT v.intent_id::text AS intent_id, v.state, v.state_version
+  FROM public.catalog_delivery_live_prepare_media v
+  WHERE (v.media_ordinal IS NULL OR v.media_ordinal = 1)
+    AND substr(v.intent_id::text, 1, 2) = ANY($1::text[])`;
+
+/** `catalog-asset-` + md5(media id ':' key), as the App derives an asset id. */
+const catalogAssetIdOf = (mediaId: string, objectKey: string) =>
+  `catalog-asset-${createHash("md5").update(`${mediaId}:${objectKey}`, "utf8").digest("hex")}`;
+
+/** The App side of the membership step (community-postgres
+ * catalog-publication-dirty, bound to the App pool). */
+export interface CatalogMembershipPort {
+  readCatalogMembershipState(): Promise<CatalogMembershipState>;
+  readCatalogMembershipAppBuckets(
+    side: "public" | "private",
+  ): Promise<CatalogMembershipBuckets>;
+  applyCatalogMembership(
+    observation: CatalogMembershipObservation,
+    now: Date,
+  ): Promise<CatalogMembershipMarks>;
+}
+
+const connectCatalog = (
+  pool: Pick<ReturnType<typeof createPostgresPool>, "connect">,
+) => pool.connect();
+type CatalogClient = Awaited<ReturnType<typeof connectCatalog>>;
+
+/**
+ * The per-minute membership step of the scoped reconcile (catalog-scale-v1
+ * W8). In one CMS snapshot (the public read role's REPEATABLE READ
+ * transaction, its snapshot exported to the prepare reader, as the complete
+ * snapshot reads both), it reads one aggregate of each membership: the
+ * published pairs and, with a prepare reader, the live private intents, each
+ * as a count and a sum of element hashes in 256 buckets. A side whose total
+ * equals the stored one is done. Otherwise only the buckets that changed are
+ * listed on both sides, and the assets whose membership differs there are
+ * marked dirty with the new fingerprints in one App transaction, so a
+ * takedown of any size is queued as a whole, and the reconcile reacts within
+ * a minute or two at any Catalog size. The same transaction marks the
+ * intents whose lease or render grace passed since the last observation. A
+ * minute without a change reads two aggregates and writes the state row.
+ *
+ * The buckets that changed are those that differ from this step's last
+ * committed observation of the side, kept in memory while the stored
+ * fingerprint is still that observation's (its count, sum and time). A
+ * difference that lasts (an asset served while a requested intent holds it,
+ * a published one that cannot be copied yet, a refused intent) is then
+ * marked again only when the CMS changes one of its buckets, not on every
+ * minute in which the CMS changes at all. Without such an observation (the
+ * first after a start, or once another process, or a commit this step could
+ * not confirm, advanced the stored row) the CMS buckets are compared with
+ * the App's own record of the side, aggregated the same way, which marks
+ * every lasting difference once. Within the listed buckets the marks are the
+ * same either way: a bucket in which the App's record matches the CMS holds
+ * nothing to mark. Above a snapshot ceiling the step writes nothing, as the
+ * sync does. Any read error throws, and nothing is written or kept. Logs
+ * are content-free counts.
+ */
+export function createCatalogMembershipWatch(options: {
+  readonly published: Pick<ReturnType<typeof createPostgresPool>, "connect">;
+  readonly prepare: Pick<
+    ReturnType<typeof createPostgresPool>,
+    "connect"
+  > | null;
+  readonly port: CatalogMembershipPort;
+  readonly logger?: {
+    info(message: string): void;
+    error(message: string): void;
+  };
+}): { run(now: Date): Promise<void> } {
+  const logger = options.logger ?? console;
+  /** This step's last committed observation, by side: its CMS buckets and
+   * the time it was read at, which the stored fingerprint then carries. */
+  const committed = new Map<
+    "public" | "private",
+    { readonly at: number; readonly buckets: CatalogMembershipBuckets }
+  >();
+  const buckets = async (client: CatalogClient, sql: string) =>
+    catalogMembershipBuckets(
+      (await client.query<{ bucket: string; count: number; sum: string }>(sql))
+        .rows,
+    );
+  /** One side: its total and, when that differs from the stored one, the CMS
+   * members of the buckets that changed since this step's committed
+   * observation while it is the stored one, or else of the buckets in which
+   * the CMS differs from the App's record. */
+  const side = async <Member>(
+    observed: CatalogMembershipBuckets,
+    stored: CatalogMembershipState["public"],
+    kind: "public" | "private",
+    members: (buckets: readonly string[]) => Promise<readonly Member[]>,
+  ): Promise<CatalogMembershipSide<Member>> => {
+    const total = catalogMembershipTotal(observed);
+    if (!catalogMembershipChanged(stored, total))
+      return { ...total, diff: null };
+    const own = committed.get(kind);
+    const stillStored =
+      own !== undefined &&
+      stored !== null &&
+      own.at === stored.observedAt.getTime() &&
+      !catalogMembershipChanged(stored, catalogMembershipTotal(own.buckets));
+    const differing = differingCatalogMembershipBuckets(
+      observed,
+      stillStored
+        ? own.buckets
+        : await options.port.readCatalogMembershipAppBuckets(kind),
+    );
+    return {
+      ...total,
+      diff: {
+        buckets: differing,
+        members: differing.length ? await members(differing) : [],
+      },
+    };
+  };
+  /** One observation, compared with `previous`, with the CMS buckets it
+   * read; null above a ceiling. */
+  const observe = async (
+    previous: CatalogMembershipState,
+  ): Promise<{
+    readonly observation: CatalogMembershipObservation;
+    readonly buckets: ReadonlyMap<
+      "public" | "private",
+      CatalogMembershipBuckets
+    >;
+  } | null> => {
+    const publicClient = await connectCatalog(options.published);
+    let privateClient: CatalogClient | undefined;
+    try {
+      await publicClient.query(
+        "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const observedAt = (
+        await publicClient.query<{ at: Date }>("SELECT clock_timestamp() AS at")
+      ).rows[0]!.at;
+      const publicBuckets = await buckets(
+        publicClient,
+        catalogPublicMembershipBucketsSql,
+      );
+      let privateBuckets: CatalogMembershipBuckets | undefined;
+      if (options.prepare) {
+        const snapshot = (
+          await publicClient.query<{ id: string }>(
+            "SELECT pg_export_snapshot() AS id",
+          )
+        ).rows[0]!.id;
+        if (!/^[a-f0-9]+-[a-f0-9]+-[a-f0-9]+$/i.test(snapshot))
+          throw new Error("Catalog snapshot identifier invalid");
+        privateClient = await connectCatalog(options.prepare);
+        await privateClient.query(
+          "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        );
+        await privateClient.query(`SET TRANSACTION SNAPSHOT '${snapshot}'`);
+        privateBuckets = await buckets(
+          privateClient,
+          catalogPrivateMembershipBucketsSql,
+        );
+      }
+      const publicCount = catalogMembershipTotal(publicBuckets).count;
+      const privateCount = privateBuckets
+        ? catalogMembershipTotal(privateBuckets).count
+        : 0;
+      if (
+        publicCount > CATALOG_SNAPSHOT_MAX_SOURCES ||
+        privateCount > CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS
+      ) {
+        logger.error(
+          `[media-worker] catalog membership skipped: above ceiling sources=${publicCount}/${CATALOG_SNAPSHOT_MAX_SOURCES} intents=${privateCount}/${CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS}`,
+        );
+        return null;
+      }
+      const publicSide = await side(
+        publicBuckets,
+        previous.public,
+        "public",
+        async (list) =>
+          (
+            await publicClient.query<{ media_id: string; object_key: string }>(
+              catalogPublicMembershipMembersSql,
+              [list],
+            )
+          ).rows.map((row) => catalogAssetIdOf(row.media_id, row.object_key)),
+      );
+      const reader = privateClient;
+      const privateSide =
+        privateBuckets && reader
+          ? await side<CatalogMembershipIntent>(
+              privateBuckets,
+              previous.private,
+              "private",
+              async (list) =>
+                (
+                  await reader.query<{
+                    intent_id: string;
+                    state: string;
+                    state_version: number;
+                  }>(catalogPrivateMembershipMembersSql, [list])
+                ).rows.map((row) => ({
+                  intentId: row.intent_id,
+                  state: row.state,
+                  stateVersion: row.state_version,
+                })),
+            )
+          : null;
+      return {
+        observation: {
+          observedAt,
+          previous,
+          public: publicSide,
+          private: privateSide,
+        },
+        buckets: new Map([
+          ["public", publicBuckets],
+          ...(privateBuckets ? [["private", privateBuckets] as const] : []),
+        ]),
+      };
+    } finally {
+      if (privateClient) {
+        await privateClient.query("ROLLBACK").catch(() => undefined);
+        privateClient.release();
+      }
+      await publicClient.query("ROLLBACK").catch(() => undefined);
+      publicClient.release();
+    }
+  };
+  let active: Promise<void> | undefined;
+  const run = async (now: Date) => {
+    const observed = await observe(
+      await options.port.readCatalogMembershipState(),
+    );
+    if (observed === null) return;
+    const marked = await options.port.applyCatalogMembership(
+      observed.observation,
+      now,
+    );
+    // Committed: the stored fingerprints are now this observation's.
+    const at = observed.observation.observedAt.getTime();
+    for (const [kind, read] of observed.buckets)
+      committed.set(kind, { at, buckets: read });
+    if (marked.public + marked.private + marked.boundaries > 0)
+      logger.info(
+        `[media-worker] catalog membership marked public=${marked.public} private=${marked.private} boundaries=${marked.boundaries}`,
+      );
   };
   return {
     run(now) {

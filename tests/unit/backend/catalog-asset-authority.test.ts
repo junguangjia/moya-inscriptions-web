@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 
 import {
+  CATALOG_SCOPE_BATCH,
   captureCatalogAssets,
   catalogExpectedRenditions,
   catalogLiveIntentRowsSql,
   createCatalogPublicationAuthority,
   currentCatalogRecipePolicy,
+  planCatalogScope,
 } from "@moya/backend-production/internal/catalog-delivery";
 import { publishedCatalogPairsSql } from "@moya/backend-production/internal/publishing-catalog";
 import {
@@ -26,7 +28,7 @@ import type {
 } from "@moya/backend-production/internal/catalog-delivery";
 
 /*
- * catalog-scale-v1 (Issue #323) 1B W5: a Catalog job's publication authority
+ * catalog-scale-v1 (Issue #323) 1B W5 and W7: a Catalog job's publication authority
  * reads only its own asset. acquire captures the asset's plan from its App
  * row, the intents App mirror members name for it and its exact CMS pair
  * (captureCatalogAssets); the fence re-reads exactly those intents by id;
@@ -44,6 +46,10 @@ import type {
  * - Read errors throw, never "not public" or "nothing permitted".
  * - Cost: acquire, current() and authorized() issue the same statements
  *   whatever the Catalog's size, and never list the published Catalog.
+ * - W7: a scoped reconcile pass plans its scope in batches exactly as each
+ *   asset's own capture, with each intent's facts read once per pass; an
+ *   asset whose plan throws is isolated, a pass where every plan throws
+ *   fails, and the budget stops it after a prefix of its scope.
  * Synthetic metadata only; no database, object store or network.
  */
 
@@ -1070,7 +1076,9 @@ describe("W5: the publication adapter plans a Catalog subject from its own job's
           : sql.startsWith("SELECT a.* FROM community.media_public_assets") ||
               sql.startsWith("SELECT * FROM community.media_public_assets")
             ? [asset]
-            : [];
+            : sql.startsWith("SELECT sweep_cursor")
+              ? [{ sweep_cursor: null, policy_digest: policy }]
+              : [];
         return { rows, rowCount: rows.length };
       },
     );
@@ -1079,7 +1087,11 @@ describe("W5: the publication adapter plans a Catalog subject from its own job's
       authorized: ReturnType<typeof vi.fn>;
       released: boolean;
     }[] = [];
-    const copyRenditionIds = vi.fn(async () => [rid(999)]);
+    const planScope = vi.fn(async () => ({
+      policy,
+      plans: new Map<string, readonly string[]>(),
+      failed: [],
+    }));
     const port = new PostgresMediaPublicationAdapter(
       {
         query,
@@ -1091,7 +1103,7 @@ describe("W5: the publication adapter plans a Catalog subject from its own job's
         isPublic: () => true,
         allowPublish: () => true,
         catalogAuthority: {
-          copyRenditionIds,
+          planScope,
           publishedAssetIds: async () => [],
           // Each acquire is its own capture, with its own rendition ID.
           acquire: async () => {
@@ -1118,7 +1130,7 @@ describe("W5: the publication adapter plans a Catalog subject from its own job's
       statements
         .filter(({ sql }) => sql.startsWith("SELECT d.* FROM ("))
         .at(-1)!.values[2];
-    return { port, statements, leases, copyRenditionIds, lastDesired };
+    return { port, statements, leases, planScope, lastDesired };
   };
   const job = (id: string): PublishingJobLease => ({
     id,
@@ -1148,10 +1160,10 @@ describe("W5: the publication adapter plans a Catalog subject from its own job's
     expect(h.lastDesired()).toEqual([rid(1)]);
     expect(h.leases[0]!.authorized.mock.calls.length).toBeGreaterThanOrEqual(3);
     await h.port.release(publish.fence, NOW_DATE);
-    expect(h.copyRenditionIds).not.toHaveBeenCalled();
-    // Only the reconcile reads the copy set (until W7 scopes it).
+    expect(h.planScope).not.toHaveBeenCalled();
+    // Only the reconcile plans, and only its scope (W7).
     await h.port.reconcile(NOW_DATE, true, 10);
-    expect(h.copyRenditionIds).toHaveBeenCalledTimes(1);
+    expect(h.planScope).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a Catalog subject's desired set without its job's fence instead of planning the whole Catalog", async () => {
@@ -1184,7 +1196,7 @@ describe("W5: the publication adapter plans a Catalog subject from its own job's
         job("y"),
       ),
     ).rejects.toThrow("Catalog subject holds no source fence");
-    expect(h.copyRenditionIds).not.toHaveBeenCalled();
+    expect(h.planScope).not.toHaveBeenCalled();
     // A withdrawal while the Catalog is not public needs no plan at all.
     expect(
       await desired(
@@ -1194,5 +1206,217 @@ describe("W5: the publication adapter plans a Catalog subject from its own job's
         job("x"),
       ),
     ).toEqual([]);
+  });
+});
+
+/** One world of many generated ones (their names, intents and renditions
+ * never collide), for scopes of several batches. */
+const mergeWorlds = (worlds: readonly World[]): World => ({
+  pairs: worlds.flatMap((w) => w.pairs),
+  published: worlds.flatMap((w) => w.published),
+  intents: worlds.flatMap((w) => w.intents),
+  appAssets: new Set(worlds.flatMap((w) => [...w.appAssets])),
+  selector: worlds.flatMap((w) => w.selector),
+  pins: new Map(worlds.flatMap((w) => [...w.pins])),
+  prior: new Map(worlds.flatMap((w) => [...w.prior])),
+  ready: new Map(worlds.flatMap((w) => [...w.ready])),
+});
+
+describe("W7: a scoped reconcile pass plans its scope as each asset's own capture", () => {
+  const world = mergeWorlds(
+    Array.from({ length: 60 }, (_, i) => generate(1_000 + i)),
+  );
+  const ids = world.pairs.map((p) => assetOf(p.mediaId, p.objectKey));
+  const capture = async (id: string) =>
+    (
+      await captureCatalogAssets(poolsOf(world), [id], readsOf(world), policy)
+    ).get(id)!;
+  const BUDGET = { budgetMs: 60_000 };
+
+  it("plans a scope of several batches as each asset's capture, one CMS check a batch, each intent's facts read once", async () => {
+    expect(ids.length).toBeGreaterThan(2 * CATALOG_SCOPE_BATCH);
+    // An intent whose facts the plan reads, with two members that have App
+    // rows, one first in the scope and the other first in its second batch.
+    const shared = world.intents.find(
+      (intent) =>
+        intent.appKnown &&
+        intent.recipe === policy &&
+        ["prepared", "release_requested", "released"].includes(intent.state) &&
+        intent.expiresAt > NOW &&
+        intent.members.filter(
+          (m) =>
+            world.appAssets.has(key(m.mediaId, m.objectKey)) &&
+            world.published.includes(m),
+        ).length > 1,
+    )!;
+    const [a, b] = shared.members
+      .filter(
+        (m) =>
+          world.appAssets.has(key(m.mediaId, m.objectKey)) &&
+          world.published.includes(m),
+      )
+      .map((m) => assetOf(m.mediaId, m.objectKey));
+    const rest = ids.filter((id) => id !== a && id !== b);
+    const order = [
+      a!,
+      ...rest.slice(0, CATALOG_SCOPE_BATCH - 1),
+      b!,
+      ...rest.slice(CATALOG_SCOPE_BATCH - 1),
+    ];
+    const statements: { pool: string; sql: string; values: unknown[] }[] = [];
+    const log: string[] = [];
+    const { plans, failed } = await planCatalogScope(
+      poolsOf(world, { statements }),
+      order,
+      readsOf(world, log),
+      policy,
+      BUDGET,
+    );
+    expect(failed).toEqual([]);
+    expect([...plans.keys()]).toEqual(order);
+    let granted = 0;
+    for (const id of ids) {
+      const expected = copySet((await capture(id)).permissions);
+      expect([...plans.get(id)!].sort(), id).toEqual(expected);
+      if (expected.length) granted += 1;
+    }
+    expect(granted).toBeGreaterThan(50);
+    // One pair check per batch, never the published list.
+    expect(
+      statements.filter(({ sql }) => sql === publishedCatalogPairsSql),
+    ).toHaveLength(Math.ceil(ids.length / CATALOG_SCOPE_BATCH));
+    // Each intent's facts once per pass, the shared one's too.
+    const facts = log.filter((line) => !line.startsWith("renditions"));
+    expect(new Set(facts).size).toBe(facts.length);
+    expect(log).toContain(`inspect ${shared.intentId}`);
+  });
+
+  it("captures a failed batch again asset by asset: only the asset whose plan throws is excluded", async () => {
+    // A public asset with an App row; its own read fails every time.
+    const target = world.pairs.find(
+      (p) =>
+        world.appAssets.has(key(p.mediaId, p.objectKey)) &&
+        world.published.includes(p),
+    )!;
+    const targetId = assetOf(target.mediaId, target.objectKey);
+    const pools = poolsOf(world);
+    const appQuery = (
+      pools.app as unknown as {
+        query(sql: string, values?: unknown[]): Promise<unknown>;
+      }
+    ).query;
+    const app = {
+      query: async (sql: string, values: unknown[] = []) => {
+        if (
+          sql.startsWith(
+            "SELECT id,media_id,source_object_key FROM community.catalog_media_assets",
+          ) &&
+          (values[0] as string[]).includes(targetId)
+        )
+          throw Object.assign(new Error("terminating connection"), {
+            code: "57P01",
+          });
+        return appQuery(sql, values);
+      },
+    } as unknown as typeof pools.app;
+    const { plans, failed } = await planCatalogScope(
+      { ...pools, app },
+      ids,
+      readsOf(world),
+      policy,
+      BUDGET,
+    );
+    expect(failed).toEqual([targetId]);
+    expect([...plans.keys()]).toEqual(ids.filter((id) => id !== targetId));
+    for (const id of ids.slice(0, 2 * CATALOG_SCOPE_BATCH))
+      if (id !== targetId)
+        expect([...plans.get(id)!].sort(), id).toEqual(
+          copySet((await capture(id)).permissions),
+        );
+    // A read that fails once is captured again with the rest: nothing fails.
+    const once = await planCatalogScope(
+      poolsOf(world, { fail: { pool: "prepare", text: "intent_id=ANY(" } }),
+      ids,
+      readsOf(world),
+      policy,
+      BUDGET,
+    );
+    expect(once.failed).toEqual([]);
+    expect(once.plans.size).toBe(ids.length);
+  });
+
+  it("fails the pass when every asset attempted fails, as the whole-Catalog plan did", async () => {
+    const pools = poolsOf(world);
+    const app = {
+      query: async () => {
+        throw Object.assign(new Error("permission denied"), { code: "42501" });
+      },
+    } as unknown as typeof pools.app;
+    await expect(
+      planCatalogScope({ ...pools, app }, ids, readsOf(world), policy, BUDGET),
+    ).rejects.toThrow("permission denied");
+  });
+
+  it("starts a batch only while the longest one so far fits the budget, so the assets attempted are a prefix", async () => {
+    // Each clock reading is 10 ms later, so each batch takes 10 ms: the
+    // second starts at 30 ms (plus 10 fits in 45), the third would end at
+    // 60 ms and does not start.
+    let ms = 0;
+    const clock = () => (ms += 10);
+    const { plans, failed } = await planCatalogScope(
+      poolsOf(world),
+      ids,
+      readsOf(world),
+      policy,
+      { budgetMs: 45, clock },
+    );
+    expect(failed).toEqual([]);
+    expect([...plans.keys()]).toEqual(ids.slice(0, 2 * CATALOG_SCOPE_BATCH));
+  });
+
+  it("refuses an asset id or a budget it cannot plan", async () => {
+    await expect(
+      planCatalogScope(
+        poolsOf(world),
+        ["catalog-asset-x"],
+        readsOf(world),
+        policy,
+        BUDGET,
+      ),
+    ).rejects.toThrow(TypeError);
+    await expect(
+      planCatalogScope(poolsOf(world), ids, readsOf(world), policy, {
+        budgetMs: 0,
+      }),
+    ).rejects.toThrow(TypeError);
+    // Nothing named, nothing read.
+    const statements: { pool: string; sql: string; values: unknown[] }[] = [];
+    expect(
+      (
+        await planCatalogScope(
+          poolsOf(world, { statements }),
+          [],
+          readsOf(world),
+          policy,
+          BUDGET,
+        )
+      ).plans.size,
+    ).toBe(0);
+    expect(statements).toEqual([]);
+  });
+
+  it("leaves no whole-Catalog plan in the production authority", () => {
+    // The whole Catalog's copy set is the tests' oracle (catalog-copy-set.ts)
+    // only: what production builds plans a scope, a job or a read.
+    const pools = poolsOf(world);
+    expect(
+      Object.keys(
+        createCatalogPublicationAuthority(
+          pools.published,
+          pools.prepare,
+          pools.app,
+        ),
+      ).sort(),
+    ).toEqual(["acquire", "planScope", "publishedAssetIds"]);
   });
 });

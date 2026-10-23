@@ -245,8 +245,11 @@ export const readCatalogSourceSnapshot = async (
  * (captureCatalogAssets), the fence re-reads exactly those intents, and
  * authorized() checks exactly that pair, so a job, a fence check and an
  * authorization cost the same at any Catalog size and never read the
- * published list or a whole private view. Every read error throws; none is
- * read as "not public" or "nothing permitted".
+ * published list or a whole private view. The reconcile plans a bounded
+ * scope of assets the same way (planScope, W7); nothing in production plans
+ * the whole Catalog any more (planCatalogPermissions is the tests' oracle).
+ * Every read error throws; none is read as "not public" or "nothing
+ * permitted".
  */
 export const createCatalogPublicationAuthority = (
   published: CatalogPool,
@@ -255,7 +258,7 @@ export const createCatalogPublicationAuthority = (
 ): CatalogAuthority => {
   // A fence keeps its client for the whole publication lease. Fences never
   // take more than CATALOG_PREPARE_LEASES clients, so snapshot reads (sync,
-  // reconcile, plans) and the other lane always find one; a fence beyond the
+  // reconcile scopes) and the other lane always find one; a fence beyond the
   // cap is busy (lock_not_available, as a contended document lock), so the job
   // is deferred instead of failing an attempt on a pool timeout.
   let fences = 0;
@@ -271,24 +274,6 @@ export const createCatalogPublicationAuthority = (
       fences -= 1;
       throw error;
     }
-  };
-  // The whole Catalog's plan from one complete snapshot: each asset's plan
-  // (planCatalogAsset) over rows grouped once by pair, so it costs O(S + R),
-  // never S x R. Only the reconcile's copy set reads it, until the scoped
-  // reconcile (catalog-scale-v1 W7) plans its scope with captureCatalogAssets;
-  // no job, fence or desired set does.
-  const plans = async () => {
-    const snapshot = await readCatalogSourceSnapshot(published, prepare);
-    if (!snapshot) throw new Error("Catalog complete source unavailable");
-    const policy = currentCatalogRecipePolicy().recipeManifestSha256;
-    return {
-      permissions: await planCatalogPermissions(
-        snapshot,
-        catalogPlanReads(app, policy),
-        policy,
-      ),
-      snapshot,
-    };
   };
   return {
     // The public read path (resolveKeys): the requested assets' exact pairs,
@@ -330,13 +315,20 @@ export const createCatalogPublicationAuthority = (
       );
       return ids.filter((id) => approved.has(id));
     },
-    // The reconcile's copy set (its only caller until W7 scopes it). The
-    // selector is read in batches of pairs with no row ceiling, so it works
-    // past the 40,000 rows #320 refused (catalog-scale-v1 W5, W-AC7).
-    async copyRenditionIds() {
-      return [
-        ...new Set((await plans()).permissions.flatMap((p) => p.renditionIds)),
-      ];
+    // One scoped reconcile pass's plans (catalog-scale-v1 W7): the named
+    // assets only, batched, within the pass's time budget.
+    async planScope(assetIds, options) {
+      const policy = currentCatalogRecipePolicy().recipeManifestSha256;
+      return {
+        policy,
+        ...(await planCatalogScope(
+          { published, prepare, app },
+          assetIds,
+          catalogPlanReads(app, policy),
+          policy,
+          options,
+        )),
+      };
     },
     async acquire(assetId) {
       if (!/^catalog-asset-[a-f0-9]{32}$/.test(assetId))
@@ -708,13 +700,13 @@ export interface CatalogPlanReads {
 export const CATALOG_PLAN_SELECTOR_BATCH = 250;
 
 /** The App reads of a Catalog plan, with the App role: one asset's (a job's
- * capture), a scope's, or the whole Catalog's (the reconcile's copy set
- * until W7). The selector rows are read CATALOG_PLAN_SELECTOR_BATCH pairs at
- * a time, every row of each pair, with no row ceiling (catalog-scale-v1 W5,
- * W-AC7): #320 refused the whole Catalog above 40,000 rows, about 10,000
- * published images. Each pair is read by its App asset's primary key (the id
- * derives from the pair by a CHECK), so a job's single pair never scans the
- * assets, at any Catalog size (W-AC3). */
+ * capture), a reconcile scope batch's (W7), or the whole Catalog's (the
+ * tests' oracle). The selector rows are read CATALOG_PLAN_SELECTOR_BATCH
+ * pairs at a time, every row of each pair, with no row ceiling
+ * (catalog-scale-v1 W5, W-AC7): #320 refused the whole Catalog above 40,000
+ * rows, about 10,000 published images. Each pair is read by its App asset's
+ * primary key (the id derives from the pair by a CHECK), so a job's single
+ * pair never scans the assets, at any Catalog size (W-AC3). */
 export const catalogPlanReads = (
   app: CatalogPool,
   policy: string,
@@ -803,7 +795,10 @@ const readIntentFacts = async (
 };
 
 /**
- * The plan of every asset a complete snapshot names: each published pair,
+ * The whole Catalog's plan, the oracle the differential and scale tests
+ * compare the per-asset and scoped plans against; no production path calls
+ * it since the reconcile plans a bounded scope (catalog-scale-v1 W7). It is
+ * the plan of every asset a complete snapshot names: each published pair,
  * and each member of a release_requested intent. App is read as before: per
  * intent in snapshot order, only for one that is requested or names a
  * public pair, then the selector rows of the published pairs once. Every row
@@ -962,7 +957,8 @@ export interface CatalogAssetCapture {
 /**
  * The publication plans of the named Catalog assets, each from its own facts
  * only (catalog-scale-v1 W5): a job's acquire names one asset; a scoped
- * reconcile (W7) may name its scope. Per call:
+ * reconcile pass names a batch of its scope (planCatalogScope, W7). Per
+ * call:
  * - App: the assets' rows (each pair, by primary key) and the intents App
  *   mirror members name for them (`catalog_delivery_media_refs` by asset);
  * - CMS, in one exported snapshot as the complete snapshot reads it: the
@@ -1140,6 +1136,132 @@ export const captureCatalogAssets = async (
         : [],
     });
   return captures;
+};
+
+/** Assets per capture of a scoped reconcile pass (planCatalogScope). Each
+ * batch is one CMS snapshot, one App read of its assets' rows and intents,
+ * and one selector statement (below CATALOG_PLAN_SELECTOR_BATCH), so a pass
+ * of K assets takes about K / 100 snapshots, and the pass's budget is kept
+ * to within about one batch's time. A snapshot per batch, not one per scope
+ * (the design's wording), is what lets the budget stop between batches and a
+ * failed batch be captured again asset by asset. Two batches may see
+ * different CMS states; each asset is still planned from one snapshot, its
+ * job re-plans it from the live CMS, and a mark made meanwhile outlives the
+ * pass (the mark_seq clear). */
+export const CATALOG_SCOPE_BATCH = 100;
+
+/** Plan reads that read each intent's App facts once per pass, however many
+ * batches name it. The key is every field of the intent a fact depends on,
+ * so an intent whose state, version or lease differs in a later batch's
+ * snapshot is read again; a failed read is not kept. */
+const memoizedPlanReads = (reads: CatalogPlanReads): CatalogPlanReads => {
+  const kept = new Map<string, Promise<unknown>>();
+  const once = <T>(
+    kind: string,
+    intent: CatalogPlanIntent,
+    read: () => Promise<T>,
+  ): Promise<T> => {
+    const key = JSON.stringify([
+      kind,
+      intent.intentId,
+      intent.documentId,
+      intent.state,
+      intent.stateVersion,
+      intent.manifestSha256,
+      intent.recipeManifestSha256,
+      intent.mediaCount,
+      intent.expiresAt,
+    ]);
+    let value = kept.get(key) as Promise<T> | undefined;
+    if (!value) {
+      value = read();
+      kept.set(key, value);
+      value.catch(() => kept.delete(key));
+    }
+    return value;
+  };
+  return {
+    inspect: (intent) => once("inspect", intent, () => reads.inspect(intent)),
+    pins: (intent) => once("pins", intent, () => reads.pins(intent)),
+    priorPins: (intent) => once("prior", intent, () => reads.priorPins(intent)),
+    renditions: (sources) => reads.renditions(sources),
+  };
+};
+
+/**
+ * The plans of one scoped reconcile pass (catalog-scale-v1 W7): the named
+ * assets in order, CATALOG_SCOPE_BATCH at a time, each batch captured as a
+ * job captures its own asset (captureCatalogAssets: one CMS snapshot, the
+ * assets' own App rows and intents), with each intent's App facts read once
+ * per pass. Inspecting an intent records its pins' public generations, so
+ * every intent of a planned asset that may grant it something has them
+ * recorded again. A batch starts only while the longest batch so far still
+ * fits in `budgetMs`, so the assets attempted are a prefix of the order and
+ * the pass ends within its budget. A batch that throws is captured again
+ * asset by asset: an asset whose plan throws is `failed` alone and the others
+ * are planned; none is ever planned from a partial read. When every asset
+ * attempted failed, the failure is the pass's (the CMS or App is unavailable)
+ * and is thrown, as a whole-Catalog plan threw. A plan is the asset's desired
+ * Catalog rendition IDs, the union of its permissions'.
+ */
+export const planCatalogScope = async (
+  pools: Parameters<typeof captureCatalogAssets>[0],
+  assetIds: readonly string[],
+  reads: CatalogPlanReads,
+  policy: string,
+  options: { readonly budgetMs: number; readonly clock?: () => number },
+): Promise<{
+  readonly plans: ReadonlyMap<string, readonly string[]>;
+  readonly failed: readonly string[];
+}> => {
+  if (!Number.isFinite(options.budgetMs) || options.budgetMs <= 0)
+    throw new TypeError("Catalog scope budget invalid");
+  const ids = [...new Set(assetIds)];
+  for (const id of ids)
+    if (typeof id !== "string" || !/^catalog-asset-[a-f0-9]{32}$/.test(id))
+      throw new TypeError("Catalog source identity invalid");
+  const clock = options.clock ?? Date.now;
+  const started = clock();
+  // A batch starts only while the longest one so far still fits, so the
+  // pass ends within its budget instead of one batch past it.
+  let longest = 0;
+  const spent = (at: number) => at - started + longest >= options.budgetMs;
+  const memo = memoizedPlanReads(reads);
+  const plans = new Map<string, readonly string[]>();
+  const failed: string[] = [];
+  let failure: unknown;
+  const capture = async (batch: readonly string[]) => {
+    for (const [id, captured] of await captureCatalogAssets(
+      pools,
+      batch,
+      memo,
+      policy,
+    ))
+      plans.set(id, [
+        ...new Set(captured.permissions.flatMap((p) => p.renditionIds)),
+      ]);
+  };
+  scope: for (let at = 0; at < ids.length; at += CATALOG_SCOPE_BATCH) {
+    const begun = clock();
+    if (spent(begun)) break;
+    const batch = ids.slice(at, at + CATALOG_SCOPE_BATCH);
+    try {
+      await capture(batch);
+    } catch {
+      for (const id of batch) {
+        if (clock() - started >= options.budgetMs) break scope;
+        try {
+          await capture([id]);
+        } catch (error) {
+          failure ??= error;
+          failed.push(id);
+        }
+      }
+    }
+    longest = Math.max(longest, clock() - begun);
+  }
+  if (failed.length && !plans.size) throw failure;
+  return { plans, failed };
 };
 
 /**

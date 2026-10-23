@@ -49,6 +49,7 @@ import {
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
   resolveCatalogRenditionRead,
   verifyCatalogDeliveryReadable,
   verifyCommunityMigrationLedger,
@@ -73,8 +74,10 @@ import {
 } from "./article-authoring/delegation-composition.js";
 import { createArticleReadPort } from "./article-authoring/read-composition.js";
 import {
+  CATALOG_MEMBERSHIP_INTERVAL_MS,
   CATALOG_SYNC_INTERVAL_MS,
   createCatalogBlockRenderer,
+  createCatalogMembershipWatch,
   createCatalogRenderer,
   createCatalogSync,
   listPublishedCatalogSources,
@@ -523,6 +526,28 @@ export const prepareProductionBackend = async (
                     },
                   ]
                 : []),
+              // catalog-scale-v1 W8, as in the media worker: wherever the
+              // scoped reconcile runs with a Catalog authority (here the
+              // publication lanes below, whenever publishing media is set,
+              // with the authority always on the published read pool), the
+              // per-minute membership step marks its dirty assets (a
+              // takedown between syncs or with no sync at all, a lease or
+              // render grace that passed), from the published read pool, on
+              // the App pool. It follows the reconcile, not the sync: without
+              // CMS_MEDIA_DIR there is no sync, and the reconcile would
+              // otherwise reach a takedown only on the sweep. One instance
+              // per process: its memory of its own last observation limits
+              // the marks.
+              {
+                label: "catalog membership",
+                intervalMs: CATALOG_MEMBERSHIP_INTERVAL_MS,
+                run: createCatalogMembershipWatch({
+                  published: pool,
+                  prepare: catalogPreparePool,
+                  port: catalogMembershipStore(communityPool),
+                }).run,
+                detached: true,
+              },
               ...(profileRender
                 ? [
                     {

@@ -113,6 +113,11 @@ export const synchronizeCatalogDeliveryIntents = async (
     width: number;
     height: number;
   }[];
+  // The observed-live rows and the snapshot's own intents, as two disjoint
+  // reads (observed_live is NOT NULL): the first through A1's partial index,
+  // the second by primary key, so neither reads the tombstones on either
+  // PostgreSQL major. One `observed_live OR intent_id=ANY(…)` scan read the
+  // whole history on PG16 (catalog-scale-v1 W6/W7).
   const existing = new Map(
     (
       await db.query<{
@@ -131,7 +136,7 @@ export const synchronizeCatalogDeliveryIntents = async (
         observed_at: Date;
         ended_at: Date | null;
       }>(
-        "SELECT * FROM community.catalog_delivery_prepares WHERE observed_live OR intent_id=ANY($1::uuid[]) ORDER BY intent_id",
+        "SELECT * FROM community.catalog_delivery_prepares WHERE observed_live UNION ALL SELECT * FROM community.catalog_delivery_prepares WHERE intent_id=ANY($1::uuid[]) AND NOT observed_live ORDER BY intent_id",
         [parsed.map(({ intentId }) => intentId)],
       )
     ).rows.map((row) => [row.intent_id, row]),

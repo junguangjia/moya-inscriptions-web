@@ -16,6 +16,7 @@ import {
 } from "@moya/community-postgres";
 import { describe, expect, it, vi } from "vitest";
 
+import { catalogAuthorityWithCopySet } from "./catalog-copy-set.js";
 import { snapshotCursors } from "./catalog-snapshot-cursor.js";
 
 /*
@@ -258,7 +259,7 @@ const world = (options: {
   });
   const app = { query: appQuery } as unknown as Parameters<Authority>[2];
   return {
-    authority: createCatalogPublicationAuthority(published, prepare, app),
+    authority: catalogAuthorityWithCopySet(published, prepare, app),
     published,
     prepare,
     capacity,

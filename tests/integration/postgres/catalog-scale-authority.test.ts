@@ -19,6 +19,10 @@ import { PostgresMediaPublicationAdapter } from "@moya/community-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  catalogAuthorityWithCopySet,
+  wholeCatalogCopySet,
+} from "../../unit/backend/catalog-copy-set.js";
+import {
   CATALOG_SCALE_25K,
   catalogScaleCounts,
   catalogScaleImage,
@@ -394,11 +398,11 @@ describe(
           ].sort(),
         ).toEqual(
           [
-            ...(await createCatalogPublicationAuthority(
+            ...(await wholeCatalogCopySet(
               fixture.publicRead,
               fixture.prepare,
               fixture.app,
-            ).copyRenditionIds()),
+            )),
           ].sort(),
         );
       },
@@ -420,7 +424,7 @@ describe(
           }),
         );
         const recorder = createQueryRecorder();
-        const authority = createCatalogPublicationAuthority(
+        const authority = catalogAuthorityWithCopySet(
           fixture.publicRead,
           fixture.prepare,
           recorder.wrap("app", fixture.app),

@@ -10,6 +10,7 @@ import {
 import {
   PostgresWorkPublishingAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 
@@ -20,8 +21,10 @@ import {
 } from "./publishing/catalog-delivery-intents.js";
 import { parseCommunityPostgresConfig } from "./community-postgres-config.js";
 import {
+  CATALOG_MEMBERSHIP_INTERVAL_MS,
   CATALOG_SYNC_INTERVAL_MS,
   createCatalogBlockRenderer,
+  createCatalogMembershipWatch,
   createCatalogRenderer,
   createCatalogSync,
   listPublishedCatalogSources,
@@ -420,6 +423,17 @@ export async function prepareMediaWorker(
         logger,
       })
     : null;
+  // catalog-scale-v1 W8: the per-minute membership fingerprints that mark
+  // the scoped reconcile's dirty assets, wherever the reconcile has a
+  // Catalog authority (the published read pool).
+  const catalogMembership = catalogPool
+    ? createCatalogMembershipWatch({
+        published: catalogPool,
+        prepare: catalogPreparePool,
+        port: catalogMembershipStore(communityPool),
+        logger,
+      })
+    : null;
   // Profile jobs share the one sandbox and the worker concurrency with work
   // processing; the sweep yields to uploads, edits and Catalog renders.
   const profile = configuration.profile
@@ -454,6 +468,18 @@ export async function prepareMediaWorker(
               label: "catalog sync",
               intervalMs: CATALOG_SYNC_INTERVAL_MS,
               run: catalogSync.run,
+              detached: true,
+            },
+          ]
+        : []),
+      // Detached as well: a minute without a change reads two aggregates,
+      // but the diff after a mass takedown reads the whole Catalog once.
+      ...(catalogMembership
+        ? [
+            {
+              label: "catalog membership",
+              intervalMs: CATALOG_MEMBERSHIP_INTERVAL_MS,
+              run: catalogMembership.run,
               detached: true,
             },
           ]

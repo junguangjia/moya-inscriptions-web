@@ -69,7 +69,7 @@ describe("Catalog publication captured-context cleanup", () => {
         isPublic: () => true,
         allowPublish: () => true,
         catalogAuthority: {
-          copyRenditionIds: async () => [],
+          planScope: async () => ({ policy: "", plans: new Map(), failed: [] }),
           publishedAssetIds: async () => [],
           acquire: async () => ({
             renditionIds: [],

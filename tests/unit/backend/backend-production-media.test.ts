@@ -10,6 +10,7 @@ import {
 import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
 import {
   CATALOG_PUBLISHED_PAIRS_MAX,
+  catalogPublicMembershipBucketsSql,
   publishedCatalogPairsSql,
 } from "@moya/backend-production/internal/publishing-catalog";
 import { CatalogQueryUnavailableError } from "@moya/api";
@@ -31,6 +32,7 @@ import {
   PostgresWorkPublishingAdapter,
   PostgresNotificationAdapter,
   PostgresMediaPublicationAdapter,
+  catalogMembershipStore,
 } from "@moya/community-postgres";
 import {
   apiErrorSchema,
@@ -159,13 +161,15 @@ vi.mock("@moya/catalog-postgres", async (importOriginal) => {
 
 // The community ledger check is read-only PostgreSQL I/O as well; the App-role
 // adapter is unused by these media compositions. The author adapter's
-// options (the profile rendition switch) are observed.
+// options (the profile rendition switch) and the App side of the Catalog
+// membership step (catalog-scale-v1 W8) are observed.
 vi.mock("@moya/community-postgres", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@moya/community-postgres")>();
   return {
     ...actual,
     verifyCommunityMigrationLedger: vi.fn(async () => {}),
+    catalogMembershipStore: vi.fn(actual.catalogMembershipStore),
     PostgresAuthorCommunityAdapter: vi.fn(function (
       ...args: ConstructorParameters<
         typeof actual.PostgresAuthorCommunityAdapter
@@ -1629,6 +1633,125 @@ describe("Work publishing composition", () => {
     },
     15_000,
   );
+
+  // catalog-scale-v1 (W8 in the media worker, here for the embedded
+  // Development worker): wherever the Backend runs the Catalog sync and the
+  // scoped reconcile, it also runs the per-minute membership step that marks
+  // the reconcile's dirty assets (takedowns between syncs, lease and render
+  // grace boundaries), on the App pool, from the published read pool.
+  it("Development runs the Catalog membership step beside the sync, on the App pool", async () => {
+    quietQueue();
+    const membership = {
+      readCatalogMembershipState: vi.fn(async () => ({
+        public: null,
+        private: null,
+      })),
+      readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+      applyCatalogMembership: vi.fn(async () => ({
+        public: 0,
+        private: 0,
+        boundaries: 0,
+      })),
+    };
+    vi.mocked(catalogMembershipStore).mockReturnValueOnce(membership);
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const from = vi.mocked(createPostgresPool).mock.results.length;
+    const prepared = await prepareProductionBackend({
+      ...local,
+      ...publishingKeys,
+    });
+    const poolOf = (url: string) =>
+      vi.mocked(createPostgresPool).mock.results[
+        from +
+          vi
+            .mocked(createPostgresPool)
+            .mock.calls.slice(from)
+            .findIndex(([config]) => config.connectionString === url)
+      ]!.value as {
+        connect: ReturnType<typeof vi.fn>;
+      };
+    try {
+      expect(catalogMembershipStore).toHaveBeenCalledTimes(1);
+      expect(catalogMembershipStore).toHaveBeenCalledWith(
+        poolOf(local.APP_DATABASE_URL),
+      );
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1),
+      );
+      // The published pool's aggregate, with no prepare reader here: no
+      // private side.
+      expect(
+        (membership.applyCatalogMembership.mock.calls[0] as unknown[])[0],
+      ).toMatchObject({
+        public: { count: 0, sum: "0", diff: { buckets: [], members: [] } },
+        private: null,
+      });
+      const clients = (await Promise.all(
+        poolOf(local.DATABASE_URL).connect.mock.results.map(
+          (result) => result.value as Promise<unknown>,
+        ),
+      )) as { query: ReturnType<typeof vi.fn> }[];
+      expect(
+        clients.some((client) =>
+          client.query.mock.calls.some(
+            ([sql]) => sql === catalogPublicMembershipBucketsSql,
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      await prepared.closeResources();
+    }
+  });
+
+  // The step follows the scoped reconcile, not the sync, as in the media
+  // worker (one condition for both there). Without CMS_MEDIA_DIR the
+  // embedded Backend runs no Catalog sync and no render, but its publication
+  // lanes still reconcile with the Catalog authority on the published read
+  // pool, so the step still marks takedowns and passed lease or render grace
+  // rather than leaving them to the sweep alone.
+  it("Development without CMS_MEDIA_DIR still runs the Catalog membership step beside the scoped reconcile, with no sync", async () => {
+    const queue = quietQueue();
+    const membership = {
+      readCatalogMembershipState: vi.fn(async () => ({
+        public: null,
+        private: null,
+      })),
+      readCatalogMembershipAppBuckets: vi.fn(async () => new Map()),
+      applyCatalogMembership: vi.fn(async () => ({
+        public: 0,
+        private: 0,
+        boundaries: 0,
+      })),
+    };
+    vi.mocked(catalogMembershipStore).mockReturnValueOnce(membership);
+    vi.mocked(openPublishingMedia).mockResolvedValueOnce(
+      fakeMedia() as unknown as Awaited<ReturnType<typeof openPublishingMedia>>,
+    );
+    const prepared = await prepareProductionBackend({
+      ...local,
+      CMS_MEDIA_DIR: undefined,
+      ...publishingKeys,
+    });
+    try {
+      expect(catalogMembershipStore).toHaveBeenCalledTimes(1);
+      prepared.startBackgroundWork();
+      await vi.waitFor(() =>
+        expect(membership.applyCatalogMembership).toHaveBeenCalledTimes(1),
+      );
+      // The publication lanes (the scoped reconcile's) run their maintenance.
+      await vi.waitFor(() =>
+        expect(
+          PostgresMediaPublicationAdapter.prototype.hasRegisteredPublications,
+        ).toHaveBeenCalled(),
+      );
+      expect(queue.catalogSync).not.toHaveBeenCalled();
+    } finally {
+      await prepared.closeResources();
+    }
+  });
 
   // catalog-scale-v1 (W4 in the media worker, here for the embedded
   // Development worker): the Catalog sync runs detached from the tick.

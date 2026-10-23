@@ -10,6 +10,7 @@ import {
 import { parseCatalogPrepareRows } from "@moya/community-postgres";
 import { describe, expect, it } from "vitest";
 
+import { catalogAuthorityWithCopySet } from "./catalog-copy-set.js";
 import { previousCatalogPlan } from "./catalog-plan-oracle.js";
 import { snapshotCursors } from "./catalog-snapshot-cursor.js";
 
@@ -734,7 +735,7 @@ describe("W1: plan cost grows linearly with the Catalog", () => {
       },
     } as unknown as Parameters<typeof createCatalogPublicationAuthority>[2];
     return {
-      authority: createCatalogPublicationAuthority(published, null, app),
+      authority: catalogAuthorityWithCopySet(published, null, app),
       rows,
       visits,
     };

@@ -27,6 +27,7 @@ import {
 } from "@moya/community-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { wholeCatalogCopySet } from "../../unit/backend/catalog-copy-set.js";
 import {
   CATALOG_SCALE_25K,
   bumpCatalogScaleRecipe,
@@ -68,9 +69,9 @@ import type { MediaId } from "@moya/contracts";
  *   fenced and the keyed view, the delivery facts and publishedAssetIds;
  * - the worker: the published listing, the snapshot (both cursors; the
  *   private one over the live prepare projection of CMS migration M2), two
- *   sync passes, plans() (copyRenditionIds), one reconcile pass, one job's
- *   acquire with its fence checks (current, authorized), and the Admin
- *   readiness read.
+ *   sync passes, plans() (copyRenditionIds, the whole-Catalog oracle), one
+ *   scoped reconcile pass (W7), one job's acquire with its fence checks
+ *   (current, authorized), and the Admin readiness read.
  * Boundary scenarios put one bound of d51114c5 at its limit and one past it.
  *
  * Environment: TEST_DATABASE_URL (the loopback disposable target, as the
@@ -539,7 +540,7 @@ const syncDetail = (measured: Measured & { recorder: QueryRecorder }) => {
   return {
     mirrorRowsRead: statementRows(
       queries,
-      "SELECT * FROM community.catalog_delivery_prepares WHERE observed_live OR intent_id=ANY(",
+      "SELECT * FROM community.catalog_delivery_prepares WHERE observed_live UNION ALL ",
     ),
     mediaRefRowsRead: statementRows(
       queries,
@@ -621,13 +622,36 @@ const fenceCheck = async (
   return { measured, queries };
 };
 
+/** The authority, with `padding` (well-formed IDs of no rendition) added to
+ * the plan of the first asset each scoped reconcile pass plans. */
+const paddedScope = (
+  authority: ReturnType<typeof createCatalogPublicationAuthority>,
+  padding: readonly string[],
+): typeof authority => ({
+  ...authority,
+  async planScope(assetIds, options) {
+    const planned = await authority.planScope(assetIds, options);
+    const [first] = planned.plans.keys();
+    return first === undefined
+      ? planned
+      : {
+          ...planned,
+          plans: new Map([
+            ...planned.plans,
+            [first, [...planned.plans.get(first)!, ...padding]],
+          ]),
+        };
+  },
+});
+
 /**
  * d51114c5's two bounds a worker pass meets only after another: the store's
  * 10,000-source bound (the snapshot's union is null first) and reconcile's
  * 40,000-id selector (the publicReady bound throws first, unless private-B
  * pins add ids), each called at its limit and one past it. At this head the
  * store takes up to the snapshot ceiling (W3) and reconcile binds the ids as
- * one text[] with no count bound (W1), so all four calls complete.
+ * one text[] with no count bound (W1): since W7 the scoped pass's planned
+ * IDs, here padded to the bound's size. All four calls complete.
  */
 const directStep = async (scenario: ScenarioReport) => {
   const sources = (n: number) =>
@@ -670,10 +694,10 @@ const directStep = async (scenario: ScenarioReport) => {
           new PostgresMediaPublicationAdapter(app, {
             isPublic: () => true,
             allowPublish: () => true,
-            catalogAuthority: {
-              ...createCatalogPublicationAuthority(cms, prepare, app),
-              copyRenditionIds: async () => ids(n),
-            },
+            catalogAuthority: paddedScope(
+              createCatalogPublicationAuthority(cms, prepare, app),
+              ids(n),
+            ),
           }).reconcile(new Date(), true, 500),
         (counts) => counts,
       ),
@@ -798,8 +822,7 @@ const workerStep = async (scenario: ScenarioReport, full: boolean) => {
   const plans = await measure(
     fixture,
     1,
-    ({ cms, prepare, app }) =>
-      createCatalogPublicationAuthority(cms, prepare, app).copyRenditionIds(),
+    ({ cms, prepare, app }) => wholeCatalogCopySet(cms, prepare, app),
     (ids) => ({ renditionIds: ids.length }),
   );
   scenario.ops.plans = {

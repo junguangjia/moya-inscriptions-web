@@ -46,6 +46,48 @@ export {
   nearCatalogSnapshotCeiling,
   readCatalogSnapshotCursor,
 } from "./publishing/catalog-snapshot-ceiling.js";
+// catalog-scale-v1 (W7/W8): the one writer of the scoped reconcile's dirty
+// queue (its mark, its consumers' lock and the lock order every writer
+// keeps) and the per-minute membership fingerprints (App migration A1's two
+// tables).
+export {
+  CATALOG_MEMBERSHIP_FIRST_WINDOW_MINUTES,
+  CATALOG_PUBLICATION_DIRTY_REASONS,
+  CATALOG_RENDER_GRACE_HOURS,
+  CatalogReconcileStateMissingError,
+  applyCatalogMembership,
+  catalogIntentAssetsSql,
+  catalogMembershipBoundariesSql,
+  catalogMembershipBuckets,
+  catalogMembershipChanged,
+  catalogMembershipHashSql,
+  catalogMembershipStateSql,
+  catalogMembershipStore,
+  catalogMembershipTotal,
+  catalogMirrorStatesSql,
+  catalogPrivateMembershipAppBucketsSql,
+  catalogPrivateMembershipAppMembersSql,
+  catalogPublicMembershipAppBucketsSql,
+  catalogPublicMembershipAppMembersSql,
+  catalogPublicationDirtyLockSql,
+  catalogPublicationDirtyMarkSql,
+  differingCatalogMembershipBuckets,
+  lockCatalogPublicationDirty,
+  markCatalogPublicationDirty,
+  readCatalogMembershipAppBuckets,
+  readCatalogMembershipState,
+} from "./publishing/catalog-publication-dirty.js";
+export type {
+  CatalogMembershipBucket,
+  CatalogMembershipBuckets,
+  CatalogMembershipFingerprint,
+  CatalogMembershipIntent,
+  CatalogMembershipMarks,
+  CatalogMembershipObservation,
+  CatalogMembershipSide,
+  CatalogMembershipState,
+  CatalogPublicationDirtyReason,
+} from "./publishing/catalog-publication-dirty.js";
 // unified-media-pipeline-v1: the recorded form of rendition recipe
 // identities (the registry itself lives with the processor) and the D7 hold.
 export {

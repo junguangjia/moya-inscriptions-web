@@ -389,7 +389,9 @@ describe("lookupPublishedCatalog with an authority", () => {
         allowPublish: () => true,
         catalogAuthority: {
           publishedAssetIds,
-          copyRenditionIds: async () => [],
+          planScope: async () => {
+            throw new Error("UNEXPECTED_PLAN");
+          },
           acquire: async () => {
             throw new Error("UNEXPECTED_ACQUIRE");
           },
