@@ -226,13 +226,17 @@ describe("published Catalog exact-pair media composition", () => {
     ];
     const result = await resolver.resolveCatalog(pairs as never);
     expect(resolveMany).toHaveBeenCalledOnce();
-    expect(query.mock.calls[1]?.[1]).toEqual([JSON.stringify(pairs)]);
+    // The pairs, and their media ids once each as the view restriction.
+    expect(query.mock.calls[1]?.[1]).toEqual([
+      JSON.stringify(pairs),
+      ["media-a", "media-b"],
+    ]);
     expect(result.size).toBe(2);
     expect(JSON.stringify([...result.values()])).not.toContain("objectKey");
     expect(release).toHaveBeenCalledOnce();
   });
   it("keeps the same legacy MediaId with different Catalog object keys in distinct batches", async () => {
-    const { pool } = database([
+    const { pool, query } = database([
       catalogRow("catalog-a", "media-same", "synthetic/a.webp"),
       catalogRow("catalog-b", "media-same", "synthetic/b.webp"),
     ]);
@@ -252,6 +256,8 @@ describe("published Catalog exact-pair media composition", () => {
       { catalogId: "catalog-b", mediaId: "media-same" },
     ] as never);
     expect(resolveMany).toHaveBeenCalledTimes(2);
+    // The view restriction names a media id once, whatever its records.
+    expect(query.mock.calls[1]?.[1]?.[1]).toEqual(["media-same"]);
     expect(
       result.get(authoredArticleCatalogPairKey("catalog-a", "media-same"))?.src,
     ).toMatch(/\/a\.webp$/u);

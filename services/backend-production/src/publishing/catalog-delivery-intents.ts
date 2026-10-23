@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
-import { parsePostgresConfig } from "@moya/catalog-postgres";
+import {
+  asCatalogQueryUnavailableError,
+  parsePostgresConfig,
+} from "@moya/catalog-postgres";
 import type { BackendApplicationOptions } from "@moya/backend-runtime";
 
 import {
@@ -120,16 +123,24 @@ import {
   parseCatalogPrepareRows,
   partitionCatalogPrepareRows,
   catalogBlockListedSql,
+  readCatalogDeliveryProjection,
   type PostgresMediaPublicationAdapter,
 } from "@moya/community-postgres";
 import type { createPostgresPool } from "@moya/catalog-postgres";
-import { listPublishedCatalogSources } from "./catalog.js";
+import {
+  CATALOG_PUBLISHED_PAIRS_MAX,
+  listPublishedCatalogSources,
+  publishedCatalogPairs,
+} from "./catalog.js";
 
 type CatalogPool = ReturnType<typeof createPostgresPool>;
 type CatalogAuthority = NonNullable<
   ConstructorParameters<
     typeof PostgresMediaPublicationAdapter
   >[1]["catalogAuthority"]
+>;
+type CatalogDeliveryFacts = NonNullable<
+  NonNullable<BackendApplicationOptions["storageUrlResolver"]>["catalogFacts"]
 >;
 const sourceAssetId = (mediaId: string, objectKey: string) =>
   `catalog-asset-${createHash("md5").update(`${mediaId}:${objectKey}`).digest("hex")}`;
@@ -454,9 +465,44 @@ export const createCatalogPublicationAuthority = (
     return { permissions, snapshot };
   };
   return {
+    // The public read path (resolveKeys): the requested assets' exact pairs,
+    // by App primary key (the id is derived from the pair by a CHECK), then
+    // the live CMS check of only those pairs on the public read pool. Never
+    // the prepare pool, and never the whole published list
+    // (catalog-scale-v1 1A).
     async publishedAssetIds(ids) {
-      const live = new Set(await publicIds());
-      return ids.filter((id) => live.has(id));
+      const requested = [...new Set(ids)];
+      for (const id of requested)
+        if (typeof id !== "string" || !/^catalog-asset-[a-f0-9]{32}$/.test(id))
+          throw new TypeError("Catalog source identity invalid");
+      if (!requested.length) return [];
+      if (requested.length > CATALOG_PUBLISHED_PAIRS_MAX)
+        throw new TypeError("Catalog published asset batch too large");
+      const rows = (
+        await app.query<{
+          id: string;
+          media_id: string;
+          source_object_key: string;
+        }>(
+          "SELECT id,media_id,source_object_key FROM community.catalog_media_assets WHERE id=ANY($1::text[])",
+          [requested],
+        )
+      ).rows;
+      const live = await publishedCatalogPairs(
+        published,
+        rows.map((row) => ({
+          mediaId: row.media_id,
+          objectKey: row.source_object_key,
+        })),
+      );
+      const approved = new Set(
+        rows
+          .filter((row) =>
+            live.has(JSON.stringify([row.media_id, row.source_object_key])),
+          )
+          .map((row) => row.id),
+      );
+      return ids.filter((id) => approved.has(id));
     },
     async copyRenditionIds() {
       return [
@@ -620,6 +666,39 @@ export const catalogExpectedRenditions = (width: number, height: number) =>
     const size = plannedStillSize(role, { width, height }, "catalog");
     return size ? [{ ...currentRecipe(role), ...size }] : [];
   });
+
+/**
+ * The public rendition-fact lookup (`catalogFacts`) every reader shares
+ * (Catalog, editorial, authored Article bodies, author cards): the live CMS
+ * check of only the requested pairs on the public read pool (never the
+ * prepare pool), then the App delivery projection of only the live ones, each
+ * once (a Detail names its representative image twice, and the projection's
+ * bound counts what it is handed). No Catalog image reads nothing, from
+ * either database. A failed or refused check or App read, or an oversized
+ * batch, is Catalog unavailability, the documented 503, never a 500
+ * (catalog-delivery-release-hardening-v1 F9; catalog-scale-v1 1A).
+ */
+export const createCatalogDeliveryFacts =
+  (published: CatalogPool, app: CatalogPool): CatalogDeliveryFacts =>
+  async (locators) => {
+    if (!locators.length) return new Map();
+    try {
+      const live = await publishedCatalogPairs(published, locators);
+      const approved = new Map<string, (typeof locators)[number]>();
+      for (const locator of locators) {
+        const key = JSON.stringify([locator.mediaId, locator.objectKey]);
+        if (live.has(key)) approved.set(key, locator);
+      }
+      if (!approved.size) return new Map();
+      return await readCatalogDeliveryProjection(
+        app,
+        [...approved.values()],
+        catalogExpectedRenditions,
+      );
+    } catch (error) {
+      throw asCatalogQueryUnavailableError(error);
+    }
+  };
 export const createCatalogReadiness =
   (prepare: CatalogPool, app: CatalogPool) => async (intentId: string) => {
     const rows = (
