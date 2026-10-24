@@ -136,3 +136,20 @@
   color: var(--yoyi-color-text-secondary);
   font-size: var(--yoyi-type-metadata-size);
 }
+
+/* Native dialogs retain ancestor selectors, so restore the form control size. */
+.form > button[type="submit"] {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--yoyi-space-2) var(--yoyi-space-3);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-surface);
+  white-space: nowrap;
+}
+.form input[type="file"] {
+  width: 100%;
+  min-width: 0;
+}

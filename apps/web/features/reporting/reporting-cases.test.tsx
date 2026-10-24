@@ -551,3 +551,37 @@ describe("own reporting cases", () => {
     expect(node.textContent).toContain("暂无记录");
   });
 });
+
+describe("system result presentation", () => {
+  it.each(["reporter", "affected"] as const)(
+    "localizes an older result for the %s without changing reasons or statements",
+    async (party) => {
+      const text = "处理措施：warn。理由：原始 warn 理由。";
+      const statement = "处理措施：warn。用户原文保持不变。";
+      const messages = [
+        { id: "system-result", kind: "result", text, createdAt },
+        { id: "user-statement", kind: "statement", text: statement, createdAt },
+      ];
+      client.list.mockResolvedValue({
+        items: [{ ...report, messages }],
+        total: 1,
+      });
+      client.decisions.mockResolvedValue({
+        items: [{ ...decision, messages }],
+        total: 1,
+      });
+      await mount();
+      await click(
+        button(party === "reporter" ? "查看与补充材料" : "处置与申诉"),
+      );
+      expect(node.textContent).toContain(
+        "处理措施：警告。理由：原始 warn 理由。",
+      );
+      expect(node.textContent).toContain(statement);
+      expect(node.textContent).not.toContain(text);
+      expect(messages[0]!.text).toBe(text);
+      expect(client.material).not.toHaveBeenCalled();
+      expect(client.appeal).not.toHaveBeenCalled();
+    },
+  );
+});

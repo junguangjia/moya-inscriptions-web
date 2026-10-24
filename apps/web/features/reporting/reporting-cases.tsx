@@ -47,6 +47,17 @@ const actionLabels = {
   delete_body: "删除正文",
   remove_thread: "移除讨论串",
 } as const;
+/** Localize only the structured prefix of older system results; keep reasons and statements intact. */
+const messageText = (message: CommunityReport["messages"][number]) =>
+  message.kind === "result"
+    ? message.text.replace(
+        /^处理措施：([a-z_]+)。/u,
+        (prefix: string, action: string) =>
+          Object.hasOwn(actionLabels, action)
+            ? `处理措施：${actionLabels[action as keyof typeof actionLabels]}。`
+            : prefix,
+      )
+    : message.text;
 const appealLabels = {
   pending: "等待复核",
   upheld: "维持原决定",
@@ -404,7 +415,7 @@ const AccountReportingCases = ({
               <>
                 {report.messages.map((message) => (
                   <div key={message.id}>
-                    <p>{message.text}</p>
+                    <p>{messageText(message)}</p>
                     <Time value={message.createdAt} />
                   </div>
                 ))}
@@ -493,7 +504,7 @@ const AccountReportingCases = ({
             )}
             {item.messages.map((message) => (
               <div key={message.id}>
-                <p>{message.text}</p>
+                <p>{messageText(message)}</p>
                 <Time value={message.createdAt} />
               </div>
             ))}
