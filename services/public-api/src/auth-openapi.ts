@@ -26,6 +26,78 @@ const commandBody = (name: string) => ({
 });
 
 export const authPaths = {
+  "/v1/community/auth/appeals/login": {
+    post: {
+      operationId: "signInForAppeal",
+      summary: "Verify a password for restricted case access",
+      description:
+        "Existing identity verification and attempt budgets. A short-lived appeal-only server grant cannot authorize normal community reads or writes; Web stores it in a separate HttpOnly cookie.",
+      requestBody: commandBody("AuthPasswordLoginRequest"),
+      responses: {
+        "200": {
+          description:
+            "Server-only appeal session grant. Relay removes the credential before browser delivery.",
+        },
+        ...passwordFailures,
+      },
+    },
+  },
+  "/v1/community/auth/appeals/challenges": {
+    post: {
+      operationId: "createAppealSignInChallenge",
+      summary:
+        "Send an existing-account sign-in challenge without an ordinary session",
+      description:
+        "Only purpose sign_in is accepted. Provider availability and source/target attempt budgets remain unchanged.",
+      requestBody: commandBody("AuthChallengeRequest"),
+      responses: {
+        "200": json(
+          "Existing challenge continuation.",
+          "AuthChallengeAccepted",
+        ),
+        ...passwordFailures,
+      },
+    },
+  },
+  "/v1/community/auth/appeals/verify": {
+    post: {
+      operationId: "verifyAppealSignInChallenge",
+      summary: "Verify a sign-in challenge for restricted case access",
+      requestBody: commandBody("AuthVerifyRequest"),
+      responses: {
+        "200": {
+          description:
+            "Server-only short-lived appeal grant; no ordinary session is issued.",
+        },
+        ...passwordFailures,
+      },
+    },
+  },
+  "/v1/community/auth/appeals/session": {
+    get: {
+      operationId: "readOwnAppealSession",
+      summary: "Read the verified appeal session owner",
+      security: [{ session: [] }],
+      responses: {
+        "200": json(
+          "Identity metadata only, no credential.",
+          "CommunityAppealSession",
+        ),
+        ...passwordFailures,
+      },
+    },
+  },
+  "/v1/community/auth/appeals/sign-out": {
+    post: {
+      operationId: "signOutAppealSession",
+      summary: "Revoke the restricted session without changing ordinary login",
+      responses: {
+        "204": { description: "Restricted session ended." },
+        ...passwordFailures,
+      },
+    },
+  },
+
   "/v1/community/auth/passwords/login": {
     post: {
       operationId: "passwordSignIn",

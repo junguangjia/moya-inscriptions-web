@@ -404,6 +404,7 @@ export class CommunityAuthService {
     readonly code: string;
     readonly continuationToken: string;
     readonly idempotencyKey: string;
+    readonly appealOnly?: boolean;
   }): Promise<AuthResult<AuthVerifyValue>> {
     if (this.options.profile === "password-only")
       return fail("AUTH_CHANNEL_UNAVAILABLE");
@@ -415,6 +416,8 @@ export class CommunityAuthService {
     }>(async (tx) => {
       const challenge = await tx.findChallenge(input.challengeId);
       if (challenge === null || challenge.continuationHash !== continuationHash)
+        return fail("AUTH_PROOF_REJECTED");
+      if (input.appealOnly && challenge.purpose !== "sign_in")
         return fail("AUTH_PROOF_REJECTED");
       let checkProvider = challenge.strategy === "provider_generated";
       if (checkProvider) {
@@ -452,7 +455,10 @@ export class CommunityAuthService {
             if (!this.provenanceOk(identity))
               return fail("AUTH_PROVENANCE_REJECTED");
             const user = await tx.findUser(identity.userId);
-            if (user === null || user.status !== "active")
+            if (
+              user === null ||
+              (!input.appealOnly && user.status !== "active")
+            )
               return fail("AUTH_ACCOUNT_SUSPENDED");
           }
           if (challenge.purpose === "reauthenticate") {
@@ -739,12 +745,58 @@ export class CommunityAuthService {
     );
   }
 
+  /** Appeal grants never authorize the normal Community session boundary. */
+  async signOutAppeal(token: string): Promise<void> {
+    const tokenHash = await hashSessionToken(token);
+    await this.transactional(async (tx) => {
+      const session = await tx.findSession(
+        tokenHash,
+        this.requiredSessionEnvironment(),
+      );
+      if (session?.scope === "appeal")
+        await tx.revokeSession(tokenHash, this.clock().toISOString());
+      return { ok: true, value: undefined };
+    });
+  }
+
+  async readAppealSession(
+    token: string,
+  ): Promise<AuthResult<{ expiresAt: string; profile: PublicUserProfile }>> {
+    const tokenHash = await hashSessionToken(token);
+    return this.transactional(async (tx) => {
+      const session = await tx.findSession(
+        tokenHash,
+        this.requiredSessionEnvironment(),
+      );
+      if (
+        !session ||
+        session.scope !== "appeal" ||
+        session.revokedAt !== null ||
+        Date.parse(session.expiresAt) <= this.clock().getTime()
+      )
+        return fail("AUTH_UNAUTHENTICATED");
+      const user = await tx.findUser(session.userId);
+      if (!user) return fail("AUTH_UNAUTHENTICATED");
+      return {
+        ok: true,
+        value: {
+          expiresAt: session.expiresAt,
+          profile: mapPublicUserProfile({
+            ...user,
+            id: user.id as PublicUserId,
+          }),
+        },
+      };
+    });
+  }
+
   async passwordLogin(input: {
     readonly channel: AuthChannelName | "handle";
     readonly identifier: string;
     readonly password: string;
     readonly idempotencyKey: string;
     readonly source: string;
+    readonly appealOnly?: boolean;
   }): Promise<AuthResult<AuthSessionGrant>> {
     const handleLogin = input.channel === "handle";
     if (
@@ -804,7 +856,8 @@ export class CommunityAuthService {
     try {
       matched = await verifyPassword(
         input.password,
-        user?.status === "active" &&
+        (user?.status === "active" ||
+          (input.appealOnly === true && user?.status === "suspended")) &&
           (handleLogin || (identity !== null && this.provenanceOk(identity)))
           ? (credential?.verifier ?? null)
           : null,
@@ -819,7 +872,7 @@ export class CommunityAuthService {
       (!handleLogin && identity === null) ||
       user === null ||
       credential === null ||
-      user.status !== "active" ||
+      (!input.appealOnly && user.status !== "active") ||
       (!handleLogin && (identity === null || !this.provenanceOk(identity)))
     )
       return fail("AUTH_INVALID_CREDENTIALS");
@@ -836,7 +889,8 @@ export class CommunityAuthService {
         : null;
       const currentCredential = await tx.findPasswordCredential(user.id);
       if (
-        currentUser?.status !== "active" ||
+        currentUser === null ||
+        (!input.appealOnly && currentUser.status !== "active") ||
         (handleLogin
           ? currentProvisioned?.id !== user.id
           : identity === null ||
@@ -849,6 +903,17 @@ export class CommunityAuthService {
         currentCredential.verifier !== credential.verifier
       )
         return fail("AUTH_INVALID_CREDENTIALS");
+      if (input.appealOnly === true) {
+        const session = await this.mint(
+          tx,
+          currentUser!,
+          sessionMethod,
+          at,
+          "appeal",
+        );
+        await this.audit(tx, user.id, "sign_in", at);
+        return { ok: true, value: session };
+      }
       const receiptKey = await this.receiptKey(
         input.idempotencyKey,
         digest,
@@ -1686,6 +1751,7 @@ export class CommunityAuthService {
       readonly challengeId: string;
       readonly code: string;
       readonly idempotencyKey: string;
+      readonly appealOnly?: boolean;
     },
     continuationHash: string,
     providerPassed: boolean,
@@ -1742,6 +1808,11 @@ export class CommunityAuthService {
       return fail("AUTH_PROVENANCE_REJECTED");
     if (challenge.invalidatedAt !== null || challenge.supersededAt !== null)
       return this.staleChallenge(challenge, at);
+    if (
+      input.appealOnly &&
+      (challenge.purpose !== "sign_in" || receipt !== null)
+    )
+      return fail("AUTH_PROOF_REJECTED");
     if (receipt !== null && challenge.purpose === "sign_in") {
       const user = await tx.lockUser(receipt.userId);
       if (user === null || user.status !== "active")
@@ -1885,10 +1956,20 @@ export class CommunityAuthService {
     if (identity === null)
       return this.issueRegistrationHandoff(tx, challenge, at);
     const user = await tx.lockUser(identity.userId);
-    if (user === null || user.status !== "active")
+    if (user === null || (!input.appealOnly && user.status !== "active"))
       return fail("AUTH_ACCOUNT_SUSPENDED");
     if (!this.provenanceOk(identity)) return fail("AUTH_PROVENANCE_REJECTED");
-    const session = await this.mint(tx, user, challenge.channel, at);
+    const session = await this.mint(
+      tx,
+      user,
+      challenge.channel,
+      at,
+      input.appealOnly ? "appeal" : "community",
+    );
+    if (input.appealOnly) {
+      await this.audit(tx, user.id, "sign_in", at);
+      return { ok: true, value: { outcome: "signed_in", session } };
+    }
     await tx.insertReceipt({
       keyHash: receiptKey,
       userId: user.id,
@@ -2338,12 +2419,16 @@ export class CommunityAuthService {
     user: StoredUser,
     channel: AuthChannelName | "password",
     at: Date,
+    scope: "community" | "appeal" = "community",
   ): Promise<Minted> {
     const token = generateSessionToken(this.randomBytes);
     const tokenHash = await hashSessionToken(token);
     const sessionId = generateOpaqueId("session", this.randomBytes);
-    const expiresAt = new Date(at.getTime() + this.sessionTtlMs).toISOString();
+    const expiresAt = new Date(
+      at.getTime() + (scope === "appeal" ? 30 * 60 * 1000 : this.sessionTtlMs),
+    ).toISOString();
     await tx.insertSession({
+      scope,
       id: sessionId,
       tokenHash,
       userId: user.id,

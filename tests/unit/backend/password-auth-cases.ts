@@ -868,6 +868,52 @@ export const passwordAuthCases = (make: () => PasswordHarness) => {
     h.advance(16 * 60 * 1000);
     expect((await login(h, email)).ok).toBe(true);
   });
+  it("allows a suspended owner to obtain only a short-lived appeal session", async () => {
+    const h = make(),
+      email = `${requestKey()}@example.invalid`;
+    const account = await registration(h, email);
+    await h.suspend(account.session.profile.id);
+    expect((await login(h, email)).ok).toBe(false);
+    const result = await h.service.passwordLogin({
+      channel: "email",
+      identifier: email,
+      password,
+      idempotencyKey: requestKey(),
+      source,
+      appealOnly: true,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw Error("Synthetic appeal login refused");
+    expect((await h.service.readAppealSession(result.value.token)).ok).toBe(
+      true,
+    );
+    expect((await h.service.readAccount(result.value.token)).ok).toBe(false);
+    h.advance(31 * 60 * 1000);
+    expect((await h.service.readAppealSession(result.value.token)).ok).toBe(
+      false,
+    );
+  });
+  it("verifies a suspended email-only owner without minting an ordinary session", async () => {
+    const h = make(),
+      email = `${requestKey()}@example.invalid`;
+    const account = await registration(h, email, false);
+    await h.suspend(account.session.profile.id);
+    const challenge = await sendAnonymousSignInCase(h, email);
+    const result = await h.service.verifyChallenge({
+      ...challenge.command,
+      appealOnly: true,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.outcome !== "signed_in")
+      throw Error("Synthetic appeal verification refused");
+    expect(
+      (await h.service.readAppealSession(result.value.session.token)).ok,
+    ).toBe(true);
+    expect((await h.service.readAccount(result.value.session.token)).ok).toBe(
+      false,
+    );
+    expect((await h.service.verifyChallenge(challenge.command)).ok).toBe(false);
+  });
 };
 
 export {

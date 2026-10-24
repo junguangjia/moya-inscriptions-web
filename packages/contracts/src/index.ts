@@ -255,3 +255,5 @@ export type {
   AuthPasswordResetRequest,
   AuthPasswordResetResult,
 } from "./auth-schemas.js";
+
+export type * from "./reporting.ts";

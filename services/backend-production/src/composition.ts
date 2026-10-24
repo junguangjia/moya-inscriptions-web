@@ -1,3 +1,10 @@
+import { PrivateReportingEvidenceStore } from "./reporting/evidence-store.js";
+import { loadOfflineIpLocation } from "./reporting/geography.js";
+import {
+  ReportingMaintenanceWorker,
+  createUrgentReportSender,
+} from "./reporting/worker.js";
+import { PostgresCommunityReportingAdapter } from "@moya/community-postgres";
 import { parseAnalyticsConfiguration } from "./analytics/config.js";
 import { AnalyticsWorker } from "./analytics/worker.js";
 import { PostgresAnalyticsAdapter } from "@moya/community-postgres";
@@ -642,6 +649,53 @@ export const prepareProductionBackend = async (
     analyticsConfiguration.umami,
     analyticsConfiguration.policy.eventRetentionDays,
   );
+  const ipLocations = await loadOfflineIpLocation(
+    environment.MOYA_REPORT_IP_DATABASE,
+  );
+  const evidenceDirectory = environment.MOYA_REPORT_EVIDENCE_DIRECTORY;
+  const reportingEvidenceStore = evidenceDirectory
+    ? new PrivateReportingEvidenceStore(evidenceDirectory)
+    : undefined;
+  const reportingPort = new PostgresCommunityReportingAdapter(communityPool, {
+    publication: { allowPublish, isPublic },
+    resolveExternalTarget: async (target) => {
+      if (target.type === "catalog") {
+        const item = await catalogQueryPort.getById(
+          target.id as Parameters<typeof catalogQueryPort.getById>[0],
+        );
+        return item
+          ? {
+              canonicalPath: `/?catalogId=${encodeURIComponent(target.id)}#detail`,
+              affectedUserId: null,
+              snapshot: { source: "official", title: item.title },
+            }
+          : null;
+      }
+      if (target.type === "article") {
+        const item = await editorialReadPort.findArticle(
+          target.id as Parameters<typeof editorialReadPort.findArticle>[0],
+        );
+        return item
+          ? {
+              canonicalPath: `/?topic=${encodeURIComponent(target.id)}`,
+              affectedUserId: null,
+              snapshot: { source: "official", title: item.title },
+            }
+          : null;
+      }
+      return null;
+    },
+  });
+  const reportingWorker = new ReportingMaintenanceWorker(
+    reportingPort,
+    createUrgentReportSender(
+      authConfiguration?.email ?? null,
+      environment.MOYA_REPORT_URGENT_TO,
+      environment.MOYA_REPORT_URGENT_TEMPLATE_ID,
+      dependencies.authProvider?.transport,
+    ),
+    reportingEvidenceStore,
+  );
   const notificationSignals = new NotificationSignals();
   const notificationPort = new PostgresNotificationAdapter(communityPool);
   const notificationWorker = notificationPort
@@ -653,6 +707,7 @@ export const prepareProductionBackend = async (
     // Running jobs finish or give their leases back before the pools close.
     await Promise.all([
       analyticsWorker.stop(),
+      reportingWorker.stop(),
       notificationWorker?.stop(),
       publishingWorker?.stop(),
       ...publicationWorkers.map((lane) => lane.stop()),
@@ -705,6 +760,16 @@ export const prepareProductionBackend = async (
       ? {}
       : { zoom: catalogZoomGate, zoomPool: communityPool }),
   });
+  const editorialReadPort = withPublishedReads(
+    createArticleReadPort(
+      pool,
+      communityPool,
+      catalogUrlResolver,
+      catalogReaders,
+    ),
+    ["listArticles", "findArticle", "listCollections", "findCollection"],
+    deliveryOptions,
+  );
   const communityIdentityPort = new PostgresCommunityIdentityAdapter(
     communityPool,
     {
@@ -805,6 +870,26 @@ export const prepareProductionBackend = async (
         storageUrlResolver: catalogUrlResolver,
         healthReadinessCheck: readinessCheck,
         communityIdentityPort,
+        reportingPort,
+        ...(reportingEvidenceStore ? { reportingEvidenceStore } : {}),
+        ...(ipLocations
+          ? {
+              onAuthenticated: async (id: string, source: string) => {
+                const label = ipLocations.locate(source);
+                if (label === null) {
+                  await communityPool.query(
+                    "UPDATE community.profile_ip_locations SET label=NULL,observed_at=CURRENT_TIMESTAMP WHERE user_id=$1",
+                    [id],
+                  );
+                  return;
+                }
+                await communityPool.query(
+                  "INSERT INTO community.profile_ip_locations(user_id,label,observed_at) VALUES($1,$2,CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET label=EXCLUDED.label,observed_at=EXCLUDED.observed_at",
+                  [id, label],
+                );
+              },
+            }
+          : {}),
         ...(() => {
           const adapter = new PostgresCommunityAuthAdapter(communityPool);
           const authService =
@@ -851,21 +936,7 @@ export const prepareProductionBackend = async (
             deliveryOptions,
           ),
           // Published editorial views through the public read role.
-          editorialContentPort: withPublishedReads(
-            createArticleReadPort(
-              pool,
-              communityPool,
-              catalogUrlResolver,
-              catalogReaders,
-            ),
-            [
-              "listArticles",
-              "findArticle",
-              "listCollections",
-              "findCollection",
-            ],
-            deliveryOptions,
-          ),
+          editorialContentPort: editorialReadPort,
           threadPort: withPublishedReads(
             new PostgresThreadAdapter(communityPool),
             ["listThreadPosts"],
@@ -952,6 +1023,7 @@ export const prepareProductionBackend = async (
       publicationWorkers.forEach((lane) => lane.start());
       if (runtimeConfig.nodeEnv === "production") analyticsWorker.start();
       notificationWorker?.start();
+      reportingWorker.start();
     },
   };
 };

@@ -23,7 +23,9 @@ const groups = [
   {
     label: "社区",
     links: [
-      { href: "/admin/community-moderation", label: "评论审核队列" },
+      { href: "/admin/community-moderation", label: "待审核" },
+      { href: "/admin/community-moderation/reports", label: "用户举报" },
+      { href: "/admin/community-moderation/appeals", label: "申诉与操作历史" },
       {
         href: "/admin/community-moderation/work-submissions",
         label: "作品提交审核",
@@ -33,7 +35,6 @@ const groups = [
         label: "作者文章审核",
       },
       { href: "/admin/community-moderation/settings", label: "发布设置" },
-      { href: "/admin/community-moderation/history", label: "操作历史" },
       { href: "/admin/community-moderation/content", label: "作品与推荐" },
       {
         href: "/admin/community-moderation/account-capacity",

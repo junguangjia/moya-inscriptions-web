@@ -47,6 +47,7 @@ server {
     listen 80 default_server;
     server_name _;
     access_log /var/log/nginx/yoyi-access.log yoyi_status;
+    access_log /var/log/nginx/yoyi-security.log yoyi_status;
     return 404;
 }
 
@@ -59,6 +60,7 @@ server {
     server_tokens off;
     if ($host != catalog.example.invalid) { return 421; }
     access_log /var/log/nginx/yoyi-access.log yoyi_status;
+    access_log /var/log/nginx/yoyi-security.log yoyi_status;
     # Request URIs can contain private search text or media capabilities.
     error_log /dev/null;
     add_header Referrer-Policy no-referrer always;
@@ -213,6 +215,7 @@ server {
         proxy_read_timeout 75s;
         # A location access_log replaces the server's: keep the status line.
         access_log /var/log/nginx/yoyi-access.log yoyi_status;
+        access_log /var/log/nginx/yoyi-security.log yoyi_status;
         access_log /var/log/nginx/yoyi-upload.log yoyi_upload;
         proxy_pass http://yoyi_web;
     }
@@ -222,6 +225,12 @@ server {
         proxy_cache off;
         proxy_next_upstream off;
         proxy_read_timeout 75s;
+        proxy_pass http://yoyi_web;
+    }
+    # Only private complaint-evidence upload needs the bounded base64 envelope.
+    location ~ "^/api/community/reports/report-[0-9a-f]{32}/evidence$" {
+        client_max_body_size 12m;
+        proxy_cache off;
         proxy_pass http://yoyi_web;
     }
     location /api/community/ { proxy_pass http://yoyi_web; }
@@ -240,6 +249,7 @@ server {
     server_tokens off;
     if ($host != article-auth.example.invalid) { return 421; }
     access_log /var/log/nginx/yoyi-article-status.log yoyi_status;
+    access_log /var/log/nginx/yoyi-security.log yoyi_status;
     error_log /dev/null;
     add_header Referrer-Policy no-referrer always;
     client_max_body_size 64k;

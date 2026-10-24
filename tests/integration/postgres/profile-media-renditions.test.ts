@@ -416,6 +416,8 @@ describe("profile media renditions migration on a dedicated synthetic database",
         "20261023010000",
         "20261023020000",
         "20261024010000",
+        "20261024020000",
+        "20261026010000",
       ]);
       await verifyCommunityMigrationLedger(pool);
       const after = await snapshot(pool);
@@ -431,8 +433,28 @@ describe("profile media renditions migration on a dedicated synthetic database",
         null,
         null,
       ]);
+      // Issue #326 adds only these default moderation fields to existing users.
+      expect(
+        after.users.map((row) => [
+          row.reporting_comments_restricted,
+          row.reporting_revision,
+          row.reporting_comment_revision,
+        ]),
+      ).toEqual(before.users.map(() => [false, 0, 0]));
       expect({
         ...after,
+        users: after.users.map((row) =>
+          Object.fromEntries(
+            Object.entries(row).filter(
+              ([key]) =>
+                ![
+                  "reporting_comments_restricted",
+                  "reporting_revision",
+                  "reporting_comment_revision",
+                ].includes(key),
+            ),
+          ),
+        ),
         renditions: after.renditions.map((row) =>
           Object.fromEntries(
             Object.entries(row).filter(
@@ -2580,11 +2602,12 @@ describe("author DTO renditions on a dedicated synthetic database", () => {
         ["avatar-512", 300, 200],
       );
 
-      // The bytes before increment 3a: a profile in its contract's key
-      // order, a person's avatar in the builder's.
+      // Preserve every historical profile/media byte, with only #326's
+      // explicitly approved null ipLocation field added in contract key order.
+      // The people/avatar JSON stays byte-identical.
       const ownerHandle = await handleOf(owner);
       const profile = (following: boolean) =>
-        `{"id":"${owner}","handle":"${ownerHandle}","displayName":"头像测试","bio":"","studioName":"","studioNameSuffix":"",` +
+        `{"ipLocation":null,"id":"${owner}","handle":"${ownerHandle}","displayName":"头像测试","bio":"","studioName":"","studioNameSuffix":"",` +
         `"avatar":{"id":"${avatar.id}","src":"/api/community/media/${avatar.id}","width":640,"height":480},` +
         `"background":{"id":"${background.id}","src":"/api/community/media/${background.id}","width":1600,"height":1200},` +
         `"isOwner":false,"following":${following},"privacy":{"following":"public","followers":"public","favorites":"private","likes":"private"},` +

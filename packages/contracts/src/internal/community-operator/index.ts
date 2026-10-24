@@ -1,3 +1,4 @@
+export { operatorModerationReasonSchema } from "./moderation-reason.js";
 export {
   BULK_MODERATION_MAXIMUM,
   OPERATOR_SEARCH_MAXIMUM,
@@ -341,3 +342,5 @@ export type {
   ArticlePendingPreview,
   ArticlePendingMediaQuery,
 } from "./article-operator-schemas.ts";
+
+export * from "./reporting.ts";

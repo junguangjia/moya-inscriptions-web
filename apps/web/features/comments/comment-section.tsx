@@ -69,6 +69,8 @@ export interface CommentSectionProps {
   readonly contentKey?: string;
   readonly onOpenAuthor?: (id: string, opener: HTMLElement) => void;
   readonly onDeleteBody?: (id: string) => void;
+  /** Formal composition supplies the quiet one-click report symbol. */
+  readonly renderReport?: ((id: string) => ReactNode) | undefined;
   readonly highlightCommentId?: string;
   readonly currentUser: CommentUserPresentation;
   readonly items: readonly CommentItem[];
@@ -107,6 +109,7 @@ interface RowInteractions {
   readonly actor: string;
   readonly open?: ((id: string, opener: HTMLElement) => void) | undefined;
   readonly remove?: ((id: string) => void) | undefined;
+  readonly report?: ((id: string) => ReactNode) | undefined;
 }
 const RowContext = createContext<RowInteractions>({ actor: "" });
 const AuthorName = ({ user }: { user: CommentUserPresentation }) => {
@@ -157,6 +160,16 @@ const BodyDelete = ({
       </svg>
     </button>
   ) : null;
+};
+const BodyReport = ({
+  id,
+  deleted,
+}: {
+  id: string;
+  deleted: boolean | undefined;
+}) => {
+  const actions = useContext(RowContext);
+  return deleted ? null : actions.report?.(id);
 };
 const Avatar = ({ user }: { readonly user: CommentUserPresentation }) => {
   const actions = useContext(RowContext);
@@ -330,6 +343,7 @@ const ReplyRow = ({
           userId={reply.user.id}
           deleted={reply.deleted}
         />
+        <BodyReport id={reply.id} deleted={reply.deleted} />
         <CommentActions
           likeCount={reply.likeCount}
           liked={reply.liked}
@@ -394,6 +408,7 @@ const CommentRow = ({
             userId={comment.user.id}
             deleted={comment.deleted}
           />
+          <BodyReport id={comment.id} deleted={comment.deleted} />
           <CommentActions
             likeCount={comment.likeCount}
             liked={comment.liked}
@@ -453,6 +468,7 @@ export const CommentSection = ({
   contentKey,
   onOpenAuthor,
   onDeleteBody,
+  renderReport,
   highlightCommentId,
   currentUser,
   hotItems,
@@ -800,6 +816,7 @@ export const CommentSection = ({
         actor: currentUser.id,
         open: onOpenAuthor,
         remove: onDeleteBody,
+        report: renderReport,
       }}
     >
       <section

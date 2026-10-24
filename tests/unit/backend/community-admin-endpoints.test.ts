@@ -37,6 +37,7 @@ import type { Endpoint, PayloadRequest } from "payload";
  * the complete request envelope is validated strictly, the id is mapped into
  * the Backend route, and only the validated command body is forwarded.
  */
+const HUMAN_REASON = "Synthetic human moderation reason";
 const commentId = "comment-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01";
 const userId = "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01";
 
@@ -121,7 +122,7 @@ describe("Admin community moderation endpoint boundary", () => {
     const result = await invoke(
       endpoints,
       "moderate-comment",
-      request({ id: commentId, action: "approve" }),
+      request({ reason: HUMAN_REASON, id: commentId, action: "approve" }),
     );
     expect(result).toEqual({
       status: 200,
@@ -131,20 +132,31 @@ describe("Admin community moderation endpoint boundary", () => {
       {
         method: "POST",
         path: `comments/${commentId}/moderation`,
-        body: { action: "approve" },
+        body: { reason: HUMAN_REASON, action: "approve" },
       },
     ]);
   });
 
   it.each([
-    ["extra field", { id: commentId, action: "approve", note: "x" }],
-    ["missing id", { action: "approve" }],
-    ["missing action", { id: commentId }],
-    ["unknown action", { id: commentId, action: "delete" }],
+    [
+      "extra field",
+      { reason: HUMAN_REASON, id: commentId, action: "approve", note: "x" },
+    ],
+    ["missing id", { reason: HUMAN_REASON, action: "approve" }],
+    ["missing action", { reason: HUMAN_REASON, id: commentId }],
+    [
+      "unknown action",
+      { reason: HUMAN_REASON, id: commentId, action: "delete" },
+    ],
     ["malformed id", { id: "comment-x", action: "approve" }],
     [
       "actor label",
-      { id: commentId, action: "approve", operatorLabel: "owner" },
+      {
+        reason: HUMAN_REASON,
+        id: commentId,
+        action: "approve",
+        operatorLabel: "owner",
+      },
     ],
     ["non-object", "approve"],
   ])("rejects %s before any Backend call", async (_label, body) => {
@@ -165,35 +177,39 @@ describe("Admin community moderation endpoint boundary", () => {
       await invoke(
         endpoints,
         "moderate-comment",
-        request({ id: commentId, action }),
+        request({ reason: HUMAN_REASON, id: commentId, action }),
       );
     for (const action of ["suspend", "reinstate"] as const)
-      await invoke(endpoints, "moderate-user", request({ id: userId, action }));
+      await invoke(
+        endpoints,
+        "moderate-user",
+        request({ reason: HUMAN_REASON, id: userId, action }),
+      );
     expect(calls).toEqual([
       {
         method: "POST",
         path: `comments/${commentId}/moderation`,
-        body: { action: "reject" },
+        body: { reason: HUMAN_REASON, action: "reject" },
       },
       {
         method: "POST",
         path: `comments/${commentId}/moderation`,
-        body: { action: "hide" },
+        body: { reason: HUMAN_REASON, action: "hide" },
       },
       {
         method: "POST",
         path: `comments/${commentId}/moderation`,
-        body: { action: "unhide" },
+        body: { reason: HUMAN_REASON, action: "unhide" },
       },
       {
         method: "POST",
         path: `users/${userId}/status`,
-        body: { action: "suspend" },
+        body: { reason: HUMAN_REASON, action: "suspend" },
       },
       {
         method: "POST",
         path: `users/${userId}/status`,
-        body: { action: "reinstate" },
+        body: { reason: HUMAN_REASON, action: "reinstate" },
       },
     ]);
     expect(
@@ -201,7 +217,7 @@ describe("Admin community moderation endpoint boundary", () => {
         await invoke(
           endpoints,
           "moderate-user",
-          request({ id: commentId, action: "suspend" }),
+          request({ reason: HUMAN_REASON, id: commentId, action: "suspend" }),
         )
       ).status,
     ).toBe(400);
@@ -219,7 +235,7 @@ describe("Admin community moderation endpoint boundary", () => {
         await invoke(
           endpoints,
           "moderate-comments",
-          request({ action: "hide", ids }),
+          request({ reason: HUMAN_REASON, action: "hide", ids }),
         )
       ).status,
     ).toBe(200);
@@ -227,14 +243,18 @@ describe("Admin community moderation endpoint boundary", () => {
       {
         method: "POST",
         path: "comments/moderation",
-        body: { action: "hide", ids },
+        body: { reason: HUMAN_REASON, action: "hide", ids },
       },
     ]);
     for (const body of [
-      { action: "hide", ids: [...ids, `comment-${"f".repeat(32)}`] },
-      { action: "hide", ids: [ids[0], ids[0]] },
-      { action: "hide", ids: [] },
-      { action: "hide", ids, all: true },
+      {
+        reason: HUMAN_REASON,
+        action: "hide",
+        ids: [...ids, `comment-${"f".repeat(32)}`],
+      },
+      { reason: HUMAN_REASON, action: "hide", ids: [ids[0], ids[0]] },
+      { reason: HUMAN_REASON, action: "hide", ids: [] },
+      { reason: HUMAN_REASON, action: "hide", ids, all: true },
     ])
       expect(
         (await invoke(endpoints, "moderate-comments", request(body))).status,
@@ -295,7 +315,10 @@ describe("Admin community moderation endpoint boundary", () => {
         await invoke(
           endpoints,
           "moderate-comment",
-          request({ id: commentId, action: "approve" }, role),
+          request(
+            { reason: HUMAN_REASON, id: commentId, action: "approve" },
+            role,
+          ),
         ),
       ).toEqual({
         status: 403,
@@ -326,7 +349,7 @@ describe("Admin community moderation endpoint boundary", () => {
       await invoke(
         endpoints,
         "moderate-comment",
-        request({ id: commentId, action: "hide" }),
+        request({ reason: HUMAN_REASON, id: commentId, action: "hide" }),
       ),
     ).toEqual({
       status: 409,
@@ -348,6 +371,7 @@ describe("Phase 4 Owner command envelopes", () => {
     [
       "moderate-work",
       {
+        reason: HUMAN_REASON,
         id: "work-" + "1".repeat(32),
         requestId: receipt,
         state: "hidden",
@@ -358,13 +382,18 @@ describe("Phase 4 Owner command envelopes", () => {
     ],
     [
       "delete-body",
-      { id: commentId, requestId: receipt },
+      { id: commentId, requestId: receipt, reason: HUMAN_REASON },
       "POST",
       `comments/${commentId}/delete-body`,
     ],
     [
       "remove-thread",
-      { id: commentId, requestId: receipt, expectedAffectedCount: 4 },
+      {
+        id: commentId,
+        requestId: receipt,
+        expectedAffectedCount: 4,
+        reason: HUMAN_REASON,
+      },
       "POST",
       `comments/${commentId}/remove-thread`,
     ],
@@ -453,6 +482,7 @@ describe("Phase 4 Owner command envelopes", () => {
             id: commentId,
             requestId: receipt,
             expectedAffectedCount: 0,
+            reason: HUMAN_REASON,
           }),
         )
       ).status,
@@ -690,6 +720,7 @@ describe("Work publishing Owner envelopes", () => {
     [
       "moderate-work-submission",
       {
+        reason: HUMAN_REASON,
         id: revisionId,
         requestId: receipt,
         action: "approve",
@@ -697,7 +728,12 @@ describe("Work publishing Owner envelopes", () => {
       },
       "POST",
       `publishing/submissions/${revisionId}/moderation`,
-      { requestId: receipt, action: "approve", expectedVersion: 4 },
+      {
+        requestId: receipt,
+        action: "approve",
+        expectedVersion: 4,
+        reason: HUMAN_REASON,
+      },
     ],
     [
       "read-account-capacity",
@@ -811,6 +847,7 @@ describe("Work publishing Owner envelopes", () => {
     [
       "moderate-work-submission",
       {
+        reason: HUMAN_REASON,
         id: revisionId,
         requestId: receipt,
         action: "hide",
@@ -828,6 +865,7 @@ describe("Work publishing Owner envelopes", () => {
     [
       "moderate-work-submission",
       {
+        reason: HUMAN_REASON,
         id: revisionId,
         requestId: receipt,
         action: "reject",
@@ -999,6 +1037,7 @@ describe("Work publishing Owner envelopes", () => {
         endpoints,
         "moderate-work-submission",
         request({
+          reason: HUMAN_REASON,
           id: revisionId,
           requestId: receipt,
           action: "approve",

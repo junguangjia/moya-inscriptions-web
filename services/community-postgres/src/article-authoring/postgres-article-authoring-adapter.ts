@@ -1,4 +1,8 @@
 import {
+  captureStaffCandidate,
+  recordStaffModeration,
+} from "../staff-moderation-reporting.js";
+import {
   beginArticlePublicationSync,
   type PublicationSyncOptions,
 } from "../publishing/publication-sync.js";
@@ -138,7 +142,7 @@ const publishedColumns =
 const publishedFrom = `FROM community.article_documents a
   JOIN community.article_revisions r ON r.article_id=a.id AND r.version=a.published_version
   JOIN community.public_users u ON u.id=a.owner_id AND u.status='active'
-  WHERE a.published_version IS NOT NULL AND a.status<>'withdrawn'`;
+  WHERE a.published_version IS NOT NULL AND a.status<>'withdrawn' AND NOT a.reporting_hidden`;
 
 const canonical = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonical);
@@ -1081,6 +1085,28 @@ export class PostgresArticleAuthoringAdapter
           )
         ).rows[0]!;
         await publicationSync.finish(now);
+        await recordStaffModeration(
+          db,
+          captureStaffCandidate(
+            { type: "article", id },
+            identity.owner_id,
+            candidate.title,
+            command.reason,
+          ),
+          operator,
+          command.action,
+          now,
+          approve
+            ? { kind: "informational" }
+            : {
+                kind: "article_submission",
+                articleId: id,
+                candidateVersion: candidate.candidateVersion,
+                fingerprint: candidate.fingerprint,
+                documentVersion: changed.version,
+                publicVersion: changed.published_version,
+              },
+        );
         return articleModerationResultSchema.parse({
           articleId: id,
           candidateVersion: candidate.candidateVersion,

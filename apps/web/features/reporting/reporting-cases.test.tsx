@@ -1,0 +1,438 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import type { ReactNode } from "react";
+import { createRoot } from "react-dom/client";
+import type { Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const { client, modal } = vi.hoisted(() => ({
+  modal: vi.fn(),
+  client: {
+    list: vi.fn(),
+    create: vi.fn(),
+    decisions: vi.fn(),
+    inbox: vi.fn(),
+    material: vi.fn(),
+    appeal: vi.fn(),
+    statement: vi.fn(),
+    read: vi.fn(),
+  },
+}));
+vi.mock("./reporting-data", () => ({
+  reportingClient: client,
+  appealReportingClient: client,
+  downloadReportEvidence: vi.fn(),
+  ReportingRequestError: class extends Error {},
+}));
+vi.mock("../authors/author-context", () => ({
+  useAuthors: () => ({
+    viewer: { id: "user-synthetic" },
+    checking: false,
+    sessionError: false,
+    notify: vi.fn(),
+  }),
+}));
+vi.mock("../auth/auth-return", () => ({ useAuthEntry: () => vi.fn() }));
+vi.mock("../authors/author-dialog", () => ({
+  AuthorDialog: ({
+    children,
+    title,
+  }: {
+    children: ReactNode;
+    title: string;
+  }) => {
+    modal();
+    return (
+      <div role="dialog" aria-label={title}>
+        {children}
+      </div>
+    );
+  },
+}));
+import { ReportingCases } from "./reporting-cases";
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+const createdAt = "2026-10-23T00:00:00.000Z";
+const report = {
+  id: "case-synthetic",
+  target: { type: "comment", id: "comment-synthetic" },
+  kind: "quick_comment",
+  reason: null,
+  description: "合成案件正文",
+  status: "open",
+  createdAt,
+  decision: null,
+  appeal: null,
+  messages: [],
+  evidence: [],
+};
+const decision = {
+  caseId: "case-synthetic",
+  kind: "standard",
+  target: { type: "work", id: "work-synthetic" },
+  decision: {
+    id: "decision-synthetic",
+    action: "hide",
+    reason: "合成处置理由",
+    createdAt,
+    reversedAt: null,
+    reviewReason: null,
+  },
+  appeal: null,
+  messages: [],
+  evidence: [],
+};
+let root: Root, node: HTMLDivElement;
+const mount = async (account = "user-synthetic", restricted = false) => {
+  node = document.createElement("div");
+  document.body.append(node);
+  root = createRoot(node);
+  await act(async () =>
+    root.render(<ReportingCases account={account} restricted={restricted} />),
+  );
+};
+const button = (label: string) =>
+  Array.from(node.querySelectorAll<HTMLButtonElement>("button")).find(
+    (item) => item.textContent === label,
+  )!;
+const click = async (element: HTMLElement) => act(async () => element.click());
+const fill = async (value: string) => {
+  const area = node.querySelector("textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(area, value);
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+beforeEach(() => {
+  vi.clearAllMocks();
+  client.list.mockResolvedValue({ items: [report], total: 1 });
+  client.decisions.mockResolvedValue({ items: [decision], total: 1 });
+  client.inbox.mockResolvedValue({ items: [] });
+  client.material.mockResolvedValue(report);
+  client.create.mockResolvedValue({
+    ...report,
+    kind: "rights_notice",
+    reason: "copyright",
+  });
+  client.appeal.mockResolvedValue(decision);
+});
+afterEach(async () => {
+  await act(async () => root?.unmount());
+  document.body.replaceChildren();
+  window.history.replaceState({}, "", "/");
+});
+describe("own reporting cases", () => {
+  it("labels a one-click comment reason truthfully and allows private supplementary material", async () => {
+    await mount();
+    expect(node.textContent).toContain("未提供原因（评论快捷举报）");
+    expect(node.textContent).toContain("合成案件正文");
+    await click(button("查看与补充材料"));
+    await fill("合成补充说明");
+    await click(button("补充材料"));
+    expect(client.material).toHaveBeenCalledWith(
+      "user-synthetic",
+      "case-synthetic",
+      { text: "合成补充说明", requestId: expect.any(String) },
+    );
+    expect(node.textContent).toContain("已收到材料");
+  });
+  it("submits a resolved quick-comment case as a source-bound formal notice without changing dialog history", async () => {
+    const marker = { phase4Dialog: "synthetic-settings", phase4DialogDepth: 1 };
+    window.history.replaceState(marker, "", "/#settings");
+    const resolved = { ...report, status: "resolved" };
+    client.list.mockResolvedValue({ items: [resolved], total: 1 });
+    client.create.mockImplementationOnce(async () => {
+      const formal = {
+        ...report,
+        id: "case-formal",
+        kind: "rights_notice",
+        reason: "copyright",
+      };
+      client.list.mockResolvedValue({ items: [resolved, formal], total: 2 });
+      return formal;
+    });
+    await mount();
+    expect(button("提交权利人投诉")).toBeUndefined();
+    await click(button("查看与补充材料"));
+    await click(button("提交权利人投诉"));
+    const dialog = node.querySelector<HTMLElement>(
+      '[data-report-embedded][aria-label="权利人投诉"]',
+    )!;
+    expect(dialog).not.toBeNull();
+    expect(dialog.closest("article")?.textContent).toContain(
+      "案件编号：case-synthetic",
+    );
+    expect(node.querySelector('[role="dialog"]')).toBeNull();
+    expect(modal).not.toHaveBeenCalled();
+    expect(window.history.state).toEqual(marker);
+    expect(window.location.hash).toBe("#settings");
+    expect(dialog.querySelector("select")!.disabled).toBe(true);
+    const fields = [
+      ...dialog.querySelectorAll<HTMLInputElement>('input:not([type="file"])'),
+      ...dialog.querySelectorAll<HTMLTextAreaElement>("textarea"),
+    ];
+    for (const [index, element] of fields.entries()) {
+      await act(async () => {
+        const prototype =
+          element instanceof HTMLInputElement
+            ? HTMLInputElement.prototype
+            : HTMLTextAreaElement.prototype;
+        Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(
+          element,
+          [
+            "合成权利人",
+            "synthetic@example.com",
+            "合成权属材料",
+            "合成评论投诉说明",
+          ][index],
+        );
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
+    await click(
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!,
+    );
+    expect(client.create).toHaveBeenCalledWith(
+      "user-synthetic",
+      expect.objectContaining({
+        kind: "rights_notice",
+        target: { type: "comment", id: "comment-synthetic" },
+        reason: "copyright",
+        claimantName: "合成权利人",
+        rightsBasis: "合成权属材料",
+        sourceCaseId: "case-synthetic",
+      }),
+    );
+    expect(node.querySelector("[data-report-embedded]")).toBeNull();
+    expect(node.textContent).toContain("case-formal");
+    expect(node.textContent).toContain("已结案");
+    expect(window.history.state).toEqual(marker);
+    expect(window.location.hash).toBe("#settings");
+  });
+  it("binds an open rights form to its source case id when the same target also has another case", async () => {
+    client.list.mockResolvedValue({
+      items: [
+        { ...report, status: "resolved" },
+        {
+          ...report,
+          id: "case-new-legal",
+          kind: "rights_notice",
+          reason: "copyright",
+        },
+      ],
+      total: 2,
+    });
+    await mount();
+    const ownCase = (id: string) =>
+      Array.from(node.querySelectorAll("article")).find((article) =>
+        article.textContent?.includes(`案件编号：${id}`),
+      )!;
+    await click(
+      ownCase("case-synthetic").querySelector<HTMLButtonElement>(
+        "button[aria-expanded]",
+      )!,
+    );
+    await click(button("提交权利人投诉"));
+    expect(
+      ownCase("case-synthetic").querySelectorAll("[data-report-embedded]"),
+    ).toHaveLength(1);
+    await click(
+      ownCase("case-new-legal").querySelector<HTMLButtonElement>(
+        "button[aria-expanded]",
+      )!,
+    );
+    expect(
+      ownCase("case-new-legal").querySelector("[data-report-embedded]"),
+    ).toBeNull();
+    expect(node.querySelectorAll("[data-report-embedded]")).toHaveLength(0);
+    expect(client.create).not.toHaveBeenCalled();
+  });
+  it("closes an untouched private follow-up without adding dialog history or sending a report", async () => {
+    const marker = { phase4Dialog: "synthetic-messages", phase4DialogDepth: 1 };
+    window.history.replaceState(marker, "", "/#messages");
+    await mount();
+    await click(button("查看与补充材料"));
+    await click(button("提交权利人投诉"));
+    await click(button("关闭投诉表单"));
+    expect(node.querySelector("[data-report-embedded]")).toBeNull();
+    expect(client.create).not.toHaveBeenCalled();
+    expect(modal).not.toHaveBeenCalled();
+    expect(window.history.state).toEqual(marker);
+    expect(window.location.hash).toBe("#messages");
+  });
+  it("does not offer another rights-notice upgrade for an already formal case", async () => {
+    client.list.mockResolvedValue({
+      items: [{ ...report, kind: "rights_notice", reason: "copyright" }],
+      total: 1,
+    });
+    await mount();
+    await click(button("查看与补充材料"));
+    expect(button("提交权利人投诉")).toBeUndefined();
+  });
+  it("shows a specific decision and submits an appeal using its decision identity", async () => {
+    await mount();
+    await click(button("处置与申诉"));
+    expect(node.textContent).toContain("合成处置理由");
+    expect(button("提交不侵权声明")).toBeUndefined();
+    await fill("合成申诉说明");
+    await click(button("提交申诉"));
+    expect(client.appeal).toHaveBeenCalledWith(
+      "user-synthetic",
+      "decision-synthetic",
+      { text: "合成申诉说明", requestId: expect.any(String) },
+    );
+  });
+  it.each([
+    ["approve", "审核通过"],
+    ["reject", "审核拒绝"],
+    ["restore", "恢复内容"],
+    ["delete_body", "删除正文"],
+    ["remove_thread", "移除讨论串"],
+  ] as const)(
+    "labels a staff %s decision without fabricating reporter controls",
+    async (action, label) => {
+      client.decisions.mockResolvedValue({
+        items: [
+          {
+            ...decision,
+            kind: "moderation",
+            decision: { ...decision.decision, action },
+            appeal: { text: "合成审核申诉", status: "pending", createdAt },
+          },
+        ],
+        total: 1,
+      });
+      await mount("user-synthetic", true);
+      expect(node.querySelector("h3")?.textContent).toBe(label);
+      expect(node.textContent).toContain("管理审核决定");
+      expect(node.textContent).toContain("审核记录编号：case-synthetic");
+      expect(node.textContent).not.toContain("补充私有证据附件");
+      expect(button("补充材料")).toBeUndefined();
+      expect(button("提交权利人投诉")).toBeUndefined();
+      expect(button("提交不侵权声明")).toBeUndefined();
+      expect(client.list).not.toHaveBeenCalled();
+    },
+  );
+  it("lets an affected account appeal a staff rejection through the restricted decisions view", async () => {
+    client.decisions.mockResolvedValue({
+      items: [
+        {
+          ...decision,
+          kind: "moderation",
+          decision: { ...decision.decision, action: "reject" },
+        },
+      ],
+      total: 1,
+    });
+    await mount("user-synthetic", true);
+    await fill("合成拒绝审核申诉");
+    await click(button("提交申诉"));
+    expect(client.appeal).toHaveBeenCalledWith(
+      "user-synthetic",
+      "decision-synthetic",
+      { text: "合成拒绝审核申诉", requestId: expect.any(String) },
+    );
+    expect(node.textContent).not.toContain("补充私有证据附件");
+  });
+  it("states that an overturned staff rejection returns to pending review and remains unpublished", async () => {
+    client.decisions.mockResolvedValue({
+      items: [
+        {
+          ...decision,
+          kind: "moderation",
+          decision: {
+            ...decision.decision,
+            action: "reject",
+            reversedAt: createdAt,
+            reviewReason: "合成复核纠正",
+          },
+          appeal: { text: "合成审核申诉", status: "overturned", createdAt },
+        },
+      ],
+      total: 1,
+    });
+    await mount("user-synthetic", true);
+    expect(node.textContent).toContain(
+      "拒绝决定已撤销，内容已返回原审核队列，仍未发布。",
+    );
+    expect(button("提交申诉")).toBeUndefined();
+    expect(node.textContent).not.toContain("补充私有证据附件");
+    expect(button("提交权利人投诉")).toBeUndefined();
+  });
+  it.each([
+    ["delete_body", "删除正文的决定已纠正；已删除的文字无法恢复。"],
+    [
+      "remove_thread",
+      "移除讨论串的决定已纠正；其他仍有效的处置可能继续限制相关内容。",
+    ],
+  ] as const)(
+    "explains the limits of correcting a staff %s decision",
+    async (action, message) => {
+      client.decisions.mockResolvedValue({
+        items: [
+          {
+            ...decision,
+            kind: "moderation",
+            decision: {
+              ...decision.decision,
+              action,
+              reversedAt: createdAt,
+              reviewReason: "合成复核理由",
+            },
+            appeal: { text: "合成审核申诉", status: "overturned", createdAt },
+          },
+        ],
+        total: 1,
+      });
+      await mount("user-synthetic", true);
+      expect(node.textContent).toContain(message);
+      expect(node.textContent).toContain("合成复核理由");
+      expect(button("提交申诉")).toBeUndefined();
+      expect(node.textContent).not.toContain("补充私有证据附件");
+    },
+  );
+  it("offers a non-infringement statement only for a rights-holder notice", async () => {
+    client.decisions.mockResolvedValue({
+      items: [{ ...decision, kind: "rights_notice" }],
+      total: 1,
+    });
+    await mount("user-synthetic", true);
+    const form = button("提交不侵权声明").closest("form")!;
+    const area = form.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(area, "合成不侵权声明");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click(button("提交不侵权声明"));
+    expect(client.statement).toHaveBeenCalledWith(
+      "user-synthetic",
+      "case-synthetic",
+      { text: "合成不侵权声明", requestId: expect.any(String) },
+    );
+    expect(client.list).not.toHaveBeenCalled();
+    expect(client.inbox).not.toHaveBeenCalled();
+    expect(node.querySelector('[role="tablist"]')).toBeNull();
+  });
+  it("discards private responses across account changes", async () => {
+    let finish!: (value: unknown) => void;
+    client.list
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ items: [], total: 0 });
+    await mount("user-before");
+    await act(async () => root.render(<ReportingCases account="user-after" />));
+    await act(async () => finish({ items: [report], total: 1 }));
+    expect(node.textContent).not.toContain("合成案件正文");
+    expect(node.textContent).toContain("暂无记录");
+  });
+});

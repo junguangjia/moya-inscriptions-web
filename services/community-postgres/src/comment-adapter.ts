@@ -1,3 +1,8 @@
+import {
+  captureStaffSubject,
+  recordStaffModeration,
+  type StaffReportingDb,
+} from "./staff-moderation-reporting.js";
 import { PostgresDiscussionStore } from "./discussion-store.js";
 import { assertExecutionFence } from "./execution-fence.js";
 import { CommunityConflictError } from "@moya/api";
@@ -283,6 +288,17 @@ export class PostgresCommunityCommentAdapter
       // racing it.
       if (receipt?.fence !== undefined)
         await assertExecutionFence(run, receipt.fence);
+      const staffDb: StaffReportingDb = {
+        query: async <Row extends QueryResultRow>(
+          sql: string,
+          params: unknown[] = [],
+        ) => ({ rows: [...(await run<Row>(sql, params))] }),
+      };
+      const staff = await captureStaffSubject(
+        staffDb,
+        { type: "comment", id },
+        audit?.reason,
+      );
       const changed = await run<Changed>(applyCommentModerationSql, values);
       const subject = changed[0];
       // The audit row exists exactly when the transition happened.
@@ -303,6 +319,19 @@ export class PostgresCommunityCommentAdapter
             subject.id,
             audit.detail ?? null,
           ]);
+        await recordStaffModeration(
+          staffDb,
+          staff,
+          operatorLabel,
+          audit?.action === "reject"
+            ? "reject"
+            : audit?.action === "unhide"
+              ? "restore"
+              : moderation === "visible"
+                ? "approve"
+                : "hide",
+          at,
+        );
         if (receipt !== undefined)
           await run(insertCommandReceiptSql, [
             operatorLabel,

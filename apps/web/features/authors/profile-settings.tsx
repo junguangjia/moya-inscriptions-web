@@ -1,4 +1,5 @@
 "use client";
+import { MyReportingCases } from "../reporting/reporting-cases";
 import { UserIdentity } from "./user-identity";
 import {
   useCallback,
@@ -26,7 +27,8 @@ import { FeedLayoutPreview } from "../settings/feed-layout-preview";
 import { feedLayoutLabels } from "../product-shell/preferences";
 import type { SettingsIconName } from "../settings/settings-icons";
 
-type Page = "root" | "display" | "privacy" | "blocks" | "security" | "factor";
+type Page =
+  "root" | "display" | "privacy" | "blocks" | "security" | "factor" | "reports";
 const titles: Record<Page, string> = {
   root: "设置",
   display: "外观",
@@ -34,6 +36,7 @@ const titles: Record<Page, string> = {
   blocks: "已屏蔽账户",
   security: "账号与安全",
   factor: "验证登录方式",
+  reports: "我的举报与申诉",
 };
 const themeLabels = {
   system: "跟随系统",
@@ -51,6 +54,7 @@ const pageIcons = {
   privacy: "lock-keyhole",
   blocks: "ban",
   security: "shield-check",
+  reports: "shield-check",
 } as const;
 const privacyIcons = {
   following: "user-round-plus",
@@ -705,6 +709,7 @@ export const ProfileSettings = ({
                       <h3>账户</h3>
                       <div className={styles.rows}>
                         {row("账号与安全", "security", "手机号、邮箱换绑")}
+                        {row("我的举报与申诉", "reports")}
                         {onEdit && (
                           <button
                             type="button"
@@ -738,6 +743,17 @@ export const ProfileSettings = ({
                     {guest}
                   </section>
                 )}
+                <section className={styles.group}>
+                  <h3>帮助与规则</h3>
+                  <div className={styles.rows}>
+                    <a className={styles.row} href="/policies">
+                      <span className={styles.rowText}>服务条款与社区规则</span>
+                    </a>
+                    <a className={styles.row} href="/policies/reporting">
+                      <span className={styles.rowText}>举报与申诉说明</span>
+                    </a>
+                  </div>
+                </section>
               </>
             )}
             {page === "display" && (
@@ -776,6 +792,7 @@ export const ProfileSettings = ({
                 <p className={styles.help}>立即生效，保存在当前浏览器。</p>
               </>
             )}
+            {page === "reports" && <MyReportingCases />}
             {page === "privacy" &&
               (ownProfile ? (
                 <>

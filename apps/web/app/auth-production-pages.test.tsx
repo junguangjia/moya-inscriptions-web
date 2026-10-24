@@ -90,8 +90,11 @@ describe("Production real authentication pages", () => {
     expect(markup).toContain('data-auth-return="/"');
   });
 
-  it("does not promote the Development agreement draft", () => {
-    expect(() => AgreementsPage()).toThrow("NEXT_NOT_FOUND");
+  it("links published policies without presenting the Development agreement draft", () => {
+    const markup = renderToStaticMarkup(AgreementsPage());
+    expect(markup).toContain('href="/policies/terms"');
+    expect(markup).toContain('href="/policies/privacy"');
+    expect(markup).not.toContain("开发环境草稿");
   });
 });
 

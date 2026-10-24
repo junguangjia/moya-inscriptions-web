@@ -1,4 +1,8 @@
 import {
+  captureStaffCandidate,
+  recordStaffModeration,
+} from "../staff-moderation-reporting.js";
+import {
   beginWorkPublicationSync,
   type PublicationSyncOptions,
 } from "./publication-sync.js";
@@ -406,6 +410,47 @@ export const moderateSubmission = async (
         await touchWork(db, row.work_id, now);
       }
       await publicationSync.finish(now);
+      if (command.reason !== undefined) {
+        const saved = (
+          await db.query<{
+            author_id: string;
+            title: string;
+            content_sha256: string;
+            work_version: number;
+            author_revision_id: string;
+            visibility: string;
+            public_revision_id: string | null;
+          }>(
+            "SELECT w.author_id,r.title,r.content_sha256,w.version AS work_version,w.author_revision_id,w.visibility,w.public_revision_id FROM community.works w JOIN community.work_revisions r ON r.work_id=w.id WHERE w.id=$1 AND r.id=$2",
+            [workId, revisionId],
+          )
+        ).rows[0]!;
+        await recordStaffModeration(
+          db,
+          captureStaffCandidate(
+            { type: "work", id: workId },
+            saved.author_id,
+            saved.title,
+            command.reason,
+          ),
+          operator,
+          command.action,
+          now,
+          command.action === "reject"
+            ? {
+                kind: "work_submission",
+                workId,
+                revisionId,
+                contentSha256: saved.content_sha256,
+                revisionVersion: version,
+                workVersion: saved.work_version,
+                authorRevisionId: saved.author_revision_id,
+                visibility: saved.visibility,
+                publicRevisionId: saved.public_revision_id,
+              }
+            : { kind: "informational" },
+        );
+      }
       return workSubmissionModerationResultSchema.parse({
         revisionId,
         workId: row.work_id,

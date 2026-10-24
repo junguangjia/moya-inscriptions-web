@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { operatorModerationReasonSchema } from "./moderation-reason.js";
 
 import {
   contentIdentitySchema,
@@ -63,10 +64,12 @@ export const userModerationActionSchema = z.enum(["suspend", "reinstate"]);
 
 /** The Backend command body: the subject id travels in the route, never here. */
 export const moderateCommentCommandSchema = z.strictObject({
+  reason: operatorModerationReasonSchema.optional(),
   action: commentModerationActionSchema,
 });
 
 export const moderateUserCommandSchema = z.strictObject({
+  reason: operatorModerationReasonSchema.optional(),
   action: userModerationActionSchema,
 });
 
@@ -91,6 +94,7 @@ const distinctIds = (ids: readonly string[]): boolean =>
   new Set(ids).size === ids.length;
 
 export const bulkModerateCommentsCommandSchema = z.strictObject({
+  reason: operatorModerationReasonSchema.optional(),
   action: commentModerationActionSchema,
   ids: z
     .array(strictCommentIdSchema)
@@ -105,17 +109,21 @@ export const bulkModerateCommentsCommandSchema = z.strictObject({
  * body above. An unknown or extra field is rejected before any call is made.
  */
 export const adminModerateCommentRequestSchema = z.strictObject({
+  reason: operatorModerationReasonSchema,
   id: strictCommentIdSchema,
   action: commentModerationActionSchema,
 });
 
 export const adminModerateUserRequestSchema = z.strictObject({
+  reason: operatorModerationReasonSchema,
   id: strictUserIdSchema,
   action: userModerationActionSchema,
 });
 
 export const adminBulkModerateCommentsRequestSchema =
-  bulkModerateCommentsCommandSchema;
+  bulkModerateCommentsCommandSchema.extend({
+    reason: operatorModerationReasonSchema,
+  });
 
 export const adminReadCommentRequestSchema = z.strictObject({
   id: strictCommentIdSchema,

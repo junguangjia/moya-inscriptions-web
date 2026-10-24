@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { operatorModerationReasonSchema } from "./moderation-reason.js";
 import {
   articleAuthoringArticleIdSchema,
   articleDocumentSchema,
@@ -52,6 +53,7 @@ export const articlePendingCandidateSchema = articlePendingSummarySchema.extend(
   },
 );
 export const moderateArticlePendingCommandSchema = z.strictObject({
+  reason: operatorModerationReasonSchema.optional(),
   requestId: z.uuid(),
   expectedVersion: version,
   candidateVersion: version,
@@ -89,6 +91,7 @@ export const adminReadArticleSubmissionRequestSchema = z.strictObject({
 });
 export const adminModerateArticleSubmissionRequestSchema =
   moderateArticlePendingCommandSchema.extend({
+    reason: operatorModerationReasonSchema,
     id: articleAuthoringArticleIdSchema,
   });
 export type AdminReadArticleSubmissionRequest = z.infer<

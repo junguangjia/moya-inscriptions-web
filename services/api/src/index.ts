@@ -482,3 +482,14 @@ export type {
   AnalyticsDelivery,
   AnalyticsWriteContext,
 } from "./modules/analytics/analytics-port.js";
+
+export type {
+  CommunityReportingPort,
+  CommunityReportingEvidenceStore,
+  ReportingEvidenceRecord,
+  ReportingResolvedTarget,
+  ReportingExternalTargetResolver,
+} from "./modules/community/application/ports/community-reporting-port.js";
+export { CommunityReportingService } from "./modules/community/application/services/community-reporting-service.js";
+
+export { requireHumanModerationReason } from "./modules/community/transport/human-moderation-parser.js";

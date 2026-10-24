@@ -413,6 +413,7 @@ describe("work publishing operator HTTP surface", () => {
         body: JSON.stringify({
           requestId: randomUUID(),
           action: "approve",
+          reason: "Synthetic human decision",
           expectedVersion,
         }),
       });

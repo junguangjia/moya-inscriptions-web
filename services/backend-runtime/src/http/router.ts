@@ -1,3 +1,6 @@
+import { handleReportingRequest } from "../community/reporting-handler.js";
+import type { ReportingIdentify } from "../community/reporting-handler.js";
+import type { CommunityReportingService } from "@moya/api";
 import { handleNotificationRequest } from "../community/notification-handler.js";
 import { handleAnalyticsRequest } from "../analytics/analytics-handler.js";
 import type { AnalyticsRouteDependencies } from "../analytics/analytics-handler.js";
@@ -78,6 +81,9 @@ const sendRouteError = (
 };
 
 export interface CommunityRouterDependencies {
+  readonly reportingService?: CommunityReportingService;
+  readonly reportingIdentify?: ReportingIdentify;
+  readonly onAuthenticated?: (id: string, source: string) => Promise<void>;
   readonly catalogRecipePolicy?: BackendApplicationOptions["catalogRecipePolicy"];
   readonly catalogDeliveryReadiness?: BackendApplicationOptions["catalogDeliveryReadiness"];
   readonly catalogPublishedRenditions?: BackendApplicationOptions["catalogPublishedRenditions"];
@@ -275,6 +281,30 @@ export const createRouter =
           response,
           community.authService,
           community.authRequestSource,
+          community.onAuthenticated,
+        ),
+        apiFailure,
+      );
+      return;
+    }
+
+    if (
+      community?.reportingService &&
+      (pathname === "/v1/community/reports" ||
+        pathname.startsWith("/v1/community/reports/") ||
+        pathname === "/v1/community/decisions" ||
+        pathname.startsWith("/v1/community/decisions/") ||
+        pathname === "/v1/community/reporting-inbox" ||
+        pathname.startsWith("/v1/community/reporting-inbox/"))
+    ) {
+      containRequest(
+        response,
+        handleReportingRequest(
+          request,
+          response,
+          community.reportingService,
+          community.sessionService,
+          community.reportingIdentify,
         ),
         apiFailure,
       );
@@ -462,6 +492,7 @@ export const createRouter =
         response,
         handleOperatorRequest(request, response, pathname, {
           moderationService,
+          reportingService: community?.reportingService,
           catalogRecipePolicy: community?.catalogRecipePolicy,
           catalogDeliveryReadiness: community?.catalogDeliveryReadiness,
           catalogPublishedRenditions: community?.catalogPublishedRenditions,

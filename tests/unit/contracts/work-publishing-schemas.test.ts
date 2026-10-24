@@ -2323,12 +2323,16 @@ describe("operator work publishing shapes", () => {
       id: `work-revision-${hex("f")}`,
       requestId,
       action: "approve",
+      reason: "Synthetic human review reason",
       expectedVersion: 2,
     };
     expect(
       adminModerateWorkSubmissionRequestSchema.safeParse(moderation).success,
     ).toBe(true);
     for (const invalid of [
+      { reason: undefined },
+      { reason: "   " },
+      { reason: "x".repeat(2001) },
       { action: "hide" },
       { id: `work-${hex("f")}` },
       { expectedVersion: undefined },

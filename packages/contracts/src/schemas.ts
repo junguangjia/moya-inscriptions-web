@@ -933,6 +933,7 @@ const addProfileFamilyIssues = (
 
 export const authorProfileSchema = z
   .strictObject({
+    ipLocation: z.string().max(100).nullable().optional(),
     id: userId,
     handle: z.string(),
     displayName: authorText(40),
@@ -1995,3 +1996,5 @@ export {
   articleConnectionRevocationSchema,
   articleConsentDecisionSchema,
 } from "./article-delegation.ts";
+
+export * from "./reporting.ts";

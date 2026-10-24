@@ -1,4 +1,7 @@
-import { CommunityStoreUnavailableError } from "@moya/api";
+import {
+  CommunityConflictError,
+  CommunityStoreUnavailableError,
+} from "@moya/api";
 
 // The same connection-level signals @moya/catalog-postgres treats as
 // unavailability; the community adapter maps them to its own error type.
@@ -28,6 +31,22 @@ export const asCommunityOperationError = (
   phase: "connect" | "query",
 ): unknown => {
   if (error instanceof CommunityStoreUnavailableError) return error;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "constraint" in error &&
+    error.constraint === "report_comments_restricted"
+  )
+    return new CommunityConflictError("Commenting is restricted");
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "constraint" in error &&
+    error.constraint === "active_report_restriction"
+  )
+    return new CommunityConflictError(
+      "An active report decision still restricts this target",
+    );
   const code = errorCode(error);
   if (
     phase === "connect" ||

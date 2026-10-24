@@ -1,0 +1,138 @@
+.flag,
+.more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  padding: var(--yoyi-space-2);
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+.flag {
+  opacity: 0.6;
+}
+.flag svg {
+  width: 14px;
+  height: 14px;
+}
+.more svg {
+  width: 22px;
+  height: 22px;
+}
+.flag:focus-visible,
+.more:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.flag:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.menuHost {
+  position: relative;
+  display: inline-flex;
+}
+.menu {
+  position: absolute;
+  inset-inline-end: 0;
+  top: 100%;
+  z-index: 5;
+  min-width: 140px;
+  padding: var(--yoyi-space-2);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-surface);
+  box-shadow: var(--yoyi-color-shadow-dialog);
+}
+.menu button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--yoyi-space-2);
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.form,
+.cases {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  padding: var(--yoyi-space-4);
+}
+.form label,
+.form fieldset {
+  display: grid;
+  gap: var(--yoyi-space-2);
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: 0;
+}
+.form select,
+.form textarea,
+.form input {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-height: 44px;
+  padding: var(--yoyi-space-2);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-surface);
+  font: inherit;
+}
+.form textarea {
+  resize: vertical;
+}
+.form button,
+.cases button {
+  min-height: 44px;
+  padding: var(--yoyi-space-2) var(--yoyi-space-3);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+  color: inherit;
+  background: var(--yoyi-color-background-surface);
+  font: inherit;
+  cursor: pointer;
+}
+.form button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.note {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-metadata-size);
+}
+.tabs {
+  display: flex;
+  gap: var(--yoyi-space-2);
+  flex-wrap: wrap;
+}
+.tabs [aria-selected="true"] {
+  font-weight: 600;
+}
+.case {
+  display: grid;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+  overflow-wrap: anywhere;
+}
+.case h3,
+.case p {
+  margin: 0;
+}
+.case time {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-metadata-size);
+}

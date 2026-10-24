@@ -985,6 +985,19 @@ const isForbiddenServerReference = (specifier: string): boolean => {
 };
 
 const allowedClientContractTypes = new Set([
+  // Issue #326 public reporting and restricted appeal DTOs (types only).
+  "AuthCapabilities",
+  "AuthChallengeAccepted",
+  "AuthPasswordLoginRequest",
+  "CommunityAppealSession",
+  "CommunityReportReason",
+  "CommunityReportTarget",
+  "CreateCommunityReportRequest",
+  "CommunityReport",
+  "CommunityReportEvidence",
+  "CommunityReportingDecision",
+  "CommunityReportingInbox",
+
   "MentionReference",
   "NotificationPage",
   "NotificationItem",

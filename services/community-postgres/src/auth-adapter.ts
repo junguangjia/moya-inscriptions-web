@@ -679,8 +679,9 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           user_id: string;
           expires_at: Date;
           revoked_at: Date | null;
+          scope: "community" | "appeal";
         }>(
-          `SELECT id, token_hash, user_id, expires_at, revoked_at
+          `SELECT id, token_hash, user_id, expires_at, revoked_at, scope
            FROM community.sessions WHERE token_hash=$1
              AND ($2::text IS NULL OR (issuer IN ('verified_login','password_login') AND auth_environment=$2))
 `,
@@ -695,6 +696,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               userId: row.user_id,
               expiresAt: iso(row.expires_at),
               revokedAt: nullableIso(row.revoked_at),
+              scope: row.scope,
             };
       },
       lockSession: async (tokenHash, requiredEnvironment) => {
@@ -704,8 +706,9 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           user_id: string;
           expires_at: Date;
           revoked_at: Date | null;
+          scope: "community" | "appeal";
         }>(
-          `SELECT id, token_hash, user_id, expires_at, revoked_at
+          `SELECT id, token_hash, user_id, expires_at, revoked_at, scope
            FROM community.sessions WHERE token_hash=$1
              AND ($2::text IS NULL OR (issuer IN ('verified_login','password_login') AND auth_environment=$2))
            FOR UPDATE`,
@@ -720,6 +723,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
               userId: row.user_id,
               expiresAt: iso(row.expires_at),
               revokedAt: nullableIso(row.revoked_at),
+              scope: row.scope,
             };
       },
       lockReceipt: async (keyHash) => {
@@ -768,8 +772,8 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
       insertSession: async (row: StoredSession) => {
         await query(
           `INSERT INTO community.sessions(
-            id, token_hash, user_id, issued_at, expires_at, issuer, auth_environment, auth_channel
-          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+            id, token_hash, user_id, issued_at, expires_at, issuer, auth_environment, auth_channel, scope
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
           [
             row.id,
             row.tokenHash,
@@ -779,6 +783,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
             row.issuer,
             row.authEnvironment,
             row.authChannel,
+            row.scope ?? "community",
           ],
         );
       },
@@ -842,7 +847,7 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           `SELECT u.id, u.handle, u.display_name, u.studio_name, u.studio_name_suffix, u.status
            FROM community.sessions s
            JOIN community.public_users u ON u.id = s.user_id
-           WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > $2
+           WHERE s.token_hash=$1 AND s.scope='community' AND s.revoked_at IS NULL AND s.expires_at > $2
              AND ($3::text IS NULL OR (s.issuer IN ('verified_login','password_login') AND s.auth_environment=$3))`,
           [tokenHash, atIso, requiredEnvironment ?? null],
         );

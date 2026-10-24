@@ -347,7 +347,15 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
                 [viewer, id],
               )
             ).rowCount === 1;
+      const location =
+        (
+          await db.query<{ label: string }>(
+            "SELECT label FROM community.profile_ip_locations WHERE user_id=$1",
+            [id],
+          )
+        ).rows[0]?.label ?? null;
       return authorProfileSchema.parse({
+        ipLocation: location,
         id,
         handle: u.handle,
         displayName: u.display_name,
