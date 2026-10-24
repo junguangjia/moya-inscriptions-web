@@ -95,6 +95,11 @@ GRANT SELECT ON TABLE community.publication_setting TO :"app_role";
 GRANT UPDATE (policy, updated_by, updated_at) ON TABLE community.publication_setting TO :"app_role";
 GRANT SELECT, INSERT ON TABLE community.moderation_events TO :"app_role";
 
+-- Existing moderation writes invoke the reporting restriction guard. It reads
+-- only the restriction identity and reversal state; complaint text stays private.
+GRANT SELECT (restriction_key, reversed_at)
+ON TABLE community.report_decisions TO :"app_role";
+
 -- Author community: relations, blocks, favorites, legacy PNG media, receipts.
 GRANT SELECT, INSERT, DELETE ON TABLE
   community.follows, community.blocks, community.content_relations

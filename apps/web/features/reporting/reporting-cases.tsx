@@ -509,20 +509,18 @@ const AccountReportingCases = ({
                 }}
               />
             )}
-            {item.kind !== "moderation" && (
-              <CaseEvidence
-                account={account}
-                caseId={item.caseId}
-                evidence={item.evidence}
-                restricted={restricted}
-                allowUpload={
-                  !item.decision.reversedAt &&
-                  (item.kind === "rights_notice" ||
-                    item.appeal?.status === "pending")
-                }
-                onChanged={reload}
-              />
-            )}
+            <CaseEvidence
+              account={account}
+              caseId={item.caseId}
+              evidence={item.evidence}
+              restricted={restricted}
+              allowUpload={
+                !item.decision.reversedAt &&
+                (item.kind === "rights_notice" ||
+                  item.appeal?.status === "pending")
+              }
+              onChanged={reload}
+            />
             {item.kind === "rights_notice" && !item.decision.reversedAt && (
               <CaseTextForm
                 label="提交不侵权声明"

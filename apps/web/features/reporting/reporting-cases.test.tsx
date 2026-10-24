@@ -4,11 +4,13 @@ import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const { client, modal } = vi.hoisted(() => ({
+const { client, modal, appealEvidence } = vi.hoisted(() => ({
   modal: vi.fn(),
+  appealEvidence: vi.fn(),
   client: {
     list: vi.fn(),
     create: vi.fn(),
+    evidence: vi.fn(),
     decisions: vi.fn(),
     inbox: vi.fn(),
     material: vi.fn(),
@@ -19,7 +21,7 @@ const { client, modal } = vi.hoisted(() => ({
 }));
 vi.mock("./reporting-data", () => ({
   reportingClient: client,
-  appealReportingClient: client,
+  appealReportingClient: { ...client, evidence: appealEvidence },
   downloadReportEvidence: vi.fn(),
   ReportingRequestError: class extends Error {},
 }));
@@ -300,7 +302,7 @@ describe("own reporting cases", () => {
             ...decision,
             kind: "moderation",
             decision: { ...decision.decision, action },
-            appeal: { text: "合成审核申诉", status: "pending", createdAt },
+            appeal: null,
           },
         ],
         total: 1,
@@ -316,6 +318,119 @@ describe("own reporting cases", () => {
       expect(client.list).not.toHaveBeenCalled();
     },
   );
+  it("does not offer staff-origin evidence upload before an appeal is pending", async () => {
+    client.decisions.mockResolvedValue({
+      items: [{ ...decision, kind: "moderation" }],
+      total: 1,
+    });
+    await mount("user-synthetic", true);
+    expect(node.querySelector('input[type="file"]')).toBeNull();
+    expect(button("上传附件")).toBeUndefined();
+    expect(button("提交申诉")).toBeDefined();
+    expect(button("补充材料")).toBeUndefined();
+    expect(button("提交权利人投诉")).toBeUndefined();
+    expect(button("提交不侵权声明")).toBeUndefined();
+  });
+  it.each([false, true])(
+    "uploads only the affected account's pending staff-appeal evidence with restricted=%s",
+    async (restricted) => {
+      const account = `user-${(restricted ? "9" : "8").repeat(32)}`;
+      const caseId = `report-${"7".repeat(32)}`;
+      const earlier = {
+        id: "evidence-own-earlier",
+        fileName: "own-earlier-evidence",
+        mimeType: "application/pdf",
+        size: 12,
+        sensitive: true,
+        createdAt,
+        downloadPath: `/v1/community/reports/${caseId}/evidence/evidence-own-earlier`,
+      };
+      const current = {
+        ...decision,
+        caseId,
+        kind: "moderation",
+        appeal: { text: "合成审核申诉", status: "pending", createdAt },
+        evidence: [earlier],
+      };
+      client.decisions.mockResolvedValue({ items: [current], total: 1 });
+      await mount(account, restricted);
+      if (!restricted) await click(button("处置与申诉"));
+      expect(button("own-earlier-evidence")).toBeDefined();
+      const file = new File(["%PDF-1.4\nsynthetic"], "own-appeal-evidence", {
+        type: "application/pdf",
+      });
+      const selectedClient = restricted ? appealEvidence : client.evidence;
+      selectedClient.mockImplementationOnce(async () => {
+        const uploaded = {
+          ...earlier,
+          id: "evidence-own-new",
+          fileName: file.name,
+          size: file.size,
+        };
+        client.decisions.mockResolvedValue({
+          items: [{ ...current, evidence: [earlier, uploaded] }],
+          total: 1,
+        });
+        return uploaded;
+      });
+      const input = node.querySelector<HTMLInputElement>('input[type="file"]')!;
+      await act(async () => {
+        Object.defineProperty(input, "files", {
+          configurable: true,
+          value: [file],
+        });
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await act(async () => {
+        button("上传附件").click();
+        await vi.waitFor(() => expect(selectedClient).toHaveBeenCalledOnce());
+      });
+      expect(selectedClient).toHaveBeenCalledWith(account, caseId, {
+        fileName: "own-appeal-evidence",
+        mimeType: "application/pdf",
+        contentBase64: btoa("%PDF-1.4\nsynthetic"),
+        sensitive: true,
+        requestId: expect.any(String),
+      });
+      expect(
+        restricted ? client.evidence : appealEvidence,
+      ).not.toHaveBeenCalled();
+      expect(button("own-appeal-evidence")).toBeDefined();
+      expect(button("补充材料")).toBeUndefined();
+      expect(button("提交权利人投诉")).toBeUndefined();
+      expect(button("提交不侵权声明")).toBeUndefined();
+      expect(client.material).not.toHaveBeenCalled();
+      expect(client.statement).not.toHaveBeenCalled();
+      expect(client.create).not.toHaveBeenCalled();
+    },
+  );
+  it("keeps only the affected account's existing files readable after a staff appeal closes", async () => {
+    const ownEvidence = {
+      id: "evidence-own",
+      fileName: "own-closed-appeal-evidence",
+      mimeType: "application/pdf",
+      size: 12,
+      sensitive: true,
+      createdAt,
+      downloadPath:
+        "/v1/community/reports/case-synthetic/evidence/evidence-own",
+    };
+    client.decisions.mockResolvedValue({
+      items: [
+        {
+          ...decision,
+          kind: "moderation",
+          evidence: [ownEvidence],
+          appeal: { text: "合成申诉", status: "upheld", createdAt },
+        },
+      ],
+      total: 1,
+    });
+    await mount("user-synthetic", true);
+    expect(button("own-closed-appeal-evidence")).toBeDefined();
+    expect(node.querySelector('input[type="file"]')).toBeNull();
+    expect(button("上传附件")).toBeUndefined();
+  });
   it("lets an affected account appeal a staff rejection through the restricted decisions view", async () => {
     client.decisions.mockResolvedValue({
       items: [

@@ -218,6 +218,102 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
     if (createdRole) await admin.query(`DROP ROLE ${role}`);
   });
 
+  it("grants only the two read columns needed by the invoker restriction guard", async () => {
+    const columns = await app!.query<{ name: string; readable: boolean }>(
+      `SELECT attname AS name,
+         has_column_privilege(current_user, 'community.report_decisions', attname, 'SELECT') AS readable
+       FROM pg_attribute
+       WHERE attrelid='community.report_decisions'::regclass AND attnum>0 AND NOT attisdropped
+       ORDER BY attname`,
+    );
+    expect(
+      columns.rows
+        .filter((column) => column.readable)
+        .map((column) => column.name),
+    ).toEqual(["restriction_key", "reversed_at"]);
+    expect(
+      (
+        await app!.query(
+          `SELECT has_table_privilege(current_user,'community.report_decisions','SELECT') AS whole_table_read,
+         has_table_privilege(current_user,'community.report_decisions','INSERT') AS insert,
+         has_table_privilege(current_user,'community.report_decisions','UPDATE') AS update,
+         has_table_privilege(current_user,'community.report_decisions','DELETE') AS delete`,
+        )
+      ).rows,
+    ).toEqual([
+      { whole_table_read: false, insert: false, update: false, delete: false },
+    ]);
+    expect(
+      (
+        await app!.query(
+          "SELECT restriction_key,reversed_at FROM community.report_decisions LIMIT 0",
+        )
+      ).rows,
+    ).toEqual([]);
+    await expect(
+      app!.query(
+        "SELECT reason,appeal_text,operator_label FROM community.report_decisions LIMIT 0",
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("keeps active report restrictions effective for the non-owner App role", async () => {
+    const commentId = key("comment"),
+      caseId = key("report"),
+      decisionId = key("report-decision");
+    try {
+      await setup!.query(
+        "INSERT INTO community.catalog_comments(id,catalog_id,author_id,text,moderation) VALUES($1,'synthetic-catalog',$2,'Synthetic restriction fixture','hidden')",
+        [commentId, bob],
+      );
+      await setup!.query(
+        "INSERT INTO community.report_cases(id,reporter_id,target_type,target_id,canonical_path,affected_user_id,snapshot,kind) VALUES($1,$2,'comment',$3,'/?catalogId=synthetic-catalog#detail',$4,'{}'::jsonb,'quick_comment')",
+        [caseId, alice, commentId, bob],
+      );
+      await setup!.query(
+        "INSERT INTO community.report_decisions(id,case_id,action,reason,operator_label,restriction_key) VALUES($1,$2,'hide','Synthetic private decision reason','synthetic-operator',$3)",
+        [decisionId, caseId, `comment:${commentId}`],
+      );
+      await expect(
+        app!.query(
+          "UPDATE community.catalog_comments SET moderation='visible' WHERE id=$1",
+          [commentId],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "active_report_restriction",
+      });
+      expect(
+        (
+          await setup!.query(
+            "SELECT moderation FROM community.catalog_comments WHERE id=$1",
+            [commentId],
+          )
+        ).rows,
+      ).toEqual([{ moderation: "hidden" }]);
+      await setup!.query(
+        "UPDATE community.report_decisions SET reversed_at=CURRENT_TIMESTAMP WHERE id=$1",
+        [decisionId],
+      );
+      expect(
+        (
+          await app!.query(
+            "UPDATE community.catalog_comments SET moderation='visible' WHERE id=$1 RETURNING moderation",
+            [commentId],
+          )
+        ).rows,
+      ).toEqual([{ moderation: "visible" }]);
+    } finally {
+      // Only this test's own fixture rows; no retained Development data.
+      await setup!.query("DELETE FROM community.report_cases WHERE id=$1", [
+        caseId,
+      ]);
+      await setup!.query("DELETE FROM community.catalog_comments WHERE id=$1", [
+        commentId,
+      ]);
+    }
+  });
+
   it("delivers real likes/comments/replies with overlap deduplication and no self effects", async () => {
     await authors.updateProfile(bob, {
       ...request(),

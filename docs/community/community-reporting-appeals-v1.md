@@ -70,6 +70,12 @@ fabricated statement from an unrelated public account.
 
 ## Production activation checklist
 
+The existing App-role plan grants only `SELECT (restriction_key, reversed_at)`
+on `community.report_decisions` so the invoker guards on existing moderation
+writes can read restriction state. Activating case handling, private evidence
+and retention still requires the separately approved reporting-role grant plan
+and verification with that actual restricted role.
+
 Implementation is not Production acceptance. Before separately authorized
 activation, configure the private evidence directory, an offline IP range
 library with documented licensing/update source, the Owner urgent mailbox and

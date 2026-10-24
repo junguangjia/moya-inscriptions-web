@@ -952,8 +952,8 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
         if (
           (
             await db.query<{ n: number }>(
-              "SELECT count(*)::integer n FROM community.report_evidence WHERE case_id=$1",
-              [id],
+              "SELECT count(*)::integer n FROM community.report_evidence WHERE case_id=$1 AND owner_id=$2",
+              [id, actor],
             )
           ).rows[0]!.n >= 10
         )

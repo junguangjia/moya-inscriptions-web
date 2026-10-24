@@ -1638,4 +1638,182 @@ describe("persistent reports, decisions and appeals", () => {
       ).rows[0].row,
     ).toEqual(before);
   });
+  it.each(["appeal", "rights_statement"] as const)(
+    "keeps separate ten-file uploader quotas for authorized %s evidence",
+    async (flow) => {
+      const reporter = await user(),
+        author = await user(),
+        target = { type: "user" as const, id: author };
+      const report =
+        flow === "appeal"
+          ? await adapter.create(reporter, {
+              kind: "standard",
+              target,
+              reason: "harassment",
+              requestId: randomUUID(),
+            })
+          : await adapter.create(reporter, {
+              kind: "rights_notice",
+              target,
+              reason: "copyright",
+              description: "Synthetic rights notice",
+              claimantName: "Synthetic claimant",
+              contact: "synthetic@example.invalid",
+              rightsBasis: "Synthetic ownership basis",
+              requestId: randomUUID(),
+            });
+      const files = new Set<string>();
+      const evidence = (owner: string, index: number) => ({
+        id: opaque("evidence"),
+        fileName: `${owner}-${index}.pdf`,
+        mimeType: "application/pdf",
+        size: 20,
+        sensitive: true,
+        sha256: "a".repeat(64),
+        createdAt: new Date().toISOString(),
+        downloadPath: "synthetic",
+      });
+      const reporterFiles = Array.from({ length: 10 }, (_, i) =>
+        evidence("reporter", i),
+      );
+      for (const item of reporterFiles.slice(0, 9))
+        await adapter.addEvidence(
+          reporter,
+          report.id,
+          item,
+          async () => {
+            files.add(item.id);
+          },
+          async () => {
+            files.delete(item.id);
+          },
+        );
+      let reserved!: () => void, release!: () => void;
+      const started = new Promise<void>((resolve) => {
+          reserved = resolve;
+        }),
+        held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      const tenth = reporterFiles[9]!;
+      const pending = adapter.addEvidence(
+        reporter,
+        report.id,
+        tenth,
+        async () => {
+          reserved();
+          await held;
+          files.add(tenth.id);
+        },
+        async () => {
+          files.delete(tenth.id);
+        },
+      );
+      const rejectedBeforeStorage = async (
+        actor: string,
+        item: ReturnType<typeof evidence>,
+      ) => {
+        let touched = false;
+        await expect(
+          adapter.addEvidence(
+            actor,
+            report.id,
+            item,
+            async () => {
+              touched = true;
+              files.add(item.id);
+            },
+            async () => {
+              files.delete(item.id);
+            },
+          ),
+        ).rejects.toThrow("Evidence limit reached");
+        expect(touched).toBe(false);
+      };
+      try {
+        await started;
+        expect(
+          (
+            await pool.query(
+              "SELECT count(*)::integer n FROM community.report_evidence WHERE case_id=$1 AND owner_id=$2 AND state='pending'",
+              [report.id, reporter],
+            )
+          ).rows[0].n,
+        ).toBe(1);
+        await rejectedBeforeStorage(reporter, evidence("reporter", 10));
+      } finally {
+        release();
+        await pending;
+      }
+      let staff = await adapter.operatorRead(report.id);
+      staff = await adapter.decide("owner", report.id, {
+        expectedVersion: staff.version,
+        action: "warn",
+        reason: "Synthetic review outcome",
+      });
+      if (flow === "appeal")
+        await adapter.appeal(author, staff.decision!.id, {
+          text: "Synthetic author appeal",
+          requestId: randomUUID(),
+        });
+      else
+        await adapter.statement(author, report.id, {
+          text: "Synthetic author rights statement",
+          requestId: randomUUID(),
+        });
+      const authorFiles = Array.from({ length: 10 }, (_, i) =>
+        evidence("author", i),
+      );
+      for (const item of authorFiles)
+        await adapter.addEvidence(
+          author,
+          report.id,
+          item,
+          async () => {
+            files.add(item.id);
+          },
+          async () => {
+            files.delete(item.id);
+          },
+        );
+      await rejectedBeforeStorage(author, evidence("author", 10));
+      await rejectedBeforeStorage(reporter, evidence("reporter", 11));
+      expect(files.size).toBe(20);
+      const rows = (
+        await pool.query(
+          "SELECT owner_id,count(*)::integer n FROM community.report_evidence WHERE case_id=$1 GROUP BY owner_id",
+          [report.id],
+        )
+      ).rows;
+      expect(new Map(rows.map((row) => [row.owner_id, row.n]))).toEqual(
+        new Map([
+          [reporter, 10],
+          [author, 10],
+        ]),
+      );
+      await expect(
+        adapter.evidence(author, report.id, reporterFiles[0]!.id),
+      ).rejects.toBeInstanceOf(CommunityNotFoundError);
+      await expect(
+        adapter.evidence(reporter, report.id, authorFiles[0]!.id),
+      ).rejects.toBeInstanceOf(CommunityNotFoundError);
+      expect(
+        (await adapter.evidence(reporter, report.id, reporterFiles[0]!.id)).id,
+      ).toBe(reporterFiles[0]!.id);
+      expect(
+        (await adapter.evidence(author, report.id, authorFiles[0]!.id)).id,
+      ).toBe(authorFiles[0]!.id);
+      expect(
+        (await adapter.readOwn(reporter, report.id)).evidence
+          .map((item) => item.id)
+          .sort(),
+      ).toEqual(reporterFiles.map((item) => item.id).sort());
+      const decision = (await adapter.decisions(author, 1, 100)).items.find(
+        (item) => item.caseId === report.id,
+      )!;
+      expect(decision.evidence.map((item) => item.id).sort()).toEqual(
+        authorFiles.map((item) => item.id).sort(),
+      );
+    },
+  );
 });
