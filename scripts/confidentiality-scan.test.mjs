@@ -268,7 +268,7 @@ test("types, references, relative imports and versions are not credential litera
     "const key = options.secretKey;",
     "import value from '../../module';",
     'const version = "18.4.0";',
-    'const assignment = "API_KEY=" + "PLACEHOLDER";',
+    'const assignment = "' + ["API", "KEY"].join("_") + '=" + "PLACEHOLDER";',
     "type Login = { password: string; secretKey?: string };",
   ];
   for (const value of values)
@@ -294,6 +294,84 @@ test("types, references, relative imports and versions are not credential litera
       ).length,
     );
 });
+test("synthetic credential fixtures are assembled at runtime in the scanner distribution", () => {
+  const bytes = readFileSync(fileURLToPath(import.meta.url));
+  assert.deepEqual(
+    inspect(bytes, "confidentiality-scan.test.mjs").filter(
+      (f) => f.severity === "BLOCK",
+    ),
+    [],
+  );
+});
+
+test("runtime ENV serialization distinguishes member reads from literal credential fragments", () => {
+  const name = ["CLOUD", "SECRET", "KEY"].join("_");
+  const opaque = ["J4m8Q2t9", "V5n7K3p6", "R1x0L8c4"].join("");
+  const line = (expression, suffix = "\n") =>
+    "body=(" +
+    JSON.stringify(name + "=") +
+    " + " +
+    expression +
+    " + " +
+    JSON.stringify(suffix) +
+    ").encode()\n";
+  for (const reference of [
+    "values['SecretKey']",
+    'values["SecretKey"]',
+    "credentials.secretKey",
+    "os.environ['CLOUD_SECRET_KEY']",
+  ]) {
+    const safe = line(reference);
+    assert.deepEqual(categories(safe, "fixture.py"), []);
+    const nested =
+      "REMOTE = r" + "'".repeat(3) + "\n" + safe + "'".repeat(3) + "\n";
+    assert.deepEqual(categories(nested, "fixture.py"), []);
+    for (const filename of ["fixture.env", "source.patch", "notes.md"])
+      assert.ok(categories(safe, filename).includes("CREDENTIAL_LITERAL"));
+    for (const unsafe of [
+      line(JSON.stringify(opaque)),
+      line(reference, opaque + "\n"),
+      line(reference + " + " + JSON.stringify(opaque)),
+      "# " + safe,
+      line(reference, "\n" + name + "=" + opaque + "\n"),
+    ])
+      assert.ok(
+        categories(unsafe, "fixture.py").includes("CREDENTIAL_LITERAL"),
+      );
+    assert.ok(categories(safe + token, "fixture.py").includes("API_TOKEN"));
+    assert.ok(
+      categories(safe + signedUrl, "fixture.py").includes("AUTHORIZING_URL"),
+    );
+  }
+  for (const [left, right] of [
+    ["<", ">"],
+    ["${", "}"],
+  ]) {
+    const wrappedLiteral =
+      "const body = " +
+      JSON.stringify(name + "=") +
+      " + " +
+      JSON.stringify(left) +
+      " + " +
+      JSON.stringify(opaque) +
+      " + " +
+      JSON.stringify(right) +
+      ";";
+    assert.ok(
+      categories(wrappedLiteral, "fixture.js").includes("CREDENTIAL_LITERAL"),
+    );
+  }
+  assert.ok(
+    categories(line(JSON.stringify(token)), "fixture.py").includes("API_TOKEN"),
+  );
+  assert.ok(
+    categories(
+      line("values[" + JSON.stringify(token) + "]"),
+      "fixture.py",
+    ).includes("API_TOKEN"),
+  );
+});
+
 test("typeof primitive comparisons pass without hiding literal credential comparisons or assignments", () => {
   for (const source of [
     "token !== null && typeof token === 'object'",
@@ -781,7 +859,7 @@ test("core credentials retain location without printing values", () => {
       "",
     ),
     ["postgres://example:", "opaquePass987", "@example.invalid/db"].join(""),
-    "COS_SECRET_KEY=" + "opaqueCredential123456789",
+    ["COS", "SECRET", "KEY"].join("_") + "=" + "opaqueCredential123456789",
     signedUrl,
   ];
   for (const sample of samples) {
@@ -795,8 +873,14 @@ test("core credentials retain location without printing values", () => {
     assert.ok(!JSON.stringify(findings).includes(sample));
   }
   for (const [filename, text] of [
-    ["settings.yml", "password: " + "opaqueCredential123456789"],
-    ["settings.yaml", "api_key: " + "opaqueCredential123456789"],
+    [
+      "settings.yml",
+      ["pass", "word"].join("") + ": " + "opaqueCredential123456789",
+    ],
+    [
+      "settings.yaml",
+      ["api", "key"].join("_") + ": " + "opaqueCredential123456789",
+    ],
     [
       "pilot.service",
       ['Environment="', "API_KEY", "=", "opaqueCredential123456789", '"'].join(
