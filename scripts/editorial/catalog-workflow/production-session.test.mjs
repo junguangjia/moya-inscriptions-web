@@ -543,6 +543,8 @@ test("real HTTPS code path with a request-object seam stages once, publishes fro
     }
     if (route === "/api/editorial/catalog-delivery-capabilities")
       return { json: { ok: true, result: { delivery: "AVAILABLE" } } };
+    if (route === "/api/editorial/catalog-render-backlog")
+      return { json: { ok: true, result: renderBacklog() } };
     throw Error("UNEXPECTED_SYNTHETIC_ROUTE:" + route);
   });
   const stateDir = path.join(d, "state");
@@ -607,6 +609,28 @@ test("real HTTPS code path with a request-object seam stages once, publishes fro
   await assert.rejects(run, { code: "PRODUCTION_SAVE_ACTION_CHANGED" });
   assert.equal(calls.length, beforeInvalidReload);
 });
+
+/** The Admin's render-backlog answer (catalog-scale-v1 I9): counted per tier
+ * by the last sync pass, a minute ago unless given, with the base renders
+ * queued and running now. */
+function renderBacklog(
+  tiers = { t0: 0, t1: 0, t2: 0, t3: 0, t4: 0 },
+  queued = 0,
+  running = 0,
+  countedMinutesAgo = 1,
+  preparedSince = 0,
+) {
+  return {
+    tiers,
+    countedAt:
+      tiers === null
+        ? null
+        : new Date(Date.now() - countedMinutesAgo * 60_000).toISOString(),
+    queued,
+    running,
+    preparedSince,
+  };
+}
 
 function receiptFor(body, draft) {
   const fields = Object.keys(body.content);
@@ -1034,6 +1058,8 @@ function syntheticNative(t, f, override = () => undefined) {
     received: false,
     intent: null,
     saveReceipt: null,
+    // What the Admin's render-backlog proxy answers: drained by default.
+    backlog: renderBacklog(),
   };
   const uploadId = hash("a");
   const session = () => ({
@@ -1165,6 +1191,8 @@ function syntheticNative(t, f, override = () => undefined) {
       return { json: { ok: true, result: n.intent } };
     if (route === "/api/editorial/catalog-delivery-capabilities")
       return { json: { ok: true, result: { delivery: "AVAILABLE" } } };
+    if (route === "/api/editorial/catalog-render-backlog")
+      return { json: { ok: true, result: n.backlog } };
     throw Error("UNEXPECTED_SYNTHETIC_ROUTE:" + route);
   });
   return n;
@@ -1551,4 +1579,332 @@ test("a draft save refused before dispatch records no attempt and is sent on the
   assert.equal(outcome.status, "WAITING_FOR_READY");
   assert.equal(count(native.calls, "save-draft"), 1);
   assert.equal(native.draft.revision, 5);
+});
+
+/* catalog-scale-v1 I9 (Owner decision D5): the waves. A new prepare is sent
+ * only while the render backlog ahead of it drains within 12 hours at the
+ * render rate (7 images a minute unless configured), read through the Admin
+ * proxy after the capability preflight. */
+const CAPABILITIES = "/api/editorial/catalog-delivery-capabilities";
+const RENDER_BACKLOG = "/api/editorial/catalog-render-backlog";
+const PREPARE = "/api/editorial/prepare-catalog-delivery";
+/** One session's requests: its preflight precedes its backlog read, which
+ * precedes its prepare, and no write precedes the preflight. */
+const assertWaveOrder = (calls, { prepared }) => {
+  const routes = calls.map((c) => c.route),
+    capability = routes.indexOf(CAPABILITIES),
+    backlog = routes.indexOf(RENDER_BACKLOG),
+    firstWrite = calls.findIndex((c) => writes([c]).length === 1);
+  assert.ok(capability >= 0 && capability < backlog);
+  assert.equal(routes.filter((r) => r === RENDER_BACKLOG).length, 1);
+  assert.equal(firstWrite === -1 || firstWrite > capability, true);
+  assert.equal(routes.indexOf(PREPARE) > backlog, prepared);
+  assert.equal(routes.includes(PREPARE), prepared);
+};
+
+test("a new wave is prepared only while the render backlog drains within 12 hours, after the capability preflight", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  // 12 hours at 7 a minute are 5,040 images ahead of the wave; a recipe
+  // re-render not queued yet (t4) runs after it and is not counted.
+  native.backlog = renderBacklog(
+    { t0: 40, t1: 1_000, t2: 4_000, t3: 1, t4: 90_000 },
+    300,
+    1,
+  );
+  const run = await stagedRun(t, f);
+  const waiting = await run();
+  assert.deepEqual(waiting, {
+    status: "WAITING_FOR_RENDER_BACKLOG",
+    renderBacklog: {
+      images: 5_041,
+      imagesPerMinute: 7,
+      drainMinutes: 721,
+      maxDrainMinutes: 720,
+      countedAt: native.backlog.countedAt,
+    },
+    anonymousDeliveryVerified: false,
+  });
+  assertWaveOrder(native.calls, { prepared: false });
+  // Counts only: no origin, record, image, key or credential.
+  const text = JSON.stringify(waiting);
+  for (const secret of [
+    "example.invalid",
+    "editorial/",
+    "SYNTHETIC",
+    f.manifest.records[0].catalogId,
+    f.manifest.records[0].media[0].mediaId,
+  ])
+    assert.equal(text.includes(secret), false, secret);
+  // A caller runs `publish` again while it waits (no sooner than a sync pass:
+  // each run spends the state directory's request budget). Each run reads
+  // the backlog afresh, with no attempt limit, and prepares nothing.
+  for (let i = 0; i < 3; i++) assert.deepEqual(await run("publish"), waiting);
+  assert.equal(count(native.calls, "catalog-render-backlog"), 4);
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+  // The draft was saved and frozen; the same state directory prepares the
+  // wave once the backlog is down to the limit.
+  native.backlog = renderBacklog(
+    { t0: 40, t1: 1_000, t2: 4_000, t3: 0, t4: 90_000 },
+    300,
+    1,
+  );
+  const from = native.calls.length;
+  const outcome = await run("publish");
+  assert.equal(outcome.status, "WAITING_FOR_READY");
+  assertWaveOrder(native.calls.slice(from), { prepared: true });
+  assert.equal(count(native.calls, "save-draft"), 1);
+});
+
+test("the base renders queued and running count when more than the tiers last counted", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  native.backlog = renderBacklog(
+    { t0: 0, t1: 0, t2: 0, t3: 0, t4: 20_000 },
+    5_040,
+    1,
+  );
+  const run = await stagedRun(t, f);
+  assert.equal((await run()).renderBacklog.images, 5_041);
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+  native.backlog = renderBacklog(
+    { t0: 0, t1: 0, t2: 0, t3: 0, t4: 20_000 },
+    5_039,
+    1,
+  );
+  assert.equal((await run("publish")).status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+});
+
+test("the images prepared since the last count hold the next wave back, so one batch inside a sync interval is paced on all of it", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  // 4,900 counted and 141 prepared by earlier sessions since: 5,041 ahead.
+  const tiers = { t0: 0, t1: 0, t2: 4_900, t3: 0, t4: 0 };
+  native.backlog = renderBacklog(tiers, 300, 1, 1, 141);
+  const run = await stagedRun(t, f);
+  const waiting = await run();
+  assert.equal(waiting.status, "WAITING_FOR_RENDER_BACKLOG");
+  assert.equal(waiting.renderBacklog.images, 5_041);
+  // Also on top of the queued and running renders when they are more.
+  native.backlog = renderBacklog(
+    { t0: 0, t1: 0, t2: 0, t3: 0, t4: 0 },
+    5_000,
+    1,
+    1,
+    40,
+  );
+  assert.equal((await run("publish")).renderBacklog.images, 5_041);
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+  native.backlog = renderBacklog(tiers, 300, 1, 1, 140);
+  assert.equal((await run("publish")).status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+});
+
+test("an Admin answer without the prepared-since count stops the wave before its prepare", async (t) => {
+  const f = setup();
+  const older = renderBacklog();
+  delete older.preparedSince;
+  const native = syntheticNative(t, f, ({ route }) =>
+    route === RENDER_BACKLOG
+      ? { json: { ok: true, result: older } }
+      : undefined,
+  );
+  const run = await stagedRun(t, f);
+  await assert.rejects(run, { code: "RENDER_BACKLOG_INVALID" });
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+});
+
+test("the render rate is configurable, and an invalid one stops before any request", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  native.backlog = renderBacklog({ t0: 0, t1: 0, t2: 10_080, t3: 1, t4: 0 });
+  const run = await stagedRun(t, f);
+  for (const renderImagesPerMinute of [
+    0,
+    -7,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    61,
+    "7",
+  ])
+    await assert.rejects(
+      () => run("run", { renderImagesPerMinute }),
+      { code: "RENDER_PACING_INVALID" },
+      String(renderImagesPerMinute),
+    );
+  assert.deepEqual(native.calls, []);
+  const waiting = await run("run", { renderImagesPerMinute: 14 });
+  assert.deepEqual(waiting.renderBacklog, {
+    images: 10_081,
+    imagesPerMinute: 14,
+    drainMinutes: 721,
+    maxDrainMinutes: 720,
+    countedAt: native.backlog.countedAt,
+  });
+  assert.equal(
+    (await run("publish", { renderImagesPerMinute: 14.01 })).status,
+    "WAITING_FOR_READY",
+  );
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+});
+
+test("a backlog the Admin cannot report, or one never counted, stops the wave before its prepare", async (t) => {
+  for (const [name, answer, code] of [
+    [
+      "never counted",
+      { json: { ok: true, result: renderBacklog(null, 0, 0) } },
+      "RENDER_BACKLOG_NOT_COUNTED",
+    ],
+    [
+      "an Admin without the proxy",
+      { status: 404, json: { message: "Route not found" } },
+      "ADMIN_RENDER_BACKLOG_MISSING",
+    ],
+    [
+      "a Backend without the route",
+      {
+        status: 503,
+        json: {
+          ok: false,
+          error: { code: "CATALOG_RENDER_BACKLOG_NOT_CONFIGURED", fields: [] },
+        },
+      },
+      "CATALOG_RENDER_BACKLOG_NOT_CONFIGURED",
+    ],
+    [
+      "an unavailable Backend",
+      {
+        status: 503,
+        json: {
+          ok: false,
+          error: { code: "CATALOG_RENDER_BACKLOG_UNAVAILABLE", fields: [] },
+        },
+      },
+      "CATALOG_RENDER_BACKLOG_UNAVAILABLE",
+    ],
+    [
+      "an answer that is not the contract",
+      {
+        json: {
+          ok: true,
+          result: { ...renderBacklog(), assetIds: ["synthetic"] },
+        },
+      },
+      "RENDER_BACKLOG_INVALID",
+    ],
+    [
+      "a refused read",
+      { status: 403, json: { ok: false, error: { code: "FORBIDDEN" } } },
+      "NATIVE_REQUEST_REJECTED",
+    ],
+  ])
+    await t.test(name, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }) =>
+        route === RENDER_BACKLOG ? answer : undefined,
+      );
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, { code });
+      assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+    });
+});
+
+test("a count with a tier that is not a whole number, or a tier this build does not know, reaches the gate as never counted and stops the wave before its prepare", async (t) => {
+  // The App's own reader (built), so the gate sees what the Backend answers
+  // for such a row: never as 0, which would let the wave through.
+  const { readCatalogRenderBacklog } =
+    await import("../../../services/community-postgres/dist/index.js");
+  const low = { t0: 0, t1: 0, t2: 100, t3: 0, t4: 0 };
+  const missing = { ...low };
+  delete missing.t4;
+  for (const [name, recorded] of [
+    ["a negative tier", { ...low, t1: -1 }],
+    ["a fractional tier", { ...low, t2: 0.5 }],
+    ["a tier as text", { ...low, t3: "0" }],
+    ["a missing tier", missing],
+    // A newer worker's tier: dropping it would undercount the backlog.
+    ["a tier this build does not know", { ...low, t5: 500 }],
+  ])
+    await t.test(name, async (t) => {
+      const read = await readCatalogRenderBacklog({
+        query: async () => ({
+          rows: [
+            {
+              render_backlog: recorded,
+              render_backlog_at: new Date(Date.now() - 60_000),
+              queued: 0,
+              running: 0,
+            },
+          ],
+        }),
+      });
+      // As the Backend serializes it and the Admin passes it on: nothing is
+      // prepared since a count it does not have.
+      const result = { ...JSON.parse(JSON.stringify(read)), preparedSince: 0 };
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }) =>
+        route === RENDER_BACKLOG ? { json: { ok: true, result } } : undefined,
+      );
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, { code: "RENDER_BACKLOG_NOT_COUNTED" });
+      assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+    });
+});
+
+test("a backlog counted over an hour ago, or ahead of this clock beyond skew, stops the wave before its prepare", async (t) => {
+  // The worker stopped counting while its last count stays under the limit,
+  // and the queue (capped at 300) cannot show what built up since.
+  const low = { t0: 0, t1: 0, t2: 100, t3: 0, t4: 0 };
+  for (const [name, minutesAgo] of [
+    ["counted 61 minutes ago", 61],
+    ["counted three days ago", 3 * 24 * 60],
+    ["counted 10 minutes ahead", -10],
+  ])
+    await t.test(name, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f);
+      native.backlog = renderBacklog(low, 300, 1, minutesAgo);
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, (error) => {
+        assert.equal(error.code, "RENDER_BACKLOG_STALE");
+        assert.equal(error.message, "RENDER_BACKLOG_STALE");
+        return true;
+      });
+      assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+      // Counted again, the same state directory prepares the wave.
+      native.backlog = renderBacklog(low, 300, 1);
+      assert.equal((await run("publish")).status, "WAITING_FOR_READY");
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+    });
+  for (const [name, minutesAgo] of [
+    ["counted 59 minutes ago", 59],
+    ["counted 4 minutes ahead (clock skew)", -4],
+  ])
+    await t.test(name, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f);
+      native.backlog = renderBacklog(low, 300, 1, minutesAgo);
+      const run = await stagedRun(t, f);
+      assert.equal((await run()).status, "WAITING_FOR_READY");
+      assertWaveOrder(native.calls, { prepared: true });
+    });
+});
+
+test("a wave whose prepare was already sent is not paced again", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  const run = await stagedRun(t, f);
+  assert.equal((await run()).status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+  // The backlog grew behind the prepared wave: its later runs still read,
+  // request and release it, and never ask for the backlog again.
+  native.backlog = renderBacklog({ t0: 0, t1: 0, t2: 50_000, t3: 0, t4: 0 });
+  assert.equal((await run("publish")).status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+  assert.equal(count(native.calls, "request-catalog-release"), 1);
 });

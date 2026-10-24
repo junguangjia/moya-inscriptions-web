@@ -21,10 +21,12 @@ import {
   catalogDeliveryReadinessSchema,
   catalogPublishedRenditionsRequestSchema,
   catalogPublishedRenditionsSchema,
+  catalogRenderBacklogSchema,
   type CatalogDeliveryReadiness,
   type CatalogPublishedRenditions,
   type CatalogPublishedRenditionsRequest,
   type CatalogRecipePolicy,
+  type CatalogRenderBacklogReport,
 } from "@moya/contracts/internal/editorial";
 
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
@@ -67,6 +69,10 @@ export interface OperatorRouteDependencies {
         media: CatalogPublishedRenditionsRequest["media"],
       ) => Promise<CatalogPublishedRenditions>)
     | undefined;
+  /** Pacing of bulk Catalog work (catalog-scale-v1 I9): the App's render
+   * backlog, counts only, read with the Backend's own role. */
+  readonly catalogRenderBacklog?:
+    (() => Promise<CatalogRenderBacklogReport>) | undefined;
   readonly articlePublicationOperatorService?:
     ArticlePublicationOperatorService | undefined;
   readonly moderationService: CommunityModerationService;
@@ -209,6 +215,7 @@ export const handleOperatorRequest = async (
     catalogRecipePolicy,
     catalogDeliveryReadiness,
     catalogPublishedRenditions,
+    catalogRenderBacklog,
     operatorCredential,
     contentOperatorPort,
     discussionPort,
@@ -302,6 +309,23 @@ export const handleOperatorRequest = async (
         catalogPublishedRenditionsSchema.parse(
           await catalogPublishedRenditions(input.data.media),
         ),
+      );
+      return;
+    }
+    // Read-only and content-free: the CLI paces its prepare waves on it
+    // (Owner decision D5); nothing is refused or written because of it.
+    if (pathname === "/internal/community/catalog-delivery/render-backlog") {
+      if (method !== "GET") return methodNotAllowed();
+      if (!catalogRenderBacklog)
+        return sendOperatorError(
+          response,
+          503,
+          "CATALOG_DELIVERY_NOT_CONFIGURED",
+        );
+      sendJson(
+        response,
+        200,
+        catalogRenderBacklogSchema.parse(await catalogRenderBacklog()),
       );
       return;
     }

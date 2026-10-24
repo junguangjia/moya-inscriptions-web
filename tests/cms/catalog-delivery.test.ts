@@ -227,6 +227,7 @@ describe
       "bypass",
       "pinned",
       "live",
+      "pacing",
     ].map((name) => `synthetic-delivery-${name}-${run}`);
     /** A loopback operator boundary with the real handler and stub facts. */
     const syntheticOperatorBoundary = async (
@@ -986,6 +987,188 @@ describe
           });
         } finally {
           await close();
+        }
+      }
+    });
+
+    it("adds the images of intents prepared since the count or up to 10 minutes before it, live or released, never ended ones (I9)", async () => {
+      // Files run one at a time, so no other intent is created meanwhile.
+      const { command } = await draftB(ids[7]!, 2);
+      const prepared = await post("prepare-catalog-delivery", command);
+      expect(prepared.status).toBe(200);
+      const { result: intent } = await prepared.json();
+      // Its prepare's start, moved far from every other intent (a run's own
+      // hour in 2098), so the 10-minute window around a count holds it alone;
+      // put back afterwards, so no later run can meet it there.
+      const { created_at: originalCreatedAt } = (
+        await payload.db.pool.query(
+          "SELECT created_at FROM catalog_delivery_intents WHERE id = $1",
+          [intent.intentId],
+        )
+      ).rows[0] as { created_at: Date };
+      const hour = Number.parseInt(run.replaceAll("-", "").slice(0, 8), 16);
+      const createdAt = new Date(
+        Date.UTC(2098, 0, 1) + (hour % 8_000) * 3_600_000,
+      );
+      const placeAt = (at: Date) =>
+        payload.db.pool.query(
+          "UPDATE catalog_delivery_intents SET created_at = $2 WHERE id = $1",
+          [intent.intentId, at],
+        );
+      await placeAt(createdAt);
+      const minute = 60_000;
+      let countedAt = new Date(createdAt.getTime() - 1);
+      const close = await syntheticOperatorBoundary({
+        catalogRenderBacklog: async () => ({
+          tiers: { t0: 0, t1: 0, t2: 7, t3: 0, t4: 0 },
+          countedAt: countedAt.toISOString(),
+          queued: 7,
+          running: 0,
+        }),
+      });
+      const pacing = async () => {
+        const response = await post(
+          "catalog-render-backlog",
+          {},
+          automationSession,
+        );
+        expect(response.status).toBe(200);
+        return (await response.json()).result;
+      };
+      try {
+        // Prepared after the count: its 2 images are not in any tier yet.
+        expect(await pacing()).toMatchObject({
+          tiers: { t2: 7 },
+          preparedSince: 2,
+        });
+        // Begun just before the count: its commit may have followed the
+        // pass's snapshot, or the worker's clock may run ahead, so it is
+        // still added (counted twice at worst, never missed).
+        for (const after of [1_000, 10 * minute - 1_000]) {
+          countedAt = new Date(createdAt.getTime() + after);
+          expect((await pacing()).preparedSince, String(after)).toBe(2);
+        }
+        // Begun over 10 minutes before the count: the sync pass holds it.
+        countedAt = new Date(createdAt.getTime() + 10 * minute + 1_000);
+        expect((await pacing()).preparedSince).toBe(0);
+        // Ended, it will never be rendered for this intent.
+        countedAt = new Date(createdAt.getTime() - 1);
+        const cancelled = await post("cancel-catalog-delivery", {
+          intentId: intent.intentId,
+          expectedStateVersion: 1,
+          idempotencyKey: `${run}:pacing-cancel`,
+        });
+        expect(cancelled.status).toBe(200);
+        expect((await pacing()).preparedSince).toBe(0);
+      } finally {
+        await placeAt(originalCreatedAt);
+        await close();
+      }
+    });
+
+    it("proxies the render backlog to an authenticated editorial actor only, counts only (I9)", async () => {
+      const backlog = async (session = ownerSession, input: unknown = {}) => {
+        const response = await post("catalog-render-backlog", input, session);
+        return { status: response.status, body: await response.json() };
+      };
+      // Counted after every intent here: none was prepared since.
+      const counted = {
+        tiers: { t0: 3, t1: 2, t2: 40, t3: 0, t4: 1_200 },
+        countedAt: "2099-01-01T00:00:00.000Z",
+        queued: 300,
+        running: 1,
+      };
+      const failure = (code: string) => ({
+        status: 503,
+        body: { ok: false, error: { code, fields: [] } },
+      });
+      const reader = vi.fn(async () => counted);
+      // Anonymous: refused before the Backend is asked.
+      const anonymous = await backlog("");
+      expect(anonymous.status).toBe(403);
+      expect(anonymous.body).toMatchObject({
+        ok: false,
+        error: { code: "AUTHORIZATION_REQUIRED" },
+      });
+      // No operator boundary configured in this Admin.
+      expect(await backlog()).toEqual(
+        failure("CATALOG_RENDER_BACKLOG_NOT_CONFIGURED"),
+      );
+      const close = await syntheticOperatorBoundary({
+        catalogRenderBacklog: reader,
+      });
+      try {
+        for (const session of [ownerSession, automationSession])
+          expect(await backlog(session)).toEqual({
+            status: 200,
+            body: { ok: true, result: { ...counted, preparedSince: 0 } },
+          });
+        expect(reader).toHaveBeenCalledTimes(2);
+        // The body is the capability probe's: empty.
+        for (const input of [{ catalogId: ids[0] }, { tiers: null }, []])
+          expect((await backlog(ownerSession, input)).status).toBe(400);
+        expect(reader).toHaveBeenCalledTimes(2);
+      } finally {
+        await close();
+      }
+      // A Backend without the reader (503), or whose reader fails (500), is
+      // unavailable.
+      for (const dependencies of [
+        {},
+        {
+          catalogRenderBacklog: async () => {
+            throw new Error("synthetic backlog failure");
+          },
+        },
+      ] as Partial<OperatorRouteDependencies>[]) {
+        const closeFailing = await syntheticOperatorBoundary(dependencies);
+        try {
+          expect(await backlog(automationSession)).toEqual(
+            failure("CATALOG_RENDER_BACKLOG_UNAVAILABLE"),
+          );
+        } finally {
+          await closeFailing();
+        }
+      }
+      // A Backend older than the route (404) is not configured; an answer
+      // beyond the contract is unavailable, never passed on.
+      for (const [status, answer, code] of [
+        [
+          404,
+          { error: { status: 404, code: "NOT_FOUND" } },
+          "CATALOG_RENDER_BACKLOG_NOT_CONFIGURED",
+        ],
+        [
+          200,
+          { ...counted, assetIds: ["synthetic-asset"] },
+          "CATALOG_RENDER_BACKLOG_UNAVAILABLE",
+        ],
+      ] as const) {
+        const raw = createServer((_request, response) => {
+          response.writeHead(status, { "content-type": "application/json" });
+          response.end(JSON.stringify(answer));
+        });
+        await new Promise<void>((resolve) =>
+          raw.listen(0, "127.0.0.1", resolve),
+        );
+        try {
+          const address = raw.address();
+          if (!address || typeof address === "string")
+            throw new Error("Synthetic operator address missing");
+          vi.stubEnv(
+            "COMMUNITY_OPERATOR_BASE_URL",
+            `http://127.0.0.1:${address.port}`,
+          );
+          vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", randomUUID());
+          const answered = await backlog();
+          expect(answered).toEqual(failure(code));
+          expect(JSON.stringify(answered)).not.toContain("synthetic-asset");
+        } finally {
+          vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", "");
+          vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", "");
+          await new Promise<void>((resolve, reject) =>
+            raw.close((error) => (error ? reject(error) : resolve())),
+          );
         }
       }
     });

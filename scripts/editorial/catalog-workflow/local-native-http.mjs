@@ -37,6 +37,9 @@ const ALLOWED_CODES = new Set([
   "CATALOG_DELIVERY_PREPARATION_REQUIRED",
   // Admin refuses a source edge beyond the 65,535 px delivery bound (422).
   "CATALOG_DELIVERY_SOURCE_TOO_LARGE",
+  // Admin cannot report the render backlog the waves pace on (503).
+  "CATALOG_RENDER_BACKLOG_NOT_CONFIGURED",
+  "CATALOG_RENDER_BACKLOG_UNAVAILABLE",
   "REVISION_CONFLICT",
   "CONCURRENT_OPERATION_BUSY",
 ]);
@@ -119,6 +122,8 @@ export function nativeRouteClass(route, method) {
     route === "/api/editorial/catalog-delivery-capabilities"
   )
     return "capabilities";
+  if (method === "POST" && route === "/api/editorial/catalog-render-backlog")
+    return "render-backlog";
   if (
     method === "POST" &&
     /^\/api\/editorial\/media-upload\/(start|status|complete)$/.test(route)
@@ -236,6 +241,7 @@ function createBoundedNativeHTTP(
         "native-main",
         "native-draft",
         "capabilities",
+        "render-backlog",
       ].includes(routeClass) ||
       route.endsWith("/status") ||
       route.endsWith("/read-catalog-delivery");

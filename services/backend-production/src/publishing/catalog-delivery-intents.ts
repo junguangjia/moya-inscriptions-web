@@ -28,6 +28,9 @@ type CatalogRecipePolicy = Awaited<
 type CatalogPublishedRenditionsReader = NonNullable<
   BackendApplicationOptions["catalogPublishedRenditions"]
 >;
+type CatalogRenderBacklogReader = NonNullable<
+  BackendApplicationOptions["catalogRenderBacklog"]
+>;
 
 /** The actual immutable registry and actual geometry functions in this build.
  * Full's parameters are only the viewer comparison bound; full is never an
@@ -126,6 +129,7 @@ import {
   partitionCatalogPrepareRows,
   catalogBlockListedSql,
   readCatalogDeliveryProjection,
+  readCatalogRenderBacklog,
   readCatalogSnapshotCursor,
   type PostgresMediaPublicationAdapter,
 } from "@moya/community-postgres";
@@ -1410,4 +1414,17 @@ export const createCatalogPublishedRenditions =
         };
       }),
     };
+  };
+
+/** Pacing of bulk Catalog work (catalog-scale-v1 I9): the render backlog the
+ * last sync pass counted and the base renders queued and running now, as the
+ * operator route reports it. One read with the Backend's own App role (SELECT
+ * grants it already holds); nothing is written, and no record, image or key
+ * is returned.
+ */
+export const createCatalogRenderBacklog =
+  (app: Pick<CatalogPool, "query">): CatalogRenderBacklogReader =>
+  async () => {
+    const { countedAt, ...backlog } = await readCatalogRenderBacklog(app);
+    return { ...backlog, countedAt: countedAt?.toISOString() ?? null };
   };

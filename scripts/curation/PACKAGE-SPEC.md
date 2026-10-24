@@ -67,9 +67,19 @@ Each media item has:
 - `rights`: optional unchanged reviewed original rights string, max 2000.
 - `orderConfidence`: optional `HIGH` or `LOW`; retained unchanged.
 
-Media is capped at 40 MiB, 80 million pixels and one frame, matching native CMS.
-Format and decoded pixels are checked by the existing Sharp dependency. Original
-bytes and local provenance are not replaced by the uploaded derivative.
+Media is capped at 40 MiB, 80 million pixels and one frame, matching native CMS
+uploads and the relay; this Development adapter does not change that. Format and
+decoded pixels are checked by the existing Sharp dependency. Original bytes and
+local provenance are not replaced by the uploaded derivative. Catalog originals
+up to 128 MiB, 120 million pixels, 512 MiB decoded, 65,500 px per side and 256
+KiB per decoded row (width × channels × bytes per sample), one frame, with 8-bit
+JPEG samples only, at most 150 scans and 512 MiB of DCT coefficients in a JPEG
+with more than one scan, at most 256 MiB decoded in an interlaced PNG, and at
+most 256 MiB of ARGB (width × height × 4 B) in a lossless WebP or one with
+VP8L-compressed alpha, go to Production only through the separate ingest path of
+catalog-scale-v1 increment 2 (the CLI `scripts/editorial/direct-ingest.mjs`, or
+a batch client built on its library), whose manifest carries the width and
+height of the same full local decode.
 
 ## API and target
 

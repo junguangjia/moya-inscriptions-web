@@ -143,6 +143,25 @@ blocks unless a full read is explicitly budgeted. Visual sampling is separate
 from integrity proof. These local tests do not establish Production cost
 control.
 
+Catalog originals over 40 MiB (up to 128 MiB, 120 million pixels, 512 MiB
+decoded, 65,500 px per side and 256 KiB per decoded row, 8-bit JPEG samples
+only, at most 150 scans and 512 MiB of coefficients in a JPEG with more than one
+scan, 256 MiB decoded in an interlaced PNG, and 256 MiB of ARGB in a lossless
+WebP or one with VP8L-compressed alpha) are not uploaded by this CLI. They go
+through the separate ingest path of catalog-scale-v1 increment 2: one signed PUT
+straight to private staging, then a server-verified copy and registration
+(`stageMediaUpload` with `uploadMode: "direct-cos-v1"` and the Codex CLI
+`scripts/editorial/direct-ingest.mjs`; see [operations](../cms/operations.md)).
+This CLI keeps the relay, its 40 MiB ceiling and its read schema: a registered
+media doc over 40 MiB fails that parse, so a run that meets one stops before it
+saves the draft or prepares a delivery (it fails closed). Reading and proving
+such originals here (a `NATIVE_INGEST` proof, the ingest routes and a direct
+byte budget in the authority) is a later, separately decided slice (S4b,
+decision D11). Until then a record holding one is prepared only by a direct
+`POST /api/editorial/prepare-catalog-delivery` outside this CLI, which must read
+the pacing route below before each prepare and apply the same rule
+([operations](../cms/operations.md)).
+
 ## Ownership and validation
 
 Root owns new `scripts/editorial/catalog-workflow/` and this document. A precise
@@ -299,12 +318,12 @@ documents must be private owned files; the checkpoint directory is private,
 owned, locked and atomically persisted. Native HTTPS journals use their own
 execution kind and cannot resume a local/synthetic journal.
 
-| Command    | Real CMS behavior                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `upload`   | Reuse-only imports recomputed historical proof plus fresh Native metadata without opening the image or staging. New selected images use the existing resumable start/status/chunk/complete protocol and measured Native body writer.                                                                                                                                                                                                  |
-| `run`      | Verifies media, adopts the existing ID, saves with exact expected revision/content/idempotency binding, then performs bounded delivery progression. A frozen delivery checkpoint resumes that delivery directly.                                                                                                                                                                                                                      |
-| `publish`  | Checks current media proofs and frozen content, performs prepare/read/request/read/release, and verifies fresh Native B+1. Whole-set READY is required; pending work returns `WAITING_FOR_READY` without an unbounded poll or direct publish fallback. An intent that ended stops with `DELIVERY_INTENT_EXPIRED`, `_SUPERSEDED`, `_CANCELLED` or `_WITHDRAWN`; it never becomes ready, so a new delivery needs a new state directory. |
-| `withdraw` | Owner-only fresh Native preflight, one revision-CAS PATCH to draft, then separate fresh revision+1/status/content/fingerprint persistence. Reentry never repeats a PATCH that may have been applied. A lost reply can establish observed draft state while retaining unknown attribution of the original mutation.                                                                                                                    |
+| Command    | Real CMS behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upload`   | Reuse-only imports recomputed historical proof plus fresh Native metadata without opening the image or staging. New selected images use the existing resumable start/status/chunk/complete protocol and measured Native body writer.                                                                                                                                                                                                                                                            |
+| `run`      | Verifies media, adopts the existing ID, saves with exact expected revision/content/idempotency binding, then performs bounded delivery progression. A frozen delivery checkpoint resumes that delivery directly.                                                                                                                                                                                                                                                                                |
+| `publish`  | Checks current media proofs and frozen content, performs prepare/read/request/read/release, and verifies fresh Native B+1. Whole-set READY is required; pending work returns `WAITING_FOR_READY` without an unbounded poll or direct publish fallback. An intent that ended stops with `DELIVERY_INTENT_EXPIRED`, `_SUPERSEDED`, `_CANCELLED` or `_WITHDRAWN`; it never becomes ready, so a new delivery needs a new state directory. A new prepare first waits for the render backlog (below). |
+| `withdraw` | Owner-only fresh Native preflight, one revision-CAS PATCH to draft, then separate fresh revision+1/status/content/fingerprint persistence. Reentry never repeats a PATCH that may have been applied. A lost reply can establish observed draft state while retaining unknown attribution of the original mutation.                                                                                                                                                                              |
 
 Before its first write (an upload, a draft save or a delivery intent), `upload`,
 `run` and `publish` ask the authenticated, read-only
@@ -319,6 +338,59 @@ reads as `BACKEND_DELIVERY_NOT_CONFIGURED`. That is usually a Backend without
 its prepare reader (`CATALOG_PREPARE_DATABASE_URL`), but a passing store outage
 (`STORE_UNAVAILABLE`) answers the same. Run once more before changing
 configuration.
+
+Prepare waves are paced by the render backlog (catalog-scale-v1, Owner decisions
+D4 and D5). Before a new prepare, after the capability preflight, `publish` and
+a `run` whose disposition is publish read the backlog through the authenticated,
+read-only `POST /api/editorial/catalog-render-backlog`, which the Admin answers
+from the Backend's operator route, adding `preparedSince`: the images of the
+delivery intents prepared since the worker's count and still live or released,
+which no count holds yet. It takes every intent whose prepare began up to 10
+minutes before the count, since a prepare can begin before a sync pass and
+commit after it, and the worker's clock can run ahead: an intent is counted
+twice for at most that long, which only slows a wave, rather than missed, as
+long as its prepare and the clock skew together stay within 10 minutes. The
+images ahead of the wave are the tiers `t0` to `t3` of the worker's last count,
+or the queued plus running renders if that is larger, plus `preparedSince`; `t4`
+(a published image's re-render not queued yet) is left out, because its earlier
+renditions keep serving. With `preparedSince`, the sessions of one batch inside
+a sync interval are paced on each other, not each on the same stale count. If
+they need more than 12 hours at the render rate (default 7 images per minute;
+the session option `renderImagesPerMinute`, more than 0 and at most 60), the
+command returns `WAITING_FOR_RENDER_BACKLOG` with counts only (`images`,
+`imagesPerMinute`, `drainMinutes`, `maxDrainMinutes`, `countedAt`). Nothing is
+prepared and the state directory is kept, so run the same command again later.
+The wave cannot pass sooner than `drainMinutes - maxDrainMinutes` minutes at
+that rate, so wait at least that long, and never less than 5 minutes (the worker
+recounts on each Catalog sync pass): each run spends the state directory's
+request and response budget, about 5 requests plus one per media item. A state
+directory whose request cap (or response bytes) runs out stops with
+`TRANSFER_BUDGET_EXCEEDED` before the request and cannot go on: continuing that
+record takes a new Owner-confirmed authority and state directory (the waits
+themselves prepared nothing). A wave whose prepare is already in the delivery
+journal is not paced again. Before any prepare, the command stops with:
+
+- `RENDER_PACING_INVALID`: the rate option is out of range (before any request);
+- `ADMIN_RENDER_BACKLOG_MISSING`: the Admin has no backlog proxy;
+- `CATALOG_RENDER_BACKLOG_NOT_CONFIGURED`: the Admin has no operator
+  configuration, or the Backend has no backlog route;
+- `CATALOG_RENDER_BACKLOG_UNAVAILABLE`: any other Backend failure, including a
+  Backend without its backlog reader or a store outage, or an answer outside the
+  contract;
+- `RENDER_BACKLOG_INVALID`: the Admin's answer is outside the contract;
+- `RENDER_BACKLOG_NOT_COUNTED`: the worker has never counted the backlog, or its
+  last count holds a tier that is missing or not a whole number of at least 0,
+  which the Backend reports as never counted (never as 0); check the media
+  worker's Catalog sync;
+- `RENDER_BACKLOG_STALE`: the count is more than 60 minutes old, or more than 5
+  minutes ahead of this machine's clock. Check the media worker and its Catalog
+  sync, and the machine's clock.
+
+Release the Backend, then the Admin, before a checkout with this pacing is used
+for `publish` or `run`. Against an older Admin it stops with
+`ADMIN_RENDER_BACKLOG_MISSING`, and against an older Backend with
+`CATALOG_RENDER_BACKLOG_NOT_CONFIGURED`, before prepare, single records
+included.
 
 A draft save or withdrawal that Native refused (a complete 4xx answer), or that
 an admission, authority or credential check refused before dispatch, changed
