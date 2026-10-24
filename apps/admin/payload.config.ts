@@ -104,6 +104,11 @@ export default buildConfig({
           path: "/community-moderation/content",
           exact: true,
         },
+        communityFeedback: {
+          Component: "/src/community/View#CommunityFeedbackView",
+          path: "/community-moderation/feedback",
+          exact: true,
+        },
         communityHistory: {
           Component: "/src/community/View#CommunityHistoryView",
           path: "/community-moderation/history",

@@ -55,6 +55,8 @@ import {
 import type { AuthKeys } from "./contact-crypto.js";
 import type { DeliveryOutcome } from "./delivery.js";
 import type { RandomBytes } from "../session-token.js";
+import { registrationInvitationDigest } from "./registration-invitation.js";
+import type { StoredInvitation } from "./auth-port.js";
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const RESEND_MS = 60 * 1000;
@@ -66,6 +68,11 @@ const GLOBAL_SENDS = 200;
 const HANDOFF_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const HANDLE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+const DEVELOPMENT_AGREEMENT: AuthRegistrationAgreement = Object.freeze({
+  version: "development-invitation-draft-v1",
+  title: "开发环境注册说明",
+  body: "这是开发环境草稿，不是已批准的用户协议或隐私政策。",
+});
 
 export const authReasons = [
   "AUTH_CHANNEL_UNAVAILABLE",
@@ -75,6 +82,8 @@ export const authReasons = [
   "AUTH_INVALID_PASSWORD",
   "AUTH_INVALID_CREDENTIALS",
   "AUTH_AGREEMENT_REQUIRED",
+  "AUTH_INVITATION_REQUIRED",
+  "AUTH_INVITATION_INVALID",
   "AUTH_RATE_LIMITED",
   "AUTH_CODE_EXHAUSTED",
   "AUTH_CODE_INVALID",
@@ -147,6 +156,8 @@ export interface CommunityAuthServiceOptions {
   readonly randomBytes?: RandomBytes;
   readonly sessionTtlMs?: number;
   readonly registrationAgreement?: AuthRegistrationAgreement | null;
+  readonly registrationMode?: "closed" | "invite-only";
+  readonly allowProvisionedHandleLogin?: boolean;
 }
 
 interface Target {
@@ -170,7 +181,7 @@ interface Minted extends AuthSessionGrant {
 type Reservation =
   | { readonly kind: "replay"; readonly accepted: AuthChallengeAccepted }
   | {
-      readonly kind: "send";
+      readonly kind: "send" | "silent";
       readonly challenge: StoredChallenge;
       readonly continuationToken: string;
       readonly destination: string;
@@ -253,9 +264,13 @@ export class CommunityAuthService {
         identifiers:
           this.options.profile === "password-only"
             ? ["handle"]
-            : phone
-              ? ["email", "phone"]
-              : ["email"],
+            : [
+                "email",
+                ...(phone ? (["phone"] as const) : []),
+                ...(this.options.allowProvisionedHandleLogin
+                  ? (["handle"] as const)
+                  : []),
+              ],
         reason: null,
       },
       phone: phone
@@ -265,18 +280,26 @@ export class CommunityAuthService {
             reason: "Phone sign-in is turned off in this acceptance profile.",
           },
       developmentOnly: this.options.environment === "development",
-      ...(this.options.environment === "production"
+      ...(this.options.environment === "production" ||
+      this.options.registrationMode !== undefined
         ? {
             registration: !this.registrationAvailable()
               ? {
                   available: false,
                   agreement: null,
-                  reason: "Registration agreement is not configured.",
+                  reason:
+                    "Registration is closed or its agreement is not configured.",
+                  invitationRequired:
+                    this.options.registrationMode === "invite-only",
                 }
               : {
                   available: true,
-                  agreement: { ...this.registrationAgreement! },
+                  agreement: {
+                    ...(this.registrationAgreement ?? DEVELOPMENT_AGREEMENT),
+                  },
                   reason: null,
+                  invitationRequired:
+                    this.options.registrationMode === "invite-only",
                 },
           }
         : {}),
@@ -291,11 +314,18 @@ export class CommunityAuthService {
     readonly source: string;
     readonly sessionToken?: string | undefined;
     readonly reauthToken?: string | undefined;
+    readonly invitationCode?: string | undefined;
   }): Promise<AuthResult<AuthChallengeAccepted>> {
     if (this.options.profile === "password-only")
       return fail("AUTH_CHANNEL_UNAVAILABLE");
     if (input.purpose === "register" && !this.registrationAvailable())
       return fail("AUTH_NOT_CONFIGURED");
+    if (
+      input.purpose === "register" &&
+      this.options.registrationMode === "invite-only" &&
+      input.channel !== "email"
+    )
+      return fail("AUTH_CHANNEL_UNAVAILABLE");
     if (!this.channelAvailable(input.channel))
       return fail("AUTH_CHANNEL_UNAVAILABLE");
     const at = this.clock();
@@ -309,6 +339,16 @@ export class CommunityAuthService {
     if (!reserved.ok) return reserved;
     if (reserved.value.kind === "replay")
       return { ok: true, value: reserved.value.accepted };
+    if (reserved.value.kind === "silent")
+      return {
+        ok: true,
+        value: {
+          challengeId: reserved.value.challenge.id,
+          resendAvailableAt: reserved.value.challenge.resendAvailableAt,
+          maskedTarget: target.value.masked,
+          continuationToken: reserved.value.continuationToken,
+        },
+      };
     const delivery = await this.deliver(reserved.value);
     const marked = await this.transactional<"accepted" | "failed" | "unknown">(
       async (tx) => {
@@ -571,6 +611,7 @@ export class CommunityAuthService {
       studio.studioName,
       studio.studioNameSuffix,
       verifier,
+      prepared.handoff.invitationId,
     );
     return this.convergeReceiptRace(
       () => this.confirmRegistration(input),
@@ -583,8 +624,6 @@ export class CommunityAuthService {
             !this.handoffModeOk(handoff)
           )
             return fail("AUTH_PROOF_REJECTED");
-          if (new Date(handoff.expiresAt).getTime() <= at.getTime())
-            return fail("AUTH_CODE_EXPIRED");
           await tx.lockDigest(handoff.targetDigest);
           const receipt = await tx.findReceipt(prepared.receiptKey);
           if (receipt !== null) {
@@ -620,14 +659,21 @@ export class CommunityAuthService {
               value: await this.reissue(tx, receipt, user, handoff.channel, at),
             };
           }
+          if (new Date(handoff.expiresAt).getTime() <= this.clock().getTime())
+            return fail("AUTH_CODE_EXPIRED");
           if (handoff.consumedAt !== null) return fail("AUTH_PROOF_REJECTED");
+          if (this.options.registrationMode === "invite-only") {
+            if (handoff.invitationId == null)
+              return fail("AUTH_INVITATION_REQUIRED");
+            const invitation = await tx.lockInvitation(handoff.invitationId);
+            if (!this.invitationUsable(invitation, this.clock()))
+              return fail("AUTH_INVITATION_INVALID");
+          }
           if (
             (await tx.findIdentity(handoff.channel, handoff.targetDigest)) !==
             null
           )
             throw new AuthRollback(fail("AUTH_IDENTIFIER_CONFLICT"));
-          if ((await tx.consumeHandoff(handoff.id, at.toISOString())) !== "ok")
-            return fail("AUTH_PROOF_REJECTED");
           const user = await this.insertNewUser(
             tx,
             displayName,
@@ -662,6 +708,19 @@ export class CommunityAuthService {
             )) !== "ok"
           )
             throw new AuthRollback(fail("AUTH_PROOF_REJECTED"));
+          const completedAt = this.clock().toISOString();
+          if (
+            this.options.registrationMode === "invite-only" &&
+            !(await tx.redeemInvitation(
+              handoff.invitationId!,
+              user.id,
+              completedAt,
+              handoff.id,
+            ))
+          )
+            throw new AuthRollback(fail("AUTH_INVITATION_INVALID"));
+          if ((await tx.consumeHandoff(handoff.id, completedAt)) !== "ok")
+            throw new AuthRollback(fail("AUTH_PROOF_REJECTED"));
           const session = await this.mint(tx, user, handoff.channel, at);
           await tx.insertReceipt({
             keyHash: prepared.receiptKey,
@@ -689,10 +748,10 @@ export class CommunityAuthService {
   }): Promise<AuthResult<AuthSessionGrant>> {
     const handleLogin = input.channel === "handle";
     if (
-      this.options.profile === "password-only"
-        ? !handleLogin
-        : handleLogin ||
-          !this.channelAvailable(input.channel as AuthChannelName)
+      handleLogin
+        ? this.options.profile !== "password-only" &&
+          !this.options.allowProvisionedHandleLogin
+        : !this.channelAvailable(input.channel as AuthChannelName)
     )
       return fail("AUTH_CHANNEL_UNAVAILABLE");
     const normalized = handleLogin
@@ -1036,23 +1095,26 @@ export class CommunityAuthService {
     studioName: string,
     studioNameSuffix: string,
     verifier: string | null,
+    invitationId?: string | null,
   ): Promise<string> {
     // Preserve exact replay of pre-suffix receipts; paired writes bind the suffix too.
+    const fields =
+      this.options.environment === "production"
+        ? [
+            "register-production",
+            displayName,
+            studioName,
+            verifier,
+            studioNameSuffix,
+            this.registrationAgreement?.version,
+          ]
+        : studioNameSuffix === ""
+          ? ["register", displayName, studioName, verifier]
+          : ["register", displayName, studioName, verifier, studioNameSuffix];
     return keyedHash(
       this.options.keys.lookupKey,
       JSON.stringify(
-        this.options.environment === "production"
-          ? [
-              "register-production",
-              displayName,
-              studioName,
-              verifier,
-              studioNameSuffix,
-              this.registrationAgreement?.version,
-            ]
-          : studioNameSuffix === ""
-            ? ["register", displayName, studioName, verifier]
-            : ["register", displayName, studioName, verifier, studioNameSuffix],
+        invitationId == null ? fields : [...fields, "invitation", invitationId],
       ),
     );
   }
@@ -1726,6 +1788,17 @@ export class CommunityAuthService {
       !this.registrationAvailable()
     )
       return fail("AUTH_NOT_CONFIGURED");
+    if (
+      this.options.registrationMode === "invite-only" &&
+      (challenge.purpose === "register" ||
+        (challenge.purpose === "sign_in" && identity === null))
+    ) {
+      if (challenge.invitationId == null)
+        return fail("AUTH_INVITATION_REQUIRED");
+      const invitation = await tx.lockInvitation(challenge.invitationId);
+      if (!this.invitationUsable(invitation, at))
+        return fail("AUTH_INVITATION_INVALID");
+    }
     await tx.saveChallenge({ ...challenge, completedAt: at.toISOString() });
     if (challenge.purpose === "reauthenticate") {
       if (challenge.userId === null || challenge.sessionHash === null)
@@ -1836,11 +1909,35 @@ export class CommunityAuthService {
       readonly purpose: AuthPurposeName;
       readonly idempotencyKey: string;
       readonly source: string;
+      readonly invitationCode?: string | undefined;
     },
     target: Target,
     at: Date,
   ): Promise<AuthResult<Reservation>> {
     const since = new Date(at.getTime() - WINDOW_MS).toISOString();
+    let invitation: StoredInvitation | null = null;
+    if (
+      input.purpose === "register" &&
+      this.options.registrationMode === "invite-only"
+    ) {
+      const budget = await this.reserveInvitationAttempt(
+        tx,
+        target.digest,
+        input.source,
+        at,
+      );
+      if (!budget.ok) return budget;
+      if (!input.invitationCode?.trim())
+        return fail("AUTH_INVITATION_REQUIRED");
+      const digest = await registrationInvitationDigest(input.invitationCode);
+      if (digest === null) return fail("AUTH_INVITATION_INVALID");
+      invitation = await tx.findInvitationByDigest(
+        digest,
+        this.options.environment,
+      );
+      if (!this.invitationUsable(invitation, at))
+        return fail("AUTH_INVITATION_INVALID");
+    }
     if (
       (await tx.failureCount(target.digest, input.purpose, since)) >=
       MAX_ATTEMPTS
@@ -1852,6 +1949,8 @@ export class CommunityAuthService {
     );
     const existing = await tx.findChallengeByIdempotency(idempotencyHash);
     if (existing !== null) {
+      if ((existing.invitationId ?? null) !== (invitation?.id ?? null))
+        return fail("AUTH_PROOF_REJECTED");
       if (existing.deliveryState === "failed")
         return fail("AUTH_DELIVERY_FAILED");
       if (existing.deliveryState === "unknown")
@@ -1877,6 +1976,8 @@ export class CommunityAuthService {
       open !== null &&
       new Date(open.resendAvailableAt).getTime() > at.getTime()
     ) {
+      if ((open.invitationId ?? null) !== (invitation?.id ?? null))
+        return fail("AUTH_PROOF_REJECTED");
       return {
         ok: true,
         value: {
@@ -1903,8 +2004,15 @@ export class CommunityAuthService {
       await tx.saveChallenge({ ...open, supersededAt: at.toISOString() });
     const mode = this.modeFor(input.channel);
     if (mode === "disabled") return fail("AUTH_CHANNEL_UNAVAILABLE");
+    // Unknown sign-in targets keep the same durable cooldown/rate-limit shape,
+    // but do not cost a provider send or acquire registration authority.
+    const silent =
+      input.purpose === "sign_in" &&
+      (this.options.environment === "production" ||
+        this.options.registrationMode !== undefined) &&
+      (await tx.findIdentity(input.channel, target.digest)) === null;
     const strategy =
-      mode === "provider" && input.channel === "phone"
+      !silent && mode === "provider" && input.channel === "phone"
         ? "provider_generated"
         : "application_otp";
     const code = strategy === "application_otp" ? generateEmailOtp() : null;
@@ -1935,6 +2043,7 @@ export class CommunityAuthService {
       expectedVersion: target.expectedVersion,
       identityId: target.identityId ?? null,
       credentialVersion: target.credentialVersion ?? null,
+      invitationId: invitation?.id ?? null,
       reauthHash: target.reauthHash,
       providerCorrelation: null,
       expiresAt: new Date(at.getTime() + OTP_TTL_MS).toISOString(),
@@ -1943,13 +2052,15 @@ export class CommunityAuthService {
       supersededAt: null,
       completedAt: null,
       invalidatedAt: null,
-      deliveryState: "pending",
+      deliveryState: silent ? "accepted" : "pending",
       idempotencyHash,
       createdAt: at.toISOString(),
     };
     if ((await tx.insertChallenge(challenge)) === "conflict") {
       const raced = await tx.findChallengeByIdempotency(idempotencyHash);
       if (raced === null) return fail("AUTH_RATE_LIMITED");
+      if ((raced.invitationId ?? null) !== (invitation?.id ?? null))
+        return fail("AUTH_PROOF_REJECTED");
       return {
         ok: true,
         value: {
@@ -1968,7 +2079,7 @@ export class CommunityAuthService {
     return {
       ok: true,
       value: {
-        kind: "send",
+        kind: silent ? "silent" : "send",
         challenge,
         continuationToken,
         destination: target.destination,
@@ -2134,6 +2245,11 @@ export class CommunityAuthService {
     challenge: StoredChallenge,
     at: Date,
   ): Promise<AuthResult<AuthVerifyValue>> {
+    if (
+      this.options.registrationMode === "invite-only" &&
+      challenge.invitationId == null
+    )
+      return fail("AUTH_INVITATION_REQUIRED");
     const token = generateSessionToken(this.randomBytes);
     await tx.insertHandoff({
       id: generateOpaqueId("handoff", this.randomBytes),
@@ -2144,6 +2260,7 @@ export class CommunityAuthService {
       ciphertext: challenge.ciphertext,
       providerMode: challenge.providerMode,
       environment: challenge.environment,
+      invitationId: challenge.invitationId ?? null,
       userId: null,
       sessionHash: null,
       expectedVersion: null,
@@ -2172,7 +2289,7 @@ export class CommunityAuthService {
   }
 
   private async deliver(
-    reserved: Extract<Reservation, { kind: "send" }>,
+    reserved: Extract<Reservation, { kind: "send" | "silent" }>,
   ): Promise<DeliveryOutcome> {
     try {
       if (reserved.challenge.channel === "email") {
@@ -2481,9 +2598,50 @@ export class CommunityAuthService {
   private registrationAvailable(): boolean {
     return (
       this.options.profile !== "password-only" &&
+      this.options.registrationMode !== "closed" &&
+      (this.options.environment !== "production" ||
+        this.options.registrationMode === "invite-only") &&
       (this.options.environment !== "production" ||
         this.registrationAgreement !== null)
     );
+  }
+
+  private invitationUsable(
+    invitation: StoredInvitation | null,
+    at: Date,
+  ): boolean {
+    return (
+      invitation !== null &&
+      invitation.environment === this.options.environment &&
+      invitation.revokedAt === null &&
+      new Date(invitation.expiresAt).getTime() > at.getTime() &&
+      invitation.usedCount < invitation.maxUses
+    );
+  }
+
+  private async reserveInvitationAttempt(
+    tx: AuthUnitOfWork,
+    targetDigest: string,
+    source: string,
+    at: Date,
+  ): Promise<AuthResult<true>> {
+    await tx.lockDigest("auth-invitation-attempts");
+    const since = new Date(at.getTime() - WINDOW_MS).toISOString();
+    const targetKey = `invitation-target:${targetDigest}`;
+    const sourceKey = await keyedHash(
+      this.options.keys.lookupKey,
+      `invitation-source\0${source}`,
+    );
+    if (
+      (await tx.sendCount("target", targetKey, since)) >= TARGET_SENDS ||
+      (await tx.sendCount("source", sourceKey, since)) >= SOURCE_SENDS ||
+      (await tx.sendCount("global", "invitation-global", since)) >= GLOBAL_SENDS
+    )
+      return fail("AUTH_RATE_LIMITED");
+    await tx.addSend("target", targetKey, at.toISOString());
+    await tx.addSend("source", sourceKey, at.toISOString());
+    await tx.addSend("global", "invitation-global", at.toISOString());
+    return { ok: true, value: true };
   }
 
   private channelAvailable(channel: AuthChannelName): boolean {

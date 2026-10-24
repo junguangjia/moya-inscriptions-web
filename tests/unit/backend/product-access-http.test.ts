@@ -1,5 +1,6 @@
 import {
   CommunityAuthService,
+  CommunityStoreUnavailableError,
   CommunitySessionService,
   createMemoryCommunityAuthPort,
   type AuthorCommunityPort,
@@ -66,7 +67,7 @@ const closedBeta = (...admitted: string[]) => {
   const accounts = new Set<string>(admitted);
   const policy: Policy = {
     mode: "closed_beta",
-    admits: (userId) => accounts.has(userId),
+    admits: async (userId) => accounts.has(userId),
   };
   return { accounts, policy };
 };
@@ -187,7 +188,7 @@ const protectedReads = [
 ] as const;
 
 describe("product access gate", () => {
-  it.each([undefined, { mode: "public", admits: () => false } as Policy])(
+  it.each([undefined, { mode: "public", admits: async () => false } as Policy])(
     "adds no restriction in public mode",
     async (policy) => {
       const backend = await start(policy);
@@ -399,6 +400,36 @@ describe("product access gate", () => {
     );
   });
 
+  it("ends an existing notification stream when asynchronous admission storage becomes unavailable", async () => {
+    let unavailable = false;
+    const backend = await start({
+      mode: "closed_beta",
+      admits: async () => {
+        if (unavailable) throw new CommunityStoreUnavailableError();
+        return true;
+      },
+    });
+    const token = await backend.session("dev-user-01");
+    const abort = new AbortController();
+    aborts.add(abort);
+    const response = await backend.get(
+      "/v1/community/notifications/stream",
+      token,
+      {
+        headers: { accept: "text/event-stream" },
+        signal: abort.signal,
+      },
+    );
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    unavailable = true;
+    backend.signals.publish([fixtureUsers.active.id]);
+    let ended = false;
+    for (let reads = 0; reads < 5 && !ended; reads += 1)
+      ended = (await reader.read()).done;
+    expect(ended).toBe(true);
+  });
+
   it("answers a streaming upload it refuses without waiting for the body", async () => {
     const backend = await start(closedBeta(fixtureUsers.active.id).policy);
     const path =
@@ -455,6 +486,26 @@ describe("product access gate", () => {
       503,
       "SERVICE_UNAVAILABLE",
     );
+  });
+
+  it("answers unavailable instead of admitting a session while account admission storage fails", async () => {
+    const backend = await start({
+      mode: "closed_beta",
+      admits: async () => {
+        throw new CommunityStoreUnavailableError();
+      },
+    });
+    const token = await backend.session("dev-user-01");
+    for (const path of [
+      "/v1/catalog",
+      "/v1/community/access",
+      "/v1/community/notifications/stream",
+    ])
+      await expectApiError(
+        await backend.get(path, token),
+        503,
+        "SERVICE_UNAVAILABLE",
+      );
   });
 
   it("applies the same policy in a production composition", async () => {

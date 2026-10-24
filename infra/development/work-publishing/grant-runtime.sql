@@ -351,6 +351,15 @@ GRANT INSERT (studio_name, studio_name_suffix) ON TABLE community.public_users T
 GRANT UPDATE (studio_name, studio_name_suffix) ON TABLE community.public_users TO :"app_role";
 GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_challenges TO :"app_role";
 GRANT INSERT (identity_id, credential_version) ON TABLE community.auth_handoffs TO :"app_role";
+-- App may inspect and redeem a valid invitation only through the fixed atomic
+-- function. It cannot create/revoke codes or write arbitrary account admission.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE community.registration_invitations,
+  community.registration_invitation_redemptions, community.beta_account_access FROM :"app_role";
+GRANT SELECT ON TABLE community.registration_invitations,
+  community.registration_invitation_redemptions, community.beta_account_access TO :"app_role";
+GRANT INSERT (invitation_id) ON TABLE community.auth_challenges, community.auth_handoffs TO :"app_role";
+GRANT EXECUTE ON FUNCTION community.lock_registration_invitation(TEXT),
+  community.redeem_registration_invitation(TEXT,TEXT,TIMESTAMPTZ,TEXT) TO :"app_role";
 
 -- production-deployment-v3: offline operator authority, never runtime provisionable.
 -- The list names every non-SELECT table privilege of PostgreSQL 16. MAINTAIN
@@ -504,4 +513,24 @@ BEGIN
   EXECUTE format(
     'GRANT UPDATE (sweep_cursor, policy_digest, public_count, public_sum, public_observed_at, private_count, private_sum, private_observed_at, render_backlog, render_backlog_at, updated_at) ON TABLE community.catalog_reconcile_state TO %I',
     current_setting('moya.runtime_app_role'));
+END $$;
+
+-- Private feedback submissions and Owner reads; feedback is append-only.
+-- Historical upgrade fixtures can precede this table; real Backend startup
+-- still requires the current migration ledger before serving any request.
+DO $$
+BEGIN
+  IF to_regclass('community.feedback') IS NOT NULL THEN
+    EXECUTE format(
+      'GRANT SELECT, INSERT ON TABLE community.feedback TO %I',
+      current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;
+
+-- Feedback image metadata is append-only; bytes stay in the common private store.
+DO $$
+BEGIN
+  IF to_regclass('community.feedback_images') IS NOT NULL THEN
+    EXECUTE format('GRANT SELECT, INSERT ON TABLE community.feedback_images TO %I', current_setting('moya.runtime_app_role'));
+  END IF;
 END $$;

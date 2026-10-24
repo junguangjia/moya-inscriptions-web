@@ -91,6 +91,8 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
       "/v1/me",
       "/v1/development/sign-in",
       "/v1/development/sign-out",
+      // Owner-approved settings-feedback-v1 (#329), session-bound write only.
+      "/v1/community/feedback",
       // Owner r2 notification scope; composition remains Development-only.
       "/v1/community/mentions",
       "/v1/community/notifications",

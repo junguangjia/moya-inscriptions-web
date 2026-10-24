@@ -168,6 +168,9 @@ export const handleCommunityAuth = async (
         ...(parsed.data.reauthToken === undefined
           ? {}
           : { reauthToken: parsed.data.reauthToken }),
+        ...(parsed.data.invitationCode === undefined
+          ? {}
+          : { invitationCode: parsed.data.invitationCode }),
       });
       if (!result.ok) {
         sendFailure(response, result.reason);

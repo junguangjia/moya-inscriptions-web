@@ -60,7 +60,7 @@ import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 
 const SLOW = 300_000;
 const A1 = "20261024010000";
-const BEFORE_A1 = "20261020160000";
+const BEFORE_A1 = "20261023020000";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const migrations = `${root}/database/community-migrations`;
 const target = requireSyntheticTestDatabaseUrl();
@@ -322,6 +322,8 @@ describe("App migration A1, its grants and the startup checks", () => {
       // Once the writer has ended, A1 applies, once.
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual([
         A1,
+        "20261024020000",
+        "20261024030000",
       ]);
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual(
         [],

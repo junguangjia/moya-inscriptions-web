@@ -24,6 +24,7 @@ type Step =
 type Operation = "send" | "verify" | "confirm" | "password-login" | "reset";
 type Field =
   | "identifier"
+  | "invitationCode"
   | "code"
   | "password"
   | "passwordConfirm"
@@ -58,6 +59,8 @@ const reasons: Record<string, string> = {
   AUTH_DELIVERY_UNKNOWN: "发送结果暂时无法确认，请稍后重新获取验证码。",
   AUTH_PROVENANCE_REJECTED: "这次验证无法继续，请重新验证。",
   AUTH_NOT_CONFIGURED: "登录服务暂时不可用，请稍后重试。",
+  AUTH_INVITATION_REQUIRED: "请输入邀请码后注册。",
+  AUTH_INVITATION_INVALID: "邀请码无效、已过期或名额已用完，请联系邀请人。",
 };
 
 const recordOf = (value: unknown): Record<string, unknown> | null =>
@@ -138,8 +141,10 @@ export const AuthFlow = ({
   const agreementId = useId();
   const passwordId = useId();
   const passwordConfirmId = useId();
+  const invitationId = useId();
   const studioId = useId();
   const identifierRef = useRef<HTMLInputElement>(null);
+  const invitationRef = useRef<HTMLInputElement>(null);
   const codeRef = useRef<HTMLInputElement>(null);
   const nicknameRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
@@ -164,7 +169,8 @@ export const AuthFlow = ({
   >("loading");
   const [channel, setChannel] = useState<Channel>(initialChannel);
   const [email, setEmail] = useState(initialEmail);
-  const [handle, setHandle] = useState("");
+  const [handle, setHandle] = useState(initialEmail);
+  const [invitationCode, setInvitationCode] = useState("");
   const [phone, setPhone] = useState(
     initialPhone.replace(/^(?:\+86|0086)/u, ""),
   );
@@ -198,10 +204,24 @@ export const AuthFlow = ({
   const registrationUnavailable =
     mode === "register" && !resetting && !agreementAvailable;
   const passwordOnly = capabilities?.profile === "password-only";
+  const passwordLogin =
+    mode === "sign-in" && method === "password" && !resetting;
   const handleLogin =
-    passwordOnly && mode === "sign-in" && method === "password" && !resetting;
-  const identifier = handleLogin ? handle : channel === "email" ? email : phone;
-  const passwordIdentifier = handleLogin ? "handle" : channel;
+    passwordLogin &&
+    capabilities?.password?.identifiers.includes("handle") === true &&
+    (passwordOnly || channel === "email");
+  const handleOnly =
+    handleLogin && !capabilities?.password?.identifiers.includes("email");
+  const identifier = handleOnly ? handle : channel === "email" ? email : phone;
+  const passwordIdentifier = handleLogin
+    ? handleOnly || !identifier.includes("@")
+      ? "handle"
+      : "email"
+    : channel;
+  const invitationRequired =
+    mode === "register" &&
+    !resetting &&
+    capabilities?.registration?.invitationRequired === true;
   const passwordAvailable =
     capabilities?.password === undefined
       ? capabilities?.[channel].available === true
@@ -213,8 +233,6 @@ export const AuthFlow = ({
       ? passwordAvailable
       : capabilities?.[channel].available === true);
   const locked = pending !== null && pending !== "send";
-  const passwordLogin =
-    mode === "sign-in" && method === "password" && !resetting;
   const remaining = Math.max(0, Math.ceil((resendAt - now) / 1000));
 
   const loadCapabilities = async () => {
@@ -356,6 +374,10 @@ export const AuthFlow = ({
   const updateIdentifier = (value: string) => {
     if (handleLogin) {
       setHandle(value);
+      if (!handleOnly) {
+        setEmail(value);
+        onInputChange?.("email", value);
+      }
       if (feedback?.field === "identifier") setFeedback(null);
       return;
     }
@@ -371,6 +393,22 @@ export const AuthFlow = ({
   const handleFailure = (operation: Operation, body: unknown) => {
     const reason = reasonOf(body);
     if (reason === "AUTH_CHANNEL_UNAVAILABLE") void loadCapabilities();
+    if (
+      ["AUTH_INVITATION_REQUIRED", "AUTH_INVITATION_INVALID"].includes(reason)
+    ) {
+      clearProof();
+      setStep("identifier");
+      setMasked("");
+      setPassword("");
+      setPasswordConfirm("");
+      void loadCapabilities();
+      setFeedback(
+        invitationRequired
+          ? { field: "invitationCode", message: messageOf(body) }
+          : { message: messageOf(body) },
+      );
+      return;
+    }
     if (
       [
         "AUTH_CODE_EXPIRED",
@@ -503,6 +541,14 @@ export const AuthFlow = ({
       identifierRef.current?.focus();
       return;
     }
+    if (
+      invitationRequired &&
+      !/^[A-Za-z0-9_-]{22}$/u.test(invitationCode.trim())
+    ) {
+      setFeedback({ field: "invitationCode", message: "请输入有效的邀请码。" });
+      invitationRef.current?.focus();
+      return;
+    }
     const previous = challenge;
     await perform(
       "send",
@@ -515,6 +561,9 @@ export const AuthFlow = ({
             ? "register"
             : "sign_in",
         identifier: normalized,
+        ...(invitationRequired
+          ? { invitationCode: invitationCode.trim() }
+          : {}),
       },
       (result) => {
         if (result.status !== 200) {
@@ -617,19 +666,22 @@ export const AuthFlow = ({
   };
 
   const validateIdentifier = () => {
-    const normalized = handleLogin
-      ? /^[a-z][a-z0-9-]{2,31}$/u.test(identifier)
-        ? identifier
-        : null
-      : normalizedIdentifier(channel, identifier);
+    const normalized =
+      passwordIdentifier === "handle"
+        ? /^[a-z][a-z0-9-]{2,31}$/u.test(identifier.trim())
+          ? identifier.trim()
+          : null
+        : normalizedIdentifier(channel, identifier);
     if (normalized === null) {
       setFeedback({
         field: "identifier",
-        message: handleLogin
+        message: handleOnly
           ? "请输入有效的账号。"
-          : channel === "email"
-            ? "请输入有效的邮箱地址。"
-            : "请输入 11 位中国大陆手机号。",
+          : handleLogin
+            ? "请输入有效的邮箱或账号。"
+            : channel === "email"
+              ? "请输入有效的邮箱地址。"
+              : "请输入 11 位中国大陆手机号。",
       });
       identifierRef.current?.focus();
     }
@@ -913,7 +965,11 @@ export const AuthFlow = ({
           </h1>
           {mode === "sign-in" && step === "identifier" && !resetting && (
             <p className={styles.subtitle}>
-              内测阶段暂不开放注册，无需登录即可浏览内容。
+              {passwordOnly || capabilities?.registration?.available === false
+                ? "内测阶段暂不开放注册，已有账户可直接登录。"
+                : capabilities?.registration?.invitationRequired
+                  ? "内测阶段可凭邀请码注册，已有账户可直接登录。"
+                  : "已有账户可直接登录。"}
             </p>
           )}
         </header>
@@ -1012,7 +1068,9 @@ export const AuthFlow = ({
                 <div className={styles.field}>
                   <label htmlFor={fieldId}>
                     {handleLogin
-                      ? "账号"
+                      ? handleOnly
+                        ? "账号"
+                        : "邮箱或账号"
                       : channel === "email"
                         ? "邮箱地址"
                         : "手机号"}
@@ -1058,7 +1116,9 @@ export const AuthFlow = ({
                       spellCheck={false}
                       placeholder={
                         handleLogin
-                          ? "账号"
+                          ? handleOnly
+                            ? "账号"
+                            : "邮箱或账号"
                           : channel === "email"
                             ? "邮箱地址"
                             : "11 位手机号"
@@ -1077,6 +1137,33 @@ export const AuthFlow = ({
                   )}
                   {fieldFeedback("identifier")}
                 </div>
+                {invitationRequired && (
+                  <div className={styles.field}>
+                    <label htmlFor={invitationId}>邀请码</label>
+                    <Input
+                      id={invitationId}
+                      ref={invitationRef}
+                      type="text"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      value={invitationCode}
+                      maxLength={22}
+                      placeholder="输入邀请码"
+                      invalid={feedbackFor("invitationCode") !== null}
+                      aria-describedby={descriptionFor("invitationCode")}
+                      disabled={pending !== null}
+                      required
+                      className={styles.input}
+                      onChange={(event) => {
+                        setInvitationCode(event.target.value);
+                        if (feedbackFor("invitationCode")) setFeedback(null);
+                      }}
+                    />
+                    {fieldFeedback("invitationCode")}
+                  </div>
+                )}
                 {passwordLogin && (
                   <div className={styles.field}>
                     <label htmlFor={passwordId}>密码</label>

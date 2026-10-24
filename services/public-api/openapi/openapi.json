@@ -12218,6 +12218,9 @@
                         "const": true,
                         "type": "boolean"
                       },
+                      "invitationRequired": {
+                        "type": "boolean"
+                      },
                       "reason": {
                         "type": "null"
                       }
@@ -12233,6 +12236,9 @@
                       },
                       "available": {
                         "const": false,
+                        "type": "boolean"
+                      },
+                      "invitationRequired": {
                         "type": "boolean"
                       },
                       "reason": {
@@ -12450,6 +12456,9 @@
                     "const": true,
                     "type": "boolean"
                   },
+                  "invitationRequired": {
+                    "type": "boolean"
+                  },
                   "reason": {
                     "type": "null"
                   }
@@ -12465,6 +12474,9 @@
                   },
                   "available": {
                     "const": false,
+                    "type": "boolean"
+                  },
+                  "invitationRequired": {
                     "type": "boolean"
                   },
                   "reason": {
@@ -12505,6 +12517,10 @@
           "identifier": {
             "maxLength": 254,
             "minLength": 1,
+            "type": "string"
+          },
+          "invitationCode": {
+            "pattern": "^[A-Za-z0-9_-]{22}$",
             "type": "string"
           },
           "purpose": {
@@ -20052,6 +20068,23 @@
           "draftId",
           "version"
         ],
+        "type": "object"
+      },
+      "FeedbackReceipt": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^feedback-[0-9a-f]{32}$",
+            "type": "string"
+          }
+        },
+        "required": ["id", "createdAt"],
         "type": "object"
       },
       "GuestFavoriteMerge": {
@@ -28292,6 +28325,10 @@
             "enum": ["standard-image-v1", "standard-live-v1"],
             "type": "string"
           },
+          "purpose": {
+            "enum": ["content", "feedback"],
+            "type": "string"
+          },
           "qualityMode": {
             "enum": ["standard", "original"],
             "type": "string"
@@ -28715,6 +28752,32 @@
           }
         },
         "required": ["requestId", "text"],
+        "type": "object"
+      },
+      "SubmitFeedbackRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "imageIds": {
+            "items": {
+              "pattern": "^media-item-[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "maxItems": 3,
+            "type": "array"
+          },
+          "message": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          }
+        },
+        "required": ["submissionId", "message"],
         "type": "object"
       },
       "ThreadPage": {
@@ -34315,7 +34378,7 @@
     },
     "/v1/community/auth/capabilities": {
       "get": {
-        "description": "Server-owned email and phone availability. A client cannot enable simulation or live delivery. Production does not mount this route in this task.",
+        "description": "Server-owned channel and registration capabilities, invitation requirement and approved agreement. A client cannot enable registration, simulation or live delivery. Production requires explicit server configuration.",
         "operationId": "getAuthCapabilities",
         "responses": {
           "200": {
@@ -34364,7 +34427,7 @@
     },
     "/v1/community/auth/passwords/login": {
       "post": {
-        "description": "Existing same-origin relay receives a server-only Session grant and sets HttpOnly Cookie. Production mounting is unchanged. Missing credentials and wrong passwords have the same response.",
+        "description": "The same-origin relay receives a server-only Session grant and sets an HttpOnly Cookie. Runtime capabilities select supported identifiers, including explicitly enabled provisioned handles. Missing credentials and wrong passwords have the same response.",
         "operationId": "passwordSignIn",
         "requestBody": {
           "content": {
@@ -34428,10 +34491,10 @@
                 }
               }
             },
-            "description": "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
           }
         },
-        "summary": "Development password sign-in for an existing public account"
+        "summary": "Password sign-in for an existing public account"
       }
     },
     "/v1/community/auth/passwords/reset": {
@@ -34507,7 +34570,7 @@
                 }
               }
             },
-            "description": "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
           }
         },
         "summary": "Consume a password_reset proof and replace an existing account's password"
@@ -36838,6 +36901,102 @@
             "session": []
           }
         ]
+      }
+    },
+    "/v1/community/feedback": {
+      "post": {
+        "description": "Requires a valid account session and x-author-account equal to that account. Saves trimmed text and up to three ready private feedback-purpose images atomically before returning the receipt. Images must be static, uploaded through a no-work temporary publishing session with purpose feedback, and at most 10 MiB each. Retry the same submissionId, message and ordered imageIds to recover the same receipt; changing text or images under the same identity returns CONFLICT. Accepts no query parameters. No public feedback read route exists.",
+        "operationId": "submitFeedback",
+        "parameters": [
+          {
+            "description": "The authenticated account; omission or mismatch rejects. This header does not authorize a request.",
+            "in": "header",
+            "name": "x-author-account",
+            "required": true,
+            "schema": {
+              "pattern": "^user-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReceipt"
+                }
+              }
+            },
+            "description": "Saved feedback receipt"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unexpected query; error code INVALID_QUERY."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid session or missing/mismatched account header; error code UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Submission identity already used; error code CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid feedback body; error code INVALID_INPUT."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Feedback store unavailable; error code SERVICE_UNAVAILABLE."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Submit private feedback from settings"
       }
     },
     "/v1/community/filter-options": {

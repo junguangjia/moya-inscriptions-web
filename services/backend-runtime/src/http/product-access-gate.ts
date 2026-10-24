@@ -23,12 +23,12 @@ import type {
 export interface ProductAccessPolicy {
   readonly mode: ProductAccess["mode"];
   /** Asked on every protected request, so a change applies to sessions that already exist. */
-  admits(userId: string): boolean;
+  admits(userId: string): Promise<boolean>;
 }
 
 export const publicProductAccess: ProductAccessPolicy = Object.freeze({
   mode: "public",
-  admits: () => true,
+  admits: async () => true,
 });
 
 type SessionIdentity = Pick<CommunitySessionService, "identify">;
@@ -46,7 +46,7 @@ export const admittedSessions = (
     : {
         identify: async (token) => {
           const user = await sessions.identify(token);
-          return user !== null && policy.admits(user.id) ? user : null;
+          return user !== null && (await policy.admits(user.id)) ? user : null;
         },
       };
 
@@ -128,7 +128,7 @@ export const createProductAccessGate = (
       return "sign_in_required";
     const user = await sessions.identify(token);
     if (user === null) return "sign_in_required";
-    return policy.admits(user.id) ? "granted" : "restricted";
+    return (await policy.admits(user.id)) ? "granted" : "restricted";
   };
 
   const refuse = (

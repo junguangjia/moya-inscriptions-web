@@ -866,6 +866,40 @@ describe("Password reset and stale authentication cookie recovery", () => {
       },
       body: "{}",
     });
+  it("forwards the invitation registration challenge in the request body without adding it to a URL or cookie", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ accepted: true }));
+    vi.stubGlobal("fetch", fetcher);
+    const syntheticInvitation = "j".repeat(22);
+    const payload = {
+      channel: "email",
+      purpose: "register",
+      identifier: "tester@example.com",
+      invitationCode: syntheticInvitation,
+      idempotencyKey: "synthetic-invite-registration",
+    };
+    const response = await relayServerCommunityAuth(
+      new Request("http://127.0.0.1:3410/api/community/auth/challenges", {
+        method: "POST",
+        headers: {
+          origin: "http://127.0.0.1:3410",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(
+      payload,
+    );
+    expect(String(fetcher.mock.calls[0]?.[0])).not.toContain(
+      syntheticInvitation,
+    );
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
   it("clears the signed browser cookie after successful reset without creating a Session", async () => {
     vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
     const fetcher = vi
@@ -1198,5 +1232,60 @@ describe("Content reads carry the visitor's session to the Backend", () => {
       `Bearer ${session}`,
     );
     expect(sent(upstream, 1).headers.has("authorization")).toBe(false);
+  });
+});
+
+describe("feedback uses the ordinary same-origin community relay", () => {
+  it("forwards the session/account and confirmed receipt without auth-service relay configuration", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const receipt = {
+      id: "feedback-" + "a".repeat(32),
+      createdAt: "2026-10-23T12:00:00.000Z",
+    };
+    const upstream = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json(receipt, { status: 201 }));
+    vi.stubGlobal("fetch", upstream);
+    const response = await relayServerAuthorCommunity(
+      new Request("http://127.0.0.1:3410/api/community/feedback", {
+        method: "POST",
+        headers: {
+          origin: "http://127.0.0.1:3410",
+          "content-type": "application/json",
+          cookie:
+            "yoyi-session=" +
+            "synthetic-feedback-session-value-".padEnd(43, "x"),
+          "x-author-account": "user-" + "b".repeat(32),
+        },
+        body: JSON.stringify({
+          submissionId: "00000000-0000-4000-8000-000000000001",
+          message: "Synthetic feedback",
+        }),
+      }),
+    );
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual(receipt);
+    expect(upstream.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "x-author-account": "user-" + "b".repeat(32),
+      Authorization:
+        "Bearer " + "synthetic-feedback-session-value-".padEnd(43, "x"),
+    });
+    expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+  it("refuses a foreign-origin feedback write before calling the Backend", async () => {
+    const upstream = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", upstream);
+    const response = await relayServerAuthorCommunity(
+      new Request("http://127.0.0.1:3410/api/community/feedback", {
+        method: "POST",
+        headers: {
+          origin: "https://foreign.invalid",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      }),
+    );
+    expect(response.status).toBe(403);
+    expect(upstream).not.toHaveBeenCalled();
   });
 });

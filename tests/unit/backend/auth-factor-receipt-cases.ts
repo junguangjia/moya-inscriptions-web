@@ -1,11 +1,20 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   CommunityAuthService,
   createProductionAuthService,
   hashSessionToken,
 } from "@moya/api";
-import type { AuthDeliveryPorts, CommunityAuthPort } from "@moya/api";
+import type {
+  AuthDeliveryPorts,
+  CommunityAuthPort,
+  StoredInvitation,
+} from "@moya/api";
+
+type SeedInvitation = (
+  port: CommunityAuthPort,
+  invitation: StoredInvitation,
+) => Promise<void>;
 
 const agreement = {
   version: "synthetic-receipt-v1",
@@ -22,6 +31,7 @@ const deferred = () => {
 const harness = (
   environment: "development" | "production",
   createPort: () => CommunityAuthPort,
+  seedInvitation?: SeedInvitation,
 ) => {
   const memory = createPort();
   let code = "",
@@ -78,7 +88,7 @@ const harness = (
     environment === "production"
       ? createProductionAuthService(
           port,
-          { keys, phoneEnabled: true },
+          { keys, phoneEnabled: true, registrationMode: "invite-only" },
           delivery,
           agreement,
         )
@@ -91,12 +101,30 @@ const harness = (
           delivery,
         });
   const register = async (name: string) => {
+    const invitationCode = randomBytes(16).toString("base64url");
+    if (environment === "production") {
+      if (seedInvitation === undefined)
+        throw Error("Synthetic invitation setup missing");
+      await seedInvitation(memory, {
+        id: `invitation-${randomBytes(16).toString("hex")}`,
+        digest: createHash("sha256")
+          .update(`artvenn:registration-invitation:v1:${invitationCode}`)
+          .digest("hex"),
+        environment,
+        maxUses: 20,
+        usedCount: 0,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        revokedAt: null,
+      });
+    }
     const sent = await service.sendChallenge({
       channel: "email",
       purpose: "register",
       identifier: `${name}@example.invalid`,
       idempotencyKey: randomUUID(),
       source: name,
+      ...(environment === "production" ? { invitationCode } : {}),
     });
     if (!sent.ok || !sent.value.continuationToken)
       throw Error("Synthetic registration send refused");
@@ -191,11 +219,14 @@ const harness = (
   };
 };
 
-export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
+export const authFactorReceiptCases = (
+  createPort: () => CommunityAuthPort,
+  seedInvitation?: SeedInvitation,
+) => {
   for (const environment of ["development", "production"] as const)
     describe(`${environment} completed factor receipt recovery`, () => {
       it("recovers the lost response with the original cookie and then retries the rotated cookie without another factor write/check", async () => {
-        const h = harness(environment, createPort),
+        const h = harness(environment, createPort, seedInvitation),
           { user, input } = await h.factor();
         const first = await h.service.completeFactor(input);
         expect(first.ok).toBe(true);
@@ -235,7 +266,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
         vi.setSystemTime(start);
         let release: (() => void) | undefined;
         try {
-          const h = harness(environment, createPort),
+          const h = harness(environment, createPort, seedInvitation),
             { user, input } = await h.factor();
           const gate = h.gateFinal();
           release = gate.release;
@@ -281,7 +312,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
         }
       });
       it("recovers an intermediate cookie superseded by another exact concurrent retry", async () => {
-        const h = harness(environment, createPort),
+        const h = harness(environment, createPort, seedInvitation),
           { input } = await h.factor();
         const first = await h.service.completeFactor(input);
         const second = await h.service.completeFactor(input);
@@ -299,7 +330,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
           ).toBe(true);
       });
       it("refuses a foreign Session and changed proof payload without consuming the completed owner's recovery", async () => {
-        const h = harness(environment, createPort),
+        const h = harness(environment, createPort, seedInvitation),
           { input } = await h.factor();
         const first = await h.service.completeFactor(input);
         if (!first.ok) throw Error("Synthetic completion refused");
@@ -319,7 +350,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
         expect(h.checks()).toBe(environment === "production" ? 1 : 0);
       });
       it("serializes identical concurrent completions and retains one factor and one live receipt Session", async () => {
-        const h = harness(environment, createPort),
+        const h = harness(environment, createPort, seedInvitation),
           { user, input } = await h.factor();
         if (environment === "production") {
           let checks = 0;
@@ -358,7 +389,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
         "intermediate",
       ] as const)
         it(`logout of the ${cookie} cookie seals the same completed recovery lineage`, async () => {
-          const h = harness(environment, createPort),
+          const h = harness(environment, createPort, seedInvitation),
             { input } = await h.factor();
           const first = await h.service.completeFactor(input);
           if (!first.ok) throw Error("Synthetic completion refused");
@@ -390,7 +421,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
         });
       for (const cookie of ["original", "issued"] as const)
         it(`refuses recovery if ${cookie} logout wins between receipt preflight and the final transaction`, async () => {
-          const h = harness(environment, createPort),
+          const h = harness(environment, createPort, seedInvitation),
             { input } = await h.factor();
           const first = await h.service.completeFactor(input);
           if (!first.ok) throw Error("Synthetic completion refused");
@@ -413,7 +444,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
           ).toBe(false);
         });
       it("serializes actual concurrent logout and recovery without leaving a live recovered Session", async () => {
-        const h = harness(environment, createPort),
+        const h = harness(environment, createPort, seedInvitation),
           { input } = await h.factor();
         const first = await h.service.completeFactor(input);
         if (!first.ok) throw Error("Synthetic completion refused");
@@ -431,7 +462,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
         expect((await h.service.completeFactor(input)).ok).toBe(false);
       });
       it("takes the User lock before unlink receipt Session locks and serializes replay with logout", async () => {
-        const h = harness(environment, createPort),
+        const h = harness(environment, createPort, seedInvitation),
           { input } = await h.factor();
         const linked = await h.service.completeFactor(input);
         if (!linked.ok) throw Error("Synthetic link refused");
@@ -471,7 +502,7 @@ export const authFactorReceiptCases = (createPort: () => CommunityAuthPort) => {
         ).toBe(false);
       });
       it("indexes the completed factor receipt from its original Session for logout", async () => {
-        const h = harness(environment, createPort),
+        const h = harness(environment, createPort, seedInvitation),
           { user, input } = await h.factor();
         const first = await h.service.completeFactor(input);
         if (!first.ok) throw Error("Synthetic completion refused");

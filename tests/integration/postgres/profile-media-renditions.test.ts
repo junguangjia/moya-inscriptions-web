@@ -413,7 +413,11 @@ describe("profile media renditions migration on a dedicated synthetic database",
         "20261019020000",
         "20261020010000",
         "20261020160000",
+        "20261023010000",
+        "20261023020000",
         "20261024010000",
+        "20261024020000",
+        "20261024030000",
       ]);
       await verifyCommunityMigrationLedger(pool);
       const after = await snapshot(pool);
@@ -429,8 +433,17 @@ describe("profile media renditions migration on a dedicated synthetic database",
         null,
         null,
       ]);
+      // Feedback-purpose migration adds only the content default to existing items.
+      expect(after.items.map((row) => row.purpose)).toEqual(
+        before.items.map(() => "content"),
+      );
       expect({
         ...after,
+        items: after.items.map((row) =>
+          Object.fromEntries(
+            Object.entries(row).filter(([key]) => key !== "purpose"),
+          ),
+        ),
         renditions: after.renditions.map((row) =>
           Object.fromEntries(
             Object.entries(row).filter(

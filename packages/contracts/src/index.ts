@@ -151,6 +151,7 @@ export type {
   AuthRegistrationAgreement,
   AuthFactor,
 } from "./auth-schemas.ts";
+export type { BetaAccountAccessPort } from "./types.js";
 export type { MentionReference } from "./mention-references.js";
 
 export type {
@@ -254,3 +255,9 @@ export type {
   AuthPasswordResetRequest,
   AuthPasswordResetResult,
 } from "./auth-schemas.js";
+
+export type {
+  SubmitFeedbackRequest,
+  FeedbackReceipt,
+  FeedbackImageVariant,
+} from "./schemas.js";

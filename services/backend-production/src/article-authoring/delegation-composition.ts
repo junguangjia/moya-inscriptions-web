@@ -54,7 +54,7 @@ export const createArticleDelegationRuntime = (options: {
   readonly clients: ArticleDelegationRuntime["clients"];
   readonly readPublished: ArticleDelegationRuntime["readPublished"];
   /** The product access policy for the account a grant represents. */
-  readonly admitsAccount?: (userId: string) => boolean;
+  readonly admitsAccount?: (userId: string) => Promise<boolean>;
   readonly now?: () => Date;
   /** Reuse existing read adapters inside this transaction and actor fence. */
   readonly discoverCatalog: (

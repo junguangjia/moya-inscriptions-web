@@ -1,4 +1,9 @@
-import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -212,7 +217,23 @@ const productionHttps = async (
 
 /** Executes the actual Production config/factory, signing and OTP proof logic.
  * Only the provider transport is simulated in code. Nothing leaves this process. */
-const productionHumans = async (pool: Pool, directory: string) => {
+const productionHumans = async (
+  pool: Pool,
+  invitationSetupPool: Pool,
+  directory: string,
+) => {
+  const invitationCode = randomBytes(16).toString("base64url");
+  await invitationSetupPool.query(
+    `INSERT INTO community.registration_invitations
+      (id,digest,environment,max_uses,expires_at)
+      VALUES($1,$2,'production',20,now()+interval '7 days')`,
+    [
+      `invitation-${randomBytes(16).toString("hex")}`,
+      createHash("sha256")
+        .update(`artvenn:registration-invitation:v1:${invitationCode}`)
+        .digest("hex"),
+    ],
+  );
   const agreement = {
     version: "synthetic-sdk-v1",
     title: "Synthetic agreement",
@@ -244,6 +265,7 @@ const productionHumans = async (pool: Pool, directory: string) => {
   const config = await loadProductionAuthConfiguration({
     NODE_ENV: "production",
     AUTH_PUBLIC_ENABLED: "true",
+    AUTH_REGISTRATION_MODE: "invite-only",
     AUTH_EMAIL_PROVIDER: "tencent-ses",
     AUTH_KEY_VERSION: "1",
     AUTH_LOOKUP_KEY: randomBytes(32).toString("base64"),
@@ -267,6 +289,7 @@ const productionHumans = async (pool: Pool, directory: string) => {
     const sent = await service.sendChallenge({
       channel: "email",
       purpose: "register",
+      invitationCode,
       identifier: `${randomUUID()}@example.invalid`,
       idempotencyKey: randomUUID(),
       source: "synthetic-sdk",
@@ -314,6 +337,7 @@ const productionHumans = async (pool: Pool, directory: string) => {
 export const registerArticleDelegationSdkCases = (fixture: {
   readonly pool: Pool;
   readonly controlPool: Pool;
+  readonly invitationSetupPool: Pool;
   readonly issuerPool: Pool;
   readonly userId: PublicUserId;
   readonly handle: string;
@@ -512,7 +536,11 @@ export const registerArticleDelegationSdkCases = (fixture: {
       if (production) {
         if (privateDirectory === undefined)
           throw Error("TEST_PRIVATE_DIRECTORY_REQUIRED");
-        const humans = await productionHumans(fixture.pool, privateDirectory);
+        const humans = await productionHumans(
+          fixture.pool,
+          fixture.invitationSetupPool,
+          privateDirectory,
+        );
         userId = humans.owner.profile.id;
         humanSession = humans.owner.token;
         foreignUserId = humans.foreign.profile.id;

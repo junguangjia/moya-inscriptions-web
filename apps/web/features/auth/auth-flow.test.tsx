@@ -301,6 +301,35 @@ describe("AuthFlow", () => {
     expect(calls("challenges")).toHaveLength(0);
   });
 
+  it("refreshes stale invitation capabilities and keeps the server refusal visible", async () => {
+    let capabilityReads = 0;
+    const agreement = {
+      version: "synthetic-v1",
+      title: "注册说明",
+      body: "仅供测试。",
+    };
+    request.mockImplementation(async (path: string) => {
+      if (path === "capabilities") {
+        capabilityReads++;
+        return capabilities(false, true, true, {
+          available: true,
+          agreement,
+          reason: null,
+          ...(capabilityReads > 1 ? { invitationRequired: true } : {}),
+        });
+      }
+      return failure("AUTH_INVITATION_REQUIRED");
+    });
+    await render({ mode: "register" });
+    await setInput(input('input[type="email"]'), "tester@example.com");
+    await submit();
+    expect(capabilityReads).toBe(2);
+    expect(container.textContent).toContain("请输入邀请码后注册");
+    expect(
+      container.querySelector('input[placeholder="输入邀请码"]'),
+    ).not.toBeNull();
+  });
+
   it.each([
     ["sign-in", "email", "sign_in"],
     ["register", "email", "register"],
@@ -1247,5 +1276,130 @@ describe("AuthFlow", () => {
     });
     expect(calls("challenges")).toHaveLength(0);
     expect(onReturn).toHaveBeenCalled();
+  });
+
+  it("requires an invitation only when advertised and sends it only in the registration challenge", async () => {
+    const syntheticInvitation = "i".repeat(22);
+    const agreement = {
+      version: "synthetic-invitation-v1",
+      title: "注册说明",
+      body: "仅供测试的注册说明。",
+    };
+    request.mockImplementation(async (path: string) => {
+      if (path === "capabilities")
+        return capabilities(false, true, true, {
+          available: true,
+          agreement,
+          reason: null,
+          invitationRequired: true,
+        });
+      if (path === "challenges") return accepted();
+      if (path === "challenges/verify") return handoff();
+      return { status: 503, body: null };
+    });
+    await render({ mode: "register" });
+    await setInput(input('input[type="email"]'), "tester@example.com");
+    await submit();
+    expect(calls("challenges")).toHaveLength(0);
+    expect(container.textContent).toContain("请输入有效的邀请码");
+    await setInput(
+      input('input[placeholder="输入邀请码"]'),
+      syntheticInvitation,
+    );
+    await submit();
+    expect(bodies("challenges")[0]).toMatchObject({
+      purpose: "register",
+      invitationCode: syntheticInvitation,
+    });
+    expect(window.location.href).not.toContain(syntheticInvitation);
+    expect(window.localStorage.length).toBe(0);
+    await enterCode();
+    await submit();
+    expect(bodies("challenges/verify")[0]).not.toHaveProperty("invitationCode");
+    await setNewPassword();
+    await click("下一步");
+    await setInput(input('input[autocomplete="nickname"]'), "受邀测试者");
+    await act(async () => input('input[type="checkbox"]').click());
+    request.mockResolvedValueOnce(failure("AUTH_INVITATION_INVALID"));
+    await submit();
+    expect(bodies("registrations")[0]).not.toHaveProperty("invitationCode");
+    expect(
+      container.querySelector("main")?.getAttribute("data-auth-step"),
+    ).toBe("identifier");
+    expect(container.textContent).toContain("邀请码无效、已过期或名额已用完");
+    await render({ mode: "sign-in" });
+    expect(
+      container.querySelector('input[placeholder="输入邀请码"]'),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["synthetic-operator", "handle"],
+    ["tester@example.com", "email"],
+  ])(
+    "uses advertised email-first password identifiers for %s",
+    async (identifier, expectedChannel) => {
+      request.mockImplementation(async (path: string) =>
+        path === "capabilities"
+          ? {
+              ...capabilities(),
+              body: {
+                ...(capabilities().body as Record<string, unknown>),
+                password: {
+                  available: true,
+                  identifiers: ["email", "handle"],
+                  reason: null,
+                },
+              },
+            }
+          : path === "passwords/login"
+            ? { status: 200, body: { session: syntheticSession } }
+            : accepted(),
+      );
+      await render({}, false);
+      expect(container.textContent).toContain("邮箱或账号");
+      await setInput(input('input[autocomplete="username"]'), identifier);
+      await setInput(input('input[type="password"]'), syntheticPassword);
+      await submit();
+      expect(bodies("passwords/login")[0]).toMatchObject({
+        channel: expectedChannel,
+        identifier,
+      });
+      expect(onReturn).toHaveBeenCalled();
+    },
+  );
+
+  it("keeps email-first code login and password reset on the email channel when handle login is available", async () => {
+    request.mockImplementation(async (path: string) =>
+      path === "capabilities"
+        ? {
+            ...capabilities(),
+            body: {
+              ...(capabilities().body as Record<string, unknown>),
+              password: {
+                available: true,
+                identifiers: ["email", "handle"],
+                reason: null,
+              },
+            },
+          }
+        : accepted(),
+    );
+    await render({}, false);
+    await setInput(
+      input('input[autocomplete="username"]'),
+      "synthetic-operator",
+    );
+    await click("忘记密码");
+    expect(container.querySelector('input[type="email"]')).not.toBeNull();
+    await submit();
+    expect(calls("challenges")).toHaveLength(0);
+    await setInput(input('input[type="email"]'), "tester@example.com");
+    await submit();
+    expect(bodies("challenges")[0]).toMatchObject({
+      channel: "email",
+      purpose: "password_reset",
+    });
+    expect(bodies("challenges")[0]).not.toHaveProperty("invitationCode");
   });
 });

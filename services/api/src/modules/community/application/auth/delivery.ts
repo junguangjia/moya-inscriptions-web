@@ -12,6 +12,7 @@ export type DeliveryOutcome =
   | { readonly state: "unknown" };
 
 export interface TencentSendEmailRequest {
+  readonly TriggerType: 1;
   readonly FromEmailAddress: string;
   readonly Destination: readonly [string];
   readonly Subject: string;
@@ -99,6 +100,7 @@ export const mapTencentSendEmail = (input: {
   readonly code: string;
   readonly minutes: number;
 }): TencentSendEmailRequest => ({
+  TriggerType: 1,
   FromEmailAddress: input.from,
   Destination: [input.to],
   Subject: authenticationEmail(input).subject,

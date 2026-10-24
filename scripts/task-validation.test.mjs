@@ -395,21 +395,25 @@ describe("task routing follows the complete changed-path set", () => {
     });
   }
 
-  it("routes only the registered password operator script to full Web checks", () => {
-    for (const event of ["pull_request", "push", "local"]) {
-      const plan = classifyTask(
-        ["scripts/provision-password-account.mjs"],
-        event,
-      );
-      assert.deepEqual(
-        flags(plan),
-        expectedFlags({ web: true, scope: "smoke" }),
-      );
-      assert.deepEqual(plan.webWorkspaces, []);
+  it("routes the registered password and invitation operator scripts to full Web checks", () => {
+    for (const script of [
+      "scripts/provision-password-account.mjs",
+      "scripts/manage-registration-invitations.mjs",
+    ]) {
+      for (const event of ["pull_request", "push", "local"]) {
+        const plan = classifyTask([script], event);
+        assert.deepEqual(
+          flags(plan),
+          expectedFlags({ web: true, scope: "smoke" }),
+        );
+        assert.deepEqual(plan.webWorkspaces, []);
+      }
     }
     for (const file of [
       "scripts/provision-password-account-extra.mjs",
       "scripts/nested/provision-password-account.mjs",
+      "scripts/manage-registration-invitations-extra.mjs",
+      "scripts/nested/manage-registration-invitations.mjs",
     ])
       assert.throws(() => classifyTask([file]), /Unmapped changed paths/);
   });

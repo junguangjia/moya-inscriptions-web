@@ -45,6 +45,7 @@ import {
   PostgresCommunityAuthAdapter,
   PostgresCommunityIdentityAdapter,
   PostgresThreadAdapter,
+  PostgresFeedbackAdapter,
   PostgresDirectMessageAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
@@ -53,6 +54,7 @@ import {
   resolveCatalogRenditionRead,
   verifyCatalogDeliveryReadable,
   verifyCommunityMigrationLedger,
+  createPostgresBetaAccountAccess,
 } from "@moya/community-postgres";
 import { loadProductAccess } from "./access/product-access.js";
 import {
@@ -240,7 +242,7 @@ export const prepareProductionBackend = async (
     );
   }
   // Who may reach product content is decided before anything is opened.
-  const productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv);
+  let productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv);
   const publicationConfig = parsePublicationConfig(
     environment,
     runtimeConfig.nodeEnv,
@@ -677,6 +679,9 @@ export const prepareProductionBackend = async (
     await assertCatalogPublicationScopeReady(communityPool);
     if (catalogPreparePool)
       await assertCatalogPrepareReaderReady(catalogPreparePool);
+    productAccess = loadProductAccess(environment, runtimeConfig.nodeEnv, {
+      betaAccountAccess: createPostgresBetaAccountAccess(communityPool),
+    });
   } catch (error) {
     await closeResources();
     throw error;
@@ -868,6 +873,7 @@ export const prepareProductionBackend = async (
             deliveryOptions,
           ),
           directMessagePort: new PostgresDirectMessageAdapter(communityPool),
+          feedbackPort: new PostgresFeedbackAdapter(communityPool),
           authorCommunityPort: withPublishedReads(
             new PostgresAuthorCommunityAdapter(communityPool, {
               profileRenditions,

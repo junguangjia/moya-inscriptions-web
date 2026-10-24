@@ -60,7 +60,7 @@ describe("analytics HTTP authority", () => {
     const server = createBackendServer(
       createBackendApplication({
         nodeEnv: "production",
-        productAccess: { mode: "closed_beta", admits: () => false },
+        productAccess: { mode: "closed_beta", admits: async () => false },
         catalogQueryPort: createDevelopmentCatalogFixtureQueryPort(),
         storageUrlResolver: new UnconfiguredStorageUrlResolver(),
         analytics: {

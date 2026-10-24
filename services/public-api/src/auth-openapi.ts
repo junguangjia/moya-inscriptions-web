@@ -1,4 +1,4 @@
-/** Development-only account authentication reads. Session grants stay off this document. */
+/** Account authentication reads and password commands. Session grants stay server-only. */
 const reference = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (description: string, schema: string) => ({
   description,
@@ -17,7 +17,7 @@ const passwordFailures = {
   "409": failure("Attempt limit or state conflict. ApiErrorCode CONFLICT."),
   "500": failure("Internal service error. ApiErrorCode INTERNAL_ERROR."),
   "503": failure(
-    "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE.",
+    "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE.",
   ),
 };
 const commandBody = (name: string) => ({
@@ -29,9 +29,9 @@ export const authPaths = {
   "/v1/community/auth/passwords/login": {
     post: {
       operationId: "passwordSignIn",
-      summary: "Development password sign-in for an existing public account",
+      summary: "Password sign-in for an existing public account",
       description:
-        "Existing same-origin relay receives a server-only Session grant and sets HttpOnly Cookie. Production mounting is unchanged. Missing credentials and wrong passwords have the same response.",
+        "The same-origin relay receives a server-only Session grant and sets an HttpOnly Cookie. Runtime capabilities select supported identifiers, including explicitly enabled provisioned handles. Missing credentials and wrong passwords have the same response.",
       requestBody: commandBody("AuthPasswordLoginRequest"),
       responses: {
         "200": {
@@ -64,7 +64,7 @@ export const authPaths = {
       operationId: "getAuthCapabilities",
       summary: "Authentication channel capabilities",
       description:
-        "Server-owned email and phone availability. A client cannot enable simulation or live delivery. Production does not mount this route in this task.",
+        "Server-owned channel and registration capabilities, invitation requirement and approved agreement. A client cannot enable registration, simulation or live delivery. Production requires explicit server configuration.",
       responses: {
         "200": json("The active acceptance profile.", "AuthCapabilities"),
         "400": failure("Invalid query. ApiErrorCode INVALID_QUERY."),
