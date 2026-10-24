@@ -95,10 +95,6 @@ GRANT SELECT ON TABLE community.publication_setting TO :"app_role";
 GRANT UPDATE (policy, updated_by, updated_at) ON TABLE community.publication_setting TO :"app_role";
 GRANT SELECT, INSERT ON TABLE community.moderation_events TO :"app_role";
 
--- Existing moderation writes invoke the reporting restriction guard. It reads
--- only the restriction identity and reversal state; complaint text stays private.
-GRANT SELECT (restriction_key, reversed_at)
-ON TABLE community.report_decisions TO :"app_role";
 
 -- Author community: relations, blocks, favorites, legacy PNG media, receipts.
 GRANT SELECT, INSERT, DELETE ON TABLE
@@ -518,4 +514,17 @@ BEGIN
   EXECUTE format(
     'GRANT UPDATE (sweep_cursor, policy_digest, public_count, public_sum, public_observed_at, private_count, private_sum, private_observed_at, render_backlog, render_backlog_at, updated_at) ON TABLE community.catalog_reconcile_state TO %I',
     current_setting('moya.runtime_app_role'));
+END $$;
+
+-- Reporting guard state (migration 20261024020000). Legacy upgrade fixtures
+-- can apply this plan before the report table exists. Reapply after migration
+-- to grant the same two read columns; private text and DML stay unavailable.
+-- The transaction-local App role was set above for the existing grant blocks.
+DO $$
+BEGIN
+  IF to_regclass('community.report_decisions') IS NOT NULL THEN
+    EXECUTE format(
+      'GRANT SELECT (restriction_key, reversed_at) ON TABLE community.report_decisions TO %I',
+      current_setting('moya.runtime_app_role'));
+  END IF;
 END $$;

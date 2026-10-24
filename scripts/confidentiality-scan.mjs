@@ -335,6 +335,27 @@ function literalFindings(text, filename) {
       continue;
     if (packageVersionContext(text, m.index, name, value, filename, operator))
       continue;
+    // A comparison against a runtime operand is not a concrete credential.
+    // The old regexp consumes minified following operators into that operand.
+    if (
+      !quoted &&
+      /\.(?:[cm]?js|jsx|tsx?)$/i.test(filename) &&
+      /^(?:===|!==|==|!=)$/.test(operator) &&
+      /^[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*(?:(?:\?\?|&&|\|\||===|!==|==|!=|[?<>])[^\s]*)$/.test(
+        value,
+      )
+    )
+      continue;
+    // Exact public password-rule copy, constant-folded by the Web compiler.
+    // Other values under this error-code key remain subject to the core check.
+    if (
+      /\.(?:[cm]?js|jsx|tsx?)$/i.test(filename) &&
+      operator === ":" &&
+      quoted &&
+      name === "AUTH_INVALID_PASSWORD" &&
+      value === "密码需要 6–20 个字符，包含大写字母和数字。"
+    )
+      continue;
     const afterValue = text.slice(m.index + m[0].length);
     const expressionEnd = /^[ \t]*(?:$|[,;)}\]\r\n]|\/\/)/;
     // This documented environment switch disables implicit authentication.
