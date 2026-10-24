@@ -187,6 +187,7 @@ export const communityReportingInboxSchema = z
         .object({
           id: z.string(),
           caseId: z.string(),
+          kind: communityReportMessageSchema.shape.kind,
           text: z.string(),
           createdAt: z.iso.datetime(),
           readAt: z.iso.datetime().nullable(),

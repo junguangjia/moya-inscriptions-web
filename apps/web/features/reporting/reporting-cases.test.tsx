@@ -3,6 +3,7 @@ import { act } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
+import type { CommunityReportingInbox } from "@moya/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { client, modal, appealEvidence } = vi.hoisted(() => ({
   modal: vi.fn(),
@@ -553,35 +554,244 @@ describe("own reporting cases", () => {
 });
 
 describe("system result presentation", () => {
-  it.each(["reporter", "affected"] as const)(
-    "localizes an older result for the %s without changing reasons or statements",
-    async (party) => {
-      const text = "处理措施：warn。理由：原始 warn 理由。";
-      const statement = "处理措施：warn。用户原文保持不变。";
+  const reason = "原始 warn 理由。";
+  const reporterText = `举报已处理：warn。${reason}`;
+  const affectedText = `处理措施：warn。理由：${reason}。可在举报与申诉中申请复核。`;
+  const noWrites = () => {
+    for (const write of [
+      client.create,
+      client.material,
+      client.appeal,
+      client.statement,
+      client.evidence,
+      client.read,
+      appealEvidence,
+    ])
+      expect(write).not.toHaveBeenCalled();
+  };
+  it.each([
+    {
+      party: "reporter",
+      text: reporterText,
+      expected: `举报已处理：警告。${reason}`,
+    },
+    {
+      party: "affected",
+      text: affectedText,
+      expected: `处理措施：警告。理由：${reason}。可在举报与申诉中申请复核。`,
+    },
+  ] as const)(
+    "localizes the actual older $party decision template while preserving all trailing text",
+    async ({ party, text, expected }) => {
+      const notice = "举报已处理：warn。管理员 notice 原文保持 warn。";
+      const statement = "处理措施：warn。用户 statement 原文保持 warn。";
       const messages = [
-        { id: "system-result", kind: "result", text, createdAt },
-        { id: "user-statement", kind: "statement", text: statement, createdAt },
+        { id: "system-result", kind: "result" as const, text, createdAt },
+        {
+          id: "operator-notice",
+          kind: "notice" as const,
+          text: notice,
+          createdAt,
+        },
+        {
+          id: "user-statement",
+          kind: "statement" as const,
+          text: statement,
+          createdAt,
+        },
       ];
+      const originals = messages.map((message) => message.text);
+      const decided = { ...decision.decision, action: "warn" as const, reason };
       client.list.mockResolvedValue({
-        items: [{ ...report, messages }],
+        items: [{ ...report, status: "resolved", decision: decided, messages }],
         total: 1,
       });
       client.decisions.mockResolvedValue({
-        items: [{ ...decision, messages }],
+        items: [{ ...decision, decision: decided, messages }],
         total: 1,
       });
       await mount();
       await click(
         button(party === "reporter" ? "查看与补充材料" : "处置与申诉"),
       );
-      expect(node.textContent).toContain(
-        "处理措施：警告。理由：原始 warn 理由。",
+      const paragraphs = Array.from(
+        node.querySelectorAll("p"),
+        (paragraph) => paragraph.textContent,
       );
-      expect(node.textContent).toContain(statement);
-      expect(node.textContent).not.toContain(text);
-      expect(messages[0]!.text).toBe(text);
-      expect(client.material).not.toHaveBeenCalled();
-      expect(client.appeal).not.toHaveBeenCalled();
+      expect(paragraphs).toContain(expected);
+      expect(paragraphs).not.toContain(text);
+      expect(paragraphs).toContain(notice);
+      expect(paragraphs).toContain(statement);
+      expect(messages.map((message) => message.text)).toEqual(originals);
+      noWrites();
     },
   );
+  it.each([
+    ["reporter", "uphold", "维持原决定"],
+    ["reporter", "overturn", "已纠正原决定"],
+    ["affected", "uphold", "维持原决定"],
+    ["affected", "overturn", "已纠正原决定"],
+  ] as const)(
+    "localizes the actual %s review %s template without rewriting its reason",
+    async (party, outcome, label) => {
+      const reviewReason = "原始 uphold 与 overturn 理由。";
+      const text = `复核结果：${outcome}。${reviewReason}`;
+      const literal = `复核结果：${outcome}。statement 中的 ${outcome} 保持不变。`;
+      const messages = [
+        { id: "review-result", kind: "result" as const, text, createdAt },
+        {
+          id: "review-statement",
+          kind: "statement" as const,
+          text: literal,
+          createdAt,
+        },
+      ];
+      const originals = messages.map((message) => message.text);
+      const reviewed = {
+        ...decision.decision,
+        reversedAt: outcome === "overturn" ? createdAt : null,
+        reviewReason,
+      };
+      const appeal = {
+        text: "合成原申诉",
+        status:
+          outcome === "uphold" ? ("upheld" as const) : ("overturned" as const),
+        createdAt,
+      };
+      client.list.mockResolvedValue({
+        items: [
+          {
+            ...report,
+            status: "resolved",
+            decision: reviewed,
+            appeal,
+            messages,
+          },
+        ],
+        total: 1,
+      });
+      client.decisions.mockResolvedValue({
+        items: [{ ...decision, decision: reviewed, appeal, messages }],
+        total: 1,
+      });
+      await mount();
+      await click(
+        button(party === "reporter" ? "查看与补充材料" : "处置与申诉"),
+      );
+      const paragraphs = Array.from(
+        node.querySelectorAll("p"),
+        (paragraph) => paragraph.textContent,
+      );
+      expect(paragraphs).toContain(`复核结果：${label}。${reviewReason}`);
+      expect(paragraphs).not.toContain(text);
+      expect(paragraphs).toContain(literal);
+      expect(messages.map((message) => message.text)).toEqual(originals);
+      noWrites();
+    },
+  );
+  it("localizes only explicitly typed system-inbox results and leaves notice/statement text immutable", async () => {
+    const inbox: CommunityReportingInbox = {
+      items: [
+        {
+          id: "result-reporter",
+          caseId: "case-synthetic",
+          kind: "result",
+          text: reporterText,
+          createdAt,
+          readAt: null,
+        },
+        {
+          id: "result-affected",
+          caseId: "case-synthetic",
+          kind: "result",
+          text: affectedText,
+          createdAt,
+          readAt: null,
+        },
+        {
+          id: "result-uphold",
+          caseId: "case-synthetic",
+          kind: "result",
+          text: "复核结果：uphold。原始 uphold 理由。",
+          createdAt,
+          readAt: null,
+        },
+        {
+          id: "result-overturn",
+          caseId: "case-synthetic",
+          kind: "result",
+          text: "复核结果：overturn。原始 overturn 理由。",
+          createdAt,
+          readAt: null,
+        },
+        {
+          id: "notice-reporter-prefix",
+          caseId: "case-synthetic",
+          kind: "notice",
+          text: "举报已处理：warn。notice 原文保持 warn。",
+          createdAt,
+          readAt: null,
+        },
+        {
+          id: "notice-affected-prefix",
+          caseId: "case-synthetic",
+          kind: "notice",
+          text: "处理措施：warn。notice 原文保持 warn。",
+          createdAt,
+          readAt: null,
+        },
+        {
+          id: "statement-action-prefix",
+          caseId: "case-synthetic",
+          kind: "statement",
+          text: "举报已处理：warn。statement 原文保持 warn。",
+          createdAt,
+          readAt: null,
+        },
+        {
+          id: "statement-review-prefix",
+          caseId: "case-synthetic",
+          kind: "statement",
+          text: "复核结果：overturn。statement 原文保持 overturn。",
+          createdAt,
+          readAt: null,
+        },
+        {
+          id: "unrecognized-result",
+          caseId: "case-synthetic",
+          kind: "result",
+          text: "复核结果：pending。未知编码 pending 保持不变。",
+          createdAt,
+          readAt: null,
+        },
+      ],
+    };
+    const originals = inbox.items.map((item) => ({ ...item }));
+    client.inbox.mockResolvedValue(inbox);
+    await mount();
+    await click(button("系统通知"));
+    const paragraphs = Array.from(
+      node.querySelectorAll("p"),
+      (paragraph) => paragraph.textContent,
+    );
+    expect(paragraphs).toContain(`举报已处理：警告。${reason}`);
+    expect(paragraphs).toContain(
+      `处理措施：警告。理由：${reason}。可在举报与申诉中申请复核。`,
+    );
+    expect(paragraphs).toContain("复核结果：维持原决定。原始 uphold 理由。");
+    expect(paragraphs).toContain(
+      "复核结果：已纠正原决定。原始 overturn 理由。",
+    );
+    for (const item of inbox.items.filter(
+      (item) => item.kind !== "result" || item.id === "unrecognized-result",
+    ))
+      expect(paragraphs).toContain(item.text);
+    for (const item of inbox.items.filter(
+      (item) => item.kind === "result" && item.id !== "unrecognized-result",
+    ))
+      expect(paragraphs).not.toContain(item.text);
+    expect(client.inbox).toHaveBeenCalled();
+    expect(inbox.items).toEqual(originals);
+    noWrites();
+  });
 });

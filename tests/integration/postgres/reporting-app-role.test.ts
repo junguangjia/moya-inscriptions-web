@@ -15,7 +15,10 @@ import type {
   CatalogCommentId,
   ArticleId,
 } from "@moya/contracts";
-import { emptyArticleDocument } from "@moya/contracts/schemas";
+import {
+  emptyArticleDocument,
+  communityReportingInboxSchema,
+} from "@moya/contracts/schemas";
 import {
   createPostgresPool,
   parsePostgresConfig,
@@ -414,11 +417,16 @@ describe("complete reporting runtime through the canonical non-owner App role", 
       file(),
     );
     expect(reporterEvidence.sensitive).toBe(true);
+    // Forwarded prose may resemble a system result; its stored kind must
+    // remain distinct so clients never rewrite a notice or statement body.
+    const forwardedNotice = "处理措施：hide。Deliberately redacted notice";
+    const forwardedStatement =
+      "复核结果：overturn。Deliberately redacted statement";
     let staff = await service.operatorRead(formal.id);
     staff = await service.forward(formal.id, {
       expectedVersion: staff.version,
       kind: "notice",
-      text: "Deliberately redacted notice",
+      text: forwardedNotice,
     });
     staff = await service.decide(formal.id, {
       expectedVersion: staff.version,
@@ -426,11 +434,29 @@ describe("complete reporting runtime through the canonical non-owner App role", 
       reason: "Staff reviewed reason",
     });
     expect(staff.decision?.reason).toBe("Staff reviewed reason");
+    const initialReporterInbox = communityReportingInboxSchema
+      .parse(await service.inbox(reporter))
+      .items.filter((message) => message.caseId === formal.id);
     expect(
-      (await service.inbox(reporter)).items.some(
-        (message) => message.caseId === formal.id,
-      ),
-    ).toBe(true);
+      initialReporterInbox.map(({ kind, text }) => ({ kind, text })),
+    ).toEqual([
+      { kind: "result", text: "举报已处理：hide。Staff reviewed reason" },
+    ]);
+    const initialAuthorInbox = communityReportingInboxSchema
+      .parse(await service.inbox(author))
+      .items.filter((message) => message.caseId === formal.id);
+    expect(initialAuthorInbox).toHaveLength(2);
+    expect(
+      initialAuthorInbox.map(({ kind, text }) => ({ kind, text })),
+    ).toEqual(
+      expect.arrayContaining([
+        { kind: "notice", text: forwardedNotice },
+        {
+          kind: "result",
+          text: "处理措施：hide。理由：Staff reviewed reason。可在举报与申诉中申请复核。",
+        },
+      ]),
+    );
     const affected = (await service.decisions(author)).items.find(
       (item) => item.caseId === formal.id,
     )!;
@@ -459,8 +485,57 @@ describe("complete reporting runtime through the canonical non-owner App role", 
     await service.forward(formal.id, {
       expectedVersion: staff.version,
       kind: "statement",
-      text: "Deliberately redacted statement",
+      text: forwardedStatement,
     });
+    staff = await service.operatorRead(formal.id);
+    staff = await service.review(formal.id, {
+      expectedVersion: staff.version,
+      outcome: "uphold",
+      reason: "Review upheld reason",
+    });
+    await service.review(formal.id, {
+      expectedVersion: staff.version,
+      outcome: "overturn",
+      reason: "Review overturned reason",
+    });
+    const reporterInbox = (await service.inbox(reporter)).items.filter(
+      (message) => message.caseId === formal.id,
+    );
+    const authorInbox = (await service.inbox(author)).items.filter(
+      (message) => message.caseId === formal.id,
+    );
+    expect(reporterInbox).toHaveLength(4);
+    expect(authorInbox).toHaveLength(4);
+    for (const inbox of [reporterInbox, authorInbox]) {
+      expect(inbox.map(({ kind, text }) => ({ kind, text }))).toEqual(
+        expect.arrayContaining([
+          { kind: "result", text: "复核结果：uphold。Review upheld reason" },
+          {
+            kind: "result",
+            text: "复核结果：overturn。Review overturned reason",
+          },
+        ]),
+      );
+    }
+    expect(
+      reporterInbox.find((message) => message.kind === "statement"),
+    ).toMatchObject({
+      kind: "statement",
+      text: forwardedStatement,
+    });
+    expect(reporterInbox.some((message) => message.kind === "notice")).toBe(
+      false,
+    );
+    expect(authorInbox.find((message) => message.kind === "notice")?.text).toBe(
+      forwardedNotice,
+    );
+    expect(authorInbox.some((message) => message.kind === "statement")).toBe(
+      false,
+    );
+    expect(JSON.stringify([reporterInbox, authorInbox])).not.toMatch(
+      /private-(claimant|contact|rights|formal|supplement|report|author|counterstatement)-/u,
+    );
+    expect((await service.inbox(stranger)).items).toEqual([]);
     await expect(service.readOwn(stranger, formal.id)).rejects.toBeInstanceOf(
       CommunityNotFoundError,
     );

@@ -47,22 +47,27 @@ const actionLabels = {
   delete_body: "删除正文",
   remove_thread: "移除讨论串",
 } as const;
-/** Localize only the structured prefix of older system results; keep reasons and statements intact. */
-const messageText = (message: CommunityReport["messages"][number]) =>
-  message.kind === "result"
-    ? message.text.replace(
-        /^处理措施：([a-z_]+)。/u,
-        (prefix: string, action: string) =>
-          Object.hasOwn(actionLabels, action)
-            ? `处理措施：${actionLabels[action as keyof typeof actionLabels]}。`
-            : prefix,
-      )
-    : message.text;
 const appealLabels = {
   pending: "等待复核",
   upheld: "维持原决定",
   overturned: "已纠正原决定",
 } as const;
+/** Format only known system-result prefixes; keep user statements and trailing reasons intact. */
+const messageText = (message: CommunityReport["messages"][number]) => {
+  if (message.kind !== "result") return message.text;
+  const actions = message.text.replace(
+    /^(处理措施|举报已处理)：([a-z_]+)。/u,
+    (prefix: string, label: string, action: string) =>
+      Object.hasOwn(actionLabels, action)
+        ? `${label}：${actionLabels[action as keyof typeof actionLabels]}。`
+        : prefix,
+  );
+  return actions.replace(
+    /^复核结果：(uphold|overturn)。/u,
+    (_prefix: string, outcome: string) =>
+      `复核结果：${outcome === "uphold" ? appealLabels.upheld : appealLabels.overturned}。`,
+  );
+};
 const failureText = (error: unknown) =>
   error instanceof Error ? error.message : "操作未完成，请重试";
 const Time = ({ value }: { value: string }) => (
@@ -549,7 +554,7 @@ const AccountReportingCases = ({
       {tab === "notices" &&
         notices.map((item) => (
           <article className={styles.case} key={item.id}>
-            <p>{item.text}</p>
+            <p>{messageText(item)}</p>
             <p className={styles.note}>案件编号：{item.caseId}</p>
             <Time value={item.createdAt} />
             {item.readAt === null && (

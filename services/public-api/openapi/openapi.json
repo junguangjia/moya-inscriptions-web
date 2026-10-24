@@ -15912,6 +15912,10 @@
                 "id": {
                   "type": "string"
                 },
+                "kind": {
+                  "enum": ["notice", "statement", "result"],
+                  "type": "string"
+                },
                 "readAt": {
                   "anyOf": [
                     {
@@ -15928,7 +15932,14 @@
                   "type": "string"
                 }
               },
-              "required": ["id", "caseId", "text", "createdAt", "readAt"],
+              "required": [
+                "id",
+                "caseId",
+                "kind",
+                "text",
+                "createdAt",
+                "readAt"
+              ],
               "type": "object"
             },
             "type": "array"

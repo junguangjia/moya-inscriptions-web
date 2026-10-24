@@ -1437,6 +1437,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
         await db.query<{
           id: string;
           case_id: string;
+          kind: CommunityReport["messages"][number]["kind"];
           text: string;
           created_at: Date;
           read_at: Date | null;
@@ -1447,6 +1448,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
       ).rows.map((m) => ({
         id: m.id,
         caseId: m.case_id,
+        kind: m.kind,
         text: m.text,
         createdAt: iso(m.created_at),
         readAt: m.read_at ? iso(m.read_at) : null,
