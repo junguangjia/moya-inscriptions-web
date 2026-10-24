@@ -437,7 +437,7 @@ export const openApiDocument: JsonObject = {
           },
         ],
         description:
-          "Requires a valid account session and x-author-account equal to that account. Saves trimmed plain text before returning the receipt. Retry the same submissionId and message to recover the same receipt; reusing it for different text returns CONFLICT. Accepts no query parameters. No public feedback read route exists.",
+          "Requires a valid account session and x-author-account equal to that account. Saves trimmed text and up to three ready private feedback-purpose images atomically before returning the receipt. Images must be static, uploaded through a no-work temporary publishing session with purpose feedback, and at most 10 MiB each. Retry the same submissionId, message and ordered imageIds to recover the same receipt; changing text or images under the same identity returns CONFLICT. Accepts no query parameters. No public feedback read route exists.",
         security: [{ session: [] }],
         requestBody: {
           required: true,

@@ -1,4 +1,5 @@
 import {
+  CommunityInputError,
   isCommunityConflictError,
   isCommunityInputError,
   isCommunityStoreUnavailableError,
@@ -8,6 +9,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { sendApiError } from "../http/api-error-response.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
+import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { readBearerToken } from "./session-credential.js";
 
@@ -96,4 +98,37 @@ export const handleFeedbackOperatorRequest = async (
       noStore,
     );
   }
+};
+
+/** Only invoked after the shared operator credential gate. */
+export const handleFeedbackOperatorImageRequest = async (
+  request: IncomingMessage,
+  response: ServerResponse,
+  service: FeedbackService,
+  path: readonly string[],
+): Promise<void> => {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    sendJson(
+      response,
+      405,
+      { error: { status: 405, code: "METHOD_NOT_ALLOWED" } },
+      { allow: "GET, HEAD", ...noStore },
+    );
+    return;
+  }
+  if (new URL(request.url ?? "/", "http://request.invalid").search)
+    throw new CommunityInputError("Feedback images accept no query");
+  const [feedbackId, itemId, variant] = path;
+  await deliverPublishingMedia(
+    request,
+    response,
+    (range) =>
+      service.openOperatorImage(
+        feedbackId ?? "",
+        itemId ?? "",
+        variant ?? "",
+        range,
+      ),
+    noStore,
+  );
 };

@@ -526,3 +526,11 @@ BEGIN
       current_setting('moya.runtime_app_role'));
   END IF;
 END $$;
+
+-- Feedback image metadata is append-only; bytes stay in the common private store.
+DO $$
+BEGIN
+  IF to_regclass('community.feedback_images') IS NOT NULL THEN
+    EXECUTE format('GRANT SELECT, INSERT ON TABLE community.feedback_images TO %I', current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;

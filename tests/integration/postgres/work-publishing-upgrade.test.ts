@@ -96,6 +96,7 @@ const workPublishingMigrations = [
   "20261023020000",
   "20261024010000",
   "20261024020000",
+  "20261024030000",
 ];
 const backfillMigration = "20260914092000";
 const bridgeMigration = "20260914093000";
@@ -268,6 +269,7 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
       "20261023020000",
       "20261024010000",
       "20261024020000",
+      "20261024030000",
     ]);
     for (const [index, user] of users.entries())
       expect(
@@ -1662,6 +1664,7 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         "20261023020000",
         "20261024010000",
         "20261024020000",
+        "20261024030000",
       ]);
 
       // Declared submissions: stored hashes unchanged and still exactly what

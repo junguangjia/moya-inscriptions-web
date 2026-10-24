@@ -3,6 +3,7 @@ import {
   feedbackReceiptSchema,
   submitFeedbackRequestSchema,
 } from "@moya/contracts/schemas";
+export { FEEDBACK_IMAGE_LIMITS as feedbackImageLimits } from "@moya/contracts/schemas";
 import { authorRequest } from "./author-community-client";
 
 /** Reuse the same-origin relay, confirmed account and Backend-owned session. */

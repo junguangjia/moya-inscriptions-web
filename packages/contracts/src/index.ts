@@ -256,4 +256,8 @@ export type {
   AuthPasswordResetResult,
 } from "./auth-schemas.js";
 
-export type { SubmitFeedbackRequest, FeedbackReceipt } from "./schemas.js";
+export type {
+  SubmitFeedbackRequest,
+  FeedbackReceipt,
+  FeedbackImageVariant,
+} from "./schemas.js";

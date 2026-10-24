@@ -111,6 +111,28 @@ export const CommunityFeedbackClient = () => {
                   用户 ID：{item.user.id}
                 </span>
                 <p className={styles.fullText}>{item.message}</p>
+                {item.images?.length ? (
+                  <div className={styles.mediaGrid} aria-label="反馈配图">
+                    {item.images.map((image, index) => (
+                      <a
+                        className={styles.mediaFrame}
+                        href={image.src}
+                        key={image.id}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`查看反馈配图 ${index + 1}`}
+                      >
+                        <img
+                          src={image.thumbSrc}
+                          alt={`反馈配图 ${index + 1}`}
+                          width={image.width}
+                          height={image.height}
+                          loading="lazy"
+                        />
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>

@@ -6,7 +6,7 @@ import {
   CommunitySessionService,
   CommunityStoreUnavailableError,
 } from "@moya/api";
-import type { FeedbackPort } from "@moya/api";
+import type { FeedbackPort, PublishingMediaStorePort } from "@moya/api";
 import type { FeedbackReceipt, SubmitFeedbackRequest } from "@moya/contracts";
 import type { OperatorFeedbackQuery } from "@moya/contracts/internal/community-operator";
 import { operatorFeedbackPageSchema } from "@moya/contracts/internal/community-operator";
@@ -38,12 +38,29 @@ class FixturePort implements FeedbackPort {
     { actor: string; input: SubmitFeedbackRequest; receipt: FeedbackReceipt }
   >();
   unavailable = false;
+  async resolveFeedbackImage(feedbackId: string, itemId: string) {
+    return [...this.saved.values()].some(
+      (x) => x.receipt.id === feedbackId && x.input.imageIds?.includes(itemId),
+    )
+      ? {
+          storageKey: "blobs/aa/bb/" + "a".repeat(32),
+          contentType: "image/webp" as const,
+          byteSize: 3,
+          sha256: "a".repeat(64),
+        }
+      : null;
+  }
+
   async submitFeedback(actor: string, input: SubmitFeedbackRequest) {
     if (this.unavailable) throw new CommunityStoreUnavailableError();
     const key = `${actor}:${input.submissionId}`;
     const previous = this.saved.get(key);
     if (previous) {
-      if (previous.input.message !== input.message)
+      if (
+        previous.input.message !== input.message ||
+        JSON.stringify(previous.input.imageIds ?? []) !==
+          JSON.stringify(input.imageIds ?? [])
+      )
         throw new CommunityConflictError();
       return previous.receipt;
     }
@@ -67,6 +84,24 @@ class FixturePort implements FeedbackPort {
     });
   }
 }
+const mediaStore: PublishingMediaStorePort = {
+  writeStream: async () => {
+    throw Error("unused");
+  },
+  remove: async () => {},
+  listBlobs: async () => ({ entries: [], nextAfter: null }),
+  openRead: async () => ({
+    status: "ok",
+    byteSize: 3,
+    start: 0,
+    end: 2,
+    contentLength: 3,
+    body: (async function* () {
+      yield Buffer.from("abc");
+    })(),
+    close: async () => {},
+  }),
+};
 const start = async (nodeEnv: "development" | "production") => {
   const identity = new InMemoryCommunityIdentityPort();
   const sessions = new CommunitySessionService(identity);
@@ -77,6 +112,7 @@ const start = async (nodeEnv: "development" | "production") => {
       communityIdentityPort: identity,
       storageUrlResolver: new MappedStorageUrlResolver(new Map()),
       feedbackPort: port,
+      publishingMediaStore: mediaStore,
       communityCommentPort: new InMemoryCommunityCommentPort(),
       communityOperatorCredential: operatorCredential,
       authRequestSource: () => null,
@@ -270,5 +306,77 @@ describe("private settings feedback HTTP", () => {
         message: ` ${"文".repeat(5000)} `,
       }).message,
     ).toHaveLength(5000);
+  });
+});
+
+describe("private feedback image HTTP", () => {
+  it("streams only associated rendered variants after operator authentication", async () => {
+    const { base, headers } = await start("development"),
+      imageId = "media-item-" + "a".repeat(32);
+    const saved = await fetch(`${base}/v1/community/feedback`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        submissionId: randomUUID(),
+        message: "Synthetic feedback image",
+        imageIds: [imageId],
+      }),
+    });
+    const receipt = feedbackReceiptSchema.parse(await saved.json());
+    const url = `${base}/internal/community/feedback/${receipt.id}/images/${imageId}/display`;
+    expect((await fetch(url)).status).toBe(401);
+    expect((await fetch(url, { headers })).status).toBe(401);
+    const operator = { authorization: `Bearer ${operatorCredential}` };
+    const result = await fetch(url, { headers: operator });
+    expect(result.status).toBe(200);
+    expect(result.headers.get("content-type")).toContain("image/webp");
+    expect(result.headers.get("cache-control")).toContain("private");
+    expect(result.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await result.text()).toBe("abc");
+    expect(
+      (await fetch(url, { headers: operator, method: "HEAD" })).status,
+    ).toBe(200);
+    expect(
+      (await fetch(url, { headers: operator, method: "POST" })).status,
+    ).toBe(405);
+    expect(
+      (await fetch(url + "?unexpected=1", { headers: operator })).status,
+    ).toBe(400);
+    expect(
+      (await fetch(url.replace("/display", "/original"), { headers: operator }))
+        .status,
+    ).toBe(404);
+    expect(
+      (
+        await fetch(url.replace(receipt.id, "feedback-" + "b".repeat(32)), {
+          headers: operator,
+        })
+      ).status,
+    ).toBe(404);
+  });
+  it("rejects too many and repeated image identities before a save", async () => {
+    const { base, headers, port } = await start("development");
+    for (const imageIds of [
+      ["media-item-" + "a".repeat(32), "media-item-" + "a".repeat(32)],
+      Array.from(
+        { length: 4 },
+        () => `media-item-${randomUUID().replaceAll("-", "")}`,
+      ),
+    ]) {
+      expect(
+        (
+          await fetch(`${base}/v1/community/feedback`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              submissionId: randomUUID(),
+              message: "Bad images",
+              imageIds,
+            }),
+          })
+        ).status,
+      ).toBe(422);
+    }
+    expect(port.saved.size).toBe(0);
   });
 });

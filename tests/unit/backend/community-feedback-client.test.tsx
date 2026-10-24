@@ -122,3 +122,38 @@ describe("Owner feedback list", () => {
     expect(signal.aborted).toBe(true);
   });
 });
+
+describe("feedback images in Owner Admin", () => {
+  it("shows private screenshot thumbnails linked to the larger authorized rendition", async () => {
+    const thumb =
+      "/api/community-moderation/feedback-media/feedback-" +
+      "a".repeat(32) +
+      "/media-item-" +
+      "c".repeat(32) +
+      "/thumb";
+    const src = thumb.replace(/thumb$/, "display");
+    runtime.call.mockResolvedValue({
+      ...page(),
+      items: [
+        {
+          ...feedback,
+          images: [
+            {
+              id: "media-item-" + "c".repeat(32),
+              width: 800,
+              height: 600,
+              thumbSrc: thumb,
+              src,
+            },
+          ],
+        },
+      ],
+    });
+    render(<CommunityFeedbackClient />);
+    const image = await screen.findByRole("img", { name: "反馈配图 1" });
+    expect(image.getAttribute("src")).toBe(thumb);
+    const link = screen.getByRole("link", { name: "查看反馈配图 1" });
+    expect(link.getAttribute("href")).toBe(src);
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+});

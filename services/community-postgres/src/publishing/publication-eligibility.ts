@@ -50,7 +50,7 @@ export const desiredRenditionsSql = (
     AND r.content_type IN ('image/webp','image/jpeg','video/mp4') AND b.content_type=r.content_type
     AND ${withinPublicPolicySql("r")}
     AND (
-      (i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL AND ${notHeldSql("i.id")} AND (
+      (i.purpose='content' AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL AND ${notHeldSql("i.id")} AND (
         EXISTS (
           SELECT 1 FROM community.work_revision_items ri
           JOIN community.work_revisions rv ON rv.id=ri.revision_id

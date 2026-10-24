@@ -14,6 +14,7 @@ import {
   operatorUserPageSchema,
   operatorFeedbackQuerySchema,
   operatorFeedbackPageSchema,
+  operatorFeedbackMediaRequestSchema,
   recommendUserCommandSchema,
   adminModerateWorkRequestSchema,
   featuredMutationSchema,
@@ -724,6 +725,54 @@ const articleSubmissionMediaEndpoint = (
   },
 });
 
+/** Private feedback screenshots: association-authorized rendered WebP only. */
+const feedbackMediaEndpoint = (openMedia: OperatorMediaCall): Endpoint => ({
+  path: "/community-moderation/feedback-media/:feedbackId/:itemId/:variant",
+  method: "get",
+  handler: async (req) => {
+    try {
+      requireOwner(req);
+      const params = req.routeParams ?? {};
+      const { feedbackId, itemId, variant } = parse(
+        operatorFeedbackMediaRequestSchema,
+        {
+          feedbackId: params.feedbackId,
+          itemId: params.itemId,
+          variant: params.variant,
+        },
+      );
+      if (new URL(req.url ?? "http://request.invalid").search !== "")
+        throw new CommunityOperatorError("COMMAND_INVALID", 400);
+      const media = await openMedia(
+        `feedback/${segment(feedbackId)}/images/${segment(itemId)}/${variant}`,
+        byteRange(req.headers?.get("range")),
+        req.signal,
+      );
+      if (media.contentType !== "image/webp") {
+        await media.body.cancel().catch(() => undefined);
+        throw new CommunityOperatorError("OPERATION_FAILED", 502);
+      }
+      const headers = new Headers({
+        "Content-Type": media.contentType,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Referrer-Policy": "no-referrer",
+        Vary: "Cookie, Range",
+      });
+      if (media.acceptsRanges) headers.set("Accept-Ranges", "bytes");
+      if (media.contentLength !== null)
+        headers.set("Content-Length", media.contentLength);
+      if (media.contentRange !== null)
+        headers.set("Content-Range", media.contentRange);
+      return new Response(media.body, { status: media.status, headers });
+    } catch (error) {
+      return failure(error, req);
+    }
+  },
+});
+
 /** The real endpoint set, with the transports injectable for boundary tests. */
 export const createCommunityEndpoints = (
   call: OperatorCall = callCommunityOperator,
@@ -735,6 +784,7 @@ export const createCommunityEndpoints = (
   }).map(([name, operation]) => endpoint(name, operation)),
   workSubmissionMediaEndpoint(openMedia),
   articleSubmissionMediaEndpoint(openMedia),
+  feedbackMediaEndpoint(openMedia),
 ];
 
 export const communityEndpoints: Endpoint[] = createCommunityEndpoints();

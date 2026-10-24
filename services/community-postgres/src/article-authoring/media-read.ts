@@ -21,7 +21,7 @@ import { publishedArticleItemSql } from "./published-media.js";
 
 /** Internal aliases only; source/master bytes and private metadata are never selected. */
 export const articleReadyMediaSql = (item: string): string => `
-  ${item}.state='ready' AND ${item}.cancelled_at IS NULL AND ${item}.purged_at IS NULL
+  ${item}.purpose='content' AND ${item}.state='ready' AND ${item}.cancelled_at IS NULL AND ${item}.purged_at IS NULL
   AND (
     (${item}.legacy_media_id IS NOT NULL AND ${item}.kind='static' AND EXISTS (
       SELECT 1 FROM community.user_media legacy

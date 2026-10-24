@@ -31,6 +31,7 @@ vi.mock("../auth/auth-api", async (importOriginal) => ({
 }));
 vi.mock("../../lib/public-api/feedback-client", () => ({
   feedbackClient: { submit: feedbackSubmit },
+  feedbackImageLimits: { maxImages: 3, maxBytes: 10 * 1024 * 1024 },
 }));
 vi.mock("./author-data", () => ({ authorClient: { people, command } }));
 vi.mock("./author-context", () => ({

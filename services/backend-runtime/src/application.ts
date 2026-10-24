@@ -270,7 +270,7 @@ const resolveCommunity = (
   const feedbackService =
     options.feedbackPort === undefined
       ? undefined
-      : new FeedbackService(options.feedbackPort);
+      : new FeedbackService(options.feedbackPort, options.publishingMediaStore);
   const directMessageService =
     options.directMessagePort !== undefined
       ? new DirectMessageService(options.directMessagePort)
