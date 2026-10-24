@@ -1,6 +1,6 @@
 "use client";
 import { useId, useLayoutEffect, useRef, useState } from "react";
-import type { KeyboardEvent, RefObject } from "react";
+import type { KeyboardEvent, RefObject, ReactNode } from "react";
 import type {
   CommentItem,
   CommentReply,
@@ -56,6 +56,8 @@ export const colophonHeadName = (name: string): string => {
 export interface ColophonInteractions {
   /** The reader's id; never matches a row for a guest. */
   readonly actorId: string;
+  /** The live composition supplies reporting; QA presentations leave it absent. */
+  readonly renderReport?: ((id: string) => ReactNode) | undefined;
   readonly now: Date;
   /** The row briefly marked after it was sent. */
   readonly flashId: string | null;
@@ -400,6 +402,13 @@ const ColophonBody = ({
         rootId={rootId}
         textRef={textRef}
       />
+      {item.deleted !== true &&
+      interactions.actorId !== item.user.id &&
+      interactions.renderReport ? (
+        <span className={styles.report} data-colophon-report="">
+          {interactions.renderReport(item.id)}
+        </span>
+      ) : null}
     </div>
   );
 };

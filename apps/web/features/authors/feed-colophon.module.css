@@ -618,3 +618,10 @@
     animation: none;
   }
 }
+
+/* A separate native button keeps the existing roving toolbar unchanged. */
+.report {
+  position: absolute;
+  top: calc(var(--yoyi-space-8) + var(--yoyi-space-1));
+  left: 0;
+}

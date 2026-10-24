@@ -10,6 +10,7 @@ import {
 import type { CSSProperties, RefObject } from "react";
 import type { DiscussionTarget } from "@moya/contracts";
 import { useAuthEntry } from "../auth/auth-return";
+import { QuickCommentReport } from "../reporting/report-actions";
 import type {
   CommentItem,
   CommentReplyTarget,
@@ -44,6 +45,7 @@ export interface FeedColophonProps {
 }
 
 export interface FeedColophonPresentationProps extends FeedColophonProps {
+  readonly renderReport?: ColophonInteractions["renderReport"];
   /** QA supplies the same thread shape without mounting a live data reader. */
   readonly thread: DiscussionThread;
   readonly enabled?: boolean;
@@ -198,6 +200,7 @@ const ScopedFeedColophon = (props: FeedColophonProps) => {
       enabled={enabled}
       headRef={headRef}
       thread={thread}
+      renderReport={(id) => <QuickCommentReport key={id} id={id} />}
     />
   );
 };
@@ -208,6 +211,7 @@ export const FeedColophonPresentation = ({
   fallbackCount,
   presentation = "feed",
   thread,
+  renderReport,
   enabled = true,
   headRef: suppliedHeadRef,
 }: FeedColophonPresentationProps) => {
@@ -750,6 +754,7 @@ export const FeedColophonPresentation = ({
     (viewer.state === "signed-in" || viewer.state === "signed-out");
   const interactions: ColophonInteractions = {
     actorId: thread.currentUser.id,
+    renderReport,
     now,
     flashId,
     replyTargetId,
