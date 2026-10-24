@@ -361,4 +361,16 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "8a4bf216f57f66c05683aee08a21bcdfe6c0a499ef4a1d9e754353efc27f1ca7",
     }),
+    Object.freeze({
+      migrationId: "20261025010000",
+      filename: "20261025010000_reporting_appeals.sql",
+      checksum:
+        "63eac63c6a36efc98ae787ac81b917fdefb5697bb20a7d82cfacc863cc218aae",
+    }),
+    Object.freeze({
+      migrationId: "20261026010000",
+      filename: "20261026010000_appeal_session_scope.sql",
+      checksum:
+        "b5938b21197af3de2f60cb0af1b550ca33347589974e0948fdc60795de891190",
+    }),
   ]);

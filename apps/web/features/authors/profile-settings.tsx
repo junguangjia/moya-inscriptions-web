@@ -1,4 +1,5 @@
 "use client";
+import { MyReportingCases } from "../reporting/reporting-cases";
 import { UserIdentity } from "./user-identity";
 import {
   useCallback,
@@ -37,6 +38,7 @@ type Page =
   | "blocks"
   | "security"
   | "factor"
+  | "reports"
   | "feedback";
 const titles: Record<Page, string> = {
   root: "设置",
@@ -45,6 +47,7 @@ const titles: Record<Page, string> = {
   blocks: "已屏蔽账户",
   security: "账号与安全",
   factor: "验证登录方式",
+  reports: "我的举报与申诉",
   feedback: "反馈与建议",
 };
 const themeLabels = {
@@ -63,6 +66,7 @@ const pageIcons = {
   privacy: "lock-keyhole",
   blocks: "ban",
   security: "shield-check",
+  reports: "shield-check",
   feedback: "mail",
 } as const;
 const privacyIcons = {
@@ -723,6 +727,7 @@ export const ProfileSettings = ({
                       <h3>账户</h3>
                       <div className={styles.rows}>
                         {row("账号与安全", "security", "手机号、邮箱换绑")}
+                        {row("我的举报与申诉", "reports")}
                         {onEdit && (
                           <button
                             type="button"
@@ -757,8 +762,14 @@ export const ProfileSettings = ({
                   </section>
                 )}
                 <section className={styles.group}>
-                  <h3>帮助</h3>
+                  <h3>帮助与规则</h3>
                   <div className={styles.rows}>
+                    <a className={styles.row} href="/policies">
+                      <span className={styles.rowText}>服务条款与社区规则</span>
+                    </a>
+                    <a className={styles.row} href="/policies/reporting">
+                      <span className={styles.rowText}>举报与申诉说明</span>
+                    </a>
                     {row("反馈与建议", "feedback")}
                   </div>
                 </section>
@@ -817,6 +828,7 @@ export const ProfileSettings = ({
                 <p className={styles.help}>立即生效，保存在当前浏览器。</p>
               </>
             )}
+            {page === "reports" && <MyReportingCases />}
             {page === "privacy" &&
               (ownProfile ? (
                 <>

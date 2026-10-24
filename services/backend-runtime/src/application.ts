@@ -1,3 +1,8 @@
+import { CommunityReportingService } from "@moya/api";
+import type {
+  CommunityReportingPort,
+  CommunityReportingEvidenceStore,
+} from "@moya/api";
 import { NotificationService } from "@moya/api";
 import type { NotificationPort, NotificationWorkerPort } from "@moya/api";
 import {
@@ -77,6 +82,9 @@ import type { CommunityRouterDependencies } from "./http/router.js";
 import type { RequestListener } from "node:http";
 
 export interface BackendApplicationOptions {
+  readonly reportingPort?: CommunityReportingPort;
+  readonly reportingEvidenceStore?: CommunityReportingEvidenceStore;
+  readonly onAuthenticated?: (id: string, source: string) => Promise<void>;
   readonly catalogRecipePolicy?: () => Promise<CatalogRecipePolicy>;
   readonly catalogDeliveryReadiness?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogDeliveryReadiness"];
   readonly catalogPublishedRenditions?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogPublishedRenditions"];
@@ -291,6 +299,30 @@ const resolveCommunity = (
   }
   return {
     sessionService,
+    ...(options.reportingPort
+      ? {
+          reportingService: new CommunityReportingService(
+            options.reportingPort,
+            {
+              ...(options.reportingEvidenceStore
+                ? { evidenceStore: options.reportingEvidenceStore }
+                : {}),
+            },
+          ),
+          ...(options.authService
+            ? {
+                reportingIdentify: async (token: string) => {
+                  const result =
+                    await options.authService!.readAppealSession(token);
+                  return result.ok ? { id: result.value.profile.id } : null;
+                },
+              }
+            : {}),
+        }
+      : {}),
+    ...(options.onAuthenticated
+      ? { onAuthenticated: options.onAuthenticated }
+      : {}),
     ...(options.articlePublicationOperatorPort !== undefined
       ? {
           articlePublicationOperatorService:

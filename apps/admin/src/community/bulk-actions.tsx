@@ -11,6 +11,41 @@ import {
 import type { OperatorWork } from "./api";
 import styles from "./community.module.css";
 
+/** Human decisions must carry an explicit reason; unrelated controls use none. */
+export const readModerationReason = (value: string): string | null => {
+  const reason = value.trim();
+  return reason.length > 0 && reason.length <= 2000 ? reason : null;
+};
+
+export const ModerationReasonInput = ({
+  value,
+  onChange,
+  disabled = false,
+  label = "处置理由（必填）",
+}: {
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly disabled?: boolean;
+  readonly label?: string;
+}) => (
+  <div className={styles.reportField}>
+    <label>
+      {label}
+      <textarea
+        disabled={disabled}
+        maxLength={2000}
+        required
+        rows={3}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+    </label>
+    <span className={styles.secondary}>
+      请先填写理由，再核对并确认决定。理由会提供给相关用户；批量处置逐项使用同一理由。
+    </span>
+  </div>
+);
+
 export interface SelectedOperation {
   readonly id: string;
   readonly label: string;
@@ -102,7 +137,12 @@ export const BulkActions = ({
   count: number;
   disabled: boolean;
   /** `confirm` is the body text of the confirmation asked before running. */
-  choices: readonly { value: string; label: string; confirm?: string }[];
+  choices: readonly {
+    value: string;
+    label: string;
+    confirm?: string;
+    requiresReason?: boolean;
+  }[];
   /** Rows the last action left alone, each with its reason. */
   skipped?: readonly string[];
   prepare: (action: string) => SelectedOperation[];
@@ -115,12 +155,14 @@ export const BulkActions = ({
   const lock = useRef(false);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<SelectedOperation[]>([]);
+  const [reasonDraft, setReasonDraft] = useState("");
   const [results, setResults] = useState<string[]>([]);
   const [confirming, setConfirming] = useState<{
-    value: string;
     label: string;
     confirm: string;
     count: number;
+    operations: SelectedOperation[];
+    reason?: string;
   } | null>(null);
   const run = async (operations: SelectedOperation[]) => {
     if (lock.current || operations.length === 0 || operations.length > 50)
@@ -150,12 +192,26 @@ export const BulkActions = ({
       onBusy(false);
     }
   };
-  const start = (action: string) => {
-    const ops = prepare(action).map((op) => ({
+  const prepareSnapshot = (
+    action: string,
+    reason?: string,
+  ): SelectedOperation[] => {
+    const prepared = prepare(action);
+    if (
+      prepared.some((operation) => operation.name === "moderate-work") &&
+      readModerationReason(reason ?? "") === null
+    )
+      return [];
+    return prepared.map((op) => ({
       ...op,
-      input: { ...op.input, requestId: crypto.randomUUID() },
+      input: {
+        ...structuredClone(op.input),
+        ...(op.name === "moderate-work"
+          ? { reason: readModerationReason(reason ?? "")! }
+          : {}),
+        requestId: crypto.randomUUID(),
+      },
     }));
-    void run(ops);
   };
   const abandon = () => {
     setPending([]);
@@ -166,6 +222,14 @@ export const BulkActions = ({
   const lines = [...results, ...skipped];
   return (
     <section aria-label="批量操作" className={styles.bulkBar}>
+      {choices.some((choice) => choice.requiresReason) ? (
+        <ModerationReasonInput
+          label="批量处置理由（必填）"
+          value={reasonDraft}
+          onChange={setReasonDraft}
+          disabled={busy || pending.length > 0}
+        />
+      ) : null}
       <div className={styles.actions}>
         {pending.length > 0 ? (
           <span>未确认 {pending.length} 项</span>
@@ -177,17 +241,39 @@ export const BulkActions = ({
             key={choice.value}
             type="button"
             className={styles.actionButton}
-            disabled={disabled || busy || count === 0 || pending.length > 0}
+            disabled={
+              disabled ||
+              busy ||
+              count === 0 ||
+              pending.length > 0 ||
+              (choice.requiresReason === true &&
+                readModerationReason(reasonDraft) === null)
+            }
             onClick={() => {
               if (choice.confirm === undefined) {
-                start(choice.value);
+                void run(
+                  prepareSnapshot(
+                    choice.value,
+                    choice.requiresReason
+                      ? readModerationReason(reasonDraft)!
+                      : undefined,
+                  ),
+                );
                 return;
               }
               setConfirming({
-                value: choice.value,
+                operations: prepareSnapshot(
+                  choice.value,
+                  choice.requiresReason
+                    ? readModerationReason(reasonDraft)!
+                    : undefined,
+                ),
                 label: choice.label,
                 confirm: choice.confirm,
                 count,
+                ...(choice.requiresReason
+                  ? { reason: readModerationReason(reasonDraft)! }
+                  : {}),
               });
               openModal(modalSlug);
             }}
@@ -230,16 +316,21 @@ export const BulkActions = ({
         confirmLabel="确认执行"
         confirmingLabel="处理中…"
         body={
-          <p>
-            {confirming === null
-              ? null
-              : `${confirming.label}所选 ${confirming.count} 项。${confirming.confirm}`}
-          </p>
+          <>
+            <p>
+              {confirming === null
+                ? null
+                : `${confirming.label}所选 ${confirming.count} 项。${confirming.confirm}`}
+            </p>
+            {confirming?.reason === undefined ? null : (
+              <p className={styles.reportText}>处置理由：{confirming.reason}</p>
+            )}
+          </>
         }
         onCancel={() => setConfirming(null)}
         onConfirm={() => {
           closeModal(modalSlug);
-          if (confirming !== null) start(confirming.value);
+          if (confirming !== null) void run(confirming.operations);
           setConfirming(null);
         }}
       />

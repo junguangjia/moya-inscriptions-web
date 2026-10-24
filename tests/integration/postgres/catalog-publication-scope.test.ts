@@ -240,6 +240,15 @@ describe("App migration A1, its grants and the startup checks", () => {
   it(
     "applies to a seeded database without rewriting a row, and startup refuses until the migration and its grants are in",
     async () => {
+      // This fixture genuinely predates reporting. The current grant plan must
+      // tolerate that phase without advancing migrations or granting future ACLs.
+      expect(
+        (
+          await upgraded.setup.query(
+            "SELECT to_regclass('community.report_decisions') AS reporting_relation",
+          )
+        ).rows,
+      ).toEqual([{ reporting_relation: null }]);
       await seedCatalogScale(upgraded, shape);
       // Two publications in flight (withdrawing, purge failed) besides the
       // published generations.
@@ -319,11 +328,13 @@ describe("App migration A1, its grants and the startup checks", () => {
       expect(await leftBehind()).toEqual([{ applied: 0, relations: [] }]);
       expect(await snapshot()).toEqual(before);
 
-      // Once the writer has ended, A1 applies, once.
+      // Once the writer has ended, A1 and the approved later migrations apply once.
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual([
         A1,
         "20261024020000",
         "20261024030000",
+        "20261025010000",
+        "20261026010000",
       ]);
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual(
         [],
@@ -422,7 +433,17 @@ describe("App migration A1, its grants and the startup checks", () => {
         await startupRefusal(assertCatalogPublicationScopeReady(upgraded.app)),
       ).toBe(missingBefore);
       await verifyCommunityMigrationLedger(upgraded.app);
+      const guardColumns = `SELECT
+        has_column_privilege(current_user,'community.report_decisions','restriction_key','SELECT') AS restriction_key,
+        has_column_privilege(current_user,'community.report_decisions','reversed_at','SELECT') AS reversed_at,
+        has_table_privilege(current_user,'community.report_decisions','SELECT') AS whole_table_read`;
+      expect((await upgraded.app.query(guardColumns)).rows).toEqual([
+        { restriction_key: false, reversed_at: false, whole_table_read: false },
+      ]);
       await grantRuntime(upgraded);
+      expect((await upgraded.app.query(guardColumns)).rows).toEqual([
+        { restriction_key: true, reversed_at: true, whole_table_read: true },
+      ]);
       await assertCatalogPublicationScopeReady(upgraded.app);
       expect(await snapshot()).toEqual(before);
     },

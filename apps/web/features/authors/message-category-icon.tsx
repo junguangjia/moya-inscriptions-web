@@ -3,9 +3,20 @@ import { QuickActionIcon } from "../quick-actions/quick-action-card-action";
 export function CategoryIcon({
   kind,
 }: {
-  kind: "followers" | "reactions" | "comments";
+  kind: "followers" | "reactions" | "comments" | "reports";
 }) {
-  return kind === "reactions" ? (
+  return kind === "reports" ? (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      aria-hidden="true"
+    >
+      <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z" />
+      <path d="M12 7v6m0 3v1" />
+    </svg>
+  ) : kind === "reactions" ? (
     <QuickActionIcon action="like" />
   ) : kind === "comments" ? (
     <Icon name="message" aria-hidden="true" />

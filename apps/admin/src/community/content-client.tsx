@@ -27,6 +27,8 @@ import { SubmissionDetail } from "./work-submissions-client";
 import styles from "./community.module.css";
 import {
   BulkActions,
+  ModerationReasonInput,
+  readModerationReason,
   planWorkOperations,
   workBulkConfirmText,
 } from "./bulk-actions";
@@ -117,6 +119,8 @@ export const CommunityContentClient = () => {
   const [bulkPending, setBulkPending] = useState(0);
   const [skipped, setSkipped] = useState<string[]>([]);
   const [confirmation, setConfirmation] = useState<Operation | null>(null);
+  const [reasonDraft, setReasonDraft] = useState("");
+  const reason = readModerationReason(reasonDraft);
   const [quantity, setQuantity] = useState("");
   const settingsVersion = useRef<number | null>(null);
   const load = useCallback(async () => {
@@ -252,6 +256,7 @@ export const CommunityContentClient = () => {
       `推荐「${title}」`,
     );
   const confirmWork = (item: OperatorWork, state: OperatorWork["state"]) => {
+    if (reason === null) return;
     setConfirmation({
       name: "moderate-work",
       input: {
@@ -259,6 +264,7 @@ export const CommunityContentClient = () => {
         state,
         expectedVersion: item.version,
         requestId: crypto.randomUUID(),
+        reason,
       },
       label: `${workActionPhrases[state]}「${workTitleOf(item)}」`,
     });
@@ -302,7 +308,7 @@ export const CommunityContentClient = () => {
             type="button"
             className={styles.actionButton}
             key={state}
-            disabled={disabled || item.authorDeleted}
+            disabled={disabled || item.authorDeleted || reason === null}
             onClick={() => confirmWork(item, state)}
           >
             {workActionPhrases[state]}
@@ -503,6 +509,12 @@ export const CommunityContentClient = () => {
       {loading ? <p role="status">读取中…</p> : null}
       {tab === "works" && works ? (
         <>
+          <ModerationReasonInput
+            label="作品处置理由（必填）"
+            value={reasonDraft}
+            onChange={setReasonDraft}
+            disabled={disabled}
+          />
           <BulkActions
             key={activeUser?.id ?? "all-works"}
             view="works"
@@ -519,11 +531,13 @@ export const CommunityContentClient = () => {
                 value: "hidden",
                 label: "批量隐藏",
                 confirm: workBulkConfirmText.hidden,
+                requiresReason: true,
               },
               {
                 value: "removed",
                 label: "批量移除",
                 confirm: workBulkConfirmText.removed,
+                requiresReason: true,
               },
             ]}
             prepare={(action) => {
@@ -804,10 +818,15 @@ export const CommunityContentClient = () => {
         confirmLabel="确认保存"
         confirmingLabel="保存中…"
         body={
-          <p>
-            {confirmation?.label}
-            。隐藏或移除会限制访问；解除管理限制仍遵循作者的可见范围和当前审核结果，不会代替审核通过。原有身份、首次发布时间和审计记录保留。
-          </p>
+          <>
+            <p>
+              {confirmation?.label}
+              。隐藏或移除会限制访问；解除管理限制仍遵循作者的可见范围和当前审核结果，不会代替审核通过。原有身份、首次发布时间和审计记录保留。
+            </p>
+            <p className={styles.reportText}>
+              处置理由：{String(confirmation?.input.reason ?? "")}
+            </p>
+          </>
         }
         onConfirm={async () => {
           closeModal("community-work-confirm");

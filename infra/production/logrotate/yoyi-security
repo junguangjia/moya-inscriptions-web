@@ -1,0 +1,16 @@
+# Dedicated operation/security records. Daily only: size-triggered rotations
+# must not exhaust the retained-file count before six calendar months pass.
+/var/log/nginx/yoyi-security.log {
+    daily
+    rotate 200
+    maxage 200
+    missingok
+    ifempty
+    compress
+    delaycompress
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        /usr/sbin/nginx -s reopen
+    endscript
+}

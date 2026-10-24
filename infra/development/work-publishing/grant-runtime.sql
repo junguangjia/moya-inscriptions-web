@@ -95,6 +95,7 @@ GRANT SELECT ON TABLE community.publication_setting TO :"app_role";
 GRANT UPDATE (policy, updated_by, updated_at) ON TABLE community.publication_setting TO :"app_role";
 GRANT SELECT, INSERT ON TABLE community.moderation_events TO :"app_role";
 
+
 -- Author community: relations, blocks, favorites, legacy PNG media, receipts.
 GRANT SELECT, INSERT, DELETE ON TABLE
   community.follows, community.blocks, community.content_relations
@@ -515,6 +516,89 @@ BEGIN
     current_setting('moya.runtime_app_role'));
 END $$;
 
+-- Reporting/appeals (migration 20261025010000): Owner-approved Backend
+-- runtime plan. Public-user and Payload identities receive no SQL privileges.
+-- Older upgrade fixtures can precede this entire family; a partial family is
+-- refused atomically. Reapply after migration. No DDL/default privileges,
+-- table-level UPDATE or immutable identity/audit rewrites are granted.
+DO $$
+DECLARE
+  report_table_count integer;
+BEGIN
+  SELECT count(*) INTO report_table_count
+  FROM (VALUES
+    ('community.report_cases'),
+    ('community.report_decisions'),
+    ('community.report_restriction_heads'),
+    ('community.report_materials'),
+    ('community.report_evidence'),
+    ('community.report_messages'),
+    ('community.report_audit'),
+    ('community.report_receipts'),
+    ('community.report_urgent_outbox')
+  ) AS required(relation_name)
+  WHERE to_regclass(required.relation_name) IS NOT NULL;
+  IF report_table_count = 0 THEN
+    RETURN;
+  END IF;
+  IF report_table_count <> 9 THEN
+    RAISE EXCEPTION 'Reporting runtime grants require the complete relation family';
+  END IF;
+  EXECUTE format(
+    'GRANT SELECT, INSERT ON TABLE community.report_cases, community.report_decisions, community.report_restriction_heads, community.report_materials, community.report_evidence, community.report_messages, community.report_audit, community.report_receipts, community.report_urgent_outbox TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (kind, reason, description, snapshot, claimant, status, urgent, legal_hold, version, decision_id, updated_at, closed_at) ON TABLE community.report_cases TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (reason, reversed_at, review_reason, appeal_text, appeal_at, appeal_status) ON TABLE community.report_decisions TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (applied_revision) ON TABLE community.report_restriction_heads TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (text) ON TABLE community.report_materials TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (state, upload_lease, lease_until) ON TABLE community.report_evidence TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (text, read_at) ON TABLE community.report_messages TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (reason) ON TABLE community.report_audit TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (result) ON TABLE community.report_receipts TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (attempts, next_attempt_at, lease_until, delivered_at, last_error) ON TABLE community.report_urgent_outbox TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT DELETE ON TABLE community.report_cases, community.report_evidence, community.report_receipts, community.report_restriction_heads TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (reporting_comments_restricted) ON TABLE community.public_users TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (reporting_hidden) ON TABLE community.article_documents TO %I',
+    current_setting('moya.runtime_app_role'));
+END $$;
+
+-- Coarse profile location (migration 20261026010000). This later relation is
+-- optional for earlier migration phases. User identity cannot be rewritten,
+-- and this role does not delete location rows directly.
+DO $$
+BEGIN
+  IF to_regclass('community.profile_ip_locations') IS NOT NULL THEN
+  EXECUTE format(
+    'GRANT SELECT, INSERT ON TABLE community.profile_ip_locations TO %I',
+    current_setting('moya.runtime_app_role'));
+  EXECUTE format(
+    'GRANT UPDATE (label, observed_at) ON TABLE community.profile_ip_locations TO %I',
+    current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;
 -- Private feedback submissions and Owner reads; feedback is append-only.
 -- Historical upgrade fixtures can precede this table; real Backend startup
 -- still requires the current migration ledger before serving any request.

@@ -24,6 +24,7 @@ import {
   subjectKindLabels,
 } from "./api";
 import styles from "./community.module.css";
+import { ModerationReasonInput, readModerationReason } from "./bulk-actions";
 
 import type {
   BulkModerationResult,
@@ -160,20 +161,38 @@ export const CommunityQueueClient = ({
   const [bulkAction, setBulkAction] =
     useState<CommentModerationAction>("approve");
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [reasonDraft, setReasonDraft] = useState("");
+  const reason = readModerationReason(reasonDraft);
+  const [pendingModeration, setPendingModeration] = useState<{
+    item: OperatorComment;
+    action: CommentModerationAction;
+    reason: string;
+  } | null>(null);
+  const [pendingBulk, setPendingBulk] = useState<{
+    action: CommentModerationAction;
+    ids: readonly string[];
+    reason: string;
+  } | null>(null);
   const [bulkFailed, setBulkFailed] = useState<{
     readonly action: CommentModerationAction;
     readonly ids: readonly string[];
+    readonly reason: string;
   } | null>(null);
   const deletionLock = useRef(false);
   const [pendingDeletion, setPendingDeletion] = useState<{
     item: OperatorComment;
     scope: "body" | "thread";
     requestId: string;
+    reason: string;
+    expectedAffectedCount?: number;
   } | null>(null);
   const [failedDeletion, setFailedDeletion] =
     useState<typeof pendingDeletion>(null);
-  const [pendingSuspension, setPendingSuspension] =
-    useState<OperatorComment | null>(null);
+  const [pendingSuspension, setPendingSuspension] = useState<{
+    item: OperatorComment;
+    action: "suspend" | "reinstate";
+    reason: string;
+  } | null>(null);
   const [detail, setDetail] = useState<
     | { readonly state: "loading"; readonly id: string }
     | {
@@ -349,12 +368,15 @@ export const CommunityQueueClient = ({
   const moderate = async (
     item: OperatorComment,
     action: CommentModerationAction,
+    reason: string,
   ) => {
+    if (readModerationReason(reason) === null) return;
     setBusy(item.id, true);
     try {
       const result = await call<ModerationResult>("moderate-comment", {
         id: item.id,
         action,
+        reason,
       });
       applyTransition(result.id, result.moderation);
       noteRow(item.id, { tone: "success", text: doneLabels[action] });
@@ -378,12 +400,15 @@ export const CommunityQueueClient = ({
   const moderateAuthor = async (
     item: OperatorComment,
     action: "suspend" | "reinstate",
+    reason: string,
   ) => {
+    if (readModerationReason(reason) === null) return;
     setBusy(item.id, true);
     try {
       const result = await call<UserModerationResult>("moderate-user", {
         id: item.author.id,
         action,
+        reason,
       });
       setPage((current) =>
         current === null
@@ -418,13 +443,20 @@ export const CommunityQueueClient = ({
   const runBulk = async (
     action: CommentModerationAction,
     ids: readonly string[],
+    reason: string,
   ) => {
-    if (ids.length === 0 || ids.length > BULK_LIMIT) return;
+    if (
+      ids.length === 0 ||
+      ids.length > BULK_LIMIT ||
+      readModerationReason(reason) === null
+    )
+      return;
     setBulkBusy(true);
     try {
       const result = await call<BulkModerationResult>("moderate-comments", {
         action,
         ids,
+        reason,
       });
       const failed: string[] = [];
       for (const outcome of result.results) {
@@ -453,7 +485,9 @@ export const CommunityQueueClient = ({
         }
       }
       setBulkFailed(
-        failed.length === 0 ? null : { action: result.action, ids: failed },
+        failed.length === 0
+          ? null
+          : { action: result.action, ids: failed, reason },
       );
       setSelected(new Set(failed));
       setReceipt({
@@ -488,15 +522,17 @@ export const CommunityQueueClient = ({
   const deleteContent = async (
     command: NonNullable<typeof pendingDeletion>,
   ) => {
-    if (deletionLock.current) return;
+    if (deletionLock.current || readModerationReason(command.reason) === null)
+      return;
     deletionLock.current = true;
     setBusy(command.item.id, true);
     try {
       await call(command.scope === "body" ? "delete-body" : "remove-thread", {
         id: command.item.id,
         requestId: command.requestId,
+        reason: command.reason,
         ...(command.scope === "thread"
-          ? { expectedAffectedCount: command.item.threadAffectedCount }
+          ? { expectedAffectedCount: command.expectedAffectedCount }
           : {}),
       });
       setFailedDeletion(null);
@@ -505,7 +541,7 @@ export const CommunityQueueClient = ({
         text:
           command.scope === "body"
             ? "正文已删除；已有回复保留。"
-            : "整帖及全部回复已移除。",
+            : "整帖及全部回复的讨论访问已移除。",
       });
       await load();
       refreshDetailIfOpen(command.item.id);
@@ -543,9 +579,14 @@ export const CommunityQueueClient = ({
             data-danger={
               action === "reject" || action === "hide" ? "true" : undefined
             }
-            disabled={busy}
+            disabled={busy || reason === null}
             key={action}
-            onClick={() => void moderate(item, action)}
+            onClick={() => {
+              if (reason !== null) {
+                setPendingModeration({ item, action, reason });
+                openModal("community-comment-confirm");
+              }
+            }}
             type="button"
           >
             {busy ? "处理中…" : bulkActionLabels[action]}
@@ -591,12 +632,16 @@ export const CommunityQueueClient = ({
                   <button
                     role="menuitem"
                     type="button"
-                    disabled={busy || failedDeletion !== null}
+                    disabled={
+                      busy || failedDeletion !== null || reason === null
+                    }
                     onClick={() => {
+                      if (reason === null) return;
                       setPendingDeletion({
                         item,
                         scope: "body",
                         requestId: crypto.randomUUID(),
+                        reason,
                       });
                       openModal("community-delete-confirm");
                     }}
@@ -611,13 +656,17 @@ export const CommunityQueueClient = ({
                     disabled={
                       busy ||
                       failedDeletion !== null ||
+                      reason === null ||
                       !item.threadAffectedCount
                     }
                     onClick={() => {
+                      if (reason === null || !item.threadAffectedCount) return;
                       setPendingDeletion({
                         item,
                         scope: "thread",
                         requestId: crypto.randomUUID(),
+                        reason,
+                        expectedAffectedCount: item.threadAffectedCount,
                       });
                       openModal("community-delete-confirm");
                     }}
@@ -637,13 +686,15 @@ export const CommunityQueueClient = ({
               </button>
             ) : null}
             <button
-              disabled={busy}
+              disabled={busy || reason === null}
               onClick={() => {
-                if (suspended) void moderateAuthor(item, "reinstate");
-                else {
-                  setPendingSuspension(item);
-                  openModal("community-suspend-confirm");
-                }
+                if (reason === null) return;
+                setPendingSuspension({
+                  item,
+                  action: suspended ? "reinstate" : "suspend",
+                  reason,
+                });
+                openModal("community-suspend-confirm");
               }}
               role="menuitem"
               type="button"
@@ -680,10 +731,17 @@ export const CommunityQueueClient = ({
             </strong>
           </span>
           <Link href="/admin/community-moderation/settings">发布设置</Link>
-          <Link href="/admin/community-moderation/history">操作历史</Link>
+          <Link href="/admin/community-moderation/reports">用户举报</Link>
+          <Link href="/admin/community-moderation/appeals">申诉与操作历史</Link>
         </div>
       </header>
 
+      <ModerationReasonInput
+        label="评论与账号处置理由（必填）"
+        value={reasonDraft}
+        onChange={setReasonDraft}
+        disabled={bulkBusy || busyIds.size > 0}
+      />
       <div aria-label="审核状态" className={styles.tabs} role="tablist">
         {statuses.map((status) => (
           <button
@@ -820,8 +878,17 @@ export const CommunityQueueClient = ({
           <button
             className={styles.actionButton}
             data-primary="true"
-            disabled={bulkBusy}
-            onClick={() => openModal("community-bulk-confirm")}
+            disabled={bulkBusy || reason === null}
+            onClick={() => {
+              if (reason !== null) {
+                setPendingBulk({
+                  action: bulkAction,
+                  ids: [...selected],
+                  reason,
+                });
+                openModal("community-bulk-confirm");
+              }
+            }}
             type="button"
           >
             {bulkBusy ? "处理中…" : "执行批量操作…"}
@@ -830,7 +897,13 @@ export const CommunityQueueClient = ({
             <button
               className={styles.actionButton}
               disabled={bulkBusy}
-              onClick={() => void runBulk(bulkFailed.action, bulkFailed.ids)}
+              onClick={() =>
+                void runBulk(
+                  bulkFailed.action,
+                  bulkFailed.ids,
+                  bulkFailed.reason,
+                )
+              }
               type="button"
             >
               重试失败项（{bulkFailed.ids.length}，
@@ -1078,7 +1151,7 @@ export const CommunityQueueClient = ({
 
       {failedDeletion ? (
         <p className={styles.notice} role="alert">
-          上次删除操作结果尚未确认。
+          上次处置操作结果尚未确认。
           <button
             type="button"
             disabled={busyIds.has(failedDeletion.item.id)}
@@ -1106,20 +1179,29 @@ export const CommunityQueueClient = ({
         }
         modalSlug="community-delete-confirm"
         cancelLabel="取消"
-        confirmLabel="确认删除"
-        confirmingLabel="删除中…"
+        confirmLabel={
+          pendingDeletion?.scope === "thread" ? "确认移除" : "确认删除"
+        }
+        confirmingLabel={
+          pendingDeletion?.scope === "thread" ? "移除中…" : "删除中…"
+        }
         body={
-          pendingDeletion?.scope === "thread" ? (
-            <p>
-              将移除此根评论及全部回复，共{" "}
-              {pendingDeletion.item.threadAffectedCount}{" "}
-              项。所有作者也无法在「我的评论」中再读取这些正文。此操作不可恢复；新回复会使确认失效，需重新检查数量。
+          <>
+            {pendingDeletion?.scope === "thread" ? (
+              <p>
+                将移除此根评论及全部回复的讨论访问，共{" "}
+                {pendingDeletion.expectedAffectedCount}{" "}
+                项。原有正文、作者关系及记录保留；复核撤销只解除本决定造成的整帖限制，已删除正文不会恢复，其他有效处分仍可限制访问。新回复会使确认失效，需重新检查数量。
+              </p>
+            ) : (
+              <p>
+                删除这条评论的正文。已有回复及其关系保留；曾公开的内容显示删除占位，未公开内容不会因此公开。作者也无法再读取被删除的正文，此操作不可恢复。
+              </p>
+            )}
+            <p className={styles.reportText}>
+              处置理由：{pendingDeletion?.reason}
             </p>
-          ) : (
-            <p>
-              删除这条评论的正文。已有回复及其关系保留；曾公开的内容显示删除占位，未公开内容不会因此公开。作者也无法再读取被删除的正文，此操作不可恢复。
-            </p>
-          )
+          </>
         }
         onConfirm={async () => {
           closeModal("community-delete-confirm");
@@ -1129,41 +1211,100 @@ export const CommunityQueueClient = ({
       />
       <ConfirmationModal
         body={
-          <p>
-            将对本页已选的 {selected.size} 条评论执行「
-            {bulkActionLabels[bulkAction]}」。
-            每条都会单独检查当前状态并记录审计；状态已变化的项目不会被处理。
-          </p>
+          <>
+            <p>
+              将对{pendingModeration?.item.kind === "reply" ? "回复" : "评论"}{" "}
+              {pendingModeration?.item.id} 执行「
+              {pendingModeration === null
+                ? ""
+                : bulkActionLabels[pendingModeration.action]}
+              」。
+            </p>
+            <p className={styles.reportText}>
+              处置理由：{pendingModeration?.reason}
+            </p>
+          </>
+        }
+        cancelLabel="取消"
+        confirmLabel="确认处置"
+        confirmingLabel="处理中…"
+        heading="确认评论处置"
+        modalSlug="community-comment-confirm"
+        onCancel={() => setPendingModeration(null)}
+        onConfirm={async () => {
+          const command = pendingModeration;
+          setPendingModeration(null);
+          closeModal("community-comment-confirm");
+          if (command !== null)
+            await moderate(command.item, command.action, command.reason);
+        }}
+      />
+      <ConfirmationModal
+        body={
+          <>
+            <p>
+              将对本页已选的 {pendingBulk?.ids.length ?? 0} 条评论执行「
+              {pendingBulk === null ? "" : bulkActionLabels[pendingBulk.action]}
+              」。每条都会单独检查当前状态并记录审计；状态已变化的项目不会被处理。
+            </p>
+            <p className={styles.reportText}>
+              各项处置理由：{pendingBulk?.reason}
+            </p>
+          </>
         }
         cancelLabel="取消"
         confirmLabel="确认执行"
         confirmingLabel="处理中…"
         heading="确认批量操作"
         modalSlug="community-bulk-confirm"
+        onCancel={() => setPendingBulk(null)}
         onConfirm={async () => {
+          const command = pendingBulk;
+          setPendingBulk(null);
           closeModal("community-bulk-confirm");
-          await runBulk(bulkAction, [...selected]);
+          if (command !== null)
+            await runBulk(command.action, command.ids, command.reason);
         }}
       />
       <ConfirmationModal
         body={
-          <p>
-            停用账号 @{pendingSuspension?.author.handle ?? ""}（
-            {pendingSuspension?.author.displayName ?? ""}
-            ）会立即撤销该账号的全部登录会话并拒绝其后续发言；
-            已有评论保持当前状态不变，可单独隐藏。此操作会记录到操作历史，可随时恢复。
-          </p>
+          <>
+            <p>
+              {pendingSuspension?.action === "reinstate"
+                ? "恢复账号"
+                : "停用账号"}{" "}
+              @{pendingSuspension?.item.author.handle ?? ""}（
+              {pendingSuspension?.item.author.displayName ?? ""}）。
+              {pendingSuspension?.action === "reinstate"
+                ? "恢复后仍遵循其他有效限制。"
+                : "将撤销全部普通登录会话并拒绝后续发言；已有评论状态不变，可单独隐藏。"}
+              此操作会记录到操作历史。
+            </p>
+            <p className={styles.reportText}>
+              处置理由：{pendingSuspension?.reason}
+            </p>
+          </>
         }
         cancelLabel="取消"
-        confirmLabel="确认停用"
+        confirmLabel={
+          pendingSuspension?.action === "reinstate"
+            ? "确认恢复账号"
+            : "确认停用"
+        }
         confirmingLabel="处理中…"
-        heading="确认停用账号"
+        heading={
+          pendingSuspension?.action === "reinstate"
+            ? "确认恢复账号"
+            : "确认停用账号"
+        }
         modalSlug="community-suspend-confirm"
+        onCancel={() => setPendingSuspension(null)}
         onConfirm={async () => {
-          closeModal("community-suspend-confirm");
-          if (pendingSuspension !== null)
-            await moderateAuthor(pendingSuspension, "suspend");
+          const command = pendingSuspension;
           setPendingSuspension(null);
+          closeModal("community-suspend-confirm");
+          if (command !== null)
+            await moderateAuthor(command.item, command.action, command.reason);
         }}
       />
     </div>

@@ -9,6 +9,10 @@ import { CommunityNavGroups as CommunityNavGroups_2abcbe3af7cd0474b6c7e39c62ec32
 import { CommunityDashboardCard as CommunityDashboardCard_04d062f16b5363b8f080834354c73870 } from "../../../src/community/DashboardCard";
 import { S3ClientUploadHandler as S3ClientUploadHandler_f97aa6c64367fa259c5bc0567239ef24 } from "@payloadcms/storage-s3/client";
 import { OwnerWorkflowView as OwnerWorkflowView_6be79d619593d3e50db1d13a833f41ac } from "../../../src/owner-workflow/View";
+import {
+  CommunityReportsView,
+  CommunityAppealsView,
+} from "../../../src/community/View";
 import { CommunityModerationView as CommunityModerationView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { ThreadsView as ThreadsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { DmModerationView as DmModerationView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
@@ -28,6 +32,8 @@ import { AnalyticsView } from "../../../src/analytics/View";
 
 /** @type import('payload').ImportMap */
 export const importMap = {
+  "/src/community/View#CommunityReportsView": CommunityReportsView,
+  "/src/community/View#CommunityAppealsView": CommunityAppealsView,
   "/src/analytics/View#AnalyticsView": AnalyticsView,
   "./src/media/MediaSnapshotPicker#MediaSnapshotPicker":
     MediaSnapshotPicker_a43c203023e3389c5dc6b4863a273b24,

@@ -1,4 +1,9 @@
 import {
+  captureStaffSubject,
+  recordStaffModeration,
+  staffAuditCommand,
+} from "./staff-moderation-reporting.js";
+import {
   beginWorkPublicationSync,
   syncWorkHolds,
   type PublicationSyncOptions,
@@ -178,7 +183,10 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
             action,
             target?.type ?? null,
             target?.id ?? null,
-            JSON.stringify({ command: input, result }),
+            JSON.stringify({
+              command: staffAuditCommand(action, input),
+              result,
+            }),
           ],
         );
       await db.query(
@@ -318,6 +326,11 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
       { type: "work", id },
       input,
       async (db, unchanged) => {
+        const staff = await captureStaffSubject(
+          db,
+          { type: "work", id },
+          input.reason,
+        );
         const before = (
           await db.query<WorkRow>(
             `${workProjection} WHERE w.id=$1 FOR UPDATE OF w`,
@@ -354,6 +367,13 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
           at,
           heldItems,
           input.state === "removed" ? "withdraw" : "publish",
+        );
+        await recordStaffModeration(
+          db,
+          staff,
+          operator,
+          input.state === "visible" ? "restore" : "hide",
+          at,
         );
         return workDto(
           (await db.query<WorkRow>(`${workProjection} WHERE w.id=$1`, [id]))

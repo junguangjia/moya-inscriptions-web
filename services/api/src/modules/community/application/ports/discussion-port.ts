@@ -54,11 +54,13 @@ export interface DiscussionPort {
     rootId: string,
     requestId: string,
     expectedCount: number,
+    reason?: string,
   ): Promise<{ removed: number }>;
   operatorDeleteBody(
     operator: string,
     id: string,
     requestId: string,
+    reason?: string,
   ): Promise<void>;
   ownComments(
     actor: string,

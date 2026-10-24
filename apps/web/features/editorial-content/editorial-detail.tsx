@@ -1,4 +1,6 @@
 "use client";
+import { useOptionalAuthors } from "../authors/author-context";
+import { ReportMenu } from "../reporting/report-actions";
 import { useContentAnalytics } from "../analytics/product-analytics";
 import { editorialImage, editorialMediaSrc } from "./editorial-media";
 import {
@@ -504,6 +506,7 @@ export function EditorialDetail({
   const detailScroll = useRef<HTMLDivElement>(null);
   const parentScroll = useRef(0);
   const isArticle = isArticleId(id);
+  const reportingAvailable = useOptionalAuthors() !== null;
   const [loaded, setLoaded] = useState<{
     id: string;
     presentation: ArticlePresentation;
@@ -553,7 +556,11 @@ export function EditorialDetail({
           <Icon name="back" aria-hidden="true" />
         </button>
         <h1>{title}</h1>
-        <span />
+        {isArticle && reportingAvailable && !commentsHidden ? (
+          <ReportMenu target={{ type: "article", id }} />
+        ) : (
+          <span />
+        )}
       </header>
       {isArticle ? (
         <LiveArticleReader

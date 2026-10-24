@@ -483,5 +483,15 @@ export type {
   AnalyticsWriteContext,
 } from "./modules/analytics/analytics-port.js";
 
+export type {
+  CommunityReportingPort,
+  CommunityReportingEvidenceStore,
+  ReportingEvidenceRecord,
+  ReportingResolvedTarget,
+  ReportingExternalTargetResolver,
+} from "./modules/community/application/ports/community-reporting-port.js";
+export { CommunityReportingService } from "./modules/community/application/services/community-reporting-service.js";
+
+export { requireHumanModerationReason } from "./modules/community/transport/human-moderation-parser.js";
 export { FeedbackService } from "./modules/community/application/services/feedback-service.js";
 export type { FeedbackPort } from "./modules/community/application/ports/feedback-port.js";

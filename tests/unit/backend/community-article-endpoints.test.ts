@@ -39,6 +39,7 @@ const candidate = {
   resolvedReferences: {},
 };
 const command = {
+  reason: "Synthetic authored article review reason",
   requestId: "00000000-0000-4000-8000-000000000004",
   expectedVersion: 4,
   candidateVersion: 3,
@@ -171,6 +172,22 @@ describe("Admin authored Article moderation", () => {
       ).toBe(400);
     expect(call).not.toHaveBeenCalled();
   });
+  it.each([undefined, " ", "x".repeat(2001)])(
+    "requires a bounded nonempty reason for human article decisions",
+    async (reason) => {
+      const call = vi.fn();
+      expect(
+        (
+          await invoke(
+            createCommunityEndpoints(call),
+            "moderate-article-submission",
+            req({ id, ...command, reason }),
+          )
+        ).status,
+      ).toBe(400);
+      expect(call).not.toHaveBeenCalled();
+    },
+  );
   it("preserves a stale-candidate refusal and never retries a decision", async () => {
     const call = vi.fn(async () => {
       throw new CommunityOperatorError("STATE_CONFLICT", 409);

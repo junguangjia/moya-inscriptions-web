@@ -381,6 +381,7 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
           userId: row.userId,
           expiresAt: row.expiresAt,
           revokedAt: row.revokedAt,
+          scope: row.scope ?? "community",
         };
       },
       lockSession: async (tokenHash, requiredEnvironment) => {
@@ -398,6 +399,7 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
           userId: row.userId,
           expiresAt: row.expiresAt,
           revokedAt: row.revokedAt,
+          scope: row.scope ?? "community",
         };
       },
       lockReceipt: async (keyHash) =>
@@ -520,6 +522,7 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
         const session = state.sessions.find(
           (row) =>
             row.tokenHash === tokenHash &&
+            (row.scope ?? "community") === "community" &&
             (requiredEnvironment === undefined ||
               (["verified_login", "password_login"].includes(row.issuer) &&
                 row.authEnvironment === requiredEnvironment)) &&

@@ -1,4 +1,5 @@
 "use client";
+import { MyReportingCases } from "../reporting/reporting-cases";
 import { UserIdentity } from "../authors/user-identity";
 import { useAuthReturn } from "../auth/auth-return";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -49,12 +50,13 @@ const unavailableDM: DirectMessagePanelAdapter = {
   render: () => <p className={styles.empty}>私信尚未在此环境接入。</p>,
   useUnreadConversationCount: () => 0,
 };
-type View = "home" | "followers" | "reactions" | "comments";
+type View = "home" | "followers" | "reactions" | "comments" | "reports";
 const labels = {
   home: "消息",
   followers: "粉丝",
   reactions: "赞和收藏",
   comments: "评论",
+  reports: "举报与系统通知",
 };
 export function LiveMessageTrigger({
   directMessages = unavailableDM,
@@ -531,40 +533,45 @@ function AccountMessages({
                   <>
                     {!directOpen && (
                       <nav className={styles.categories} aria-label="消息分类">
-                        {(["followers", "reactions", "comments"] as const).map(
-                          (kind) => {
-                            const count =
-                              kind === "reactions"
-                                ? (inbox.page?.unread.likes ?? 0)
-                                : kind === "comments"
-                                  ? (inbox.page?.unread.comments ?? 0) +
-                                    (inbox.page?.unread.mentions ?? 0)
-                                  : 0;
-                            return (
-                              <button
-                                type="button"
-                                key={kind}
-                                aria-label={`${labels[kind]}${count ? `，${count} 条未读动态` : ""}`}
-                                onClick={() => select(kind)}
+                        {(
+                          [
+                            "followers",
+                            "reactions",
+                            "comments",
+                            "reports",
+                          ] as const
+                        ).map((kind) => {
+                          const count =
+                            kind === "reactions"
+                              ? (inbox.page?.unread.likes ?? 0)
+                              : kind === "comments"
+                                ? (inbox.page?.unread.comments ?? 0) +
+                                  (inbox.page?.unread.mentions ?? 0)
+                                : 0;
+                          return (
+                            <button
+                              type="button"
+                              key={kind}
+                              aria-label={`${labels[kind]}${count ? `，${count} 条未读动态` : ""}`}
+                              onClick={() => select(kind)}
+                            >
+                              <span
+                                className={styles.categoryIcon}
+                                data-kind={kind}
                               >
-                                <span
-                                  className={styles.categoryIcon}
-                                  data-kind={kind}
-                                >
-                                  <CategoryIcon kind={kind} />
-                                  {count > 0 && (
-                                    <span
-                                      className={styles.categoryBadge}
-                                      aria-hidden="true"
-                                    >
-                                      {count > 99 ? "99+" : count}
-                                    </span>
-                                  )}
-                                </span>
-                              </button>
-                            );
-                          },
-                        )}
+                                <CategoryIcon kind={kind} />
+                                {count > 0 && (
+                                  <span
+                                    className={styles.categoryBadge}
+                                    aria-hidden="true"
+                                  >
+                                    {count > 99 ? "99+" : count}
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          );
+                        })}
                       </nav>
                     )}
                     {!directOpen && (
@@ -587,6 +594,9 @@ function AccountMessages({
                       </p>
                     )}
                   </>
+                )}
+                {view === "reports" && (
+                  <MyReportingCases initialTab="notices" />
                 )}
                 {view === "followers" && (
                   <Followers id={author.viewer.id} onOpen={navigate} />

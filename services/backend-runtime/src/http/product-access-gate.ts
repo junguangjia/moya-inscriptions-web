@@ -74,6 +74,11 @@ const openAuthOperations: ReadonlySet<string> = new Set([
   "POST passwords/reset",
   "POST registrations",
   "POST sign-out",
+  "POST appeals/login",
+  "POST appeals/challenges",
+  "POST appeals/verify",
+  "GET appeals/session",
+  "POST appeals/sign-out",
 ]);
 /** The Owner's operator boundary answers only to its own credential. */
 const operatorPrefix = "/internal/community/";
@@ -92,6 +97,19 @@ export const productRouteAuthority = (
     openAuthOperations.has(`${method} ${pathname.slice(authPrefix.length)}`)
   )
     return "open";
+  // These operations have a separate case-owner/appeal-session boundary.
+  // Opening their outer beta gate never grants ordinary community access.
+  if (
+    (method === "GET" &&
+      /^\/v1\/community\/(?:decisions(?:\/[^/]+)?|reports\/[^/]+(?:\/evidence\/[^/]+)?)$/u.test(
+        pathname,
+      )) ||
+    (method === "POST" &&
+      /^\/v1\/community\/(?:decisions\/[^/]+\/appeals|reports\/[^/]+\/(?:statements|evidence))$/u.test(
+        pathname,
+      ))
+  )
+    return "boundary";
   if (pathname.startsWith(operatorPrefix) || delegatedPaths.has(pathname))
     return "boundary";
   return "session";

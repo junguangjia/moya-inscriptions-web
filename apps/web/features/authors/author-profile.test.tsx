@@ -514,14 +514,18 @@ describe("Visitor profile actions", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it("offers a signed-out visitor the sign-in pill instead of actions", async () => {
+  it("offers a signed-out visitor the sign-in pill and a login-gated report menu", async () => {
     author.viewer = null;
     profileRead.mockResolvedValue(profile(false));
     const node = await render();
     const link = node.querySelector("a")!;
     expect(link.textContent).toBe("登录后关注");
     expect(link.classList.contains(media.primaryButton!)).toBe(true);
-    expect(button(node, "更多操作")).toBeUndefined();
+    const more = button(node, "更多操作")!;
+    expect(more).toBeDefined();
+    await act(async () => more.click());
+    expect(node.querySelector('[role="menuitem"]')?.textContent).toBe("举报");
+    expect(node.querySelector("[data-profile-block]")).toBeNull();
   });
 });
 /**
@@ -1328,4 +1332,20 @@ describe("profile settings authentication snapshot lifetime", () => {
       }
     },
   );
+});
+
+describe("Profile IP location", () => {
+  it("renders only the resolved public label supplied by the Backend", async () => {
+    profileRead.mockResolvedValue({ ...profile(true), ipLocation: "北京市" });
+    const node = await render();
+    expect(node.querySelector("[data-profile-ip-location]")?.textContent).toBe(
+      "IP 属地：北京市",
+    );
+  });
+  it("shows a truthful unavailable label when no resolved location exists", async () => {
+    const node = await render();
+    expect(node.querySelector("[data-profile-ip-location]")?.textContent).toBe(
+      "IP 属地：属地暂不可用",
+    );
+  });
 });

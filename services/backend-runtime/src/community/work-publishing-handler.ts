@@ -1,4 +1,5 @@
 import {
+  requireHumanModerationReason,
   isCommunityConflictError,
   isCommunityInputError,
   isCommunityNotFoundError,
@@ -559,7 +560,10 @@ export const handlePublishingOperatorRequest = async (
         else {
           const revisionId = segment("revisionId", id);
           reply(
-            await service.moderateSubmission(revisionId, await commandBody()),
+            await service.moderateSubmission(
+              revisionId,
+              requireHumanModerationReason(await commandBody()),
+            ),
           );
         }
         return true;
