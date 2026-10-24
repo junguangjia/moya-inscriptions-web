@@ -329,3 +329,13 @@ existing identity/database boundaries. Simulated provider/COS transport results
 remain separate from real external services. Registration agreement text/version
 approval, real service credentials and delivery, live host configuration,
 permission changes and deployment remain pending Owner gates. PR195 stays Draft.
+
+## PNVS authentication continuation
+
+The bounded `aliyun-pnvs-live-auth-v1` continuation permits independently
+configured email and phone delivery under the existing auth profile. The
+[configuration, acceptance and rollback procedure](../development/aliyun-pnvs-live-auth-v1.md)
+is the current source for SMS-only startup, purpose-specific templates and
+challenge-bound provider verification. The historical r3 authorization and
+evidence above remain unchanged; neither this source change nor fixture tests
+establish live SMS receipt, provider PASS, or Production deployment.

@@ -145,7 +145,7 @@ const withTransactionOverride = (
 });
 
 describe("invitation-only registration", () => {
-  it("does not turn an enabled phone login channel into invitation registration", async () => {
+  it("requires an invitation before sending an enabled phone registration code", async () => {
     const h = harness({ phoneMode: "provider" });
     h.seed();
     expect(
@@ -153,11 +153,10 @@ describe("invitation-only registration", () => {
         channel: "phone",
         purpose: "register",
         identifier: "+8613800138000",
-        invitationCode: syntheticCode,
         idempotencyKey: randomUUID(),
         source: "synthetic-source",
       }),
-    ).toEqual({ ok: false, reason: "AUTH_CHANNEL_UNAVAILABLE" });
+    ).toEqual({ ok: false, reason: "AUTH_INVITATION_REQUIRED" });
     expect(h.sends()).toBe(0);
   });
 

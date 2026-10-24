@@ -133,6 +133,7 @@ export interface AuthDeliveryPorts {
     readonly minutes: number;
   }): Promise<DeliveryOutcome>;
   sendPhone(input: {
+    readonly purpose: AuthPurposeName;
     readonly e164: string;
     readonly code: string | null;
     readonly outId: string;
@@ -236,9 +237,12 @@ export class CommunityAuthService {
       (options.profile === "full-local" ||
         (options.profile === "password-only"
           ? options.emailMode !== "disabled" || options.phoneMode !== "disabled"
-          : options.emailMode !== "provider" ||
+          : (options.emailMode !== "provider" &&
+              options.emailMode !== "disabled") ||
             (options.phoneMode !== "provider" &&
-              options.phoneMode !== "disabled")))
+              options.phoneMode !== "disabled") ||
+            (options.emailMode === "disabled" &&
+              options.phoneMode === "disabled")))
     )
       throw new Error("Production authentication requires real provider modes");
     this.registrationAgreement =
@@ -265,7 +269,7 @@ export class CommunityAuthService {
           this.options.profile === "password-only"
             ? ["handle"]
             : [
-                "email",
+                ...(email ? (["email"] as const) : []),
                 ...(phone ? (["phone"] as const) : []),
                 ...(this.options.allowProvisionedHandleLogin
                   ? (["handle"] as const)
@@ -320,12 +324,6 @@ export class CommunityAuthService {
       return fail("AUTH_CHANNEL_UNAVAILABLE");
     if (input.purpose === "register" && !this.registrationAvailable())
       return fail("AUTH_NOT_CONFIGURED");
-    if (
-      input.purpose === "register" &&
-      this.options.registrationMode === "invite-only" &&
-      input.channel !== "email"
-    )
-      return fail("AUTH_CHANNEL_UNAVAILABLE");
     if (!this.channelAvailable(input.channel))
       return fail("AUTH_CHANNEL_UNAVAILABLE");
     const at = this.clock();
@@ -2382,6 +2380,7 @@ export class CommunityAuthService {
         });
       }
       return await this.options.delivery.sendPhone({
+        purpose: reserved.challenge.purpose,
         e164: reserved.destination,
         code: reserved.code,
         outId: reserved.challenge.id,

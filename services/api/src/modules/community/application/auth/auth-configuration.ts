@@ -18,6 +18,7 @@ const keyFrom = (value: string | undefined, name: string): Uint8Array => {
 export interface ProductionAuthConfiguration {
   readonly keys: AuthKeys;
   readonly profile?: "email-first" | "password-only";
+  readonly emailEnabled?: boolean;
   readonly phoneEnabled: boolean;
   readonly registrationMode?: "closed" | "invite-only";
   readonly allowProvisionedHandleLogin?: boolean;
@@ -84,8 +85,19 @@ export const productionAuthConfigurationFrom = (
       throw new Error(
         "password-only requires disabled OTP providers and no delivery configuration",
       );
-  } else if (env.AUTH_EMAIL_PROVIDER !== "tencent-ses")
-    throw new Error("AUTH_EMAIL_PROVIDER must be tencent-ses when enabled");
+  } else {
+    if (!["disabled", "tencent-ses"].includes(env.AUTH_EMAIL_PROVIDER ?? ""))
+      throw new Error(
+        "AUTH_EMAIL_PROVIDER must be disabled or tencent-ses when enabled",
+      );
+    if (
+      env.AUTH_EMAIL_PROVIDER !== "tencent-ses" &&
+      env.AUTH_PHONE_PROVIDER !== "aliyun-dypns"
+    )
+      throw new Error(
+        "OTP authentication requires at least one enabled provider",
+      );
+  }
   const version = env.AUTH_KEY_VERSION;
   if (
     version === undefined ||
@@ -101,6 +113,7 @@ export const productionAuthConfigurationFrom = (
       encryptionKey: keyFrom(env.AUTH_ENCRYPTION_KEY, "AUTH_ENCRYPTION_KEY"),
       otpKey: keyFrom(env.AUTH_OTP_KEY, "AUTH_OTP_KEY"),
     },
+    emailEnabled: env.AUTH_EMAIL_PROVIDER === "tencent-ses",
     phoneEnabled: env.AUTH_PHONE_PROVIDER === "aliyun-dypns",
     registrationMode:
       registrationModeFrom(env.AUTH_REGISTRATION_MODE) ?? "closed",
@@ -127,7 +140,10 @@ export const createProductionAuthService = (
     environment: "production",
     profile: config.profile ?? "email-first",
     keys: config.keys,
-    emailMode: config.profile === "password-only" ? "disabled" : "provider",
+    emailMode:
+      config.profile === "password-only" || config.emailEnabled === false
+        ? "disabled"
+        : "provider",
     phoneMode: config.phoneEnabled ? "provider" : "disabled",
     delivery,
     registrationAgreement,

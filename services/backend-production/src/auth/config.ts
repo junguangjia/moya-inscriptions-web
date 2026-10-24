@@ -1,7 +1,10 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { productionAuthConfigurationFrom } from "@moya/backend-runtime";
-import type { ProductionAuthConfiguration } from "@moya/backend-runtime";
+import type {
+  AuthDeliveryPorts,
+  ProductionAuthConfiguration,
+} from "@moya/backend-runtime";
 import type { AuthRegistrationAgreement } from "@moya/backend-runtime";
 import { authRegistrationAgreementSchema } from "@moya/backend-runtime";
 
@@ -20,7 +23,9 @@ export interface AliyunDypnsConfiguration {
   readonly accessKeyId: string;
   readonly accessKeySecret: string;
   readonly signName: string;
-  readonly templateCode: string;
+  readonly templates: Readonly<
+    Record<Parameters<AuthDeliveryPorts["sendPhone"]>[0]["purpose"], string>
+  >;
   readonly schemeName: string;
 }
 export interface ConfiguredProductionAuth {
@@ -86,14 +91,9 @@ const readAgreement = async (
   }
 };
 
-/** Validation only. No provider request, pool, credential generation or fallback. */
-export const loadProductionAuthConfiguration = async (
+const loadTencentSesConfiguration = (
   env: Environment,
-): Promise<ConfiguredProductionAuth | null> => {
-  const service = productionAuthConfigurationFrom(env);
-  if (service === null) return null;
-  if (service.profile === "password-only")
-    return { service, email: null, phone: null, agreement: null };
+): TencentSesConfiguration => {
   const selected = required(env, "TENCENT_SES_ENDPOINT");
   if (
     selected !== "https://ses.tencentcloudapi.com" &&
@@ -124,7 +124,7 @@ export const loadProductionAuthConfiguration = async (
     !/^[^\r\n<>]+<[^\s@<>]+@[^\s@<>]+>$/u.test(from)
   )
     throw new Error("TENCENT_SES_FROM: invalid sender");
-  const email: TencentSesConfiguration = {
+  return {
     endpoint,
     region,
     from,
@@ -132,12 +132,49 @@ export const loadProductionAuthConfiguration = async (
     secretId: required(env, "TENCENT_SES_SECRET_ID", 256),
     secretKey: required(env, "TENCENT_SES_SECRET_KEY", 256),
   };
+};
+
+const templateFor = (
+  env: Environment,
+  name: string,
+  fallback: string,
+): string => (env[name] === undefined ? fallback : required(env, name, 128));
+
+/** Validation only. No provider request, pool, credential generation or fallback. */
+export const loadProductionAuthConfiguration = async (
+  env: Environment,
+): Promise<ConfiguredProductionAuth | null> => {
+  const service = productionAuthConfigurationFrom(env);
+  if (service === null) return null;
+  if (service.profile === "password-only")
+    return { service, email: null, phone: null, agreement: null };
+  const email =
+    service.emailEnabled === false ? null : loadTencentSesConfiguration(env);
   const phone: AliyunDypnsConfiguration | null = service.phoneEnabled
     ? {
         accessKeyId: required(env, "ALIYUN_ACCESS_KEY_ID", 256),
         accessKeySecret: required(env, "ALIYUN_ACCESS_KEY_SECRET", 256),
         signName: required(env, "ALIYUN_SMS_SIGN_NAME", 128),
-        templateCode: required(env, "ALIYUN_SMS_TEMPLATE_CODE", 128),
+        templates: {
+          sign_in: required(env, "ALIYUN_SMS_TEMPLATE_CODE", 128),
+          register: required(env, "ALIYUN_SMS_TEMPLATE_CODE", 128),
+          replace: templateFor(
+            env,
+            "ALIYUN_SMS_REPLACE_TEMPLATE_CODE",
+            "100002",
+          ),
+          password_reset: templateFor(
+            env,
+            "ALIYUN_SMS_PASSWORD_RESET_TEMPLATE_CODE",
+            "100003",
+          ),
+          link: templateFor(env, "ALIYUN_SMS_LINK_TEMPLATE_CODE", "100004"),
+          reauthenticate: templateFor(
+            env,
+            "ALIYUN_SMS_REAUTH_TEMPLATE_CODE",
+            "100005",
+          ),
+        },
         schemeName: required(env, "ALIYUN_SMS_SCHEME_NAME", 20),
       }
     : null;

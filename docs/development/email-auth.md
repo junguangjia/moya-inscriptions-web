@@ -1,8 +1,10 @@
 # Email-first authentication
 
-Task `email-auth-v1`. Email is the primary login channel. Phone stays on the
-same public user, challenge and session system. Payload operator users and Agent
-Connection identities are not public accounts.
+Task `email-auth-v1` originally made email the primary login channel. The
+`aliyun-pnvs-live-auth-v1` continuation also supports SMS-only Production
+configuration. Phone stays on the same public user, challenge and session
+system. Payload operator users and Agent Connection identities are not public
+accounts.
 
 ## Status
 
@@ -69,9 +71,9 @@ attachments. SMTP is not the production path.
 
 Aliyun Number Authentication `SendSmsVerifyCode` / `CheckSmsVerifyCode` uses
 provider-generated codes (`##code##`), six digits, 300 seconds, resend interval
-60 seconds, and `ReturnVerifyCode=false`. Verification succeeds only when
-`Model.VerifyResult` is `PASS`. `OutId` is correlation, not an authorization
-key. A response that echoes the code is a failure.
+60 seconds, `DuplicatePolicy=1`, and `ReturnVerifyCode=false`. Verification
+succeeds only when `Model.VerifyResult` is `PASS`. `OutId` is correlation, not
+an authorization key. A response that echoes the code is a failure.
 
 Configure protected server inputs when separately authorized; no live activation
 or delivery runs in the runtime task:
@@ -129,9 +131,20 @@ forward migration after it has been applied.
 `loadProductionAuthConfiguration` validates enabled configuration and the
 optional approved registration file before database pools. `AUTH_PUBLIC_ENABLED`
 unset/false keeps auth unmounted; enabled incomplete configuration refuses
-startup. `AUTH_PROFILE=email-first`, `AUTH_EMAIL_PROVIDER=tencent-ses`, optional
-`AUTH_PHONE_PROVIDER=aliyun-dypns` (otherwise disabled) select existing mappings
-and the existing CommunityAuthService, never a second Session/provider system.
+startup. `AUTH_PROFILE=email-first` retains its public profile name while
+`AUTH_EMAIL_PROVIDER=tencent-ses|disabled` and
+`AUTH_PHONE_PROVIDER=aliyun-dypns|disabled` independently select real channels.
+At least one OTP provider must be enabled; omitted phone remains disabled for
+existing email configurations. SMS-only explicitly disables email and requires
+no SES inputs. Disabled providers are not parsed or initialized. The existing
+CommunityAuthService still owns every identity and Session. `password-only`
+continues to require both OTP providers disabled and no delivery configuration.
+
+Phone registration uses the same invitation, approved agreement and atomic beta
+grant as email registration. Linking an email-only account still requires its
+existing usable email factor; disabling email does not bypass reauthentication.
+See [PNVS configuration and release procedure](aliyun-pnvs-live-auth-v1.md) for
+purpose templates, challenge-bound schemes and current acceptance boundaries.
 
 `AUTH_REGISTRATION_AGREEMENT_FILE` points to private approved plain-text JSON
 {version,title,body}. Missing material closes registration; a supplied invalid
