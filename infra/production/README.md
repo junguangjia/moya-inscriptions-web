@@ -608,16 +608,22 @@ from what it read; `abandon` deletes a caller's staging object. Nothing is read
 back through artvenn.com. The routes accept originals up to 128 MiB, 120 million
 pixels, 512 MiB decoded, 65,500 px per side and 256 KiB per decoded row (width ×
 channels × bytes per sample, so a 16-bit RGBA PNG is at most 32,768 px wide),
-with 8-bit JPEG samples only, at most 512 MiB of DCT coefficients in a
-progressive JPEG and at most 256 MiB decoded in an interlaced (Adam7) PNG. The
-Development render measurement set all but the first three
+with 8-bit JPEG samples only, at most 150 scans and at most 512 MiB of DCT
+coefficients in a JPEG with more than one scan, at most 256 MiB decoded in an
+interlaced (Adam7) PNG, and at most 256 MiB of ARGB (width × height × 4 B) in a
+lossless WebP or a lossy one with VP8L-compressed alpha. The Development render
+measurement and its reviews set all but the first three
 ([catalog-scale-bench](../../docs/development/catalog-scale-bench.md), increment
 2): the sandbox's JPEG decoder refuses a side over 65,500 px and every 12-bit
 JPEG, a wider 16-bit row took up to 1.4 GiB of the sandbox's 1.5 GiB, and a
 decoder that holds the whole image (progressive JPEG, Adam7 PNG) took up to 1.1
-GiB at 120 million pixels. The native upload and the relay keep 40 MiB and 80
-million pixels, and nginx keeps `client_max_body_size 50m`. There is no
-migration and no nginx or EdgeOne change.
+GiB at 120 million pixels. The lossless WebP bound is conservative (a 120 MP
+lossless file peaked under 600 MiB), and the scan count bounds the time of a
+crafted JPEG, not measured. Within the limits the measured peak was at most 926
+MiB (60%), on arm64; Production's amd64 render timing is still to be measured by
+the canary (step 6). The native upload and the relay keep 40 MiB and 80 million
+pixels, and nginx keeps `client_max_body_size 50m`. There is no migration and no
+nginx or EdgeOne change.
 
 Before its copy, `complete` refuses a staging object whose HEAD shows anything a
 signed PUT never stores: another Content-Type, a Content-Encoding, -Disposition
@@ -626,6 +632,34 @@ than standard, encryption other than SSE-COS (AES256), or a tag beside the
 signed one. It deletes it and answers 422 `INGEST_STAGING_INVALID`, so nothing
 of the kind reaches `editorial/`, which the Admin cannot delete. A final object
 that shows one is refused unread (500 `INGEST_FINAL_INVALID`).
+
+Three outcomes need the Owner. Each is logged as a fixed category with no key,
+URL or file name; the final key of an intent is
+`editorial/<SHA-256 of catalogId>/<SHA-256 of mediaId>-<sha256>.<jpg|png|webp>`
+(hex digests).
+
+- `INGEST_FINAL_INVALID` (500, logged as
+  `EDITORIAL_MEDIA_INGEST_FINAL_INVALID`): the final object of that mediaId
+  exists but fails re-verification (its size, its HEAD attributes, its hash or
+  its structure), before or after the copy. Nothing is registered, and the
+  staging object is kept. Every later `complete` of that mediaId answers the
+  same until the Owner deletes that final object with the Owner's own COS
+  identity (the Admin cannot delete `editorial/`), after checking read-only that
+  no media record holds its key. Other mediaIds are not affected. Then re-run
+  the batch with the credential and state file that started it.
+- `EDITORIAL_MEDIA_INGEST_ORPHAN` (a warning; the request answered 409
+  `MEDIA_IDENTITY_CONFLICT` or `MEDIA_IDENTITY_EXISTS`): another path registered
+  the mediaId with other facts while this `complete` copied, so a verified
+  original sits under `editorial/` with no media record. Nothing serves or reads
+  it; it only takes storage. To remove it, list the `editorial/` keys that no
+  media record holds (a read-only comparison) and delete them by hand with the
+  Owner's identity.
+- `EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED` (a warning): after a
+  registration or a reuse, the best-effort delete of the caller's staging object
+  failed or ran out of its deadline. The registration stands. Under L1 the
+  lifecycle rule removes the object within a day. Under L2 nothing does, and
+  `--abandon` skips registered items, so the Owner's listing of
+  `catalog-ingest/v1/` after the batch (step 4) finds it; delete it by hand.
 
 `admin.env` gains `CMS_CATALOG_INGEST` (`off` or `on`; absent or empty means
 off) and `CMS_CATALOG_INGEST_UPLOAD_ENDPOINT`, the https origin of the public
@@ -642,19 +676,42 @@ and `CMS_CATALOG_INGEST_STAGING_TAG` (default `off`: lifecycle L2; `on`: L1, the
 staging PUT carries the staging tag and the copy drops it, decision D8). While
 the switch is off the routes are not composed (404), and the scripts use the
 relay for files within 40 MiB and refuse larger ones with
-`MEDIA_INGEST_UNAVAILABLE`. The release ships with the switch off and needs an
-Admin built on the PR #320 base; the live off-main Admin cannot carry it.
+`MEDIA_INGEST_UNAVAILABLE`, unless the item's staging PUT began (in this run, or
+recorded in the state file by an earlier one): such an item, whatever its size,
+also stops with `MEDIA_INGEST_UNAVAILABLE` and keeps its staging record, for a
+re-run with the same state file or `--abandon` once the routes are back. Under
+L2 nothing else removes its staging object, so run `--abandon` for every
+unfinished batch before switching off (see Rollback below). The release ships
+with the switch off and needs an Admin built on `main`; the live off-main Admin
+cannot carry it.
+
+Release order with 1B: this Admin is built on `main` after 1B, so its checkout
+also holds `20261020_160000_catalog_delivery_intents` (#320), M1 (1A) and M2
+(1B). Release it only after the CMS steps 1–3 of
+[increment 1B](#catalog-scale-database-steps-of-increment-1b-catalog-scale-v1)
+have run, each from its own checkout (#320, then 1A, then 1B), so that each of
+these migrations is a batch of its own. Never run `pnpm db:migrate` from this
+checkout while more than one of them is pending: `payload migrate` would apply
+`20261020_160000`, M1 and M2 as one batch, which that section forbids. Read the
+`payload_migrations` table first (read-only) to see which have run; once all
+three are there, this checkout has no pending CMS migration. The pacing proxy
+needs them too: `POST /api/editorial/catalog-render-backlog` reads
+`catalog_delivery_intents`, which `20261020_160000` creates.
 
 `CMS_CATALOG_INGEST_SERVER_SHA256=off` hashes nothing at `complete`: it
 registers the client's declared SHA-256 as the content-addressed key, so the
 `editorial/` object key and the media doc carry the client's value, and only the
 staging ETag (the body's MD5), the image header and the tail are checked against
-the bytes. A declared SHA-256 that does not match the bytes is caught only when
-the worker renders the original (`source_hash_mismatch`; nothing is published),
-and by then the mediaId and its `editorial/` object stay occupied: media delete
-is disabled and the Admin cannot delete `editorial/`. Keep the setting `on`
-unless the S0 check (step 1) shows that the Admin's COS host resolves to a
-public address and the Owner accepts that risk.
+the bytes (and the JPEG scan count, which needs every byte, is not applied
+beyond the part read for the header: a crafted JPEG of more scans than
+`CATALOG_ORIGINAL_MAX_JPEG_SCANS` is registered, can never render within the
+job's time, and cannot be deleted). A declared SHA-256 that does not match the
+bytes is caught only when the worker renders the original
+(`source_hash_mismatch`; nothing is published), and by then the mediaId and its
+`editorial/` object stay occupied: media delete is disabled and the Admin cannot
+delete `editorial/`. Keep the setting `on` unless the S0 check (step 1) shows
+that the Admin's COS host resolves to a public address and the Owner accepts
+that risk.
 
 Increment 2 also paces Catalog prepares (decisions D4 and D5). The Backend gains
 a read-only operator route,
@@ -782,8 +839,10 @@ in the environment, as the Admin's own code, while the switch is still off.
      batch's state file: it reports `abandoned` (removed), `absent` (nothing
      staged), `notStarted`, and `INGEST_ACTOR_MISMATCH` for items another
      credential started, which it leaves alone; without the state file it
-     refuses (`STATE_NOT_FOUND`). A batch of Codex's own script is abandoned by
-     that script, with its identity.
+     refuses (`STATE_NOT_FOUND`). It rebuilds each item's intent from the
+     manifest and the MD5 the item's state row recorded (not secret), so it
+     still reaches an item whose local file changed or was removed since. A
+     batch of Codex's own script is abandoned by that script, with its identity.
 
    Change `CMS_CATALOG_INGEST_STAGING_TAG` later only while `catalog-ingest/v1/`
    is empty (run `--abandon` for every unfinished batch first), so no staging
@@ -797,18 +856,34 @@ in the environment, as the Admin's own code, while the switch is still off.
 6. The 10-image canary, from the Owner's location, before any bulk batch: 10
    originals of mixed sizes, at least four over 40 MiB, through
    `scripts/editorial/direct-ingest.mjs` (or Codex's changed script). Its
-   summary must show `"privacy": "private"`. Record from its `metrics`, numbers
-   only: `largePuts` and `largePutsFailedOnce` (originals over 40 MiB that
-   needed more than one PUT), `putAttempts` and `failedPuts`, `putMiBps`
-   (median, slowest and fastest PUT that stored the bytes) and `completeMs`
-   (median and longest `complete` phase, retries included). Each image's own PUT
-   times and statuses and `complete` times are in the 0600 state file's row
-   (`metrics`). More than 5% of large PUTs failed at least once
+   summary must show `"privacy": "private"`. The check fails closed, in the
+   canary and in every batch: any answer but private (401 or 403) stops the run,
+   and no item or attempt starts while it runs. After `uncertain` (no clear
+   answer in three tries) the next run with the same state file checks its first
+   new original, and every run of that state that checks nothing reports
+   `uncertain` again (exit 1) until a check answers private. `public` (2xx) or
+   `unexpected` (404) is recorded in the state file, which then refuses
+   `--execute` with `PRIVACY_STOPPED` before any request: once the Owner has
+   made the bucket private and confirmed it, the batch continues with a new
+   state file (registered items are reused, staged bytes completed), while
+   `--abandon` still runs with the old one. The stderr
+   `EDITORIAL_DIRECT_INGEST_RUNBOOK` lines name the step for each. Record from
+   its `metrics`, numbers only: `largePuts` and `largePutsFailedOnce` (originals
+   over 40 MiB that needed more than one PUT), `putAttempts` and `failedPuts`,
+   `putMiBps` (median, slowest and fastest PUT that stored the bytes) and
+   `completeMs` (median and longest `complete` phase, retries included). Each
+   image's own PUT times and statuses and `complete` times are in the 0600 state
+   file's row (`metrics`). More than 5% of large PUTs failed at least once
    (`largePutsFailedOnce` over `largePuts`) stops the rollout (multipart staging
    is a later change); a slow canary leaves paid COS acceleration to the Owner.
 7. Paced batches: rendering stays at about 7 images per minute, so prepare the
    next wave only while the render backlog drains within 12 hours; ingested
-   records can wait as drafts. The pacing read is
+   records can wait as drafts. Ingest itself is slower for one credential: the
+   Admin signs at most 4 GiB per credential per hour (12 GiB in all), about 58
+   originals of 70 MiB an hour against about 420 renders, so one credential's
+   batches meet `INGEST_QUOTA_EXCEEDED` (429: the run starts no new item and
+   leaves the rest pending for a re-run in the next hour) long before the render
+   backlog holds a wave back. The pacing read is
    `POST /api/editorial/catalog-render-backlog` (released Backend, then Admin):
    the App's per-tier count plus `preparedSince`, the images of the intents
    prepared since that count (from 10 minutes before it, so an intent whose

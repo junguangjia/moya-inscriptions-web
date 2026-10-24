@@ -79,9 +79,12 @@ key 与业务身份分离；默认 2 并发、3 次尝试、30 秒请求超时�
 把 Catalog 原图（单帧 JPEG、PNG 或 WebP，最大 128 MiB、1.2 亿像素、解码后 512
 MiB、每边 65,500 px，解码后每行（宽 × 通道 × 每样本字节）不超过 256
 KiB，即 16 位 RGBA 的 PNG 最宽 32,768
-px；JPEG 只收 8 位样本，渐进式 JPEG 的 DCT 系数缓冲（每个分量的 8×8 块数 × 128
-B）不超过 512 MiB，隔行（Adam7）PNG 解码后不超过 256
-MiB；每边与每行两项以及这三条由 Development 渲染实测确定，见
+px；JPEG 只收 8 位样本、最多 150 个扫描，多扫描 JPEG（渐进式，或首个扫描不含全部分量的顺序式）的 DCT 系数缓冲（每个分量的 8×8 块数 ×
+128 B）不超过 512 MiB，隔行（Adam7）PNG 解码后不超过 256
+MiB，无损（VP8L）WebP 以及 alpha 以 VP8L 压缩（`ALPH`
+方法 1）的有损 WebP 的 ARGB 缓冲（宽 × 高 × 4 B）不超过 256
+MiB；每边、每行、8 位样本和前两个整图缓冲上限由 Development 渲染实测确定，无损 WebP 上限（保守值：实测 1.2 亿像素的无损文件峰值不到 600
+MiB）和扫描数上限来自其评审，见
 [catalog-scale-bench](../development/catalog-scale-bench.md)）用一次签名 PUT 直接写入私有桶的暂存键
 `catalog-ingest/v1/`；原图字节不经过 artvenn.com、EdgeOne、nginx 或 CVM。Admin 只收到
 `start`、`complete`（必要时
@@ -90,7 +93,11 @@ MiB；每边与每行两项以及这三条由 Development 渲染实测确定，�
 [production](../../infra/production/README.md)
 的增量 2 一节）；开关关闭时路由不存在（404），40
 MiB 以内的文件自动改走既有续传通道，更大的文件以 `MEDIA_INGEST_UNAVAILABLE`
-失败。原生上传和续传通道仍是 40 MiB / 8000 万像素。
+失败；但暂存 PUT 已经开始的项目（本次运行开始的，或状态文件记录了此前运行开始的）不论大小都不走续传通道，同样以
+`MEDIA_INGEST_UNAVAILABLE` 失败并保留暂存记录，待路由恢复后用同一状态文件重跑或
+`--abandon`。L2 下没有别的办法删除它的暂存对象，所以关闭开关之前先对每个未完成批次运行
+`--abandon`（见 [production](../../infra/production/README.md)
+增量 2 一节的回退说明）。原生上传和续传通道仍是 40 MiB / 8000 万像素。
 
 开关打开后 Admin 另读两个 `on`/`off`
 设置：`CMS_CATALOG_INGEST_SERVER_SHA256`（默认 `on`，`complete`
@@ -110,9 +117,27 @@ API 写法（`x-amz-copy-source`、`x-amz-copy-source-if-match`、`x-amz-metadat
 `INGEST_FINAL_INVALID`。预演由 Owner 在 CVM 上用 Admin 自己的代码运行（`apps/admin/scripts/catalog-ingest-probes.ts`，步骤见
 [production](../../infra/production/README.md)）。
 
+以下三种结果需要 Owner 处理。日志只记固定类别，不含对象键、URL 或文件名；某个意图的最终对象键为
+`editorial/<catalogId 的 SHA-256>/<mediaId 的 SHA-256>-<sha256>.<jpg|png|webp>`（十六进制摘要）。
+
+- `INGEST_FINAL_INVALID`（500，日志类别
+  `EDITORIAL_MEDIA_INGEST_FINAL_INVALID`）：该 mediaId 的最终对象已存在，但在复制前或复制后的复核（大小、HEAD 属性、哈希或结构）中不合格。什么也不登记，暂存对象保留。在 Owner 用自己的 COS 身份删除这个最终对象之前（Admin 不能删除
+  `editorial/`；删除前先只读确认没有媒体记录持有该键），这个 mediaId 的每次
+  `complete`
+  都同样失败，其他 mediaId 不受影响。删除后用开始这一批的凭据和状态文件重跑。
+- `EDITORIAL_MEDIA_INGEST_ORPHAN`（警告；该请求答 409 `MEDIA_IDENTITY_CONFLICT`
+  或 `MEDIA_IDENTITY_EXISTS`）：本次 `complete`
+  复制期间，另一路径以不同的事实登记了该 mediaId，于是一张已校验的原图留在
+  `editorial/`
+  下而没有媒体记录。它不会被读取或提供，只占存储；要清理时，只读比对出没有媒体记录持有的
+  `editorial/` 键，再由 Owner 手工删除。
+- `EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED`（警告）：登记或复用之后，尽力而为地删除调用者暂存对象时失败或超出期限。登记照常有效。L1 下生命周期规则一天内删除它；L2 下没有规则会删，`--abandon`
+  也跳过已登记项，所以每批之后 Owner 列出
+  `catalog-ingest/v1/`（production 第 4 步）时会看到它，手工删除即可。
+
 `CMS_CATALOG_INGEST_SERVER_SHA256=off` 时 `complete`
 不计算任何哈希，直接把客户端声明的 SHA-256 登记为内容寻址键：`editorial/`
-对象键和媒体记录都带这个值，字节只核对暂存 ETag（即正文的 MD5）、图像文件头和结尾。声明的 SHA-256 与字节不符时，要到 worker 渲染这张原图时才发现（`source_hash_mismatch`，不发布），而此时该 mediaId 和它的
+对象键和媒体记录都带这个值，字节只核对暂存 ETag（即正文的 MD5）、图像文件头和结尾（文件头之后的 JPEG 扫描因此不计数）。声明的 SHA-256 与字节不符时，要到 worker 渲染这张原图时才发现（`source_hash_mismatch`，不发布），而此时该 mediaId 和它的
 `editorial/` 对象已被占用：媒体删除已禁用，Admin 也不能删除
 `editorial/`。因此保持
 `on`，除非 S0 检查表明 Admin 的 COS 主机解析到公网地址，并且 Owner 接受这一风险。
@@ -158,16 +183,27 @@ JSONL，已登记项续接时跳过，上次已暂存的项续接时只调 `star
 必须用跑这一批的同一凭据和同一状态文件：输出
 `abandoned`（确实删除）、`absent`（该身份下没有暂存对象）、`notStarted`，别的凭据开始的项目计为
 `INGEST_ACTOR_MISMATCH` 且不动；没有状态文件时以 `STATE_NOT_FOUND`
-拒绝。续接（再次
+拒绝。`--abandon`
+按清单和状态文件中该项记录的 MD5（非机密）重建意图，所以本地文件之后改动或删除也不妨碍清理（只有旧版本写下的、没有 MD5 的行才读一次文件）。续接（再次
 `--execute`）同样必须用开始这一批的凭据：已记录暂存键的项目若拿到别的身份的授权，以
 `INGEST_ACTOR_MISMATCH`
 停止，保留记录和已暂存的对象，不在新身份下 PUT、`complete` 或
 `abandon`；暂存键确认已清空（最终失败时 `abandon` 成功，或 `--abandon`
-成功）后才解除这一绑定。Codex 自己脚本的批次由该脚本用其身份放弃。`complete` 或
-`abandon` 等不到该 mediaId 的锁（续传通道正持有）时答 409
-`CONCURRENT_OPERATION_BUSY`，什么也没改变，客户端按可重试处理，不放弃暂存。每次运行在第一张新登记的原图之后，对其最终对象做一次匿名 Range
-0-0
-GET（期望 401 或 403）；能匿名读取时立即停止整批。标准输出只有计数和固定代码（`registered`、`pending`、`privacy`、`codes`
+成功）后才解除这一绑定。Codex 自己脚本的批次由该脚本用其身份放弃。`complete`
+等不到该 mediaId 的数据库锁（续传通道正持有，最多等 5 秒）时答 409
+`CONCURRENT_OPERATION_BUSY`，什么也没改变，客户端按可重试处理，不放弃暂存。`abandon`
+不取这把数据库锁，只在本 Admin 进程内排在同一 mediaId 的 `complete` 或 `abandon`
+之后（进程内互斥），45 秒期限内仍未轮到时答 504
+`INGEST_DEADLINE_EXCEEDED`，同样什么也没改变，重跑 `--abandon`
+即可。每次运行在第一张新直传登记的原图之后，对其最终对象做一次匿名 Range 0-0
+GET（期望 401 或 403），失败即关闭：检查进行期间不开始任何项目或尝试；除 private（401/403）以外的任何回答都停止接纳新项目并中止进行中的传输（2xx 为
+`public`，404 为 `unexpected`，私有对象对匿名请求从不答 404；其他状态或无响应为
+`uncertain`，最多试 3 次）。状态文件记录了 `public` 或 `unexpected`
+时，`--execute` 在发出任何请求之前以 `PRIVACY_STOPPED`
+拒绝：Owner 把桶改为私有并确认后，这一批用新的状态文件继续（已登记项复用，已暂存的字节直接
+`complete`），`--abandon` 仍用原状态文件。记录为 `uncertain`
+时，下次用同一状态文件的运行重新检查它的第一张新原图；不做检查的运行（例如剩余项都已登记）仍报告
+`uncertain`、退出码为 1，直到某次检查答 private；没有未登记项时由 Owner 手工匿名读取本批一张最终原图（须答 401 或 403），或由下一批第一张新原图的检查确认。标准输出只有计数和固定代码（`registered`、`pending`、`privacy`、`codes`
 等）以及只含数字的 `metrics`：`putAttempts`、`failedPuts`、`largePuts`（40
 MiB 以上且发过 PUT 的原图数）、`largePutsFailedOnce`（其中至少一次 PUT 失败的）、`putMiBps`、`putMs`、`completeMs`（各为中位数、最小、最大）；每张图自己的 PUT 耗时与状态、`complete`
 耗时记在 0600 状态文件该项的 `metrics`。金丝雀批次据此记录（见
@@ -191,7 +227,7 @@ Codex 的私有批处理脚本（`execute_catalog_upload_v4.mjs`，在仓库之�
    - 配置的 COS API 主机后缀之下、路径为 `/catalog-ingest/v1/<2>/<64>` 的 https
      PUT：不带 Authorization、Cookie 或会话令牌，拒绝重定向，只发送 `start`
      返回的签名头，不增加任何 `x-cos-`/`x-amz-` 头；
-   - 第 4 项的匿名 GET，每批恰好一次：只带
+   - 第 4 项的匿名 GET，每次运行只检查一张原图（无明确回答时最多 3 次请求）：只带
      `Range: bytes=0-0`，不带 Authorization、Cookie、会话令牌或查询串（不复用任何签名），拒绝重定向；目标只能是与本批签名暂存 URL 同一桶源（https、同一主机、默认端口）上形如
      `editorial/<64 hex>/<64 hex>-<64 hex>.(jpg|png|webp)` 的最终对象键。这与
      `createCosClient` 的 `checkPrivate` 相同。
@@ -204,8 +240,8 @@ Codex 的私有批处理脚本（`execute_catalog_upload_v4.mjs`，在仓库之�
    时的哈希和结构检查（D9 回退时为 MD5/ETag）以及 worker 渲染前的 SHA-256 校验保证；只需把
    `complete` 返回的 `validatedBytes`、`validatedSha256`、`validatedMd5`
    与本地值比对。
-4. 每批保留一次匿名 Range
-   0-0 隐私检查（原脚本约第 330 行），按第 1 项许可的形式发出：对象改为本批一张新登记原图的最终对象，直接在 COS 桶主机上检查，期望 401 或 403；能匿名读取时停止整批。不要再经
+4. 每次运行保留一次匿名 Range
+   0-0 隐私检查（原脚本约第 330 行），按第 1 项许可的形式发出：对象改为本批一张新登记原图的最终对象，直接在 COS 桶主机上检查，期望 401 或 403。检查须与 CLI 一样失败即关闭：检查进行期间不开始任何项目；除 401/403 以外的任何回答（2xx、404、其他状态或无响应）都停止开始新项目，无明确回答时最多试 3 次；回答记入本批状态。记录为 2xx 或 404 的状态拒绝再次执行，直到 Owner 把桶改为私有并确认，之后这一批用新的状态继续，放弃仍用原状态；记录为无明确回答时，之后每次运行在某次检查答 401/403 之前都报告未确认。不要再经
    `/api/media/file/*`。CLI 已实现这一检查。
 5. 需要抽样复核时，调用 Admin 的
    `POST /api/editorial/media-ingest/verify`（`{mediaId}`，服务端重算哈希，与

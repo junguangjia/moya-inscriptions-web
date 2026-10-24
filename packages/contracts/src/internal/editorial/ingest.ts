@@ -18,7 +18,9 @@ import { editorialUploadedMediaSchema } from "./upload.js";
  * 16-bit RGBA PNG wider than 32,768 px) took up to 1.4 GiB of the sandbox's
  * 1.5 GiB, and a decoder holding the whole image (the coefficients of a
  * JPEG with more than one scan, an interlaced PNG's pixels) took up to
- * 1.1 GiB at 120 MP.
+ * 1.1 GiB at 120 MP. The PR review added the lossless WebP buffer bound (a
+ * conservative one: a 120 MP lossless file peaked under 600 MiB) and the
+ * JPEG scan count, which bounds a crafted file's time rather than its memory.
  */
 export const CATALOG_ORIGINAL_MAX_BYTES = 128 * 1024 * 1024;
 export const CATALOG_ORIGINAL_MAX_PIXELS = 120_000_000;
@@ -51,6 +53,22 @@ export const CATALOG_ORIGINAL_MAX_JPEG_COEFFICIENT_BYTES = 512 * 1024 * 1024;
  * included) × bytes per sample.
  */
 export const CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES = 256 * 1024 * 1024;
+/**
+ * A lossless (VP8L) WebP's ARGB buffer, which libwebp's decoder holds whole
+ * whatever the output size: width × height × 4 B, with alpha or without. A
+ * lossy WebP whose alpha is VP8L-compressed (ALPH, compression method 1)
+ * counts the same, since its alpha decoder can hold the same buffer.
+ */
+export const CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES = 256 * 1024 * 1024;
+/**
+ * The scans of one JPEG. libjpeg reads every scan of a multi-scan file in
+ * full whatever the output size, so a crafted file of thousands of tiny
+ * scans passes every size bound and still never renders in time. Common
+ * encoders write a few dozen at most (libjpeg's progressive script: 10 for
+ * YCbCr, 18 for CMYK). Counted only when every byte is read: the MD5/ETag
+ * mode's header prefix ends at the first scan.
+ */
+export const CATALOG_ORIGINAL_MAX_JPEG_SCANS = 150;
 /** The only tag a staging PUT may carry (lifecycle L1); the copy strips it. */
 export const CATALOG_INGEST_STAGING_TAGGING = "moya-ingest-staging=v1";
 

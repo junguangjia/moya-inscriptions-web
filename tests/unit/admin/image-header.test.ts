@@ -6,6 +6,8 @@ import {
   CATALOG_ORIGINAL_MAX_EDGE,
   CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES,
   CATALOG_ORIGINAL_MAX_JPEG_COEFFICIENT_BYTES,
+  CATALOG_ORIGINAL_MAX_JPEG_SCANS,
+  CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES,
   CATALOG_ORIGINAL_MAX_PIXELS,
   CATALOG_ORIGINAL_MAX_ROW_BYTES,
 } from "@moya/contracts/internal/editorial";
@@ -213,6 +215,27 @@ const vp8 = (width: number, height: number) =>
   ]);
 const vp8x = (width: number, height: number, flags = 0) =>
   riffChunk("VP8X", [flags, 0, 0, 0, ...le24(width - 1), ...le24(height - 1)]);
+/** A VP8L chunk: signature, 14-bit sizes less one, alpha hint, version. */
+const vp8l = (
+  width: number,
+  height: number,
+  { alpha = false, signature = 0x2f, version = 0 } = {},
+) =>
+  riffChunk("VP8L", [
+    signature,
+    ...le32(
+      width -
+        1 +
+        (height - 1) * 0x4000 +
+        (alpha ? 0x10000000 : 0) +
+        version * 0x20000000,
+    ),
+    1,
+    2,
+    3,
+  ]);
+/** An ALPH chunk whose header byte names the compression method. */
+const alph = (method: number) => riffChunk("ALPH", [method, 1, 2, 3]);
 
 let jpeg: Buffer;
 let progressive: Buffer;
@@ -220,6 +243,7 @@ let png: Buffer;
 let interlaced: Buffer;
 let webpLossy: Buffer;
 let webpLossless: Buffer;
+let webpLosslessAlpha: Buffer;
 let webpAlpha: Buffer;
 
 beforeAll(async () => {
@@ -238,16 +262,17 @@ beforeAll(async () => {
   interlaced = await image().png({ progressive: true }).toBuffer();
   webpLossy = await image().webp().toBuffer();
   webpLossless = await image().webp({ lossless: true }).toBuffer();
-  webpAlpha = await sharp({
-    create: {
-      width: 64,
-      height: 48,
-      channels: 4,
-      background: { r: 1, g: 2, b: 3, alpha: 0.5 },
-    },
-  })
-    .webp()
-    .toBuffer();
+  const translucent = () =>
+    sharp({
+      create: {
+        width: 64,
+        height: 48,
+        channels: 4,
+        background: { r: 1, g: 2, b: 3, alpha: 0.5 },
+      },
+    });
+  webpAlpha = await translucent().webp().toBuffer();
+  webpLosslessAlpha = await translucent().webp({ lossless: true }).toBuffer();
 });
 
 describe("JPEG", () => {
@@ -478,7 +503,7 @@ describe("JPEG", () => {
     expect(refused.header).toBeNull();
   });
 
-  it("refuses a missing FFD9, a truncated scan, a frame after the scan and unsupported frames", () => {
+  it("refuses a missing FFD9, a truncated scan, a scan without a frame and unsupported frames", () => {
     expect(run("image/jpeg", jpeg.subarray(0, jpeg.length - 2))).toEqual({
       refused: "incomplete",
     });
@@ -494,9 +519,13 @@ describe("JPEG", () => {
     expect(
       run("image/jpeg", bytesOf([0xff, 0xd8], frame(0xc0, 8, 8), [0xff, 0xd9])),
     ).toEqual({ refused: "incomplete" });
-    expect(run("image/jpeg", jpegOf(frame(0xc3, 8, 8)))).toEqual({
-      refused: "format",
-    });
+    // Lossless (SOF3, SOF7, SOF11, SOF15) and hierarchical (SOF5-7, SOF13-15)
+    // frames, which libjpeg cannot decode.
+    for (const marker of [0xc3, 0xc5, 0xc6, 0xc7, 0xcb, 0xcd, 0xce, 0xcf])
+      expect(
+        run("image/jpeg", jpegOf(frame(marker, 8, 8))),
+        `${marker}`,
+      ).toEqual({ refused: "format" });
     expect(run("image/jpeg", jpegOf(frame(0xc0, 8, 0)))).toEqual({
       refused: "invalid",
     });
@@ -508,6 +537,92 @@ describe("JPEG", () => {
       width: 64,
       height: 48,
     });
+  });
+
+  it("refuses a second frame, before or after the first scan", () => {
+    const tables = [
+      segment(0xdb, new Array(65).fill(1)),
+      segment(0xc4, new Array(20).fill(0)),
+    ];
+    for (const second of [0xc0, 0xc2]) {
+      // A frame after the first scan: libjpeg allows one frame per image.
+      expect(
+        run(
+          "image/jpeg",
+          bytesOf(
+            [0xff, 0xd8],
+            ...tables,
+            frame(0xc0, 8, 8),
+            scan(),
+            entropy,
+            frame(second, 8, 8),
+            scan(),
+            entropy,
+            [0xff, 0xd9],
+          ),
+        ),
+      ).toEqual({ refused: "invalid" });
+      expect(
+        run(
+          "image/jpeg",
+          bytesOf(
+            [0xff, 0xd8],
+            ...tables,
+            frame(0xc0, 8, 8),
+            frame(second, 8, 8),
+            scan(),
+            entropy,
+            [0xff, 0xd9],
+          ),
+        ),
+      ).toEqual({ refused: "invalid" });
+    }
+  });
+
+  it("refuses more scans than the bound, at the scan over it", () => {
+    expect(CATALOG_ORIGINAL_MAX_JPEG_SCANS).toBe(150);
+    const scans = (count: number) =>
+      scansOf(
+        frame(0xc2, 64, 48),
+        Array.from({ length: count }, () => [1, 2, 3]),
+      );
+    expect(run("image/jpeg", scans(150))).toEqual({ width: 64, height: 48 });
+    expect(run("image/jpeg", scans(151))).toEqual({ refused: "bounds" });
+    // Sequential files count alike.
+    expect(
+      run(
+        "image/jpeg",
+        scansOf(
+          frame(0xc0, 64, 48),
+          Array.from({ length: 151 }, () => [1, 2, 3]),
+        ),
+      ),
+    ).toEqual({ refused: "bounds" });
+    // Encoder output stays far below: sharp's progressive file has 10.
+    const markers = (bytes: Uint8Array) => {
+      let count = 0;
+      for (let at = 0; at + 1 < bytes.length; at++)
+        if (bytes[at] === 0xff && bytes[at + 1] === 0xda) count++;
+      return count;
+    };
+    expect(markers(progressive)).toBe(10);
+    expect(
+      run("image/jpeg", progressive, undefined, { maxJpegScans: 10 }),
+    ).toEqual({ width: 64, height: 48 });
+    expect(
+      run("image/jpeg", progressive, undefined, { maxJpegScans: 9 }),
+    ).toEqual({ refused: "bounds" });
+    // The refusal comes with the 151st scan's marker and length, before its
+    // header or entropy data.
+    const over = Buffer.from(scans(151));
+    let last = -1;
+    for (let count = 0; count < 151; count++)
+      last = over.indexOf(Buffer.from([0xff, 0xda]), last + 1);
+    const probe = new ImageStructureProbe("image/jpeg");
+    probe.update(over.subarray(0, last + 3));
+    expect(() => probe.update(over.subarray(last + 3, last + 4))).toThrow(
+      new ImageProbeError("bounds"),
+    );
   });
 });
 
@@ -535,6 +650,19 @@ describe("PNG", () => {
     expect(run("image/png", pngOf(chunk("IDAT", [1]), ihdr(8, 8)))).toEqual({
       refused: "invalid",
     });
+    // A second IHDR, before or after the data.
+    expect(
+      run(
+        "image/png",
+        pngOf(ihdr(8, 8), ihdr(8, 8), chunk("IDAT", [1]), chunk("IEND")),
+      ),
+    ).toEqual({ refused: "invalid" });
+    expect(
+      run(
+        "image/png",
+        pngOf(ihdr(8, 8), chunk("IDAT", [1]), ihdr(4, 4), chunk("IEND")),
+      ),
+    ).toEqual({ refused: "invalid" });
   });
 
   it("refuses animation (acTL) wherever it appears", () => {
@@ -828,6 +956,134 @@ describe("WebP", () => {
       run("image/webp", webpOf(vp8x(16_384, 8), vp8(16_384 & 0x3fff, 8))),
     ).toEqual({ refused: "bounds" });
   });
+
+  it("refuses a bad VP8L signature or version and an odd RIFF size at once", () => {
+    expect(run("image/webp", webpOf(vp8l(8, 8)))).toEqual({
+      width: 8,
+      height: 8,
+    });
+    expect(run("image/webp", webpOf(vp8l(8, 8, { signature: 0x2e })))).toEqual({
+      refused: "invalid",
+    });
+    for (const version of [1, 7])
+      expect(run("image/webp", webpOf(vp8l(8, 8, { version })))).toEqual({
+        refused: "invalid",
+      });
+    // An odd RIFF size (every chunk is padded to an even size) is refused
+    // with the RIFF header, before any chunk.
+    for (const size of [0x1f, 0x2d]) {
+      const header = Uint8Array.from(webpOf(vp8l(8, 8)).subarray(0, 12));
+      new DataView(header.buffer).setUint32(4, size, true);
+      const probe = new ImageStructureProbe("image/webp");
+      probe.update(header.subarray(0, 11));
+      expect(() => probe.update(header.subarray(11)), `${size}`).toThrow(
+        new ImageProbeError("invalid"),
+      );
+    }
+  });
+
+  it("bounds a lossless image's ARGB buffer, with alpha or without, which libwebp holds whole", () => {
+    expect(CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES).toBe(256 * 1024 ** 2);
+    const fits = (width: number, height: number) => ({ width, height });
+    const bounds = { refused: "bounds" };
+    for (const alpha of [false, true]) {
+      // 16,383 x 4,096 x 4 B is 255.98 MiB; one more row is over.
+      expect(run("image/webp", webpOf(vp8l(16_383, 4_096, { alpha })))).toEqual(
+        fits(16_383, 4_096),
+      );
+      expect(run("image/webp", webpOf(vp8l(16_383, 4_097, { alpha })))).toEqual(
+        bounds,
+      );
+      // 8,192 x 8,192 is exactly 256 MiB.
+      expect(run("image/webp", webpOf(vp8l(8_192, 8_192, { alpha })))).toEqual(
+        fits(8_192, 8_192),
+      );
+      expect(run("image/webp", webpOf(vp8l(8_192, 8_193, { alpha })))).toEqual(
+        bounds,
+      );
+      // The extended format alike, whatever its alpha flag says.
+      for (const flags of [0, 0x10])
+        expect(
+          run(
+            "image/webp",
+            webpOf(vp8x(16_383, 7_324, flags), vp8l(16_383, 7_324, { alpha })),
+          ),
+        ).toEqual(bounds);
+    }
+    // A lossy image of the same size holds no such buffer.
+    expect(
+      run("image/webp", webpOf(vp8x(16_383, 7_324), vp8(16_383, 7_324))),
+    ).toEqual(fits(16_383, 7_324));
+    // Encoder output, at a bound just under its 64 x 48 x 4 B.
+    for (const bytes of [webpLossless, webpLosslessAlpha]) {
+      expect(
+        run("image/webp", bytes, undefined, { maxLosslessWebpBytes: 12_288 }),
+      ).toEqual(fits(64, 48));
+      expect(
+        run("image/webp", bytes, undefined, { maxLosslessWebpBytes: 12_287 }),
+      ).toEqual(bounds);
+    }
+    expect(
+      run("image/webp", webpLossy, undefined, { maxLosslessWebpBytes: 1 }),
+    ).toEqual(fits(64, 48));
+  });
+
+  it("counts a VP8L-compressed alpha plane (ALPH method 1) like a lossless image", () => {
+    const lossy = (width: number, height: number, ...before: Uint8Array[]) =>
+      webpOf(vp8x(width, height, 0x10), ...before, vp8(width, height));
+    expect(run("image/webp", lossy(16_383, 7_324, alph(1)))).toEqual({
+      refused: "bounds",
+    });
+    // Uncompressed alpha (method 0) holds one byte a pixel, row by row.
+    expect(run("image/webp", lossy(16_383, 7_324, alph(0)))).toEqual({
+      width: 16_383,
+      height: 7_324,
+    });
+    // Filtering and pre-processing bits do not change the method.
+    expect(run("image/webp", lossy(16_383, 7_324, alph(0x3d)))).toEqual({
+      refused: "bounds",
+    });
+    expect(run("image/webp", lossy(8_192, 8_192, alph(1)))).toEqual({
+      width: 8_192,
+      height: 8_192,
+    });
+    expect(run("image/webp", lossy(8_192, 8_193, alph(1)))).toEqual({
+      refused: "bounds",
+    });
+    // sharp writes its alpha VP8L-compressed.
+    const at = webpAlpha.indexOf(Buffer.from("ALPH", "latin1"));
+    expect(at).toBeGreaterThan(0);
+    expect(webpAlpha[at + 8]! & 0x03).toBe(1);
+    expect(
+      run("image/webp", webpAlpha, undefined, { maxLosslessWebpBytes: 12_287 }),
+    ).toEqual({ refused: "bounds" });
+    expect(
+      run("image/webp", webpAlpha, undefined, { maxLosslessWebpBytes: 12_288 }),
+    ).toEqual({ width: 64, height: 48 });
+  });
+
+  it("applies the lossless bound before the header is complete, so a header prefix holds it", () => {
+    const over = webpOf(vp8l(16_383, 4_097));
+    // The RIFF header, the chunk header and VP8L's five header bytes.
+    const probe = new ImageStructureProbe("image/webp");
+    probe.update(over.subarray(0, 24));
+    expect(probe.header).toBeNull();
+    expect(() => probe.update(over.subarray(24, 25))).toThrow(
+      new ImageProbeError("bounds"),
+    );
+    expect(probe.header).toBeNull();
+    const alpha = webpOf(
+      vp8x(16_383, 7_324, 0x10),
+      alph(1),
+      vp8(16_383, 7_324),
+    );
+    const prefix = new ImageStructureProbe("image/webp");
+    // RIFF, VP8X (8 + 10), then ALPH's chunk header and its first byte.
+    prefix.update(alpha.subarray(0, 38));
+    expect(() => prefix.update(alpha.subarray(38, 39))).toThrow(
+      new ImageProbeError("bounds"),
+    );
+  });
 });
 
 describe("any format", () => {
@@ -874,6 +1130,8 @@ describe("any format", () => {
     expect(CATALOG_ORIGINAL_MAX_DECODED_BYTES).toBe(512 * 1024 * 1024);
     expect(CATALOG_ORIGINAL_MAX_EDGE).toBe(65_500);
     expect(CATALOG_ORIGINAL_MAX_ROW_BYTES).toBe(256 * 1024);
+    expect(CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES).toBe(256 * 1024 * 1024);
+    expect(CATALOG_ORIGINAL_MAX_JPEG_SCANS).toBe(150);
   });
 
   it("gives the same result for chunk boundaries split anywhere (fuzz)", () => {
@@ -907,6 +1165,20 @@ describe("any format", () => {
       ["image/webp", webpLossless],
       ["image/webp", webpAlpha],
       ["image/webp", webpOf(vp8x(8, 8, 0x02), vp8(8, 8))],
+      ["image/webp", webpLosslessAlpha],
+      ["image/webp", webpOf(vp8l(16_383, 4_097))],
+      ["image/webp", webpOf(vp8x(8, 8, 0x10), alph(1), vp8(8, 8))],
+      [
+        "image/webp",
+        webpOf(vp8x(16_383, 7_324, 0x10), alph(1), vp8(16_383, 7_324)),
+      ],
+      [
+        "image/jpeg",
+        scansOf(
+          frame(0xc2, 64, 48),
+          Array.from({ length: 151 }, () => [1, 2, 3]),
+        ),
+      ],
     ];
     for (const [index, [mimeType, bytes]] of fixtures.entries()) {
       const whole = run(mimeType, bytes);

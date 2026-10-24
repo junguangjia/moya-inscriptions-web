@@ -32,6 +32,7 @@ import {
   CATALOG_ORIGINAL_MAX_BYTES,
   CATALOG_ORIGINAL_MAX_DECODED_BYTES,
   CATALOG_ORIGINAL_MAX_EDGE,
+  CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES,
   CATALOG_ORIGINAL_MAX_PIXELS,
   CATALOG_ORIGINAL_MAX_ROW_BYTES,
 } from "@moya/contracts/internal/editorial";
@@ -101,6 +102,13 @@ interface BenchCase {
   readonly depth?: 16;
   /** JPEG only: CMYK samples (four channels) instead of YCbCr. */
   readonly cmyk?: true;
+  /** WebP only: lossless (VP8L), whose decoder holds w x h x 4 B whole. */
+  readonly lossless?: true;
+  /**
+   * Four channels only: a varying alpha (a smooth band, 100-220), so the
+   * encoder keeps the alpha channel; otherwise alpha is 255 throughout.
+   */
+  readonly alpha?: true;
   /**
    * A progressive JPEG or an interlaced (Adam7) PNG: the decoder holds the
    * whole image (JPEG coefficients, PNG pixels) before it can shrink it.
@@ -128,7 +136,7 @@ interface BenchCase {
    * Every other case sits at or under every CATALOG_ORIGINAL_* limit, and
    * the Admin's ingest probe accepts exactly those.
    */
-  readonly beyond?: "edge" | "row" | "coefficients" | "interlaced";
+  readonly beyond?: "edge" | "row" | "coefficients" | "interlaced" | "lossless";
   readonly expect: "rendered" | "rejected";
   readonly note: string;
 }
@@ -136,8 +144,9 @@ interface BenchCase {
 /**
  * The D6 limit cases and the worst shapes within the limits the measurement
  * left (EXIF-rotated variants, wide strips at the row bound, progressive
- * JPEG and interlaced PNG at their buffer bounds), then the cases over the
- * old limits that lowered the edge and added the row and buffer bounds.
+ * JPEG, interlaced PNG and lossless WebP at their buffer bounds), then the
+ * cases over the old limits that lowered the edge and added the row and
+ * buffer bounds.
  */
 const CASES: readonly BenchCase[] = [
   {
@@ -390,6 +399,40 @@ const CASES: readonly BenchCase[] = [
     note: "8,192 x 8,192 Adam7 RGBA PNG (256 MiB decoded)",
   },
   {
+    name: "webp-lossless-16383x4096",
+    format: "webp",
+    width: 16_383,
+    height: 4_096,
+    channels: 3,
+    noise: 2,
+    lossless: true,
+    expect: "rendered",
+    note: "16,383 x 4,096 lossless WebP, no alpha (ARGB buffer 256.0 MiB)",
+  },
+  {
+    name: "webp-lossless-alpha-16383x4096",
+    format: "webp",
+    width: 16_383,
+    height: 4_096,
+    channels: 4,
+    alpha: true,
+    noise: 2,
+    lossless: true,
+    expect: "rendered",
+    note: "16,383 x 4,096 lossless WebP with alpha (ARGB buffer 256.0 MiB)",
+  },
+  {
+    name: "webp-alpha-16383x4096",
+    format: "webp",
+    width: 16_383,
+    height: 4_096,
+    channels: 4,
+    alpha: true,
+    noise: 24,
+    expect: "rendered",
+    note: "16,383 x 4,096 lossy WebP, quality 90, with alpha (VP8L-compressed ALPH)",
+  },
+  {
     name: "jpeg-65535-header",
     format: "jpeg",
     width: 65_500,
@@ -439,6 +482,68 @@ const CASES: readonly BenchCase[] = [
     expect: "rendered",
     note: "65,500 x 1,832 Adam7 RGBA PNG (457.8 MiB decoded)",
   },
+  {
+    name: "webp-lossless-16383",
+    format: "webp",
+    width: 16_383,
+    height: 7_324,
+    channels: 3,
+    noise: 2,
+    lossless: true,
+    beyond: "lossless",
+    expect: "rendered",
+    note: "16,383 x 7,324 lossless WebP, no alpha (ARGB buffer 457.7 MiB)",
+  },
+  {
+    name: "webp-lossless-alpha-16383",
+    format: "webp",
+    width: 16_383,
+    height: 7_324,
+    channels: 4,
+    alpha: true,
+    noise: 2,
+    lossless: true,
+    beyond: "lossless",
+    expect: "rendered",
+    note: "16,383 x 7,324 lossless WebP with alpha (ARGB buffer 457.7 MiB)",
+  },
+  {
+    name: "webp-alpha-16383x7324",
+    format: "webp",
+    width: 16_383,
+    height: 7_324,
+    channels: 4,
+    alpha: true,
+    noise: 24,
+    beyond: "lossless",
+    expect: "rendered",
+    note: "16,383 x 7,324 lossy WebP, quality 90, with alpha (VP8L-compressed ALPH, ARGB buffer 457.7 MiB)",
+  },
+  {
+    name: "webp-lossless-16383x6552",
+    format: "webp",
+    width: 16_383,
+    height: 6_552,
+    channels: 3,
+    noise: 2,
+    lossless: true,
+    beyond: "lossless",
+    expect: "rendered",
+    note: "16,383 x 6,552 lossless WebP, no alpha, a long scroll (ARGB buffer 409.5 MiB)",
+  },
+  {
+    name: "webp-lossless-alpha-16383x6552",
+    format: "webp",
+    width: 16_383,
+    height: 6_552,
+    channels: 4,
+    alpha: true,
+    noise: 2,
+    lossless: true,
+    beyond: "lossless",
+    expect: "rendered",
+    note: "16,383 x 6,552 lossless WebP with alpha, a long scroll (ARGB buffer 409.5 MiB)",
+  },
 ];
 
 /** Bumped whenever generation changes, so cached originals are rebuilt. */
@@ -454,6 +559,7 @@ const texture = (
   height: number,
   channels: 3 | 4,
   noise: number,
+  alpha = false,
 ): Buffer => {
   const data = Buffer.alloc(width * height * channels);
   const column = new Float64Array(width);
@@ -480,7 +586,10 @@ const texture = (
         const value = base + (channel - 1) * 9;
         data[offset++] = value < 0 ? 0 : value > 255 ? 255 : value;
       }
-      if (channels === 4) data[offset++] = 255;
+      if (channels === 4)
+        data[offset++] = alpha
+          ? 160 + Math.round((band + column[x]!) / 3)
+          : 255;
     }
   }
   return data;
@@ -747,7 +856,13 @@ const encode = async (item: BenchCase): Promise<Buffer> => {
     );
   }
   let pipeline = sharp(
-    texture(item.width, item.height, item.channels, item.noise),
+    texture(
+      item.width,
+      item.height,
+      item.channels,
+      item.noise,
+      item.alpha === true,
+    ),
     {
       raw: { width: item.width, height: item.height, channels: item.channels },
       limitInputPixels: false,
@@ -767,7 +882,10 @@ const encode = async (item: BenchCase): Promise<Buffer> => {
     pipeline = (
       item.depth === 16 ? pipeline.toColourspace("rgb16") : pipeline
     ).png({ compressionLevel: 6, progressive: item.progressive === true });
-  else pipeline = pipeline.webp({ quality: 90 });
+  else
+    pipeline = pipeline.webp(
+      item.lossless ? { lossless: true } : { quality: 90 },
+    );
   const bytes = await pipeline.toBuffer();
   return item.headerWidth === undefined
     ? bytes
@@ -1044,12 +1162,22 @@ describe.skipIf(!OUTPUT)(
               CATALOG_ORIGINAL_MAX_DECODED_BYTES,
             edge: Math.max(width, item.height) > CATALOG_ORIGINAL_MAX_EDGE,
             row: width * channels * sample > CATALOG_ORIGINAL_MAX_ROW_BYTES,
+            // A lossless WebP, and a lossy one with alpha (sharp compresses
+            // its alpha plane with VP8L, ALPH method 1), whose ARGB buffer
+            // the probe bounds.
+            lossless:
+              item.format === "webp" &&
+              (item.lossless === true ||
+                (item.channels === 4 && item.alpha === true)) &&
+              width * item.height * 4 >
+                CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES,
           };
           expect(over, item.name).toEqual({
             pixels: false,
             decoded: false,
             edge: item.beyond === "edge",
             row: item.beyond === "row",
+            lossless: item.beyond === "lossless",
           });
         }
         // The Admin's ingest probe, on the stored bytes.
@@ -1295,6 +1423,7 @@ describe.skipIf(!OUTPUT)(
             maxDecodedBytes: CATALOG_ORIGINAL_MAX_DECODED_BYTES,
             maxEdge: CATALOG_ORIGINAL_MAX_EDGE,
             maxRowBytes: CATALOG_ORIGINAL_MAX_ROW_BYTES,
+            maxLosslessWebpBytes: CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES,
           },
           cases: cases.map((item) => ({
             ...item,

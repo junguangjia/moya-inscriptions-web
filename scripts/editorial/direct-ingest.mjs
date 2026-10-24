@@ -31,6 +31,7 @@ import {
   MEDIA_INGEST_ROUTES,
   mediaIngestIntent,
   normalizeCosHostSuffix,
+  recordedIngestIntent,
   stageMediaUpload,
   stagingUploadTarget,
 } from "./resumable-upload.mjs";
@@ -49,8 +50,32 @@ const MAX_INPUT_BYTES = 32 * MiB;
 const MAX_CONFIG_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_ITEMS = 10_000;
+/**
+ * The state file a run reads, and the rows appended before it is written
+ * whole again (stateWriter). A row is under 3 KiB: a 128-character key,
+ * mediaId and catalogId (each character JSON-escaped to at most 6 bytes) and
+ * the 24 latest PUT and complete timings. So the rows of MAX_ITEMS items and
+ * the privacy row are under 30 MiB written whole, and with the rows appended
+ * since, the file stays under 38 MiB, within what the next run reads (the
+ * unit test measures the largest row a run writes against these bounds).
+ */
+const MAX_STATE_BYTES = 64 * MiB;
+const STATE_COMPACT_BYTES = 8 * MiB;
+export const STATE_LIMITS = Object.freeze({
+  maxItems: MAX_ITEMS,
+  maxStateBytes: MAX_STATE_BYTES,
+  compactAfterBytes: STATE_COMPACT_BYTES,
+});
 const STATE_KIND = "catalog-direct-ingest-v1";
 const PRIVACY_ROW = "#privacy";
+/** Recorded privacy answers that refuse --execute until the Owner acts. */
+const PRIVACY_STOPS = new Set(["public", "unexpected"]);
+const PRIVACY_ANSWERS = new Set([
+  "private",
+  "public",
+  "unexpected",
+  "uncertain",
+]);
 // The final key form of collection.ts and the worker's EDITORIAL_KEY.
 const EDITORIAL_KEY =
   /^editorial\/[a-f0-9]{64}\/[a-f0-9]{64}-[a-f0-9]{64}\.(?:jpg|png|webp)$/;
@@ -722,13 +747,14 @@ const parseJSON = (bytes) => {
 
 /**
  * The private state file: a header line, then one synced JSON row per change
- * (the last row of a key wins). Rows hold outcomes, counts and the
- * registered facts, never a URL, object key or credential.
+ * (the last row of a key wins). Rows hold outcomes, counts, the registered
+ * facts and the MD5 of the item's bytes (not secret: the staging PUT sends
+ * it), never a URL, object key or credential.
  */
 async function loadState(file, batchId, scopeFingerprint) {
   let bytes;
   try {
-    bytes = await readBounded(file, MAX_INPUT_BYTES, true);
+    bytes = await readBounded(file, MAX_STATE_BYTES, true);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
@@ -790,14 +816,38 @@ async function writeState(file, state) {
     await directory.close();
   }
 }
-async function appendState(file, key, value) {
+async function appendState(file, line) {
   const handle = await open(file, "a", 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify({ key, value })}\n`, "utf8");
+    await handle.writeFile(line, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * Writes the state whole, then appends each recorded row, synced and in
+ * order. Once the rows appended since the last whole write pass compactBytes,
+ * the next row is written by writing the state whole again (its header and
+ * the last row of each key) instead, so the file never holds more than one
+ * whole state and compactBytes of rows (MAX_STATE_BYTES). record returns the
+ * write chain, settled once that row is on disk; settled() is the chain.
+ */
+function stateWriter(file, state, compactBytes) {
+  let appended = 0;
+  let writes = writeState(file, state);
+  const record = (key, value) => {
+    state.rows.set(key, value);
+    const line = `${JSON.stringify({ key, value })}\n`;
+    appended += Buffer.byteLength(line);
+    if (appended > compactBytes) {
+      appended = 0;
+      writes = writes.then(() => writeState(file, state));
+    } else writes = writes.then(() => appendState(file, line));
+    return writes;
+  };
+  return { record, settled: () => writes };
 }
 
 /** Registered facts kept in state: no object key, filename or URL. */
@@ -837,11 +887,19 @@ async function withStateLock(stateFile, work) {
  * and at most 2 completes run; registered items are skipped on resume, and an
  * item whose bytes an earlier run staged goes from start straight to
  * complete. While the ingest routes are absent, items within 40 MiB use the
- * relay and larger ones stop with MEDIA_INGEST_UNAVAILABLE. After the first
- * new registration of a run, one anonymous Range 0-0 GET checks that the
- * final original is private; a public answer stops the run, and
- * INGEST_QUOTA_EXCEEDED admits no further item. dryRun (the default) only
- * verifies the local files and makes no request.
+ * relay unless a staging PUT of theirs began (recorded in the state), and
+ * the others stop with MEDIA_INGEST_UNAVAILABLE, keeping their record. After
+ * the first new direct registration of a run, one anonymous Range 0-0 GET
+ * (up to three tries while uncertain) checks that the final original is
+ * private. Fail closed: no item or attempt starts while it runs, and any
+ * answer but private stops the run before it is recorded; a state whose
+ * recorded answer is public or unexpected refuses to start (PRIVACY_STOPPED,
+ * before any request) until the Owner has made the bucket private and the
+ * batch continues with a new state file, and a recorded uncertain answer is
+ * reported again by every run that makes no check, until one answers
+ * private. INGEST_QUOTA_EXCEEDED admits no further item. dryRun (the default)
+ * only verifies the local files and makes no request. stateCompactBytes is
+ * for tests (stateWriter).
  */
 export async function runDirectIngest({
   manifest,
@@ -858,12 +916,14 @@ export async function runDirectIngest({
   retryDelayMs = 1_000,
   now = Date.now,
   signal,
+  stateCompactBytes = STATE_COMPACT_BYTES,
 }) {
   bounded(concurrency, 1, 4, "CONCURRENCY_INVALID");
   bounded(completeConcurrency, 1, 2, "CONCURRENCY_INVALID");
   bounded(attempts, 1, 3, "ATTEMPTS_INVALID");
   bounded(budgetMs, 1_000, 86_400_000, "BUDGET_INVALID");
   bounded(retryDelayMs, 0, 60_000, "RETRY_DELAY_INVALID");
+  bounded(stateCompactBytes, 1, STATE_COMPACT_BYTES, "STATE_COMPACT_INVALID");
   const prepared = await prepareConfined(manifest, directory);
   if (dryRun) {
     let bytes = 0,
@@ -895,13 +955,16 @@ export async function runDirectIngest({
         state.rows.get(item.key).requestHash !== item.requestHash
       )
         throwCode("STATE_INPUT_CHANGED");
-    let writes = writeState(stateFile, state);
-    const record = (key, value) => {
-      state.rows.set(key, value);
-      writes = writes.then(() => appendState(stateFile, key, value));
-      return writes;
-    };
-    await writes;
+    // An earlier run of this state saw a final original answer anonymously:
+    // a run would register another before its own check could stop it.
+    const recordedPrivacy = state.rows.get(PRIVACY_ROW)?.status;
+    if (PRIVACY_STOPS.has(recordedPrivacy)) throwCode("PRIVACY_STOPPED");
+    const { record, settled } = stateWriter(
+      stateFile,
+      state,
+      stateCompactBytes,
+    );
+    await settled();
     const stop = new AbortController();
     const deadline = now() + budgetMs;
     const operationSignal = AbortSignal.any(
@@ -918,30 +981,52 @@ export async function runDirectIngest({
       privacy: "not-needed",
       privacyChecks: 0,
     };
-    // One check per run; an uncertain answer lets a later registration retry
-    // (three tries in all). Only the status is kept.
-    const privacyCheck = async ({ url, objectKey }) => {
-      if (
-        ["private", "public", "checking"].includes(run.privacy) ||
-        run.privacyChecks >= 3
-      )
-        return "skipped";
+    // One check per run, of its first new direct registration, with up to
+    // three tries while the answer is uncertain. Anything but private stops
+    // the run (no new item or attempt; transfers in flight are aborted)
+    // before the answer is recorded, so a failed write cannot skip the stop.
+    // Only the status is kept.
+    let privacyPending = null;
+    const privacyCheck = ({ url, objectKey }) => {
+      if (run.privacy !== "not-needed") return "skipped";
       run.privacy = "checking";
-      run.privacyChecks++;
-      const status = await cos.checkPrivate({ url, objectKey, signal });
-      run.privacy = status;
-      await record(PRIVACY_ROW, {
-        status,
-        checkedAt: new Date(now()).toISOString(),
-      });
-      if (status === "public") stop.abort();
-      return status;
+      privacyPending = (async () => {
+        let status = "uncertain";
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (attempt)
+            await sleep(retryDelayMs * 2 ** (attempt - 1), undefined, {
+              signal,
+            }).catch(() => {});
+          if (signal?.aborted) break;
+          run.privacyChecks++;
+          let answer;
+          try {
+            answer = await cos.checkPrivate({ url, objectKey, signal });
+          } catch {
+            answer = "uncertain";
+          }
+          status = PRIVACY_ANSWERS.has(answer) ? answer : "uncertain";
+          if (status !== "uncertain") break;
+        }
+        run.privacy = status;
+        if (status !== "private") stop.abort();
+        await record(PRIVACY_ROW, {
+          status,
+          checkedAt: new Date(now()).toISOString(),
+        });
+        return status;
+      })();
+      return privacyPending;
     };
     // The Admin's ingest quota (per actor or global, per rolling hour) closes
     // admission: items in flight finish, no new item or attempt starts, and
-    // the rest stay pending for a later run.
+    // the rest stay pending for a later run. A privacy check in flight holds
+    // admission until it answers.
     let quotaReached = false;
-    const admitting = () => !stopped() && !quotaReached;
+    const admitting = async () => {
+      await privacyPending?.catch(() => {});
+      return !stopped() && !quotaReached;
+    };
     // One attempt. The original's bytes live only inside it, so no buffer of
     // up to 128 MiB is held through a retry's backoff.
     const attemptItem = async (item) => {
@@ -952,11 +1037,15 @@ export async function runDirectIngest({
       } catch (error) {
         return { ok: false, retryable: false, code: safeCode(error?.code) };
       }
+      // Recorded before start: --abandon rebuilds the intent (and so the
+      // staging id the Admin derives from it) from the manifest and this,
+      // even after the local file changed or was removed.
       await record(item.key, {
         requestHash: item.requestHash,
         status: "pending",
         attempts: (previous?.attempts ?? 0) + 1,
         staged: previous?.staged === true,
+        md5Base64: createHash("md5").update(bytes).digest("base64"),
         ...keepStaging(previous),
         ...(previous?.metrics ? { metrics: previous.metrics } : {}),
       });
@@ -974,6 +1063,9 @@ export async function runDirectIngest({
           complete,
           privacyCheck,
           resumeStaged: previous?.staged === true,
+          // A PUT an earlier run began (its grant was recorded first) may
+          // have landed: never the relay for this item while it is recorded.
+          stagingRecorded: typeof previous?.stagingDigest === "string",
           // A key an earlier run may have written stays this row's: a grant
           // for another credential's actor stops the item
           // (INGEST_ACTOR_MISMATCH) before it PUTs, completes or abandons.
@@ -1007,10 +1099,10 @@ export async function runDirectIngest({
       while (cursor < prepared.length) {
         const item = prepared[cursor++];
         if (state.rows.get(item.key)?.status === "registered") continue;
-        if (!admitting()) break;
+        if (!(await admitting())) break;
         let outcome;
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
-          if (!admitting()) break;
+          if (!(await admitting())) break;
           outcome = await attemptItem(item);
           if (outcome.metrics)
             await record(item.key, {
@@ -1025,7 +1117,7 @@ export async function runDirectIngest({
             outcome.ok ||
             !outcome.retryable ||
             attempt === attempts ||
-            !admitting()
+            !(await admitting())
           )
             break;
           await sleep(retryDelayMs * 2 ** (attempt - 1), undefined, {
@@ -1056,6 +1148,9 @@ export async function runDirectIngest({
             // Cleared: the recorded key is empty, so no actor binds the row.
             staged: outcome.stagingCleared ? false : current?.staged === true,
             ...(outcome.stagingCleared ? {} : keepStaging(current)),
+            ...(typeof current?.md5Base64 === "string"
+              ? { md5Base64: current.md5Base64 }
+              : {}),
             code: safeCode(outcome.code),
             retryable: outcome.retryable === true,
             ...(current?.metrics ? { metrics: current.metrics } : {}),
@@ -1066,10 +1161,10 @@ export async function runDirectIngest({
     const workers = await Promise.allSettled(
       Array.from({ length: concurrency }, worker),
     );
-    await writes;
+    await settled();
     const rejected = workers.find((result) => result.status === "rejected");
     if (rejected) throw rejected.reason;
-    return summarize(prepared, state, run);
+    return summarize(prepared, state, run, recordedPrivacy);
   });
 }
 
@@ -1147,7 +1242,22 @@ function metricsSummary(rows) {
   };
 }
 
-function summarize(prepared, state, run) {
+/**
+ * The run's privacy answer. A run that made no check carries forward an
+ * uncertain answer its state recorded: no check of this batch has answered
+ * private since, so it stays unsettled (exit 1) until one does. New
+ * originals through the relay only are checked by the Admin's path.
+ */
+function privacyOf(run, recordedPrivacy) {
+  if (run.privacy === "checking") return "uncertain";
+  if (run.privacy !== "not-needed") return run.privacy;
+  if (recordedPrivacy === "uncertain") return "uncertain";
+  return run.newlyRegistered > 0 && run.newlyRegistered === run.relayFallbacks
+    ? "relay-only"
+    : "not-needed";
+}
+
+function summarize(prepared, state, run, recordedPrivacy) {
   const rows = prepared.map(({ key }) => state.rows.get(key));
   const codes = {};
   for (const row of rows)
@@ -1163,15 +1273,7 @@ function summarize(prepared, state, run) {
     reused: run.reused,
     relayFallbacks: run.relayFallbacks,
     abandoned: run.abandoned,
-    // New originals through the relay only are checked by the Admin's path.
-    privacy:
-      run.privacy === "not-needed" &&
-      run.newlyRegistered > 0 &&
-      run.newlyRegistered === run.relayFallbacks
-        ? "relay-only"
-        : run.privacy === "checking"
-          ? "uncertain"
-          : run.privacy,
+    privacy: privacyOf(run, recordedPrivacy),
     codes,
     metrics: metricsSummary(rows),
   };
@@ -1180,7 +1282,9 @@ function summarize(prepared, state, run) {
 /**
  * Abandons the staging key of every started item the state file does not
  * show registered (lifecycle L2 cleanup, or a batch given up). Idempotent;
- * reads each local file once to rebuild the exact intent. Counts only:
+ * rebuilds each exact intent from the manifest and the MD5 its row recorded,
+ * so a local file changed or removed since is never read (a row recorded
+ * without one, by an earlier version, reads the file once). Counts only:
  * abandoned (an object was removed), absent (nothing was staged under this
  * actor's key), notStarted (no row: this state never started the item, so
  * no request is sent). The Admin derives the staging key from the caller, so
@@ -1212,8 +1316,12 @@ export async function abandonIngest({
       manifest.batchId,
       send.scopeFingerprint ?? "isolated-injected-transport",
     );
-    let writes = writeState(stateFile, state);
-    await writes;
+    const { record, settled } = stateWriter(
+      stateFile,
+      state,
+      STATE_COMPACT_BYTES,
+    );
+    await settled();
     const result = {
       abandon: true,
       total: prepared.length,
@@ -1236,12 +1344,24 @@ export async function abandonIngest({
       let code;
       let answer;
       try {
-        const intent = mediaIngestIntent({
-          item: item.upload,
-          bytes: await readOriginal(item),
-          transferId: item.transferId,
-        });
-        if (!intent) throwCode("MEDIA_SOURCE_CHANGED");
+        const intent =
+          row.md5Base64 === undefined
+            ? mediaIngestIntent({
+                item: item.upload,
+                bytes: await readOriginal(item),
+                transferId: item.transferId,
+              })
+            : recordedIngestIntent({
+                item: item.upload,
+                transferId: item.transferId,
+                md5Base64: row.md5Base64,
+              });
+        if (!intent)
+          throwCode(
+            row.md5Base64 === undefined
+              ? "MEDIA_SOURCE_CHANGED"
+              : "STATE_INVALID",
+          );
         const response = await send(
           MEDIA_INGEST_ROUTES.abandon,
           "POST",
@@ -1277,13 +1397,49 @@ export async function abandonIngest({
         // The recorded key is empty now, so no actor binds the row.
         const value = { ...row, staged: false };
         delete value.stagingDigest;
-        state.rows.set(item.key, value);
-        writes = writes.then(() => appendState(stateFile, item.key, value));
-        await writes;
+        await record(item.key, value);
       }
     }
     return { ...result, codes };
   });
+}
+
+const ORPHAN_RUNBOOK =
+  "the mediaId is registered with other facts, or by a record outside this credential's scope. When complete answered this after its copy, the verified original has no record (Admin log EDITORIAL_MEDIA_INGEST_ORPHAN): the Owner deletes that object once no media doc names its key.";
+const PRIVACY_CONTINUE =
+  "the batch then continues with a new state file (registered items are reused, staged bytes completed), and --abandon still runs with this one.";
+/**
+ * Fixed operator guidance for outcomes a plain re-run does not settle, by the
+ * code the summary (or the error) shows. Never a value of the run.
+ */
+const RUNBOOK = Object.freeze({
+  INGEST_FINAL_INVALID:
+    "a final original already at the item's content-addressed key failed the Admin's re-verification (Admin log EDITORIAL_MEDIA_INGEST_FINAL_INVALID). Every run fails the same way: the mediaId stays blocked until the Owner inspects that object and deletes it, which the Admin cannot.",
+  MEDIA_IDENTITY_CONFLICT: ORPHAN_RUNBOOK,
+  MEDIA_IDENTITY_EXISTS: ORPHAN_RUNBOOK,
+  MEDIA_INGEST_UNAVAILABLE:
+    "the ingest routes answered 404 (the switch is off, or an older Admin runs). Items over 40 MiB, and items whose staging PUT began, keep their record: run the batch again with the same state file once the switch is on, or --abandon then for a batch given up (under L2 nothing else removes a staging object).",
+  PRIVACY_PUBLIC: `a new final original answered an anonymous read, so the run stopped and this state now refuses --execute (PRIVACY_STOPPED). The Owner makes the bucket private and confirms it; ${PRIVACY_CONTINUE}`,
+  PRIVACY_UNEXPECTED: `an anonymous read of a new final original answered 404, which a private object never does, so the run stopped and this state now refuses --execute (PRIVACY_STOPPED). The Owner checks the bucket's access and the COS host; ${PRIVACY_CONTINUE}`,
+  PRIVACY_UNCERTAIN:
+    "the anonymous read of a new final original had no clear answer in three tries, so that run stopped, and every run of this state that checks nothing reports uncertain again until a check answers private. Check the network path to the bucket, then run again with the same state file: its first new original is checked again. When no unregistered item remains there is nothing new to check: the Owner reads one of the batch's final originals anonymously by hand (it must answer 401 or 403), or the next batch's first new original settles it.",
+  PRIVACY_STOPPED: `this state recorded a public or unexpected answer to the anonymous read of a final original, so nothing was sent. The Owner makes the bucket private and confirms it; ${PRIVACY_CONTINUE}`,
+  ABANDON_SCOPE:
+    "--abandon reaches unregistered items only. A staging object left after its item registered (the Admin's removal failed: Admin log EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED) is found by the Owner's listing of the staging prefix after the batch.",
+});
+
+/** The RUNBOOK lines for a summary, an --abandon result or an error code. */
+export function runbookLines(result) {
+  const keys = [
+    ...Object.keys(plainObject(result?.codes) ? result.codes : {}),
+    ...(["public", "unexpected", "uncertain"].includes(result?.privacy)
+      ? [`PRIVACY_${result.privacy.toUpperCase()}`]
+      : []),
+    ...(result?.abandon === true ? ["ABANDON_SCOPE"] : []),
+  ];
+  return [...new Set(keys)]
+    .filter((key) => Object.hasOwn(RUNBOOK, key))
+    .map((key) => `EDITORIAL_DIRECT_INGEST_RUNBOOK ${key}: ${RUNBOOK[key]}`);
 }
 
 function parseConfig(config) {
@@ -1359,6 +1515,7 @@ async function main() {
           signal: controller.signal,
         });
     process.stdout.write(`${JSON.stringify(result)}\n`);
+    for (const line of runbookLines(result)) process.stderr.write(`${line}\n`);
     if (
       !process.exitCode &&
       (result.failed ||
@@ -1377,8 +1534,11 @@ if (
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 )
   main().catch((error) => {
+    const code = safeCode(error?.code);
     process.stderr.write(
-      `EDITORIAL_DIRECT_INGEST_FAILED ${safeCode(error?.code)}: inspect protected input and state locally; no private values were logged.\n`,
+      `EDITORIAL_DIRECT_INGEST_FAILED ${code}: inspect protected input and state locally; no private values were logged.\n`,
     );
+    for (const line of runbookLines({ codes: { [code]: 1 } }))
+      process.stderr.write(`${line}\n`);
     process.exitCode = 1;
   });

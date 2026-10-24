@@ -441,14 +441,34 @@ export function mediaIngestIntent({ item, bytes, transferId }) {
     digest(bytes) !== item.file.sha256
   )
     return null;
+  return ingestIntent(
+    item,
+    transferId,
+    createHash("md5").update(bytes).digest("base64"),
+  );
+}
+
+/**
+ * The same intent from the MD5 a caller recorded when it read the item's
+ * bytes, without reading them again (the server derives the staging key from
+ * it, MD5 included): --abandon of an item whose file changed or is gone. Null
+ * when the record cannot be the intent's.
+ */
+export function recordedIngestIntent({ item, transferId, md5Base64 }) {
+  return typeof md5Base64 === "string" && Number.isSafeInteger(item?.file?.size)
+    ? ingestIntent(item, transferId, md5Base64)
+    : null;
+}
+
+function ingestIntent(item, transferId, md5Base64) {
   const intent = {
     transferId,
     catalogId: item.body.catalogId,
     mediaId: item.body.mediaId,
     sha256: item.file.sha256,
-    bytes: bytes.length,
+    bytes: item.file.size,
     mimeType: item.file.mimeType,
-    md5Base64: createHash("md5").update(bytes).digest("base64"),
+    md5Base64,
     ...(item.file.width === undefined ? {} : { width: item.file.width }),
     ...(item.file.height === undefined ? {} : { height: item.file.height }),
     alt: item.body.alt,
@@ -503,12 +523,20 @@ const registeredMatches = (media, intent) =>
  * headers, and complete has the Admin verify, copy and register them. start,
  * the PUT (forbid-overwrite) and complete are each safe to repeat, so every
  * uncertain answer is retried. A 404 from an ingest route means the routes
- * are absent ({fallback: true}). A terminal failure after a PUT, in this run
- * or the staged run resumeStaged continues (start included), is final and
- * abandons the staging key; a retryable one keeps it, and resumeStaged then
- * skips the PUT after start. A start that finds the mediaId registered after
- * such a PUT reuses the doc and abandons the key first (best effort), as the
- * Admin's complete deletes it on a reuse. privacyCheck, when given, receives
+ * are absent: before any PUT the item may use the relay ({fallback: true}).
+ * Once a PUT began, in this run or an earlier one (resumeStaged, or
+ * stagingRecorded: the caller's record of a PUT that may have landed), it
+ * stops with MEDIA_INGEST_UNAVAILABLE instead and abandons nothing, so the
+ * caller keeps its staging record for a run or an abandon once the routes
+ * are back; a relay registration would leave the staged object to no one.
+ * A terminal failure after a PUT, in this run or the staged run resumeStaged
+ * continues (start included), is final and abandons the staging key; a
+ * retryable one keeps it, and resumeStaged then skips the PUT after start.
+ * A used or nearly expired URL is re-signed only once the put slot is held,
+ * so a wait for a shared slot never outlasts the signature. A start that
+ * finds the mediaId registered after such a PUT reuses the doc and abandons
+ * the key first (best effort), as the Admin's complete deletes it on a
+ * reuse. privacyCheck, when given, receives
  * the signed URL (for its bucket origin) and the key of each new
  * registration; only its status string is returned. Every answer but a
  * fallback carries metrics: the bytes, each PUT's milliseconds and status,
@@ -538,6 +566,7 @@ async function ingestDirectRun({
   signal,
   onProgress,
   resumeStaged,
+  stagingRecorded,
   ownsStaging,
   retryDelayMs,
   now,
@@ -620,10 +649,13 @@ async function ingestDirectRun({
   // straight on to complete.
   let grant,
     staged = resumeStaged === true,
-    putBegan = staged,
+    putBegan = staged || stagingRecorded === true,
     putAttempts = 0,
     lastPutStatus = 0,
     rePut = false;
+  // The routes are absent (404): the relay only while no PUT began.
+  const absent = () =>
+    putBegan ? failed("MEDIA_INGEST_UNAVAILABLE") : { fallback: true };
   // Final: the item fails (never retried, even after a 5xx such as
   // INGEST_FINAL_INVALID), and a staging key a PUT may have written, in this
   // run or the one resumed, is abandoned.
@@ -666,16 +698,20 @@ async function ingestDirectRun({
       );
     return registered(media, true, null);
   };
+  // start (or a re-sign) that did not grant a URL.
+  const notGranted = (started) =>
+    !started.ok
+      ? started.httpStatus === 404
+        ? absent()
+        : ingestRetryable(started)
+          ? started
+          : giveUp(started)
+      : reuse(started.result.media);
   // start first, also on resume: a doc registered meanwhile is reused without
   // a PUT or complete, and a 404 means the routes are absent.
   const first = await begin();
-  if (!first.ok)
-    return first.httpStatus === 404
-      ? { fallback: true }
-      : ingestRetryable(first)
-        ? first
-        : giveUp(first);
-  if (first.result.state === "registered") return reuse(first.result.media);
+  if (!first.ok || first.result.state === "registered")
+    return notGranted(first);
   grant = first.result;
   for (;;) {
     if (!staged) {
@@ -685,43 +721,43 @@ async function ingestDirectRun({
         return lastPutStatus === 403
           ? giveUp(failed("MEDIA_INGEST_PUT_FORBIDDEN"))
           : failed("MEDIA_INGEST_PUT_UNCERTAIN", true);
-      // A used or nearly expired URL is re-signed for the same key.
-      if (grant.used || grant.expiresAt - now() < 15_000) {
-        const started = await begin();
-        if (!started.ok)
-          return started.httpStatus === 404
-            ? { fallback: true }
-            : ingestRetryable(started)
-              ? started
-              : giveUp(started);
-        if (started.result.state === "registered")
-          return reuse(started.result.media);
-        grant = started.result;
-      }
       if (aborted(signal)) return failed("TRANSPORT_UNCERTAIN", true);
-      putAttempts += 1;
-      putBegan = true;
-      grant.used = true;
-      await notify("streaming", false);
-      let response;
       let putMs = 0;
-      try {
-        response = await put(async () => {
-          const began = now();
-          try {
-            return await putObject({
+      // The slot may be shared with other items (a caller's limiter smaller
+      // than its items in flight), so the URL is checked only once it is
+      // held: a used or nearly expired one is re-signed for the same key
+      // there, and no wait for the slot can outlast the 300 s signature.
+      const slot = await put(async () => {
+        if (grant.used || grant.expiresAt - now() < 15_000) {
+          const started = await begin();
+          if (!started.ok || started.result.state === "registered")
+            return { started };
+          grant = started.result;
+        }
+        if (aborted(signal)) return { aborted: true };
+        putAttempts += 1;
+        putBegan = true;
+        grant.used = true;
+        await notify("streaming", false);
+        const began = now();
+        try {
+          return {
+            response: await putObject({
               url: grant.upload.url,
               headers: { ...grant.upload.headers },
               body: bytes,
               signal,
-            });
-          } finally {
-            putMs = now() - began;
-          }
-        });
-      } catch {
-        response = { ok: false, status: 0 };
-      }
+            }),
+          };
+        } catch {
+          return { response: { ok: false, status: 0 } };
+        } finally {
+          putMs = now() - began;
+        }
+      });
+      if (slot?.started) return notGranted(slot.started);
+      if (slot?.aborted) return failed("TRANSPORT_UNCERTAIN", true);
+      const response = slot?.response;
       metrics.puts.push({
         ms: putMs,
         status: Number.isSafeInteger(response?.status) ? response.status : 0,
@@ -792,7 +828,7 @@ async function ingestDirectRun({
         privacy: PRIVACY.has(privacy) ? privacy : "uncertain",
       };
     }
-    if (done.httpStatus === 404) return { fallback: true };
+    if (done.httpStatus === 404) return absent();
     // The staging object is gone (expired, abandoned, or deleted after a
     // mismatch the server found): PUT again, and only once after a mismatch.
     if (done.code === "INGEST_NOT_UPLOADED") {
@@ -819,7 +855,8 @@ async function ingestDirectRun({
  * uploadMode "direct-cos-v1" ingests a Catalog original of up to
  * CATALOG_ORIGINAL_MAX_BYTES through the media-ingest routes and the injected
  * putObject (see ingestDirect); while those routes are absent (404) it falls
- * back to the relay only for files within MAX_MEDIA_UPLOAD_BYTES.
+ * back to the relay only for files within MAX_MEDIA_UPLOAD_BYTES and only
+ * before any staging PUT (stagingRecorded: one an earlier run recorded).
  */
 export async function stageMediaUpload({
   item,
@@ -836,6 +873,7 @@ export async function stageMediaUpload({
   put = (operation) => operation(),
   privacyCheck,
   resumeStaged = false,
+  stagingRecorded = false,
   ownsStaging,
   retryDelayMs = 1_000,
   now = Date.now,
@@ -870,6 +908,9 @@ export async function stageMediaUpload({
       typeof put !== "function" ||
       (privacyCheck !== undefined && typeof privacyCheck !== "function") ||
       (ownsStaging !== undefined && typeof ownsStaging !== "function") ||
+      // Never read as "nothing recorded": that would let the relay register
+      // an item whose staged object then stays.
+      typeof stagingRecorded !== "boolean" ||
       !normalizeCosHostSuffix(cosHostSuffix) ||
       !Number.isSafeInteger(retryDelayMs) ||
       retryDelayMs < 0 ||
@@ -891,6 +932,7 @@ export async function stageMediaUpload({
       signal,
       onProgress,
       resumeStaged,
+      stagingRecorded,
       ownsStaging,
       retryDelayMs,
       now,

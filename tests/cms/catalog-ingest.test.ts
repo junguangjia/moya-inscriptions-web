@@ -1437,6 +1437,93 @@ describe("Catalog ingest through real Payload and a synthetic COS", () => {
     expect((await send("complete", { intent })).status).toBe(200);
   });
 
+  it("opens no registration transaction when the deadline passes with the last storage answer", async () => {
+    const deadlineMs = 1_000;
+    const send = via(routes({}, deadlineMs));
+    const intent = intentFor("deadline-after-copy", jpeg);
+    await started(intent, jpeg, send);
+    // COS answers the final object's HEAD after the copy just as the
+    // deadline passes: the answer arrives, so no storage call fails.
+    let passed = false;
+    cos.copied = (object) => ({
+      ...object,
+      headers: {
+        get "x-cos-request-id"() {
+          if (!passed) {
+            passed = true;
+            vi.advanceTimersByTime(deadlineMs);
+          }
+          return "synthetic-request";
+        },
+      },
+    });
+    const begin = vi.spyOn(payload.db, "beginTransaction");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let late: Reply;
+    let transactions: number;
+    try {
+      late = await send("complete", { intent });
+    } finally {
+      vi.useRealTimers();
+      // mockRestore also clears the recorded calls.
+      transactions = begin.mock.calls.length;
+      begin.mockRestore();
+    }
+    expect(passed).toBe(true);
+    expect(late.status).toBe(504);
+    expect(late.body.error?.code).toBe("INGEST_DEADLINE_EXCEEDED");
+    // Only (a)'s short transaction ran; (g) never took the media lock.
+    expect(transactions).toBe(1);
+    expect(await mediaCount(intent.mediaId)).toBe(0);
+    expect(editorialKeysFor(intent.mediaId)).toEqual([finalKey(intent)]);
+    // A retry re-verifies the final object and registers it.
+    const retry = await send("complete", { intent });
+    expect(retry.status).toBe(200);
+    expect(retry.body.result).toMatchObject({ reused: false });
+    expect(await mediaCount(intent.mediaId)).toBe(1);
+  });
+
+  it("registers nothing when the deadline passes while (g) waits for the record lookup", async () => {
+    const deadlineMs = 1_500;
+    const send = via(routes({}, deadlineMs));
+    const intent = intentFor("deadline-in-lookup", jpeg);
+    await started(intent, jpeg, send);
+    // After the copy, the first lookup under (g)'s lock waits past the
+    // deadline, as a pool or lock wait would; nothing aborts it.
+    let copied = false;
+    let waited = false;
+    cos.before = (request) => {
+      if (request.kind === "copy") copied = true;
+    };
+    const find = payload.find.bind(payload);
+    const spy = vi.spyOn(payload, "find").mockImplementation((async (
+      options: Parameters<Payload["find"]>[0],
+    ) => {
+      const where = options.where as
+        { mediaId?: { equals?: string } } | undefined;
+      if (copied && !waited && where?.mediaId?.equals === intent.mediaId) {
+        waited = true;
+        await new Promise((resolve) => setTimeout(resolve, deadlineMs + 300));
+      }
+      return find(options);
+    }) as never);
+    let late: Reply;
+    try {
+      late = await send("complete", { intent });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(waited).toBe(true);
+    expect(late.status).toBe(504);
+    expect(late.body.error?.code).toBe("INGEST_DEADLINE_EXCEEDED");
+    expect(await mediaCount(intent.mediaId)).toBe(0);
+    expect(editorialKeysFor(intent.mediaId)).toEqual([finalKey(intent)]);
+    cos.before = undefined;
+    const retry = await send("complete", { intent });
+    expect(retry.status).toBe(200);
+    expect(await mediaCount(intent.mediaId)).toBe(1);
+  });
+
   it("admits two running and eight waiting completes, and refuses the next with 429", async () => {
     const send = via(routes({}, 20_000));
     const intents = Array.from({ length: 11 }, (_, index) =>
@@ -1692,6 +1779,31 @@ describe("Catalog ingest through real Payload and a synthetic COS", () => {
     const verify = await send("verify", { mediaId: intent.mediaId });
     expect(verify.status).toBe(409);
     expect(verify.body.error?.code).toBe("INGEST_SERVER_HASH_DISABLED");
+  });
+
+  it("refuses a header over the bounds from its prefix alone when the server SHA-256 is off (D9)", async () => {
+    const send = via(routes({ CMS_CATALOG_INGEST_SERVER_SHA256: "off" }));
+    // A side over 65,500 px, in the first range read; the tail is complete.
+    const wide = virtualJpeg(3 * 1024 * 1024, 65_501, 1_000);
+    const intent = intentFor("etag-bounds", Buffer.alloc(0), {
+      sha256: wide.sha256,
+      md5Base64: wide.md5Base64,
+      bytes: wide.object.size,
+    });
+    const staging = await started(intent, wide.object, send);
+    const mark = cos.requests.length;
+    const refused = await send("complete", { intent });
+    expect(refused.status).toBe(422);
+    expect(refused.body.error?.code).toBe("INGEST_CONTENT_INVALID");
+    expect(cos.objects.has(staging)).toBe(false);
+    expect(
+      since(mark)
+        .filter(({ kind }) => kind === "get")
+        .map(({ headers }) => headers.range),
+    ).toEqual(["bytes=0-1048575"]);
+    expect(since(mark).some(({ kind }) => kind === "copy")).toBe(false);
+    expect(editorialKeysFor(intent.mediaId)).toEqual([]);
+    expect(await mediaCount(intent.mediaId)).toBe(0);
   });
 
   it("tags staging and strips the tag on copy under the tag lifecycle (L1)", async () => {

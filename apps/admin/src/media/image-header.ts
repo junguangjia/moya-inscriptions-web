@@ -3,6 +3,8 @@ import {
   CATALOG_ORIGINAL_MAX_EDGE,
   CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES,
   CATALOG_ORIGINAL_MAX_JPEG_COEFFICIENT_BYTES,
+  CATALOG_ORIGINAL_MAX_JPEG_SCANS,
+  CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES,
   CATALOG_ORIGINAL_MAX_PIXELS,
   CATALOG_ORIGINAL_MAX_ROW_BYTES,
 } from "@moya/contracts/internal/editorial";
@@ -33,8 +35,8 @@ export type ImageProbeRefusal =
   /** More than one frame (PNG acTL/fcTL/fdAT, WebP ANIM flag or chunks). */
   | "animated"
   /**
-   * A side, the pixels, the decoded size, a decoded row or a whole-image
-   * decoder buffer over the bound.
+   * A side, the pixels, the decoded size, a decoded row, a whole-image
+   * decoder buffer or the JPEG scans over the bound.
    */
   | "bounds"
   /** A declared width or height that differs from the stored one. */
@@ -76,6 +78,13 @@ export type ImageProbeOptions = {
   maxCoefficientBytes?: number;
   /** An interlaced PNG's decoded pixels (tRNS alpha included), held whole. */
   maxInterlacedBytes?: number;
+  /**
+   * A lossless WebP's ARGB buffer (VP8L, or a VP8L-compressed alpha),
+   * width × height × 4 B, held whole.
+   */
+  maxLosslessWebpBytes?: number;
+  /** The scans of one JPEG, every one of which the decoder reads in full. */
+  maxJpegScans?: number;
   declaredWidth?: number | undefined;
   declaredHeight?: number | undefined;
 };
@@ -115,7 +124,12 @@ type ParserState = {
     bytesPerSample: number,
   ): ImageProbeFacts;
   /** Bounds a decoder buffer that holds the whole image. */
-  buffered(kind: "coefficients" | "interlaced", bytes: number): void;
+  buffered(
+    kind: "coefficients" | "interlaced" | "lossless",
+    bytes: number,
+  ): void;
+  /** Bounds the count of JPEG scans. */
+  scans(count: number): void;
   /** Marks the header complete: the first scan, IDAT or image chunk. */
   header(facts: ImageProbeFacts): void;
   /** WebP: the exact byte length the RIFF header declares. */
@@ -221,7 +235,8 @@ function* jpeg(state: ParserState): Parser {
     }
     if (code === 0xda) {
       if (!frame) refuse("invalid");
-      if (scans++ > 0) yield skip(length - 2);
+      state.scans(++scans);
+      if (scans > 1) yield skip(length - 2);
       else {
         // The first scan's header: Ns, a selector and table pair per
         // component, then Ss, Se and Ah/Al. It precedes the entropy data, so
@@ -399,6 +414,10 @@ function* webp(state: ParserState): Parser {
       if (width !== canvas.width || height !== canvas.height) refuse("invalid");
       facts = canvas;
     } else facts = state.size(width, height, alpha ? 4 : 3, 1);
+    // libwebp's lossless decoder holds the whole image as 32-bit ARGB,
+    // whatever the output size and whether or not alpha is used.
+    if (found.fourcc === "VP8L")
+      state.buffered("lossless", facts.width * facts.height * 4);
     state.header(facts);
     yield skip(found.padded - consumed);
   }
@@ -429,6 +448,15 @@ function* webp(state: ParserState): Parser {
       yield* image(next, canvas);
       continue;
     }
+    // A lossy image's alpha plane. Compression method 1 is a VP8L stream,
+    // whose decoder can hold the whole plane as 32-bit ARGB too.
+    if (next.fourcc === "ALPH" && next.size > 0) {
+      const method = ((yield read(1)) as Uint8Array)[0]! & 0x03;
+      if (method === 1)
+        state.buffered("lossless", canvas.width * canvas.height * 4);
+      yield skip(next.padded - 1);
+      continue;
+    }
     yield skip(next.padded);
   }
   if (!found) refuse("incomplete");
@@ -451,6 +479,8 @@ export class ImageStructureProbe {
       | "maxRowBytes"
       | "maxCoefficientBytes"
       | "maxInterlacedBytes"
+      | "maxLosslessWebpBytes"
+      | "maxJpegScans"
     >
   >;
   readonly #declared: { width?: number; height?: number };
@@ -484,6 +514,10 @@ export class ImageStructureProbe {
       maxInterlacedBytes:
         options.maxInterlacedBytes ??
         CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES,
+      maxLosslessWebpBytes:
+        options.maxLosslessWebpBytes ??
+        CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES,
+      maxJpegScans: options.maxJpegScans ?? CATALOG_ORIGINAL_MAX_JPEG_SCANS,
     };
     this.#declared = {
       ...(options.declaredWidth === undefined
@@ -525,9 +559,14 @@ export class ImageStructureProbe {
           bytes >
           (kind === "coefficients"
             ? this.#limits.maxCoefficientBytes
-            : this.#limits.maxInterlacedBytes)
+            : kind === "interlaced"
+              ? this.#limits.maxInterlacedBytes
+              : this.#limits.maxLosslessWebpBytes)
         )
           refuse("bounds");
+      },
+      scans: (count) => {
+        if (count > this.#limits.maxJpegScans) refuse("bounds");
       },
       header: (facts) => {
         this.#header ??= facts;

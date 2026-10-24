@@ -145,11 +145,12 @@ control.
 
 Catalog originals over 40 MiB (up to 128 MiB, 120 million pixels, 512 MiB
 decoded, 65,500 px per side and 256 KiB per decoded row, 8-bit JPEG samples
-only, at most 512 MiB of coefficients in a progressive JPEG and 256 MiB decoded
-in an interlaced PNG) are not uploaded by this CLI. They go through the separate
-ingest path of catalog-scale-v1 increment 2: one signed PUT straight to private
-staging, then a server-verified copy and registration (`stageMediaUpload` with
-`uploadMode: "direct-cos-v1"` and the Codex CLI
+only, at most 150 scans and 512 MiB of coefficients in a JPEG with more than one
+scan, 256 MiB decoded in an interlaced PNG, and 256 MiB of ARGB in a lossless
+WebP or one with VP8L-compressed alpha) are not uploaded by this CLI. They go
+through the separate ingest path of catalog-scale-v1 increment 2: one signed PUT
+straight to private staging, then a server-verified copy and registration
+(`stageMediaUpload` with `uploadMode: "direct-cos-v1"` and the Codex CLI
 `scripts/editorial/direct-ingest.mjs`; see [operations](../cms/operations.md)).
 This CLI keeps the relay, its 40 MiB ceiling and its read schema: a registered
 media doc over 40 MiB fails that parse, so a run that meets one stops before it

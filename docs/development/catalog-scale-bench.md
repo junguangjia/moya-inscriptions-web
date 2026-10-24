@@ -928,8 +928,12 @@ a Development measurement before switch-on (I-AC7). This section is that
 measurement. It kept the first three, lowered the edge to 65,500 px and added
 one bound, 256 KiB per stored decoded row. Its review added three more: JPEG
 samples of 8 bits only, at most 512 MiB of DCT coefficients in a JPEG with more
-than one scan, and at most 256 MiB decoded in an interlaced (Adam7) PNG (see
-[Decision](#decision-the-ingest-limits)).
+than one scan, and at most 256 MiB decoded in an interlaced (Adam7) PNG. The PR
+review (S11 and a suggestion) added two more: at most 256 MiB of ARGB (width ×
+height × 4 B) in a lossless WebP, and at most 150 scans in a JPEG (see
+[Decision](#decision-the-ingest-limits)). The figures that hold for the final
+head are in [Final figures](#final-figures-r2); the earlier sections keep each
+round's own numbers.
 
 ### Files
 
@@ -1018,17 +1022,17 @@ repeats differ by more than 5%. Peak includes the page cache.
 | `png-120mp-rgba-orient6` | `png-120mp-rgba` with EXIF Orientation 6                | 2.4 (2.3–2.5)  | 6.7            | 381 (346–387) | 260 (219–286)    |
 | `tall-png16-rgba-o6`     | 1,024 × 65,500 16-bit RGBA PNG, EXIF Orientation 6      | 2.0            | 5.0            | 168 (155–169) | 97               |
 
-Within the limits, the worst values were a peak of 892 MiB (58% of 1,536 MiB,
-46% of 1.9 GiB), a slowest role of 7.9 s of 120 and a slowest job of 15.8 s
-of 300. The renderer's preparation (container checks and the header inspection,
-no pixel decode) took under 0.1 s in every case.
+In this first round, within the limits, the worst values were a peak of 892 MiB
+(58% of 1,536 MiB, 46% of 1.9 GiB), a slowest role of 7.9 s of 120 and a slowest
+job of 15.8 s of 300. The renderer's preparation (container checks and the
+header inspection, no pixel decode) took under 0.1 s in every case.
 
 The two cases over the old limits, which set the new ones:
 
-| Case                                 | Original                                       | Outcome                                                                    |
-| ------------------------------------ | ---------------------------------------------- | -------------------------------------------------------------------------- |
-| `jpeg-65535-header` (over the edge)  | a JPEG whose frame header says 65,535 × 1,831  | rejected `decode_failed` after 0.2 s, every repeat                         |
-| `pano-png16-rgba-65500` (over a row) | 65,500 × 1,024 16-bit RGBA PNG (row 512,000 B) | rendered in 2.4 s with a peak of 1,106 MiB (1,005–1,163), 72% of 1,536 MiB |
+| Case                                 | Original                                       | Outcome                                                                                                                                                         |
+| ------------------------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jpeg-65535-header` (over the edge)  | a JPEG whose frame header says 65,535 × 1,831  | rejected `decode_failed` after 0.2 s, every repeat                                                                                                              |
+| `pano-png16-rgba-65500` (over a row) | 65,500 × 1,024 16-bit RGBA PNG (row 512,000 B) | rendered in 2.4 s with a peak of 1,106 MiB (1,005–1,163), 72% of 1,536 MiB, in this round; in the final run (2026-10-24) 2.6 s and 1,408 MiB (1,405–1,419), 92% |
 
 - **The JPEG edge is 65,500.** libjpeg-turbo's `JPEG_MAX_DIMENSION` is 65,500
   px. The encoder refuses to write a longer side, and the sandbox's decoder
@@ -1101,11 +1105,15 @@ and at that bound:
 | `png16-adam7-rgba-strip`         | 32,768 × 1,024 Adam7 16-bit RGBA PNG, 42 MiB                               | 256 MiB           | 4.1 (4.1–4.7)  | 5.4           | 693 (690–721) |
 | `png-adam7-rgba-8192`            | 8,192 × 8,192 Adam7 RGBA PNG, 72 MiB                                       | 256 MiB           | 2.2            | 5.3           | 491 (478–513) |
 
-The worst was 790 MiB (51%). At a quarter of a core the slowest role was 21.1 s
-(`png16-adam7-rgba-strip`) and the slowest job 40.2 s
+Among these eight buffer cases (the 2026-10-24 run), the worst peak was 790 MiB
+(51%). At a quarter of a core their slowest role was 21.1 s
+(`png16-adam7-rgba-strip`) and their slowest job 40.2 s
 (`jpeg-prog-cmyk-444-512mib`), 3.8–5.5 times the one-core time; memory did not
-change. A 4:2:0 progressive JPEG (the usual web form) keeps all 120 million
-pixels; a 4:4:4 one keeps about 89 million (RGB) or 67 million (CMYK).
+change. These are not the figures of every accepted case: the non-interlaced
+strips above peak higher and run longer (see
+[Final figures](#final-figures-r2)). A 4:2:0 progressive JPEG (the usual web
+form) keeps all 120 million pixels; a 4:4:4 one keeps about 89 million (RGB) or
+67 million (CMYK).
 
 ### Sequential JPEG in several scans
 
@@ -1148,10 +1156,11 @@ such an original could be registered and never render. It is now refused as
 
 The CVM's vCPU is slower than an M5 Pro core, by how much is not known: no
 Production render timing exists, and the figure of about 7 images a minute is a
-review note for typical originals, COS reads and writes included. Wall time
-under `MOYA_CATALOG_RENDER_BENCH_CPUS=0.25` (a quarter of a core) was 3.8–8.7
-times the one-core time per job, and up to 9.7 times per role: more than 4,
-because of throttling. Every case ran once:
+review note for typical originals, COS reads and writes included. In the first
+round (2026-10-23), wall time under `MOYA_CATALOG_RENDER_BENCH_CPUS=0.25` (a
+quarter of a core) was 3.8–8.7 times the one-core time per job, and up to 9.7
+times per role: more than 4, because of throttling. Every case ran once (the
+re-run of the final head is in [Final figures](#final-figures-r2)):
 
 | Case                     | Slowest role s | Container s | Times one core |
 | ------------------------ | -------------- | ----------- | -------------- |
@@ -1178,6 +1187,73 @@ a quarter of this core, it is the first to reach a bound. Its job is retried
 and, after its attempts, fails: the image stays unrendered, and the readiness
 gate keeps its record unpublished.
 
+### Lossless WebP
+
+The first round measured lossy WebP only. libwebp's lossless (VP8L) decoder
+keeps the whole image as 32-bit ARGB, width × height × 4 B, whatever the output
+size and whether or not the image uses alpha (the 32-bit internal buffers of
+`vp8l_dec.c`); a lossy image whose alpha plane is VP8L-compressed (`ALPH`,
+compression method 1) can hold the same buffer for that plane. At the pixel
+bound that is 458 MiB, so the PR review (S11) asked for a measurement or a bound
+like Adam7's. Measured 2026-10-24 in the same way (one core, three repeats; the
+bench encodes with sharp, `lossless: true` for VP8L, and a case with alpha
+carries a varying alpha so that the encoder keeps it):
+
+| Case                                    | Original                                                         | ARGB buffer           | Largest outputs (display, viewer) | Slowest role s | Container s   | Peak MiB      |
+| --------------------------------------- | ---------------------------------------------------------------- | --------------------- | --------------------------------- | -------------- | ------------- | ------------- |
+| `webp-16383` (same run)                 | 16,383 × 7,324 lossy WebP, q90, 46 MiB                           | none                  | 2,048 × 916, 4,096 × 1,831        | 3.1            | 11.2          | 199 (191–297) |
+| `webp-lossless-16383x4096`              | 16,383 × 4,096 lossless, no alpha, 29 MiB                        | 256.0 MiB             | 5,120 × 1,280, 8,192 × 2,048      | 1.6            | 4.3           | 397           |
+| `webp-lossless-alpha-16383x4096`        | the same with alpha, 39 MiB                                      | 256.0 MiB             | 5,120 × 1,280, 8,192 × 2,048      | 5.6            | 10.3          | 827 (807–853) |
+| `webp-alpha-16383x4096`                 | the same size, lossy q90 with alpha (`ALPH` method 1), 36 MiB    | 256.0 MiB (its alpha) | 5,120 × 1,280, 8,192 × 2,048      | 7.4            | 15.8          | 833 (802–848) |
+| `webp-lossless-16383` (over)            | 16,383 × 7,324 lossless, no alpha, 51 MiB                        | 457.7 MiB             | 2,048 × 916, 4,096 × 1,831        | 1.7            | 5.7           | 573           |
+| `webp-lossless-alpha-16383` (over)      | the same with alpha, 70 MiB                                      | 457.7 MiB             | 2,048 × 916, 4,096 × 1,831        | 3.9            | 8.8           | 596           |
+| `webp-lossless-16383x6552` (over)       | 16,383 × 6,552 lossless, no alpha, a long scroll (2.5:1), 46 MiB | 409.5 MiB             | 3,201 × 1,280, 5,121 × 2,048      | 1.7 (1.7–1.8)  | 5.6 (5.6–6.0) | 537           |
+| `webp-lossless-alpha-16383x6552` (over) | the same with alpha, 62 MiB                                      | 409.5 MiB             | 3,201 × 1,280, 5,121 × 2,048      | 4.9            | 10.3          | 572           |
+| `webp-alpha-16383x7324` (over, r3)      | 16,383 × 7,324 lossy q90 with alpha (`ALPH` method 1), 64 MiB    | 457.7 MiB (its alpha) | 2,048 × 916, 4,096 × 1,831        | 6.0            | 17.0          | 723 (721–725) |
+
+The ARGB buffer did not set the peak at these shapes. The 120 MP lossless files
+(458 MiB of ARGB) peaked at 573–596 MiB, at most 39% of 1,536 MiB, below the 64
+MP files of aspect 4 with alpha (853 MiB lossless and 848 MiB lossy, 56%), whose
+peak follows the alpha channel and the viewer of 8,192 × 2,048 that a long
+scroll at the 16,383 px edge gets: the same file without alpha peaked at 399
+MiB. At a quarter of a core (three repeats) the lossy file with alpha was the
+slowest job measured: 88.3 s (87.4–88.8) of 300, with a viewer of 39.5 s
+(39.4–41.0) of 120; the lossless one took 52.0 s (51.1–54.4), viewer 28.4 s
+(28.3–30.2), with the same peaks as on one core.
+
+So the bound (`CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES`, 256 MiB, the Adam7
+value) is a conservative one: it keeps every whole-image decoder buffer at or
+under 256 MiB, and it costs only lossless WebP originals over 64 MP and lossy
+ones with VP8L-compressed alpha over 64 MP. The measurement alone would allow
+the 120 MP pixel bound (458 MiB of ARGB, under 600 MiB peak lossless, 723 MiB
+lossy with alpha, below); raising the bound is a decision for the Owner, with
+these figures. The `ALPH` rule follows the decoder's code: whether a file's
+alpha takes the 32-bit path depends on how it was encoded, which the probe
+cannot see. Its over-limit half was measured in a later run (r3, 2026-10-24, at
+the review's request; one core, three repeats, with `webp-alpha-16383x4096` and
+`webp-lossless-alpha-16383` in the same run at 833 and 597 MiB, as before): the
+120 MP lossy file with VP8L-compressed alpha (`webp-alpha-16383x7324`, which the
+probe refuses) peaked at 723 MiB (47%), with a slowest role of 6.0 s and a
+container of 17.0 s. At a quarter of a core it took 106.1 s (105.3–106.3) of
+300, viewer 36.9 s (36.7–37.4) of 120, with a peak of 715 MiB. So both halves of
+the bound now have an over-limit measurement, and both stay within the 30%
+margin at the 120 MP pixel bound.
+
+### JPEG scans
+
+libjpeg reads every scan of a multi-scan file in full, whatever the output size,
+and the renderer decodes the source once per role. A crafted progressive JPEG of
+thousands of tiny scans fits every size bound and still could never render
+within the job's time. The probe now counts the scans and refuses more than 150
+(`CATALOG_ORIGINAL_MAX_JPEG_SCANS`, `bounds`) at the marker of the one over it.
+Common encoders write far fewer: libjpeg's progressive script writes 10 scans
+for YCbCr and 18 for CMYK (sharp's progressive output in the unit tests has 10,
+the bench's progressive CMYK strip 18), and a sequential file at most one per
+component. The bound was not measured: no case of 150 scans at 120 MP was
+rendered, so the time such a file takes on the Production CPU is still open. The
+count needs every byte, so the MD5/ETag mode (D9), which probes only a header
+prefix, does not apply it.
+
 ### Decision: the ingest limits
 
 | Limit                                                           | Before (D6) | After              |
@@ -1189,6 +1265,8 @@ gate keeps its record unpublished.
 | `CATALOG_ORIGINAL_MAX_ROW_BYTES`                                | none        | 256 KiB (new)      |
 | `CATALOG_ORIGINAL_MAX_JPEG_COEFFICIENT_BYTES` (multi-scan JPEG) | none        | 512 MiB (new)      |
 | `CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES` (Adam7 PNG)     | none        | 256 MiB (new)      |
+| `CATALOG_ORIGINAL_MAX_LOSSLESS_WEBP_BYTES` (VP8L, VP8L alpha)   | none        | 256 MiB (new, r2)  |
+| `CATALOG_ORIGINAL_MAX_JPEG_SCANS`                               | none        | 150 (new, r2)      |
 | JPEG sample precision                                           | 8 or 12 bit | 8 bit only         |
 
 - **The edge applies to every format.** JPEG needs 65,500. A PNG side between
@@ -1210,17 +1288,71 @@ gate keeps its record unpublished.
   (IHDR's interlace method, with tRNS alpha counted), at the header, with the
   other bounds (`INGEST_CONTENT_INVALID`). A sequential JPEG whose first scan
   holds every component and a non-interlaced PNG hold no such buffer.
+- **The lossless WebP bound** is width × height × 4 B for a VP8L image chunk
+  (simple or extended format, with alpha or without) and for a lossy image's
+  `ALPH` chunk with compression method 1, read before the image chunk's header
+  is complete, so the MD5/ETag mode applies it too. A lossy WebP without alpha,
+  or with uncompressed alpha, holds no such buffer.
+- **The scan bound** counts every SOS of a JPEG (see [JPEG scans](#jpeg-scans));
+  it needs the full read, so only the server SHA-256 mode applies it.
 - **What did not change.** The worker's own sandbox bounds, the processing
   snapshot's 65,535 px edge, and the native and relay paths (40 MiB, 80 MP) are
   unchanged. A native upload of a wide 16-bit PNG within 80 MP can still reach
   the sandbox (an open issue, outside this increment).
 
-With these limits, the worst measured case is again the non-interlaced RGBA
-strip at the edge, a peak of 892 MiB, with a role of 7.9 s and a job of 15.8 s
-on one core, and 889 MiB, 75.3 s and 87.7 s on a quarter of a core. Every bound
-keeps at least 30% margin in both. (The first round's same figure had missed the
-progressive and interlaced cases above, which reached 1,121 MiB inside its
+With these limits every measured case keeps at least 30% margin on one core and
+on a quarter of a core; the figures that hold are in
+[Final figures](#final-figures-r2). (The first round's own summary had missed
+the progressive and interlaced cases above, which reached 1,121 MiB inside its
 limits.)
+
+### Final figures (r2)
+
+The strips within the limits (the shapes with the most rows held, among them the
+worst accepted case, `pano-png-rgba-65500`) were re-run on the final head on
+2026-10-24: five repeats on one core and three on a quarter of a core, with the
+same machine, image and flags as above (Apple M5 Pro, arm64; Docker Desktop's
+Linux VM with 18 vCPUs and 8 GiB; the local
+`yoyi-work-publishing-media-tools:v2`, linux/arm64). Median, with the range in
+parentheses where the repeats differ by more than 5%:
+
+| Case                       | Slowest role s, one core | Container s, one core | Peak MiB, one core | Slowest role s, quarter | Container s, quarter | Peak MiB, quarter |
+| -------------------------- | ------------------------ | --------------------- | ------------------ | ----------------------- | -------------------- | ----------------- |
+| `pano-jpeg-65500`          | 0.8                      | 1.7                   | 251                | 4.2 (4.0–4.5)           | 7.5 (7.4–8.1)        | 249               |
+| `pano-jpeg-cmyk-65500`     | 1.8                      | 3.0                   | 303                | 10.2 (8.5–10.5)         | 16.0 (14.2–16.1)     | 304               |
+| `pano-png-rgba-65500`      | 1.1                      | 2.7                   | 857 (812–926)      | 6.0 (5.0–6.2)           | 13.6 (11.1–13.7)     | 685 (681–923)     |
+| `pano-png16-rgba-32768`    | 6.9 (6.8–7.7)            | 9.0 (8.8–9.7)         | 596 (589–794)      | 38.2 (35.6–38.8)        | 47.7 (43.6–48.7)     | 626 (598–795)     |
+| `pano-png16-rgb-43690`     | 6.3 (6.2–7.1)            | 7.9 (7.8–8.6)         | 704 (538–705)      | 32.4 (26.9–32.7)        | 38.9 (33.8–40.2)     | 704 (534–705)     |
+| `tall-png16-rgba-o6`       | 1.9 (1.9–2.1)            | 5.0                   | 156 (155–170)      | 9.6 (8.4–9.8)           | 23.8 (20.8–25.8)     | 153               |
+| `jpeg-prog-cmyk-444-strip` | 1.7                      | 4.0                   | 727                | 7.4                     | 16.8 (16.5–17.7)     | 728               |
+| `png-adam7-rgba-strip`     | 0.9 (0.9–1.0)            | 2.5 (2.4–2.6)         | 702 (699–804)      | 3.9 (3.8–4.8)           | 9.5 (9.5–12.1)       | 787               |
+| `png-adam7-rgb-strip`      | 1.1                      | 2.9                   | 693 (629–698)      | 5.8 (4.6–6.0)           | 12.8 (11.8–14.7)     | 691               |
+| `png16-adam7-rgba-strip`   | 3.9 (3.6–4.0)            | 5.2 (4.9–5.4)         | 634 (630–715)      | 19.6 (18.6–20.3)        | 25.4 (25.0–26.8)     | 643 (633–693)     |
+
+Across every round, at the final limits, the largest values seen (the decision
+uses those, never the median) are:
+
+| Figure                  | One core                                                              | A quarter of a core                                                                        |
+| ----------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Peak                    | 926 MiB, `pano-png-rgba-65500` (r2): 60% of 1,536 MiB, 48% of 1.9 GiB | 923 MiB, the same case (r2); memory does not change with the CPU                           |
+| Slowest role            | 7.9 s of 120, `pano-png16-rgba-32768` (first round; 7.7 s in r2)      | 75.3 s of 120 (63%), the same case (first round, one run; 35.6–38.8 s in r2's three)       |
+| Slowest job (container) | 16.2 s of 300, `webp-alpha-16383x4096` (r2)                           | 88.8 s of 300 (30%), the same case (r2); 87.7 s for `png16-rgba-512mib` in the first round |
+
+Every figure keeps the 30% margin of the budget (1,075 MiB, 84 s a role, 210 s a
+job). Run to run, the same case moved by up to 30–40% in peak (for example
+589–794 MiB) and by 2× in quarter-core time between sessions (75.3 s in the
+first round, at most 38.8 s in r2), so a single run is never the figure.
+
+Over the limits, the cases that set them measured, in their last runs: a 16-bit
+RGBA row of 512,000 B 1,408 MiB (1,405–1,419, 92%), a 120 MP progressive CMYK
+JPEG 1,094 MiB (71%), a 65,500 px Adam7 RGBA strip 1,021 MiB (1,015–1,113), and
+a JPEG frame of 65,535 px a `decode_failed` refusal; a 120 MP lossless WebP 573–
+596 MiB (39%; see [Lossless WebP](#lossless-webp)).
+
+**These are arm64 figures.** Production's CVM is amd64, and no Production render
+timing exists yet. Its timing is still to be measured: the 10-image canary
+(README step 6) is the first Production measurement, and the render jobs of its
+originals should be read against these figures before any bulk batch.
 
 ### Development e2e (I-AC7)
 

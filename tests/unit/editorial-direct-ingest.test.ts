@@ -74,9 +74,11 @@ type RunOptions = {
   concurrency?: number;
   completeConcurrency?: number;
   attempts?: number;
+  budgetMs?: number;
   retryDelayMs?: number;
   now?: () => number;
   signal?: AbortSignal;
+  stateCompactBytes?: number;
 };
 const ingest = (await import(
   new URL("../../scripts/editorial/direct-ingest.mjs", import.meta.url).href
@@ -92,6 +94,12 @@ const ingest = (await import(
     fetchImpl?: typeof fetch;
   }) => CosClient;
   validateIngestManifest: (manifest: unknown) => Manifest;
+  runbookLines: (result: Json) => string[];
+  STATE_LIMITS: {
+    maxItems: number;
+    maxStateBytes: number;
+    compactAfterBytes: number;
+  };
   openOriginal: (
     realParent: string,
     name: string,
@@ -815,6 +823,97 @@ describe(
       expect(cosPuts(expiring)).toHaveLength(1);
     });
 
+    it("re-signs inside the put slot, so a library caller's wait for a shared slot never sends an expired URL", async () => {
+      // A shared one-slot limiter for two items, and PUTs that take 400 s of
+      // a fake clock: the second item gets the slot after its first URL's
+      // 300 s have passed.
+      let clock = Date.now();
+      const expiries = new Map<string, number>();
+      let grants = 0;
+      const context = await setup(
+        [
+          { key: "first", size: 4096 },
+          { key: "second", size: 4096 },
+        ],
+        {
+          mutateGrant: (grant) => {
+            const upload = grant.upload as Json;
+            const id = String(++grants);
+            upload.url = `${String(upload.url)}&q-key-time=${id}`;
+            upload.expiresAt = new Date(clock + 300_000).toISOString();
+            expiries.set(id, clock + 300_000);
+          },
+        },
+      );
+      const statuses: number[] = [];
+      let busy = false;
+      const waiting: (() => void)[] = [];
+      const put = async (work: () => Promise<unknown>) => {
+        if (busy) await new Promise<void>((resolve) => waiting.push(resolve));
+        busy = true;
+        try {
+          return await work();
+        } finally {
+          busy = false;
+          waiting.shift()?.();
+        }
+      };
+      const putObject = async (request: Json) => {
+        // The first PUT lasts until the other item waits for the slot.
+        for (let tick = 0; !statuses.length && !waiting.length; tick++) {
+          if (tick > 500) throw new Error("the other item never waited");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        const id = new URL(String(request.url)).searchParams.get("q-key-time");
+        // As COS answers a PUT whose signature has expired.
+        if (clock >= (expiries.get(String(id)) ?? 0)) {
+          statuses.push(403);
+          return { ok: false, status: 403 };
+        }
+        const response = await context.client.putObject(request);
+        clock += 400_000;
+        statuses.push(response.status);
+        return response;
+      };
+      const results = await Promise.all(
+        context.manifest.items.map(async (item) =>
+          upload.stageMediaUpload({
+            item: {
+              requestHash: sha256(String(item.key)),
+              body: {
+                catalogId: item.catalogId,
+                mediaId: item.mediaId,
+                alt: item.alt,
+              },
+              file: {
+                sha256: item.sha256,
+                size: item.bytes,
+                mimeType: item.mimeType,
+                width: item.width,
+                height: item.height,
+              },
+            },
+            bytes: await readFile(
+              join(context.directory, `${String(item.key)}.jpg`),
+            ),
+            transferId: sha256(`transfer-${String(item.key)}`),
+            send: context.send,
+            uploadMode: "direct-cos-v1",
+            putObject,
+            put,
+            cosHostSuffix: SUFFIX,
+            retryDelayMs: 0,
+            now: () => clock,
+          }),
+        ),
+      );
+      expect(results).toMatchObject([{ ok: true }, { ok: true }]);
+      // One PUT each, both on a live signature; the second item re-signed
+      // once it held the slot.
+      expect(statuses).toEqual([200, 200]);
+      expect(context.admin.stats().startCalls).toBe(3);
+    });
+
     it("retries a 502 or a lost 504 reply of complete as uncertain and registers once", async () => {
       const context = await setup([{ key: "uncertain", size: 4096 }], {
         completeFaults: ["before", "after"],
@@ -1128,6 +1227,75 @@ describe(
       expect(stagedKeys(resigned)).toBe(0);
     });
 
+    /**
+     * A first run whose three PUTs all answered 503: no answer confirmed a
+     * PUT, so the row says staged: false, but it records the grant's staging
+     * id, and one PUT did land (put in the bucket here by hand).
+     */
+    const unconfirmedPut = async (adminOptions: AdminOptions = {}) => {
+      const context = await setup(
+        [{ key: "landed", size: 4096 }],
+        adminOptions,
+        { putStatuses: [503, 503, 503] },
+      );
+      expect(await context.run({ attempts: 1 })).toMatchObject({
+        pending: 1,
+        codes: { MEDIA_INGEST_PUT_UNCERTAIN: 1 },
+      });
+      expect((await stateRows(context)).get("landed")).toMatchObject({
+        staged: false,
+        stagingDigest: expect.any(String),
+      });
+      context.bucket.set(
+        cosPuts(context)[0]!.path.slice(1),
+        await readFile(join(context.directory, "landed.jpg")),
+      );
+      expect(stagedKeys(context)).toBe(1);
+      return context;
+    };
+
+    it("abandons the staging key of a recorded but unconfirmed PUT when start finds the mediaId registered meanwhile", async () => {
+      const context = await unconfirmedPut();
+      const item = context.manifest.items[0]!;
+      context.admin.docs.set(String(item.mediaId), registeredFor(item));
+      const before = context.admin.requests.length;
+      expect(await context.run()).toMatchObject({
+        registered: 1,
+        reused: 1,
+        failed: 0,
+        pending: 0,
+      });
+      expect(
+        context.admin.requests.slice(before).map((request) => request.route),
+      ).toEqual([INGEST.start, INGEST.abandon]);
+      expect(cosPuts(context)).toHaveLength(3);
+      // The registered row drops its staging record, and --abandon skips
+      // registered rows: this abandon is the only one that object gets.
+      expect(stagedKeys(context)).toBe(0);
+    });
+
+    it("abandons the staging key of a recorded but unconfirmed PUT when a resumed start refuses the item terminally", async () => {
+      const adminOptions: AdminOptions = {};
+      const context = await unconfirmedPut(adminOptions);
+      adminOptions.startRefusal = { status: 400, code: "INGEST_INPUT_INVALID" };
+      const before = context.admin.requests.length;
+      expect(await context.run()).toMatchObject({
+        failed: 1,
+        pending: 0,
+        abandoned: 1,
+        codes: { INGEST_INPUT_INVALID: 1 },
+      });
+      expect(
+        context.admin.requests.slice(before).map((request) => request.route),
+      ).toEqual([INGEST.start, INGEST.abandon]);
+      expect(cosPuts(context)).toHaveLength(3);
+      expect(stagedKeys(context)).toBe(0);
+      // The key is empty now, so the row no longer binds an actor.
+      const row = (await stateRows(context)).get("landed")!;
+      expect(row).toMatchObject({ status: "failed", staged: false });
+      expect(row).not.toHaveProperty("stagingDigest");
+    });
+
     it("admits no new item after the Admin's ingest quota refuses one", async () => {
       const context = await setup(
         Array.from({ length: 3 }, (_, index) => ({
@@ -1357,6 +1525,118 @@ describe(
       expect(state).toContain('"transport":"relay"');
     });
 
+    it("never takes the relay once a PUT began: an Admin restarted with the switch off keeps the staged item for the next run or --abandon", async () => {
+      const relayRoutes = (context: Awaited<ReturnType<typeof setup>>) =>
+        adminRoutes(context).filter((route) =>
+          route.startsWith("/api/editorial/media-upload/"),
+        );
+      for (const finish of ["run", "abandon"] as const) {
+        // The Admin restarts with the switch off once it granted the PUT.
+        const adminOptions: AdminOptions = {};
+        adminOptions.mutateGrant = () => {
+          adminOptions.ingest = false;
+        };
+        const context = await setup(
+          [{ key: "restarted", size: 300 * 1024 }],
+          adminOptions,
+        );
+        expect(await context.run(), finish).toMatchObject({
+          registered: 0,
+          failed: 1,
+          relayFallbacks: 0,
+          codes: { MEDIA_INGEST_UNAVAILABLE: 1 },
+        });
+        expect(cosPuts(context), finish).toHaveLength(1);
+        expect(relayRoutes(context), finish).toEqual([]);
+        expect(context.admin.docs.size, finish).toBe(0);
+        expect(stagedKeys(context), finish).toBe(1);
+        expect(
+          (await stateRows(context)).get("restarted"),
+          finish,
+        ).toMatchObject({
+          status: "failed",
+          staged: true,
+          stagingDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        });
+        // A second run while it is off still keeps the record.
+        expect(await context.run(), finish).toMatchObject({
+          failed: 1,
+          relayFallbacks: 0,
+          codes: { MEDIA_INGEST_UNAVAILABLE: 1 },
+        });
+        expect(relayRoutes(context), finish).toEqual([]);
+        // The switch is on again.
+        delete adminOptions.mutateGrant;
+        adminOptions.ingest = true;
+        if (finish === "run") {
+          expect(await context.run()).toMatchObject({
+            registered: 1,
+            failed: 0,
+            codes: {},
+          });
+          // From the staged bytes: no second PUT.
+          expect(cosPuts(context)).toHaveLength(1);
+        } else
+          expect(
+            await ingest.abandonIngest({
+              manifest: context.manifest,
+              directory: context.directory,
+              stateFile: context.stateFile,
+              send: context.send,
+            }),
+          ).toMatchObject({ abandoned: 1, codes: {} });
+        expect(stagedKeys(context), finish).toBe(0);
+      }
+    });
+
+    it("never takes the relay for an item whose earlier PUT may have landed, and --abandon then finds its object", async () => {
+      const adminOptions: AdminOptions = {};
+      const context = await setup(
+        [{ key: "uncertain", size: 4096 }],
+        adminOptions,
+        { putStatuses: [503, 503, 503] },
+      );
+      expect(await context.run({ attempts: 1 })).toMatchObject({
+        pending: 1,
+        codes: { MEDIA_INGEST_PUT_UNCERTAIN: 1 },
+      });
+      const row = (await stateRows(context)).get("uncertain");
+      expect(row).toMatchObject({
+        staged: false,
+        stagingDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      // One of the uncertain PUTs did land after all.
+      const put = cosPuts(context)[0]!;
+      context.bucket.set(
+        put.path.slice(1),
+        await readFile(join(context.directory, "uncertain.jpg")),
+      );
+      adminOptions.ingest = false;
+      const before = context.admin.requests.length;
+      expect(await context.run()).toMatchObject({
+        registered: 0,
+        failed: 1,
+        relayFallbacks: 0,
+        codes: { MEDIA_INGEST_UNAVAILABLE: 1 },
+      });
+      expect(
+        context.admin.requests.slice(before).map((request) => request.route),
+      ).toEqual([INGEST.start]);
+      expect((await stateRows(context)).get("uncertain")).toMatchObject({
+        stagingDigest: row?.stagingDigest,
+      });
+      adminOptions.ingest = true;
+      expect(
+        await ingest.abandonIngest({
+          manifest: context.manifest,
+          directory: context.directory,
+          stateFile: context.stateFile,
+          send: context.send,
+        }),
+      ).toMatchObject({ abandoned: 1, codes: {} });
+      expect(stagedKeys(context)).toBe(0);
+    });
+
     it("stops the run and reports a final original that answers anonymously", async () => {
       const context = await setup(
         [
@@ -1373,6 +1653,262 @@ describe(
       expect(
         context.cos.requests.filter((r) => r.method === "GET"),
       ).toHaveLength(1);
+    });
+
+    it("stops admitting items on any privacy answer but private, after three tries while uncertain", async () => {
+      // 404: a private object never answers it anonymously; a 500 leaves the
+      // answer uncertain.
+      for (const [privacyStatus, privacy, gets] of [
+        [404, "unexpected", 1],
+        [500, "uncertain", 3],
+      ] as const) {
+        const context = await setup(
+          [
+            { key: "first", size: 4096 },
+            { key: "second", size: 4096 },
+          ],
+          {},
+          { privacyStatus },
+        );
+        const summary = await context.run({ concurrency: 1 });
+        expect(summary, privacy).toMatchObject({
+          privacy,
+          registered: 1,
+          pending: 1,
+        });
+        expect(
+          context.cos.requests.filter((r) => r.method === "GET"),
+          privacy,
+        ).toHaveLength(gets);
+        // The second item never started: one start, one PUT, no row.
+        expect(context.admin.stats().startCalls, privacy).toBe(1);
+        expect(cosPuts(context), privacy).toHaveLength(1);
+        const rows = await stateRows(context);
+        expect(rows.has("second"), privacy).toBe(false);
+        expect(rows.get("#privacy"), privacy).toEqual({
+          status: privacy,
+          checkedAt: expect.any(String),
+        });
+      }
+    });
+
+    it("refuses to start or resume while the state records a public or unexpected answer, before any request", async () => {
+      for (const [privacyStatus, privacy] of [
+        [206, "public"],
+        [404, "unexpected"],
+      ] as const) {
+        const context = await setup(
+          [
+            { key: "first", size: 4096 },
+            { key: "second", size: 4096 },
+          ],
+          {},
+          { privacyStatus },
+        );
+        expect(await context.run({ concurrency: 1 })).toMatchObject({
+          privacy,
+          pending: 1,
+        });
+        const admin = context.admin.requests.length,
+          cos = context.cos.requests.length,
+          state = await readFile(context.stateFile, "utf8");
+        await expect(context.run(), privacy).rejects.toMatchObject({
+          code: "PRIVACY_STOPPED",
+        });
+        expect(context.admin.requests, privacy).toHaveLength(admin);
+        expect(context.cos.requests, privacy).toHaveLength(cos);
+        expect(await readFile(context.stateFile, "utf8"), privacy).toBe(state);
+        // --abandon registers nothing, so it still runs on that state.
+        expect(
+          await ingest.abandonIngest({
+            manifest: context.manifest,
+            directory: context.directory,
+            stateFile: context.stateFile,
+            send: context.send,
+          }),
+          privacy,
+        ).toMatchObject({ abandon: true, notStarted: 1, codes: {} });
+      }
+
+      // An uncertain answer does not refuse: the next run checks again.
+      const uncertain = await setup(
+        [
+          { key: "first", size: 4096 },
+          { key: "second", size: 4096 },
+        ],
+        {},
+        { privacyStatus: 500 },
+      );
+      expect(await uncertain.run({ concurrency: 1 })).toMatchObject({
+        privacy: "uncertain",
+        pending: 1,
+      });
+      const client = ingest.createCosClient({
+        hostSuffix: SUFFIX,
+        fetchImpl: fakeCos(uncertain.bucket, uncertain.secrets).fetchImpl,
+      });
+      expect(await uncertain.run({ cos: client })).toMatchObject({
+        privacy: "private",
+        registered: 2,
+      });
+      // That private answer settled the recorded uncertain one.
+      expect(await uncertain.run({ cos: client })).toMatchObject({
+        privacy: "not-needed",
+        registered: 2,
+        newlyRegistered: 0,
+      });
+    });
+
+    it("reports a recorded uncertain answer again on a re-run that checks nothing, until a check answers private", async () => {
+      const gets = (context: Awaited<ReturnType<typeof setup>>) =>
+        context.cos.requests.filter((r) => r.method === "GET").length;
+      // One item: the re-run finds it registered, so nothing new is checked.
+      const single = await setup(
+        [{ key: "only", size: 4096 }],
+        {},
+        { privacyStatus: 500 },
+      );
+      expect(await single.run()).toMatchObject({
+        privacy: "uncertain",
+        registered: 1,
+      });
+      expect(gets(single)).toBe(3);
+      const again = await single.run();
+      expect(again).toMatchObject({
+        privacy: "uncertain",
+        registered: 1,
+        newlyRegistered: 0,
+        reused: 0,
+        codes: {},
+      });
+      expect(gets(single)).toBe(3);
+      expect(ingest.runbookLines(again)).toEqual([
+        expect.stringMatching(
+          /^EDITORIAL_DIRECT_INGEST_RUNBOOK PRIVACY_UNCERTAIN: /,
+        ),
+      ]);
+      expect((await stateRows(single)).get("#privacy")).toMatchObject({
+        status: "uncertain",
+      });
+
+      // The rest through the relay only: the Admin's path checks those, not
+      // the direct original whose answer is still open.
+      const adminOptions: AdminOptions = {};
+      const relayed = await setup(
+        [
+          { key: "first", size: 4096 },
+          { key: "second", size: 4096 },
+        ],
+        adminOptions,
+        { privacyStatus: 500 },
+      );
+      expect(await relayed.run({ concurrency: 1 })).toMatchObject({
+        privacy: "uncertain",
+        pending: 1,
+      });
+      adminOptions.ingest = false;
+      expect(await relayed.run()).toMatchObject({
+        privacy: "uncertain",
+        registered: 2,
+        newlyRegistered: 1,
+        relayFallbacks: 1,
+      });
+      expect(gets(relayed)).toBe(3);
+    });
+
+    it("treats a privacy check that throws as uncertain: three tries, then the run stops", async () => {
+      const context = await setup([
+        { key: "first", size: 4096 },
+        { key: "second", size: 4096 },
+      ]);
+      let calls = 0;
+      const summary = await context.run({
+        concurrency: 1,
+        cos: {
+          putObject: context.client.putObject,
+          checkPrivate: async () => {
+            calls++;
+            throw new Error("injected check failure");
+          },
+        },
+      });
+      expect(summary).toMatchObject({
+        privacy: "uncertain",
+        registered: 1,
+        pending: 1,
+      });
+      expect(calls).toBe(3);
+      // The second item never started.
+      expect(context.admin.stats().startCalls).toBe(1);
+      const rows = await stateRows(context);
+      expect(rows.has("second")).toBe(false);
+      expect(rows.get("#privacy")).toEqual({
+        status: "uncertain",
+        checkedAt: expect.any(String),
+      });
+    });
+
+    it("starts no item while the privacy check of a new original runs", async () => {
+      const context = await setup(
+        Array.from({ length: 3 }, (_, index) => ({
+          key: `item-${index}`,
+          size: 4096,
+        })),
+      );
+      // The first registration's check takes a while and answers public;
+      // the other item in flight registers meanwhile, and its worker waits.
+      const summary = await context.run({
+        concurrency: 2,
+        cos: {
+          putObject: context.client.putObject,
+          checkPrivate: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            return "public";
+          },
+        },
+      });
+      expect(summary).toMatchObject({
+        privacy: "public",
+        registered: 2,
+        pending: 1,
+      });
+      expect(context.admin.stats().startCalls).toBe(2);
+      expect((await stateRows(context)).has("item-2")).toBe(false);
+    });
+
+    it("stops the run before it records a privacy answer, so a failed state write cannot skip the stop", async () => {
+      const context = await setup([
+        { key: "first", size: 4096 },
+        { key: "held", size: 4096 },
+      ]);
+      const held = md5(await readFile(join(context.directory, "held.jpg")));
+      let heldAborted: boolean | undefined;
+      const cos: CosClient = {
+        putObject: async (request) => {
+          if (md5(request.body as Uint8Array) !== held)
+            return context.client.putObject(request);
+          // The second item's PUT is held until the run aborts it.
+          const signal = request.signal as AbortSignal;
+          heldAborted = await new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => resolve(false), 2_000);
+            signal.addEventListener("abort", () => {
+              clearTimeout(timer);
+              resolve(true);
+            });
+          });
+          return { ok: false, status: 0 };
+        },
+        checkPrivate: async () => {
+          // The state file can no longer be appended to.
+          await rm(context.stateFile);
+          await mkdir(context.stateFile);
+          return "public";
+        },
+      };
+      await expect(context.run({ concurrency: 2, cos })).rejects.toMatchObject({
+        code: "EISDIR",
+      });
+      expect(heldAborted).toBe(true);
     });
 
     it("refuses a registration whose MD5 differs from the local bytes", async () => {
@@ -1442,6 +1978,94 @@ describe(
       expect(result.codes).toEqual({});
       expect(staged()).toBe(0);
       expectRedacted(JSON.stringify(result), context.secrets);
+    });
+
+    it("abandons a staged item from the MD5 its row recorded, after its file changed or was removed", async () => {
+      const context = await setup(
+        [
+          { key: "changed", size: 4096 },
+          { key: "removed", size: 4096 },
+        ],
+        { completeFaults: Array.from({ length: 8 }, () => "before" as const) },
+      );
+      const originals = new Map<string, Buffer>();
+      for (const key of ["changed", "removed"])
+        originals.set(
+          key,
+          await readFile(join(context.directory, `${key}.jpg`)),
+        );
+      await context.run({ attempts: 1, concurrency: 1 });
+      expect(stagedKeys(context)).toBe(2);
+      // The MD5 the staging PUT sent, which the Admin's staging id covers.
+      for (const [key, bytes] of originals)
+        expect((await stateRows(context)).get(key)).toMatchObject({
+          staged: true,
+          md5Base64: md5(bytes),
+        });
+      await writeFile(join(context.directory, "changed.jpg"), original(4096));
+      await rm(join(context.directory, "removed.jpg"));
+      const before = context.admin.requests.length;
+      const result = await ingest.abandonIngest({
+        manifest: context.manifest,
+        directory: context.directory,
+        stateFile: context.stateFile,
+        send: context.send,
+      });
+      expect(result).toMatchObject({ abandoned: 2, absent: 0 });
+      expect(result.codes).toEqual({});
+      expect(
+        context.admin.requests.slice(before).map((request) => request.route),
+      ).toEqual([INGEST.abandon, INGEST.abandon]);
+      expect(stagedKeys(context)).toBe(0);
+    });
+
+    it("reads the file only for a row recorded without an MD5, and refuses an MD5 that cannot be one", async () => {
+      const context = await setup(
+        [
+          { key: "legacy", size: 4096 },
+          { key: "invalid", size: 4096 },
+        ],
+        { completeFaults: Array.from({ length: 8 }, () => "before" as const) },
+      );
+      await context.run({ attempts: 1, concurrency: 1 });
+      expect(stagedKeys(context)).toBe(2);
+      // As an earlier version recorded it, and a damaged row.
+      const [header, ...lines] = (await readFile(context.stateFile, "utf8"))
+        .trim()
+        .split("\n");
+      const rows = lines.map(
+        (line) => JSON.parse(line) as { key: string; value: Json },
+      );
+      for (const row of rows)
+        if (row.key === "legacy") delete row.value.md5Base64;
+        else if (row.key === "invalid") row.value.md5Base64 = "not-an-md5";
+      await writeFile(
+        context.stateFile,
+        `${[header, ...rows.map((row) => JSON.stringify(row))].join("\n")}\n`,
+        { mode: 0o600 },
+      );
+      const abandon = () =>
+        ingest.abandonIngest({
+          manifest: context.manifest,
+          directory: context.directory,
+          stateFile: context.stateFile,
+          send: context.send,
+        });
+      const legacy = join(context.directory, "legacy.jpg");
+      const bytes = await readFile(legacy);
+      await rm(legacy);
+      const before = context.admin.requests.length;
+      expect(await abandon()).toMatchObject({
+        abandoned: 0,
+        codes: { MEDIA_FILE_UNREADABLE: 1, STATE_INVALID: 1 },
+      });
+      expect(context.admin.requests).toHaveLength(before);
+      await writeFile(legacy, bytes);
+      expect(await abandon()).toMatchObject({
+        abandoned: 1,
+        codes: { STATE_INVALID: 1 },
+      });
+      expect(stagedKeys(context)).toBe(1);
     });
 
     it("abandons a failed item whose own abandon did not succeed, and never an unstarted one", async () => {
@@ -1769,6 +2393,206 @@ describe(
         "/api/editorial/media-upload/start": [30_000],
         "/api/editorial/media-upload/complete": [75_000],
       });
+    });
+
+    it("writes the state whole again once the rows appended since pass the compaction bound", async () => {
+      const context = await setup(
+        Array.from({ length: 6 }, (_, index) => ({
+          key: `item-${index}`,
+          size: 4096,
+        })),
+      );
+      const compactAfterBytes = 2048;
+      expect(
+        await context.run({
+          concurrency: 1,
+          stateCompactBytes: compactAfterBytes,
+        }),
+      ).toMatchObject({ registered: 6, privacy: "private" });
+      const text = await readFile(context.stateFile, "utf8");
+      const [header, ...lines] = text.trim().split("\n");
+      const last = new Map(
+        lines.map((line) => [(JSON.parse(line) as { key: string }).key, line]),
+      );
+      const whole = Buffer.byteLength(
+        `${[header, ...last.values()].join("\n")}\n`,
+      );
+      const longest = Math.max(
+        ...lines.map((line) => Buffer.byteLength(line) + 1),
+      );
+      // One whole state and at most the bound's rows appended since (six
+      // items append about five rows each).
+      expect(last.size).toBe(7);
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(
+        whole + compactAfterBytes + longest,
+      );
+      expect((await stat(context.stateFile)).mode & 0o077).toBe(0);
+      // Still the batch's state: a later run sends nothing.
+      const before = context.admin.requests.length;
+      expect(await context.run()).toMatchObject({
+        registered: 6,
+        newlyRegistered: 0,
+      });
+      expect(context.admin.requests).toHaveLength(before);
+    });
+
+    it("keeps the state of the most items a manifest holds, at the largest row it writes, within what the next run reads", async () => {
+      // A 128-character key, and a mediaId and catalogId of 128 characters
+      // that JSON escapes to 6 bytes each.
+      const identity = "\u0001".repeat(128);
+      const key = `k${"x".repeat(127)}`;
+      const context = await setup(
+        [
+          {
+            key,
+            size: 4096,
+            json: { mediaId: identity, catalogId: identity },
+          },
+        ],
+        { completeFaults: ["before", "before", "before", "before"] },
+      );
+      // Every PUT and complete phase as long as a 900 s PUT.
+      let clock = 0;
+      const options = {
+        now: () => (clock += 900_000),
+        budgetMs: 86_400_000,
+      };
+      expect(await context.run({ attempts: 1, ...options })).toMatchObject({
+        pending: 1,
+      });
+      // The 24 latest PUT and complete timings an item keeps.
+      const [header, ...lines] = (await readFile(context.stateFile, "utf8"))
+        .trim()
+        .split("\n");
+      const row = lines
+        .map((line) => JSON.parse(line) as { key: string; value: Json })
+        .filter((entry) => entry.key === key)
+        .at(-1)!;
+      row.value.metrics = {
+        bytes: 4096,
+        puts: Array.from({ length: 24 }, () => ({
+          ms: 900_000,
+          status: 503,
+        })),
+        completes: Array.from({ length: 24 }, () => 900_000),
+      };
+      await writeFile(
+        context.stateFile,
+        `${header}\n${JSON.stringify(row)}\n`,
+        { mode: 0o600 },
+      );
+      expect(await context.run(options)).toMatchObject({ registered: 1 });
+      const [written, ...rows] = (await readFile(context.stateFile, "utf8"))
+        .trim()
+        .split("\n");
+      expect(rows.at(-1)).toContain('"status":"registered"');
+      const largest = Math.max(
+        ...rows.map((line) => Buffer.byteLength(line) + 1),
+      );
+      expect(largest).toBeLessThan(3 * 1024);
+      const { maxItems, maxStateBytes, compactAfterBytes } =
+        ingest.STATE_LIMITS;
+      // Every item's row and the privacy row written whole, the rows
+      // appended before the next whole write, and the row that passes it.
+      expect(
+        Buffer.byteLength(written!) +
+          1 +
+          (maxItems + 1) * largest +
+          compactAfterBytes +
+          largest,
+      ).toBeLessThanOrEqual(maxStateBytes);
+      // And a run reads such a state: here past the manifest's 32 MiB, with
+      // rows of other items at the largest size.
+      const filler = rows.at(-1)!;
+      const others = Array.from(
+        { length: Math.ceil((33 * MiB) / largest) + 1 },
+        (_, index) =>
+          filler.replace(
+            JSON.stringify(key),
+            JSON.stringify(`o${String(index).padStart(127, "0")}`),
+          ),
+      );
+      await writeFile(
+        context.stateFile,
+        `${[written, ...others, ...rows].join("\n")}\n`,
+        { mode: 0o600 },
+      );
+      expect((await stat(context.stateFile)).size).toBeGreaterThan(33 * MiB);
+      const before = context.admin.requests.length;
+      expect(await context.run(options)).toMatchObject({
+        registered: 1,
+        newlyRegistered: 0,
+      });
+      expect(context.admin.requests).toHaveLength(before);
+    });
+
+    it("names the runbook step for outcomes a re-run does not settle, and nothing private", () => {
+      const lines = (result: Json) => ingest.runbookLines(result).join("\n");
+      const secrets = secretsFor();
+      for (const [result, label, category] of [
+        [
+          { codes: { INGEST_FINAL_INVALID: 1 } },
+          "INGEST_FINAL_INVALID",
+          "EDITORIAL_MEDIA_INGEST_FINAL_INVALID",
+        ],
+        [
+          { codes: { MEDIA_IDENTITY_CONFLICT: 2 } },
+          "MEDIA_IDENTITY_CONFLICT",
+          "EDITORIAL_MEDIA_INGEST_ORPHAN",
+        ],
+        [
+          { codes: { MEDIA_IDENTITY_EXISTS: 1 } },
+          "MEDIA_IDENTITY_EXISTS",
+          "EDITORIAL_MEDIA_INGEST_ORPHAN",
+        ],
+        [
+          { abandon: true, codes: {} },
+          "ABANDON_SCOPE",
+          "EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED",
+        ],
+        [
+          { codes: { MEDIA_INGEST_UNAVAILABLE: 1 } },
+          "MEDIA_INGEST_UNAVAILABLE",
+          "--abandon",
+        ],
+        [{ privacy: "public", codes: {} }, "PRIVACY_PUBLIC", "PRIVACY_STOPPED"],
+        [
+          { privacy: "unexpected", codes: {} },
+          "PRIVACY_UNEXPECTED",
+          "PRIVACY_STOPPED",
+        ],
+        [
+          { privacy: "uncertain", codes: {} },
+          "PRIVACY_UNCERTAIN",
+          "same state file",
+        ],
+        [
+          { codes: { PRIVACY_STOPPED: 1 } },
+          "PRIVACY_STOPPED",
+          "new state file",
+        ],
+      ] as const) {
+        const text = lines(result);
+        expect(text, label).toMatch(
+          new RegExp(`^EDITORIAL_DIRECT_INGEST_RUNBOOK ${label}: `),
+        );
+        expect(text, label).toContain(category);
+        expect(text.split("\n"), label).toHaveLength(1);
+        expectRedacted(text, secrets);
+      }
+      // A plain re-run settles everything else, and a private run needs none.
+      expect(
+        ingest.runbookLines({
+          privacy: "private",
+          codes: { ADMIN_UNAVAILABLE: 1, MEDIA_INGEST_PUT_UNCERTAIN: 1 },
+        }),
+      ).toEqual([]);
+      expect(
+        ingest.runbookLines({
+          privacy: "public",
+          codes: { INGEST_FINAL_INVALID: 1, ADMIN_UNAVAILABLE: 1 },
+        }),
+      ).toHaveLength(2);
     });
 
     it("validates the manifest strictly before reading any file", () => {
@@ -2116,7 +2940,7 @@ describe(
       ).rejects.toMatchObject({ code: "MEDIA_FILE_UNREADABLE" });
     });
 
-    it("refuses the direct mode without a putObject, a valid suffix or within existingOnly, or with a staging owner that is no function", async () => {
+    it("refuses the direct mode without a putObject, a valid suffix or within existingOnly, or with a staging owner or record of the wrong type", async () => {
       const bytes = original(1024);
       const base = {
         item: {
@@ -2144,6 +2968,8 @@ describe(
         { existingOnly: true },
         // Never read as "no record": that would let any actor's grant through.
         { ownsStaging: "recorded" },
+        // Nor as "no PUT recorded": that would let the relay register it.
+        { stagingRecorded: "recorded" },
       ])
         expect(await upload.stageMediaUpload({ ...base, ...change })).toEqual({
           ok: false,
@@ -2244,6 +3070,69 @@ describe("direct-ingest CLI output", { timeout: 60_000 }, () => {
       codes: { ADMIN_UNAVAILABLE: 1 },
     });
     expectRedacted(failed.output, failing.secrets);
+  });
+
+  it("prints the runbook step after the summary or error: an identity conflict, a privacy stop and --abandon", async () => {
+    const conflict = await setup([{ key: "conflict", size: 4096 }]);
+    conflict.admin.docs.set("synthetic-ingest-conflict", {
+      mediaId: "synthetic-ingest-conflict",
+      catalogId: "another-synthetic-catalog",
+    });
+    const conflicted = await runCli([
+      ...(await cliFiles(conflict)),
+      "--execute",
+    ]);
+    expect(conflicted.code).toBe(1);
+    expect(JSON.parse(conflicted.stdout)).toMatchObject({
+      failed: 1,
+      codes: { MEDIA_IDENTITY_CONFLICT: 1 },
+    });
+    expect(conflicted.output).toContain(
+      "EDITORIAL_DIRECT_INGEST_RUNBOOK MEDIA_IDENTITY_CONFLICT: ",
+    );
+    expect(conflicted.output).toContain("EDITORIAL_MEDIA_INGEST_ORPHAN");
+    expectRedacted(conflicted.output, conflict.secrets);
+
+    // A state that recorded a public answer refuses before any request.
+    const stopped = await setup(
+      [
+        { key: "first", size: 4096 },
+        { key: "second", size: 4096 },
+      ],
+      {},
+      { privacyStatus: 206 },
+    );
+    expect(await stopped.run({ concurrency: 1 })).toMatchObject({
+      privacy: "public",
+    });
+    const args = await cliFiles(stopped);
+    const before = stopped.admin.requests.length;
+    const refused = await runCli([...args, "--execute"]);
+    expect(refused.code).toBe(1);
+    expect(refused.stdout).toBe("");
+    expect(refused.output).toContain(
+      "EDITORIAL_DIRECT_INGEST_FAILED PRIVACY_STOPPED",
+    );
+    expect(refused.output).toContain(
+      "EDITORIAL_DIRECT_INGEST_RUNBOOK PRIVACY_STOPPED: ",
+    );
+    expect(stopped.admin.requests).toHaveLength(before);
+    expectRedacted(refused.output, stopped.secrets);
+
+    // --abandon still runs, and names what it cannot reach.
+    const abandoned = await runCli([...args, "--abandon"]);
+    expect(abandoned.code).toBe(0);
+    expect(JSON.parse(abandoned.stdout)).toMatchObject({
+      abandon: true,
+      notStarted: 1,
+    });
+    expect(abandoned.output).toContain(
+      "EDITORIAL_DIRECT_INGEST_RUNBOOK ABANDON_SCOPE: ",
+    );
+    expect(abandoned.output).toContain(
+      "EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED",
+    );
+    expectRedacted(abandoned.output, stopped.secrets);
   });
 
   it("dry-runs without a config or any request, and refuses a readable config", async () => {
