@@ -14,11 +14,20 @@
   cursor: pointer;
 }
 .flag {
-  opacity: 0.6;
+  flex-basis: var(--yoyi-space-9);
+  width: var(--yoyi-space-9);
+  padding: 0;
+  border-radius: var(--yoyi-radius-sm);
+  font: inherit;
 }
 .flag svg {
-  width: 14px;
-  height: 14px;
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+.flag:hover:not(:disabled) {
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-background-muted);
 }
 .more svg {
   width: 22px;
@@ -28,6 +37,9 @@
 .more:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
+}
+.flag:focus-visible {
+  outline-color: var(--yoyi-color-focus-ring);
 }
 .flag:disabled {
   cursor: default;
