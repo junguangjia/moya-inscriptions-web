@@ -54,6 +54,9 @@ vi.mock("../../../apps/admin/src/community/settings-client", () => ({
 vi.mock("../../../apps/admin/src/community/content-client", () => ({
   CommunityContentClient: () => "content",
 }));
+vi.mock("../../../apps/admin/src/community/feedback-client", () => ({
+  CommunityFeedbackClient: () => "feedback",
+}));
 vi.mock("../../../apps/admin/src/community/history-client", () => ({
   CommunityHistoryClient: () => "history",
 }));
@@ -84,6 +87,7 @@ import {
   AccountCapacityView,
   AgentOperationsView,
   CommunityContentView,
+  CommunityFeedbackView,
   CommunityModerationView,
   CommunitySettingsView,
   DmModerationView,
@@ -105,6 +109,7 @@ const businessViews = [
   [CommunityModerationView, "queue-enabled"],
   [CommunitySettingsView, "publishing-enabled"],
   [CommunityContentView, "content"],
+  [CommunityFeedbackView, "feedback"],
   [WorkSubmissionsView, "submissions"],
   [ArticleSubmissionsView, "article-submissions"],
   [AccountCapacityView, "capacity"],
@@ -158,6 +163,7 @@ describe.each(["development", "production"])(
         "publishing-jobs",
         "threads",
         "direct-messages",
+        "feedback",
       ])
         expect(markup).toContain(`/admin/community-moderation/${path}`);
       expect(
@@ -196,6 +202,7 @@ describe.each(["development", "production"])(
       const markup = renderToStaticMarkup(card);
       expect(markup).toContain('data-card-pending-work-submissions="">3');
       expect(markup).toContain("/admin/community-moderation/publishing-jobs");
+      expect(markup).toContain("/admin/community-moderation/feedback");
       expect(runtime.call).toHaveBeenCalledWith(
         "GET",
         "publishing/submissions?state=pending&page=1&pageSize=1",

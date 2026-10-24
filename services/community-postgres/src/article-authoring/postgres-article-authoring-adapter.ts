@@ -449,7 +449,7 @@ export class PostgresArticleAuthoringAdapter
             `SELECT i.id,i.state,i.legacy_media_id,i.kind,
         EXISTS (SELECT 1 FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed' WHERE d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready') AS display_ready,
         EXISTS (SELECT 1 FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed' WHERE d.item_id=i.id AND d.role='motion' AND d.edit_key='base' AND d.state='ready') AS motion_ready
-       FROM community.media_items i WHERE i.id=ANY($1::text[]) AND i.owner_id=$2 ORDER BY i.id FOR SHARE OF i`,
+       FROM community.media_items i WHERE i.id=ANY($1::text[]) AND i.owner_id=$2 AND i.purpose='content' ORDER BY i.id FOR SHARE OF i`,
             [refs.itemIds, draft.ownerId],
           )
         ).rows

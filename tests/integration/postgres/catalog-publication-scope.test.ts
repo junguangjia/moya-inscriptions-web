@@ -322,6 +322,8 @@ describe("App migration A1, its grants and the startup checks", () => {
       // Once the writer has ended, A1 applies, once.
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual([
         A1,
+        "20261024020000",
+        "20261024030000",
       ]);
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual(
         [],

@@ -3,6 +3,7 @@ import { authorCommunityPaths } from "./author-community-openapi.js";
 import { articleAuthoringPaths } from "./article-authoring-openapi.js";
 import {
   authJsonSchemas,
+  feedbackJsonSchemas,
   analyticsJsonSchemas,
   authorCommunityJsonSchemas,
   workPublishingJsonSchemas,
@@ -421,6 +422,50 @@ export const openApiDocument: JsonObject = {
         ),
       },
     },
+    "/v1/community/feedback": {
+      post: {
+        operationId: "submitFeedback",
+        summary: "Submit private feedback from settings",
+        parameters: [
+          {
+            name: "x-author-account",
+            in: "header",
+            required: true,
+            description:
+              "The authenticated account; omission or mismatch rejects. This header does not authorize a request.",
+            schema: { type: "string", pattern: "^user-[0-9a-f]{32}$" },
+          },
+        ],
+        description:
+          "Requires a valid account session and x-author-account equal to that account. Saves trimmed text and up to three ready private feedback-purpose images atomically before returning the receipt. Images must be static, uploaded through a no-work temporary publishing session with purpose feedback, and at most 10 MiB each. Retry the same submissionId, message and ordered imageIds to recover the same receipt; changing text or images under the same identity returns CONFLICT. Accepts no query parameters. No public feedback read route exists.",
+        security: [{ session: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/SubmitFeedbackRequest" },
+            },
+          },
+        },
+        responses: {
+          "201": jsonResponse("Saved feedback receipt", "FeedbackReceipt"),
+          "400": apiErrorResponse("Unexpected query", "INVALID_QUERY"),
+          "401": apiErrorResponse(
+            "Invalid session or missing/mismatched account header",
+            "UNAUTHENTICATED",
+          ),
+          "409": apiErrorResponse(
+            "Submission identity already used",
+            "CONFLICT",
+          ),
+          "422": apiErrorResponse("Invalid feedback body", "INVALID_INPUT"),
+          "503": apiErrorResponse(
+            "Feedback store unavailable",
+            "SERVICE_UNAVAILABLE",
+          ),
+        },
+      },
+    },
     "/v1/me": {
       get: {
         operationId: "getCurrentUser",
@@ -487,6 +532,7 @@ export const openApiDocument: JsonObject = {
       ...analyticsJsonSchemas,
       ...componentSchemas(authorCommunityJsonSchemas),
       ...authJsonSchemas,
+      ...feedbackJsonSchemas,
       ...workPublishingJsonSchemas,
       ...componentSchemas(articleAuthoringJsonSchemas),
       CatalogId: catalogIdJsonSchema,

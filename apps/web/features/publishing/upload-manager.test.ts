@@ -1242,6 +1242,93 @@ const received = (
 };
 
 describe("upload manager: pauses never strand work (review fixes)", () => {
+  it("Continue restarts interrupted preprocessing and waiting selections without replacing a ready image", async () => {
+    const test = createTestManager({
+      preprocessConcurrency: 1,
+      saveMode: "unsaved",
+      recovery: null,
+    });
+    try {
+      // An existing ready image can already belong to an unconfirmed feedback
+      // receipt. Connection recovery must keep its identity and received bytes.
+      test.manager.addConfirmed([confirm("kept", staticSource(), "original")]);
+      await settle();
+      const keptId = received(test, 0);
+      await settle();
+      test.client.makeReady(keptId);
+      test.timers.fireAll();
+      await settle();
+      expect(test.item("kept").phase).toBe("ready");
+
+      let release!: () => void;
+      test.preprocess.still.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({
+                status: "optimized",
+                blob: new Blob([new Uint8Array(100)], { type: "image/webp" }),
+                contentType: "image/webp",
+                width: 4,
+                height: 3,
+              });
+          }),
+      );
+      const preparing = staticSource();
+      const waiting = staticSource();
+      test.manager.addConfirmed([
+        confirm("preparing", preparing),
+        confirm("waiting", waiting),
+      ]);
+      await settle();
+      expect(test.item("preparing").phase).toBe("preprocessing");
+      expect(test.item("waiting").phase).toBe("waiting");
+      test.manager.pause("offline");
+      release();
+      await settle();
+      expect(test.manager.getSnapshot().status).toBe("paused");
+      expect(test.item("preparing").phase).toBe("waiting");
+      expect(test.item("waiting").phase).toBe("waiting");
+      // The stale worker answer must not register either interrupted intent.
+      expect(test.client.client.registerItem).toHaveBeenCalledOnce();
+      expect(test.manager.localStill("preparing")).toBe(preparing.still.file);
+      expect(test.manager.localStill("waiting")).toBe(waiting.still.file);
+
+      await test.manager.continueUploads();
+      await settle();
+      expect(test.manager.getSnapshot().status).toBe("active");
+      expect(test.manager.getSnapshot().items.map((item) => item.key)).toEqual([
+        "kept",
+        "preparing",
+        "waiting",
+      ]);
+      expect(test.item("kept").itemId).toBe(keptId);
+      expect(test.client.client.registerItem).toHaveBeenCalledTimes(3);
+      expect(
+        test.client.client.registerItem.mock.calls
+          .slice(1)
+          .map(([command]) => command.holder),
+      ).toEqual([{ sessionId: SESSION_ID }, { sessionId: SESSION_ID }]);
+      expect(test.transfer.starts).toHaveLength(3);
+      for (const index of [1, 2]) test.client.makeReady(received(test, index));
+      await settle();
+      test.timers.fireAll();
+      await settle();
+      expect(
+        test.manager
+          .getSnapshot()
+          .items.every((item) => item.phase === "ready"),
+      ).toBe(true);
+      expect(test.item("kept").itemId).toBe(keptId);
+      expect(test.client.client.resetComponent).not.toHaveBeenCalled();
+      expect(test.client.client.cancelItem).not.toHaveBeenCalled();
+      expect(test.recovery.save).not.toHaveBeenCalled();
+      expect(test.transfer.starts).toHaveLength(3);
+    } finally {
+      test.manager.dispose();
+    }
+  });
+
   it("resumes a component whose upload answer came back after the account changed", async () => {
     const test = createTestManager();
     test.manager.addConfirmed([confirm("a", staticSource())]);

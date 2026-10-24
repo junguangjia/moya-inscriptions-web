@@ -1,4 +1,8 @@
 import { z } from "zod";
+export const FEEDBACK_IMAGE_LIMITS = Object.freeze({
+  maxImages: 3,
+  maxBytes: 10 * 1024 * 1024,
+});
 import {
   addMediaRenditionAnchorIssues,
   mediaRenditionListSchema,
@@ -998,6 +1002,7 @@ export const registerMediaItemCommandSchema = z
   .strictObject({
     requestId: requestIdSchema,
     holder: publishingHolderSchema,
+    purpose: z.enum(["content", "feedback"]).optional(),
     kind: mediaItemKindSchema,
     qualityMode: mediaUploadQualityModeSchema,
     processingProfile: mediaProcessingProfileSchema.optional(),
@@ -1006,6 +1011,19 @@ export const registerMediaItemCommandSchema = z
     metadata: mediaMetadataSchema.optional(),
   })
   .superRefine((command, context) => {
+    if (
+      command.purpose === "feedback" &&
+      (!("sessionId" in command.holder) ||
+        command.kind !== "static" ||
+        command.components.length !== 1 ||
+        command.components[0]?.role !== "still" ||
+        command.components[0].byteSize > FEEDBACK_IMAGE_LIMITS.maxBytes)
+    )
+      context.addIssue({
+        code: "custom",
+        message:
+          "Feedback images require a temporary session and one still image up to 10 MiB",
+      });
     const layout = roleLayout(command.components.map(({ role }) => role));
     const standard = command.qualityMode === "standard";
     const expectedProfile = standard

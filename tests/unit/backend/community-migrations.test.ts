@@ -97,6 +97,8 @@ describe("community migration family", () => {
         "20261023010000_registration_invitations.sql",
         "20261023020000_registration_invitation_xid_cast.sql",
         "20261024010000_catalog_publication_scope.sql",
+        "20261024020000_settings_feedback.sql",
+        "20261024030000_feedback_images.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);
