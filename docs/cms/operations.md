@@ -73,6 +73,20 @@ Bearer 透传至 CMS，必要的上游身份验证使用已批准的兼容通道
 `--execute --config <PROTECTED_CONFIG> --receipt <PROTECTED_RECEIPT>`。每项稳定 replay
 key 与业务身份分离；默认 2 并发、3 次尝试、30 秒请求超时、120 秒批次预算、最多 10000 项。成功项在恢复时跳过；失败项有限重试。正文通过文件读取原样传递，媒体通过官方 multipart 上传；不从清单 URL 取文件。回执以 0600 日志逐项同步后压缩成快照。非正常终止后，先确认记录进程已结束，再移除该回执的残留锁并续接；不自动删除对象或替换业务身份。
 
+### Catalog 直接发布开关
+
+含 #320 及以后代码的 Admin 发布 Catalog 记录时会检查交付准备：只要有一张
+`editorial/`
+图还没有完整、当前 recipe、已发布的 rendition 集合，Publish 按钮、publish-approved 和 MCP
+`editorial_publish_approved` 都答 409
+`CATALOG_DELIVERY_PREPARATION_REQUIRED`。Admin 目前还没有 prepare/release 控件，因此
+`admin.env` 提供 `CMS_CATALOG_DIRECT_PUBLISH`：`off`（默认；未设置或为空同
+`off`）保留检查；`on`
+时发布不经检查，记录立即上线，worker 渲染已发布的图，渲染完成前公开结果不包含该图；其他值使 Admin 和
+`payload migrate` 都拒绝启动。改值须重启 Admin，并同步
+`/etc/yoyi/production-v3/` 下的副本。Admin 的 prepare/release 控件可用后改回
+`off`。
+
 ### Catalog 原图直传（catalog-scale-v1 增量 2）
 
 `scripts/editorial/direct-ingest.mjs`

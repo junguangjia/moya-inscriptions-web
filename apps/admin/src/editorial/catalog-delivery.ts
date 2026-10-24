@@ -49,6 +49,7 @@ import {
   withEditorialTransaction,
 } from "./transaction";
 import { validateCatalogMedia } from "../media/validation";
+import { catalogDirectPublishEnabled } from "../runtime-settings";
 
 // Storage-only row shape, never an HTTP DTO. In particular, the persisted B
 // snapshot and source object keys are not returned by the five endpoints.
@@ -569,12 +570,14 @@ export const invalidateCatalogDelivery = async (
 
 /** Editorial originals are published by the release path, or when every one
  * of them already has its complete, current and published rendition set (a
- * text-only edit of a live record). Anything less still needs preparation.
+ * text-only edit of a live record). Anything less still needs preparation,
+ * unless CMS_CATALOG_DIRECT_PUBLISH is on.
  */
 export const assertCatalogDeliveryPublication = async (
   content: EditorialDraft,
   req?: PayloadRequest,
 ) => {
+  if (catalogDirectPublishEnabled()) return;
   if (
     req &&
     catalogDeliveryPublishProof(req)?.fingerprint ===

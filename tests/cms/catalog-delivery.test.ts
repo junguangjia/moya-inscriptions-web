@@ -205,6 +205,36 @@ describe("Catalog delivery internal boundary", () => {
       }),
     ).rejects.toThrow("CATALOG_DELIVERY_PREPARATION_REQUIRED");
   });
+
+  it("publishes editorial originals unprepared only while CMS_CATALOG_DIRECT_PUBLISH is on", async () => {
+    const content = {
+      ...editorialDraftSchema.parse({
+        catalogId: "synthetic-direct",
+        sourceId: "synthetic-direct-source",
+        kind: "calligraphy",
+        media: [],
+      }),
+      media: [syntheticMedia("synthetic-direct-private")],
+    };
+    try {
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "on");
+      await expect(
+        assertCatalogDeliveryPublication(content),
+      ).resolves.toBeUndefined();
+      for (const value of ["", "off"]) {
+        vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", value);
+        await expect(assertCatalogDeliveryPublication(content)).rejects.toThrow(
+          "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+        );
+      }
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "ON");
+      await expect(assertCatalogDeliveryPublication(content)).rejects.toThrow(
+        "CMS_CATALOG_DIRECT_PUBLISH_INVALID",
+      );
+    } finally {
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+    }
+  });
 });
 
 // The pure boundary cases above run without a DB. These cases only run with the
@@ -228,6 +258,8 @@ describe
       "pinned",
       "live",
       "pacing",
+      "direct",
+      "direct-native",
     ].map((name) => `synthetic-delivery-${name}-${run}`);
     /** A loopback operator boundary with the real handler and stub facts. */
     const syntheticOperatorBoundary = async (
@@ -863,6 +895,57 @@ describe
         overrideAccess: false,
       });
       expect(primary.title).toBe("Synthetic published A");
+    });
+
+    it("publishes unprepared editorial originals through approved automation and Native Owner PATCH while CMS_CATALOG_DIRECT_PUBLISH is on", async () => {
+      // No operator is configured here, so the guard could only refuse; with
+      // the switch on it is not consulted.
+      const { draft } = await draftB(ids[8]!);
+      const { draft: native } = await draftB(ids[9]!);
+      const primaryTitle = async (id: number | string) =>
+        (
+          await payload.findByID({
+            collection: "catalogs",
+            id,
+            draft: false,
+            req: await reqFor(),
+            overrideAccess: false,
+          })
+        ).title;
+      try {
+        vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "on");
+        const approval = await approveBatch(await reqFor(), {
+          automationUserId: automation.id,
+          items: [{ id: draft.id, revision: draft.revision }],
+        });
+        await publishApproved(await reqFor(automation), {
+          id: draft.id,
+          approvalId: approval.approvalId,
+          idempotencyKey: `${run}:direct`,
+        });
+        expect(await primaryTitle(draft.id)).toBe("Synthetic private B");
+        const response = await handleEndpoints({
+          config,
+          request: new Request(
+            `http://127.0.0.1:3002/api/catalogs/${native.id}`,
+            {
+              method: "PATCH",
+              headers: {
+                "content-type": "application/json",
+                authorization: `JWT ${ownerSession}`,
+              },
+              body: JSON.stringify({
+                revision: native.revision,
+                _status: "published",
+              }),
+            },
+          ),
+        });
+        expect(response.status).toBe(200);
+        expect(await primaryTitle(native.id)).toBe("Synthetic private B");
+      } finally {
+        vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+      }
     });
 
     it("publishes editorial originals that already have complete published sets, and still refuses one that lacks its set", async () => {

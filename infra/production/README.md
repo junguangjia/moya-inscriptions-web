@@ -505,6 +505,26 @@ turn the switches on, one at a time, each as a separately approved operation:
    with every failure explained). Setting it back to `off` restores the previous
    answers.
 
+## Catalog direct publish switch
+
+An Admin built with the Catalog delivery guard (from #320 on) refuses to publish
+a record whose `editorial/` image has no complete, current-recipe and published
+rendition set: the Publish button, publish-approved and the MCP
+`editorial_publish_approved` tool all answer 409
+`CATALOG_DELIVERY_PREPARATION_REQUIRED`, and only the prepare/release flow can
+publish such a record. The Admin has no prepare or release controls yet.
+
+`admin.env` takes `CMS_CATALOG_DIRECT_PUBLISH` (`off` or `on`; absent or empty
+means off) for that gap. With `on`, every publish skips the guard and works as
+it did before the guard existed: the record goes public at once, the media
+worker renders its published images, and the public Catalog answer leaves an
+image out until its renditions are ready. Any other value (`ON`, `true`, a typo)
+refuses to load the Admin's configuration, which stops both the Admin and
+`payload migrate`. The value is read when the Admin starts, so changing it needs
+an Admin restart; change the staged copy in `/etc/yoyi/production-v3/` too. It
+changes nothing in the Backend, the worker or the prepare chain. Turn it back to
+`off` once the Admin's prepare and release controls are in use.
+
 ## Catalog scale: database steps of increment 1B (catalog-scale-v1)
 
 Increment 1B of Issue #323 adds CMS migration

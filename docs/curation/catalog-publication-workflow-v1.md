@@ -95,14 +95,17 @@ The required platform sequence is:
    contract with frozen intent/state/revision/fingerprint binding. Persist
    pending before dispatch and reconcile the original target on uncertainty.
    Never select a new revision or replay a non-idempotent PATCH. Direct Owner
-   publish PATCH must not bypass the preparation guard. The guard admits a
-   direct publish only when every `editorial/` image of B already has its
-   complete, current-recipe and published rendition set, as the Backend reports
-   from its own App facts over the existing operator boundary (for example a
-   text-only edit of a live record). Any image without that set, or an
-   unconnected Backend, still answers 409
-   `CATALOG_DELIVERY_PREPARATION_REQUIRED`. Missing/unimplemented/503 release is
-   HOLD.
+   publish PATCH must not bypass the preparation guard, except where the Admin
+   runs with `CMS_CATALOG_DIRECT_PUBLISH=on` (a stopgap until the Admin has
+   prepare and release controls): there every publish skips the guard, the
+   record goes public at once and its images appear once the worker has rendered
+   them (`infra/production/README.md`). The guard admits a direct publish only
+   when every `editorial/` image of B already has its complete, current-recipe
+   and published rendition set, as the Backend reports from its own App facts
+   over the existing operator boundary (for example a text-only edit of a live
+   record). Any image without that set, or an unconnected Backend, still answers
+   409 `CATALOG_DELIVERY_PREPARATION_REQUIRED`. Missing/unimplemented/503
+   release is HOLD.
 5. Verify anonymous Catalog API and advertised image delivery independently.
    Partial images, signed-source fallback or queue succeeded does not suffice.
 6. Hide/withdrawal fences A and B, stale processing and pending publication.
