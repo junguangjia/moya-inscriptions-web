@@ -200,11 +200,13 @@ export const PUBLICATION_USAGE_INTERVAL_MS = 86_400_000;
 export const PUBLICATION_EDGE_FALLBACK_TTL_SECONDS = 3_600;
 /**
  * Block URL purges per purge-quota day (catalog-deep-zoom-v1, OD-4): 25 % of
- * the zone's daily `purge_url` quota as read at P0, and 0 while no figure is
- * recorded. Every block withdrawal beyond it takes the TTL path: the origin
- * object is deleted and warmed edges drop it within the forced edge TTL.
+ * the zone's daily `purge_url` quota, which P0 read as 1,000,000
+ * (catalog-deep-zoom-self-master-v1; the value awaits the Owner's
+ * confirmation, #206 r23). Every block withdrawal beyond it takes the TTL
+ * path: the origin object is deleted and warmed edges drop it within the
+ * forced edge TTL.
  */
-export const CATALOG_BLOCK_PURGE_BUDGET_PER_DAY = 0;
+export const CATALOG_BLOCK_PURGE_BUDGET_PER_DAY = 250_000;
 
 /** The purge quota's day: from 00:00 Asia/Shanghai (UTC+8), until P0 says otherwise. */
 export const purgeQuotaDayStart = (now: Date): Date => {
@@ -230,16 +232,19 @@ export interface CatalogZoomDayUsage {
 }
 
 /**
- * The breaker's thresholds (planned; P0 item 7 settles them): a warning line
- * at 100,000 requests or 3 GB, a trip at 150,000 requests or 5 GB. A trip
- * hides the Detail `zoom` frame and answers 404 on the block-list read until
- * the cap's next day. GB is 10^9 bytes, the lower reading of the cap.
+ * The breaker's thresholds: a warning line at 100,000 requests or 0.25 GB, a
+ * trip at 150,000 requests or 0.4 GB. The byte values were 3 GB and 5 GB; the
+ * lower ones (catalog-deep-zoom-self-master-v1) await the Owner's
+ * confirmation (#206 r23), and the request values are unchanged. The bytes
+ * are the image host's whole response traffic, not blocks only. A trip hides
+ * the Detail `zoom` frame and answers 404 on the block-list read until the
+ * cap's next day. GB is 10^9 bytes, the lower reading of the cap.
  */
 export const CATALOG_ZOOM_USAGE_LIMITS = {
   warningRequests: 100_000,
-  warningBytes: 3_000_000_000,
+  warningBytes: 250_000_000,
   tripRequests: 150_000,
-  tripBytes: 5_000_000_000,
+  tripBytes: 400_000_000,
   /** An observation older than this counts as missing. */
   staleMs: 60 * 60 * 1_000,
 } as const;

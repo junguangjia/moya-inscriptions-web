@@ -58,11 +58,24 @@ export interface CatalogMasterHeader {
   readonly height: number;
 }
 
-/** The two storage bounds checked live at every attach (D4). */
+/**
+ * The two storage bounds checked live at every attach (D4). Both figures are
+ * the bytes measured now plus the projected blocks (1 byte per frame pixel)
+ * of every active master whose set is not yet cut, other than a master the
+ * same write ends, so attaches faster than the cutting cannot pass either
+ * bound (catalog-deep-zoom-self-master-v1). A partly cut set counts twice
+ * until it is complete.
+ */
 export interface CatalogMasterStorage {
-  /** Every byte #206 created, measured now (private and published). */
+  /**
+   * Every byte #206 created (private and published), measured now, plus the
+   * projected blocks of uncut active masters.
+   */
   readonly taskBytes: number;
-  /** Masters plus blocks, private and published. */
+  /**
+   * Masters plus blocks (private and published), measured now, plus the
+   * projected blocks of uncut active masters.
+   */
   readonly sliceBytes: number;
   /** This attach: the master (0 on a re-attach) plus its projected blocks. */
   readonly attachBytes: number;
@@ -75,6 +88,8 @@ export type CatalogMasterRefusal =
   | "asset_not_ready"
   | "approved_too_large"
   | "approved_mismatch"
+  /** The approved key is not an `editorial/` original (`sourceOf`). */
+  | "not_editorial"
   | "master_mismatch"
   | "aspect_mismatch"
   | "gain_too_small"
@@ -181,6 +196,21 @@ export interface CatalogBlockGuardCounts {
  */
 export interface CatalogDisplayMasterPort {
   listCandidates(catalogId: string): Promise<readonly CatalogMasterCandidate[]>;
+  /**
+   * Read-only: the published `editorial/` original a media id names and the
+   * SHA-256 of its approved bytes, for `attach --from-source` (a self-master,
+   * catalog-deep-zoom-self-master-v1). Refused when the image is not
+   * published, its asset is not ready, its key is not `editorial/`, or it
+   * already has an active master. The key stays in the process: it is handed
+   * to the source reader only and never printed. `attach` re-checks every
+   * precondition under the asset row lock.
+   */
+  sourceOf(mediaId: string): Promise<
+    CatalogMasterResult<{
+      readonly objectKey: string;
+      readonly approvedSha256: string;
+    }>
+  >;
   attach(
     input: CatalogMasterAttach,
     now: Date,
