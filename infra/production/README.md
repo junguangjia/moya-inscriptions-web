@@ -593,3 +593,244 @@ bounds, so until 1B has run stably keep the Catalog within them: fewer than
 about 8,800 published images (with live prepares, the 10,000
 published-plus-prepared pair bound), fewer than 10,000 prepare intents in all,
 and fewer than 18,000 rows in the private prepare view.
+
+## Catalog scale: bulk ingest of Catalog originals (increment 2)
+
+Increment 2 of Issue #323 adds an ingest path for Catalog originals that keeps
+their bytes off EdgeOne, nginx and the CVM uplink. The uploader (Codex's batch
+script or `scripts/editorial/direct-ingest.mjs`) asks the Admin for one signed
+staging PUT (`POST /api/editorial/media-ingest/start`), sends the bytes once
+straight to the private bucket under `catalog-ingest/v1/<2 hex>/<64 hex>` with
+`x-cos-forbid-overwrite`, and then calls `complete`. The Admin reads the staging
+object over `CMS_COS_ENDPOINT`, checks its size, hash and image structure,
+copies it to the content-addressed `editorial/` key and registers the media doc
+from what it read; `abandon` deletes a caller's staging object. Nothing is read
+back through artvenn.com. The routes accept originals up to 128 MiB, 120 million
+pixels, 512 MiB decoded, 65,500 px per side and 256 KiB per decoded row (width ×
+channels × bytes per sample, so a 16-bit RGBA PNG is at most 32,768 px wide),
+with 8-bit JPEG samples only, at most 512 MiB of DCT coefficients in a
+progressive JPEG and at most 256 MiB decoded in an interlaced (Adam7) PNG. The
+Development render measurement set all but the first three
+([catalog-scale-bench](../../docs/development/catalog-scale-bench.md), increment
+2): the sandbox's JPEG decoder refuses a side over 65,500 px and every 12-bit
+JPEG, a wider 16-bit row took up to 1.4 GiB of the sandbox's 1.5 GiB, and a
+decoder that holds the whole image (progressive JPEG, Adam7 PNG) took up to 1.1
+GiB at 120 million pixels. The native upload and the relay keep 40 MiB and 80
+million pixels, and nginx keeps `client_max_body_size 50m`. There is no
+migration and no nginx or EdgeOne change.
+
+Before its copy, `complete` refuses a staging object whose HEAD shows anything a
+signed PUT never stores: another Content-Type, a Content-Encoding, -Disposition
+or -Language, Cache-Control or Expires, user metadata, a storage class other
+than standard, encryption other than SSE-COS (AES256), or a tag beside the
+signed one. It deletes it and answers 422 `INGEST_STAGING_INVALID`, so nothing
+of the kind reaches `editorial/`, which the Admin cannot delete. A final object
+that shows one is refused unread (500 `INGEST_FINAL_INVALID`).
+
+`admin.env` gains `CMS_CATALOG_INGEST` (`off` or `on`; absent or empty means
+off) and `CMS_CATALOG_INGEST_UPLOAD_ENDPOINT`, the https origin of the public
+COS API endpoint the staging URLs are signed for. Any other switch value (`ON`,
+`true`, a typo) refuses to load the Admin's configuration, which stops both the
+Admin and `payload migrate` until it is corrected (decision J of the design;
+every other ingest setting is read only by the routes). Two more settings are
+read only when the switch is on, each `on` or `off`; an invalid ingest setting
+makes every ingest request answer 503 `INGEST_CONFIGURATION_INVALID` (logged as
+`EDITORIAL_MEDIA_INGEST_CONFIGURATION_INVALID`):
+`CMS_CATALOG_INGEST_SERVER_SHA256` (default `on`: `complete` reads and hashes
+the staging object; `off`: MD5/ETag, header and tail checks only, decision D9)
+and `CMS_CATALOG_INGEST_STAGING_TAG` (default `off`: lifecycle L2; `on`: L1, the
+staging PUT carries the staging tag and the copy drops it, decision D8). While
+the switch is off the routes are not composed (404), and the scripts use the
+relay for files within 40 MiB and refuse larger ones with
+`MEDIA_INGEST_UNAVAILABLE`. The release ships with the switch off and needs an
+Admin built on the PR #320 base; the live off-main Admin cannot carry it.
+
+Increment 2 also paces Catalog prepares (decisions D4 and D5). The Backend gains
+a read-only operator route,
+`GET /internal/community/catalog-delivery/render-backlog` (operator credential;
+counts only, from the App pool's existing grants), and the Admin an
+authenticated proxy, `POST /api/editorial/catalog-render-backlog`. The
+publication CLI's `run` and `publish` read it before a new prepare and return
+`WAITING_FOR_RENDER_BACKLOG` while the backlog needs more than 12 hours at 7
+images per minute (see
+[the publication workflow](../../docs/curation/catalog-publication-workflow-v1.md)).
+The Admin refuses no prepare because of it. Release order: the Backend first,
+then the Admin, before a CLI checkout with this pacing is used for `publish` or
+`run`. Against an older Admin that CLI stops with
+`ADMIN_RENDER_BACKLOG_MISSING`, and against an older Backend with
+`CATALOG_RENDER_BACKLOG_NOT_CONFIGURED`, before any prepare, single records
+included.
+
+Switch-on is Owner-run, one separately approved step at a time, in this order.
+The plan CLI (`scripts/editorial/catalog-ingest-bucket-plan.mjs`) makes no
+request and needs no credential; it prints placeholders, digests and fixed codes
+only, reads its inputs (`--target`, `--current`) only from owner-only (0600)
+files, and writes real values only to a new 0600 file given by `--out`. The
+probe runner (`apps/admin/scripts/catalog-ingest-probes.ts`) is the only step
+that sends requests: it runs on the CVM with the Admin's protected configuration
+in the environment, as the Admin's own code, while the switch is still off.
+
+1. S0, read-only checks; nothing changes:
+   - the policies attached to the Admin's COS write identity;
+   - GetBucketVersioning (it must not be `Enabled`: forbid-overwrite does not
+     protect a versioned bucket), GetBucketEncryption (none, or SSE-COS: the
+     Admin refuses staging with KMS or customer-key encryption),
+     GetBucketLifecycle (capture it to a private file, the merge input of step
+     4), GetBucketCors, the Referer setting (an empty Referer must stay allowed)
+     and whether lifecycle tag filters are supported; keep every captured file
+     owner-only (0600);
+   - that the Admin and UGC stores use the same bucket;
+   - on the CVM, the address class the host of `CMS_COS_ENDPOINT` and the media
+     worker's Catalog source host resolve to. This is a hard gate for
+     server-side hashing (decision D9): an intranet address lets `complete` read
+     and hash the staging object (`CMS_CATALOG_INGEST_SERVER_SHA256=on`, the
+     default); a public one means MD5/ETag checks only at `complete`, with the
+     SHA-256 check left to the worker at render time
+     (`CMS_CATALOG_INGEST_SERVER_SHA256=off`), which step 3 must also clear;
+   - whether Codex's runtime may reach the public COS API host.
+2. The CAM statement (option 1, Codex and the CLI only), always the L1 form
+   first, since step 3 tests tagging with it:
+   `node scripts/editorial/catalog-ingest-bucket-plan.mjs cam --lifecycle L1`
+   prints it with placeholders; with
+   `--target <private target.json> --out <new private file>` (`target.json` is
+   `{"region", "appId", "bucket"}`) it writes the bound statement and prints its
+   SHA-256. Add it as one more statement on the Admin's COS write identity:
+   `PutObject`, `GetObject`, `HeadObject`, `DeleteObject` and `PutObjectTagging`
+   on `catalog-ingest/v1/*` only; no list, multipart, ACL or bucket permission.
+   Keep the policy as read in S0 as the undo file.
+3. The staging dry run, on the CVM, with the Admin's configuration and
+   `CMS_CATALOG_INGEST_UPLOAD_ENDPOINT` (step 5's value) in the environment:
+   `pnpm --filter admin exec payload run scripts/catalog-ingest-probes.ts -- --lifecycle L1 --out <new private file> --keep-source`
+   (an absolute `--out` path: the command runs in `apps/admin`;
+   `node scripts/editorial/catalog-ingest-bucket-plan.mjs probes --lifecycle L1`
+   lists every probe and the Owner's own checks). It builds every request with
+   the Admin's code: the staging PUT URL with its signer (SigV4 query signature,
+   `x-id=PutObject`, the signed headers of `start`), the copy in the S3 API
+   spellings COS's S3-compatible layer must honour
+   (`x-amz-copy-source: <bucket>/<key>`, `x-amz-copy-source-if-match`,
+   `x-amz-metadata-directive: COPY`, `x-amz-tagging-directive: REPLACE`, plus
+   `x-cos-forbid-overwrite: true`) and HEAD with its own parser. Then it makes
+   each probe: the signed PUT; a HEAD of a key never written (404, which
+   `complete` reads as absent); a second PUT (409); the same PUT through Node's
+   fetch, as the Codex library sends it; a wrong length, a missing
+   `x-cos-forbid-overwrite` or Content-MD5, another body, another key, another
+   method; one probe per unsigned header (copy-source, ACL, every grant,
+   tagging, metadata-directive, server-side encryption including customer keys,
+   storage class and user metadata, each in both spellings); unsigned standard
+   headers (refused, or not stored, or stored where HEAD shows them, so
+   `complete` refuses them); `?acl`, `?tagging` and `?uploads` added to a URL
+   signed for an object the run placed first, the first two signed for their own
+   document body (a READ grant to everyone, two tags) with no unsigned header
+   (exactly 403, and the object keeps its ETag and tag count and stays private:
+   a COS that ran the sub-resource would answer a key never written with 404);
+   anonymous reads of the staged object and of a copy; a PUT finishing after its
+   URL expired; the copy conditions (If-Match 412, forbid-overwrite 409); ETag
+   or CRC64 kept across the copy and no metadata on it (and, under L2, no tag);
+   the tag count on HEAD and the tag-stripping copy. It deletes every object it
+   wrote (with `--keep-source`, all but the first). Standard output carries the
+   verdicts (`always`, `md5Mode`, `l1`), the failed probe ids and the report's
+   SHA-256; the 0600 report holds status codes and booleans, never a URL or key.
+   `always` must pass: any honoured unsigned header or sub-resource stops the
+   rollout, because the signing identity can read every original. An `l1`
+   failure alone (no tag count on HEAD, or a copy that keeps the staging tag) is
+   no stop: it chooses L2 in step 4. `md5Mode` (the staging ETag is the body's
+   MD5 and the copy keeps it; CRC64 alone is not enough) must pass before
+   `CMS_CATALOG_INGEST_SERVER_SHA256=off`. Then, as the Owner, read the kept
+   object's tags (GetObjectTagging: exactly `moya-ingest-staging=v1`; the
+   Admin's identity has no GetObjectTagging) and delete it.
+4. The staging lifecycle. L1 when S0 showed tag filters are supported, step 3's
+   `l1` verdict passed (COS reports `x-cos-tagging-count` on HEAD; without it
+   every L1 `complete` answers 503 `INGEST_CONFIGURATION_INVALID`) and the kept
+   object carried exactly the staging tag; else L2.
+   - L1:
+     `node scripts/editorial/catalog-ingest-bucket-plan.mjs lifecycle --lifecycle L1 --current <captured lifecycle.json> --out <new private file>`
+     appends one rule, a 1-day Expiration filtered by the prefix
+     `catalog-ingest/v1/` AND the tag `moya-ingest-staging=v1`, keeps every
+     existing rule byte for byte and prints the diff. It checks every existing
+     rule, the one under its own ID included, and stops on a rule without a
+     Filter or with a rule-level Prefix beside one; on a rule that is not
+     `Disabled` and expires, transitions or carries any action it does not know
+     under a filter that could match `editorial/` or `display/`; and on any rule
+     under its ID that differs from the generated one (compared key by key). It
+     never generates a rule that could match `editorial/`, `display/` or `ugc/`.
+     The input and output use the S3 API JSON shape only (`{"Rules": [...]}`;
+     `{}` when the bucket has none); convert any other capture first. Apply the
+     written file with read-merge-write, read the configuration back and compare
+     (the plan run on the 0600 read-back must answer `"unchanged": true`); the
+     captured file is the undo.
+   - L2: write nothing to the lifecycle. Replace the statement of step 2 with
+     the L2 form (`cam --lifecycle L2`, without `PutObjectTagging`) and run step
+     3 again with `--lifecycle L2` (without `--keep-source`); its `always`
+     verdict must pass under that statement. Staging objects then go at
+     `complete`, at `abandon`, through
+     `scripts/editorial/direct-ingest.mjs --abandon` for a batch given up, and
+     by an Owner listing of `catalog-ingest/v1/` after each batch (it should be
+     empty). The Admin derives each staging key from the caller, so `--abandon`
+     reaches only the objects of the credential that ran the batch, with that
+     batch's state file: it reports `abandoned` (removed), `absent` (nothing
+     staged), `notStarted`, and `INGEST_ACTOR_MISMATCH` for items another
+     credential started, which it leaves alone; without the state file it
+     refuses (`STATE_NOT_FOUND`). A batch of Codex's own script is abandoned by
+     that script, with its identity.
+
+   Change `CMS_CATALOG_INGEST_STAGING_TAG` later only while `catalog-ingest/v1/`
+   is empty (run `--abandon` for every unfinished batch first), so no staging
+   object of the other lifecycle is copied.
+
+5. Switch on: set `CMS_CATALOG_INGEST=on` exactly (any other value but `off` or
+   empty stops the Admin and `payload migrate`),
+   `CMS_CATALOG_INGEST_UPLOAD_ENDPOINT`, `CMS_CATALOG_INGEST_SERVER_SHA256`
+   (from steps 1 and 3) and `CMS_CATALOG_INGEST_STAGING_TAG` (`on` for L1, from
+   step 4) in `admin.env` and its staged copy, then restart the Admin.
+6. The 10-image canary, from the Owner's location, before any bulk batch: 10
+   originals of mixed sizes, at least four over 40 MiB, through
+   `scripts/editorial/direct-ingest.mjs` (or Codex's changed script). Its
+   summary must show `"privacy": "private"`. Record from its `metrics`, numbers
+   only: `largePuts` and `largePutsFailedOnce` (originals over 40 MiB that
+   needed more than one PUT), `putAttempts` and `failedPuts`, `putMiBps`
+   (median, slowest and fastest PUT that stored the bytes) and `completeMs`
+   (median and longest `complete` phase, retries included). Each image's own PUT
+   times and statuses and `complete` times are in the 0600 state file's row
+   (`metrics`). More than 5% of large PUTs failed at least once
+   (`largePutsFailedOnce` over `largePuts`) stops the rollout (multipart staging
+   is a later change); a slow canary leaves paid COS acceleration to the Owner.
+7. Paced batches: rendering stays at about 7 images per minute, so prepare the
+   next wave only while the render backlog drains within 12 hours; ingested
+   records can wait as drafts. The pacing read is
+   `POST /api/editorial/catalog-render-backlog` (released Backend, then Admin):
+   the App's per-tier count plus `preparedSince`, the images of the intents
+   prepared since that count (from 10 minutes before it, so an intent whose
+   prepare spanned the count is counted twice rather than missed, as long as its
+   prepare and the clock skew together stay within 10 minutes), so the sessions
+   of one batch are paced on each other. The publication CLI's `run` and
+   `publish` apply it before every new prepare; a `WAITING_FOR_RENDER_BACKLOG`
+   answer prepared nothing, so run the same command again after
+   `drainMinutes - maxDrainMinutes` minutes (at least 5). Until the formal CLI
+   reads originals over 40 MiB (S4b, deferred by decision D11), it stops, before
+   any save or prepare, on a record that holds one. Such records are prepared
+   only by a direct `POST /api/editorial/prepare-catalog-delivery` (Codex's
+   private script, under the Owner's approval), which must read the pacing route
+   before each prepare and apply the same rule (see
+   [operations](../../docs/cms/operations.md)); the Admin itself refuses no
+   prepare for the backlog. Run, resume and abandon each ingest batch with the
+   credential that started it and its state file: the Admin derives the staging
+   key from the caller, so a resumed item whose recorded staging key belongs to
+   another credential stops with `INGEST_ACTOR_MISMATCH` and keeps its record
+   and its staged object, with no PUT, `complete` or `abandon` under the new
+   credential.
+
+Rollback: set `CMS_CATALOG_INGEST=off` (or blank it), or redeploy the previous
+Admin. There is no migration. Ingested docs stay readable; a formal CLI without
+the ingest proof refuses a registered doc over 40 MiB when it parses it, so it
+fails closed. Ingest changes neither the worker nor the Backend; the pacing adds
+only the read-only Backend route and its Admin proxy, and a CLI checkout with
+pacing stops before any prepare against a Backend or Admin without them. Before
+switching off, while the routes still exist, run
+`scripts/editorial/direct-ingest.mjs --abandon` for every unfinished batch: once
+the switch is off or the previous Admin runs, `abandon` answers 404, and under
+L2 no rule ever removes a staging object of up to 128 MiB. Each batch is
+abandoned with the credential that ran it and its state file (Codex's script
+batches by Codex, with its identity); an `INGEST_ACTOR_MISMATCH` count means the
+wrong credential. Then list `catalog-ingest/v1/` and delete what is left by
+hand. Keep the L1 lifecycle rule until `catalog-ingest/v1/` is empty; the CAM
+statement and the rule are then removed by writing back the captured undo files.

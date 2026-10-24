@@ -48,6 +48,7 @@ export {
   catalogDeliveryCapabilitiesSchema,
   catalogPublishedRenditionsRequestSchema,
   catalogPublishedRenditionsSchema,
+  catalogRenderBacklogAnswerSchema,
   catalogRenderBacklogSchema,
 } from "./catalog-delivery.js";
 export type {
@@ -60,6 +61,7 @@ export type {
   CatalogDeliveryCapabilities,
   CatalogPublishedRenditionsRequest,
   CatalogPublishedRenditions,
+  CatalogRenderBacklogAnswer,
   CatalogRenderBacklogReport,
 } from "./catalog-delivery.js";
 export type {
@@ -104,7 +106,10 @@ export {
   CATALOG_ORIGINAL_MAX_BYTES,
   CATALOG_ORIGINAL_MAX_DECODED_BYTES,
   CATALOG_ORIGINAL_MAX_EDGE,
+  CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES,
+  CATALOG_ORIGINAL_MAX_JPEG_COEFFICIENT_BYTES,
   CATALOG_ORIGINAL_MAX_PIXELS,
+  CATALOG_ORIGINAL_MAX_ROW_BYTES,
   editorialRegisteredMediaSchema,
   editorialMediaIngestStartSchema,
   editorialMediaIngestStartResultSchema,

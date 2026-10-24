@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getFileKey } from "@payloadcms/plugin-cloud-storage/utilities";
 import {
+  CATALOG_ORIGINAL_MAX_BYTES,
+  CATALOG_ORIGINAL_MAX_EDGE,
+  CATALOG_ORIGINAL_MAX_PIXELS,
   editorialDraftSchema,
   editorialMediaSchema,
 } from "@moya/contracts/internal/editorial";
@@ -66,6 +69,83 @@ function assertAdapterPreservesKey(
   }
   if (actual !== objectKey) fail("MEDIA_OBJECT_KEY_REQUIRES_ADAPTER_EXTENSION");
 }
+
+const keyDigest = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
+
+/**
+ * The content-addressed key of an editorial original, as the native branch
+ * below derives it: editorial/<sha(catalogId)>/<sha(mediaId)>-<sha(bytes)>.<ext>.
+ */
+export const editorialObjectKey = (
+  catalogId: string,
+  mediaId: string,
+  sha256: string,
+  mimeType: keyof typeof MIME_FORMATS,
+) => {
+  const prefix = `editorial/${keyDigest(catalogId)}`;
+  const filename = `${keyDigest(mediaId)}-${sha256}.${mimeType === "image/jpeg" ? "jpg" : MIME_FORMATS[mimeType]}`;
+  return { prefix, filename, objectKey: `${prefix}/${filename}` };
+};
+
+/** A Catalog original the ingest endpoint verified in storage (catalog-ingest.ts). */
+export type VerifiedIngest = Readonly<{
+  catalogId: string;
+  mediaId: string;
+  origin: "upload";
+  objectKey: string;
+  prefix: string;
+  filename: string;
+  sha256: string;
+  filesize: number;
+  mimeType: keyof typeof MIME_FORMATS;
+  width: number;
+  height: number;
+  alt: string;
+  rights?: string;
+  orderConfidence?: "HIGH" | "LOW";
+}>;
+// Module-private: the only way a fileless `upload` create passes the hook.
+const verifiedIngests = new WeakMap<PayloadRequest, VerifiedIngest>();
+
+/**
+ * Runs `work`, one Local API create of exactly these fields with this
+ * request, with the verified-ingest marker set, and always removes it.
+ * Payload's Local API mutates and reuses the request it is given
+ * (createLocalReq), so the media hook sees this same object.
+ */
+export async function withVerifiedIngest<T>(
+  req: PayloadRequest,
+  verified: VerifiedIngest,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (verifiedIngests.has(req)) fail("MEDIA_INPUT_INVALID");
+  verifiedIngests.set(req, Object.freeze({ ...verified }));
+  try {
+    return await work();
+  } finally {
+    verifiedIngests.delete(req);
+  }
+}
+
+/** Every persisted field present and equal to the marker, and no other. */
+const matchesVerifiedIngest = (
+  data: Record<string, unknown>,
+  verified: VerifiedIngest,
+) => {
+  const fields = Object.keys(data)
+    .filter((field) => data[field] !== undefined)
+    .sort();
+  const expected = Object.keys(verified).sort();
+  return (
+    fields.length === expected.length &&
+    fields.every(
+      (field, index) =>
+        field === expected[index] &&
+        data[field] === verified[field as keyof VerifiedIngest],
+    )
+  );
+};
 
 type MediaAccess = {
   read: Access;
@@ -269,6 +349,52 @@ export function createMediaCollection(options: MediaAccess): CollectionConfig {
           }
           if (data.origin !== undefined && data.origin !== "upload")
             fail("MEDIA_ORIGIN_INVALID");
+          // A Catalog ingest registers bytes it verified in storage, so the
+          // record is fileless; only with the module-private marker, only
+          // with no file in the request or the storage context (the adapter
+          // would PUT over the final key), and only for exactly its fields.
+          const verified = verifiedIngests.get(req);
+          if (verified) {
+            // Single use; the ingest endpoint also removes it in finally.
+            verifiedIngests.delete(req);
+            const expected = editorialObjectKey(
+              verified.catalogId,
+              verified.mediaId,
+              verified.sha256,
+              verified.mimeType,
+            );
+            if (
+              req.file ||
+              req.context?._payloadCloudStorage !== undefined ||
+              !matchesVerifiedIngest(data, verified) ||
+              verified.origin !== "upload" ||
+              !/^[a-f0-9]{64}$/.test(verified.sha256) ||
+              verified.objectKey !== expected.objectKey ||
+              verified.prefix !== expected.prefix ||
+              verified.filename !== expected.filename ||
+              !Number.isSafeInteger(verified.filesize) ||
+              verified.filesize < 1 ||
+              verified.filesize > CATALOG_ORIGINAL_MAX_BYTES ||
+              !Number.isSafeInteger(verified.width) ||
+              !Number.isSafeInteger(verified.height) ||
+              verified.width < 1 ||
+              verified.height < 1 ||
+              verified.width > CATALOG_ORIGINAL_MAX_EDGE ||
+              verified.height > CATALOG_ORIGINAL_MAX_EDGE ||
+              verified.width * verified.height > CATALOG_ORIGINAL_MAX_PIXELS
+            )
+              fail("MEDIA_FILE_INVALID");
+            data.origin = "upload";
+            data.sha256 = verified.sha256;
+            data.width = verified.width;
+            data.height = verified.height;
+            data.prefix = expected.prefix;
+            data.objectKey = expected.objectKey;
+            data.filename = expected.filename;
+            data.filesize = verified.filesize;
+            data.mimeType = verified.mimeType;
+            return;
+          }
           const file = req.file;
           if (
             !file ||

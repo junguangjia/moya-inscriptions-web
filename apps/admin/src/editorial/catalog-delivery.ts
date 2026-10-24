@@ -6,6 +6,7 @@ import {
   catalogDeliveryCapabilitiesSchema,
   catalogDeliveryManifestSchema,
   catalogDeliveryResultSchema,
+  catalogRenderBacklogAnswerSchema,
   prepareCatalogDeliverySchema,
   readCatalogDeliverySchema,
   releaseCatalogDeliverySchema,
@@ -13,6 +14,7 @@ import {
   type CatalogDeliveryMedia,
   type CatalogDeliveryResult,
   type CatalogDeliveryState,
+  type CatalogRenderBacklogAnswer,
   type EditorialDraft,
 } from "@moya/contracts/internal/editorial";
 import { sql } from "@payloadcms/db-postgres";
@@ -21,6 +23,7 @@ import type { PayloadRequest } from "payload";
 import { canEditCatalog, isOwner, requireActor } from "./access";
 import {
   catalogDeliveryReadiness,
+  catalogRenderBacklog,
   probeCatalogDeliveryBackend,
   readCatalogPublishedRenditions,
   readCatalogRecipePolicy,
@@ -619,4 +622,41 @@ export const catalogDeliveryCapabilities = async (
   return catalogDeliveryCapabilitiesSchema.parse({
     delivery: await probeCatalogDeliveryBackend(),
   });
+};
+
+/** The pacing read of bulk Catalog work (catalog-scale-v1 I9, D5): the
+ * App's render backlog, plus the images of every delivery intent prepared
+ * since that count and still live or released, which only the worker's next
+ * sync pass queues. Counts only, over every Catalog: the render queue is one.
+ *
+ * An intent's created_at is its prepare transaction's start, and the count's
+ * time is the worker pass's start by the worker's clock. A prepare that began
+ * before the count can commit after the pass read its snapshot (it waits up
+ * to 5 s for each lock and 15 s for the recipe policy), and the CLI accepts a
+ * count up to 5 minutes ahead of its own clock. So every intent created from
+ * PREPARED_SINCE_MARGIN before the count is added: an intent the pass already
+ * held is counted twice for that long, which only slows a wave, and one is
+ * missed only if its prepare and the clocks' skew together exceed the margin.
+ */
+const PREPARED_SINCE_MARGIN = "10 minutes";
+
+export const catalogRenderBacklogForPacing = async (
+  req: PayloadRequest,
+  input: unknown,
+): Promise<CatalogRenderBacklogAnswer> => {
+  const backlog = await catalogRenderBacklog(req, input);
+  const preparedSince =
+    backlog.countedAt === null
+      ? 0
+      : await withEditorialTransaction(req, async () => {
+          const db = await editorialTransaction(req);
+          const result = await db.execute(sql`
+            SELECT coalesce(sum(jsonb_array_length(media_manifest)), 0)::bigint AS images
+            FROM catalog_delivery_intents
+            WHERE created_at > ${backlog.countedAt}::timestamptz - ${PREPARED_SINCE_MARGIN}::interval
+              AND state IN ('prepared', 'release_requested', 'released')
+          `);
+          return Number((result.rows[0] as { images: unknown }).images);
+        });
+  return catalogRenderBacklogAnswerSchema.parse({ ...backlog, preparedSince });
 };

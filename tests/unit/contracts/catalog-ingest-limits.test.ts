@@ -14,7 +14,10 @@ import {
   CATALOG_ORIGINAL_MAX_BYTES,
   CATALOG_ORIGINAL_MAX_DECODED_BYTES,
   CATALOG_ORIGINAL_MAX_EDGE,
+  CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES,
+  CATALOG_ORIGINAL_MAX_JPEG_COEFFICIENT_BYTES,
   CATALOG_ORIGINAL_MAX_PIXELS,
+  CATALOG_ORIGINAL_MAX_ROW_BYTES,
   MAX_MEDIA_UPLOAD_BYTES,
   catalogProcessingIntentSchema,
   catalogRenderBacklogSchema,
@@ -97,11 +100,25 @@ const completed = {
 };
 
 describe("Catalog original ingest limits", () => {
-  it("are the Owner's D6 bounds and stay within what the worker reads", () => {
+  it("are the Owner's D6 bounds as the Development render measurement left them, within what the worker reads", () => {
     expect(CATALOG_ORIGINAL_MAX_BYTES).toBe(128 * MiB);
     expect(CATALOG_ORIGINAL_MAX_PIXELS).toBe(120_000_000);
     expect(CATALOG_ORIGINAL_MAX_DECODED_BYTES).toBe(512 * MiB);
-    expect(CATALOG_ORIGINAL_MAX_EDGE).toBe(65_535);
+    // S5b: the JPEG decoder's longest side, and one decoded row.
+    expect(CATALOG_ORIGINAL_MAX_EDGE).toBe(65_500);
+    expect(CATALOG_ORIGINAL_MAX_ROW_BYTES).toBe(256 * 1024);
+    // An 8-bit RGBA row keeps the whole edge.
+    expect(CATALOG_ORIGINAL_MAX_EDGE * 4).toBeLessThanOrEqual(
+      CATALOG_ORIGINAL_MAX_ROW_BYTES,
+    );
+    // The whole-image decoder buffers (S5b review): a progressive JPEG's
+    // coefficients and an interlaced PNG's pixels, both within the decoded
+    // bound.
+    expect(CATALOG_ORIGINAL_MAX_JPEG_COEFFICIENT_BYTES).toBe(512 * MiB);
+    expect(CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES).toBe(256 * MiB);
+    expect(CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES).toBeLessThan(
+      CATALOG_ORIGINAL_MAX_DECODED_BYTES,
+    );
 
     expect(CATALOG_ORIGINAL_MAX_BYTES).toBeLessThanOrEqual(
       CATALOG_SOURCE_MAX_BYTES,
@@ -145,7 +162,9 @@ describe("Catalog original ingest limits", () => {
         expiresAt: "2026-10-24T00:00:00.000Z",
       }).success;
     expect(snapshot(CATALOG_ORIGINAL_MAX_EDGE)).toBe(true);
-    expect(snapshot(CATALOG_ORIGINAL_MAX_EDGE + 1)).toBe(false);
+    // The snapshot's own bound stays at or above the ingest edge (S5b).
+    expect(snapshot(65_535)).toBe(true);
+    expect(snapshot(65_536)).toBe(false);
   });
 
   it("leave the native and relay limit at 40 MiB", () => {
@@ -275,6 +294,9 @@ describe("ingest intent", () => {
     expect(accepts({ ...intent, width: 12_000, height: 10_001 })).toBe(false);
     expect(
       accepts({ ...intent, width: CATALOG_ORIGINAL_MAX_EDGE, height: 1_832 }),
+    ).toBe(true);
+    expect(
+      accepts({ ...intent, width: CATALOG_ORIGINAL_MAX_EDGE, height: 1_833 }),
     ).toBe(false);
   });
 

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { privateJSON } from "../../curation/adapter.mjs";
 import {
   catalogDeliveryCapabilitiesSchema,
+  catalogRenderBacklogAnswerSchema,
   editorialDraftSchema,
   editorialContentFromDocument,
   editorialSaveDraftSchema,
@@ -50,6 +51,36 @@ import {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const bytesHash = (x) => createHash("sha256").update(x).digest("hex");
 const CAPABILITIES_ROUTE = "/api/editorial/catalog-delivery-capabilities";
+const RENDER_BACKLOG_ROUTE = "/api/editorial/catalog-render-backlog";
+/** Owner decisions D4 and D5 (catalog-scale-v1 I9): one background render
+ * makes about 7 Catalog images a minute, and the next wave is prepared only
+ * while the render backlog ahead of it drains within 12 hours at that rate.
+ * The rate is a session option; above one image a second it is a unit
+ * mistake, not a measurement. */
+export const RENDER_IMAGES_PER_MINUTE = 7;
+export const RENDER_BACKLOG_MAX_DRAIN_MINUTES = 12 * 60;
+const MAX_RENDER_IMAGES_PER_MINUTE = 60;
+/** The oldest per-tier count a wave is paced on, by this machine's clock:
+ * twelve of the worker's 5-minute sync passes. An older one says the worker
+ * or its Catalog sync stopped counting (down, skipped passes, failed backlog
+ * writes), and the queued and running renders cannot show a larger backlog
+ * (the queue is capped at 300), so the wave stops rather than prepare on it.
+ * A count up to a few minutes ahead is clock skew; further ahead, one of the
+ * clocks is wrong and the count's age is unknown. */
+export const RENDER_BACKLOG_MAX_AGE_MINUTES = 60;
+const RENDER_BACKLOG_MAX_SKEW_MINUTES = 5;
+/** The images a newly prepared wave renders behind: those a published record,
+ * a requested, prepared or grace intent still waits for (tiers t0-t3 of the
+ * last sync pass, queued or not), or the base renders queued and running now
+ * when more (a queued recipe re-render is claimed before a later wave too),
+ * and the images of every intent prepared since that count, which no count
+ * holds yet (the Admin counts them), so the sessions of one batch inside a
+ * sync interval are paced on each other. A published image's re-render not
+ * queued yet (t4) runs after the wave while its earlier set keeps serving,
+ * so it is not counted. */
+const renderBacklogImages = ({ tiers, queued, running, preparedSince }) =>
+  Math.max(tiers.t0 + tiers.t1 + tiers.t2 + tiers.t3, queued + running) +
+  preparedSince;
 const TERMINAL_INTENT_CODES = Object.freeze({
   cancelled: "DELIVERY_INTENT_CANCELLED",
   superseded: "DELIVERY_INTENT_SUPERSEDED",
@@ -72,6 +103,14 @@ export async function withProductionCatalogSession(options, work) {
   const { manifest, command } = options;
   const binding = normalizeProductionAuthority(manifest, options.authority);
   assertProductionCommand(binding, command, manifest);
+  const imagesPerMinute =
+    options.renderImagesPerMinute ?? RENDER_IMAGES_PER_MINUTE;
+  if (
+    typeof imagesPerMinute !== "number" ||
+    !(imagesPerMinute > 0) ||
+    imagesPerMinute > MAX_RENDER_IMAGES_PER_MINUTE
+  )
+    fail("RENDER_PACING_INVALID");
   const controlled = validateControlledInput(
     manifest,
     options.input.controlled,
@@ -417,6 +456,13 @@ export async function withProductionCatalogSession(options, work) {
         )
           return;
         if (
+          method === "POST" &&
+          route === RENDER_BACKLOG_ROUTE &&
+          ["run", "publish"].includes(command) &&
+          JSON.stringify(body) === "{}"
+        )
+          return;
+        if (
           method === "GET" &&
           state.save &&
           route ===
@@ -504,6 +550,7 @@ export async function withProductionCatalogSession(options, work) {
                 "/api/editorial/read-catalog-delivery",
                 "/api/editorial/media-upload/status",
                 CAPABILITIES_ROUTE,
+                RENDER_BACKLOG_ROUTE,
               ].includes(route))
           )
             await verifySourceFiles();
@@ -563,6 +610,51 @@ export async function withProductionCatalogSession(options, work) {
               : "BACKEND_DELIVERY_UNAVAILABLE",
           );
         capabilities = parsed.data;
+      };
+      // The pacing of prepare waves (catalog-scale-v1 I9): asked after the
+      // capability preflight, before a new prepare. A backlog that drains
+      // within the limit lets the wave through; a longer one returns a
+      // content-free WAITING_FOR_RENDER_BACKLOG (counts only) with nothing
+      // prepared, and `publish` runs again later. The session does not wait
+      // in-process: its deadline is minutes, the count is refreshed by each
+      // sync pass. Each run spends this state directory's request and
+      // response budget (its reads, the preflight and this read), so a wait
+      // is re-run no sooner than the next sync pass. A backlog this Admin
+      // cannot report, one never counted, or one counted too long ago stops
+      // the wave.
+      const paceWave = async () => {
+        const response = await request(RENDER_BACKLOG_ROUTE, "POST", {});
+        if (!response.ok)
+          fail(
+            response.httpStatus === 404
+              ? "ADMIN_RENDER_BACKLOG_MISSING"
+              : response.code,
+          );
+        const parsed = catalogRenderBacklogAnswerSchema.safeParse(
+          response.result?.result,
+        );
+        if (response.result?.ok !== true || !parsed.success)
+          fail("RENDER_BACKLOG_INVALID");
+        if (parsed.data.tiers === null) fail("RENDER_BACKLOG_NOT_COUNTED");
+        const age = Date.now() - Date.parse(parsed.data.countedAt);
+        const recent =
+          age <= RENDER_BACKLOG_MAX_AGE_MINUTES * 60_000 &&
+          age >= -RENDER_BACKLOG_MAX_SKEW_MINUTES * 60_000;
+        if (!recent) fail("RENDER_BACKLOG_STALE");
+        const images = renderBacklogImages(parsed.data);
+        if (images <= imagesPerMinute * RENDER_BACKLOG_MAX_DRAIN_MINUTES)
+          return null;
+        return {
+          status: "WAITING_FOR_RENDER_BACKLOG",
+          renderBacklog: {
+            images,
+            imagesPerMinute,
+            drainMinutes: Math.ceil(images / imagesPerMinute),
+            maxDrainMinutes: RENDER_BACKLOG_MAX_DRAIN_MINUTES,
+            countedAt: parsed.data.countedAt,
+          },
+          anonymousDeliveryVerified: false,
+        };
       };
       const protect = () => {
         if (
@@ -1037,6 +1129,12 @@ export async function withProductionCatalogSession(options, work) {
           return result;
         };
         await preflight();
+        // A wave whose prepare was already sent is in the queue (or may be):
+        // only a new one is paced.
+        if (!delivery.snapshot().actions[`${record.recordId}:prepare`]) {
+          const waiting = await paceWave();
+          if (waiting) return waiting;
+        }
         let result = await action("prepare", {
           id: binding.nativeId,
           expectedRevision: state.frozen.revision,

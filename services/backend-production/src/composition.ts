@@ -119,6 +119,7 @@ import {
   createCatalogDeliveryFacts,
   createCatalogReadiness,
   createCatalogPublishedRenditions,
+  createCatalogRenderBacklog,
   currentCatalogRecipePolicy,
 } from "./publishing/catalog-delivery-intents.js";
 import { LocalCatalogSourceReader } from "./storage/catalog-source.js";
@@ -784,6 +785,7 @@ export const prepareProductionBackend = async (
         // App facts only: no prepare reader and no CMS connection is needed.
         catalogPublishedRenditions:
           createCatalogPublishedRenditions(communityPool),
+        catalogRenderBacklog: createCatalogRenderBacklog(communityPool),
         ...(catalogPreparePool
           ? {
               catalogDeliveryReadiness: createCatalogReadiness(

@@ -9,12 +9,48 @@ import { editorialUploadedMediaSchema } from "./upload.js";
  * decoded-size bounds and the 65,535 px source edge of the processing
  * snapshot, so an ingested original is never one the worker refuses to read.
  * The native upload and the relay keep MAX_MEDIA_UPLOAD_BYTES.
+ *
+ * The Development render measurement (S5b,
+ * docs/development/catalog-scale-bench.md) kept the byte, pixel and
+ * decoded-size bounds, lowered the edge and added the row and buffer bounds:
+ * the sandbox's JPEG decoder refuses a side over 65,500 px (and any 12-bit
+ * sample, which the Admin's probe refuses too), a stored row over 256 KiB (a
+ * 16-bit RGBA PNG wider than 32,768 px) took up to 1.4 GiB of the sandbox's
+ * 1.5 GiB, and a decoder holding the whole image (the coefficients of a
+ * JPEG with more than one scan, an interlaced PNG's pixels) took up to
+ * 1.1 GiB at 120 MP.
  */
 export const CATALOG_ORIGINAL_MAX_BYTES = 128 * 1024 * 1024;
 export const CATALOG_ORIGINAL_MAX_PIXELS = 120_000_000;
-/** width × height × channels × bytes per sample, before any pixel decode. */
+/**
+ * width × height × decoded channels × bytes per sample, before any pixel
+ * decode. A palette PNG counts 4 channels, and a grey or RGB PNG with tRNS
+ * one more for the alpha the decoder adds.
+ */
 export const CATALOG_ORIGINAL_MAX_DECODED_BYTES = 512 * 1024 * 1024;
-export const CATALOG_ORIGINAL_MAX_EDGE = 65_535;
+/** Each side: libjpeg-turbo's JPEG_MAX_DIMENSION, kept for every format. */
+export const CATALOG_ORIGINAL_MAX_EDGE = 65_500;
+/**
+ * Stored width × decoded channels × bytes per sample: one decoded row, which
+ * the renderer holds many times over while it shrinks a wide image.
+ */
+export const CATALOG_ORIGINAL_MAX_ROW_BYTES = 256 * 1024;
+/**
+ * The DCT coefficients of a JPEG with more than one scan, which the decoder
+ * holds whole until its last scan: per component, its 8 × 8 blocks (rounded
+ * up to whole sampling units) × 64 coefficients × 2 B. libjpeg keeps them for
+ * a progressive frame and for a sequential one whose first scan holds fewer
+ * components than the frame (written one scan per component, for example).
+ * A sequential JPEG whose first scan holds every component (the usual
+ * interleaved file) has no such buffer.
+ */
+export const CATALOG_ORIGINAL_MAX_JPEG_COEFFICIENT_BYTES = 512 * 1024 * 1024;
+/**
+ * An interlaced (Adam7) PNG's decoded pixels, which the decoder holds whole
+ * before its first full row: width × height × decoded channels (tRNS alpha
+ * included) × bytes per sample.
+ */
+export const CATALOG_ORIGINAL_MAX_INTERLACED_DECODED_BYTES = 256 * 1024 * 1024;
 /** The only tag a staging PUT may carry (lifecycle L1); the copy strips it. */
 export const CATALOG_INGEST_STAGING_TAGGING = "moya-ingest-staging=v1";
 
@@ -156,10 +192,15 @@ export type EditorialMediaIngestCompleteResult = z.infer<
   typeof editorialMediaIngestCompleteResultSchema
 >;
 
-/** Idempotent: the caller's derived staging key is gone, whether or not it existed. */
+/**
+ * Idempotent: the caller's derived staging key is gone. "abandoned": an
+ * object was there and is removed; "absent": nothing was staged under the
+ * caller's key (another actor's key, derived from that actor, is never
+ * touched). ingestId is the caller's.
+ */
 export const editorialMediaIngestAbandonResultSchema = z.strictObject({
   ingestId: digestSchema,
-  state: z.literal("abandoned"),
+  state: z.enum(["abandoned", "absent"]),
 });
 export type EditorialMediaIngestAbandonResult = z.infer<
   typeof editorialMediaIngestAbandonResultSchema

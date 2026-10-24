@@ -2,15 +2,20 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   catalogRecipePolicySchema,
+  catalogDeliveryCapabilitiesRequestSchema,
   catalogDeliveryReadinessSchema,
   catalogPublishedRenditionsSchema,
+  catalogRenderBacklogSchema,
   type CatalogDeliveryCapabilities,
   type CatalogPublishedRenditions,
   type CatalogPublishedRenditionsRequest,
   type CatalogRecipePolicy,
+  type CatalogRenderBacklogReport,
 } from "@moya/contracts/internal/editorial";
+import type { PayloadRequest } from "payload";
 
-import { EditorialError } from "./errors";
+import { requireActor } from "./access";
+import { EditorialError, validationError } from "./errors";
 import {
   callCommunityOperator,
   CommunityOperatorError,
@@ -94,6 +99,40 @@ export const readCatalogPublishedRenditions = async (
       return null;
     throw new EditorialError("CATALOG_DELIVERY_READINESS_UNAVAILABLE", 503);
   }
+};
+
+/** Pacing of bulk Catalog work (catalog-scale-v1 I9, Owner decision D5): the
+ * App's render backlog, over the same operator boundary. Counts only, so any
+ * authenticated editorial actor may ask, with the capability probe's empty
+ * body. It is read-only and informs the CLI's waves; Admin refuses no prepare
+ * because of it. No Backend that answers it is NOT_CONFIGURED; any other
+ * failure, or an answer that is not the contract, is UNAVAILABLE.
+ */
+export const catalogRenderBacklog = async (
+  req: PayloadRequest,
+  input: unknown,
+): Promise<CatalogRenderBacklogReport> => {
+  requireActor(req);
+  const request = catalogDeliveryCapabilitiesRequestSchema.safeParse(input);
+  if (!request.success) throw validationError(request.error.issues);
+  let answer: unknown;
+  try {
+    answer = await callCommunityOperator(
+      "GET",
+      "catalog-delivery/render-backlog",
+    );
+  } catch (error) {
+    if (
+      error instanceof CommunityOperatorError &&
+      ["OPERATOR_NOT_CONFIGURED", "NOT_FOUND"].includes(error.code)
+    )
+      throw new EditorialError("CATALOG_RENDER_BACKLOG_NOT_CONFIGURED", 503);
+    throw new EditorialError("CATALOG_RENDER_BACKLOG_UNAVAILABLE", 503);
+  }
+  const backlog = catalogRenderBacklogSchema.safeParse(answer);
+  if (!backlog.success)
+    throw new EditorialError("CATALOG_RENDER_BACKLOG_UNAVAILABLE", 503);
+  return backlog.data;
 };
 
 /** Read-only capability probe for release tooling: the recipe policy must be

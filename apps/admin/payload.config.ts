@@ -22,6 +22,7 @@ import { agentConnectionAuthenticateHeader } from "./src/agent-connections/disco
 import { communityEndpoints } from "./src/community/endpoints";
 import { analyticsEndpoints } from "./src/analytics/endpoints";
 import { editorialMcp } from "./src/mcp";
+import { createCatalogIngestEndpoints } from "./src/media/catalog-ingest";
 import { createMediaCollection } from "./src/media/collection";
 import { createResumableMediaEndpoints } from "./src/media/resumable-upload";
 import { createEditorialStoragePlugin } from "./src/media/storage";
@@ -34,6 +35,7 @@ import { adminPreviewURL, editorialPreviewEndpoint } from "./src/preview";
 import {
   cmsDatabasePool,
   assertCmsProductionEnvironment,
+  catalogIngestEnabled,
   cmsRuntimeLogFields,
   requiredSetting,
 } from "./src/runtime-settings";
@@ -255,6 +257,18 @@ export default buildConfig({
       ),
       mediaDirectory,
     }),
+    // Catalog ingest: empty unless CMS_CATALOG_INGEST=on, so the routes do
+    // not exist (404) when it is off. Its settings and storage clients are
+    // read on the first request, never while the config loads.
+    ...(catalogIngestEnabled()
+      ? createCatalogIngestEndpoints({
+          mediaDirectory,
+          stagingDirectory: path.join(
+            path.dirname(mediaDirectory),
+            "editorial-ingest-staging",
+          ),
+        })
+      : []),
     ...communityEndpoints,
     ...analyticsEndpoints,
     // Empty unless the connection surface is composed at all; the gate is the

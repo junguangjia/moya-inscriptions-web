@@ -873,6 +873,7 @@ const completeQueue = async <T>(work: () => Promise<T>): Promise<T> => {
 };
 const mediaProjection = (
   document: Record<string, unknown>,
+  invalid: () => never = () => fail("UPLOAD_INPUT_INVALID"),
 ): EditorialUploadedMedia => {
   const value: Record<string, unknown> = {};
   for (const field of [
@@ -892,7 +893,9 @@ const mediaProjection = (
   ])
     if (document[field] !== undefined && document[field] !== null)
       value[field] = document[field];
-  return parse(editorialUploadedMediaSchema, value);
+  const projected = editorialUploadedMediaSchema.safeParse(value);
+  if (!projected.success) invalid();
+  return projected.data;
 };
 const matchesIntent = (
   media: EditorialUploadedMedia,
@@ -1129,8 +1132,11 @@ export function createResumableMediaEndpoints(options: {
           let media: EditorialUploadedMedia;
           let reused = false;
           if (found.docs[0]) {
+            // A registered original over the relay's 40 MiB (a Catalog
+            // ingest) can never be this intent: an identity conflict.
             media = mediaProjection(
               found.docs[0] as unknown as Record<string, unknown>,
+              () => fail("MEDIA_IDENTITY_CONFLICT", 409),
             );
             if (!matchesIntent(media, intent))
               fail("MEDIA_IDENTITY_CONFLICT", 409);

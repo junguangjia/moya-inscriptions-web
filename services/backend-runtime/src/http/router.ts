@@ -83,6 +83,7 @@ export interface CommunityRouterDependencies {
   readonly catalogRecipePolicy?: BackendApplicationOptions["catalogRecipePolicy"];
   readonly catalogDeliveryReadiness?: BackendApplicationOptions["catalogDeliveryReadiness"];
   readonly catalogPublishedRenditions?: BackendApplicationOptions["catalogPublishedRenditions"];
+  readonly catalogRenderBacklog?: BackendApplicationOptions["catalogRenderBacklog"];
   /** Separate user-owned Article operations. */
   readonly articleAuthoringService?: ArticleAuthoringService;
   readonly articleDelegation?: BackendApplicationOptions["articleDelegation"];
@@ -485,6 +486,7 @@ export const createRouter =
           catalogRecipePolicy: community?.catalogRecipePolicy,
           catalogDeliveryReadiness: community?.catalogDeliveryReadiness,
           catalogPublishedRenditions: community?.catalogPublishedRenditions,
+          catalogRenderBacklog: community?.catalogRenderBacklog,
           articlePublicationOperatorService:
             community?.articlePublicationOperatorService,
           contentOperatorPort: community?.contentOperatorPort,

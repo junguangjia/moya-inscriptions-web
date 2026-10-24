@@ -1203,7 +1203,7 @@ export const isAuthorizedCmsServerFile = (
       relative,
     ) ||
     relative === "src/analytics/View.tsx" ||
-    /^scripts\/(?:build\.mjs|bootstrap-synthetic\.ts|provision-initial-owner\.ts|benchmark-synthetic\.ts|migrate-legacy\.ts|recovery-synthetic\.ts|seed-community-acceptance\.ts)$/.test(
+    /^scripts\/(?:build\.mjs|bootstrap-synthetic\.ts|provision-initial-owner\.ts|benchmark-synthetic\.ts|migrate-legacy\.ts|recovery-synthetic\.ts|seed-community-acceptance\.ts|catalog-ingest-probes\.ts)$/.test(
       relative,
     ) ||
     /^src\/owner-workflow\/(?:View|NavLink)\.tsx$/.test(relative) ||
