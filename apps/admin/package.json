@@ -77,6 +77,7 @@
     "./community-navigation": "./src/community/NavGroup.tsx",
     "./community-dashboard": "./src/community/DashboardCard.tsx",
     "./community-api": "./src/community/api.ts",
+    "./community-feedback-client": "./src/community/feedback-client.tsx",
     "./community-article-client": "./src/community/article-submissions-client.tsx",
     "./community-article-preview": "./src/community/article-submission-preview.tsx",
     "./users": "./src/users.ts",

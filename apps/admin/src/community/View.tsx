@@ -7,6 +7,7 @@ import { AccountCapacityClient } from "./account-capacity-client";
 import { AgentOperationsClient } from "./agent-operations-client";
 import { CommunityContentClient } from "./content-client";
 import { CommunityHistoryClient } from "./history-client";
+import { CommunityFeedbackClient } from "./feedback-client";
 import { PublishingJobsClient } from "./publishing-jobs-client";
 import { CommunityQueueClient } from "./queue-client";
 import { ThreadsClient } from "./threads-client";
@@ -51,6 +52,12 @@ export const CommunitySettingsView = (props: AdminViewServerProps) => (
 export const CommunityHistoryView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
     <CommunityHistoryClient />
+  </OwnerOnly>
+);
+
+export const CommunityFeedbackView = (props: AdminViewServerProps) => (
+  <OwnerOnly props={props}>
+    <CommunityFeedbackClient />
   </OwnerOnly>
 );
 

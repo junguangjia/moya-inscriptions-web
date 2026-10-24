@@ -556,7 +556,7 @@ export const resolveMediaRead = async (
         await db.query<MediaReadTargetRow>(
           `${derivativeReadSql} AND (
             (i.owner_id=$4::text AND EXISTS (SELECT 1 FROM community.public_users o WHERE o.id=$4::text AND o.status='active'))
-            OR (${withinPublicPolicySql("d")} AND (
+            OR (i.purpose='content' AND ${withinPublicPolicySql("d")} AND (
               EXISTS (
                 SELECT 1 FROM community.work_revision_items ri
                 JOIN community.work_revisions r ON r.id=ri.revision_id

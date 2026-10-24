@@ -2165,3 +2165,173 @@ describe("Agent administration Owner envelopes (Development)", () => {
     ).toBe(false);
   });
 });
+
+describe("Owner feedback read boundary", () => {
+  const feedbackPage = {
+    items: [
+      {
+        id: "feedback-" + "a".repeat(32),
+        message: "设置中的反馈正文",
+        images: [],
+        user: { id: userId, displayName: "测试用户" },
+        createdAt: "2026-10-23T12:00:00.000Z",
+      },
+    ],
+    total: 21,
+    page: 2,
+    pageSize: 20,
+  };
+
+  it.each(["development", "production"])(
+    "forwards only validated pagination and contract-checks the answer in %s",
+    async (nodeEnv) => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      try {
+        const call = vi.fn(async () => feedbackPage) as unknown as OperatorCall;
+        const endpoints = createCommunityEndpoints(call);
+        expect(
+          await invoke(
+            endpoints,
+            "read-feedback",
+            request({ page: 2, pageSize: 20 }),
+          ),
+        ).toEqual({
+          status: 200,
+          body: { ok: true, result: feedbackPage },
+        });
+        expect(call).toHaveBeenCalledWith("GET", "feedback?page=2&pageSize=20");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("refuses non-Owners and extra query fields before reading any feedback", async () => {
+    const { call, calls } = recorder();
+    const endpoints = createCommunityEndpoints(call);
+    for (const role of [null, "automation"] as const)
+      expect(
+        (await invoke(endpoints, "read-feedback", request({}, role))).status,
+      ).toBe(403);
+    for (const input of [
+      { page: 0 },
+      { pageSize: 51 },
+      { userId },
+      { search: "测试" },
+    ])
+      expect(
+        (await invoke(endpoints, "read-feedback", request(input))).status,
+      ).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
+  it("does not expose or log an answer outside the feedback contract", async () => {
+    const call = vi.fn(async () => ({
+      ...feedbackPage,
+      privateField: "unexpected content",
+    })) as unknown as OperatorCall;
+    const req = request({ page: 1, pageSize: 20 });
+    expect(
+      await invoke(createCommunityEndpoints(call), "read-feedback", req),
+    ).toEqual({
+      status: 502,
+      body: { ok: false, error: { code: "OPERATOR_RESPONSE_INVALID" } },
+    });
+    expect(req.payload.logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe("private feedback image streaming boundary", () => {
+  const feedbackId = "feedback-" + "a".repeat(32),
+    itemId = "media-item-" + "b".repeat(32);
+  const path =
+    "/community-moderation/feedback-media/:feedbackId/:itemId/:variant";
+  const req = (
+    role: "owner" | "automation" | null = "owner",
+    changes: Record<string, unknown> = {},
+  ) =>
+    ({
+      ...request({}, role),
+      routeParams: { feedbackId, itemId, variant: "display" },
+      headers: new Headers(),
+      url:
+        "http://admin.invalid/api/community-moderation/feedback-media/" +
+        feedbackId +
+        "/" +
+        itemId +
+        "/display",
+      signal: new AbortController().signal,
+      ...changes,
+    }) as unknown as PayloadRequest;
+  const invokeMedia = async (
+    open: OperatorMediaCall,
+    value: PayloadRequest,
+  ) => {
+    const endpoint = createCommunityEndpoints(recorder().call, open).find(
+      (e) => e.path === path,
+    )!;
+    return await (endpoint.handler as (r: PayloadRequest) => Promise<Response>)(
+      value,
+    );
+  };
+  const media = (contentType = "image/webp"): OperatorMediaResponse => ({
+    status: 200,
+    contentType,
+    contentLength: "4",
+    contentRange: null,
+    acceptsRanges: false,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+        controller.close();
+      },
+    }),
+  });
+  it("requires Owner and refuses malformed identities, queries and source/master variants before transport", async () => {
+    const open = vi.fn<OperatorMediaCall>();
+    for (const role of [null, "automation"] as const)
+      expect((await invokeMedia(open, req(role))).status).toBe(403);
+    for (const routeParams of [
+      { feedbackId: "../other", itemId, variant: "display" },
+      { feedbackId, itemId: "blob-secret", variant: "display" },
+      { feedbackId, itemId, variant: "original" },
+      { feedbackId, itemId, variant: "standard_master" },
+    ])
+      expect(
+        (await invokeMedia(open, req("owner", { routeParams }))).status,
+      ).toBe(400);
+    expect(
+      (
+        await invokeMedia(
+          open,
+          req("owner", { url: "http://admin.invalid/?url=other" }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(open).not.toHaveBeenCalled();
+  });
+  it("relays only the exact association route and private WebP headers", async () => {
+    const open = vi.fn<OperatorMediaCall>().mockResolvedValue(media());
+    const value = req();
+    const result = await invokeMedia(open, value);
+    expect(open).toHaveBeenCalledWith(
+      `feedback/${feedbackId}/images/${itemId}/display`,
+      null,
+      value.signal,
+    );
+    expect(result.status).toBe(200);
+    expect(result.headers.get("content-type")).toBe("image/webp");
+    expect(result.headers.get("cache-control")).toBe("private, no-store");
+    expect(result.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(result.headers.get("cross-origin-resource-policy")).toBe(
+      "same-origin",
+    );
+    expect((await result.arrayBuffer()).byteLength).toBe(4);
+  });
+  it("rejects unexpected media types instead of exposing other bytes", async () => {
+    const open = vi
+      .fn<OperatorMediaCall>()
+      .mockResolvedValue(media("video/mp4"));
+    expect((await invokeMedia(open, req())).status).toBe(502);
+  });
+});

@@ -683,6 +683,13 @@ const articleClientImports: ReadonlyMap<
 > = new Map(
   (
     Object.entries({
+      "features/settings/feedback-upload-session.ts": {
+        "feedback-client": ["feedbackImageLimits"],
+        "work-publishing-client": ["publishingClient"],
+      },
+      "features/settings/feedback-form.tsx": {
+        "feedback-client": ["feedbackClient", "feedbackImageLimits"],
+      },
       "features/editorial-content/article-authoring/use-article-draft-creation.ts":
         {
           "author-community-client": ["authorClient"],
@@ -985,6 +992,7 @@ const isForbiddenServerReference = (specifier: string): boolean => {
 };
 
 const allowedClientContractTypes = new Set([
+  "SubmitFeedbackRequest",
   "MentionReference",
   "NotificationPage",
   "NotificationItem",

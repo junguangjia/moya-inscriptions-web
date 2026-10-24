@@ -21,6 +21,7 @@ import type {
 export type {
   AccountCapacityClass,
   OperatorAccountCapacity,
+  OperatorFeedbackPage,
   OperatorPublishingJob,
   OperatorPublishingJobPage,
   OperatorSubmissionMedia,
