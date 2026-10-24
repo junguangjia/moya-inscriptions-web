@@ -1749,3 +1749,22 @@ test("pre-push input rejects invalid UTF-8 ref names before remote access", (t) 
     assert.equal(result.stderr, "");
   }
 });
+
+// Reviewed synthetic values only. No live configuration or credential access.
+test("minified runtime operands and exact UI copy pass while concrete literals remain blocked", () => {
+  const fakeValue = ["Opaque", "Fixture", "Material", "123456789"].join("");
+  for (const code of [
+    "if(x.token!==e&&ready){}",
+    "if(password===s?yes:no){}",
+    'const hints={AUTH_INVALID_PASSWORD:"密码需要 6–20 个字符，包含大写字母和数字。"};',
+  ])
+    assert.deepEqual(categories(code, "generated.js"), []);
+  const literal = JSON.stringify(fakeValue);
+  for (const code of [
+    ["const", "password", "=", literal, ";"].join(" "),
+    ["if(token", "===", literal, "){}"].join(""),
+    ["const hints={AUTH_INVALID_PASSWORD", ":", literal, "};"].join(""),
+    ["const cloud={AWS_SECRET_ACCESS_KEY", ":", literal, "};"].join(""),
+  ])
+    assert.ok(categories(code, "generated.js").includes("CREDENTIAL_LITERAL"));
+});
