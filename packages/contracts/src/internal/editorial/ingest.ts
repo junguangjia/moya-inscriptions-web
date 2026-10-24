@@ -156,8 +156,8 @@ export type EditorialMediaIngestRequest = z.infer<
 >;
 
 /**
- * The registered media and the facts the server derived. A reuse without
- * storage I/O reports the doc's own registered facts and no MD5.
+ * The registered media and the facts the server derived. A reuse, which
+ * reads no object, reports the doc's own registered facts and no MD5.
  */
 export const editorialMediaIngestCompleteResultSchema = z
   .strictObject({

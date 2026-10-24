@@ -943,7 +943,12 @@ const recordCatalogRenderBacklog = async (
  * The Catalog render backlog for the later pacing (catalog-scale-v1 W9; an
  * internal read, no contract yet): the per-tier counts the last sync pass
  * recorded and when (null before the first), and the base `catalog_render`
- * jobs queued and running now. A missing state row throws.
+ * jobs queued and running now. A missing state row throws. Pacing reads
+ * every tier as images still to render, so a recorded count with a tier that
+ * is missing or not a safe non-negative integer (corruption), or with a key
+ * that is no tier this build knows (a newer worker's tier it would drop), is
+ * reported as never counted (both null), which stops a wave; it is never
+ * read as 0.
  */
 export const readCatalogRenderBacklog = async (
   pool: Pick<Pool, "query">,
@@ -969,23 +974,24 @@ export const readCatalogRenderBacklog = async (
     )
   ).rows[0];
   if (row === undefined) throw new CatalogReconcileStateMissingError();
-  const tiers = row.render_backlog;
+  const recorded = row.render_backlog;
+  // Exactly the known tiers: as many keys, each of them counted below.
+  const counts =
+    recorded === null ||
+    Object.keys(recorded).length !== CATALOG_RENDER_TIERS.length
+      ? null
+      : CATALOG_RENDER_TIERS.map((tier) => [tier, recorded[tier]] as const);
+  const counted =
+    counts !== null &&
+    counts.every(
+      ([, count]) =>
+        typeof count === "number" && Number.isSafeInteger(count) && count >= 0,
+    );
   return {
-    tiers:
-      tiers === null
-        ? null
-        : (Object.fromEntries(
-            CATALOG_RENDER_TIERS.map((tier) => {
-              const count = tiers[tier];
-              return [
-                tier,
-                typeof count === "number" && Number.isSafeInteger(count)
-                  ? count
-                  : 0,
-              ];
-            }),
-          ) as CatalogRenderBacklog),
-    countedAt: row.render_backlog_at,
+    tiers: counted
+      ? (Object.fromEntries(counts) as CatalogRenderBacklog)
+      : null,
+    countedAt: counted ? row.render_backlog_at : null,
     queued: row.queued,
     running: row.running,
   };

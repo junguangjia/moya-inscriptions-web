@@ -506,11 +506,14 @@ const registeredMatches = (media, intent) =>
  * are absent ({fallback: true}). A terminal failure after a PUT, in this run
  * or the staged run resumeStaged continues (start included), is final and
  * abandons the staging key; a retryable one keeps it, and resumeStaged then
- * skips the PUT after start. privacyCheck, when given, receives the signed
- * URL (for its bucket origin) and the key of each new registration; only its
- * status string is returned. Every answer but a fallback carries metrics:
- * the bytes, each PUT's milliseconds and status, and each complete phase's
- * milliseconds (numbers only, for the canary's record). ownsStaging, when
+ * skips the PUT after start. A start that finds the mediaId registered after
+ * such a PUT reuses the doc and abandons the key first (best effort), as the
+ * Admin's complete deletes it on a reuse. privacyCheck, when given, receives
+ * the signed URL (for its bucket origin) and the key of each new
+ * registration; only its status string is returned. Every answer but a
+ * fallback carries metrics: the bytes, each PUT's milliseconds and status,
+ * and each complete phase's milliseconds (numbers only, for the canary's
+ * record). ownsStaging, when
  * given, is the caller's record of the staging id an earlier run may have
  * written under (the Admin derives it from the caller): a grant for another
  * id is another credential's, so the item stops, final, with
@@ -649,8 +652,22 @@ async function ingestDirectRun({
       stagingCleared: cleared,
     };
   };
+  // A doc registered meanwhile (the relay, another credential) is reused.
+  // Bytes this item may have staged, in this run or the one resumed, are
+  // never copied, so the caller's own staging key is abandoned first;
+  // best effort, the staging lifecycle is the backstop.
+  const reuse = async (media) => {
+    if (putBegan && !aborted(signal))
+      await control(
+        MEDIA_INGEST_ROUTES.abandon,
+        { intent },
+        editorialMediaIngestAbandonResultSchema,
+        2,
+      );
+    return registered(media, true, null);
+  };
   // start first, also on resume: a doc registered meanwhile is reused without
-  // any storage I/O, and a 404 means the routes are absent.
+  // a PUT or complete, and a 404 means the routes are absent.
   const first = await begin();
   if (!first.ok)
     return first.httpStatus === 404
@@ -658,8 +675,7 @@ async function ingestDirectRun({
       : ingestRetryable(first)
         ? first
         : giveUp(first);
-  if (first.result.state === "registered")
-    return registered(first.result.media, true, null);
+  if (first.result.state === "registered") return reuse(first.result.media);
   grant = first.result;
   for (;;) {
     if (!staged) {
@@ -679,7 +695,7 @@ async function ingestDirectRun({
               ? started
               : giveUp(started);
         if (started.result.state === "registered")
-          return registered(started.result.media, true, null);
+          return reuse(started.result.media);
         grant = started.result;
       }
       if (aborted(signal)) return failed("TRANSPORT_UNCERTAIN", true);

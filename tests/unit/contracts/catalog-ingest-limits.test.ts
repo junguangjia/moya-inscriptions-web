@@ -643,6 +643,54 @@ describe("Catalog render backlog contract (I9)", () => {
     }
   });
 
+  it("reports a count with a tier that is not a whole number of at least 0 as never counted, never as 0", async () => {
+    const countedAt = new Date("2026-10-23T12:00:00.000Z");
+    const read = (render_backlog: unknown) =>
+      readCatalogRenderBacklog({
+        query: async () => ({
+          rows: [
+            {
+              render_backlog,
+              render_backlog_at: countedAt,
+              queued: 6,
+              running: 1,
+            },
+          ],
+        }),
+      } as unknown as Parameters<typeof readCatalogRenderBacklog>[0]);
+    const whole = { t0: 0, t1: 2, t2: 3, t3: 4, t4: 5 };
+    expect(await read(whole)).toEqual({
+      tiers: whole,
+      countedAt,
+      queued: 6,
+      running: 1,
+    });
+    const missing: Record<string, unknown> = { ...whole };
+    delete missing.t2;
+    for (const recorded of [
+      { ...whole, t2: -1 },
+      { ...whole, t2: 1.5 },
+      { ...whole, t2: "3" },
+      { ...whole, t2: null },
+      { ...whole, t2: 2 ** 53 },
+      { ...whole, t2: { images: 3 } },
+      missing,
+      [0, 2, 3, 4, 5],
+    ]) {
+      const report = await read(recorded);
+      expect(report, JSON.stringify(recorded)).toEqual({
+        tiers: null,
+        countedAt: null,
+        queued: 6,
+        running: 1,
+      });
+      // On the wire it is the contract's "never counted", which stops a wave.
+      expect(
+        catalogRenderBacklogSchema.parse(JSON.parse(JSON.stringify(report))),
+      ).toMatchObject({ tiers: null, countedAt: null });
+    }
+  });
+
   it("names exactly the App's render tiers", () => {
     expect(
       Object.keys(catalogRenderBacklogSchema.shape.tiers.unwrap().shape),

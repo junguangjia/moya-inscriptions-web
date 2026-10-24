@@ -1811,6 +1811,49 @@ test("a backlog the Admin cannot report, or one never counted, stops the wave be
     });
 });
 
+test("a count with a tier that is not a whole number, or a tier this build does not know, reaches the gate as never counted and stops the wave before its prepare", async (t) => {
+  // The App's own reader (built), so the gate sees what the Backend answers
+  // for such a row: never as 0, which would let the wave through.
+  const { readCatalogRenderBacklog } =
+    await import("../../../services/community-postgres/dist/index.js");
+  const low = { t0: 0, t1: 0, t2: 100, t3: 0, t4: 0 };
+  const missing = { ...low };
+  delete missing.t4;
+  for (const [name, recorded] of [
+    ["a negative tier", { ...low, t1: -1 }],
+    ["a fractional tier", { ...low, t2: 0.5 }],
+    ["a tier as text", { ...low, t3: "0" }],
+    ["a missing tier", missing],
+    // A newer worker's tier: dropping it would undercount the backlog.
+    ["a tier this build does not know", { ...low, t5: 500 }],
+  ])
+    await t.test(name, async (t) => {
+      const read = await readCatalogRenderBacklog({
+        query: async () => ({
+          rows: [
+            {
+              render_backlog: recorded,
+              render_backlog_at: new Date(Date.now() - 60_000),
+              queued: 0,
+              running: 0,
+            },
+          ],
+        }),
+      });
+      // As the Backend serializes it and the Admin passes it on: nothing is
+      // prepared since a count it does not have.
+      const result = { ...JSON.parse(JSON.stringify(read)), preparedSince: 0 };
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }) =>
+        route === RENDER_BACKLOG ? { json: { ok: true, result } } : undefined,
+      );
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, { code: "RENDER_BACKLOG_NOT_COUNTED" });
+      assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+    });
+});
+
 test("a backlog counted over an hour ago, or ahead of this clock beyond skew, stops the wave before its prepare", async (t) => {
   // The worker stopped counting while its last count stays under the limit,
   // and the queue (capped at 300) cannot show what built up since.

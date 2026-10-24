@@ -377,7 +377,10 @@ journal is not paced again. Before any prepare, the command stops with:
   Backend without its backlog reader or a store outage, or an answer outside the
   contract;
 - `RENDER_BACKLOG_INVALID`: the Admin's answer is outside the contract;
-- `RENDER_BACKLOG_NOT_COUNTED`: the worker has never counted the backlog;
+- `RENDER_BACKLOG_NOT_COUNTED`: the worker has never counted the backlog, or its
+  last count holds a tier that is missing or not a whole number of at least 0,
+  which the Backend reports as never counted (never as 0); check the media
+  worker's Catalog sync;
 - `RENDER_BACKLOG_STALE`: the count is more than 60 minutes old, or more than 5
   minutes ahead of this machine's clock. Check the media worker and its Catalog
   sync, and the machine's clock.

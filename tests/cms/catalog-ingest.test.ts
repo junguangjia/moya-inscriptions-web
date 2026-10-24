@@ -864,7 +864,8 @@ describe("Catalog ingest through real Payload and a synthetic COS", () => {
       prefix: `editorial/${hex(catalogA)}`,
       filename: `${hex(intent.mediaId)}-${intent.sha256}.jpg`,
     });
-    // Idempotent: the same projection, no storage request at all.
+    // Idempotent: the same projection; nothing is read or copied, and the
+    // caller's own staging key (already gone) is removed again.
     const replayMark = cos.requests.length;
     const replay = await call("complete", { intent });
     expect(replay.status).toBe(200);
@@ -877,7 +878,12 @@ describe("Catalog ingest through real Payload and a synthetic COS", () => {
       width: 96,
       height: 64,
     });
-    expect(since(replayMark)).toEqual([]);
+    expect(
+      since(replayMark).map(({ kind, key }) => [
+        kind,
+        key === staging ? "staging" : key,
+      ]),
+    ).toEqual([["delete", "staging"]]);
     const registered = await call("start", intent);
     expect(registered.body.result).toEqual({
       state: "registered",
@@ -1482,6 +1488,67 @@ describe("Catalog ingest through real Payload and a synthetic COS", () => {
     });
     expect(cos.objects.has(theirs)).toBe(true);
     expect((await call("complete", { intent }, scopedToken)).status).toBe(200);
+  });
+
+  it("removes the caller's own staging object when complete reuses another path's record, and still answers reused", async () => {
+    // Two actors staged the same original; the first one registers it.
+    const intent = intentFor("reuse-staging", jpeg);
+    const own = await started(intent, jpeg);
+    const theirs = await started(intent, jpeg, call, scopedToken);
+    const first = await call("complete", { intent });
+    expect(first.status).toBe(200);
+    expect(cos.objects.has(own)).toBe(false);
+    expect(cos.objects.has(theirs)).toBe(true);
+    const before = logged.length;
+    const mark = cos.requests.length;
+    const reused = await call("complete", { intent }, scopedToken);
+    expect(reused.status).toBe(200);
+    expect(reused.body.result).toEqual({
+      media: first.body.result!.media,
+      reused: true,
+      validatedBytes: jpeg.length,
+      validatedSha256: intent.sha256,
+      validatedMd5: null,
+      width: 96,
+      height: 64,
+    });
+    // Only the caller's own key is removed: nothing is read or copied, and
+    // no Payload transaction spans the request.
+    expect(
+      since(mark).map(({ kind, key, transactions }) => [
+        kind,
+        key === theirs ? "theirs" : key,
+        transactions,
+      ]),
+    ).toEqual([["delete", "theirs", 0]]);
+    expect(cos.objects.has(theirs)).toBe(false);
+    expect(logged.slice(before)).toEqual([]);
+    expect(editorialKeysFor(intent.mediaId)).toEqual([finalKey(intent)]);
+    expect(await mediaCount(intent.mediaId)).toBe(1);
+
+    // A delete that fails, as after a registration, is logged and the reuse
+    // still answered: abandon and the staging lifecycle are the backstops.
+    const failing = intentFor("reuse-staging-failure", jpeg);
+    await started(failing, jpeg);
+    const kept = await started(failing, jpeg, call, scopedToken);
+    expect((await call("complete", { intent: failing })).status).toBe(200);
+    cos.before = (request) => {
+      if (request.kind === "delete")
+        throw new Error("synthetic delete failure");
+    };
+    const failureMark = logged.length;
+    const answered = await call("complete", { intent: failing }, scopedToken);
+    expect(answered.status).toBe(200);
+    expect(answered.body.result).toMatchObject({ reused: true });
+    expect(cos.objects.has(kept)).toBe(true);
+    expect(logged.slice(failureMark)).toEqual([
+      [{ category: "EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED" }],
+    ]);
+    cos.before = undefined;
+    expect(
+      (await call("abandon", { intent: failing }, scopedToken)).body.result,
+    ).toMatchObject({ state: "abandoned" });
+    expect(cos.objects.has(kept)).toBe(false);
   });
 
   it("bounds outstanding ingests per actor and declared bytes per hour", async () => {

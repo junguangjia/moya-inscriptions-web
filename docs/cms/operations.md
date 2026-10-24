@@ -110,6 +110,13 @@ API 写法（`x-amz-copy-source`、`x-amz-copy-source-if-match`、`x-amz-metadat
 `INGEST_FINAL_INVALID`。预演由 Owner 在 CVM 上用 Admin 自己的代码运行（`apps/admin/scripts/catalog-ingest-probes.ts`，步骤见
 [production](../../infra/production/README.md)）。
 
+`CMS_CATALOG_INGEST_SERVER_SHA256=off` 时 `complete`
+不计算任何哈希，直接把客户端声明的 SHA-256 登记为内容寻址键：`editorial/`
+对象键和媒体记录都带这个值，字节只核对暂存 ETag（即正文的 MD5）、图像文件头和结尾。声明的 SHA-256 与字节不符时，要到 worker 渲染这张原图时才发现（`source_hash_mismatch`，不发布），而此时该 mediaId 和它的
+`editorial/` 对象已被占用：媒体删除已禁用，Admin 也不能删除
+`editorial/`。因此保持
+`on`，除非 S0 检查表明 Admin 的 COS 主机解析到公网地址，并且 Owner 接受这一风险。
+
 ```sh
 node scripts/editorial/direct-ingest.mjs --manifest <PROTECTED_MANIFEST>
 node scripts/editorial/direct-ingest.mjs --manifest <PROTECTED_MANIFEST> --execute --config <PROTECTED_CONFIG> --state <PROTECTED_STATE>
@@ -117,9 +124,14 @@ node scripts/editorial/direct-ingest.mjs --manifest <PROTECTED_MANIFEST> --aband
 ```
 
 清单为 `{version: 1, batchId, items}`，最多 10000 项；每项含
-`key`、`file`（本地路径，拒绝 URL 和符号链接）、`mimeType`、`catalogId`、`mediaId`、`sha256`、`bytes`、`width`、`height`、`alt`，以及可选的
-`rights`、`orderConfidence`。`width`、`height` 取自打包阶段的完整本地解码（Sharp
-`metadata()` 加 `stats()`，`limitInputPixels`
+`key`、`file`（清单所在目录之内的相对路径：URL 以 `MEDIA_INPUT_INVALID`
+拒绝；绝对路径、跳出该目录的 `..`
+和经过符号链接的目录在读取任何文件、发出任何请求之前以 `MEDIA_PATH_INVALID`
+拒绝整批，目录按真实路径比对，名称须与磁盘一致（包括大小写和 Unicode 规范化形式 NFC/NFD，打包时按
+`readdir`
+返回的原样写目录名）；文件本身不能是符号链接）、`mimeType`、`catalogId`、`mediaId`、`sha256`、`bytes`、`width`、`height`、`alt`，以及可选的
+`rights`、`orderConfidence`。读取原图时只打开检查时确定的真实目录中的文件：macOS 上整条路径都不跟随符号链接；其他系统在打开后核对目录的真实路径和文件的设备号与 inode，能写批次目录并不停来回替换其中目录的人仍有很小的机会读到目录外的文件（其大小、SHA-256 和文件头还须与清单一致），因此批次目录只应由运行者本人可写。`width`、`height`
+取自打包阶段的完整本地解码（Sharp `metadata()` 加 `stats()`，`limitInputPixels`
 120000000），服务端会与读到的尺寸比对；CLI 清单中二者必填，缺少时以
 `MEDIA_INPUT_INVALID`
 拒绝。配置文件须为 0600：`{baseURL, apiKey 或 sessionToken, cosHostSuffix}`，可选
@@ -131,8 +143,11 @@ node scripts/editorial/direct-ingest.mjs --manifest <PROTECTED_MANIFEST> --aband
 默认 dry-run 只校验本地文件，不发请求。`--execute` 时最多 4 个 PUT、2 个
 `complete` 同时进行（约 4×128 MiB 内存）；状态文件为 0600
 JSONL，已登记项续接时跳过，上次已暂存的项续接时只调 `start` 和
-`complete`，不再重传。`start`、带 forbid-overwrite 的 PUT 与 `complete`
-都可安全重复：502、504 或无响应按不确定处理并重试（`complete`
+`complete`，不再重传。该 mediaId 若已由续传通道或别的凭据登记，则复用该记录：`complete`
+复用时服务端删除调用者自己的暂存对象；PUT 之后（含续接）`start`
+就答已登记时，客户端先 `abandon`
+自己的暂存键再复用（尽力而为，生命周期规则兜底）。`start`、带 forbid-overwrite 的 PUT 与
+`complete` 都可安全重复：502、504 或无响应按不确定处理并重试（`complete`
 等待 75 秒，超过 nginx 的 60 秒，服务端期限为 45 秒）；PUT 遇 403 或签名临近过期时重新签名，遇 409 说明已暂存，直接
 `complete`。最终失败时调用 `abandon`
 删除暂存对象；可重试的失败（包括 Admin 直传配额的 `INGEST_QUOTA_EXCEEDED` 和

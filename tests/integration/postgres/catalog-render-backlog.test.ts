@@ -41,6 +41,9 @@ import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
  * - After a pass: its per-tier counts and time, and the base Catalog renders
  *   queued and running now (not a block render, a finished one or another
  *   kind), as the contract.
+ * - A recorded count with a tier that is not a whole number of at least 0,
+ *   or with a key that is no known tier: reported as never counted, never
+ *   as 0.
  * Content is synthetic; no object store, CMS or network.
  */
 
@@ -216,6 +219,28 @@ describe("Catalog render-backlog route on PostgreSQL (I9)", () => {
     // One read, through the READ ONLY wrapper, and nothing changed.
     expect(statements.length).toBe(reads + 1);
     expect(await readRows()).toEqual(before);
+  });
+
+  it("reports a count it cannot read as whole tiers as never counted, never as 0", async () => {
+    for (const recorded of [
+      { t0: 3, t1: -1, t2: 40, t3: 1, t4: 1_200 },
+      { t0: 3, t1: 2, t2: 0.5, t3: 1, t4: 1_200 },
+      { t0: 3, t1: 2, t2: 40, t3: "1", t4: 1_200 },
+      { t0: 3, t1: 2, t2: 40, t4: 1_200 },
+      { t0: 3, t1: 2, t2: 40, t3: 1, t4: 1_200, t5: 500 },
+    ]) {
+      await fixture.setup.query(catalogRenderBacklogWriteSql, [
+        JSON.stringify(recorded),
+        countedAt,
+      ]);
+      const before = await readRows();
+      const answer = await backlog();
+      expect(answer.status, JSON.stringify(recorded)).toBe(200);
+      expect(
+        catalogRenderBacklogSchema.parse(await answer.json()),
+      ).toMatchObject({ tiers: null, countedAt: null });
+      expect(await readRows()).toEqual(before);
+    }
   });
 
   it("runs the App role's read in a transaction that refuses writes", async () => {

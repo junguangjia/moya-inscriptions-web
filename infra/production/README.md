@@ -645,6 +645,17 @@ relay for files within 40 MiB and refuse larger ones with
 `MEDIA_INGEST_UNAVAILABLE`. The release ships with the switch off and needs an
 Admin built on the PR #320 base; the live off-main Admin cannot carry it.
 
+`CMS_CATALOG_INGEST_SERVER_SHA256=off` hashes nothing at `complete`: it
+registers the client's declared SHA-256 as the content-addressed key, so the
+`editorial/` object key and the media doc carry the client's value, and only the
+staging ETag (the body's MD5), the image header and the tail are checked against
+the bytes. A declared SHA-256 that does not match the bytes is caught only when
+the worker renders the original (`source_hash_mismatch`; nothing is published),
+and by then the mediaId and its `editorial/` object stay occupied: media delete
+is disabled and the Admin cannot delete `editorial/`. Keep the setting `on`
+unless the S0 check (step 1) shows that the Admin's COS host resolves to a
+public address and the Owner accepts that risk.
+
 Increment 2 also paces Catalog prepares (decisions D4 and D5). The Backend gains
 a read-only operator route,
 `GET /internal/community/catalog-delivery/render-backlog` (operator credential;
@@ -684,9 +695,10 @@ in the environment, as the Admin's own code, while the switch is still off.
      worker's Catalog source host resolve to. This is a hard gate for
      server-side hashing (decision D9): an intranet address lets `complete` read
      and hash the staging object (`CMS_CATALOG_INGEST_SERVER_SHA256=on`, the
-     default); a public one means MD5/ETag checks only at `complete`, with the
-     SHA-256 check left to the worker at render time
-     (`CMS_CATALOG_INGEST_SERVER_SHA256=off`), which step 3 must also clear;
+     default, which then stays on); only a public one allows MD5/ETag checks at
+     `complete`, with the SHA-256 check left to the worker at render time
+     (`CMS_CATALOG_INGEST_SERVER_SHA256=off`), and only once the Owner accepts
+     the risk described above; step 3 must also clear it;
    - whether Codex's runtime may reach the public COS API host.
 2. The CAM statement (option 1, Codex and the CLI only), always the L1 form
    first, since step 3 tests tagging with it:

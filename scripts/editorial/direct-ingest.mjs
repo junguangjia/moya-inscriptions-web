@@ -9,7 +9,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { constants } from "node:fs";
-import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  unlink,
+} from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -437,12 +446,27 @@ export function createAdminSend(config, { fetchImpl = fetch } = {}) {
 }
 
 /**
+ * A path that stays inside the directory it is relative to: not absolute,
+ * and no ".." step that leaves it, nested ones included (normalize folds
+ * "a/../../b" to "../b").
+ */
+const insideDirectory = (file) => {
+  const normal = path.normalize(file);
+  return (
+    !path.isAbsolute(normal) &&
+    normal !== ".." &&
+    !normal.startsWith(`..${path.sep}`)
+  );
+};
+
+/**
  * A batch manifest: {version: 1, batchId, items}. Each item names a local
  * JPEG, PNG or WebP file and its exact bytes and SHA-256, the Catalog and
  * Media identity, alt and the optional rights and orderConfidence, and the
  * required width and height of the package's full local decode, which
  * complete compares with what the Admin reads (the start schema keeps them
- * optional for other clients). No URL is accepted.
+ * optional for other clients). No URL is accepted, and a file path outside
+ * the manifest's directory is refused (MEDIA_PATH_INVALID).
  */
 export function validateIngestManifest(manifest) {
   if (
@@ -484,6 +508,7 @@ export function validateIngestManifest(manifest) {
       }).success
     )
       throwCode("MEDIA_INPUT_INVALID");
+    if (!insideDirectory(item.file)) throwCode("MEDIA_PATH_INVALID");
   }
   return manifest;
 }
@@ -546,6 +571,37 @@ function localPath(root, value) {
   return path.resolve(root, value);
 }
 
+/**
+ * prepare, with each item's directory confined to the batch directory: the
+ * real path (no symlink) of every item's directory must be the batch
+ * directory's own real path joined with the item's relative directory. A
+ * symlinked directory on the way refuses the whole batch
+ * (MEDIA_PATH_INVALID) before any file is read or request sent; a directory
+ * that does not exist is left to the item's read (MEDIA_FILE_UNREADABLE).
+ * readOriginal opens each file in that real directory (openOriginal), never
+ * through the batch directory's name again.
+ */
+async function prepareConfined(manifest, directory) {
+  const items = prepare(manifest, directory);
+  const root = await realpath(directory).catch(() =>
+    throwCode("MEDIA_FILE_UNREADABLE"),
+  );
+  const parents = new Map();
+  for (const item of items) {
+    const parent = path.dirname(item.filePath);
+    item.realParent = path.join(
+      root,
+      path.relative(path.resolve(directory), parent),
+    );
+    parents.set(parent, item.realParent);
+  }
+  for (const [parent, expected] of parents) {
+    const real = await realpath(parent).catch(() => null);
+    if (real !== null && real !== expected) throwCode("MEDIA_PATH_INVALID");
+  }
+  return items;
+}
+
 const MAGIC = {
   "image/jpeg": (bytes) =>
     bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff,
@@ -558,19 +614,72 @@ const MAGIC = {
     Buffer.from(bytes.subarray(8, 12)).toString("latin1") === "WEBP",
 };
 
-/** The item's exact local bytes (no symlink), or MEDIA_SOURCE_CHANGED. */
-async function readOriginal(prepared) {
+/**
+ * Flags that open an original without following a symlink. On macOS,
+ * O_NOFOLLOW_ANY (0x20000000 in <sys/fcntl.h>; Node's fs.constants lacks it,
+ * and open fails with EINVAL if O_NOFOLLOW is added) refuses a symlink in
+ * any component, so a directory swapped for a link while the file is opened
+ * cannot redirect the open. Elsewhere only the final component is
+ * O_NOFOLLOW, and openOriginal's checks after the open stand in.
+ */
+const ORIGINAL_OPEN_FLAGS =
+  process.platform === "darwin"
+    ? constants.O_RDONLY | 0x20000000
+    : constants.O_RDONLY | constants.O_NOFOLLOW;
+
+/**
+ * The original `name` opened in its confined directory `realParent` (the
+ * real path prepareConfined fixed), as {handle, info}, before any byte is
+ * read. After the open the directory must still be its own real path, and
+ * the path must still name the opened file (same device and inode), or
+ * MEDIA_PATH_INVALID: a directory left as a link is caught, and one swapped
+ * for a link only while the file was opened is caught unless it is swapped
+ * back and forth again before the second check (on macOS the open itself
+ * refuses it). A failed open is MEDIA_PATH_INVALID for a link met on the
+ * way (ELOOP while the file itself is no link) and MEDIA_FILE_UNREADABLE
+ * otherwise. `openFile` and `flags` are for tests.
+ */
+export async function openOriginal(
+  realParent,
+  name,
+  { openFile = open, flags = ORIGINAL_OPEN_FLAGS } = {},
+) {
+  const file = path.join(realParent, name);
   let handle;
   try {
-    handle = await open(
-      prepared.filePath,
-      constants.O_RDONLY | constants.O_NOFOLLOW,
+    handle = await openFile(file, flags);
+  } catch (error) {
+    const link = await lstat(file).then(
+      (info) => info.isSymbolicLink(),
+      () => false,
     );
-  } catch {
-    throwCode("MEDIA_FILE_UNREADABLE");
+    throwCode(
+      error?.code === "ELOOP" && !link
+        ? "MEDIA_PATH_INVALID"
+        : "MEDIA_FILE_UNREADABLE",
+    );
   }
   try {
+    if ((await realpath(realParent).catch(() => null)) !== realParent)
+      throwCode("MEDIA_PATH_INVALID");
+    const named = await lstat(file).catch(() => null);
     const info = await handle.stat();
+    if (named === null || named.dev !== info.dev || named.ino !== info.ino)
+      throwCode("MEDIA_PATH_INVALID");
+    return { handle, info };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+/** The item's exact local bytes (openOriginal), or MEDIA_SOURCE_CHANGED. */
+async function readOriginal(prepared) {
+  const { handle, info } = await openOriginal(
+    prepared.realParent,
+    path.basename(prepared.filePath),
+  );
+  try {
     const { file } = prepared.upload;
     if (
       !info.isFile() ||
@@ -755,7 +864,7 @@ export async function runDirectIngest({
   bounded(attempts, 1, 3, "ATTEMPTS_INVALID");
   bounded(budgetMs, 1_000, 86_400_000, "BUDGET_INVALID");
   bounded(retryDelayMs, 0, 60_000, "RETRY_DELAY_INVALID");
-  const prepared = prepare(manifest, directory);
+  const prepared = await prepareConfined(manifest, directory);
   if (dryRun) {
     let bytes = 0,
       overRelayLimit = 0;
@@ -1088,7 +1197,7 @@ export async function abandonIngest({
   send,
   signal,
 }) {
-  const prepared = prepare(manifest, directory);
+  const prepared = await prepareConfined(manifest, directory);
   if (typeof send !== "function" || typeof stateFile !== "string")
     throwCode("TRANSPORT_REQUIRED");
   return withStateLock(stateFile, async () => {

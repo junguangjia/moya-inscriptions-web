@@ -1,11 +1,20 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes, randomFillSync } from "node:crypto";
+import { constants, renameSync, symlinkSync, unlinkSync } from "node:fs";
 import {
   chmod,
+  copyFile,
+  type FileHandle,
+  mkdir,
   mkdtemp,
+  open,
   readFile,
+  realpath,
+  rename,
   rm,
   stat,
+  symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import {
@@ -83,6 +92,18 @@ const ingest = (await import(
     fetchImpl?: typeof fetch;
   }) => CosClient;
   validateIngestManifest: (manifest: unknown) => Manifest;
+  openOriginal: (
+    realParent: string,
+    name: string,
+    options?: {
+      openFile?: (file: string, flags: number) => Promise<FileHandle>;
+      /** undefined: the CLI's own flags. */
+      flags?: number | undefined;
+    },
+  ) => Promise<{
+    handle: FileHandle;
+    info: Awaited<ReturnType<FileHandle["stat"]>>;
+  }>;
 };
 const upload = (await import(
   new URL("../../scripts/editorial/resumable-upload.mjs", import.meta.url).href
@@ -304,6 +325,8 @@ async function startAdmin(
         if (existing) {
           if (!matches(existing, intent))
             return refuse(409, "MEDIA_IDENTITY_CONFLICT");
+          // As the Admin: a reuse removes the caller's own staging object.
+          bucket.delete(key);
           return reply(200, {
             ok: true,
             result: {
@@ -618,6 +641,23 @@ const INGEST = {
   start: "/api/editorial/media-ingest/start",
   complete: "/api/editorial/media-ingest/complete",
   abandon: "/api/editorial/media-ingest/abandon",
+};
+/** The item registered by another path (the relay, another credential). */
+const registeredFor = (item: Json): Json => {
+  const filename = `${sha256(String(item.mediaId))}-${String(item.sha256)}.jpg`;
+  return {
+    id: 900,
+    mediaId: item.mediaId,
+    catalogId: item.catalogId,
+    objectKey: `editorial/${sha256(String(item.catalogId))}/${filename}`,
+    sha256: item.sha256,
+    mimeType: item.mimeType,
+    filesize: item.bytes,
+    filename,
+    width: item.width,
+    height: item.height,
+    alt: item.alt,
+  };
 };
 
 describe(
@@ -1020,6 +1060,72 @@ describe(
       ).toEqual([INGEST.start, INGEST.abandon]);
       expect(cosPuts(context)).toHaveLength(1);
       expect(stagedKeys(context)).toBe(0);
+    });
+
+    it("abandons its own staged bytes when start finds the mediaId registered meanwhile, on resume and on a re-sign", async () => {
+      // Nothing PUT: start's reuse sends nothing else.
+      const fresh = await setup([{ key: "fresh", size: 4096 }]);
+      fresh.admin.docs.set(
+        "synthetic-ingest-fresh",
+        registeredFor(fresh.manifest.items[0]!),
+      );
+      expect(await fresh.run()).toMatchObject({ registered: 1, reused: 1 });
+      expect(adminRoutes(fresh)).toEqual([INGEST.start]);
+      expect(fresh.cos.requests).toHaveLength(0);
+
+      // Resumed: an earlier run staged the bytes, then another path
+      // registered the same original.
+      const resumed = await setup([{ key: "meanwhile", size: 8192 }], {
+        completeFaults: ["before", "before", "before", "before"],
+      });
+      expect(await resumed.run({ attempts: 1 })).toMatchObject({
+        pending: 1,
+      });
+      expect(stagedKeys(resumed)).toBe(1);
+      resumed.admin.docs.set(
+        "synthetic-ingest-meanwhile",
+        registeredFor(resumed.manifest.items[0]!),
+      );
+      const before = resumed.admin.requests.length;
+      expect(await resumed.run()).toMatchObject({
+        registered: 1,
+        reused: 1,
+        failed: 0,
+        pending: 0,
+      });
+      expect(
+        resumed.admin.requests.slice(before).map((request) => request.route),
+      ).toEqual([INGEST.start, INGEST.abandon]);
+      expect(cosPuts(resumed)).toHaveLength(1);
+      expect(stagedKeys(resumed)).toBe(0);
+
+      // Re-signed: the first PUT landed but its reply was lost, and the
+      // mediaId was registered before the re-sign.
+      let registerOnce = () => {};
+      const resigned = await setup(
+        [{ key: "resigned", size: 4096 }],
+        { mutateGrant: () => registerOnce() },
+        { loseFirstReply: true },
+      );
+      registerOnce = () => {
+        registerOnce = () => {};
+        resigned.admin.docs.set(
+          "synthetic-ingest-resigned",
+          registeredFor(resigned.manifest.items[0]!),
+        );
+      };
+      expect(await resigned.run()).toMatchObject({
+        registered: 1,
+        reused: 1,
+        failed: 0,
+      });
+      expect(resigned.cos.statuses).toEqual([0]);
+      expect(adminRoutes(resigned)).toEqual([
+        INGEST.start,
+        INGEST.start,
+        INGEST.abandon,
+      ]);
+      expect(stagedKeys(resigned)).toBe(0);
     });
 
     it("admits no new item after the Admin's ingest quota refuses one", async () => {
@@ -1686,14 +1792,21 @@ describe(
         batchId: "synthetic",
         items,
       });
-      expect(() =>
-        ingest.validateIngestManifest(manifest([item])),
-      ).not.toThrow();
+      for (const file of ["one.jpg", "sub/one.jpg", "./sub/../one.jpg"])
+        expect(
+          () => ingest.validateIngestManifest(manifest([{ ...item, file }])),
+          file,
+        ).not.toThrow();
       for (const [items, code] of [
         [
           [{ ...item, file: "https://elsewhere.test/one.jpg" }],
           "MEDIA_INPUT_INVALID",
         ],
+        // Only paths inside the manifest's directory.
+        [[{ ...item, file: "/synthetic/one.jpg" }], "MEDIA_PATH_INVALID"],
+        [[{ ...item, file: ".." }], "MEDIA_PATH_INVALID"],
+        [[{ ...item, file: "../one.jpg" }], "MEDIA_PATH_INVALID"],
+        [[{ ...item, file: "sub/../../one.jpg" }], "MEDIA_PATH_INVALID"],
         [[{ ...item, bytes: 128 * MiB + 1 }], "MEDIA_INPUT_INVALID"],
         [[{ ...item, mimeType: "image/gif" }], "MEDIA_INPUT_INVALID"],
         // width and height of the full local decode are required here.
@@ -1707,6 +1820,300 @@ describe(
         expect(() => ingest.validateIngestManifest(manifest(items))).toThrow(
           code,
         );
+    });
+
+    it("refuses an item path outside the manifest's directory before reading any file or sending any request", async () => {
+      const context = await setup([
+        { key: "inside", size: 4096 },
+        { key: "outside", size: 4096 },
+      ]);
+      // The batch is a subdirectory and the originals stay one level above
+      // it. "inside.jpg" is absent from the batch at first, so a read in item
+      // order would answer MEDIA_FILE_UNREADABLE before the escaping item.
+      const batch = join(context.directory, "batch");
+      await mkdir(join(batch, "sub"), { recursive: true });
+      const outside = context.manifest.items[1]!;
+      const refused = async () => {
+        for (const file of [
+          join(context.directory, "outside.jpg"),
+          "../outside.jpg",
+          "sub/../../outside.jpg",
+        ]) {
+          outside.file = file;
+          expect(
+            () => ingest.validateIngestManifest(context.manifest),
+            file,
+          ).toThrow("MEDIA_PATH_INVALID");
+          for (const dryRun of [true, false])
+            await expect(
+              context.run({ directory: batch, dryRun }),
+              file,
+            ).rejects.toMatchObject({ code: "MEDIA_PATH_INVALID" });
+          await expect(
+            ingest.abandonIngest({
+              manifest: context.manifest,
+              directory: batch,
+              stateFile: context.stateFile,
+              send: context.send,
+            }),
+            file,
+          ).rejects.toMatchObject({ code: "MEDIA_PATH_INVALID" });
+        }
+      };
+      await refused();
+      // Readable now: a check item by item would have registered it.
+      await copyFile(
+        join(context.directory, "inside.jpg"),
+        join(batch, "inside.jpg"),
+      );
+      await refused();
+      expect(context.admin.requests).toHaveLength(0);
+      expect(context.cos.requests).toHaveLength(0);
+      await expect(stat(context.stateFile)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      // The same original inside the batch is ingested.
+      await copyFile(
+        join(context.directory, "outside.jpg"),
+        join(batch, "sub", "outside.jpg"),
+      );
+      outside.file = "sub/outside.jpg";
+      expect(await context.run({ directory: batch })).toMatchObject({
+        registered: 2,
+        failed: 0,
+      });
+    });
+
+    it("refuses an item under a symlinked directory for the whole batch before any read", async () => {
+      const context = await setup([
+        { key: "first", size: 4096 },
+        { key: "linked", size: 4096 },
+      ]);
+      // The original sits outside the batch, reached through a symlinked
+      // directory; the file itself is no symlink.
+      const elsewhere = await mkdtemp(
+        join(tmpdir(), "direct-ingest-elsewhere-"),
+      );
+      directories.push(elsewhere);
+      await rename(
+        join(context.directory, "linked.jpg"),
+        join(elsewhere, "linked.jpg"),
+      );
+      await symlink(elsewhere, join(context.directory, "via"));
+      context.manifest.items[1]!.file = "via/linked.jpg";
+      const abandon = () =>
+        ingest.abandonIngest({
+          manifest: context.manifest,
+          directory: context.directory,
+          stateFile: context.stateFile,
+          send: context.send,
+        });
+      // "first.jpg" moved away: a read in item order would answer
+      // MEDIA_FILE_UNREADABLE first.
+      await rename(
+        join(context.directory, "first.jpg"),
+        join(context.directory, "first.away"),
+      );
+      await expect(context.run({ dryRun: true })).rejects.toMatchObject({
+        code: "MEDIA_PATH_INVALID",
+      });
+      await rename(
+        join(context.directory, "first.away"),
+        join(context.directory, "first.jpg"),
+      );
+      // Every file readable: still refused, and nothing sent or recorded.
+      for (const dryRun of [true, false])
+        await expect(context.run({ dryRun })).rejects.toMatchObject({
+          code: "MEDIA_PATH_INVALID",
+        });
+      await expect(abandon()).rejects.toMatchObject({
+        code: "MEDIA_PATH_INVALID",
+      });
+      expect(context.admin.requests).toHaveLength(0);
+      expect(context.cos.requests).toHaveLength(0);
+      await expect(stat(context.stateFile)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+
+    it("refuses an item whose directory became a symlink after the batch was checked", async () => {
+      let swap = () => {};
+      const context = await setup(
+        [
+          { key: "first", size: 4096 },
+          { key: "second", size: 4096 },
+        ],
+        { mutateGrant: () => swap() },
+      );
+      await mkdir(join(context.directory, "b"));
+      await rename(
+        join(context.directory, "second.jpg"),
+        join(context.directory, "b", "second.jpg"),
+      );
+      context.manifest.items[1]!.file = "b/second.jpg";
+      // The same bytes outside the batch, which "b" points to once the first
+      // item has started.
+      const elsewhere = await mkdtemp(
+        join(tmpdir(), "direct-ingest-elsewhere-"),
+      );
+      directories.push(elsewhere);
+      await copyFile(
+        join(context.directory, "b", "second.jpg"),
+        join(elsewhere, "second.jpg"),
+      );
+      let swapped = false;
+      swap = () => {
+        if (swapped) return;
+        swapped = true;
+        renameSync(
+          join(context.directory, "b"),
+          join(context.directory, "b-real"),
+        );
+        symlinkSync(elsewhere, join(context.directory, "b"));
+      };
+      const summary = await context.run({ concurrency: 1 });
+      expect(swapped).toBe(true);
+      expect(summary).toMatchObject({
+        registered: 1,
+        failed: 1,
+        codes: { MEDIA_PATH_INVALID: 1 },
+      });
+      expect(context.admin.stats().startCalls).toBe(1);
+      expect(context.admin.docs.has("synthetic-ingest-second")).toBe(false);
+    });
+
+    it("refuses an original whose directory is a link only while it is opened or stays one, and a linked file", async () => {
+      const base = await realpath(
+        await mkdtemp(join(tmpdir(), "direct-ingest-open-")),
+      );
+      directories.push(base);
+      const inside = join(base, "b");
+      const elsewhere = join(base, "elsewhere");
+      await mkdir(inside);
+      await mkdir(elsewhere);
+      await writeFile(join(inside, "one.jpg"), "inside");
+      await writeFile(join(elsewhere, "one.jpg"), "outside");
+      await symlink(join(inside, "one.jpg"), join(inside, "link.jpg"));
+      const toLink = async () => {
+        await rename(inside, `${inside}-real`);
+        await symlink(elsewhere, inside);
+      };
+      const back = async () => {
+        await unlink(inside);
+        await rename(`${inside}-real`, inside);
+      };
+      // "b" names "elsewhere" during the open only; whether the open itself
+      // got through is recorded.
+      const opens: string[] = [];
+      const swappedOpen = async (file: string, flags: number) => {
+        await toLink();
+        try {
+          const handle = await open(file, flags);
+          opens.push("opened");
+          return handle;
+        } catch (error) {
+          opens.push(String((error as { code?: unknown }).code));
+          throw error;
+        } finally {
+          await back();
+        }
+      };
+      // The CLI's own flags: on macOS the open itself meets the link and
+      // never reaches the outside file; elsewhere the inode check refuses it.
+      await expect(
+        ingest.openOriginal(inside, "one.jpg", { openFile: swappedOpen }),
+      ).rejects.toMatchObject({ code: "MEDIA_PATH_INVALID" });
+      expect(opens).toEqual([
+        process.platform === "darwin" ? "ELOOP" : "opened",
+      ]);
+      // Only the final component O_NOFOLLOW, as off macOS: the inode check.
+      const finalOnly = constants.O_RDONLY | constants.O_NOFOLLOW;
+      await expect(
+        ingest.openOriginal(inside, "one.jpg", {
+          openFile: swappedOpen,
+          flags: finalOnly,
+        }),
+      ).rejects.toMatchObject({ code: "MEDIA_PATH_INVALID" });
+      expect(opens.at(-1)).toBe("opened");
+      // A link that stays: the directory's real path check.
+      await toLink();
+      for (const flags of [undefined, finalOnly])
+        await expect(
+          ingest.openOriginal(inside, "one.jpg", { flags }),
+        ).rejects.toMatchObject({ code: "MEDIA_PATH_INVALID" });
+      await back();
+      for (const flags of [undefined, finalOnly]) {
+        await expect(
+          ingest.openOriginal(inside, "link.jpg", { flags }),
+        ).rejects.toMatchObject({ code: "MEDIA_FILE_UNREADABLE" });
+        await expect(
+          ingest.openOriginal(inside, "absent.jpg", { flags }),
+        ).rejects.toMatchObject({ code: "MEDIA_FILE_UNREADABLE" });
+        const { handle, info } = await ingest.openOriginal(inside, "one.jpg", {
+          flags,
+        });
+        try {
+          expect(info.isFile()).toBe(true);
+          expect((await handle.readFile()).toString()).toBe("inside");
+        } finally {
+          await handle.close();
+        }
+      }
+    });
+
+    it("reads every original where the batch was checked, even after the link naming the batch is re-pointed", async () => {
+      let repoint = () => {};
+      const context = await setup(
+        [
+          { key: "first", size: 4096 },
+          { key: "second", size: 4096 },
+        ],
+        { mutateGrant: () => repoint() },
+      );
+      // The batch is named through a link; once the first item has started,
+      // the link names a copy whose "second.jpg" holds other bytes.
+      const names = await mkdtemp(join(tmpdir(), "direct-ingest-names-"));
+      const elsewhere = await mkdtemp(
+        join(tmpdir(), "direct-ingest-elsewhere-"),
+      );
+      directories.push(names, elsewhere);
+      const link = join(names, "batch");
+      await symlink(context.directory, link);
+      await copyFile(
+        join(context.directory, "first.jpg"),
+        join(elsewhere, "first.jpg"),
+      );
+      await writeFile(join(elsewhere, "second.jpg"), original(4096));
+      let repointed = false;
+      repoint = () => {
+        if (repointed) return;
+        repointed = true;
+        unlinkSync(link);
+        symlinkSync(elsewhere, link);
+      };
+      expect(
+        await context.run({ directory: link, concurrency: 1 }),
+      ).toMatchObject({ registered: 2, failed: 0 });
+      expect(repointed).toBe(true);
+    });
+
+    it("leaves an item in a missing directory to its read, and refuses a missing batch directory", async () => {
+      const context = await setup([
+        { key: "present", size: 4096 },
+        { key: "absent", size: 4096 },
+      ]);
+      context.manifest.items[1]!.file = "missing/absent.jpg";
+      expect(await context.run()).toMatchObject({
+        registered: 1,
+        failed: 1,
+        codes: { MEDIA_FILE_UNREADABLE: 1 },
+      });
+      await expect(
+        context.run({
+          directory: join(context.directory, "gone"),
+          dryRun: true,
+        }),
+      ).rejects.toMatchObject({ code: "MEDIA_FILE_UNREADABLE" });
     });
 
     it("refuses the direct mode without a putObject, a valid suffix or within existingOnly, or with a staging owner that is no function", async () => {

@@ -712,13 +712,30 @@ export function createCatalogIngestEndpoints(options: {
     /** Charges the actor's hourly read bytes before an object is read. */
     chargeRead: (bytes: number) => void,
   ): Promise<EditorialMediaIngestCompleteResult> {
+    // (h) Best effort, after a registration or a reuse: removing a missing
+    // key is success, and abandon and the staging lifecycle are the
+    // backstops.
+    const removeStaging = async () => {
+      try {
+        await deadline.io((signal) => storage.remove(staging, signal));
+      } catch {
+        req.payload.logger.warn({
+          category: "EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED",
+        });
+      }
+    };
     // (a) A short transaction under the relay's own media lock; nothing is
-    // written to storage for a registered or conflicting mediaId.
+    // read, copied or written for a registered or conflicting mediaId. A
+    // reuse (another path registered it) never copies the caller's own
+    // staging object, so it is removed before the answer.
     const prior = await withEditorialTransaction(req, async () => {
       await lockEditorialKey(req, `media-upload-media:${intent.mediaId}`);
       return registered(req, intent);
     });
-    if (prior) return reusedResult(prior);
+    if (prior) {
+      await removeStaging();
+      return reusedResult(prior);
+    }
     const target = editorialObjectKey(
       intent.catalogId,
       intent.mediaId,
@@ -894,14 +911,8 @@ export function createCatalogIngestEndpoints(options: {
         height: verifiedFacts.height,
       });
     });
-    // (h) Best effort: abandon and the staging lifecycle are the backstops.
-    try {
-      await deadline.io((signal) => storage.remove(staging, signal));
-    } catch {
-      req.payload.logger.warn({
-        category: "EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED",
-      });
-    }
+    // (h)
+    await removeStaging();
     return outcome;
   }
 
