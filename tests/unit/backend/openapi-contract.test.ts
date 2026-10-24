@@ -4,6 +4,7 @@ import {
   analyticsJsonSchemas,
   reportingJsonSchemas,
   authJsonSchemas,
+  feedbackJsonSchemas,
   authorCommunityJsonSchemas,
   workPublishingJsonSchemas,
   articleAuthoringJsonSchemas,
@@ -156,6 +157,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/catalog-search",
         "/v1/me",
         "/v1/community/access",
+        "/v1/community/feedback",
         "/v1/community/discover",
         "/v1/community/filter-options",
         "/v1/community/content/{type}/{id}/card",
@@ -255,6 +257,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "/v1/catalog/{catalogId}/comments/{commentId}/replies",
     ]);
     const authorMethods: Record<string, string[]> = {
+      "/v1/community/feedback": ["post"],
       "/v1/community/notifications": ["get"],
       "/v1/community/notifications/read": ["post"],
       "/v1/community/notifications/stream": ["get"],
@@ -620,6 +623,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       ...reportingJsonSchemas,
       ...authorCommunityJsonSchemas,
       ...authJsonSchemas,
+      ...feedbackJsonSchemas,
       ...workPublishingJsonSchemas,
       ...articleAuthoringJsonSchemas,
       CatalogId: catalogIdJsonSchema,

@@ -20,6 +20,10 @@ import { ArticleAgentConnections } from "../editorial-content/article-authoring/
 import { useArticleAvailability } from "../editorial-content/article-authoring/article-availability";
 import { AccountSecurity } from "../auth/account-security";
 import type { AccountSecurityHandle } from "../auth/account-security";
+import {
+  SettingsFeedbackForm,
+  useSettingsFeedback,
+} from "../settings/feedback-form";
 import { useSettingsSwipe } from "../settings/use-settings-swipe";
 import styles from "../settings/settings-view.module.css";
 import { SettingsIcon } from "../settings/settings-icons";
@@ -28,7 +32,14 @@ import { feedLayoutLabels } from "../product-shell/preferences";
 import type { SettingsIconName } from "../settings/settings-icons";
 
 type Page =
-  "root" | "display" | "privacy" | "blocks" | "security" | "factor" | "reports";
+  | "root"
+  | "display"
+  | "privacy"
+  | "blocks"
+  | "security"
+  | "factor"
+  | "reports"
+  | "feedback";
 const titles: Record<Page, string> = {
   root: "设置",
   display: "外观",
@@ -37,6 +48,7 @@ const titles: Record<Page, string> = {
   security: "账号与安全",
   factor: "验证登录方式",
   reports: "我的举报与申诉",
+  feedback: "反馈与建议",
 };
 const themeLabels = {
   system: "跟随系统",
@@ -55,6 +67,7 @@ const pageIcons = {
   blocks: "ban",
   security: "shield-check",
   reports: "shield-check",
+  feedback: "mail",
 } as const;
 const privacyIcons = {
   following: "user-round-plus",
@@ -188,6 +201,7 @@ export const ProfileSettings = ({
     shell = useProductShell();
   const ownProfile = !!profile?.isOwner && profile.id === author.viewer?.id;
   const owner = ownProfile ? profile.id : null;
+  const feedback = useSettingsFeedback(owner);
   const mounted = useRef(true);
   const mutationRun = useRef(0);
   const ownerRef = useRef(owner);
@@ -275,8 +289,9 @@ export const ProfileSettings = ({
   );
   const latest = useRef({ onClose, onEdit, editRequested, signedOut });
   latest.current = { onClose, onEdit, editRequested, signedOut };
-  const dirty = JSON.stringify(saved) !== JSON.stringify(privacy);
-  const blocked = busy || securityBusy || closing;
+  const privacyDirty = JSON.stringify(saved) !== JSON.stringify(privacy);
+  const dirty = privacyDirty || feedback.dirty;
+  const blocked = busy || securityBusy || feedback.pending || closing;
   const remember = () => {
     if (scroller.current)
       scrollPositions.current[pageRef.current] = scroller.current.scrollTop;
@@ -532,7 +547,10 @@ export const ProfileSettings = ({
       );
   };
   const canBack = () =>
-    !busyRef.current && !securityBusyRef.current && !closingRef.current;
+    !busyRef.current &&
+    !securityBusyRef.current &&
+    !feedback.isPending() &&
+    !closingRef.current;
   const back = () => {
     if (canBack()) navigation.current?.back();
   };
@@ -548,7 +566,7 @@ export const ProfileSettings = ({
     setBusy(value);
   };
   const savePrivacy = async () => {
-    if (busyRef.current || !owner || !dirty) return;
+    if (busyRef.current || !owner || !privacyDirty) return;
     const account = owner,
       run = ++mutationRun.current,
       submitted = { ...privacy };
@@ -700,7 +718,7 @@ export const ProfileSettings = ({
                         {row(
                           "列表隐私",
                           "privacy",
-                          dirty ? "有未保存的更改" : undefined,
+                          privacyDirty ? "有未保存的更改" : undefined,
                         )}
                         {row("已屏蔽账户", "blocks")}
                       </div>
@@ -752,10 +770,28 @@ export const ProfileSettings = ({
                     <a className={styles.row} href="/policies/reporting">
                       <span className={styles.rowText}>举报与申诉说明</span>
                     </a>
+                    {row("反馈与建议", "feedback")}
                   </div>
                 </section>
               </>
             )}
+            {page === "feedback" &&
+              (ownProfile ? (
+                <SettingsFeedbackForm feedback={feedback} />
+              ) : (
+                <div className={styles.rows}>
+                  <a className={styles.row} href={author.signInHref}>
+                    <span className={styles.rowIcon}>
+                      <SettingsIcon name="shield-check" />
+                    </span>
+                    <span className={styles.rowText}>登录后提交反馈</span>
+                    <SettingsIcon
+                      className={styles.chevron}
+                      name="chevron-right"
+                    />
+                  </a>
+                </div>
+              ))}
             {page === "display" && (
               <>
                 <ChoiceGroup
@@ -835,13 +871,13 @@ export const ProfileSettings = ({
                   <button
                     type="button"
                     className={`${styles.action} ${styles.primary}`}
-                    disabled={busy || !dirty}
+                    disabled={busy || !privacyDirty}
                     onClick={() => void savePrivacy()}
                   >
                     {busy ? "正在保存" : "保存隐私设置"}
                   </button>
                   <p className={styles.status} role="status">
-                    {notice || (dirty ? "更改尚未保存" : "")}
+                    {notice || (privacyDirty ? "更改尚未保存" : "")}
                   </p>
                 </>
               ) : (

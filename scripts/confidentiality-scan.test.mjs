@@ -1754,9 +1754,14 @@ test("pre-push input rejects invalid UTF-8 ref names before remote access", (t) 
 test("minified runtime operands and exact UI copy pass while concrete literals remain blocked", () => {
   const fakeValue = ["Opaque", "Fixture", "Material", "123456789"].join("");
   for (const code of [
-    "if(x.token!==e&&ready){}",
-    "if(password===s?yes:no){}",
-    'const hints={AUTH_INVALID_PASSWORD:"密码需要 6–20 个字符，包含大写字母和数字。"};',
+    ["if(x.token", "!==e&&ready){}"].join(""),
+    ["if(password", "===s?yes:no){}"].join(""),
+    [
+      "const hints={AUTH_INVALID_PASSWORD",
+      ":",
+      JSON.stringify("密码需要 6–20 个字符，包含大写字母和数字。"),
+      "};",
+    ].join(""),
   ])
     assert.deepEqual(categories(code, "generated.js"), []);
   const literal = JSON.stringify(fakeValue);
@@ -1767,4 +1772,110 @@ test("minified runtime operands and exact UI copy pass while concrete literals r
     ["const cloud={AWS_SECRET_ACCESS_KEY", ":", literal, "};"].join(""),
   ])
     assert.ok(categories(code, "generated.js").includes("CREDENTIAL_LITERAL"));
+});
+
+test("generated-code exemptions reject quoted tails and continued hint expressions", () => {
+  const opaque = JSON.stringify(
+    ["Opaque", "Boundary", "Fixture", "123456789"].join(""),
+  );
+  const hint = JSON.stringify("密码需要 6–20 个字符，包含大写字母和数字。");
+  for (const code of [
+    ["const x={AUTH_INVALID_PASSWORD", ":", hint, "+", opaque, "};"].join(""),
+    ["const x={AUTH_INVALID_PASSWORD", ":", hint, "\n+", opaque, "};"].join(""),
+    ["if(token", "===runtime&&", opaque, "){}"].join(""),
+    ["if(token", "===runtime?", opaque, ":other){}"].join(""),
+    ["if(token", "===runtime&&value?", opaque, ":other){}"].join(""),
+    ["if(token", "===runtime&&(", opaque, ")){}"].join(""),
+    ["if(token", "===runtime&&( /* separator */ ", opaque, ")){}"].join(""),
+    [
+      "const x={AUTH_INVALID_PASSWORD",
+      ":",
+      hint,
+      " /* separator */ +",
+      opaque,
+      "};",
+    ].join(""),
+  ])
+    assert.ok(categories(code, "generated.js").includes("CREDENTIAL_LITERAL"));
+});
+
+test("generated syntax proof accepts runtime groups and public form-state labels", () => {
+  for (const code of [
+    ["if(value.token", "!==kind&&(node.kind===kind||node.flag)){}"].join(""),
+    ["if(value?.token", "!==kind&&(node.kind===kind||node.flag)){}"].join(""),
+    [
+      "if(value.token",
+      "===kind&&view.components.find(item=>item.type===kind)){}",
+    ].join(""),
+    [
+      "const shown=",
+      JSON.stringify("password"),
+      "===step?",
+      JSON.stringify("text"),
+      ":",
+      JSON.stringify("hidden"),
+      ";",
+    ].join(""),
+    [
+      "const shown=",
+      JSON.stringify("AUTH_INVALID_PASSWORD"),
+      "===reason&&",
+      JSON.stringify("password"),
+      ";",
+    ].join(""),
+  ])
+    assert.deepEqual(categories(code, "generated.js"), []);
+});
+
+test("generated runtime proof does not exempt string or comment lookalikes", () => {
+  const opaque = JSON.stringify(
+    ["Opaque", "Context", "Fixture", "123456789"].join(""),
+  );
+  for (const code of [
+    [
+      "const note=",
+      JSON.stringify(["token", "===runtime&&", JSON.parse(opaque)].join("")),
+      ";",
+    ].join(""),
+    ["// token", "===runtime&&", opaque].join(""),
+    ["if(value?.token", "===runtime&&( /* comment */ ", opaque, ")){}"].join(
+      "",
+    ),
+  ])
+    assert.ok(categories(code, "generated.js").includes("CREDENTIAL_LITERAL"));
+});
+
+test("unavailable bundled parser falls back conservatively", () => {
+  const literal = JSON.stringify(
+    ["Opaque", "Fallback", "Fixture", "123456789"].join(""),
+  );
+  const samples = {
+    runtime: ["if(token", "===runtime&&other){}"].join(""),
+    hint: [
+      "const x={AUTH_INVALID_PASSWORD",
+      ":",
+      JSON.stringify("密码需要 6–20 个字符，包含大写字母和数字。"),
+      "};",
+    ].join(""),
+    literal: ["const", "password", "=", literal, ";"].join(" "),
+  };
+  const script = [
+    "const original=process.binding.bind(process);",
+    'process.binding=(name)=>{if(name==="natives")throw Error("synthetic unavailable");return original(name);};',
+    "const {categories}=await import(" +
+      JSON.stringify(
+        pathToFileURL(path.join(source, "confidentiality-scan.mjs")).href,
+      ) +
+      ");",
+    "const samples=" + JSON.stringify(samples) + ";",
+    'console.log(JSON.stringify(Object.fromEntries(Object.entries(samples).map(([name,code])=>[name,categories(code,"generated.js")]))));',
+  ].join("\n");
+  const result = run(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    script,
+  ]);
+  assert.equal(result.status, 0);
+  for (const value of Object.values(JSON.parse(result.stdout)))
+    assert.ok(value.includes("CREDENTIAL_LITERAL"));
 });

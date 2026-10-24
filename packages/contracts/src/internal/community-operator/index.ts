@@ -344,3 +344,17 @@ export type {
 } from "./article-operator-schemas.ts";
 
 export * from "./reporting.ts";
+export {
+  operatorFeedbackImageSchema,
+  operatorFeedbackMediaRequestSchema,
+  operatorFeedbackQuerySchema,
+  operatorFeedbackSchema,
+  operatorFeedbackPageSchema,
+} from "./feedback-schemas.js";
+export type {
+  OperatorFeedbackImage,
+  OperatorFeedbackMediaRequest,
+  OperatorFeedbackQuery,
+  OperatorFeedback,
+  OperatorFeedbackPage,
+} from "./feedback-schemas.js";

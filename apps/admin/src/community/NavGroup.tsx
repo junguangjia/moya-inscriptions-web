@@ -35,6 +35,7 @@ const groups = [
         label: "作者文章审核",
       },
       { href: "/admin/community-moderation/settings", label: "发布设置" },
+      { href: "/admin/community-moderation/feedback", label: "用户反馈" },
       { href: "/admin/community-moderation/content", label: "作品与推荐" },
       {
         href: "/admin/community-moderation/account-capacity",

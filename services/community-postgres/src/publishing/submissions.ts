@@ -444,7 +444,7 @@ const notReadyKeys = async (
           )
         END AS ready
       FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS e(item,ordinal)
-      LEFT JOIN community.media_items i ON i.id=e.item->>'itemId'
+      LEFT JOIN community.media_items i ON i.id=e.item->>'itemId' AND i.purpose='content'
       ORDER BY e.ordinal`,
       [
         JSON.stringify(

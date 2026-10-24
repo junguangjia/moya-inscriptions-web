@@ -70,11 +70,17 @@ fabricated statement from an unrelated public account.
 
 ## Production activation checklist
 
-The existing App-role plan grants only `SELECT (restriction_key, reversed_at)`
-on `community.report_decisions` so the invoker guards on existing moderation
-writes can read restriction state. Activating case handling, private evidence
-and retention still requires the separately approved reporting-role grant plan
-and verification with that actual restricted role.
+The Owner-approved Backend App-role plan grants reads and inserts on the nine
+reporting relations and coarse-location relation, updates only the named mutable
+columns, and deletes only cases, evidence, receipts and restriction heads. Case
+deletion uses the existing retention cascades. The plan skips an absent
+migration family and refuses partial reporting families; reapply after
+migration. The trusted Backend role can read private case data to serve
+authorized requests; reporter, affected-user and operator access stay separate
+at the service boundary. Schema changes, immutable identity/audit rewrites,
+other direct deletion and public-user or Payload SQL access remain outside these
+grants. Verify the actual restricted role before activation; template
+preparation is not Production rollout.
 
 Implementation is not Production acceptance. Before separately authorized
 activation, configure the private evidence directory, an offline IP range
@@ -91,3 +97,10 @@ Task-owned database and preview only; no retained Development data. Complete
 lint, typecheck, relevant tests, builds, exact candidate CI and independent
 review. Owner visual acceptance of phone/desktop entry exposure and end-to-end
 handling precedes merge. Production changes remain separately authorized.
+
+Integration note: the unmerged reporting migration is named
+`20261025010000_reporting_appeals.sql` to avoid the `20261024020000` identifier
+already merged for settings feedback. Its SQL bytes and checksum are unchanged.
+Retained synthetic targets carrying the earlier PR-only identifier are
+preserved; acceptance uses fresh isolated databases. No deployed migration
+ledger is rewritten.

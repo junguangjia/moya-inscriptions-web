@@ -27,6 +27,7 @@ export type {
   OperatorReportReviewRequest,
   AccountCapacityClass,
   OperatorAccountCapacity,
+  OperatorFeedbackPage,
   OperatorPublishingJob,
   OperatorPublishingJobPage,
   OperatorSubmissionMedia,

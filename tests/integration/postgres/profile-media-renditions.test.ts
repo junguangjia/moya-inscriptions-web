@@ -417,6 +417,8 @@ describe("profile media renditions migration on a dedicated synthetic database",
         "20261023020000",
         "20261024010000",
         "20261024020000",
+        "20261024030000",
+        "20261025010000",
         "20261026010000",
       ]);
       await verifyCommunityMigrationLedger(pool);
@@ -433,7 +435,10 @@ describe("profile media renditions migration on a dedicated synthetic database",
         null,
         null,
       ]);
-      // Issue #326 adds only these default moderation fields to existing users.
+      // Both additive families preserve existing data and add defaults only.
+      expect(after.items.map((row) => row.purpose)).toEqual(
+        before.items.map(() => "content"),
+      );
       expect(
         after.users.map((row) => [
           row.reporting_comments_restricted,
@@ -443,6 +448,11 @@ describe("profile media renditions migration on a dedicated synthetic database",
       ).toEqual(before.users.map(() => [false, 0, 0]));
       expect({
         ...after,
+        items: after.items.map((row) =>
+          Object.fromEntries(
+            Object.entries(row).filter(([key]) => key !== "purpose"),
+          ),
+        ),
         users: after.users.map((row) =>
           Object.fromEntries(
             Object.entries(row).filter(

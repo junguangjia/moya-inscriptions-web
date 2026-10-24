@@ -77,6 +77,7 @@ describe("@moya/api server-only surface", () => {
       "DisabledCommentAnalysisPort",
       "EditorialContentReadService",
       "ExecutionFenceLostError",
+      "FeedbackService",
       "NotificationService",
       "PasswordHashBusyError",
       "PublishingOperatorService",

@@ -218,19 +218,35 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
     if (createdRole) await admin.query(`DROP ROLE ${role}`);
   });
 
-  it("grants only the two read columns needed by the invoker restriction guard", async () => {
-    const columns = await app!.query<{ name: string; readable: boolean }>(
+  it("gives the trusted Backend role reporting reads while keeping decision identity immutable", async () => {
+    // This SQL role serves both authorized private user and operator requests.
+    // User/counterparty isolation is enforced at the service boundary, not by
+    // denying the Backend the private columns it must read to handle cases.
+    const columns = await app!.query<{
+      name: string;
+      readable: boolean;
+      mutable: boolean;
+    }>(
       `SELECT attname AS name,
-         has_column_privilege(current_user, 'community.report_decisions', attname, 'SELECT') AS readable
+         has_column_privilege(current_user, 'community.report_decisions', attname, 'SELECT') AS readable,
+         has_column_privilege(current_user, 'community.report_decisions', attname, 'UPDATE') AS mutable
        FROM pg_attribute
        WHERE attrelid='community.report_decisions'::regclass AND attnum>0 AND NOT attisdropped
        ORDER BY attname`,
     );
+    expect(columns.rows.every((column) => column.readable)).toBe(true);
     expect(
       columns.rows
-        .filter((column) => column.readable)
+        .filter((column) => column.mutable)
         .map((column) => column.name),
-    ).toEqual(["restriction_key", "reversed_at"]);
+    ).toEqual([
+      "appeal_at",
+      "appeal_status",
+      "appeal_text",
+      "reason",
+      "reversed_at",
+      "review_reason",
+    ]);
     expect(
       (
         await app!.query(
@@ -241,18 +257,18 @@ describe.each(["clean", "upgrade"])("notification App-role %s", (mode) => {
         )
       ).rows,
     ).toEqual([
-      { whole_table_read: false, insert: false, update: false, delete: false },
+      { whole_table_read: true, insert: true, update: false, delete: false },
     ]);
     expect(
       (
         await app!.query(
-          "SELECT restriction_key,reversed_at FROM community.report_decisions LIMIT 0",
+          "SELECT restriction_key,reversed_at,reason,appeal_text,operator_label FROM community.report_decisions LIMIT 0",
         )
       ).rows,
     ).toEqual([]);
     await expect(
       app!.query(
-        "SELECT reason,appeal_text,operator_label FROM community.report_decisions LIMIT 0",
+        "UPDATE community.report_decisions SET operator_label=operator_label WHERE false",
       ),
     ).rejects.toMatchObject({ code: "42501" });
   });

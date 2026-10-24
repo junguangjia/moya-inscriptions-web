@@ -30,6 +30,7 @@ import {
   handleDevelopmentSignIn,
   handleDevelopmentSignOut,
 } from "../community/community-handler.js";
+import { handleFeedbackRequest } from "../community/feedback-handler.js";
 import { handleAuthorRequest } from "../community/author-handler.js";
 import { handleDevelopmentCatalogRendition } from "../community/development-catalog-rendition-handler.js";
 import type { DevelopmentCatalogRenditions } from "../community/development-catalog-rendition-handler.js";
@@ -60,6 +61,7 @@ import type {
   DirectMessageService,
   PublishingOperatorService,
   ThreadService,
+  FeedbackService,
   WorkPublishingService,
 } from "@moya/api";
 import type { HealthReadinessCheck } from "../health/health-handler.js";
@@ -108,6 +110,7 @@ export interface CommunityRouterDependencies {
   readonly discussionPort?: DiscussionPort | undefined;
   /** Operator-managed Thread routes. */
   readonly threadService?: ThreadService | undefined;
+  readonly feedbackService?: FeedbackService | undefined;
   /** Owner-only direct-message moderation routes. */
   readonly directMessageService?: DirectMessageService | undefined;
   /** True only under NODE_ENV=development; Production never composes the entry. */
@@ -312,6 +315,23 @@ export const createRouter =
     }
 
     if (
+      community?.feedbackService !== undefined &&
+      pathname === "/v1/community/feedback"
+    ) {
+      containRequest(
+        response,
+        handleFeedbackRequest(
+          request,
+          response,
+          community.feedbackService,
+          community.sessionService,
+        ),
+        apiFailure,
+      );
+      return;
+    }
+
+    if (
       community?.notificationService &&
       community.notificationStreams &&
       (pathname === "/v1/community/mentions" ||
@@ -503,6 +523,7 @@ export const createRouter =
           publishingOperatorService: community?.publishingOperatorService,
           agentAdministrationService: community?.agentAdministrationService,
           threadService: community?.threadService,
+          feedbackService: community?.feedbackService,
           directMessageService: community?.directMessageService,
           operatorCredential: community?.operatorCredential ?? "",
         }),

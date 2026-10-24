@@ -121,6 +121,7 @@ export const CommunityDashboardCard = async ({ user }: ServerProps) => {
         <Link href="/admin/community-moderation/publishing-jobs">发布任务</Link>
         <Link href="/admin/community-moderation/settings">发布设置</Link>
         <Link href="/admin/community-moderation/history">操作历史</Link>
+        <Link href="/admin/community-moderation/feedback">用户反馈</Link>
       </div>
     </section>
   );

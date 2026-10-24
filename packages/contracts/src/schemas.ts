@@ -1998,3 +1998,30 @@ export {
 } from "./article-delegation.ts";
 
 export * from "./reporting.ts";
+// settings-feedback-v1 r2: private still-image references, never storage keys.
+import {
+  FEEDBACK_IMAGE_LIMITS,
+  mediaItemIdSchema,
+} from "./work-publishing-schemas.ts";
+export { FEEDBACK_IMAGE_LIMITS } from "./work-publishing-schemas.ts";
+export const feedbackImageVariantSchema = z.enum(["thumb", "display", "full"]);
+export type FeedbackImageVariant = z.infer<typeof feedbackImageVariantSchema>;
+export const feedbackIdSchema = z.string().regex(/^feedback-[0-9a-f]{32}$/u);
+export const submitFeedbackRequestSchema = z.strictObject({
+  submissionId: z.uuid(),
+  message: z.string().trim().min(1).max(5000),
+  imageIds: z
+    .array(mediaItemIdSchema)
+    .max(FEEDBACK_IMAGE_LIMITS.maxImages)
+    .refine(
+      (ids) => new Set(ids).size === ids.length,
+      "Feedback images must be unique",
+    )
+    .optional(),
+});
+export type SubmitFeedbackRequest = z.infer<typeof submitFeedbackRequestSchema>;
+export const feedbackReceiptSchema = z.strictObject({
+  id: feedbackIdSchema,
+  createdAt: z.iso.datetime(),
+});
+export type FeedbackReceipt = z.infer<typeof feedbackReceiptSchema>;

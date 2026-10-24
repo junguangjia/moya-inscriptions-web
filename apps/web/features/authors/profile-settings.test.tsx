@@ -6,6 +6,7 @@ import type { AuthorProfile } from "@moya/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   authRequest,
+  feedbackSubmit,
   people,
   command,
   mutate,
@@ -15,6 +16,7 @@ const {
   presentation,
 } = vi.hoisted(() => ({
   authRequest: vi.fn(),
+  feedbackSubmit: vi.fn(),
   people: vi.fn(),
   command: vi.fn(),
   mutate: vi.fn(),
@@ -26,6 +28,10 @@ const {
 vi.mock("../auth/auth-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../auth/auth-api")>()),
   authRequest,
+}));
+vi.mock("../../lib/public-api/feedback-client", () => ({
+  feedbackClient: { submit: feedbackSubmit },
+  feedbackImageLimits: { maxImages: 3, maxBytes: 10 * 1024 * 1024 },
 }));
 vi.mock("./author-data", () => ({ authorClient: { people, command } }));
 vi.mock("./author-context", () => ({
@@ -1118,4 +1124,43 @@ describe("settings authentication return", () => {
       expectReadOnlyReturn();
     });
   });
+});
+
+describe("feedback in settings navigation", () => {
+  it("keeps the entry visible to guests and requires login for the form", async () => {
+    const { node } = await render(null);
+    await click(node, "反馈与建议");
+    expect(node.querySelector("textarea")).toBeNull();
+    expect(node.querySelector("a")?.textContent).toContain("登录后提交反馈");
+    expect(node.querySelector("a")?.getAttribute("href")).toBe("/login");
+    expect(feedbackSubmit).not.toHaveBeenCalled();
+  });
+  it.each(["phone", "pc"])(
+    "preserves feedback across child Back and guards root exit on %s",
+    async (platform) => {
+      presentation.platform = platform;
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      vi.spyOn(window.history, "back").mockImplementation(() => {});
+      const { node, onClose } = await render();
+      const rootState = window.history.state;
+      await click(node, "反馈与建议");
+      const textarea = node.querySelector("textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!.call(textarea, "保留的产品建议");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await click(node, "返回");
+      expect(confirm).not.toHaveBeenCalled();
+      await pop(rootState);
+      await click(node, "反馈与建议");
+      expect(node.querySelector("textarea")?.value).toBe("保留的产品建议");
+      await pop(rootState);
+      await click(node, "返回");
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(onClose).not.toHaveBeenCalled();
+    },
+  );
 });

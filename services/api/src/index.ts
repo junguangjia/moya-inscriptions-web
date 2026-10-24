@@ -493,3 +493,5 @@ export type {
 export { CommunityReportingService } from "./modules/community/application/services/community-reporting-service.js";
 
 export { requireHumanModerationReason } from "./modules/community/transport/human-moderation-parser.js";
+export { FeedbackService } from "./modules/community/application/services/feedback-service.js";
+export type { FeedbackPort } from "./modules/community/application/ports/feedback-port.js";

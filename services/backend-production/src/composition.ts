@@ -52,6 +52,7 @@ import {
   PostgresCommunityAuthAdapter,
   PostgresCommunityIdentityAdapter,
   PostgresThreadAdapter,
+  PostgresFeedbackAdapter,
   PostgresDirectMessageAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresWorkPublishingAdapter,
@@ -943,6 +944,7 @@ export const prepareProductionBackend = async (
             deliveryOptions,
           ),
           directMessagePort: new PostgresDirectMessageAdapter(communityPool),
+          feedbackPort: new PostgresFeedbackAdapter(communityPool),
           authorCommunityPort: withPublishedReads(
             new PostgresAuthorCommunityAdapter(communityPool, {
               profileRenditions,

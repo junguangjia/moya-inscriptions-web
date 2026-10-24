@@ -96,6 +96,8 @@ const workPublishingMigrations = [
   "20261023020000",
   "20261024010000",
   "20261024020000",
+  "20261024030000",
+  "20261025010000",
   "20261026010000",
 ];
 const backfillMigration = "20260914092000";
@@ -269,6 +271,8 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
       "20261023020000",
       "20261024010000",
       "20261024020000",
+      "20261024030000",
+      "20261025010000",
       "20261026010000",
     ]);
     for (const [index, user] of users.entries())
@@ -1673,6 +1677,8 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         "20261023020000",
         "20261024010000",
         "20261024020000",
+        "20261024030000",
+        "20261025010000",
         "20261026010000",
       ]);
 

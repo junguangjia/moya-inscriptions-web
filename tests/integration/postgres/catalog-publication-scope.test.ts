@@ -332,6 +332,8 @@ describe("App migration A1, its grants and the startup checks", () => {
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual([
         A1,
         "20261024020000",
+        "20261024030000",
+        "20261025010000",
         "20261026010000",
       ]);
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual(
@@ -440,7 +442,7 @@ describe("App migration A1, its grants and the startup checks", () => {
       ]);
       await grantRuntime(upgraded);
       expect((await upgraded.app.query(guardColumns)).rows).toEqual([
-        { restriction_key: true, reversed_at: true, whole_table_read: false },
+        { restriction_key: true, reversed_at: true, whole_table_read: true },
       ]);
       await assertCatalogPublicationScopeReady(upgraded.app);
       expect(await snapshot()).toEqual(before);

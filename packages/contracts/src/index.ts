@@ -257,3 +257,8 @@ export type {
 } from "./auth-schemas.js";
 
 export type * from "./reporting.ts";
+export type {
+  SubmitFeedbackRequest,
+  FeedbackReceipt,
+  FeedbackImageVariant,
+} from "./schemas.js";

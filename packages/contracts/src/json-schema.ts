@@ -47,6 +47,8 @@ import {
   authPasswordResetRequestSchema,
   authPasswordResetResultSchema,
   healthResponseSchema,
+  submitFeedbackRequestSchema,
+  feedbackReceiptSchema,
   productAccessSchema,
   mediaIdSchema,
   noQueryTransportSchema,
@@ -524,4 +526,9 @@ export const reportingJsonSchemas = {
   ReportingReadResult: toJsonSchema(
     z.object({ read: z.literal(true) }).strict(),
   ),
+};
+
+export const feedbackJsonSchemas = {
+  SubmitFeedbackRequest: toJsonSchema(submitFeedbackRequestSchema),
+  FeedbackReceipt: toJsonSchema(feedbackReceiptSchema),
 };

@@ -33,6 +33,10 @@ import { failureLabel } from "../http/request-boundary.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { handleAgentRequest } from "./agent-handler.js";
 import { handlePublishingOperatorRequest } from "./work-publishing-handler.js";
+import {
+  handleFeedbackOperatorRequest,
+  handleFeedbackOperatorImageRequest,
+} from "./feedback-handler.js";
 import { handleThreadOperatorRequest } from "./thread-handler.js";
 import { handleDirectMessageOperatorRequest } from "./direct-message-handler.js";
 import { handleArticlePublicationOperatorRequest } from "./article-publication-operator-handler.js";
@@ -46,6 +50,7 @@ import type {
   DirectMessageService,
   PublishingOperatorService,
   ThreadService,
+  FeedbackService,
 } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
@@ -73,6 +78,7 @@ export interface OperatorRouteDependencies {
   readonly agentAdministrationService?: AgentAdministrationService | undefined;
   /** Threads (content-community-completion-v1, Development only); absent leaves threads/* unrouted. */
   readonly threadService?: ThreadService | undefined;
+  readonly feedbackService?: FeedbackService | undefined;
   /** DM moderation (content-community-completion-v1, Development only). */
   readonly directMessageService?: DirectMessageService | undefined;
   /** Shared credential the Owner's Payload Admin holds server-side. */
@@ -209,6 +215,7 @@ export const handleOperatorRequest = async (
     publishingOperatorService,
     agentAdministrationService,
     threadService,
+    feedbackService,
     directMessageService,
     articlePublicationOperatorService,
   }: OperatorRouteDependencies,
@@ -221,6 +228,26 @@ export const handleOperatorRequest = async (
   const methodNotAllowed = () =>
     sendOperatorError(response, 405, "METHOD_NOT_ALLOWED");
   try {
+    if (
+      feedbackService !== undefined &&
+      pathname === "/internal/community/feedback"
+    ) {
+      await handleFeedbackOperatorRequest(request, response, feedbackService);
+      return;
+    }
+    const feedbackImage =
+      /^\/internal\/community\/feedback\/(feedback-[0-9a-f]{32})\/images\/(media-item-[0-9a-f]{32})\/(thumb|display|full)$/u.exec(
+        pathname,
+      );
+    if (feedbackService !== undefined && feedbackImage) {
+      await handleFeedbackOperatorImageRequest(
+        request,
+        response,
+        feedbackService,
+        feedbackImage.slice(1),
+      );
+      return;
+    }
     if (
       reportingService &&
       (pathname === "/internal/community/reports" ||
