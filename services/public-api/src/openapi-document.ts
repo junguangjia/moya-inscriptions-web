@@ -1,3 +1,5 @@
+import { reportingPaths } from "./reporting-openapi.js";
+import { reportingJsonSchemas } from "@moya/contracts/json-schema";
 import { authPaths } from "./auth-openapi.js";
 import { authorCommunityPaths } from "./author-community-openapi.js";
 import { articleAuthoringPaths } from "./article-authoring-openapi.js";
@@ -242,6 +244,7 @@ export const openApiDocument: JsonObject = {
         },
       },
     },
+    ...reportingPaths,
     ...authorCommunityPaths,
     ...articleAuthoringPaths,
     ...authPaths,
@@ -529,6 +532,7 @@ export const openApiDocument: JsonObject = {
       },
     },
     schemas: {
+      ...reportingJsonSchemas,
       ...analyticsJsonSchemas,
       ...componentSchemas(authorCommunityJsonSchemas),
       ...authJsonSchemas,

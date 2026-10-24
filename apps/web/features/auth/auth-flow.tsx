@@ -1505,6 +1505,20 @@ export const AuthFlow = ({
                 {mode === "register" ? "去登录" : "去注册"}
               </a>
             </p>
+            {mode === "sign-in" && (
+              <p>
+                <a
+                  href="/appeal-login"
+                  aria-disabled={locked || undefined}
+                  tabIndex={locked ? -1 : undefined}
+                  onClick={(event) => {
+                    if (locked) event.preventDefault();
+                  }}
+                >
+                  账号受限？提出申诉
+                </a>
+              </p>
+            )}
           </footer>
         )}
       </section>

@@ -32,6 +32,7 @@ import {
   PostgresAuthorCommunityAdapter,
   PostgresWorkPublishingAdapter,
   PostgresNotificationAdapter,
+  PostgresCommunityReportingAdapter,
   PostgresMediaPublicationAdapter,
   catalogMembershipStore,
 } from "@moya/community-postgres";
@@ -1347,6 +1348,20 @@ describe("Work publishing composition", () => {
   const pause = (ms: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, ms));
   const quietQueue = () => {
+    // Publishing snapshot assertions exclude the independent reporting pump.
+    vi.spyOn(
+      PostgresCommunityReportingAdapter.prototype,
+      "claimUrgent",
+    ).mockResolvedValue([]);
+    vi.spyOn(
+      PostgresCommunityReportingAdapter.prototype,
+      "purgeExpiredCases",
+    ).mockResolvedValue(0);
+    vi.spyOn(
+      PostgresCommunityReportingAdapter.prototype,
+      "purgeExpiredEvidence",
+    ).mockResolvedValue(0);
+
     vi.spyOn(
       PostgresMediaPublicationAdapter.prototype,
       "hasRegisteredPublications",

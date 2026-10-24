@@ -933,6 +933,7 @@ const addProfileFamilyIssues = (
 
 export const authorProfileSchema = z
   .strictObject({
+    ipLocation: z.string().max(100).nullable().optional(),
     id: userId,
     handle: z.string(),
     displayName: authorText(40),
@@ -1996,6 +1997,7 @@ export {
   articleConsentDecisionSchema,
 } from "./article-delegation.ts";
 
+export * from "./reporting.ts";
 // settings-feedback-v1 r2: private still-image references, never storage keys.
 import {
   FEEDBACK_IMAGE_LIMITS,

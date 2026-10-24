@@ -1,4 +1,5 @@
 import {
+  requireHumanModerationReason,
   CommunityInputError,
   parseArticlePendingId,
   parseArticlePendingListQuery,
@@ -79,7 +80,9 @@ export const handleArticlePublicationOperatorRequest = async (
   reply(
     await service.moderatePending(
       id,
-      parseArticlePendingModerationCommand(await readJsonBody(request, 4_096)),
+      parseArticlePendingModerationCommand(
+        requireHumanModerationReason(await readJsonBody(request, 16_384)),
+      ),
     ),
   );
   return true;

@@ -273,4 +273,5 @@ export type { PublicationSyncOptions } from "./publishing/publication-sync.js";
 
 export { PostgresAnalyticsAdapter } from "./analytics-adapter.js";
 
+export { PostgresCommunityReportingAdapter } from "./reporting-adapter.js";
 export { PostgresFeedbackAdapter } from "./feedback-adapter.js";

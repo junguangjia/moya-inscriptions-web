@@ -1,4 +1,9 @@
 import {
+  captureStaffSubject,
+  captureStaffThread,
+  recordStaffModeration,
+} from "./staff-moderation-reporting.js";
+import {
   enqueueNotification,
   validateMentionUsers,
 } from "./notifications/source.js";
@@ -154,7 +159,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
         AND u.status='active' AND community.accounts_can_interact($2,a.owner_id)) AS allowed
       FROM community.article_documents a
       LEFT JOIN community.article_revisions r ON r.article_id=a.id
-        AND r.version=a.published_version AND r.owner_id=a.owner_id
+        AND r.version=a.published_version AND r.owner_id=a.owner_id AND NOT a.reporting_hidden
       LEFT JOIN community.public_users u ON u.id=a.owner_id
       WHERE a.id=$1${lock ? " FOR SHARE OF a" : ""}`,
       [id, viewer],
@@ -768,15 +773,41 @@ export class PostgresDiscussionStore implements DiscussionPort {
       [opaque("moderation"), operator, action, kind, id, detail],
     );
   }
-  async operatorDeleteBody(operator: string, id: string, request: string) {
+  async operatorDeleteBody(
+    operator: string,
+    id: string,
+    request: string,
+    reason?: string,
+  ) {
     await this.run(true, (db) =>
       this.receipt(
         db,
         `operator:${operator}`,
         request,
-        ["delete_body", id],
+        ["delete_body", id, ...(reason === undefined ? [] : [reason])],
         async () => {
+          const staff = await captureStaffSubject(
+            db,
+            { type: "comment", id },
+            reason,
+          );
           const s = await this.subject(db, id);
+          if (staff) {
+            const old = (
+              await db.query<{ body_deleted_at: Date | null }>(
+                `SELECT body_deleted_at FROM community.${s.id === s.root_id ? "catalog_comments" : "catalog_comment_replies"} WHERE id=$1`,
+                [id],
+              )
+            ).rows[0];
+            if (old?.body_deleted_at) return;
+            staff.snapshot = {
+              rootId: s.root_id,
+              authorId: s.author_id,
+              post: { type: s.target_type, id: s.catalog_id },
+              irreversible: true,
+            };
+            delete staff.restriction;
+          }
           await db.query(
             `UPDATE community.${s.id === s.root_id ? "catalog_comments" : "catalog_comment_replies"} SET text=$2,body_deleted_at=COALESCE(body_deleted_at,CURRENT_TIMESTAMP) WHERE id=$1`,
             [id, deletedText],
@@ -789,6 +820,14 @@ export class PostgresDiscussionStore implements DiscussionPort {
             s.id === s.root_id ? "comment" : "reply",
             "Body deleted; eligible replies retained",
           );
+          await recordStaffModeration(
+            db,
+            staff,
+            operator,
+            "delete_body",
+            new Date(),
+            { kind: "irreversible" },
+          );
         },
       ),
     );
@@ -798,15 +837,24 @@ export class PostgresDiscussionStore implements DiscussionPort {
     rootId: string,
     request: string,
     expectedCount: number,
+    reason?: string,
   ) {
     return this.run(true, (db) =>
       this.receipt(
         db,
         `operator:${operator}`,
         request,
-        ["remove_thread", rootId, expectedCount],
+        [
+          "remove_thread",
+          rootId,
+          expectedCount,
+          ...(reason === undefined ? [] : [reason]),
+        ],
         async () => {
+          const staff = await captureStaffThread(db, rootId, reason);
           const s = await this.subject(db, rootId);
+          if (staff && s.thread_removed_at !== null)
+            throw new CommunityConflictError("Thread is already removed");
           if (s.id !== s.root_id) throw new CommunityNotFoundError();
           const total =
             1 +
@@ -834,6 +882,22 @@ export class PostgresDiscussionStore implements DiscussionPort {
             "comment",
             `Removed ${total} items`,
           );
+          if (staff) {
+            const authors = (
+              await db.query<{ author_id: string }>(
+                "SELECT $2::text AS author_id UNION SELECT author_id FROM community.catalog_comment_replies WHERE root_comment_id=$1",
+                [rootId, s.author_id],
+              )
+            ).rows;
+            for (const author of authors)
+              await recordStaffModeration(
+                db,
+                { ...staff, affectedUserId: author.author_id },
+                operator,
+                "remove_thread",
+                new Date(),
+              );
+          }
           return { removed: total };
         },
       ),

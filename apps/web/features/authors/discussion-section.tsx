@@ -1,5 +1,6 @@
 "use client";
 import type { DiscussionTarget as ContentIdentity } from "@moya/contracts";
+import { QuickCommentReport } from "../reporting/report-actions";
 import { CommentSection } from "../comments/comment-section";
 import { useProductShell } from "../product-shell/product-shell";
 import { useAuthors, contentKey } from "./author-context";
@@ -48,6 +49,7 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
           t.deleteBody(id);
         }}
         {...(t.highlightId ? { highlightCommentId: t.highlightId } : {})}
+        renderReport={(id) => <QuickCommentReport key={id} id={id} />}
         presentation="live"
         viewer={t.viewerState}
         loading={t.loading}

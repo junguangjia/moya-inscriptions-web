@@ -24,3 +24,13 @@ export type {
   MediaWorkerDependencies,
   PreparedMediaWorker,
 } from "./worker-composition.js";
+
+export { PrivateReportingEvidenceStore } from "./reporting/evidence-store.js";
+export {
+  OfflineIpLocation,
+  loadOfflineIpLocation,
+} from "./reporting/geography.js";
+export {
+  createUrgentReportSender,
+  ReportingMaintenanceWorker,
+} from "./reporting/worker.js";

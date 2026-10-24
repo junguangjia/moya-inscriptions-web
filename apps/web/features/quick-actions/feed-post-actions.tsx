@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { QuickActionIcon } from "./quick-action-card-action";
 import styles from "./feed-post-actions.module.css";
 
@@ -60,11 +61,13 @@ export const FeedPostActions = ({
   environment,
   onComment,
   trailing,
+  report,
 }: {
   readonly content: QuickActionContent;
   readonly environment: ContentQuickActionEnvironment | null;
   readonly onComment: (opener: HTMLButtonElement) => void;
   readonly trailing?: FeedPostTrailingAction | undefined;
+  readonly report?: ReactNode;
 }) => {
   const key = quickActionContentKey(content);
   const liked = environment?.likedIds.includes(key) ?? false;
@@ -123,6 +126,7 @@ export const FeedPostActions = ({
         <QuickActionIcon action="favorite" filled={favorited} />
         <ActionCount action="favorite" value={environment?.favoriteCount} />
       </button>
+      {report}
       {trailing === undefined ? null : trailing.kind === "expand" ? (
         <button
           type="button"

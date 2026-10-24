@@ -108,7 +108,9 @@ export const CommunityDashboardCard = async ({ user }: ServerProps) => {
         </>
       )}
       <div className={styles.links}>
-        <Link href="/admin/community-moderation">评论审核队列</Link>
+        <Link href="/admin/community-moderation">待审核</Link>
+        <Link href="/admin/community-moderation/reports">用户举报</Link>
+        <Link href="/admin/community-moderation/appeals">申诉与操作历史</Link>
         <Link href="/admin/community-moderation/work-submissions">
           作品提交审核
         </Link>

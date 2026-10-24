@@ -8,6 +8,11 @@
   padding: 0 var(--yoyi-space-2);
 }
 
+/* Open menus must remain above the Detail's sibling sticky reading tabs. */
+.actions:has([role="menu"]) {
+  z-index: var(--yoyi-z-index-navigation);
+}
+
 .action {
   display: inline-flex;
   min-width: 44px;

@@ -83,6 +83,16 @@ export default buildConfig({
           path: "/community-moderation",
           exact: true,
         },
+        communityReports: {
+          Component: "/src/community/View#CommunityReportsView",
+          path: "/community-moderation/reports",
+          exact: true,
+        },
+        communityAppeals: {
+          Component: "/src/community/View#CommunityAppealsView",
+          path: "/community-moderation/appeals",
+          exact: true,
+        },
         // content-community-completion-v1: Threads over Works (Development).
         communityThreads: {
           Component: "/src/community/View#ThreadsView",

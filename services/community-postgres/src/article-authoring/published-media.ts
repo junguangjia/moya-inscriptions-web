@@ -15,7 +15,7 @@ export const publishedArticleItemSql = (
   JOIN community.public_users article_owner
     ON article_owner.id=article_document.owner_id AND article_owner.status='active'
   WHERE article_ref.item_id=${item}
-    AND article_document.status<>'withdrawn'
+    AND article_document.status<>'withdrawn' AND NOT article_document.reporting_hidden
     ${owner === undefined ? "" : `AND article_document.owner_id=${owner} AND article_revision.owner_id=${owner}`}
     AND community.accounts_can_interact(${viewer},article_document.owner_id)
 )`;

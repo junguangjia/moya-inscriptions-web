@@ -1,6 +1,9 @@
+import { handleReportingOperatorRequest } from "./reporting-handler.js";
+import type { CommunityReportingService } from "@moya/api";
 import { timingSafeEqual } from "node:crypto";
 
 import {
+  requireHumanModerationReason,
   CommunityInputError,
   CommunityContentOperatorService,
   isCommunityConflictError,
@@ -52,6 +55,7 @@ import type {
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export interface OperatorRouteDependencies {
+  readonly reportingService?: CommunityReportingService | undefined;
   readonly catalogDeliveryReadiness?:
     | ((intentId: string) => Promise<CatalogDeliveryReadiness | null>)
     | undefined;
@@ -201,6 +205,7 @@ export const handleOperatorRequest = async (
   pathname: string,
   {
     moderationService,
+    reportingService,
     catalogRecipePolicy,
     catalogDeliveryReadiness,
     catalogPublishedRenditions,
@@ -240,6 +245,19 @@ export const handleOperatorRequest = async (
         response,
         feedbackService,
         feedbackImage.slice(1),
+      );
+      return;
+    }
+    if (
+      reportingService &&
+      (pathname === "/internal/community/reports" ||
+        pathname.startsWith("/internal/community/reports/"))
+    ) {
+      await handleReportingOperatorRequest(
+        request,
+        response,
+        pathname,
+        reportingService,
       );
       return;
     }
@@ -429,7 +447,10 @@ export const handleOperatorRequest = async (
         sendJson(
           response,
           200,
-          await operatorService.moderateWork(work[1]!, await commandBody()),
+          await operatorService.moderateWork(
+            work[1]!,
+            requireHumanModerationReason(await commandBody()),
+          ),
         );
         return;
       }
@@ -444,7 +465,10 @@ export const handleOperatorRequest = async (
           sendJson(
             response,
             200,
-            await operatorService.deleteBody(deletion[1]!, await commandBody()),
+            await operatorService.deleteBody(
+              deletion[1]!,
+              requireHumanModerationReason(await commandBody()),
+            ),
           );
         } else {
           sendJson(
@@ -452,7 +476,7 @@ export const handleOperatorRequest = async (
             200,
             await operatorService.removeThread(
               deletion[1]!,
-              await commandBody(),
+              requireHumanModerationReason(await commandBody()),
             ),
           );
         }
@@ -516,7 +540,9 @@ export const handleOperatorRequest = async (
       sendJson(
         response,
         200,
-        await moderationService.moderateComments(await readJsonBody(request)),
+        await moderationService.moderateComments(
+          requireHumanModerationReason(await readJsonBody(request)),
+        ),
       );
       return;
     }
@@ -605,7 +631,7 @@ export const handleOperatorRequest = async (
         200,
         await moderationService.moderateComment(
           id.data,
-          await readJsonBody(request),
+          requireHumanModerationReason(await readJsonBody(request)),
         ),
       );
       return;
@@ -633,7 +659,7 @@ export const handleOperatorRequest = async (
         200,
         await moderationService.moderateUser(
           id.data,
-          await readJsonBody(request),
+          requireHumanModerationReason(await readJsonBody(request)),
         ),
       );
       return;

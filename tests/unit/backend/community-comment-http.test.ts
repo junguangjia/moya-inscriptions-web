@@ -450,7 +450,7 @@ describe("Community V1 operator boundary", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action }),
+          body: JSON.stringify({ reason: "Synthetic human decision", action }),
         },
       );
       expect(response.status).toBe(200);
@@ -476,7 +476,10 @@ describe("Community V1 operator boundary", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "approve" }),
+        body: JSON.stringify({
+          reason: "Synthetic human decision",
+          action: "approve",
+        }),
       },
     );
     expect(unknown.status).toBe(404);
@@ -490,7 +493,10 @@ describe("Community V1 operator boundary", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "approve" }),
+        body: JSON.stringify({
+          reason: "Synthetic human decision",
+          action: "approve",
+        }),
       },
     );
     expect(outOfMachine.status).toBe(409);
@@ -520,7 +526,7 @@ describe("Community V1 operator boundary", () => {
     const rejected = await operatorFetch(
       baseUrl,
       `comments/${pending.id}/moderation`,
-      json({ action: "reject" }),
+      json({ reason: "Synthetic human decision", action: "reject" }),
     );
     expect(rejected.status).toBe(200);
     expect(await rejected.json()).toEqual({
@@ -536,6 +542,7 @@ describe("Community V1 operator boundary", () => {
       baseUrl,
       "comments/moderation",
       json({
+        reason: "Synthetic human decision",
         action: "approve",
         ids: [other.id, pending.id, "comment-ffffffffffffffffffffffffffffffff"],
       }),
@@ -560,6 +567,7 @@ describe("Community V1 operator boundary", () => {
       baseUrl,
       "comments/moderation",
       json({
+        reason: "Synthetic human decision",
         action: "approve",
         ids: Array.from(
           { length: 51 },
@@ -572,7 +580,11 @@ describe("Community V1 operator boundary", () => {
     const envelope = await operatorFetch(
       baseUrl,
       `comments/${other.id}/moderation`,
-      json({ action: "hide", id: other.id }),
+      json({
+        reason: "Synthetic human decision",
+        action: "hide",
+        id: other.id,
+      }),
     );
     expect(envelope.status).toBe(400);
   });
@@ -598,7 +610,10 @@ describe("Community V1 operator boundary", () => {
     await operatorFetch(baseUrl, `comments/${root.id}/moderation`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "hide" }),
+      body: JSON.stringify({
+        reason: "Synthetic human decision",
+        action: "hide",
+      }),
     });
 
     const detail = await operatorFetch(baseUrl, `comments/${reply.id}`);
@@ -676,7 +691,10 @@ describe("Community V1 operator boundary", () => {
       const response = await operatorFetch(baseUrl, path, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "approve" }),
+        body: JSON.stringify({
+          reason: "Synthetic human decision",
+          action: "approve",
+        }),
       });
       expect(response.status, path).toBe(404);
     }
@@ -696,7 +714,10 @@ describe("Community V1 operator boundary", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "suspend" }),
+        body: JSON.stringify({
+          reason: "Synthetic human decision",
+          action: "suspend",
+        }),
       },
     );
     expect(suspended.status).toBe(200);
@@ -719,7 +740,10 @@ describe("Community V1 operator boundary", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "reinstate" }),
+        body: JSON.stringify({
+          reason: "Synthetic human decision",
+          action: "reinstate",
+        }),
       },
     );
     expect(reinstated.status).toBe(200);
@@ -743,4 +767,44 @@ describe("Community V1 operator boundary", () => {
       expect(response.status).not.toBe(200);
     }
   });
+  it.each([
+    { label: "missing", reason: undefined },
+    { label: "blank", reason: "   " },
+    { label: "too long", reason: "x".repeat(2001) },
+  ])(
+    "requires a bounded human reason before a moderation mutation ($label)",
+    async ({ reason }) => {
+      const { baseUrl, commentPort, identityPort, signIn } = await start();
+      const token = await signIn();
+      const item = catalogCommentSchema.parse(
+        await (
+          await postComment(baseUrl, token, {
+            text: "Synthetic reason boundary",
+          })
+        ).json(),
+      );
+      const eventCount = commentPort.events.length;
+      const initialModeration = commentPort.comments.get(item.id)?.moderation;
+      for (const [path, fields] of [
+        [`comments/${item.id}/moderation`, { action: "hide" }],
+        ["comments/moderation", { action: "hide", ids: [item.id] }],
+        [`users/${item.author.id}/status`, { action: "suspend" }],
+      ] as const) {
+        const response = await operatorFetch(baseUrl, path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...fields,
+            ...(reason === undefined ? {} : { reason }),
+          }),
+        });
+        expect(response.status).toBe(400);
+      }
+      expect(commentPort.events).toHaveLength(eventCount);
+      expect(commentPort.comments.get(item.id)?.moderation).toBe(
+        initialModeration,
+      );
+      expect(identityPort.users.get(item.author.id)?.status).toBe("active");
+    },
+  );
 });

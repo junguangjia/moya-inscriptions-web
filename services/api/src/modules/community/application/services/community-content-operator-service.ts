@@ -100,10 +100,12 @@ export class CommunityContentOperatorService {
   }
   async deleteBody(id: string, input: unknown) {
     if (!this.discussion) throw new CommunityNotFoundError();
+    const command = parse(operatorDeleteBodySchema, input);
     await this.discussion.operatorDeleteBody(
       this.operator,
       id,
-      parse(operatorDeleteBodySchema, input).requestId,
+      command.requestId,
+      command.reason,
     );
     return { deleted: true };
   }
@@ -115,6 +117,7 @@ export class CommunityContentOperatorService {
       id,
       command.requestId,
       command.expectedAffectedCount,
+      command.reason,
     );
   }
 }

@@ -120,6 +120,7 @@ export interface StoredPasswordResetReceipt {
 }
 
 export interface LockedAuthSession {
+  readonly scope?: "community" | "appeal";
   readonly id: string;
   readonly tokenHash: string;
   readonly userId: string;
@@ -128,6 +129,7 @@ export interface LockedAuthSession {
 }
 
 export interface StoredSession {
+  readonly scope?: "community" | "appeal";
   readonly id: string;
   readonly tokenHash: string;
   readonly userId: string;

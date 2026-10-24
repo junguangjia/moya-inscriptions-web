@@ -15,6 +15,7 @@ export const findSessionUserSql = `
   FROM community.sessions s
   JOIN community.public_users u ON u.id = s.user_id
   WHERE s.token_hash = $1::text
+    AND s.scope = 'community'
     AND s.revoked_at IS NULL
     AND s.expires_at > $2::timestamptz
     AND (NOT $3::boolean OR (s.issuer IN ('verified_login','password_login') AND s.auth_environment = 'production'))

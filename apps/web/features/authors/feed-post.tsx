@@ -1,4 +1,5 @@
 "use client";
+import { ReportMenu } from "../reporting/report-actions";
 import { useId, useMemo, useRef, useState } from "react";
 import type { ContentCard as Card } from "@moya/contracts";
 import { requestDetailComments } from "../detail/detail-comments-request";
@@ -214,6 +215,9 @@ export const FeedPost = ({
           environment={actions.environment}
           onComment={openComments}
           trailing={trailing}
+          report={
+            item.live === true ? <ReportMenu target={item.target} /> : undefined
+          }
         />
         <PostDate value={item.firstPublishedAt} />
       </article>

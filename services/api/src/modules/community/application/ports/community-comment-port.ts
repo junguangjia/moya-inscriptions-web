@@ -120,7 +120,7 @@ export interface ModerationEvent {
 export type ModerationEventDraft = Omit<
   ModerationEvent,
   "subjectKind" | "subjectId"
->;
+> & { readonly reason?: string };
 
 /** What the moderation write actually changed; null when the id is unknown. */
 export interface ModeratedSubject {

@@ -1235,6 +1235,120 @@ describe("Content reads carry the visitor's session to the Backend", () => {
   });
 });
 
+describe("Issue #326 reporting relay", () => {
+  const normal = Buffer.alloc(32, 1).toString("base64url"),
+    appeal = Buffer.alloc(32, 2).toString("base64url");
+  describe("reporting credential and evidence relay", () => {
+    it("does not let an old appeal cookie replace ordinary account requests", async () => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ items: [] }));
+      vi.stubGlobal("fetch", upstream);
+      await relayServerAuthorCommunity(
+        new Request("http://localhost/api/community/decisions", {
+          headers: {
+            cookie: `yoyi-session=${normal}; yoyi-appeal-session=${appeal}`,
+          },
+        }),
+      );
+      expect(
+        new Headers(upstream.mock.calls[0]?.[1]?.headers).get(
+          "authorization",
+        ) === `Bearer ${normal}`,
+      ).toBe(true);
+    });
+    it("uses restricted credentials only for an explicit allowed case operation", async () => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ items: [] }));
+      vi.stubGlobal("fetch", upstream);
+      await relayServerAuthorCommunity(
+        new Request("http://localhost/api/community/decisions", {
+          headers: {
+            cookie: `yoyi-session=${normal}; yoyi-appeal-session=${appeal}`,
+            "x-reporting-session": "appeal",
+            "x-author-account": "user-" + "1".repeat(32),
+          },
+        }),
+      );
+      const headers = new Headers(upstream.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("authorization") === `Bearer ${appeal}`).toBe(true);
+      expect(headers.get("x-author-account")).toBe("user-" + "1".repeat(32));
+    });
+    it("never forwards a stale normal cookie to restricted OTP challenge issuance", async () => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ accepted: true }));
+      vi.stubGlobal("fetch", upstream);
+      const result = await relayServerCommunityAuth(
+        new Request("http://localhost/api/community/auth/appeals/challenges", {
+          method: "POST",
+          headers: {
+            cookie: `yoyi-session=${normal}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ purpose: "sign_in" }),
+        }),
+      );
+      expect(result.status).toBe(200);
+      expect(
+        new Headers(upstream.mock.calls[0]?.[1]?.headers).has("authorization"),
+      ).toBe(false);
+    });
+    it("keeps restricted session material in its own HttpOnly cookie", async () => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({
+            outcome: "appeal_signed_in",
+            session: {
+              token: appeal,
+              expiresAt: "2030-01-01T00:00:00.000Z",
+              profile: { id: "synthetic" },
+            },
+          }),
+        ),
+      );
+      const result = await relayServerCommunityAuth(
+        new Request("http://localhost/api/community/auth/appeals/login", {
+          method: "POST",
+          body: "{}",
+        }),
+      );
+      const body = await result.json();
+      expect(body.session).not.toHaveProperty("token");
+      expect(
+        result.headers.get("set-cookie")?.startsWith("yoyi-appeal-session="),
+      ).toBe(true);
+      expect(result.headers.get("set-cookie")).toContain("HttpOnly");
+    });
+    it("delivers private PDF evidence only as an uncached attachment", async () => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          new Response("%PDF-synthetic", {
+            headers: { "content-type": "application/pdf" },
+          }),
+        ),
+      );
+      const result = await relayServerAuthorCommunity(
+        new Request(
+          "http://localhost/api/community/reports/report-synthetic/evidence/evidence-synthetic",
+          { headers: { cookie: `yoyi-session=${normal}` } },
+        ),
+      );
+      expect(result.status).toBe(200);
+      expect(result.headers.get("cache-control")).toBe("private, no-store");
+      expect(result.headers.get("content-disposition")).toBe("attachment");
+    });
+  });
+});
+
 describe("feedback uses the ordinary same-origin community relay", () => {
   it("forwards the session/account and confirmed receipt without auth-service relay configuration", async () => {
     vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");

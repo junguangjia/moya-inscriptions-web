@@ -27,6 +27,7 @@ import {
   workSubmissionMediaSrc,
 } from "./api";
 import styles from "./community.module.css";
+import { ModerationReasonInput, readModerationReason } from "./bulk-actions";
 import {
   coverPreview,
   itemPreviewVariant,
@@ -54,6 +55,7 @@ interface Decision {
   readonly item: OperatorWorkSubmission;
   readonly action: WorkSubmissionModerationAction;
   readonly requestId: string;
+  readonly reason: string;
 }
 
 type Detail =
@@ -138,6 +140,8 @@ export const WorkSubmissionsQueueClient = () => {
   const [receipt, setReceipt] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState<Decision | null>(null);
+  const [reasonDraft, setReasonDraft] = useState("");
+  const reason = readModerationReason(reasonDraft);
   const [retry, setRetry] = useState<Decision | null>(null);
   const lock = useRef(false);
   const listSequence = useRef(0);
@@ -251,6 +255,7 @@ export const WorkSubmissionsQueueClient = () => {
           requestId,
           action,
           expectedVersion: item.version,
+          reason: decision.reason,
         },
       );
       setRetry(null);
@@ -291,7 +296,8 @@ export const WorkSubmissionsQueueClient = () => {
     item: OperatorWorkSubmission,
     action: WorkSubmissionModerationAction,
   ) => {
-    setConfirmation({ item, action, requestId: crypto.randomUUID() });
+    if (reason === null) return;
+    setConfirmation({ item, action, requestId: crypto.randomUUID(), reason });
     openModal(CONFIRM_SLUG);
   };
 
@@ -312,7 +318,7 @@ export const WorkSubmissionsQueueClient = () => {
             className={styles.actionButton}
             data-primary="true"
             data-submission-action="approve"
-            disabled={busy || retry !== null}
+            disabled={busy || retry !== null || reason === null}
             onClick={() => ask(item, "approve")}
             type="button"
           >
@@ -322,7 +328,7 @@ export const WorkSubmissionsQueueClient = () => {
             className={styles.actionButton}
             data-danger="true"
             data-submission-action="reject"
-            disabled={busy || retry !== null}
+            disabled={busy || retry !== null || reason === null}
             onClick={() => ask(item, "reject")}
             type="button"
           >
@@ -372,6 +378,12 @@ export const WorkSubmissionsQueueClient = () => {
         </p>
       ) : null}
 
+      <ModerationReasonInput
+        label="作品审核理由（必填）"
+        value={reasonDraft}
+        onChange={setReasonDraft}
+        disabled={busy || retry !== null}
+      />
       <div aria-label="提交状态" className={styles.tabs} role="tablist">
         {states.map((state) => (
           <button
@@ -638,6 +650,9 @@ export const WorkSubmissionsQueueClient = () => {
                   。审核决定不会解除作者或 Owner 的隐藏与移除状态。
                 </p>
               ) : null}
+              <p className={styles.reportText}>
+                处置理由：{pendingDecision.reason}
+              </p>
               <p>
                 只针对你查看时的版本（版本号 {pendingDecision.item.version}
                 ）；若期间已有新的提交或其他处理，本次操作不会执行。
