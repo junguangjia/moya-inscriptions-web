@@ -12,6 +12,7 @@ import type {
 } from "@moya/contracts";
 import {
   PUBLISHING_MEDIA_PATH_PREFIX,
+  FEEDBACK_IMAGE_LIMITS,
   publishingMediaItemSchema,
 } from "@moya/contracts/schemas";
 import type {
@@ -244,7 +245,7 @@ export const assertOwnedItems = async (
   const unique = [...new Set(itemIds)];
   if (unique.length === 0) return;
   const owned = await db.query<{ count: string }>(
-    "SELECT count(*)::text AS count FROM community.media_items WHERE owner_id=$1 AND id=ANY($2::text[])",
+    "SELECT count(*)::text AS count FROM community.media_items WHERE owner_id=$1 AND id=ANY($2::text[]) AND purpose='content'",
     [ownerId, unique],
   );
   if (safeInteger(owned.rows[0]?.count ?? 0) !== unique.length)
@@ -256,7 +257,11 @@ export type RefHolderKind = "draft" | "snapshot" | "session";
 /** The refs one holder group lets go of (only of `itemIds` when given). */
 export interface RefRelease {
   readonly holderKind:
-    RefHolderKind | "revision" | "article_draft" | "article_revision";
+    | RefHolderKind
+    | "revision"
+    | "article_draft"
+    | "article_revision"
+    | "feedback";
   readonly holderIds: readonly string[];
   readonly itemIds?: readonly string[];
 }
@@ -399,7 +404,7 @@ export const cancelItems = async (
     await db.query<{ id: string }>(
       `SELECT i.id FROM community.media_items i
        WHERE i.id=ANY($1::text[]) AND i.state <> 'purged'
-       AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id AND r.holder_kind='article_revision')
+       AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id AND r.holder_kind IN ('article_revision','feedback'))
        ${options.onlyUnreferenced === true ? "AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id)" : ""}
        ORDER BY i.id`,
       [unique],
@@ -548,7 +553,7 @@ export const ensureContentDerivatives = async (
                    WHERE j.kind='derive_edit' AND j.subject_id=i.id AND j.state <> 'succeeded'
                      AND j.payload->>'editKey' IN (e.edit_key, e.cover_key)), '[]'::jsonb) AS jobs
        FROM input e
-       LEFT JOIN community.media_items i ON i.id=e.item_id AND i.owner_id=$2
+       LEFT JOIN community.media_items i ON i.id=e.item_id AND i.owner_id=$2 AND i.purpose='content'
        ORDER BY e.ord`,
       [JSON.stringify(inputs), ownerId],
     );
@@ -915,6 +920,27 @@ export const registerItem = async (
     async (db) => {
       const at = nowParam(now);
       const holder = await lockHolder(db, actorId, command.holder, now);
+      const feedbackPurpose = command.purpose === "feedback";
+      if (feedbackPurpose) {
+        if (
+          holder.kind !== "session" ||
+          command.kind !== "static" ||
+          command.components.length !== 1 ||
+          command.components[0]?.role !== "still" ||
+          command.components[0].byteSize > FEEDBACK_IMAGE_LIMITS.maxBytes
+        )
+          throw new CommunityInputError("Invalid feedback image upload");
+        const session = (
+          await db.query<{ work_id: string | null }>(
+            "SELECT work_id FROM community.publishing_sessions WHERE id=$1",
+            [holder.id],
+          )
+        ).rows[0];
+        if (session?.work_id !== null)
+          throw new CommunityInputError(
+            "Feedback images require a no-work session",
+          );
+      }
       const settings = await selectSettings(db, "share");
       const held = await db.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM community.media_item_refs r
@@ -922,7 +948,12 @@ export const registerItem = async (
          WHERE r.holder_kind=$1 AND r.holder_id=$2 AND i.state NOT IN ('cancelled','purged')`,
         [holder.kind, holder.id],
       );
-      if (safeInteger(held.rows[0]?.count ?? 0) >= settings.maxItemsPerWork)
+      // Work item limits do not limit replacing selections in a feedback lease.
+      // Feedback commit enforces its own maximum; byte capacity/lease still apply.
+      if (
+        !feedbackPurpose &&
+        safeInteger(held.rows[0]?.count ?? 0) >= settings.maxItemsPerWork
+      )
         throw new CommunityInputError("items_limit");
       const declaredTotal = command.components.reduce(
         (total, component) => total + component.byteSize,
@@ -970,9 +1001,10 @@ export const registerItem = async (
             : [[component.role, component.standardOutcome]],
         ),
       );
-      const privateMetadata =
-        command.metadata === undefined &&
-        Object.keys(standardOutcomes).length === 0
+      const privateMetadata = feedbackPurpose
+        ? null
+        : command.metadata === undefined &&
+            Object.keys(standardOutcomes).length === 0
           ? null
           : {
               ...(command.metadata ?? {}),
@@ -981,8 +1013,8 @@ export const registerItem = async (
                 : { standardOutcomes }),
             };
       await db.query(
-        `INSERT INTO community.media_items(id,owner_id,kind,quality_mode,source,state,declared_total_bytes,pairing,private_metadata,processing_profile,created_at,updated_at)
-         VALUES($1,$2,$3,$4,'upload','awaiting_upload',$5,$6::jsonb,$7::jsonb,$8,$9::timestamptz,$9::timestamptz)`,
+        `INSERT INTO community.media_items(id,owner_id,kind,quality_mode,source,state,declared_total_bytes,pairing,private_metadata,processing_profile,created_at,updated_at,purpose)
+         VALUES($1,$2,$3,$4,'upload','awaiting_upload',$5,$6::jsonb,$7::jsonb,$8,$9::timestamptz,$9::timestamptz,$10)`,
         [
           itemId,
           actorId,
@@ -993,6 +1025,7 @@ export const registerItem = async (
           privateMetadata === null ? null : JSON.stringify(privateMetadata),
           command.processingProfile ?? null,
           at,
+          command.purpose ?? "content",
         ],
       );
       const components = [...command.components].sort(
@@ -1098,7 +1131,7 @@ export const cancelItem = async (
         // unavailable) and holds the purge back until it is evicted; the
         // explicit cancel still stops the transfer (U07).
         const kept = await db.query(
-          "SELECT 1 FROM community.media_item_refs WHERE item_id=$1 AND holder_kind IN ('revision','article_revision') LIMIT 1",
+          "SELECT 1 FROM community.media_item_refs WHERE item_id=$1 AND holder_kind IN ('revision','article_revision','feedback') LIMIT 1",
           [itemId],
         );
         if ((kept.rowCount ?? 0) === 0)
@@ -1532,7 +1565,7 @@ export const markItemReady = async (
       `UPDATE community.media_items
        SET state='ready', failure_code=NULL, ready_at=$2::timestamptz, updated_at=$2::timestamptz, version=version+1,
            presentation=$3::jsonb, pairing=$4::jsonb,
-           private_metadata=COALESCE(private_metadata,'{}'::jsonb) || jsonb_build_object('server', $5::jsonb),
+           private_metadata=CASE WHEN purpose='feedback' THEN NULL ELSE COALESCE(private_metadata,'{}'::jsonb) || jsonb_build_object('server', $5::jsonb) END,
            placeholder_color=CASE WHEN $6::boolean THEN $7::text ELSE placeholder_color END
        WHERE id=$1`,
       [

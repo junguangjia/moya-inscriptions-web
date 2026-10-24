@@ -15,6 +15,7 @@ import { DmModerationView as DmModerationView_86a1b3c9ec56e37b61bf12e13c3d66d2 }
 import { CommunitySettingsView as CommunitySettingsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CommunityContentView as CommunityContentView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CommunityHistoryView as CommunityHistoryView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
+import { CommunityFeedbackView as CommunityFeedbackView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { ArticleSubmissionsView as ArticleSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { WorkSubmissionsView as WorkSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { AgentConnectionsView as AgentConnectionsView_3d1d3bf96b1194d419c311865cb1d9cc } from "../../../src/agent-connections/View";
@@ -60,6 +61,8 @@ export const importMap = {
     CommunityContentView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#CommunityHistoryView":
     CommunityHistoryView_86a1b3c9ec56e37b61bf12e13c3d66d2,
+  "/src/community/View#CommunityFeedbackView":
+    CommunityFeedbackView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#ArticleSubmissionsView":
     ArticleSubmissionsView_86a1b3c9ec56e37b61bf12e13c3d66d2,
   "/src/community/View#WorkSubmissionsView":
