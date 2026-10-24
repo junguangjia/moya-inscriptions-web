@@ -2019,6 +2019,68 @@ describe(
       expect(stagedKeys(context)).toBe(0);
     });
 
+    it("keeps a staged item's recorded MD5 through a re-run that finds its file changed, so --abandon still removes its object", async () => {
+      for (const restored of [false, true]) {
+        const context = await setup([{ key: "staged", size: 4096 }], {
+          completeFaults: Array.from({ length: 8 }, () => "before" as const),
+        });
+        const file = join(context.directory, "staged.jpg");
+        const bytes = await readFile(file);
+        // The PUT landed; complete never answered.
+        await context.run({ attempts: 1 });
+        expect(cosPuts(context), String(restored)).toHaveLength(1);
+        expect(stagedKeys(context), String(restored)).toBe(1);
+        const recorded = (await stateRows(context)).get("staged");
+        expect(recorded, String(restored)).toMatchObject({
+          staged: true,
+          md5Base64: md5(bytes),
+          stagingDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        });
+        // Same size, other bytes: no longer the manifest's SHA-256.
+        await writeFile(file, original(4096));
+        const before = context.admin.requests.length;
+        expect(await context.run(), String(restored)).toMatchObject({
+          registered: 0,
+          failed: 1,
+          codes: { MEDIA_SOURCE_CHANGED: 1 },
+        });
+        // Refused before any request; the row keeps what --abandon needs.
+        expect(context.admin.requests.length, String(restored)).toBe(before);
+        expect(cosPuts(context), String(restored)).toHaveLength(1);
+        expect(
+          (await stateRows(context)).get("staged"),
+          String(restored),
+        ).toMatchObject({
+          status: "failed",
+          code: "MEDIA_SOURCE_CHANGED",
+          staged: true,
+          md5Base64: recorded?.md5Base64,
+          stagingDigest: recorded?.stagingDigest,
+        });
+        if (restored) await writeFile(file, bytes);
+        const result = await ingest.abandonIngest({
+          manifest: context.manifest,
+          directory: context.directory,
+          stateFile: context.stateFile,
+          send: context.send,
+        });
+        expect(result, String(restored)).toMatchObject({
+          abandoned: 1,
+          absent: 0,
+        });
+        expect(result.codes, String(restored)).toEqual({});
+        expect(
+          context.admin.requests.slice(before).map((request) => request.route),
+          String(restored),
+        ).toEqual([INGEST.abandon]);
+        expect(stagedKeys(context), String(restored)).toBe(0);
+        expect(
+          (await stateRows(context)).get("staged"),
+          String(restored),
+        ).not.toHaveProperty("stagingDigest");
+      }
+    });
+
     it("reads the file only for a row recorded without an MD5, and refuses an MD5 that cannot be one", async () => {
       const context = await setup(
         [

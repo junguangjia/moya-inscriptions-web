@@ -1039,13 +1039,23 @@ export async function runDirectIngest({
       }
       // Recorded before start: --abandon rebuilds the intent (and so the
       // staging id the Admin derives from it) from the manifest and this,
-      // even after the local file changed or was removed.
+      // even after the local file changed or was removed. Only bytes that are
+      // the manifest's (its size and SHA-256, as start's intent checks them)
+      // give the row its MD5: other bytes fail the item and keep the MD5 and
+      // staging record an earlier run left for --abandon.
+      const intent = mediaIngestIntent({
+        item: item.upload,
+        bytes,
+        transferId: item.transferId,
+      });
+      if (!intent)
+        return { ok: false, retryable: false, code: "MEDIA_SOURCE_CHANGED" };
       await record(item.key, {
         requestHash: item.requestHash,
         status: "pending",
         attempts: (previous?.attempts ?? 0) + 1,
         staged: previous?.staged === true,
-        md5Base64: createHash("md5").update(bytes).digest("base64"),
+        md5Base64: intent.md5Base64,
         ...keepStaging(previous),
         ...(previous?.metrics ? { metrics: previous.metrics } : {}),
       });
