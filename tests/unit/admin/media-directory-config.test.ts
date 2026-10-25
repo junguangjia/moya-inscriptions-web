@@ -127,4 +127,20 @@ describe("Admin config's Catalog ingest routes", () => {
       "CMS_CATALOG_INGEST_INVALID",
     );
   }, 60_000);
+
+  it("loads with CMS_CATALOG_DIRECT_PUBLISH absent, blank, off or on and refuses any other value", async () => {
+    for (const value of ["", "off", "on"])
+      expect(
+        await ingestRoutes({
+          CMS_CATALOG_INGEST: "off",
+          CMS_CATALOG_DIRECT_PUBLISH: value,
+        }),
+      ).toEqual([]);
+    await expect(
+      ingestRoutes({
+        CMS_CATALOG_INGEST: "off",
+        CMS_CATALOG_DIRECT_PUBLISH: "ON",
+      }),
+    ).rejects.toThrow("CMS_CATALOG_DIRECT_PUBLISH_INVALID");
+  }, 60_000);
 });

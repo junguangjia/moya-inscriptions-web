@@ -35,11 +35,14 @@ import { adminPreviewURL, editorialPreviewEndpoint } from "./src/preview";
 import {
   cmsDatabasePool,
   assertCmsProductionEnvironment,
+  catalogDirectPublishEnabled,
   catalogIngestEnabled,
   cmsRuntimeLogFields,
   requiredSetting,
 } from "./src/runtime-settings";
 assertCmsProductionEnvironment();
+// Read at publish time; checked here so an invalid value refuses to load.
+catalogDirectPublishEnabled();
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 // A relative value, as in the local template, names a directory relative to
 // the Admin workspace the process starts in, exactly as Payload already reads

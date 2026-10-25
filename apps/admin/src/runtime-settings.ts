@@ -286,6 +286,23 @@ export const catalogIngestEnabled = (
   throw new Error("CMS_CATALOG_INGEST_INVALID");
 };
 
+/**
+ * CMS_CATALOG_DIRECT_PUBLISH lets a Catalog record with editorial originals
+ * publish without the delivery preparation the release path proves, until
+ * Admin has prepare and release controls: absent, empty or `off` keeps that
+ * guard, `on` publishes at once (the worker renders the published images and
+ * the public answer leaves them out until it has), and any other value refuses
+ * to load, which stops the Admin and `payload migrate` alike.
+ */
+export const catalogDirectPublishEnabled = (
+  environment: Environment = process.env,
+): boolean => {
+  const value = environment.CMS_CATALOG_DIRECT_PUBLISH;
+  if (value === undefined || value === "" || value === "off") return false;
+  if (value === "on") return true;
+  throw new Error("CMS_CATALOG_DIRECT_PUBLISH_INVALID");
+};
+
 /** The Development ingest store: local storage outside a production environment. */
 export const catalogIngestDevelopmentStore = (
   environment: Environment = process.env,
