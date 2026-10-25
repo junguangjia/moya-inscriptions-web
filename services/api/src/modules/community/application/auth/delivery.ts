@@ -35,6 +35,7 @@ export interface AliyunSendSmsVerifyCodeRequest {
   readonly ReturnVerifyCode: false;
   readonly OutId: string;
   readonly Interval: 60;
+  readonly DuplicatePolicy: 1;
 }
 
 export interface AliyunCheckSmsVerifyCodeRequest {
@@ -147,6 +148,7 @@ export const mapAliyunSendSmsVerifyCode = (input: {
   ReturnVerifyCode: false,
   OutId: input.outId,
   Interval: 60,
+  DuplicatePolicy: 1,
 });
 
 export const mapAliyunCheckSmsVerifyCode = (input: {

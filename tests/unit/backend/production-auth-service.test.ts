@@ -334,8 +334,8 @@ describe("Production authentication core invariants", () => {
 });
 
 const phoneChallenge = async (h: ReturnType<typeof harness>) => {
-  // Production registration is email-invitation-only. Exercise live phone checks
-  // on an existing account linked through its purpose-bound authorization.
+  // Exercise provider phone checks on an existing account linked through its
+  // purpose-bound authorization; SMS-only registration has separate coverage.
   const linked = await h.service.completeFactor(await factorChallenge(h));
   if (!linked.ok) throw Error("Synthetic phone link refused");
   h.resetChecks();

@@ -373,4 +373,10 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "b5938b21197af3de2f60cb0af1b550ca33347589974e0948fdc60795de891190",
     }),
+    Object.freeze({
+      migrationId: "20261026020000",
+      filename: "20261026020000_phone_registration_invitations.sql",
+      checksum:
+        "0fe727a146b52b58fe9268b77b74dea140260509b226caeec63571acab6ecc85",
+    }),
   ]);
