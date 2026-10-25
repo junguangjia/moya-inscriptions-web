@@ -733,6 +733,23 @@ export const registerMediaDeliveryTests = (pool: Pool) => {
         media: repaired,
         gallery: repaired,
       });
+      // A stored position is read as the Web editor stores it, rounded to
+      // 1e-4: 0.50004 is the centre (no key), 0.12345 is 0.1235.
+      for (const [y, expected] of [
+        [0.50004, undefined],
+        [0.12345, { fit: "cover", y: 0.1235 }],
+      ] as const) {
+        await pool.query(
+          `UPDATE community.work_revision_items SET edit=jsonb_set(edit,'{feed}',$3::jsonb)
+          WHERE revision_id=$1 AND item_id=$2`,
+          [plain.revisionId, damaged, JSON.stringify({ fit: "cover", y })],
+        );
+        const rounded = [...itemFraming.slice(0, -1), expected];
+        expect(await framing(plain.workId, visitor)).toMatchObject({
+          media: rounded,
+          gallery: rounded,
+        });
+      }
 
       // A cropped cover defaults to a centred cover; the author's whole
       // image wins over that default.

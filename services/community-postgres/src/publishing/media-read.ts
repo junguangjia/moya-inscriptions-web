@@ -183,6 +183,8 @@ const placeholderOf = (
 
 /** How far a frame's height-to-width ratio must pass 1 to be taller than a square. */
 const SQUARE_TOLERANCE = 0.001;
+/** A stored position is read as the Web editor stores it: rounded to 1e-4. */
+const FEED_PRECISION = 1e4;
 
 /**
  * `feed` of a shown entry of `width` × `height` as readers get it: its
@@ -207,7 +209,9 @@ const publicFeed = (
       ? { feed: { fit: "contain" } }
       : {};
   const feed = parsed.data;
-  return feed.fit === "cover" && feed.y === MEDIA_FEED_CENTRE ? {} : { feed };
+  if (feed.fit === "contain") return { feed };
+  const y = Math.round(feed.y * FEED_PRECISION) / FEED_PRECISION;
+  return y === MEDIA_FEED_CENTRE ? {} : { feed: { fit: "cover", y } };
 };
 
 /** `publicFeed` of a card cover row: none under a cover crop. */
