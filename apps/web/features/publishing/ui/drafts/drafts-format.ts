@@ -1,3 +1,5 @@
+import { normalizeFeed, sameEdit, sameFeed } from "../media/media-geometry";
+
 import type {
   PublishingDeviceClass,
   PublishingDraftSummary,
@@ -155,13 +157,23 @@ export const newestEditedFirst = (
 export const missingLocalText = (count: number): string =>
   `${count} 项尚未上传，打开后需重新选择文件`;
 
-/** A rotation or crop the thumbnails cannot show (they are the unedited image). */
+/**
+ * A rotation, crop or feed framing the thumbnails cannot show (they are the
+ * unedited image). A framing is named only when it is the author's choice
+ * and not the photo's default (whole when uncropped, else a centred cover).
+ */
 export const itemEditText = (
   edit: WorkDraftContent["items"][number]["edit"],
 ): string | null => {
+  const feed = normalizeFeed(edit.feed, edit);
   const parts = [
     edit.rotation === 0 ? null : `已旋转 ${edit.rotation}°`,
     edit.crop === null ? null : "已裁剪",
+    feed === undefined
+      ? null
+      : feed.fit === "contain"
+        ? "动态流整张显示"
+        : "动态流显示局部",
   ].filter((part) => part !== null);
   return parts.length === 0 ? null : parts.join("、");
 };
@@ -210,7 +222,11 @@ const sameAuthorship = (
   (a?.kind ?? null) === (b?.kind ?? null) &&
   JSON.stringify(authorshipDetails(a)) === JSON.stringify(authorshipDetails(b));
 
-/** Which parts of two versions differ, for the conflict chooser's markers. */
+/**
+ * Which parts of two versions differ, for the conflict chooser's markers.
+ * An item's edit differs by its pixels or its feed framing, both of which
+ * the chooser names (`itemEditText`).
+ */
 export const compareContent = (
   a: WorkDraftContent,
   b: WorkDraftContent,
@@ -227,7 +243,8 @@ export const compareContent = (
         other === undefined ||
         other.key !== item.key ||
         other.itemId !== item.itemId ||
-        JSON.stringify(other.edit) !== JSON.stringify(item.edit)
+        !sameEdit(other.edit, item.edit) ||
+        !sameFeed(other.edit.feed, item.edit.feed, item.edit)
       );
     }),
   cover:

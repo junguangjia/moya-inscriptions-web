@@ -207,6 +207,42 @@ describe("editor preview media", () => {
     ]);
   });
 
+  it("never redraws for a feed framing, which leaves the pixels alone (#341)", async () => {
+    const store = createEditorSessionStore(ACCOUNT, { type: "new" });
+    store.setMedia({
+      items: [accountItem(90)],
+      coverKey: null,
+      coverCrop: null,
+    });
+    store.mergeServerItems([serverItem]);
+    await draw(store, "all");
+    expect(frames.drawn).toEqual(["/media/display"]);
+    const shown = seen.current?.sources;
+
+    store.setItemEdit("account", {
+      rotation: 90,
+      crop: null,
+      feed: { fit: "cover", y: 0 },
+    });
+    await draw(store, "all");
+    expect(frames.drawn).toEqual(["/media/display"]);
+    expect(frames.released).toEqual([]);
+    expect(seen.current?.sources).toEqual(shown);
+
+    // An unturned, uncropped item stays the account's picture, motion too.
+    store.setItemEdit("account", {
+      rotation: 0,
+      crop: null,
+      feed: { fit: "contain" },
+    });
+    await draw(store, "all");
+    expect(frames.drawn).toEqual(["/media/display"]);
+    expect(seen.current?.sources[0]).toMatchObject({
+      src: "/media/display",
+      live: { motionSrc: "/media/motion", hasAudio: true },
+    });
+  });
+
   it("counts an edit that cannot be drawn and shows the unedited picture", async () => {
     frames.fail = true;
     const store = createEditorSessionStore(ACCOUNT, { type: "new" });

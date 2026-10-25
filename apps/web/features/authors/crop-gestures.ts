@@ -7,6 +7,15 @@ export const CROP_MAX_ZOOM = 3;
 const ZOOM_STEP = 0.1;
 
 /**
+ * Controls of the caller's own inside the crop frame (the phone stage's
+ * corner handles, a framing slider): their keys and focus stay theirs.
+ */
+export const OWN_CONTROL = "[data-crop-own-control]";
+
+const ownControl = (target: EventTarget | null) =>
+  target instanceof Element && target.closest(OWN_CONTROL) !== null;
+
+/**
  * Input for a react-easy-crop surface shared by the cover and avatar editors
  * (Owner decision, #171 r3/r4): drag to move and two-finger zoom (touch pinch
  * or trackpad pinch) with no zoom bar. Ctrl + wheel and the + − 0 keys are
@@ -15,11 +24,33 @@ const ZOOM_STEP = 0.1;
 export const useCropGestures = ({
   locked,
   autoFocus = false,
+  frozen = false,
+  holdRef,
+  maxZoom = CROP_MAX_ZOOM,
+  keepControlFocus = false,
 }: {
   /** Saving: user input is blocked; layout re-reports still apply. */
   locked: boolean;
   /** Focus the crop area once the photo is laid out. */
   autoFocus?: boolean;
+  /**
+   * The caller has the frame for a moment (a corner handle drag, a framing
+   * tool): touch, mouse, wheel, Safari's gestures and keys reach the photo
+   * no more. Unlike `locked`, the crop area stays focusable.
+   */
+  frozen?: boolean;
+  /**
+   * `frozen` as the caller sets it inside an event, before that event's
+   * render: a second finger in the same turn already finds the photo held.
+   */
+  holdRef?: { readonly current: boolean };
+  /** How far zoom goes (a small stored crop may need more than the shared 3×). */
+  maxZoom?: number;
+  /**
+   * A press on a button or an own control inside the frame keeps its focus
+   * instead of handing it to the crop area.
+   */
+  keepControlFocus?: boolean;
 }) => {
   const [crop, setCrop] = useState({ x: 0, y: 0 }),
     [zoom, setZoom] = useState(1),
@@ -33,8 +64,16 @@ export const useCropGestures = ({
   const frame = useRef<HTMLDivElement>(null),
     focused = useRef(false),
     interacting = useRef(false),
-    latestLocked = useRef(locked);
+    latestLocked = useRef(locked),
+    latestFrozen = useRef(frozen),
+    latestMaxZoom = useRef(maxZoom),
+    refused = useRef(false);
   latestLocked.current = locked;
+  latestFrozen.current = frozen;
+  latestMaxZoom.current = maxZoom;
+  const held = () => latestFrozen.current || holdRef?.current === true;
+  /** Nothing the author does reaches the photo. */
+  const blocked = () => latestLocked.current || held();
   // react-easy-crop keeps document listeners until touchend or mouseup. A
   // cancelled touch (system gesture, call) or a lost mouseup would leave the
   // next touch dragging: end it by remounting; crop and zoom stay controlled.
@@ -49,14 +88,26 @@ export const useCropGestures = ({
     };
     // A second finger landing outside the frame starts no pinch in the
     // library (its distance stays 0, so zoom would jump): end the gesture.
+    // A corner handle is drawn over the frame but is not the library's.
     const outside = (event: TouchEvent) => {
       if (
         frame.current &&
         event.target instanceof Node &&
-        !frame.current.contains(event.target)
+        (!frame.current.contains(event.target) ||
+          (event.target instanceof Element &&
+            event.target.closest("[data-crop-handle]") !== null))
       )
         endInterrupted();
     };
+    // Safari's own pinch reaches the library as gesture events on its
+    // container: a frozen frame takes them first.
+    const node = frame.current;
+    const gesture = (event: Event) => {
+      if (!held()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    node?.addEventListener("gesturestart", gesture, { capture: true });
     window.addEventListener("blur", endInterrupted);
     document.addEventListener("visibilitychange", hidden);
     document.addEventListener("touchstart", outside, {
@@ -67,6 +118,7 @@ export const useCropGestures = ({
       window.removeEventListener("blur", endInterrupted);
       document.removeEventListener("visibilitychange", hidden);
       document.removeEventListener("touchstart", outside, { capture: true });
+      node?.removeEventListener("gesturestart", gesture, { capture: true });
     };
   }, []);
   // The crop area exists once the library has measured and reported an
@@ -79,22 +131,27 @@ export const useCropGestures = ({
     target.focus({ preventScroll: true });
   }, [area, autoFocus]);
   const changeZoom = (value: number) => {
-    if (latestLocked.current) return;
-    setZoom(Math.min(CROP_MAX_ZOOM, Math.max(1, value)));
+    if (blocked()) return;
+    setZoom(Math.min(latestMaxZoom.current, Math.max(1, value)));
   };
-  const reset = () => {
-    if (latestLocked.current) return;
+  /** Back to the centre at zoom 1, whatever the author's input may do now. */
+  const restart = () => {
     setCrop({ x: 0, y: 0 });
     setZoom(1);
+  };
+  const reset = () => {
+    if (blocked()) return;
+    restart();
   };
   const keys = (event: KeyboardEvent<HTMLElement>) => {
     // Only the photo takes + − 0 (not toolbars or action buttons); browser
     // shortcuts (page zoom Ctrl/⌘ + = − 0) stay the browser's.
     if (
-      latestLocked.current ||
+      blocked() ||
       !(
         event.target instanceof Node && frame.current?.contains(event.target)
       ) ||
+      ownControl(event.target) ||
       event.ctrlKey ||
       event.metaKey ||
       event.altKey
@@ -110,7 +167,10 @@ export const useCropGestures = ({
   const lockKeys = (event: KeyboardEvent<HTMLElement>) => {
     if (
       !event.key.startsWith("Arrow") ||
-      !(event.target instanceof Node && frame.current?.contains(event.target))
+      !(
+        event.target instanceof Node && frame.current?.contains(event.target)
+      ) ||
+      ownControl(event.target)
     )
       return;
     // ⌘/Alt/Ctrl + arrows are the browser's (Back, page scroll): the
@@ -119,8 +179,9 @@ export const useCropGestures = ({
       event.stopPropagation();
       return;
     }
-    // While saving, a focused crop area's arrow keys must not move the photo.
-    if (latestLocked.current) {
+    // While saving or frozen, a focused crop area's arrow keys must not
+    // move the photo.
+    if (blocked()) {
       event.preventDefault();
       event.stopPropagation();
     }
@@ -136,6 +197,18 @@ export const useCropGestures = ({
     coarse,
     pristine: zoom === 1 && crop.x === 0 && crop.y === 0,
     reset,
+    /**
+     * A hold ends on the same cropper: if it refused a touch meanwhile, the
+     * surface is remounted (crop and zoom kept) so the library is not left
+     * touching. A hold that ends with a new cropper only forgets it.
+     */
+    endHold: (sameCropper: boolean) => {
+      if (!refused.current) return;
+      refused.current = false;
+      if (sameCropper) setSurface((value) => value + 1);
+    },
+    /** A new frame or aspect: centred at zoom 1 (not the author's input, so never blocked). */
+    restart,
     /** Put on an element around the crop surface and its controls. */
     wrapperProps: { onKeyDown: keys, onKeyDownCapture: lockKeys },
     /** Put on the crop surface's own container. */
@@ -144,11 +217,21 @@ export const useCropGestures = ({
       onTouchCancel: endInterrupted,
       // The library's mousedown prevents focus: take it here so the keys
       // keep working after a toolbar click (mouse-only desktops).
-      onPointerDownCapture: () => {
+      onPointerDownCapture: (event: { target: EventTarget | null }) => {
         if (latestLocked.current) return;
+        if (
+          keepControlFocus &&
+          event.target instanceof Element &&
+          event.target.closest(`button, ${OWN_CONTROL}`) !== null
+        )
+          return;
         frame.current
           ?.querySelector<HTMLElement>('[tabindex="0"]')
           ?.focus({ preventScroll: true });
+      },
+      // The library's own mousedown, while the frame is the caller's.
+      onMouseDownCapture: (event: { stopPropagation: () => void }) => {
+        if (held()) event.stopPropagation();
       },
       onContextMenu: (event: { preventDefault: () => void }) =>
         event.preventDefault(),
@@ -158,17 +241,22 @@ export const useCropGestures = ({
       crop,
       zoom,
       minZoom: 1,
-      maxZoom: CROP_MAX_ZOOM,
+      maxZoom,
       keyboardStep: 8,
-      // User input is blocked while saving (touch, wheel, keys and
+      // User input is blocked while saving or frozen (touch, wheel, keys and
       // pointer-events); what still arrives is layout re-reporting.
       onCropChange: setCrop,
       onZoomChange: setZoom,
-      onTouchRequest: () => !latestLocked.current,
+      onTouchRequest: () => {
+        if (!blocked()) return true;
+        // react-easy-crop marks itself touching before it asks, and a refused
+        // touch never ends: until a remount its Safari gestures do nothing.
+        refused.current = true;
+        return false;
+      },
       // Plain wheel and two-finger scroll keep scrolling the page; trackpad
       // pinch arrives with ctrlKey (Safari uses gesture events).
-      onWheelRequest: (event: WheelEvent) =>
-        !latestLocked.current && event.ctrlKey,
+      onWheelRequest: (event: WheelEvent) => !blocked() && event.ctrlKey,
       onInteractionStart: () => {
         interacting.current = true;
       },

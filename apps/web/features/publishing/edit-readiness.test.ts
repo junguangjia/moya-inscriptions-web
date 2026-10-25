@@ -13,7 +13,11 @@ import {
 } from "./edit-readiness";
 import { manualTimers, settle } from "./upload-manager.test-support";
 
-import type { PublishingReadiness, WorkDraftContent } from "@moya/contracts";
+import type {
+  PublishingReadiness,
+  WorkDraftContent,
+  WorkDraftItem,
+} from "@moya/contracts";
 
 const ITEM = `media-item-${"1".repeat(32)}`;
 const KEY = "a".repeat(32);
@@ -108,6 +112,35 @@ describe("derivation signatures", () => {
     ).toBe(false);
   });
 
+  it("never derives for feed framing: it is presentation only (#341)", () => {
+    const album = { coverKey: null, coverCrop: null };
+    const [a, b] = content().items as [WorkDraftItem, WorkDraftItem];
+    const framed = (entry: WorkDraftItem): WorkDraftItem => ({
+      ...entry,
+      edit: { ...entry.edit, feed: { fit: "contain" } },
+    });
+    expect(derivationSignature(framed(a), album)).toBe(
+      derivationSignature(a, album),
+    );
+    expect(derivationSignature(framed(b), album)).toBeNull();
+    expect(
+      needsDerivation(content({ items: [framed(b)], coverKey: null })),
+    ).toBe(false);
+    // The answer that covered the unframed edit still covers it.
+    const covered = {
+      status: "ready" as const,
+      answered: {
+        ready: true,
+        pendingItemKeys: new Set<string>(),
+        failedItemKeys: new Set<string>(),
+        editKeys: { a: KEY },
+        signatures: { a: derivationSignature(a, album), b: null },
+      },
+    };
+    expect(itemDerivation(framed(a), album, covered)).toBe("ready");
+    expect(itemEditKey(framed(a), album, covered)).toBe(KEY);
+  });
+
   it("derives an item's state from the answer that covers its current edit", () => {
     const album = { coverKey: null, coverCrop: null };
     const [a, b] = content().items;
@@ -196,6 +229,27 @@ describe("edit readiness tracker", () => {
     });
     // Ready: no more polling.
     expect(t.delays()).toEqual([]);
+  });
+
+  it("asks nothing again when only an item's feed framing changes (#341)", async () => {
+    const t = setup();
+    t.check.mockResolvedValueOnce(answer([], [], { a: KEY }));
+    t.tracker.schedule();
+    await t.tick();
+    expect(t.tracker.store.get().status).toBe("ready");
+    const [a, b] = content().items as [WorkDraftItem, WorkDraftItem];
+    t.setContent(
+      content({
+        items: [
+          { ...a, edit: { ...a.edit, feed: { fit: "cover", y: 0 } } },
+          { ...b, edit: { ...b.edit, feed: { fit: "contain" } } },
+        ],
+      }),
+    );
+    t.tracker.schedule();
+    expect(t.delays()).toEqual([]);
+    expect(t.check).toHaveBeenCalledTimes(1);
+    expect(t.tracker.store.get().status).toBe("ready");
   });
 
   it("stops when only failures remain, and asks again after the next edit", async () => {

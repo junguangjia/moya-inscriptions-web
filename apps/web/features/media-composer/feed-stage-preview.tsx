@@ -17,6 +17,8 @@ import {
   readStripOffset,
   resolveStageAspect,
   slideFit,
+  slideFraming,
+  slidePositionY,
   stripIndex,
   stripProgress,
   stripScrollLeft,
@@ -25,15 +27,17 @@ import { MediaFallback } from "../home/card-media-parts";
 import home from "../home/home-screen.module.css";
 import styles from "./media-composer.module.css";
 
+import type { MediaFeedFraming } from "@moya/contracts";
 import type { CSSProperties } from "react";
 
 /**
  * The post as the phone single-column feed (#243) will show it, inside the
  * composer (#244): the same stage box (from the first image, between 1:1 and
  * 4:5), the same right-to-left native scroll-snap strip with the first image
- * at the right edge, the same fit per slide and the same dot row — without
- * the feed's taps, likes, viewer or comments. Pictures come from the editor's
- * own media sources; the preview holds no object URLs of its own.
+ * at the right edge, the same fit and framing per slide and the same dot row
+ * — without the feed's taps, likes, viewer or comments. Pictures come from
+ * the editor's own media sources; the preview holds no object URLs of its
+ * own.
  */
 
 export interface FeedStagePreviewSlide {
@@ -45,6 +49,11 @@ export interface FeedStagePreviewSlide {
   readonly size: { readonly width: number; readonly height: number } | null;
   readonly status: "ready" | "loading" | "unavailable";
   readonly placeholderColor?: string | undefined;
+  /**
+   * The item's feed framing as the feed reads it (its effective one, so an
+   * uncropped taller picture is whole; `readerFeed`); absent, centred.
+   */
+  readonly feed?: MediaFeedFraming | undefined;
 }
 
 export interface FeedStagePreviewProps {
@@ -271,7 +280,13 @@ export const FeedStagePreview = ({
             const active = index === current;
             const broken = failed.has(slide.key);
             const fit =
-              slide.size === null ? "contain" : slideFit(slide.size, ratio);
+              slide.size === null
+                ? "contain"
+                : slideFit(slide.size, ratio, slide.feed);
+            const positionY =
+              slide.size === null
+                ? undefined
+                : slidePositionY(slide.size, ratio, slide.feed);
             const picture =
               slide.src === null ? null : (
                 <img
@@ -297,11 +312,21 @@ export const FeedStagePreview = ({
                 aria-label={`第 ${index + 1} 张，共 ${count} 张`}
                 aria-roledescription="slide"
                 className={home.postSlide}
+                data-feed-framing={
+                  slide.size === null
+                    ? undefined
+                    : slideFraming(slide.size, ratio, slide.feed)
+                }
                 data-feed-slide={index}
                 data-fit={fit}
                 inert={(onSlideActivate !== undefined && !active) || undefined}
                 key={slide.key}
                 role="group"
+                style={
+                  positionY === undefined
+                    ? undefined
+                    : ({ "--feed-slide-y": positionY } as CSSProperties)
+                }
               >
                 {broken ? (
                   <MediaFallback

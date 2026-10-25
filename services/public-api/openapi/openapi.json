@@ -16304,6 +16304,37 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "feed": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fit": {
+                          "const": "contain",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["fit"],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fit": {
+                          "const": "cover",
+                          "type": "string"
+                        },
+                        "y": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      },
+                      "required": ["fit", "y"],
+                      "type": "object"
+                    }
+                  ]
+                },
                 "height": {
                   "exclusiveMinimum": 0,
                   "maximum": 9007199254740991,
@@ -16442,6 +16473,37 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "feed": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "fit": {
+                            "const": "contain",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["fit"],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "fit": {
+                            "const": "cover",
+                            "type": "string"
+                          },
+                          "y": {
+                            "maximum": 1,
+                            "minimum": 0,
+                            "type": "number"
+                          }
+                        },
+                        "required": ["fit", "y"],
+                        "type": "object"
+                      }
+                    ]
+                  },
                   "height": {
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991,
@@ -16668,6 +16730,37 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "feed": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "fit": {
+                                "const": "contain",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["fit"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "fit": {
+                                "const": "cover",
+                                "type": "string"
+                              },
+                              "y": {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              }
+                            },
+                            "required": ["fit", "y"],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "height": {
                         "exclusiveMinimum": 0,
                         "maximum": 9007199254740991,
@@ -16816,6 +16909,37 @@
                     {
                       "additionalProperties": false,
                       "properties": {
+                        "feed": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "contain",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["fit"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "cover",
+                                  "type": "string"
+                                },
+                                "y": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["fit", "y"],
+                              "type": "object"
+                            }
+                          ]
+                        },
                         "height": {
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991,
@@ -18645,6 +18769,37 @@
                             }
                           ]
                         },
+                        "feed": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "contain",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["fit"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "cover",
+                                  "type": "string"
+                                },
+                                "y": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["fit", "y"],
+                              "type": "object"
+                            }
+                          ]
+                        },
                         "rotation": {
                           "enum": [0, 90, 180, 270],
                           "type": "number"
@@ -19448,6 +19603,37 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "feed": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "fit": {
+                                "const": "contain",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["fit"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "fit": {
+                                "const": "cover",
+                                "type": "string"
+                              },
+                              "y": {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              }
+                            },
+                            "required": ["fit", "y"],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "height": {
                         "exclusiveMinimum": 0,
                         "maximum": 9007199254740991,
@@ -19596,6 +19782,37 @@
                     {
                       "additionalProperties": false,
                       "properties": {
+                        "feed": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "contain",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["fit"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "cover",
+                                  "type": "string"
+                                },
+                                "y": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["fit", "y"],
+                              "type": "object"
+                            }
+                          ]
+                        },
                         "height": {
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991,
@@ -21220,6 +21437,37 @@
                             }
                           ]
                         },
+                        "feed": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "contain",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["fit"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "cover",
+                                  "type": "string"
+                                },
+                                "y": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["fit", "y"],
+                              "type": "object"
+                            }
+                          ]
+                        },
                         "rotation": {
                           "enum": [0, 90, 180, 270],
                           "type": "number"
@@ -21941,6 +22189,37 @@
               },
               {
                 "type": "null"
+              }
+            ]
+          },
+          "feed": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fit": {
+                    "const": "contain",
+                    "type": "string"
+                  }
+                },
+                "required": ["fit"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fit": {
+                    "const": "cover",
+                    "type": "string"
+                  },
+                  "y": {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": ["fit", "y"],
+                "type": "object"
               }
             ]
           },
@@ -22909,6 +23188,37 @@
                                         }
                                       ]
                                     },
+                                    "feed": {
+                                      "oneOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "fit": {
+                                              "const": "contain",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": ["fit"],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "fit": {
+                                              "const": "cover",
+                                              "type": "string"
+                                            },
+                                            "y": {
+                                              "maximum": 1,
+                                              "minimum": 0,
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": ["fit", "y"],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
                                     "rotation": {
                                       "enum": [0, 90, 180, 270],
                                       "type": "number"
@@ -23219,6 +23529,37 @@
                                         }
                                       ]
                                     },
+                                    "feed": {
+                                      "oneOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "fit": {
+                                              "const": "contain",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": ["fit"],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "fit": {
+                                              "const": "cover",
+                                              "type": "string"
+                                            },
+                                            "y": {
+                                              "maximum": 1,
+                                              "minimum": 0,
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": ["fit", "y"],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
                                     "rotation": {
                                       "enum": [0, 90, 180, 270],
                                       "type": "number"
@@ -23516,6 +23857,37 @@
                             },
                             {
                               "type": "null"
+                            }
+                          ]
+                        },
+                        "feed": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "contain",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["fit"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "cover",
+                                  "type": "string"
+                                },
+                                "y": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["fit", "y"],
+                              "type": "object"
                             }
                           ]
                         },
@@ -24238,6 +24610,37 @@
                                                 }
                                               ]
                                             },
+                                            "feed": {
+                                              "oneOf": [
+                                                {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "fit": {
+                                                      "const": "contain",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": ["fit"],
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "fit": {
+                                                      "const": "cover",
+                                                      "type": "string"
+                                                    },
+                                                    "y": {
+                                                      "maximum": 1,
+                                                      "minimum": 0,
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": ["fit", "y"],
+                                                  "type": "object"
+                                                }
+                                              ]
+                                            },
                                             "rotation": {
                                               "enum": [0, 90, 180, 270],
                                               "type": "number"
@@ -24562,6 +24965,37 @@
                                                 }
                                               ]
                                             },
+                                            "feed": {
+                                              "oneOf": [
+                                                {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "fit": {
+                                                      "const": "contain",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": ["fit"],
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "fit": {
+                                                      "const": "cover",
+                                                      "type": "string"
+                                                    },
+                                                    "y": {
+                                                      "maximum": 1,
+                                                      "minimum": 0,
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": ["fit", "y"],
+                                                  "type": "object"
+                                                }
+                                              ]
+                                            },
                                             "rotation": {
                                               "enum": [0, 90, 180, 270],
                                               "type": "number"
@@ -24868,6 +25302,37 @@
                                     },
                                     {
                                       "type": "null"
+                                    }
+                                  ]
+                                },
+                                "feed": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "fit": {
+                                          "const": "contain",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["fit"],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "fit": {
+                                          "const": "cover",
+                                          "type": "string"
+                                        },
+                                        "y": {
+                                          "maximum": 1,
+                                          "minimum": 0,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["fit", "y"],
+                                      "type": "object"
                                     }
                                   ]
                                 },
@@ -25413,6 +25878,37 @@
                                         }
                                       ]
                                     },
+                                    "feed": {
+                                      "oneOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "fit": {
+                                              "const": "contain",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": ["fit"],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "fit": {
+                                              "const": "cover",
+                                              "type": "string"
+                                            },
+                                            "y": {
+                                              "maximum": 1,
+                                              "minimum": 0,
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": ["fit", "y"],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
                                     "rotation": {
                                       "enum": [0, 90, 180, 270],
                                       "type": "number"
@@ -25720,6 +26216,37 @@
                                         },
                                         {
                                           "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "feed": {
+                                      "oneOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "fit": {
+                                              "const": "contain",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": ["fit"],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "fit": {
+                                              "const": "cover",
+                                              "type": "string"
+                                            },
+                                            "y": {
+                                              "maximum": 1,
+                                              "minimum": 0,
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": ["fit", "y"],
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -26050,6 +26577,37 @@
                                                 }
                                               ]
                                             },
+                                            "feed": {
+                                              "oneOf": [
+                                                {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "fit": {
+                                                      "const": "contain",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": ["fit"],
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "fit": {
+                                                      "const": "cover",
+                                                      "type": "string"
+                                                    },
+                                                    "y": {
+                                                      "maximum": 1,
+                                                      "minimum": 0,
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": ["fit", "y"],
+                                                  "type": "object"
+                                                }
+                                              ]
+                                            },
                                             "rotation": {
                                               "enum": [0, 90, 180, 270],
                                               "type": "number"
@@ -26374,6 +26932,37 @@
                                                 }
                                               ]
                                             },
+                                            "feed": {
+                                              "oneOf": [
+                                                {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "fit": {
+                                                      "const": "contain",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": ["fit"],
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "fit": {
+                                                      "const": "cover",
+                                                      "type": "string"
+                                                    },
+                                                    "y": {
+                                                      "maximum": 1,
+                                                      "minimum": 0,
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": ["fit", "y"],
+                                                  "type": "object"
+                                                }
+                                              ]
+                                            },
                                             "rotation": {
                                               "enum": [0, 90, 180, 270],
                                               "type": "number"
@@ -26680,6 +27269,37 @@
                                     },
                                     {
                                       "type": "null"
+                                    }
+                                  ]
+                                },
+                                "feed": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "fit": {
+                                          "const": "contain",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["fit"],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "fit": {
+                                          "const": "cover",
+                                          "type": "string"
+                                        },
+                                        "y": {
+                                          "maximum": 1,
+                                          "minimum": 0,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["fit", "y"],
+                                      "type": "object"
                                     }
                                   ]
                                 },
@@ -27738,6 +28358,37 @@
                                             }
                                           ]
                                         },
+                                        "feed": {
+                                          "oneOf": [
+                                            {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "fit": {
+                                                  "const": "contain",
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": ["fit"],
+                                              "type": "object"
+                                            },
+                                            {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "fit": {
+                                                  "const": "cover",
+                                                  "type": "string"
+                                                },
+                                                "y": {
+                                                  "maximum": 1,
+                                                  "minimum": 0,
+                                                  "type": "number"
+                                                }
+                                              },
+                                              "required": ["fit", "y"],
+                                              "type": "object"
+                                            }
+                                          ]
+                                        },
                                         "rotation": {
                                           "enum": [0, 90, 180, 270],
                                           "type": "number"
@@ -28057,6 +28708,37 @@
                                             }
                                           ]
                                         },
+                                        "feed": {
+                                          "oneOf": [
+                                            {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "fit": {
+                                                  "const": "contain",
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": ["fit"],
+                                              "type": "object"
+                                            },
+                                            {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "fit": {
+                                                  "const": "cover",
+                                                  "type": "string"
+                                                },
+                                                "y": {
+                                                  "maximum": 1,
+                                                  "minimum": 0,
+                                                  "type": "number"
+                                                }
+                                              },
+                                              "required": ["fit", "y"],
+                                              "type": "object"
+                                            }
+                                          ]
+                                        },
                                         "rotation": {
                                           "enum": [0, 90, 180, 270],
                                           "type": "number"
@@ -28363,6 +29045,37 @@
                                 },
                                 {
                                   "type": "null"
+                                }
+                              ]
+                            },
+                            "feed": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "fit": {
+                                      "const": "contain",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["fit"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "fit": {
+                                      "const": "cover",
+                                      "type": "string"
+                                    },
+                                    "y": {
+                                      "maximum": 1,
+                                      "minimum": 0,
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": ["fit", "y"],
+                                  "type": "object"
                                 }
                               ]
                             },
@@ -28932,6 +29645,37 @@
                             }
                           ]
                         },
+                        "feed": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "contain",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["fit"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "cover",
+                                  "type": "string"
+                                },
+                                "y": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["fit", "y"],
+                              "type": "object"
+                            }
+                          ]
+                        },
                         "rotation": {
                           "enum": [0, 90, 180, 270],
                           "type": "number"
@@ -29240,6 +29984,37 @@
                                   },
                                   {
                                     "type": "null"
+                                  }
+                                ]
+                              },
+                              "feed": {
+                                "oneOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "fit": {
+                                        "const": "contain",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["fit"],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "fit": {
+                                        "const": "cover",
+                                        "type": "string"
+                                      },
+                                      "y": {
+                                        "maximum": 1,
+                                        "minimum": 0,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": ["fit", "y"],
+                                    "type": "object"
                                   }
                                 ]
                               },
@@ -30136,6 +30911,37 @@
                             },
                             {
                               "type": "null"
+                            }
+                          ]
+                        },
+                        "feed": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "contain",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["fit"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "cover",
+                                  "type": "string"
+                                },
+                                "y": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["fit", "y"],
+                              "type": "object"
                             }
                           ]
                         },
@@ -31654,6 +32460,37 @@
           "canEdit": {
             "type": "boolean"
           },
+          "coverFeed": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fit": {
+                    "const": "contain",
+                    "type": "string"
+                  }
+                },
+                "required": ["fit"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fit": {
+                    "const": "cover",
+                    "type": "string"
+                  },
+                  "y": {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": ["fit", "y"],
+                "type": "object"
+              }
+            ]
+          },
           "coverMediaId": {
             "anyOf": [
               {
@@ -31782,6 +32619,37 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "feed": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fit": {
+                          "const": "contain",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["fit"],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fit": {
+                          "const": "cover",
+                          "type": "string"
+                        },
+                        "y": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      },
+                      "required": ["fit", "y"],
+                      "type": "object"
+                    }
+                  ]
+                },
                 "hasAudio": {
                   "type": "boolean"
                 },
@@ -32181,6 +33049,37 @@
                         }
                       ]
                     },
+                    "feed": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fit": {
+                              "const": "contain",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["fit"],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fit": {
+                              "const": "cover",
+                              "type": "string"
+                            },
+                            "y": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": ["fit", "y"],
+                          "type": "object"
+                        }
+                      ]
+                    },
                     "rotation": {
                       "enum": [0, 90, 180, 270],
                       "type": "number"
@@ -32361,6 +33260,37 @@
                 "canEdit": {
                   "type": "boolean"
                 },
+                "coverFeed": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fit": {
+                          "const": "contain",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["fit"],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fit": {
+                          "const": "cover",
+                          "type": "string"
+                        },
+                        "y": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      },
+                      "required": ["fit", "y"],
+                      "type": "object"
+                    }
+                  ]
+                },
                 "coverMediaId": {
                   "anyOf": [
                     {
@@ -32489,6 +33419,37 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "feed": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "fit": {
+                                "const": "contain",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["fit"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "fit": {
+                                "const": "cover",
+                                "type": "string"
+                              },
+                              "y": {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              }
+                            },
+                            "required": ["fit", "y"],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "hasAudio": {
                         "type": "boolean"
                       },
@@ -32859,6 +33820,37 @@
                             },
                             {
                               "type": "null"
+                            }
+                          ]
+                        },
+                        "feed": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "contain",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["fit"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fit": {
+                                  "const": "cover",
+                                  "type": "string"
+                                },
+                                "y": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["fit", "y"],
+                              "type": "object"
                             }
                           ]
                         },

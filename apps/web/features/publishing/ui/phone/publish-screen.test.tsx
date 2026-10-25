@@ -9,6 +9,8 @@ import {
   localIssues,
 } from "../editor/editor-session-state";
 import { KEYBOARD_ATTRIBUTE } from "../editor/editor-layout";
+import { FeedPostStage } from "../../../authors/feed-post-stage";
+import { FeedStagePreview } from "../../../media-composer/feed-stage-preview";
 import { publishReason } from "./publish-bar";
 import {
   PublishPreviewStrip,
@@ -31,7 +33,12 @@ import type {
   PublishPreviewSlide,
   PublishScreenProps,
 } from "./publish-screen";
-import type { MentionReference, WorkDraftItem } from "@moya/contracts";
+import type {
+  MediaFeedFraming,
+  MentionReference,
+  WorkDraftItem,
+} from "@moya/contracts";
+import type { ReactNode } from "react";
 import type { Root } from "react-dom/client";
 
 (
@@ -1323,6 +1330,92 @@ describe("PublishPreviewStrip", () => {
     expect(onActiveIndexChange).toHaveBeenCalledTimes(4);
   });
 
+  // #341: 发布's cards, the desktop preview and the feed itself frame every
+  // picture alike: the same fit, the author's region or the whole image.
+  it("frames each picture exactly as the feed stage and the desktop preview do", () => {
+    const tall = { width: 600, height: 1800 };
+    const pictures: readonly {
+      readonly size: { readonly width: number; readonly height: number };
+      readonly feed?: MediaFeedFraming;
+    }[] = [
+      { size: tall, feed: { fit: "cover", y: 0 } },
+      { size: { width: 800, height: 600 }, feed: { fit: "contain" } },
+      { size: tall, feed: { fit: "contain" } },
+      { size: tall, feed: { fit: "cover", y: 0.75 } },
+      { size: tall, feed: { fit: "cover", y: 0.5 } },
+      { size: tall },
+    ];
+    const slides = pictures.map(({ size, feed }, index) =>
+      slide(`p${index}`, {
+        size,
+        placeholderColor: "#4a4038",
+        ...(feed === undefined ? {} : { feed }),
+      }),
+    );
+    const drawn = (nodes: NodeListOf<HTMLElement>) =>
+      [...nodes].map((node) => [
+        node.getAttribute("data-fit"),
+        node.getAttribute("data-feed-framing"),
+        node.style.getPropertyValue("--feed-slide-y"),
+      ]);
+    const { strip } = mount({ slides, total: slides.length });
+    const cards = drawn(
+      strip.querySelectorAll<HTMLElement>("[data-publish-card]"),
+    );
+    expect(cards).toEqual([
+      ["cover", "region", "0%"],
+      ["contain", null, ""],
+      ["contain", "whole", ""],
+      ["cover", "region", "75%"],
+      ["cover", null, ""],
+      ["cover", null, ""],
+    ]);
+    // A whole picture's blank sides stay the card's own (the feed's page).
+    const tint = (index: number) =>
+      strip.querySelector<HTMLElement>(`[data-publish-card="${index}"] img`)!
+        .style.backgroundColor;
+    expect([0, 1, 2].map(tint)).toEqual(["rgb(74, 64, 56)", "", ""]);
+
+    const elsewhere = (node: ReactNode) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      roots.push(root);
+      act(() => root.render(node));
+      return container;
+    };
+    const preview = elsewhere(
+      <FeedStagePreview
+        activeIndex={0}
+        layout="desktop"
+        onActiveIndexChange={vi.fn()}
+        slides={slides}
+        total={slides.length}
+      />,
+    );
+    expect(
+      drawn(preview.querySelectorAll<HTMLElement>("[data-feed-slide]")),
+    ).toEqual(cards);
+    const feed = elsewhere(
+      <FeedPostStage
+        burstEnabled={false}
+        media={pictures.map(({ size, feed }, index) => ({
+          id: `p${index}`,
+          src: `/media/p${index}.webp`,
+          alt: "临兰亭",
+          ...size,
+          ...(feed === undefined ? {} : { feed }),
+        }))}
+        onDoubleTap={vi.fn()}
+        onOpenViewer={vi.fn()}
+        viewerOpen={false}
+      />,
+    );
+    expect(
+      drawn(feed.querySelectorAll<HTMLElement>("[data-feed-slide]")),
+    ).toEqual(cards);
+  });
+
   it("rests on the nearest card, never past either end", () => {
     expect(stripCardIndex(0, 500, 268, 3)).toBe(0);
     expect(stripCardIndex(150, 500, 268, 3)).toBe(1);
@@ -1478,6 +1571,19 @@ describe("publish-screen.module.css", () => {
           /(^|[\s(])\d+(\.\d+)?px/u,
         );
     }
+  });
+
+  // #341: a contained picture's blank margins read as the feed's.
+  it("draws a card on the feed stage's page background, its placeholders muted and a cover at the author's region", () => {
+    expect(css).toMatch(
+      /\n\.card \{[^}]*background: var\(--yoyi-color-background-page\);/u,
+    );
+    expect(css).toMatch(
+      /\n\.cardPlaceholder \{[^}]*background: var\(--yoyi-color-background-muted\);/u,
+    );
+    expect(css).toMatch(
+      /\n\.card\[data-fit="cover"\] \.cardImage \{\s*object-fit: cover;\s*object-position: 50% var\(--feed-slide-y, 50%\);\s*\}/u,
+    );
   });
 
   it("uses literal px only for the sizes without a token", () => {

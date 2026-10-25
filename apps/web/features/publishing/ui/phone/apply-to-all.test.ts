@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { setItemEdit } from "../media/media-order";
 import { applyRatioToAll } from "./apply-to-all";
 
 import type { Size } from "../media/media-geometry";
+import type { MediaValue } from "../media/media-order";
 import type { MediaEdit, WorkDraftItem } from "@moya/contracts";
 
 const item = (
@@ -113,5 +115,60 @@ describe("applyRatioToAll", () => {
     expect(changes).toEqual([
       { key: "cropped", edit: { rotation: 180, crop: null } },
     ]);
+  });
+
+  it("never touches a photo's feed framing, applied or undone (#341)", () => {
+    const placed = { x: 0.1, y: 0.4, width: 0.3, height: 0.5 };
+    const album: MediaValue = {
+      items: (
+        [
+          [
+            "region",
+            { rotation: 0, crop: null, feed: { fit: "cover", y: 0.2 } },
+          ],
+          ["whole", { rotation: 0, crop: placed, feed: { fit: "contain" } }],
+          ["plain", { rotation: 90, crop: null }],
+        ] as const
+      ).map(([key, edit]): WorkDraftItem => ({
+        key,
+        itemId: null,
+        kind: "static",
+        qualityMode: "standard",
+        edit,
+        pendingLabel: "photo",
+      })),
+      coverKey: null,
+      coverCrop: null,
+    };
+    const sizes = new Map(album.items.map((entry) => [entry.key, landscape]));
+    const changes = applyRatioToAll(album.items, sizes, "4:5");
+    // The ratio is all it sets: "whole" already has the shape and keeps it.
+    expect(changes.map((change) => change.key)).toEqual(["region", "plain"]);
+    expect(changes.every((change) => !("feed" in change.edit))).toBe(true);
+
+    // Folded like the edit screen does, then undone with each photo's edit.
+    const applied = changes.reduce(
+      (value, change) => setItemEdit(value, change.key, change.edit).value,
+      album,
+    );
+    const feeds = (value: MediaValue) =>
+      value.items.map((entry) => entry.edit.feed);
+    expect(feeds(applied)).toEqual(feeds(album));
+    expect(applied.items[0]!.edit.crop).toEqual({
+      x: 0.2,
+      y: 0,
+      width: 0.6,
+      height: 1,
+    });
+    const undone = changes.reduce(
+      (value, change) =>
+        setItemEdit(
+          value,
+          change.key,
+          album.items.find((entry) => entry.key === change.key)!.edit,
+        ).value,
+      applied,
+    );
+    expect(undone.items).toEqual(album.items);
   });
 });

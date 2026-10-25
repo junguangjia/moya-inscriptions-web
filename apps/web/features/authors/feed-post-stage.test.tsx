@@ -40,6 +40,22 @@ const three = [
   image("second", 800, 600),
   image("third", 600, 1200),
 ];
+/** #341: a 1:3 first image (a 4:5 stage) and the author's feed framings. */
+const framed: DetailMediaPresentation[] = [
+  {
+    ...image("region", 600, 1800),
+    placeholderColor: "#4a4038",
+    feed: { fit: "cover", y: 0 },
+  },
+  { ...image("short", 800, 600), feed: { fit: "contain" } },
+  {
+    ...image("whole", 600, 1800),
+    placeholderColor: "#4a4038",
+    feed: { fit: "contain" },
+  },
+  { ...image("centred", 600, 1800), feed: { fit: "cover", y: 0.5 } },
+  image("unframed", 600, 1800),
+];
 
 const roots: Root[] = [];
 const render = (overrides: Partial<FeedPostStageProps> = {}) => {
@@ -379,6 +395,53 @@ describe("FeedPostStage", () => {
       ),
     ).toEqual(["contain", "contain", "contain"]);
     expect(container.querySelectorAll("img")).toHaveLength(3);
+  });
+
+  it("crops a taller image at the author's region or keeps it whole", () => {
+    const { container } = render({ media: framed });
+    const slides = [
+      ...container.querySelectorAll<HTMLElement>("[data-feed-slide]"),
+    ];
+    expect(slides.map((slide) => slide.dataset.fit)).toEqual([
+      "cover",
+      "contain",
+      "contain",
+      "cover",
+      "cover",
+    ]);
+    // Only a framing that changes the slide is marked; a shorter image is
+    // whole anyway and the centre is the default.
+    expect(slides.map((slide) => slide.dataset.feedFraming)).toEqual([
+      "region",
+      undefined,
+      "whole",
+      undefined,
+      undefined,
+    ]);
+    expect(
+      slides.map((slide) => slide.style.getPropertyValue("--feed-slide-y")),
+    ).toEqual(["0%", "", "", "", ""]);
+    // The asset colour sits only behind a covering image: a whole one's
+    // blank sides stay the stage's page background.
+    const tint = (index: number) =>
+      slides[index]!.querySelector("img")!.style.backgroundColor;
+    expect(tint(0)).toBe("rgb(74, 64, 56)");
+    expect(tint(2)).toBe("");
+  });
+
+  it("ignores the author's feed framing when Detail contains every image", () => {
+    const { container } = render({ imageFit: "contain", media: framed });
+    const slides = [
+      ...container.querySelectorAll<HTMLElement>("[data-feed-slide]"),
+    ];
+    expect(slides.map((slide) => slide.dataset.fit)).toEqual(
+      framed.map(() => "contain"),
+    );
+    for (const slide of slides) {
+      expect(slide.hasAttribute("data-feed-framing")).toBe(false);
+      expect(slide.style.getPropertyValue("--feed-slide-y")).toBe("");
+      expect(slide.querySelector("img")!.style.backgroundColor).toBe("");
+    }
   });
 
   it("reports a changed image after settling, without reporting the comments", () => {

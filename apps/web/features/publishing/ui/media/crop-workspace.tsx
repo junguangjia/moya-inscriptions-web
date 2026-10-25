@@ -4,10 +4,13 @@ import { useEffect, useRef, useState } from "react";
 
 import { CropSurface } from "../../../media-composer/crop-surface";
 import {
+  EDIT_PRESETS,
   centeredCrop,
   cropFromPercentages,
+  cropRatio,
   normalizeCrop,
   percentagesFromCrop,
+  presetRatio,
 } from "./media-geometry";
 import styles from "./media.module.css";
 
@@ -50,6 +53,12 @@ export interface CropSession {
   readonly touched: boolean;
   /** Remounts the cropper when its frame or aspect changes. */
   readonly generation: number;
+  /**
+   * The width / height of a 自由 (`custom`) frame this session chose (#341):
+   * the shape the author dragged or zoomed to. Absent, a `custom` session
+   * keeps the stored crop's shape.
+   */
+  readonly freeRatio?: number | undefined;
 }
 
 export const startCrop = (
@@ -63,6 +72,65 @@ export const startCrop = (
   zoom: 1,
   touched: false,
   generation: 0,
+});
+
+/**
+ * The width / height of the session's frame inside the edited `frame`: the
+ * preset's, else (自由, a stored shape) the shape chosen in this session, else
+ * that of the `stored` crop of its own frame.
+ */
+export const sessionRatio = (
+  session: CropSession,
+  frame: Size,
+  stored: { readonly crop: MediaCrop | null; readonly frame: Size },
+): number => {
+  const preset = EDIT_PRESETS.find((option) => option.id === session.preset);
+  if (preset !== undefined) return presetRatio(preset, frame);
+  return session.freeRatio ?? cropRatio(stored.crop, stored.frame);
+};
+
+/** 自由 at `ratio`: the crop stays as it is (same area, same cropper). */
+export const freeCrop = (session: CropSession, ratio: number): CropSession => ({
+  ...session,
+  preset: "custom",
+  freeRatio: ratio,
+});
+
+/**
+ * On the phone 原始比例 is the whole frame (#341): a 原始比例 session the
+ * author moved or zoomed into a crop, or one that continues a crop (a
+ * desktop dialog's, handed over), is 自由 at the frame's own `ratio`. The
+ * cropper's aspect stays, so it never remounts.
+ */
+export const freedOriginal = (
+  session: CropSession,
+  ratio: number,
+): CropSession =>
+  session.preset === "original" &&
+  (session.seed !== undefined ||
+    (session.touched && session.area !== undefined && session.area !== null))
+    ? freeCrop(session, ratio)
+    : session;
+
+/**
+ * A corner drag let go (#341): a new cropper of the dragged shape, seeded
+ * with `crop`, so it re-centres and fills the frame. A locked `preset`
+ * keeps its ratio; a free one is 自由 at `freeRatio`.
+ */
+export const reframeCrop = (
+  session: CropSession,
+  crop: MediaCrop | null,
+  preset: CropPreset,
+  freeRatio?: number,
+): CropSession => ({
+  preset,
+  seed: crop === null ? undefined : percentagesFromCrop(crop),
+  area: crop,
+  position: { x: 0, y: 0 },
+  zoom: 1,
+  touched: true,
+  generation: session.generation + 1,
+  ...(preset === "custom" && freeRatio !== undefined ? { freeRatio } : {}),
 });
 
 /** A new frame or aspect: the crop starts again centered at full zoom-out. */
@@ -221,6 +289,7 @@ export const CropWorkspace = ({
   label,
   overlay,
   onCropSize,
+  maxZoom,
 }: {
   /**
    * The item `session` belongs to. The crop surface owns position and zoom,
@@ -238,6 +307,8 @@ export const CropWorkspace = ({
   readonly overlay?: ReactNode;
   /** The crop box size in viewport pixels, for guides that follow it. */
   readonly onCropSize?: ((size: Size) => void) | undefined;
+  /** How far zoom goes (`seedMaxZoom`: a small stored crop reopens as it was). */
+  readonly maxZoom?: number | undefined;
 }) => {
   // A new source of the same item (e.g. the account derivative replacing
   // local bytes) keeps the crop the author made: the cropper reseeds from it
@@ -258,6 +329,7 @@ export const CropWorkspace = ({
       key={itemKey}
       image={image}
       label={label}
+      maxZoom={maxZoom}
       onCropSize={onCropSize}
       onSession={onSession}
       overlay={overlay}
@@ -277,6 +349,7 @@ const CropFrame = ({
   label,
   overlay,
   onCropSize,
+  maxZoom,
 }: {
   readonly image: string;
   readonly rotation: MediaRotation;
@@ -286,12 +359,14 @@ const CropFrame = ({
   readonly label: string;
   readonly overlay?: ReactNode;
   readonly onCropSize?: ((size: Size) => void) | undefined;
+  readonly maxZoom?: number | undefined;
 }) => (
   <CropSurface
     aspect={ratio}
     generation={session.generation}
     image={image}
     label={`${label}，+ − 键缩放，0 键还原`}
+    maxZoom={maxZoom}
     objectFit="contain"
     onArea={(area) =>
       onSession((current) => ({

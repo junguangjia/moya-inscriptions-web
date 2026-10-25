@@ -1,5 +1,14 @@
-import type { MediaRendition, MediaVariant, WorkMedia } from "@moya/contracts";
-import { WORK_EXCERPT_MAXIMUM } from "@moya/contracts/schemas";
+import type {
+  MediaFeedFraming,
+  MediaRendition,
+  MediaVariant,
+  UserWorkMedia,
+} from "@moya/contracts";
+import {
+  MEDIA_FEED_CENTRE,
+  WORK_EXCERPT_MAXIMUM,
+  mediaFeedFramingSchema,
+} from "@moya/contracts/schemas";
 import type { PublishingMediaReadTarget } from "@moya/api";
 import type { Pool, QueryResultRow } from "pg";
 
@@ -67,18 +76,29 @@ const revisionItemRenditionsSql = (
   );
 
 /**
+ * SQL for one revision item row alias: true when its edit has no crop (the
+ * crop is stored as JSON null), so its default feed framing is the whole
+ * image rather than a centred cover.
+ */
+const uncroppedSql = (item: string): string =>
+  `COALESCE(jsonb_typeof(${item}.edit->'crop'),'null')='null'`;
+
+/**
  * A lateral join (alias `alias`) selecting the card cover of revision alias
  * `revision`: its explicit cover item (its `cover` derivative), else its first
  * item (its `cover` derivative when one exists for the edit, else its
  * `display` derivative), with the card candidates of that derivative's own
- * framing. Read its columns with `revisionCoverColumns` and map them with
- * `revisionCover`.
+ * framing and, while the revision has no cover crop, the item's feed framing
+ * and whether it is uncropped (a cover composition replaces both). Read its
+ * columns with `revisionCoverColumns` and map them with `revisionCover`.
  */
 export const revisionCoverJoin = (revision: string, alias: string): string =>
   `LEFT JOIN LATERAL (
     SELECT cc.*, ${revisionItemRenditionsSql("cc", revision, "cc.edit_key")} AS renditions
     FROM (
-      SELECT ci.item_id, ci.edit, cm.kind, cm.legacy_media_id, um.width AS legacy_width, um.height AS legacy_height,
+      SELECT ci.item_id, ci.edit, CASE WHEN ${revision}.cover_crop IS NULL THEN ci.edit->'feed' END AS feed,
+        CASE WHEN ${revision}.cover_crop IS NULL THEN ${uncroppedSql("ci")} END AS uncropped,
+        cm.kind, cm.legacy_media_id, um.width AS legacy_width, um.height AS legacy_height,
         cm.presentation, cm.state, cm.placeholder_color, cd.variant, cd.edit_key, cd.width AS cover_width, cd.height AS cover_height
       FROM community.work_revision_items ci
       JOIN community.media_items cm ON cm.id=ci.item_id
@@ -114,6 +134,10 @@ export interface RevisionCoverColumns extends QueryResultRow {
   readonly cover_placeholder_color: string | null;
   /** Candidate rows (`itemRenditionsSql`) of the cover derivative's framing. */
   readonly cover_renditions: unknown;
+  /** The cover item's stored `edit.feed`; SQL NULL under a cover crop. */
+  readonly cover_feed: unknown;
+  /** Whether the cover item's edit has no crop; SQL NULL under a cover crop. */
+  readonly cover_uncropped: boolean | null;
 }
 
 /** SELECT list for the `revisionCoverJoin` columns under `RevisionCoverColumns` names. */
@@ -121,7 +145,8 @@ export const revisionCoverColumns = (alias: string): string =>
   `${alias}.item_id AS cover_item_id,${alias}.kind AS cover_kind,${alias}.legacy_media_id AS cover_legacy_media_id,
   ${alias}.legacy_width AS cover_legacy_width,${alias}.legacy_height AS cover_legacy_height,
   ${alias}.presentation AS cover_presentation,${alias}.state AS cover_state,${alias}.variant AS cover_variant,${alias}.edit_key AS cover_edit_key,
-  ${alias}.cover_width,${alias}.cover_height,${alias}.placeholder_color AS cover_placeholder_color,${alias}.renditions AS cover_renditions`;
+  ${alias}.cover_width,${alias}.cover_height,${alias}.placeholder_color AS cover_placeholder_color,${alias}.renditions AS cover_renditions,
+  ${alias}.feed AS cover_feed,${alias}.uncropped AS cover_uncropped`;
 
 export interface RevisionCover {
   /** The legacy user media id, or the media item id. */
@@ -138,6 +163,11 @@ export interface RevisionCover {
   readonly renditions?: MediaRendition[];
   /** The item's loading colour; absent for a Phase 4 PNG and a non-opaque image. */
   readonly placeholderColor?: string;
+  /**
+   * The cover item's effective feed framing (`publicFeed`) while the
+   * revision has no cover crop; a cover composition frames the card itself.
+   */
+  readonly feed?: MediaFeedFraming;
 }
 
 const dimension = (value: unknown): number | null =>
@@ -150,6 +180,49 @@ const placeholderOf = (
   color: string | null | undefined,
 ): { placeholderColor?: string } =>
   typeof color === "string" ? { placeholderColor: color } : {};
+
+/** How far a frame's height-to-width ratio must pass 1 to be taller than a square. */
+const SQUARE_TOLERANCE = 0.001;
+/** A stored position is read as the Web editor stores it: rounded to 1e-4. */
+const FEED_PRECISION = 1e4;
+
+/**
+ * `feed` of a shown entry of `width` × `height` as readers get it: its
+ * effective framing, in the reader form where absent means a centred cover.
+ * A stored `edit.feed` is only the author's explicit choice; it is sent when
+ * not the centred cover. Without a valid one (an invalid one is dropped) the
+ * item's default applies: the whole image (`contain`) for an `uncropped`
+ * item, a centred cover for a cropped one. The whole image is sent only for
+ * a frame taller than a square, the only frame it changes, so square and
+ * wider frames keep their exact shape. Framing never changes pixels or the
+ * edit key, so an unedited legacy PNG (never cropped) carries it as well.
+ */
+const publicFeed = (
+  stored: unknown,
+  uncropped: boolean,
+  width: number,
+  height: number,
+): { feed?: MediaFeedFraming } => {
+  const parsed = mediaFeedFramingSchema.safeParse(stored);
+  if (!parsed.success)
+    return uncropped && height / width > 1 + SQUARE_TOLERANCE
+      ? { feed: { fit: "contain" } }
+      : {};
+  const feed = parsed.data;
+  if (feed.fit === "contain") return { feed };
+  const y = Math.round(feed.y * FEED_PRECISION) / FEED_PRECISION;
+  return y === MEDIA_FEED_CENTRE ? {} : { feed: { fit: "cover", y } };
+};
+
+/** `publicFeed` of a card cover row: none under a cover crop. */
+const coverFeed = (
+  row: RevisionCoverColumns,
+  width: number,
+  height: number,
+): { feed?: MediaFeedFraming } =>
+  row.cover_uncropped === null
+    ? {}
+    : publicFeed(row.cover_feed, row.cover_uncropped, width, height);
 
 /**
  * The card cover of a revision, or null for a text-only revision. A legacy
@@ -177,6 +250,7 @@ export const revisionCover = (
           width,
           height,
           live: false,
+          ...coverFeed(row, width, height),
         };
   }
   if (
@@ -205,6 +279,7 @@ export const revisionCover = (
     live: row.cover_kind === "live",
     ...(renditions === undefined ? {} : { renditions }),
     ...placeholderOf(row.cover_placeholder_color),
+    ...coverFeed(row, width, height),
   };
 };
 
@@ -227,11 +302,15 @@ interface RevisionMediaRow extends QueryResultRow {
   placeholder_color: string | null;
   /** Candidate rows (`itemRenditionsSql`) of the item's edit framing. */
   renditions: unknown;
+  /** The item's stored `edit.feed` (SQL NULL without one). */
+  feed: unknown;
+  /** Whether the item's edit has no crop (its default framing is the whole image). */
+  uncropped: boolean;
 }
 
 /** One revision's ordered media and the entry its card cover uses. */
 export interface RevisionMediaView {
-  readonly media: WorkMedia[];
+  readonly media: UserWorkMedia[];
   /**
    * The media id (a legacy user media id for an unedited legacy item) of the
    * revision's chosen cover item when it is shown, else of the first shown
@@ -247,7 +326,7 @@ export interface RevisionMediaView {
  * derivative for the revision edit, with motion for Live items, the detail
  * candidates of the edit's framing (the display as anchor; the thumb and
  * cover of a cover item with a cover crop never, the relay serves those only
- * under the crop's key) and its loading colour.
+ * under the crop's key), its loading colour and its feed framing.
  */
 export const revisionMedia = async (
   db: PublishingDb,
@@ -277,8 +356,8 @@ export const revisionsMedia = async (
     await db.query<RevisionMediaRow & { revision_id: string }>(
       `SELECT ri.revision_id,ri.item_id,i.kind,i.state,i.legacy_media_id,um.width AS legacy_width,um.height AS legacy_height,
         i.presentation,k.display_key,d.width AS display_width,d.height AS display_height,
-        ri.item_id IS NOT DISTINCT FROM r.cover_item_id AS is_cover,i.placeholder_color,
-        ${revisionItemRenditionsSql("ri", "r", "k.display_key")} AS renditions
+        ri.item_id IS NOT DISTINCT FROM r.cover_item_id AS is_cover,i.placeholder_color,ri.edit->'feed' AS feed,
+        ${uncroppedSql("ri")} AS uncropped,${revisionItemRenditionsSql("ri", "r", "k.display_key")} AS renditions
       FROM community.work_revision_items ri
       JOIN community.work_revisions r ON r.id=ri.revision_id
       JOIN community.media_items i ON i.id=ri.item_id
@@ -304,7 +383,7 @@ export const revisionsMedia = async (
 const revisionMediaView = (
   rows: readonly RevisionMediaRow[],
 ): RevisionMediaView => {
-  const media: WorkMedia[] = [];
+  const media: UserWorkMedia[] = [];
   let chosenCover: string | null = null;
   for (const row of rows) {
     if (row.legacy_media_id !== null && row.display_key === "base") {
@@ -316,6 +395,7 @@ const revisionMediaView = (
           src: legacyMediaSrc(row.legacy_media_id),
           width,
           height,
+          ...publicFeed(row.feed, row.uncropped, width, height),
         });
         if (row.is_cover) chosenCover = row.legacy_media_id;
       }
@@ -355,6 +435,7 @@ const revisionMediaView = (
         : {}),
       ...(renditions === undefined ? {} : { renditions }),
       ...placeholderOf(row.placeholder_color),
+      ...publicFeed(row.feed, row.uncropped, width, height),
     });
   }
   return { media, coverMediaId: chosenCover ?? media[0]?.id ?? null };
@@ -371,6 +452,8 @@ export interface RevisionGalleryEntry {
   /** Card candidates up to the display still, `src` as the anchor. */
   readonly renditions?: MediaRendition[];
   readonly placeholderColor?: string;
+  /** The item's effective feed framing (`publicFeed`). */
+  readonly feed?: MediaFeedFraming;
 }
 
 /** A revision's first gallery entries and the number of its shown media items. */
@@ -396,11 +479,11 @@ const presentationDimensionSql = (field: "width" | "height"): string => {
  * The card gallery of several revisions in one statement (a page of cards):
  * the first `maximum` shown items of each revision by position, shown exactly as
  * `revisionMedia` shows them (the unedited legacy PNG, else the display
- * derivative of the revision edit) but with the card candidates of that
- * framing and the Live flag instead of motion, plus each revision's item
- * total. The window runs over eligible items, so candidates are read
- * for at most `maximum` rows per revision. A revision without shown media is
- * absent from the map.
+ * derivative of the revision edit, with its feed framing) but with the card
+ * candidates of that framing and the Live flag instead of motion, plus each
+ * revision's item total. The window runs over eligible items, so candidates
+ * are read for at most `maximum` rows per revision. A revision without shown
+ * media is absent from the map.
  */
 export const revisionsGallery = async (
   db: PublishingDb,
@@ -434,8 +517,8 @@ export const revisionsGallery = async (
       )
       SELECT ri.revision_id,ri.item_id,ri.total,ri.kind,ri.state,ri.legacy_media_id,ri.legacy_width,ri.legacy_height,
         ri.presentation,ri.display_key,ri.display_width,ri.display_height,
-        ri.item_id IS NOT DISTINCT FROM r.cover_item_id AS is_cover,ri.placeholder_color,
-        ${revisionItemRenditionsSql("ri", "r", "ri.display_key")} AS renditions
+        ri.item_id IS NOT DISTINCT FROM r.cover_item_id AS is_cover,ri.placeholder_color,ri.edit->'feed' AS feed,
+        ${uncroppedSql("ri")} AS uncropped,${revisionItemRenditionsSql("ri", "r", "ri.display_key")} AS renditions
       FROM ranked ri JOIN community.work_revisions r ON r.id=ri.revision_id
       WHERE ri.rn<=$2
       ORDER BY ri.revision_id,ri.position`,
@@ -473,6 +556,7 @@ const revisionGalleryEntry = (
           width,
           height,
           live: false,
+          ...publicFeed(row.feed, row.uncropped, width, height),
         };
   }
   if (row.state !== "ready") return null;
@@ -496,6 +580,7 @@ const revisionGalleryEntry = (
     live: row.kind === "live",
     ...(renditions === undefined ? {} : { renditions }),
     ...placeholderOf(row.placeholder_color),
+    ...publicFeed(row.feed, row.uncropped, width, height),
   };
 };
 

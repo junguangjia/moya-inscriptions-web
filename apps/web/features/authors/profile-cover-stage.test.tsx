@@ -7,6 +7,7 @@ import type { Area } from "react-easy-crop";
 
 interface CropperProps {
   zoom: number;
+  maxZoom: number;
   crop: { x: number; y: number };
   keyboardStep: number;
   aspect: number;
@@ -185,6 +186,8 @@ it("zooms by pinch or keys without a zoom bar, clamped to 1–3, with a reset", 
   expect(cropper.props!.zoom).toBeCloseTo(1.6);
   for (let i = 0; i < 30; i++) await key("+");
   expect(cropper.props!.zoom).toBe(3);
+  // The phone 编辑's seed-sized ceiling (#341) is not the profile cover's.
+  expect(cropper.props!.maxZoom).toBe(3);
   expect(document.body.textContent).toContain("已放大到最大");
   await act(async () => cropper.props!.onCropChange({ x: 12, y: -4 }));
   await act(async () => button("还原").click());

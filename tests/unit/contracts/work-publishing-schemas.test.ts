@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  MEDIA_FEED_CENTRE,
   PUBLISHING_DRAFT_CHANGED,
   WORK_ITEMS_CONFIGURABLE_MAXIMUM,
+  articleResolvedReferenceSchema,
+  articleSummarySchema,
   authorMediaSchema,
   authorPersonSchema,
   authorProfileSchema,
@@ -12,6 +15,7 @@ import {
   editableWorkSchema,
   mediaCropSchema,
   mediaEditSchema,
+  mediaFeedFramingSchema,
   mediaItemIdSchema,
   mediaVariantSchema,
   publishingDraftDeletionCommandSchema,
@@ -30,6 +34,7 @@ import {
   workDraftContentSchema,
   workCoverSrcSchema,
   workDraftIdSchema,
+  userWorkMediaSchema,
   workMediaSchema,
   workSchema,
   workSubmissionCommandSchema,
@@ -47,6 +52,7 @@ import {
   adminSetAccountCapacityClassRequestSchema,
   operatorAccountCapacitySchema,
   operatorPublishingJobSchema,
+  operatorSubmissionMediaSchema,
   operatorWorkSchema,
   operatorWorkSubmissionQuerySchema,
   operatorWorkSubmissionSchema,
@@ -1659,7 +1665,7 @@ describe("backward-compatible Phase 4 adjustments", () => {
       { ...legacy, hasAudio: false },
     ])
       expect(workMediaSchema.safeParse(invalid).success).toBe(false);
-    expect(workSchema.shape.media.element).toBe(workMediaSchema);
+    expect(workSchema.shape.media.element).toBe(userWorkMediaSchema);
   });
 
   it("accepts existing works and the new nullable first publication and author-only fields", () => {
@@ -2261,6 +2267,276 @@ describe("media delivery on work reads (unified-media-pipeline-v1)", () => {
       {
         ...card,
         gallery: [{ ...still(itemId), motionSrc: path("motion") }],
+        mediaCount: 1,
+      },
+    ])
+      expect(
+        contentCardSchema.safeParse(invalid).success,
+        JSON.stringify(invalid),
+      ).toBe(false);
+  });
+});
+
+describe("feed framing (#341)", () => {
+  const framings = [
+    { fit: "contain" },
+    { fit: "cover", y: 0 },
+    { fit: "cover", y: 1 },
+    { fit: "cover", y: 0.3333 },
+  ];
+  const invalidFramings: unknown[] = [
+    { fit: "cover" },
+    { fit: "contain", y: 0.3 },
+    { fit: "cover", y: 0.4, x: 0.5 },
+    { fit: "cover", y: -0.01 },
+    { fit: "cover", y: 1.01 },
+    { fit: "cover", y: Number.NaN },
+    { fit: "cover", y: Number.POSITIVE_INFINITY },
+    { fit: "cover", y: "0.5" },
+    { fit: "fill" },
+    null,
+    "contain",
+  ];
+  const framed = { rotation: 90, crop: null, feed: { fit: "cover", y: 0.2 } };
+  const userMedia = {
+    id: itemId,
+    src: src("display"),
+    width: 1_200,
+    height: 3_600,
+    kind: "static",
+  };
+  const legacyMedia = {
+    id: `user-media-${hex("a")}`,
+    src: legacySrc,
+    width: 30,
+    height: 90,
+  };
+
+  it("frames an edit by fit and vertical position, centred when absent", () => {
+    expect(MEDIA_FEED_CENTRE).toBe(0.5);
+    expect(mediaEditSchema.parse(baseEdit)).not.toHaveProperty("feed");
+    for (const feed of framings) {
+      expect(mediaFeedFramingSchema.parse(feed)).toEqual(feed);
+      expect(
+        mediaEditSchema.safeParse({ rotation: 90, crop: null, feed }).success,
+      ).toBe(true);
+    }
+    for (const feed of invalidFramings) {
+      expect(
+        mediaFeedFramingSchema.safeParse(feed).success,
+        JSON.stringify(feed),
+      ).toBe(false);
+      expect(
+        mediaEditSchema.safeParse({ ...baseEdit, feed }).success,
+        JSON.stringify(feed),
+      ).toBe(false);
+    }
+  });
+
+  it("keeps an item's framing in drafts, submissions, readiness, editable content and the Admin queue", () => {
+    const framedContent = content({
+      title: "长图",
+      items: [item("k-framed", { edit: framed })],
+    });
+    expect(workDraftContentSchema.parse(framedContent).items[0]?.edit).toEqual(
+      framed,
+    );
+    expect(
+      workSubmissionCommandSchema.parse({
+        requestId,
+        holder: { sessionId },
+        content: framedContent,
+        baseRevisionId: null,
+      }).content.items[0]?.edit,
+    ).toEqual(framed);
+    expect(
+      publishingReadinessCommandSchema.safeParse({ content: framedContent })
+        .success,
+    ).toBe(true);
+    expect(
+      editableWorkSchema.parse({
+        workId,
+        revisionId,
+        content: framedContent,
+        mediaItems: [],
+        visibility: "public",
+        firstPublishedAt: at,
+        editedAt: null,
+        draftId: null,
+        version: 1,
+      }).content.items[0]?.edit,
+    ).toEqual(framed);
+    expect(
+      operatorSubmissionMediaSchema.parse({
+        position: 1,
+        itemId,
+        kind: "static",
+        qualityMode: "standard",
+        state: "ready",
+        edit: framed,
+        editKey: "e".repeat(32),
+        coverEditKey: null,
+        presentation: { width: 1_200, height: 3_600 },
+        variants: ["thumb", "display"],
+      }).edit,
+    ).toEqual(framed);
+    for (const feed of invalidFramings)
+      expect(
+        workDraftContentSchema.safeParse(
+          content({
+            items: [item("k-framed", { edit: { ...baseEdit, feed } })],
+          }),
+        ).success,
+        JSON.stringify(feed),
+      ).toBe(false);
+  });
+
+  it("carries framing on user work media and the work cover only, never on Article media", () => {
+    for (const feed of framings) {
+      expect(userWorkMediaSchema.parse({ ...userMedia, feed })).toEqual({
+        ...userMedia,
+        feed,
+      });
+      expect(
+        userWorkMediaSchema.safeParse({ ...legacyMedia, feed }).success,
+      ).toBe(true);
+    }
+    for (const feed of invalidFramings)
+      expect(
+        userWorkMediaSchema.safeParse({ ...userMedia, feed }).success,
+        JSON.stringify(feed),
+      ).toBe(false);
+    // The user work entry keeps every work media rule.
+    expect(
+      userWorkMediaSchema.safeParse({
+        ...userMedia,
+        src: src("display", `media-item-${hex("b")}`),
+        feed: { fit: "contain" },
+      }).success,
+    ).toBe(false);
+    const work = {
+      id: workId,
+      authorId: `user-${hex("1")}`,
+      authorName: "合成作者",
+      title: "",
+      text: "正文",
+      media: [{ ...userMedia, feed: { fit: "contain" } }, legacyMedia],
+      coverMediaId: itemId,
+      coverSrc: src("cover"),
+      coverFeed: { fit: "contain" },
+      firstPublishedAt: at,
+      version: 1,
+      canEdit: false,
+      available: true,
+    };
+    expect(workSchema.parse(work)).toEqual(work);
+    for (const invalid of [
+      { coverFeed: { fit: "cover" } },
+      { coverFeed: null },
+      { media: [{ ...userMedia, feed: { fit: "fill" } }] },
+    ])
+      expect(
+        workSchema.safeParse({ ...work, ...invalid }).success,
+        JSON.stringify(invalid),
+      ).toBe(false);
+    // Article managed media keep the work media shape without framing.
+    expect(workMediaSchema.safeParse(userMedia).success).toBe(true);
+    expect(
+      workMediaSchema.safeParse({ ...userMedia, feed: { fit: "contain" } })
+        .success,
+    ).toBe(false);
+    const article = {
+      id: `article-${hex("9")}`,
+      presentation: "news",
+      title: "合成文章",
+      subtitle: null,
+      summary: null,
+      section: null,
+      issue: null,
+      byline: "合成作者",
+      cover: null,
+      managedCover: userMedia,
+      firstPublishedAt: at,
+      publishedAt: at,
+      updatedAt: at,
+    };
+    expect(articleSummarySchema.safeParse(article).success).toBe(true);
+    expect(
+      articleSummarySchema.safeParse({
+        ...article,
+        managedCover: { ...userMedia, feed: { fit: "contain" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      articleResolvedReferenceSchema.safeParse({
+        type: "managed",
+        media: { ...userMedia, feed: { fit: "contain" } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("lets only a work card image and gallery entry carry framing", () => {
+    const card = {
+      aliases: [],
+      target: { type: "work", id: workId },
+      title: "",
+      kind: null,
+      authorId: `user-${hex("1")}`,
+      firstPublishedAt: null,
+      media: {
+        id: itemId,
+        src: src("cover"),
+        width: 360,
+        height: 1_080,
+        feed: { fit: "cover", y: 0 },
+      },
+      gallery: [
+        {
+          id: itemId,
+          src: src("display"),
+          width: 683,
+          height: 2_048,
+          feed: { fit: "cover", y: 0 },
+        },
+        {
+          id: `media-item-${hex("b")}`,
+          src: src("display", `media-item-${hex("b")}`),
+          width: 683,
+          height: 2_048,
+          live: true,
+          feed: { fit: "contain" },
+        },
+      ],
+      mediaCount: 2,
+    };
+    expect(contentCardSchema.parse(card)).toEqual(card);
+    const catalogSrc = `https://media.example.invalid/display.webp?sign=${hex("4")}`;
+    const catalogImage = {
+      id: "media-example-001",
+      src: catalogSrc,
+      width: 1_600,
+      height: 900,
+    };
+    const catalogCard = {
+      ...card,
+      target: { type: "catalog", id: "catalog-example-001" },
+      kind: "inscription",
+      authorId: null,
+      media: catalogImage,
+      gallery: [catalogImage],
+      mediaCount: 1,
+    };
+    expect(contentCardSchema.safeParse(catalogCard).success).toBe(true);
+    for (const invalid of [
+      { ...catalogCard, media: { ...catalogImage, feed: { fit: "contain" } } },
+      {
+        ...catalogCard,
+        gallery: [{ ...catalogImage, feed: { fit: "cover", y: 0 } }],
+      },
+      { ...card, media: { ...card.media, feed: { fit: "cover" } } },
+      {
+        ...card,
+        gallery: [{ ...card.gallery[0]!, feed: { fit: "fill" } }],
         mediaCount: 1,
       },
     ])

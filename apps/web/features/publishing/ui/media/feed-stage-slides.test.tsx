@@ -34,18 +34,24 @@ import { FEED_GALLERY_MAXIMUM, useFeedStageSlides } from "./feed-stage-slides";
 import type { FeedStageModel } from "./feed-stage-slides";
 import type { EditorSessionState } from "../editor/editor-session-state";
 import type { EditorMediaScope } from "../editor/preview";
+import type { MediaCrop, MediaFeedFraming } from "@moya/contracts";
 import type { Root } from "react-dom/client";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const item = (key: string, rotation: 0 | 90 = 0) => ({
+const item = (
+  key: string,
+  rotation: 0 | 90 = 0,
+  feed?: MediaFeedFraming,
+  crop: MediaCrop | null = null,
+) => ({
   key,
   itemId: null,
   kind: "static" as const,
   qualityMode: "standard" as const,
-  edit: { rotation, crop: null },
+  edit: { rotation, crop, ...(feed === undefined ? {} : { feed }) },
   pendingLabel: "photo" as const,
 });
 
@@ -127,12 +133,14 @@ describe("useFeedStageSlides", () => {
       unedited: 0,
     };
     await render([item("a", 90), item("b")]);
+    // Uncropped and taller than a square, it is framed whole (#341 r3).
     expect(latest!.slides[0]).toEqual({
       key: "a",
       alt: "第 1 项",
       src: null,
       size: { width: 3000, height: 4000 },
       status: "loading",
+      feed: { fit: "contain" },
     });
     // A turned 4:3 is 3:4: the stage is already 4:5 before the picture lands.
     expect(latest!.stageRatio).toBe(1.25);
@@ -152,6 +160,72 @@ describe("useFeedStageSlides", () => {
       size: { width: 3000, height: 4000 },
       status: "ready",
     });
+  });
+
+  // #341: 发布 and the desktop preview frame a taller picture as the feed will.
+  it("carries each item's feed framing onto its slide in every state", async () => {
+    sources.value = {
+      sources: [
+        { key: "ready", src: "blob:ready", width: 1000, height: 3000 },
+        {
+          key: "drawn",
+          src: "blob:drawn",
+          width: 1000,
+          height: 3000,
+          pending: true,
+        },
+      ],
+      unedited: 0,
+    };
+    await render([
+      item("ready", 0, { fit: "cover", y: 0 }),
+      item("drawn", 0, { fit: "contain" }),
+      item("waiting", 0, { fit: "cover", y: 0.8 }),
+      item("plain"),
+    ]);
+    expect(latest!.slides.map((slide) => [slide.status, slide.feed])).toEqual([
+      ["ready", { fit: "cover", y: 0 }],
+      ["loading", { fit: "contain" }],
+      ["loading", { fit: "cover", y: 0.8 }],
+      ["loading", undefined],
+    ]);
+    expect(latest!.slides[3]).not.toHaveProperty("feed");
+  });
+
+  // #341 r3: the slides read as the server reads the work out.
+  it("frames an uncropped taller picture whole by default, a cropped one centred", async () => {
+    const cut = { x: 0, y: 0.25, width: 1, height: 0.5 };
+    sources.value = {
+      sources: [
+        { key: "tall", src: "blob:tall", width: 1000, height: 3000 },
+        { key: "square", src: "blob:square", width: 1000, height: 1000 },
+        { key: "wide", src: "blob:wide", width: 3000, height: 1000 },
+        { key: "centred", src: "blob:centred", width: 1000, height: 3000 },
+        { key: "cut", src: "blob:cut", width: 1000, height: 3000 },
+        { key: "cutWhole", src: "blob:cut-whole", width: 1000, height: 3000 },
+      ],
+      unedited: 0,
+    };
+    await render([
+      item("tall"),
+      item("square"),
+      item("wide"),
+      item("centred", 0, { fit: "cover", y: 0.5 }),
+      item("cut", 0, undefined, cut),
+      item("cutWhole", 0, { fit: "contain" }, cut),
+    ]);
+    expect(latest!.slides.map((slide) => [slide.key, slide.feed])).toEqual([
+      ["tall", { fit: "contain" }],
+      // Whole changes nothing for a frame no taller than a square.
+      ["square", undefined],
+      ["wide", undefined],
+      // An explicit 局部 at the centre reads as the centred cover.
+      ["centred", undefined],
+      ["cut", undefined],
+      ["cutWhole", { fit: "contain" }],
+    ]);
+    for (const index of [1, 2, 3, 4])
+      expect(latest!.slides[index]).not.toHaveProperty("feed");
   });
 
   it("marks an item with neither a local file nor account media as unavailable", async () => {

@@ -1722,6 +1722,60 @@ describe("MediaSection feed preview (#244)", () => {
     expect(dialog.querySelector('input[type="range"]')).toBe(null);
     await click(buttonByText("返回"));
   });
+
+  it("keeps the dialog's 局部 · 整张 choice with 完成, and 还原 clears it (#341)", async () => {
+    await render("desktop");
+    await addStatic(2);
+    await makeFirstReady();
+    const fitPicker = () =>
+      document.querySelector<HTMLElement>(
+        "[data-media-edit-dialog] [data-feed-fit-picker]",
+      );
+    const choice = (fit: "region" | "whole") =>
+      fitPicker()!.querySelector<HTMLInputElement>(
+        `[data-feed-choice="${fit}"]`,
+      )!;
+
+    await click(buttonByText("编辑第 1 项"));
+    let dialog = document.querySelector<HTMLElement>(
+      "[data-media-edit-dialog]",
+    )!;
+    // Presentation 4 × 3 is shown whole: nothing to choose.
+    expect(fitPicker()).toBe(null);
+    // Turned, the 3 × 4 frame is taller than its 4:5 stage; uncropped, it
+    // shows whole by default (r3), so 局部 is the author's choice.
+    await click(buttonByText("向右旋转 90°", dialog));
+    expect(choice("whole").checked).toBe(true);
+    await click(choice("region"));
+    await click(buttonByText("完成", dialog));
+    expect(probe.store!.get().items[0]!.edit).toEqual({
+      rotation: 90,
+      crop: null,
+      feed: { fit: "cover", y: 0.5 },
+    });
+
+    // A framing-only change is kept too; the pixels stay.
+    await click(buttonByText("编辑第 1 项"));
+    dialog = document.querySelector<HTMLElement>("[data-media-edit-dialog]")!;
+    expect(choice("region").checked).toBe(true);
+    await click(choice("whole"));
+    await click(buttonByText("完成", dialog));
+    expect(probe.store!.get().items[0]!.edit).toEqual({
+      rotation: 90,
+      crop: null,
+    });
+
+    await click(buttonByText("编辑第 1 项"));
+    dialog = document.querySelector<HTMLElement>("[data-media-edit-dialog]")!;
+    await click(choice("region"));
+    await click(buttonByText("还原", dialog));
+    expect(fitPicker()).toBe(null);
+    await click(buttonByText("完成", dialog));
+    expect(probe.store!.get().items[0]!.edit).toEqual({
+      rotation: 0,
+      crop: null,
+    });
+  });
 });
 
 describe("useMediaActions for the phone composer (#244)", () => {
@@ -1878,6 +1932,69 @@ describe("useMediaActions for the phone composer (#244)", () => {
     expect(hook.actions!.announcement).not.toContain("编辑已应用");
     await run((actions) => actions.applyEdit(b!, turned));
     expect(hook.actions!.announcement).toBe("第 2 项的编辑已应用");
+  });
+
+  it("keeps feed framing apart from the pixels, without a word (#341)", async () => {
+    await renderActions({});
+    await stage(photos(2));
+    const [a] = storeKeys();
+    await run((actions) => actions.applyCoverCrop(a!, crop));
+    const said = hook.actions!.announcement;
+    await run((actions) => actions.applyFeed(a!, { fit: "cover", y: 0.2 }));
+    expect(probe.store!.get().items[0]!.edit).toEqual({
+      rotation: 0,
+      crop: null,
+      feed: { fit: "cover", y: 0.2 },
+    });
+    // Never a pixel edit: the cover composition stays and nothing is said.
+    expect(probe.store!.get()).toMatchObject({ coverKey: a, coverCrop: crop });
+    expect(hook.actions!.announcement).toBe(said);
+    expect(hook.actions!.notice).toBeNull();
+    const version = probe.store!.get().editVersion;
+    await run((actions) => actions.applyFeed(a!, { fit: "cover", y: 0.20001 }));
+    expect(probe.store!.get().editVersion).toBe(version);
+
+    // A rotate/crop edit keeps the framing and resets the composition.
+    await run((actions) =>
+      actions.applyEdit(a!, { rotation: 90, crop: null }, { quiet: true }),
+    );
+    expect(probe.store!.get()).toMatchObject({
+      coverKey: a,
+      coverCrop: null,
+      items: [
+        { edit: { rotation: 90, crop: null, feed: { fit: "cover", y: 0.2 } } },
+        {},
+      ],
+    });
+    // The photo's default (whole, as it is uncropped) is no framing.
+    await run((actions) => actions.applyFeed(a!, { fit: "contain" }));
+    expect(probe.store!.get().items[0]!.edit).toEqual({
+      rotation: 90,
+      crop: null,
+    });
+  });
+
+  it("carries a photo's feed framing to its re-selection (#341)", async () => {
+    await renderActions({});
+    await stage(photos(2));
+    const [a, b] = storeKeys();
+    await run((actions) => actions.applyFeed(a!, { fit: "cover", y: 0.3 }));
+    await act(async () => {
+      hook.actions!.startReplacement(a!, [
+        fileOf(jpeg({ width: 9 }), "again.jpg"),
+      ]);
+      await settle();
+    });
+    await until(() => !storeKeys().includes(a!));
+    const [first, second] = probe.store!.get().items;
+    expect(first!.key).not.toBe(a);
+    // The same photo again: its edit, framing included, travels.
+    expect(first!.edit).toEqual({
+      rotation: 0,
+      crop: null,
+      feed: { fit: "cover", y: 0.3 },
+    });
+    expect(second!.key).toBe(b);
   });
 
   const phoneCoverRule = {

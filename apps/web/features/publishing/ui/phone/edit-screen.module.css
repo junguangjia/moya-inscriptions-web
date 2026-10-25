@@ -92,8 +92,10 @@
 /*
  * The cropper's box (`cropperBox` in edit-stage.tsx): the stage until it is
  * measured, then sized so the cropper's frame is the largest frame of the
- * ratio the stage holds, with the photo just covering it. Centred on the
- * stage; a finger down steps it back (B's 0.94 peek).
+ * ratio the crop field holds (the stage less `CROP_FIELD_INSETS` while the
+ * corner handles are offered), with the photo just covering it. Centred on
+ * the stage; a finger down steps it back (B's 0.94 peek), a corner drag
+ * never does.
  */
 .cropBox {
   position: absolute;
@@ -123,6 +125,12 @@
   cursor: grab;
 }
 
+/* The photo is the stage's for a moment (a corner drag, a framing tool): no pointer reaches the cropper. */
+.cropBox[data-frozen] > :first-child {
+  cursor: default;
+  pointer-events: none;
+}
+
 /* The crop frame (B `.mask`): the photo outside it dimmed, lighter while a finger is down. */
 .cropBox .stageCropArea {
   border: 1px solid var(--crop-line);
@@ -132,6 +140,12 @@
 
 .stage[data-gesture] .cropBox .stageCropArea {
   color: var(--dim-peek);
+}
+
+/* While a corner is dragged the window draws the mask instead, at the same darkness. */
+.stage[data-resizing] .cropBox .stageCropArea {
+  color: transparent;
+  border-color: transparent;
 }
 
 /* The crop area takes focus (arrows move, + − zoom): its ring is drawn inward, as `.cropViewport`'s. */
@@ -147,6 +161,74 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/*
+ * The crop window (#341): the whole frame at rest; while a corner is dragged
+ * the window as it goes, its edge drawn and the rest of the stage dimmed.
+ */
+.window {
+  position: absolute;
+  inset: 0;
+}
+
+.stage[data-resizing] .window {
+  box-shadow:
+    inset 0 0 0 1px var(--crop-line),
+    0 0 0 9999em var(--dim-mask);
+}
+
+/* The corner handles: 44px targets inside each corner, over its mark. */
+.handles {
+  position: absolute;
+  inset: 0;
+}
+
+.handle {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: nwse-resize;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.handle[data-crop-handle="nw"] {
+  top: 0;
+  left: 0;
+}
+
+.handle[data-crop-handle="ne"] {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.handle[data-crop-handle="sw"] {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.handle[data-crop-handle="se"] {
+  right: 0;
+  bottom: 0;
+}
+
+.handle:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* A finger on the photo or the reframe zoom has the stage: the handles take nothing (focus stays). */
+.stage[data-gesture] .handle,
+.handles:not([data-active]) .handle {
   pointer-events: none;
 }
 
@@ -198,6 +280,10 @@
   opacity: 1;
 }
 
+.stage[data-resizing] .thirds {
+  opacity: 1;
+}
+
 .thirds > span {
   position: absolute;
   background: color-mix(
@@ -237,10 +323,36 @@
   top: 66.666%;
 }
 
-/* 动态流参考线 (B `.band`): what the feed cuts is dimmed, its edge dashed, and a label says what it shows. */
+/*
+ * 「动态流」 (B `.band`, #341): what the feed cuts above and below the
+ * author's region is dimmed, each edge dashed only where it cuts something,
+ * and a label says what it shows. The crop rests meanwhile: no thirds.
+ */
 .band {
   position: absolute;
   inset: 0;
+}
+
+.stage[data-feed-tool="on"] .thirds {
+  opacity: 0;
+}
+
+/* 局部: the whole frame is the slider that drags the shown region (a 44px target or more). */
+.feedControl {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: ns-resize;
+}
+
+.feedControl[data-dragging] {
+  cursor: grabbing;
+}
+
+.feedControl:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
 }
 
 .bandEdge {
@@ -264,6 +376,41 @@
   position: absolute;
   left: var(--yoyi-space-3);
   display: flex;
+}
+
+/*
+ * A corner let go (#341): the photo as it was, zooming until the window
+ * fills the field, over the new cropper while it mounts. One mask darkness
+ * throughout: the frame's at rest.
+ */
+.reframe {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: hidden;
+  background: var(--yoyi-color-paper-dark);
+}
+
+.reframeMotion {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  transition: transform var(--yoyi-duration-normal)
+    var(--yoyi-easing-emphasized);
+}
+
+.reframeMotion > img {
+  position: absolute;
+  display: block;
+  max-width: none;
+  pointer-events: none;
+}
+
+.reframeWindow {
+  position: absolute;
+  box-shadow:
+    inset 0 0 0 1px var(--crop-line),
+    0 0 0 9999em var(--dim-mask);
 }
 
 /* A photo that cannot be cropped (a carried-over one), shown whole. */
@@ -319,25 +466,32 @@
   margin-left: auto;
 }
 
+/* 还原 and 旋转 side by side (#341): every stage button stays within the field's 60px edges, clear of the handles. */
 .stageRail {
   position: absolute;
   z-index: 3;
   right: max(var(--yoyi-space-3), env(safe-area-inset-right));
   bottom: var(--yoyi-space-3);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: var(--yoyi-space-3);
   transition: opacity var(--yoyi-duration-fast) var(--yoyi-easing-standard);
 }
 
-/* A finger down hides them (B), and nothing under it takes a tap. */
+/* A finger down, a corner or the 局部 window dragged hides them (B), and nothing under it takes a tap. */
 .stage[data-gesture] .stageTop,
-.stage[data-gesture] .stageRail {
+.stage[data-gesture] .stageRail,
+.stage[data-feed-drag] .stageTop,
+.stage[data-feed-drag] .stageRail,
+.stage[data-resizing] .stageTop,
+.stage[data-resizing] .stageRail {
   opacity: 0;
   pointer-events: none;
 }
 
-.stage[data-gesture] .stageTop > * {
+.stage[data-gesture] .stageTop > *,
+.stage[data-feed-drag] .stageTop > *,
+.stage[data-resizing] .stageTop > * {
   pointer-events: none;
 }
 
@@ -561,6 +715,19 @@ span.icon14 {
     max(var(--yoyi-space-5), env(safe-area-inset-left));
 }
 
+/* 「动态流」 with nothing to choose: a line in the row's place, as tall as the row. */
+.feedNote {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 1.4;
+  text-align: center;
+}
+
 /* B `.seg`: one muted track, the chosen ratio lifted onto the elevated fill. */
 .segment {
   display: grid;
@@ -575,6 +742,34 @@ span.icon14 {
 /* 封面构图's ratios: 原始比例 and three shapes. */
 .segment[data-count="4"] {
   grid-template-columns: 1.34fr repeat(3, 1fr);
+}
+
+/* 「动态流」's 局部 · 整张 (#341). */
+.segment[data-count="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/*
+ * 编辑's six (#341): 原始比例 and 自由 as words, each never narrower than
+ * its word; the four shapes share the rest. Whole from a 320px phone: its
+ * track is 320 less the row's 16px sides and the track's 2px insets, 284px.
+ * The words take 60px (52 + 2 × 4) and 37.3px (0.8fr of the rest), so each
+ * shape has 46.7px: a 20px glyph, a 2px gap and up to 24px of label (a
+ * semibold 4:5 is 21.8px in SF Pro, 23.7px in a fallback as wide as
+ * Verdana; a 4px gap would leave that one 1px short).
+ */
+.segment[data-count="6"] {
+  grid-template-columns:
+    minmax(max-content, 1.2fr) minmax(max-content, 0.8fr)
+    repeat(4, minmax(0, 1fr));
+}
+
+.segment[data-count="6"] .segmentButton:nth-child(-n + 2) {
+  padding: 0 var(--yoyi-space-2);
+}
+
+.segment[data-count="6"] .segmentButton:nth-child(n + 3) {
+  gap: var(--yoyi-space-1);
 }
 
 .segmentButton {
@@ -1114,6 +1309,7 @@ span.icon14 {
 
   .cropBox,
   .cropBox .stageCropArea,
+  .reframeMotion,
   .thirds,
   .stageTop,
   .stageRail,

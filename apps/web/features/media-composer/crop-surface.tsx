@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Cropper from "react-easy-crop";
 import "react-easy-crop/react-easy-crop.css";
 
@@ -9,7 +9,7 @@ import { CropTools } from "../authors/crop-tools";
 import media from "../publishing/ui/media/media.module.css";
 
 import type { MediaRotation } from "@moya/contracts";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import type { Area } from "react-easy-crop";
 
 /**
@@ -52,6 +52,25 @@ export interface CropSurfaceProps {
   readonly generation: number | string;
   /** Saving: user input is blocked; layout re-reports still apply. */
   readonly locked?: boolean;
+  /**
+   * The caller has the frame for a moment (the phone stage's corner drag or
+   * framing tool): the photo takes no input, but stays focusable.
+   */
+  readonly frozen?: boolean;
+  /** `frozen` set inside an event, ahead of its render (see useCropGestures). */
+  readonly holdRef?: { readonly current: boolean } | undefined;
+  /** How far zoom goes; the shared 3× by default. */
+  readonly maxZoom?: number | undefined;
+  /**
+   * A press on a control of the caller's inside the frame (a corner
+   * handle) keeps its focus.
+   */
+  readonly keepControlFocus?: boolean;
+  /**
+   * Filled with a reader of the area the cropper shows right now, in
+   * percentages of the frame (null before it has shown one).
+   */
+  readonly areaRef?: RefObject<(() => Area | null) | null> | undefined;
   readonly autoFocus?: boolean;
   /** Accessible name of the crop area; the hint row describes the gestures. */
   readonly label: string;
@@ -89,6 +108,11 @@ export const CropSurface = ({
   seed,
   generation,
   locked = false,
+  frozen = false,
+  holdRef,
+  maxZoom,
+  keepControlFocus = false,
+  areaRef,
   autoFocus = false,
   label,
   tools = "full",
@@ -101,7 +125,14 @@ export const CropSurface = ({
   remeasure,
   children,
 }: CropSurfaceProps) => {
-  const gestures = useCropGestures({ locked, autoFocus });
+  const gestures = useCropGestures({
+    locked,
+    autoFocus,
+    frozen,
+    keepControlFocus,
+    ...(holdRef === undefined ? {} : { holdRef }),
+    ...(maxZoom === undefined ? {} : { maxZoom }),
+  });
   const hintId = useId();
   const cropperRef = useRef<Cropper | null>(null);
 
@@ -147,14 +178,50 @@ export const CropSurface = ({
       ? seeded.current.seed
       : undefined;
 
-  // A new generation starts from zoom 1 at the centre before its seed applies.
-  const shownGeneration = useRef(generation);
-  const reset = gestures.reset;
+  // A hold (frozen) ends: on the same generation's cropper, a touch it was
+  // refused meanwhile must not leave the library touching (gestures.endHold).
+  const heldFrom = useRef<number | string | null>(null);
   useEffect(() => {
-    if (shownGeneration.current === generation) return;
-    shownGeneration.current = generation;
-    reset();
-  }, [generation, reset]);
+    if (frozen) {
+      heldFrom.current ??= generation;
+      return;
+    }
+    if (heldFrom.current === null) return;
+    const same = heldFrom.current === generation;
+    heldFrom.current = null;
+    gestures.endHold(same);
+  }, [frozen, generation]);
+
+  // A new generation starts from zoom 1 at the centre before its seed
+  // applies: reset while rendering, so the new cropper mounts there and its
+  // seed (applied as it mounts) is never overwritten afterwards (#341).
+  const [shownGeneration, setShownGeneration] = useState(generation);
+  if (shownGeneration !== generation) {
+    setShownGeneration(generation);
+    gestures.restart();
+  }
+
+  // What the cropper shows now: its own crop data, else its last report.
+  useEffect(() => {
+    if (areaRef === undefined) return undefined;
+    const read = () => {
+      const cropper = cropperRef.current;
+      const live =
+        typeof cropper?.getCropData === "function"
+          ? cropper.getCropData()?.croppedAreaPercentages
+          : undefined;
+      return (
+        live ??
+        (reported.current?.generation === generation
+          ? reported.current.area
+          : null)
+      );
+    };
+    areaRef.current = read;
+    return () => {
+      if (areaRef.current === read) areaRef.current = null;
+    };
+  }, [areaRef, generation]);
 
   // The author's input shows as a position or zoom away from the pristine
   // state; returning to it (还原, a new generation) is not a touch.
@@ -176,6 +243,7 @@ export const CropSurface = ({
     <div {...gestures.wrapperProps} data-crop-surface="">
       <div
         className={viewportClassName ?? media.cropViewport}
+        data-frozen={frozen ? "" : undefined}
         data-media-crop=""
         data-saving={locked ? "true" : undefined}
         {...gestures.frameProps}
@@ -192,7 +260,8 @@ export const CropSurface = ({
           cropperProps={{
             tabIndex: locked ? -1 : 0,
             "aria-label": label,
-            "aria-describedby": hintId,
+            // A frozen area takes no gesture: the hint would describe none.
+            ...(frozen ? {} : { "aria-describedby": hintId }),
           }}
           disableAutomaticStylesInjection
           image={image}

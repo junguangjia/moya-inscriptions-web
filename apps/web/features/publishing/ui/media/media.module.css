@@ -717,7 +717,8 @@
 }
 
 /* The feed display window over the crop box (#244): ink dims what the phone
-   stage cuts above and below, a paper edge marks the visible band. */
+   stage cuts above and below the author's region (#341), each band only where
+   it cuts something, and a paper edge marks where the visible part starts. */
 .feedOverlay {
   position: absolute;
   top: 50%;
@@ -730,7 +731,6 @@
 .feedBand {
   position: absolute;
   inset-inline: 0;
-  height: var(--feed-band, 0%);
   background: color-mix(in srgb, var(--yoyi-color-ink-black) 45%, transparent);
 }
 
@@ -740,21 +740,45 @@
 
 .feedBand[data-edge="top"] {
   top: 0;
+  height: var(--feed-band-top, 0%);
+  border-bottom: 1px dashed
+    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
 }
 
 .feedBand[data-edge="bottom"] {
   bottom: 0;
+  height: var(--feed-band-bottom, 0%);
+  border-top: 1px dashed
+    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
 }
 
-.feedOverlay[data-feed-fit="cover"]::after {
+/* 局部 (#341): the handle that drags the shown region, on the bright window's right. */
+.feedHandle {
   position: absolute;
-  inset-inline: 0;
-  top: var(--feed-band, 0%);
-  bottom: var(--feed-band, 0%);
-  content: "";
-  outline: 1px dashed
-    color-mix(in srgb, var(--yoyi-color-paper-light) 85%, transparent);
-  outline-offset: -1px;
+  right: var(--yoyi-space-3);
+  display: grid;
+  width: 44px;
+  height: 44px;
+  box-sizing: border-box;
+  place-items: center;
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-background-inverse);
+  border: 1px solid
+    color-mix(in srgb, var(--yoyi-color-paper-light) 22%, transparent);
+  border-radius: var(--yoyi-radius-full);
+  transform: translateY(-50%);
+  pointer-events: auto;
+  touch-action: none;
+  cursor: ns-resize;
+}
+
+.feedHandle[data-dragging] {
+  cursor: grabbing;
+}
+
+.feedHandle:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
 }
 
 .presets {

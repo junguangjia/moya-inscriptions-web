@@ -2,13 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { FEED_CENTRE_Y } from "../../../authors/feed-post-strip-geometry";
 import editorStyles from "../editor/editor.module.css";
 import { feedWindowHint } from "../media/feed-window-overlay";
-import { feedStageWindow, sameEdit } from "../media/media-geometry";
+import {
+  effectiveFeed,
+  feedStageWindow,
+  sameEdit,
+} from "../media/media-geometry";
 import {
   effectiveCoverKey,
   indexOfKey,
   setItemEdit,
+  setItemFeed,
+  undoneFeed,
 } from "../media/media-order";
 import { derivativeExpected } from "../media/media-status";
 import { useMediaUiState } from "../media/media-ui-store";
@@ -21,11 +28,16 @@ import {
 import { applyRatioToAll } from "./apply-to-all";
 import { COVER_RESET_NOTICE, keepCoverAround } from "./cover-rule";
 import styles from "./edit-screen.module.css";
-import { EditGlyph, EditStage, useStageCrop } from "./edit-stage";
+import {
+  EditGlyph,
+  EditStage,
+  feedToolState,
+  useStageCrop,
+} from "./edit-stage";
 import { MediaNotice } from "./media-notice";
 import { PhoneNextButton, PhoneScreen } from "./phone-screen";
 import { failureSource } from "./photo-tile";
-import { RatioBar, isPhonePreset } from "./ratio-bar";
+import { FeedFitBar, RatioBar, isPhonePreset } from "./ratio-bar";
 import sheetStyles from "./select-screen.module.css";
 import {
   FIRST_MARK,
@@ -44,10 +56,16 @@ import {
 
 import type { FileOrigin } from "../../import-grouping";
 import type { EditorSessionHandle } from "../editor/editor-session-provider";
-import type { AspectPresetId, Size } from "../media/media-geometry";
+import type { CropPreset } from "../media/crop-workspace";
+import type {
+  AspectPresetId,
+  FeedStageWindow,
+  Size,
+} from "../media/media-geometry";
 import type { MediaValue } from "../media/media-order";
 import type { MediaActions } from "../media/use-media-actions";
-import type { StageSnapshot } from "./edit-stage";
+import type { FeedToolState, StageSnapshot } from "./edit-stage";
+import type { FeedFit } from "./ratio-bar";
 import type { PhotoTileModel } from "./photo-tile";
 import type { StripAddInputs, StripSource } from "./thumbnail-strip";
 import type { WorkDraftItem } from "@moya/contracts";
@@ -58,11 +76,20 @@ import type { ReactNode, Ref, RefObject } from "react";
  * photo fills the stage between the bar and one control band; the band
  * holds the editor's notices, the ratio row and the strip of every photo,
  * read right to left as the feed (photo 1, the 首图, at the right edge),
- * with 应用到全部 at its left end. Each photo keeps its own crop, 原始比例 by
- * default; nothing waits for a 完成: the shown edit is kept when the author
- * leaves the photo, turns it, picks a ratio, presses 还原, pauses for a
- * moment or leaves the screen. A turn, 还原, 应用到全部 and 移除 can be taken
- * back from their toast (撤销).
+ * with 应用到全部 at its left end. Each photo keeps its own crop, 原始比例 (the
+ * whole frame) by default, 自由 once a corner or a zoom makes it any other
+ * shape (#341); nothing waits for a 完成: the shown edit is kept when the
+ * author leaves the photo, turns it, picks a ratio, lets a corner go,
+ * presses 还原, pauses for a moment or leaves the screen, never while a
+ * finger is still down. A turn, 还原, 应用到全部 and 移除 can be taken back
+ * from their toast (撤销).
+ *
+ * 「动态流」 at the stage's top (#341, off at first) shows what the phone
+ * feed shows of each photo and rests the crop meanwhile; for a photo taller
+ * than the feed's stage the ratio row turns into 局部 · 整张, and 局部's
+ * region is dragged on the stage. Without a choice an uncropped photo shows
+ * whole and a cropped one centred (r3). Each photo keeps its framing at
+ * once, as a ratio; 还原 resets it with the crop and the turn.
  *
  * The order is changed here (r4 R4): a long-press drag in the strip,
  * Alt + arrows, or the current photo's sheet (设为首图 · 前移 · 后移 ·
@@ -205,6 +232,30 @@ const EDIT_COVER_RESET = `图片编辑后，${COVER_RESET_NOTICE}，可重新调
 
 /** Why a carried-over photo's tools are off (review r2: never a disabled state alone). */
 export const LEGACY_NOTE = "这张图片来自早期作品，不能裁剪或旋转";
+
+/** What the 「动态流」 tool says in the band when there is nothing to choose. */
+const feedNote = (
+  state: FeedToolState,
+  window: FeedStageWindow | null,
+): string => {
+  if (state === "pending") return "正在确定动态流画幅…";
+  if (state === "none") return "这张图片暂时无法预览，不能选择动态流显示";
+  return window?.fit === "fill"
+    ? "动态流中满幅显示，无需选择"
+    : "动态流中整张显示，无需选择";
+};
+
+/** What turning 「动态流」 on says for the photo shown. */
+const feedToolText = (
+  state: FeedToolState,
+  window: FeedStageWindow | null,
+): string => {
+  if (state === "region") return "动态流：上下拖动亮处，选择动态流里显示的部分";
+  if (state === "whole") return "动态流：这张整张显示，左右留白";
+  return window?.fit === "fill"
+    ? "动态流：这张满幅显示，无需选择"
+    : "动态流：这张整张显示，无需选择";
+};
 
 const hasSize = (size: Size | undefined): boolean =>
   size !== undefined && size.width > 0 && size.height > 0;
@@ -595,6 +646,8 @@ const EditWorkspace = ({
     drafts: media.ui,
     editable,
     onCommit: media.applyEdit,
+    // 继续编辑 finds the screen as it was: nothing is kept meanwhile.
+    paused: backAsk,
   });
 
   const {
@@ -613,8 +666,11 @@ const EditWorkspace = ({
   const stripHint = useStripHint(
     count >= 2 && !hint.shown && !(editable && !hintShownBefore()),
   );
-  // 动态流参考线 starts off (mockup B).
-  const [guide, setGuide] = useState(false);
+  // 「动态流」 starts off (mockup B) and stays as the author left it from
+  // photo to photo, within this opening of 编辑 (#341).
+  const [feedTool, setFeedTool] = useState(false);
+  // 整张 → 局部 brings back the region each photo had before (this opening).
+  const regions = useRef(new Map<string, number>());
   // 应用到全部 just ran and nothing differs since: 已应用.
   const [applied, setApplied] = useState(false);
   // The sheet over the screen: the shown photo's actions or fix, or +'s.
@@ -738,16 +794,26 @@ const EditWorkspace = ({
     showToast(text, options);
   };
 
-  // The stage takes its shape from the first photo (as the feed does).
+  // The stage takes its shape from the first photo (as the feed does), and
+  // shows each photo as its framing asks (#341): the author's, else the
+  // default of the crop shown (whole when uncropped, else centred).
   const stageRatio = media.feed.slides[0]?.size ? media.feed.stageRatio : null;
+  const framing = effectiveFeed(crop.next);
   const feedWindow =
     crop.frame === null
       ? null
       : index === 0
-        ? feedStageWindow(crop.ratio)
+        ? feedStageWindow(crop.ratio, undefined, framing)
         : stageRatio === null
           ? null
-          : feedStageWindow(crop.ratio, stageRatio);
+          : feedStageWindow(crop.ratio, stageRatio, framing);
+  // On, the tool keeps the stage until it is turned off, whatever the photo
+  // shown: one whose window is still unknown waits for it, crop resting.
+  const feedState = feedToolState(
+    feedTool,
+    feedWindow,
+    crop.loading || crop.frame !== null,
+  );
 
   /** Each photo's source size as its thumbnail learns it, for 应用到全部. */
   const [sizes, setSizes] = useState<ReadonlyMap<string, Size>>(
@@ -785,7 +851,8 @@ const EditWorkspace = ({
   };
 
   const preset = crop.session.preset;
-  // A stored shape outside the phone's ratios is never spread to the others.
+  // 自由 (a free shape, or a stored one outside the phone's ratios) is never
+  // spread to the others.
   const applicable: AspectPresetId | null =
     editable && crop.previewable && isPhonePreset(preset) ? preset : null;
   // 应用到全部 is offered while another photo has a different ratio.
@@ -797,7 +864,8 @@ const EditWorkspace = ({
   // 已应用 only once every photo could take it: one whose size is not known
   // yet was left as it is, so the ratios still differ.
   const done = applied && !differs && unsized(others, othersKnown).length === 0;
-  const applyOff = done || !differs;
+  // Off while 「动态流」 has the stage: the ratio row is away.
+  const applyOff = done || !differs || feedTool;
 
   // An older draft's chosen cover that is not photo 1 keeps its 封面 mark.
   const albumFirst = media.value.items[0]?.key ?? null;
@@ -849,22 +917,35 @@ const EditWorkspace = ({
     );
   };
 
-  const choosePreset = (id: AspectPresetId) => {
+  const choosePreset = (id: CropPreset) => {
     if (id === preset) return;
     setApplied(false);
     crop.choosePreset(id);
   };
 
   /**
-   * 撤销 of a turn or 还原 (taken before it): the photo's edit back and, when
-   * the step reset the cover's composition (the photo is the cover), that
-   * composition too, as 应用到全部's 撤销 brings it back.
+   * 撤销 of a turn or 还原 (taken before it): the photo's edit and its feed
+   * framing back and, when the step reset the cover's composition (the photo
+   * is the cover), that composition too, as 应用到全部's 撤销 brings it back.
+   * 还原 (`feed`) reset the framing, so it always comes back. A turn left it
+   * as it was (`undoneFeed`), so its 撤销 never takes back one chosen since.
    */
-  const stageUndo = (before: StageSnapshot) => {
+  const stageUndo = (
+    before: StageSnapshot,
+    { feed = true }: { readonly feed?: boolean } = {},
+  ) => {
     const album = editor.actions.media();
     const edited = album.items.find((entry) => entry.key === before.key);
     return () => {
+      const shown = editor.actions
+        .media()
+        .items.find((entry) => entry.key === before.key);
       crop.restore(before);
+      // The framing is not the pixels: it comes back on its own.
+      media.applyFeed(
+        before.key,
+        feed ? before.feed : undoneFeed(before.feed, shown),
+      );
       if (
         edited === undefined ||
         album.coverCrop === null ||
@@ -889,30 +970,73 @@ const EditWorkspace = ({
 
   const rotate = () => {
     if (!editable) return;
-    const undo = stageUndo(crop.snapshot());
+    const undo = stageUndo(crop.snapshot(), { feed: false });
     crop.rotate();
     say("已向右旋转 90°", { undo });
   };
 
+  /**
+   * 还原: the whole frame, unturned, and the photo's default feed framing
+   * (#341 r3: whole, as it is uncropped again); a carried-over photo has
+   * only its framing to reset. The region 整张 → 局部 would bring back goes
+   * too (局部 starts centred), until 撤销.
+   */
   const revert = () => {
-    if (!editable || !crop.restorable) return;
+    if (!crop.restorable) return;
     const undo = stageUndo(crop.snapshot());
+    const key = item.key;
+    const region = regions.current.get(key);
+    regions.current.delete(key);
     setApplied(false);
-    crop.revert();
+    if (editable) crop.revert();
+    media.applyFeed(key, undefined);
     say(`第 ${number} 项已还原`, {
       undo: () => {
         setApplied(false);
+        if (region !== undefined) regions.current.set(key, region);
         undo();
       },
     });
   };
 
-  const toggleGuide = () => {
+  /**
+   * 「动态流」 on or off. On, the crop shown is kept first, so the window
+   * lies over the frame as the feed will have it.
+   */
+  const toggleFeedTool = () => {
+    if (feedTool) {
+      setFeedTool(false);
+      say("已退出动态流");
+      return;
+    }
     if (feedWindow === null) return;
-    setGuide(!guide);
-    say(
-      guide ? "已隐藏动态流参考线" : "动态流参考线：亮处是动态流里看到的部分",
-    );
+    crop.commit();
+    setFeedTool(true);
+    say(feedToolText(feedToolState(true, feedWindow, true), feedWindow));
+  };
+  /** 局部's region, as the finger lifts or a key moves it: kept at once. */
+  const placeRegion = (y: number) =>
+    media.applyFeed(item.key, { fit: "cover", y });
+  /**
+   * 局部 or 整张; 整张 → 局部 returns to the region the photo had (centred
+   * when it had none). Each is kept as chosen, the photo's default as none.
+   */
+  const chooseFeedFit = (fit: FeedFit) => {
+    if (fit === feedState) return;
+    if (fit === "whole") {
+      regions.current.set(
+        item.key,
+        framing.fit === "cover" ? framing.y : FEED_CENTRE_Y,
+      );
+      media.applyFeed(item.key, { fit: "contain" });
+      media.announce("动态流整张显示，左右留白");
+      return;
+    }
+    media.applyFeed(item.key, {
+      fit: "cover",
+      y: regions.current.get(item.key) ?? FEED_CENTRE_Y,
+    });
+    media.announce("动态流显示局部，上下拖动选择显示的部分");
   };
 
   const applyToAll = () => {
@@ -938,12 +1062,20 @@ const EditWorkspace = ({
     say(appliedText(album.items, sizes), {
       kind: "apply-all",
       undo: () => {
-        // Each changed photo gets its own edit back, the cover its composition.
+        // Each changed photo gets its own edit back, its framing as a turn's
+        // 撤销 gives it (`undoneFeed`), the cover its composition.
         let restored: MediaValue = editor.actions.media();
         for (const change of changes) {
           const before = album.items.find((entry) => entry.key === change.key);
-          if (before !== undefined)
-            restored = setItemEdit(restored, change.key, before.edit).value;
+          if (before === undefined) continue;
+          const shown = restored.items.find(
+            (entry) => entry.key === change.key,
+          );
+          restored = setItemFeed(
+            setItemEdit(restored, change.key, before.edit).value,
+            change.key,
+            undoneFeed(before.edit.feed, shown),
+          );
         }
         if (coverCropReset && restored.coverKey === album.coverKey) {
           restored = { ...restored, coverCrop: album.coverCrop };
@@ -1416,14 +1548,21 @@ const EditWorkspace = ({
       <div ref={body} className={styles.editBody} data-edit-body="">
         <EditStage
           crop={crop}
+          cropPaused={feedTool}
           derivativeExpected={derivativeExpected(status)}
           enter={enter?.key === item.key ? enter.from : undefined}
-          feedWindow={feedWindow}
-          guide={guide}
-          guideHint={
-            feedWindow === null ? null : feedWindowHint(feedWindow, index === 0)
+          feedHint={
+            feedWindow === null
+              ? null
+              : feedWindowHint(feedWindow, index === 0, {
+                  adjustable: feedState === "region",
+                })
           }
+          feedTool={feedState}
+          feedWindow={feedWindow}
           hint={hint.shown}
+          interrupted={backAsk}
+          onFeedRegion={placeRegion}
           onFix={() => setSheet({ type: "attention", key: item.key })}
           onGestureEnd={(moved) => {
             if (!moved) return;
@@ -1434,7 +1573,8 @@ const EditWorkspace = ({
           onPage={page}
           onRevert={revert}
           onRotate={rotate}
-          onToggleGuide={toggleGuide}
+          onToggleFeedTool={toggleFeedTool}
+          reducedMotion={media.reducedMotion}
           status={status}
           uploadFailed={view?.phase === "failed"}
         />
@@ -1459,11 +1599,26 @@ const EditWorkspace = ({
               />
             </div>
           )}
-          <RatioBar
-            disabled={!crop.previewable || !editable}
-            onChange={choosePreset}
-            value={preset}
-          />
+          {feedState === "off" ? (
+            <RatioBar
+              disabled={!crop.previewable || !editable}
+              free
+              onChange={choosePreset}
+              value={preset}
+            />
+          ) : feedState === "region" || feedState === "whole" ? (
+            <FeedFitBar onChange={chooseFeedFit} value={feedState} />
+          ) : (
+            <div className={styles.ratioRow}>
+              <p
+                className={styles.feedNote}
+                data-edit-feed-note={feedState}
+                role="status"
+              >
+                {feedNote(feedState, feedWindow)}
+              </p>
+            </div>
+          )}
           {/* A touch anywhere on the row ends the strip's hint. */}
           <div className={styles.stripRow} onPointerDown={stripHint.hide}>
             <ThumbnailStrip

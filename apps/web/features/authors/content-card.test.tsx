@@ -3,13 +3,19 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { shell, contentActions } = vi.hoisted(() => ({
+const { shell, contentActions, slot } = vi.hoisted(() => ({
   // `browseOnly` stays unset, like a partial shell, unless a test sets it.
   shell: { openContent: vi.fn(), browseOnly: undefined as boolean | undefined },
   contentActions: vi.fn(),
+  slot: { value: null as MediaSlot | null },
 }));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => shell,
+}));
+// The card image's masonry slot: none, as outside a list, unless a test sets it.
+vi.mock("../home/catalog-masonry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../home/catalog-masonry")>()),
+  useMasonrySlot: () => slot.value,
 }));
 vi.mock("./content-actions", () => ({
   useContentActions: (...args: unknown[]) => {
@@ -24,6 +30,7 @@ import { ContentCard } from "./content-card";
 import styles from "../home/home-screen.module.css";
 
 import type { ContentCard as Card } from "@moya/contracts";
+import type { MediaSlot } from "../media/responsive-media";
 import type { Root } from "react-dom/client";
 
 (
@@ -65,6 +72,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   document.body.replaceChildren();
   vi.clearAllMocks();
+  slot.value = null;
 });
 
 describe("ContentCard for works", () => {
@@ -188,6 +196,52 @@ describe("ContentCard for works", () => {
         ),
       ).toBe(ratio);
     }
+  });
+
+  // #341: without a cover composition the card follows the cover's feed
+  // framing (the server sends `media.feed` only then).
+  it("frames a tall work cover the author's way only when the card carries it", () => {
+    const tall = { ...cover, width: 600, height: 1800 };
+    const box = (item: Card) =>
+      render(item).querySelector<HTMLElement>(
+        '[data-catalog-media-state="valid"]',
+      )!;
+    const region = box(
+      card({ media: { ...tall, feed: { fit: "cover", y: 0 } } }),
+    );
+    expect(region.getAttribute("data-feed-framing")).toBe("region");
+    expect(region.style.getPropertyValue("--feed-media-y")).toBe("0%");
+    const whole = box(card({ media: { ...tall, feed: { fit: "contain" } } }));
+    expect(whole.getAttribute("data-fit")).toBe("contain");
+    expect(whole.getAttribute("data-feed-framing")).toBe("whole");
+    const plain = box(card({ media: tall }));
+    expect(plain.hasAttribute("data-fit")).toBe(false);
+    expect(plain.hasAttribute("data-feed-framing")).toBe(false);
+    expect(plain.style.getPropertyValue("--feed-media-y")).toBe("");
+  });
+
+  // A framing kept from an earlier, taller crop is dormant in 编辑 once the
+  // cover is no taller than its feed stage (at most 4:5); a 3:2 card covering
+  // every column shows that cover centred.
+  it("never frames a card by a framing the author can no longer see", () => {
+    slot.value = { platform: "phone", columns: 2, span: true };
+    const box = (media: NonNullable<Card["media"]>) =>
+      render(card({ media })).querySelector<HTMLElement>(
+        '[data-catalog-media-state="valid"]',
+      )!;
+    for (const feed of [{ fit: "contain" }, { fit: "cover", y: 0 }] as const) {
+      const dormant = box({ ...cover, width: 800, height: 1000, feed });
+      expect(dormant.hasAttribute("data-fit")).toBe(false);
+      expect(dormant.hasAttribute("data-feed-framing")).toBe(false);
+      expect(dormant.style.getPropertyValue("--feed-media-y")).toBe("");
+    }
+    const tall = box({
+      ...cover,
+      width: 900,
+      height: 1600,
+      feed: { fit: "contain" },
+    });
+    expect(tall.getAttribute("data-feed-framing")).toBe("whole");
   });
 
   it("keeps a titled media card and its activation unchanged", () => {

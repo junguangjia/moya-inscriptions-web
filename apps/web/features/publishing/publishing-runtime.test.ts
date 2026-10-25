@@ -1129,6 +1129,120 @@ describe("publishing runtime", () => {
     );
   });
 
+  it("keeps an item's feed framing when the manager's identity reaches it (#341)", async () => {
+    const test = setup();
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "unsaved" });
+    await test.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+    expect(test.runtime.confirmStaging().ok).toBe(true);
+    await settle();
+    const [managed] = test.runtime.draftItems();
+    expect(managed?.itemId).not.toBeNull();
+    // The editor still lists the item as pending, framed whole.
+    test.runtime.edit({
+      ...content("framed"),
+      items: [
+        {
+          key: managed!.key,
+          itemId: null,
+          kind: managed!.kind,
+          qualityMode: managed!.qualityMode,
+          pendingLabel: "photo",
+          edit: { rotation: 0, crop: null, feed: { fit: "contain" } },
+        },
+      ],
+    });
+    expect(test.runtime.checkpoint()!.content!.items).toEqual([
+      {
+        key: managed!.key,
+        itemId: managed!.itemId,
+        kind: managed!.kind,
+        qualityMode: managed!.qualityMode,
+        edit: { rotation: 0, crop: null, feed: { fit: "contain" } },
+      },
+    ]);
+    test.runtime.dispose();
+  });
+
+  describe("the first save of a framed published work (#341)", () => {
+    const work = `work-${"7".repeat(32)}`;
+    const revision = `work-revision-${"6".repeat(32)}`;
+    const framed = (title: string): WorkDraftContent => ({
+      ...content(title),
+      items: [
+        {
+          key: "framed",
+          itemId: `media-item-${"5".repeat(32)}`,
+          kind: "static",
+          qualityMode: "standard",
+          edit: { rotation: 0, crop: null, feed: { fit: "cover", y: 0.2 } },
+        },
+      ],
+    });
+    /** The editor opened the work (its framing in the baseline) and changed its title. */
+    const saveFirst = async (opened: WorkDraftContent) => {
+      const test = setup();
+      const openWorkEditDraft = vi.fn(async () => ({
+        draft: {
+          ...draftOf(opened),
+          kind: "edit" as const,
+          workId: work,
+          baseRevisionId: revision,
+        },
+        created: false,
+      }));
+      Object.assign(test.client, { openWorkEditDraft });
+      test.signIn(ACCOUNT);
+      test.runtime.startSession({
+        target: { type: "work", id: work },
+        saveMode: "saved",
+        workId: work,
+        baseRevisionId: revision,
+        content: framed("旧作"),
+      });
+      test.runtime.edit(framed("旧作（改）"));
+      await test.runtime.saveNow();
+      await settle();
+      expect(openWorkEditDraft).toHaveBeenCalledOnce();
+      return test;
+    };
+
+    it("continues the account's untouched edit draft when it keeps the framing", async () => {
+      const test = await saveFirst(framed("旧作"));
+      expect(test.client.saveDraft).toHaveBeenCalledOnce();
+      expect(test.client.saveDraft.mock.calls[0]![1]).toEqual({
+        baseRevision: 1,
+        content: framed("旧作（改）"),
+        deviceClass: "phone",
+      });
+      expect(test.runtime.autosave()!.store.get()).toMatchObject({
+        status: "saved",
+        error: null,
+      });
+    });
+
+    it("takes an edit draft without the work's framing for another draft", async () => {
+      // What an account that rebuilt the edit without `feed` would answer:
+      // the comparison covers the framing, so it never passes as untouched.
+      const lossy = framed("旧作");
+      const test = await saveFirst({
+        ...lossy,
+        items: lossy.items.map((item) => ({
+          ...item,
+          edit: { rotation: item.edit.rotation, crop: item.edit.crop },
+        })),
+      });
+      expect(test.client.saveDraft).not.toHaveBeenCalled();
+      expect(test.runtime.autosave()!.store.get()).toMatchObject({
+        status: "error",
+        error: {
+          message:
+            "这件作品已有其他草稿，请先打开那份草稿；本次内容仍保留在本机",
+        },
+      });
+    });
+  });
+
   it("r6 replays only the newest interrupted replacement at its original album position", async () => {
     const test = setup();
     test.signIn(ACCOUNT);
@@ -2415,6 +2529,31 @@ describe("edited-frame background progress lifecycle", () => {
     t.runtime.edit({ ...edited(0), title: "title only" });
     t.timers.fireAll();
     await settle();
+    expect(t.progress).toHaveBeenCalledOnce();
+    expect(
+      t.runtime.manager()!.getSnapshot().items[0]!.processingFailure,
+    ).toBeNull();
+    expect(t.client.readiness).not.toHaveBeenCalled();
+    t.runtime.dispose();
+  });
+
+  it("does not rearm completed HD for a feed framing or its save (#341)", async () => {
+    const t = await restored();
+    const framing = edited(0);
+    const framed: WorkDraftContent = {
+      ...framing,
+      items: framing.items.map((item) => ({
+        ...item,
+        edit: { ...item.edit, feed: { fit: "contain" } },
+      })),
+    };
+    t.runtime.edit(framed);
+    t.timers.fireAll();
+    await settle();
+    await t.runtime.saveNow();
+    t.timers.fireAll();
+    await settle();
+    expect(t.client.saveDraft.mock.calls.at(-1)![1].content).toEqual(framed);
     expect(t.progress).toHaveBeenCalledOnce();
     expect(
       t.runtime.manager()!.getSnapshot().items[0]!.processingFailure,

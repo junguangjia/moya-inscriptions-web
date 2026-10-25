@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { CROP_MAX_ZOOM, useCropGestures } from "./crop-gestures";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -10,8 +10,15 @@ import { CROP_MAX_ZOOM, useCropGestures } from "./crop-gestures";
 
 let root: Root | null = null;
 let latest: ReturnType<typeof useCropGestures> | null = null;
-const Harness = ({ locked }: { locked: boolean }) => {
-  const gestures = useCropGestures({ locked });
+type Options = Omit<Parameters<typeof useCropGestures>[0], "locked">;
+const Harness = ({
+  locked,
+  options,
+}: {
+  locked: boolean;
+  options: Options;
+}) => {
+  const gestures = useCropGestures({ locked, ...options });
   latest = gestures;
   return (
     <div {...gestures.wrapperProps}>
@@ -20,17 +27,24 @@ const Harness = ({ locked }: { locked: boolean }) => {
       </button>
       <div data-frame="" {...gestures.frameProps}>
         <div data-area="" tabIndex={0} />
+        <span data-crop-own-control="">
+          <button type="button" data-handle="" data-crop-handle="nw">
+            角
+          </button>
+        </span>
       </div>
     </div>
   );
 };
-const render = async (locked = false) => {
+const render = async (locked = false, options: Options = {}) => {
   if (!root) {
     const node = document.createElement("div");
     document.body.append(node);
     root = createRoot(node);
   }
-  await act(async () => root!.render(<Harness locked={locked} />));
+  await act(async () =>
+    root!.render(<Harness locked={locked} options={options} />),
+  );
 };
 const key = async (
   target: string,
@@ -111,4 +125,111 @@ it("gives the photo focus on pointer down and ends interrupted gestures", async 
   await act(async () => latest!.cropperProps.onInteractionStart());
   await act(async () => window.dispatchEvent(new Event("blur")));
   expect(latest!.surface).toBe(before + 2);
+});
+
+it("zooms as far as the caller allows, and no further", async () => {
+  await render(false, { maxZoom: 5 });
+  expect(latest!.cropperProps.maxZoom).toBe(5);
+  for (let i = 0; i < 60; i++) await key("[data-area]", "=");
+  expect(latest!.zoom).toBe(5);
+  await render(false, {});
+  expect(latest!.cropperProps.maxZoom).toBe(CROP_MAX_ZOOM);
+});
+
+it("takes nothing while frozen: touch, wheel, keys, the mouse and Safari's pinch", async () => {
+  await render(false, { frozen: true });
+  expect(latest!.cropperProps.onTouchRequest()).toBe(false);
+  expect(
+    latest!.cropperProps.onWheelRequest({ ctrlKey: true } as WheelEvent),
+  ).toBe(false);
+  await key("[data-area]", "+");
+  expect(latest!.zoom).toBe(1);
+  await key("[data-area]", "0");
+  expect((await key("[data-area]", "ArrowLeft")).defaultPrevented).toBe(true);
+  // The caller's own control keeps its arrows (a framing slider).
+  expect((await key("[data-handle]", "ArrowUp")).defaultPrevented).toBe(false);
+  const stopped = { stopPropagation: vi.fn() };
+  latest!.frameProps.onMouseDownCapture(stopped);
+  expect(stopped.stopPropagation).toHaveBeenCalledOnce();
+  const pinch = new Event("gesturestart", { bubbles: true, cancelable: true });
+  await act(async () =>
+    document.querySelector("[data-area]")!.dispatchEvent(pinch),
+  );
+  expect(pinch.defaultPrevented).toBe(true);
+  // Layout re-reports still apply.
+  await act(async () => latest!.cropperProps.onZoomChange(1.4));
+  expect(latest!.zoom).toBe(1.4);
+
+  await render(false, {});
+  expect(latest!.cropperProps.onTouchRequest()).toBe(true);
+  const free = { stopPropagation: vi.fn() };
+  latest!.frameProps.onMouseDownCapture(free);
+  expect(free.stopPropagation).not.toHaveBeenCalled();
+});
+
+it("holds the photo from a hold the caller sets ahead of its render", async () => {
+  const hold = { current: false };
+  await render(false, { holdRef: hold });
+  expect(latest!.cropperProps.onTouchRequest()).toBe(true);
+  // Set inside an event, with no render in between: already held.
+  hold.current = true;
+  expect(latest!.cropperProps.onTouchRequest()).toBe(false);
+  const stopped = { stopPropagation: vi.fn() };
+  latest!.frameProps.onMouseDownCapture(stopped);
+  expect(stopped.stopPropagation).toHaveBeenCalledOnce();
+  const pinch = new Event("gesturestart", { bubbles: true, cancelable: true });
+  await act(async () =>
+    document.querySelector("[data-area]")!.dispatchEvent(pinch),
+  );
+  expect(pinch.defaultPrevented).toBe(true);
+  hold.current = false;
+  expect(latest!.cropperProps.onTouchRequest()).toBe(true);
+});
+
+it("leaves the caller's own controls their keys", async () => {
+  await render();
+  await key("[data-handle]", "+");
+  expect(latest!.zoom).toBe(1);
+  expect(
+    (await key("[data-handle]", "ArrowLeft", { altKey: true }))
+      .defaultPrevented,
+  ).toBe(false);
+});
+
+it("keeps a pressed control's focus only when asked", async () => {
+  const press = async () => {
+    const handle = document.querySelector<HTMLElement>("[data-handle]")!;
+    await act(async () => handle.focus());
+    await act(async () =>
+      handle.dispatchEvent(new Event("pointerdown", { bubbles: true })),
+    );
+    return handle;
+  };
+  await render();
+  await press();
+  expect(document.activeElement).toBe(document.querySelector("[data-area]"));
+  await render(false, { keepControlFocus: true });
+  const handle = await press();
+  expect(document.activeElement).toBe(handle);
+});
+
+it("ends a gesture when a second finger lands on a corner handle", async () => {
+  await render();
+  const before = latest!.surface;
+  await act(async () => latest!.cropperProps.onInteractionStart());
+  // Inside the frame, but not the library's: its pinch would start from nothing.
+  await act(async () =>
+    document
+      .querySelector("[data-handle]")!
+      .dispatchEvent(new Event("touchstart", { bubbles: true })),
+  );
+  expect(latest!.surface).toBe(before + 1);
+  // A finger on the photo itself is the library's own.
+  await act(async () => latest!.cropperProps.onInteractionStart());
+  await act(async () =>
+    document
+      .querySelector("[data-area]")!
+      .dispatchEvent(new Event("touchstart", { bubbles: true })),
+  );
+  expect(latest!.surface).toBe(before + 1);
 });

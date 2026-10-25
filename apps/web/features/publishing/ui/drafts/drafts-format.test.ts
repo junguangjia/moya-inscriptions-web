@@ -6,6 +6,7 @@ import {
   compareContent,
   draftDeletionScopeText,
   draftKindLabel,
+  itemEditText,
   mediaEditNotes,
   missingLocalText,
   newestEditedFirst,
@@ -14,6 +15,8 @@ import {
   textExcerpt,
 } from "./drafts-format";
 import { NOW, content, minutesAgo, summary } from "./drafts.test-support";
+
+import type { WorkDraftContent } from "@moya/contracts";
 
 describe("drafts wording", () => {
   it("labels new drafts and edits, with the UI-only unnamed placeholder", () => {
@@ -135,5 +138,87 @@ describe("drafts ordering and media notes", () => {
     expect(mediaEditNotes(content({ items: [item("a", 0, false)] }))).toEqual(
       [],
     );
+  });
+
+  it("names feed framing and marks a framing-only difference (#341)", () => {
+    const cut = { x: 0, y: 0, width: 0.5, height: 1 };
+    const framed = (
+      feed?: WorkDraftContent["items"][number]["edit"]["feed"],
+      crop: WorkDraftContent["items"][number]["edit"]["crop"] = null,
+    ) =>
+      content({
+        items: [
+          {
+            key: "a",
+            itemId: null,
+            kind: "static",
+            qualityMode: "standard",
+            pendingLabel: "photo",
+            edit: { rotation: 0, crop, ...(feed ? { feed } : {}) },
+          },
+        ],
+      });
+    expect(
+      itemEditText({ rotation: 90, crop: cut, feed: { fit: "contain" } }),
+    ).toBe("已旋转 90°、已裁剪、动态流整张显示");
+    expect(
+      itemEditText({ rotation: 0, crop: null, feed: { fit: "cover", y: 0 } }),
+    ).toBe("动态流显示局部");
+    // An uncropped photo shows whole by default (r3): 局部 at the centre is
+    // the author's choice, 整张 nothing to name.
+    expect(
+      itemEditText({ rotation: 0, crop: null, feed: { fit: "cover", y: 0.5 } }),
+    ).toBe("动态流显示局部");
+    expect(
+      itemEditText({ rotation: 0, crop: null, feed: { fit: "contain" } }),
+    ).toBeNull();
+    expect(itemEditText({ rotation: 0, crop: null })).toBeNull();
+    // A cropped one is centred by default.
+    expect(
+      itemEditText({ rotation: 0, crop: cut, feed: { fit: "cover", y: 0.5 } }),
+    ).toBe("已裁剪");
+    expect(mediaEditNotes(framed({ fit: "contain" }, cut))).toEqual([
+      "第 1 项已裁剪、动态流整张显示",
+    ]);
+    expect(mediaEditNotes(framed({ fit: "cover", y: 0.5 }))).toEqual([
+      "第 1 项动态流显示局部",
+    ]);
+
+    // Compared as the feed shows each photo: absent is its default.
+    expect(compareContent(framed(), framed({ fit: "contain" })).media).toBe(
+      false,
+    );
+    expect(
+      compareContent(framed(), framed({ fit: "cover", y: 0.5 })),
+    ).toMatchObject({ media: true, cover: false });
+    expect(
+      compareContent(framed(undefined, cut), framed({ fit: "contain" }, cut))
+        .media,
+    ).toBe(true);
+    expect(
+      compareContent(
+        framed(undefined, cut),
+        framed({ fit: "cover", y: 0.5 }, cut),
+      ).media,
+    ).toBe(false);
+    expect(
+      compareContent(
+        framed({ fit: "cover", y: 0.2 }),
+        framed({ fit: "cover", y: 0.3 }),
+      ).media,
+    ).toBe(true);
+    // Key order is not a difference.
+    const reordered = framed();
+    expect(
+      compareContent(framed({ fit: "cover", y: 0.2 }), {
+        ...reordered,
+        items: [
+          {
+            ...reordered.items[0]!,
+            edit: { feed: { y: 0.2, fit: "cover" }, crop: null, rotation: 0 },
+          },
+        ],
+      }).media,
+    ).toBe(false);
   });
 });

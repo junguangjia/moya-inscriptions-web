@@ -24,7 +24,8 @@
 }
 
 /* A shorter image sits centred with blank above and below; a taller one is
-   centre-cropped, like the feed. */
+   cropped at the author's region (--feed-slide-y; centred by default) unless
+   the author keeps it whole, blank at the sides, like the feed. */
 .slideImage {
   display: block;
   width: 100%;
@@ -37,6 +38,7 @@
 [data-fit="cover"] > .slideImage,
 [data-fit="cover"] > .slideButton > .slideImage {
   object-fit: cover;
+  object-position: 50% var(--feed-slide-y, 50%);
 }
 
 /* With `onSlideActivate` a picture opens its item for editing. */

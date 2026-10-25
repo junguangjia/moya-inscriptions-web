@@ -1,14 +1,18 @@
 import type { MediaCrop } from "@moya/contracts";
+import type { CropPoint } from "../../media-composer/crop-window";
 import {
   CROP_MINIMUM,
   normalizeCrop,
 } from "../../publishing/ui/media/media-geometry";
 
-export type CropCorner = "nw" | "ne" | "sw" | "se";
-export interface CropPoint {
-  readonly x: number;
-  readonly y: number;
-}
+// The anchored-corner geometry is the Media Composer's (#341), shared with
+// the phone 编辑 stage's corner handles.
+export type { CropCorner, CropPoint } from "../../media-composer/crop-window";
+export {
+  cropCornerPoint,
+  resizeCropCorner as resizeArticleCrop,
+} from "../../media-composer/crop-window";
+
 export interface CropBounds {
   readonly left: number;
   readonly top: number;
@@ -63,40 +67,6 @@ export const moveArticleCrop = (
     x: clamp(crop.x + delta.x, 0, 1 - crop.width),
     y: clamp(crop.y + delta.y, 0, 1 - crop.height),
   });
-
-/** Each corner moves independently while the opposite corner stays anchored. */
-export const resizeArticleCrop = (
-  crop: MediaCrop,
-  corner: CropCorner,
-  point: CropPoint,
-): MediaCrop | null => {
-  const left = corner.endsWith("w")
-    ? clamp(point.x, 0, crop.x + crop.width - CROP_MINIMUM)
-    : crop.x;
-  const right = corner.endsWith("e")
-    ? clamp(point.x, crop.x + CROP_MINIMUM, 1)
-    : crop.x + crop.width;
-  const top = corner.startsWith("n")
-    ? clamp(point.y, 0, crop.y + crop.height - CROP_MINIMUM)
-    : crop.y;
-  const bottom = corner.startsWith("s")
-    ? clamp(point.y, crop.y + CROP_MINIMUM, 1)
-    : crop.y + crop.height;
-  return normalizeCrop({
-    x: left,
-    y: top,
-    width: right - left,
-    height: bottom - top,
-  });
-};
-
-export const cropCornerPoint = (
-  crop: MediaCrop,
-  corner: CropCorner,
-): CropPoint => ({
-  x: crop.x + (corner.endsWith("e") ? crop.width : 0),
-  y: crop.y + (corner.startsWith("s") ? crop.height : 0),
-});
 
 /** react-easy-crop's viewport window stays centered as its free ratio changes. */
 export const centeredCropWindow = (

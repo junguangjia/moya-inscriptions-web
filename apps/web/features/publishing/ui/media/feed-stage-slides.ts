@@ -2,9 +2,10 @@ import { useMemo } from "react";
 
 import { resolveStageAspect } from "../../../authors/feed-post-strip-geometry";
 import { useEditorMediaSources } from "../editor/preview";
-import { editedSize } from "./media-geometry";
+import { editedSize, readerFeed } from "./media-geometry";
 
 import type { FeedStagePreviewSlide } from "../../../media-composer/feed-stage-preview";
+import type { Size } from "./media-geometry";
 import type { UploadManagerSnapshot } from "../../upload-manager";
 import type { EditorSessionState } from "../editor/editor-session-state";
 import type { EditorMediaScope } from "../editor/preview";
@@ -31,7 +32,10 @@ export interface FeedStageModel {
  * items in `scope` get a picture (a screen without the stage asks for the
  * first one, whose size still sets the stage ratio). An item whose edited
  * frame is still being drawn keeps its edited shape as a placeholder, so the
- * stage never jumps when the picture lands.
+ * stage never jumps when the picture lands. Every slide carries its item's
+ * effective feed framing in the form the feed reads it (`readerFeed`: an
+ * uncropped taller picture whole, absent for a centred cover), so the
+ * preview frames a taller picture as the feed will.
  */
 export const useFeedStageSlides = (
   state: EditorSessionState,
@@ -52,44 +56,57 @@ export const useFeedStageSlides = (
       .slice(0, FEED_GALLERY_MAXIMUM)
       .map((item, index): FeedStagePreviewSlide => {
         const alt = `第 ${index + 1} 项`;
+        // The framing as the feed will read it (the item's default counts).
+        const framing = (size: Size | null) => {
+          const feed = readerFeed(item.edit, size);
+          return feed === undefined ? {} : { feed };
+        };
         const source = sources.get(item.key);
-        if (source !== undefined && source.pending !== true)
+        if (source !== undefined && source.pending !== true) {
+          const size = { width: source.width, height: source.height };
           return {
             key: item.key,
             alt,
             src: source.src,
-            size: { width: source.width, height: source.height },
+            size,
             status: "ready",
+            ...framing(size),
           };
-        if (source !== undefined)
+        }
+        if (source !== undefined) {
+          const size = editedSize(
+            { width: source.width, height: source.height },
+            item.edit,
+          );
           return {
             key: item.key,
             alt,
             src: null,
-            size: editedSize(
-              { width: source.width, height: source.height },
-              item.edit,
-            ),
+            size,
             status: "loading",
+            ...framing(size),
           };
+        }
         const server =
           views.get(item.key)?.serverItem ??
           (item.itemId === null
             ? null
             : (state.serverItems[item.itemId] ?? null));
         const presentation = server?.presentation;
+        const size =
+          presentation === undefined || presentation === null
+            ? null
+            : editedSize(presentation, item.edit);
         return {
           key: item.key,
           alt,
           src: null,
-          size:
-            presentation === undefined || presentation === null
-              ? null
-              : editedSize(presentation, item.edit),
+          size,
           status:
             idle || localStill(item.key) !== null || server?.media
               ? "loading"
               : "unavailable",
+          ...framing(size),
         };
       });
     return {

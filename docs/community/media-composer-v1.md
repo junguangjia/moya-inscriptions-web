@@ -20,6 +20,16 @@ database schema or media-storage field is added. Account isolation, local
 recovery, explicit draft saving, conflict protection, upload quality, limits,
 Live Photo pairing and manual failure recovery remain authoritative.
 
+Issue [#341](https://github.com/junguangjia/moya-inscriptions-web/issues/341)
+later added one optional, render-only field, `MediaEdit.feed` (the author's feed
+framing of a tall work photo, stored only when it differs from the photo's
+default: whole when uncropped, else a centred cover), and the public `feed` it
+is read back as (the effective framing, an uncropped photo's whole default
+included) on card gallery entries, the card cover and `Work.media`. It needs no
+migration, creates no derivative and never changes content identity; see
+[Media composer tall-work framing V1](./media-composer-tall-work-framing-v1.md).
+The statement above describes #244 as delivered.
+
 The approved phone flow replaces the intermediate selected-photo grid and the
 old order rail. Avatar and profile-cover editors retain their accepted flows.
 Shared crop and preview helpers remain available to their existing consumers;
@@ -50,10 +60,63 @@ iPhone check.
 
 The current photo fills the editing stage. Each photo starts with its full
 frame, labelled **原始比例**, and keeps its own crop and rotation. The ratio row
-offers **原始比例 · 4:5 · 3:4 · 1:1 · 4:3**. Drag repositions the image and
-pinch zooms it; rotation and 还原 keep their existing non-destructive edit
-model. Changing photos or leaving 编辑 keeps the current edit without a
+offers **原始比例 · 自由 · 4:5 · 3:4 · 1:1 · 4:3** (#341). Drag repositions the
+image and pinch zooms it; rotation and 还原 keep their existing non-destructive
+edit model. Changing photos or leaving 编辑 keeps the current edit without a
 separate 完成 action.
+
+### Freeform crop (#341)
+
+The crop frame's four corners are handles, as in iOS Photos. A corner drag keeps
+the opposite corner anchored; a fixed ratio keeps its shape,
+while 原始比例 and 自由 are free. On release the photo re-centres and zooms so
+the new window fills the crop field again. 原始比例 always means the whole frame
+(crop null): a corner drag, or a move or pinch that produces a real crop,
+switches it to **自由**. A stored crop outside the phone's ratios (16:9, 9:16 or
+a zoomed crop of the frame's own shape) reopens as 自由 on the phone; the
+desktop dialog keeps its labels. A turn at 自由 starts again at 原始比例.
+
+While the handles are offered, the crop field is the stage less 60 px above and
+below and 16 px at the sides, so the stage's buttons never cover a handle;
+**还原** and **旋转** sit side by side at the bottom right. 封面构图 keeps its
+whole stage. Nothing is kept while a finger is down: a switch, 下一步,
+Back, 封面构图, a reorder, 应用到全部 or the leave guard meanwhile keeps the
+photo as the finger found it. An interrupted corner drag (a cancelled pointer,
+the page losing focus, a touch outside the photo, the back sheet) is taken back;
+an interrupted pan or pinch keeps today's rule. The handles take the arrow keys
+for keyboard users; VoiceOver users, who cannot drag them, pick a ratio from the
+row.
+
+### 「动态流」 (#341)
+
+**动态流** at the stage's top replaces 动态流参考线. It starts off and, once on,
+stays on from photo to photo until the author turns it off. Turning it on keeps
+the crop shown first; meanwhile the crop rests: the corner handles go, and no
+gesture or key reaches the photo. The frame then shows what the phone
+single-column feed shows of it.
+
+- A photo taller than the feed's stage (1:1 to 4:5, set by photo 1) is the
+  author's to frame. The ratio row becomes **局部 · 整张**. **局部** (a cropped
+  photo's default, centred) makes the whole frame a vertical slider: a finger
+  drags the shown region and keeps it once it lifts; ↑ and ↓ (Shift for a fine
+  step), Page Up / Down, Home (the bottom) and End (the top) keep each step at
+  once. **整张** (an uncropped photo's default, #341 r3) shows the whole photo
+  with blank sides. 整张 → 局部 returns to the photo's last region in this
+  opening, or the centre. The author's choice always
+  wins; 原始比例 or 还原 brings back 整张 for a photo without one.
+- Any other photo says the feed shows it whole or full, with no choice. A
+  framing it kept from an earlier, taller crop stays dormant: neither the feed
+  nor a work card uses it, not even a 3:2 card across the row.
+- A photo whose window is not known yet waits, the crop still resting.
+- A carried-over photo, which cannot be cropped, is framed the same way over its
+  still, here on the phone only: the desktop has never offered 编辑 for it.
+
+Each photo keeps its framing at once, like a ratio, with no toast or 撤销.
+**还原** resets the crop, the turn and the framing together (an uncropped photo
+is whole again), and its 撤销 brings all three back. A turn keeps the author's
+choice. 应用到全部 is off while the tool is on and never changes framing. A
+cancelled pointer, the page losing focus, Escape or the back sheet take a region
+drag back; a second finger never takes it over.
 
 **应用到全部** applies the chosen ratio once to the photos currently present.
 Each eligible photo receives a crop calculated from its own rotated frame;
@@ -125,9 +188,11 @@ cover-reset semantics.
 下一步 opens the approved mockup A publish screen:
 
 - An RTL feed preview uses the edited photos, the first photo's stage geometry,
-  status chips and existing gallery limit. A photo tap returns to 编辑 for that
-  item. Photos beyond the feed limit remain in the work and are identified as
-  visible only on its page.
+  status chips and existing gallery limit. A tall photo shows the author's
+  region or the whole photo (#341; an uncropped one is whole until its author
+  picks 局部), its blank sides the page background. A photo tap returns
+  to 编辑 for that item. Photos beyond the feed limit remain in the work and are
+  identified as visible only on its page.
 - Title and body use the existing text validation. **建议添加标题** remains a
   hint rather than a new title requirement.
 - **作品性质** is an optional chip group: **原创 · 临摹或练习 · 素材分享**, with
@@ -164,9 +229,14 @@ edit intent; a mount re-report is not a user edit.
 
 `feed-stage-preview.tsx` shares the feed's stage geometry and RTL scroll-snap
 presentation. `feedStageWindow` in publishing's media geometry describes the
-centred visible window without storing a new crop. 编辑's **动态流参考线**
-starts off; enabling it explains the visible window. The shared edit presets
-include 4:5 for existing crop consumers, including article body images.
+visible window of an edited frame: centred (a cropped frame's default), at the
+author's region with uneven cuts above and below, or the whole frame
+for 整张 (#341; an uncropped frame's default). Framing is never a crop. 编辑's
+**动态流** starts off. The desktop edit dialog's feed window shows the photo's
+framing (its default when none is stored) and offers the same 局部 · 整张, the
+region placed by a handle on the window or its arrow keys, kept by 完成 and
+reset by 还原. The shared edit presets include 4:5 for existing crop consumers,
+including article body images.
 
 `article-cover-preview.tsx` continues to show the selected article cover in the
 existing 1:1 compact-card and 16:10 large-card boxes in 文章设置. It stores only
@@ -179,17 +249,19 @@ the existing `coverRefId`; no article-cover crop field is introduced.
 | Phone dock +, new work            | Start screen directly; 专题 and 草稿箱 when available                              | Same presentation when the existing publishing capability is available | Authentication, account checks and desktop chooser                         |
 | Select or capture photos          | System picker/camera → 编辑 without a selected-photo grid                          | Same                                                                   | Accepted formats, quality choice, item limits and Live pairing             |
 | Crop one photo                    | Full-frame default; independent ratio, position and rotation                       | Same                                                                   | Non-destructive `MediaEdit`, stored crops and local recovery               |
+| Freeform crop (#341)              | Corner handles in a 60/16 px crop field; 自由; release re-centres and zooms        | Same                                                                   | Stored crops, 原始比例 = crop null, rotation in 90° steps                  |
+| Feed framing (#341)               | 「动态流」: 整张 if uncropped, 局部 if cropped, or chosen; 还原; desktop 完成      | Same after the joint Web, Backend and Admin release                    | Detail/Viewer whole frame, no 已编辑, no re-derivation, stage ratio rule   |
 | 应用到全部                        | One-time ratio application with per-photo geometry and 撤销                        | Same                                                                   | Rotation, existing same-ratio position and unsupported-photo handling      |
 | Reorder and 首图                  | RTL strip, drag/keyboard/sheet actions; first photo badge                          | Same                                                                   | Logical order, current-photo identity and cover reset rule                 |
 | Remove or reselect                | Immediate visual removal; 撤销; empty album returns to start                       | Same                                                                   | Cancelled-upload ownership, correct focus and no stale 撤销                |
 | Add more photos                   | + sheet: quality, album and camera; existing limit enforced                        | Same                                                                   | Existing photos and their quality remain intact                            |
 | Back from new-work 编辑           | Reselect / save-and-leave / continue sheet                                         | Same where draft saving is available                                   | Existing leave guard for drafts, works and unavailable saving              |
 | 存草稿并退出 during upload        | Progress wait, explicit save, then exit; cancel wait or remain on failure          | Same                                                                   | Complete uploaded bytes, conflicts, newer edits and no implicit cloud save |
-| 封面构图                          | Separate first-photo card-cover screen, 完成 and dirty-cancel guard                | Same                                                                   | Existing cover model; photo crop and feed window remain independent        |
+| 封面构图                          | Separate first-photo card-cover screen, 完成 and dirty-cancel guard                | Same                                                                   | Existing cover model; photo crop and feed framing remain independent       |
 | 发布                              | Mockup A chips, visibility segment, reference sheet, menu and footer               | Same where available                                                   | Existing text rules, visibility semantics and submission readiness         |
 | Preview and media failures        | Feed geometry, gallery-limit note, truthful statuses and remedies                  | Same                                                                   | Existing resolved media sources; no synthetic fallback for real media      |
 | 专题 and article cover            | Existing article-draft entry and two cover-card previews                           | Existing capability gate retained                                      | Article editor, `coverRefId` and account isolation                         |
-| Keyboard, Back and layout swap    | Topmost sheet handling, keyboard-aware footer, session/crop retained across 896 px | Same                                                                   | IME handling, focus restoration, reduced motion and one editor session     |
+| Keyboard, Back and layout swap    | Topmost sheet handling, keyboard-aware footer, session/crop/framing kept at 896 px | Same                                                                   | IME handling, focus restoration, reduced motion and one editor session     |
 | Desktop, avatar and profile cover | Existing workflows retained                                                        | Same                                                                   | Accepted desktop editor and profile image flows                            |
 
 Development sign-in and synthetic acceptance fixtures remain Development-only.
@@ -216,9 +288,16 @@ emulation does not establish native album/camera, physical gestures, iOS
 keyboard or Android acceptance. The Owner's device acceptance and independent
 review remain separate evidence.
 
+Feed framing (#341) is covered by the edit-screen, media-dialog, feed-stage,
+publish-preview, card and draft-format suites, and by the contract, backend and
+integration cases listed in its task record.
+
 ## Deferred
 
 - Stored article-cover cropping, which requires separate contract/backend scope.
+- Feed framing in the native clients (Apple, HarmonyOS), which do not parse
+  `feed` yet; they must treat its absence as the centred cover. Until they read
+  it, they show an uncropped tall photo centred, where the Web shows it whole.
 - Byte-level progress for profile images under the separately authorized media
   pipeline work.
 - Broader device/browser acceptance and further visual refinements beyond the
