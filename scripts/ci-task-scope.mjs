@@ -41,6 +41,9 @@ const tooling = new Set([
   // Exact dependency-free archive tooling; unknown operations scripts stay unmapped.
   "scripts/build-ops-archive-bundle.mjs",
   "scripts/operations/archive-runtime-data.mjs",
+  "scripts/operations/runtime-artifact.py",
+  "scripts/operations/runtime-retention.py",
+  "scripts/operations/test-runtime-tools.py",
   "scripts/cursor-review.mjs",
   "scripts/cursor-dialogue.mjs",
   "scripts/cursor-stream.mjs",

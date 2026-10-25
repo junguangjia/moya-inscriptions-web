@@ -1,0 +1,9 @@
+# Shape only: freeze real paths and preserve all other existing role write paths.
+# Prepare the external directory with the existing Web/Admin UID, 0700,
+# on the same filesystem as the runtime. Verify the manifest's empty stub first.
+[Service]
+BindPaths=/var/cache/REPLACE_ME_ROLE:/opt/REPLACE_ME_RUNTIME/apps/REPLACE_ME_ROLE/.next/cache
+ReadWritePaths=/var/cache/REPLACE_ME_ROLE /opt/REPLACE_ME_RUNTIME/apps/REPLACE_ME_ROLE/.next/cache
+# Review the complete projected unit: inherited non-optional old cache paths can
+# prevent startup after their release retires. Do not clear canonical media or
+# upload-session write paths when replacing obsolete cache entries.

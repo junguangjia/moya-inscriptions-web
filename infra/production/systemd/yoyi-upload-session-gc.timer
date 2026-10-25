@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic private upload buffer cleanup independent of requests
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=30
+Unit=yoyi-upload-session-gc.service
+
+[Install]
+WantedBy=timers.target

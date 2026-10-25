@@ -1214,6 +1214,10 @@ export const isAuthorizedCmsServerFile = (
   return (
     relative === "payload.config.ts" ||
     relative === "next.config.ts" ||
+    // Internal upload-buffer maintenance only; arbitrary neighbors and client modules stay denied.
+    /^src\/operations\/upload-session-gc(?:-postgres|-cli)?\.ts$/.test(
+      relative,
+    ) ||
     /^src\/analytics\/(?:config|endpoints|proxy|upstream)\.ts$/.test(
       relative,
     ) ||
